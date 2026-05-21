@@ -1,0 +1,63 @@
+cabal-version:      3.0
+name:               max
+version:            0.1.0.0
+synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
+author:             Hank Hogan
+maintainer:         hankchogan@gmail.com
+build-type:         Simple
+
+common warnings
+    ghc-options:
+        -Wall
+        -Wcompat
+        -Widentities
+        -Wincomplete-record-updates
+        -Wincomplete-uni-patterns
+        -Wmissing-export-lists
+        -Wmissing-home-modules
+        -Wpartial-fields
+        -Wredundant-constraints
+        -Wunused-packages
+
+common lang
+    default-language:   GHC2024
+    default-extensions:
+        DuplicateRecordFields
+        LambdaCase
+        OverloadedRecordDot
+        OverloadedStrings
+        NoFieldSelectors
+        StrictData
+
+library
+    import:           warnings, lang
+    hs-source-dirs:   src
+    exposed-modules:
+        OneBot.Action
+        OneBot.Event
+        OneBot.Segment
+        OneBot.Server
+        OneBot.Types
+        Max.Config
+        Max.Handler
+        Max.Misc
+    build-depends:
+        , aeson              >= 2.2  && < 2.3
+        , base               >= 4.20 && < 5
+        , bytestring         >= 0.12 && < 0.13
+        , case-insensitive   >= 1.2  && < 1.3
+        , scientific         >= 0.3  && < 0.4
+        , stm                >= 2.5  && < 2.6
+        , text               >= 2.1  && < 2.2
+        , uuid               >= 1.3  && < 1.4
+        , websockets         >= 0.13 && < 0.14
+
+executable max-bot
+    import:           warnings, lang
+    hs-source-dirs:   app
+    main-is:          Main.hs
+    build-depends:
+        , base >= 4.20 && < 5
+        , max
+        , text >= 2.1 && < 2.2
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N

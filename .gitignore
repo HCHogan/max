@@ -1,0 +1,22 @@
+# Haskell
+dist-newstyle/
+.ghc.environment.*
+*.hi
+*.o
+
+# Nix / devenv
+.direnv/
+.devenv/
+.devenv.flake.nix
+.pre-commit-config.yaml
+result
+result-*
+
+# Secrets and runtime state
+.env
+.envrc.local
+.napcat/
+
+# Editor
+.vscode/
+.idea/
