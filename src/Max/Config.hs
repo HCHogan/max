@@ -5,14 +5,16 @@ module Max.Config
 where
 
 import Data.Maybe (fromMaybe)
-import Data.Text ()
 import Data.Text qualified as T
+import Max.DB.Connection (DbConfig (..))
 import OneBot.Server (ServerConfig (..))
 import System.Environment (lookupEnv)
 import Text.Read (readMaybe)
 
-newtype AppConfig = AppConfig
-  { server :: ServerConfig
+data AppConfig = AppConfig
+  { server :: !ServerConfig,
+    db :: !DbConfig,
+    migrationsDir :: !FilePath
   }
   deriving stock (Show)
 
@@ -22,9 +24,15 @@ loadFromEnv = do
   portRaw <- envOr "MAX_WS_PORT" "8080"
   path <- envOr "MAX_WS_PATH" "/onebot"
   token <- lookupEnv "MAX_ACCESS_TOKEN"
+  dbUrl <- envOr "MAX_DB_URL" "postgresql://localhost:5433/max"
+  dbConnsRaw <- envOr "MAX_DB_MAX_CONNS" "8"
+  migDir <- envOr "MAX_MIGRATIONS_DIR" "migrations"
   port <- case readMaybe portRaw of
     Just p -> pure p
     Nothing -> fail $ "MAX_WS_PORT is not an integer: " <> portRaw
+  dbConns <- case readMaybe dbConnsRaw of
+    Just n -> pure n
+    Nothing -> fail $ "MAX_DB_MAX_CONNS is not an integer: " <> dbConnsRaw
   pure
     AppConfig
       { server =
@@ -33,7 +41,13 @@ loadFromEnv = do
               port = port,
               path = T.pack path,
               accessToken = T.pack <$> token
-            }
+            },
+        db =
+          DbConfig
+            { url = T.pack dbUrl,
+              maxConns = dbConns
+            },
+        migrationsDir = migDir
       }
 
 envOr :: String -> String -> IO String

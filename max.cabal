@@ -26,7 +26,6 @@ common lang
         LambdaCase
         OverloadedRecordDot
         OverloadedStrings
-        NoFieldSelectors
         StrictData
 
 library
@@ -39,25 +38,49 @@ library
         OneBot.Server
         OneBot.Types
         Max.Config
+        Max.DB.Connection
+        Max.DB.Message
+        Max.DB.Migrations
         Max.Handler
         Max.Misc
     build-depends:
         , aeson              >= 2.2  && < 2.3
+        , async              >= 2.2  && < 2.3
         , base               >= 4.20 && < 5
         , bytestring         >= 0.12 && < 0.13
         , case-insensitive   >= 1.2  && < 1.3
+        , containers         >= 0.7  && < 0.9
+        , directory          >= 1.3  && < 1.4
+        , filepath           >= 1.5  && < 1.6
+        , log-base           >= 0.12 && < 0.13
+        , postgresql-simple  >= 0.7  && < 0.8
+        , resource-pool      >= 0.4  && < 0.5
         , scientific         >= 0.3  && < 0.4
         , stm                >= 2.5  && < 2.6
         , text               >= 2.1  && < 2.2
+        , unliftio-core      >= 0.2  && < 0.3
         , uuid               >= 1.3  && < 1.4
         , websockets         >= 0.13 && < 0.14
+        , mtl
 
 executable max-bot
     import:           warnings, lang
     hs-source-dirs:   app
     main-is:          Main.hs
     build-depends:
-        , base >= 4.20 && < 5
+        , base          >= 4.20 && < 5
+        , log-base      >= 0.12 && < 0.13
         , max
-        , text >= 2.1 && < 2.2
+        , text          >= 2.1  && < 2.2
+        , unliftio-core >= 0.2  && < 0.3
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+
+executable ws
+    import:             warnings, lang
+    hs-source-dirs:     ws
+    main-is:            Main.hs
+    build-depends:
+        , base
+        , websockets
+        , text
+        , stm

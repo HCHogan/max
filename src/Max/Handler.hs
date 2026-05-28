@@ -4,41 +4,60 @@ module Max.Handler
 where
 
 import Control.Concurrent.STM (TQueue, atomically, readTQueue)
-import Control.Monad (forever, when)
+import Control.Exception (SomeException, try)
+import Control.Monad (when)
+import Control.Monad.IO.Class (liftIO)
 import Data.Text qualified as T
+import Log
+import Max.DB.Connection (DbPool)
+import Max.DB.Message (insertGroupMessage)
 import OneBot.Action (Action (SendGroupMsg))
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
 import OneBot.Server (Client, send)
-import OneBot.Types (UserId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 
--- | MVP handler. Pulls events off the queue and reacts to group messages
--- that @ the bot with body \"ping\" — replies \"pong\" in the same group.
--- Everything else is logged for now.
-handleEvents :: Client -> TQueue Event -> IO ()
-handleEvents client q = forever $ do
-  atomically (readTQueue q) >>= \case
-    EvHeartbeat -> pure ()
-    EvLifecycle sub ->
-      putStrLn $ "lifecycle: " <> T.unpack sub
-    EvRaw v ->
-      putStrLn $ "unhandled event: " <> show v
-    EvGroupMessage gm -> onGroupMessage client gm
+-- | MVP handler. Persists every group message, replies @pong@ to
+-- @\@bot ping@. DB failures are logged but don't kill the handler — the
+-- bot stays responsive even if Postgres is down.
+handleEvents :: DbPool -> Client -> TQueue Event -> LogT IO ()
+handleEvents pool client q = loop
+  where
+    loop = do
+      ev <- liftIO (atomically (readTQueue q))
+      case ev of
+        EvHeartbeat -> pure ()
+        EvLifecycle sub ->
+          logInfo "lifecycle" $ object ["sub_type" .= sub]
+        EvRaw v ->
+          logTrace "unhandled event" v
+        EvGroupMessage gm -> do
+          persist pool gm
+          onGroupMessage client gm
+      loop
 
-onGroupMessage :: Client -> GroupMessage -> IO ()
+persist :: DbPool -> GroupMessage -> LogT IO ()
+persist pool gm = do
+  eres <- liftIO (try (insertGroupMessage pool gm))
+  case eres :: Either SomeException () of
+    Right () -> pure ()
+    Left e ->
+      logAttention "db insert failed" $
+        object ["error" .= T.pack (show e)]
+
+onGroupMessage :: Client -> GroupMessage -> LogT IO ()
 onGroupMessage client gm = do
-  let UserId selfRaw = gm.selfId
-      UserId fromRaw = gm.userId
+  let UserId fromRaw = gm.userId
+      GroupId gidRaw = gm.groupId
       body = T.strip (stripMentions gm.selfId (renderPlainText gm.message))
-  putStrLn $
-    "group "
-      <> show gm.groupId
-      <> " from "
-      <> show fromRaw
-      <> ": "
-      <> T.unpack (renderPlainText gm.message)
+  logInfo "group message" $
+    object
+      [ "group_id" .= gidRaw,
+        "user_id" .= fromRaw,
+        "text" .= renderPlainText gm.message
+      ]
   when (mentionsUser gm.selfId gm.message && body == "ping") $ do
-    _ <-
+    eid <-
       send
         client
         ( SendGroupMsg
@@ -47,10 +66,11 @@ onGroupMessage client gm = do
               SegText " pong"
             ]
         )
-    putStrLn $ "replied pong to " <> show selfRaw <> "/" <> show fromRaw
+    logInfo "replied pong" $
+      object ["echo" .= eid, "to" .= fromRaw, "group_id" .= gidRaw]
 
--- | Drop any leading @<bot> mention from a rendered plain-text body so we can
--- match the bare command word.
+-- | Drop any leading @<bot> mention from a rendered plain-text body so we
+-- can match the bare command word.
 stripMentions :: UserId -> T.Text -> T.Text
 stripMentions (UserId u) =
   T.replace ("@" <> T.pack (show u)) ""
