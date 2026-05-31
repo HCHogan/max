@@ -57,21 +57,21 @@ import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
 import Database.PostgreSQL.Simple (execute)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
-import Max.DB.Connection (DbPool, withConn)
+import Effectful
+import Max.Effects.Db (Db, withConn)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
--- | Wrap a JSON 'Value' so it inserts into a @jsonb@ column.
 newtype Jsonb = Jsonb Value
 
 instance ToField Jsonb where
   toField (Jsonb v) = toJSONField v
 
--- | Insert a group message. Idempotent on @message_id@: NapCat may replay
--- the same event after our reverse-WS reconnects.
-insertGroupMessage :: DbPool -> GroupMessage -> IO ()
-insertGroupMessage pool gm = withConn pool $ \c -> do
+-- | Insert a group message; idempotent on @message_id@ (NapCat may replay
+-- the same event after our reverse-WS reconnects).
+insertGroupMessage :: Db :> es => GroupMessage -> Eff es ()
+insertGroupMessage gm = withConn $ \c -> do
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
       UserId uid = gm.userId

@@ -11,7 +11,8 @@ import Data.Text (Text)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Database.PostgreSQL.Simple (Connection, Only (..), execute, query_, (:.) (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
-import Max.DB.Connection (DbPool, withConn)
+import Effectful
+import Max.Effects.Db (Db, withConn)
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (MessageId (..))
 
@@ -20,8 +21,6 @@ newtype Jsonb = Jsonb Value
 instance ToField Jsonb where
   toField (Jsonb v) = toJSONField v
 
--- | Everything needed to materialise one node inside a forwarded chain as
--- a synthetic row in 'messages'.
 data ForwardNodeInsert = ForwardNodeInsert
   { containerMessageId :: !Int64,
     groupId :: !Int64,
@@ -30,18 +29,16 @@ data ForwardNodeInsert = ForwardNodeInsert
     senderUserId :: !Int64,
     senderNickname :: !Text,
     originalMessageId :: !(Maybe Int64),
-    -- | Unix seconds; lifted to timestamptz on insert.
     originalSentAt :: !(Maybe Int64),
     segments :: ![Segment]
   }
   deriving stock (Show)
 
--- | Insert one forward node. Allocates a fresh synthetic 'message_id' from
--- 'synthetic_message_id_seq' (encoded as a negative bigint so it can never
--- collide with a real QQ message id). Returns the allocated id so the
--- caller can recurse into nested forwards with the correct container ref.
-insertForwardNode :: DbPool -> ForwardNodeInsert -> IO Int64
-insertForwardNode pool n = withConn pool $ \c -> do
+-- | Insert one forwarded node under a synthetic id (negated
+-- @synthetic_message_id_seq@). Returns the allocated id so the caller can
+-- thread it as a container for nested inline forwards.
+insertForwardNode :: Db :> es => ForwardNodeInsert -> Eff es Int64
+insertForwardNode n = withConn $ \c -> do
   sid <- allocSyntheticId c
   let segs = Jsonb (toJSON n.segments)
       rendered = renderPlainText n.segments

@@ -10,49 +10,42 @@ where
 import Control.Applicative ((<|>))
 import Control.Concurrent.STM
   ( TQueue,
-    TVar,
     atomically,
     newTQueueIO,
     readTQueue,
-    readTVarIO,
     writeTQueue,
   )
-import Control.Exception (SomeAsyncException, SomeException, catch, fromException, throwIO)
-import Control.Monad (forM_, forever)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.IO.Unlift (withRunInIO)
-import Data.Aeson (Value (Object, String))
+import Control.Exception (SomeException)
+import Control.Monad (forM_, forever, unless)
+import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson.Types (Parser, parseEither, withObject, (.!=), (.:), (.:?))
+import Data.Aeson.Types (Object, Parser, parseEither, withObject, (.:), (.:?))
+import Data.Foldable (toList)
 import Data.Int (Int64)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Log
-import Max.DB.Connection (DbPool)
+import Effectful
+import Effectful.Log
 import Max.DB.Forward (ForwardNodeInsert (..), insertForwardNode)
+import Max.Effects.Db (Db)
+import Max.Effects.NapCat (NapCat, callAction)
 import Max.Images (ImageQueue, enqueueImagesFromNode)
+import Max.Util (catchSync)
 import OneBot.Action (Action (GetForwardMsg), Response (..))
 import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), parseIntId)
-import OneBot.Server (Client, call)
 
--- | Maximum recursion depth for nested forwards. Anything deeper is left
--- as @[forward (deep, not expanded)]@ in the parent's jsonb so the loop
--- can't run away if NapCat returns pathological data.
+-- | Stop recursing inline content past this depth — sanity bound against
+-- pathological NapCat responses. Anything deeper stays in jsonb.
 maxDepth :: Int
 maxDepth = 3
 
--- | One forward chain awaiting expansion via @get_forward_msg@.
 data ForwardJob = ForwardJob
-  { -- | The row this forward segment is contained in.
-    containerMessageId :: !Int64,
-    -- | NapCat's opaque forward id (from @forward@ segment's @data.id@).
+  { containerMessageId :: !Int64,
     forwardId :: !Text,
-    -- | 1-based depth; the top-level forward inside a real message is 1.
-    depth :: !Int,
     groupId :: !Int64,
     selfId :: !Int64
   }
@@ -63,22 +56,22 @@ type ForwardQueue = TQueue ForwardJob
 newForwardQueue :: IO ForwardQueue
 newForwardQueue = newTQueueIO
 
--- | Walk segments of a real group message and enqueue every top-level
--- forward chain (depth=1). Nested forwards are discovered later when the
--- worker parses each chain.
+-- | Enqueue every top-level forward chain in a real group message.
+-- Nested forwards arrive inlined inside the @get_forward_msg@ response,
+-- so we never enqueue more jobs from inside the worker.
 enqueueForwards :: ForwardQueue -> GroupMessage -> IO ()
 enqueueForwards q gm = do
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
       UserId sid = gm.selfId
-      jobs = mapMaybe (mkJob mid gid sid 1) gm.message
+      jobs = mapMaybe (mkJob mid gid sid) gm.message
   atomically $ mapM_ (writeTQueue q) jobs
 
-mkJob :: Int64 -> Int64 -> Int64 -> Int -> Segment -> Maybe ForwardJob
-mkJob container gid sid d = \case
+mkJob :: Int64 -> Int64 -> Int64 -> Segment -> Maybe ForwardJob
+mkJob container gid sid = \case
   SegOther "forward" v -> do
     fid <- forwardIdFromValue v
-    Just (ForwardJob container fid d gid sid)
+    Just (ForwardJob container fid gid sid)
   _ -> Nothing
 
 forwardIdFromValue :: Value -> Maybe Text
@@ -87,102 +80,125 @@ forwardIdFromValue (Object o) = case KM.lookup (K.fromText "id") o of
   _ -> Nothing
 forwardIdFromValue _ = Nothing
 
--- | Long-lived worker. Reads jobs, calls @get_forward_msg@ via the
--- currently-published 'Client', flattens nodes into 'messages', and
--- enqueues nested forwards and image segments discovered along the way.
 forwardWorker ::
-  TVar (Maybe Client) ->
-  DbPool ->
+  (Log :> es, NapCat :> es, Db :> es, IOE :> es) =>
   ImageQueue ->
   ForwardQueue ->
-  LogT IO ()
-forwardWorker clientRef pool imgQ q = forever $ do
-  job <- liftIO (atomically (readTQueue q))
-  processJob clientRef pool imgQ q job
-    `catchSync` \e ->
-      logAttention "forward worker crash" $
-        object
-          [ "error" .= T.pack (show e),
-            "forward_id" .= job.forwardId,
-            "container_message_id" .= job.containerMessageId
-          ]
+  Eff es ()
+forwardWorker imgQ q = localDomain "forward-worker" $ do
+  logInfo_ "forward worker started"
+  forever $ do
+    job <- liftIO (atomically (readTQueue q))
+    logInfo "forward expanding" $
+      object
+        [ "forward_id" .= job.forwardId,
+          "container_message_id" .= job.containerMessageId
+        ]
+    processJob imgQ job
+      `catchSync` \e ->
+        logAttention "forward worker crash" $
+          object
+            [ "error" .= T.pack (show (e :: SomeException)),
+              "forward_id" .= job.forwardId,
+              "container_message_id" .= job.containerMessageId
+            ]
 
 processJob ::
-  TVar (Maybe Client) ->
-  DbPool ->
+  (Log :> es, NapCat :> es, Db :> es, IOE :> es) =>
   ImageQueue ->
-  ForwardQueue ->
   ForwardJob ->
-  LogT IO ()
-processJob clientRef pool imgQ fwdQ job
-  | job.depth > maxDepth = do
-      logInfo "forward depth exceeded" $
-        object ["depth" .= job.depth, "forward_id" .= job.forwardId]
-  | otherwise = do
-      mc <- liftIO (readTVarIO clientRef)
-      case mc of
-        Nothing ->
-          logAttention "forward: no client connected" $
-            object ["forward_id" .= job.forwardId]
-        Just client -> do
-          eres <- liftIO (call client (GetForwardMsg job.forwardId) timeoutMs)
-          case eres of
-            Left err ->
-              logAttention "get_forward_msg failed" $
-                object ["error" .= err, "forward_id" .= job.forwardId]
-            Right (Response _ rc _ _) | rc /= 0 ->
-              logAttention "get_forward_msg bad retcode" $
-                object ["retcode" .= rc, "forward_id" .= job.forwardId]
-            Right (Response _ _ payload _) ->
-              case parseEither nodesParser payload of
-                Left perr ->
-                  logAttention "forward response parse error" $
-                    object ["error" .= T.pack perr, "forward_id" .= job.forwardId]
-                Right nodes -> ingestNodes pool imgQ fwdQ job nodes
+  Eff es ()
+processJob imgQ job = do
+  eres <- callAction (GetForwardMsg job.forwardId) timeoutMs
+  case eres of
+    Left err ->
+      logAttention "get_forward_msg failed" $
+        object ["error" .= err, "forward_id" .= job.forwardId]
+    Right (Response _ rc _ _) | rc /= 0 ->
+      logAttention "get_forward_msg bad retcode" $
+        object ["retcode" .= rc, "forward_id" .= job.forwardId]
+    Right (Response _ _ payload _) ->
+      case parseEither nodesParser payload of
+        Left perr ->
+          logAttention "forward response parse error" $
+            object ["error" .= T.pack perr, "forward_id" .= job.forwardId]
+        Right nodes -> ingestNodes imgQ job nodes
   where
     timeoutMs = 30000
 
 ingestNodes ::
-  DbPool ->
+  (Log :> es, Db :> es, IOE :> es) =>
   ImageQueue ->
-  ForwardQueue ->
   ForwardJob ->
   [ForwardNode] ->
-  LogT IO ()
-ingestNodes pool imgQ fwdQ job nodes =
-  forM_ (zip [0 ..] nodes) $ \(i, node) -> do
-    let ins =
-          ForwardNodeInsert
-            { containerMessageId = job.containerMessageId,
-              groupId = job.groupId,
-              selfId = job.selfId,
-              position = i,
-              senderUserId = node.userId,
-              senderNickname = node.nickname,
-              originalMessageId = node.originalId,
-              originalSentAt = node.time,
-              segments = node.segments
-            }
-    sid <- liftIO (insertForwardNode pool ins)
-    -- Recurse into nested forwards under this synthetic id.
-    let nested = mapMaybe (mkJob sid job.groupId job.selfId (job.depth + 1)) node.segments
-    liftIO $ atomically $ mapM_ (writeTQueue fwdQ) nested
-    -- And feed image / mface segments to the image worker against this
-    -- synthetic id (so message_images links to the right row).
-    liftIO $ enqueueImagesFromNode imgQ sid node.segments
-    logTrace "forward node ingested" $
-      object
-        [ "container_message_id" .= job.containerMessageId,
-          "synthetic_message_id" .= sid,
-          "position" .= i,
-          "nested_forwards" .= length nested
-        ]
+  Eff es ()
+ingestNodes imgQ job nodes =
+  forM_ (zip [0 ..] nodes) $ \(i, node) ->
+    ingestNode imgQ job.containerMessageId job.groupId job.selfId 1 i node
 
--- | Parsed shape of one entry in @get_forward_msg@'s @messages@ array.
+ingestNode ::
+  (Log :> es, Db :> es, IOE :> es) =>
+  ImageQueue ->
+  Int64 -> -- containerSid
+  Int64 -> -- groupId
+  Int64 -> -- selfId
+  Int -> -- depth (1-based)
+  Int -> -- position
+  ForwardNode ->
+  Eff es ()
+ingestNode imgQ containerSid gid sid depth pos node = do
+  let ins =
+        ForwardNodeInsert
+          { containerMessageId = containerSid,
+            groupId = gid,
+            selfId = sid,
+            position = pos,
+            senderUserId = node.userId,
+            senderNickname = node.nickname,
+            originalMessageId = node.originalId,
+            originalSentAt = node.time,
+            segments = node.segments
+          }
+  insSid <- insertForwardNode ins
+  liftIO (enqueueImagesFromNode imgQ insSid node.segments)
+  let inlineChildren = concatMap extractInlineNodes node.segments
+  logInfo "forward node ingested" $
+    object
+      [ "container_message_id" .= containerSid,
+        "synthetic_message_id" .= insSid,
+        "position" .= pos,
+        "depth" .= depth,
+        "sender_user_id" .= node.userId,
+        "inline_nested" .= length inlineChildren
+      ]
+  if depth >= maxDepth
+    then
+      unless (null inlineChildren) $
+        logInfo "inline nested forwards skipped (max depth)" $
+          object
+            [ "depth" .= depth,
+              "skipped" .= length inlineChildren,
+              "synthetic_message_id" .= insSid
+            ]
+    else
+      forM_ (zip [0 ..] inlineChildren) $ \(i, child) ->
+        ingestNode imgQ insSid gid sid (depth + 1) i child
+
+-- | Pull nested-forward children inlined in a @forward@ segment's
+-- @data.content@ (NapCat-style; whole tree comes in one @get_forward_msg@
+-- response rather than per-id RPCs).
+extractInlineNodes :: Segment -> [ForwardNode]
+extractInlineNodes (SegOther "forward" (Object o)) =
+  case KM.lookup (K.fromText "content") o of
+    Just (Array arr) ->
+      let parsedEach = map (parseEither nodeParser) (toList arr)
+       in [n | Right n <- parsedEach]
+    _ -> []
+extractInlineNodes _ = []
+
 data ForwardNode = ForwardNode
   { userId :: !Int64,
     nickname :: !Text,
-    -- | Unix seconds when the forwarded message was originally sent.
     time :: !(Maybe Int64),
     originalId :: !(Maybe Int64),
     segments :: ![Segment]
@@ -192,18 +208,17 @@ data ForwardNode = ForwardNode
 nodesParser :: Value -> Parser [ForwardNode]
 nodesParser = withObject "ForwardResponse" $ \o -> do
   ms <- o .: "messages" :: Parser [Value]
-  mapM (parseEitherToP nodeParser) ms
-  where
-    parseEitherToP :: (Value -> Parser a) -> Value -> Parser a
-    parseEitherToP p v = p v
+  mapM nodeParser ms
 
 nodeParser :: Value -> Parser ForwardNode
 nodeParser = withObject "ForwardNode" $ \o -> do
   uid <- o .: "user_id" >>= parseIntId "user_id"
-  nick <- o .:? "nickname" .!= ""
+  mTop <- o .:? "nickname"
+  mSender <- o .:? "sender" :: Parser (Maybe Object)
+  let senderNick = mSender >>= lookupStringIn "nickname"
+      nick = fromMaybe "" (mTop <|> senderNick)
   t <- o .:? "time"
   oid <- o .:? "message_id"
-  -- NapCat uses @message@; OneBot v11 legacy sometimes uses @content@.
   segs <- (o .: "message") <|> (o .: "content") <|> pure []
   pure
     ForwardNode
@@ -214,9 +229,7 @@ nodeParser = withObject "ForwardNode" $ \o -> do
         segments = segs
       }
 
-catchSync :: LogT IO a -> (SomeException -> LogT IO a) -> LogT IO a
-catchSync act h = withRunInIO $ \run ->
-  run act `catch` \e ->
-    case fromException e :: Maybe SomeAsyncException of
-      Just _ -> throwIO e
-      Nothing -> run (h e)
+lookupStringIn :: Text -> Object -> Maybe Text
+lookupStringIn k o = case KM.lookup (K.fromText k) o of
+  Just (String s) -> Just s
+  _ -> Nothing

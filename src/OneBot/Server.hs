@@ -2,26 +2,14 @@ module OneBot.Server
   ( ServerConfig (..),
     Client (..),
     runServer,
-    send,
-    call,
   )
 where
 
 import Control.Concurrent.Async (concurrently_)
 import Control.Concurrent.STM
-import Control.Exception
-  ( SomeAsyncException,
-    SomeException,
-    catch,
-    finally,
-    fromException,
-    throwIO,
-    try,
-  )
+import Control.Exception (SomeException, catch, finally)
 import Control.Monad (forM_)
-import Control.Monad.IO.Class (liftIO)
-import Control.Monad.IO.Unlift (withRunInIO)
-import Data.Aeson (Value (Object), decode, eitherDecode, encode)
+import Data.Aeson (Value (Object), decode, eitherDecode)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
@@ -32,11 +20,11 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
-import Log
+import Effectful
+import Effectful.Log
+import Max.Util (catchSync)
 import Network.WebSockets qualified as WS
-import OneBot.Action (Action, Envelope (..), Response (..), encodeAction)
+import OneBot.Action (Response (..))
 import OneBot.Event (Event, parseEvent)
 
 data ServerConfig = ServerConfig
@@ -47,90 +35,90 @@ data ServerConfig = ServerConfig
   }
   deriving stock (Show)
 
--- | Handle to talk to a connected NapCat client. The MVP supports a single
--- connection at a time; later phases can swap this for a registry keyed by
--- @self_id@.
---
--- 'pending' correlates outbound action requests with NapCat's responses by
--- @echo@ id. Each entry holds a 'TMVar' the caller blocks on; the read loop
--- fills it on response, the disconnect path fills it with @Left@.
+-- | Handle to talk to a connected NapCat client. Carries the websocket plus
+-- a pending-call registry (echo id → TMVar) shared between the read loop
+-- (which fills incoming responses) and the NapCat effect's 'call' (which
+-- creates entries and waits on them).
 data Client = Client
   { connection :: !WS.Connection,
     pending :: !(TVar (Map Text (TMVar (Either Text Response))))
   }
 
--- | Start the reverse-WS server. Each accepted connection is given its own
--- @conn-N@ log domain so reconnect cycles stay readable in the log stream.
---
--- The @setClient@ callback is fired with @Just@ when a connection is
--- established and @Nothing@ when it tears down. App-lived workers that need
--- to issue actions ('call') route through this.
+-- | Run the reverse-WS server. Each accepted connection gets its own
+-- @conn-N@ log domain. Decoded events are pushed onto 'eventQ' for the
+-- app-lived handler to consume. The current 'Client' (if any) is
+-- published on 'clientRef' for the NapCat effect to read.
 runServer ::
+  (Log :> es, IOE :> es) =>
   ServerConfig ->
-  (Maybe Client -> IO ()) ->
-  (Client -> TQueue Event -> LogT IO ()) ->
-  LogT IO ()
-runServer cfg setClient handler = do
+  TQueue Event ->
+  TVar (Maybe Client) ->
+  Eff es ()
+runServer cfg eventQ clientRef = do
   counter <- liftIO (newIORef (0 :: Int))
-  withRunInIO $ \run -> WS.runServer cfg.host cfg.port $ \pending -> do
-    cid <- atomicModifyIORef' counter (\n -> let n' = n + 1 in (n', n'))
-    run $
-      localDomain ("conn-" <> T.pack (show cid)) $
-        acceptConn cfg pending setClient handler
+  withRunInIO $ \run ->
+    WS.runServer cfg.host cfg.port $ \pending -> do
+      cid <- atomicModifyIORef' counter (\n -> let n' = n + 1 in (n', n'))
+      run $
+        localDomain ("conn-" <> T.pack (show cid)) $
+          acceptConn cfg pending eventQ clientRef
 
 acceptConn ::
+  (Log :> es, IOE :> es) =>
   ServerConfig ->
   WS.PendingConnection ->
-  (Maybe Client -> IO ()) ->
-  (Client -> TQueue Event -> LogT IO ()) ->
-  LogT IO ()
-acceptConn cfg pending setClient handler = do
+  TQueue Event ->
+  TVar (Maybe Client) ->
+  Eff es ()
+acceptConn cfg pending eventQ clientRef = do
   let req = WS.pendingRequest pending
       reqPath = TE.decodeUtf8Lenient (WS.requestPath req)
   if reqPath /= cfg.path
     then do
       logAttention "rejecting unknown path" $ object ["path" .= reqPath]
-      liftIO $ WS.rejectRequest pending "not found"
+      liftIO (WS.rejectRequest pending "not found")
     else case checkToken cfg.accessToken (WS.requestHeaders req) of
       Left msg -> do
         logAttention "rejecting unauthorized" $ object ["reason" .= msg]
-        liftIO $ WS.rejectRequest pending (TE.encodeUtf8 msg)
+        liftIO (WS.rejectRequest pending (TE.encodeUtf8 msg))
       Right () -> do
         conn <- liftIO (WS.acceptRequest pending)
         logInfo_ "ws connected"
-        runConn conn setClient handler `catchSync` \e ->
+        runConn conn eventQ clientRef `catchSync` \e ->
           logAttention "connection terminated" $
             object ["error" .= T.pack (show e)]
         liftIO (closeQuietly conn)
         logInfo_ "ws closed"
 
--- | Build the per-connection 'Client', publish it via 'setClient', and tie
--- handler + read loop together. On exit we clear setClient and fail any
--- in-flight callers so they don't hang past the disconnect.
+-- | Build the per-connection 'Client', publish on 'clientRef', and run the
+-- read loop. On exit clear 'clientRef' and abort any in-flight 'call's so
+-- callers don't hang past the disconnect.
 runConn ::
+  (Log :> es, IOE :> es) =>
   WS.Connection ->
-  (Maybe Client -> IO ()) ->
-  (Client -> TQueue Event -> LogT IO ()) ->
-  LogT IO ()
-runConn conn setClient handler = do
-  eventQ <- liftIO newTQueueIO
+  TQueue Event ->
+  TVar (Maybe Client) ->
+  Eff es ()
+runConn conn eventQ clientRef = do
   pendingMap <- liftIO (newTVarIO Map.empty)
   let client = Client {connection = conn, pending = pendingMap}
   withRunInIO $ \run -> do
-    setClient (Just client)
+    atomically (writeTVar clientRef (Just client))
     ( WS.withPingThread conn 30 (pure ()) $
-        concurrently_
-          (run (handler client eventQ))
-          (run (readLoop client eventQ))
+        -- concurrently_ is left for symmetry with previous handler/read pairing
+        -- — here it just runs read loop, but we keep the structure so adding
+        -- a per-connection sibling later (e.g. a watchdog) is a one-line change.
+        concurrently_ (run (readLoop client eventQ)) (pure ())
       )
       `finally` ( do
-                    setClient Nothing
+                    atomically (writeTVar clientRef Nothing)
                     abortPending pendingMap "connection closed"
                 )
 
--- | Fill every pending 'TMVar' with a failure so callers stop blocking on
--- a connection that's gone.
-abortPending :: TVar (Map Text (TMVar (Either Text Response))) -> Text -> IO ()
+abortPending ::
+  TVar (Map Text (TMVar (Either Text Response))) ->
+  Text ->
+  IO ()
 abortPending tv reason = atomically $ do
   m <- readTVar tv
   forM_ (Map.elems m) $ \tm -> tryPutTMVar tm (Left reason)
@@ -147,7 +135,11 @@ checkToken (Just expected) hs =
             else Left "unauthorized"
     Nothing -> Left "unauthorized"
 
-readLoop :: Client -> TQueue Event -> LogT IO ()
+readLoop ::
+  (Log :> es, IOE :> es) =>
+  Client ->
+  TQueue Event ->
+  Eff es ()
 readLoop client q = loop
   where
     loop = do
@@ -172,10 +164,11 @@ looksLikeResponse :: Value -> Bool
 looksLikeResponse (Object o) = KM.member (K.fromString "retcode") o
 looksLikeResponse _ = False
 
--- | Route a response by 'echo' id to its waiting 'call'. Responses without
--- a matching pending entry (e.g. from one-way 'send' calls, or arriving
--- after timeout) are just logged.
-handleResponse :: Client -> LBS.ByteString -> LogT IO ()
+handleResponse ::
+  (Log :> es, IOE :> es) =>
+  Client ->
+  LBS.ByteString ->
+  Eff es ()
 handleResponse client raw = case eitherDecode raw :: Either String Response of
   Left err ->
     logAttention "response parse error" $ object ["error" .= T.pack err]
@@ -200,57 +193,3 @@ closeQuietly :: WS.Connection -> IO ()
 closeQuietly conn =
   WS.sendClose conn ("bye" :: Text)
     `catch` \(_ :: SomeException) -> pure ()
-
--- | Catch only synchronous exceptions; re-raise anything tagged
--- 'SomeAsyncException' so cancellation and signals propagate normally.
-catchSync :: LogT IO a -> (SomeException -> LogT IO a) -> LogT IO a
-catchSync act h = withRunInIO $ \run ->
-  run act `catch` \e ->
-    case fromException e :: Maybe SomeAsyncException of
-      Just _ -> throwIO e
-      Nothing -> run (h e)
-
--- | Fire-and-forget. Returns the echo id without registering for a
--- response — useful when the caller doesn't need NapCat's ack. For
--- request/response correlation use 'call'.
-send :: Client -> Action -> LogT IO Text
-send client a = do
-  eid <- liftIO (T.pack . UUID.toString <$> UUID.nextRandom)
-  let env = Envelope {action = a, echo = eid}
-  eres <-
-    liftIO $
-      try (WS.sendTextData client.connection (encode (encodeAction env)))
-  case eres :: Either WS.ConnectionException () of
-    Right () -> pure ()
-    Left e ->
-      logAttention "send failed" $ object ["error" .= T.pack (show e)]
-  pure eid
-
--- | Send an action and wait for NapCat's response, up to @timeoutMs@.
--- Returns @Left@ on send failure, timeout, or connection drop.
-call :: Client -> Action -> Int -> IO (Either Text Response)
-call client a timeoutMs = do
-  eid <- T.pack . UUID.toString <$> UUID.nextRandom
-  tm <- newEmptyTMVarIO
-  atomically $ modifyTVar' client.pending (Map.insert eid tm)
-  let env = Envelope {action = a, echo = eid}
-  eres <-
-    try (WS.sendTextData client.connection (encode (encodeAction env)))
-  case eres :: Either WS.ConnectionException () of
-    Left e -> do
-      atomically $ modifyTVar' client.pending (Map.delete eid)
-      pure (Left ("send failed: " <> T.pack (show e)))
-    Right () -> do
-      timer <- registerDelay (timeoutMs * 1000)
-      res <-
-        atomically $
-          takeTMVar tm
-            `orElse` ( do
-                         done <- readTVar timer
-                         if done then pure (Left "timeout") else retry
-                     )
-      case res of
-        Left _ ->
-          atomically (modifyTVar' client.pending (Map.delete eid))
-            *> pure res
-        Right _ -> pure res
