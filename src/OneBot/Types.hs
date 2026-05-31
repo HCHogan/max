@@ -2,6 +2,7 @@ module OneBot.Types
   ( UserId (..),
     GroupId (..),
     MessageId (..),
+    parseIntId,
   )
 where
 

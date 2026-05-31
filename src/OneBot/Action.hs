@@ -13,14 +13,18 @@ import Data.Text (Text)
 import OneBot.Segment (Segment)
 import OneBot.Types (GroupId)
 
--- | Subset of OneBot 11 actions we issue in the MVP.
+-- | Subset of OneBot 11 actions we issue.
 data Action
   = SendGroupMsg !GroupId ![Segment]
+  | -- | Look up a forwarded message chain by its id (the @id@ in a
+    -- @forward@ segment's data). NapCat returns a list of nodes.
+    GetForwardMsg !Text
   deriving stock (Show)
 
 actionName :: Action -> Text
 actionName = \case
   SendGroupMsg {} -> "send_group_msg"
+  GetForwardMsg {} -> "get_forward_msg"
 
 actionParams :: Action -> Value
 actionParams = \case
@@ -28,6 +32,13 @@ actionParams = \case
     object
       [ "group_id" .= gid,
         "message" .= segs
+      ]
+  GetForwardMsg fid ->
+    -- OneBot 11 spec says @id@; NapCat also accepts @message_id@. Sending
+    -- both is cheap insurance against implementation drift.
+    object
+      [ "id" .= fid,
+        "message_id" .= fid
       ]
 
 data Envelope = Envelope

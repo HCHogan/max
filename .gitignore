@@ -16,6 +16,7 @@ result-*
 .env
 .envrc.local
 .napcat/
+var/
 
 # Editor
 .vscode/

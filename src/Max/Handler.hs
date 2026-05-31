@@ -9,19 +9,21 @@ import Control.Monad (when)
 import Control.Monad.IO.Class (liftIO)
 import Data.Text qualified as T
 import Log
-import Max.DB.Connection (DbPool)
 import Max.DB.Message (insertGroupMessage)
+import Max.Deps (AppDeps (..))
+import Max.Forward (enqueueForwards)
+import Max.Images (enqueueImages)
 import OneBot.Action (Action (SendGroupMsg))
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
 import OneBot.Server (Client, send)
 import OneBot.Types (GroupId (..), UserId (..))
 
--- | MVP handler. Persists every group message, replies @pong@ to
--- @\@bot ping@. DB failures are logged but don't kill the handler — the
--- bot stays responsive even if Postgres is down.
-handleEvents :: DbPool -> Client -> TQueue Event -> LogT IO ()
-handleEvents pool client q = loop
+-- | MVP handler. Persists every group message, enqueues image segments for
+-- async download, replies @pong@ to @\@bot ping@. DB / queue failures are
+-- logged but never tear down the handler thread.
+handleEvents :: AppDeps -> Client -> TQueue Event -> LogT IO ()
+handleEvents deps client q = loop
   where
     loop = do
       ev <- liftIO (atomically (readTQueue q))
@@ -32,13 +34,15 @@ handleEvents pool client q = loop
         EvRaw v ->
           logTrace "unhandled event" v
         EvGroupMessage gm -> do
-          persist pool gm
+          persist deps gm
+          liftIO (enqueueImages deps.imageQ gm)
+          liftIO (enqueueForwards deps.forwardQ gm)
           onGroupMessage client gm
       loop
 
-persist :: DbPool -> GroupMessage -> LogT IO ()
-persist pool gm = do
-  eres <- liftIO (try (insertGroupMessage pool gm))
+persist :: AppDeps -> GroupMessage -> LogT IO ()
+persist deps gm = do
+  eres <- liftIO (try (insertGroupMessage deps.db gm))
   case eres :: Either SomeException () of
     Right () -> pure ()
     Left e ->

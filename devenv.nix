@@ -46,7 +46,7 @@
   };
 
   env = {
-    MAX_DB_URL = "postgresql://localhost:5433/max";
+    MAX_DB_URL = "postgresql://127.0.0.1:5433/max";
     MAX_WS_HOST = "0.0.0.0";
     MAX_WS_PORT = "8080";
     MAX_WS_PATH = "/onebot";
