@@ -8,7 +8,6 @@ module Max.Images
   )
 where
 
-import Control.Concurrent.Async (forConcurrently_)
 import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
 import Control.Exception (SomeException)
 import Control.Monad (forever)
@@ -22,6 +21,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (execute)
 import Effectful
+import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Log
 import Max.Effects.Blob (Blob, blobPath, putBlob)
 import Max.Effects.Db (Db, withConn)
@@ -75,17 +75,15 @@ lookupString k o = case KM.lookup (K.fromText k) o of
 -- | Pool of @poolSize@ workers reading from a shared queue. HTTP fetch,
 -- blob store, and DB writes all go through their respective effects.
 imageWorker ::
-  (Log :> es, Http :> es, Blob :> es, Db :> es, IOE :> es) =>
+  (Log :> es, Http :> es, Blob :> es, Db :> es, Concurrent :> es, IOE :> es) =>
   Int ->
   ImageQueue ->
   Eff es ()
 imageWorker poolSize q = localDomain "image-worker" $ do
   logInfo "image worker pool started" $ object ["workers" .= poolSize]
-  withRunInIO $ \run ->
-    forConcurrently_ [1 .. poolSize] $ \wid ->
-      run $
-        localData [("w", toJSON (wid :: Int))] $
-          workerLoop q
+  forConcurrently_ [1 .. poolSize] $ \wid ->
+    localData [("w", toJSON (wid :: Int))] $
+      workerLoop q
 
 workerLoop ::
   (Log :> es, Http :> es, Blob :> es, Db :> es, IOE :> es) =>

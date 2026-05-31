@@ -5,7 +5,6 @@ module OneBot.Server
   )
 where
 
-import Control.Concurrent.Async (concurrently_)
 import Control.Concurrent.STM
 import Control.Exception (SomeException, catch, finally)
 import Control.Monad (forM_)
@@ -90,9 +89,9 @@ acceptConn cfg pending eventQ clientRef = do
         liftIO (closeQuietly conn)
         logInfo_ "ws closed"
 
--- | Build the per-connection 'Client', publish on 'clientRef', and run the
--- read loop. On exit clear 'clientRef' and abort any in-flight 'call's so
--- callers don't hang past the disconnect.
+-- | Build the per-connection 'Client', publish on 'clientRef', and run
+-- the read loop. On exit clear 'clientRef' and abort any in-flight
+-- 'call's so callers don't hang past the disconnect.
 runConn ::
   (Log :> es, IOE :> es) =>
   WS.Connection ->
@@ -104,12 +103,7 @@ runConn conn eventQ clientRef = do
   let client = Client {connection = conn, pending = pendingMap}
   withRunInIO $ \run -> do
     atomically (writeTVar clientRef (Just client))
-    ( WS.withPingThread conn 30 (pure ()) $
-        -- concurrently_ is left for symmetry with previous handler/read pairing
-        -- — here it just runs read loop, but we keep the structure so adding
-        -- a per-connection sibling later (e.g. a watchdog) is a one-line change.
-        concurrently_ (run (readLoop client eventQ)) (pure ())
-      )
+    WS.withPingThread conn 30 (pure ()) (run (readLoop client eventQ))
       `finally` ( do
                     atomically (writeTVar clientRef Nothing)
                     abortPending pendingMap "connection closed"

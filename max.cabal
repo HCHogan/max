@@ -52,7 +52,6 @@ library
         Max.Util
     build-depends:
         , aeson               >= 2.2  && < 2.3
-        , async               >= 2.2  && < 2.3
         , base                >= 4.20 && < 5
         , base16-bytestring   >= 1.0  && < 1.1
         , bytestring          >= 0.12 && < 0.13
@@ -60,6 +59,7 @@ library
         , containers          >= 0.7  && < 0.9
         , cryptohash-sha256   >= 0.11 && < 0.12
         , directory           >= 1.3  && < 1.4
+        , effectful           >= 2.5  && < 2.6
         , effectful-core      >= 2.5  && < 2.6
         , filepath            >= 1.5  && < 1.6
         , http-client         >= 0.7  && < 0.8
@@ -80,7 +80,6 @@ executable max-bot
     hs-source-dirs:   app
     main-is:          Main.hs
     build-depends:
-        , async          >= 2.2  && < 2.3
         , base           >= 4.20 && < 5
         , effectful      >= 2.5  && < 2.6
         , log-base       >= 0.12 && < 0.13

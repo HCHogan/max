@@ -1,11 +1,11 @@
 module Main (main) where
 
-import Control.Concurrent.Async (withAsync)
 import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (bracket)
 import Control.Monad (unless)
 import Data.Text qualified as T
 import Effectful
+import Effectful.Concurrent.Async (Concurrent, link, runConcurrent, withAsync)
 import Effectful.Log
 import Log.Backend.StandardOutput (withStdOutLogger)
 import Max.Config (AppConfig (..), loadFromEnv)
@@ -35,6 +35,7 @@ main = do
       fwdQ <- newForwardQueue
       clientRef <- newTVarIO (Nothing :: Maybe Client)
       runEff
+        . runConcurrent
         . runLog "max" logger LogInfo
         . runHttp
         . runBlob cfg.imagesDir
@@ -43,9 +44,30 @@ main = do
         $ runApp cfg applied eventQ imgQ fwdQ clientRef
 
 runApp ::
-  (IOE :> es, Log :> es, Http :> es, Blob :> es, Db :> es, NapCat :> es) =>
-  AppConfig -> [String] -> TQueue Event -> ImageQueue -> ForwardQueue -> TVar (Maybe Client) -> Eff es ()
-runApp cfg applied eventQ imgQ fwdQ clientRef = do
+  ( IOE :> es,
+    Log :> es,
+    Http :> es,
+    Blob :> es,
+    Db :> es,
+    NapCat :> es,
+    Concurrent :> es
+  ) =>
+  AppConfig ->
+  [String] ->
+  TQueue Event ->
+  ImageQueue ->
+  ForwardQueue ->
+  TVar (Maybe Client) ->
+  Eff es ()
+runApp cfg applied eventQ imgQ fwdQ clientRef =
+  -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
+  -- websockets, which fires that callback in a fresh thread. The 'run'
+  -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
+  -- websockets silently closes the connection (NapCat sees "socket hang
+  -- up"). We could set this only around the runServer call, but setting
+  -- globally is harmless and avoids surprise for any future cross-thread
+  -- `withRunInIO` usage.
+  withUnliftStrategy (ConcUnlift Persistent Unlimited) $ do
   let s = cfg.server
   logInfo "max-bot starting" $
     object
@@ -59,10 +81,14 @@ runApp cfg applied eventQ imgQ fwdQ clientRef = do
   unless (null applied) $
     logInfo "migrations applied" $
       object ["files" .= applied]
-  -- Three long-lived siblings + the server, all under withAsync so Ctrl+C
-  -- (cancellation from above) takes them down cleanly together.
-  withRunInIO $ \run ->
-    withAsync (run (imageWorker cfg.imageWorkers imgQ)) $ \_ ->
-      withAsync (run (forwardWorker imgQ fwdQ)) $ \_ ->
-        withAsync (run (handleEvents eventQ imgQ fwdQ)) $ \_ ->
-          run (runServer cfg.server eventQ clientRef)
+  -- Three long-lived siblings + the server. 'link' rethrows any worker
+  -- exception into this thread so a worker silently dying takes the whole
+  -- process down (systemd / supervisor restarts) rather than leaving a
+  -- stuck queue. Ctrl+C still cascades via withAsync as usual.
+  withAsync (imageWorker cfg.imageWorkers imgQ) $ \aImg -> do
+    link aImg
+    withAsync (forwardWorker imgQ fwdQ) $ \aFwd -> do
+      link aFwd
+      withAsync (handleEvents eventQ imgQ fwdQ) $ \aH -> do
+        link aH
+        runServer cfg.server eventQ clientRef
