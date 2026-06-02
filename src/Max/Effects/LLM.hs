@@ -1,11 +1,21 @@
 {-# LANGUAGE TypeFamilies #-}
 
+-- |
+-- Multi-profile OpenAI-compatible chat client.  The interpreter holds
+-- a map of named 'LLMProfile's (each one has its own api_key,
+-- base_url, model, etc.); callers pick which profile to use per call.
+--
+-- The Agent layer (Phase 6b) sits on top of this; this effect stays
+-- raw — one HTTP request in, structured response out, no looping.
 module Max.Effects.LLM
   ( LLM,
-    LLMConfig (..),
+    LLMProfile (..),
+    LLMRegistry (..),
     ChatMessage (..),
     runLLM,
     chat,
+    listProfiles,
+    defaultProfile,
   )
 where
 
@@ -13,6 +23,8 @@ import Control.Exception (SomeException, try)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -21,8 +33,8 @@ import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log
 import Network.HTTP.Client
   ( Manager,
-    Response,
     RequestBody (RequestBodyLBS),
+    Response,
     httpLbs,
     method,
     newManager,
@@ -37,16 +49,27 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Status (statusCode)
 
-data LLMConfig = LLMConfig
-  { -- | e.g. @https://api.deepseek.com/v1@. We append @/chat/completions@.
+-- | A single named LLM endpoint.  Materialized from
+-- @[llm.profiles.<name>]@ in TOML.
+data LLMProfile = LLMProfile
+  { -- | e.g. @https://api.deepseek.com/v1@.  We append @/chat/completions@.
     baseUrl :: !Text,
     apiKey :: !Text,
     -- | Model id; @deepseek-chat@, @gpt-4o-mini@, @qwen2.5:7b@, etc.
     model :: !Text,
     maxTokens :: !Int,
     temperature :: !Double,
-    -- | HTTP timeout for one chat completion. LLMs are slow, default 120.
+    -- | HTTP timeout for one chat completion.  LLMs are slow, default 120.
     timeoutSeconds :: !Int
+  }
+  deriving stock (Show)
+
+-- | The full profile registry: the name of the default profile + every
+-- known profile keyed by name.  'runLLM' takes one of these; everything
+-- downstream picks profiles by name.
+data LLMRegistry = LLMRegistry
+  { defaultName :: !Text,
+    profiles :: !(Map Text LLMProfile)
   }
   deriving stock (Show)
 
@@ -60,45 +83,68 @@ data ChatMessage = ChatMessage
 instance ToJSON ChatMessage where
   toJSON m = object ["role" .= m.role, "content" .= m.content]
 
+instance FromJSON ChatMessage where
+  parseJSON = withObject "ChatMessage" $ \o ->
+    ChatMessage <$> o .: "role" <*> o .: "content"
+
 data LLM :: Effect where
-  Chat :: [ChatMessage] -> LLM m (Either Text Text)
+  -- | Run one chat completion against the named profile.
+  Chat :: Text -> [ChatMessage] -> LLM m (Either Text Text)
+  -- | List configured profile names (so commands like @!model list@
+  -- have something to enumerate).
+  ListProfiles :: LLM m [Text]
+  -- | The default profile name, for command resolution.
+  DefaultProfile :: LLM m Text
 
 type instance DispatchOf LLM = Dynamic
 
--- | Interpreter holds its own 'Manager' so the LLM's HTTP stack is
--- independent from the image worker's (different latency profile,
--- different timeout, different host pool).
+-- | One 'Manager' shared across all profiles — they're all just HTTPS
+-- endpoints, so we don't gain anything by pooling per host.
 runLLM ::
   (Log :> es, IOE :> es) =>
-  LLMConfig ->
+  LLMRegistry ->
   Eff (LLM : es) a ->
   Eff es a
-runLLM cfg m = do
+runLLM reg m = do
   mgr <- liftIO (newManager tlsManagerSettings)
   interpret
     ( \_ -> \case
-        Chat msgs -> do
-          logInfo "llm: chat request" $
-            object
-              [ "msg_count" .= length msgs,
-                "model" .= cfg.model
-              ]
-          r <- liftIO (callChat mgr cfg msgs)
-          case r of
-            Left err ->
-              logAttention "llm: error" $ object ["error" .= err]
-            Right text ->
-              logInfo "llm: got response" $
-                object ["len" .= T.length text]
-          pure r
+        Chat name msgs -> case Map.lookup name reg.profiles of
+          Nothing -> do
+            logAttention "llm: unknown profile" $ object ["profile" .= name]
+            pure $ Left ("unknown llm profile: " <> name)
+          Just cfg -> do
+            logInfo "llm: chat request" $
+              object
+                [ "msg_count" .= length msgs,
+                  "profile" .= name,
+                  "model" .= cfg.model
+                ]
+            r <- liftIO (callChat mgr cfg msgs)
+            case r of
+              Left err ->
+                logAttention "llm: error" $
+                  object ["error" .= err, "profile" .= name]
+              Right text ->
+                logInfo "llm: got response" $
+                  object ["len" .= T.length text, "profile" .= name]
+            pure r
+        ListProfiles -> pure (Map.keys reg.profiles)
+        DefaultProfile -> pure reg.defaultName
     )
     m
 
-chat :: LLM :> es => [ChatMessage] -> Eff es (Either Text Text)
-chat msgs = send (Chat msgs)
+chat :: LLM :> es => Text -> [ChatMessage] -> Eff es (Either Text Text)
+chat name msgs = send (Chat name msgs)
+
+listProfiles :: LLM :> es => Eff es [Text]
+listProfiles = send ListProfiles
+
+defaultProfile :: LLM :> es => Eff es Text
+defaultProfile = send DefaultProfile
 
 -- | OpenAI-compatible @POST {baseUrl}/chat/completions@.
-callChat :: Manager -> LLMConfig -> [ChatMessage] -> IO (Either Text Text)
+callChat :: Manager -> LLMProfile -> [ChatMessage] -> IO (Either Text Text)
 callChat mgr cfg msgs = do
   let body =
         object

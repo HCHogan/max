@@ -4,13 +4,38 @@
 -- Each source parses into a 'PartialAppConfig' whose every field is 'Maybe';
 -- they are combined left-to-right with @<>@ (first 'Just' wins, per
 -- 'Alternative'), then materialised, filling in defaults for any field still
--- 'Nothing'. Only @llm.api_key@ is required — everything else has a default
--- baked into 'materialize'.
+-- 'Nothing'.
 --
 -- TOML file is looked up in this order, first hit wins:
 --   * explicit @--config PATH@ (or @MAX_CONFIG=PATH@)
 --   * @./max.toml@ in the current working directory
 --   * @$XDG_CONFIG_HOME/max/config.toml@ (defaulting to @~/.config@)
+--
+-- == LLM profiles
+--
+-- The bot can be wired to several OpenAI-compatible endpoints at once.
+-- Each is a named 'LLMProfile' in the TOML:
+--
+-- > [llm]
+-- > default = "main"
+-- >
+-- > [llm.profiles.main]
+-- > api_key = "sk-..."
+-- > model   = "deepseek-chat"
+-- >
+-- > [llm.profiles.reasoner]
+-- > api_key = "sk-..."
+-- > model   = "deepseek-reasoner"
+-- >
+-- > [llm.profiles.local]
+-- > base_url = "http://localhost:8080/v1"
+-- > model    = "qwen2.5:7b"
+-- > api_key  = "any"
+--
+-- The env/CLI single-profile flags (@MAX_LLM_API_KEY@, @--llm-model@, ...)
+-- write into the @default@-named profile.  If no TOML exists and only env
+-- is set, the bot synthesises a single profile named @"default"@ from
+-- those values.
 module Max.Config
   ( AppConfig (..),
     loadConfig,
@@ -20,38 +45,37 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Monad (when)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.DB.Connection (DbConfig (..))
-import Max.Effects.LLM (LLMConfig (..))
+import Max.Effects.LLM (LLMProfile (..), LLMRegistry (..))
 import OneBot.Server (ServerConfig (..))
 import Options.Applicative qualified as O
-import System.Directory (doesFileExist, getXdgDirectory, XdgDirectory (XdgConfig))
+import System.Directory (XdgDirectory (XdgConfig), doesFileExist, getXdgDirectory)
 import System.Environment (lookupEnv)
 import System.FilePath ((</>))
 import Text.Read (readMaybe)
 import Toml (TomlCodec, (.=))
 import Toml qualified
 
--- | Final, fully-resolved application config. Everything required for
--- the bot to boot.
+-- | Final, fully-resolved application config.
 data AppConfig = AppConfig
   { server :: !ServerConfig,
     db :: !DbConfig,
     migrationsDir :: !FilePath,
     imagesDir :: !FilePath,
     imageWorkers :: !Int,
-    llm :: !LLMConfig,
+    llm :: !LLMRegistry,
     historyWindow :: !Int,
-    -- | The "persona" portion of the system prompt — the bit that
-    -- shapes voice/identity. The format-guide tail is appended by
-    -- "Max.Prompt".
+    -- | Persona used when a session hasn't overridden it.
     persona :: !Text
   }
   deriving stock (Show)
 
--- | Default persona used when no source supplies one.
+-- | Default persona used when neither config nor session supplies one.
 defaultPersona :: Text
 defaultPersona =
   "你是一个 QQ 群里的 AI 助手。群成员会 @你 来让你回答问题。请用自然简洁的中文回答。"
@@ -82,7 +106,15 @@ data PartialDb = PartialDb
     maxConns :: !(Maybe Int)
   }
 
+-- | Multi-profile LLM partial.  'defaultName' selects which profile is the
+-- default; 'profiles' is the raw map.  CLI/env flags write into a profile
+-- named @"default"@ (which is also the implicit name when no TOML exists).
 data PartialLLM = PartialLLM
+  { defaultName :: !(Maybe Text),
+    profiles :: !(Map Text PartialProfile)
+  }
+
+data PartialProfile = PartialProfile
   { apiKey :: !(Maybe Text),
     baseUrl :: !(Maybe Text),
     model :: !(Maybe Text),
@@ -115,9 +147,9 @@ instance Semigroup PartialDb where
 instance Monoid PartialDb where
   mempty = PartialDb Nothing Nothing
 
-instance Semigroup PartialLLM where
+instance Semigroup PartialProfile where
   a <> b =
-    PartialLLM
+    PartialProfile
       { apiKey = a.apiKey <|> b.apiKey,
         baseUrl = a.baseUrl <|> b.baseUrl,
         model = a.model <|> b.model,
@@ -126,8 +158,18 @@ instance Semigroup PartialLLM where
         timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds
       }
 
+instance Monoid PartialProfile where
+  mempty = PartialProfile Nothing Nothing Nothing Nothing Nothing Nothing
+
+instance Semigroup PartialLLM where
+  a <> b =
+    PartialLLM
+      { defaultName = a.defaultName <|> b.defaultName,
+        profiles = Map.unionWith (<>) a.profiles b.profiles
+      }
+
 instance Monoid PartialLLM where
-  mempty = PartialLLM Nothing Nothing Nothing Nothing Nothing Nothing
+  mempty = PartialLLM Nothing Map.empty
 
 instance Semigroup PartialAppConfig where
   a <> b =
@@ -159,12 +201,7 @@ instance Monoid PartialAppConfig where
 
 materialize :: PartialAppConfig -> IO AppConfig
 materialize p = do
-  apiKey <- case p.llm.apiKey of
-    Just k | not (T.null k) -> pure k
-    _ ->
-      fail $
-        "llm.api_key is required\n"
-          <> "  set via --llm-api-key, MAX_LLM_API_KEY, or [llm].api_key in the TOML"
+  registry <- materializeLLM p.llm
   pure
     AppConfig
       { server =
@@ -182,18 +219,50 @@ materialize p = do
         migrationsDir = fromMaybe "migrations" p.migrationsDir,
         imagesDir = fromMaybe "var/images" p.imagesDir,
         imageWorkers = fromMaybe 4 p.imageWorkers,
-        llm =
-          LLMConfig
-            { apiKey = apiKey,
-              baseUrl = fromMaybe "https://api.deepseek.com/v1" p.llm.baseUrl,
-              model = fromMaybe "deepseek-chat" p.llm.model,
-              maxTokens = fromMaybe 2048 p.llm.maxTokens,
-              temperature = fromMaybe 0.7 p.llm.temperature,
-              timeoutSeconds = fromMaybe 120 p.llm.timeoutSeconds
-            },
+        llm = registry,
         historyWindow = fromMaybe 20 p.historyWindow,
         persona = fromMaybe defaultPersona p.persona
       }
+
+materializeLLM :: PartialLLM -> IO LLMRegistry
+materializeLLM (PartialLLM dn rawProfiles) = do
+  let resolvedDefault = case dn of
+        Just n -> n
+        Nothing -> case Map.keys rawProfiles of
+          [single] -> single
+          _ -> "default"
+  -- Ensure the default profile exists in the map even if no source
+  -- declared it (single-profile env-only path).
+  let withDefault =
+        Map.insertWith
+          (\_ existing -> existing)
+          resolvedDefault
+          mempty
+          rawProfiles
+  resolved <- Map.traverseWithKey (resolveProfile resolvedDefault) withDefault
+  pure LLMRegistry {defaultName = resolvedDefault, profiles = resolved}
+  where
+    resolveProfile def name partial = do
+      apiKey <- case partial.apiKey of
+        Just k | not (T.null k) -> pure k
+        _ ->
+          fail $
+            "llm profile '"
+              <> T.unpack name
+              <> "' has no api_key"
+              <> ( if name == def
+                     then "\n  set via --llm-api-key, MAX_LLM_API_KEY, or [llm.profiles." <> T.unpack name <> "].api_key"
+                     else "\n  set via [llm.profiles." <> T.unpack name <> "].api_key"
+                 )
+      pure
+        LLMProfile
+          { apiKey = apiKey,
+            baseUrl = fromMaybe "https://api.deepseek.com/v1" partial.baseUrl,
+            model = fromMaybe "deepseek-chat" partial.model,
+            maxTokens = fromMaybe 2048 partial.maxTokens,
+            temperature = fromMaybe 0.7 partial.temperature,
+            timeoutSeconds = fromMaybe 120 partial.timeoutSeconds
+          }
 
 --------------------------------------------------------------------------------
 -- Entry point.
@@ -244,7 +313,7 @@ partialP =
     <*> O.optional (O.strOption (O.long "images-dir" <> O.metavar "DIR"))
     <*> O.optional (O.option O.auto (O.long "image-workers" <> O.metavar "N"))
     <*> O.optional (O.option O.auto (O.long "history-window" <> O.metavar "N"))
-    <*> O.optional (textOption (O.long "persona" <> O.metavar "TEXT" <> O.help "Bot persona / system-prompt identity segment"))
+    <*> O.optional (textOption (O.long "persona" <> O.metavar "TEXT" <> O.help "Default bot persona / system-prompt identity segment"))
 
 serverP :: O.Parser PartialServer
 serverP =
@@ -260,15 +329,46 @@ dbP =
     <$> O.optional (textOption (O.long "db-url" <> O.metavar "URL"))
     <*> O.optional (O.option O.auto (O.long "db-max-conns" <> O.metavar "N"))
 
+-- | CLI flags only operate on the default profile; defining additional
+-- profiles requires TOML.
 llmP :: O.Parser PartialLLM
 llmP =
-  PartialLLM
-    <$> O.optional (textOption (O.long "llm-api-key" <> O.metavar "KEY"))
+  build
+    <$> O.optional (textOption (O.long "llm-default-profile" <> O.metavar "NAME" <> O.help "Which TOML profile is the default (default: \"default\")"))
+    <*> O.optional (textOption (O.long "llm-api-key" <> O.metavar "KEY"))
     <*> O.optional (textOption (O.long "llm-base-url" <> O.metavar "URL"))
     <*> O.optional (textOption (O.long "llm-model" <> O.metavar "NAME"))
     <*> O.optional (O.option O.auto (O.long "llm-max-tokens" <> O.metavar "N"))
     <*> O.optional (O.option O.auto (O.long "llm-temperature" <> O.metavar "F"))
     <*> O.optional (O.option O.auto (O.long "llm-timeout-seconds" <> O.metavar "N"))
+  where
+    build dn key url mdl mt temp to =
+      let profile =
+            PartialProfile
+              { apiKey = key,
+                baseUrl = url,
+                model = mdl,
+                maxTokens = mt,
+                temperature = temp,
+                timeoutSeconds = to
+              }
+          name = fromMaybe "default" dn
+       in PartialLLM
+            { defaultName = dn,
+              profiles =
+                if profile == mempty
+                  then Map.empty
+                  else Map.singleton name profile
+            }
+
+instance Eq PartialProfile where
+  a == b =
+    a.apiKey == b.apiKey
+      && a.baseUrl == b.baseUrl
+      && a.model == b.model
+      && a.maxTokens == b.maxTokens
+      && a.temperature == b.temperature
+      && a.timeoutSeconds == b.timeoutSeconds
 
 textOption :: O.Mod O.OptionFields String -> O.Parser Text
 textOption = fmap T.pack . O.strOption
@@ -292,13 +392,32 @@ parseEnvPartial = do
   imgWorkers <- lookupEnvIntMaybe "MAX_IMAGE_WORKERS"
   histWin <- lookupEnvIntMaybe "MAX_HISTORY_WINDOW"
   persona <- fmap T.pack <$> lookupEnv "MAX_PERSONA"
-  -- llm
+  -- llm: default profile + its field overrides
+  llmDefault <- fmap T.pack <$> lookupEnv "MAX_LLM_DEFAULT_PROFILE"
   llmKey <- fmap T.pack <$> lookupEnv "MAX_LLM_API_KEY"
   llmBase <- fmap T.pack <$> lookupEnv "MAX_LLM_BASE_URL"
   llmModel <- fmap T.pack <$> lookupEnv "MAX_LLM_MODEL"
   llmMaxTok <- lookupEnvIntMaybe "MAX_LLM_MAX_TOKENS"
   llmTemp <- lookupEnvDoubleMaybe "MAX_LLM_TEMPERATURE"
   llmTimeout <- lookupEnvIntMaybe "MAX_LLM_TIMEOUT_SECONDS"
+  let envProfile =
+        PartialProfile
+          { apiKey = llmKey,
+            baseUrl = llmBase,
+            model = llmModel,
+            maxTokens = llmMaxTok,
+            temperature = llmTemp,
+            timeoutSeconds = llmTimeout
+          }
+      envProfileName = fromMaybe "default" llmDefault
+      envLlm =
+        PartialLLM
+          { defaultName = llmDefault,
+            profiles =
+              if envProfile == mempty
+                then Map.empty
+                else Map.singleton envProfileName envProfile
+          }
   pure
     PartialAppConfig
       { server =
@@ -313,15 +432,7 @@ parseEnvPartial = do
             { url = dbUrl,
               maxConns = dbConns
             },
-        llm =
-          PartialLLM
-            { apiKey = llmKey,
-              baseUrl = llmBase,
-              model = llmModel,
-              maxTokens = llmMaxTok,
-              temperature = llmTemp,
-              timeoutSeconds = llmTimeout
-            },
+        llm = envLlm,
         migrationsDir = migDir,
         imagesDir = imgDir,
         imageWorkers = imgWorkers,
@@ -349,9 +460,8 @@ lookupEnvDoubleMaybe name =
 -- TOML.
 
 parseTomlFile :: FilePath -> IO PartialAppConfig
-parseTomlFile fp = do
-  txt <- Toml.decodeFileEither partialAppCodec fp >>= either bad pure
-  pure txt
+parseTomlFile fp =
+  Toml.decodeFileEither partialAppCodec fp >>= either bad pure
   where
     bad errs = fail $ "TOML parse failed for " <> fp <> ":\n" <> show errs
 
@@ -381,9 +491,22 @@ partialDbCodec =
     <$> Toml.dioptional (Toml.text "url") .= (.url)
     <*> Toml.dioptional (Toml.int "max_conns") .= (.maxConns)
 
+-- | TOML LLM section:
+--
+-- >   [llm]
+-- >   default = "main"
+-- >
+-- >   [llm.profiles.main]
+-- >   api_key = "..."
 partialLlmCodec :: TomlCodec PartialLLM
 partialLlmCodec =
   PartialLLM
+    <$> Toml.dioptional (Toml.text "default") .= (.defaultName)
+    <*> Toml.tableMap Toml._KeyText (const partialProfileCodec) "profiles" .= (.profiles)
+
+partialProfileCodec :: TomlCodec PartialProfile
+partialProfileCodec =
+  PartialProfile
     <$> Toml.dioptional (Toml.text "api_key") .= (.apiKey)
     <*> Toml.dioptional (Toml.text "base_url") .= (.baseUrl)
     <*> Toml.dioptional (Toml.text "model") .= (.model)

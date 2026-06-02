@@ -1,5 +1,5 @@
 # Copy to ./max.toml (looked up first), or place at $XDG_CONFIG_HOME/max/config.toml.
-# Every field is optional; omit anything you don't want to set, and the bot
+# Every field is optional; omit anything you don't want to set and the bot
 # falls back to environment variables, then to the built-in defaults.
 #
 # Config precedence (first wins): CLI flags > env vars > this file > defaults.
@@ -7,6 +7,8 @@
 # Bot persona — the identity line at the top of the system prompt.
 # The format guide for [HH:MM], [↩ 引用 ...], [image:…], [forward] markers is
 # always appended underneath; only this string is configurable.
+#
+# Group members can override this per-group at runtime with !persona <text>.
 persona = "你是一个 QQ 群里的 AI 助手。群成员会 @你 来让你回答问题。请用自然简洁的中文回答。"
 
 # migrations_dir   = "migrations"
@@ -24,10 +26,35 @@ persona = "你是一个 QQ 群里的 AI 助手。群成员会 @你 来让你回�
 # url       = "postgresql://127.0.0.1:5433/max"
 # max_conns = 8
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM profiles.  You can define as many as you like; group members switch
+# between them at runtime via !model <name>.  The 'default' field picks which
+# one is used when a session has no per-group override.
+#
+# CLI/env flags (--llm-api-key, MAX_LLM_API_KEY, ...) seed the profile named
+# "default".  If you only configure LLM via CLI/env (no [llm.profiles.*]
+# table), the bot synthesises a single profile called "default" for you.
+# ─────────────────────────────────────────────────────────────────────────────
+
 [llm]
-# api_key         = "sk-..."        # required somewhere (CLI / env / here)
-# base_url        = "https://api.deepseek.com/v1"
-# model           = "deepseek-chat"
-# max_tokens      = 2048
-# temperature     = 0.7
-# timeout_seconds = 120
+default = "deepseek-chat"
+
+[llm.profiles.deepseek-chat]
+api_key         = "sk-..."
+base_url        = "https://api.deepseek.com/v1"
+model           = "deepseek-chat"
+max_tokens      = 2048
+temperature     = 0.7
+timeout_seconds = 120
+
+[llm.profiles.deepseek-reasoner]
+api_key         = "sk-..."
+base_url        = "https://api.deepseek.com/v1"
+model           = "deepseek-reasoner"
+max_tokens      = 4096
+temperature     = 0.3
+
+# [llm.profiles.local]
+# api_key  = "any"          # llama.cpp ignores it but the field is required
+# base_url = "http://localhost:8080/v1"
+# model    = "qwen2.5:7b"

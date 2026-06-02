@@ -17,6 +17,7 @@ result-*
 .envrc.local
 .napcat/
 var/
+max.toml
 
 # Editor
 .vscode/

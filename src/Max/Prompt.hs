@@ -12,13 +12,14 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
 import Max.Effects.LLM (ChatMessage (..))
+import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
--- | Assemble the system prompt: the caller-supplied @persona@ on top
--- of a fixed format guide describing the marker conventions used in
--- the rendered context.
+-- | Assemble the system prompt: the @persona@ (from session override
+-- or AppConfig default) on top of a fixed format guide describing the
+-- marker conventions used in the rendered context.
 systemPrompt :: Text -> Text
 systemPrompt persona =
   T.unlines
@@ -31,44 +32,60 @@ systemPrompt persona =
       "  [forward]                   — 转发的聊天记录（你看不到内容）"
     ]
 
--- | Build the chat context for one @bot trigger as a single-turn prompt:
---   - one @system@ message with persona + format key
---   - one @user@ message containing recent group context + reply context
---     + the triggering message + an explicit ask
+-- | Build the chat context for one @bot trigger:
+--
+--   * @system@ message: session persona override (or default) + format guide
+--   * any prior session history (user/assistant pairs from earlier rounds)
+--   * @user@ message: ambient group context (DB recent-N) + reply chain +
+--     pending !btw notes (drained from session) + current @-mention.
+--
+-- The drained notes are returned alongside the messages so the caller
+-- can persist the "notes consumed" state back to the session after
+-- the LLM call lands.
 buildContext ::
   (WithConnection :> es, IOE :> es) =>
-  Text -> -- persona
-  Int -> -- history window size
+  Text -> -- default persona (used when session has no override)
+  Int -> -- history window size for ambient context
+  Session ->
   GroupMessage ->
-  Eff es [ChatMessage]
-buildContext persona n gm = do
+  Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
+buildContext defaultPersona n session gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
-  history <- fetchRecentInGroup gid mid n
+      effectivePersona = fromMaybe defaultPersona session.persona
+  ambient <- fetchRecentInGroup gid mid n
   replyCtx <- case extractReply gm.message of
     Nothing -> pure Nothing
     Just rid -> fetchMessage rid
-  let body = renderBody selfId' history replyCtx gm
-  pure
-    [ ChatMessage "system" (systemPrompt persona),
-      ChatMessage "user" body
-    ]
+  let userBody = renderUser selfId' ambient replyCtx session.btwNotes gm
+      messages =
+        [ChatMessage "system" (systemPrompt effectivePersona)]
+          <> session.history
+          <> [ChatMessage "user" userBody]
+  pure (messages, session.btwNotes)
 
-renderBody :: Int64 -> [HistoryItem] -> Maybe HistoryItem -> GroupMessage -> Text
-renderBody selfId' history replyCtx gm =
+renderUser :: Int64 -> [HistoryItem] -> Maybe HistoryItem -> [Text] -> GroupMessage -> Text
+renderUser selfId' ambient replyCtx notes gm =
   T.intercalate "\n" $
     concat
       [ ["[群最近上下文]"],
-        if null history
+        if null ambient
           then ["(无历史消息)"]
-          else map (renderHistoryLine selfId') history,
+          else map (renderHistoryLine selfId') ambient,
         [""],
         case replyCtx of
           Nothing -> []
           Just r ->
             [ "[引用上下文]",
               renderReplyLine selfId' r,
+              ""
+            ],
+        if null notes
+          then []
+          else
+            [ "[侧记 — 你之前的 !btw 笔记]",
+              T.intercalate "\n" (map ("  • " <>) notes),
               ""
             ],
         [ "[当前 @ 你的消息]",

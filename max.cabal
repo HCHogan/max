@@ -37,12 +37,16 @@ library
         OneBot.Segment
         OneBot.Server
         OneBot.Types
+        Max.Command.Dispatcher
+        Max.Command.Parser
+        Max.Command.Types
         Max.Config
         Max.DB.Connection
         Max.DB.Forward
         Max.DB.History
         Max.DB.Message
         Max.DB.Migrations
+        Max.DB.Session
         Max.Effects.Blob
         Max.Effects.Http
         Max.Effects.LLM
@@ -51,6 +55,8 @@ library
         Max.Handler
         Max.Images
         Max.Prompt
+        Max.Session
+        Max.Session.Types
         Max.Util
     build-depends:
         , aeson               >= 2.2  && < 2.3
@@ -69,6 +75,7 @@ library
         , http-client-tls     >= 0.3  && < 0.4
         , http-types          >= 0.12 && < 0.13
         , log-effectful       >= 1.0  && < 1.1
+        , megaparsec          >= 9.5  && < 9.8
         , optparse-applicative >= 0.18 && < 0.20
         , postgresql-simple   >= 0.7  && < 0.8
         , resource-pool       >= 0.4  && < 0.5

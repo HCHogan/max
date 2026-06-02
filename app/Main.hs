@@ -18,8 +18,10 @@ import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (LLM, runLLM)
 import Max.Effects.NapCat (NapCat, runNapCat)
 import Max.Forward (ForwardQueue, forwardWorker, newForwardQueue)
+import Max.Effects.LLM (LLMRegistry (..))
 import Max.Handler (handleEvents)
 import Max.Images (ImageQueue, imageWorker, newImageQueue)
+import Max.Session (SessionRegistry, newSessionRegistry)
 import OneBot.Event (Event)
 import OneBot.Server (Client, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
@@ -35,6 +37,7 @@ main = do
       eventQ <- newTQueueIO
       imgQ <- newImageQueue
       fwdQ <- newForwardQueue
+      sessions <- newSessionRegistry
       clientRef <- newTVarIO (Nothing :: Maybe Client)
       runEff
         . runConcurrent
@@ -44,7 +47,7 @@ main = do
         . runWithConnectionPool pool
         . runNapCat clientRef
         . runLLM cfg.llm
-        $ runApp cfg applied eventQ imgQ fwdQ clientRef
+        $ runApp cfg applied sessions eventQ imgQ fwdQ clientRef
 
 runApp ::
   ( IOE :> es,
@@ -58,12 +61,13 @@ runApp ::
   ) =>
   AppConfig ->
   [String] ->
+  SessionRegistry ->
   TQueue Event ->
   ImageQueue ->
   ForwardQueue ->
   TVar (Maybe Client) ->
   Eff es ()
-runApp cfg applied eventQ imgQ fwdQ clientRef =
+runApp cfg applied sessions eventQ imgQ fwdQ clientRef =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -93,6 +97,6 @@ runApp cfg applied eventQ imgQ fwdQ clientRef =
     link aImg
     withAsync (forwardWorker imgQ fwdQ) $ \aFwd -> do
       link aFwd
-      withAsync (handleEvents cfg.persona cfg.historyWindow eventQ imgQ fwdQ) $ \aH -> do
+      withAsync (handleEvents cfg.persona cfg.historyWindow sessions cfg.llm.defaultName eventQ imgQ fwdQ) $ \aH -> do
         link aH
         runServer cfg.server eventQ clientRef
