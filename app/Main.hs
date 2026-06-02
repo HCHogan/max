@@ -7,13 +7,15 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, link, runConcurrent, withAsync)
 import Effectful.Log
+import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Log.Backend.StandardOutput (withStdOutLogger)
-import Max.Config (AppConfig (..), loadFromEnv)
+import Max.Config (AppConfig (..), loadConfig)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
 import Max.Effects.Blob (Blob, runBlob)
-import Max.Effects.Db (Db, runDb)
 import Max.Effects.Http (Http, runHttp)
+import Max.Effects.LLM (LLM, runLLM)
 import Max.Effects.NapCat (NapCat, runNapCat)
 import Max.Forward (ForwardQueue, forwardWorker, newForwardQueue)
 import Max.Handler (handleEvents)
@@ -26,7 +28,7 @@ main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   hSetBuffering stderr LineBuffering
-  cfg <- loadFromEnv
+  cfg <- loadConfig
   bracket (newDbPool cfg.db) closeDbPool $ \pool -> do
     applied <- runMigrations pool cfg.migrationsDir
     withStdOutLogger $ \logger -> do
@@ -39,8 +41,9 @@ main = do
         . runLog "max" logger LogInfo
         . runHttp
         . runBlob cfg.imagesDir
-        . runDb pool
+        . runWithConnectionPool pool
         . runNapCat clientRef
+        . runLLM cfg.llm
         $ runApp cfg applied eventQ imgQ fwdQ clientRef
 
 runApp ::
@@ -48,8 +51,9 @@ runApp ::
     Log :> es,
     Http :> es,
     Blob :> es,
-    Db :> es,
+    WithConnection :> es,
     NapCat :> es,
+    LLM :> es,
     Concurrent :> es
   ) =>
   AppConfig ->
@@ -89,6 +93,6 @@ runApp cfg applied eventQ imgQ fwdQ clientRef =
     link aImg
     withAsync (forwardWorker imgQ fwdQ) $ \aFwd -> do
       link aFwd
-      withAsync (handleEvents eventQ imgQ fwdQ) $ \aH -> do
+      withAsync (handleEvents cfg.persona cfg.historyWindow eventQ imgQ fwdQ) $ \aH -> do
         link aH
         runServer cfg.server eventQ clientRef

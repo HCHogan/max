@@ -28,8 +28,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log
+import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Forward (ForwardNodeInsert (..), insertForwardNode)
-import Max.Effects.Db (Db)
 import Max.Effects.NapCat (NapCat, callAction)
 import Max.Images (ImageQueue, enqueueImagesFromNode)
 import Max.Util (catchSync)
@@ -81,7 +81,7 @@ forwardIdFromValue (Object o) = case KM.lookup (K.fromText "id") o of
 forwardIdFromValue _ = Nothing
 
 forwardWorker ::
-  (Log :> es, NapCat :> es, Db :> es, IOE :> es) =>
+  (Log :> es, NapCat :> es, WithConnection :> es, IOE :> es) =>
   ImageQueue ->
   ForwardQueue ->
   Eff es ()
@@ -104,7 +104,7 @@ forwardWorker imgQ q = localDomain "forward-worker" $ do
             ]
 
 processJob ::
-  (Log :> es, NapCat :> es, Db :> es, IOE :> es) =>
+  (Log :> es, NapCat :> es, WithConnection :> es, IOE :> es) =>
   ImageQueue ->
   ForwardJob ->
   Eff es ()
@@ -127,7 +127,7 @@ processJob imgQ job = do
     timeoutMs = 30000
 
 ingestNodes ::
-  (Log :> es, Db :> es, IOE :> es) =>
+  (Log :> es, WithConnection :> es, IOE :> es) =>
   ImageQueue ->
   ForwardJob ->
   [ForwardNode] ->
@@ -137,7 +137,7 @@ ingestNodes imgQ job nodes =
     ingestNode imgQ job.containerMessageId job.groupId job.selfId 1 i node
 
 ingestNode ::
-  (Log :> es, Db :> es, IOE :> es) =>
+  (Log :> es, WithConnection :> es, IOE :> es) =>
   ImageQueue ->
   Int64 -> -- containerSid
   Int64 -> -- groupId

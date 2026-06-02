@@ -1,0 +1,33 @@
+# Copy to ./max.toml (looked up first), or place at $XDG_CONFIG_HOME/max/config.toml.
+# Every field is optional; omit anything you don't want to set, and the bot
+# falls back to environment variables, then to the built-in defaults.
+#
+# Config precedence (first wins): CLI flags > env vars > this file > defaults.
+
+# Bot persona — the identity line at the top of the system prompt.
+# The format guide for [HH:MM], [↩ 引用 ...], [image:…], [forward] markers is
+# always appended underneath; only this string is configurable.
+persona = "你是一个 QQ 群里的 AI 助手。群成员会 @你 来让你回答问题。请用自然简洁的中文回答。"
+
+# migrations_dir   = "migrations"
+# images_dir       = "var/images"
+# image_workers    = 4
+# history_window   = 20
+
+[server]
+# host         = "0.0.0.0"
+# port         = 8080
+# path         = "/onebot"
+# access_token = "shared-secret-with-napcat"
+
+[db]
+# url       = "postgresql://127.0.0.1:5433/max"
+# max_conns = 8
+
+[llm]
+# api_key         = "sk-..."        # required somewhere (CLI / env / here)
+# base_url        = "https://api.deepseek.com/v1"
+# model           = "deepseek-chat"
+# max_tokens      = 2048
+# temperature     = 0.7
+# timeout_seconds = 120

@@ -55,10 +55,9 @@ where
 import Data.Aeson (Value, toJSON)
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
-import Database.PostgreSQL.Simple (execute)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Effectful
-import Max.Effects.Db (Db, withConn)
+import Effectful.PostgreSQL (WithConnection, execute)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -70,8 +69,8 @@ instance ToField Jsonb where
 
 -- | Insert a group message; idempotent on @message_id@ (NapCat may replay
 -- the same event after our reverse-WS reconnects).
-insertGroupMessage :: Db :> es => GroupMessage -> Eff es ()
-insertGroupMessage gm = withConn $ \c -> do
+insertGroupMessage :: (WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
+insertGroupMessage gm = do
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
       UserId uid = gm.userId
@@ -82,7 +81,6 @@ insertGroupMessage gm = withConn $ \c -> do
       replyTo = extractReply gm.message
   _ <-
     execute
-      c
       "INSERT INTO messages \
       \ (message_id, group_id, user_id, self_id, \
       \  segments, rendered_text, raw_message, \

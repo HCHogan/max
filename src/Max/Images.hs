@@ -19,12 +19,11 @@ import Data.Int (Int64)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (execute)
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Log
+import Effectful.PostgreSQL (WithConnection, execute)
 import Max.Effects.Blob (Blob, blobPath, putBlob)
-import Max.Effects.Db (Db, withConn)
 import Max.Effects.Http (Http, getBytes)
 import Max.Util (catchSync)
 import OneBot.Event (GroupMessage (..))
@@ -75,7 +74,7 @@ lookupString k o = case KM.lookup (K.fromText k) o of
 -- | Pool of @poolSize@ workers reading from a shared queue. HTTP fetch,
 -- blob store, and DB writes all go through their respective effects.
 imageWorker ::
-  (Log :> es, Http :> es, Blob :> es, Db :> es, Concurrent :> es, IOE :> es) =>
+  (Log :> es, Http :> es, Blob :> es, WithConnection :> es, Concurrent :> es, IOE :> es) =>
   Int ->
   ImageQueue ->
   Eff es ()
@@ -86,7 +85,7 @@ imageWorker poolSize q = localDomain "image-worker" $ do
       workerLoop q
 
 workerLoop ::
-  (Log :> es, Http :> es, Blob :> es, Db :> es, IOE :> es) =>
+  (Log :> es, Http :> es, Blob :> es, WithConnection :> es, IOE :> es) =>
   ImageQueue ->
   Eff es ()
 workerLoop q = forever $ do
@@ -107,7 +106,7 @@ workerLoop q = forever $ do
           ]
 
 processOne ::
-  (Log :> es, Http :> es, Blob :> es, Db :> es) =>
+  (Log :> es, Http :> es, Blob :> es, WithConnection :> es, IOE :> es) =>
   ImageJob ->
   Eff es ()
 processOne job = do
@@ -135,23 +134,21 @@ processOne job = do
     maxBytes = 50 * 1024 * 1024
 
 recordImage ::
-  Db :> es =>
+  (WithConnection :> es, IOE :> es) =>
   Text ->
   Text ->
   Int ->
   FilePath ->
   ImageJob ->
   Eff es ()
-recordImage sha mime size rel job = withConn $ \c -> do
+recordImage sha mime size rel job = do
   _ <-
     execute
-      c
       "INSERT INTO images (sha256, mime_type, bytes_size, local_path) \
       \ VALUES (?,?,?,?) ON CONFLICT (sha256) DO NOTHING"
       (sha, mime, fromIntegral size :: Int64, T.pack rel)
   _ <-
     execute
-      c
       "INSERT INTO message_images (message_id, sha256, seg_index) \
       \ VALUES (?,?,?) ON CONFLICT DO NOTHING"
       (job.messageId, sha, job.segIndex)

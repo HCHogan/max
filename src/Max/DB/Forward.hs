@@ -9,10 +9,10 @@ import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Database.PostgreSQL.Simple (Connection, Only (..), execute, query_, (:.) (..))
+import Database.PostgreSQL.Simple (Only (..), (:.) (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Effectful
-import Max.Effects.Db (Db, withConn)
+import Effectful.PostgreSQL (WithConnection, execute, query_)
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (MessageId (..))
 
@@ -37,9 +37,9 @@ data ForwardNodeInsert = ForwardNodeInsert
 -- | Insert one forwarded node under a synthetic id (negated
 -- @synthetic_message_id_seq@). Returns the allocated id so the caller can
 -- thread it as a container for nested inline forwards.
-insertForwardNode :: Db :> es => ForwardNodeInsert -> Eff es Int64
-insertForwardNode n = withConn $ \c -> do
-  sid <- allocSyntheticId c
+insertForwardNode :: (WithConnection :> es, IOE :> es) => ForwardNodeInsert -> Eff es Int64
+insertForwardNode n = do
+  sid <- allocSyntheticId
   let segs = Jsonb (toJSON n.segments)
       rendered = renderPlainText n.segments
       replyTo = extractReply n.segments
@@ -64,7 +64,6 @@ insertForwardNode n = withConn $ \c -> do
         )
   _ <-
     execute
-      c
       "INSERT INTO messages \
       \ (message_id, group_id, user_id, self_id, segments, rendered_text, raw_message, \
       \  sender_nickname, sender_card, reply_to_message_id, \
@@ -75,9 +74,9 @@ insertForwardNode n = withConn $ \c -> do
       (row1 :. row2)
   pure sid
 
-allocSyntheticId :: Connection -> IO Int64
-allocSyntheticId c = do
-  rows <- query_ c "SELECT -nextval('synthetic_message_id_seq')"
+allocSyntheticId :: (WithConnection :> es, IOE :> es) => Eff es Int64
+allocSyntheticId = do
+  rows <- query_ "SELECT -nextval('synthetic_message_id_seq')"
   case rows of
     [Only n] -> pure n
     _ -> error "allocSyntheticId: sequence query returned no rows"
