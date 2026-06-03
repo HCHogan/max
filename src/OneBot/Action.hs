@@ -19,12 +19,21 @@ data Action
   | -- | Look up a forwarded message chain by its id (the @id@ in a
     -- @forward@ segment's data). NapCat returns a list of nodes.
     GetForwardMsg !Text
+  | -- | Fetch a downloadable URL for a non-image group file.  The
+    -- response @data.url@ is what the file worker streams from.
+    GetGroupFileUrl !GroupId !Text -- group_id, file_id
+  | -- | Upload a local file to the group's "群文件" area.  @file_path@
+    -- is a path *inside the NapCat container* — we stage to a shared
+    -- volume on the host so NapCat can read it (see docker-compose.yml).
+    UploadGroupFile !GroupId !Text !Text -- group_id, file_path, display_name
   deriving stock (Show)
 
 actionName :: Action -> Text
 actionName = \case
   SendGroupMsg {} -> "send_group_msg"
   GetForwardMsg {} -> "get_forward_msg"
+  GetGroupFileUrl {} -> "get_group_file_url"
+  UploadGroupFile {} -> "upload_group_file"
 
 actionParams :: Action -> Value
 actionParams = \case
@@ -39,6 +48,21 @@ actionParams = \case
     object
       [ "id" .= fid,
         "message_id" .= fid
+      ]
+  GetGroupFileUrl gid fid ->
+    object
+      [ "group_id" .= gid,
+        "file_id" .= fid,
+        -- NapCat's documented field is 'busid' = 102 (file system) for
+        -- normal uploads; supplying it is harmless when the server
+        -- doesn't need it.
+        "busid" .= (102 :: Int)
+      ]
+  UploadGroupFile gid path name ->
+    object
+      [ "group_id" .= gid,
+        "file" .= path,
+        "name" .= name
       ]
 
 data Envelope = Envelope

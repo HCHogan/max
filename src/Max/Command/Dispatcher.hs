@@ -1,15 +1,8 @@
 -- |
--- Execute parsed 'Command's against the session registry and produce
--- the text the bot should reply with.  All side-effects (DB writes,
--- session mutations) happen here; the parser is pure.
---
--- 'execute' returns the reply 'Text'; the handler posts it via the
--- NapCat effect.  Returning 'Nothing' means "command produced no
--- reply" (currently only !btw without inject context falls here is
--- still a reply — kept for future commands).
---
--- Commands that don't exist yet (!ps !kill !branch !switch in Phase
--- 6a) return a friendly "coming in Phase 6b/6c" stub.
+-- Execute parsed 'Command's against the session registry + task
+-- registry, producing the text the bot should reply with.  All
+-- side-effects (DB writes, session mutations, task pokes) happen here;
+-- the parser is pure.
 module Max.Command.Dispatcher
   ( execute,
   )
@@ -19,13 +12,24 @@ import Control.Concurrent.STM (TVar)
 import Data.List (sort)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (diffUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.Command.Types
 import Max.Effects.LLM (LLM, listProfiles)
+import Max.Sandbox.Registry (SandboxRegistry, destroySandboxesForGroup)
 import Max.Session (Session (..), updateSession)
 import Max.Session qualified as Session
+import Max.Tasks
+  ( TaskId (..),
+    TaskInfo (..),
+    TaskRegistry,
+    cancelTask,
+    listTasks,
+    pushBtwToLatest,
+  )
+import OneBot.Types (GroupId (..))
 
 -- | Run one command and produce the reply text.
 execute ::
@@ -35,9 +39,12 @@ execute ::
     IOE :> es
   ) =>
   TVar Session ->
+  TaskRegistry ->
+  SandboxRegistry ->
+  GroupId ->
   Command ->
   Eff es Text
-execute t cmd = case cmd of
+execute t taskReg sandboxReg gid cmd = case cmd of
   Help mTopic -> pure (helpText mTopic)
   --
   ModelShow -> do
@@ -76,19 +83,39 @@ execute t cmd = case cmd of
     pure "✓ history 已清"
   ClearAll -> do
     updateSession t (\s -> (Session.clearAll s, ()))
-    pure "✓ history / btw / persona override 全清"
+    n <- liftIO (destroySandboxesForGroup sandboxReg gid)
+    logInfo "session: clear --all" $ object ["sandboxes_destroyed" .= n]
+    let sboxSuffix
+          | n == 0 = ""
+          | otherwise = "，并销毁了 " <> T.pack (show n) <> " 个 sandbox"
+    pure $ "✓ history / btw / persona override 全清" <> sboxSuffix
   --
   Btw note -> do
-    -- Phase 6a: queue-only fallback (no running tasks yet).
-    -- Phase 6b will check the task registry first and inject if any
-    -- task is in flight, falling back to this queue otherwise.
-    updateSession t (\s -> (Session.appendBtwNote note s, ()))
-    n <- (length . (.btwNotes)) <$> liftIO (Session.readSession t)
-    pure $ "✓ 侧记已收 (" <> T.pack (show n) <> " 条待消化)"
+    -- Prefer injecting into a running task in this group; fall back
+    -- to the session queue if nothing's in flight.  Caller doesn't
+    -- have to think about which case applies.
+    injected <- liftIO (pushBtwToLatest taskReg gid note)
+    if injected
+      then pure "✓ 侧记已注入运行中的任务"
+      else do
+        updateSession t (\s -> (Session.appendBtwNote note s, ()))
+        n <- (length . (.btwNotes)) <$> liftIO (Session.readSession t)
+        pure $ "✓ 没在跑的任务，先排队了 (" <> T.pack (show n) <> " 条待消化)"
   --
-  PsLocal -> pure "(后台任务表 Phase 6b 接入)"
-  PsAll -> pure "(后台任务表 Phase 6b 接入)"
-  Kill _ -> pure "(任务取消 Phase 6b 接入)"
+  PsLocal -> do
+    now <- liftIO getCurrentTime
+    tasks <- liftIO (listTasks taskReg (Just gid))
+    pure (formatTasks now Nothing tasks)
+  PsAll -> do
+    now <- liftIO getCurrentTime
+    tasks <- liftIO (listTasks taskReg Nothing)
+    pure (formatTasks now (Just gid) tasks)
+  Kill tid -> do
+    ok <- liftIO (cancelTask taskReg (TaskId tid))
+    pure $
+      if ok
+        then "✓ 已发取消信号给 " <> tid
+        else "找不到任务 " <> tid <> " (用 !ps 看在跑的)"
   --
   BranchList -> pure "(分支列表 Phase 6c 接入)"
   BranchNew _ -> pure "(分支创建 Phase 6c 接入)"
@@ -99,6 +126,41 @@ execute t cmd = case cmd of
       "不认识的命令: !"
         <> v
         <> "\n用 !help 看可用命令"
+
+--------------------------------------------------------------------------------
+-- !ps formatting.
+
+-- | Render a task list.  If 'callerGid' is given (i.e. --all mode), each
+-- row includes the group id so the caller can tell which task is theirs;
+-- otherwise the group is implicit and omitted.
+formatTasks :: UTCTime -> Maybe GroupId -> [TaskInfo] -> Text
+formatTasks _ _ [] = "(没有在跑的任务)"
+formatTasks now callerGid tasks =
+  T.unlines (header : map (formatOne now callerGid) tasks)
+  where
+    header = "在跑的任务:"
+
+formatOne :: UTCTime -> Maybe GroupId -> TaskInfo -> Text
+formatOne now callerGid ti =
+  T.intercalate "  " $
+    [ "  " <> (ti.tiId.unTaskId),
+      ti.tiKind,
+      ageText now ti.tiStartedAt
+    ]
+      <> [groupTag | Just _ <- [callerGid]]
+      <> [pendingTag | ti.tiPendingBtw > 0]
+  where
+    GroupId raw = ti.tiGroup
+    groupTag = "group=" <> T.pack (show raw)
+    pendingTag = "btw=" <> T.pack (show ti.tiPendingBtw)
+
+ageText :: UTCTime -> UTCTime -> Text
+ageText now started =
+  let secs = round (realToFrac (diffUTCTime now started) :: Double) :: Int
+   in case secs of
+        n | n < 60 -> T.pack (show n) <> "s"
+        n | n < 3600 -> T.pack (show (n `div` 60)) <> "m"
+        n -> T.pack (show (n `div` 3600)) <> "h"
 
 --------------------------------------------------------------------------------
 -- Help.
@@ -116,13 +178,13 @@ helpText Nothing =
       "  !persona clear           回到默认 persona",
       "  !clear                   清 @-mention 历史",
       "  !clear --all             清历史/侧记/persona override",
-      "  !btw <text>              排一条侧记，下次回复消化",
-      "  !ps                      看本群后台任务  (6b)",
-      "  !kill <id>               砍后台任务      (6b)",
+      "  !btw <text>              注入运行中的任务 (没有就排队)",
+      "  !ps                      看本群在跑的后台任务",
+      "  !ps --all                看所有群的任务",
+      "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",
       "  !branch <name>           新建分支        (6c)",
       "  !branch list             列分支          (6c)",
       "  !switch <name>           切分支          (6c)"
     ]
 helpText (Just topic) =
-  -- Phase 6a: no per-topic help yet; punt back to the index.
   "(目前没有 '" <> topic <> "' 的详细帮助，看 !help)"

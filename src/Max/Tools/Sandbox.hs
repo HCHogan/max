@@ -1,0 +1,340 @@
+-- |
+-- Sandbox tools exposed to the agent: create / exec / list /
+-- destroy / read_file / write_file.  All scoped to the calling
+-- group's session.
+--
+-- == What the model sees
+--
+-- A small JSON-schema'd toolkit for "run stuff in a Linux box".
+-- Defaults to Debian 13-slim, bridge network, 1 CPU, 1 GiB memory.
+-- The sandbox survives across @-mention dispatches; the model is
+-- told this so it can reuse one between turns instead of recreating.
+--
+-- == Concurrency disclosure
+--
+-- The tool descriptions warn the model that sandboxes are shared
+-- within the group's session — multiple parallel dispatches can
+-- target the same sandbox.  Per-sandbox 'execInSandbox' serialization
+-- protects against concurrent shell invocations corrupting each
+-- other; same-file writes are still a coordination problem the
+-- model must reason about.
+module Max.Tools.Sandbox
+  ( sandboxToolsFor,
+  )
+where
+
+import Data.Aeson
+import Data.Aeson.Types (Parser, parseEither)
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Time (defaultTimeLocale, formatTime)
+import Effectful
+import Max.Effects.Tools (Tool (..))
+import Max.Sandbox.Docker (ExecResult (..), maxOutputBytes)
+import Max.Sandbox.Registry
+  ( SandboxCreateOpts (..),
+    SandboxEntry (..),
+    SandboxId (..),
+    SandboxRegistry,
+    createSandbox,
+    defaultCreateOpts,
+    destroySandbox,
+    execInSandbox,
+    listSandboxesForGroup,
+    readSandboxFile,
+    writeSandboxFile,
+  )
+import OneBot.Types (GroupId)
+
+sandboxToolsFor :: IOE :> es => GroupId -> SandboxRegistry -> [Tool es]
+sandboxToolsFor gid reg =
+  [ createTool gid reg,
+    execTool gid reg,
+    listTool gid reg,
+    destroyTool gid reg,
+    readFileTool gid reg,
+    writeFileTool gid reg
+  ]
+
+--------------------------------------------------------------------------------
+-- sandbox_create
+
+createTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+createTool gid reg =
+  Tool
+    { toolName = "sandbox_create",
+      toolDescription =
+        T.unwords
+          [ "Create a new Linux sandbox (Docker container) for running commands.",
+            "Defaults to debian:13-slim with bridge networking, 1 CPU, 1 GiB memory.",
+            "Returns a 'sandbox_id' you pass to sandbox_exec / sandbox_read_file etc.",
+            "Sandboxes persist across your subsequent dispatches in this group's session,",
+            "so prefer reusing an existing one (sandbox_list) over creating a new one",
+            "for each turn.  They are destroyed only by sandbox_destroy, !clear --all,",
+            "or bot restart.  IMPORTANT: this group's other concurrent dispatches share",
+            "the same sandboxes — don't assume exclusive access."
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "image"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("Docker image (default debian:13-slim)." :: Text)
+                      ],
+                  "network"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("bridge | none (default bridge)." :: Text),
+                        "enum" .= (["bridge", "none"] :: [Text])
+                      ]
+                ],
+            "required" .= ([] :: [Text])
+          ],
+      toolRun = \args ->
+        case parseEither (withObject "args" parseArgs) args of
+          Left e -> pure $ Left ("bad args: " <> T.pack e)
+          Right opts -> do
+            res <- liftIO (createSandbox reg gid opts)
+            pure $ case res of
+              Left err -> Left err
+              Right e ->
+                Right $
+                  object
+                    [ "sandbox_id" .= e.seId.unSandboxId,
+                      "image" .= e.seImage,
+                      "container" .= e.seContainer,
+                      "note" .= ("Use sandbox_exec with sandbox_id to run commands." :: Text)
+                    ]
+    }
+  where
+    parseArgs :: Object -> Parser SandboxCreateOpts
+    parseArgs o = do
+      mImg <- o .:? "image"
+      mNet <- o .:? "network"
+      pure
+        defaultCreateOpts
+          { scoImage = maybe (scoImage defaultCreateOpts) id mImg,
+            scoNetwork = maybe (scoNetwork defaultCreateOpts) id mNet
+          }
+
+--------------------------------------------------------------------------------
+-- sandbox_exec
+
+execTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+execTool gid reg =
+  Tool
+    { toolName = "sandbox_exec",
+      toolDescription =
+        T.unwords
+          [ "Run a shell command inside an existing sandbox.  The command",
+            "is passed verbatim to 'sh -c' inside the container, with a",
+            "wallclock timeout enforced via timeout(1).  Stdout and stderr",
+            "are captured separately and capped at ~16 KiB each (truncated",
+            "results set 'truncated' = true).  Exit code 0 = success."
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "sandbox_id" .= stringField "Sandbox id from sandbox_create.",
+                  "command" .= stringField "Shell command to run.",
+                  "timeout_seconds"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("Max wallclock seconds (default 30, max 600)." :: Text),
+                        "default" .= (30 :: Int)
+                      ]
+                ],
+            "required" .= (["sandbox_id", "command"] :: [Text])
+          ],
+      toolRun = \args ->
+        case parseEither (withObject "args" parseArgs) args of
+          Left e -> pure $ Left ("bad args: " <> T.pack e)
+          Right (sid, cmd, t) -> do
+            res <- liftIO (execInSandbox reg gid (SandboxId sid) cmd (clampTimeout t))
+            pure $ case res of
+              Left err -> Left err
+              Right er ->
+                Right $
+                  object
+                    [ "exit_code" .= er.erExitCode,
+                      "stdout" .= er.erStdout,
+                      "stderr" .= er.erStderr,
+                      "truncated" .= er.erTruncated
+                    ]
+    }
+  where
+    parseArgs :: Object -> Parser (Text, Text, Int)
+    parseArgs o = do
+      sid <- o .: "sandbox_id"
+      cmd <- o .: "command"
+      mTo <- o .:? "timeout_seconds"
+      pure (sid, cmd, maybe 30 id mTo)
+
+    clampTimeout n = max 1 (min 600 n)
+
+--------------------------------------------------------------------------------
+-- sandbox_list
+
+listTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+listTool gid reg =
+  Tool
+    { toolName = "sandbox_list",
+      toolDescription =
+        "List sandboxes available in this group's session (created by you or by other parallel dispatches).",
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties" .= object [],
+            "required" .= ([] :: [Text])
+          ],
+      toolRun = \_args -> do
+        entries <- liftIO (listSandboxesForGroup reg gid)
+        pure $
+          Right $
+            toJSON $
+              map summarize entries
+    }
+  where
+    summarize e =
+      object
+        [ "sandbox_id" .= e.seId.unSandboxId,
+          "image" .= e.seImage,
+          "created_at" .= T.pack (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" e.seCreatedAt)
+        ]
+
+--------------------------------------------------------------------------------
+-- sandbox_destroy
+
+destroyTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+destroyTool gid reg =
+  Tool
+    { toolName = "sandbox_destroy",
+      toolDescription =
+        T.unwords
+          [ "Permanently destroy a sandbox and its data volume.",
+            "All state inside (/work, installed packages, processes) is lost.",
+            "Use this when you're done with a sandbox to free resources."
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "sandbox_id" .= stringField "Sandbox id to destroy."
+                ],
+            "required" .= (["sandbox_id"] :: [Text])
+          ],
+      toolRun = \args ->
+        case parseEither (withObject "args" (\o -> o .: "sandbox_id")) args of
+          Left e -> pure $ Left ("bad args: " <> T.pack e)
+          Right (sid :: Text) -> do
+            res <- liftIO (destroySandbox reg gid (SandboxId sid))
+            pure $ case res of
+              Left err -> Left err
+              Right () -> Right (object ["ok" .= True])
+    }
+
+--------------------------------------------------------------------------------
+-- sandbox_read_file
+
+readFileTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+readFileTool gid reg =
+  Tool
+    { toolName = "sandbox_read_file",
+      toolDescription =
+        T.unwords
+          [ "Read up to max_bytes from a file inside a sandbox (paths relative",
+            "to /work, or absolute).  Returns the text content; assumes UTF-8.",
+            "Truncated transparently at the byte cap — pass a smaller max_bytes",
+            "if you just want a peek."
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "sandbox_id" .= stringField "Sandbox id.",
+                  "path" .= stringField "File path (relative to /work, or absolute).",
+                  "max_bytes"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("Cap (default 16384, max 65536)." :: Text),
+                        "default" .= (maxOutputBytes :: Int)
+                      ]
+                ],
+            "required" .= (["sandbox_id", "path"] :: [Text])
+          ],
+      toolRun = \args ->
+        case parseEither (withObject "args" parseArgs) args of
+          Left e -> pure $ Left ("bad args: " <> T.pack e)
+          Right (sid, path, mx) -> do
+            res <- liftIO (readSandboxFile reg gid (SandboxId sid) path (clampMax mx))
+            pure $ case res of
+              Left err -> Left err
+              Right content ->
+                Right $
+                  object
+                    [ "content" .= content,
+                      "bytes" .= T.length content
+                    ]
+    }
+  where
+    parseArgs :: Object -> Parser (Text, Text, Int)
+    parseArgs o = do
+      sid <- o .: "sandbox_id"
+      path <- o .: "path"
+      mx <- o .:? "max_bytes"
+      pure (sid, path, maybe maxOutputBytes id mx)
+    clampMax n = max 1 (min 65536 n)
+
+--------------------------------------------------------------------------------
+-- sandbox_write_file
+
+writeFileTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+writeFileTool gid reg =
+  Tool
+    { toolName = "sandbox_write_file",
+      toolDescription =
+        T.unwords
+          [ "Write text content to a file inside a sandbox, creating parent",
+            "directories as needed.  Overwrites if the file exists.",
+            "Useful for dropping a script before sandbox_exec runs it."
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "sandbox_id" .= stringField "Sandbox id.",
+                  "path" .= stringField "File path (relative to /work, or absolute).",
+                  "content" .= stringField "File content (UTF-8 text)."
+                ],
+            "required" .= (["sandbox_id", "path", "content"] :: [Text])
+          ],
+      toolRun = \args ->
+        case parseEither (withObject "args" parseArgs) args of
+          Left e -> pure $ Left ("bad args: " <> T.pack e)
+          Right (sid, path, content) -> do
+            res <- liftIO (writeSandboxFile reg gid (SandboxId sid) path content)
+            pure $ case res of
+              Left err -> Left err
+              Right () -> Right (object ["ok" .= True, "bytes" .= T.length content])
+    }
+  where
+    parseArgs :: Object -> Parser (Text, Text, Text)
+    parseArgs o = (,,) <$> o .: "sandbox_id" <*> o .: "path" <*> o .: "content"
+
+--------------------------------------------------------------------------------
+-- Helpers.
+
+stringField :: Text -> Value
+stringField desc =
+  object
+    [ "type" .= ("string" :: Text),
+      "description" .= desc
+    ]

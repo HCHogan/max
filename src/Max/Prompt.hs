@@ -10,6 +10,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Effectful
 import Effectful.PostgreSQL (WithConnection)
+import Max.DB.Files (FileRecord (..))
+import Max.DB.Files qualified as DBFiles
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
 import Max.Effects.LLM (ChatMessage (..))
 import Max.Session (Session (..))
@@ -29,7 +31,12 @@ systemPrompt persona =
       "  [HH:MM <昵称>]: 内容        — 群里的一条普通消息",
       "  [↩ 引用 HH:MM <昵称>]: ...   — 用户引用了某条历史消息",
       "  [image:abcd1234]            — 一张图片（你看不到内容，可以请用户描述）",
-      "  [forward]                   — 转发的聊天记录（你看不到内容）"
+      "  [file:<name>]               — 一个群文件；用 list_recent_files 或 import_file_to_sandbox 处理",
+      "  [forward]                   — 转发的聊天记录（你看不到内容）",
+      "",
+      "当用户引用了带文件的消息时，引用块下面会附带一段 `附带文件:`，",
+      "列出该消息里每个文件的 file_id / name / size / ready 状态。用",
+      "其中的 file_id 直接调 import_file_to_sandbox，不需要先 list_recent_files。"
     ]
 
 -- | Build the chat context for one @bot trigger:
@@ -57,15 +64,29 @@ buildContext defaultPersona n session gm = do
   ambient <- fetchRecentInGroup gid mid n
   replyCtx <- case extractReply gm.message of
     Nothing -> pure Nothing
-    Just rid -> fetchMessage rid
+    Just rid -> do
+      mHist <- fetchMessage rid
+      case mHist of
+        Nothing -> pure Nothing
+        Just h -> do
+          -- Also pull any files attached to the replied-to message so
+          -- the model gets file_ids without an extra tool call.
+          files <- DBFiles.fetchFilesForMessage h.messageId
+          pure (Just (h, files))
   let userBody = renderUser selfId' ambient replyCtx session.btwNotes gm
       messages =
-        [ChatMessage "system" (systemPrompt effectivePersona)]
+        [MsgSystem (systemPrompt effectivePersona)]
           <> session.history
-          <> [ChatMessage "user" userBody]
+          <> [MsgUser userBody]
   pure (messages, session.btwNotes)
 
-renderUser :: Int64 -> [HistoryItem] -> Maybe HistoryItem -> [Text] -> GroupMessage -> Text
+renderUser ::
+  Int64 ->
+  [HistoryItem] ->
+  Maybe (HistoryItem, [FileRecord]) ->
+  [Text] ->
+  GroupMessage ->
+  Text
 renderUser selfId' ambient replyCtx notes gm =
   T.intercalate "\n" $
     concat
@@ -76,11 +97,8 @@ renderUser selfId' ambient replyCtx notes gm =
         [""],
         case replyCtx of
           Nothing -> []
-          Just r ->
-            [ "[引用上下文]",
-              renderReplyLine selfId' r,
-              ""
-            ],
+          Just (r, files) ->
+            "[引用上下文]" : renderReplyLine selfId' r : renderReplyFiles files <> [""],
         if null notes
           then []
           else
@@ -104,6 +122,22 @@ renderReplyLine :: Int64 -> HistoryItem -> Text
 renderReplyLine selfId' h =
   let name = displayName selfId' h.userId h.senderNickname
    in "[↩ 引用 " <> formatHM h.receivedAt <> " " <> name <> "]: " <> oneLine h.renderedText
+
+renderReplyFiles :: [FileRecord] -> [Text]
+renderReplyFiles [] = []
+renderReplyFiles xs = "  附带文件:" : map fileLine xs
+  where
+    fileLine r =
+      "    - file_id="
+        <> tquote r.frFileId
+        <> ", name="
+        <> tquote r.frFileName
+        <> sizePart r.frBytesSize
+        <> ", ready="
+        <> (case r.frLocalPath of Just _ -> "true"; Nothing -> "false")
+    sizePart Nothing = ""
+    sizePart (Just n) = ", bytes=" <> T.pack (show n)
+    tquote t = "\"" <> t <> "\""
 
 renderCurrentLine :: GroupMessage -> Text
 renderCurrentLine gm =

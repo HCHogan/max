@@ -18,3 +18,9 @@ services:
     volumes:
       - ./.napcat/QQ:/app/.config/QQ
       - ./.napcat/napcat:/app/napcat/config
+      # Outbox for bot -> NapCat file uploads. The bot writes files to
+      # ./var/outbox on the host; the `upload_group_file` action then
+      # references them via the container-side path /data/outbox/...
+      # so NapCat can read them without us shipping bytes through the
+      # action payload itself.
+      - ./var/outbox:/data/outbox

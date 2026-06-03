@@ -1,7 +1,8 @@
 module Main (main) where
 
+import Control.Concurrent (myThreadId)
 import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
-import Control.Exception (bracket)
+import Control.Exception (AsyncException (UserInterrupt), bracket, bracket_, throwTo)
 import Control.Monad (unless)
 import Data.Text qualified as T
 import Effectful
@@ -13,41 +14,75 @@ import Log.Backend.StandardOutput (withStdOutLogger)
 import Max.Config (AppConfig (..), loadConfig)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
+import Max.Effects.Agent (Agent, DispatchContext (..), defaultLimits, runAgent)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
-import Max.Effects.LLM (LLM, runLLM)
+import Max.Effects.LLM (LLM, LLMRegistry (..), runLLM)
 import Max.Effects.NapCat (NapCat, runNapCat)
+import Max.Files (FileQueue, fileWorker, newFileQueue)
 import Max.Forward (ForwardQueue, forwardWorker, newForwardQueue)
-import Max.Effects.LLM (LLMRegistry (..))
 import Max.Handler (handleEvents)
 import Max.Images (ImageQueue, imageWorker, newImageQueue)
+import Max.Sandbox.Registry
+  ( SandboxRegistry,
+    destroyAllSandboxes,
+    newSandboxRegistry,
+    reapStaleSandboxes,
+  )
 import Max.Session (SessionRegistry, newSessionRegistry)
+import Max.Tasks (TaskRegistry, newTaskRegistry)
+import Max.Tools (builtinsFor)
+import Max.Tools.Files (fileToolsFor)
+import Max.Tools.Sandbox (sandboxToolsFor)
 import OneBot.Event (Event)
 import OneBot.Server (Client, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
+import System.Posix.Signals (Handler (Catch), installHandler, sigTERM)
 
 main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   hSetBuffering stderr LineBuffering
+  -- Convert SIGTERM (e.g. from systemd) into the same UserInterrupt
+  -- async exception Ctrl+C produces, so all our 'bracket' cleanups
+  -- — DB pool, sandbox reaper — fire on graceful shutdown.
+  mainTid <- myThreadId
+  _ <- installHandler sigTERM (Catch (throwTo mainTid UserInterrupt)) Nothing
+
   cfg <- loadConfig
   bracket (newDbPool cfg.db) closeDbPool $ \pool -> do
     applied <- runMigrations pool cfg.migrationsDir
-    withStdOutLogger $ \logger -> do
-      eventQ <- newTQueueIO
-      imgQ <- newImageQueue
-      fwdQ <- newForwardQueue
-      sessions <- newSessionRegistry
-      clientRef <- newTVarIO (Nothing :: Maybe Client)
-      runEff
-        . runConcurrent
-        . runLog "max" logger LogInfo
-        . runHttp
-        . runBlob cfg.imagesDir
-        . runWithConnectionPool pool
-        . runNapCat clientRef
-        . runLLM cfg.llm
-        $ runApp cfg applied sessions eventQ imgQ fwdQ clientRef
+    -- Sandbox registry + lifecycle:
+    --   * reapStaleSandboxes on entry kills any 'max-sb-*' containers
+    --     left over from a prior unclean exit (we're the only writer
+    --     of that namespace).
+    --   * destroyAllSandboxes on exit kills everything the registry
+    --     knows about — fires on UserInterrupt (Ctrl+C / SIGTERM) too.
+    bracket_ reapStaleSandboxes (pure ()) $ do
+      sandboxes <- newSandboxRegistry
+      bracket_ (pure ()) (destroyAllSandboxes sandboxes) $ do
+        withStdOutLogger $ \logger -> do
+          eventQ <- newTQueueIO
+          imgQ <- newImageQueue
+          fwdQ <- newForwardQueue
+          fileQ <- newFileQueue
+          sessions <- newSessionRegistry
+          tasks <- newTaskRegistry
+          clientRef <- newTVarIO (Nothing :: Maybe Client)
+          let toolFactory dc =
+                builtinsFor dc
+                  <> sandboxToolsFor dc.dcGroupId sandboxes
+                  <> fileToolsFor dc.dcGroupId cfg.imagesDir sandboxes
+          runEff
+            . runConcurrent
+            . runLog "max" logger LogInfo
+            . runHttp
+            . runBlob cfg.imagesDir
+            . runWithConnectionPool pool
+            . runNapCat clientRef
+            . runLLM cfg.llm
+            . runAgent defaultLimits toolFactory tasks
+            $ runApp cfg applied sessions tasks sandboxes eventQ imgQ fwdQ fileQ clientRef
 
 runApp ::
   ( IOE :> es,
@@ -57,17 +92,21 @@ runApp ::
     WithConnection :> es,
     NapCat :> es,
     LLM :> es,
+    Agent :> es,
     Concurrent :> es
   ) =>
   AppConfig ->
   [String] ->
   SessionRegistry ->
+  TaskRegistry ->
+  SandboxRegistry ->
   TQueue Event ->
   ImageQueue ->
   ForwardQueue ->
+  FileQueue ->
   TVar (Maybe Client) ->
   Eff es ()
-runApp cfg applied sessions eventQ imgQ fwdQ clientRef =
+runApp cfg applied sessions tasks sandboxes eventQ imgQ fwdQ fileQ clientRef =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -76,27 +115,29 @@ runApp cfg applied sessions eventQ imgQ fwdQ clientRef =
   -- globally is harmless and avoids surprise for any future cross-thread
   -- `withRunInIO` usage.
   withUnliftStrategy (ConcUnlift Persistent Unlimited) $ do
-  let s = cfg.server
-  logInfo "max-bot starting" $
-    object
-      [ "host" .= T.pack s.host,
-        "port" .= s.port,
-        "path" .= s.path,
-        "db_url" .= cfg.db.url,
-        "images_dir" .= T.pack cfg.imagesDir,
-        "image_workers" .= cfg.imageWorkers
-      ]
-  unless (null applied) $
-    logInfo "migrations applied" $
-      object ["files" .= applied]
-  -- Three long-lived siblings + the server. 'link' rethrows any worker
-  -- exception into this thread so a worker silently dying takes the whole
-  -- process down (systemd / supervisor restarts) rather than leaving a
-  -- stuck queue. Ctrl+C still cascades via withAsync as usual.
-  withAsync (imageWorker cfg.imageWorkers imgQ) $ \aImg -> do
-    link aImg
-    withAsync (forwardWorker imgQ fwdQ) $ \aFwd -> do
-      link aFwd
-      withAsync (handleEvents cfg.persona cfg.historyWindow sessions cfg.llm.defaultName eventQ imgQ fwdQ) $ \aH -> do
-        link aH
-        runServer cfg.server eventQ clientRef
+    let s = cfg.server
+    logInfo "max-bot starting" $
+      object
+        [ "host" .= T.pack s.host,
+          "port" .= s.port,
+          "path" .= s.path,
+          "db_url" .= cfg.db.url,
+          "images_dir" .= T.pack cfg.imagesDir,
+          "image_workers" .= cfg.imageWorkers
+        ]
+    unless (null applied) $
+      logInfo "migrations applied" $
+        object ["files" .= applied]
+    -- Three long-lived siblings + the server. 'link' rethrows any worker
+    -- exception into this thread so a worker silently dying takes the whole
+    -- process down (systemd / supervisor restarts) rather than leaving a
+    -- stuck queue. Ctrl+C still cascades via withAsync as usual.
+    withAsync (imageWorker cfg.imageWorkers imgQ) $ \aImg -> do
+      link aImg
+      withAsync (forwardWorker imgQ fwdQ) $ \aFwd -> do
+        link aFwd
+        withAsync (fileWorker fileQ) $ \aFile -> do
+          link aFile
+          withAsync (handleEvents cfg.persona cfg.historyWindow sessions tasks sandboxes cfg.llm.defaultName eventQ imgQ fwdQ fileQ) $ \aH -> do
+            link aH
+            runServer cfg.server eventQ clientRef

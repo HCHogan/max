@@ -4,7 +4,7 @@ module Max.Handler
 where
 
 import Control.Concurrent.STM (TQueue, atomically, readTQueue)
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, fromException, try)
 import Control.Monad (void)
 import Data.Text qualified as T
 import Effectful
@@ -14,13 +14,16 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Parser (parseCommand)
 import Max.DB.Message (insertGroupMessage)
-import Max.Effects.LLM (ChatMessage (..), LLM, chat)
+import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
+import Max.Effects.LLM (ChatMessage (..), LLM)
 import Max.Effects.NapCat (NapCat, sendAction)
+import Max.Files (FileQueue, enqueueFiles)
 import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
 import Max.Prompt (buildContext)
+import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession, updateSession)
-import Max.Session qualified as Session
+import Max.Tasks (TaskCancelled, TaskRegistry)
 import Max.Util (catchSync)
 import OneBot.Action (Action (SendGroupMsg))
 import OneBot.Event (Event (..), GroupMessage (..))
@@ -66,18 +69,22 @@ handleEvents ::
     WithConnection :> es,
     NapCat :> es,
     LLM :> es,
+    Agent :> es,
     Concurrent :> es,
     IOE :> es
   ) =>
   T.Text -> -- default bot persona
   Int -> -- history window size for ambient context
   SessionRegistry ->
+  TaskRegistry ->
+  SandboxRegistry ->
   T.Text -> -- default LLM profile name (for new sessions)
   TQueue Event ->
   ImageQueue ->
   ForwardQueue ->
+  FileQueue ->
   Eff es ()
-handleEvents persona historyN reg defaultModel q imgQ fwdQ = loop
+handleEvents persona historyN reg taskReg sandboxReg defaultModel q imgQ fwdQ fileQ = loop
   where
     loop = do
       ev <- liftIO (atomically (readTQueue q))
@@ -91,7 +98,8 @@ handleEvents persona historyN reg defaultModel q imgQ fwdQ = loop
           persist gm
           liftIO (enqueueImages imgQ gm)
           liftIO (enqueueForwards fwdQ gm)
-          onGroupMessage persona historyN reg defaultModel gm
+          enqueueFiles fileQ gm
+          onGroupMessage persona historyN reg taskReg sandboxReg defaultModel gm
       loop
 
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
@@ -108,16 +116,19 @@ onGroupMessage ::
     WithConnection :> es,
     NapCat :> es,
     LLM :> es,
+    Agent :> es,
     Concurrent :> es,
     IOE :> es
   ) =>
   T.Text ->
   Int ->
   SessionRegistry ->
+  TaskRegistry ->
+  SandboxRegistry ->
   T.Text ->
   GroupMessage ->
   Eff es ()
-onGroupMessage persona historyN reg defaultModel gm = do
+onGroupMessage persona historyN reg taskReg sandboxReg defaultModel gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
   logInfo "group message" $
@@ -129,7 +140,7 @@ onGroupMessage persona historyN reg defaultModel gm = do
   case classify gm of
     TriggerNone -> pure ()
     TriggerPong -> sendPong gm
-    TriggerCommand body -> dispatchCommand reg defaultModel gm body
+    TriggerCommand body -> dispatchCommand reg taskReg sandboxReg defaultModel gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
     TriggerLLM _ -> dispatchLLM persona historyN reg defaultModel gm
 
@@ -144,18 +155,20 @@ dispatchCommand ::
     IOE :> es
   ) =>
   SessionRegistry ->
+  TaskRegistry ->
+  SandboxRegistry ->
   T.Text ->
   GroupMessage ->
   T.Text ->
   Eff es ()
-dispatchCommand reg defaultModel gm body = localDomain "cmd" $ do
+dispatchCommand reg taskReg sandboxReg defaultModel gm body = localDomain "cmd" $ do
   case parseCommand body of
     Left err -> replyText gm ("命令解析失败:\n" <> err)
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
     Right (Just cmd) -> do
       t <- loadSession reg defaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
-      reply <- CmdDispatch.execute t cmd
+      reply <- CmdDispatch.execute t taskReg sandboxReg gm.groupId cmd
       replyText gm reply
 
 --------------------------------------------------------------------------------
@@ -181,7 +194,7 @@ dispatchLLM ::
   ( Log :> es,
     WithConnection :> es,
     NapCat :> es,
-    LLM :> es,
+    Agent :> es,
     Concurrent :> es,
     IOE :> es
   ) =>
@@ -203,41 +216,54 @@ dispatchLLM defaultPersona historyN reg defaultModel gm = void $ async $
           "message_id" .= midRaw
         ]
     work `catchSync` \e ->
-      logAttention "llm dispatch crashed" $
-        object ["error" .= T.pack (show (e :: SomeException))]
+      case fromException e :: Maybe TaskCancelled of
+        Just _ ->
+          -- User-initiated !kill — quieter log, not an error.
+          logInfo "llm dispatch cancelled" $
+            object ["group_id" .= gidRaw]
+        Nothing ->
+          logAttention "llm dispatch crashed" $
+            object ["error" .= T.pack (show (e :: SomeException))]
   where
     work = do
       t <- loadSession reg defaultModel gm.groupId
       s <- liftIO (readSession t)
       (ctx, drained) <- buildContext defaultPersona historyN s gm
-      eres <- chat s.model ctx
-      case eres of
-        Left err ->
-          logAttention "llm response failed" $ object ["error" .= err]
-        Right text -> do
-          let stripped = T.strip text
-              -- Use the stripped user-facing body (no @bot mention) as
-              -- the user turn we record in history.
-              userBody =
-                T.strip (stripMentions gm.selfId (renderPlainText gm.message))
-              userMsg = ChatMessage "user" userBody
-              asstMsg = ChatMessage "assistant" stripped
-          replyText gm stripped
-          -- Persist the turn + drain the btw notes that were consumed
-          -- into this prompt.  One write through DB.
-          updateSession t $ \sess ->
-            let sess1 = Session.appendHistoryTurn userMsg asstMsg sess
-                sess2 =
-                  if null drained
-                    then sess1
-                    else sess1 {btwNotes = drop (length drained) sess1.btwNotes}
-             in (sess2, ())
-          logInfo "llm replied" $
-            object
-              [ "to" .= (let UserId u = gm.userId in u),
-                "len" .= T.length text,
-                "btw_drained" .= length drained
-              ]
+      let dc = DispatchContext gm.groupId gm.messageId gm.userId
+      result <- agentTurn dc s.model ctx
+      let stripped = T.strip result.reply
+          -- The "user" message we persist is the stripped user-facing
+          -- body (no @bot mention, no ambient context).  That keeps
+          -- the persisted history a clean transcript of what the
+          -- group member actually typed — ambient/btw context gets
+          -- re-derived from DB on the next turn.
+          userBody =
+            T.strip (stripMentions gm.selfId (renderPlainText gm.message))
+          userMsg = MsgUser userBody
+      replyText gm stripped
+      -- Persist user turn + every message the agent emitted (tool
+      -- calls, tool results, final assistant text).  Drain the btw
+      -- notes that fed into this prompt.
+      updateSession t $ \sess ->
+        let newHistory = sess.history <> [userMsg] <> result.appended
+            sess' =
+              sess
+                { history = newHistory,
+                  btwNotes =
+                    if null drained
+                      then sess.btwNotes
+                      else drop (length drained) sess.btwNotes
+                }
+         in (sess', ())
+      logInfo "llm replied" $
+        object
+          [ "to" .= (let UserId u = gm.userId in u),
+            "len" .= T.length stripped,
+            "turns" .= result.turnsUsed,
+            "appended" .= length result.appended,
+            "btw_drained" .= length drained,
+            "aborted" .= result.aborted
+          ]
 
 --------------------------------------------------------------------------------
 -- Reply helper.

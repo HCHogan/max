@@ -15,14 +15,11 @@ module Max.DB.Session
 where
 
 import Control.Monad (void)
-import Data.Aeson (Value, eitherDecode, encode, toJSON)
-import Data.ByteString.Lazy qualified as LBS
+import Data.Aeson (Result (..), Value, fromJSON, toJSON)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Simple (FromRow, Only (..))
-import Database.PostgreSQL.Simple.FromField (FromField, fromField, returnError, ResultError (ConversionFailed))
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Effectful
@@ -40,23 +37,19 @@ instance ToField Jsonb where
 -- | One row from @sessions@ alongside the active-branch pointer.  We
 -- pull both in one round trip via a join so we can detect "active
 -- branch points at a deleted row" cleanly.
+--
+-- Note: jsonb columns deserialise via @postgresql-simple@'s built-in
+-- 'Value' instance — DON'T wrap them in a Text/ByteString newtype
+-- (jsonb has no FromField for those, you'll get @errHaskellType =
+-- "Text"@).
 data Row = Row
   { rGroupId :: !Int64,
     rBranch :: !Text,
     rModel :: !(Maybe Text),
     rPersona :: !(Maybe Text),
-    rHistory :: !JsonbCol,
-    rBtwNotes :: !JsonbCol
+    rHistory :: !Value,
+    rBtwNotes :: !Value
   }
-
-newtype JsonbCol = JsonbCol {unJsonbCol :: Value}
-
-instance FromField JsonbCol where
-  fromField f mdata = do
-    bs <- fromField f mdata
-    case eitherDecode (LBS.fromStrict (TE.encodeUtf8 bs)) of
-      Left e -> returnError ConversionFailed f e
-      Right v -> pure (JsonbCol v)
 
 instance FromRow Row where
   fromRow = Row <$> field <*> field <*> field <*> field <*> field <*> field
@@ -140,22 +133,20 @@ listBranches (GroupId gid) = do
 
 rowToSession :: Text -> Row -> Session
 rowToSession defaultModel r =
-  let hist = case decodeHistory (unJsonbCol r.rHistory) of
-        Right xs -> xs
-        Left _ -> []
-      notes = case decodeNotes (unJsonbCol r.rBtwNotes) of
-        Right xs -> xs
-        Left _ -> []
-   in Session
-        { groupId = GroupId r.rGroupId,
-          branch = r.rBranch,
-          model = case r.rModel of
-            Just m | not (T.null m) -> m
-            _ -> defaultModel,
-          persona = r.rPersona,
-          history = hist,
-          btwNotes = notes
-        }
+  Session
+    { groupId = GroupId r.rGroupId,
+      branch = r.rBranch,
+      model = case r.rModel of
+        Just m | not (T.null m) -> m
+        _ -> defaultModel,
+      persona = r.rPersona,
+      history = decodeOrEmpty r.rHistory,
+      btwNotes = decodeOrEmpty r.rBtwNotes
+    }
   where
-    decodeHistory v = eitherDecode (encode v)
-    decodeNotes v = eitherDecode (encode v)
+    -- Tolerate junk in jsonb columns (e.g. older shape we don't know
+    -- how to read) by silently falling back to empty.  Better than
+    -- crashing the dispatch and dropping the user's question.
+    decodeOrEmpty v = case fromJSON v of
+      Success xs -> xs
+      Error _ -> []
