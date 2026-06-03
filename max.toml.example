@@ -39,7 +39,12 @@ persona = "你是一个 QQ 群里的 AI 助手。群成员会 @你 来让你回�
 [llm]
 default = "deepseek-chat"
 
-[llm.profiles.deepseek-chat]
+# Each profile is an entry in the [[llm.profiles]] array of tables.
+# (We use array-of-tables rather than [llm.profiles.<name>] subtables
+# because tomland's tableMap doesn't traverse the latter; the 'name'
+# field is what becomes the !model key.)
+[[llm.profiles]]
+name            = "deepseek-chat"
 api_key         = "sk-..."
 base_url        = "https://api.deepseek.com/v1"
 model           = "deepseek-chat"
@@ -47,14 +52,40 @@ max_tokens      = 2048
 temperature     = 0.7
 timeout_seconds = 120
 
-[llm.profiles.deepseek-reasoner]
+[[llm.profiles]]
+name            = "deepseek-reasoner"
 api_key         = "sk-..."
 base_url        = "https://api.deepseek.com/v1"
 model           = "deepseek-reasoner"
 max_tokens      = 4096
 temperature     = 0.3
 
-# [llm.profiles.local]
+# Anthropic native protocol — use when the endpoint only exposes
+# /v1/messages, OR when an OpenAI-compat proxy mangles tool-call
+# translation (e.g. drops function.name).  Set base_url to the API
+# root (no /v1 suffix); we append /v1/messages ourselves.  Auth uses
+# x-api-key + anthropic-version: 2023-06-01 headers.
+# [[llm.profiles]]
+# name      = "claude-opus-4-6"
+# protocol  = "anthropic"
+# api_key   = "sk-..."
+# base_url  = "https://api.anthropic.com"
+# model     = "claude-opus-4-5-20250101"
+# max_tokens = 4096
+
+# [[llm.profiles]]
+# name     = "local"
 # api_key  = "any"          # llama.cpp ignores it but the field is required
 # base_url = "http://localhost:8080/v1"
 # model    = "qwen2.5:7b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Web search.  When tavily_api_key is set (here or via MAX_TAVILY_API_KEY
+# / --tavily-api-key) the agent gets a web_search tool backed by Tavily.
+# Without a key, the tool simply isn't registered — model never sees it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# [search]
+# tavily_api_key   = "tvly-..."
+# max_results      = 5
+# timeout_seconds  = 30

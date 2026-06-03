@@ -19,6 +19,8 @@ module Max.Effects.LLM
   ( LLM,
     LLMProfile (..),
     LLMRegistry (..),
+    Protocol (..),
+    parseProtocol,
     -- * Messages
     ChatMessage (..),
     ToolCall (..),
@@ -34,9 +36,12 @@ module Max.Effects.LLM
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Exception (SomeException, try)
+import Control.Lens ((&), (.~), (?~), (^.))
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -46,36 +51,53 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log
-import Network.HTTP.Client
-  ( Manager,
-    RequestBody (RequestBodyLBS),
-    Response,
-    httpLbs,
-    method,
-    newManager,
-    parseRequest,
-    requestBody,
-    requestHeaders,
-    responseBody,
-    responseStatus,
-    responseTimeout,
-    responseTimeoutMicro,
-  )
-import Network.HTTP.Client.TLS (tlsManagerSettings)
+import Effectful.Wreq qualified as W
 import Network.HTTP.Types.Status (statusCode)
+import Network.Wreq qualified as Wreq
+import Network.Wreq.Lens qualified as WL
+import System.Timeout (timeout)
 
--- | A single named LLM endpoint.  Materialized from
--- @[llm.profiles.<name>]@ in TOML.
+-- | Which wire format the endpoint speaks.  Picks URL suffix, auth
+-- header shape, request body structure, and response parser.
+data Protocol
+  = -- | OpenAI / OpenAI-compatible: POST @{baseUrl}/chat/completions@
+    -- with @Authorization: Bearer@.  Default — most LLM-as-a-service
+    -- ships this.
+    ProtocolOpenAI
+  | -- | Native Anthropic Messages API: POST @{baseUrl}/v1/messages@
+    -- with @x-api-key@ + @anthropic-version: 2023-06-01@.  Use this
+    -- when the endpoint only exposes Anthropic format, OR when an
+    -- OpenAI-compat proxy mangles tool-call shapes during translation
+    -- (e.g. drops @function.name@) — going native skips the lossy
+    -- translation layer.  Set 'baseUrl' to the API root (no @/v1@
+    -- suffix); we append @/v1/messages@.
+    ProtocolAnthropic
+  deriving stock (Show, Eq)
+
+-- | Parse a protocol name from config (TOML / env / CLI).
+-- Case-insensitive.  Returns 'Nothing' for anything other than
+-- @openai@ / @anthropic@.
+parseProtocol :: Text -> Maybe Protocol
+parseProtocol t = case T.toLower (T.strip t) of
+  "openai" -> Just ProtocolOpenAI
+  "anthropic" -> Just ProtocolAnthropic
+  _ -> Nothing
+
+-- | A single named LLM endpoint.  Materialized from one entry of the
+-- @[[llm.profiles]]@ array in TOML.
 data LLMProfile = LLMProfile
-  { -- | e.g. @https://api.deepseek.com/v1@.  We append @/chat/completions@.
+  { -- | OpenAI: e.g. @https://api.deepseek.com/v1@; we append @/chat/completions@.
+    -- Anthropic: e.g. @https://api.anthropic.com@; we append @/v1/messages@.
     baseUrl :: !Text,
     apiKey :: !Text,
-    -- | Model id; @deepseek-chat@, @gpt-4o-mini@, @qwen2.5:7b@, etc.
+    -- | Model id; @deepseek-chat@, @gpt-4o-mini@, @claude-opus-4-6@, etc.
     model :: !Text,
     maxTokens :: !Int,
     temperature :: !Double,
     -- | HTTP timeout for one chat completion.  LLMs are slow, default 120.
-    timeoutSeconds :: !Int
+    timeoutSeconds :: !Int,
+    -- | Wire format spoken by the endpoint.  Default 'ProtocolOpenAI'.
+    protocol :: !Protocol
   }
   deriving stock (Show)
 
@@ -187,11 +209,21 @@ parseToolCall :: Value -> Parser ToolCall
 parseToolCall = withObject "ToolCall" $ \o -> do
   cid <- o .: "id"
   fn <- o .: "function" :: Parser Object
-  name <- fn .: "name"
-  argsStr <- fn .: "arguments" :: Parser Text
-  args <- case eitherDecode (LBS.fromStrict (TE.encodeUtf8 argsStr)) of
-    Right v -> pure v
-    Left e -> fail $ "decoding tool arguments JSON: " <> e
+  -- Some Anthropic→OpenAI proxies (e.g. how88.top) leave 'name' at
+  -- the tool-call top level instead of inside 'function'; try both.
+  mNameInner <- fn .:? "name"
+  mNameOuter <- o .:? "name"
+  name <- case mNameInner <|> mNameOuter of
+    Just n -> pure n
+    Nothing -> fail "tool_call missing 'name' in both function.name and top-level"
+  -- 'arguments' is sometimes absent for no-arg tools; default to {}.
+  mArgsStr <- fn .:? "arguments" :: Parser (Maybe Text)
+  args <- case mArgsStr of
+    Nothing -> pure (Object mempty)
+    Just s | T.null (T.strip s) -> pure (Object mempty)
+    Just s -> case eitherDecode (LBS.fromStrict (TE.encodeUtf8 s)) of
+      Right v -> pure v
+      Left e -> fail $ "decoding tool arguments JSON: " <> e
   pure (ToolCall cid name args)
 
 --------------------------------------------------------------------------------
@@ -204,49 +236,47 @@ data LLM :: Effect where
 
 type instance DispatchOf LLM = Dynamic
 
--- | One 'Manager' shared across all profiles — they're all just HTTPS
--- endpoints, so we don't gain anything by pooling per host.
+-- | All chat completions go through wreq's default 'Manager' (a
+-- shared singleton).  Per-profile timeout is enforced via
+-- 'System.Timeout.timeout' around each call — wreq's 'Options' does
+-- not expose response timeout, only the 'Manager' does, and we don't
+-- want to maintain one 'Manager' per profile just for that.
 runLLM ::
-  (Log :> es, IOE :> es) =>
+  (W.Wreq :> es, Log :> es, IOE :> es) =>
   LLMRegistry ->
   Eff (LLM : es) a ->
   Eff es a
-runLLM reg m = do
-  mgr <- liftIO (newManager tlsManagerSettings)
-  interpret
-    ( \_ -> \case
-        Chat name msgs tools -> case Map.lookup name reg.profiles of
-          Nothing -> do
-            logAttention "llm: unknown profile" $ object ["profile" .= name]
-            pure $ Left ("unknown llm profile: " <> name)
-          Just cfg -> do
-            logInfo "llm: chat request" $
-              object
-                [ "msg_count" .= length msgs,
-                  "tool_count" .= length tools,
-                  "profile" .= name,
-                  "model" .= cfg.model
-                ]
-            r <- liftIO (callChat mgr cfg msgs tools)
-            case r of
-              Left err ->
-                logAttention "llm: error" $
-                  object ["error" .= err, "profile" .= name]
-              Right (ContentResp text) ->
-                logInfo "llm: got content" $
-                  object ["len" .= T.length text, "profile" .= name]
-              Right (ToolCallsResp tcs) ->
-                logInfo "llm: got tool_calls" $
-                  object
-                    [ "count" .= length tcs,
-                      "names" .= map (.callName) tcs,
-                      "profile" .= name
-                    ]
-            pure r
-        ListProfiles -> pure (Map.keys reg.profiles)
-        DefaultProfile -> pure reg.defaultName
-    )
-    m
+runLLM reg = interpret $ \_ -> \case
+  Chat name msgs tools -> case Map.lookup name reg.profiles of
+    Nothing -> do
+      logAttention "llm: unknown profile" $ object ["profile" .= name]
+      pure $ Left ("unknown llm profile: " <> name)
+    Just cfg -> do
+      logInfo "llm: chat request" $
+        object
+          [ "msg_count" .= length msgs,
+            "tool_count" .= length tools,
+            "profile" .= name,
+            "model" .= cfg.model
+          ]
+      r <- callChat cfg msgs tools
+      case r of
+        Left err ->
+          logAttention "llm: error" $
+            object ["error" .= err, "profile" .= name]
+        Right (ContentResp text) ->
+          logInfo "llm: got content" $
+            object ["len" .= T.length text, "profile" .= name]
+        Right (ToolCallsResp tcs) ->
+          logInfo "llm: got tool_calls" $
+            object
+              [ "count" .= length tcs,
+                "names" .= map (.callName) tcs,
+                "profile" .= name
+              ]
+      pure r
+  ListProfiles -> pure (Map.keys reg.profiles)
+  DefaultProfile -> pure reg.defaultName
 
 chat :: LLM :> es => Text -> [ChatMessage] -> [ToolSpec] -> Eff es (Either Text ChatResponse)
 chat name msgs tools = send (Chat name msgs tools)
@@ -258,11 +288,78 @@ defaultProfile :: LLM :> es => Eff es Text
 defaultProfile = send DefaultProfile
 
 --------------------------------------------------------------------------------
--- HTTP.
+-- Shared HTTP helper.
 
--- | OpenAI-compatible @POST {baseUrl}/chat/completions@.
-callChat :: Manager -> LLMProfile -> [ChatMessage] -> [ToolSpec] -> IO (Either Text ChatResponse)
-callChat mgr cfg msgs tools = do
+-- | POST a request and run the protocol-specific parser on the
+-- response body.  Wraps the wreq call in 'System.Timeout' to enforce
+-- the per-profile wallclock cap (wreq's 'Options' has no
+-- @responseTimeout@ slot).  Surfaces structured 'Left' errors for
+-- timeout / transport / HTTP-status / JSON-parse / extract failures
+-- with the response body preview attached so log readers see what
+-- the upstream actually sent.
+postAndParse ::
+  (W.Wreq :> es, IOE :> es) =>
+  LLMProfile ->
+  Wreq.Options ->
+  String -> -- url
+  BS.ByteString -> -- body
+  (Value -> Parser ChatResponse) -> -- parser
+  Eff es (Either Text ChatResponse)
+postAndParse cfg opts url body parser = do
+  res <- withRunInIO $ \run ->
+    timeout (cfg.timeoutSeconds * 1_000_000) $
+      try (run (W.postWith opts url body))
+  pure $ case res of
+    Nothing -> Left "request timed out"
+    Just (Left e) -> Left ("http: " <> T.pack (show (e :: SomeException)))
+    Just (Right resp) ->
+      let code = statusCode (resp ^. WL.responseStatus)
+          rbody = resp ^. WL.responseBody
+       in if code >= 400
+            then
+              Left $
+                "HTTP "
+                  <> T.pack (show code)
+                  <> ": "
+                  <> T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
+            else
+              let bodyPreview =
+                    T.take 800 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
+               in case eitherDecode rbody of
+                    Left e ->
+                      Left ("parse: " <> T.pack e <> "\nbody: " <> bodyPreview)
+                    Right v -> case parseEither parser v of
+                      Left e ->
+                        Left ("extract: " <> T.pack e <> "\nbody: " <> bodyPreview)
+                      Right r -> Right r
+
+--------------------------------------------------------------------------------
+-- HTTP — dispatch on protocol.
+
+-- | Chat-completion dispatch.  Picks 'callChatOpenAI' or
+-- 'callChatAnthropic' based on 'profile.protocol'.  Each branch
+-- handles its own wire format end-to-end (URL, headers, request
+-- body, response parsing); only the timeout wrapping is shared.
+callChat ::
+  (W.Wreq :> es, IOE :> es) =>
+  LLMProfile ->
+  [ChatMessage] ->
+  [ToolSpec] ->
+  Eff es (Either Text ChatResponse)
+callChat cfg msgs tools = case cfg.protocol of
+  ProtocolOpenAI -> callChatOpenAI cfg msgs tools
+  ProtocolAnthropic -> callChatAnthropic cfg msgs tools
+
+--------------------------------------------------------------------------------
+-- OpenAI / OpenAI-compatible: POST {baseUrl}/chat/completions.
+
+callChatOpenAI ::
+  (W.Wreq :> es, IOE :> es) =>
+  LLMProfile ->
+  [ChatMessage] ->
+  [ToolSpec] ->
+  Eff es (Either Text ChatResponse)
+callChatOpenAI cfg msgs tools = do
   let baseFields =
         [ "model" .= cfg.model,
           "messages" .= msgs,
@@ -274,43 +371,20 @@ callChat mgr cfg msgs tools = do
         if null tools
           then []
           else
-            [ "tools" .= map encodeToolSpec tools,
+            [ "tools" .= map encodeToolSpecOpenAI tools,
               "tool_choice" .= ("auto" :: Text)
             ]
-      body = object (baseFields <> toolFields)
-  req0 <- parseRequest (T.unpack (cfg.baseUrl <> "/chat/completions"))
-  let req =
-        req0
-          { method = "POST",
-            requestHeaders =
-              [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.apiKey),
-                ("Content-Type", "application/json")
-              ],
-            requestBody = RequestBodyLBS (encode body),
-            responseTimeout = responseTimeoutMicro (cfg.timeoutSeconds * 1_000_000)
-          }
-  eres <- try (httpLbs req mgr)
-  case eres :: Either SomeException (Response LBS.ByteString) of
-    Left e -> pure (Left ("http: " <> T.pack (show e)))
-    Right resp ->
-      let code = statusCode (responseStatus resp)
-          rbody = responseBody resp
-       in if code >= 400
-            then
-              pure $
-                Left $
-                  "HTTP "
-                    <> T.pack (show code)
-                    <> ": "
-                    <> T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
-            else case eitherDecode rbody of
-              Left e -> pure (Left ("parse: " <> T.pack e))
-              Right v -> case parseEither parseResponse v of
-                Left e -> pure (Left ("extract: " <> T.pack e))
-                Right r -> pure (Right r)
+      body = LBS.toStrict (encode (object (baseFields <> toolFields)))
+      url = T.unpack (cfg.baseUrl <> "/chat/completions")
+      opts =
+        Wreq.defaults
+          & WL.header "Authorization" .~ ["Bearer " <> TE.encodeUtf8 cfg.apiKey]
+          & WL.header "Content-Type" .~ ["application/json"]
+          & WL.checkResponse ?~ (\_ _ -> pure ())
+  postAndParse cfg opts url body parseResponseOpenAI
 
-encodeToolSpec :: ToolSpec -> Value
-encodeToolSpec t =
+encodeToolSpecOpenAI :: ToolSpec -> Value
+encodeToolSpecOpenAI t =
   object
     [ "type" .= ("function" :: Text),
       "function"
@@ -321,11 +395,9 @@ encodeToolSpec t =
           ]
     ]
 
--- | Pull @choices[0].message@ off an OpenAI-style chat response and
--- return either the text or the tool-call list.  Treats an empty
--- @tool_calls@ array as "no calls".
-parseResponse :: Value -> Parser ChatResponse
-parseResponse = withObject "ChatResponse" $ \o -> do
+-- | Pull @choices[0].message@ off an OpenAI-style chat response.
+parseResponseOpenAI :: Value -> Parser ChatResponse
+parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
   choices <- o .: "choices"
   case choices of
     (c : _) -> withObject "Choice" parseChoice c
@@ -341,3 +413,144 @@ parseResponse = withObject "ChatResponse" $ \o -> do
           case mC of
             Just c' -> pure (ContentResp c')
             Nothing -> fail "no content nor tool_calls in message"
+
+--------------------------------------------------------------------------------
+-- Anthropic Messages API: POST {baseUrl}/v1/messages.
+
+callChatAnthropic ::
+  (W.Wreq :> es, IOE :> es) =>
+  LLMProfile ->
+  [ChatMessage] ->
+  [ToolSpec] ->
+  Eff es (Either Text ChatResponse)
+callChatAnthropic cfg msgs tools = do
+  let (systemText, anthropicMsgs) = toAnthropicMessages msgs
+      baseFields =
+        [ "model" .= cfg.model,
+          "max_tokens" .= cfg.maxTokens,
+          "temperature" .= cfg.temperature,
+          "messages" .= map encodeAnthropicMsg anthropicMsgs
+        ]
+      systemField = case systemText of
+        Just s -> ["system" .= s]
+        Nothing -> []
+      toolFields =
+        if null tools
+          then []
+          else
+            [ "tools" .= map encodeToolSpecAnthropic tools,
+              "tool_choice" .= object ["type" .= ("auto" :: Text)]
+            ]
+      body = LBS.toStrict (encode (object (baseFields <> systemField <> toolFields)))
+      url = T.unpack (cfg.baseUrl <> "/v1/messages")
+      opts =
+        Wreq.defaults
+          & WL.header "x-api-key" .~ [TE.encodeUtf8 cfg.apiKey]
+          & WL.header "anthropic-version" .~ ["2023-06-01"]
+          & WL.header "Content-Type" .~ ["application/json"]
+          & WL.checkResponse ?~ (\_ _ -> pure ())
+  postAndParse cfg opts url body parseResponseAnthropic
+
+encodeToolSpecAnthropic :: ToolSpec -> Value
+encodeToolSpecAnthropic t =
+  object
+    [ "name" .= t.specName,
+      "description" .= t.specDescription,
+      -- Anthropic's @input_schema@ replaces OpenAI's @parameters@.
+      "input_schema" .= t.specSchema
+    ]
+
+-- | One Anthropic message: @role@ + @content@ where content is either
+-- a plain string (simple turn) or an array of content blocks (tool
+-- turns).  We just carry the raw 'Value' to skip an intermediate type.
+data AnthropicMsg = AnthropicMsg !Text !Value
+
+encodeAnthropicMsg :: AnthropicMsg -> Value
+encodeAnthropicMsg (AnthropicMsg role content) =
+  object ["role" .= role, "content" .= content]
+
+-- | Convert our 'ChatMessage' sequence to (system-prompt, message-list)
+-- in Anthropic shape:
+--
+--   * All 'MsgSystem' texts are joined and pulled into the top-level
+--     @system@ field (Anthropic doesn't accept @role: system@ inside
+--     the messages array).
+--   * Consecutive 'MsgTool' messages are coalesced into a single
+--     @role: user@ message with multiple @tool_result@ blocks — that
+--     matches how Claude expects to see tool results after a single
+--     assistant turn with multiple @tool_use@ blocks.
+--   * 'MsgAssistantToolCalls' becomes an assistant message whose
+--     content is an array of @tool_use@ blocks.
+toAnthropicMessages :: [ChatMessage] -> (Maybe Text, [AnthropicMsg])
+toAnthropicMessages msgs = (systemPrompt, go nonSystems)
+  where
+    systems = [t | MsgSystem t <- msgs]
+    nonSystems = [m | m <- msgs, not (isSystem m)]
+    systemPrompt = case systems of
+      [] -> Nothing
+      _ -> Just (T.intercalate "\n\n" systems)
+
+    isSystem (MsgSystem _) = True
+    isSystem _ = False
+
+    go [] = []
+    go (MsgUser t : rest) = AnthropicMsg "user" (toJSON t) : go rest
+    go (MsgAssistant t : rest) = AnthropicMsg "assistant" (toJSON t) : go rest
+    go (MsgAssistantToolCalls tcs : rest) =
+      let blocks =
+            [ object
+                [ "type" .= ("tool_use" :: Text),
+                  "id" .= tc.callId,
+                  "name" .= tc.callName,
+                  "input" .= tc.callArguments
+                ]
+              | tc <- tcs
+            ]
+       in AnthropicMsg "assistant" (toJSON blocks) : go rest
+    go ms@(MsgTool _ _ : _) =
+      let (toolMsgs, after) = span isToolMsg ms
+          blocks =
+            [ object
+                [ "type" .= ("tool_result" :: Text),
+                  "tool_use_id" .= tcid,
+                  "content" .= c
+                ]
+              | MsgTool tcid c <- toolMsgs
+            ]
+       in AnthropicMsg "user" (toJSON blocks) : go after
+    go (MsgSystem _ : rest) = go rest -- already pulled out
+
+    isToolMsg (MsgTool _ _) = True
+    isToolMsg _ = False
+
+-- | Parse Anthropic Messages API response: walk the @content@ array,
+-- collect @text@ blocks and @tool_use@ blocks.  If any tool_use
+-- present → 'ToolCallsResp' (drops the text blocks, which are
+-- typically Claude's pre-call thinking).  Else if any text →
+-- 'ContentResp' with the concatenation.
+parseResponseAnthropic :: Value -> Parser ChatResponse
+parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
+  blocks <- o .: "content" :: Parser [Value]
+  parsed <- traverse parseBlock blocks
+  let toolCalls = [tc | Right tc <- parsed]
+      texts = [t | Left t <- parsed]
+  if not (null toolCalls)
+    then pure (ToolCallsResp toolCalls)
+    else
+      if not (null texts)
+        then pure (ContentResp (T.concat texts))
+        else fail "no text nor tool_use blocks in response.content"
+  where
+    parseBlock :: Value -> Parser (Either Text ToolCall)
+    parseBlock = withObject "ContentBlock" $ \b -> do
+      ty <- b .: "type" :: Parser Text
+      case ty of
+        "text" -> Left <$> b .: "text"
+        "tool_use" -> do
+          tcid <- b .: "id"
+          name <- b .: "name"
+          -- Anthropic's @input@ is already a JSON object — no
+          -- stringified-JSON ceremony like OpenAI requires.
+          inp <- b .: "input"
+          pure (Right (ToolCall tcid name inp))
+        other -> fail $ "unknown content block type: " <> T.unpack other

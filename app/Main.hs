@@ -10,6 +10,7 @@ import Effectful.Concurrent.Async (Concurrent, link, runConcurrent, withAsync)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
+import Effectful.Wreq (runWreq)
 import Log.Backend.StandardOutput (withStdOutLogger)
 import Max.Config (AppConfig (..), loadConfig)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
@@ -34,6 +35,7 @@ import Max.Tasks (TaskRegistry, newTaskRegistry)
 import Max.Tools (builtinsFor)
 import Max.Tools.Files (fileToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
+import Max.Tools.Search (searchToolsFor)
 import OneBot.Event (Event)
 import OneBot.Server (Client, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
@@ -73,6 +75,7 @@ main = do
                 builtinsFor dc
                   <> sandboxToolsFor dc.dcGroupId sandboxes
                   <> fileToolsFor dc.dcGroupId cfg.imagesDir sandboxes
+                  <> maybe [] searchToolsFor cfg.search
           runEff
             . runConcurrent
             . runLog "max" logger LogInfo
@@ -80,6 +83,7 @@ main = do
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
             . runNapCat clientRef
+            . runWreq
             . runLLM cfg.llm
             . runAgent defaultLimits toolFactory tasks
             $ runApp cfg applied sessions tasks sandboxes eventQ imgQ fwdQ fileQ clientRef

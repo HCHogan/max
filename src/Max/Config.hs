@@ -51,7 +51,8 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.DB.Connection (DbConfig (..))
-import Max.Effects.LLM (LLMProfile (..), LLMRegistry (..))
+import Max.Effects.LLM (LLMProfile (..), LLMRegistry (..), Protocol (..), parseProtocol)
+import Max.Tools.Search (SearchConfig (..))
 import OneBot.Server (ServerConfig (..))
 import Options.Applicative qualified as O
 import System.Directory (XdgDirectory (XdgConfig), doesFileExist, getXdgDirectory)
@@ -71,7 +72,10 @@ data AppConfig = AppConfig
     llm :: !LLMRegistry,
     historyWindow :: !Int,
     -- | Persona used when a session hasn't overridden it.
-    persona :: !Text
+    persona :: !Text,
+    -- | Web-search backend, if configured.  When 'Nothing' the
+    -- @web_search@ tool is not registered (model doesn't see it).
+    search :: !(Maybe SearchConfig)
   }
   deriving stock (Show)
 
@@ -87,6 +91,7 @@ data PartialAppConfig = PartialAppConfig
   { server :: !PartialServer,
     db :: !PartialDb,
     llm :: !PartialLLM,
+    search :: !PartialSearch,
     migrationsDir :: !(Maybe FilePath),
     imagesDir :: !(Maybe FilePath),
     imageWorkers :: !(Maybe Int),
@@ -106,6 +111,12 @@ data PartialDb = PartialDb
     maxConns :: !(Maybe Int)
   }
 
+data PartialSearch = PartialSearch
+  { tavilyApiKey :: !(Maybe Text),
+    maxResults :: !(Maybe Int),
+    timeoutSeconds :: !(Maybe Int)
+  }
+
 -- | Multi-profile LLM partial.  'defaultName' selects which profile is the
 -- default; 'profiles' is the raw map.  CLI/env flags write into a profile
 -- named @"default"@ (which is also the implicit name when no TOML exists).
@@ -120,7 +131,8 @@ data PartialProfile = PartialProfile
     model :: !(Maybe Text),
     maxTokens :: !(Maybe Int),
     temperature :: !(Maybe Double),
-    timeoutSeconds :: !(Maybe Int)
+    timeoutSeconds :: !(Maybe Int),
+    protocol :: !(Maybe Protocol)
   }
 
 -- per-field <|>: earlier source wins.
@@ -147,6 +159,17 @@ instance Semigroup PartialDb where
 instance Monoid PartialDb where
   mempty = PartialDb Nothing Nothing
 
+instance Semigroup PartialSearch where
+  a <> b =
+    PartialSearch
+      { tavilyApiKey = a.tavilyApiKey <|> b.tavilyApiKey,
+        maxResults = a.maxResults <|> b.maxResults,
+        timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds
+      }
+
+instance Monoid PartialSearch where
+  mempty = PartialSearch Nothing Nothing Nothing
+
 instance Semigroup PartialProfile where
   a <> b =
     PartialProfile
@@ -155,11 +178,13 @@ instance Semigroup PartialProfile where
         model = a.model <|> b.model,
         maxTokens = a.maxTokens <|> b.maxTokens,
         temperature = a.temperature <|> b.temperature,
-        timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds
+        timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds,
+        protocol = a.protocol <|> b.protocol
       }
 
 instance Monoid PartialProfile where
-  mempty = PartialProfile Nothing Nothing Nothing Nothing Nothing Nothing
+  mempty =
+    PartialProfile Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 instance Semigroup PartialLLM where
   a <> b =
@@ -177,6 +202,7 @@ instance Semigroup PartialAppConfig where
       { server = a.server <> b.server,
         db = a.db <> b.db,
         llm = a.llm <> b.llm,
+        search = a.search <> b.search,
         migrationsDir = a.migrationsDir <|> b.migrationsDir,
         imagesDir = a.imagesDir <|> b.imagesDir,
         imageWorkers = a.imageWorkers <|> b.imageWorkers,
@@ -187,6 +213,7 @@ instance Semigroup PartialAppConfig where
 instance Monoid PartialAppConfig where
   mempty =
     PartialAppConfig
+      mempty
       mempty
       mempty
       mempty
@@ -202,6 +229,7 @@ instance Monoid PartialAppConfig where
 materialize :: PartialAppConfig -> IO AppConfig
 materialize p = do
   registry <- materializeLLM p.llm
+  let search = materializeSearch p.search
   pure
     AppConfig
       { server =
@@ -221,8 +249,22 @@ materialize p = do
         imageWorkers = fromMaybe 4 p.imageWorkers,
         llm = registry,
         historyWindow = fromMaybe 20 p.historyWindow,
-        persona = fromMaybe defaultPersona p.persona
+        persona = fromMaybe defaultPersona p.persona,
+        search = search
       }
+
+-- | If no API key, search is disabled.  Otherwise build a
+-- 'SearchConfig' with sensible defaults for the optional knobs.
+materializeSearch :: PartialSearch -> Maybe SearchConfig
+materializeSearch p = case p.tavilyApiKey of
+  Just key | not (T.null key) ->
+    Just
+      SearchConfig
+        { scTavilyApiKey = key,
+          scDefaultMaxResults = fromMaybe 5 p.maxResults,
+          scTimeoutSeconds = fromMaybe 30 p.timeoutSeconds
+        }
+  _ -> Nothing
 
 materializeLLM :: PartialLLM -> IO LLMRegistry
 materializeLLM (PartialLLM dn rawProfiles) = do
@@ -261,7 +303,8 @@ materializeLLM (PartialLLM dn rawProfiles) = do
             model = fromMaybe "deepseek-chat" partial.model,
             maxTokens = fromMaybe 2048 partial.maxTokens,
             temperature = fromMaybe 0.7 partial.temperature,
-            timeoutSeconds = fromMaybe 120 partial.timeoutSeconds
+            timeoutSeconds = fromMaybe 120 partial.timeoutSeconds,
+            protocol = fromMaybe ProtocolOpenAI partial.protocol
           }
 
 --------------------------------------------------------------------------------
@@ -309,6 +352,7 @@ partialP =
     <$> serverP
     <*> dbP
     <*> llmP
+    <*> searchP
     <*> O.optional (O.strOption (O.long "migrations-dir" <> O.metavar "DIR"))
     <*> O.optional (O.strOption (O.long "images-dir" <> O.metavar "DIR"))
     <*> O.optional (O.option O.auto (O.long "image-workers" <> O.metavar "N"))
@@ -329,6 +373,13 @@ dbP =
     <$> O.optional (textOption (O.long "db-url" <> O.metavar "URL"))
     <*> O.optional (O.option O.auto (O.long "db-max-conns" <> O.metavar "N"))
 
+searchP :: O.Parser PartialSearch
+searchP =
+  PartialSearch
+    <$> O.optional (textOption (O.long "tavily-api-key" <> O.metavar "KEY" <> O.help "Tavily API key (enables the web_search tool)"))
+    <*> O.optional (O.option O.auto (O.long "search-max-results" <> O.metavar "N"))
+    <*> O.optional (O.option O.auto (O.long "search-timeout-seconds" <> O.metavar "N"))
+
 -- | CLI flags only operate on the default profile; defining additional
 -- profiles requires TOML.
 llmP :: O.Parser PartialLLM
@@ -341,8 +392,9 @@ llmP =
     <*> O.optional (O.option O.auto (O.long "llm-max-tokens" <> O.metavar "N"))
     <*> O.optional (O.option O.auto (O.long "llm-temperature" <> O.metavar "F"))
     <*> O.optional (O.option O.auto (O.long "llm-timeout-seconds" <> O.metavar "N"))
+    <*> O.optional (O.option protoReader (O.long "llm-protocol" <> O.metavar "openai|anthropic"))
   where
-    build dn key url mdl mt temp to =
+    build dn key url mdl mt temp to proto =
       let profile =
             PartialProfile
               { apiKey = key,
@@ -350,7 +402,8 @@ llmP =
                 model = mdl,
                 maxTokens = mt,
                 temperature = temp,
-                timeoutSeconds = to
+                timeoutSeconds = to,
+                protocol = proto
               }
           name = fromMaybe "default" dn
        in PartialLLM
@@ -360,6 +413,9 @@ llmP =
                   then Map.empty
                   else Map.singleton name profile
             }
+    protoReader = O.eitherReader $ \s -> case parseProtocol (T.pack s) of
+      Just p -> Right p
+      Nothing -> Left ("expected 'openai' or 'anthropic', got: " <> s)
 
 instance Eq PartialProfile where
   a == b =
@@ -369,6 +425,7 @@ instance Eq PartialProfile where
       && a.maxTokens == b.maxTokens
       && a.temperature == b.temperature
       && a.timeoutSeconds == b.timeoutSeconds
+      && a.protocol == b.protocol
 
 textOption :: O.Mod O.OptionFields String -> O.Parser Text
 textOption = fmap T.pack . O.strOption
@@ -400,6 +457,11 @@ parseEnvPartial = do
   llmMaxTok <- lookupEnvIntMaybe "MAX_LLM_MAX_TOKENS"
   llmTemp <- lookupEnvDoubleMaybe "MAX_LLM_TEMPERATURE"
   llmTimeout <- lookupEnvIntMaybe "MAX_LLM_TIMEOUT_SECONDS"
+  llmProto <- lookupEnvProtocol "MAX_LLM_PROTOCOL"
+  -- search
+  tavilyKey <- fmap T.pack <$> lookupEnv "MAX_TAVILY_API_KEY"
+  searchMax <- lookupEnvIntMaybe "MAX_SEARCH_MAX_RESULTS"
+  searchTimeout <- lookupEnvIntMaybe "MAX_SEARCH_TIMEOUT_SECONDS"
   let envProfile =
         PartialProfile
           { apiKey = llmKey,
@@ -407,7 +469,8 @@ parseEnvPartial = do
             model = llmModel,
             maxTokens = llmMaxTok,
             temperature = llmTemp,
-            timeoutSeconds = llmTimeout
+            timeoutSeconds = llmTimeout,
+            protocol = llmProto
           }
       envProfileName = fromMaybe "default" llmDefault
       envLlm =
@@ -433,6 +496,12 @@ parseEnvPartial = do
               maxConns = dbConns
             },
         llm = envLlm,
+        search =
+          PartialSearch
+            { tavilyApiKey = tavilyKey,
+              maxResults = searchMax,
+              timeoutSeconds = searchTimeout
+            },
         migrationsDir = migDir,
         imagesDir = imgDir,
         imageWorkers = imgWorkers,
@@ -456,6 +525,14 @@ lookupEnvDoubleMaybe name =
       Just d -> pure (Just d)
       Nothing -> fail $ name <> " is not a number: " <> s
 
+lookupEnvProtocol :: String -> IO (Maybe Protocol)
+lookupEnvProtocol name =
+  lookupEnv name >>= \case
+    Nothing -> pure Nothing
+    Just s -> case parseProtocol (T.pack s) of
+      Just p -> pure (Just p)
+      Nothing -> fail $ name <> " must be 'openai' or 'anthropic', got: " <> s
+
 --------------------------------------------------------------------------------
 -- TOML.
 
@@ -471,6 +548,7 @@ partialAppCodec =
     <$> optionalTable partialServerCodec "server" .= (.server)
     <*> optionalTable partialDbCodec "db" .= (.db)
     <*> optionalTable partialLlmCodec "llm" .= (.llm)
+    <*> optionalTable partialSearchCodec "search" .= (.search)
     <*> Toml.dioptional (Toml.string "migrations_dir") .= (.migrationsDir)
     <*> Toml.dioptional (Toml.string "images_dir") .= (.imagesDir)
     <*> Toml.dioptional (Toml.int "image_workers") .= (.imageWorkers)
@@ -491,18 +569,61 @@ partialDbCodec =
     <$> Toml.dioptional (Toml.text "url") .= (.url)
     <*> Toml.dioptional (Toml.int "max_conns") .= (.maxConns)
 
--- | TOML LLM section:
+partialSearchCodec :: TomlCodec PartialSearch
+partialSearchCodec =
+  PartialSearch
+    <$> Toml.dioptional (Toml.text "tavily_api_key") .= (.tavilyApiKey)
+    <*> Toml.dioptional (Toml.int "max_results") .= (.maxResults)
+    <*> Toml.dioptional (Toml.int "timeout_seconds") .= (.timeoutSeconds)
+
+-- | TOML LLM section.  Profiles are an array of tables, each carrying
+-- its own @name@:
 --
 -- >   [llm]
 -- >   default = "main"
 -- >
--- >   [llm.profiles.main]
+-- >   [[llm.profiles]]
+-- >   name      = "main"
+-- >   api_key   = "..."
+-- >   model     = "..."
+-- >
+-- >   [[llm.profiles]]
+-- >   name    = "reasoner"
 -- >   api_key = "..."
+--
+-- The @[[...]]@ syntax is needed because tomland's @tableMap@ doesn't
+-- traverse @[llm.profiles.<name>]@ subtable headers — it only sees
+-- inline-table values at the @profiles@ key.  Array-of-tables works
+-- cleanly and lets each profile span multiple lines.
 partialLlmCodec :: TomlCodec PartialLLM
-partialLlmCodec =
-  PartialLLM
-    <$> Toml.dioptional (Toml.text "default") .= (.defaultName)
-    <*> Toml.tableMap Toml._KeyText (const partialProfileCodec) "profiles" .= (.profiles)
+partialLlmCodec = build
+  <$> Toml.dioptional (Toml.text "default") .= (.defaultName)
+  <*> Toml.list partialProfileEntryCodec "profiles" .= profilesAsEntries
+  where
+    build dn entries =
+      PartialLLM
+        { defaultName = dn,
+          profiles =
+            Map.fromList
+              [(e.entryName, e.entryProfile) | e <- entries]
+        }
+    profilesAsEntries p =
+      [ PartialProfileEntry {entryName = n, entryProfile = pp}
+        | (n, pp) <- Map.toList p.profiles
+      ]
+
+-- | One row in the @[[llm.profiles]]@ array.  Internal to the codec;
+-- materialise transforms back to a plain 'Map'.
+data PartialProfileEntry = PartialProfileEntry
+  { entryName :: !Text,
+    entryProfile :: !PartialProfile
+  }
+
+partialProfileEntryCodec :: TomlCodec PartialProfileEntry
+partialProfileEntryCodec =
+  PartialProfileEntry
+    <$> Toml.text "name" .= (.entryName)
+    <*> partialProfileCodec .= (.entryProfile)
 
 partialProfileCodec :: TomlCodec PartialProfile
 partialProfileCodec =
@@ -513,6 +634,18 @@ partialProfileCodec =
     <*> Toml.dioptional (Toml.int "max_tokens") .= (.maxTokens)
     <*> Toml.dioptional (Toml.double "temperature") .= (.temperature)
     <*> Toml.dioptional (Toml.int "timeout_seconds") .= (.timeoutSeconds)
+    <*> Toml.dioptional protocolCodec .= (.protocol)
+
+-- | TOML codec for the @protocol@ field; matches "openai" / "anthropic".
+protocolCodec :: TomlCodec Protocol
+protocolCodec =
+  Toml.textBy renderProto parseProtoToml "protocol"
+  where
+    renderProto ProtocolOpenAI = "openai"
+    renderProto ProtocolAnthropic = "anthropic"
+    parseProtoToml t = case parseProtocol t of
+      Just p -> Right p
+      Nothing -> Left ("expected 'openai' or 'anthropic', got: " <> t)
 
 -- | Decode a subtable, treating its absence as 'mempty' rather than an error.
 optionalTable :: Monoid a => TomlCodec a -> Toml.Key -> TomlCodec a

@@ -81,10 +81,10 @@ data AgentLimits = AgentLimits
   }
   deriving stock (Show)
 
--- | Sane starting point: 10 turns covers a few rounds of tool use,
+-- | Sane starting point: 40 turns covers a few rounds of tool use,
 -- a couple of @say@ status updates, and a final summary.
 defaultLimits :: AgentLimits
-defaultLimits = AgentLimits {maxTurns = 10}
+defaultLimits = AgentLimits {maxTurns = 40}
 
 -- | What one agent run produced.
 data AgentResult = AgentResult
