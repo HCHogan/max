@@ -28,22 +28,28 @@ module Max.Session
     readSession,
     updateSession,
     -- * Convenience updates (pass to 'updateSession')
-    appendHistoryTurn,
     appendBtwNote,
     drainBtwNotes,
     clearHistory,
     clearAll,
+    unclear,
+    addPin,
+    removePin,
+    removeAllPins,
+    setThinkingOverride,
+    clearThinkingOverride,
   )
 where
 
 import Control.Concurrent.STM
+import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Data.Time (UTCTime)
 import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Session qualified as DB
-import Max.Effects.LLM (ChatMessage)
 import Max.Session.Types (Session (..))
 import OneBot.Types (GroupId)
 
@@ -102,10 +108,6 @@ updateSession t f = do
 --------------------------------------------------------------------------------
 -- Pure helpers callable inside updateSession.
 
-appendHistoryTurn :: ChatMessage -> ChatMessage -> Session -> Session
-appendHistoryTurn user assistant s =
-  s {history = s.history <> [user, assistant]}
-
 appendBtwNote :: Text -> Session -> Session
 appendBtwNote note s = s {btwNotes = s.btwNotes <> [note]}
 
@@ -113,10 +115,50 @@ appendBtwNote note s = s {btwNotes = s.btwNotes <> [note]}
 drainBtwNotes :: Session -> ([Text], Session)
 drainBtwNotes s = (s.btwNotes, s {btwNotes = []})
 
-clearHistory :: Session -> Session
-clearHistory s = s {history = []}
+-- | Stamp a 'clearedAt' watermark so the next prompt skips ambient
+-- group messages AND reconstructed mention history older than now.
+-- Pinned messages and explicit reply contexts still survive.  No
+-- destructive truncation any more — the data lives in the messages
+-- table; @!unclear@ brings it all back.
+clearHistory :: UTCTime -> Session -> Session
+clearHistory now s = s {clearedAt = Just now}
 
--- | Wipe back to defaults: empty history, no btw, no persona override.
--- Leaves model + branch as-is (use !model to change those explicitly).
-clearAll :: Session -> Session
-clearAll s = s {history = [], btwNotes = [], persona = Nothing}
+-- | Stamp 'clearedAt' AND wipe per-session ephemera: btw notes,
+-- persona override, and pins.  Leaves model + branch alone (use
+-- !model to change those explicitly).
+clearAll :: UTCTime -> Session -> Session
+clearAll now s =
+  s
+    { btwNotes = [],
+      persona = Nothing,
+      clearedAt = Just now,
+      pinned = []
+    }
+
+-- | Remove the 'clearedAt' watermark.  The next prompt is allowed to
+-- pull in everything (ambient + mention history) from before any
+-- earlier @!clear@.
+unclear :: Session -> Session
+unclear s = s {clearedAt = Nothing}
+
+-- | Add a message id to the pin list.  Dedupes; preserves insertion
+-- order (the pinned list reads in the order the user pinned).
+addPin :: Int64 -> Session -> Session
+addPin mid s
+  | mid `elem` s.pinned = s -- already pinned, no-op
+  | otherwise = s {pinned = s.pinned <> [mid]}
+
+removePin :: Int64 -> Session -> Session
+removePin mid s = s {pinned = filter (/= mid) s.pinned}
+
+removeAllPins :: Session -> Session
+removeAllPins s = s {pinned = []}
+
+-- | Set the thinking-mode override for this session.
+setThinkingOverride :: Bool -> Session -> Session
+setThinkingOverride b s = s {thinkingOverride = Just b}
+
+-- | Drop the override; subsequent dispatches fall back to the
+-- profile's (or server's) default.
+clearThinkingOverride :: Session -> Session
+clearThinkingOverride s = s {thinkingOverride = Nothing}

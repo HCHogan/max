@@ -49,12 +49,14 @@
 -- @sha256@ on @message_images@ for "which messages reference this blob".
 module Max.DB.Message
   ( insertGroupMessage,
+    insertOutbound,
   )
 where
 
 import Data.Aeson (Value, toJSON)
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
+import Data.Text (Text)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute)
@@ -103,3 +105,41 @@ insertGroupMessage gm = do
 extractReply :: [Segment] -> Maybe Int64
 extractReply segs =
   listToMaybe [m | SegReply (MessageId m) <- segs]
+
+-- | Insert an *outbound* message (something the bot itself sent) into
+-- the messages table.  Used by the LLM-reply path so mention history
+-- can be reconstructed from a single source of truth at dispatch time.
+-- Idempotent on @message_id@ — NapCat occasionally sends our own
+-- message back as an event too, and the upsert collapses the dup.
+insertOutbound ::
+  (WithConnection :> es, IOE :> es) =>
+  GroupId ->
+  UserId -> -- bot's self_id; both user_id and self_id columns get this
+  Text -> -- nickname for the sender column (e.g. "max")
+  MessageId ->
+  [Segment] ->
+  Eff es ()
+insertOutbound (GroupId gid) (UserId sid) nick (MessageId mid) segs = do
+  let segsJson = Jsonb (toJSON segs)
+      rendered = renderPlainText segs
+      replyTo = extractReply segs
+  _ <-
+    execute
+      "INSERT INTO messages \
+      \ (message_id, group_id, user_id, self_id, \
+      \  segments, rendered_text, raw_message, \
+      \  sender_nickname, sender_card, reply_to_message_id) \
+      \ VALUES (?,?,?,?,?,?,?,?,?,?) \
+      \ ON CONFLICT (message_id) DO NOTHING"
+      ( mid,
+        gid,
+        sid, -- user_id = bot's id (bot is the sender)
+        sid, -- self_id same
+        segsJson,
+        rendered,
+        "" :: Text,
+        Just nick,
+        Nothing :: Maybe Text,
+        replyTo
+      )
+  pure ()

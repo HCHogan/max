@@ -19,7 +19,8 @@ import Data.Aeson (Result (..), Value, fromJSON, toJSON)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (FromRow, Only (..))
+import Data.Time (UTCTime)
+import Database.PostgreSQL.Simple (FromRow, Only (..), (:.) (..))
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Effectful
@@ -47,12 +48,23 @@ data Row = Row
     rBranch :: !Text,
     rModel :: !(Maybe Text),
     rPersona :: !(Maybe Text),
-    rHistory :: !Value,
-    rBtwNotes :: !Value
+    rBtwNotes :: !Value,
+    rClearedAt :: !(Maybe UTCTime),
+    rPinned :: !Value,
+    rThinkingOverride :: !(Maybe Bool)
   }
 
 instance FromRow Row where
-  fromRow = Row <$> field <*> field <*> field <*> field <*> field <*> field
+  fromRow =
+    Row
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
 
 -- | Load the active branch's session for a group, creating a fresh
 -- @main@ branch (with the given default model) if nothing exists yet.
@@ -64,7 +76,7 @@ fetchActiveOrInit ::
 fetchActiveOrInit (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT s.group_id, s.branch, s.model, s.persona, s.history, s.btw_notes \
+      "SELECT s.group_id, s.branch, s.model, s.persona, s.btw_notes, s.cleared_at, s.pinned, s.thinking_override \
       \  FROM session_active_branch a \
       \  JOIN sessions s \
       \    ON s.group_id = a.group_id AND s.branch = a.branch \
@@ -80,8 +92,10 @@ fetchActiveOrInit (GroupId gid) defaultModel = do
                 branch = "main",
                 model = defaultModel,
                 persona = Nothing,
-                history = [],
-                btwNotes = []
+                btwNotes = [],
+                clearedAt = Nothing,
+                pinned = [],
+                thinkingOverride = Nothing
               }
       upsertSession initial
       _ <-
@@ -95,19 +109,21 @@ fetchActiveOrInit (GroupId gid) defaultModel = do
 upsertSession :: (WithConnection :> es, IOE :> es) => Session -> Eff es ()
 upsertSession s = do
   let GroupId gid = s.groupId
-      hist = Jsonb (toJSON s.history)
       btw = Jsonb (toJSON s.btwNotes)
+      pin = Jsonb (toJSON s.pinned)
   void $
     execute
-      "INSERT INTO sessions (group_id, branch, model, persona, history, btw_notes) \
-      \ VALUES (?,?,?,?,?,?) \
+      "INSERT INTO sessions (group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override) \
+      \ VALUES (?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (group_id, branch) DO UPDATE SET \
-      \   model      = EXCLUDED.model, \
-      \   persona    = EXCLUDED.persona, \
-      \   history    = EXCLUDED.history, \
-      \   btw_notes  = EXCLUDED.btw_notes, \
-      \   updated_at = now()"
-      (gid, s.branch, s.model, s.persona, hist, btw)
+      \   model             = EXCLUDED.model, \
+      \   persona           = EXCLUDED.persona, \
+      \   btw_notes         = EXCLUDED.btw_notes, \
+      \   cleared_at        = EXCLUDED.cleared_at, \
+      \   pinned            = EXCLUDED.pinned, \
+      \   thinking_override = EXCLUDED.thinking_override, \
+      \   updated_at        = now()"
+      ((gid, s.branch, s.model, s.persona, btw, s.clearedAt, pin) :. Only s.thinkingOverride)
 
 switchActiveBranch ::
   (WithConnection :> es, IOE :> es) =>
@@ -140,8 +156,10 @@ rowToSession defaultModel r =
         Just m | not (T.null m) -> m
         _ -> defaultModel,
       persona = r.rPersona,
-      history = decodeOrEmpty r.rHistory,
-      btwNotes = decodeOrEmpty r.rBtwNotes
+      btwNotes = decodeOrEmpty r.rBtwNotes,
+      clearedAt = r.rClearedAt,
+      pinned = decodeOrEmpty r.rPinned,
+      thinkingOverride = r.rThinkingOverride
     }
   where
     -- Tolerate junk in jsonb columns (e.g. older shape we don't know

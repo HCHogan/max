@@ -37,28 +37,30 @@ persona = "你是一个 QQ 群里的 AI 助手。群成员会 @你 来让你回�
 # ─────────────────────────────────────────────────────────────────────────────
 
 [llm]
-default = "deepseek-chat"
+default = "deepseek-flash"
 
 # Each profile is an entry in the [[llm.profiles]] array of tables.
 # (We use array-of-tables rather than [llm.profiles.<name>] subtables
 # because tomland's tableMap doesn't traverse the latter; the 'name'
 # field is what becomes the !model key.)
 [[llm.profiles]]
-name            = "deepseek-chat"
+name            = "deepseek-flash"
 api_key         = "sk-..."
 base_url        = "https://api.deepseek.com/v1"
-model           = "deepseek-chat"
+model           = "deepseek-v4-flash"
 max_tokens      = 2048
 temperature     = 0.7
 timeout_seconds = 120
+# thinking = false   # uncomment to force non-thinking (DeepSeek default = on)
 
 [[llm.profiles]]
-name            = "deepseek-reasoner"
+name            = "deepseek-pro"
 api_key         = "sk-..."
 base_url        = "https://api.deepseek.com/v1"
-model           = "deepseek-reasoner"
+model           = "deepseek-v4-pro"
 max_tokens      = 4096
 temperature     = 0.3
+# thinking defaults to upstream's choice (DeepSeek pro = on)
 
 # Anthropic native protocol — use when the endpoint only exposes
 # /v1/messages, OR when an OpenAI-compat proxy mangles tool-call

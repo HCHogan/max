@@ -8,6 +8,7 @@ module Max.Command.Dispatcher
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent.STM (TVar)
 import Data.List (sort)
 import Data.Text (Text)
@@ -17,6 +18,8 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.Command.Types
+import Data.Int (Int64)
+import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
 import Max.Effects.LLM (LLM, listProfiles)
 import Max.Sandbox.Registry (SandboxRegistry, destroySandboxesForGroup)
 import Max.Session (Session (..), updateSession)
@@ -32,6 +35,10 @@ import Max.Tasks
 import OneBot.Types (GroupId (..))
 
 -- | Run one command and produce the reply text.
+--
+-- @replyTarget@ is the @message_id@ extracted from the trigger
+-- message's @SegReply@ (if any) — lets bare @!pin@ / @!unpin@ refer
+-- to the message the user replied to without typing an id.
 execute ::
   ( Log :> es,
     WithConnection :> es,
@@ -42,14 +49,19 @@ execute ::
   TaskRegistry ->
   SandboxRegistry ->
   GroupId ->
+  Maybe Int64 -> -- replyTarget message_id, if the command was a reply
   Command ->
   Eff es Text
-execute t taskReg sandboxReg gid cmd = case cmd of
+execute t taskReg sandboxReg gid replyTarget cmd = case cmd of
   Help mTopic -> pure (helpText mTopic)
   --
   ModelShow -> do
     s <- liftIO (Session.readSession t)
-    pure $ "当前 model: " <> s.model
+    pure $
+      "当前 model: "
+        <> s.model
+        <> "  思考: "
+        <> renderThinkingState s.thinkingOverride
   ModelList -> do
     profs <- listProfiles
     pure $ "可用 models:\n  " <> T.intercalate "\n  " (sort profs)
@@ -65,6 +77,13 @@ execute t taskReg sandboxReg gid cmd = case cmd of
           "找不到 model: "
             <> name
             <> "\n用 !model list 看可用列表"
+  ModelThinkShow -> do
+    s <- liftIO (Session.readSession t)
+    pure $ "思考: " <> renderThinkingState s.thinkingOverride
+  ModelThinkSet b -> do
+    updateSession t (\s -> (Session.setThinkingOverride b s, ()))
+    logInfo "session: thinking override" $ object ["value" .= b]
+    pure $ "✓ 思考模式 " <> (if b then "开" else "关") <> "（覆盖 profile 默认）"
   --
   PersonaShow -> do
     s <- liftIO (Session.readSession t)
@@ -79,16 +98,65 @@ execute t taskReg sandboxReg gid cmd = case cmd of
     pure $ "✓ persona 已设 (" <> T.pack (show (T.length p)) <> " 字)"
   --
   Clear -> do
-    updateSession t (\s -> (Session.clearHistory s, ()))
-    pure "✓ history 已清"
+    now <- liftIO getCurrentTime
+    updateSession t (\s -> (Session.clearHistory now s, ()))
+    pure "✓ history 已清，之后的 prompt 不再带这之前的群上下文"
   ClearAll -> do
-    updateSession t (\s -> (Session.clearAll s, ()))
+    now <- liftIO getCurrentTime
+    updateSession t (\s -> (Session.clearAll now s, ()))
     n <- liftIO (destroySandboxesForGroup sandboxReg gid)
     logInfo "session: clear --all" $ object ["sandboxes_destroyed" .= n]
     let sboxSuffix
           | n == 0 = ""
           | otherwise = "，并销毁了 " <> T.pack (show n) <> " 个 sandbox"
-    pure $ "✓ history / btw / persona override 全清" <> sboxSuffix
+    pure $ "✓ history / btw / persona override 全清，群上下文水位线已置" <> sboxSuffix
+  Unclear -> do
+    s <- liftIO (Session.readSession t)
+    case s.clearedAt of
+      Nothing -> pure "本来就没设水位线"
+      Just _ -> do
+        updateSession t (\sess -> (Session.unclear sess, ()))
+        pure "✓ 水位线已撤销，下次 prompt 又能看到 !clear 之前的群上下文了"
+  --
+  Pin mExplicitId -> do
+    let mTarget = mExplicitId <|> replyTarget
+    case mTarget of
+      Nothing ->
+        pure $
+          "用法：引用要 pin 的那条消息发 !pin，或者 !pin <message_id>"
+      Just mid -> do
+        mMsg <- fetchMessage mid
+        case mMsg of
+          Nothing -> pure $ "找不到 message_id=" <> T.pack (show mid)
+          Just _ -> do
+            updateSession t (\s -> (Session.addPin mid s, ()))
+            pinCount <- (length . (.pinned)) <$> liftIO (Session.readSession t)
+            logInfo "session: pinned" $ object ["message_id" .= mid]
+            pure $
+              "✓ pinned message_id="
+                <> T.pack (show mid)
+                <> "（当前共 "
+                <> T.pack (show pinCount)
+                <> " 条 pin）"
+  Unpin UnpinAll -> do
+    n <- (length . (.pinned)) <$> liftIO (Session.readSession t)
+    updateSession t (\s -> (Session.removeAllPins s, ()))
+    pure $ "✓ 清空所有 pin（共 " <> T.pack (show n) <> " 条）"
+  Unpin (UnpinOne mid) -> do
+    updateSession t (\s -> (Session.removePin mid s, ()))
+    pure $ "✓ unpinned message_id=" <> T.pack (show mid)
+  Unpin UnpinReply -> case replyTarget of
+    Nothing -> pure "用法：引用要 unpin 的那条消息发 !unpin，或者 !unpin <id> / !unpin all"
+    Just mid -> do
+      updateSession t (\s -> (Session.removePin mid s, ()))
+      pure $ "✓ unpinned message_id=" <> T.pack (show mid)
+  Pins -> do
+    s <- liftIO (Session.readSession t)
+    case s.pinned of
+      [] -> pure "没有 pin 任何消息"
+      ids -> do
+        items <- fetchMessagesByIds ids
+        pure $ formatPins items
   --
   Btw note -> do
     -- Prefer injecting into a running task in this group; fall back
@@ -126,6 +194,32 @@ execute t taskReg sandboxReg gid cmd = case cmd of
       "不认识的命令: !"
         <> v
         <> "\n用 !help 看可用命令"
+
+renderThinkingState :: Maybe Bool -> Text
+renderThinkingState = \case
+  Nothing -> "(跟随 profile/服务端默认)"
+  Just True -> "开 (session 覆盖)"
+  Just False -> "关 (session 覆盖)"
+
+--------------------------------------------------------------------------------
+-- !pins formatting.
+
+formatPins :: [HistoryItem] -> Text
+formatPins [] = "没有 pin 任何消息"
+formatPins items =
+  T.unlines $
+    "pinned:" : map oneLine items
+  where
+    oneLine h =
+      "  "
+        <> T.pack (show h.messageId)
+        <> "  "
+        <> (case h.senderNickname of Just n -> n; Nothing -> T.pack (show h.userId))
+        <> "  "
+        <> trunc 60 h.renderedText
+    trunc n t
+      | T.length t <= n = t
+      | otherwise = T.take n t <> "…"
 
 --------------------------------------------------------------------------------
 -- !ps formatting.
@@ -170,14 +264,20 @@ helpText Nothing =
   T.unlines
     [ "可用命令：",
       "  !help [topic]            这条帮助",
-      "  !model                   看当前 model",
+      "  !model                   看当前 model + 思考状态",
       "  !model list              列所有 model",
       "  !model <name>            切 model",
+      "  !model think             看当前思考开关",
+      "  !model think on/off      开/关思考模式 (session 覆盖)",
       "  !persona                 看当前 persona override",
       "  !persona <text>          设 persona override",
       "  !persona clear           回到默认 persona",
-      "  !clear                   清 @-mention 历史",
-      "  !clear --all             清历史/侧记/persona override",
+      "  !clear                   清 @-mention 历史 + 置群上下文水位线",
+      "  !clear --all             清历史/侧记/persona override + 置水位线 + 销毁 sandbox",
+      "  !unclear                 撤销水位线（恢复看 !clear 之前的群消息）",
+      "  !pin [id]                pin 一条消息（不带 id 时用引用的那条）",
+      "  !unpin [id|all]          移除 pin（同上语法 + all 清空）",
+      "  !pins                    列出当前 pin 的消息",
       "  !btw <text>              注入运行中的任务 (没有就排队)",
       "  !ps                      看本群在跑的后台任务",
       "  !ps --all                看所有群的任务",

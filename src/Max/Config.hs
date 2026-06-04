@@ -132,7 +132,8 @@ data PartialProfile = PartialProfile
     maxTokens :: !(Maybe Int),
     temperature :: !(Maybe Double),
     timeoutSeconds :: !(Maybe Int),
-    protocol :: !(Maybe Protocol)
+    protocol :: !(Maybe Protocol),
+    thinking :: !(Maybe Bool)
   }
 
 -- per-field <|>: earlier source wins.
@@ -179,12 +180,21 @@ instance Semigroup PartialProfile where
         maxTokens = a.maxTokens <|> b.maxTokens,
         temperature = a.temperature <|> b.temperature,
         timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds,
-        protocol = a.protocol <|> b.protocol
+        protocol = a.protocol <|> b.protocol,
+        thinking = a.thinking <|> b.thinking
       }
 
 instance Monoid PartialProfile where
   mempty =
-    PartialProfile Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+    PartialProfile
+      Nothing
+      Nothing
+      Nothing
+      Nothing
+      Nothing
+      Nothing
+      Nothing
+      Nothing
 
 instance Semigroup PartialLLM where
   a <> b =
@@ -300,11 +310,12 @@ materializeLLM (PartialLLM dn rawProfiles) = do
         LLMProfile
           { apiKey = apiKey,
             baseUrl = fromMaybe "https://api.deepseek.com/v1" partial.baseUrl,
-            model = fromMaybe "deepseek-chat" partial.model,
+            model = fromMaybe "deepseek-v4-flash" partial.model,
             maxTokens = fromMaybe 2048 partial.maxTokens,
             temperature = fromMaybe 0.7 partial.temperature,
             timeoutSeconds = fromMaybe 120 partial.timeoutSeconds,
-            protocol = fromMaybe ProtocolOpenAI partial.protocol
+            protocol = fromMaybe ProtocolOpenAI partial.protocol,
+            thinking = partial.thinking
           }
 
 --------------------------------------------------------------------------------
@@ -393,8 +404,9 @@ llmP =
     <*> O.optional (O.option O.auto (O.long "llm-temperature" <> O.metavar "F"))
     <*> O.optional (O.option O.auto (O.long "llm-timeout-seconds" <> O.metavar "N"))
     <*> O.optional (O.option protoReader (O.long "llm-protocol" <> O.metavar "openai|anthropic"))
+    <*> O.optional (O.option O.auto (O.long "llm-thinking" <> O.metavar "true|false" <> O.help "DeepSeek thinking mode (omit to use upstream default)"))
   where
-    build dn key url mdl mt temp to proto =
+    build dn key url mdl mt temp to proto think =
       let profile =
             PartialProfile
               { apiKey = key,
@@ -403,7 +415,8 @@ llmP =
                 maxTokens = mt,
                 temperature = temp,
                 timeoutSeconds = to,
-                protocol = proto
+                protocol = proto,
+                thinking = think
               }
           name = fromMaybe "default" dn
        in PartialLLM
@@ -426,6 +439,7 @@ instance Eq PartialProfile where
       && a.temperature == b.temperature
       && a.timeoutSeconds == b.timeoutSeconds
       && a.protocol == b.protocol
+      && a.thinking == b.thinking
 
 textOption :: O.Mod O.OptionFields String -> O.Parser Text
 textOption = fmap T.pack . O.strOption
@@ -458,6 +472,7 @@ parseEnvPartial = do
   llmTemp <- lookupEnvDoubleMaybe "MAX_LLM_TEMPERATURE"
   llmTimeout <- lookupEnvIntMaybe "MAX_LLM_TIMEOUT_SECONDS"
   llmProto <- lookupEnvProtocol "MAX_LLM_PROTOCOL"
+  llmThinking <- lookupEnvBoolMaybe "MAX_LLM_THINKING"
   -- search
   tavilyKey <- fmap T.pack <$> lookupEnv "MAX_TAVILY_API_KEY"
   searchMax <- lookupEnvIntMaybe "MAX_SEARCH_MAX_RESULTS"
@@ -470,7 +485,8 @@ parseEnvPartial = do
             maxTokens = llmMaxTok,
             temperature = llmTemp,
             timeoutSeconds = llmTimeout,
-            protocol = llmProto
+            protocol = llmProto,
+            thinking = llmThinking
           }
       envProfileName = fromMaybe "default" llmDefault
       envLlm =
@@ -532,6 +548,21 @@ lookupEnvProtocol name =
     Just s -> case parseProtocol (T.pack s) of
       Just p -> pure (Just p)
       Nothing -> fail $ name <> " must be 'openai' or 'anthropic', got: " <> s
+
+lookupEnvBoolMaybe :: String -> IO (Maybe Bool)
+lookupEnvBoolMaybe name =
+  lookupEnv name >>= \case
+    Nothing -> pure Nothing
+    Just s -> case T.toLower (T.strip (T.pack s)) of
+      "true" -> pure (Just True)
+      "1" -> pure (Just True)
+      "yes" -> pure (Just True)
+      "on" -> pure (Just True)
+      "false" -> pure (Just False)
+      "0" -> pure (Just False)
+      "no" -> pure (Just False)
+      "off" -> pure (Just False)
+      _ -> fail $ name <> " must be true/false (got: " <> s <> ")"
 
 --------------------------------------------------------------------------------
 -- TOML.
@@ -635,6 +666,7 @@ partialProfileCodec =
     <*> Toml.dioptional (Toml.double "temperature") .= (.temperature)
     <*> Toml.dioptional (Toml.int "timeout_seconds") .= (.timeoutSeconds)
     <*> Toml.dioptional protocolCodec .= (.protocol)
+    <*> Toml.dioptional (Toml.bool "thinking") .= (.thinking)
 
 -- | TOML codec for the @protocol@ field; matches "openai" / "anthropic".
 protocolCodec :: TomlCodec Protocol

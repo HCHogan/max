@@ -21,12 +21,13 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.History (HistoryItem (..), fetchMessage)
+import Max.DB.Message (insertOutbound)
 import Max.Effects.Agent (DispatchContext (..))
-import Max.Effects.NapCat (NapCat, sendAction)
+import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool (..))
-import OneBot.Action (Action (SendGroupMsg))
+import OneBot.Action (Action (SendGroupMsg), Response (..))
 import OneBot.Segment (Segment (..))
-import OneBot.Types (GroupId (..))
+import OneBot.Types (GroupId (..), MessageId (..))
 
 builtinsFor ::
   ( WithConnection :> es,
@@ -36,6 +37,8 @@ builtinsFor ::
   ) =>
   DispatchContext ->
   [Tool es]
+-- WithConnection + IOE constraints already in scope above; sayTool
+-- needs them for the insertOutbound persistence path.
 builtinsFor dc =
   [ getMessageByIdTool,
     searchMessagesTool dc.dcGroupId,
@@ -161,7 +164,7 @@ runSearch gid q lim =
 -- updates so the user isn't staring at silence while the bot is busy
 -- (especially when running sandbox commands that take real time).
 sayTool ::
-  (NapCat :> es, Log :> es) =>
+  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   DispatchContext ->
   Tool es
 sayTool dc =
@@ -194,16 +197,29 @@ sayTool dc =
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (msg :: Text) -> do
-          sendAction
-            ( SendGroupMsg
-                dc.dcGroupId
+          let segs =
                 [ SegReply dc.dcMessageId,
                   SegAt dc.dcUserId,
                   SegText (" " <> T.strip msg)
                 ]
-            )
-          logInfo "say: sent" $ object ["len" .= T.length msg]
-          pure $ Right (object ["ok" .= True])
+          eres <- callAction (SendGroupMsg dc.dcGroupId segs) 30000
+          case eres of
+            Left err -> do
+              logAttention "say: send failed" $ object ["error" .= err]
+              pure $ Left ("say failed: " <> err)
+            Right (Response _ rc payload _)
+              | rc /= 0 -> do
+                  logAttention "say: bad retcode" $ object ["retcode" .= rc]
+                  pure $ Left ("say retcode " <> T.pack (show rc))
+              | otherwise -> do
+                  case parseEither (withObject "send_resp" (\o -> o .: "message_id")) payload of
+                    Right (outMid :: Int64) ->
+                      insertOutbound dc.dcGroupId dc.dcSelfId "max" (MessageId outMid) segs
+                    Left _ ->
+                      logAttention "say: no message_id in response" $
+                        object ["payload" .= payload]
+                  logInfo "say: sent" $ object ["len" .= T.length msg]
+                  pure $ Right (object ["ok" .= True])
     }
 
 --------------------------------------------------------------------------------

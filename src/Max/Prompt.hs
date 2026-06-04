@@ -12,7 +12,13 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
-import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
+import Max.DB.History
+  ( HistoryItem (..),
+    fetchMentionHistory,
+    fetchMessage,
+    fetchMessagesByIds,
+    fetchRecentInGroup,
+  )
 import Max.Effects.LLM (ChatMessage (..))
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
@@ -36,23 +42,34 @@ systemPrompt persona =
       "",
       "当用户引用了带文件的消息时，引用块下面会附带一段 `附带文件:`，",
       "列出该消息里每个文件的 file_id / name / size / ready 状态。用",
-      "其中的 file_id 直接调 import_file_to_sandbox，不需要先 list_recent_files。"
+      "其中的 file_id 直接调 import_file_to_sandbox，不需要先 list_recent_files。",
+      "",
+      "群成员可以用 !pin 把过去的某条消息标记保留——这些会单独显示在",
+      "[pin 上下文] 段；即使用户 !clear 也不会消失。这是用户给的明确",
+      "提示，请认真当成对话背景。"
     ]
 
--- | Build the chat context for one @bot trigger:
+-- | Build the chat context for one @bot trigger.
 --
---   * @system@ message: session persona override (or default) + format guide
---   * any prior session history (user/assistant pairs from earlier rounds)
---   * @user@ message: ambient group context (DB recent-N) + reply chain +
---     pending !btw notes (drained from session) + current @-mention.
+-- Structure:
 --
--- The drained notes are returned alongside the messages so the caller
--- can persist the "notes consumed" state back to the session after
--- the LLM call lands.
+--   * @system@ message: persona + format guide.
+--   * Prior mention history reconstructed from the messages table:
+--     each prior @-mention becomes a 'MsgUser', each bot LLM reply
+--     becomes a 'MsgAssistant', in chronological order.  Pinned
+--     messages and the watermark ('clearedAt') determine inclusion.
+--   * One final @user@ message containing the ambient group context
+--     (chatter NOT directed at the bot), the reply chain (if any),
+--     pinned messages, pending !btw notes, and the current
+--     @-mention.
+--
+-- The drained notes are returned alongside the messages so the
+-- caller can persist the "notes consumed" state back to the
+-- session.
 buildContext ::
   (WithConnection :> es, IOE :> es) =>
   Text -> -- default persona (used when session has no override)
-  Int -> -- history window size for ambient context
+  Int -> -- history window size
   Session ->
   GroupMessage ->
   Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
@@ -61,7 +78,9 @@ buildContext defaultPersona n session gm = do
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
       effectivePersona = fromMaybe defaultPersona session.persona
-  ambient <- fetchRecentInGroup gid mid n
+  ambient <- fetchRecentInGroup gid mid session.clearedAt n
+  mention <- fetchMentionHistory gid selfId' mid session.clearedAt n
+  pinnedItems <- fetchMessagesByIds session.pinned
   replyCtx <- case extractReply gm.message of
     Nothing -> pure Nothing
     Just rid -> do
@@ -69,28 +88,62 @@ buildContext defaultPersona n session gm = do
       case mHist of
         Nothing -> pure Nothing
         Just h -> do
-          -- Also pull any files attached to the replied-to message so
-          -- the model gets file_ids without an extra tool call.
           files <- DBFiles.fetchFilesForMessage h.messageId
           pure (Just (h, files))
-  let userBody = renderUser selfId' ambient replyCtx session.btwNotes gm
+  -- The ambient list still might contain @-mention rows (the SQL
+  -- doesn't filter them out; they'll already appear as part of
+  -- 'mention').  Drop those from ambient by message_id to avoid
+  -- showing the same message twice.
+  let mentionIds = [h.messageId | h <- mention]
+      ambientNoDup =
+        [a | a <- ambient, a.messageId `notElem` mentionIds]
+      mentionMessages = map (historyToChat selfId') mention
+      userBody =
+        renderUser
+          selfId'
+          ambientNoDup
+          replyCtx
+          pinnedItems
+          session.btwNotes
+          gm
       messages =
         [MsgSystem (systemPrompt effectivePersona)]
-          <> session.history
+          <> mentionMessages
           <> [MsgUser userBody]
   pure (messages, session.btwNotes)
+
+-- | Reconstruct one bot/user turn as an OpenAI/Anthropic ChatMessage.
+-- A row sent by the bot becomes 'MsgAssistant'; everything else
+-- (members @-ing the bot) becomes 'MsgUser' with a sender-prefixed
+-- body so the model knows who's talking when multiple members
+-- address the bot.
+historyToChat :: Int64 -> HistoryItem -> ChatMessage
+historyToChat botId h
+  | h.userId == botId = MsgAssistant h.renderedText
+  | otherwise =
+      let name = fromMaybe (T.pack (show h.userId)) h.senderNickname
+       in MsgUser ("<" <> name <> ">: " <> h.renderedText)
 
 renderUser ::
   Int64 ->
   [HistoryItem] ->
   Maybe (HistoryItem, [FileRecord]) ->
+  [HistoryItem] -> -- pinned items, in user pin order
   [Text] ->
   GroupMessage ->
   Text
-renderUser selfId' ambient replyCtx notes gm =
+renderUser selfId' ambient replyCtx pinnedItems notes gm =
   T.intercalate "\n" $
     concat
-      [ ["[群最近上下文]"],
+      [ -- Pinned first so the model sees them as primary context
+        if null pinnedItems
+          then []
+          else
+            [ "[pin 上下文 — 用户标记需要保留的消息]",
+              T.intercalate "\n" (map (renderHistoryLine selfId') pinnedItems),
+              ""
+            ],
+        ["[群最近上下文]"],
         if null ambient
           then ["(无历史消息)"]
           else map (renderHistoryLine selfId') ambient,

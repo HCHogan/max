@@ -18,7 +18,9 @@ where
 
 import Control.Monad (void)
 import Data.Map.Strict qualified as Map
+import Data.Int (Int64)
 import Data.Maybe (catMaybes)
+import Data.Text.Read qualified as TR
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Void (Void)
@@ -156,6 +158,9 @@ classify verb raw@(RawArgs pos flags) = case verb of
   "model" -> case pos of
     [] -> ModelShow
     ["list"] -> ModelList
+    ["think"] -> ModelThinkShow
+    ["think", "on"] -> ModelThinkSet True
+    ["think", "off"] -> ModelThinkSet False
     [name] -> ModelSet name
     _ -> Unknown verb raw -- too many args; let dispatcher complain
   "persona" -> case pos of
@@ -163,6 +168,21 @@ classify verb raw@(RawArgs pos flags) = case verb of
     ["clear"] -> PersonaClear
     _ -> PersonaSet (T.unwords pos)
   "clear" -> if "all" `Map.member` flags then ClearAll else Clear
+  "unclear" -> Unclear
+  "pin" -> case pos of
+    [] -> Pin Nothing
+    [s] -> case parseInt64 s of
+      Just n -> Pin (Just n)
+      Nothing -> Unknown verb raw
+    _ -> Unknown verb raw
+  "unpin" -> case pos of
+    [] -> Unpin UnpinReply
+    ["all"] -> Unpin UnpinAll
+    [s] -> case parseInt64 s of
+      Just n -> Unpin (UnpinOne n)
+      Nothing -> Unknown verb raw
+    _ -> Unknown verb raw
+  "pins" -> Pins
   "btw" -> Btw (T.unwords pos)
   "ps" -> if "all" `Map.member` flags then PsAll else PsLocal
   "kill" -> case pos of
@@ -180,3 +200,8 @@ classify verb raw@(RawArgs pos flags) = case verb of
     oneArg xs = case catMaybes [Just t | t <- xs] of
       [] -> Nothing
       (t : _) -> Just t
+
+parseInt64 :: Text -> Maybe Int64
+parseInt64 t = case TR.signed TR.decimal (T.strip t) of
+  Right (n, rest) | T.null rest -> Just n
+  _ -> Nothing

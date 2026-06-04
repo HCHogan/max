@@ -7,8 +7,9 @@ module Max.Session.Types
   )
 where
 
+import Data.Int (Int64)
 import Data.Text (Text)
-import Max.Effects.LLM (ChatMessage)
+import Data.Time (UTCTime)
 import OneBot.Types (GroupId)
 
 -- | One branch of one group's session.  See "Max.Session" for the
@@ -22,10 +23,21 @@ data Session = Session
     model :: !Text,
     -- | Persona override.  'Nothing' means inherit @AppConfig.persona@.
     persona :: !(Maybe Text),
-    -- | The bot's @-mention conversation history, OpenAI shape.
-    history :: ![ChatMessage],
     -- | Queued !btw notes consumed by the next dispatch (Phase 6a) or
     -- injected into a running agent task (Phase 6b).
-    btwNotes :: ![Text]
+    btwNotes :: ![Text],
+    -- | Watermark set by @!clear@.  When 'Just', ambient group context
+    -- AND reconstructed mention history older than this are excluded
+    -- from the prompt.  'Nothing' means no filtering.  Pinned messages
+    -- (see 'pinned') bypass this entirely.  Survives across restarts.
+    clearedAt :: !(Maybe UTCTime),
+    -- | Explicit message_ids the user pinned via @!pin@.  These get
+    -- included in every prompt regardless of 'clearedAt'.  Order
+    -- preserved (display reflects user's pin order).
+    pinned :: ![Int64],
+    -- | Per-session thinking-mode override, set by @!model think
+    -- on@/@off@.  'Nothing' means follow the profile's (or server's)
+    -- default; 'Just' overrides for this session.
+    thinkingOverride :: !(Maybe Bool)
   }
   deriving stock (Show)

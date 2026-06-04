@@ -15,14 +15,23 @@
 -- already containing backslashes.
 module Max.Command.Types
   ( Command (..),
+    UnpinTarget (..),
     RawArgs (..),
     PosArg,
     Flag,
   )
 where
 
+import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
+
+-- | What @!unpin@ should target.
+data UnpinTarget
+  = UnpinOne !Int64 -- ^ '!unpin <id>'
+  | UnpinReply -- ^ '!unpin' (no arg) — uses the SegReply on the trigger
+  | UnpinAll -- ^ '!unpin all'
+  deriving stock (Show, Eq)
 
 -- | A parsed and structured command.  Unknown commands are represented
 -- by 'Unknown' so the dispatcher can give a friendly "did you mean"
@@ -32,11 +41,17 @@ data Command
   | ModelShow -- ^ '!model'
   | ModelList -- ^ '!model list'
   | ModelSet !Text -- ^ '!model <name>'
+  | ModelThinkShow -- ^ '!model think'
+  | ModelThinkSet !Bool -- ^ '!model think on' / '!model think off'
   | PersonaShow -- ^ '!persona'
   | PersonaClear -- ^ '!persona clear'
   | PersonaSet !Text -- ^ '!persona <text>'
   | Clear -- ^ '!clear'
   | ClearAll -- ^ '!clear --all'
+  | Unclear -- ^ '!unclear' — remove the cleared_at watermark
+  | Pin !(Maybe Int64) -- ^ '!pin [id]' — Nothing = use reply target
+  | Unpin !UnpinTarget -- ^ '!unpin [id|all]'
+  | Pins -- ^ '!pins'
   | Btw !Text -- ^ '!btw <text>'
   | PsLocal -- ^ '!ps' (this group)
   | PsAll -- ^ '!ps --all'

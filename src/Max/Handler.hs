@@ -6,6 +6,10 @@ where
 import Control.Concurrent.STM (TQueue, atomically, readTQueue)
 import Control.Exception (SomeException, fromException, try)
 import Control.Monad (void)
+import Data.Aeson (Value, withObject, (.:))
+import Data.Aeson.Types (parseEither)
+import Data.Int (Int64)
+import Data.Maybe (listToMaybe)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
@@ -13,10 +17,10 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Parser (parseCommand)
-import Max.DB.Message (insertGroupMessage)
+import Max.DB.Message (insertGroupMessage, insertOutbound)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
-import Max.Effects.LLM (ChatMessage (..), LLM)
-import Max.Effects.NapCat (NapCat, sendAction)
+import Max.Effects.LLM (LLM)
+import Max.Effects.NapCat (NapCat, callAction, sendAction)
 import Max.Files (FileQueue, enqueueFiles)
 import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
@@ -25,7 +29,7 @@ import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession, updateSession)
 import Max.Tasks (TaskCancelled, TaskRegistry)
 import Max.Util (catchSync)
-import OneBot.Action (Action (SendGroupMsg))
+import OneBot.Action (Action (SendGroupMsg), Response (..))
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -168,7 +172,8 @@ dispatchCommand reg taskReg sandboxReg defaultModel gm body = localDomain "cmd" 
     Right (Just cmd) -> do
       t <- loadSession reg defaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
-      reply <- CmdDispatch.execute t taskReg sandboxReg gm.groupId cmd
+      let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
+      reply <- CmdDispatch.execute t taskReg sandboxReg gm.groupId replyTarget cmd
       replyText gm reply
 
 --------------------------------------------------------------------------------
@@ -229,27 +234,20 @@ dispatchLLM defaultPersona historyN reg defaultModel gm = void $ async $
       t <- loadSession reg defaultModel gm.groupId
       s <- liftIO (readSession t)
       (ctx, drained) <- buildContext defaultPersona historyN s gm
-      let dc = DispatchContext gm.groupId gm.messageId gm.userId
-      result <- agentTurn dc s.model ctx
+      let dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId
+      result <- agentTurn dc s.model s.thinkingOverride ctx
       let stripped = T.strip result.reply
-          -- The "user" message we persist is the stripped user-facing
-          -- body (no @bot mention, no ambient context).  That keeps
-          -- the persisted history a clean transcript of what the
-          -- group member actually typed — ambient/btw context gets
-          -- re-derived from DB on the next turn.
-          userBody =
-            T.strip (stripMentions gm.selfId (renderPlainText gm.message))
-          userMsg = MsgUser userBody
-      replyText gm stripped
-      -- Persist user turn + every message the agent emitted (tool
-      -- calls, tool results, final assistant text).  Drain the btw
-      -- notes that fed into this prompt.
+      -- callAction so we get the message_id back, then persist this
+      -- outbound message into the messages table.  That's where
+      -- subsequent dispatches will read this turn's assistant reply
+      -- back from when reconstructing mention history.
+      sendAndPersistReply gm stripped
+      -- Drain consumed btw notes (no more history splicing —
+      -- session.history is gone; history lives in messages table).
       updateSession t $ \sess ->
-        let newHistory = sess.history <> [userMsg] <> result.appended
-            sess' =
+        let sess' =
               sess
-                { history = newHistory,
-                  btwNotes =
+                { btwNotes =
                     if null drained
                       then sess.btwNotes
                       else drop (length drained) sess.btwNotes
@@ -268,6 +266,9 @@ dispatchLLM defaultPersona historyN reg defaultModel gm = void $ async $
 --------------------------------------------------------------------------------
 -- Reply helper.
 
+-- | Fire-and-forget reply (no persist).  Used for pong, command
+-- responses, parse errors — chitchat we don't want polluting the
+-- LLM mention history.
 replyText :: NapCat :> es => GroupMessage -> T.Text -> Eff es ()
 replyText gm body =
   sendAction
@@ -278,6 +279,43 @@ replyText gm body =
           SegText (" " <> body)
         ]
     )
+
+-- | Send the LLM's final reply and persist it into the messages
+-- table (so future dispatches can read this back as part of the
+-- mention history).  Uses 'callAction' instead of 'sendAction' to
+-- get NapCat's assigned @message_id@ from the response.  If the
+-- send or message_id extraction fails, logs and gives up
+-- persistence — the user still gets the reply (NapCat printed it),
+-- only the bot's memory loses this turn.
+sendAndPersistReply ::
+  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  GroupMessage ->
+  T.Text ->
+  Eff es ()
+sendAndPersistReply gm body = do
+  let segs =
+        [ SegReply gm.messageId,
+          SegAt gm.userId,
+          SegText (" " <> body)
+        ]
+  eres <- callAction (SendGroupMsg gm.groupId segs) 30000
+  case eres of
+    Left err ->
+      logAttention "llm reply send failed" $ object ["error" .= err]
+    Right (Response _ rc payload _)
+      | rc /= 0 ->
+          logAttention "llm reply retcode bad" $ object ["retcode" .= rc]
+      | otherwise -> case extractOutMid payload of
+          Nothing ->
+            logAttention "no message_id in send_group_msg response" $
+              object ["payload" .= payload]
+          Just outMid ->
+            insertOutbound gm.groupId gm.selfId "max" (MessageId outMid) segs
+
+extractOutMid :: Value -> Maybe Int64
+extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of
+  Right (mid :: Int64) -> Just mid
+  Left _ -> Nothing
 
 stripMentions :: UserId -> T.Text -> T.Text
 stripMentions (UserId u) =

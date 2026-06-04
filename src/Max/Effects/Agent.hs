@@ -64,11 +64,14 @@ import OneBot.Types (GroupId, MessageId, UserId)
 -- | Per-dispatch context the agent loop hands to its tool factory.
 -- Tools like @say@ need the triggering message coordinates to thread
 -- their reply correctly; ambient tools that only care about the group
--- can just project 'dcGroupId'.
+-- can just project 'dcGroupId'.  'dcSelfId' is the bot's own QQ id —
+-- needed when persisting outbound messages so we can attribute them
+-- to the bot.
 data DispatchContext = DispatchContext
   { dcGroupId :: !GroupId,
     dcMessageId :: !MessageId,
-    dcUserId :: !UserId
+    dcUserId :: !UserId,
+    dcSelfId :: !UserId
   }
   deriving stock (Show)
 
@@ -109,7 +112,7 @@ data AgentResult = AgentResult
 data Agent :: Effect where
   -- | Run a full agent loop for the given dispatch.  Returns when the
   -- model emits a content response, hits 'maxTurns', or the LLM errors.
-  AgentTurn :: DispatchContext -> Text -> [ChatMessage] -> Agent m AgentResult
+  AgentTurn :: DispatchContext -> Text -> Maybe Bool -> [ChatMessage] -> Agent m AgentResult
 
 type instance DispatchOf Agent = Dynamic
 
@@ -129,7 +132,7 @@ runAgent ::
   Eff (Agent : es) a ->
   Eff es a
 runAgent lims toolFactory taskReg = interpret $ \_ -> \case
-  AgentTurn dc profile msgs ->
+  AgentTurn dc profile thinking msgs ->
     withRunInIO $ \run -> do
       selfTid <- myThreadId
       let cancel = throwTo selfTid TaskCancelled
@@ -137,24 +140,26 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
         (registerTask taskReg dc.dcGroupId "llm" cancel)
         (unregisterTask taskReg)
         ( \handle ->
-            run (runTools (toolFactory dc) (loop handle profile msgs))
+            run (runTools (toolFactory dc) (loop handle profile thinking msgs))
         )
   where
     loop ::
       TaskHandle ->
       Text ->
+      Maybe Bool ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    loop h = go h 0 []
+    loop h profile thinking = go h 0 [] profile thinking
 
     go ::
       TaskHandle ->
       Int ->
       [ChatMessage] ->
       Text ->
+      Maybe Bool ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    go h n appended profile msgs = do
+    go h n appended profile thinking msgs = do
       -- Drain any !btw notes that arrived since the previous turn.
       notes <- liftIO (drainBtwInbox h)
       let (msgs', appended') = case notes of
@@ -176,7 +181,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
               }
         else do
           specs <- listToolSpecs
-          eres <- chat profile msgs' specs
+          eres <- chat profile thinking msgs' specs
           case eres of
             Left err ->
               pure
@@ -195,17 +200,21 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                     turnsUsed = n + 1,
                     aborted = Nothing
                   }
-            Right (ToolCallsResp tcs) -> do
+            Right (ToolCallsResp reasoning tcs) -> do
               logInfo "agent: tool calls" $
                 object
                   [ "turn" .= n,
                     "count" .= length tcs,
-                    "names" .= map (.callName) tcs
+                    "names" .= map (.callName) tcs,
+                    "has_reasoning" .= case reasoning of Just _ -> True; Nothing -> False
                   ]
-              let asst = MsgAssistantToolCalls tcs
+              -- Carry reasoning_content into the assistant message so
+              -- it round-trips back to the API on the next request —
+              -- DeepSeek returns 400 otherwise.
+              let asst = MsgAssistantToolCalls reasoning tcs
               toolMsgs <- traverse executeOne tcs
               let appended'' = appended' <> [asst] <> toolMsgs
-              go h (n + 1) appended'' profile (msgs' <> [asst] <> toolMsgs)
+              go h (n + 1) appended'' profile thinking (msgs' <> [asst] <> toolMsgs)
 
     executeOne :: ToolCall -> Eff (Tools : es) ChatMessage
     executeOne tc = do
@@ -243,5 +252,5 @@ previewJson n v =
         then collapsed
         else T.take n collapsed <> "…"
 
-agentTurn :: Agent :> es => DispatchContext -> Text -> [ChatMessage] -> Eff es AgentResult
-agentTurn dc profile msgs = send (AgentTurn dc profile msgs)
+agentTurn :: Agent :> es => DispatchContext -> Text -> Maybe Bool -> [ChatMessage] -> Eff es AgentResult
+agentTurn dc profile thinking msgs = send (AgentTurn dc profile thinking msgs)

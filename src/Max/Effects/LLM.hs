@@ -90,14 +90,22 @@ data LLMProfile = LLMProfile
     -- Anthropic: e.g. @https://api.anthropic.com@; we append @/v1/messages@.
     baseUrl :: !Text,
     apiKey :: !Text,
-    -- | Model id; @deepseek-chat@, @gpt-4o-mini@, @claude-opus-4-6@, etc.
+    -- | Model id; @deepseek-v4-flash@, @deepseek-v4-pro@, @gpt-4o-mini@,
+    -- @claude-opus-4-6@, etc.
     model :: !Text,
     maxTokens :: !Int,
     temperature :: !Double,
     -- | HTTP timeout for one chat completion.  LLMs are slow, default 120.
     timeoutSeconds :: !Int,
     -- | Wire format spoken by the endpoint.  Default 'ProtocolOpenAI'.
-    protocol :: !Protocol
+    protocol :: !Protocol,
+    -- | Whether to enable thinking mode.  'Nothing' = don't send the
+    -- field, server uses its default (DeepSeek default = enabled).
+    -- 'Just True' / 'Just False' = explicitly send
+    -- @{"thinking": {"type": "enabled"|"disabled"}}@ in the OpenAI
+    -- request body.  Ignored for Anthropic protocol (Claude has its
+    -- own thinking-block format).
+    thinking :: !(Maybe Bool)
   }
   deriving stock (Show)
 
@@ -117,11 +125,16 @@ data ChatMessage
     MsgSystem !Text
   | -- | @{ role: "user", content: ... }@
     MsgUser !Text
-  | -- | Plain assistant text response.
+  | -- | Plain assistant text response.  Any 'reasoning_content' from
+    -- the original response is dropped — per DeepSeek docs it's not
+    -- needed in subsequent turns when no tool call happened.
     MsgAssistant !Text
-  | -- | Assistant chose to call one or more tools.  The wire form has
-    -- @content: null@ alongside the @tool_calls@ array.
-    MsgAssistantToolCalls ![ToolCall]
+  | -- | Assistant chose to call one or more tools.  Carries the
+    -- optional @reasoning_content@ from the thinking model — must
+    -- round-trip to the API in the *next* request within the same
+    -- agent dispatch, or the API returns 400.  'Nothing' for
+    -- non-thinking models.
+    MsgAssistantToolCalls !(Maybe Text) ![ToolCall]
   | -- | Tool result reply: @{ role: "tool", tool_call_id: ..., content: ... }@.
     -- 'content' is freeform text (typically a JSON-encoded result).
     MsgTool !Text !Text
@@ -151,8 +164,12 @@ data ChatResponse
   = -- | A plain text answer.  The loop is done.
     ContentResp !Text
   | -- | The model wants to call one or more tools.  Caller executes
-    -- them and re-invokes 'chat' with the results appended.
-    ToolCallsResp ![ToolCall]
+    -- them and re-invokes 'chat' with the results appended.  The
+    -- optional first field is the model's @reasoning_content@
+    -- (DeepSeek thinking mode); when 'Just', it MUST be carried
+    -- into the next assistant message's @reasoning_content@ field
+    -- or DeepSeek returns 400.
+    ToolCallsResp !(Maybe Text) ![ToolCall]
   deriving stock (Show)
 
 --------------------------------------------------------------------------------
@@ -163,12 +180,15 @@ instance ToJSON ChatMessage where
     MsgSystem c -> object ["role" .= ("system" :: Text), "content" .= c]
     MsgUser c -> object ["role" .= ("user" :: Text), "content" .= c]
     MsgAssistant c -> object ["role" .= ("assistant" :: Text), "content" .= c]
-    MsgAssistantToolCalls tcs ->
-      object
+    MsgAssistantToolCalls mReasoning tcs ->
+      object $
         [ "role" .= ("assistant" :: Text),
           "content" .= Null,
           "tool_calls" .= map encodeToolCall tcs
         ]
+          <> case mReasoning of
+            Just r -> ["reasoning_content" .= r]
+            Nothing -> []
     MsgTool cid c ->
       object
         [ "role" .= ("tool" :: Text),
@@ -198,8 +218,11 @@ instance FromJSON ChatMessage where
       "tool" -> MsgTool <$> o .: "tool_call_id" <*> o .: "content"
       "assistant" -> do
         mTools <- o .:? "tool_calls"
+        mReasoning <- o .:? "reasoning_content"
         case mTools of
-          Just tcs | not (null tcs) -> MsgAssistantToolCalls <$> traverse parseToolCall tcs
+          Just tcs | not (null tcs) -> do
+            tcs' <- traverse parseToolCall tcs
+            pure (MsgAssistantToolCalls mReasoning tcs')
           _ -> do
             mC <- o .:? "content"
             pure (MsgAssistant (case mC of Just c -> c; Nothing -> ""))
@@ -230,7 +253,11 @@ parseToolCall = withObject "ToolCall" $ \o -> do
 -- Effect.
 
 data LLM :: Effect where
-  Chat :: Text -> [ChatMessage] -> [ToolSpec] -> LLM m (Either Text ChatResponse)
+  -- | The optional 'Maybe Bool' is a per-call thinking-mode
+  -- override.  When 'Nothing', use the profile's setting (which may
+  -- itself be 'Nothing', meaning don't send the field at all).
+  -- When 'Just', overrides whatever the profile says.
+  Chat :: Text -> Maybe Bool -> [ChatMessage] -> [ToolSpec] -> LLM m (Either Text ChatResponse)
   ListProfiles :: LLM m [Text]
   DefaultProfile :: LLM m Text
 
@@ -247,19 +274,21 @@ runLLM ::
   Eff (LLM : es) a ->
   Eff es a
 runLLM reg = interpret $ \_ -> \case
-  Chat name msgs tools -> case Map.lookup name reg.profiles of
+  Chat name thinkingOverride msgs tools -> case Map.lookup name reg.profiles of
     Nothing -> do
       logAttention "llm: unknown profile" $ object ["profile" .= name]
       pure $ Left ("unknown llm profile: " <> name)
     Just cfg -> do
+      let effThinking = thinkingOverride <|> cfg.thinking
       logInfo "llm: chat request" $
         object
           [ "msg_count" .= length msgs,
             "tool_count" .= length tools,
             "profile" .= name,
-            "model" .= cfg.model
+            "model" .= cfg.model,
+            "thinking" .= effThinking
           ]
-      r <- callChat cfg msgs tools
+      r <- callChat cfg effThinking msgs tools
       case r of
         Left err ->
           logAttention "llm: error" $
@@ -267,7 +296,7 @@ runLLM reg = interpret $ \_ -> \case
         Right (ContentResp text) ->
           logInfo "llm: got content" $
             object ["len" .= T.length text, "profile" .= name]
-        Right (ToolCallsResp tcs) ->
+        Right (ToolCallsResp _ tcs) ->
           logInfo "llm: got tool_calls" $
             object
               [ "count" .= length tcs,
@@ -278,8 +307,15 @@ runLLM reg = interpret $ \_ -> \case
   ListProfiles -> pure (Map.keys reg.profiles)
   DefaultProfile -> pure reg.defaultName
 
-chat :: LLM :> es => Text -> [ChatMessage] -> [ToolSpec] -> Eff es (Either Text ChatResponse)
-chat name msgs tools = send (Chat name msgs tools)
+chat ::
+  LLM :> es =>
+  Text -> -- profile name
+  Maybe Bool -> -- per-call thinking override; Nothing = use profile's
+  [ChatMessage] ->
+  [ToolSpec] ->
+  Eff es (Either Text ChatResponse)
+chat name thinkingOverride msgs tools =
+  send (Chat name thinkingOverride msgs tools)
 
 listProfiles :: LLM :> es => Eff es [Text]
 listProfiles = send ListProfiles
@@ -343,11 +379,14 @@ postAndParse cfg opts url body parser = do
 callChat ::
   (W.Wreq :> es, IOE :> es) =>
   LLMProfile ->
+  Maybe Bool -> -- effective thinking
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text ChatResponse)
-callChat cfg msgs tools = case cfg.protocol of
-  ProtocolOpenAI -> callChatOpenAI cfg msgs tools
+callChat cfg thinkingEff msgs tools = case cfg.protocol of
+  ProtocolOpenAI -> callChatOpenAI cfg thinkingEff msgs tools
+  -- Anthropic protocol has its own thinking spec we don't bridge yet;
+  -- ignore the override on this path.
   ProtocolAnthropic -> callChatAnthropic cfg msgs tools
 
 --------------------------------------------------------------------------------
@@ -356,10 +395,11 @@ callChat cfg msgs tools = case cfg.protocol of
 callChatOpenAI ::
   (W.Wreq :> es, IOE :> es) =>
   LLMProfile ->
+  Maybe Bool -> -- effective thinking
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text ChatResponse)
-callChatOpenAI cfg msgs tools = do
+callChatOpenAI cfg thinkingEff msgs tools = do
   let baseFields =
         [ "model" .= cfg.model,
           "messages" .= msgs,
@@ -374,7 +414,21 @@ callChatOpenAI cfg msgs tools = do
             [ "tools" .= map encodeToolSpecOpenAI tools,
               "tool_choice" .= ("auto" :: Text)
             ]
-      body = LBS.toStrict (encode (object (baseFields <> toolFields)))
+      -- DeepSeek thinking-mode wire: top-level `thinking: {type: ...}`
+      -- and optionally reasoning_effort=high.  Skip when 'Nothing'
+      -- (= follow server default; non-DeepSeek endpoints get no
+      -- unknown fields).
+      thinkingFields = case thinkingEff of
+        Nothing -> []
+        Just True ->
+          [ "thinking" .= object ["type" .= ("enabled" :: Text)],
+            "reasoning_effort" .= ("high" :: Text)
+          ]
+        Just False ->
+          ["thinking" .= object ["type" .= ("disabled" :: Text)]]
+      body =
+        LBS.toStrict
+          (encode (object (baseFields <> toolFields <> thinkingFields)))
       url = T.unpack (cfg.baseUrl <> "/chat/completions")
       opts =
         Wreq.defaults
@@ -396,6 +450,10 @@ encodeToolSpecOpenAI t =
     ]
 
 -- | Pull @choices[0].message@ off an OpenAI-style chat response.
+-- For thinking-model responses with tool_calls, extracts the
+-- accompanying @reasoning_content@ and stuffs it into the
+-- 'ToolCallsResp' so the agent loop can carry it forward into the
+-- next request (DeepSeek requires this — missing → 400).
 parseResponseOpenAI :: Value -> Parser ChatResponse
 parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
   choices <- o .: "choices"
@@ -407,7 +465,10 @@ parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
       m <- c .: "message" :: Parser Object
       mTools <- m .:? "tool_calls"
       case mTools of
-        Just tcs | not (null tcs) -> ToolCallsResp <$> traverse parseToolCall tcs
+        Just tcs | not (null tcs) -> do
+          tcs' <- traverse parseToolCall tcs
+          reasoning <- m .:? "reasoning_content"
+          pure (ToolCallsResp reasoning tcs')
         _ -> do
           mC <- m .:? "content"
           case mC of
@@ -496,7 +557,9 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
     go [] = []
     go (MsgUser t : rest) = AnthropicMsg "user" (toJSON t) : go rest
     go (MsgAssistant t : rest) = AnthropicMsg "assistant" (toJSON t) : go rest
-    go (MsgAssistantToolCalls tcs : rest) =
+    go (MsgAssistantToolCalls _reasoning tcs : rest) =
+      -- Anthropic has its own native thinking-block format; we don't
+      -- bridge OpenAI 'reasoning_content' over (drop on this path).
       let blocks =
             [ object
                 [ "type" .= ("tool_use" :: Text),
@@ -535,7 +598,7 @@ parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
   let toolCalls = [tc | Right tc <- parsed]
       texts = [t | Left t <- parsed]
   if not (null toolCalls)
-    then pure (ToolCallsResp toolCalls)
+    then pure (ToolCallsResp Nothing toolCalls)
     else
       if not (null texts)
         then pure (ContentResp (T.concat texts))
