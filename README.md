@@ -118,7 +118,7 @@ Reply-to a previous message and `@bot ...` to give the model the quoted context 
                                                 └────────┬─────────┘
                                                          │
                                                          ▼
-       ┌──────────────────────── handleEvents ──────────────────────────┐
+       ┌──────────────────────── handleEvents ───────────────────────────┐
        │ EvGroupMessage gm  →                                            │
        │   1. insertGroupMessage   (Postgres, idempotent on message_id)  │
        │   2. enqueueImages        → ImageQueue                          │
@@ -127,8 +127,8 @@ Reply-to a previous message and `@bot ...` to give the model the quoted context 
        │        none / ping / !cmd / agent-turn                          │
        └──────┬──────────┬──────────┬──────────────┬─────────────────────┘
               │          │          │              │
-        ┌─────▼────┐ ┌───▼────┐ ┌───▼─────┐ ┌──────▼─────────────────┐
-        │imageWkr  │ │fwdWkr  │ │!cmd     │ │ agentTurn (async task) │
+        ┌─────▼────┐ ┌───▼────┐ ┌───▼─────┐ ┌──────▼──────────────────┐
+        │imageWkr  │ │fwdWkr  │ │!cmd     │ │ agentTurn (async task)  │
         │N parallel│ │in-proc │ │dispatch │ │  buildContext           │
         │HTTP fetch│ │recurse │ │(session,│ │  → LLM (tools)          │
         │+ blob/db │ │on data │ │ tasks,  │ │    └─ tool loop ◀──┐    │
