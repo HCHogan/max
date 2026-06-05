@@ -22,7 +22,7 @@ import Data.Int (Int64)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
 import Max.Effects.LLM (LLM, listProfiles)
 import Max.Sandbox.Registry (SandboxRegistry, destroySandboxesForGroup)
-import Max.Session (Session (..), updateSession)
+import Max.Session (Session (..), SessionRegistry, updateSession)
 import Max.Session qualified as Session
 import Max.Tasks
   ( TaskId (..),
@@ -46,13 +46,15 @@ execute ::
     IOE :> es
   ) =>
   TVar Session ->
+  SessionRegistry -> -- needed to swap the active-branch TVar on !switch
+  Text -> -- default LLM profile name (used when loading a branch row with NULL model)
   TaskRegistry ->
   SandboxRegistry ->
   GroupId ->
   Maybe Int64 -> -- replyTarget message_id, if the command was a reply
   Command ->
   Eff es Text
-execute t taskReg sandboxReg gid replyTarget cmd = case cmd of
+execute t reg defaultModel taskReg sandboxReg gid replyTarget cmd = case cmd of
   Help mTopic -> pure (helpText mTopic)
   --
   ModelShow -> do
@@ -185,9 +187,35 @@ execute t taskReg sandboxReg gid replyTarget cmd = case cmd of
         then "✓ 已发取消信号给 " <> tid
         else "找不到任务 " <> tid <> " (用 !ps 看在跑的)"
   --
-  BranchList -> pure "(分支列表 Phase 6c 接入)"
-  BranchNew _ -> pure "(分支创建 Phase 6c 接入)"
-  Switch _ -> pure "(分支切换 Phase 6c 接入)"
+  BranchList -> do
+    s <- liftIO (Session.readSession t)
+    bs <- Session.listBranches gid
+    pure (formatBranches s.branch bs)
+  BranchNew name -> do
+    now <- liftIO getCurrentTime
+    res <- Session.forkAndSwitch reg gid name now
+    case res of
+      Left err -> pure err
+      Right () -> do
+        logInfo "session: branch forked + switched" $
+          object ["branch" .= name]
+        pure $
+          "✓ 已创建并切到分支 " <> name
+            <> "\n（继承了 model/persona/pinned/thinking；btw 清空；上下文水位线设到现在——用 !unclear 看老群消息）"
+  BranchDelete name -> do
+    res <- Session.dropBranch gid name
+    case res of
+      Left err -> pure err
+      Right () -> do
+        logInfo "session: branch deleted" $ object ["branch" .= name]
+        pure $ "✓ 已删除分支 " <> name
+  Switch name -> do
+    res <- Session.switchToBranch reg gid name defaultModel
+    case res of
+      Left err -> pure err
+      Right () -> do
+        logInfo "session: branch switched" $ object ["branch" .= name]
+        pure $ "✓ 已切到分支 " <> name
   --
   Unknown v _ ->
     pure $
@@ -200,6 +228,18 @@ renderThinkingState = \case
   Nothing -> "(跟随 profile/服务端默认)"
   Just True -> "开 (session 覆盖)"
   Just False -> "关 (session 覆盖)"
+
+--------------------------------------------------------------------------------
+-- !branch formatting.
+
+formatBranches :: Text -> [Text] -> Text
+formatBranches _ [] = "(没有分支 — 异常状态，重启 bot 重建 main)"
+formatBranches active bs =
+  T.unlines $ "分支：" : map line (sort bs)
+  where
+    line b
+      | b == active = "  * " <> b <> "  (active)"
+      | otherwise = "    " <> b
 
 --------------------------------------------------------------------------------
 -- !pins formatting.
@@ -282,9 +322,10 @@ helpText Nothing =
       "  !ps                      看本群在跑的后台任务",
       "  !ps --all                看所有群的任务",
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",
-      "  !branch <name>           新建分支        (6c)",
-      "  !branch list             列分支          (6c)",
-      "  !switch <name>           切分支          (6c)"
+      "  !branch                  列分支（标出 active）",
+      "  !branch <name>           创建并切到新分支（fork 当前；上下文水位线设到现在）",
+      "  !branch delete <name>    删除分支（不能删 active / 最后一个）",
+      "  !switch <name>           切到已存在的分支"
     ]
 helpText (Just topic) =
   "(目前没有 '" <> topic <> "' 的详细帮助，看 !help)"

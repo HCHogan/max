@@ -8,9 +8,13 @@
 -- default model.  'upsertSession' writes through on every mutation.
 module Max.DB.Session
   ( fetchActiveOrInit,
+    fetchBranch,
     upsertSession,
     switchActiveBranch,
     listBranches,
+    branchExists,
+    getActiveBranch,
+    deleteBranch,
   )
 where
 
@@ -144,6 +148,57 @@ listBranches (GroupId gid) = do
       "SELECT branch FROM sessions WHERE group_id = ? ORDER BY branch"
       (Only gid)
   pure [b | Only b <- rows :: [Only Text]]
+
+-- | Load a specific branch of a group.  Returns 'Nothing' if the
+-- branch row doesn't exist.
+fetchBranch ::
+  (WithConnection :> es, IOE :> es) =>
+  GroupId ->
+  Text -> -- branch name
+  Text -> -- default model (used when row.model is NULL/empty)
+  Eff es (Maybe Session)
+fetchBranch (GroupId gid) name defaultModel = do
+  rows <-
+    query
+      "SELECT group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override \
+      \  FROM sessions \
+      \  WHERE group_id = ? AND branch = ? \
+      \  LIMIT 1"
+      (gid, name)
+  pure $ case rows :: [Row] of
+    (r : _) -> Just (rowToSession defaultModel r)
+    [] -> Nothing
+
+branchExists :: (WithConnection :> es, IOE :> es) => GroupId -> Text -> Eff es Bool
+branchExists (GroupId gid) name = do
+  rows <-
+    query
+      "SELECT 1 FROM sessions WHERE group_id = ? AND branch = ? LIMIT 1"
+      (gid, name)
+  pure $ not (null (rows :: [Only Int]))
+
+getActiveBranch ::
+  (WithConnection :> es, IOE :> es) =>
+  GroupId ->
+  Eff es (Maybe Text)
+getActiveBranch (GroupId gid) = do
+  rows <-
+    query
+      "SELECT branch FROM session_active_branch WHERE group_id = ? LIMIT 1"
+      (Only gid)
+  pure $ case rows :: [Only Text] of
+    (Only b : _) -> Just b
+    [] -> Nothing
+
+-- | Remove a non-active branch row.  Caller must check it's not the
+-- active branch (this function will happily delete the active row,
+-- leaving a dangling 'session_active_branch' pointer).
+deleteBranch :: (WithConnection :> es, IOE :> es) => GroupId -> Text -> Eff es ()
+deleteBranch (GroupId gid) name =
+  void $
+    execute
+      "DELETE FROM sessions WHERE group_id = ? AND branch = ?"
+      (gid, name)
 
 --------------------------------------------------------------------------------
 

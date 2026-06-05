@@ -56,8 +56,9 @@ data Command
   | PsLocal -- ^ '!ps' (this group)
   | PsAll -- ^ '!ps --all'
   | Kill !Text -- ^ '!kill <id>'
-  | BranchList -- ^ '!branch list'
-  | BranchNew !Text -- ^ '!branch <name>'
+  | BranchList -- ^ '!branch' or '!branch list'
+  | BranchNew !Text -- ^ '!branch <name>' — fork from current + switch
+  | BranchDelete !Text -- ^ '!branch delete <name>'
   | Switch !Text -- ^ '!switch <name>'
   | Unknown !Text !RawArgs -- ^ verb + raw args; parser succeeded but verb unknown
   deriving stock (Show, Eq)

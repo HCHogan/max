@@ -173,7 +173,7 @@ dispatchCommand reg taskReg sandboxReg defaultModel gm body = localDomain "cmd" 
       t <- loadSession reg defaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
-      reply <- CmdDispatch.execute t taskReg sandboxReg gm.groupId replyTarget cmd
+      reply <- CmdDispatch.execute t reg defaultModel taskReg sandboxReg gm.groupId replyTarget cmd
       replyText gm reply
 
 --------------------------------------------------------------------------------

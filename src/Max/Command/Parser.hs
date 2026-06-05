@@ -189,7 +189,9 @@ classify verb raw@(RawArgs pos flags) = case verb of
     [tid] -> Kill tid
     _ -> Unknown verb raw
   "branch" -> case pos of
+    [] -> BranchList
     ["list"] -> BranchList
+    ["delete", name] -> BranchDelete name
     [name] -> BranchNew name
     _ -> Unknown verb raw
   "switch" -> case pos of

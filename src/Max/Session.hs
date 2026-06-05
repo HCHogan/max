@@ -27,6 +27,12 @@ module Max.Session
     loadSession,
     readSession,
     updateSession,
+    -- * Branches
+    listBranches,
+    forkAndSwitch,
+    switchToBranch,
+    dropBranch,
+    isValidBranchName,
     -- * Convenience updates (pass to 'updateSession')
     appendBtwNote,
     drainBtwNotes,
@@ -42,10 +48,12 @@ module Max.Session
 where
 
 import Control.Concurrent.STM
+import Data.Char (isAlphaNum)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Effectful
 import Effectful.PostgreSQL (WithConnection)
@@ -162,3 +170,122 @@ setThinkingOverride b s = s {thinkingOverride = Just b}
 -- profile's (or server's) default.
 clearThinkingOverride :: Session -> Session
 clearThinkingOverride s = s {thinkingOverride = Nothing}
+
+--------------------------------------------------------------------------------
+-- Branches.
+
+-- | Branch names must be a non-empty run of letters/digits/@. _ -@,
+-- ≤64 chars, not starting with a dot.  Conservative on purpose:
+-- branches show up in user-facing output and we don't want surprises
+-- from whitespace or shell-like characters.
+isValidBranchName :: Text -> Bool
+isValidBranchName name =
+  not (T.null name)
+    && T.length name <= 64
+    && T.all ok name
+    && T.head name /= '.'
+  where
+    ok c = isAlphaNum c || c == '.' || c == '_' || c == '-'
+
+-- | List branch names known for a group.  Read-through to DB; we
+-- don't keep a per-group branch index in memory.
+listBranches ::
+  (WithConnection :> es, IOE :> es) =>
+  GroupId ->
+  Eff es [Text]
+listBranches = DB.listBranches
+
+-- | Result of a branch operation.  @Right ()@ on success; @Left msg@
+-- with a user-facing reason on failure.
+type BranchResult = Either Text ()
+
+-- | @git checkout -b@: create @newName@ by copying the currently
+-- active branch's state (model, persona, pinned, thinking_override),
+-- stamp 'clearedAt' to @now@ so the new branch starts with a fresh
+-- view of the messages table, drain @btw_notes@, then flip the
+-- active-branch pointer.  Errors out if @newName@ already exists or
+-- is invalid.
+forkAndSwitch ::
+  (WithConnection :> es, IOE :> es) =>
+  SessionRegistry ->
+  GroupId ->
+  Text -> -- new branch name
+  UTCTime -> -- wall clock used for the watermark on the new branch
+  Eff es BranchResult
+forkAndSwitch (SessionRegistry outer) gid newName now
+  | not (isValidBranchName newName) =
+      pure (Left ("分支名不合法（允许字母数字 . _ -，最多 64 字符，不能以 . 开头）：" <> newName))
+  | otherwise = do
+      exists <- DB.branchExists gid newName
+      if exists
+        then pure (Left ("分支已存在：" <> newName))
+        else do
+          mTvar <- liftIO . atomically $ do
+            m <- readTVar outer
+            pure (Map.lookup gid m)
+          case mTvar of
+            Nothing ->
+              pure (Left "当前 group 还没有 session（先发一条消息让 bot 初始化）")
+            Just t -> do
+              cur <- liftIO (readTVarIO t)
+              let forked =
+                    cur
+                      { branch = newName,
+                        btwNotes = [],
+                        clearedAt = Just now
+                      }
+              DB.upsertSession forked
+              DB.switchActiveBranch gid newName
+              liftIO . atomically $ writeTVar t forked
+              pure (Right ())
+
+-- | Switch the active branch to one that already exists.  Loads the
+-- target branch row, flips the active pointer, then atomically
+-- replaces the in-memory 'Session' inside the existing TVar so
+-- callers that already hold the TVar handle see the new branch on
+-- their next read.
+switchToBranch ::
+  (WithConnection :> es, IOE :> es) =>
+  SessionRegistry ->
+  GroupId ->
+  Text -> -- target branch name
+  Text -> -- default model (for resolving NULL row.model on load)
+  Eff es BranchResult
+switchToBranch (SessionRegistry outer) gid name defaultModel = do
+  mTarget <- DB.fetchBranch gid name defaultModel
+  case mTarget of
+    Nothing -> pure (Left ("分支不存在：" <> name <> "（用 !branch " <> name <> " 创建）"))
+    Just target -> do
+      mTvar <- liftIO . atomically $ do
+        m <- readTVar outer
+        pure (Map.lookup gid m)
+      DB.switchActiveBranch gid name
+      case mTvar of
+        Just t -> liftIO . atomically $ writeTVar t target
+        Nothing -> do
+          tvar <- liftIO (newTVarIO target)
+          liftIO . atomically $ modifyTVar' outer (Map.insert gid tvar)
+      pure (Right ())
+
+-- | Delete a branch.  Refuses to drop the active branch or the only
+-- remaining branch (so a group always has somewhere to land).
+dropBranch ::
+  (WithConnection :> es, IOE :> es) =>
+  GroupId ->
+  Text -> -- branch to delete
+  Eff es BranchResult
+dropBranch gid name = do
+  mActive <- DB.getActiveBranch gid
+  case mActive of
+    Just a | a == name ->
+      pure (Left ("不能删除当前 active 分支 " <> name <> "（先 !switch 到别的分支）"))
+    _ -> do
+      branches <- DB.listBranches gid
+      if name `notElem` branches
+        then pure (Left ("分支不存在：" <> name))
+        else
+          if length branches <= 1
+            then pure (Left "不能删除最后一个分支")
+            else do
+              DB.deleteBranch gid name
+              pure (Right ())

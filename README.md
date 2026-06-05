@@ -154,9 +154,24 @@ Effect stack at the top of `runApp`:
 | 5b | LLM client, `@bot` trigger, async dispatch, persona config | ✅ |
 | 6a | `!cmd` DSL, per-group session, multi-profile LLM, watermark/pin | ✅ |
 | 6b | Tool calling + agent loop + sandbox + files + search | ✅ |
-| 6c | Branch / switch over the messages table | next |
+| 6c | Branch / switch (per-(group,branch) session row over the shared messages table) | ✅ |
 | 7 | Multimodal (VL on stored images) | later |
 | 8 | NixOS module + production deployment | later |
+
+## Tests
+
+```sh
+cabal test                   # runs the hspec suite (test/Spec.hs)
+cabal test --test-show-details=direct   # verbose, individual cases
+```
+
+Specs live under `test/` mirroring the library layout. Currently covered:
+
+- `Max.Command.ParserSpec` — every command verb + edge cases (Phase 6a/6c parser)
+- `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, `isValidBranchName`, …)
+- `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip + `parseToolCall` tolerance (top-level `name` fallback, missing arguments, etc.)
+
+DB-touching code paths (`Max.DB.*`, `Max.Prompt.buildContext`) currently need a real Postgres and aren't covered yet — keep them as integration tests against `devenv up`.
 
 ## Debugging
 
