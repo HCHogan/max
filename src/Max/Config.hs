@@ -133,7 +133,8 @@ data PartialProfile = PartialProfile
     temperature :: !(Maybe Double),
     timeoutSeconds :: !(Maybe Int),
     protocol :: !(Maybe Protocol),
-    thinking :: !(Maybe Bool)
+    thinking :: !(Maybe Bool),
+    multimodal :: !(Maybe Bool)
   }
 
 -- per-field <|>: earlier source wins.
@@ -181,12 +182,14 @@ instance Semigroup PartialProfile where
         temperature = a.temperature <|> b.temperature,
         timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds,
         protocol = a.protocol <|> b.protocol,
-        thinking = a.thinking <|> b.thinking
+        thinking = a.thinking <|> b.thinking,
+        multimodal = a.multimodal <|> b.multimodal
       }
 
 instance Monoid PartialProfile where
   mempty =
     PartialProfile
+      Nothing
       Nothing
       Nothing
       Nothing
@@ -315,7 +318,8 @@ materializeLLM (PartialLLM dn rawProfiles) = do
             temperature = fromMaybe 0.7 partial.temperature,
             timeoutSeconds = fromMaybe 120 partial.timeoutSeconds,
             protocol = fromMaybe ProtocolOpenAI partial.protocol,
-            thinking = partial.thinking
+            thinking = partial.thinking,
+            multimodal = fromMaybe False partial.multimodal
           }
 
 --------------------------------------------------------------------------------
@@ -405,8 +409,9 @@ llmP =
     <*> O.optional (O.option O.auto (O.long "llm-timeout-seconds" <> O.metavar "N"))
     <*> O.optional (O.option protoReader (O.long "llm-protocol" <> O.metavar "openai|anthropic"))
     <*> O.optional (O.option O.auto (O.long "llm-thinking" <> O.metavar "true|false" <> O.help "DeepSeek thinking mode (omit to use upstream default)"))
+    <*> O.optional (O.option O.auto (O.long "llm-multimodal" <> O.metavar "true|false" <> O.help "Profile accepts image content blocks (e.g. Gemma 4 / GPT-4o; default false)"))
   where
-    build dn key url mdl mt temp to proto think =
+    build dn key url mdl mt temp to proto think mm =
       let profile =
             PartialProfile
               { apiKey = key,
@@ -416,7 +421,8 @@ llmP =
                 temperature = temp,
                 timeoutSeconds = to,
                 protocol = proto,
-                thinking = think
+                thinking = think,
+                multimodal = mm
               }
           name = fromMaybe "default" dn
        in PartialLLM
@@ -440,6 +446,7 @@ instance Eq PartialProfile where
       && a.timeoutSeconds == b.timeoutSeconds
       && a.protocol == b.protocol
       && a.thinking == b.thinking
+      && a.multimodal == b.multimodal
 
 textOption :: O.Mod O.OptionFields String -> O.Parser Text
 textOption = fmap T.pack . O.strOption
@@ -473,6 +480,7 @@ parseEnvPartial = do
   llmTimeout <- lookupEnvIntMaybe "MAX_LLM_TIMEOUT_SECONDS"
   llmProto <- lookupEnvProtocol "MAX_LLM_PROTOCOL"
   llmThinking <- lookupEnvBoolMaybe "MAX_LLM_THINKING"
+  llmMultimodal <- lookupEnvBoolMaybe "MAX_LLM_MULTIMODAL"
   -- search
   tavilyKey <- fmap T.pack <$> lookupEnv "MAX_TAVILY_API_KEY"
   searchMax <- lookupEnvIntMaybe "MAX_SEARCH_MAX_RESULTS"
@@ -486,7 +494,8 @@ parseEnvPartial = do
             temperature = llmTemp,
             timeoutSeconds = llmTimeout,
             protocol = llmProto,
-            thinking = llmThinking
+            thinking = llmThinking,
+            multimodal = llmMultimodal
           }
       envProfileName = fromMaybe "default" llmDefault
       envLlm =
@@ -667,6 +676,7 @@ partialProfileCodec =
     <*> Toml.dioptional (Toml.int "timeout_seconds") .= (.timeoutSeconds)
     <*> Toml.dioptional protocolCodec .= (.protocol)
     <*> Toml.dioptional (Toml.bool "thinking") .= (.thinking)
+    <*> Toml.dioptional (Toml.bool "multimodal") .= (.multimodal)
 
 -- | TOML codec for the @protocol@ field; matches "openai" / "anthropic".
 protocolCodec :: TomlCodec Protocol

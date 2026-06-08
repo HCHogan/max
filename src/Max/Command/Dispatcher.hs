@@ -5,6 +5,7 @@
 -- the parser is pure.
 module Max.Command.Dispatcher
   ( execute,
+    DispatchResult (..),
   )
 where
 
@@ -34,7 +35,21 @@ import Max.Tasks
   )
 import OneBot.Types (GroupId (..))
 
--- | Run one command and produce the reply text.
+-- | What the caller should do after dispatching a command.
+--
+-- Most commands collapse to 'ReplyText' (just say something back).
+-- 'EphemeralAsk' is reserved for the new !btw semantics: the caller
+-- should spawn a regular LLM dispatch with the carried text as the
+-- user prompt, but under 'Max.Persistence.withEphemeral' so the
+-- reply doesn't get persisted to mention history.  Wiring it as a
+-- result rather than a direct call keeps Dispatcher free of the
+-- Agent/NapCat/Concurrent constraints.
+data DispatchResult
+  = ReplyText !Text
+  | EphemeralAsk !Text
+  deriving stock (Show, Eq)
+
+-- | Run one command and produce a 'DispatchResult'.
 --
 -- @replyTarget@ is the @message_id@ extracted from the trigger
 -- message's @SegReply@ (if any) — lets bare @!pin@ / @!unpin@ refer
@@ -53,56 +68,67 @@ execute ::
   GroupId ->
   Maybe Int64 -> -- replyTarget message_id, if the command was a reply
   Command ->
-  Eff es Text
+  Eff es DispatchResult
 execute t reg defaultModel taskReg sandboxReg gid replyTarget cmd = case cmd of
-  Help mTopic -> pure (helpText mTopic)
+  Btw note -> do
+    -- Prefer injecting into a running task in this group.  Otherwise
+    -- become the new !btw: an ephemeral one-shot LLM ask using
+    -- current context.  The caller (Handler.dispatchCommand) sees
+    -- 'EphemeralAsk' and spawns a 'withEphemeral'-wrapped dispatch.
+    injected <- liftIO (pushBtwToLatest taskReg gid note)
+    if injected
+      then reply "✓ 侧记已注入运行中的任务"
+      else case T.strip note of
+        "" -> reply "用法：!btw <要临时问的内容>（不污染对话历史）"
+        q -> pure (EphemeralAsk q)
+  Help mTopic -> reply (helpText mTopic)
   --
   ModelShow -> do
     s <- liftIO (Session.readSession t)
-    pure $
+    reply $
       "当前 model: "
         <> s.model
         <> "  思考: "
         <> renderThinkingState s.thinkingOverride
   ModelList -> do
     profs <- listProfiles
-    pure $ "可用 models:\n  " <> T.intercalate "\n  " (sort profs)
+    reply $ "可用 models:\n  " <> T.intercalate "\n  " (sort profs)
   ModelSet name -> do
     profs <- listProfiles
     if name `elem` profs
       then do
         updateSession t (\s -> (s {model = name}, ()))
         logInfo "session: model set" $ object ["model" .= name]
-        pure $ "✓ model 切到 " <> name
+        reply $ "✓ model 切到 " <> name
       else
-        pure $
+        reply $
           "找不到 model: "
             <> name
             <> "\n用 !model list 看可用列表"
   ModelThinkShow -> do
     s <- liftIO (Session.readSession t)
-    pure $ "思考: " <> renderThinkingState s.thinkingOverride
+    reply $ "思考: " <> renderThinkingState s.thinkingOverride
   ModelThinkSet b -> do
     updateSession t (\s -> (Session.setThinkingOverride b s, ()))
     logInfo "session: thinking override" $ object ["value" .= b]
-    pure $ "✓ 思考模式 " <> (if b then "开" else "关") <> "（覆盖 profile 默认）"
+    reply $ "✓ 思考模式 " <> (if b then "开" else "关") <> "（覆盖 profile 默认）"
   --
   PersonaShow -> do
     s <- liftIO (Session.readSession t)
-    pure $ case s.persona of
+    reply $ case s.persona of
       Nothing -> "(使用默认 persona — 用 !persona <text> 覆盖)"
       Just p -> "当前 persona override:\n" <> p
   PersonaClear -> do
     updateSession t (\s -> (s {persona = Nothing}, ()))
-    pure "✓ persona override 已清，回到默认"
+    reply "✓ persona override 已清，回到默认"
   PersonaSet p -> do
     updateSession t (\s -> (s {persona = Just p}, ()))
-    pure $ "✓ persona 已设 (" <> T.pack (show (T.length p)) <> " 字)"
+    reply $ "✓ persona 已设 (" <> T.pack (show (T.length p)) <> " 字)"
   --
   Clear -> do
     now <- liftIO getCurrentTime
     updateSession t (\s -> (Session.clearHistory now s, ()))
-    pure "✓ history 已清，之后的 prompt 不再带这之前的群上下文"
+    reply "✓ history 已清，之后的 prompt 不再带这之前的群上下文"
   ClearAll -> do
     now <- liftIO getCurrentTime
     updateSession t (\s -> (Session.clearAll now s, ()))
@@ -111,30 +137,29 @@ execute t reg defaultModel taskReg sandboxReg gid replyTarget cmd = case cmd of
     let sboxSuffix
           | n == 0 = ""
           | otherwise = "，并销毁了 " <> T.pack (show n) <> " 个 sandbox"
-    pure $ "✓ history / btw / persona override 全清，群上下文水位线已置" <> sboxSuffix
+    reply $ "✓ history / btw / persona override 全清，群上下文水位线已置" <> sboxSuffix
   Unclear -> do
     s <- liftIO (Session.readSession t)
     case s.clearedAt of
-      Nothing -> pure "本来就没设水位线"
+      Nothing -> reply "本来就没设水位线"
       Just _ -> do
         updateSession t (\sess -> (Session.unclear sess, ()))
-        pure "✓ 水位线已撤销，下次 prompt 又能看到 !clear 之前的群上下文了"
+        reply "✓ 水位线已撤销，下次 prompt 又能看到 !clear 之前的群上下文了"
   --
   Pin mExplicitId -> do
     let mTarget = mExplicitId <|> replyTarget
     case mTarget of
       Nothing ->
-        pure $
-          "用法：引用要 pin 的那条消息发 !pin，或者 !pin <message_id>"
+        reply "用法：引用要 pin 的那条消息发 !pin，或者 !pin <message_id>"
       Just mid -> do
         mMsg <- fetchMessage mid
         case mMsg of
-          Nothing -> pure $ "找不到 message_id=" <> T.pack (show mid)
+          Nothing -> reply $ "找不到 message_id=" <> T.pack (show mid)
           Just _ -> do
             updateSession t (\s -> (Session.addPin mid s, ()))
             pinCount <- (length . (.pinned)) <$> liftIO (Session.readSession t)
             logInfo "session: pinned" $ object ["message_id" .= mid]
-            pure $
+            reply $
               "✓ pinned message_id="
                 <> T.pack (show mid)
                 <> "（当前共 "
@@ -143,46 +168,34 @@ execute t reg defaultModel taskReg sandboxReg gid replyTarget cmd = case cmd of
   Unpin UnpinAll -> do
     n <- (length . (.pinned)) <$> liftIO (Session.readSession t)
     updateSession t (\s -> (Session.removeAllPins s, ()))
-    pure $ "✓ 清空所有 pin（共 " <> T.pack (show n) <> " 条）"
+    reply $ "✓ 清空所有 pin（共 " <> T.pack (show n) <> " 条）"
   Unpin (UnpinOne mid) -> do
     updateSession t (\s -> (Session.removePin mid s, ()))
-    pure $ "✓ unpinned message_id=" <> T.pack (show mid)
+    reply $ "✓ unpinned message_id=" <> T.pack (show mid)
   Unpin UnpinReply -> case replyTarget of
-    Nothing -> pure "用法：引用要 unpin 的那条消息发 !unpin，或者 !unpin <id> / !unpin all"
+    Nothing -> reply "用法：引用要 unpin 的那条消息发 !unpin，或者 !unpin <id> / !unpin all"
     Just mid -> do
       updateSession t (\s -> (Session.removePin mid s, ()))
-      pure $ "✓ unpinned message_id=" <> T.pack (show mid)
+      reply $ "✓ unpinned message_id=" <> T.pack (show mid)
   Pins -> do
     s <- liftIO (Session.readSession t)
     case s.pinned of
-      [] -> pure "没有 pin 任何消息"
+      [] -> reply "没有 pin 任何消息"
       ids -> do
         items <- fetchMessagesByIds ids
-        pure $ formatPins items
-  --
-  Btw note -> do
-    -- Prefer injecting into a running task in this group; fall back
-    -- to the session queue if nothing's in flight.  Caller doesn't
-    -- have to think about which case applies.
-    injected <- liftIO (pushBtwToLatest taskReg gid note)
-    if injected
-      then pure "✓ 侧记已注入运行中的任务"
-      else do
-        updateSession t (\s -> (Session.appendBtwNote note s, ()))
-        n <- (length . (.btwNotes)) <$> liftIO (Session.readSession t)
-        pure $ "✓ 没在跑的任务，先排队了 (" <> T.pack (show n) <> " 条待消化)"
+        reply (formatPins items)
   --
   PsLocal -> do
     now <- liftIO getCurrentTime
     tasks <- liftIO (listTasks taskReg (Just gid))
-    pure (formatTasks now Nothing tasks)
+    reply (formatTasks now Nothing tasks)
   PsAll -> do
     now <- liftIO getCurrentTime
     tasks <- liftIO (listTasks taskReg Nothing)
-    pure (formatTasks now (Just gid) tasks)
+    reply (formatTasks now (Just gid) tasks)
   Kill tid -> do
     ok <- liftIO (cancelTask taskReg (TaskId tid))
-    pure $
+    reply $
       if ok
         then "✓ 已发取消信号给 " <> tid
         else "找不到任务 " <> tid <> " (用 !ps 看在跑的)"
@@ -190,38 +203,41 @@ execute t reg defaultModel taskReg sandboxReg gid replyTarget cmd = case cmd of
   BranchList -> do
     s <- liftIO (Session.readSession t)
     bs <- Session.listBranches gid
-    pure (formatBranches s.branch bs)
+    reply (formatBranches s.branch bs)
   BranchNew name -> do
     now <- liftIO getCurrentTime
     res <- Session.forkAndSwitch reg gid name now
     case res of
-      Left err -> pure err
+      Left err -> reply err
       Right () -> do
         logInfo "session: branch forked + switched" $
           object ["branch" .= name]
-        pure $
+        reply $
           "✓ 已创建并切到分支 " <> name
             <> "\n（继承了 model/persona/pinned/thinking；btw 清空；上下文水位线设到现在——用 !unclear 看老群消息）"
   BranchDelete name -> do
     res <- Session.dropBranch gid name
     case res of
-      Left err -> pure err
+      Left err -> reply err
       Right () -> do
         logInfo "session: branch deleted" $ object ["branch" .= name]
-        pure $ "✓ 已删除分支 " <> name
+        reply $ "✓ 已删除分支 " <> name
   Switch name -> do
     res <- Session.switchToBranch reg gid name defaultModel
     case res of
-      Left err -> pure err
+      Left err -> reply err
       Right () -> do
         logInfo "session: branch switched" $ object ["branch" .= name]
-        pure $ "✓ 已切到分支 " <> name
+        reply $ "✓ 已切到分支 " <> name
   --
   Unknown v _ ->
-    pure $
+    reply $
       "不认识的命令: !"
         <> v
         <> "\n用 !help 看可用命令"
+  where
+    reply :: Applicative f => Text -> f DispatchResult
+    reply = pure . ReplyText
 
 renderThinkingState :: Maybe Bool -> Text
 renderThinkingState = \case
@@ -318,7 +334,7 @@ helpText Nothing =
       "  !pin [id]                pin 一条消息（不带 id 时用引用的那条）",
       "  !unpin [id|all]          移除 pin（同上语法 + all 清空）",
       "  !pins                    列出当前 pin 的消息",
-      "  !btw <text>              注入运行中的任务 (没有就排队)",
+      "  !btw <text>              在跑的任务里就注入侧记；否则当前上下文临时问一句（不入对话历史）",
       "  !ps                      看本群在跑的后台任务",
       "  !ps --all                看所有群的任务",
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",

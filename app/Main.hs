@@ -10,6 +10,7 @@ import Effectful.Concurrent.Async (Concurrent, link, runConcurrent, withAsync)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
+import Effectful.Reader.Dynamic (Reader, runReader)
 import Effectful.Wreq (runWreq)
 import Log.Backend.StandardOutput (withStdOutLogger)
 import Max.Config (AppConfig (..), loadConfig)
@@ -20,6 +21,7 @@ import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (LLM, LLMRegistry (..), runLLM)
 import Max.Effects.NapCat (NapCat, runNapCat)
+import Max.Persistence (PersistMode (Persisted))
 import Max.Files (FileQueue, fileWorker, newFileQueue)
 import Max.Forward (ForwardQueue, forwardWorker, newForwardQueue)
 import Max.Handler (handleEvents)
@@ -85,6 +87,7 @@ main = do
             . runNapCat clientRef
             . runWreq
             . runLLM cfg.llm
+            . runReader Persisted -- default mode; !btw scopes Volatile on top
             . runAgent defaultLimits toolFactory tasks
             $ runApp cfg applied sessions tasks sandboxes eventQ imgQ fwdQ fileQ clientRef
 
@@ -97,7 +100,8 @@ runApp ::
     NapCat :> es,
     LLM :> es,
     Agent :> es,
-    Concurrent :> es
+    Concurrent :> es,
+    Reader PersistMode :> es
   ) =>
   AppConfig ->
   [String] ->

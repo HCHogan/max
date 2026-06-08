@@ -13,7 +13,7 @@ A QQ group-chat agent in Haskell. Talks to QQ via [NapCatQQ](https://napneko.git
   - `web_search` — Tavily (requires `tavily_api_key`)
   - File tools — `list_recent_files`, `import_file_to_sandbox`, `send_image_from_sandbox`, `send_file_from_sandbox`
   - Sandbox tools — persistent per-group Docker workspace for code execution
-- **Commands**: `!help`, `!model [list|<name>|think [on|off]]`, `!persona`, `!clear [--all]`, `!unclear`, `!pin [id]`, `!unpin [id|all]`, `!pins`, `!btw <text>`, `!ps [--all]`, `!kill <id>`. Branch commands are stubs (Phase 6c).
+- **Commands**: `!help`, `!model [list|<name>|think [on|off]]`, `!persona`, `!clear [--all]`, `!unclear`, `!pin [id]`, `!unpin [id|all]`, `!pins`, `!btw <text>` (ephemeral one-shot ask — doesn't pollute mention history; injects into a running task instead when one's in flight), `!ps [--all]`, `!kill <id>`, `!branch [list|<name>|delete <name>]`, `!switch <name>`.
 - `@bot ping` returns `pong` as a fast path with no LLM hop.
 
 ## Layout
@@ -160,18 +160,42 @@ Effect stack at the top of `runApp`:
 
 ## Tests
 
+Two test suites — one in-memory, one against Postgres.
+
 ```sh
-cabal test                   # runs the hspec suite (test/Spec.hs)
-cabal test --test-show-details=direct   # verbose, individual cases
+cabal test max-test                          # in-memory: pure logic
+cabal test max-test-db                       # DB integration; needs MAX_TEST_DB_URL
+cabal test all --test-show-details=direct    # both, verbose
 ```
 
-Specs live under `test/` mirroring the library layout. Currently covered:
+### `max-test` (88 cases, no DB)
 
-- `Max.Command.ParserSpec` — every command verb + edge cases (Phase 6a/6c parser)
+Pure logic in `test/` mirroring the library layout:
+
+- `Max.Command.ParserSpec` — every `!cmd` verb + edge cases
 - `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, `isValidBranchName`, …)
 - `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip + `parseToolCall` tolerance (top-level `name` fallback, missing arguments, etc.)
+- `Max.PersistenceSpec` — `withEphemeral` Reader scoping (inside/outside `isEphemeral` flip + restore)
+- `Max.PromptSpec` — `renderContext` over hand-built `PromptInputs` (pin/ambient/mention/reply/btw section ordering and content)
 
-DB-touching code paths (`Max.DB.*`, `Max.Prompt.buildContext`) currently need a real Postgres and aren't covered yet — keep them as integration tests against `devenv up`.
+### `max-test-db` (34 cases, real Postgres)
+
+```sh
+# one-time setup
+createdb -h 127.0.0.1 -p 5433 max_test
+export MAX_TEST_DB_URL=postgresql://127.0.0.1:5433/max_test
+
+cabal test max-test-db
+```
+
+Without `MAX_TEST_DB_URL` the suite exits 0 with a friendly note (so a CI box without a database doesn't break). Migrations are applied automatically on startup, and every test runs after `TRUNCATE … RESTART IDENTITY CASCADE` so cases stay independent.
+
+Specs live in `test-db/`:
+
+- `Max.DB.SessionSpec` — `fetchActiveOrInit` / `upsertSession` / branch ops
+- `Max.DB.HistorySpec` — `fetchRecentInGroup` / `fetchMentionHistory` (incl. watermark + LIMIT semantics) / `fetchMessagesByIds` ordering
+- `Max.DB.MessageSpec` — `insertGroupMessage` / `insertOutbound` idempotency
+- `Max.PromptIntegrationSpec` — `buildContext` end-to-end through the real DB
 
 ## Debugging
 

@@ -5,7 +5,7 @@ where
 
 import Control.Concurrent.STM (TQueue, atomically, readTQueue)
 import Control.Exception (SomeException, fromException, try)
-import Control.Monad (void)
+import Control.Monad (unless, void)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (parseEither)
 import Data.Int (Int64)
@@ -15,15 +15,18 @@ import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
+import Effectful.Reader.Dynamic (Reader)
 import Max.Command.Dispatcher qualified as CmdDispatch
+import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Parser (parseCommand)
 import Max.DB.Message (insertGroupMessage, insertOutbound)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
-import Max.Effects.LLM (LLM)
+import Max.Effects.LLM (LLM, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, callAction, sendAction)
 import Max.Files (FileQueue, enqueueFiles)
 import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
+import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (buildContext)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession, updateSession)
@@ -75,6 +78,7 @@ handleEvents ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
+    Reader PersistMode :> es,
     IOE :> es
   ) =>
   T.Text -> -- default bot persona
@@ -122,6 +126,7 @@ onGroupMessage ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
+    Reader PersistMode :> es,
     IOE :> es
   ) =>
   T.Text ->
@@ -144,7 +149,7 @@ onGroupMessage persona historyN reg taskReg sandboxReg defaultModel gm = do
   case classify gm of
     TriggerNone -> pure ()
     TriggerPong -> sendPong gm
-    TriggerCommand body -> dispatchCommand reg taskReg sandboxReg defaultModel gm body
+    TriggerCommand body -> dispatchCommand persona historyN reg taskReg sandboxReg defaultModel gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
     TriggerLLM _ -> dispatchLLM persona historyN reg defaultModel gm
 
@@ -156,8 +161,13 @@ dispatchCommand ::
     WithConnection :> es,
     NapCat :> es,
     LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader PersistMode :> es,
     IOE :> es
   ) =>
+  T.Text -> -- default bot persona
+  Int -> -- history window
   SessionRegistry ->
   TaskRegistry ->
   SandboxRegistry ->
@@ -165,7 +175,7 @@ dispatchCommand ::
   GroupMessage ->
   T.Text ->
   Eff es ()
-dispatchCommand reg taskReg sandboxReg defaultModel gm body = localDomain "cmd" $ do
+dispatchCommand persona historyN reg taskReg sandboxReg defaultModel gm body = localDomain "cmd" $ do
   case parseCommand body of
     Left err -> replyText gm ("命令解析失败:\n" <> err)
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
@@ -173,8 +183,23 @@ dispatchCommand reg taskReg sandboxReg defaultModel gm body = localDomain "cmd" 
       t <- loadSession reg defaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
-      reply <- CmdDispatch.execute t reg defaultModel taskReg sandboxReg gm.groupId replyTarget cmd
-      replyText gm reply
+      result <- CmdDispatch.execute t reg defaultModel taskReg sandboxReg gm.groupId replyTarget cmd
+      case result of
+        ReplyText reply -> replyText gm reply
+        EphemeralAsk askBody -> do
+          logInfo "btw: ephemeral dispatch" $
+            object ["len" .= T.length askBody]
+          -- Rebuild the trigger with the !btw body as the user
+          -- message; preserve everything else (reply target, sender,
+          -- self id) so buildContext sees a normal @-mention.
+          let virtualGm =
+                gm
+                  { message =
+                      [ SegAt gm.selfId,
+                        SegText (" " <> askBody)
+                      ]
+                  }
+          withEphemeral $ dispatchLLM persona historyN reg defaultModel virtualGm
 
 --------------------------------------------------------------------------------
 -- LLM dispatch.
@@ -199,8 +224,10 @@ dispatchLLM ::
   ( Log :> es,
     WithConnection :> es,
     NapCat :> es,
+    LLM :> es,
     Agent :> es,
     Concurrent :> es,
+    Reader PersistMode :> es,
     IOE :> es
   ) =>
   T.Text ->
@@ -233,7 +260,8 @@ dispatchLLM defaultPersona historyN reg defaultModel gm = void $ async $
     work = do
       t <- loadSession reg defaultModel gm.groupId
       s <- liftIO (readSession t)
-      (ctx, drained) <- buildContext defaultPersona historyN s gm
+      multimodal <- isProfileMultimodal s.model
+      (ctx, drained) <- buildContext defaultPersona historyN multimodal s gm
       let dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId
       result <- agentTurn dc s.model s.thinkingOverride ctx
       let stripped = T.strip result.reply
@@ -242,17 +270,20 @@ dispatchLLM defaultPersona historyN reg defaultModel gm = void $ async $
       -- subsequent dispatches will read this turn's assistant reply
       -- back from when reconstructing mention history.
       sendAndPersistReply gm stripped
-      -- Drain consumed btw notes (no more history splicing —
-      -- session.history is gone; history lives in messages table).
-      updateSession t $ \sess ->
-        let sess' =
-              sess
-                { btwNotes =
-                    if null drained
-                      then sess.btwNotes
-                      else drop (length drained) sess.btwNotes
-                }
-         in (sess', ())
+      -- Drain consumed btw notes — but only when persisting; an
+      -- ephemeral dispatch (e.g. !btw one-shot) must not eat the
+      -- queue (the notes are still waiting for a real turn).
+      ephemeral <- isEphemeral
+      unless ephemeral $
+        updateSession t $ \sess ->
+          let sess' =
+                sess
+                  { btwNotes =
+                      if null drained
+                        then sess.btwNotes
+                        else drop (length drained) sess.btwNotes
+                  }
+           in (sess', ())
       logInfo "llm replied" $
         object
           [ "to" .= (let UserId u = gm.userId in u),
@@ -288,7 +319,12 @@ replyText gm body =
 -- persistence — the user still gets the reply (NapCat printed it),
 -- only the bot's memory loses this turn.
 sendAndPersistReply ::
-  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  ( NapCat :> es,
+    WithConnection :> es,
+    Reader PersistMode :> es,
+    Log :> es,
+    IOE :> es
+  ) =>
   GroupMessage ->
   T.Text ->
   Eff es ()
@@ -309,8 +345,14 @@ sendAndPersistReply gm body = do
           Nothing ->
             logAttention "no message_id in send_group_msg response" $
               object ["payload" .= payload]
-          Just outMid ->
-            insertOutbound gm.groupId gm.selfId "max" (MessageId outMid) segs
+          Just outMid -> do
+            -- The reply already went out over NapCat — that's a real
+            -- side effect we can't undo.  Only the messages-table
+            -- write is gated, so an ephemeral turn doesn't show up
+            -- in next dispatch's mention history.
+            ephemeral <- isEphemeral
+            unless ephemeral $
+              insertOutbound gm.groupId gm.selfId "max" (MessageId outMid) segs
 
 extractOutMid :: Value -> Maybe Int64
 extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of

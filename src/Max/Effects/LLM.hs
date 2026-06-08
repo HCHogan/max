@@ -23,6 +23,7 @@ module Max.Effects.LLM
     parseProtocol,
     -- * Messages
     ChatMessage (..),
+    ContentBlock (..),
     ToolCall (..),
     -- * Tool descriptions for the wire
     ToolSpec (..),
@@ -33,6 +34,7 @@ module Max.Effects.LLM
     chat,
     listProfiles,
     defaultProfile,
+    isProfileMultimodal,
   )
 where
 
@@ -105,7 +107,14 @@ data LLMProfile = LLMProfile
     -- @{"thinking": {"type": "enabled"|"disabled"}}@ in the OpenAI
     -- request body.  Ignored for Anthropic protocol (Claude has its
     -- own thinking-block format).
-    thinking :: !(Maybe Bool)
+    thinking :: !(Maybe Bool),
+    -- | Whether the endpoint can handle multimodal (image) content
+    -- blocks.  When 'True', 'Max.Prompt' will embed images from the
+    -- current trigger as @image_url@ blocks; when 'False' (default),
+    -- only text is sent and images stay as @[image:abcd]@ markers.
+    -- Turn this on for Gemma 4 / GPT-4o / Claude vision endpoints;
+    -- leave off for DeepSeek (text-only).
+    multimodal :: !Bool
   }
   deriving stock (Show)
 
@@ -117,6 +126,20 @@ data LLMRegistry = LLMRegistry
   }
   deriving stock (Show)
 
+-- | One block in a multimodal user message.  Maps directly to the
+-- OpenAI multimodal content-block format that ollama / vLLM /
+-- OpenRouter all speak.  Use 'TextBlock' for ordinary text;
+-- 'ImageDataUrl' for an inline @data:image\/...;base64,...@ URL
+-- (works without exposing a local HTTP server — the model fetches
+-- nothing, it gets the bytes inline).
+data ContentBlock
+  = TextBlock !Text
+  | -- | The carried 'Text' is the full @data:image\/png;base64,xxxx@
+    -- URL.  External http(s) URLs would also work but we don't use
+    -- them (QQ CDN needs auth headers we don't share with the LLM).
+    ImageDataUrl !Text
+  deriving stock (Show, Eq)
+
 -- | A single message in the chat history.  Mirrors OpenAI's role
 -- enum.  Sum-typed so we can keep tool turns first-class instead of
 -- carrying optional fields around.
@@ -125,6 +148,12 @@ data ChatMessage
     MsgSystem !Text
   | -- | @{ role: "user", content: ... }@
     MsgUser !Text
+  | -- | Multimodal user message.  Used only when the active LLM
+    -- profile sets @multimodal = true@; otherwise build a 'MsgUser'
+    -- with text markers like @[image:abcd]@ instead.  Wire format
+    -- is the OpenAI content-block array
+    -- (@content: [{type:text,...}, {type:image_url,...}, ...]@).
+    MsgUserBlocks ![ContentBlock]
   | -- | Plain assistant text response.  Any 'reasoning_content' from
     -- the original response is dropped — per DeepSeek docs it's not
     -- needed in subsequent turns when no tool call happened.
@@ -175,10 +204,24 @@ data ChatResponse
 --------------------------------------------------------------------------------
 -- JSON.
 
+instance ToJSON ContentBlock where
+  toJSON = \case
+    TextBlock t -> object ["type" .= ("text" :: Text), "text" .= t]
+    ImageDataUrl url ->
+      object
+        [ "type" .= ("image_url" :: Text),
+          "image_url" .= object ["url" .= url]
+        ]
+
 instance ToJSON ChatMessage where
   toJSON = \case
     MsgSystem c -> object ["role" .= ("system" :: Text), "content" .= c]
     MsgUser c -> object ["role" .= ("user" :: Text), "content" .= c]
+    MsgUserBlocks blocks ->
+      object
+        [ "role" .= ("user" :: Text),
+          "content" .= blocks
+        ]
     MsgAssistant c -> object ["role" .= ("assistant" :: Text), "content" .= c]
     MsgAssistantToolCalls mReasoning tcs ->
       object $
@@ -260,6 +303,10 @@ data LLM :: Effect where
   Chat :: Text -> Maybe Bool -> [ChatMessage] -> [ToolSpec] -> LLM m (Either Text ChatResponse)
   ListProfiles :: LLM m [Text]
   DefaultProfile :: LLM m Text
+  -- | Look up @profile.multimodal@ by profile name.  Returns 'False'
+  -- if the profile doesn't exist (caller will already fail on the
+  -- subsequent 'Chat' call with a clearer error).
+  IsProfileMultimodal :: Text -> LLM m Bool
 
 type instance DispatchOf LLM = Dynamic
 
@@ -306,6 +353,9 @@ runLLM reg = interpret $ \_ -> \case
       pure r
   ListProfiles -> pure (Map.keys reg.profiles)
   DefaultProfile -> pure reg.defaultName
+  IsProfileMultimodal name -> pure $ case Map.lookup name reg.profiles of
+    Just cfg -> cfg.multimodal
+    Nothing -> False
 
 chat ::
   LLM :> es =>
@@ -322,6 +372,9 @@ listProfiles = send ListProfiles
 
 defaultProfile :: LLM :> es => Eff es Text
 defaultProfile = send DefaultProfile
+
+isProfileMultimodal :: LLM :> es => Text -> Eff es Bool
+isProfileMultimodal name = send (IsProfileMultimodal name)
 
 --------------------------------------------------------------------------------
 -- Shared HTTP helper.
@@ -556,6 +609,21 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
 
     go [] = []
     go (MsgUser t : rest) = AnthropicMsg "user" (toJSON t) : go rest
+    go (MsgUserBlocks blocks : rest) =
+      -- Anthropic uses a different image-block shape
+      -- (@source: {type:base64, media_type, data}@) than OpenAI's
+      -- @image_url@.  Until we add a profile that needs Anthropic
+      -- multimodal, flatten to text and stash a marker so the model
+      -- at least knows an image was meant to be here.
+      let flat =
+            T.intercalate
+              " "
+              [ case b of
+                  TextBlock t -> t
+                  ImageDataUrl _ -> "[image:omitted — Anthropic multimodal not wired]"
+                | b <- blocks
+              ]
+       in AnthropicMsg "user" (toJSON flat) : go rest
     go (MsgAssistant t : rest) = AnthropicMsg "assistant" (toJSON t) : go rest
     go (MsgAssistantToolCalls _reasoning tcs : rest) =
       -- Anthropic has its own native thinking-block format; we don't

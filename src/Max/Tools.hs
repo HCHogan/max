@@ -20,11 +20,13 @@ import Data.Time (defaultTimeLocale, formatTime)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
+import Effectful.Reader.Dynamic (Reader)
 import Max.DB.History (HistoryItem (..), fetchMessage)
 import Max.DB.Message (insertOutbound)
 import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool (..))
+import Max.Persistence (PersistMode, isEphemeral)
 import OneBot.Action (Action (SendGroupMsg), Response (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..))
@@ -32,6 +34,7 @@ import OneBot.Types (GroupId (..), MessageId (..))
 builtinsFor ::
   ( WithConnection :> es,
     NapCat :> es,
+    Reader PersistMode :> es,
     Log :> es,
     IOE :> es
   ) =>
@@ -164,7 +167,12 @@ runSearch gid q lim =
 -- updates so the user isn't staring at silence while the bot is busy
 -- (especially when running sandbox commands that take real time).
 sayTool ::
-  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  ( NapCat :> es,
+    WithConnection :> es,
+    Reader PersistMode :> es,
+    Log :> es,
+    IOE :> es
+  ) =>
   DispatchContext ->
   Tool es
 sayTool dc =
@@ -212,13 +220,16 @@ sayTool dc =
                   logAttention "say: bad retcode" $ object ["retcode" .= rc]
                   pure $ Left ("say retcode " <> T.pack (show rc))
               | otherwise -> do
+                  ephemeral <- isEphemeral
                   case parseEither (withObject "send_resp" (\o -> o .: "message_id")) payload of
-                    Right (outMid :: Int64) ->
-                      insertOutbound dc.dcGroupId dc.dcSelfId "max" (MessageId outMid) segs
+                    Right (outMid :: Int64)
+                      | not ephemeral ->
+                          insertOutbound dc.dcGroupId dc.dcSelfId "max" (MessageId outMid) segs
+                      | otherwise -> pure ()
                     Left _ ->
                       logAttention "say: no message_id in response" $
                         object ["payload" .= payload]
-                  logInfo "say: sent" $ object ["len" .= T.length msg]
+                  logInfo "say: sent" $ object ["len" .= T.length msg, "ephemeral" .= ephemeral]
                   pure $ Right (object ["ok" .= True])
     }
 

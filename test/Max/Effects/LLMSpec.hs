@@ -1,9 +1,10 @@
 module Max.Effects.LLMSpec (spec) where
 
-import Data.Aeson (Value (..), decode, eitherDecode, encode, object, (.=))
+import Data.Aeson (Value (..), decode, eitherDecode, encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KM
 import Data.Text (Text)
-import Max.Effects.LLM (ChatMessage (..), ToolCall (..))
+import Data.Vector qualified as V
+import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), ToolCall (..))
 import Test.Hspec
 
 -- | Round-tripping a single 'ChatMessage' through aeson should be
@@ -137,3 +138,43 @@ spec = do
       case eitherDecode (encode wire) of
         Right (MsgAssistant t) -> t `shouldBe` ""
         other -> expectationFailure $ "expected MsgAssistant \"\", got: " <> show other
+
+  describe "Multimodal MsgUserBlocks encoding" $ do
+    it "encodes a text-only block as the text-only OpenAI shape" $ do
+      let m = MsgUserBlocks [TextBlock "hi"]
+      case decode (encode m) :: Maybe Value of
+        Just (Object o) -> do
+          KM.lookup "role" o `shouldBe` Just (toJSON ("user" :: Text))
+          case KM.lookup "content" o of
+            Just (Array _) -> pure () -- array form is fine even for a single text block
+            other -> expectationFailure $ "expected array content, got: " <> show other
+        other -> expectationFailure $ "expected object, got: " <> show other
+
+    it "encodes text + image as an array of typed blocks" $ do
+      let m =
+            MsgUserBlocks
+              [ TextBlock "describe this",
+                ImageDataUrl "data:image/png;base64,AAAA"
+              ]
+      case decode (encode m) :: Maybe Value of
+        Just (Object o) -> case KM.lookup "content" o of
+          Just (Array arr) -> do
+            length arr `shouldBe` 2
+            -- text block
+            case arr V.!? 0 of
+              Just (Object t) -> do
+                KM.lookup "type" t `shouldBe` Just (toJSON ("text" :: Text))
+                KM.lookup "text" t `shouldBe` Just (toJSON ("describe this" :: Text))
+              other -> expectationFailure $ "block 0: " <> show other
+            -- image_url block (OpenAI-compat shape)
+            case arr V.!? 1 of
+              Just (Object i) -> do
+                KM.lookup "type" i `shouldBe` Just (toJSON ("image_url" :: Text))
+                case KM.lookup "image_url" i of
+                  Just (Object u) ->
+                    KM.lookup "url" u
+                      `shouldBe` Just (toJSON ("data:image/png;base64,AAAA" :: Text))
+                  other -> expectationFailure $ "image_url: " <> show other
+              other -> expectationFailure $ "block 1: " <> show other
+          other -> expectationFailure $ "content: " <> show other
+        other -> expectationFailure $ "object: " <> show other

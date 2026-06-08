@@ -1,15 +1,26 @@
 module Max.Prompt
-  ( buildContext,
+  ( -- * Pipeline
+    buildContext,
+
+    -- * Building blocks (exposed for tests)
+    PromptInputs (..),
+    renderContext,
   )
 where
 
+import Control.Exception (IOException, try)
+import Data.ByteString qualified as BS
+import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Database.PostgreSQL.Simple (Only (..))
 import Effectful
-import Effectful.PostgreSQL (WithConnection)
+import Effectful.Log (Log, logAttention, object, (.=))
+import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.History
@@ -19,11 +30,41 @@ import Max.DB.History
     fetchMessagesByIds,
     fetchRecentInGroup,
   )
-import Max.Effects.LLM (ChatMessage (..))
+import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+
+-- | Everything 'renderContext' needs in one record.  Splitting the
+-- pipeline into 'PromptInputs' + 'renderContext' lets us unit-test the
+-- (large) rendering logic against handwritten fixtures without
+-- needing Postgres in the loop.
+data PromptInputs = PromptInputs
+  { -- | Persona from 'AppConfig' — used when 'session.persona' is 'Nothing'.
+    defaultPersona :: !Text,
+    -- | The active session record (carries persona override + btw notes
+    -- + pin list; the field that flows back as "drained notes").
+    session :: !Session,
+    -- | The @\@-bot@ message that triggered this turn.
+    triggerMessage :: !GroupMessage,
+    -- | Recent group messages, chronological.  May overlap with
+    -- 'mention'; 'renderContext' dedupes by message id.
+    ambient :: ![HistoryItem],
+    -- | Reconstructed mention/reply history with the bot, chronological.
+    mention :: ![HistoryItem],
+    -- | Resolved pin list (preserves the user's pin order).
+    pinnedItems :: ![HistoryItem],
+    -- | If the trigger replied to a message: that message + the files
+    -- attached to it (so the model can address them by file_id).
+    replyCtx :: !(Maybe (HistoryItem, [FileRecord])),
+    -- | Already-loaded data URLs for any images on the current
+    -- trigger.  Populated only when the active profile is
+    -- multimodal AND the image worker has finished fetching;
+    -- otherwise empty and the images remain as @[image:abcd]@
+    -- markers in the rendered text.  Format: @data:<mime>;base64,...@.
+    triggerImageUrls :: ![Text]
+  }
 
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default) on top of a fixed format guide describing the
@@ -32,6 +73,14 @@ systemPrompt :: Text -> Text
 systemPrompt persona =
   T.unlines
     [ persona,
+      "",
+      "回复风格（重要）：",
+      "  - 你在 QQ 群里跟人说话，不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
+      "  - 想说多句话时空一行分段，每段尽量短（一两句话）。",
+      "  - 禁用 markdown：不要 # 标题、不要 **粗体** / *斜体*、不要 - / * 列表项、不要表格。",
+      "  - 只有长代码 / 长引用才用 ``` 代码块；块内随便写。",
+      "  - 不开场寒暄、不总结收尾（\"好的我来回答\"、\"希望对你有帮助\"），直接说事。",
+      "  - 不要复读用户的问题再回答。",
       "",
       "上下文格式：",
       "  [HH:MM <昵称>]: 内容        — 群里的一条普通消息",
@@ -49,39 +98,30 @@ systemPrompt persona =
       "提示，请认真当成对话背景。"
     ]
 
--- | Build the chat context for one @bot trigger.
+-- | Build the chat context for one @bot trigger.  Runs the DB
+-- fetches, then hands off to the pure 'renderContext'.
 --
--- Structure:
---
---   * @system@ message: persona + format guide.
---   * Prior mention history reconstructed from the messages table:
---     each prior @-mention becomes a 'MsgUser', each bot LLM reply
---     becomes a 'MsgAssistant', in chronological order.  Pinned
---     messages and the watermark ('clearedAt') determine inclusion.
---   * One final @user@ message containing the ambient group context
---     (chatter NOT directed at the bot), the reply chain (if any),
---     pinned messages, pending !btw notes, and the current
---     @-mention.
---
--- The drained notes are returned alongside the messages so the
--- caller can persist the "notes consumed" state back to the
--- session.
+-- When @multimodal@ is 'True', also looks up the local bytes of any
+-- image segments on the trigger and embeds them as inline data URLs
+-- so the final @user@ message becomes 'MsgUserBlocks' instead of
+-- 'MsgUser'.  Falls back gracefully when the image worker hasn't
+-- caught up yet — those images stay as @[image:abcd]@ markers.
 buildContext ::
-  (WithConnection :> es, IOE :> es) =>
+  (WithConnection :> es, Log :> es, IOE :> es) =>
   Text -> -- default persona (used when session has no override)
   Int -> -- history window size
+  Bool -> -- multimodal: load + attach inline images for the trigger
   Session ->
   GroupMessage ->
   Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
-buildContext defaultPersona n session gm = do
+buildContext defaultPersona n multimodal s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
-      effectivePersona = fromMaybe defaultPersona session.persona
-  ambient <- fetchRecentInGroup gid mid session.clearedAt n
-  mention <- fetchMentionHistory gid selfId' mid session.clearedAt n
-  pinnedItems <- fetchMessagesByIds session.pinned
-  replyCtx <- case extractReply gm.message of
+  ambient' <- fetchRecentInGroup gid mid s.clearedAt n
+  mention' <- fetchMentionHistory gid selfId' mid s.clearedAt n
+  pinnedItems' <- fetchMessagesByIds s.pinned
+  replyCtx' <- case extractReply gm.message of
     Nothing -> pure Nothing
     Just rid -> do
       mHist <- fetchMessage rid
@@ -90,27 +130,111 @@ buildContext defaultPersona n session gm = do
         Just h -> do
           files <- DBFiles.fetchFilesForMessage h.messageId
           pure (Just (h, files))
-  -- The ambient list still might contain @-mention rows (the SQL
-  -- doesn't filter them out; they'll already appear as part of
-  -- 'mention').  Drop those from ambient by message_id to avoid
-  -- showing the same message twice.
-  let mentionIds = [h.messageId | h <- mention]
+  triggerImageUrls' <-
+    if multimodal && hasImageSeg gm.message
+      then loadTriggerImageUrls mid
+      else pure []
+  pure $
+    renderContext
+      PromptInputs
+        { defaultPersona = defaultPersona,
+          session = s,
+          triggerMessage = gm,
+          ambient = ambient',
+          mention = mention',
+          pinnedItems = pinnedItems',
+          replyCtx = replyCtx',
+          triggerImageUrls = triggerImageUrls'
+        }
+
+-- | True iff there's at least one image segment in the message.
+hasImageSeg :: [Segment] -> Bool
+hasImageSeg = any isImage
+  where
+    isImage (SegImage _) = True
+    isImage _ = False
+
+-- | Look up image rows for the trigger message via the
+-- 'message_images' join table; for each one with a local path
+-- present (i.e. the image worker has finished), read the bytes and
+-- build a @data:\<mime\>;base64,...@ URL.  Rows where the worker
+-- hasn't caught up yet are skipped (caller falls back to the text
+-- marker representation).
+loadTriggerImageUrls ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  Int64 -> -- trigger message_id
+  Eff es [Text]
+loadTriggerImageUrls mid = do
+  rows <-
+    query
+      "SELECT i.mime_type, i.local_path \
+      \  FROM message_images mi \
+      \  JOIN images i ON i.sha256 = mi.sha256 \
+      \  WHERE mi.message_id = ? \
+      \  ORDER BY mi.seg_index"
+      (Only mid)
+  let pairs = [(mime, path) | (mime, path) <- rows :: [(Text, Text)]]
+  fmap concat $ traverse readOne pairs
+  where
+    readOne (mime, path) = do
+      eres <- liftIO (try (BS.readFile (T.unpack path)))
+      case eres of
+        Right bytes ->
+          let b64 = TE.decodeUtf8 (B64.encode bytes)
+              url = "data:" <> mime <> ";base64," <> b64
+           in pure [url]
+        Left (e :: IOException) -> do
+          logAttention "prompt: image read failed" $
+            object ["path" .= path, "error" .= T.pack (show e)]
+          pure []
+
+-- | Pure transformation from fetched inputs to the chat-message list
+-- the LLM sees + the (consumed) btw notes the caller should clear off
+-- the session.
+--
+-- Structure:
+--
+--   * @system@ message: persona + format guide.
+--   * Prior mention history reconstructed from the messages table:
+--     each prior @-mention becomes a 'MsgUser', each bot LLM reply
+--     becomes a 'MsgAssistant', in chronological order.
+--   * One final @user@ message containing the ambient group context
+--     (chatter NOT directed at the bot), the reply chain (if any),
+--     pinned messages, pending !btw notes, and the current
+--     @-mention.
+--
+-- Ambient messages already present in the mention list are dropped
+-- to avoid showing the same line twice.
+renderContext :: PromptInputs -> ([ChatMessage], [Text])
+renderContext pi' =
+  let UserId selfId' = pi'.triggerMessage.selfId
+      effectivePersona = fromMaybe pi'.defaultPersona pi'.session.persona
+      mentionIds = [h.messageId | h <- pi'.mention]
       ambientNoDup =
-        [a | a <- ambient, a.messageId `notElem` mentionIds]
-      mentionMessages = map (historyToChat selfId') mention
+        [a | a <- pi'.ambient, a.messageId `notElem` mentionIds]
+      mentionMessages = map (historyToChat selfId') pi'.mention
       userBody =
         renderUser
           selfId'
           ambientNoDup
-          replyCtx
-          pinnedItems
-          session.btwNotes
-          gm
+          pi'.replyCtx
+          pi'.pinnedItems
+          pi'.session.btwNotes
+          pi'.triggerMessage
+      -- If we have inline image bytes for the current trigger,
+      -- attach them as a multimodal content-block message;
+      -- otherwise fall back to plain text (which still has
+      -- @[image:abcd]@ markers in the body).
+      userMessage = case pi'.triggerImageUrls of
+        [] -> MsgUser userBody
+        urls ->
+          MsgUserBlocks $
+            TextBlock userBody : map ImageDataUrl urls
       messages =
         [MsgSystem (systemPrompt effectivePersona)]
           <> mentionMessages
-          <> [MsgUser userBody]
-  pure (messages, session.btwNotes)
+          <> [userMessage]
+   in (messages, pi'.session.btwNotes)
 
 -- | Reconstruct one bot/user turn as an OpenAI/Anthropic ChatMessage.
 -- A row sent by the bot becomes 'MsgAssistant'; everything else
@@ -132,23 +256,23 @@ renderUser ::
   [Text] ->
   GroupMessage ->
   Text
-renderUser selfId' ambient replyCtx pinnedItems notes gm =
+renderUser selfId' ambient' replyCtx' pinnedItems' notes gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
-        if null pinnedItems
+        if null pinnedItems'
           then []
           else
             [ "[pin 上下文 — 用户标记需要保留的消息]",
-              T.intercalate "\n" (map (renderHistoryLine selfId') pinnedItems),
+              T.intercalate "\n" (map (renderHistoryLine selfId') pinnedItems'),
               ""
             ],
         ["[群最近上下文]"],
-        if null ambient
+        if null ambient'
           then ["(无历史消息)"]
-          else map (renderHistoryLine selfId') ambient,
+          else map (renderHistoryLine selfId') ambient',
         [""],
-        case replyCtx of
+        case replyCtx' of
           Nothing -> []
           Just (r, files) ->
             "[引用上下文]" : renderReplyLine selfId' r : renderReplyFiles files <> [""],

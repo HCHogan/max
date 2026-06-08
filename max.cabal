@@ -58,6 +58,7 @@ library
         Max.Forward
         Max.Handler
         Max.Images
+        Max.Persistence
         Max.Prompt
         Max.Sandbox.Docker
         Max.Sandbox.Registry
@@ -132,12 +133,44 @@ test-suite max-test
         Max.Command.ParserSpec
         Max.SessionSpec
         Max.Effects.LLMSpec
+        Max.PersistenceSpec
+        Max.PromptSpec
     build-depends:
-        , aeson      >= 2.2  && < 2.3
-        , base       >= 4.20 && < 5
-        , hspec      >= 2.11 && < 2.12
+        , aeson           >= 2.2  && < 2.3
+        , base            >= 4.20 && < 5
+        , effectful       >= 2.5  && < 2.6
+        , effectful-core  >= 2.5  && < 2.6
+        , hspec           >= 2.11 && < 2.12
         , max
-        , text       >= 2.1  && < 2.2
-        , time       >= 1.12 && < 1.15
+        , text            >= 2.1  && < 2.2
+        , time            >= 1.12 && < 1.15
+        , vector          >= 0.13 && < 0.14
     build-tool-depends: hspec-discover:hspec-discover
+    ghc-options:        -threaded -rtsopts -with-rtsopts=-N
+
+-- DB-touching tests against a real Postgres.  Skipped (exit 0) when
+-- MAX_TEST_DB_URL is unset.  See test-db/README.md for setup, or just
+-- run `devenv up` and `export MAX_TEST_DB_URL=postgresql://.../max_test`.
+test-suite max-test-db
+    import:             warnings, lang
+    type:               exitcode-stdio-1.0
+    hs-source-dirs:     test-db
+    main-is:            Main.hs
+    other-modules:
+        Helpers
+        Max.DB.SessionSpec
+        Max.DB.HistorySpec
+        Max.DB.MessageSpec
+        Max.PromptIntegrationSpec
+    build-depends:
+        , base                 >= 4.20 && < 5
+        , hspec                >= 2.11 && < 2.12
+        , log-base             >= 0.12 && < 0.13
+        , log-effectful        >= 1.0  && < 1.1
+        , max
+        , effectful            >= 2.5  && < 2.6
+        , effectful-postgresql >= 0.1  && < 0.2
+        , postgresql-simple    >= 0.7  && < 0.8
+        , text                 >= 2.1  && < 2.2
+        , time                 >= 1.12 && < 1.15
     ghc-options:        -threaded -rtsopts -with-rtsopts=-N
