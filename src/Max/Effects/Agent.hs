@@ -87,7 +87,7 @@ data AgentLimits = AgentLimits
 -- | Sane starting point: 40 turns covers a few rounds of tool use,
 -- a couple of @say@ status updates, and a final summary.
 defaultLimits :: AgentLimits
-defaultLimits = AgentLimits {maxTurns = 40}
+defaultLimits = AgentLimits {maxTurns = 200}
 
 -- | What one agent run produced.
 data AgentResult = AgentResult
