@@ -1,0 +1,113 @@
+# Copy to ./max.yaml (looked up first), or place at
+# $XDG_CONFIG_HOME/max/config.yaml.
+# Every field is optional; omit anything you don't want to set and the bot
+# falls back to environment variables, then to the built-in defaults.
+#
+# Config precedence (first wins): CLI flags > env vars > this file > defaults.
+# Run `max-bot --help` for the full option/env/config reference.
+
+# Bot persona — the identity line at the top of the system prompt.
+# The format guide for [HH:MM], [↩ 引用 ...], [image], [forward] markers is
+# always appended underneath; only this string is configurable.
+#
+# Group members can override this per-group at runtime with !persona <text>.
+persona: "你是一个 QQ 群里的 AI 助手。群成员会 @你 来让你回答问题。请用自然简洁的中文回答。"
+
+# migrations_dir: migrations
+# images_dir: var/images
+# image_workers: 4
+# history_window: 20
+
+# Default debug mode (default false).  When effective debug is on, the
+# agent loop posts each tool call to the group as a "⚙ tool {args}"
+# status line.  Group members override per session with
+# !debug on / off / default.
+# debug: false
+
+# server:
+#   host: "0.0.0.0"
+#   port: 8080
+#   path: /onebot
+#   access_token: shared-secret-with-napcat
+
+# db:
+#   url: "postgresql://127.0.0.1:5433/max"
+#   max_conns: 8
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LLM profiles.  You can define as many as you like; group members switch
+# between them at runtime via !model <name>.  The 'default' field picks which
+# one is used when a session has no per-group override.
+#
+# CLI/env flags (--llm-api-key, MAX_LLM_API_KEY, ...) overlay onto the default
+# profile.  If you only configure LLM via CLI/env (no llm.profiles map), the
+# bot synthesises a single profile called "default" for you.
+#
+# NOTE on temperature: omit it to not send the field at all (server default).
+# Some gateways (opencode zen) reject explicit values other than 1.0 for
+# certain models (kimi etc.) with a generic 400.
+# ─────────────────────────────────────────────────────────────────────────────
+
+llm:
+  default: deepseek-flash
+
+  profiles:
+    deepseek-flash:
+      api_key: "sk-..."
+      base_url: "https://api.deepseek.com/v1"
+      model: deepseek-v4-flash
+      max_tokens: 2048
+      temperature: 0.7
+      timeout_seconds: 120
+      # thinking: false   # uncomment to force non-thinking (DeepSeek default = on)
+
+    deepseek-pro:
+      api_key: "sk-..."
+      base_url: "https://api.deepseek.com/v1"
+      model: deepseek-v4-pro
+      max_tokens: 4096
+      temperature: 0.3
+      # thinking defaults to upstream's choice (DeepSeek pro = on)
+
+    # Anthropic native protocol — use when the endpoint only exposes
+    # /v1/messages, OR when an OpenAI-compat proxy mangles tool-call
+    # translation (e.g. drops function.name).  Set base_url to the API
+    # root (no /v1 suffix); we append /v1/messages ourselves.  Auth uses
+    # x-api-key + anthropic-version: 2023-06-01 headers.
+    # claude-opus-4-6:
+    #   protocol: anthropic
+    #   api_key: "sk-..."
+    #   base_url: "https://api.anthropic.com"
+    #   model: claude-opus-4-5-20250101
+    #   max_tokens: 4096
+
+    # local:
+    #   api_key: any          # llama.cpp ignores it but the field is required
+    #   base_url: "http://localhost:8080/v1"
+    #   model: "qwen2.5:7b"
+
+    # Multimodal example — Gemma 4 12B via local Ollama.  Set
+    # `multimodal: true` so Max.Prompt embeds inline `data:image/...`
+    # blocks for images on the trigger and recent context (reply target,
+    # pins, history — capped at 8 images / 20 MiB each, labeled by source
+    # message).  Works for OpenAI and Anthropic protocols.  Text-only
+    # profiles (DeepSeek, etc.) should leave `multimodal` omitted —
+    # they'll error on the array-of-blocks request body.
+    # gemma4-local:
+    #   api_key: ollama       # ollama ignores it; the field is required
+    #   base_url: "http://localhost:11434/v1"
+    #   model: "hf.co/unsloth/gemma-4-12B-it-GGUF:UD-Q4_K_XL"
+    #   max_tokens: 2048
+    #   temperature: 0.7      # model card default is 1.0; lower for chat
+    #   multimodal: true
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Web search.  When tavily_api_key is set (here or via MAX_TAVILY_API_KEY
+# / --tavily-api-key) the agent gets a web_search tool backed by Tavily.
+# Without a key, the tool simply isn't registered — model never sees it.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# search:
+#   tavily_api_key: "tvly-..."
+#   max_results: 5
+#   timeout_seconds: 30

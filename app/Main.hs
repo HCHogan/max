@@ -146,6 +146,6 @@ runApp cfg applied sessions tasks sandboxes eventQ imgQ fwdQ fileQ clientRef =
         link aFwd
         withAsync (fileWorker fileQ) $ \aFile -> do
           link aFile
-          withAsync (handleEvents cfg.persona cfg.historyWindow sessions tasks sandboxes cfg.llm.defaultName eventQ imgQ fwdQ fileQ) $ \aH -> do
+          withAsync (handleEvents cfg.persona cfg.historyWindow cfg.imagesDir cfg.debug sessions tasks sandboxes cfg.llm.defaultName eventQ imgQ fwdQ fileQ) $ \aH -> do
             link aH
             runServer cfg.server eventQ clientRef

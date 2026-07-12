@@ -48,6 +48,7 @@ where
 
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Exception (bracket)
+import Control.Monad (unless)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (Text)
@@ -57,8 +58,11 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log
 import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLM, ToolCall (..), chat)
+import Max.Effects.NapCat (NapCat, sendAction)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, drainBtwInbox, registerTask, unregisterTask)
+import OneBot.Action (Action (SendGroupMsg))
+import OneBot.Segment (Segment (SegText))
 import OneBot.Types (GroupId, MessageId, UserId)
 
 -- | Per-dispatch context the agent loop hands to its tool factory.
@@ -71,7 +75,11 @@ data DispatchContext = DispatchContext
   { dcGroupId :: !GroupId,
     dcMessageId :: !MessageId,
     dcUserId :: !UserId,
-    dcSelfId :: !UserId
+    dcSelfId :: !UserId,
+    -- | Effective debug mode for this dispatch (config default,
+    -- possibly overridden per session via !debug).  When on, each
+    -- tool-call round is announced in the group.
+    dcDebug :: !Bool
   }
   deriving stock (Show)
 
@@ -125,7 +133,7 @@ type instance DispatchOf Agent = Dynamic
 --   * Drives the loop, draining the task's inbox between turns.
 runAgent ::
   forall es a.
-  (LLM :> es, Log :> es, IOE :> es) =>
+  (LLM :> es, NapCat :> es, Log :> es, IOE :> es) =>
   AgentLimits ->
   (DispatchContext -> [Tool es]) ->
   TaskRegistry ->
@@ -140,18 +148,20 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
         (registerTask taskReg dc.dcGroupId "llm" cancel)
         (unregisterTask taskReg)
         ( \handle ->
-            run (runTools (toolFactory dc) (loop handle profile thinking msgs))
+            run (runTools (toolFactory dc) (loop dc handle profile thinking msgs))
         )
   where
     loop ::
+      DispatchContext ->
       TaskHandle ->
       Text ->
       Maybe Bool ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    loop h profile thinking = go h 0 [] profile thinking
+    loop dc h profile thinking = go dc h 0 [] profile thinking
 
     go ::
+      DispatchContext ->
       TaskHandle ->
       Int ->
       [ChatMessage] ->
@@ -159,7 +169,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
       Maybe Bool ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    go h n appended profile thinking msgs = do
+    go dc h n appended profile thinking msgs = do
       -- Drain any !btw notes that arrived since the previous turn.
       notes <- liftIO (drainBtwInbox h)
       let (msgs', appended') = case notes of
@@ -208,13 +218,31 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                     "names" .= map (.callName) tcs,
                     "has_reasoning" .= case reasoning of Just _ -> True; Nothing -> False
                   ]
+              announceToolCalls dc tcs
               -- Carry reasoning_content into the assistant message so
               -- it round-trips back to the API on the next request —
               -- DeepSeek returns 400 otherwise.
               let asst = MsgAssistantToolCalls reasoning tcs
               toolMsgs <- traverse executeOne tcs
               let appended'' = appended' <> [asst] <> toolMsgs
-              go h (n + 1) appended'' profile thinking (msgs' <> [asst] <> toolMsgs)
+              go dc h (n + 1) appended'' profile thinking (msgs' <> [asst] <> toolMsgs)
+
+    -- Post one compact status line per tool call to the group so
+    -- members can see what the bot is doing mid-task.  Only when the
+    -- dispatch runs with debug on (config default / !debug).
+    -- Fire-and-forget: a lost status line must never fail the
+    -- dispatch.  Tools whose whole point is visible group output are
+    -- skipped — announcing them would just double the noise.
+    announceToolCalls :: DispatchContext -> [ToolCall] -> Eff (Tools : es) ()
+    announceToolCalls dc tcs = do
+      let visible = [tc | tc <- tcs, tc.callName `notElem` silentTools]
+          line tc = "⚙ " <> tc.callName <> " " <> previewJson 1000 tc.callArguments
+      unless (not dc.dcDebug || null visible) $
+        sendAction $
+          SendGroupMsg dc.dcGroupId [SegText (T.intercalate "\n" (map line visible))]
+
+    silentTools :: [Text]
+    silentTools = ["say", "send_image_from_sandbox", "send_file_from_sandbox"]
 
     executeOne :: ToolCall -> Eff (Tools : es) ChatMessage
     executeOne tc = do

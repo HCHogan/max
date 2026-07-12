@@ -42,7 +42,7 @@ import Control.Applicative ((<|>))
 import Control.Exception (SomeException, try)
 import Control.Lens ((&), (.~), (?~), (^.))
 import Data.Aeson
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson.Types (Pair, Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
@@ -54,6 +54,8 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log
 import Effectful.Wreq qualified as W
+import Network.HTTP.Client qualified as HTTP
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Status (statusCode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
@@ -96,7 +98,11 @@ data LLMProfile = LLMProfile
     -- @claude-opus-4-6@, etc.
     model :: !Text,
     maxTokens :: !Int,
-    temperature :: !Double,
+    -- | 'Nothing' = omit the field entirely (server default).  Some
+    -- providers (kimi via opencode zen) reject any explicit value
+    -- other than 1.0 with a generic 400, so only send when the user
+    -- configured one.
+    temperature :: !(Maybe Double),
     -- | HTTP timeout for one chat completion.  LLMs are slow, default 120.
     timeoutSeconds :: !Int,
     -- | Wire format spoken by the endpoint.  Default 'ProtocolOpenAI'.
@@ -109,11 +115,12 @@ data LLMProfile = LLMProfile
     -- own thinking-block format).
     thinking :: !(Maybe Bool),
     -- | Whether the endpoint can handle multimodal (image) content
-    -- blocks.  When 'True', 'Max.Prompt' will embed images from the
-    -- current trigger as @image_url@ blocks; when 'False' (default),
-    -- only text is sent and images stay as @[image:abcd]@ markers.
-    -- Turn this on for Gemma 4 / GPT-4o / Claude vision endpoints;
-    -- leave off for DeepSeek (text-only).
+    -- blocks.  When 'True', 'Max.Prompt' embeds images from the
+    -- trigger and recent context as inline image blocks (OpenAI
+    -- @image_url@ / Anthropic @source:base64@); when 'False'
+    -- (default), only text is sent and images stay as @[image]@
+    -- markers.  Turn this on for Gemma 4 / GPT-4o / Claude vision
+    -- endpoints; leave off for DeepSeek (text-only).
     multimodal :: !Bool
   }
   deriving stock (Show)
@@ -150,7 +157,7 @@ data ChatMessage
     MsgUser !Text
   | -- | Multimodal user message.  Used only when the active LLM
     -- profile sets @multimodal = true@; otherwise build a 'MsgUser'
-    -- with text markers like @[image:abcd]@ instead.  Wire format
+    -- with text markers like @[image]@ instead.  Wire format
     -- is the OpenAI content-block array
     -- (@content: [{type:text,...}, {type:image_url,...}, ...]@).
     MsgUserBlocks ![ContentBlock]
@@ -310,11 +317,12 @@ data LLM :: Effect where
 
 type instance DispatchOf LLM = Dynamic
 
--- | All chat completions go through wreq's default 'Manager' (a
--- shared singleton).  Per-profile timeout is enforced via
--- 'System.Timeout.timeout' around each call — wreq's 'Options' does
--- not expose response timeout, only the 'Manager' does, and we don't
--- want to maintain one 'Manager' per profile just for that.
+-- | Per-profile timeout is enforced twice: the http-client
+-- 'HTTP.managerResponseTimeout' is set to @timeoutSeconds@ inside
+-- 'postAndParse' (otherwise the manager's built-in 30s default kills
+-- any generation slower than that — non-streaming endpoints send
+-- nothing until the completion is done), and a 'System.Timeout.timeout'
+-- wraps the whole call as the wallclock belt-and-braces.
 runLLM ::
   (W.Wreq :> es, Log :> es, IOE :> es) =>
   LLMRegistry ->
@@ -380,14 +388,16 @@ isProfileMultimodal name = send (IsProfileMultimodal name)
 -- Shared HTTP helper.
 
 -- | POST a request and run the protocol-specific parser on the
--- response body.  Wraps the wreq call in 'System.Timeout' to enforce
--- the per-profile wallclock cap (wreq's 'Options' has no
--- @responseTimeout@ slot).  Surfaces structured 'Left' errors for
--- timeout / transport / HTTP-status / JSON-parse / extract failures
--- with the response body preview attached so log readers see what
--- the upstream actually sent.
+-- response body.  Overrides http-client's 30s default response
+-- timeout with the per-profile budget (LLM completions routinely
+-- take longer — the server sends nothing until generation is done),
+-- and wraps the whole call in 'System.Timeout' as the outer
+-- wallclock cap.  Surfaces structured 'Left' errors for timeout /
+-- transport / HTTP-status / JSON-parse / extract failures with the
+-- response body preview attached so log readers see what the
+-- upstream actually sent.
 postAndParse ::
-  (W.Wreq :> es, IOE :> es) =>
+  (W.Wreq :> es, Log :> es, IOE :> es) =>
   LLMProfile ->
   Wreq.Options ->
   String -> -- url
@@ -395,32 +405,48 @@ postAndParse ::
   (Value -> Parser ChatResponse) -> -- parser
   Eff es (Either Text ChatResponse)
 postAndParse cfg opts url body parser = do
+  let mgrSettings =
+        tlsManagerSettings
+          { HTTP.managerResponseTimeout =
+              HTTP.responseTimeoutMicro (cfg.timeoutSeconds * 1_000_000)
+          }
+      opts' = opts & WL.manager .~ Left mgrSettings
   res <- withRunInIO $ \run ->
     timeout (cfg.timeoutSeconds * 1_000_000) $
-      try (run (W.postWith opts url body))
-  pure $ case res of
-    Nothing -> Left "request timed out"
-    Just (Left e) -> Left ("http: " <> T.pack (show (e :: SomeException)))
-    Just (Right resp) ->
+      try (run (W.postWith opts' url body))
+  case res of
+    Nothing -> pure (Left "request timed out")
+    Just (Left e) -> pure (Left ("http: " <> T.pack (show (e :: SomeException))))
+    Just (Right resp) -> do
       let code = statusCode (resp ^. WL.responseStatus)
           rbody = resp ^. WL.responseBody
-       in if code >= 400
-            then
-              Left $
-                "HTTP "
-                  <> T.pack (show code)
-                  <> ": "
-                  <> T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
-            else
-              let bodyPreview =
-                    T.take 800 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
-               in case eitherDecode rbody of
-                    Left e ->
-                      Left ("parse: " <> T.pack e <> "\nbody: " <> bodyPreview)
-                    Right v -> case parseEither parser v of
-                      Left e ->
-                        Left ("extract: " <> T.pack e <> "\nbody: " <> bodyPreview)
-                      Right r -> Right r
+      if code >= 400
+        then do
+          -- 4xx bodies like "invalid_request_error" are
+          -- undiagnosable without seeing what we actually sent —
+          -- log a (truncated) copy of the request alongside.
+          logAttention "llm: http error request dump" $
+            object
+              [ "url" .= T.pack url,
+                "status" .= code,
+                "request_body" .= T.take 4000 (TE.decodeUtf8Lenient body)
+              ]
+          pure $
+            Left $
+              "HTTP "
+                <> T.pack (show code)
+                <> ": "
+                <> T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
+        else
+          let bodyPreview =
+                T.take 800 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
+           in pure $ case eitherDecode rbody of
+                Left e ->
+                  Left ("parse: " <> T.pack e <> "\nbody: " <> bodyPreview)
+                Right v -> case parseEither parser v of
+                  Left e ->
+                    Left ("extract: " <> T.pack e <> "\nbody: " <> bodyPreview)
+                  Right r -> Right r
 
 --------------------------------------------------------------------------------
 -- HTTP — dispatch on protocol.
@@ -430,7 +456,7 @@ postAndParse cfg opts url body parser = do
 -- handles its own wire format end-to-end (URL, headers, request
 -- body, response parsing); only the timeout wrapping is shared.
 callChat ::
-  (W.Wreq :> es, IOE :> es) =>
+  (W.Wreq :> es, Log :> es, IOE :> es) =>
   LLMProfile ->
   Maybe Bool -> -- effective thinking
   [ChatMessage] ->
@@ -446,7 +472,7 @@ callChat cfg thinkingEff msgs tools = case cfg.protocol of
 -- OpenAI / OpenAI-compatible: POST {baseUrl}/chat/completions.
 
 callChatOpenAI ::
-  (W.Wreq :> es, IOE :> es) =>
+  (W.Wreq :> es, Log :> es, IOE :> es) =>
   LLMProfile ->
   Maybe Bool -> -- effective thinking
   [ChatMessage] ->
@@ -457,9 +483,9 @@ callChatOpenAI cfg thinkingEff msgs tools = do
         [ "model" .= cfg.model,
           "messages" .= msgs,
           "max_tokens" .= cfg.maxTokens,
-          "temperature" .= cfg.temperature,
           "stream" .= False
         ]
+          <> temperatureField cfg
       toolFields =
         if null tools
           then []
@@ -489,6 +515,13 @@ callChatOpenAI cfg thinkingEff msgs tools = do
           & WL.header "Content-Type" .~ ["application/json"]
           & WL.checkResponse ?~ (\_ _ -> pure ())
   postAndParse cfg opts url body parseResponseOpenAI
+
+-- | @temperature@ only when configured — omitting lets the server
+-- pick its default, and some providers 400 on explicit values.
+temperatureField :: LLMProfile -> [Pair]
+temperatureField cfg = case cfg.temperature of
+  Just t -> ["temperature" .= t]
+  Nothing -> []
 
 encodeToolSpecOpenAI :: ToolSpec -> Value
 encodeToolSpecOpenAI t =
@@ -532,7 +565,7 @@ parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
 -- Anthropic Messages API: POST {baseUrl}/v1/messages.
 
 callChatAnthropic ::
-  (W.Wreq :> es, IOE :> es) =>
+  (W.Wreq :> es, Log :> es, IOE :> es) =>
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
@@ -542,9 +575,9 @@ callChatAnthropic cfg msgs tools = do
       baseFields =
         [ "model" .= cfg.model,
           "max_tokens" .= cfg.maxTokens,
-          "temperature" .= cfg.temperature,
           "messages" .= map encodeAnthropicMsg anthropicMsgs
         ]
+          <> temperatureField cfg
       systemField = case systemText of
         Just s -> ["system" .= s]
         Nothing -> []
@@ -583,6 +616,15 @@ encodeAnthropicMsg :: AnthropicMsg -> Value
 encodeAnthropicMsg (AnthropicMsg role content) =
   object ["role" .= role, "content" .= content]
 
+-- | Split a @data:\<mime\>;base64,\<payload\>@ URL back into
+-- (mime, payload) for Anthropic's image-block shape.
+splitDataUrl :: Text -> Maybe (Text, Text)
+splitDataUrl url = do
+  rest <- T.stripPrefix "data:" url
+  let (mime, after) = T.breakOn ";base64," rest
+  b64 <- T.stripPrefix ";base64," after
+  if T.null mime then Nothing else Just (mime, b64)
+
 -- | Convert our 'ChatMessage' sequence to (system-prompt, message-list)
 -- in Anthropic shape:
 --
@@ -610,20 +652,29 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
     go [] = []
     go (MsgUser t : rest) = AnthropicMsg "user" (toJSON t) : go rest
     go (MsgUserBlocks blocks : rest) =
-      -- Anthropic uses a different image-block shape
-      -- (@source: {type:base64, media_type, data}@) than OpenAI's
-      -- @image_url@.  Until we add a profile that needs Anthropic
-      -- multimodal, flatten to text and stash a marker so the model
-      -- at least knows an image was meant to be here.
-      let flat =
-            T.intercalate
-              " "
-              [ case b of
-                  TextBlock t -> t
-                  ImageDataUrl _ -> "[image:omitted — Anthropic multimodal not wired]"
-                | b <- blocks
-              ]
-       in AnthropicMsg "user" (toJSON flat) : go rest
+      -- Anthropic image blocks carry @source: {type:base64,
+      -- media_type, data}@ rather than OpenAI's data-URL
+      -- @image_url@, so split our data URLs back apart.  A URL that
+      -- doesn't parse degrades to a text marker.
+      let content =
+            [ case b of
+                TextBlock t -> object ["type" .= ("text" :: Text), "text" .= t]
+                ImageDataUrl url -> case splitDataUrl url of
+                  Just (mime, b64) ->
+                    object
+                      [ "type" .= ("image" :: Text),
+                        "source"
+                          .= object
+                            [ "type" .= ("base64" :: Text),
+                              "media_type" .= mime,
+                              "data" .= b64
+                            ]
+                      ]
+                  Nothing ->
+                    object ["type" .= ("text" :: Text), "text" .= ("[image]" :: Text)]
+              | b <- blocks
+            ]
+       in AnthropicMsg "user" (toJSON content) : go rest
     go (MsgAssistant t : rest) = AnthropicMsg "assistant" (toJSON t) : go rest
     go (MsgAssistantToolCalls _reasoning tcs : rest) =
       -- Anthropic has its own native thinking-block format; we don't

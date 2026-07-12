@@ -30,7 +30,8 @@ emptySession =
       btwNotes = [],
       clearedAt = Nothing,
       pinned = [],
-      thinkingOverride = Nothing
+      thinkingOverride = Nothing,
+      debugOverride = Nothing
     }
 
 t0 :: UTCTime

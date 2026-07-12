@@ -55,13 +55,15 @@ data Row = Row
     rBtwNotes :: !Value,
     rClearedAt :: !(Maybe UTCTime),
     rPinned :: !Value,
-    rThinkingOverride :: !(Maybe Bool)
+    rThinkingOverride :: !(Maybe Bool),
+    rDebugOverride :: !(Maybe Bool)
   }
 
 instance FromRow Row where
   fromRow =
     Row
       <$> field
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -80,7 +82,7 @@ fetchActiveOrInit ::
 fetchActiveOrInit (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT s.group_id, s.branch, s.model, s.persona, s.btw_notes, s.cleared_at, s.pinned, s.thinking_override \
+      "SELECT s.group_id, s.branch, s.model, s.persona, s.btw_notes, s.cleared_at, s.pinned, s.thinking_override, s.debug_override \
       \  FROM session_active_branch a \
       \  JOIN sessions s \
       \    ON s.group_id = a.group_id AND s.branch = a.branch \
@@ -99,7 +101,8 @@ fetchActiveOrInit (GroupId gid) defaultModel = do
                 btwNotes = [],
                 clearedAt = Nothing,
                 pinned = [],
-                thinkingOverride = Nothing
+                thinkingOverride = Nothing,
+                debugOverride = Nothing
               }
       upsertSession initial
       _ <-
@@ -117,8 +120,8 @@ upsertSession s = do
       pin = Jsonb (toJSON s.pinned)
   void $
     execute
-      "INSERT INTO sessions (group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override) \
-      \ VALUES (?,?,?,?,?,?,?,?) \
+      "INSERT INTO sessions (group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override) \
+      \ VALUES (?,?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (group_id, branch) DO UPDATE SET \
       \   model             = EXCLUDED.model, \
       \   persona           = EXCLUDED.persona, \
@@ -126,8 +129,9 @@ upsertSession s = do
       \   cleared_at        = EXCLUDED.cleared_at, \
       \   pinned            = EXCLUDED.pinned, \
       \   thinking_override = EXCLUDED.thinking_override, \
+      \   debug_override    = EXCLUDED.debug_override, \
       \   updated_at        = now()"
-      ((gid, s.branch, s.model, s.persona, btw, s.clearedAt, pin) :. Only s.thinkingOverride)
+      ((gid, s.branch, s.model, s.persona, btw, s.clearedAt, pin) :. (s.thinkingOverride, s.debugOverride))
 
 switchActiveBranch ::
   (WithConnection :> es, IOE :> es) =>
@@ -160,7 +164,7 @@ fetchBranch ::
 fetchBranch (GroupId gid) name defaultModel = do
   rows <-
     query
-      "SELECT group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override \
+      "SELECT group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override \
       \  FROM sessions \
       \  WHERE group_id = ? AND branch = ? \
       \  LIMIT 1"
@@ -214,7 +218,8 @@ rowToSession defaultModel r =
       btwNotes = decodeOrEmpty r.rBtwNotes,
       clearedAt = r.rClearedAt,
       pinned = decodeOrEmpty r.rPinned,
-      thinkingOverride = r.rThinkingOverride
+      thinkingOverride = r.rThinkingOverride,
+      debugOverride = r.rDebugOverride
     }
   where
     -- Tolerate junk in jsonb columns (e.g. older shape we don't know

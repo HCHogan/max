@@ -63,13 +63,14 @@ execute ::
   TVar Session ->
   SessionRegistry -> -- needed to swap the active-branch TVar on !switch
   Text -> -- default LLM profile name (used when loading a branch row with NULL model)
+  Bool -> -- config-level debug default (AppConfig.debug); !debug overrides per session
   TaskRegistry ->
   SandboxRegistry ->
   GroupId ->
   Maybe Int64 -> -- replyTarget message_id, if the command was a reply
   Command ->
   Eff es DispatchResult
-execute t reg defaultModel taskReg sandboxReg gid replyTarget cmd = case cmd of
+execute t reg defaultModel debugDefault taskReg sandboxReg gid replyTarget cmd = case cmd of
   Btw note -> do
     -- Prefer injecting into a running task in this group.  Otherwise
     -- become the new !btw: an ephemeral one-shot LLM ask using
@@ -112,6 +113,25 @@ execute t reg defaultModel taskReg sandboxReg gid replyTarget cmd = case cmd of
     updateSession t (\s -> (Session.setThinkingOverride b s, ()))
     logInfo "session: thinking override" $ object ["value" .= b]
     reply $ "✓ 思考模式 " <> (if b then "开" else "关") <> "（覆盖 profile 默认）"
+  --
+  DebugShow -> do
+    s <- liftIO (Session.readSession t)
+    reply $ "debug: " <> renderDebugState debugDefault s.debugOverride
+  DebugSet mb -> do
+    updateSession t $ \s ->
+      ( case mb of
+          Just b -> Session.setDebugOverride b s
+          Nothing -> Session.clearDebugOverride s,
+        ()
+      )
+    logInfo "session: debug override" $ object ["value" .= mb]
+    reply $ case mb of
+      Just True -> "✓ debug 开 — 工具调用会打印到群里"
+      Just False -> "✓ debug 关 — 工具调用不再打印"
+      Nothing ->
+        "✓ debug 回到配置默认（当前默认"
+          <> (if debugDefault then "开" else "关")
+          <> "）"
   --
   PersonaShow -> do
     s <- liftIO (Session.readSession t)
@@ -245,6 +265,12 @@ renderThinkingState = \case
   Just True -> "开 (session 覆盖)"
   Just False -> "关 (session 覆盖)"
 
+renderDebugState :: Bool -> Maybe Bool -> Text
+renderDebugState defB = \case
+  Nothing -> (if defB then "开" else "关") <> " (配置默认)"
+  Just True -> "开 (session 覆盖)"
+  Just False -> "关 (session 覆盖)"
+
 --------------------------------------------------------------------------------
 -- !branch formatting.
 
@@ -325,6 +351,8 @@ helpText Nothing =
       "  !model <name>            切 model",
       "  !model think             看当前思考开关",
       "  !model think on/off      开/关思考模式 (session 覆盖)",
+      "  !debug                   看 debug 状态（开时工具调用打印到群里）",
+      "  !debug on/off/default    开/关/回到配置默认 (session 覆盖)",
       "  !persona                 看当前 persona override",
       "  !persona <text>          设 persona override",
       "  !persona clear           回到默认 persona",

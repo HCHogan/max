@@ -113,19 +113,19 @@ reapStaleSandboxes = do
 
 data SandboxCreateOpts = SandboxCreateOpts
   { scoImage :: !Text,
-    scoNetwork :: !Text,
-    scoMemory :: !Text,
-    scoCpus :: !Text
+    scoNetwork :: !Text
   }
   deriving stock (Show)
 
+-- | Default image is the nix-enabled base built from
+-- @sandbox-image/@ (@build.sh@ must have been run on the docker
+-- host); packages come from the pinned nixpkgs via @nix shell@,
+-- with the store shared across sandboxes through 'nixVolume'.
 defaultCreateOpts :: SandboxCreateOpts
 defaultCreateOpts =
   SandboxCreateOpts
-    { scoImage = "debian:13-slim",
-      scoNetwork = "bridge",
-      scoMemory = "1g",
-      scoCpus = "1"
+    { scoImage = "max-sandbox:latest",
+      scoNetwork = "bridge"
     }
 
 --------------------------------------------------------------------------------
@@ -156,8 +156,6 @@ createSandbox reg gid opts = do
       opts.scoImage
       volume
       opts.scoNetwork
-      opts.scoMemory
-      opts.scoCpus
   case res of
     Left err -> do
       -- docker run failed; nothing to clean (no container created),

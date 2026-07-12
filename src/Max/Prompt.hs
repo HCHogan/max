@@ -4,20 +4,27 @@ module Max.Prompt
 
     -- * Building blocks (exposed for tests)
     PromptInputs (..),
+    PromptImage (..),
     renderContext,
   )
 where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
+import Control.Monad (when)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
+import Data.List (sortOn)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Ord (Down (..))
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
-import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple (In (..), Only (..))
 import Effectful
 import Effectful.Log (Log, logAttention, object, (.=))
 import Effectful.PostgreSQL (WithConnection, query)
@@ -31,10 +38,12 @@ import Max.DB.History
     fetchRecentInGroup,
   )
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
+import Max.Images (downloadableImageCount)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import System.FilePath ((</>))
 
 -- | Everything 'renderContext' needs in one record.  Splitting the
 -- pipeline into 'PromptInputs' + 'renderContext' lets us unit-test the
@@ -58,19 +67,32 @@ data PromptInputs = PromptInputs
     -- | If the trigger replied to a message: that message + the files
     -- attached to it (so the model can address them by file_id).
     replyCtx :: !(Maybe (HistoryItem, [FileRecord])),
-    -- | Already-loaded data URLs for any images on the current
-    -- trigger.  Populated only when the active profile is
-    -- multimodal AND the image worker has finished fetching;
-    -- otherwise empty and the images remain as @[image:abcd]@
-    -- markers in the rendered text.  Format: @data:<mime>;base64,...@.
-    triggerImageUrls :: ![Text]
+    -- | Whether the active profile accepts image content blocks.
+    -- Toggles the format-guide wording for the @[image]@ marker.
+    multimodal :: !Bool,
+    -- | Already-loaded images to attach to the final user message,
+    -- in display order (context images chronological, trigger's
+    -- last).  Populated only when 'multimodal' AND the image worker
+    -- has finished fetching; otherwise empty and images remain as
+    -- @[image]@ markers in the rendered text.
+    images :: ![PromptImage]
   }
+
+-- | One inline image for the final user message: a data URL plus a
+-- text label naming the source message (\"[HH:MM \<昵称\>] 消息里的
+-- 图片:\") so the model can tie it back to a rendered context line.
+data PromptImage = PromptImage
+  { piLabel :: !Text,
+    -- | @data:\<mime\>;base64,...@
+    piDataUrl :: !Text
+  }
+  deriving stock (Show, Eq)
 
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default) on top of a fixed format guide describing the
 -- marker conventions used in the rendered context.
-systemPrompt :: Text -> Text
-systemPrompt persona =
+systemPrompt :: Bool -> Text -> Text
+systemPrompt multimodal' persona =
   T.unlines
     [ persona,
       "",
@@ -85,7 +107,9 @@ systemPrompt persona =
       "上下文格式：",
       "  [HH:MM <昵称>]: 内容        — 群里的一条普通消息",
       "  [↩ 引用 HH:MM <昵称>]: ...   — 用户引用了某条历史消息",
-      "  [image:abcd1234]            — 一张图片（你看不到内容，可以请用户描述）",
+      if multimodal'
+        then "  [image]                     — 一张图片；内容会附在消息末尾，标注来自哪条消息（[HH:MM <昵称>] 消息里的图片）。太老或太多的图会被略去，只剩标记"
+        else "  [image]                     — 一张图片（你看不到内容，可以请用户描述）",
       "  [file:<name>]               — 一个群文件；用 list_recent_files 或 import_file_to_sandbox 处理",
       "  [forward]                   — 转发的聊天记录（你看不到内容）",
       "",
@@ -101,20 +125,22 @@ systemPrompt persona =
 -- | Build the chat context for one @bot trigger.  Runs the DB
 -- fetches, then hands off to the pure 'renderContext'.
 --
--- When @multimodal@ is 'True', also looks up the local bytes of any
--- image segments on the trigger and embeds them as inline data URLs
--- so the final @user@ message becomes 'MsgUserBlocks' instead of
--- 'MsgUser'.  Falls back gracefully when the image worker hasn't
--- caught up yet — those images stay as @[image:abcd]@ markers.
+-- When @multimodal@ is 'True', also looks up the local bytes of
+-- images on the trigger AND on context messages (reply target, pins,
+-- recent history) and embeds them as inline data URLs so the final
+-- @user@ message becomes 'MsgUserBlocks' instead of 'MsgUser'.
+-- Falls back gracefully when the image worker hasn't caught up yet —
+-- those images stay as @[image]@ markers.
 buildContext ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   Text -> -- default persona (used when session has no override)
   Int -> -- history window size
-  Bool -> -- multimodal: load + attach inline images for the trigger
+  Bool -> -- multimodal: load + attach inline images
+  FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
   Session ->
   GroupMessage ->
   Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
-buildContext defaultPersona n multimodal s gm = do
+buildContext defaultPersona n multimodal' blobRoot s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -130,9 +156,26 @@ buildContext defaultPersona n multimodal s gm = do
         Just h -> do
           files <- DBFiles.fetchFilesForMessage h.messageId
           pure (Just (h, files))
-  triggerImageUrls' <-
-    if multimodal && hasImageSeg gm.message
-      then loadTriggerImageUrls mid
+  images' <-
+    if multimodal'
+      then do
+        -- The trigger's images were enqueued moments ago and may
+        -- still be downloading — hold the turn until they land so
+        -- the model actually sees them.  (Older context images are
+        -- either long since fetched or permanently failed; no point
+        -- waiting on those.)
+        let expected = downloadableImageCount gm.message
+        when (expected > 0) $ waitForTriggerImages mid expected
+        -- Budget priority: the reply target is what the user is
+        -- pointing at, pins are explicit user signals, then plain
+        -- recency.  (Display order is chronological regardless —
+        -- 'loadPromptImages' re-sorts.)
+        let candidates =
+              dedupById $
+                maybe [] (\(r, _) -> [r]) replyCtx'
+                  <> pinnedItems'
+                  <> sortOn (Down . (.receivedAt)) (ambient' <> mention')
+        loadPromptImages blobRoot selfId' mid candidates
       else pure []
   pure $
     renderContext
@@ -144,45 +187,123 @@ buildContext defaultPersona n multimodal s gm = do
           mention = mention',
           pinnedItems = pinnedItems',
           replyCtx = replyCtx',
-          triggerImageUrls = triggerImageUrls'
+          multimodal = multimodal',
+          images = images'
         }
 
--- | True iff there's at least one image segment in the message.
-hasImageSeg :: [Segment] -> Bool
-hasImageSeg = any isImage
-  where
-    isImage (SegImage _) = True
-    isImage _ = False
-
--- | Look up image rows for the trigger message via the
--- 'message_images' join table; for each one with a local path
--- present (i.e. the image worker has finished), read the bytes and
--- build a @data:\<mime\>;base64,...@ URL.  Rows where the worker
--- hasn't caught up yet are skipped (caller falls back to the text
--- marker representation).
-loadTriggerImageUrls ::
+-- | Poll until the image worker has recorded all of the trigger's
+-- downloadable images ('message_images' rows are inserted only after
+-- a download completes), so the prompt doesn't race the fetch and
+-- silently drop the picture the user is asking about.  Bounded: a
+-- failed download never inserts its row, so we give up after
+-- 'waitImagesMaxMs' and build the prompt with whatever landed.
+waitForTriggerImages ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   Int64 -> -- trigger message_id
-  Eff es [Text]
-loadTriggerImageUrls mid = do
+  Int -> -- expected downloadable image count
+  Eff es ()
+waitForTriggerImages mid expected = go 0
+  where
+    stepMs = 300
+    waitImagesMaxMs = 30_000
+    go elapsed
+      | elapsed >= waitImagesMaxMs =
+          logAttention "prompt: trigger images still missing after wait" $
+            object ["message_id" .= mid, "expected" .= expected]
+      | otherwise = do
+          rows <-
+            query
+              "SELECT count(*) FROM message_images WHERE message_id = ?"
+              (Only mid)
+          case rows of
+            [Only (n :: Int64)] | n >= fromIntegral expected -> pure ()
+            _ -> do
+              liftIO (threadDelay (stepMs * 1000))
+              go (elapsed + stepMs)
+
+-- | Keep first occurrence of each message id.
+dedupById :: [HistoryItem] -> [HistoryItem]
+dedupById = go Set.empty
+  where
+    go _ [] = []
+    go seen (h : rest)
+      | h.messageId `Set.member` seen = go seen rest
+      | otherwise = h : go (Set.insert h.messageId seen) rest
+
+-- | Total images attached to one prompt.  Keeps worst-case context
+-- growth bounded (8 × ~1 MiB of base64) while covering the common
+-- "look at these screenshots" flows.
+maxPromptImages :: Int
+maxPromptImages = 8
+
+-- | Per-image byte cap; anything larger is skipped (stays a text
+-- marker) rather than blowing up the request body.  NB: some
+-- endpoints cap lower than this (e.g. Anthropic at 5 MB/image) and
+-- will reject the request themselves.
+maxImageBytes :: Int
+maxImageBytes = 20 * 1024 * 1024
+
+-- | Load up to 'maxPromptImages' images for the trigger + context
+-- messages via one 'message_images' join.  The trigger's images
+-- claim the budget first, then @candidates@ in the given priority
+-- order.  Selected context images are re-sorted chronologically for
+-- display and the trigger's go last, closest to the question.
+-- Images whose local file is missing (worker hasn't caught up) or
+-- oversized are skipped.
+loadPromptImages ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  FilePath -> -- blob store root; images.local_path is relative to it
+  Int64 -> -- bot self id (for display names in labels)
+  Int64 -> -- trigger message_id
+  [HistoryItem] -> -- context candidates, priority order, deduped
+  Eff es [PromptImage]
+loadPromptImages blobRoot selfId' mid candidates = do
+  let candidates' = filter (\h -> h.messageId /= mid) candidates
+      ids = mid : map (.messageId) candidates'
   rows <-
     query
-      "SELECT i.mime_type, i.local_path \
+      "SELECT mi.message_id, i.mime_type, i.local_path \
       \  FROM message_images mi \
       \  JOIN images i ON i.sha256 = mi.sha256 \
-      \  WHERE mi.message_id = ? \
-      \  ORDER BY mi.seg_index"
-      (Only mid)
-  let pairs = [(mime, path) | (mime, path) <- rows :: [(Text, Text)]]
-  fmap concat $ traverse readOne pairs
+      \  WHERE mi.message_id IN ? \
+      \  ORDER BY mi.message_id, mi.seg_index"
+      (Only (In ids))
+  let byMsg =
+        Map.fromListWith
+          (flip (<>))
+          [(m, [(mime, path)]) | (m, mime, path) <- rows :: [(Int64, Text, Text)]]
+      imagesOf i = Map.findWithDefault [] i byMsg
+      picked =
+        take maxPromptImages $
+          map Left (imagesOf mid)
+            <> [Right (h, mp) | h <- candidates', mp <- imagesOf h.messageId]
+      contextPicked = sortOn (\(h, _) -> h.receivedAt) [hp | Right hp <- picked]
+      triggerPicked = [mp | Left mp <- picked]
+  ctxImgs <- fmap concat $ traverse (uncurry loadCtx) contextPicked
+  trigImgs <- fmap concat $ traverse (loadOne "[当前消息] 里的图片:") triggerPicked
+  pure (ctxImgs <> trigImgs)
   where
-    readOne (mime, path) = do
-      eres <- liftIO (try (BS.readFile (T.unpack path)))
+    loadCtx h mp =
+      let label =
+            "["
+              <> formatHM h.receivedAt
+              <> " "
+              <> displayName selfId' h.userId h.senderNickname
+              <> "] 消息里的图片:"
+       in loadOne label mp
+    loadOne label (mime, path) = do
+      -- images.local_path is stored relative to the blob root
+      -- (that's what the image worker writes); resolve before reading.
+      eres <- liftIO (try (BS.readFile (blobRoot </> T.unpack path)))
       case eres of
-        Right bytes ->
-          let b64 = TE.decodeUtf8 (B64.encode bytes)
-              url = "data:" <> mime <> ";base64," <> b64
-           in pure [url]
+        Right bytes
+          | BS.length bytes > maxImageBytes -> do
+              logAttention "prompt: image skipped (too large)" $
+                object ["path" .= path, "bytes" .= BS.length bytes]
+              pure []
+          | otherwise ->
+              let b64 = TE.decodeUtf8 (B64.encode bytes)
+               in pure [PromptImage label ("data:" <> mime <> ";base64," <> b64)]
         Left (e :: IOException) -> do
           logAttention "prompt: image read failed" $
             object ["path" .= path, "error" .= T.pack (show e)]
@@ -221,17 +342,24 @@ renderContext pi' =
           pi'.pinnedItems
           pi'.session.btwNotes
           pi'.triggerMessage
-      -- If we have inline image bytes for the current trigger,
-      -- attach them as a multimodal content-block message;
-      -- otherwise fall back to plain text (which still has
-      -- @[image:abcd]@ markers in the body).
-      userMessage = case pi'.triggerImageUrls of
+      -- If we have inline image bytes, attach them as a multimodal
+      -- content-block message, each prefixed with a label naming its
+      -- source message; otherwise fall back to plain text (which
+      -- still has @[image]@ markers in the body).
+      --
+      -- Block layout: the first label is folded into the body text
+      -- and every other label sits between two images, so no two
+      -- text blocks are ever adjacent — the most conservative shape
+      -- for strict OpenAI-compatible providers.
+      userMessage = case pi'.images of
         [] -> MsgUser userBody
-        urls ->
+        (i0 : rest) ->
           MsgUserBlocks $
-            TextBlock userBody : map ImageDataUrl urls
+            TextBlock (userBody <> "\n\n" <> i0.piLabel)
+              : ImageDataUrl i0.piDataUrl
+              : concat [[TextBlock i.piLabel, ImageDataUrl i.piDataUrl] | i <- rest]
       messages =
-        [MsgSystem (systemPrompt effectivePersona)]
+        [MsgSystem (systemPrompt pi'.multimodal effectivePersona)]
           <> mentionMessages
           <> [userMessage]
    in (messages, pi'.session.btwNotes)

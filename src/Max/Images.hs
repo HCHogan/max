@@ -4,6 +4,7 @@ module Max.Images
     newImageQueue,
     enqueueImages,
     enqueueImagesFromNode,
+    downloadableImageCount,
     imageWorker,
   )
 where
@@ -58,6 +59,13 @@ enqueueImagesFromNode q mid segs = do
   let jobs = mapMaybe pick (zip [0 ..] segs)
       pick (i, s) = ImageJob mid i <$> imageUrl s
   atomically $ mapM_ (writeTQueue q) jobs
+
+-- | How many of a message's segments the worker will try to fetch —
+-- i.e. how many 'message_images' rows will eventually exist for it
+-- (barring download failures).  Lets 'Max.Prompt' wait for the
+-- worker to catch up before embedding the trigger's images.
+downloadableImageCount :: [Segment] -> Int
+downloadableImageCount = length . mapMaybe imageUrl
 
 imageUrl :: Segment -> Maybe Text
 imageUrl = \case

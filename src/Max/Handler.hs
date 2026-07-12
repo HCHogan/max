@@ -19,6 +19,7 @@ import Effectful.Reader.Dynamic (Reader)
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Parser (parseCommand)
+import Max.DB.History (HistoryItem (..), fetchMessage)
 import Max.DB.Message (insertGroupMessage, insertOutbound)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
 import Max.Effects.LLM (LLM, isProfileMultimodal)
@@ -54,18 +55,22 @@ data Trigger
     TriggerCommandError !T.Text
   deriving stock (Show)
 
-classify :: GroupMessage -> Trigger
-classify gm =
+-- | @repliesToBot@ = the message quotes (replies to) one of the
+-- bot's own messages; the caller resolves that via DB lookup.  A
+-- reply to the bot counts as addressing it, same as an @-mention.
+classify :: Bool -> GroupMessage -> Trigger
+classify repliesToBot gm =
   let raw = T.strip (renderPlainText gm.message)
       stripped = T.strip (stripMentions gm.selfId raw)
    in case parseCommand stripped of
         Right (Just _) -> TriggerCommand stripped
         Left err -> TriggerCommandError err
         Right Nothing
-          | not (mentionsUser gm.selfId gm.message) -> TriggerNone
+          | not (mentionsUser gm.selfId gm.message) && not repliesToBot -> TriggerNone
           | otherwise -> case stripped of
               "ping" -> TriggerPong
-              "" -> TriggerNone
+              -- A bare @bot (or bare reply) still triggers — the
+              -- model sees the ambient/reply context and reacts.
               _ -> TriggerLLM stripped
 
 -- | App-lived event loop. Persists every group message, enqueues image
@@ -83,6 +88,8 @@ handleEvents ::
   ) =>
   T.Text -> -- default bot persona
   Int -> -- history window size for ambient context
+  FilePath -> -- blob store root (AppConfig.imagesDir)
+  Bool -> -- config-level debug default (AppConfig.debug)
   SessionRegistry ->
   TaskRegistry ->
   SandboxRegistry ->
@@ -92,7 +99,7 @@ handleEvents ::
   ForwardQueue ->
   FileQueue ->
   Eff es ()
-handleEvents persona historyN reg taskReg sandboxReg defaultModel q imgQ fwdQ fileQ = loop
+handleEvents persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel q imgQ fwdQ fileQ = loop
   where
     loop = do
       ev <- liftIO (atomically (readTQueue q))
@@ -107,7 +114,7 @@ handleEvents persona historyN reg taskReg sandboxReg defaultModel q imgQ fwdQ fi
           liftIO (enqueueImages imgQ gm)
           liftIO (enqueueForwards fwdQ gm)
           enqueueFiles fileQ gm
-          onGroupMessage persona historyN reg taskReg sandboxReg defaultModel gm
+          onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel gm
       loop
 
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
@@ -131,13 +138,15 @@ onGroupMessage ::
   ) =>
   T.Text ->
   Int ->
+  FilePath ->
+  Bool -> -- debug default
   SessionRegistry ->
   TaskRegistry ->
   SandboxRegistry ->
   T.Text ->
   GroupMessage ->
   Eff es ()
-onGroupMessage persona historyN reg taskReg sandboxReg defaultModel gm = do
+onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
   logInfo "group message" $
@@ -146,12 +155,24 @@ onGroupMessage persona historyN reg taskReg sandboxReg defaultModel gm = do
         "user_id" .= fromRaw,
         "text" .= renderPlainText gm.message
       ]
-  case classify gm of
+  -- Cheap pure pass first; only when it says "not addressed" AND the
+  -- message quotes something do we pay a PK lookup to see whether
+  -- the quoted message was ours (reply-to-bot counts as addressing).
+  trig <- case classify False gm of
+    TriggerNone
+      | Just rid <- listToMaybe [m | SegReply (MessageId m) <- gm.message] -> do
+          mQuoted <- fetchMessage rid
+          let UserId selfRaw = gm.selfId
+          pure $ case mQuoted of
+            Just quoted | quoted.userId == selfRaw -> classify True gm
+            _ -> TriggerNone
+    t -> pure t
+  case trig of
     TriggerNone -> pure ()
     TriggerPong -> sendPong gm
-    TriggerCommand body -> dispatchCommand persona historyN reg taskReg sandboxReg defaultModel gm body
+    TriggerCommand body -> dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
-    TriggerLLM _ -> dispatchLLM persona historyN reg defaultModel gm
+    TriggerLLM _ -> dispatchLLM persona historyN blobRoot debugDefault reg defaultModel gm
 
 --------------------------------------------------------------------------------
 -- Commands.
@@ -168,6 +189,8 @@ dispatchCommand ::
   ) =>
   T.Text -> -- default bot persona
   Int -> -- history window
+  FilePath -> -- blob store root
+  Bool -> -- debug default
   SessionRegistry ->
   TaskRegistry ->
   SandboxRegistry ->
@@ -175,7 +198,7 @@ dispatchCommand ::
   GroupMessage ->
   T.Text ->
   Eff es ()
-dispatchCommand persona historyN reg taskReg sandboxReg defaultModel gm body = localDomain "cmd" $ do
+dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel gm body = localDomain "cmd" $ do
   case parseCommand body of
     Left err -> replyText gm ("命令解析失败:\n" <> err)
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
@@ -183,7 +206,7 @@ dispatchCommand persona historyN reg taskReg sandboxReg defaultModel gm body = l
       t <- loadSession reg defaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
-      result <- CmdDispatch.execute t reg defaultModel taskReg sandboxReg gm.groupId replyTarget cmd
+      result <- CmdDispatch.execute t reg defaultModel debugDefault taskReg sandboxReg gm.groupId replyTarget cmd
       case result of
         ReplyText reply -> replyText gm reply
         EphemeralAsk askBody -> do
@@ -199,7 +222,7 @@ dispatchCommand persona historyN reg taskReg sandboxReg defaultModel gm body = l
                         SegText (" " <> askBody)
                       ]
                   }
-          withEphemeral $ dispatchLLM persona historyN reg defaultModel virtualGm
+          withEphemeral $ dispatchLLM persona historyN blobRoot debugDefault reg defaultModel virtualGm
 
 --------------------------------------------------------------------------------
 -- LLM dispatch.
@@ -232,11 +255,13 @@ dispatchLLM ::
   ) =>
   T.Text ->
   Int ->
+  FilePath ->
+  Bool -> -- debug default
   SessionRegistry ->
   T.Text ->
   GroupMessage ->
   Eff es ()
-dispatchLLM defaultPersona historyN reg defaultModel gm = void $ async $
+dispatchLLM defaultPersona historyN blobRoot debugDefault reg defaultModel gm = void $ async $
   localDomain "llm" $ do
     let UserId fromRaw = gm.userId
         GroupId gidRaw = gm.groupId
@@ -261,10 +286,17 @@ dispatchLLM defaultPersona historyN reg defaultModel gm = void $ async $
       t <- loadSession reg defaultModel gm.groupId
       s <- liftIO (readSession t)
       multimodal <- isProfileMultimodal s.model
-      (ctx, drained) <- buildContext defaultPersona historyN multimodal s gm
-      let dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId
+      (ctx, drained) <- buildContext defaultPersona historyN multimodal blobRoot s gm
+      let debugEff = maybe debugDefault id s.debugOverride
+          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff
       result <- agentTurn dc s.model s.thinkingOverride ctx
-      let stripped = T.strip result.reply
+      -- The outbound message already @-mentions the sender via 'SegAt'
+      -- (rendered as their nickname).  The model, having seen prior
+      -- turns where mentions render as raw "@<qq>", tends to also write
+      -- "@<sender-qq>" into its reply text — producing a double @.
+      -- Strip the sender's raw @-mention from the model text so only the
+      -- structured SegAt remains.
+      let stripped = T.strip (stripMentions gm.userId result.reply)
       -- callAction so we get the message_id back, then persist this
       -- outbound message into the messages table.  That's where
       -- subsequent dispatches will read this turn's assistant reply

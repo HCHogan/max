@@ -44,6 +44,8 @@ module Max.Session
     removeAllPins,
     setThinkingOverride,
     clearThinkingOverride,
+    setDebugOverride,
+    clearDebugOverride,
   )
 where
 
@@ -170,6 +172,14 @@ setThinkingOverride b s = s {thinkingOverride = Just b}
 -- profile's (or server's) default.
 clearThinkingOverride :: Session -> Session
 clearThinkingOverride s = s {thinkingOverride = Nothing}
+
+-- | Set the debug override for this session (@!debug on@/@off@).
+setDebugOverride :: Bool -> Session -> Session
+setDebugOverride b s = s {debugOverride = Just b}
+
+-- | Drop the override; fall back to @AppConfig.debug@.
+clearDebugOverride :: Session -> Session
+clearDebugOverride s = s {debugOverride = Nothing}
 
 --------------------------------------------------------------------------------
 -- Branches.

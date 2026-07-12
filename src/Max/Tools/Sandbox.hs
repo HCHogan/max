@@ -1,14 +1,19 @@
 -- |
 -- Sandbox tools exposed to the agent: create / exec / list /
--- destroy / read_file / write_file.  All scoped to the calling
--- group's session.
+-- destroy / read_file / write_file / nix_search.  All scoped to the
+-- calling group's session.
 --
 -- == What the model sees
 --
 -- A small JSON-schema'd toolkit for "run stuff in a Linux box".
--- Defaults to Debian 13-slim, bridge network, 1 CPU, 1 GiB memory.
--- The sandbox survives across @-mention dispatches; the model is
--- told this so it can reuse one between turns instead of recreating.
+-- The box is nix-based (image built from @sandbox-image/@, nixpkgs
+-- pinned to 26.05, /nix shared across all sandboxes): instead of
+-- apt-installing, the model passes @packages@ to @sandbox_exec@ and
+-- we wrap the command in @nix shell nixpkgs#… -c@, so models that
+-- don't know nix never have to write a nix command; @nix_search@
+-- covers discovery.  The sandbox survives across @-mention
+-- dispatches; the model is told this so it can reuse one between
+-- turns instead of recreating.
 --
 -- == Concurrency disclosure
 --
@@ -30,7 +35,7 @@ import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime)
 import Effectful
 import Max.Effects.Tools (Tool (..))
-import Max.Sandbox.Docker (ExecResult (..), maxOutputBytes)
+import Max.Sandbox.Docker (ExecResult (..), maxOutputBytes, shellQuote)
 import Max.Sandbox.Registry
   ( SandboxCreateOpts (..),
     SandboxEntry (..),
@@ -50,6 +55,7 @@ sandboxToolsFor :: IOE :> es => GroupId -> SandboxRegistry -> [Tool es]
 sandboxToolsFor gid reg =
   [ createTool gid reg,
     execTool gid reg,
+    nixSearchTool gid reg,
     listTool gid reg,
     destroyTool gid reg,
     readFileTool gid reg,
@@ -66,7 +72,10 @@ createTool gid reg =
       toolDescription =
         T.unwords
           [ "Create a new Linux sandbox (Docker container) for running commands.",
-            "Defaults to debian:13-slim with bridge networking, 1 CPU, 1 GiB memory.",
+            "The default image is nix-based (nixpkgs pinned to 26.05, package store",
+            "shared across sandboxes): do NOT apt/yum install — to use a tool that",
+            "isn't preinstalled, pass its nixpkgs attribute in the 'packages' arg of",
+            "sandbox_exec (find attributes with nix_search).",
             "Returns a 'sandbox_id' you pass to sandbox_exec / sandbox_read_file etc.",
             "Sandboxes persist across your subsequent dispatches in this group's session,",
             "so prefer reusing an existing one (sandbox_list) over creating a new one",
@@ -82,7 +91,7 @@ createTool gid reg =
                 [ "image"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("Docker image (default debian:13-slim)." :: Text)
+                        "description" .= ("Docker image (default max-sandbox:latest, the nix-enabled base; only override if you have a specific reason)." :: Text)
                       ],
                   "network"
                     .= object
@@ -133,7 +142,12 @@ execTool gid reg =
             "is passed verbatim to 'sh -c' inside the container, with a",
             "wallclock timeout enforced via timeout(1).  Stdout and stderr",
             "are captured separately and capped at ~16 KiB each (truncated",
-            "results set 'truncated' = true).  Exit code 0 = success."
+            "results set 'truncated' = true).  Exit code 0 = success.",
+            "To use tools that aren't preinstalled, list their nixpkgs",
+            "attributes in 'packages' — they are put on PATH for this",
+            "command only (no permanent install needed).  The first use of",
+            "a package downloads it into the shared store: raise",
+            "timeout_seconds to 120-300 for that call; later uses are instant."
           ],
       toolSchema =
         object
@@ -142,6 +156,15 @@ execTool gid reg =
               .= object
                 [ "sandbox_id" .= stringField "Sandbox id from sandbox_create.",
                   "command" .= stringField "Shell command to run.",
+                  "packages"
+                    .= object
+                      [ "type" .= ("array" :: Text),
+                        "items" .= object ["type" .= ("string" :: Text)],
+                        "description"
+                          .= ( "nixpkgs attributes to put on PATH for this command, e.g. [\"python3\", \"ffmpeg\", \"imagemagick\"]. Use nix_search to find attribute names."
+                                 :: Text
+                             )
+                      ],
                   "timeout_seconds"
                     .= object
                       [ "type" .= ("integer" :: Text),
@@ -154,8 +177,8 @@ execTool gid reg =
       toolRun = \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
-          Right (sid, cmd, t) -> do
-            res <- liftIO (execInSandbox reg gid (SandboxId sid) cmd (clampTimeout t))
+          Right (sid, cmd, pkgs, t) -> do
+            res <- liftIO (execInSandbox reg gid (SandboxId sid) (wrapPackages pkgs cmd) (clampTimeout t))
             pure $ case res of
               Left err -> Left err
               Right er ->
@@ -168,14 +191,81 @@ execTool gid reg =
                     ]
     }
   where
-    parseArgs :: Object -> Parser (Text, Text, Int)
+    parseArgs :: Object -> Parser (Text, Text, [Text], Int)
     parseArgs o = do
       sid <- o .: "sandbox_id"
       cmd <- o .: "command"
+      pkgs <- o .:? "packages" .!= []
       mTo <- o .:? "timeout_seconds"
-      pure (sid, cmd, maybe 30 id mTo)
+      pure (sid, cmd, pkgs, maybe 30 id mTo)
 
     clampTimeout n = max 1 (min 600 n)
+
+    -- 'nix shell' realises the packages (fetching from the shared
+    -- store or a substituter) and execs the command with them on
+    -- PATH; nothing is installed into the sandbox itself.
+    wrapPackages :: [Text] -> Text -> Text
+    wrapPackages [] cmd = cmd
+    wrapPackages pkgs cmd =
+      "nix shell "
+        <> T.unwords [shellQuote ("nixpkgs#" <> p) | p <- pkgs]
+        <> " -c sh -c "
+        <> shellQuote cmd
+
+--------------------------------------------------------------------------------
+-- nix_search
+
+-- | Runs @nix search@ inside the sandbox (piped through jq, which
+-- the base image ships) so results come from the same pinned
+-- nixpkgs the sandbox will fetch from.  The image bakes the eval
+-- cache, so searches are cheap after the first.
+nixSearchTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+nixSearchTool gid reg =
+  Tool
+    { toolName = "nix_search",
+      toolDescription =
+        T.unwords
+          [ "Search the sandbox's package set (nixpkgs 26.05) by regex.",
+            "Returns up to 30 matches, one per line: 'attribute version description'.",
+            "Pass the attribute (first column) in sandbox_exec's 'packages' to use it.",
+            "Example queries: 'ffmpeg', 'python.*opencv', '^nodejs$'.",
+            "An empty result means no package matched — try a broader regex."
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "sandbox_id" .= stringField "Sandbox id to search in.",
+                  "query" .= stringField "Regex matched against package names and descriptions."
+                ],
+            "required" .= (["sandbox_id", "query"] :: [Text])
+          ],
+      toolRun = \args ->
+        case parseEither (withObject "args" parseArgs) args of
+          Left e -> pure $ Left ("bad args: " <> T.pack e)
+          Right (sid, query) -> do
+            let jqProg =
+                  "to_entries[:30][] | \"\\(.key|split(\".\")[2:]|join(\".\")) \\(.value.version) \\(.value.description)\""
+                cmd =
+                  "nix search nixpkgs "
+                    <> shellQuote query
+                    <> " --json 2>/dev/null | jq -r "
+                    <> shellQuote jqProg
+            res <- liftIO (execInSandbox reg gid (SandboxId sid) cmd 120)
+            pure $ case res of
+              Left err -> Left err
+              Right er
+                | er.erExitCode /= 0 ->
+                    Left ("nix search failed (exit " <> T.pack (show er.erExitCode) <> "): " <> er.erStderr)
+                | T.null (T.strip er.erStdout) ->
+                    Right (object ["results" .= ("" :: Text), "note" .= ("no packages matched; try a broader regex" :: Text)])
+                | otherwise ->
+                    Right (object ["results" .= er.erStdout, "truncated" .= er.erTruncated])
+    }
+  where
+    parseArgs :: Object -> Parser (Text, Text)
+    parseArgs o = (,) <$> o .: "sandbox_id" <*> o .: "query"
 
 --------------------------------------------------------------------------------
 -- sandbox_list
@@ -217,7 +307,9 @@ destroyTool gid reg =
       toolDescription =
         T.unwords
           [ "Permanently destroy a sandbox and its data volume.",
-            "All state inside (/work, installed packages, processes) is lost.",
+            "All state inside (/work files, processes) is lost, though",
+            "downloaded packages survive in the shared store and stay",
+            "instant for future sandboxes.",
             "Use this when you're done with a sandbox to free resources."
           ],
       toolSchema =

@@ -38,6 +38,10 @@ data Session = Session
     -- | Per-session thinking-mode override, set by @!model think
     -- on@/@off@.  'Nothing' means follow the profile's (or server's)
     -- default; 'Just' overrides for this session.
-    thinkingOverride :: !(Maybe Bool)
+    thinkingOverride :: !(Maybe Bool),
+    -- | Per-session debug override, set by @!debug on@/@off@.
+    -- 'Nothing' means follow @AppConfig.debug@.  When effective
+    -- debug is on, tool calls are announced in the group.
+    debugOverride :: !(Maybe Bool)
   }
   deriving stock (Show)

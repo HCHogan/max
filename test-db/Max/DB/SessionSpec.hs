@@ -80,7 +80,8 @@ spec pool = before_ (truncateAll pool) $
                   btwNotes = [],
                   clearedAt = Nothing,
                   pinned = [],
-                  thinkingOverride = Nothing
+                  thinkingOverride = Nothing,
+      debugOverride = Nothing
                 }
         withDb pool $ upsertSession (mk "first")
         withDb pool $ upsertSession (mk "second")

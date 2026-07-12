@@ -6,8 +6,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
-import Max.Effects.LLM (ChatMessage (..))
-import Max.Prompt (PromptInputs (..), renderContext)
+import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
+import Max.Prompt (PromptImage (..), PromptInputs (..), renderContext)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -77,7 +77,8 @@ emptySession =
       btwNotes = [],
       clearedAt = Nothing,
       pinned = [],
-      thinkingOverride = Nothing
+      thinkingOverride = Nothing,
+      debugOverride = Nothing
     }
 
 baseInputs :: PromptInputs
@@ -90,7 +91,8 @@ baseInputs =
       mention = [],
       pinnedItems = [],
       replyCtx = Nothing,
-      triggerImageUrls = []
+      multimodal = False,
+      images = []
     }
 
 --------------------------------------------------------------------------------
@@ -257,6 +259,36 @@ spec = do
               }
           (_, _, ub) = splitMessages (fst (renderContext inp))
       ub `shouldSatisfy` ("<Alice>: 你好啊" `T.isInfixOf`)
+
+  describe "renderContext images" $ do
+    it "attaches images with labels, never two adjacent text blocks" $ do
+      let img1 = PromptImage "[09:15 Alice] 消息里的图片:" "data:image/png;base64,AAAA"
+          img2 = PromptImage "[当前消息] 里的图片:" "data:image/jpeg;base64,BBBB"
+          inp = baseInputs {multimodal = True, images = [img1, img2]}
+          msgs = fst (renderContext inp)
+      case last msgs of
+        MsgUserBlocks (TextBlock body : blocks) -> do
+          body `shouldSatisfy` ("[当前 @ 你的消息]" `T.isInfixOf`)
+          -- First label folds into the body (some providers 400 on
+          -- adjacent text blocks); the rest interleave with images.
+          body `shouldSatisfy` (img1.piLabel `T.isSuffixOf`)
+          blocks
+            `shouldBe` [ ImageDataUrl img1.piDataUrl,
+                         TextBlock img2.piLabel,
+                         ImageDataUrl img2.piDataUrl
+                       ]
+        other -> expectationFailure $ "unexpected shape: " <> show other
+
+    it "stays a plain MsgUser when no images were loaded" $ do
+      let inp = baseInputs {multimodal = True, images = []}
+          (_, _, ub) = splitMessages (fst (renderContext inp))
+      ub `shouldSatisfy` ("[当前 @ 你的消息]" `T.isInfixOf`)
+
+    it "documents attached images in the format guide only when multimodal" $ do
+      let (sysOff, _, _) = splitMessages (fst (renderContext baseInputs))
+          (sysOn, _, _) = splitMessages (fst (renderContext baseInputs {multimodal = True}))
+      sysOff `shouldSatisfy` ("你看不到内容" `T.isInfixOf`)
+      sysOn `shouldSatisfy` ("内容会附在消息末尾" `T.isInfixOf`)
 
   describe "renderContext drained notes" $ do
     it "returns the session btw notes verbatim as 'drained'" $ do

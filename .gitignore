@@ -18,6 +18,7 @@ result-*
 .napcat/
 var/
 max.toml
+max.yaml
 
 # Editor
 .vscode/

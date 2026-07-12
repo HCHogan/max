@@ -30,6 +30,9 @@ module Max.Sandbox.Docker
     runCopyFromContainer,
     -- * Tuning knobs
     maxOutputBytes,
+    nixVolume,
+    -- * Helpers
+    shellQuote,
   )
 where
 
@@ -50,6 +53,14 @@ import System.Process
 maxOutputBytes :: Int
 maxOutputBytes = 16 * 1024
 
+-- | Shared nix store volume, mounted at /nix in every sandbox so a
+-- package downloaded once is instant for all later sandboxes.  On
+-- the first ever run docker seeds it from the image's /nix.
+-- Deliberately outside the @max-sb-@ namespace so the startup reaper
+-- never touches it; it survives bot restarts by design.
+nixVolume :: Text
+nixVolume = "max-nix"
+
 -- | Result of one in-container exec.
 data ExecResult = ExecResult
   { erExitCode :: !Int,
@@ -63,6 +74,9 @@ data ExecResult = ExecResult
 -- Lifecycle.
 
 -- | @docker run -d --init --name NAME [...args] IMAGE sleep infinity@.
+-- Mounts the per-sandbox work volume at /work and the shared
+-- 'nixVolume' at /nix.  No memory/cpu caps: nixpkgs evaluation alone
+-- can want ~2 GiB, and sandboxes are per-group already.
 -- Returns the container id on success, or a stderr-flavoured error.
 runRun ::
   -- | container name
@@ -73,12 +87,8 @@ runRun ::
   Text ->
   -- | network mode ("bridge" / "none")
   Text ->
-  -- | memory limit (e.g. "1g")
-  Text ->
-  -- | cpu limit (e.g. "1")
-  Text ->
   IO (Either Text Text)
-runRun name image volume network memory cpus = do
+runRun name image volume network = do
   let args =
         [ "run",
           "-d",
@@ -87,10 +97,8 @@ runRun name image volume network memory cpus = do
           T.unpack name,
           "--network",
           T.unpack network,
-          "--memory",
-          T.unpack memory,
-          "--cpus",
-          T.unpack cpus,
+          "-v",
+          T.unpack nixVolume <> ":/nix",
           "-v",
           T.unpack volume <> ":/work",
           "-w",
