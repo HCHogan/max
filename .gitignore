@@ -8,6 +8,11 @@ dist-newstyle/
 .direnv/
 .devenv/
 .devenv.flake.nix
+# Standalone-devenv-CLI artifacts: this repo uses devenv only as a
+# flake module (flake.nix + flake.lock).  A stray `devenv` run outside
+# the dir shell regenerates these; they must never be committed.
+devenv.lock
+devenv.yaml
 .pre-commit-config.yaml
 result
 result-*
