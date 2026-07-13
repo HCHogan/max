@@ -53,6 +53,16 @@ runRunBrowser name image = do
           "--init",
           "--name",
           T.unpack name,
+          -- Disable the server→client heartbeat.  In HTTP mode
+          -- playwright-mcp pings the client after the first tools/call
+          -- and closes the whole session when the ping can't be
+          -- delivered within 5s — and it never can be delivered here,
+          -- because pings ride the GET SSE stream, which this bot's
+          -- request/response-only MCP client (Max.MCP.Client) never
+          -- opens.  0 turns the heartbeat off; session GC is ours
+          -- anyway (registry teardown on !clear / exit).
+          "-e",
+          "PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0",
           "-p",
           "127.0.0.1::" <> cp,
           T.unpack image,
