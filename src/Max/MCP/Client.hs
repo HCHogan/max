@@ -86,6 +86,11 @@ protocolVersion = "2025-06-18"
 -- header for subsequent requests.
 mcpInitialize :: McpClient -> IO (Either Text ())
 mcpInitialize c = do
+  -- Start a *fresh* handshake: drop any prior session id first.  The
+  -- server issues the session on this request and 404s an initialize
+  -- that carries an unknown one — so re-initializing to recover from a
+  -- stale/expired session must not send the dead id.
+  atomically $ writeTVar c.mcSession Nothing
   let params =
         object
           [ "protocolVersion" .= protocolVersion,
