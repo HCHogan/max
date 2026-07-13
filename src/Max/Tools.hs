@@ -11,12 +11,18 @@ module Max.Tools
   )
 where
 
+import Control.Exception (try)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
+import Data.Foldable (asum)
 import Data.Int (Int64)
+import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Text.Encoding qualified as TE
+import Data.Time (defaultTimeLocale, formatTime, parseTimeM)
+import Database.PostgreSQL.Simple (SqlError (..))
+import Database.PostgreSQL.Simple.ToField qualified as PG
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
@@ -94,14 +100,20 @@ searchMessagesTool (GroupId gid) =
     { toolName = "search_messages",
       toolDescription =
         T.unwords
-          [ "Case-insensitive substring search across messages in this group.",
-            "The 'query' is matched as a literal substring (single word, phrase,",
-            "or partial token) against each message's rendered text.  Mixed",
-            "CJK + ASCII works (e.g. 'haskell' will match '我在学haskell').",
-            "Returns up to 'limit' most-recent matches, each summarised as",
-            "message_id, sender, time, and a short snippet.  Use this when the",
-            "user asks something like 我们之前讨论过 X 吗 or 上次谁说了 Y.",
-            "For multi-keyword AND, call the tool multiple times and intersect."
+          [ "Search the bot's message history.  All filters are optional and",
+            "AND-combined: 'query' is a case-insensitive literal substring",
+            "(mixed CJK + ASCII works, e.g. 'haskell' matches '我在学haskell');",
+            "'regex' is a case-insensitive POSIX regex (Postgres ~*: \\d \\w,",
+            "alternation, anchors all work; no lookaround; prefer 'query' for",
+            "plain substrings); 'sender_id' / 'sender' filter by who sent it;",
+            "'after' / 'before' bound the time range (UTC — same timezone as",
+            "the 'time' values in results and chat history).  'group_id'",
+            "defaults to the current group; pass a different id only when the",
+            "user explicitly asks about another group.  With no text filter it",
+            "just lists that slice of history (e.g. 张三昨天说了什么 →",
+            "sender + after/before, no query).  Returns up to 'limit'",
+            "most-recent matches as message_id, sender, time, and a snippet.",
+            "Use for questions like 我们之前讨论过X吗 or 上次谁说了Y."
           ],
       toolSchema =
         object
@@ -111,7 +123,37 @@ searchMessagesTool (GroupId gid) =
                 [ "query"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("Substring to match (case-insensitive)." :: Text)
+                        "description" .= ("Literal substring to match in message text (case-insensitive)." :: Text)
+                      ],
+                  "regex"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("POSIX regex to match against message text (case-insensitive, Postgres ~* semantics)." :: Text)
+                      ],
+                  "sender_id"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("Only messages sent by this QQ user id." :: Text)
+                      ],
+                  "sender"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("Only messages whose sender nickname or group card contains this substring (case-insensitive)." :: Text)
+                      ],
+                  "after"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("Only messages at or after this time: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (UTC)." :: Text)
+                      ],
+                  "before"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("Only messages at or before this time: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (UTC)." :: Text)
+                      ],
+                  "group_id"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("Group to search (defaults to the current group)." :: Text)
                       ],
                   "limit"
                     .= object
@@ -119,44 +161,130 @@ searchMessagesTool (GroupId gid) =
                         "description" .= ("Max results (default 10, max 30)." :: Text),
                         "default" .= (10 :: Int)
                       ]
-                ],
-            "required" .= (["query"] :: [Text])
+                ]
           ],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (q, lim) -> do
-          rows <- runSearch gid q (min 30 (max 1 lim))
-          pure $ Right (toJSON (map historyItemSummary rows))
+        Right sa -> case toFilter sa of
+          Left e -> pure (Left e)
+          Right f -> fmap (toJSON . map historyItemSummary) <$> runSearch f
     }
   where
-    parseArgs :: Object -> Parser (Text, Int)
-    parseArgs o = do
-      q <- o .: "query"
-      l <- o .:? "limit"
-      pure (q, maybe 10 id l)
+    parseArgs :: Object -> Parser SearchArgs
+    parseArgs o =
+      SearchArgs
+        <$> o .:? "query"
+        <*> o .:? "regex"
+        <*> o .:? "sender_id"
+        <*> o .:? "sender"
+        <*> o .:? "after"
+        <*> o .:? "before"
+        <*> o .:? "group_id"
+        <*> (maybe 10 id <$> o .:? "limit")
 
--- | Substring search via @ILIKE@.  Backed by a @pg_trgm@ GIN index
--- (migration 005), which actually accelerates @%foo%@ patterns —
--- unlike the previous @tsvector @@ plainto_tsquery('simple', ...)@
--- approach, which broke on mixed CJK+ASCII text because the 'simple'
--- tokeniser doesn't split CJK runs.
+    toFilter :: SearchArgs -> Either Text MessageFilter
+    toFilter sa = do
+      after <- traverse parseTimeArg sa.saAfter
+      before <- traverse parseTimeArg sa.saBefore
+      pure
+        MessageFilter
+          { mfGroupId = maybe gid id sa.saGroupId,
+            mfQuery = sa.saQuery,
+            mfRegex = sa.saRegex,
+            mfSenderId = sa.saSenderId,
+            mfSender = sa.saSender,
+            mfAfter = after,
+            mfBefore = before,
+            mfLimit = min 30 (max 1 sa.saLimit)
+          }
+
+-- | Raw tool arguments, straight out of the JSON.
+data SearchArgs = SearchArgs
+  { saQuery :: !(Maybe Text),
+    saRegex :: !(Maybe Text),
+    saSenderId :: !(Maybe Int64),
+    saSender :: !(Maybe Text),
+    saAfter :: !(Maybe Text),
+    saBefore :: !(Maybe Text),
+    saGroupId :: !(Maybe Int64),
+    saLimit :: !Int
+  }
+
+-- | Validated filter set, times parsed.  Every field except the group
+-- and the limit is optional; present ones are AND-combined.
+data MessageFilter = MessageFilter
+  { mfGroupId :: !Int64,
+    mfQuery :: !(Maybe Text),
+    mfRegex :: !(Maybe Text),
+    mfSenderId :: !(Maybe Int64),
+    mfSender :: !(Maybe Text),
+    mfAfter :: !(Maybe UTCTime),
+    mfBefore :: !(Maybe UTCTime),
+    mfLimit :: !Int
+  }
+
+-- | Accept the timestamp shapes a model plausibly emits.  Naive times
+-- are UTC — the same clock 'formatTimestamp' renders, so the model can
+-- round-trip times it saw in earlier results.
+parseTimeArg :: Text -> Either Text UTCTime
+parseTimeArg t =
+  case asum [parseTimeM True defaultTimeLocale f s :: Maybe UTCTime | f <- fmts] of
+    Just u -> Right u
+    Nothing -> Left ("bad time '" <> t <> "': use 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (UTC)")
+  where
+    s = T.unpack (T.strip t)
+    fmts =
+      [ "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y-%m-%d",
+        "%Y-%m-%dT%H:%M:%S%QZ",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M"
+      ]
+
+-- | Filtered history search.  Text matching (@ILIKE@ substring and
+-- @~*@ regex alike) is backed by the @pg_trgm@ GIN index (migration
+-- 005), which accelerates both operator classes — unlike the previous
+-- @tsvector @@ plainto_tsquery('simple', ...)@ approach, which broke
+-- on mixed CJK+ASCII text because the 'simple' tokeniser doesn't
+-- split CJK runs.
+--
+-- The WHERE clause is assembled from code-controlled fragments only;
+-- user input travels exclusively through @?@ parameters.  A bad regex
+-- makes Postgres throw 'SqlError', which we surface as a normal tool
+-- error so the model can correct the pattern instead of killing the
+-- dispatch.
 runSearch ::
   (WithConnection :> es, IOE :> es) =>
-  Int64 ->
-  Text ->
-  Int ->
-  Eff es [HistoryItem]
-runSearch gid q lim =
-  query
-    "SELECT message_id, user_id, self_id, sender_nickname, rendered_text, received_at \
-    \  FROM messages \
-    \  WHERE group_id = ? \
-    \    AND NOT is_synthetic \
-    \    AND forwarded_in_message_id IS NULL \
-    \    AND rendered_text ILIKE ? \
-    \  ORDER BY received_at DESC \
-    \  LIMIT ?"
-    (gid, "%" <> q <> "%", lim)
+  MessageFilter ->
+  Eff es (Either Text [HistoryItem])
+runSearch f = do
+  let conds :: [(String, [PG.Action])]
+      conds =
+        concat
+          [ [("rendered_text ILIKE ?", [PG.toField ("%" <> q <> "%")]) | Just q <- [f.mfQuery]],
+            [("rendered_text ~* ?", [PG.toField r]) | Just r <- [f.mfRegex]],
+            [("user_id = ?", [PG.toField u]) | Just u <- [f.mfSenderId]],
+            [ ("(sender_nickname ILIKE ? OR sender_card ILIKE ?)", [PG.toField p, PG.toField p])
+            | Just s <- [f.mfSender],
+              let p = "%" <> s <> "%"
+            ],
+            [("received_at >= ?", [PG.toField t]) | Just t <- [f.mfAfter]],
+            [("received_at <= ?", [PG.toField t]) | Just t <- [f.mfBefore]]
+          ]
+      sql =
+        "SELECT message_id, user_id, self_id, sender_nickname, rendered_text, received_at \
+        \  FROM messages \
+        \  WHERE group_id = ? \
+        \    AND NOT is_synthetic \
+        \    AND forwarded_in_message_id IS NULL"
+          <> concatMap ((" AND " <>) . fst) conds
+          <> " ORDER BY received_at DESC LIMIT ?"
+      params = PG.toField f.mfGroupId : concatMap snd conds <> [PG.toField f.mfLimit]
+  eres <- withRunInIO $ \run -> try @SqlError (run (query (fromString sql) params))
+  pure $ case eres of
+    Left e -> Left ("search failed: " <> TE.decodeUtf8Lenient (sqlErrorMsg e))
+    Right rows -> Right rows
 
 --------------------------------------------------------------------------------
 -- say — mid-task progress updates
