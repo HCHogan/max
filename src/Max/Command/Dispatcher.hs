@@ -22,6 +22,7 @@ import Max.Command.Types
 import Data.Int (Int64)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
 import Max.Effects.LLM (LLM, listProfiles)
+import Max.Browser.Registry (BrowserRegistry, destroyBrowsersForGroup)
 import Max.Sandbox.Registry (SandboxRegistry, destroySandboxesForGroup)
 import Max.Session (Session (..), SessionRegistry, updateSession)
 import Max.Session qualified as Session
@@ -66,11 +67,12 @@ execute ::
   Bool -> -- config-level debug default (AppConfig.debug); !debug overrides per session
   TaskRegistry ->
   SandboxRegistry ->
+  BrowserRegistry ->
   GroupId ->
   Maybe Int64 -> -- replyTarget message_id, if the command was a reply
   Command ->
   Eff es DispatchResult
-execute t reg defaultModel debugDefault taskReg sandboxReg gid replyTarget cmd = case cmd of
+execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gid replyTarget cmd = case cmd of
   Btw note -> do
     -- Prefer injecting into a running task in this group.  Otherwise
     -- become the new !btw: an ephemeral one-shot LLM ask using
@@ -153,7 +155,9 @@ execute t reg defaultModel debugDefault taskReg sandboxReg gid replyTarget cmd =
     now <- liftIO getCurrentTime
     updateSession t (\s -> (Session.clearAll now s, ()))
     n <- liftIO (destroySandboxesForGroup sandboxReg gid)
-    logInfo "session: clear --all" $ object ["sandboxes_destroyed" .= n]
+    nb <- liftIO (destroyBrowsersForGroup browserReg gid)
+    logInfo "session: clear --all" $
+      object ["sandboxes_destroyed" .= n, "browsers_destroyed" .= nb]
     let sboxSuffix
           | n == 0 = ""
           | otherwise = "，并销毁了 " <> T.pack (show n) <> " 个 sandbox"

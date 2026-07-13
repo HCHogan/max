@@ -79,7 +79,10 @@ data DispatchContext = DispatchContext
     -- | Effective debug mode for this dispatch (config default,
     -- possibly overridden per session via !debug).  When on, each
     -- tool-call round is announced in the group.
-    dcDebug :: !Bool
+    dcDebug :: !Bool,
+    -- | Whether the active profile is multimodal.  The tool factory
+    -- gates capability-heavy tools (e.g. the browser toolset) on this.
+    dcMultimodal :: !Bool
   }
   deriving stock (Show)
 

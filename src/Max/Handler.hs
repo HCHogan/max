@@ -28,6 +28,7 @@ import Max.Files (FileQueue, enqueueFiles)
 import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
+import Max.Browser.Registry (BrowserRegistry)
 import Max.Prompt (buildContext)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession, updateSession)
@@ -93,13 +94,14 @@ handleEvents ::
   SessionRegistry ->
   TaskRegistry ->
   SandboxRegistry ->
+  BrowserRegistry ->
   T.Text -> -- default LLM profile name (for new sessions)
   TQueue Event ->
   ImageQueue ->
   ForwardQueue ->
   FileQueue ->
   Eff es ()
-handleEvents persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel q imgQ fwdQ fileQ = loop
+handleEvents persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel q imgQ fwdQ fileQ = loop
   where
     loop = do
       ev <- liftIO (atomically (readTQueue q))
@@ -114,7 +116,7 @@ handleEvents persona historyN blobRoot debugDefault reg taskReg sandboxReg defau
           liftIO (enqueueImages imgQ gm)
           liftIO (enqueueForwards fwdQ gm)
           enqueueFiles fileQ gm
-          onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel gm
+          onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel gm
       loop
 
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
@@ -143,10 +145,11 @@ onGroupMessage ::
   SessionRegistry ->
   TaskRegistry ->
   SandboxRegistry ->
+  BrowserRegistry ->
   T.Text ->
   GroupMessage ->
   Eff es ()
-onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel gm = do
+onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
   logInfo "group message" $
@@ -170,7 +173,7 @@ onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg def
   case trig of
     TriggerNone -> pure ()
     TriggerPong -> sendPong gm
-    TriggerCommand body -> dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel gm body
+    TriggerCommand body -> dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
     TriggerLLM _ -> dispatchLLM persona historyN blobRoot debugDefault reg defaultModel gm
 
@@ -194,11 +197,12 @@ dispatchCommand ::
   SessionRegistry ->
   TaskRegistry ->
   SandboxRegistry ->
+  BrowserRegistry ->
   T.Text ->
   GroupMessage ->
   T.Text ->
   Eff es ()
-dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg defaultModel gm body = localDomain "cmd" $ do
+dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel gm body = localDomain "cmd" $ do
   case parseCommand body of
     Left err -> replyText gm ("命令解析失败:\n" <> err)
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
@@ -206,7 +210,7 @@ dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg de
       t <- loadSession reg defaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
-      result <- CmdDispatch.execute t reg defaultModel debugDefault taskReg sandboxReg gm.groupId replyTarget cmd
+      result <- CmdDispatch.execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gm.groupId replyTarget cmd
       case result of
         ReplyText reply -> replyText gm reply
         EphemeralAsk askBody -> do
@@ -288,7 +292,7 @@ dispatchLLM defaultPersona historyN blobRoot debugDefault reg defaultModel gm = 
       multimodal <- isProfileMultimodal s.model
       (ctx, drained) <- buildContext defaultPersona historyN multimodal blobRoot s gm
       let debugEff = maybe debugDefault id s.debugOverride
-          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff
+          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal
       result <- agentTurn dc s.model s.thinkingOverride ctx
       -- The outbound message already @-mentions the sender via 'SegAt'
       -- (rendered as their nickname).  The model, having seen prior

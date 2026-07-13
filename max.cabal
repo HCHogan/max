@@ -37,10 +37,13 @@ library
         OneBot.Segment
         OneBot.Server
         OneBot.Types
+        Max.Browser.Docker
+        Max.Browser.Registry
         Max.Command.Dispatcher
         Max.Command.Parser
         Max.Command.Types
         Max.Config
+        Max.MCP.Client
         Max.DB.Connection
         Max.DB.Files
         Max.DB.Forward
@@ -66,6 +69,7 @@ library
         Max.Session.Types
         Max.Tasks
         Max.Tools
+        Max.Tools.Browser
         Max.Tools.Files
         Max.Tools.Sandbox
         Max.Tools.Search
@@ -135,11 +139,13 @@ test-suite max-test
         Max.Command.ParserSpec
         Max.SessionSpec
         Max.Effects.LLMSpec
+        Max.MCP.ClientSpec
         Max.PersistenceSpec
         Max.PromptSpec
     build-depends:
         , aeson           >= 2.2  && < 2.3
         , base            >= 4.20 && < 5
+        , bytestring      >= 0.12 && < 0.13
         , effectful       >= 2.5  && < 2.6
         , effectful-core  >= 2.5  && < 2.6
         , hspec           >= 2.11 && < 2.12
