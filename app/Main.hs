@@ -21,25 +21,24 @@ import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (LLM, LLMRegistry (..), runLLM)
 import Max.Effects.NapCat (NapCat, runNapCat)
+import Max.Env (BotEnv (..))
 import Max.Persistence (PersistMode (Persisted))
 import Max.Files (FileQueue, fileWorker, newFileQueue)
 import Max.Forward (ForwardQueue, forwardWorker, newForwardQueue)
 import Max.Handler (handleEvents)
 import Max.Images (ImageQueue, imageWorker, newImageQueue)
 import Max.Browser.Registry
-  ( BrowserRegistry,
-    destroyAllBrowsers,
+  ( destroyAllBrowsers,
     newBrowserRegistry,
     reapStaleBrowsers,
   )
 import Max.Sandbox.Registry
-  ( SandboxRegistry,
-    destroyAllSandboxes,
+  ( destroyAllSandboxes,
     newSandboxRegistry,
     reapStaleSandboxes,
   )
-import Max.Session (SessionRegistry, newSessionRegistry)
-import Max.Tasks (TaskRegistry, newTaskRegistry)
+import Max.Session (newSessionRegistry)
+import Max.Tasks (newTaskRegistry)
 import Max.Tools (builtinsFor)
 import Max.Tools.Browser (browserToolsFor)
 import Max.Tools.Files (fileToolsFor)
@@ -88,6 +87,18 @@ main = do
                   <> maybe [] searchToolsFor cfg.search
                   -- Browser toolset only for multimodal profiles (per config).
                   <> (if dc.dcMultimodal then browserToolsFor dc.dcGroupId browsers else [])
+              env =
+                BotEnv
+                  { bePersona = cfg.persona,
+                    beHistoryWindow = cfg.historyWindow,
+                    beBlobRoot = cfg.imagesDir,
+                    beDebugDefault = cfg.debug,
+                    beDefaultModel = cfg.llm.defaultName,
+                    beSessions = sessions,
+                    beTasks = tasks,
+                    beSandboxes = sandboxes,
+                    beBrowsers = browsers
+                  }
           runEff
             . runConcurrent
             . runLog "max" logger LogInfo
@@ -98,8 +109,9 @@ main = do
             . runWreq
             . runLLM cfg.llm
             . runReader Persisted -- default mode; !btw scopes Volatile on top
+            . runReader env
             . runAgent defaultLimits toolFactory tasks
-            $ runApp cfg applied sessions tasks sandboxes browsers eventQ imgQ fwdQ fileQ clientRef
+            $ runApp cfg applied eventQ imgQ fwdQ fileQ clientRef
 
 runApp ::
   ( IOE :> es,
@@ -111,21 +123,18 @@ runApp ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
-    Reader PersistMode :> es
+    Reader PersistMode :> es,
+    Reader BotEnv :> es
   ) =>
   AppConfig ->
   [String] ->
-  SessionRegistry ->
-  TaskRegistry ->
-  SandboxRegistry ->
-  BrowserRegistry ->
   TQueue Event ->
   ImageQueue ->
   ForwardQueue ->
   FileQueue ->
   TVar (Maybe Client) ->
   Eff es ()
-runApp cfg applied sessions tasks sandboxes browsers eventQ imgQ fwdQ fileQ clientRef =
+runApp cfg applied eventQ imgQ fwdQ fileQ clientRef =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -157,6 +166,6 @@ runApp cfg applied sessions tasks sandboxes browsers eventQ imgQ fwdQ fileQ clie
         link aFwd
         withAsync (fileWorker fileQ) $ \aFile -> do
           link aFile
-          withAsync (handleEvents cfg.persona cfg.historyWindow cfg.imagesDir cfg.debug sessions tasks sandboxes browsers cfg.llm.defaultName eventQ imgQ fwdQ fileQ) $ \aH -> do
+          withAsync (handleEvents eventQ imgQ fwdQ fileQ) $ \aH -> do
             link aH
             runServer cfg.server eventQ clientRef

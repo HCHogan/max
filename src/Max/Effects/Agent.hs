@@ -47,7 +47,6 @@ module Max.Effects.Agent
 where
 
 import Control.Concurrent (myThreadId, throwTo)
-import Control.Exception (bracket)
 import Control.Monad (unless)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
@@ -56,6 +55,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
+import Effectful.Exception (bracket)
 import Effectful.Log
 import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLM, ToolCall (..), chat)
 import Max.Effects.NapCat (NapCat, sendAction)
@@ -144,16 +144,15 @@ runAgent ::
   Eff (Agent : es) a ->
   Eff es a
 runAgent lims toolFactory taskReg = interpret $ \_ -> \case
-  AgentTurn dc profile thinking msgs ->
-    withRunInIO $ \run -> do
-      selfTid <- myThreadId
-      let cancel = throwTo selfTid TaskCancelled
-      bracket
-        (registerTask taskReg dc.dcGroupId "llm" cancel)
-        (unregisterTask taskReg)
-        ( \handle ->
-            run (runTools (toolFactory dc) (loop dc handle profile thinking msgs))
-        )
+  AgentTurn dc profile thinking msgs -> do
+    selfTid <- liftIO myThreadId
+    let cancel = throwTo selfTid TaskCancelled
+    bracket
+      (liftIO (registerTask taskReg dc.dcGroupId "llm" cancel))
+      (liftIO . unregisterTask taskReg)
+      ( \handle ->
+          runTools (toolFactory dc) (loop dc handle profile thinking msgs)
+      )
   where
     loop ::
       DispatchContext ->

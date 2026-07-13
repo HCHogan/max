@@ -11,7 +11,6 @@ module Max.Tools
   )
 where
 
-import Control.Exception (try)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Foldable (asum)
@@ -24,6 +23,7 @@ import Data.Time (defaultTimeLocale, formatTime, parseTimeM)
 import Database.PostgreSQL.Simple (SqlError (..))
 import Database.PostgreSQL.Simple.ToField qualified as PG
 import Effectful
+import Effectful.Exception (try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader)
@@ -281,7 +281,7 @@ runSearch f = do
           <> concatMap ((" AND " <>) . fst) conds
           <> " ORDER BY received_at DESC LIMIT ?"
       params = PG.toField f.mfGroupId : concatMap snd conds <> [PG.toField f.mfLimit]
-  eres <- withRunInIO $ \run -> try @SqlError (run (query (fromString sql) params))
+  eres <- try @SqlError (query (fromString sql) params)
   pure $ case eres of
     Left e -> Left ("search failed: " <> TE.decodeUtf8Lenient (sqlErrorMsg e))
     Right rows -> Right rows

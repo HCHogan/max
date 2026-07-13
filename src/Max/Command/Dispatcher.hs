@@ -18,18 +18,19 @@ import Data.Time (diffUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
+import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Types
 import Data.Int (Int64)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
 import Max.Effects.LLM (LLM, listProfiles)
-import Max.Browser.Registry (BrowserRegistry, destroyBrowsersForGroup)
-import Max.Sandbox.Registry (SandboxRegistry, destroySandboxesForGroup)
-import Max.Session (Session (..), SessionRegistry, updateSession)
+import Max.Browser.Registry (destroyBrowsersForGroup)
+import Max.Env (BotEnv (..))
+import Max.Sandbox.Registry (destroySandboxesForGroup)
+import Max.Session (Session (..), updateSession)
 import Max.Session qualified as Session
 import Max.Tasks
   ( TaskId (..),
     TaskInfo (..),
-    TaskRegistry,
     cancelTask,
     listTasks,
     pushBtwToLatest,
@@ -59,26 +60,23 @@ execute ::
   ( Log :> es,
     WithConnection :> es,
     LLM :> es,
+    Reader BotEnv :> es,
     IOE :> es
   ) =>
   TVar Session ->
-  SessionRegistry -> -- needed to swap the active-branch TVar on !switch
-  Text -> -- default LLM profile name (used when loading a branch row with NULL model)
-  Bool -> -- config-level debug default (AppConfig.debug); !debug overrides per session
-  TaskRegistry ->
-  SandboxRegistry ->
-  BrowserRegistry ->
   GroupId ->
   Maybe Int64 -> -- replyTarget message_id, if the command was a reply
   Command ->
   Eff es DispatchResult
-execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gid replyTarget cmd = case cmd of
+execute t gid replyTarget cmd = do
+ env :: BotEnv <- ask
+ case cmd of
   Btw note -> do
     -- Prefer injecting into a running task in this group.  Otherwise
     -- become the new !btw: an ephemeral one-shot LLM ask using
     -- current context.  The caller (Handler.dispatchCommand) sees
     -- 'EphemeralAsk' and spawns a 'withEphemeral'-wrapped dispatch.
-    injected <- liftIO (pushBtwToLatest taskReg gid note)
+    injected <- liftIO (pushBtwToLatest env.beTasks gid note)
     if injected
       then reply "✓ 侧记已注入运行中的任务"
       else case T.strip note of
@@ -118,7 +116,7 @@ execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gid replyT
   --
   DebugShow -> do
     s <- liftIO (Session.readSession t)
-    reply $ "debug: " <> renderDebugState debugDefault s.debugOverride
+    reply $ "debug: " <> renderDebugState env.beDebugDefault s.debugOverride
   DebugSet mb -> do
     updateSession t $ \s ->
       ( case mb of
@@ -132,7 +130,7 @@ execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gid replyT
       Just False -> "✓ debug 关 — 工具调用不再打印"
       Nothing ->
         "✓ debug 回到配置默认（当前默认"
-          <> (if debugDefault then "开" else "关")
+          <> (if env.beDebugDefault then "开" else "关")
           <> "）"
   --
   PersonaShow -> do
@@ -154,8 +152,8 @@ execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gid replyT
   ClearAll -> do
     now <- liftIO getCurrentTime
     updateSession t (\s -> (Session.clearAll now s, ()))
-    n <- liftIO (destroySandboxesForGroup sandboxReg gid)
-    nb <- liftIO (destroyBrowsersForGroup browserReg gid)
+    n <- liftIO (destroySandboxesForGroup env.beSandboxes gid)
+    nb <- liftIO (destroyBrowsersForGroup env.beBrowsers gid)
     logInfo "session: clear --all" $
       object ["sandboxes_destroyed" .= n, "browsers_destroyed" .= nb]
     let sboxSuffix
@@ -211,14 +209,14 @@ execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gid replyT
   --
   PsLocal -> do
     now <- liftIO getCurrentTime
-    tasks <- liftIO (listTasks taskReg (Just gid))
+    tasks <- liftIO (listTasks env.beTasks (Just gid))
     reply (formatTasks now Nothing tasks)
   PsAll -> do
     now <- liftIO getCurrentTime
-    tasks <- liftIO (listTasks taskReg Nothing)
+    tasks <- liftIO (listTasks env.beTasks Nothing)
     reply (formatTasks now (Just gid) tasks)
   Kill tid -> do
-    ok <- liftIO (cancelTask taskReg (TaskId tid))
+    ok <- liftIO (cancelTask env.beTasks (TaskId tid))
     reply $
       if ok
         then "✓ 已发取消信号给 " <> tid
@@ -230,7 +228,7 @@ execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gid replyT
     reply (formatBranches s.branch bs)
   BranchNew name -> do
     now <- liftIO getCurrentTime
-    res <- Session.forkAndSwitch reg gid name now
+    res <- Session.forkAndSwitch env.beSessions gid name now
     case res of
       Left err -> reply err
       Right () -> do
@@ -247,7 +245,7 @@ execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gid replyT
         logInfo "session: branch deleted" $ object ["branch" .= name]
         reply $ "✓ 已删除分支 " <> name
   Switch name -> do
-    res <- Session.switchToBranch reg gid name defaultModel
+    res <- Session.switchToBranch env.beSessions gid name env.beDefaultModel
     case res of
       Left err -> reply err
       Right () -> do

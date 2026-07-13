@@ -4,7 +4,6 @@ module Max.Handler
 where
 
 import Control.Concurrent.STM (TQueue, atomically, readTQueue)
-import Control.Exception (SomeException, fromException, try)
 import Control.Monad (unless, void)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (parseEither)
@@ -13,9 +12,10 @@ import Data.Maybe (listToMaybe)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
+import Effectful.Exception (SomeException, fromException, try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Effectful.Reader.Dynamic (Reader)
+import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Parser (parseCommand)
@@ -24,15 +24,14 @@ import Max.DB.Message (insertGroupMessage, insertOutbound)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
 import Max.Effects.LLM (LLM, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, callAction, sendAction)
+import Max.Env (BotEnv (..))
 import Max.Files (FileQueue, enqueueFiles)
 import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
-import Max.Browser.Registry (BrowserRegistry)
 import Max.Prompt (buildContext)
-import Max.Sandbox.Registry (SandboxRegistry)
-import Max.Session (Session (..), SessionRegistry, loadSession, readSession, updateSession)
-import Max.Tasks (TaskCancelled, TaskRegistry)
+import Max.Session (Session (..), loadSession, readSession, updateSession)
+import Max.Tasks (TaskCancelled)
 import Max.Util (catchSync)
 import OneBot.Action (Action (SendGroupMsg), Response (..))
 import OneBot.Event (Event (..), GroupMessage (..))
@@ -85,23 +84,15 @@ handleEvents ::
     Agent :> es,
     Concurrent :> es,
     Reader PersistMode :> es,
+    Reader BotEnv :> es,
     IOE :> es
   ) =>
-  T.Text -> -- default bot persona
-  Int -> -- history window size for ambient context
-  FilePath -> -- blob store root (AppConfig.imagesDir)
-  Bool -> -- config-level debug default (AppConfig.debug)
-  SessionRegistry ->
-  TaskRegistry ->
-  SandboxRegistry ->
-  BrowserRegistry ->
-  T.Text -> -- default LLM profile name (for new sessions)
   TQueue Event ->
   ImageQueue ->
   ForwardQueue ->
   FileQueue ->
   Eff es ()
-handleEvents persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel q imgQ fwdQ fileQ = loop
+handleEvents q imgQ fwdQ fileQ = loop
   where
     loop = do
       ev <- liftIO (atomically (readTQueue q))
@@ -116,12 +107,12 @@ handleEvents persona historyN blobRoot debugDefault reg taskReg sandboxReg brows
           liftIO (enqueueImages imgQ gm)
           liftIO (enqueueForwards fwdQ gm)
           enqueueFiles fileQ gm
-          onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel gm
+          onGroupMessage gm
       loop
 
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
 persist gm = do
-  eres <- withRunInIO $ \run -> try (run (insertGroupMessage gm))
+  eres <- try (insertGroupMessage gm)
   case eres :: Either SomeException () of
     Right () -> pure ()
     Left e ->
@@ -136,20 +127,12 @@ onGroupMessage ::
     Agent :> es,
     Concurrent :> es,
     Reader PersistMode :> es,
+    Reader BotEnv :> es,
     IOE :> es
   ) =>
-  T.Text ->
-  Int ->
-  FilePath ->
-  Bool -> -- debug default
-  SessionRegistry ->
-  TaskRegistry ->
-  SandboxRegistry ->
-  BrowserRegistry ->
-  T.Text ->
   GroupMessage ->
   Eff es ()
-onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel gm = do
+onGroupMessage gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
   logInfo "group message" $
@@ -173,9 +156,9 @@ onGroupMessage persona historyN blobRoot debugDefault reg taskReg sandboxReg bro
   case trig of
     TriggerNone -> pure ()
     TriggerPong -> sendPong gm
-    TriggerCommand body -> dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel gm body
+    TriggerCommand body -> dispatchCommand gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
-    TriggerLLM _ -> dispatchLLM persona historyN blobRoot debugDefault reg defaultModel gm
+    TriggerLLM _ -> dispatchLLM gm
 
 --------------------------------------------------------------------------------
 -- Commands.
@@ -188,29 +171,22 @@ dispatchCommand ::
     Agent :> es,
     Concurrent :> es,
     Reader PersistMode :> es,
+    Reader BotEnv :> es,
     IOE :> es
   ) =>
-  T.Text -> -- default bot persona
-  Int -> -- history window
-  FilePath -> -- blob store root
-  Bool -> -- debug default
-  SessionRegistry ->
-  TaskRegistry ->
-  SandboxRegistry ->
-  BrowserRegistry ->
-  T.Text ->
   GroupMessage ->
   T.Text ->
   Eff es ()
-dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg browserReg defaultModel gm body = localDomain "cmd" $ do
+dispatchCommand gm body = localDomain "cmd" $ do
   case parseCommand body of
     Left err -> replyText gm ("命令解析失败:\n" <> err)
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
     Right (Just cmd) -> do
-      t <- loadSession reg defaultModel gm.groupId
+      env :: BotEnv <- ask
+      t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
-      result <- CmdDispatch.execute t reg defaultModel debugDefault taskReg sandboxReg browserReg gm.groupId replyTarget cmd
+      result <- CmdDispatch.execute t gm.groupId replyTarget cmd
       case result of
         ReplyText reply -> replyText gm reply
         EphemeralAsk askBody -> do
@@ -226,7 +202,7 @@ dispatchCommand persona historyN blobRoot debugDefault reg taskReg sandboxReg br
                         SegText (" " <> askBody)
                       ]
                   }
-          withEphemeral $ dispatchLLM persona historyN blobRoot debugDefault reg defaultModel virtualGm
+          withEphemeral $ dispatchLLM virtualGm
 
 --------------------------------------------------------------------------------
 -- LLM dispatch.
@@ -255,17 +231,12 @@ dispatchLLM ::
     Agent :> es,
     Concurrent :> es,
     Reader PersistMode :> es,
+    Reader BotEnv :> es,
     IOE :> es
   ) =>
-  T.Text ->
-  Int ->
-  FilePath ->
-  Bool -> -- debug default
-  SessionRegistry ->
-  T.Text ->
   GroupMessage ->
   Eff es ()
-dispatchLLM defaultPersona historyN blobRoot debugDefault reg defaultModel gm = void $ async $
+dispatchLLM gm = void $ async $
   localDomain "llm" $ do
     let UserId fromRaw = gm.userId
         GroupId gidRaw = gm.groupId
@@ -287,11 +258,12 @@ dispatchLLM defaultPersona historyN blobRoot debugDefault reg defaultModel gm = 
             object ["error" .= T.pack (show (e :: SomeException))]
   where
     work = do
-      t <- loadSession reg defaultModel gm.groupId
+      env :: BotEnv <- ask
+      t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
       multimodal <- isProfileMultimodal s.model
-      (ctx, drained) <- buildContext defaultPersona historyN multimodal blobRoot s gm
-      let debugEff = maybe debugDefault id s.debugOverride
+      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot s gm
+      let debugEff = maybe env.beDebugDefault id s.debugOverride
           dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal
       result <- agentTurn dc s.model s.thinkingOverride ctx
       -- The outbound message already @-mentions the sender via 'SegAt'

@@ -57,6 +57,7 @@ library
         Max.Effects.LLM
         Max.Effects.NapCat
         Max.Effects.Tools
+        Max.Env
         Max.Files
         Max.Forward
         Max.Handler
