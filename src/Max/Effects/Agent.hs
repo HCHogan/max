@@ -92,8 +92,9 @@ data AgentLimits = AgentLimits
   }
   deriving stock (Show)
 
--- | Sane starting point: 40 turns covers a few rounds of tool use,
--- a couple of @say@ status updates, and a final summary.
+-- | Sane starting point: 200 turns covers long multi-round sandbox
+-- sessions with @say@ status updates interleaved, while still capping
+-- runaway loops.  Hard cap to keep cost bounded.
 defaultLimits :: AgentLimits
 defaultLimits = AgentLimits {maxTurns = 200}
 
@@ -178,20 +179,10 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
               let btw = MsgUser ("[侧记]: " <> T.intercalate " | " xs)
                in (msgs <> [btw], appended <> [btw])
       if n >= lims.maxTurns
-        then
-          pure
-            AgentResult
-              { reply =
-                  "(达到最大轮次 "
-                    <> T.pack (show lims.maxTurns)
-                    <> "，没收敛到最终回答)",
-                appended = appended',
-                turnsUsed = n,
-                aborted = Just "max-turns"
-              }
+        then finalAnswer n appended' profile thinking msgs'
         else do
           specs <- listToolSpecs
-          eres <- chat profile thinking msgs' specs
+          eres <- chat profile thinking (capToolResults toolResultBudget msgs') specs
           case eres of
             Left err ->
               pure
@@ -226,6 +217,40 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
               toolMsgs <- traverse executeOne tcs
               let appended'' = appended' <> [asst] <> toolMsgs
               go dc h (n + 1) appended'' profile thinking (msgs' <> [asst] <> toolMsgs)
+
+    -- Hit the turn cap: make one final tool-free chat call so the user
+    -- gets a real answer built from whatever the loop already gathered,
+    -- rather than a bare "max turns" error.  Empty tool specs force a
+    -- content response; a synthetic note tells the model to wrap up.
+    finalAnswer ::
+      Int ->
+      [ChatMessage] ->
+      Text ->
+      Maybe Bool ->
+      [ChatMessage] ->
+      Eff (Tools : es) AgentResult
+    finalAnswer n appended profile thinking msgs = do
+      logInfo "agent: max turns reached, forcing final answer" $
+        object ["turns" .= n]
+      let capNote =
+            MsgUser
+              "[系统] 工具调用轮次已用满，别再调用任何工具了。\
+              \直接根据目前已经掌握的信息，给用户一个最终回复。"
+          fallback =
+            "(达到最大轮次 " <> T.pack (show lims.maxTurns) <> "，没收敛到最终回答)"
+      eres <-
+        chat profile thinking (capToolResults toolResultBudget (msgs <> [capNote])) []
+      let (text, ab) = case eres of
+            Right (ContentResp t) | not (T.null (T.strip t)) -> (t, Just "max-turns")
+            Right _ -> (fallback, Just "max-turns")
+            Left err -> (fallback, Just err)
+      pure
+        AgentResult
+          { reply = text,
+            appended = appended <> [capNote, MsgAssistant text],
+            turnsUsed = n + 1,
+            aborted = ab
+          }
 
     -- Post one compact status line per tool call to the group so
     -- members can see what the bot is doing mid-task.  Only when the
@@ -279,6 +304,35 @@ previewJson n v =
    in if T.length collapsed <= n
         then collapsed
         else T.take n collapsed <> "…"
+
+-- | Total tool-result content, in characters, kept at full size before
+-- older results start getting trimmed.  Individual tools already cap
+-- their own output (~16 KiB), but a long multi-round sandbox loop can
+-- still stack dozens of those; this bounds the whole conversation.
+toolResultBudget :: Int
+toolResultBudget = 60000
+
+-- | Cap the combined size of tool-result content sent to the model.
+-- Walks newest-first: recent 'MsgTool' results stay full until the
+-- running total passes @budget@, then older ones are shrunk to a short
+-- stub.  Every 'MsgTool' is preserved (so it still pairs with its
+-- assistant @tool_call@ — dropping one would make the request invalid);
+-- only the text content of the oldest results is trimmed.
+capToolResults :: Int -> [ChatMessage] -> [ChatMessage]
+capToolResults budget = reverse . go budget . reverse
+  where
+    go _ [] = []
+    go rem_ (m : rest) = case m of
+      MsgTool cid content
+        | rem_ <= 0 -> MsgTool cid (stub content) : go 0 rest
+        | otherwise ->
+            let len = T.length content
+             in if len <= rem_
+                  then m : go (rem_ - len) rest
+                  else MsgTool cid (T.take rem_ content <> elision) : go 0 rest
+      _ -> m : go rem_ rest
+    stub content = T.take 300 content <> elision
+    elision = "\n…[旧工具结果已截断以节省上下文]"
 
 agentTurn :: Agent :> es => DispatchContext -> Text -> Maybe Bool -> [ChatMessage] -> Eff es AgentResult
 agentTurn dc profile thinking msgs = send (AgentTurn dc profile thinking msgs)

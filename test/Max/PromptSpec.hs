@@ -92,7 +92,8 @@ baseInputs =
       pinnedItems = [],
       replyCtx = Nothing,
       multimodal = False,
-      images = []
+      images = [],
+      now = timeAt 12
     }
 
 --------------------------------------------------------------------------------
@@ -130,6 +131,13 @@ spec = do
       let inp = baseInputs {session = emptySession {persona = Just "猫娘 mode"}}
           (sys, _, _) = splitMessages (fst (renderContext inp))
       sys `shouldSatisfy` ("猫娘 mode" `T.isPrefixOf`)
+
+    it "includes an environment block with date, group, and model" $ do
+      let (sys, _, _) = splitMessages (fst (renderContext baseInputs))
+      sys `shouldSatisfy` ("[当前环境]" `T.isInfixOf`)
+      sys `shouldSatisfy` ("2026-06-05" `T.isInfixOf`)
+      sys `shouldSatisfy` ("7777" `T.isInfixOf`)
+      sys `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
 
   describe "renderContext mention history" $ do
     it "renders bot rows as MsgAssistant, member rows as MsgUser" $ do

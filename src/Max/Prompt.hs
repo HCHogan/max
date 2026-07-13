@@ -23,7 +23,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Database.PostgreSQL.Simple (In (..), Only (..))
 import Effectful
 import Effectful.Log (Log, logAttention, object, (.=))
@@ -75,7 +75,11 @@ data PromptInputs = PromptInputs
     -- last).  Populated only when 'multimodal' AND the image worker
     -- has finished fetching; otherwise empty and images remain as
     -- @[image]@ markers in the rendered text.
-    images :: ![PromptImage]
+    images :: ![PromptImage],
+    -- | Wall-clock time this turn is being built.  Feeds the system
+    -- prompt's environment block so the model knows the current
+    -- date/time — context lines only carry HH:MM, no date.
+    now :: !UTCTime
   }
 
 -- | One inline image for the final user message: a data URL plus a
@@ -91,10 +95,12 @@ data PromptImage = PromptImage
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default) on top of a fixed format guide describing the
 -- marker conventions used in the rendered context.
-systemPrompt :: Bool -> Text -> Text
-systemPrompt multimodal' persona =
+systemPrompt :: Bool -> Text -> Text -> Text
+systemPrompt multimodal' envText persona =
   T.unlines
     [ persona,
+      "",
+      envText,
       "",
       "回复风格（重要）：",
       "  - 你在 QQ 群里跟人说话，不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
@@ -177,6 +183,7 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
                   <> sortOn (Down . (.receivedAt)) (ambient' <> mention')
         loadPromptImages blobRoot selfId' mid candidates
       else pure []
+  now' <- liftIO getCurrentTime
   pure $
     renderContext
       PromptInputs
@@ -188,7 +195,8 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
           pinnedItems = pinnedItems',
           replyCtx = replyCtx',
           multimodal = multimodal',
-          images = images'
+          images = images',
+          now = now'
         }
 
 -- | Poll until the image worker has recorded all of the trigger's
@@ -329,7 +337,15 @@ loadPromptImages blobRoot selfId' mid candidates = do
 renderContext :: PromptInputs -> ([ChatMessage], [Text])
 renderContext pi' =
   let UserId selfId' = pi'.triggerMessage.selfId
+      GroupId gidRaw = pi'.triggerMessage.groupId
       effectivePersona = fromMaybe pi'.defaultPersona pi'.session.persona
+      envText =
+        T.intercalate "\n" $
+          [ "[当前环境]",
+            "  现在：" <> formatEnvTime pi'.now,
+            "  群号：" <> T.pack (show gidRaw),
+            "  当前模型：" <> pi'.session.model
+          ]
       mentionIds = [h.messageId | h <- pi'.mention]
       ambientNoDup =
         [a | a <- pi'.ambient, a.messageId `notElem` mentionIds]
@@ -359,7 +375,7 @@ renderContext pi' =
               : ImageDataUrl i0.piDataUrl
               : concat [[TextBlock i.piLabel, ImageDataUrl i.piDataUrl] | i <- rest]
       messages =
-        [MsgSystem (systemPrompt pi'.multimodal effectivePersona)]
+        [MsgSystem (systemPrompt pi'.multimodal envText effectivePersona)]
           <> mentionMessages
           <> [userMessage]
    in (messages, pi'.session.btwNotes)
@@ -462,6 +478,27 @@ displayName selfId' uid mNick
 
 formatHM :: UTCTime -> Text
 formatHM = T.pack . formatTime defaultTimeLocale "%H:%M"
+
+-- | Full date + Chinese weekday + time for the environment block, e.g.
+-- @2026-07-13（周一） 15:42@.  Formatted off the raw 'UTCTime', same as
+-- the @[HH:MM]@ context lines, so the model can line them up directly.
+formatEnvTime :: UTCTime -> Text
+formatEnvTime t =
+  T.pack (formatTime defaultTimeLocale "%Y-%m-%d" t)
+    <> "（"
+    <> weekdayCN t
+    <> "）"
+    <> T.pack (formatTime defaultTimeLocale " %H:%M" t)
+
+weekdayCN :: UTCTime -> Text
+weekdayCN t = case formatTime defaultTimeLocale "%u" t of
+  "1" -> "周一"
+  "2" -> "周二"
+  "3" -> "周三"
+  "4" -> "周四"
+  "5" -> "周五"
+  "6" -> "周六"
+  _ -> "周日"
 
 oneLine :: Text -> Text
 oneLine = T.replace "\n" " ⏎ "
