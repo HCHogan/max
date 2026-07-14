@@ -58,11 +58,14 @@ library
         Max.Effects.LLM
         Max.Effects.NapCat
         Max.Effects.Tools
+        Max.Embedder
+        Max.Embedding
         Max.Env
         Max.Files
         Max.Forward
         Max.Handler
         Max.Images
+        Max.MemoryExtract
         Max.Persistence
         Max.Prompt
         Max.Sandbox.Docker
@@ -144,6 +147,7 @@ test-suite max-test
         Max.Effects.LLMSpec
         Max.MCP.ClientSpec
         Max.PersistenceSpec
+        Max.MemoryExtractSpec
         Max.PromptSpec
     build-depends:
         , aeson           >= 2.2  && < 2.3

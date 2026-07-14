@@ -36,5 +36,7 @@ data BotEnv = BotEnv
     beSessions :: !SessionRegistry,
     beTasks :: !TaskRegistry,
     beSandboxes :: !SandboxRegistry,
-    beBrowsers :: !BrowserRegistry
+    beBrowsers :: !BrowserRegistry,
+    -- | Profile for post-dispatch memory extraction ('Nothing' = off).
+    beMemoryExtract :: !(Maybe Text)
   }

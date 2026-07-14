@@ -26,6 +26,7 @@ module Max.Tools.Memory
   ( memoryToolsFor,
     maxMemoriesPerScope,
     maxMemoryChars,
+    checkContent,
   )
 where
 
@@ -36,7 +37,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader)
 import Max.DB.Memory
   ( MemoryItem (..),
@@ -50,6 +51,7 @@ import Max.DB.Memory
   )
 import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.Tools (Tool (..))
+import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Persistence (PersistMode, isEphemeral)
 import OneBot.Types (GroupId (..), UserId (..))
 
@@ -65,14 +67,16 @@ maxMemoryChars = 300
 
 memoryToolsFor ::
   (WithConnection :> es, Reader PersistMode :> es, Log :> es, IOE :> es) =>
+  Maybe EmbedClient ->
   DispatchContext ->
   [Tool es]
-memoryToolsFor dc =
+memoryToolsFor mEmbed dc =
   [ saveTool dc,
     updateTool,
     forgetTool,
     listTool dc
   ]
+    <> [searchTool ec | Just ec <- [mEmbed]]
 
 --------------------------------------------------------------------------------
 -- memory_save
@@ -287,6 +291,69 @@ listTool dc =
 
 memorySummary :: MemoryItem -> Value
 memorySummary m = object ["id" .= m.memId, "content" .= m.memContent]
+
+--------------------------------------------------------------------------------
+-- memory_search (semantic; only registered when embedding is configured)
+
+searchTool ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  EmbedClient ->
+  Tool es
+searchTool ec =
+  Tool
+    { toolName = "memory_search",
+      toolDescription =
+        T.unwords
+          [ "跨【所有群、所有人】的长期记忆做语义搜索。当你想知道",
+            "\"谁擅长X\"、\"哪个群在做Y\" 这类跨 scope 的问题时用它；",
+            "本群和当前发言者的记忆已在系统提示里，别用它重复查。"
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "query"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("自然语言描述要找的内容。" :: Text)
+                      ],
+                  "limit"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("最多返回条数（默认 8，上限 20）。" :: Text),
+                        "default" .= (8 :: Int)
+                      ]
+                ],
+            "required" .= (["query"] :: [Text])
+          ],
+      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+        Left e -> pure $ Left ("bad args: " <> T.pack e)
+        Right (q, lim) -> do
+          evec <- liftIO (embedTexts ec [q])
+          case evec of
+            Left err -> pure $ Left ("embedding failed: " <> err)
+            Right [vec] -> do
+              rows <-
+                query
+                  "SELECT id, scope, scope_id, content, updated_at \
+                  \  FROM memories WHERE embedding IS NOT NULL \
+                  \  ORDER BY embedding <=> ?::vector LIMIT ?"
+                  (renderVector vec, min 20 (max 1 lim))
+              pure $ Right (toJSON (map fullSummary (rows :: [MemoryItem])))
+            Right _ -> pure $ Left "embedding failed: unexpected result shape"
+    }
+  where
+    parseArgs :: Object -> Parser (Text, Int)
+    parseArgs o = (,) <$> o .: "query" <*> (maybe 8 id <$> o .:? "limit")
+
+    fullSummary m =
+      object
+        [ "id" .= m.memId,
+          "scope" .= m.memScope,
+          "scope_id" .= m.memScopeId,
+          "content" .= m.memContent
+        ]
 
 --------------------------------------------------------------------------------
 -- Shared guards.

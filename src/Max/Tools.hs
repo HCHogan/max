@@ -32,6 +32,7 @@ import Max.DB.Message (insertOutbound)
 import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool (..))
+import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Persistence (PersistMode, isEphemeral)
 import OneBot.Action (Action (SendGroupMsg), Response (..))
 import OneBot.Segment (Segment (..))
@@ -44,13 +45,14 @@ builtinsFor ::
     Log :> es,
     IOE :> es
   ) =>
+  Maybe EmbedClient ->
   DispatchContext ->
   [Tool es]
 -- WithConnection + IOE constraints already in scope above; sayTool
 -- needs them for the insertOutbound persistence path.
-builtinsFor dc =
+builtinsFor mEmbed dc =
   [ getMessageByIdTool,
-    searchMessagesTool dc.dcGroupId,
+    searchMessagesTool mEmbed dc.dcGroupId,
     sayTool dc
   ]
 
@@ -94,12 +96,12 @@ getMessageByIdTool =
 --------------------------------------------------------------------------------
 -- search_messages
 
-searchMessagesTool :: (WithConnection :> es, IOE :> es) => GroupId -> Tool es
-searchMessagesTool (GroupId gid) =
+searchMessagesTool :: (WithConnection :> es, IOE :> es) => Maybe EmbedClient -> GroupId -> Tool es
+searchMessagesTool mEmbed (GroupId gid) =
   Tool
     { toolName = "search_messages",
       toolDescription =
-        T.unwords
+        T.unwords $
           [ "Search the bot's message history.  All filters are optional and",
             "AND-combined: 'query' is a case-insensitive literal substring",
             "(mixed CJK + ASCII works, e.g. 'haskell' matches '我在学haskell');",
@@ -114,7 +116,15 @@ searchMessagesTool (GroupId gid) =
             "sender + after/before, no query).  Returns up to 'limit'",
             "most-recent matches as message_id, sender, time, and a snippet.",
             "Use for questions like 我们之前讨论过X吗 or 上次谁说了Y."
-          ],
+          ]
+            <> concat
+              [ [ "'semantic' searches by MEANING instead of exact wording",
+                  "(找\"讨论过部署方案\"这类不知道原话怎么说的)；results come",
+                  "back most-similar-first instead of newest-first, and it",
+                  "combines with all the other filters."
+                ]
+              | Just _ <- [mEmbed]
+              ],
       toolSchema =
         object
           [ "type" .= ("object" :: Text),
@@ -150,6 +160,11 @@ searchMessagesTool (GroupId gid) =
                       [ "type" .= ("string" :: Text),
                         "description" .= ("Only messages at or before this time: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (UTC)." :: Text)
                       ],
+                  "semantic"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("Natural-language meaning search; needs no exact wording. Requires embedding to be configured." :: Text)
+                      ],
                   "group_id"
                     .= object
                       [ "type" .= ("integer" :: Text),
@@ -165,9 +180,19 @@ searchMessagesTool (GroupId gid) =
           ],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right sa -> case toFilter sa of
-          Left e -> pure (Left e)
-          Right f -> fmap (toJSON . map historyItemSummary) <$> runSearch f
+        Right sa ->
+          let run f mVec = fmap (toJSON . map historyItemSummary) <$> runSearch f mVec
+           in case toFilter sa of
+                Left e -> pure (Left e)
+                Right f -> case (sa.saSemantic, mEmbed) of
+                  (Nothing, _) -> run f Nothing
+                  (Just _, Nothing) -> pure (Left "semantic 搜索未启用（没有配置 embedding）")
+                  (Just q, Just ec) -> do
+                    evec <- liftIO (embedTexts ec [q])
+                    case evec of
+                      Left err -> pure (Left ("embedding failed: " <> err))
+                      Right [v] -> run f (Just (renderVector v))
+                      Right _ -> pure (Left "embedding failed: unexpected result shape")
     }
   where
     parseArgs :: Object -> Parser SearchArgs
@@ -179,6 +204,7 @@ searchMessagesTool (GroupId gid) =
         <*> o .:? "sender"
         <*> o .:? "after"
         <*> o .:? "before"
+        <*> o .:? "semantic"
         <*> o .:? "group_id"
         <*> (maybe 10 id <$> o .:? "limit")
 
@@ -206,6 +232,7 @@ data SearchArgs = SearchArgs
     saSender :: !(Maybe Text),
     saAfter :: !(Maybe Text),
     saBefore :: !(Maybe Text),
+    saSemantic :: !(Maybe Text),
     saGroupId :: !(Maybe Int64),
     saLimit :: !Int
   }
@@ -257,8 +284,11 @@ parseTimeArg t =
 runSearch ::
   (WithConnection :> es, IOE :> es) =>
   MessageFilter ->
+  -- | Rendered query vector — 'Just' switches ordering from
+  -- newest-first to most-similar-first.
+  Maybe Text ->
   Eff es (Either Text [HistoryItem])
-runSearch f = do
+runSearch f mVec = do
   let conds :: [(String, [PG.Action])]
       conds =
         concat
@@ -272,6 +302,12 @@ runSearch f = do
             [("received_at >= ?", [PG.toField t]) | Just t <- [f.mfAfter]],
             [("received_at <= ?", [PG.toField t]) | Just t <- [f.mfBefore]]
           ]
+      (orderSql, orderParams) = case mVec of
+        Just v ->
+          ( " AND embedding IS NOT NULL ORDER BY embedding <=> ?::vector LIMIT ?",
+            [PG.toField v, PG.toField f.mfLimit]
+          )
+        Nothing -> (" ORDER BY received_at DESC LIMIT ?", [PG.toField f.mfLimit])
       sql =
         "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
         \  FROM messages \
@@ -279,8 +315,8 @@ runSearch f = do
         \    AND NOT is_synthetic \
         \    AND forwarded_in_message_id IS NULL"
           <> concatMap ((" AND " <>) . fst) conds
-          <> " ORDER BY received_at DESC LIMIT ?"
-      params = PG.toField f.mfGroupId : concatMap snd conds <> [PG.toField f.mfLimit]
+          <> orderSql
+      params = PG.toField f.mfGroupId : concatMap snd conds <> orderParams
   eres <- try @SqlError (query (fromString sql) params)
   pure $ case eres of
     Left e -> Left ("search failed: " <> TE.decodeUtf8Lenient (sqlErrorMsg e))

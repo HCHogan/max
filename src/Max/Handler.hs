@@ -26,6 +26,7 @@ import Max.Effects.LLM (LLM, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, callAction, sendAction)
 import Max.Env (BotEnv (..))
 import Max.Files (FileQueue, enqueueFiles)
+import Max.MemoryExtract (extractMemories)
 import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
@@ -301,6 +302,17 @@ dispatchLLM gm = void $ async $
             "btw_drained" .= length drained,
             "aborted" .= result.aborted
           ]
+      -- Post-reply memory extraction: the user already has their
+      -- answer, so this costs them nothing; ephemeral (!btw) turns
+      -- must not leave traces.  A crashed extraction only logs.
+      case env.beMemoryExtract of
+        Just prof
+          | not ephemeral ->
+              extractMemories prof gm (ctx <> result.appended)
+                `catchSync` \e ->
+                  logAttention "memx: crashed" $
+                    object ["error" .= T.pack (show e)]
+        _ -> pure ()
 
 --------------------------------------------------------------------------------
 -- Reply helper.

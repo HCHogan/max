@@ -59,6 +59,7 @@ import Data.Text qualified as T
 import Data.Version (makeVersion)
 import Max.DB.Connection (DbConfig (..))
 import Max.Effects.LLM (LLMProfile (..), LLMRegistry (..), Protocol (..), parseProtocol)
+import Max.Embedding (EmbeddingConfig (..))
 import Max.Tools.Search (SearchConfig (..))
 import OneBot.Server (ServerConfig (..))
 import OptEnvConf
@@ -80,6 +81,12 @@ data AppConfig = AppConfig
     -- | Web-search backend, if configured.  When 'Nothing' the
     -- @web_search@ tool is not registered (model doesn't see it).
     search :: !(Maybe SearchConfig),
+    -- | LLM profile for post-dispatch memory extraction; 'Nothing'
+    -- disables the extractor (agent-side memory tools still work).
+    memoryExtractProfile :: !(Maybe Text),
+    -- | Embeddings endpoint; presence enables the embed worker and
+    -- the semantic-search surfaces (search_messages, memory_search).
+    embedding :: !(Maybe EmbeddingConfig),
     -- | Default for debug mode: when effective debug is on, the
     -- agent loop posts each tool call to the group.  Per-group
     -- override via !debug on/off.
@@ -164,6 +171,19 @@ appConfigParser =
           valueWithShown (const "(built-in Chinese default)") defaultPersona
         ]
     search <- subConfig "search" searchParser
+    memoryExtractProfile <-
+      subConfig "memory" $
+        optional $
+          setting
+            [ help "LLM profile for post-dispatch memory extraction (presence enables it)",
+              reader str,
+              option,
+              long "memory-extract-profile",
+              env "MAX_MEMORY_EXTRACT_PROFILE",
+              conf "extract_profile",
+              metavar "PROFILE"
+            ]
+    embedding <- subConfig "embedding" embeddingParser
     debug <-
       yesNoSwitch
         [ help "Default debug mode: announce tool calls in the group (per-group override via !debug)",
@@ -316,6 +336,69 @@ searchParser = do
               { scTavilyApiKey = key,
                 scDefaultMaxResults = maxResults,
                 scTimeoutSeconds = timeoutSecs
+              }
+    _ -> Nothing
+
+--------------------------------------------------------------------------------
+-- Embeddings.
+
+-- | Enabled iff both @base_url@ and @model@ are present — an API key
+-- alone means nothing, and local servers (Ollama) need no key at all.
+embeddingParser :: Parser (Maybe EmbeddingConfig)
+embeddingParser = do
+  mUrl <-
+    optional $
+      setting
+        [ help "OpenAI-compatible embeddings base URL, e.g. http://127.0.0.1:11434/v1 (enables vector search)",
+          reader str,
+          option,
+          long "embedding-base-url",
+          env "MAX_EMBEDDING_BASE_URL",
+          conf "base_url",
+          metavar "URL"
+        ]
+  mKey <-
+    optional $
+      setting
+        [ help "Embeddings API key (omit for local servers)",
+          reader str,
+          option,
+          long "embedding-api-key",
+          env "MAX_EMBEDDING_API_KEY",
+          conf "api_key",
+          metavar "KEY"
+        ]
+  mModel <-
+    optional $
+      setting
+        [ help "Embedding model name, e.g. bge-m3",
+          reader str,
+          option,
+          long "embedding-model",
+          env "MAX_EMBEDDING_MODEL",
+          conf "model",
+          metavar "MODEL"
+        ]
+  timeoutSecs <-
+    setting
+      [ help "Embeddings HTTP timeout seconds",
+        reader auto,
+        option,
+        long "embedding-timeout-seconds",
+        env "MAX_EMBEDDING_TIMEOUT_SECONDS",
+        conf "timeout_seconds",
+        metavar "N",
+        value 60
+      ]
+  pure $ case (mUrl, mModel) of
+    (Just u, Just m)
+      | not (T.null u) ->
+          Just
+            EmbeddingConfig
+              { ecBaseUrl = u,
+                ecApiKey = mKey,
+                ecModel = m,
+                ecTimeoutSeconds = timeoutSecs
               }
     _ -> Nothing
 

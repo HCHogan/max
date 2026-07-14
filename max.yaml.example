@@ -111,3 +111,27 @@ llm:
 #   tavily_api_key: "tvly-..."
 #   max_results: 5
 #   timeout_seconds: 30
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Long-term memory extraction.  When extract_profile names an LLM profile,
+# every persisted dispatch is followed by one cheap extraction call that
+# distills stable facts into the memories table (ADD/UPDATE/DELETE).
+# Without it, only the agent's own memory_* tool calls write memories.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# memory:
+#   extract_profile: deepseek-flash
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Embeddings (vector search).  Any OpenAI-compatible /embeddings endpoint;
+# presence of base_url + model enables the background embed worker plus
+# semantic search in search_messages and the memory_search tool.
+# Local via Ollama works fine:  ollama pull bge-m3  → base_url
+# http://127.0.0.1:11434/v1, model bge-m3, no api_key.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# embedding:
+#   base_url: "http://127.0.0.1:11434/v1"
+#   model: bge-m3
+#   # api_key: "sk-..."       # cloud endpoints only
+#   # timeout_seconds: 60
