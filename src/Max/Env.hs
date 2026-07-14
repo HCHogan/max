@@ -17,6 +17,7 @@ where
 
 import Data.Text (Text)
 import Max.Browser.Registry (BrowserRegistry)
+import Max.Embedding (EmbedClient)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
 import Max.Tasks (TaskRegistry)
@@ -38,5 +39,8 @@ data BotEnv = BotEnv
     beSandboxes :: !SandboxRegistry,
     beBrowsers :: !BrowserRegistry,
     -- | Profile for post-dispatch memory extraction ('Nothing' = off).
-    beMemoryExtract :: !(Maybe Text)
+    beMemoryExtract :: !(Maybe Text),
+    -- | Embeddings client when configured — the extractor uses it for
+    -- semantic dedup of new memories.
+    beEmbed :: !(Maybe EmbedClient)
   }

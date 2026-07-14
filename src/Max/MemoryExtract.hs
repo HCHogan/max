@@ -19,15 +19,15 @@ module Max.MemoryExtract
 where
 
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.ByteString.Lazy qualified as LBS
+import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Memory
   ( MemoryItem (..),
     MemoryScope (..),
@@ -36,9 +36,11 @@ import Max.DB.Memory
     insertMemory,
     listMemories,
     parseScope,
+    scopeText,
     updateMemory,
   )
 import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, chat)
+import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Tools.Memory (checkContent, maxMemoriesPerScope)
 import OneBot.Event (GroupMessage (..))
 import OneBot.Types (GroupId (..), UserId (..))
@@ -63,10 +65,11 @@ instance FromJSON ExtractOp where
 extractMemories ::
   (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Text -> -- extractor profile name
+  Maybe EmbedClient -> -- for semantic dedup of adds
   GroupMessage -> -- the trigger (group + sender scope keys)
   [ChatMessage] -> -- the dispatch conversation (context + appended)
   Eff es ()
-extractMemories profile gm conversation = localDomain "memx" $ do
+extractMemories profile mEmbed gm conversation = localDomain "memx" $ do
   let GroupId gid = gm.groupId
       UserId uid = gm.userId
   groupMems <- listMemories ScopeGroup gid
@@ -86,7 +89,7 @@ extractMemories profile gm conversation = localDomain "memx" $ do
         logAttention "memx: bad ops json" $
           object ["error" .= err, "raw" .= T.take 400 raw]
       Right [] -> logInfo "memx: no ops" $ object []
-      Right ops -> mapM_ (applyOp gid uid) (take 6 ops)
+      Right ops -> mapM_ (applyOp mEmbed gid uid) (take 6 ops)
 
 -- | Parse the model's output into ops: strip code fences, find the
 -- first @[@ .. last @]@, decode.
@@ -108,11 +111,12 @@ parseOps raw =
 
 applyOp ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
+  Maybe EmbedClient ->
   Int64 -> -- group id
   Int64 -> -- trigger user id
   ExtractOp ->
   Eff es ()
-applyOp gid triggerUid = \case
+applyOp mEmbed gid triggerUid = \case
   OpAdd scopeRaw mUid content -> case parseScope scopeRaw of
     Nothing -> logAttention "memx: bad scope" $ object ["scope" .= scopeRaw]
     Just scope -> case checkContent content of
@@ -121,23 +125,88 @@ applyOp gid triggerUid = \case
         let sid = case scope of
               ScopeGroup -> gid
               ScopeUser -> maybe triggerUid id mUid
-        n <- countMemories scope sid
-        if n >= maxMemoriesPerScope
-          then
-            logAttention "memx: scope full, add skipped" $
-              object ["scope" .= scopeRaw, "scope_id" .= sid]
-          else do
-            mid <- insertMemory scope sid c (Just gid)
-            logInfo "memx: added" $
-              object ["id" .= mid, "scope" .= scopeRaw, "scope_id" .= sid, "content" .= c]
+        -- The prompt says "don't re-add near-duplicates", but small
+        -- extractor models re-add anyway (observed on day one).
+        -- Enforce in code: embed the candidate and skip when an
+        -- existing memory in the same scope sits within the distance
+        -- threshold.  pg_trgm can't do this — the DB is C-locale, so
+        -- CJK text yields no trigrams at all (similarity() = 0).
+        (mVec, mDup) <- findNearDup scope sid c
+        case mDup of
+          Just (did, dist) ->
+            logInfo "memx: near-duplicate skipped" $
+              object ["existing_id" .= did, "distance" .= dist, "content" .= c]
+          Nothing -> do
+            n <- countMemories scope sid
+            if n >= maxMemoriesPerScope
+              then
+                logAttention "memx: scope full, add skipped" $
+                  object ["scope" .= scopeRaw, "scope_id" .= sid]
+              else do
+                mid <- insertMemory scope sid c (Just gid)
+                -- Reuse the dedup vector so the new row is instantly
+                -- searchable / dedupable (no worker lag window).
+                case mVec of
+                  Just v -> do
+                    _ <-
+                      execute
+                        "UPDATE memories SET embedding = ?::vector WHERE id = ?"
+                        (v, mid)
+                    pure ()
+                  Nothing -> pure ()
+                logInfo "memx: added" $
+                  object ["id" .= mid, "scope" .= scopeRaw, "scope_id" .= sid, "content" .= c]
   OpUpdate mid content -> case checkContent content of
     Left err -> logAttention "memx: bad content" $ object ["error" .= err]
     Right c -> do
       ok <- updateMemory mid c
+      -- Content changed → stale vector; NULL it so the embed worker
+      -- refreshes on its next pass.
+      _ <- execute "UPDATE memories SET embedding = NULL WHERE id = ?" (Only mid)
       logInfo "memx: updated" $ object ["id" .= mid, "ok" .= ok, "content" .= c]
   OpDelete mid -> do
     ok <- deleteMemory mid
     logInfo "memx: deleted" $ object ["id" .= mid, "ok" .= ok]
+  where
+    -- | Returns (embedding of the candidate — reusable for the insert,
+    -- nearest same-scope duplicate within 'dupDistance' if any).
+    -- Fail-open: an embedding hiccup must not block memory writes; the
+    -- fallback is exact-content match.
+    findNearDup scope sid c = case mEmbed of
+      Nothing -> do
+        rows <-
+          query
+            "SELECT id FROM memories WHERE scope = ? AND scope_id = ? AND content = ? LIMIT 1"
+            (scopeText scope, sid, c)
+        let hit = case rows :: [Only Int64] of
+              (Only did : _) -> Just (did, 0 :: Double)
+              [] -> Nothing
+        pure (Nothing, hit)
+      Just ec -> do
+        evec <- liftIO (embedTexts ec [c])
+        case evec of
+          Left err -> do
+            logAttention "memx: dedup embed failed (fail-open)" $ object ["error" .= err]
+            pure (Nothing, Nothing)
+          Right [v] -> do
+            let vt = renderVector v
+            rows <-
+              query
+                "SELECT id, embedding <=> ?::vector AS dist FROM memories \
+                \ WHERE scope = ? AND scope_id = ? AND embedding IS NOT NULL \
+                \ ORDER BY dist LIMIT 1"
+                (vt, scopeText scope, sid)
+            let hit = case rows :: [(Int64, Double)] of
+                  ((did, dist) : _) | dist < dupDistance -> Just (did, dist)
+                  _ -> Nothing
+            pure (Just vt, hit)
+          Right _ -> pure (Nothing, Nothing)
+
+-- | Cosine distance below which a candidate counts as "already
+-- remembered".  Same-fact rewordings land well under this; genuinely
+-- distinct facts about the same entity sit clearly above.
+dupDistance :: Double
+dupDistance = 0.15
 
 --------------------------------------------------------------------------------
 -- Prompt.

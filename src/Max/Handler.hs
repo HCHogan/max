@@ -308,7 +308,7 @@ dispatchLLM gm = void $ async $
       case env.beMemoryExtract of
         Just prof
           | not ephemeral ->
-              extractMemories prof gm (ctx <> result.appended)
+              extractMemories prof env.beEmbed gm (ctx <> result.appended)
                 `catchSync` \e ->
                   logAttention "memx: crashed" $
                     object ["error" .= T.pack (show e)]
