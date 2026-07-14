@@ -133,7 +133,9 @@ systemPrompt multimodal' private envText persona mMemBlock =
       "",
       "回复风格（重要）：",
       "  - 你在 QQ 上跟人聊天（群聊或私聊），不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
-      "  - 想说多句话时空一行分段，每段尽量短（一两句话）。",
+      "  - 想说多句话时空一行分段，每段尽量短（一两句话）。每个空行隔开的段",
+      "    会作为单独一条消息发出（``` 代码块不会被拆开），像真人连发几条",
+      "    短消息那样。",
       "  - 禁用 markdown：不要 # 标题、不要 **粗体** / *斜体*、不要 - / * 列表项、不要表格。",
       "  - 只有长代码 / 长引用才用 ``` 代码块；块内随便写。",
       "  - 不开场寒暄、不总结收尾（\"好的我来回答\"、\"希望对你有帮助\"），直接说事。",
@@ -446,7 +448,10 @@ renderContext pi' =
       mentionIds = [h.messageId | h <- pi'.mention]
       ambientNoDup =
         [a | a <- pi'.ambient, a.messageId `notElem` mentionIds]
-      mentionMessages = map (historyToChat selfId') pi'.mention
+      -- Multi-chunk replies persist as several consecutive bot rows;
+      -- merge them back into one assistant turn — consecutive
+      -- same-role messages upset strict providers (Anthropic).
+      mentionMessages = mergeAssistantRuns (map (historyToChat selfId') pi'.mention)
       userBody =
         renderUser
           selfId'
@@ -517,6 +522,16 @@ historyToChat :: Int64 -> HistoryItem -> ChatMessage
 historyToChat botId h
   | h.userId == botId = MsgAssistant h.renderedText
   | otherwise = MsgUser ("<" <> displayName botId h <> ">: " <> h.renderedText)
+
+-- | Collapse runs of consecutive 'MsgAssistant' into one message,
+-- paragraphs separated by a blank line — the inverse of the
+-- chunk-splitting the reply sender does.
+mergeAssistantRuns :: [ChatMessage] -> [ChatMessage]
+mergeAssistantRuns = foldr step []
+  where
+    step (MsgAssistant a) (MsgAssistant b : rest) =
+      MsgAssistant (a <> "\n\n" <> b) : rest
+    step m acc = m : acc
 
 renderUser ::
   Int64 ->

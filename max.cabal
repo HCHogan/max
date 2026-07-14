@@ -144,6 +144,7 @@ test-suite max-test
     other-modules:
         Max.Command.ParserSpec
         OneBot.EventSpec
+        Max.UtilSpec
         Max.SessionSpec
         Max.Effects.LLMSpec
         Max.MCP.ClientSpec

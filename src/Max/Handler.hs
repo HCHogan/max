@@ -5,6 +5,7 @@ where
 
 import Control.Concurrent.STM (TQueue, atomically, readTQueue)
 import Control.Monad (unless, void)
+import Data.Foldable (for_)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (parseEither)
 import Data.Int (Int64)
@@ -33,7 +34,7 @@ import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (buildContext)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Tasks (TaskCancelled)
-import Max.Util (catchSync)
+import Max.Util (catchSync, splitReply)
 import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
@@ -331,13 +332,17 @@ replyText :: NapCat :> es => GroupMessage -> T.Text -> Eff es ()
 replyText gm body =
   sendAction (sendChatMsg gm.groupId (replySegs gm (" " <> body)))
 
--- | Send the LLM's final reply and persist it into the messages
--- table (so future dispatches can read this back as part of the
--- mention history).  Uses 'callAction' instead of 'sendAction' to
--- get NapCat's assigned @message_id@ from the response.  If the
--- send or message_id extraction fails, logs and gives up
--- persistence — the user still gets the reply (NapCat printed it),
--- only the bot's memory loses this turn.
+-- | Send the LLM's final reply — split into one message per
+-- blank-line paragraph ('splitReply'; code fences never split) — and
+-- persist each sent chunk into the messages table (so future
+-- dispatches can read this back as mention history, and a reply to
+-- *any* chunk resolves as reply-to-bot).  The consecutive bot rows
+-- this produces are merged back into one assistant turn at prompt
+-- build time (see 'Max.Prompt').  Uses 'callAction' to get NapCat's
+-- assigned @message_id@ per chunk; chunks are sent sequentially so
+-- ordering is guaranteed.  If a send or message_id extraction fails,
+-- logs and moves on — the user still gets the delivered chunks, only
+-- the bot's memory loses them.
 sendAndPersistReply ::
   ( NapCat :> es,
     WithConnection :> es,
@@ -349,26 +354,32 @@ sendAndPersistReply ::
   T.Text ->
   Eff es ()
 sendAndPersistReply gm body = do
-  let segs = replySegs gm (" " <> body)
-  eres <- callAction (sendChatMsg gm.groupId segs) 30000
-  case eres of
-    Left err ->
-      logAttention "llm reply send failed" $ object ["error" .= err]
-    Right (Response _ rc payload _)
-      | rc /= 0 ->
-          logAttention "llm reply retcode bad" $ object ["retcode" .= rc]
-      | otherwise -> case extractOutMid payload of
-          Nothing ->
-            logAttention "no message_id in send_group_msg response" $
-              object ["payload" .= payload]
-          Just outMid -> do
-            -- The reply already went out over NapCat — that's a real
-            -- side effect we can't undo.  Only the messages-table
-            -- write is gated, so an ephemeral turn doesn't show up
-            -- in next dispatch's mention history.
-            ephemeral <- isEphemeral
-            unless ephemeral $
-              insertOutbound gm.groupId gm.selfId "max" (MessageId outMid) segs
+  -- The reply already goes out over NapCat regardless — that's a
+  -- real side effect we can't undo.  Only the messages-table write
+  -- is gated, so an ephemeral turn doesn't show up in the next
+  -- dispatch's mention history.
+  ephemeral <- isEphemeral
+  for_ (zip [0 :: Int ..] (splitReply body)) $ \(i, chunk) -> do
+    -- Only the first chunk quotes + @s the trigger; follow-ups read
+    -- as continuation lines.
+    let segs =
+          if i == 0
+            then replySegs gm (" " <> chunk)
+            else [SegText chunk]
+    eres <- callAction (sendChatMsg gm.groupId segs) 30000
+    case eres of
+      Left err ->
+        logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
+      Right (Response _ rc payload _)
+        | rc /= 0 ->
+            logAttention "llm reply retcode bad" $ object ["retcode" .= rc, "chunk" .= i]
+        | otherwise -> case extractOutMid payload of
+            Nothing ->
+              logAttention "no message_id in send response" $
+                object ["payload" .= payload, "chunk" .= i]
+            Just outMid ->
+              unless ephemeral $
+                insertOutbound gm.groupId gm.selfId "max" (MessageId outMid) segs
 
 extractOutMid :: Value -> Maybe Int64
 extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of

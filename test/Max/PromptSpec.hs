@@ -242,6 +242,20 @@ spec = do
           u2 `shouldSatisfy` ("Alice" `T.isInfixOf`)
         other -> expectationFailure $ "unexpected shape: " <> show other
 
+    it "merges consecutive bot rows (multi-chunk replies) into one assistant turn" $ do
+      let mention =
+            [ historyAt 9 8001 memberId (Just "Alice") "@1000 讲讲",
+              historyAt 9 8002 botId Nothing "第一段",
+              historyAt 9 8003 botId Nothing "第二段",
+              historyAt 10 8004 memberId (Just "Alice") "@1000 继续"
+            ]
+          inp = baseInputs {mention = mention}
+          (_, mid, _) = splitMessages (fst (renderContext inp))
+      case mid of
+        [MsgUser _, MsgAssistant a, MsgUser _] ->
+          a `shouldBe` "第一段\n\n第二段"
+        other -> expectationFailure $ "unexpected shape: " <> show other
+
     it "uses numeric user id when nickname is missing" $ do
       let mention = [historyAt 9 8001 otherMemberId Nothing "@1000 hi"]
           inp = baseInputs {mention = mention}
