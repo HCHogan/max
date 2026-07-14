@@ -102,16 +102,32 @@ data PromptImage = PromptImage
   deriving stock (Show, Eq)
 
 -- | Assemble the system prompt: the @persona@ (from session override
--- or AppConfig default) on top of a fixed format guide describing the
--- marker conventions used in the rendered context, with the long-term
--- memory block (if any) appended *last* — end-of-prompt placement
--- keeps it low-salience relative to the persona and the live
--- conversation, which is deliberate: memories are background, not
--- agenda.
-systemPrompt :: Bool -> Text -> Text -> Maybe Text -> Text
-systemPrompt multimodal' envText persona mMemBlock =
+-- or AppConfig default), a scene block saying whether this is a
+-- group or a one-on-one chat (kept out of the persona so configured
+-- personas stay scene-agnostic), the environment, a fixed format
+-- guide, and the long-term memory block (if any) appended *last* —
+-- end-of-prompt placement keeps it low-salience relative to the
+-- persona and the live conversation, which is deliberate: memories
+-- are background, not agenda.
+systemPrompt ::
+  Bool -> -- multimodal
+  Bool -> -- private chat
+  Text -> -- environment block
+  Text -> -- persona
+  Maybe Text -> -- memory block
+  Text
+systemPrompt multimodal' private envText persona mMemBlock =
   T.unlines $
     [ persona,
+      "",
+      if private
+        then
+          "对话场景：QQ 一对一私聊。对方的每条消息都是直接对你说的，\
+          \正常对话即可；没有其他人在看。"
+        else
+          "对话场景：QQ 群聊。你同时面对多名群成员，上下文里 [HH:MM <昵称>] \
+          \前缀标明谁在说话；大部分消息是成员之间的闲聊，只有 @你 或引用你的\
+          \消息才是在叫你。",
       "",
       envText,
       "",
@@ -124,7 +140,7 @@ systemPrompt multimodal' envText persona mMemBlock =
       "  - 不要复读用户的问题再回答。",
       "",
       "上下文格式：",
-      "  [HH:MM <昵称>]: 内容        — 群里的一条普通消息",
+      "  [HH:MM <昵称>]: 内容        — 一条历史消息",
       "  [↩ 引用 HH:MM <昵称>]: ...   — 用户引用了某条历史消息",
       if multimodal'
         then "  [image]                     — 一张图片；内容会附在消息末尾，标注来自哪条消息（[HH:MM <昵称>] 消息里的图片）。太老或太多的图会被略去，只剩标记"
@@ -137,7 +153,7 @@ systemPrompt multimodal' envText persona mMemBlock =
       "列出该消息里每个文件的 file_id / name / size / ready 状态。用",
       "其中的 file_id 直接调 import_file_to_sandbox，不需要先 list_recent_files。",
       "",
-      "群成员可以用 !pin 把过去的某条消息标记保留——这些会单独显示在",
+      "用户可以用 !pin 把过去的某条消息标记保留——这些会单独显示在",
       "[pin 上下文] 段；即使用户 !clear 也不会消失。这是用户给的明确",
       "提示，请认真当成对话背景。",
       "",
@@ -393,7 +409,12 @@ renderContext pi' =
       GroupId gidRaw = pi'.triggerMessage.groupId
       UserId senderId = pi'.triggerMessage.userId
       senderName = senderDisplayName pi'.triggerMessage
-      memBlock = renderMemories senderName pi'.groupMemories pi'.userMemories
+      memBlock =
+        renderMemories
+          (isPrivateChat pi'.triggerMessage.groupId)
+          senderName
+          pi'.groupMemories
+          pi'.userMemories
       effectivePersona = fromMaybe pi'.defaultPersona pi'.session.persona
       -- Everyone appearing in this turn's context, QQ号 ↔ display
       -- name.  Rendered text shows mentions as raw @<QQ号> (that's
@@ -451,7 +472,7 @@ renderContext pi' =
               : ImageDataUrl i0.piDataUrl
               : concat [[TextBlock i.piLabel, ImageDataUrl i.piDataUrl] | i <- rest]
       messages =
-        [MsgSystem (systemPrompt pi'.multimodal envText effectivePersona memBlock)]
+        [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) envText effectivePersona memBlock)]
           <> mentionMessages
           <> [userMessage]
    in (messages, pi'.session.btwNotes)
@@ -461,8 +482,8 @@ renderContext pi' =
 -- and nothing for the model to fixate on).  The framing line matters
 -- as much as the content: memories are 背景备忘 the model may
 -- silently draw on, not a topic list to bring up.
-renderMemories :: Text -> [MemoryItem] -> [MemoryItem] -> Maybe Text
-renderMemories senderName groupMems userMems
+renderMemories :: Bool -> Text -> [MemoryItem] -> [MemoryItem] -> Maybe Text
+renderMemories private senderName groupMems userMems
   | null groupMems && null userMems = Nothing
   | otherwise =
       Just . T.intercalate "\n" . concat $
@@ -472,7 +493,7 @@ renderMemories senderName groupMems userMems
           ],
           if null groupMems
             then []
-            else "本群:" : map memoryLine groupMems,
+            else (if private then "本会话:" else "本群:") : map memoryLine groupMems,
           if null userMems
             then []
             else ("关于当前发言者 <" <> senderName <> ">（跨群）:") : map memoryLine userMems

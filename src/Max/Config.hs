@@ -50,7 +50,6 @@ import Autodocodec
     scientificCodec,
     (.=),
   )
-import Control.Applicative ((<|>))
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, maybeToList)
@@ -95,9 +94,12 @@ data AppConfig = AppConfig
   deriving stock (Show)
 
 -- | Default persona used when neither config nor session supplies one.
+-- Deliberately scene-neutral: whether this is a group chat or a
+-- private chat is injected by "Max.Prompt" as a 对话场景 block, so
+-- personas (including user-configured ones) don't have to care.
 defaultPersona :: Text
 defaultPersona =
-  "你是一个 QQ 群里的 AI 助手。群成员会 @你 来让你回答问题。请用自然简洁的中文回答。"
+  "你是 QQ 上的 AI 助手。请用自然简洁的中文回答。"
 
 --------------------------------------------------------------------------------
 -- Entry point.

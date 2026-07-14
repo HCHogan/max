@@ -196,6 +196,14 @@ spec = do
       sys `shouldSatisfy` ("私聊" `T.isInfixOf`)
       sys `shouldSatisfy` (not . ("群号" `T.isInfixOf`))
 
+    it "injects the matching 对话场景 block per chat kind" $ do
+      let (sysG, _, _) = splitMessages (fst (renderContext baseInputs))
+          inpP = baseInputs {triggerMessage = privateTriggerMsg [SegText "hi"]}
+          (sysP, _, _) = splitMessages (fst (renderContext inpP))
+      sysG `shouldSatisfy` ("对话场景：QQ 群聊" `T.isInfixOf`)
+      sysP `shouldSatisfy` ("对话场景：QQ 一对一私聊" `T.isInfixOf`)
+      sysP `shouldSatisfy` (not . ("群成员" `T.isInfixOf`))
+
   describe "renderContext long-term memory" $ do
     it "omits the memory block entirely when nothing is remembered" $ do
       let (sys, _, _) = splitMessages (fst (renderContext baseInputs))
