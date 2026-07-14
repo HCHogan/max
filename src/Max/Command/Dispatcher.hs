@@ -224,12 +224,14 @@ execute t gid uid replyTarget cmd = do
         then "✓ 已发取消信号给 " <> tid
         else "找不到任务 " <> tid <> " (用 !ps 看在跑的)"
   --
+  -- Group-scope only, on purpose: the reply is posted publicly in the
+  -- group, and a member's user-scope memories may have been learned in
+  -- *other* groups — printing them here would leak across groups.
+  -- (!memory rm can still delete one's own user memories by id.)
   MemoryList -> do
     let GroupId gidRaw = gid
-        UserId uidRaw = uid
     gms <- listMemories ScopeGroup gidRaw
-    ums <- listMemories ScopeUser uidRaw
-    reply (formatMemories gms ums)
+    reply (formatMemories gms)
   MemoryRm mid -> do
     let GroupId gidRaw = gid
         UserId uidRaw = uid
@@ -312,14 +314,12 @@ formatBranches active bs =
 --------------------------------------------------------------------------------
 -- !memory formatting.
 
-formatMemories :: [MemoryItem] -> [MemoryItem] -> Text
-formatMemories [] [] = "没有任何长期记忆（bot 觉得值得记的东西会存在这里）"
-formatMemories gms ums =
-  T.unlines . concat $
-    [ if null gms then ["(本群没有记忆)"] else "本群记忆:" : map memLine gms,
-      if null ums then ["(你没有个人记忆)"] else "你的记忆（跨群）:" : map memLine ums,
-      ["用 !memory rm <id> 删除"]
-    ]
+formatMemories :: [MemoryItem] -> Text
+formatMemories [] = "本群没有长期记忆（bot 觉得值得记的东西会存在这里）"
+formatMemories gms =
+  T.unlines $
+    ("本群记忆:" : map memLine gms)
+      <> ["用 !memory rm <id> 删除"]
   where
     memLine m = "  #" <> T.pack (show m.memId) <> "  " <> m.memContent
 
@@ -403,7 +403,7 @@ helpText Nothing =
       "  !unpin [id|all]          移除 pin（同上语法 + all 清空）",
       "  !pins                    列出当前 pin 的消息",
       "  !btw <text>              在跑的任务里就注入侧记；否则当前上下文临时问一句（不入对话历史）",
-      "  !memory                  看本群记忆 + 你的个人记忆",
+      "  !memory                  看本群的长期记忆",
       "  !memory rm <id>          删除一条记忆（本群的或你自己的）",
       "  !ps                      看本群在跑的后台任务",
       "  !ps --all                看所有群的任务",
