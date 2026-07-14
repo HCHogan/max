@@ -1,0 +1,55 @@
+# Build + test through the same flake dev shell developers use
+# (nix develop --impure; devenv-as-flake-module needs impure eval), so
+# CI's GHC/toolchain pin is exactly flake.lock's.  Haskell deps are
+# compiled by cabal inside the shell and cached across runs — the
+# first run after a dependency bump is slow (~40 min), cached runs
+# are minutes.
+#
+# Only the pure suite (max-test) runs here; max-test-db needs a live
+# Postgres and exits 0 when MAX_TEST_DB_URL is unset.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      # devenv's binary cache — saves building the devenv machinery.
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+
+      - name: Cache cabal store
+        uses: actions/cache@v4
+        with:
+          # Cover both layouts: classic ~/.cabal and XDG (state/cache).
+          path: |
+            ~/.cabal
+            ~/.cache/cabal
+            ~/.local/state/cabal
+            dist-newstyle
+          key: cabal-${{ runner.os }}-${{ hashFiles('flake.lock', 'max.cabal') }}
+          restore-keys: |
+            cabal-${{ runner.os }}-
+
+      - name: cabal update
+        run: nix develop --impure -c cabal update
+
+      - name: Build
+        run: nix develop --impure -c cabal build all
+
+      - name: Test
+        run: nix develop --impure -c cabal test max-test --test-show-details=direct
