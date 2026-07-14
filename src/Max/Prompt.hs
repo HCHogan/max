@@ -37,6 +37,7 @@ import Max.DB.History
     fetchMessagesByIds,
     fetchRecentInGroup,
   )
+import Max.DB.Memory (MemoryItem (..), MemoryScope (..), listMemories)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Images (downloadableImageCount)
 import Max.Session (Session (..))
@@ -70,6 +71,12 @@ data PromptInputs = PromptInputs
     -- | Whether the active profile accepts image content blocks.
     -- Toggles the format-guide wording for the @[image]@ marker.
     multimodal :: !Bool,
+    -- | Long-term memories of this group, oldest first.
+    groupMemories :: ![MemoryItem],
+    -- | Long-term memories of the *triggering* user (cross-group),
+    -- oldest first.  Other members' memories are not injected — the
+    -- model can @memory_list@ them when actually relevant.
+    userMemories :: ![MemoryItem],
     -- | Already-loaded images to attach to the final user message,
     -- in display order (context images chronological, trigger's
     -- last).  Populated only when 'multimodal' AND the image worker
@@ -94,10 +101,14 @@ data PromptImage = PromptImage
 
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default) on top of a fixed format guide describing the
--- marker conventions used in the rendered context.
-systemPrompt :: Bool -> Text -> Text -> Text
-systemPrompt multimodal' envText persona =
-  T.unlines
+-- marker conventions used in the rendered context, with the long-term
+-- memory block (if any) appended *last* — end-of-prompt placement
+-- keeps it low-salience relative to the persona and the live
+-- conversation, which is deliberate: memories are background, not
+-- agenda.
+systemPrompt :: Bool -> Text -> Text -> Maybe Text -> Text
+systemPrompt multimodal' envText persona mMemBlock =
+  T.unlines $
     [ persona,
       "",
       envText,
@@ -125,8 +136,17 @@ systemPrompt multimodal' envText persona =
       "",
       "群成员可以用 !pin 把过去的某条消息标记保留——这些会单独显示在",
       "[pin 上下文] 段；即使用户 !clear 也不会消失。这是用户给的明确",
-      "提示，请认真当成对话背景。"
+      "提示，请认真当成对话背景。",
+      "",
+      "长期记忆（memory_* 工具）：",
+      "  - 只存将来的对话还会用到的稳定信息（身份、偏好、约定、长期项目）。",
+      "    闲聊、一次性任务的细节、翻群消息能查到的东西都不要存。",
+      "    大多数对话不需要动记忆。",
+      "  - 发现记忆过时或重复时，用 memory_update 改、memory_forget 删，",
+      "    不要越攒越多。",
+      "  - 存了记忆不用在回复里宣布（群友可以用 !memory 查看和删除）。"
     ]
+      <> maybe [] (\b -> ["", b]) mMemBlock
 
 -- | Build the chat context for one @bot trigger.  Runs the DB
 -- fetches, then hands off to the pure 'renderContext'.
@@ -150,9 +170,12 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
+      UserId senderId = gm.userId
   ambient' <- fetchRecentInGroup gid mid s.clearedAt n
   mention' <- fetchMentionHistory gid selfId' mid s.clearedAt n
   pinnedItems' <- fetchMessagesByIds s.pinned
+  groupMems <- listMemories ScopeGroup gid
+  userMems <- listMemories ScopeUser senderId
   replyCtx' <- case extractReply gm.message of
     Nothing -> pure Nothing
     Just rid -> do
@@ -195,6 +218,8 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
           pinnedItems = pinnedItems',
           replyCtx = replyCtx',
           multimodal = multimodal',
+          groupMemories = groupMems,
+          userMemories = userMems,
           images = images',
           now = now'
         }
@@ -338,6 +363,10 @@ renderContext :: PromptInputs -> ([ChatMessage], [Text])
 renderContext pi' =
   let UserId selfId' = pi'.triggerMessage.selfId
       GroupId gidRaw = pi'.triggerMessage.groupId
+      UserId senderId = pi'.triggerMessage.userId
+      Sender _ senderNick _ = pi'.triggerMessage.sender
+      senderName = fromMaybe (T.pack (show senderId)) senderNick
+      memBlock = renderMemories senderName pi'.groupMemories pi'.userMemories
       effectivePersona = fromMaybe pi'.defaultPersona pi'.session.persona
       envText =
         T.intercalate "\n" $
@@ -375,10 +404,41 @@ renderContext pi' =
               : ImageDataUrl i0.piDataUrl
               : concat [[TextBlock i.piLabel, ImageDataUrl i.piDataUrl] | i <- rest]
       messages =
-        [MsgSystem (systemPrompt pi'.multimodal envText effectivePersona)]
+        [MsgSystem (systemPrompt pi'.multimodal envText effectivePersona memBlock)]
           <> mentionMessages
           <> [userMessage]
    in (messages, pi'.session.btwNotes)
+
+-- | The injected memory block, or 'Nothing' when there is nothing
+-- remembered (no block at all beats an empty header — zero tokens,
+-- and nothing for the model to fixate on).  The framing line matters
+-- as much as the content: memories are 背景备忘 the model may
+-- silently draw on, not a topic list to bring up.
+renderMemories :: Text -> [MemoryItem] -> [MemoryItem] -> Maybe Text
+renderMemories senderName groupMems userMems
+  | null groupMems && null userMems = Nothing
+  | otherwise =
+      Just . T.intercalate "\n" . concat $
+        [ [ "[长期记忆 — 背景备忘]",
+            "这是你过去存下的备忘，仅在与当前话题直接相关时才参考。",
+            "不要主动复述、评论或围绕它们展开；与当前对话矛盾时以对话为准（并考虑 memory_update）。"
+          ],
+          if null groupMems
+            then []
+            else "本群:" : map memoryLine groupMems,
+          if null userMems
+            then []
+            else ("关于当前发言者 <" <> senderName <> ">（跨群）:") : map memoryLine userMems
+        ]
+
+memoryLine :: MemoryItem -> Text
+memoryLine m =
+  "  (#"
+    <> T.pack (show m.memId)
+    <> " "
+    <> T.pack (formatTime defaultTimeLocale "%Y-%m-%d" m.memUpdatedAt)
+    <> ") "
+    <> oneLine m.memContent
 
 -- | Reconstruct one bot/user turn as an OpenAI/Anthropic ChatMessage.
 -- A row sent by the bot becomes 'MsgAssistant'; everything else

@@ -48,6 +48,7 @@ library
         Max.DB.Files
         Max.DB.Forward
         Max.DB.History
+        Max.DB.Memory
         Max.DB.Message
         Max.DB.Migrations
         Max.DB.Session
@@ -72,6 +73,7 @@ library
         Max.Tools
         Max.Tools.Browser
         Max.Tools.Files
+        Max.Tools.Memory
         Max.Tools.Sandbox
         Max.Tools.Search
         Max.Util

@@ -186,7 +186,7 @@ dispatchCommand gm body = localDomain "cmd" $ do
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
-      result <- CmdDispatch.execute t gm.groupId replyTarget cmd
+      result <- CmdDispatch.execute t gm.groupId gm.userId replyTarget cmd
       case result of
         ReplyText reply -> replyText gm reply
         EphemeralAsk askBody -> do

@@ -73,6 +73,14 @@ spec = do
     it "ps all" $ "!ps --all" `parsesTo` PsAll
     it "kill" $ "!kill T-1" `parsesTo` Kill "T-1"
 
+  describe "!memory" $ do
+    it "bare memory → list" $ "!memory" `parsesTo` MemoryList
+    it "memory rm with id" $ "!memory rm 42" `parsesTo` MemoryRm 42
+    it "memory rm with junk id → Unknown" $
+      case parseCommand "!memory rm abc" of
+        Right (Just (Unknown "memory" _)) -> pure ()
+        other -> expectationFailure $ "expected Unknown memory, got: " <> show other
+
   describe "!branch / !switch (Phase 6c)" $ do
     it "bare branch → list" $ "!branch" `parsesTo` BranchList
     it "branch list" $ "!branch list" `parsesTo` BranchList

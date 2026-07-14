@@ -58,6 +58,8 @@ data Command
   | PsLocal -- ^ '!ps' (this group)
   | PsAll -- ^ '!ps --all'
   | Kill !Text -- ^ '!kill <id>'
+  | MemoryList -- ^ '!memory' — this group's memories + the caller's own
+  | MemoryRm !Int64 -- ^ '!memory rm <id>'
   | BranchList -- ^ '!branch' or '!branch list'
   | BranchNew !Text -- ^ '!branch <name>' — fork from current + switch
   | BranchDelete !Text -- ^ '!branch delete <name>'

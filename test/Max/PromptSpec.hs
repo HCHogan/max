@@ -6,6 +6,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
+import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Prompt (PromptImage (..), PromptInputs (..), renderContext)
 import Max.Session (Session (..))
@@ -55,6 +56,16 @@ historyAt h mid uid nick body =
       receivedAt = timeAt h
     }
 
+memAt :: Int64 -> Text -> MemoryItem
+memAt mid content =
+  MemoryItem
+    { memId = mid,
+      memScope = "group", -- rendering doesn't read scope fields
+      memScopeId = 0,
+      memContent = content,
+      memUpdatedAt = timeAt 12
+    }
+
 triggerMsg :: [Segment] -> GroupMessage
 triggerMsg segs =
   GroupMessage
@@ -92,6 +103,8 @@ baseInputs =
       pinnedItems = [],
       replyCtx = Nothing,
       multimodal = False,
+      groupMemories = [],
+      userMemories = [],
       images = [],
       now = timeAt 12
     }
@@ -138,6 +151,27 @@ spec = do
       sys `shouldSatisfy` ("2026-06-05" `T.isInfixOf`)
       sys `shouldSatisfy` ("7777" `T.isInfixOf`)
       sys `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
+
+  describe "renderContext long-term memory" $ do
+    it "omits the memory block entirely when nothing is remembered" $ do
+      let (sys, _, _) = splitMessages (fst (renderContext baseInputs))
+      sys `shouldSatisfy` (not . ("[长期记忆" `T.isInfixOf`))
+
+    it "renders group + user memories with ids, at the end of the system prompt" $ do
+      let inp =
+            baseInputs
+              { groupMemories = [memAt 5 "群里在开发 max bot"],
+                userMemories = [memAt 9 "偏好 Haskell"]
+              }
+          (sys, _, _) = splitMessages (fst (renderContext inp))
+      sys `shouldSatisfy` ("[长期记忆 — 背景备忘]" `T.isInfixOf`)
+      sys `shouldSatisfy` ("(#5 2026-06-05) 群里在开发 max bot" `T.isInfixOf`)
+      sys `shouldSatisfy` ("(#9 2026-06-05) 偏好 Haskell" `T.isInfixOf`)
+      sys `shouldSatisfy` ("关于当前发言者 <Alice>" `T.isInfixOf`)
+      -- Low-salience placement: the block sits after the persona and
+      -- format guide, i.e. the memory header appears only near the end.
+      let (upToBlock, _) = T.breakOn "[长期记忆" sys
+      upToBlock `shouldSatisfy` ("回复风格" `T.isInfixOf`)
 
   describe "renderContext mention history" $ do
     it "renders bot rows as MsgAssistant, member rows as MsgUser" $ do

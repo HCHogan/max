@@ -22,6 +22,7 @@ import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Types
 import Data.Int (Int64)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
+import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, fetchMemory, listMemories)
 import Max.Effects.LLM (LLM, listProfiles)
 import Max.Browser.Registry (destroyBrowsersForGroup)
 import Max.Env (BotEnv (..))
@@ -35,7 +36,7 @@ import Max.Tasks
     listTasks,
     pushBtwToLatest,
   )
-import OneBot.Types (GroupId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 
 -- | What the caller should do after dispatching a command.
 --
@@ -65,10 +66,11 @@ execute ::
   ) =>
   TVar Session ->
   GroupId ->
+  UserId -> -- the command's sender (permission scope for !memory rm)
   Maybe Int64 -> -- replyTarget message_id, if the command was a reply
   Command ->
   Eff es DispatchResult
-execute t gid replyTarget cmd = do
+execute t gid uid replyTarget cmd = do
  env :: BotEnv <- ask
  case cmd of
   Btw note -> do
@@ -222,6 +224,28 @@ execute t gid replyTarget cmd = do
         then "✓ 已发取消信号给 " <> tid
         else "找不到任务 " <> tid <> " (用 !ps 看在跑的)"
   --
+  MemoryList -> do
+    let GroupId gidRaw = gid
+        UserId uidRaw = uid
+    gms <- listMemories ScopeGroup gidRaw
+    ums <- listMemories ScopeUser uidRaw
+    reply (formatMemories gms ums)
+  MemoryRm mid -> do
+    let GroupId gidRaw = gid
+        UserId uidRaw = uid
+    mMem <- fetchMemory mid
+    case mMem of
+      Nothing -> reply $ "没有 id=" <> T.pack (show mid) <> " 的记忆"
+      Just m
+        -- A member may delete this group's memories and their own
+        -- user memories — not other people's, and not other groups'.
+        | (m.memScope == "group" && m.memScopeId == gidRaw)
+            || (m.memScope == "user" && m.memScopeId == uidRaw) -> do
+            _ <- deleteMemory mid
+            logInfo "memory: removed via !memory" $ object ["id" .= mid]
+            reply $ "✓ 已删除记忆 #" <> T.pack (show mid)
+        | otherwise -> reply "只能删本群的记忆或你自己的记忆"
+  --
   BranchList -> do
     s <- liftIO (Session.readSession t)
     bs <- Session.listBranches gid
@@ -284,6 +308,20 @@ formatBranches active bs =
     line b
       | b == active = "  * " <> b <> "  (active)"
       | otherwise = "    " <> b
+
+--------------------------------------------------------------------------------
+-- !memory formatting.
+
+formatMemories :: [MemoryItem] -> [MemoryItem] -> Text
+formatMemories [] [] = "没有任何长期记忆（bot 觉得值得记的东西会存在这里）"
+formatMemories gms ums =
+  T.unlines . concat $
+    [ if null gms then ["(本群没有记忆)"] else "本群记忆:" : map memLine gms,
+      if null ums then ["(你没有个人记忆)"] else "你的记忆（跨群）:" : map memLine ums,
+      ["用 !memory rm <id> 删除"]
+    ]
+  where
+    memLine m = "  #" <> T.pack (show m.memId) <> "  " <> m.memContent
 
 --------------------------------------------------------------------------------
 -- !pins formatting.
@@ -365,6 +403,8 @@ helpText Nothing =
       "  !unpin [id|all]          移除 pin（同上语法 + all 清空）",
       "  !pins                    列出当前 pin 的消息",
       "  !btw <text>              在跑的任务里就注入侧记；否则当前上下文临时问一句（不入对话历史）",
+      "  !memory                  看本群记忆 + 你的个人记忆",
+      "  !memory rm <id>          删除一条记忆（本群的或你自己的）",
       "  !ps                      看本群在跑的后台任务",
       "  !ps --all                看所有群的任务",
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",

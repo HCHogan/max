@@ -42,6 +42,7 @@ import Max.Tasks (newTaskRegistry)
 import Max.Tools (builtinsFor)
 import Max.Tools.Browser (browserToolsFor)
 import Max.Tools.Files (fileToolsFor)
+import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
 import OneBot.Event (Event)
@@ -82,6 +83,7 @@ main = do
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           let toolFactory dc =
                 builtinsFor dc
+                  <> memoryToolsFor dc
                   <> sandboxToolsFor dc.dcGroupId sandboxes
                   <> fileToolsFor dc.dcGroupId cfg.imagesDir sandboxes
                   <> maybe [] searchToolsFor cfg.search

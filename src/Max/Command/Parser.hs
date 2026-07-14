@@ -194,6 +194,12 @@ classify verb raw@(RawArgs pos flags) = case verb of
   "kill" -> case pos of
     [tid] -> Kill tid
     _ -> Unknown verb raw
+  "memory" -> case pos of
+    [] -> MemoryList
+    ["rm", s] -> case parseInt64 s of
+      Just n -> MemoryRm n
+      Nothing -> Unknown verb raw
+    _ -> Unknown verb raw
   "branch" -> case pos of
     [] -> BranchList
     ["list"] -> BranchList
