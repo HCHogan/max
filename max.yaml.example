@@ -126,8 +126,9 @@ llm:
 # Embeddings (vector search).  Any OpenAI-compatible /embeddings endpoint;
 # presence of base_url + model enables the background embed worker plus
 # semantic search in search_messages and the memory_search tool.
-# Local via Ollama works fine:  ollama pull bge-m3  → base_url
-# http://127.0.0.1:11434/v1, model bge-m3, no api_key.
+# siliconflow's BAAI/bge-m3 is free (api.siliconflow.cn/v1); local via
+# Ollama also works on capable hardware (base_url
+# http://127.0.0.1:11434/v1, model bge-m3, no api_key).
 # ─────────────────────────────────────────────────────────────────────────────
 
 # embedding:
