@@ -9,6 +9,7 @@ module Max.Prompt
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
 import Control.Monad (when)
@@ -32,6 +33,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.History
   ( HistoryItem (..),
+    bestName,
     fetchMentionHistory,
     fetchMessage,
     fetchMessagesByIds,
@@ -129,6 +131,7 @@ systemPrompt multimodal' envText persona mMemBlock =
         else "  [image]                     — 一张图片（你看不到内容，可以请用户描述）",
       "  [file:<name>]               — 一个群文件；用 list_recent_files 或 import_file_to_sandbox 处理",
       "  [forward]                   — 转发的聊天记录（你看不到内容）",
+      "  @<数字>                     — @某人（数字是 QQ 号）；对应谁看 [当前环境] 的成员对照",
       "",
       "当用户引用了带文件的消息时，引用块下面会附带一段 `附带文件:`，",
       "列出该消息里每个文件的 file_id / name / size / ready 状态。用",
@@ -254,6 +257,15 @@ waitForTriggerImages mid expected = go 0
               liftIO (threadDelay (stepMs * 1000))
               go (elapsed + stepMs)
 
+-- | Keep the first (name) entry per user id.
+dedupeRoster :: [(Int64, Text)] -> [(Int64, Text)]
+dedupeRoster = go Set.empty
+  where
+    go _ [] = []
+    go seen ((u, n) : rest)
+      | u `Set.member` seen = go seen rest
+      | otherwise = (u, n) : go (Set.insert u seen) rest
+
 -- | Keep first occurrence of each message id.
 dedupById :: [HistoryItem] -> [HistoryItem]
 dedupById = go Set.empty
@@ -321,7 +333,7 @@ loadPromptImages blobRoot selfId' mid candidates = do
             "["
               <> formatHM h.receivedAt
               <> " "
-              <> displayName selfId' h.userId h.senderNickname
+              <> displayName selfId' h
               <> "] 消息里的图片:"
        in loadOne label mp
     loadOne label (mime, path) = do
@@ -364,16 +376,33 @@ renderContext pi' =
   let UserId selfId' = pi'.triggerMessage.selfId
       GroupId gidRaw = pi'.triggerMessage.groupId
       UserId senderId = pi'.triggerMessage.userId
-      Sender _ senderNick _ = pi'.triggerMessage.sender
-      senderName = fromMaybe (T.pack (show senderId)) senderNick
+      senderName = senderDisplayName pi'.triggerMessage
       memBlock = renderMemories senderName pi'.groupMemories pi'.userMemories
       effectivePersona = fromMaybe pi'.defaultPersona pi'.session.persona
+      -- Everyone appearing in this turn's context, QQ号 ↔ display
+      -- name.  Rendered text shows mentions as raw @<QQ号> (that's
+      -- all the wire event carries), so without this table the model
+      -- cannot tell who @123456 is — including itself.
+      roster =
+        dedupeRoster $
+          (selfId', "Max（你自己）")
+            : (senderId, senderName)
+            : [ (h.userId, displayName selfId' h)
+              | h <-
+                  pi'.mention
+                    <> pi'.ambient
+                    <> pi'.pinnedItems
+                    <> maybe [] (\(r, _) -> [r]) pi'.replyCtx,
+                h.userId /= selfId'
+              ]
       envText =
         T.intercalate "\n" $
           [ "[当前环境]",
             "  现在：" <> formatEnvTime pi'.now,
             "  群号：" <> T.pack (show gidRaw),
-            "  当前模型：" <> pi'.session.model
+            "  当前模型：" <> pi'.session.model,
+            "  成员对照（@数字 即 QQ号）："
+              <> T.intercalate "、" [T.pack (show u) <> "=" <> n | (u, n) <- roster]
           ]
       mentionIds = [h.messageId | h <- pi'.mention]
       ambientNoDup =
@@ -448,9 +477,7 @@ memoryLine m =
 historyToChat :: Int64 -> HistoryItem -> ChatMessage
 historyToChat botId h
   | h.userId == botId = MsgAssistant h.renderedText
-  | otherwise =
-      let name = fromMaybe (T.pack (show h.userId)) h.senderNickname
-       in MsgUser ("<" <> name <> ">: " <> h.renderedText)
+  | otherwise = MsgUser ("<" <> displayName botId h <> ">: " <> h.renderedText)
 
 renderUser ::
   Int64 ->
@@ -496,13 +523,11 @@ renderUser selfId' ambient' replyCtx' pinnedItems' notes gm =
 
 renderHistoryLine :: Int64 -> HistoryItem -> Text
 renderHistoryLine selfId' h =
-  let name = displayName selfId' h.userId h.senderNickname
-   in "[" <> formatHM h.receivedAt <> " " <> name <> "]: " <> oneLine h.renderedText
+  "[" <> formatHM h.receivedAt <> " " <> displayName selfId' h <> "]: " <> oneLine h.renderedText
 
 renderReplyLine :: Int64 -> HistoryItem -> Text
 renderReplyLine selfId' h =
-  let name = displayName selfId' h.userId h.senderNickname
-   in "[↩ 引用 " <> formatHM h.receivedAt <> " " <> name <> "]: " <> oneLine h.renderedText
+  "[↩ 引用 " <> formatHM h.receivedAt <> " " <> displayName selfId' h <> "]: " <> oneLine h.renderedText
 
 renderReplyFiles :: [FileRecord] -> [Text]
 renderReplyFiles [] = []
@@ -522,19 +547,28 @@ renderReplyFiles xs = "  附带文件:" : map fileLine xs
 
 renderCurrentLine :: GroupMessage -> Text
 renderCurrentLine gm =
-  let UserId uid = gm.userId
-      Sender _ nick _ = gm.sender
-      name = fromMaybe (T.pack (show uid)) nick
-      txt = stripBotMention gm.selfId (renderPlainText gm.message)
-   in "<" <> name <> ">: " <> T.strip txt
+  let txt = stripBotMention gm.selfId (renderPlainText gm.message)
+   in "<" <> senderDisplayName gm <> ">: " <> T.strip txt
 
 stripBotMention :: UserId -> Text -> Text
 stripBotMention (UserId u) = T.replace ("@" <> T.pack (show u)) ""
 
-displayName :: Int64 -> Int64 -> Maybe Text -> Text
-displayName selfId' uid mNick
-  | uid == selfId' = "Max"
-  | otherwise = fromMaybe (T.pack (show uid)) mNick
+-- | 群名片 > 昵称 > QQ 号 — matching what other members see on
+-- screen, so the model calls people what the group calls them.
+displayName :: Int64 -> HistoryItem -> Text
+displayName selfId' h
+  | h.userId == selfId' = "Max"
+  | otherwise = fromMaybe (T.pack (show h.userId)) (bestName h)
+
+-- | Same preference order for the live trigger message's sender.
+senderDisplayName :: GroupMessage -> Text
+senderDisplayName gm =
+  let UserId uid = gm.userId
+      Sender _ nick card = gm.sender
+   in fromMaybe (T.pack (show uid)) (nonBlank card <|> nonBlank nick)
+  where
+    nonBlank (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
+    nonBlank _ = Nothing
 
 formatHM :: UTCTime -> Text
 formatHM = T.pack . formatTime defaultTimeLocale "%H:%M"

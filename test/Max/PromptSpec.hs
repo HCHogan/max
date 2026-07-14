@@ -52,6 +52,7 @@ historyAt h mid uid nick body =
       userId = uid,
       selfId = botId,
       senderNickname = nick,
+      senderCard = Nothing,
       renderedText = body,
       receivedAt = timeAt h
     }
@@ -151,6 +152,29 @@ spec = do
       sys `shouldSatisfy` ("2026-06-05" `T.isInfixOf`)
       sys `shouldSatisfy` ("7777" `T.isInfixOf`)
       sys `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
+
+  describe "renderContext identity" $ do
+    it "includes a roster mapping QQ ids to display names, bot first" $ do
+      let inp = baseInputs {ambient = [historyAt 9 8001 otherMemberId (Just "Bob") "早"]}
+          (sys, _, _) = splitMessages (fst (renderContext inp))
+      sys `shouldSatisfy` ("成员对照" `T.isInfixOf`)
+      sys `shouldSatisfy` ((T.pack (show botId) <> "=Max（你自己）") `T.isInfixOf`)
+      sys `shouldSatisfy` ((T.pack (show memberId) <> "=Alice") `T.isInfixOf`)
+      sys `shouldSatisfy` ((T.pack (show otherMemberId) <> "=Bob") `T.isInfixOf`)
+
+    it "prefers 群名片 over nickname in context lines and the roster" $ do
+      let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just "sleepy"}
+          inp = baseInputs {ambient = [item]}
+          (sys, _, ub) = splitMessages (fst (renderContext inp))
+      ub `shouldSatisfy` ("[09:00 sleepy]" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("SkyRain" `T.isInfixOf`))
+      sys `shouldSatisfy` ((T.pack (show otherMemberId) <> "=sleepy") `T.isInfixOf`)
+
+    it "treats a blank card as absent" $ do
+      let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just ""}
+          inp = baseInputs {ambient = [item]}
+          (_, _, ub) = splitMessages (fst (renderContext inp))
+      ub `shouldSatisfy` ("[09:00 SkyRain]" `T.isInfixOf`)
 
   describe "renderContext long-term memory" $ do
     it "omits the memory block entirely when nothing is remembered" $ do

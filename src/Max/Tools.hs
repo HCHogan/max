@@ -27,7 +27,7 @@ import Effectful.Exception (try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader)
-import Max.DB.History (HistoryItem (..), fetchMessage)
+import Max.DB.History (HistoryItem (..), bestName, fetchMessage)
 import Max.DB.Message (insertOutbound)
 import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.NapCat (NapCat, callAction)
@@ -273,7 +273,7 @@ runSearch f = do
             [("received_at <= ?", [PG.toField t]) | Just t <- [f.mfBefore]]
           ]
       sql =
-        "SELECT message_id, user_id, self_id, sender_nickname, rendered_text, received_at \
+        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND NOT is_synthetic \
@@ -370,7 +370,8 @@ historyItemSummary h =
   object
     [ "message_id" .= h.messageId,
       "sender_user_id" .= h.userId,
-      "sender" .= h.senderNickname,
+      -- 群名片 > 昵称 > QQ号, matching the prompt's context lines.
+      "sender" .= maybe (T.pack (show h.userId)) id (bestName h),
       "time" .= formatTimestamp h.receivedAt,
       "text" .= shorten 400 h.renderedText
     ]

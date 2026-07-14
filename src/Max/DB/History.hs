@@ -1,11 +1,14 @@
 module Max.DB.History
   ( HistoryItem (..),
+    bestName,
     fetchRecentInGroup,
     fetchMessage,
     fetchMentionHistory,
     fetchMessagesByIds,
   )
 where
+
+import Control.Applicative ((<|>))
 
 import Data.Int (Int64)
 import Data.Text (Text)
@@ -22,6 +25,10 @@ data HistoryItem = HistoryItem
     userId :: !Int64,
     selfId :: !Int64,
     senderNickname :: !(Maybe Text),
+    -- | 群名片 — the sender's per-group display name.  This is what
+    -- other members actually see and call them by, so rendering
+    -- prefers it over the (global) nickname.
+    senderCard :: !(Maybe Text),
     renderedText :: !Text,
     receivedAt :: !UTCTime
   }
@@ -36,6 +43,17 @@ instance FromRow HistoryItem where
       <*> field
       <*> field
       <*> field
+      <*> field
+
+-- | The name group members actually see for this sender: 群名片
+-- first, then nickname; 'Nothing' when both are absent/blank (QQ
+-- sends @\"\"@ for an unset card, so blanks count as absent).
+bestName :: HistoryItem -> Maybe Text
+bestName h = nonBlank h.senderCard <|> nonBlank h.senderNickname
+
+nonBlank :: Maybe Text -> Maybe Text
+nonBlank (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
+nonBlank _ = Nothing
 
 -- | Last @n@ real (non-synthetic, non-forward-child) messages in @gid@,
 -- *excluding* @excludeId@.  When @since@ is @Just@, also filters out
@@ -52,7 +70,7 @@ fetchRecentInGroup gid excludeId since n = do
   rows <- case since of
     Nothing ->
       query
-        "SELECT message_id, user_id, self_id, sender_nickname, rendered_text, received_at \
+        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND message_id <> ? \
@@ -63,7 +81,7 @@ fetchRecentInGroup gid excludeId since n = do
         (gid, excludeId, n)
     Just t ->
       query
-        "SELECT message_id, user_id, self_id, sender_nickname, rendered_text, received_at \
+        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND message_id <> ? \
@@ -80,7 +98,7 @@ fetchMessage :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es (Maybe Hist
 fetchMessage mid = do
   rows <-
     query
-      "SELECT message_id, user_id, self_id, sender_nickname, rendered_text, received_at \
+      "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
       \  FROM messages \
       \  WHERE message_id = ? \
       \  LIMIT 1"
@@ -114,7 +132,7 @@ fetchMentionHistory gid botId excludeId since n = do
   rows <- case since of
     Nothing ->
       query
-        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.rendered_text, m.received_at \
+        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at \
         \  FROM messages m \
         \  WHERE m.group_id = ? \
         \    AND m.message_id <> ? \
@@ -129,7 +147,7 @@ fetchMentionHistory gid botId excludeId since n = do
         ((gid, excludeId, botId) :. (mentionLike :: Text, botId, n))
     Just t ->
       query
-        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.rendered_text, m.received_at \
+        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at \
         \  FROM messages m \
         \  WHERE m.group_id = ? \
         \    AND m.message_id <> ? \
@@ -155,7 +173,7 @@ fetchMessagesByIds [] = pure []
 fetchMessagesByIds ids = do
   rows <-
     query
-      "SELECT message_id, user_id, self_id, sender_nickname, rendered_text, received_at \
+      "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
       \  FROM messages \
       \  WHERE message_id IN ?"
       (Only (In ids))
