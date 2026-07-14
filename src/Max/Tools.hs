@@ -308,14 +308,17 @@ sayTool dc =
     { toolName = "say",
       toolDescription =
         T.unwords
-          [ "Send a status update to the user *during* a long-running task,",
-            "before producing your final answer.  Use this to:",
-            "(a) acknowledge a request before starting (e.g. \"好的，我去装一下\");",
-            "(b) mark significant milestones (e.g. \"装好了，现在跑\");",
-            "(c) split a long answer into digestible chunks.",
-            "Do NOT use this for the final answer — just produce that as",
-            "your normal text response.  Each say() is one extra LLM turn,",
-            "so don't overdo it (2-3 per task is a good ceiling)."
+          [ "Send a status update to the group *during* a task, before your",
+            "final answer.  For anything that takes more than a couple of",
+            "tool calls, keep the group posted — they can't see your tool",
+            "activity, only silence.  Say something when you (a) start a",
+            "multi-step task (\"好的，我去装一下\"); (b) finish or fail a",
+            "significant step (\"装好了，现在跑\", \"编译挂了，我看看\");",
+            "(c) change plan or hit something unexpected; (d) have been",
+            "silently grinding through tool calls for a while — as a rule",
+            "of thumb, don't let ~5 tool rounds pass without a status line.",
+            "Keep each update to one short line.  Do NOT use this for the",
+            "final answer — produce that as your normal text response."
           ],
       toolSchema =
         object
