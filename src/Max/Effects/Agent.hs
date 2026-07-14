@@ -61,7 +61,7 @@ import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLM, ToolCall (..),
 import Max.Effects.NapCat (NapCat, sendAction)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, drainBtwInbox, registerTask, unregisterTask)
-import OneBot.Action (Action (SendGroupMsg))
+import OneBot.Action (sendChatMsg)
 import OneBot.Segment (Segment (SegText))
 import OneBot.Types (GroupId, MessageId, UserId)
 
@@ -266,7 +266,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
           line tc = "⚙ " <> tc.callName <> " " <> previewJson 1000 tc.callArguments
       unless (not dc.dcDebug || null visible) $
         sendAction $
-          SendGroupMsg dc.dcGroupId [SegText (T.intercalate "\n" (map line visible))]
+          sendChatMsg dc.dcGroupId [SegText (T.intercalate "\n" (map line visible))]
 
     silentTools :: [Text]
     silentTools = ["say", "send_image_from_sandbox", "send_file_from_sandbox"]

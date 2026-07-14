@@ -34,9 +34,9 @@ import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Persistence (PersistMode, isEphemeral)
-import OneBot.Action (Action (SendGroupMsg), Response (..))
+import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Segment (Segment (..))
-import OneBot.Types (GroupId (..), MessageId (..))
+import OneBot.Types (GroupId (..), MessageId (..), isPrivateChat)
 
 builtinsFor ::
   ( WithConnection :> es,
@@ -373,11 +373,10 @@ sayTool dc =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (msg :: Text) -> do
           let segs =
-                [ SegReply dc.dcMessageId,
-                  SegAt dc.dcUserId,
-                  SegText (" " <> T.strip msg)
-                ]
-          eres <- callAction (SendGroupMsg dc.dcGroupId segs) 30000
+                [SegReply dc.dcMessageId]
+                  <> [SegAt dc.dcUserId | not (isPrivateChat dc.dcGroupId)]
+                  <> [SegText (" " <> T.strip msg)]
+          eres <- callAction (sendChatMsg dc.dcGroupId segs) 30000
           case eres of
             Left err -> do
               logAttention "say: send failed" $ object ["error" .= err]

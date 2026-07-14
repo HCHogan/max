@@ -43,9 +43,9 @@ import Max.Effects.NapCat (NapCat, callAction, sendAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
-import OneBot.Action (Action (SendGroupMsg, UploadGroupFile), Response (..))
+import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..), sendChatMsg)
 import OneBot.Segment (Segment (..))
-import OneBot.Types (GroupId (..))
+import OneBot.Types (GroupId (..), isPrivateChat, privateChatUserId)
 import System.Directory
   ( createDirectoryIfMissing,
     getTemporaryDirectory,
@@ -270,7 +270,7 @@ sendImageFromSandboxTool gid sandboxes =
                         Just c | not (T.null (T.strip c)) -> [SegText (T.strip c <> "\n")]
                         _ -> []
                       segs = caption <> [SegImage (Just b64)]
-                  sendAction (SendGroupMsg gid segs)
+                  sendAction (sendChatMsg gid segs)
                   logInfo "image sent from sandbox" $
                     object
                       [ "sandbox_id" .= sid,
@@ -366,10 +366,11 @@ sendFileFromSandboxTool gid sandboxes =
               case cpRes of
                 Left err -> pure (Left ("docker cp failed: " <> err))
                 Right () -> do
-                  callRes <-
-                    callAction
-                      (UploadGroupFile gid containerStaged displayName)
-                      60000
+                  let uploadAction
+                        | isPrivateChat gid =
+                            UploadPrivateFile (privateChatUserId gid) containerStaged displayName
+                        | otherwise = UploadGroupFile gid containerStaged displayName
+                  callRes <- callAction uploadAction 60000
                   case callRes of
                     Left err -> pure (Left ("upload_group_file failed: " <> err))
                     Right (Response _ rc _ _) | rc /= 0 ->

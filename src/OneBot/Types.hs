@@ -3,6 +3,10 @@ module OneBot.Types
     GroupId (..),
     MessageId (..),
     parseIntId,
+    -- * Private chats as pseudo-groups
+    privateChatGroupId,
+    privateChatUserId,
+    isPrivateChat,
   )
 where
 
@@ -45,3 +49,26 @@ newtype MessageId = MessageId Int64
 
 instance FromJSON MessageId where
   parseJSON = fmap MessageId . parseIntId "MessageId"
+
+--------------------------------------------------------------------------------
+-- Private chats as pseudo-groups.
+--
+-- The whole pipeline (sessions, history, memories, sandboxes,
+-- commands) is keyed by 'GroupId'.  Rather than thread a second
+-- conversation kind through all of it, a private chat with user @u@
+-- is identified by the pseudo group id @-u@: real QQ ids are always
+-- positive, so the sign carries the chat kind losslessly and every
+-- group-keyed subsystem works unchanged.  Only the edges look at the
+-- sign: event ingest mints the pseudo id, senders route to
+-- @send_private_msg@, and the prompt says 私聊 instead of 群号.
+
+privateChatGroupId :: UserId -> GroupId
+privateChatGroupId (UserId u) = GroupId (negate u)
+
+-- | Recover the peer from a pseudo group id.  Only meaningful when
+-- 'isPrivateChat' holds.
+privateChatUserId :: GroupId -> UserId
+privateChatUserId (GroupId g) = UserId (negate g)
+
+isPrivateChat :: GroupId -> Bool
+isPrivateChat (GroupId g) = g < 0

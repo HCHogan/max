@@ -10,7 +10,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Text (Text)
 import OneBot.Segment (Segment)
-import OneBot.Types (GroupId, MessageId, UserId)
+import OneBot.Types (GroupId, MessageId, UserId, privateChatGroupId)
 
 data Sender = Sender
   { userId :: !UserId,
@@ -57,6 +57,7 @@ eventParser v@(Object o) = do
       msgType <- o .:? "message_type" :: Parser (Maybe Text)
       case msgType of
         Just "group" -> EvGroupMessage <$> parseGroupMessage o
+        Just "private" -> EvGroupMessage <$> parsePrivateMessage o
         _ -> pure (EvRaw v)
     Just "meta_event" -> do
       metaType <- o .:? "meta_event_type" :: Parser (Maybe Text)
@@ -75,6 +76,21 @@ parseGroupMessage o =
     <$> o .: "self_id"
     <*> o .: "group_id"
     <*> o .: "user_id"
+    <*> o .: "message_id"
+    <*> o .: "message"
+    <*> o .:? "raw_message" .!= ""
+    <*> o .: "sender"
+
+-- | A private message rides the same 'GroupMessage' shape under its
+-- pseudo group id (see "OneBot.Types") so the whole group pipeline
+-- applies unchanged.
+parsePrivateMessage :: Object -> Parser GroupMessage
+parsePrivateMessage o = do
+  uid <- o .: "user_id"
+  GroupMessage
+    <$> o .: "self_id"
+    <*> pure (privateChatGroupId uid)
+    <*> pure uid
     <*> o .: "message_id"
     <*> o .: "message"
     <*> o .:? "raw_message" .!= ""

@@ -34,10 +34,10 @@ import Max.Prompt (buildContext)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Tasks (TaskCancelled)
 import Max.Util (catchSync)
-import OneBot.Action (Action (SendGroupMsg), Response (..))
+import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 -- | Decision derived from one group message.
 data Trigger
@@ -59,15 +59,20 @@ data Trigger
 -- | @repliesToBot@ = the message quotes (replies to) one of the
 -- bot's own messages; the caller resolves that via DB lookup.  A
 -- reply to the bot counts as addressing it, same as an @-mention.
+-- In a private chat every message addresses the bot.
 classify :: Bool -> GroupMessage -> Trigger
 classify repliesToBot gm =
   let raw = T.strip (renderPlainText gm.message)
       stripped = T.strip (stripMentions gm.selfId raw)
+      addressed =
+        mentionsUser gm.selfId gm.message
+          || repliesToBot
+          || isPrivateChat gm.groupId
    in case parseCommand stripped of
         Right (Just _) -> TriggerCommand stripped
         Left err -> TriggerCommandError err
         Right Nothing
-          | not (mentionsUser gm.selfId gm.message) && not repliesToBot -> TriggerNone
+          | not addressed -> TriggerNone
           | otherwise -> case stripped of
               "ping" -> TriggerPong
               -- A bare @bot (or bare reply) still triggers — the
@@ -212,15 +217,17 @@ sendPong :: (NapCat :> es, Log :> es) => GroupMessage -> Eff es ()
 sendPong gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
-  sendAction
-    ( SendGroupMsg
-        gm.groupId
-        [ SegReply gm.messageId,
-          SegAt gm.userId,
-          SegText " pong"
-        ]
-    )
+  sendAction (sendChatMsg gm.groupId (replySegs gm " pong"))
   logInfo "replied pong" $ object ["to" .= fromRaw, "group_id" .= gidRaw]
+
+-- | Reply segments for a trigger: quote it, @-the sender (groups
+-- only — a private chat has no third party to disambiguate for, and
+-- NapCat renders private at-segments poorly), then the text.
+replySegs :: GroupMessage -> T.Text -> [Segment]
+replySegs gm body =
+  [SegReply gm.messageId]
+    <> [SegAt gm.userId | not (isPrivateChat gm.groupId)]
+    <> [SegText body]
 
 -- | Spawn an async to build the prompt, call the LLM, post the reply,
 -- and append the (user, assistant) turn to the session history.
@@ -322,14 +329,7 @@ dispatchLLM gm = void $ async $
 -- LLM mention history.
 replyText :: NapCat :> es => GroupMessage -> T.Text -> Eff es ()
 replyText gm body =
-  sendAction
-    ( SendGroupMsg
-        gm.groupId
-        [ SegReply gm.messageId,
-          SegAt gm.userId,
-          SegText (" " <> body)
-        ]
-    )
+  sendAction (sendChatMsg gm.groupId (replySegs gm (" " <> body)))
 
 -- | Send the LLM's final reply and persist it into the messages
 -- table (so future dispatches can read this back as part of the
@@ -349,12 +349,8 @@ sendAndPersistReply ::
   T.Text ->
   Eff es ()
 sendAndPersistReply gm body = do
-  let segs =
-        [ SegReply gm.messageId,
-          SegAt gm.userId,
-          SegText (" " <> body)
-        ]
-  eres <- callAction (SendGroupMsg gm.groupId segs) 30000
+  let segs = replySegs gm (" " <> body)
+  eres <- callAction (sendChatMsg gm.groupId segs) 30000
   case eres of
     Left err ->
       logAttention "llm reply send failed" $ object ["error" .= err]

@@ -36,7 +36,7 @@ import Max.Tasks
     listTasks,
     pushBtwToLatest,
   )
-import OneBot.Types (GroupId (..), UserId (..))
+import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 
 -- | What the caller should do after dispatching a command.
 --
@@ -224,14 +224,18 @@ execute t gid uid replyTarget cmd = do
         then "✓ 已发取消信号给 " <> tid
         else "找不到任务 " <> tid <> " (用 !ps 看在跑的)"
   --
-  -- Group-scope only, on purpose: the reply is posted publicly in the
-  -- group, and a member's user-scope memories may have been learned in
-  -- *other* groups — printing them here would leak across groups.
-  -- (!memory rm can still delete one's own user memories by id.)
+  -- In a group, group scope only: the reply is public, and a member's
+  -- user-scope memories may have been learned in *other* groups —
+  -- printing them would leak across groups.  In a private chat the
+  -- audience IS the subject, so their own cross-group memories are
+  -- safe to show — that's the self-audit channel.
   MemoryList -> do
     let GroupId gidRaw = gid
+        UserId uidRaw = uid
+        private = isPrivateChat gid
     gms <- listMemories ScopeGroup gidRaw
-    reply (formatMemories gms)
+    ums <- if private then listMemories ScopeUser uidRaw else pure []
+    reply (formatMemories private gms ums)
   MemoryRm mid -> do
     let GroupId gidRaw = gid
         UserId uidRaw = uid
@@ -314,12 +318,18 @@ formatBranches active bs =
 --------------------------------------------------------------------------------
 -- !memory formatting.
 
-formatMemories :: [MemoryItem] -> Text
-formatMemories [] = "本群没有长期记忆（bot 觉得值得记的东西会存在这里）"
-formatMemories gms =
-  T.unlines $
-    ("本群记忆:" : map memLine gms)
-      <> ["用 !memory rm <id> 删除"]
+formatMemories :: Bool -> [MemoryItem] -> [MemoryItem] -> Text
+formatMemories _ [] [] = "没有长期记忆（bot 觉得值得记的东西会存在这里）"
+formatMemories private gms ums =
+  T.unlines . concat $
+    [ if null gms
+        then []
+        else (if private then "本会话记忆:" else "本群记忆:") : map memLine gms,
+      if null ums
+        then []
+        else "你的记忆（跨群，只在私聊显示）:" : map memLine ums,
+      ["用 !memory rm <id> 删除"]
+    ]
   where
     memLine m = "  #" <> T.pack (show m.memId) <> "  " <> m.memContent
 

@@ -143,6 +143,7 @@ test-suite max-test
     main-is:            Spec.hs
     other-modules:
         Max.Command.ParserSpec
+        OneBot.EventSpec
         Max.SessionSpec
         Max.Effects.LLMSpec
         Max.MCP.ClientSpec

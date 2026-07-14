@@ -79,6 +79,19 @@ triggerMsg segs =
       sender = Sender (UserId memberId) (Just "Alice") Nothing
     }
 
+-- | Same trigger but arriving via private chat (pseudo group id).
+privateTriggerMsg :: [Segment] -> GroupMessage
+privateTriggerMsg segs =
+  GroupMessage
+    { selfId = UserId botId,
+      groupId = GroupId (negate memberId),
+      userId = UserId memberId,
+      messageId = MessageId triggerMid,
+      message = segs,
+      rawMessage = "",
+      sender = Sender (UserId memberId) (Just "Alice") Nothing
+    }
+
 emptySession :: Session
 emptySession =
   Session
@@ -175,6 +188,13 @@ spec = do
           inp = baseInputs {ambient = [item]}
           (_, _, ub) = splitMessages (fst (renderContext inp))
       ub `shouldSatisfy` ("[09:00 SkyRain]" `T.isInfixOf`)
+
+  describe "renderContext private chat" $ do
+    it "labels the environment as 私聊 instead of 群号" $ do
+      let inp = baseInputs {triggerMessage = privateTriggerMsg [SegText "hi"]}
+          (sys, _, _) = splitMessages (fst (renderContext inp))
+      sys `shouldSatisfy` ("私聊" `T.isInfixOf`)
+      sys `shouldSatisfy` (not . ("群号" `T.isInfixOf`))
 
   describe "renderContext long-term memory" $ do
     it "omits the memory block entirely when nothing is remembered" $ do

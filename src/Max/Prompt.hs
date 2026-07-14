@@ -45,7 +45,7 @@ import Max.Images (downloadableImageCount)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 import System.FilePath ((</>))
 
 -- | Everything 'renderContext' needs in one record.  Splitting the
@@ -116,7 +116,7 @@ systemPrompt multimodal' envText persona mMemBlock =
       envText,
       "",
       "回复风格（重要）：",
-      "  - 你在 QQ 群里跟人说话，不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
+      "  - 你在 QQ 上跟人聊天（群聊或私聊），不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
       "  - 想说多句话时空一行分段，每段尽量短（一两句话）。",
       "  - 禁用 markdown：不要 # 标题、不要 **粗体** / *斜体*、不要 - / * 列表项、不要表格。",
       "  - 只有长代码 / 长引用才用 ``` 代码块；块内随便写。",
@@ -180,8 +180,18 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
       UserId senderId = gm.userId
-  ambient' <- fetchRecentInGroup gid mid s.clearedAt n
-  mention' <- fetchMentionHistory gid selfId' mid s.clearedAt n
+  -- In a private chat every message is part of the bot conversation:
+  -- the full recent history becomes the structured user/assistant
+  -- turn list, and the ambient section (chatter *not* directed at the
+  -- bot) is empty by definition.
+  ambient' <-
+    if isPrivateChat gm.groupId
+      then pure []
+      else fetchRecentInGroup gid mid s.clearedAt n
+  mention' <-
+    if isPrivateChat gm.groupId
+      then fetchRecentInGroup gid mid s.clearedAt n
+      else fetchMentionHistory gid selfId' mid s.clearedAt n
   pinnedItems' <- fetchMessagesByIds s.pinned
   groupMems <- listMemories ScopeGroup gid
   userMems <- listMemories ScopeUser senderId
@@ -405,7 +415,9 @@ renderContext pi' =
         T.intercalate "\n" $
           [ "[当前环境]",
             "  现在：" <> formatEnvTime pi'.now,
-            "  群号：" <> T.pack (show gidRaw),
+            if isPrivateChat pi'.triggerMessage.groupId
+              then "  场景：与 " <> senderName <> "（QQ " <> T.pack (show senderId) <> "）私聊"
+              else "  群号：" <> T.pack (show gidRaw),
             "  当前模型：" <> pi'.session.model,
             "  成员对照（@数字 即 QQ号）："
               <> T.intercalate "、" [T.pack (show u) <> "=" <> n | (u, n) <- roster]

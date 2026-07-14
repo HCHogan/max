@@ -4,6 +4,7 @@ module OneBot.Action
     Response (..),
     encodeAction,
     parseResponse,
+    sendChatMsg,
   )
 where
 
@@ -11,11 +12,12 @@ import Data.Aeson
 import Data.Aeson.Types (Parser)
 import Data.Text (Text)
 import OneBot.Segment (Segment)
-import OneBot.Types (GroupId)
+import OneBot.Types (GroupId, UserId, isPrivateChat, privateChatUserId)
 
 -- | Subset of OneBot 11 actions we issue.
 data Action
   = SendGroupMsg !GroupId ![Segment]
+  | SendPrivateMsg !UserId ![Segment]
   | -- | Look up a forwarded message chain by its id (the @id@ in a
     -- @forward@ segment's data). NapCat returns a list of nodes.
     GetForwardMsg !Text
@@ -26,20 +28,38 @@ data Action
     -- is a path *inside the NapCat container* — we stage to a shared
     -- volume on the host so NapCat can read it (see docker-compose.yml).
     UploadGroupFile !GroupId !Text !Text -- group_id, file_path, display_name
+  | -- | Private-chat counterpart of 'UploadGroupFile'.
+    UploadPrivateFile !UserId !Text !Text -- user_id, file_path, display_name
   deriving stock (Show)
+
+-- | Send to the conversation behind a (possibly pseudo) group id:
+-- real groups get @send_group_msg@, private pseudo-groups get
+-- @send_private_msg@.  Every reply path routes through this so chat
+-- kind is decided in exactly one place.
+sendChatMsg :: GroupId -> [Segment] -> Action
+sendChatMsg gid segs
+  | isPrivateChat gid = SendPrivateMsg (privateChatUserId gid) segs
+  | otherwise = SendGroupMsg gid segs
 
 actionName :: Action -> Text
 actionName = \case
   SendGroupMsg {} -> "send_group_msg"
+  SendPrivateMsg {} -> "send_private_msg"
   GetForwardMsg {} -> "get_forward_msg"
   GetGroupFileUrl {} -> "get_group_file_url"
   UploadGroupFile {} -> "upload_group_file"
+  UploadPrivateFile {} -> "upload_private_file"
 
 actionParams :: Action -> Value
 actionParams = \case
   SendGroupMsg gid segs ->
     object
       [ "group_id" .= gid,
+        "message" .= segs
+      ]
+  SendPrivateMsg uid segs ->
+    object
+      [ "user_id" .= uid,
         "message" .= segs
       ]
   GetForwardMsg fid ->
@@ -61,6 +81,12 @@ actionParams = \case
   UploadGroupFile gid path name ->
     object
       [ "group_id" .= gid,
+        "file" .= path,
+        "name" .= name
+      ]
+  UploadPrivateFile uid path name ->
+    object
+      [ "user_id" .= uid,
         "file" .= path,
         "name" .= name
       ]
