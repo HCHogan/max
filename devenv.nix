@@ -32,6 +32,9 @@
 
     # table replies render through the typst CLI
     typst
+
+    # sticker captioning extracts a GIF frame via ffmpeg
+    ffmpeg
   ];
 
   services.postgres = {

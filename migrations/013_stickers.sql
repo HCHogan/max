@@ -16,6 +16,7 @@ CREATE TABLE stickers (
     mface_key        text,
     summary          text,       -- NapCat's own label, e.g. [贴贴]
     description      text,       -- vision-model caption; NULL = pending
+    caption_attempts int         NOT NULL DEFAULT 0,  -- failed caption tries; capped so a poison row can't loop the worker
     banned           boolean     NOT NULL DEFAULT false,
     times_seen       int         NOT NULL DEFAULT 1,
     times_sent       int         NOT NULL DEFAULT 0,
@@ -27,7 +28,7 @@ CREATE TABLE stickers (
 
 CREATE INDEX stickers_uncaptioned_idx
     ON stickers (first_seen_at)
-    WHERE description IS NULL AND NOT banned;
+    WHERE description IS NULL AND NOT banned AND caption_attempts < 5;
 
 CREATE INDEX stickers_unembedded_idx
     ON stickers (first_seen_at)

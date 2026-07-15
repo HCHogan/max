@@ -41,6 +41,7 @@ import Max.Sandbox.Registry
     reapStaleSandboxes,
   )
 import Max.Session (newSessionRegistry)
+import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
 import Max.Tools (builtinsFor)
 import Max.Tools.Browser (browserToolsFor)
@@ -179,6 +180,11 @@ runApp cfg applied mEmbed eventQ imgQ fwdQ fileQ clientRef =
           -- linking a successfully-finished async is a no-op.
           withAsync (for_ mEmbed embedWorker) $ \aE -> do
             link aE
-            withAsync (handleEvents eventQ imgQ fwdQ fileQ) $ \aH -> do
-              link aH
-              runServer cfg.server eventQ clientRef
+            -- Same trick: no caption profile → immediate no-op async.
+            withAsync
+              (for_ cfg.stickerCaptionProfile (\p -> stickerCaptionWorker p cfg.imagesDir))
+              $ \aCap -> do
+                link aCap
+                withAsync (handleEvents eventQ imgQ fwdQ fileQ) $ \aH -> do
+                  link aH
+                  runServer cfg.server eventQ clientRef

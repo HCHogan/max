@@ -1,7 +1,8 @@
 -- |
 -- Background embedding worker: polls for rows whose @embedding@ is
--- still NULL (new group messages, new/edited memories), embeds them
--- in batches through "Max.Embedding", and writes the vectors back.
+-- still NULL (new group messages, new/edited memories, freshly
+-- captioned stickers), embeds them in batches through
+-- "Max.Embedding", and writes the vectors back.
 --
 -- Polling instead of write-path hooks on purpose: memories are
 -- written from three places (agent tools, the extractor, @!memory@)
@@ -21,6 +22,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log
+import Database.PostgreSQL.Simple (Query)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful.PostgreSQL (WithConnection, execute, query_)
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Util (catchSync)
@@ -43,6 +46,7 @@ errorMicros :: Int
 errorMicros = 60_000_000
 
 embedWorker ::
+  forall es.
   (WithConnection :> es, Log :> es, IOE :> es) =>
   EmbedClient ->
   Eff es ()
@@ -64,16 +68,29 @@ embedWorker client = forever $ do
       mems <-
         query_
           "SELECT id, content FROM memories WHERE embedding IS NULL LIMIT 64"
-      if null (msgs :: [(Int64, Text)]) && null (mems :: [(Int64, Text)])
+      -- Stickers embed their vision caption (the retrieval key for
+      -- send_sticker); rows wait here until the caption worker fills
+      -- description in.
+      stickers <-
+        query_
+          "SELECT sha256, description FROM stickers \
+          \ WHERE embedding IS NULL AND description IS NOT NULL AND NOT banned \
+          \ LIMIT 64"
+      if null (msgs :: [(Int64, Text)])
+        && null (mems :: [(Int64, Text)])
+        && null (stickers :: [(Text, Text)])
         then liftIO (threadDelay idleMicros)
         else do
           okM <- embedInto "UPDATE messages SET embedding = ?::vector WHERE message_id = ?" msgs
           okR <- embedInto "UPDATE memories SET embedding = ?::vector WHERE id = ?" mems
-          unless (okM && okR) $ liftIO (threadDelay errorMicros)
+          okS <- embedInto "UPDATE stickers SET embedding = ?::vector WHERE sha256 = ?" stickers
+          unless (okM && okR && okS) $ liftIO (threadDelay errorMicros)
           liftIO (threadDelay busyMicros)
 
     -- Embed one batch and write vectors back; False on API failure
-    -- (rows stay NULL for retry).
+    -- (rows stay NULL for retry).  Polymorphic in the key column
+    -- (messages/memories use bigint ids, stickers their sha256 text).
+    embedInto :: ToField i => Query -> [(i, Text)] -> Eff es Bool
     embedInto _ [] = pure True
     embedInto sql rows = do
       let (ids, texts) = unzip (take batchSize rows)

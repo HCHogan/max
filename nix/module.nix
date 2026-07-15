@@ -183,10 +183,11 @@ in
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
       # Sandbox lifecycle shells out to the docker CLI; table replies
-      # shell out to typst.
+      # shell out to typst; sticker captioning to ffmpeg (GIF frames).
       path = [
         config.virtualisation.docker.package
         pkgs.typst
+        pkgs.ffmpeg
       ];
       environment = {
         # typst needs a *static* CJK face for table rendering (the

@@ -83,6 +83,10 @@ data AppConfig = AppConfig
     -- | LLM profile for post-dispatch memory extraction; 'Nothing'
     -- disables the extractor (agent-side memory tools still work).
     memoryExtractProfile :: !(Maybe Text),
+    -- | Vision-capable LLM profile for sticker captioning; 'Nothing'
+    -- disables the caption worker (stickers are still recorded, just
+    -- never described — and thus never retrievable for sending).
+    stickerCaptionProfile :: !(Maybe Text),
     -- | Embeddings endpoint; presence enables the embed worker and
     -- the semantic-search surfaces (search_messages, memory_search).
     embedding :: !(Maybe EmbeddingConfig),
@@ -183,6 +187,18 @@ appConfigParser =
               long "memory-extract-profile",
               env "MAX_MEMORY_EXTRACT_PROFILE",
               conf "extract_profile",
+              metavar "PROFILE"
+            ]
+    stickerCaptionProfile <-
+      subConfig "stickers" $
+        optional $
+          setting
+            [ help "Vision-capable LLM profile for sticker captioning (presence enables it)",
+              reader str,
+              option,
+              long "sticker-caption-profile",
+              env "MAX_STICKER_CAPTION_PROFILE",
+              conf "caption_profile",
               metavar "PROFILE"
             ]
     embedding <- subConfig "embedding" embeddingParser

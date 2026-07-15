@@ -75,6 +75,7 @@ library
         Max.Sandbox.Registry
         Max.Session
         Max.Session.Types
+        Max.Stickers
         Max.Tasks
         Max.Tools
         Max.Tools.Browser
