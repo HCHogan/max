@@ -204,6 +204,25 @@ spec = do
       sysP `shouldSatisfy` ("对话场景：QQ 一对一私聊" `T.isInfixOf`)
       sysP `shouldSatisfy` (not . ("群成员" `T.isInfixOf`))
 
+  describe "renderContext quoted forward" $ do
+    it "expands stored forward children under the reply block" $ do
+      let container = historyAt 9 8001 otherMemberId (Just "Bob") "[forward]"
+          kids =
+            [ historyAt 8 (-1) 3001 (Just "甲") "第一条转发",
+              historyAt 8 (-2) 3002 (Just "乙") "第二条转发"
+            ]
+          inp = baseInputs {replyCtx = Just (container, [], kids)}
+          (_, _, ub) = splitMessages (fst (renderContext inp))
+      ub `shouldSatisfy` ("转发记录内容" `T.isInfixOf`)
+      ub `shouldSatisfy` ("第一条转发" `T.isInfixOf`)
+      ub `shouldSatisfy` ("乙" `T.isInfixOf`)
+
+    it "omits the forward section for ordinary quoted messages" $ do
+      let replied = historyAt 9 8001 otherMemberId (Just "Bob") "普通消息"
+          inp = baseInputs {replyCtx = Just (replied, [], [])}
+          (_, _, ub) = splitMessages (fst (renderContext inp))
+      ub `shouldSatisfy` (not . ("转发记录内容" `T.isInfixOf`))
+
   describe "renderContext long-term memory" $ do
     it "omits the memory block entirely when nothing is remembered" $ do
       let (sys, _, _) = splitMessages (fst (renderContext baseInputs))
@@ -326,7 +345,7 @@ spec = do
                 frReceivedAt = timeAt 8,
                 frFetchedAt = Just (timeAt 8)
               }
-          inp = baseInputs {replyCtx = Just (replied, [file])}
+          inp = baseInputs {replyCtx = Just (replied, [file], [])}
           (_, _, ub) = splitMessages (fst (renderContext inp))
       ub `shouldSatisfy` ("[引用上下文]" `T.isInfixOf`)
       ub `shouldSatisfy` ("report.pdf" `T.isInfixOf`)
@@ -349,7 +368,7 @@ spec = do
                 frReceivedAt = timeAt 8,
                 frFetchedAt = Nothing
               }
-          inp = baseInputs {replyCtx = Just (replied, [file])}
+          inp = baseInputs {replyCtx = Just (replied, [file], [])}
           (_, _, ub) = splitMessages (fst (renderContext inp))
       ub `shouldSatisfy` ("ready=false" `T.isInfixOf`)
 

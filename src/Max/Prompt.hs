@@ -34,6 +34,7 @@ import Max.DB.Files qualified as DBFiles
 import Max.DB.History
   ( HistoryItem (..),
     bestName,
+    fetchForwardChildren,
     fetchMentionHistory,
     fetchMessage,
     fetchMessagesByIds,
@@ -67,9 +68,11 @@ data PromptInputs = PromptInputs
     mention :: ![HistoryItem],
     -- | Resolved pin list (preserves the user's pin order).
     pinnedItems :: ![HistoryItem],
-    -- | If the trigger replied to a message: that message + the files
-    -- attached to it (so the model can address them by file_id).
-    replyCtx :: !(Maybe (HistoryItem, [FileRecord])),
+    -- | If the trigger replied to a message: that message, the files
+    -- attached to it (so the model can address them by file_id), and
+    -- — when the quoted message is a 转发聊天记录 — its stored
+    -- contents, so quoting a forward makes it readable.
+    replyCtx :: !(Maybe (HistoryItem, [FileRecord], [HistoryItem])),
     -- | Whether the active profile accepts image content blocks.
     -- Toggles the format-guide wording for the @[image]@ marker.
     multimodal :: !Bool,
@@ -148,7 +151,7 @@ systemPrompt multimodal' private envText persona mMemBlock =
         then "  [image]                     — 一张图片；内容会附在消息末尾，标注来自哪条消息（[HH:MM <昵称>] 消息里的图片）。太老或太多的图会被略去，只剩标记"
         else "  [image]                     — 一张图片（你看不到内容，可以请用户描述）",
       "  [file:<name>]               — 一个群文件；用 list_recent_files 或 import_file_to_sandbox 处理",
-      "  [forward]                   — 转发的聊天记录（你看不到内容）",
+      "  [forward]                   — 转发的聊天记录；用户引用它时，内容会展开在 [引用上下文] 的 转发记录内容 里",
       "  @<数字>                     — @某人（数字是 QQ 号）；对应谁看 [当前环境] 的成员对照",
       "",
       "当用户引用了带文件的消息时，引用块下面会附带一段 `附带文件:`，",
@@ -221,7 +224,11 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
         Nothing -> pure Nothing
         Just h -> do
           files <- DBFiles.fetchFilesForMessage h.messageId
-          pure (Just (h, files))
+          -- Expand a quoted 转发聊天记录: its contents were filed by
+          -- the forward worker as child rows.  Empty for ordinary
+          -- messages — one cheap indexed lookup either way.
+          kids <- fetchForwardChildren h.messageId maxForwardLines
+          pure (Just (h, files, kids))
   images' <-
     if multimodal'
       then do
@@ -236,12 +243,18 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
         -- pointing at, pins are explicit user signals, then plain
         -- recency.  (Display order is chronological regardless —
         -- 'loadPromptImages' re-sorts.)
-        let candidates =
+        let replyItems = maybe [] (\(r, _, kids) -> r : kids) replyCtx'
+            candidates =
               dedupById $
-                maybe [] (\(r, _) -> [r]) replyCtx'
+                replyItems
                   <> pinnedItems'
                   <> sortOn (Down . (.receivedAt)) (ambient' <> mention')
-        loadPromptImages blobRoot selfId' mid candidates
+        loadPromptImages
+          blobRoot
+          selfId'
+          mid
+          (Set.fromList (map (.messageId) replyItems))
+          candidates
       else pure []
   now' <- liftIO getCurrentTime
   pure $
@@ -334,9 +347,10 @@ loadPromptImages ::
   FilePath -> -- blob store root; images.local_path is relative to it
   Int64 -> -- bot self id (for display names in labels)
   Int64 -> -- trigger message_id
+  Set.Set Int64 -> -- message ids belonging to the quoted reply (incl. forward children)
   [HistoryItem] -> -- context candidates, priority order, deduped
   Eff es [PromptImage]
-loadPromptImages blobRoot selfId' mid candidates = do
+loadPromptImages blobRoot selfId' mid replyIds candidates = do
   let candidates' = filter (\h -> h.messageId /= mid) candidates
       ids = mid : map (.messageId) candidates'
   rows <-
@@ -363,12 +377,22 @@ loadPromptImages blobRoot selfId' mid candidates = do
   pure (ctxImgs <> trigImgs)
   where
     loadCtx h mp =
-      let label =
-            "["
-              <> formatHM h.receivedAt
-              <> " "
-              <> displayName selfId' h
-              <> "] 消息里的图片:"
+      -- The quoted message's images get an unmistakable label — "which
+      -- picture are you asking about" must not depend on the model
+      -- correlating timestamps.
+      let label
+            | h.messageId `Set.member` replyIds =
+                "[↩ 被引用的那条消息（"
+                  <> formatHM h.receivedAt
+                  <> " "
+                  <> displayName selfId' h
+                  <> "）] 里的图片:"
+            | otherwise =
+                "["
+                  <> formatHM h.receivedAt
+                  <> " "
+                  <> displayName selfId' h
+                  <> "] 消息里的图片:"
        in loadOne label mp
     loadOne label (mime, path) = do
       -- images.local_path is stored relative to the blob root
@@ -431,7 +455,7 @@ renderContext pi' =
                   pi'.mention
                     <> pi'.ambient
                     <> pi'.pinnedItems
-                    <> maybe [] (\(r, _) -> [r]) pi'.replyCtx,
+                    <> maybe [] (\(r, _, _) -> [r]) pi'.replyCtx,
                 h.userId /= selfId'
               ]
       envText =
@@ -536,7 +560,7 @@ mergeAssistantRuns = foldr step []
 renderUser ::
   Int64 ->
   [HistoryItem] ->
-  Maybe (HistoryItem, [FileRecord]) ->
+  Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
   [HistoryItem] -> -- pinned items, in user pin order
   [Text] ->
   GroupMessage ->
@@ -559,8 +583,12 @@ renderUser selfId' ambient' replyCtx' pinnedItems' notes gm =
         [""],
         case replyCtx' of
           Nothing -> []
-          Just (r, files) ->
-            "[引用上下文]" : renderReplyLine selfId' r : renderReplyFiles files <> [""],
+          Just (r, files, kids) ->
+            "[引用上下文]"
+              : renderReplyLine selfId' r
+              : renderReplyFiles files
+                <> renderReplyForward selfId' kids
+                <> [""],
         if null notes
           then []
           else
@@ -582,6 +610,23 @@ renderHistoryLine selfId' h =
 renderReplyLine :: Int64 -> HistoryItem -> Text
 renderReplyLine selfId' h =
   "[↩ 引用 " <> formatHM h.receivedAt <> " " <> displayName selfId' h <> "]: " <> oneLine h.renderedText
+
+-- | The expanded contents of a quoted 转发聊天记录.  Lines carry the
+-- original send times; each line is truncated to keep a huge bundle
+-- from eating the prompt.
+renderReplyForward :: Int64 -> [HistoryItem] -> [Text]
+renderReplyForward _ [] = []
+renderReplyForward selfId' kids =
+  ("  转发记录内容" <> capNote <> ":")
+    : map (("    " <>) . T.take 200 . renderHistoryLine selfId') kids
+  where
+    capNote
+      | length kids >= maxForwardLines = "（前 " <> T.pack (show maxForwardLines) <> " 条）"
+      | otherwise = ""
+
+-- | How many lines of a quoted forward bundle get expanded.
+maxForwardLines :: Int
+maxForwardLines = 30
 
 renderReplyFiles :: [FileRecord] -> [Text]
 renderReplyFiles [] = []

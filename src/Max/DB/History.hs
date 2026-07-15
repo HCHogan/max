@@ -5,6 +5,7 @@ module Max.DB.History
     fetchMessage,
     fetchMentionHistory,
     fetchMessagesByIds,
+    fetchForwardChildren,
   )
 where
 
@@ -180,3 +181,22 @@ fetchMessagesByIds ids = do
   -- Re-order to match input.
   let byId = [(r.messageId, r) | r <- rows :: [HistoryItem]]
   pure [r | i <- ids, Just r <- [lookup i byId]]
+
+-- | The stored contents of a forwarded chat record: the synthetic
+-- child rows the forward worker filed under @container@, in original
+-- order.  Timestamps prefer the *original* send time (the synthetic
+-- row's received_at is merely when we fetched the bundle).
+fetchForwardChildren ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 -> -- container message id
+  Int -> -- cap
+  Eff es [HistoryItem]
+fetchForwardChildren containerId cap =
+  query
+    "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, \
+    \       COALESCE(original_sent_at, received_at) \
+    \  FROM messages \
+    \  WHERE forwarded_in_message_id = ? \
+    \  ORDER BY forward_position \
+    \  LIMIT ?"
+    (containerId, cap)
