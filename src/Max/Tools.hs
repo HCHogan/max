@@ -102,29 +102,13 @@ searchMessagesTool mEmbed (GroupId gid) =
     { toolName = "search_messages",
       toolDescription =
         T.unwords $
-          [ "Search the bot's message history.  All filters are optional and",
-            "AND-combined: 'query' is a case-insensitive literal substring",
-            "(mixed CJK + ASCII works, e.g. 'haskell' matches '我在学haskell');",
-            "'regex' is a case-insensitive POSIX regex (Postgres ~*: \\d \\w,",
-            "alternation, anchors all work; no lookaround; prefer 'query' for",
-            "plain substrings); 'sender_id' / 'sender' filter by who sent it;",
-            "'after' / 'before' bound the time range (UTC — same timezone as",
-            "the 'time' values in results and chat history).  'group_id'",
-            "defaults to the current group; pass a different id only when the",
-            "user explicitly asks about another group.  With no text filter it",
-            "just lists that slice of history (e.g. 张三昨天说了什么 →",
-            "sender + after/before, no query).  Returns up to 'limit'",
-            "most-recent matches as message_id, sender, time, and a snippet.",
-            "Use for questions like 我们之前讨论过X吗 or 上次谁说了Y."
+          [ "搜索聊天记录（之前讨论过X吗 / 上次谁说了Y / 张三昨天说了啥）。",
+            "所有过滤条件可选、AND 组合，各参数含义见参数说明；",
+            "没给任何文本条件时就按其余条件列出最近的消息。"
           ]
-            <> concat
-              [ [ "'semantic' searches by MEANING instead of exact wording",
-                  "(找\"讨论过部署方案\"这类不知道原话怎么说的)；results come",
-                  "back most-similar-first instead of newest-first, and it",
-                  "combines with all the other filters."
-                ]
-              | Just _ <- [mEmbed]
-              ],
+            <> [ "找不到原话怎么说时用 semantic 按语义搜，结果按相似度排序。"
+               | Just _ <- [mEmbed]
+               ],
       toolSchema =
         object
           [ "type" .= ("object" :: Text),
@@ -344,17 +328,9 @@ sayTool dc =
     { toolName = "say",
       toolDescription =
         T.unwords
-          [ "Send a status update to the group *during* a task, before your",
-            "final answer.  For anything that takes more than a couple of",
-            "tool calls, keep the group posted — they can't see your tool",
-            "activity, only silence.  Say something when you (a) start a",
-            "multi-step task (\"好的，我去装一下\"); (b) finish or fail a",
-            "significant step (\"装好了，现在跑\", \"编译挂了，我看看\");",
-            "(c) change plan or hit something unexpected; (d) have been",
-            "silently grinding through tool calls for a while — as a rule",
-            "of thumb, don't let ~5 tool rounds pass without a status line.",
-            "Keep each update to one short line.  Do NOT use this for the",
-            "final answer — produce that as your normal text response."
+          [ "任务中途向用户播报一行进展（用户看不到你的工具调用，只能看到沉默）。",
+            "开工、关键步骤成败、改变计划时各说一句；连续 ~5 轮工具没吭声也该报一下。",
+            "每次一行短话；最终答案不要用 say，直接作为正文回复。"
           ],
       toolSchema =
         object

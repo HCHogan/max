@@ -415,7 +415,7 @@ spec = do
       let (sysOff, _, _) = splitMessages (fst (renderContext baseInputs))
           (sysOn, _, _) = splitMessages (fst (renderContext baseInputs {multimodal = True}))
       sysOff `shouldSatisfy` ("你看不到内容" `T.isInfixOf`)
-      sysOn `shouldSatisfy` ("内容会附在消息末尾" `T.isInfixOf`)
+      sysOn `shouldSatisfy` ("附在消息末尾" `T.isInfixOf`)
 
   describe "renderContext drained notes" $ do
     it "returns the session btw notes verbatim as 'drained'" $ do

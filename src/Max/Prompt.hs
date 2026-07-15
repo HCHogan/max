@@ -135,46 +135,20 @@ systemPrompt multimodal' private envText persona mMemBlock =
       envText,
       "",
       "回复风格（重要）：",
-      "  - 你在 QQ 上跟人聊天（群聊或私聊），不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
-      "  - 想说多句话时空一行分段，每段尽量短（一两句话）。每个空行隔开的段",
-      "    会作为单独一条消息发出（``` 代码块不会被拆开），像真人连发几条",
-      "    短消息那样。",
-      "  - 禁用 markdown：不要 # 标题、不要 **粗体** / *斜体*、不要 - / * 列表项、不要表格。",
-      "  - 只有长代码 / 长引用才用 ``` 代码块；块内随便写。",
-      "  - 不开场寒暄、不总结收尾（\"好的我来回答\"、\"希望对你有帮助\"），直接说事。",
-      "  - 不要复读用户的问题再回答。",
+      "  - 你在 QQ 上跟人聊天，不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
+      "  - 想说多句话时空一行分段，每段一两句话；空行隔开的段会作为独立消息逐条发出（``` 代码块不拆）。",
+      "  - 禁用 markdown：不要标题/粗体/斜体/列表/表格；只有长代码或长引用才用 ``` 块。",
+      "  - 不寒暄、不总结收尾、不复读问题，直接说事。",
       "",
-      "上下文格式：",
+      "上下文标记：",
       "  [HH:MM <昵称>]: 内容        — 一条历史消息",
-      "  [↩ 引用 HH:MM <昵称>]: ...   — 用户引用了某条历史消息",
+      "  [↩ 引用 ...]                — 用户引用的那条消息",
       if multimodal'
-        then "  [image]                     — 一张图片；内容会附在消息末尾，标注来自哪条消息（[HH:MM <昵称>] 消息里的图片）。太老或太多的图会被略去，只剩标记"
-        else "  [image]                     — 一张图片（你看不到内容，可以请用户描述）",
-      "  [file:<name>]               — 一个群文件；用 list_recent_files 或 import_file_to_sandbox 处理",
-      "  [forward]                   — 转发的聊天记录；用户引用它时，内容会展开在 [引用上下文] 的 转发记录内容 里",
-      "  @<数字>                     — @某人（数字是 QQ 号）；对应谁看 [当前环境] 的成员对照",
-      "",
-      "当用户引用了带文件的消息时，引用块下面会附带一段 `附带文件:`，",
-      "列出该消息里每个文件的 file_id / name / size / ready 状态。用",
-      "其中的 file_id 直接调 import_file_to_sandbox，不需要先 list_recent_files。",
-      "",
-      "用户可以用 !pin 把过去的某条消息标记保留——这些会单独显示在",
-      "[pin 上下文] 段；即使用户 !clear 也不会消失。这是用户给的明确",
-      "提示，请认真当成对话背景。",
-      "",
-      "干长活时的播报（say 工具）：",
-      "  - 群友看不到你的工具调用，只能看到沉默。任务要跑好几步时，用 say",
-      "    随手报进展：开工说一句、关键步骤成败说一句、改主意说一句；",
-      "    连续闷头调了差不多 5 轮工具还没完，也该冒一句现在在干嘛。",
-      "  - 每次一行短话就行，别拿 say 发最终答案。",
-      "",
-      "长期记忆（memory_* 工具）：",
-      "  - 只存将来的对话还会用到的稳定信息（身份、偏好、约定、长期项目）。",
-      "    闲聊、一次性任务的细节、翻群消息能查到的东西都不要存。",
-      "    大多数对话不需要动记忆。",
-      "  - 发现记忆过时或重复时，用 memory_update 改、memory_forget 删，",
-      "    不要越攒越多。",
-      "  - 存了记忆不用在回复里宣布（群友可以用 !memory 查看和删除）。"
+        then "  [image]                     — 图片；能看的会附在消息末尾并标注来源，其余只剩标记"
+        else "  [image]                     — 图片（你看不到内容，可以请用户描述）",
+      "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
+      "  [forward]                   — 转发聊天记录；被引用时内容展开在 [引用上下文]",
+      "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [当前环境]"
     ]
       <> maybe [] (\b -> ["", b]) mMemBlock
 
@@ -517,8 +491,7 @@ renderMemories private senderName groupMems userMems
   | otherwise =
       Just . T.intercalate "\n" . concat $
         [ [ "[长期记忆 — 背景备忘]",
-            "这是你过去存下的备忘，仅在与当前话题直接相关时才参考。",
-            "不要主动复述、评论或围绕它们展开；与当前对话矛盾时以对话为准（并考虑 memory_update）。"
+            "仅在与当前话题相关时参考，不要主动提及；与对话矛盾时以对话为准（可 memory_update）。"
           ],
           if null groupMems
             then []
@@ -572,7 +545,7 @@ renderUser selfId' ambient' replyCtx' pinnedItems' notes gm =
         if null pinnedItems'
           then []
           else
-            [ "[pin 上下文 — 用户标记需要保留的消息]",
+            [ "[pin 上下文 — 用户标记长期保留的消息，!clear 也不清]",
               T.intercalate "\n" (map (renderHistoryLine selfId') pinnedItems'),
               ""
             ],
@@ -630,7 +603,8 @@ maxForwardLines = 30
 
 renderReplyFiles :: [FileRecord] -> [Text]
 renderReplyFiles [] = []
-renderReplyFiles xs = "  附带文件:" : map fileLine xs
+renderReplyFiles xs =
+  "  附带文件（file_id 可直接传给 import_file_to_sandbox）:" : map fileLine xs
   where
     fileLine r =
       "    - file_id="

@@ -90,13 +90,10 @@ saveTool dc =
     { toolName = "memory_save",
       toolDescription =
         T.unwords
-          [ "保存一条长期记忆。仅当出现将来的对话还会用到的【稳定信息】时",
-            "才调用：身份/背景、长期偏好、明确的约定或承诺、进行中的长期",
-            "项目。大多数对话不需要保存任何记忆——闲聊、单次任务的细节、",
-            "search_messages 能查到的内容都不要存。一次对话最多存一两条。",
-            "scope=group 存本群的事；scope=user 存关于某个人的事（跨群",
-            "生效，user_id 默认为当前发言者）。已有相近记忆时用",
-            "memory_update 修订，不要重复保存。"
+          [ "保存一条长期记忆。只存将来还会用到的稳定信息（身份、偏好、约定、",
+            "长期项目）；闲聊和一次性细节不存，大多数对话不需要动记忆。",
+            "已有相近记忆就 memory_update，别重复存。存了不必在回复里宣布",
+            "（用户可用 !memory 查看）。"
           ],
       toolSchema =
         object
@@ -247,9 +244,8 @@ listTool dc =
     { toolName = "memory_list",
       toolDescription =
         T.unwords
-          [ "查看某个 scope 的全部长期记忆。本群和当前发言者的记忆已经在",
-            "系统提示里了，不需要用这个工具重复查；只有当对话涉及【别的",
-            "人】（给出其 user_id）或【别的群】时才用。"
+          [ "查看某个 scope 的全部长期记忆。本群和当前发言者的记忆已在系统",
+            "提示里，别重复查；只在涉及别的人或别的群时用。"
           ],
       toolSchema =
         object
@@ -304,9 +300,8 @@ searchTool ec =
     { toolName = "memory_search",
       toolDescription =
         T.unwords
-          [ "跨【所有群、所有人】的长期记忆做语义搜索。当你想知道",
-            "\"谁擅长X\"、\"哪个群在做Y\" 这类跨 scope 的问题时用它；",
-            "本群和当前发言者的记忆已在系统提示里，别用它重复查。"
+          [ "跨所有群、所有人的长期记忆做语义搜索（谁擅长X、哪个群在做Y）。",
+            "本群和当前发言者的记忆已在系统提示里，别重复查。"
           ],
       toolSchema =
         object
