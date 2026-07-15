@@ -160,7 +160,7 @@ ingestNode imgQ containerSid gid sid depth pos node = do
             segments = node.segments
           }
   insSid <- insertForwardNode ins
-  liftIO (enqueueImagesFromNode imgQ insSid node.segments)
+  liftIO (enqueueImagesFromNode imgQ insSid (Just gid) node.segments)
   let inlineChildren = concatMap extractInlineNodes node.segments
   logInfo "forward node ingested" $
     object

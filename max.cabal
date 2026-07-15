@@ -52,6 +52,7 @@ library
         Max.DB.Message
         Max.DB.Migrations
         Max.DB.Session
+        Max.DB.Stickers
         Max.Effects.Agent
         Max.Effects.Blob
         Max.Effects.Http

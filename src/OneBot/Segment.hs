@@ -1,6 +1,10 @@
 module OneBot.Segment
   ( Segment (..),
     FileSegInfo (..),
+    ImageSegInfo (..),
+    imageSeg,
+    stickerSeg,
+    isStickerImage,
     renderPlainText,
     mentionsUser,
   )
@@ -24,11 +28,7 @@ data Segment
   = SegText !Text
   | SegAt !UserId
   | SegReply !MessageId
-  | -- | Inbound: the URL NapCat handed us (or 'Nothing' if file-id only).
-    -- Outbound: a @file@ value to send — typically @"base64://...\"@ or
-    -- @"file://..."@ or an http(s) URL.  Same constructor either way
-    -- because OneBot 11 puts both in the same @data.file@ slot.
-    SegImage !(Maybe Text)
+  | SegImage !ImageSegInfo
   | SegFace !Int
   | -- | Non-image file attached to a group message.  @data.file_id@ is
     -- the only thing guaranteed to round-trip back to QQ; @data.url@ is
@@ -46,6 +46,33 @@ data FileSegInfo = FileSegInfo
   }
   deriving stock (Show)
 
+-- | An @image@ segment.  Inbound, 'isiUrl' is the URL NapCat handed
+-- us ('Nothing' if file-id only); outbound it's the @file@ value to
+-- send (@base64://...@, @file://...@, http(s)) — OneBot 11 puts both
+-- in the same slot.  'isiSubType' distinguishes a real photo (0)
+-- from a saved sticker / 动画表情 (1); NapCat also ships a
+-- 'isiSummary' like @[动画表情]@ for the latter.  Both round-trip so
+-- nothing is lost at persist time.
+data ImageSegInfo = ImageSegInfo
+  { isiUrl :: !(Maybe Text),
+    isiSubType :: !(Maybe Int),
+    isiSummary :: !(Maybe Text)
+  }
+  deriving stock (Show)
+
+-- | A plain outbound image.
+imageSeg :: Text -> Segment
+imageSeg file = SegImage (ImageSegInfo (Just file) Nothing Nothing)
+
+-- | An outbound custom sticker: same image, flagged @sub_type: 1@ so
+-- QQ clients show it as a 表情 rather than a photo.
+stickerSeg :: Text -> Segment
+stickerSeg file = SegImage (ImageSegInfo (Just file) (Just 1) Nothing)
+
+-- | Did this image arrive as a saved sticker (动画表情)?
+isStickerImage :: ImageSegInfo -> Bool
+isStickerImage info = info.isiSubType == Just 1
+
 instance FromJSON Segment where
   parseJSON = withObject "Segment" $ \o -> do
     ty <- o .: "type" :: Parser Text
@@ -55,7 +82,13 @@ instance FromJSON Segment where
           "text" -> SegText <$> d .: "text"
           "at" -> SegAt <$> d .: "qq"
           "reply" -> SegReply <$> d .: "id"
-          "image" -> SegImage <$> d .:? "url"
+          "image" -> do
+            url <- d .:? "url"
+            -- NapCat is number/string-inconsistent here too.
+            mSub <- d .:? "sub_type"
+            subTy <- traverse parseFlexInt mSub
+            summ <- d .:? "summary"
+            pure (SegImage (ImageSegInfo url subTy summ))
           "face" -> SegFace <$> (parseFlexInt =<< d .: "id")
           "file" -> SegFile <$> parseFileSeg d
           _ -> fallback
@@ -137,8 +170,16 @@ instance ToJSON Segment where
         [ "type" .= ("reply" :: Text)
         , "data" .= object ["id" .= T.pack (show m)]
         ]
-    SegImage mu ->
-      object ["type" .= ("image" :: Text), "data" .= object ["file" .= mu]]
+    SegImage info ->
+      object
+        [ "type" .= ("image" :: Text),
+          "data"
+            .= object
+              ( ["file" .= info.isiUrl]
+                  <> ["sub_type" .= st | Just st <- [info.isiSubType]]
+                  <> ["summary" .= s | Just s <- [info.isiSummary]]
+              )
+        ]
     SegFace i ->
       object ["type" .= ("face" :: Text), "data" .= object ["id" .= i]]
     SegFile fs ->
@@ -162,7 +203,9 @@ renderPlainText = T.concat . map go
       SegText t -> t
       SegAt (UserId u) -> "@" <> T.pack (show u) <> " "
       SegReply _ -> ""
-      SegImage _ -> "[image]"
+      SegImage info
+        | isStickerImage info -> "[动画表情]"
+        | otherwise -> "[image]"
       SegFace _ -> "[face]"
       SegFile fs -> "[file:" <> fs.fsiName <> "]"
       SegOther t _ -> "[" <> t <> "]"

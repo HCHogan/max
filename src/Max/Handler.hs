@@ -41,7 +41,7 @@ import Max.Reply (Chunk (..), chunkSource, planReply)
 import Max.Util (catchSync)
 import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
-import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
+import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 -- | Decision derived from one group message.
@@ -379,7 +379,7 @@ sendAndPersistReply gm body = do
         rendered <- liftIO (renderTableImage src)
         case rendered of
           Right png ->
-            pure [SegImage (Just ("base64://" <> TE.decodeASCII (B64.encode png)))]
+            pure [imageSeg ("base64://" <> TE.decodeASCII (B64.encode png))]
           Left err -> do
             logAttention "table render failed, sending source" $
               object ["error" .= err, "chunk" .= i]

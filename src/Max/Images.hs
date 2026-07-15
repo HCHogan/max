@@ -12,6 +12,7 @@ where
 import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
 import Control.Exception (SomeException)
 import Control.Monad (forever)
+import Data.Foldable (for_)
 import Data.Aeson (Value (Object, String), toJSON)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -24,18 +25,24 @@ import Effectful
 import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute)
+import Max.DB.Stickers (StickerMeta, recordSticker, stickerMeta)
 import Max.Effects.Blob (Blob, blobPath, putBlob)
 import Max.Effects.Http (Http, getBytes)
 import Max.Util (catchSync)
 import OneBot.Event (GroupMessage (..))
-import OneBot.Segment (Segment (..))
-import OneBot.Types (MessageId (..))
+import OneBot.Segment (ImageSegInfo (..), Segment (..))
+import OneBot.Types (GroupId (..), MessageId (..))
 
 -- | One image (or mface) waiting to be fetched and recorded.
+-- 'sticker' carries the sticker metadata when the segment was a
+-- 动画表情/商城表情, so the worker can register it in the sticker
+-- library once the bytes (and thus the sha) are known.
 data ImageJob = ImageJob
   { messageId :: !Int64,
     segIndex :: !Int,
-    url :: !Text
+    url :: !Text,
+    groupId :: !(Maybe Int64),
+    sticker :: !(Maybe StickerMeta)
   }
   deriving stock (Show)
 
@@ -50,14 +57,15 @@ newImageQueue = newTQueueIO
 enqueueImages :: ImageQueue -> GroupMessage -> IO ()
 enqueueImages q gm =
   let MessageId mid = gm.messageId
-   in enqueueImagesFromNode q mid gm.message
+      GroupId gid = gm.groupId
+   in enqueueImagesFromNode q mid (Just gid) gm.message
 
 -- | Enqueue images belonging to an arbitrary 'message_id' — used by the
 -- forward worker to feed synthetic ids for forwarded nodes.
-enqueueImagesFromNode :: ImageQueue -> Int64 -> [Segment] -> IO ()
-enqueueImagesFromNode q mid segs = do
+enqueueImagesFromNode :: ImageQueue -> Int64 -> Maybe Int64 -> [Segment] -> IO ()
+enqueueImagesFromNode q mid gid segs = do
   let jobs = mapMaybe pick (zip [0 ..] segs)
-      pick (i, s) = ImageJob mid i <$> imageUrl s
+      pick (i, s) = (\u -> ImageJob mid i u gid (stickerMeta s)) <$> imageUrl s
   atomically $ mapM_ (writeTQueue q) jobs
 
 -- | How many of a message's segments the worker will try to fetch —
@@ -69,7 +77,7 @@ downloadableImageCount = length . mapMaybe imageUrl
 
 imageUrl :: Segment -> Maybe Text
 imageUrl = \case
-  SegImage (Just u) -> Just u
+  SegImage info -> info.isiUrl
   SegOther "mface" (Object o) -> lookupString "url" o
   SegOther "image" (Object o) -> lookupString "url" o
   _ -> Nothing
@@ -131,6 +139,7 @@ processOne job = do
       sha <- putBlob bytes
       rel <- blobPath sha
       recordImage sha mime (BS.length bytes) rel job
+      for_ job.sticker (recordSticker sha job.groupId)
       logInfo "image stored" $
         object
           [ "sha256_short" .= T.take 8 sha,

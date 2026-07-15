@@ -44,7 +44,7 @@ import Max.Effects.Tools (Tool (..))
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..), sendChatMsg)
-import OneBot.Segment (Segment (..))
+import OneBot.Segment (Segment (..), imageSeg)
 import OneBot.Types (GroupId (..), isPrivateChat, privateChatUserId)
 import System.Directory
   ( createDirectoryIfMissing,
@@ -269,7 +269,7 @@ sendImageFromSandboxTool gid sandboxes =
                       caption = case mCaption of
                         Just c | not (T.null (T.strip c)) -> [SegText (T.strip c <> "\n")]
                         _ -> []
-                      segs = caption <> [SegImage (Just b64)]
+                      segs = caption <> [imageSeg b64]
                   sendAction (sendChatMsg gid segs)
                   logInfo "image sent from sandbox" $
                     object
