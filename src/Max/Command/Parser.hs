@@ -200,6 +200,12 @@ classify verb raw@(RawArgs pos flags) = case verb of
       Just n -> MemoryRm n
       Nothing -> Unknown verb raw
     _ -> Unknown verb raw
+  "sticker" -> case pos of
+    [] -> StickerStats
+    ["list"] -> StickerList
+    ["ban", s] -> StickerBan s
+    ["unban", s] -> StickerUnban s
+    _ -> Unknown verb raw
   "branch" -> case pos of
     [] -> BranchList
     ["list"] -> BranchList

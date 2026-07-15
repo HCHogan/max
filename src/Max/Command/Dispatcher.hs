@@ -23,6 +23,7 @@ import Max.Command.Types
 import Data.Int (Int64)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, fetchMemory, listMemories)
+import Max.DB.Stickers qualified as Stickers
 import Max.Effects.LLM (LLM, listProfiles)
 import Max.Browser.Registry (destroyBrowsersForGroup)
 import Max.Env (BotEnv (..))
@@ -252,6 +253,22 @@ execute t gid uid replyTarget cmd = do
             reply $ "✓ 已删除记忆 #" <> T.pack (show mid)
         | otherwise -> reply "只能删本群的记忆或你自己的记忆"
   --
+  StickerStats -> do
+    s <- Stickers.stickerStats
+    reply $
+      T.concat
+        [ "表情包库：共 ", tshow s.ssTotal,
+          "，已识图 ", tshow s.ssCaptioned,
+          "，待识图 ", tshow s.ssPending,
+          "，已屏蔽 ", tshow s.ssBanned,
+          "\n用 !sticker list 看最近的；!sticker ban <sha前缀> 屏蔽"
+        ]
+  StickerList -> do
+    rows <- Stickers.listRecentStickers 10
+    reply (formatStickers rows)
+  StickerBan prefix -> banSticker True prefix
+  StickerUnban prefix -> banSticker False prefix
+  --
   BranchList -> do
     s <- liftIO (Session.readSession t)
     bs <- Session.listBranches gid
@@ -290,6 +307,19 @@ execute t gid uid replyTarget cmd = do
   where
     reply :: Applicative f => Text -> f DispatchResult
     reply = pure . ReplyText
+
+    banSticker b prefix
+      | T.length prefix < 6 =
+          reply "sha 前缀至少 6 位（!sticker list 里有）"
+      | otherwise = do
+          n <- Stickers.setStickerBanned b prefix
+          reply $ case n of
+            0 -> "没有匹配 " <> prefix <> "* 的表情"
+            _ ->
+              "✓ 已"
+                <> (if b then "屏蔽 " else "解除屏蔽 ")
+                <> tshow n
+                <> " 个表情"
 
 renderThinkingState :: Maybe Bool -> Text
 renderThinkingState = \case
@@ -332,6 +362,28 @@ formatMemories private gms ums =
     ]
   where
     memLine m = "  #" <> T.pack (show m.memId) <> "  " <> m.memContent
+
+--------------------------------------------------------------------------------
+-- !sticker formatting.
+
+formatStickers :: [Stickers.StickerRow] -> Text
+formatStickers [] = "还没有识图完成的表情包（bot 会从群里学）"
+formatStickers rows =
+  T.unlines $
+    "最近见过的表情包（sha前缀 见/发 简介）："
+      : [ "  "
+            <> T.take 8 r.srSha
+            <> "  "
+            <> tshow r.srTimesSeen
+            <> "/"
+            <> tshow r.srTimesSent
+            <> "  "
+            <> T.take 40 r.srDescription
+        | r <- rows
+        ]
+
+tshow :: Show a => a -> Text
+tshow = T.pack . show
 
 --------------------------------------------------------------------------------
 -- !pins formatting.
@@ -415,6 +467,9 @@ helpText Nothing =
       "  !btw <text>              在跑的任务里就注入侧记；否则当前上下文临时问一句（不入对话历史）",
       "  !memory                  看本群的长期记忆",
       "  !memory rm <id>          删除一条记忆（本群的或你自己的）",
+      "  !sticker                 表情包库统计（bot 从群里学表情包）",
+      "  !sticker list            看最近识图完成的表情包",
+      "  !sticker ban <sha前缀>   屏蔽某个表情（unban 恢复）",
       "  !ps                      看本群在跑的后台任务",
       "  !ps --all                看所有群的任务",
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",

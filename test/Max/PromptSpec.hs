@@ -1,6 +1,7 @@
 module Max.PromptSpec (spec) where
 
 import Data.Int (Int64)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
@@ -8,7 +9,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
-import Max.Prompt (PromptImage (..), PromptInputs (..), renderContext)
+import Max.Prompt (PromptImage (..), PromptInputs (..), applyStickerCaptions, renderContext)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -427,3 +428,24 @@ spec = do
     it "returns empty list when no notes" $ do
       let (_, drained) = renderContext baseInputs
       drained `shouldBe` []
+
+  describe "applyStickerCaptions" $ do
+    let caps = Map.fromList [(50 :: Int64, ["柴犬歪头，配字\"啊?\"，表达疑惑"])]
+        item marker = historyAt 1 50 memberId (Just "甲") ("看这个 " <> marker)
+
+    it "swaps a 动画表情 marker for its caption" $ do
+      (applyStickerCaptions caps (item "[动画表情]")).renderedText
+        `shouldBe` "看这个 [表情包: 柴犬歪头，配字\"啊?\"，表达疑惑]"
+
+    it "handles legacy [image] markers too" $ do
+      (applyStickerCaptions caps (item "[image]")).renderedText
+        `shouldBe` "看这个 [表情包: 柴犬歪头，配字\"啊?\"，表达疑惑]"
+
+    it "consumes markers in order, leaves extras alone" $ do
+      let caps2 = Map.fromList [(50 :: Int64, ["第一张", "第二张"])]
+      (applyStickerCaptions caps2 (item "[mface] 和 [动画表情] 和 [image]")).renderedText
+        `shouldBe` "看这个 [表情包: 第一张] 和 [表情包: 第二张] 和 [image]"
+
+    it "leaves messages without captions untouched" $ do
+      (applyStickerCaptions Map.empty (item "[动画表情]")).renderedText
+        `shouldBe` "看这个 [动画表情]"

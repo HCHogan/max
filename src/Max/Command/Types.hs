@@ -60,6 +60,10 @@ data Command
   | Kill !Text -- ^ '!kill <id>'
   | MemoryList -- ^ '!memory' — this group's memories + the caller's own
   | MemoryRm !Int64 -- ^ '!memory rm <id>'
+  | StickerStats -- ^ '!sticker' — library counters
+  | StickerList -- ^ '!sticker list' — recent captioned stickers
+  | StickerBan !Text -- ^ '!sticker ban <sha-prefix>'
+  | StickerUnban !Text -- ^ '!sticker unban <sha-prefix>'
   | BranchList -- ^ '!branch' or '!branch list'
   | BranchNew !Text -- ^ '!branch <name>' — fork from current + switch
   | BranchDelete !Text -- ^ '!branch delete <name>'

@@ -6,6 +6,7 @@ module Max.Prompt
     PromptInputs (..),
     PromptImage (..),
     renderContext,
+    applyStickerCaptions,
   )
 where
 
@@ -192,7 +193,7 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
   pinnedItems' <- fetchMessagesByIds s.pinned
   groupMems <- listMemories ScopeGroup gid
   userMems <- listMemories ScopeUser senderId
-  replyCtx' <- case extractReply gm.message of
+  replyCtx0 <- case extractReply gm.message of
     Nothing -> pure Nothing
     Just rid -> do
       mHist <- fetchMessage rid
@@ -205,6 +206,21 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
           -- messages — one cheap indexed lookup either way.
           kids <- fetchForwardChildren h.messageId maxForwardLines
           pure (Just (h, files, kids))
+  -- Context stickers the caption worker has already described read
+  -- as [表情包: <简介>] instead of an opaque [动画表情] marker — a
+  -- non-multimodal model gets to "see" them, and a multimodal one
+  -- saves image budget for real photos.
+  capMap <-
+    stickerCaptionsFor . map (.messageId) $
+      ambient'
+        <> mention'
+        <> pinnedItems'
+        <> maybe [] (\(r, _, kids) -> r : kids) replyCtx0
+  let enrich = applyStickerCaptions capMap
+      ambient'' = map enrich ambient'
+      mention'' = map enrich mention'
+      pinnedItems'' = map enrich pinnedItems'
+      replyCtx' = fmap (\(r, f, kids) -> (enrich r, f, map enrich kids)) replyCtx0
   images' <-
     if multimodal'
       then do
@@ -223,8 +239,8 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
             candidates =
               dedupById $
                 replyItems
-                  <> pinnedItems'
-                  <> sortOn (Down . (.receivedAt)) (ambient' <> mention')
+                  <> pinnedItems''
+                  <> sortOn (Down . (.receivedAt)) (ambient'' <> mention'')
         loadPromptImages
           blobRoot
           selfId'
@@ -239,9 +255,9 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
         { defaultPersona = defaultPersona,
           session = s,
           triggerMessage = gm,
-          ambient = ambient',
-          mention = mention',
-          pinnedItems = pinnedItems',
+          ambient = ambient'',
+          mention = mention'',
+          pinnedItems = pinnedItems'',
           replyCtx = replyCtx',
           multimodal = multimodal',
           groupMemories = groupMems,
@@ -288,6 +304,51 @@ dedupeRoster = go Set.empty
     go seen ((u, n) : rest)
       | u `Set.member` seen = go seen rest
       | otherwise = (u, n) : go (Set.insert u seen) rest
+
+-- | Captions of already-described stickers appearing in the given
+-- messages, in seg_index order per message.
+stickerCaptionsFor ::
+  (WithConnection :> es, IOE :> es) =>
+  [Int64] ->
+  Eff es (Map.Map Int64 [Text])
+stickerCaptionsFor [] = pure Map.empty
+stickerCaptionsFor ids = do
+  rows <-
+    query
+      "SELECT mi.message_id, s.description \
+      \  FROM message_images mi \
+      \  JOIN stickers s USING (sha256) \
+      \  WHERE mi.message_id IN ? \
+      \    AND s.description IS NOT NULL AND NOT s.banned \
+      \  ORDER BY mi.message_id, mi.seg_index"
+      (Only (In ids))
+  pure (Map.fromListWith (flip (<>)) [(m, [d]) | (m, d) <- rows :: [(Int64, Text)]])
+
+-- | Swap sticker markers in a history item's rendered text for their
+-- captions.  Markers are consumed left-to-right in seg order;
+-- @[image]@ is accepted too because rows persisted before sub_type
+-- survived parsing rendered stickers that way.
+applyStickerCaptions :: Map.Map Int64 [Text] -> HistoryItem -> HistoryItem
+applyStickerCaptions caps h = case Map.lookup h.messageId caps of
+  Nothing -> h
+  Just ds -> h {renderedText = replaceStickerMarkers ds h.renderedText}
+
+replaceStickerMarkers :: [Text] -> Text -> Text
+replaceStickerMarkers ds0 = go ds0
+  where
+    markers = ["[动画表情]", "[mface]", "[image]"] :: [Text]
+    go [] rest = rest
+    go (d : ds) rest = case firstMarker rest of
+      Nothing -> rest
+      Just (pre, post) ->
+        pre <> "[表情包: " <> T.take 80 d <> "]" <> go ds post
+    firstMarker rest =
+      case sortOn fst [(T.length pre, m) | m <- markers, Just pre <- [findSub m rest]] of
+        [] -> Nothing
+        ((i, m) : _) -> Just (T.take i rest, T.drop (i + T.length m) rest)
+    findSub m s = case T.breakOn m s of
+      (pre, suf) | not (T.null suf) -> Just pre
+      _ -> Nothing
 
 -- | Keep first occurrence of each message id.
 dedupById :: [HistoryItem] -> [HistoryItem]

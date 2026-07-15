@@ -6,8 +6,13 @@
 -- Captioning and embedding happen asynchronously (see "Max.Stickers").
 module Max.DB.Stickers
   ( StickerMeta (..),
+    StickerRow (..),
+    StickerStats (..),
     stickerMeta,
     recordSticker,
+    stickerStats,
+    listRecentStickers,
+    setStickerBanned,
   )
 where
 
@@ -19,7 +24,7 @@ import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, (:>))
-import Effectful.PostgreSQL (WithConnection, execute)
+import Effectful.PostgreSQL (WithConnection, execute, query, query_)
 import OneBot.Segment (ImageSegInfo (..), Segment (..), isStickerImage)
 
 -- | What we know about a sticker at ingest time, before any vision
@@ -100,3 +105,58 @@ recordSticker sha gid meta = do
         gid
       )
   pure ()
+
+--------------------------------------------------------------------------------
+-- !sticker command support.
+
+data StickerStats = StickerStats
+  { ssTotal :: !Int,
+    ssCaptioned :: !Int,
+    ssBanned :: !Int,
+    ssPending :: !Int
+  }
+  deriving stock (Show)
+
+stickerStats :: (WithConnection :> es, IOE :> es) => Eff es StickerStats
+stickerStats = do
+  rows <-
+    query_
+      "SELECT count(*)::int, count(description)::int, \
+      \       (count(*) FILTER (WHERE banned))::int, \
+      \       (count(*) FILTER (WHERE description IS NULL AND NOT banned \
+      \                           AND caption_attempts < 5))::int \
+      \ FROM stickers"
+  pure $ case rows of
+    [(t, c, b, p)] -> StickerStats t c b p
+    _ -> StickerStats 0 0 0 0
+
+data StickerRow = StickerRow
+  { srSha :: !Text,
+    srKind :: !Text,
+    srDescription :: !Text,
+    srTimesSeen :: !Int,
+    srTimesSent :: !Int
+  }
+  deriving stock (Show)
+
+-- | Most recently seen captioned stickers — what !sticker list shows
+-- (sha prefix is the handle for !sticker ban).
+listRecentStickers :: (WithConnection :> es, IOE :> es) => Int -> Eff es [StickerRow]
+listRecentStickers n = do
+  rows <-
+    query
+      "SELECT sha256, kind, description, times_seen, times_sent \
+      \ FROM stickers WHERE description IS NOT NULL AND NOT banned \
+      \ ORDER BY last_seen_at DESC LIMIT ?"
+      [n]
+  pure [StickerRow sha kind d ts tx | (sha, kind, d, ts, tx) <- rows]
+
+-- | (Un)ban by sha256 prefix; returns how many rows matched.  The
+-- caller enforces a minimum prefix length so @!sticker ban a@ can't
+-- carpet-bomb the library.
+setStickerBanned :: (WithConnection :> es, IOE :> es) => Bool -> Text -> Eff es Int
+setStickerBanned b prefix =
+  fromIntegral
+    <$> execute
+      "UPDATE stickers SET banned = ? WHERE sha256 LIKE ?"
+      (b, prefix <> "%")

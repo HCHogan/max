@@ -162,6 +162,7 @@ test-suite max-test
         , aeson           >= 2.2  && < 2.4
         , base            >= 4.20 && < 5
         , bytestring      >= 0.12 && < 0.13
+        , containers      >= 0.7  && < 0.9
         , effectful       >= 2.5  && < 2.7
         , effectful-core  >= 2.5  && < 2.7
         , hspec           >= 2.11 && < 2.12
