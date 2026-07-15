@@ -1,5 +1,6 @@
 module Max.Handler
   ( handleEvents,
+    stripStickerText,
   )
 where
 
@@ -277,7 +278,8 @@ dispatchLLM gm = void $ async $
       multimodal <- isProfileMultimodal s.model
       (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot s gm
       let debugEff = maybe env.beDebugDefault id s.debugOverride
-          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal
+          stickersEff = maybe env.beStickerDefault id s.stickerOverride
+          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff
       result <- agentTurn dc s.model s.thinkingOverride ctx
       -- The outbound message already @-mentions the sender via 'SegAt'
       -- (rendered as their nickname).  The model, having seen prior
@@ -285,7 +287,13 @@ dispatchLLM gm = void $ async $
       -- "@<sender-qq>" into its reply text — producing a double @.
       -- Strip the sender's raw @-mention from the model text so only the
       -- structured SegAt remains.
-      let stripped = T.strip (stripMentions gm.userId result.reply)
+      -- Stickers go out only via the send_sticker tool.  In history the
+      -- bot's past sticker sends render as "[表情包: …]" text, and weaker
+      -- models imitate that by *typing* the caption instead of calling
+      -- the tool — leaking the description into the group.  Strip any
+      -- such span as a hard backstop (the tool descriptions also tell
+      -- the model not to).
+      let stripped = T.strip (stripStickerText (stripMentions gm.userId result.reply))
       -- callAction so we get the message_id back, then persist this
       -- outbound message into the messages table.  That's where
       -- subsequent dispatches will read this turn's assistant reply
@@ -414,3 +422,20 @@ extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_
 stripMentions :: UserId -> T.Text -> T.Text
 stripMentions (UserId u) =
   T.replace ("@" <> T.pack (show u)) ""
+
+-- | Remove any "[表情包: …]" / "[表情包…]" spans a model hallucinated
+-- into its reply text (see call site).  Scans for the "[表情包" opener
+-- and drops through the next "]"; leaves everything else untouched.
+stripStickerText :: T.Text -> T.Text
+stripStickerText = go
+  where
+    opener = "[表情包"
+    go t = case T.breakOn opener t of
+      (before, rest)
+        | T.null rest -> t -- no opener left
+        | otherwise ->
+            let afterOpener = T.drop (T.length opener) rest
+             in case T.breakOn "]" afterOpener of
+                  (_, close)
+                    | T.null close -> before -- unterminated: drop the tail too
+                    | otherwise -> before <> go (T.drop 1 close)

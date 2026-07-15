@@ -31,7 +31,8 @@ emptySession =
       clearedAt = Nothing,
       pinned = [],
       thinkingOverride = Nothing,
-      debugOverride = Nothing
+      debugOverride = Nothing,
+      stickerOverride = Nothing
     }
 
 t0 :: UTCTime

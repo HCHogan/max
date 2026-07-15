@@ -202,6 +202,9 @@ classify verb raw@(RawArgs pos flags) = case verb of
     _ -> Unknown verb raw
   "sticker" -> case pos of
     [] -> StickerStats
+    ["on"] -> StickerSet (Just True)
+    ["off"] -> StickerSet (Just False)
+    ["default"] -> StickerSet Nothing
     ["list"] -> StickerList
     ["ban", s] -> StickerBan s
     ["unban", s] -> StickerUnban s

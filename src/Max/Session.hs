@@ -46,6 +46,8 @@ module Max.Session
     clearThinkingOverride,
     setDebugOverride,
     clearDebugOverride,
+    setStickerOverride,
+    clearStickerOverride,
   )
 where
 
@@ -180,6 +182,14 @@ setDebugOverride b s = s {debugOverride = Just b}
 -- | Drop the override; fall back to @AppConfig.debug@.
 clearDebugOverride :: Session -> Session
 clearDebugOverride s = s {debugOverride = Nothing}
+
+-- | Set the sticker override for this session (@!sticker on@/@off@).
+setStickerOverride :: Bool -> Session -> Session
+setStickerOverride b s = s {stickerOverride = Just b}
+
+-- | Drop the override; fall back to @AppConfig.stickersEnabled@.
+clearStickerOverride :: Session -> Session
+clearStickerOverride s = s {stickerOverride = Nothing}
 
 --------------------------------------------------------------------------------
 -- Branches.

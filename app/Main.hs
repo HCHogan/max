@@ -92,7 +92,7 @@ main = do
                   <> memoryToolsFor mEmbed dc
                   <> sandboxToolsFor dc.dcGroupId sandboxes
                   <> fileToolsFor dc.dcGroupId cfg.imagesDir sandboxes
-                  <> stickerToolsFor mEmbed cfg.imagesDir dc
+                  <> (if dc.dcStickers then stickerToolsFor mEmbed cfg.imagesDir dc else [])
                   <> maybe [] searchToolsFor cfg.search
                   -- Browser toolset only for multimodal profiles (per config).
                   <> (if dc.dcMultimodal then browserToolsFor dc.dcGroupId browsers else [])
@@ -102,6 +102,7 @@ main = do
                     beHistoryWindow = cfg.historyWindow,
                     beBlobRoot = cfg.imagesDir,
                     beDebugDefault = cfg.debug,
+                    beStickerDefault = cfg.stickersEnabled,
                     beDefaultModel = cfg.llm.defaultName,
                     beSessions = sessions,
                     beTasks = tasks,

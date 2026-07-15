@@ -60,7 +60,8 @@ data Command
   | Kill !Text -- ^ '!kill <id>'
   | MemoryList -- ^ '!memory' — this group's memories + the caller's own
   | MemoryRm !Int64 -- ^ '!memory rm <id>'
-  | StickerStats -- ^ '!sticker' — library counters
+  | StickerStats -- ^ '!sticker' — library counters + on/off state
+  | StickerSet !(Maybe Bool) -- ^ '!sticker on' / 'off' / 'default'
   | StickerList -- ^ '!sticker list' — recent captioned stickers
   | StickerBan !Text -- ^ '!sticker ban <sha-prefix>'
   | StickerUnban !Text -- ^ '!sticker unban <sha-prefix>'

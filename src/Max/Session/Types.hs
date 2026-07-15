@@ -42,6 +42,11 @@ data Session = Session
     -- | Per-session debug override, set by @!debug on@/@off@.
     -- 'Nothing' means follow @AppConfig.debug@.  When effective
     -- debug is on, tool calls are announced in the group.
-    debugOverride :: !(Maybe Bool)
+    debugOverride :: !(Maybe Bool),
+    -- | Per-session sticker override, set by @!sticker on@/@off@.
+    -- 'Nothing' means follow @AppConfig.stickersEnabled@.  When
+    -- effective sticker sending is on, the @send_sticker@ tool is
+    -- registered so the model may post stickers.
+    stickerOverride :: !(Maybe Bool)
   }
   deriving stock (Show)

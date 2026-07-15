@@ -32,6 +32,9 @@ data BotEnv = BotEnv
     beBlobRoot :: !FilePath,
     -- | Config-level debug default; sessions override via @!debug@.
     beDebugDefault :: !Bool,
+    -- | Config-level sticker default; sessions override via @!sticker
+    -- on/off@.  When off, the @send_sticker@ tool isn't registered.
+    beStickerDefault :: !Bool,
     -- | Default LLM profile name for new sessions / NULL branch rows.
     beDefaultModel :: !Text,
     beSessions :: !SessionRegistry,

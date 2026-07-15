@@ -87,6 +87,11 @@ data AppConfig = AppConfig
     -- disables the caption worker (stickers are still recorded, just
     -- never described — and thus never retrievable for sending).
     stickerCaptionProfile :: !(Maybe Text),
+    -- | Config-level default for whether the bot may post stickers via
+    -- the @send_sticker@ tool.  Per-group override via @!sticker
+    -- on/off@.  When off, the tool isn't registered (model can't send),
+    -- but ingest/captioning still run.
+    stickersEnabled :: !Bool,
     -- | Embeddings endpoint; presence enables the embed worker and
     -- the semantic-search surfaces (search_messages, memory_search).
     embedding :: !(Maybe EmbeddingConfig),
@@ -201,6 +206,15 @@ appConfigParser =
               conf "caption_profile",
               metavar "PROFILE"
             ]
+    stickersEnabled <-
+      subConfig "stickers" $
+        yesNoSwitch
+          [ help "Default for whether the bot may post stickers (send_sticker tool); per-group override via !sticker on/off",
+            long "stickers",
+            env "MAX_STICKERS",
+            conf "enabled",
+            value True
+          ]
     embedding <- subConfig "embedding" embeddingParser
     debug <-
       yesNoSwitch

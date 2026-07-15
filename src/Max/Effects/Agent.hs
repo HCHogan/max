@@ -82,7 +82,11 @@ data DispatchContext = DispatchContext
     dcDebug :: !Bool,
     -- | Whether the active profile is multimodal.  The tool factory
     -- gates capability-heavy tools (e.g. the browser toolset) on this.
-    dcMultimodal :: !Bool
+    dcMultimodal :: !Bool,
+    -- | Effective sticker toggle for this dispatch (config default,
+    -- possibly overridden per session via !sticker on/off).  The tool
+    -- factory gates the send_sticker tool on this.
+    dcStickers :: !Bool
   }
   deriving stock (Show)
 

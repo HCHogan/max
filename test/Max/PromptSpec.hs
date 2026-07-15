@@ -104,7 +104,8 @@ emptySession =
       clearedAt = Nothing,
       pinned = [],
       thinkingOverride = Nothing,
-      debugOverride = Nothing
+      debugOverride = Nothing,
+      stickerOverride = Nothing
     }
 
 baseInputs :: PromptInputs

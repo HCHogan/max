@@ -254,15 +254,32 @@ execute t gid uid replyTarget cmd = do
         | otherwise -> reply "只能删本群的记忆或你自己的记忆"
   --
   StickerStats -> do
-    s <- Stickers.stickerStats
+    st <- Stickers.stickerStats
+    sess <- liftIO (Session.readSession t)
     reply $
       T.concat
-        [ "表情包库：共 ", tshow s.ssTotal,
-          "，已识图 ", tshow s.ssCaptioned,
-          "，待识图 ", tshow s.ssPending,
-          "，已屏蔽 ", tshow s.ssBanned,
-          "\n用 !sticker list 看最近的；!sticker ban <sha前缀> 屏蔽"
+        [ "表情包库：共 ", tshow st.ssTotal,
+          "，已识图 ", tshow st.ssCaptioned,
+          "，待识图 ", tshow st.ssPending,
+          "，已屏蔽 ", tshow st.ssBanned,
+          "\n发送开关：", renderStickerState env.beStickerDefault sess.stickerOverride,
+          "\n用 !sticker on/off/default 开关；!sticker list 看最近的；!sticker ban <sha前缀> 屏蔽"
         ]
+  StickerSet mb -> do
+    updateSession t $ \s ->
+      ( case mb of
+          Just b -> Session.setStickerOverride b s
+          Nothing -> Session.clearStickerOverride s,
+        ()
+      )
+    logInfo "session: sticker override" $ object ["value" .= mb]
+    reply $ case mb of
+      Just True -> "✓ 表情包发送 开 — bot 可以主动发表情了"
+      Just False -> "✓ 表情包发送 关 — bot 不再发表情（仍会学习入库）"
+      Nothing ->
+        "✓ 表情包发送回到配置默认（当前默认"
+          <> (if env.beStickerDefault then "开" else "关")
+          <> "）"
   StickerList -> do
     rows <- Stickers.listRecentStickers 10
     reply (formatStickers rows)
@@ -329,6 +346,12 @@ renderThinkingState = \case
 
 renderDebugState :: Bool -> Maybe Bool -> Text
 renderDebugState defB = \case
+  Nothing -> (if defB then "开" else "关") <> " (配置默认)"
+  Just True -> "开 (session 覆盖)"
+  Just False -> "关 (session 覆盖)"
+
+renderStickerState :: Bool -> Maybe Bool -> Text
+renderStickerState defB = \case
   Nothing -> (if defB then "开" else "关") <> " (配置默认)"
   Just True -> "开 (session 覆盖)"
   Just False -> "关 (session 覆盖)"
@@ -467,7 +490,8 @@ helpText Nothing =
       "  !btw <text>              在跑的任务里就注入侧记；否则当前上下文临时问一句（不入对话历史）",
       "  !memory                  看本群的长期记忆",
       "  !memory rm <id>          删除一条记忆（本群的或你自己的）",
-      "  !sticker                 表情包库统计（bot 从群里学表情包）",
+      "  !sticker                 表情包库统计 + 发送开关状态（bot 从群里学表情包）",
+      "  !sticker on/off/default  开/关/回到配置默认 bot 主动发表情 (session 覆盖)",
       "  !sticker list            看最近识图完成的表情包",
       "  !sticker ban <sha前缀>   屏蔽某个表情（unban 恢复）",
       "  !ps                      看本群在跑的后台任务",
