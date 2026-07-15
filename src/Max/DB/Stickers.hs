@@ -11,11 +11,13 @@ module Max.DB.Stickers
   )
 where
 
-import Data.Aeson (Value (Object, String))
+import Data.Aeson (Value (Number, Object, String))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Int (Int64)
+import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Effectful (Eff, IOE, (:>))
 import Effectful.PostgreSQL (WithConnection, execute)
 import OneBot.Segment (ImageSegInfo (..), Segment (..), isStickerImage)
@@ -58,8 +60,13 @@ stickerMeta = \case
         }
   _ -> Nothing
   where
+    -- NapCat mixes types here (emoji_package_id is a JSON number,
+    -- the rest strings); store everything as text.
     look k o = case KM.lookup (K.fromText k) o of
       Just (String s) -> Just s
+      Just (Number n) -> case floatingOrInteger n of
+        Right (i :: Integer) -> Just (T.pack (show i))
+        Left (_ :: Double) -> Nothing
       _ -> Nothing
 
 -- | Upsert one sighting.  On repeat sightings the counters advance

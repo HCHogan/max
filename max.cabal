@@ -83,6 +83,7 @@ library
         Max.Tools.Memory
         Max.Tools.Sandbox
         Max.Tools.Search
+        Max.Tools.Stickers
         Max.Util
     build-depends:
         , aeson               >= 2.2  && < 2.4
@@ -112,6 +113,7 @@ library
         , opt-env-conf        >= 0.15 && < 0.17
         , postgresql-simple   >= 0.7  && < 0.8
         , process             >= 1.6  && < 1.7
+        , random              >= 1.2  && < 1.4
         , resource-pool       >= 0.4  && < 0.6
         , scientific          >= 0.3  && < 0.4
         , stm                 >= 2.5  && < 2.6

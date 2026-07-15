@@ -49,6 +49,7 @@ import Max.Tools.Files (fileToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
+import Max.Tools.Stickers (stickerToolsFor)
 import OneBot.Event (Event)
 import OneBot.Server (Client, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
@@ -91,6 +92,7 @@ main = do
                   <> memoryToolsFor mEmbed dc
                   <> sandboxToolsFor dc.dcGroupId sandboxes
                   <> fileToolsFor dc.dcGroupId cfg.imagesDir sandboxes
+                  <> stickerToolsFor mEmbed cfg.imagesDir dc
                   <> maybe [] searchToolsFor cfg.search
                   -- Browser toolset only for multimodal profiles (per config).
                   <> (if dc.dcMultimodal then browserToolsFor dc.dcGroupId browsers else [])
