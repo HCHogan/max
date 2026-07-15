@@ -4,6 +4,7 @@ import Control.Concurrent (myThreadId)
 import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (AsyncException (UserInterrupt), bracket, bracket_, throwTo)
 import Control.Monad (unless)
+import Data.Foldable (for_)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, link, runConcurrent, withAsync)
@@ -21,6 +22,8 @@ import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (LLM, LLMRegistry (..), runLLM)
 import Max.Effects.NapCat (NapCat, runNapCat)
+import Max.Embedder (embedWorker)
+import Max.Embedding (EmbedClient, newEmbedClient)
 import Max.Env (BotEnv (..))
 import Max.Persistence (PersistMode (Persisted))
 import Max.Files (FileQueue, fileWorker, newFileQueue)
@@ -81,9 +84,10 @@ main = do
           sessions <- newSessionRegistry
           tasks <- newTaskRegistry
           clientRef <- newTVarIO (Nothing :: Maybe Client)
+          mEmbed <- traverse newEmbedClient cfg.embedding
           let toolFactory dc =
-                builtinsFor dc
-                  <> memoryToolsFor dc
+                builtinsFor mEmbed dc
+                  <> memoryToolsFor mEmbed dc
                   <> sandboxToolsFor dc.dcGroupId sandboxes
                   <> fileToolsFor dc.dcGroupId cfg.imagesDir sandboxes
                   <> maybe [] searchToolsFor cfg.search
@@ -99,7 +103,9 @@ main = do
                     beSessions = sessions,
                     beTasks = tasks,
                     beSandboxes = sandboxes,
-                    beBrowsers = browsers
+                    beBrowsers = browsers,
+                    beMemoryExtract = cfg.memoryExtractProfile,
+                    beEmbed = mEmbed
                   }
           runEff
             . runConcurrent
@@ -113,7 +119,7 @@ main = do
             . runReader Persisted -- default mode; !btw scopes Volatile on top
             . runReader env
             . runAgent defaultLimits toolFactory tasks
-            $ runApp cfg applied eventQ imgQ fwdQ fileQ clientRef
+            $ runApp cfg applied mEmbed eventQ imgQ fwdQ fileQ clientRef
 
 runApp ::
   ( IOE :> es,
@@ -130,13 +136,14 @@ runApp ::
   ) =>
   AppConfig ->
   [String] ->
+  Maybe EmbedClient ->
   TQueue Event ->
   ImageQueue ->
   ForwardQueue ->
   FileQueue ->
   TVar (Maybe Client) ->
   Eff es ()
-runApp cfg applied eventQ imgQ fwdQ fileQ clientRef =
+runApp cfg applied mEmbed eventQ imgQ fwdQ fileQ clientRef =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -168,6 +175,10 @@ runApp cfg applied eventQ imgQ fwdQ fileQ clientRef =
         link aFwd
         withAsync (fileWorker fileQ) $ \aFile -> do
           link aFile
-          withAsync (handleEvents eventQ imgQ fwdQ fileQ) $ \aH -> do
-            link aH
-            runServer cfg.server eventQ clientRef
+          -- No embedding config → this async completes immediately;
+          -- linking a successfully-finished async is a no-op.
+          withAsync (for_ mEmbed embedWorker) $ \aE -> do
+            link aE
+            withAsync (handleEvents eventQ imgQ fwdQ fileQ) $ \aH -> do
+              link aH
+              runServer cfg.server eventQ clientRef
