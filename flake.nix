@@ -56,9 +56,8 @@
               # Marked broken in nixpkgs (stale bounds); it builds fine
               # against the current set once the bounds are relaxed.
               wreq-effectful = hlib.markUnbroken (hlib.doJailbreak hsuper.wreq-effectful);
-              # doJailbreak: nixpkgs has effectful 2.6 (our bound says <2.6);
               # dontCheck: max-test-db wants a live PostgreSQL.
-              max = hlib.dontCheck (hlib.doJailbreak (hself.callCabal2nix "max" (cleanSrc pkgs) { }));
+              max = hlib.dontCheck (hself.callCabal2nix "max" (cleanSrc pkgs) { });
             };
           };
         in
