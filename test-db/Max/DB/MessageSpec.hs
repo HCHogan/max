@@ -69,6 +69,7 @@ spec pool = before_ (truncateAll pool) $
             botId
             "max"
             (MessageId 5050)
+            Nothing
             [SegText "你好"]
         m <- withDb pool $ fetchMessage 5050
         case m of
@@ -81,8 +82,8 @@ spec pool = before_ (truncateAll pool) $
 
       it "is idempotent on message_id too" $ do
         withDb pool $
-          insertOutbound testGroup botId "max" (MessageId 5050) [SegText "one"]
+          insertOutbound testGroup botId "max" (MessageId 5050) Nothing [SegText "one"]
         withDb pool $
-          insertOutbound testGroup botId "max" (MessageId 5050) [SegText "two"]
+          insertOutbound testGroup botId "max" (MessageId 5050) Nothing [SegText "two"]
         m <- withDb pool $ fetchMessage 5050
         (m >>= Just . (.renderedText)) `shouldBe` Just "one"

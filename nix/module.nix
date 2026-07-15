@@ -182,8 +182,18 @@ in
         ++ lib.optional cfg.sandboxImage.enable "max-sandbox-image.service";
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
-      # Sandbox lifecycle shells out to the docker CLI.
-      path = [ config.virtualisation.docker.package ];
+      # Sandbox lifecycle shells out to the docker CLI; table replies
+      # shell out to typst.
+      path = [
+        config.virtualisation.docker.package
+        pkgs.typst
+      ];
+      environment = {
+        # typst needs a *static* CJK face for table rendering (the
+        # nixpkgs noto CJK ships variable fonts, which typst cannot
+        # render), and the service user has no fontconfig of its own.
+        TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
+      };
       serviceConfig = {
         User = "max-bot";
         Group = "max-bot";

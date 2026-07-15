@@ -29,6 +29,9 @@
 
     # postgres client
     postgresql_17
+
+    # table replies render through the typst CLI
+    typst
   ];
 
   services.postgres = {
@@ -46,6 +49,8 @@
   };
 
   env = {
+    # Static CJK face for typst table rendering (matches nix/module.nix).
+    TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
     MAX_DB_URL = "postgresql://127.0.0.1:5433/max";
     MAX_WS_HOST = "0.0.0.0";
     MAX_WS_PORT = "8080";

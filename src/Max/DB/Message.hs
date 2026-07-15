@@ -55,7 +55,7 @@ where
 
 import Data.Aeson (Value, toJSON)
 import Data.Int (Int64)
-import Data.Maybe (listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Effectful
@@ -111,17 +111,22 @@ extractReply segs =
 -- can be reconstructed from a single source of truth at dispatch time.
 -- Idempotent on @message_id@ — NapCat occasionally sends our own
 -- message back as an event too, and the upsert collapses the dup.
+--
+-- @renderedOverride@ replaces the default 'renderPlainText' of the
+-- sent segments: a table sent as an image should read back as its
+-- markdown source in the bot's own history, not as @[image]@.
 insertOutbound ::
   (WithConnection :> es, IOE :> es) =>
   GroupId ->
   UserId -> -- bot's self_id; both user_id and self_id columns get this
   Text -> -- nickname for the sender column (e.g. "max")
   MessageId ->
+  Maybe Text -> -- renderedOverride
   [Segment] ->
   Eff es ()
-insertOutbound (GroupId gid) (UserId sid) nick (MessageId mid) segs = do
+insertOutbound (GroupId gid) (UserId sid) nick (MessageId mid) renderedOverride segs = do
   let segsJson = Jsonb (toJSON segs)
-      rendered = renderPlainText segs
+      rendered = fromMaybe (renderPlainText segs) renderedOverride
       replyTo = extractReply segs
   _ <-
     execute

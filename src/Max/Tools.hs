@@ -366,7 +366,7 @@ sayTool dc =
                   case parseEither (withObject "send_resp" (\o -> o .: "message_id")) payload of
                     Right (outMid :: Int64)
                       | not ephemeral ->
-                          insertOutbound dc.dcGroupId dc.dcSelfId "max" (MessageId outMid) segs
+                          insertOutbound dc.dcGroupId dc.dcSelfId "max" (MessageId outMid) Nothing segs
                       | otherwise -> pure ()
                     Left _ ->
                       logAttention "say: no message_id in response" $

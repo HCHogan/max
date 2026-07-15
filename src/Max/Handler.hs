@@ -8,9 +8,11 @@ import Control.Monad (unless, void)
 import Data.Foldable (for_)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (parseEither)
+import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
 import Effectful.Exception (SomeException, fromException, try)
@@ -34,7 +36,8 @@ import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (buildContext)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Tasks (TaskCancelled)
-import Max.Reply (chunkSource, planReply)
+import Max.Render (renderTableImage)
+import Max.Reply (Chunk (..), chunkSource, planReply)
 import Max.Util (catchSync)
 import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
@@ -333,17 +336,20 @@ replyText :: NapCat :> es => GroupMessage -> T.Text -> Eff es ()
 replyText gm body =
   sendAction (sendChatMsg gm.groupId (replySegs gm (" " <> body)))
 
--- | Send the LLM's final reply — planned into one message per
--- blank-line paragraph ('planReply'; code fences never split) — and
--- persist each sent chunk into the messages table (so future
--- dispatches can read this back as mention history, and a reply to
--- *any* chunk resolves as reply-to-bot).  The consecutive bot rows
--- this produces are merged back into one assistant turn at prompt
--- build time (see 'Max.Prompt').  Uses 'callAction' to get NapCat's
--- assigned @message_id@ per chunk; chunks are sent sequentially so
--- ordering is guaranteed.  If a send or message_id extraction fails,
--- logs and moves on — the user still gets the delivered chunks, only
--- the bot's memory loses them.
+-- | Send the LLM's final reply as planned by 'planReply' — one
+-- message per blank-line paragraph, markdown tables rendered to a
+-- PNG via typst (falling back to the markdown source when rendering
+-- fails) — and persist each sent chunk into the messages table (so
+-- future dispatches can read this back as mention history, and a
+-- reply to *any* chunk resolves as reply-to-bot).  A table chunk
+-- persists with its markdown source as rendered_text: the model
+-- should see the table it wrote, not @[image]@.  The consecutive
+-- bot rows this produces are merged back into one assistant turn at
+-- prompt build time (see 'Max.Prompt').  Uses 'callAction' to get
+-- NapCat's assigned @message_id@ per chunk; chunks are sent
+-- sequentially so ordering is guaranteed.  If a send or message_id
+-- extraction fails, logs and moves on — the user still gets the
+-- delivered chunks, only the bot's memory loses them.
 sendAndPersistReply ::
   ( NapCat :> es,
     WithConnection :> es,
@@ -360,13 +366,25 @@ sendAndPersistReply gm body = do
   -- is gated, so an ephemeral turn doesn't show up in the next
   -- dispatch's mention history.
   ephemeral <- isEphemeral
-  for_ (zip [0 :: Int ..] (map chunkSource (planReply body))) $ \(i, chunk) -> do
+  for_ (zip [0 :: Int ..] (planReply body)) $ \(i, chunk) -> do
     -- Only the first chunk quotes + @s the trigger; follow-ups read
     -- as continuation lines.
-    let segs =
-          if i == 0
-            then replySegs gm (" " <> chunk)
-            else [SegText chunk]
+    let prefix =
+          [SegReply gm.messageId | i == 0]
+            <> [SegAt gm.userId | i == 0, not (isPrivateChat gm.groupId)]
+    content <- case chunk of
+      TextChunk t ->
+        pure [SegText (if i == 0 then " " <> t else t)]
+      TableChunk src -> do
+        rendered <- liftIO (renderTableImage src)
+        case rendered of
+          Right png ->
+            pure [SegImage (Just ("base64://" <> TE.decodeASCII (B64.encode png)))]
+          Left err -> do
+            logAttention "table render failed, sending source" $
+              object ["error" .= err, "chunk" .= i]
+            pure [SegText (if i == 0 then " " <> src else src)]
+    let segs = prefix <> content
     eres <- callAction (sendChatMsg gm.groupId segs) 30000
     case eres of
       Left err ->
@@ -380,7 +398,13 @@ sendAndPersistReply gm body = do
                 object ["payload" .= payload, "chunk" .= i]
             Just outMid ->
               unless ephemeral $
-                insertOutbound gm.groupId gm.selfId "max" (MessageId outMid) segs
+                insertOutbound
+                  gm.groupId
+                  gm.selfId
+                  "max"
+                  (MessageId outMid)
+                  (Just (T.strip (chunkSource chunk)))
+                  segs
 
 extractOutMid :: Value -> Maybe Int64
 extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of
