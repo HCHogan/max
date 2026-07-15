@@ -34,7 +34,8 @@ import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (buildContext)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Tasks (TaskCancelled)
-import Max.Util (catchSync, splitReply)
+import Max.Reply (chunkSource, planReply)
+import Max.Util (catchSync)
 import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
@@ -332,8 +333,8 @@ replyText :: NapCat :> es => GroupMessage -> T.Text -> Eff es ()
 replyText gm body =
   sendAction (sendChatMsg gm.groupId (replySegs gm (" " <> body)))
 
--- | Send the LLM's final reply — split into one message per
--- blank-line paragraph ('splitReply'; code fences never split) — and
+-- | Send the LLM's final reply — planned into one message per
+-- blank-line paragraph ('planReply'; code fences never split) — and
 -- persist each sent chunk into the messages table (so future
 -- dispatches can read this back as mention history, and a reply to
 -- *any* chunk resolves as reply-to-bot).  The consecutive bot rows
@@ -359,7 +360,7 @@ sendAndPersistReply gm body = do
   -- is gated, so an ephemeral turn doesn't show up in the next
   -- dispatch's mention history.
   ephemeral <- isEphemeral
-  for_ (zip [0 :: Int ..] (splitReply body)) $ \(i, chunk) -> do
+  for_ (zip [0 :: Int ..] (map chunkSource (planReply body))) $ \(i, chunk) -> do
     -- Only the first chunk quotes + @s the trigger; follow-ups read
     -- as continuation lines.
     let segs =

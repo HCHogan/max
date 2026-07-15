@@ -68,6 +68,7 @@ library
         Max.MemoryExtract
         Max.Persistence
         Max.Prompt
+        Max.Reply
         Max.Sandbox.Docker
         Max.Sandbox.Registry
         Max.Session
@@ -144,7 +145,7 @@ test-suite max-test
     other-modules:
         Max.Command.ParserSpec
         OneBot.EventSpec
-        Max.UtilSpec
+        Max.ReplySpec
         Max.SessionSpec
         Max.Effects.LLMSpec
         Max.MCP.ClientSpec
