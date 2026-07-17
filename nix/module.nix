@@ -184,9 +184,6 @@ in
 
     services.postgresql = lib.mkIf cfg.postgres.enable {
       enable = true;
-      # The 012/013 migrations run CREATE EXTENSION vector themselves
-      # (pgvector is `trusted`, so the db owner may) — the .so just has
-      # to be on the server's extension path.
       extensions = ps: [ ps.pgvector ];
       ensureDatabases = [ "max-bot" ];
       ensureUsers = [
@@ -196,6 +193,16 @@ in
         }
       ];
     };
+
+    # The 012 migration runs CREATE EXTENSION IF NOT EXISTS vector as the
+    # service user, but the nixpkgs pgvector is not marked `trusted`, so
+    # only a superuser may actually create it.  Pre-create it here; the
+    # migration's IF NOT EXISTS then no-ops.
+    systemd.services.postgresql.postStart = lib.mkIf cfg.postgres.enable (
+      lib.mkAfter ''
+        $PSQL -d max-bot -tAc 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null
+      ''
+    );
 
     systemd.services.max-sandbox-image = lib.mkIf cfg.sandboxImage.enable (
       mkImageBuild "max-sandbox" sandboxImageSrc
@@ -255,6 +262,11 @@ in
         TimeoutStopSec = 60;
       };
     };
+
+    # NixOS defaults oci-containers to podman; the bot's images, the
+    # max-nix volume and the host-gateway extra_host all live on the
+    # docker side, so keep NapCat there too.
+    virtualisation.oci-containers.backend = lib.mkIf cfg.napcat.enable "docker";
 
     virtualisation.oci-containers.containers.napcat = lib.mkIf cfg.napcat.enable {
       image = "mlikiowa/napcat-docker:latest";
