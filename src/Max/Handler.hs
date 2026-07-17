@@ -123,9 +123,8 @@ handleEvents q imgQ fwdQ fileQ = loop
       loop
 
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
-persist gm = do
-  eres <- try (insertGroupMessage gm)
-  case eres :: Either SomeException () of
+persist gm =
+  try @SomeException (insertGroupMessage gm) >>= \case
     Right () -> pure ()
     Left e ->
       logAttention "db insert failed" $
@@ -393,8 +392,7 @@ sendAndPersistReply gm body = do
               object ["error" .= err, "chunk" .= i]
             pure [SegText (if i == 0 then " " <> src else src)]
     let segs = prefix <> content
-    eres <- callAction (sendChatMsg gm.groupId segs) 30000
-    case eres of
+    callAction (sendChatMsg gm.groupId segs) 30000 >>= \case
       Left err ->
         logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
       Right (Response _ rc payload _)

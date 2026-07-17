@@ -12,7 +12,7 @@ where
 import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
 import Control.Exception (SomeException)
 import Control.Monad (forever)
-import Data.Foldable (for_)
+import Data.Foldable (for_, traverse_)
 import Data.Aeson (Value (Object, String), toJSON)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -66,7 +66,7 @@ enqueueImagesFromNode :: ImageQueue -> Int64 -> Maybe Int64 -> [Segment] -> IO (
 enqueueImagesFromNode q mid gid segs = do
   let jobs = mapMaybe pick (zip [0 ..] segs)
       pick (i, s) = (\u -> ImageJob mid i u gid (stickerMeta s)) <$> imageUrl s
-  atomically $ mapM_ (writeTQueue q) jobs
+  atomically $ traverse_ (writeTQueue q) jobs
 
 -- | How many of a message's segments the worker will try to fetch —
 -- i.e. how many 'message_images' rows will eventually exist for it

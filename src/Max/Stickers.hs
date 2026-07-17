@@ -21,6 +21,7 @@ where
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
 import Control.Monad (forever)
+import Data.Foldable (traverse_)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
@@ -91,7 +92,7 @@ stickerCaptionWorker profile blobRoot = localDomain "sticker-caption" $ do
       if null (rows :: [(Text, Text, Text, Maybe Text)])
         then liftIO (threadDelay idleMicros)
         else do
-          mapM_ (captionOne profile blobRoot) rows
+          traverse_ (captionOne profile blobRoot) rows
           liftIO (threadDelay busyMicros)
 
 captionOne ::

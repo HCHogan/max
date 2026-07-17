@@ -17,6 +17,7 @@ where
 import Control.Concurrent.STM
 import Control.Exception (SomeException)
 import Control.Monad (forever)
+import Data.Foldable (traverse_)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
@@ -68,8 +69,8 @@ enqueueFiles q gm = do
       UserId uid = gm.userId
       jobs = mapMaybe (mkJob mid gid uid) gm.message
   -- Insert seen rows so list_recent_files works immediately.
-  mapM_ insertJob jobs
-  liftIO . atomically $ mapM_ (writeTQueue q) jobs
+  traverse_ insertJob jobs
+  liftIO . atomically $ traverse_ (writeTQueue q) jobs
   where
     insertJob j =
       DB.insertSeen

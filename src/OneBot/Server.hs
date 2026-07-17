@@ -7,7 +7,7 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (SomeException, catch, finally)
-import Control.Monad (forM_)
+import Data.Foldable (for_)
 import Data.Aeson (Value (Object), decode, eitherDecode)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
@@ -115,7 +115,7 @@ abortPending ::
   IO ()
 abortPending tv reason = atomically $ do
   m <- readTVar tv
-  forM_ (Map.elems m) $ \tm -> tryPutTMVar tm (Left reason)
+  for_ (Map.elems m) $ \tm -> tryPutTMVar tm (Left reason)
   writeTVar tv Map.empty
 
 checkToken :: Maybe Text -> WS.Headers -> Either Text ()

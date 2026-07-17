@@ -3,7 +3,7 @@ module Max.DB.Migrations
   )
 where
 
-import Control.Monad (forM_)
+import Data.Foldable (for_)
 import Data.ByteString qualified as BS
 import Data.List (isSuffixOf, sort)
 import Data.Set qualified as Set
@@ -26,7 +26,7 @@ runMigrations pool dir = do
       done <- listApplied c
       files <- sort . filter (".sql" `isSuffixOf`) <$> listDirectory dir
       let pending = filter (`Set.notMember` done) files
-      forM_ pending (applyOne c dir)
+      for_ pending (applyOne c dir)
       pure pending
 
 ensureTable :: Connection -> IO ()

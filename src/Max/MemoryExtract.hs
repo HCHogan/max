@@ -19,6 +19,7 @@ module Max.MemoryExtract
 where
 
 import Data.Aeson
+import Data.Foldable (traverse_)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -79,8 +80,7 @@ extractMemories profile mEmbed gm conversation = localDomain "memx" $ do
         [ MsgSystem extractorSystem,
           MsgUser (renderInput gid uid groupMems userMems transcript)
         ]
-  eres <- chat profile (Just False) msgs []
-  case eres of
+  chat profile (Just False) msgs [] >>= \case
     Left err -> logAttention "memx: chat failed" $ object ["error" .= err]
     Right (ToolCallsResp _ _) ->
       logAttention "memx: unexpected tool calls" $ object []
@@ -89,7 +89,7 @@ extractMemories profile mEmbed gm conversation = localDomain "memx" $ do
         logAttention "memx: bad ops json" $
           object ["error" .= err, "raw" .= T.take 400 raw]
       Right [] -> logInfo "memx: no ops" $ object []
-      Right ops -> mapM_ (applyOp mEmbed gid uid) (take 6 ops)
+      Right ops -> traverse_ (applyOp mEmbed gid uid) (take 6 ops)
 
 -- | Parse the model's output into ops: strip code fences, find the
 -- first @[@ .. last @]@, decode.

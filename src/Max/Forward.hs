@@ -16,12 +16,12 @@ import Control.Concurrent.STM
     writeTQueue,
   )
 import Control.Exception (SomeException)
-import Control.Monad (forM_, forever, unless)
+import Control.Monad (forever, unless)
 import Data.Aeson (Value (Array, Object, String))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Object, Parser, parseEither, withObject, (.:), (.:?))
-import Data.Foldable (toList)
+import Data.Foldable (for_, toList, traverse_)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
@@ -65,7 +65,7 @@ enqueueForwards q gm = do
       GroupId gid = gm.groupId
       UserId sid = gm.selfId
       jobs = mapMaybe (mkJob mid gid sid) gm.message
-  atomically $ mapM_ (writeTQueue q) jobs
+  atomically $ traverse_ (writeTQueue q) jobs
 
 mkJob :: Int64 -> Int64 -> Int64 -> Segment -> Maybe ForwardJob
 mkJob container gid sid = \case
@@ -133,7 +133,7 @@ ingestNodes ::
   [ForwardNode] ->
   Eff es ()
 ingestNodes imgQ job nodes =
-  forM_ (zip [0 ..] nodes) $ \(i, node) ->
+  for_ (zip [0 ..] nodes) $ \(i, node) ->
     ingestNode imgQ job.containerMessageId job.groupId job.selfId 1 i node
 
 ingestNode ::
@@ -181,7 +181,7 @@ ingestNode imgQ containerSid gid sid depth pos node = do
               "synthetic_message_id" .= insSid
             ]
     else
-      forM_ (zip [0 ..] inlineChildren) $ \(i, child) ->
+      for_ (zip [0 ..] inlineChildren) $ \(i, child) ->
         ingestNode imgQ insSid gid sid (depth + 1) i child
 
 -- | Pull nested-forward children inlined in a @forward@ segment's
@@ -208,7 +208,7 @@ data ForwardNode = ForwardNode
 nodesParser :: Value -> Parser [ForwardNode]
 nodesParser = withObject "ForwardResponse" $ \o -> do
   ms <- o .: "messages" :: Parser [Value]
-  mapM nodeParser ms
+  traverse nodeParser ms
 
 nodeParser :: Value -> Parser ForwardNode
 nodeParser = withObject "ForwardNode" $ \o -> do

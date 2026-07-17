@@ -17,6 +17,7 @@ where
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (forever, unless)
+import Data.Foldable (traverse_)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -101,7 +102,7 @@ embedWorker client = forever $ do
             object ["error" .= err, "rows" .= length ids]
           pure False
         Right vecs -> do
-          mapM_
+          traverse_
             (\(i, v) -> execute sql (renderVector v, i))
             (zip ids vecs)
           logInfo "embed: batch done" $ object ["rows" .= length ids]

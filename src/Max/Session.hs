@@ -271,9 +271,8 @@ switchToBranch ::
   Text -> -- target branch name
   Text -> -- default model (for resolving NULL row.model on load)
   Eff es BranchResult
-switchToBranch (SessionRegistry outer) gid name defaultModel = do
-  mTarget <- DB.fetchBranch gid name defaultModel
-  case mTarget of
+switchToBranch (SessionRegistry outer) gid name defaultModel =
+  DB.fetchBranch gid name defaultModel >>= \case
     Nothing -> pure (Left ("分支不存在：" <> name <> "（用 !branch " <> name <> " 创建）"))
     Just target -> do
       mTvar <- liftIO . atomically $ do
@@ -294,9 +293,8 @@ dropBranch ::
   GroupId ->
   Text -> -- branch to delete
   Eff es BranchResult
-dropBranch gid name = do
-  mActive <- DB.getActiveBranch gid
-  case mActive of
+dropBranch gid name =
+  DB.getActiveBranch gid >>= \case
     Just a | a == name ->
       pure (Left ("不能删除当前 active 分支 " <> name <> "（先 !switch 到别的分支）"))
     _ -> do
