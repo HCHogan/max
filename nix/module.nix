@@ -196,13 +196,13 @@ in
 
     # The 012 migration runs CREATE EXTENSION IF NOT EXISTS vector as the
     # service user, but the nixpkgs pgvector is not marked `trusted`, so
-    # only a superuser may actually create it.  Pre-create it here; the
-    # migration's IF NOT EXISTS then no-ops.
-    systemd.services.postgresql.postStart = lib.mkIf cfg.postgres.enable (
-      lib.mkAfter ''
-        $PSQL -d max-bot -tAc 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null
-      ''
-    );
+    # only a superuser may actually create it.  Pre-create it after the
+    # ensure* statements; the migration's IF NOT EXISTS then no-ops.
+    # (postgresql-setup runs as the postgres superuser with psql/PGPORT
+    # in its environment.)
+    systemd.services.postgresql-setup.postStart = lib.mkIf cfg.postgres.enable ''
+      psql -d max-bot -tAc 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null
+    '';
 
     systemd.services.max-sandbox-image = lib.mkIf cfg.sandboxImage.enable (
       mkImageBuild "max-sandbox" sandboxImageSrc
