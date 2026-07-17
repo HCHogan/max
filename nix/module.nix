@@ -3,9 +3,12 @@
 # Wires up everything the bot needs on one machine:
 #   * a systemd service running max-bot (config rendered to YAML from
 #     `settings`, secrets via `environmentFile`),
-#   * a local PostgreSQL with a peer-authenticated database,
-#   * Docker plus a one-shot unit that builds the nix-enabled sandbox
-#     base image (max-sandbox:latest) from ../sandbox-image,
+#   * a local PostgreSQL (with pgvector) and a peer-authenticated
+#     database,
+#   * Docker plus one-shot units that build the container images the
+#     bot spawns: the nix-enabled sandbox base (max-sandbox:latest,
+#     from ../sandbox-image) and the camoufox browser
+#     (max-browser:latest, from ../browser-image),
 #   * optionally the NapCat container (QQ client) with the outbox
 #     bind-mount the file tools expect.
 #
@@ -19,9 +22,41 @@
 let
   cfg = config.services.max-bot;
   settingsFormat = pkgs.formats.yaml { };
-  configFile = settingsFormat.generate "max.yaml" cfg.settings;
+  renderedConfig = settingsFormat.generate "max.yaml" cfg.settings;
+  effectiveConfigFile = if cfg.configFile != null then cfg.configFile else renderedConfig;
   stateDir = "/var/lib/max-bot";
   sandboxImageSrc = ../sandbox-image;
+  browserImageSrc = ../browser-image;
+
+  # One-shot unit that builds a docker image from a store-copied build
+  # context.  The tag is the context's store hash, so edits rebuild
+  # exactly once and unchanged rebuilds are a no-op inspect.
+  mkImageBuild = name: src: {
+    description = "max: build the ${name} container image";
+    after = [
+      "docker.service"
+      "network-online.target"
+    ];
+    requires = [ "docker.service" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+    path = [ config.virtualisation.docker.package ];
+    serviceConfig = {
+      Type = "oneshot";
+      RemainAfterExit = true;
+      # First build downloads base layers and toolchains — minutes,
+      # not seconds.
+      TimeoutStartSec = "60min";
+    };
+    script = ''
+      tag=$(basename ${src} | cut -c1-8)
+      if ! docker image inspect "${name}:$tag" >/dev/null 2>&1; then
+        docker build -t "${name}:$tag" ${src}
+      fi
+      # The bot's default image name tracks the current content tag.
+      docker tag "${name}:$tag" ${name}:latest
+    '';
+  };
 in
 {
   options.services.max-bot = {
@@ -57,6 +92,20 @@ in
       '';
     };
 
+    configFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      example = "/var/lib/max-bot/max.yaml";
+      description = ''
+        Use this max.yaml instead of rendering one from `settings`.
+        For configs full of per-profile API keys (which must stay out
+        of the world-readable store) point this at a root-deployed or
+        sops-managed file readable by the max-bot user.  The module
+        still wires db/paths via MAX_* environment variables, which
+        take precedence over the file.
+      '';
+    };
+
     environmentFile = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;
@@ -89,6 +138,17 @@ in
       '';
     };
 
+    browserImage.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Build the camoufox browser image (max-browser:latest) from the
+        repo's browser-image/ at boot, same content-tag scheme as the
+        sandbox image.  The per-group browser containers the bot
+        spawns are instances of this image.
+      '';
+    };
+
     napcat = {
       enable = lib.mkEnableOption "the NapCat container (QQ client) alongside the bot";
 
@@ -111,13 +171,6 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    services.max-bot.settings = {
-      db.url = lib.mkDefault "postgresql:///max-bot?host=/run/postgresql";
-      images_dir = lib.mkDefault "${stateDir}/images";
-      # The .sql files ship with the flake source, not the binary.
-      migrations_dir = lib.mkDefault "${../migrations}";
-    };
-
     virtualisation.docker.enable = true;
 
     users.users.max-bot = {
@@ -131,6 +184,10 @@ in
 
     services.postgresql = lib.mkIf cfg.postgres.enable {
       enable = true;
+      # The 012/013 migrations run CREATE EXTENSION vector themselves
+      # (pgvector is `trusted`, so the db owner may) — the .so just has
+      # to be on the server's extension path.
+      extensions = ps: [ ps.pgvector ];
       ensureDatabases = [ "max-bot" ];
       ensureUsers = [
         {
@@ -140,32 +197,12 @@ in
       ];
     };
 
-    systemd.services.max-sandbox-image = lib.mkIf cfg.sandboxImage.enable {
-      description = "max: build the nix-enabled sandbox base image";
-      after = [
-        "docker.service"
-        "network-online.target"
-      ];
-      requires = [ "docker.service" ];
-      wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
-      path = [ config.virtualisation.docker.package ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        # First build pins nixpkgs and pre-warms the eval cache —
-        # minutes of downloads, not seconds.
-        TimeoutStartSec = "45min";
-      };
-      script = ''
-        tag=$(basename ${sandboxImageSrc} | cut -c1-8)
-        if ! docker image inspect "max-sandbox:$tag" >/dev/null 2>&1; then
-          docker build -t "max-sandbox:$tag" ${sandboxImageSrc}
-        fi
-        # The bot's default image name tracks the current content tag.
-        docker tag "max-sandbox:$tag" max-sandbox:latest
-      '';
-    };
+    systemd.services.max-sandbox-image = lib.mkIf cfg.sandboxImage.enable (
+      mkImageBuild "max-sandbox" sandboxImageSrc
+    );
+    systemd.services.max-browser-image = lib.mkIf cfg.browserImage.enable (
+      mkImageBuild "max-browser" browserImageSrc
+    );
 
     systemd.services.max-bot = {
       description = "max — QQ group-chat agent";
@@ -175,11 +212,13 @@ in
           "docker.service"
         ]
         ++ lib.optional cfg.postgres.enable "postgresql.service"
-        ++ lib.optional cfg.sandboxImage.enable "max-sandbox-image.service";
+        ++ lib.optional cfg.sandboxImage.enable "max-sandbox-image.service"
+        ++ lib.optional cfg.browserImage.enable "max-browser-image.service";
       requires =
         [ "docker.service" ]
         ++ lib.optional cfg.postgres.enable "postgresql.service"
-        ++ lib.optional cfg.sandboxImage.enable "max-sandbox-image.service";
+        ++ lib.optional cfg.sandboxImage.enable "max-sandbox-image.service"
+        ++ lib.optional cfg.browserImage.enable "max-browser-image.service";
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
       # Sandbox lifecycle shells out to the docker CLI; table replies
@@ -194,6 +233,12 @@ in
         # nixpkgs noto CJK ships variable fonts, which typst cannot
         # render), and the service user has no fontconfig of its own.
         TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
+        # Env (not settings) so they hold for hand-managed configFile
+        # setups too — opt-env-conf gives env precedence over the file.
+        MAX_DB_URL = lib.mkDefault "postgresql:///max-bot?host=/run/postgresql";
+        MAX_IMAGES_DIR = lib.mkDefault "${stateDir}/images";
+        # The .sql files ship with the flake source, not the binary.
+        MAX_MIGRATIONS_DIR = lib.mkDefault "${../migrations}";
       };
       serviceConfig = {
         User = "max-bot";
@@ -202,7 +247,7 @@ in
         # The bot resolves images_dir and var/outbox relative paths
         # against its cwd; keep everything under the state dir.
         WorkingDirectory = stateDir;
-        ExecStart = "${cfg.package}/bin/max-bot --config-file ${configFile}";
+        ExecStart = "${cfg.package}/bin/max-bot --config-file ${effectiveConfigFile}";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
         Restart = "on-failure";
         RestartSec = 5;
