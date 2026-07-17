@@ -80,6 +80,10 @@ data AppConfig = AppConfig
     -- | Web-search backend, if configured.  When 'Nothing' the
     -- @web_search@ tool is not registered (model doesn't see it).
     search :: !(Maybe SearchConfig),
+    -- | Proxy URL the stealth-browser containers route page traffic
+    -- through, e.g. @http://host.docker.internal:7890@ for a proxy on
+    -- the docker host.  'Nothing' = direct connections.
+    browserProxy :: !(Maybe Text),
     -- | LLM profile for post-dispatch memory extraction; 'Nothing'
     -- disables the extractor (agent-side memory tools still work).
     memoryExtractProfile :: !(Maybe Text),
@@ -182,6 +186,18 @@ appConfigParser =
           valueWithShown (const "(built-in Chinese default)") defaultPersona
         ]
     search <- subConfig "search" searchParser
+    browserProxy <-
+      subConfig "browser" $
+        optional $
+          setting
+            [ help "Proxy URL for the stealth-browser containers, e.g. http://host.docker.internal:7890 (use the host.docker.internal form for a proxy on the docker host)",
+              reader str,
+              option,
+              long "browser-proxy",
+              env "MAX_BROWSER_PROXY",
+              conf "proxy",
+              metavar "URL"
+            ]
     memoryExtractProfile <-
       subConfig "memory" $
         optional $

@@ -76,7 +76,7 @@ main = do
     --     knows about — fires on UserInterrupt (Ctrl+C / SIGTERM) too.
     bracket_ (reapStaleSandboxes >> reapStaleBrowsers) (pure ()) $ do
       sandboxes <- newSandboxRegistry
-      browsers <- newBrowserRegistry
+      browsers <- newBrowserRegistry cfg.browserProxy
       bracket_ (pure ()) (destroyAllSandboxes sandboxes >> destroyAllBrowsers browsers) $ do
         withStdOutLogger $ \logger -> do
           eventQ <- newTQueueIO

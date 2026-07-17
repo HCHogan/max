@@ -12,7 +12,7 @@ A QQ chat agent in Haskell — group chats and one-on-one private chats. Talks t
 - **Vector search** (optional, any OpenAI-compatible embeddings endpoint — siliconflow's `BAAI/bge-m3` is free): a background worker embeds all messages and memories into pgvector columns; `search_messages` gains a `semantic` mode and `memory_search` searches memories across all scopes. Without the config, everything degrades to substring/regex search.
 - **Multi-profile LLM**: as many `llm.profiles` as you like, switch per-session at runtime with `!model <name>`. OpenAI-compatible or Anthropic-native (`protocol: anthropic`); thinking-mode override via `!model think on/off` with `reasoning_content` round-tripping.
 - **Multimodal**: profiles marked `multimodal: true` get context images inlined as data URLs (trigger images awaited, reply-target images labelled as 被引用的那条), plus the browser toolset.
-- **Browser** (multimodal profiles): per-group Playwright-MCP container — `browser_navigate/snapshot/click/type/press_key/wait_for/navigate_back` driven by accessibility snapshots with stable element refs. Build the image once with `browser-image/build.sh`.
+- **Browser** (multimodal profiles): per-group camoufox-MCP container (stealth Firefox, stdio bridged to Streamable HTTP by supergateway) — `browser_navigate/snapshot/click/type/press_key/wait_for/scroll` driven by page snapshots whose interactive elements carry CSS selectors. Build the image once with `browser-image/build.sh`.
 - **Replies read like a person**: blank-line paragraphs in the model's answer are sent as separate consecutive messages (code fences never split, capped at 5); the prompt carries a QQ号↔名字 roster so the model knows who is who (群名片 preferred over nickname).
 - **Tools** (registered conditionally on config): `web_search` (Tavily) · file tools (`list_recent_files`, `import_file_to_sandbox`, `send_image_from_sandbox`, `send_file_from_sandbox` — private chats upload via `upload_private_file`) · sandbox tools (persistent per-group Docker workspace, Nix-based: `max-sandbox:latest` from `sandbox-image/build.sh`, packages from pinned nixpkgs via `nix_search` + `sandbox_exec`'s `packages`, one shared store volume `max-nix`) · memory tools · `search_messages` / `get_message_by_id` · browser tools.
 - **Commands**: `!help`, `!model [list|<name>|think [on|off]]`, `!debug [on|off|default]`, `!persona [<text>|clear]`, `!clear [--all]`, `!unclear`, `!pin [id]`, `!unpin [id|all]`, `!pins`, `!memory [rm <id>]` (group memories in groups; private chats also show your own cross-group memories), `!btw <text>`, `!ps [--all]`, `!kill <id>`, `!branch [list|<name>|delete <name>]`, `!switch <name>`.
@@ -25,7 +25,7 @@ flake.nix          devenv shell as a flake module (GHC 9.12, Postgres 17 + pgvec
 devenv.nix         service definitions + .env sourcing on shell entry
 docker-compose.yml NapCat container; shared ./var/outbox volume
 sandbox-image/     nix-enabled sandbox base image  → max-sandbox:latest
-browser-image/     Playwright MCP + matching Chromium → max-browser:latest
+browser-image/     camoufox-mcp + supergateway + camoufox → max-browser:latest
 nix/module.nix     NixOS module for production deployment
 .github/workflows/ CI: build + max-test through the flake dev shell
 max.cabal          library + max-bot executable
@@ -40,7 +40,7 @@ src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, F
 src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher
 src/Max/Session/   Per-conversation session: in-memory TVar + DB persistence
 src/Max/Sandbox/   Per-group Docker workspace lifecycle + registry
-src/Max/Browser/   Per-group Playwright-MCP container lifecycle + registry
+src/Max/Browser/   Per-group camoufox-MCP container lifecycle + registry
 src/Max/MCP/       Minimal MCP client (Streamable HTTP)
 src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,

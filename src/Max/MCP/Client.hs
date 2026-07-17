@@ -59,11 +59,12 @@ import Network.HTTP.Types.Status (statusCode)
 -- conversation.
 data McpClient = McpClient
   { mcEndpoint :: !String,
-    -- | Value for the @Host@ request header.  Playwright MCP enforces
-    -- DNS-rebinding protection: it 403s unless @Host@ matches the
-    -- address it bound to (e.g. @localhost:8931@).  We reach it via a
-    -- docker-published @127.0.0.1:<random>@ port, so we must send the
-    -- container-internal host explicitly rather than the connect host.
+    -- | Value for the @Host@ request header.  Some MCP servers enforce
+    -- DNS-rebinding protection: playwright-mcp 403s unless @Host@
+    -- matches the address it bound to (e.g. @localhost:8931@).  We
+    -- reach servers via a docker-published @127.0.0.1:<random>@ port,
+    -- so we send the container-internal host explicitly rather than
+    -- the connect host.
     mcHost :: !ByteString,
     mcManager :: !Manager,
     mcSession :: !(TVar (Maybe ByteString)),

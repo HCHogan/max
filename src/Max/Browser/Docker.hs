@@ -1,9 +1,9 @@
 -- |
 -- @docker@ CLI wrappers for the per-group browser container: the
 -- pre-built @max-browser:latest@ image (see @browser-image/@) running
--- Playwright MCP in headless Streamable-HTTP mode.  Same shell-out
--- approach as "Max.Sandbox.Docker" (which we borrow 'runRm' / list
--- helpers from).
+-- camoufox-mcp behind a supergateway stdio→Streamable-HTTP bridge.
+-- Same shell-out approach as "Max.Sandbox.Docker" (which we borrow
+-- 'runRm' / list helpers from).
 --
 -- The container publishes its MCP port to an ephemeral @127.0.0.1@
 -- host port; 'browserHostPort' reads the mapping back so the client
@@ -23,22 +23,21 @@ import System.Exit (ExitCode (..))
 import System.Process (readProcessWithExitCode)
 
 -- | Our pre-built browser image (@browser-image/build.sh@ → this tag).
--- It bakes @playwright-mcp@ plus its exact matching Chromium in, so
--- container start needs no npm/npx/browser download.  Build it once on
--- the docker host before browsing works.
+-- It bakes @camoufox-mcp-server@, @supergateway@ and the camoufox
+-- browser binary in, so container start needs no npm/npx/browser
+-- download.  Build it once on the docker host before browsing works.
 defaultBrowserImage :: Text
 defaultBrowserImage = "max-browser:latest"
 
--- | Fixed in-container port the MCP server binds; published to a
--- random host port.
+-- | Fixed in-container port supergateway binds; published to a random
+-- host port.
 containerPort :: Int
 containerPort = 8931
 
--- | @docker run -d --name NAME -p 127.0.0.1::CPORT IMAGE playwright-mcp
--- --headless --browser chromium --host 0.0.0.0 --port CPORT@.  Returns
--- the container id.  @playwright-mcp@ and its Chromium are baked into
--- the image; @--browser chromium@ selects the bundled browser (not the
--- 'chrome' channel, which isn't installed).
+-- | @docker run -d --name NAME -p 127.0.0.1::CPORT IMAGE@.  Returns
+-- the container id.  The image's CMD runs supergateway bridging
+-- camoufox-mcp's stdio to Streamable HTTP on 'containerPort', so no
+-- command override is needed here.
 runRunBrowser ::
   -- | container name
   Text ->
@@ -53,27 +52,33 @@ runRunBrowser name image = do
           "--init",
           "--name",
           T.unpack name,
-          -- Disable the server→client heartbeat.  In HTTP mode
-          -- playwright-mcp pings the client after the first tools/call
-          -- and closes the whole session when the ping can't be
-          -- delivered within 5s — and it never can be delivered here,
-          -- because pings ride the GET SSE stream, which this bot's
-          -- request/response-only MCP client (Max.MCP.Client) never
-          -- opens.  0 turns the heartbeat off; session GC is ours
-          -- anyway (registry teardown on !clear / exit).
+          -- Stretch camoufox-mcp's browse-session idle TTL to its
+          -- 15-minute ceiling (default 10) — the group's page state
+          -- lives in that session, and every expiry forces the model
+          -- to re-navigate from scratch.
           "-e",
-          "PLAYWRIGHT_MCP_PING_TIMEOUT_MS=0",
+          "CAMOUFOX_MCP_SESSION_TTL_MS=900000",
+          -- Headroom over the default of 1: recovery from a wedged
+          -- session (request-guard latch) closes the old one before
+          -- starting fresh, but if that close is ever lost, the TTL
+          -- reaps the leak — meanwhile new sessions must still fit.
+          "-e",
+          "CAMOUFOX_MCP_MAX_SESSIONS=4",
+          -- Skip the request guard's local resolve-and-inspect (image
+          -- patch, see browser-image/Dockerfile): container DNS is
+          -- censored here, so resolution failures / poisoned answers
+          -- were latching sessions on ordinary pages.  String-level
+          -- checks (literal private IPs, localhost names) still apply.
+          "-e",
+          "CAMOUFOX_MCP_SKIP_DNS_CHECK=1",
+          -- Make a host-side proxy (browser.proxy in max.yaml as
+          -- http://host.docker.internal:PORT) reachable on engines
+          -- without built-in host.docker.internal (Linux).
+          "--add-host",
+          "host.docker.internal:host-gateway",
           "-p",
           "127.0.0.1::" <> cp,
-          T.unpack image,
-          "playwright-mcp",
-          "--headless",
-          "--browser",
-          "chromium",
-          "--host",
-          "0.0.0.0",
-          "--port",
-          cp
+          T.unpack image
         ]
   res <- try @IOException $ readProcessWithExitCode "docker" args ""
   pure $ case res of

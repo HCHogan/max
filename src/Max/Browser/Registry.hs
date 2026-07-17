@@ -1,21 +1,27 @@
 -- |
--- Per-group browser registry: one Playwright-MCP container per
+-- Per-group browser registry: one camoufox-MCP container per
 -- 'GroupId', created lazily on the first browser tool call and reused
 -- across dispatches, torn down on @!clear --all@ or bot exit.  Mirrors
 -- "Max.Sandbox.Registry"; we reuse its @docker@ helpers for teardown
 -- and boot-time reaping of the @max-br-@ namespace.
 --
--- The browser session (current page, cookies) lives inside the MCP
--- server, so it is inherently stateful and shared within a group —
--- parallel dispatches drive the same page.  Container creation is
--- serialized by a global start lock; the readiness wait (first @npx@
--- fetch of @\@playwright/mcp@ can take tens of seconds) happens under
--- it, which is fine for a single-tenant bot.
+-- The browser page state lives in a camoufox /browse session/ inside
+-- the MCP server (created by @browse_session_start@, addressed by a
+-- @sessionId@ that every @browse_session_*@ call must carry), so it is
+-- inherently stateful and shared within a group — parallel dispatches
+-- drive the same page.  The registry tracks that per-group @sessionId@
+-- alongside the container; "Max.Tools.Browser" injects it into tool
+-- arguments.  Container creation is serialized by a global start lock;
+-- the readiness wait happens under it, which is fine for a
+-- single-tenant bot.
 module Max.Browser.Registry
   ( BrowserRegistry,
+    brProxy,
     newBrowserRegistry,
     reapStaleBrowsers,
     callBrowserTool,
+    getCamoSession,
+    setCamoSession,
     destroyBrowsersForGroup,
     destroyAllBrowsers,
     browserNamePrefix,
@@ -59,13 +65,31 @@ data BrowserRegistry = BrowserRegistry
     -- | Global create lock: only one container is brought up (and
     -- waited on) at a time.
     brStartLock :: !(TMVar ()),
-    brEntries :: !(TVar (Map GroupId BrowserEntry))
+    brEntries :: !(TVar (Map GroupId BrowserEntry)),
+    -- | The group's live camoufox browse-session id, if a page is
+    -- open.  Kept outside 'BrowserEntry' so the tool layer can read /
+    -- update it without racing entry creation.
+    brCamoSessions :: !(TVar (Map GroupId Text)),
+    -- | Proxy URL every browse session routes through (config
+    -- @browser.proxy@); 'Nothing' = direct.  "Max.Tools.Browser"
+    -- passes it to @browse_session_start@.
+    brProxy :: !(Maybe Text)
   }
 
-newBrowserRegistry :: IO BrowserRegistry
-newBrowserRegistry = do
+newBrowserRegistry :: Maybe Text -> IO BrowserRegistry
+newBrowserRegistry proxy = do
   mgr <- newManager defaultManagerSettings
-  BrowserRegistry mgr <$> newTMVarIO () <*> newTVarIO Map.empty
+  BrowserRegistry mgr <$> newTMVarIO () <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> pure proxy
+
+-- | The group's current camoufox browse-session id, if any.
+getCamoSession :: BrowserRegistry -> GroupId -> IO (Maybe Text)
+getCamoSession reg gid = Map.lookup gid <$> readTVarIO reg.brCamoSessions
+
+-- | Record ('Just') or forget ('Nothing') the group's browse-session id.
+setCamoSession :: BrowserRegistry -> GroupId -> Maybe Text -> IO ()
+setCamoSession reg gid msid =
+  atomically . modifyTVar' reg.brCamoSessions $
+    maybe (Map.delete gid) (Map.insert gid) msid
 
 -- | Reap leftover @max-br-@ containers from a previous unclean exit.
 -- Run once at startup before any browser is created.
@@ -108,8 +132,9 @@ createEntry reg gid = do
         Left err -> runRm name >> pure (Left err)
         Right port -> do
           let endpoint = "http://127.0.0.1:" <> show port <> "/mcp"
-              -- Host header must match the container-internal bind, not
-              -- the published port (Playwright MCP rebinding guard).
+              -- supergateway does no Host validation; send the
+              -- container-internal bind anyway so a future server
+              -- with a rebinding guard (as playwright-mcp had) works.
               hostHeader = "localhost:" <> show containerPort
           client <- newMcpClient reg.brManager endpoint hostHeader
           ready <- waitReady client
@@ -126,9 +151,9 @@ createEntry reg gid = do
               atomically $ modifyTVar' reg.brEntries (Map.insert gid entry)
               pure (Right entry)
 
--- | Poll @initialize@ until the MCP server answers or we give up.  The
--- first run pays an @npx@ download for @\@playwright/mcp@, so the
--- ceiling is generous.
+-- | Poll @initialize@ until the MCP server answers or we give up.
+-- supergateway spawns a camoufox-mcp child per @initialize@, so the
+-- first success also covers the child's node startup.
 waitReady :: McpClient -> IO (Either Text ())
 waitReady client = go 0
   where
@@ -148,11 +173,12 @@ waitReady client = go 0
 -- | Ensure the group's browser is up, then invoke one MCP tool on it.
 --
 -- Resilience: the MCP session can be lost out from under us (server
--- recycles it, the browser context resets, memory pressure).  The
--- server then 404s with "Session not found".  On that we re-run the
--- @initialize@ handshake once and retry; if even that fails the
--- container is unhealthy, so we tear it down and report — the next call
--- rebuilds a fresh one.
+-- recycles it, the gateway restarts, memory pressure).  On that we
+-- re-run the @initialize@ handshake once and retry; if even that fails
+-- the container is unhealthy, so we tear it down and report — the next
+-- call rebuilds a fresh one.  Re-initializing makes supergateway spawn
+-- a *fresh* camoufox-mcp child, so any camoufox browse session died
+-- with the old one — forget it, the tool layer will start a new one.
 callBrowserTool :: BrowserRegistry -> GroupId -> Text -> Value -> IO (Either Text Value)
 callBrowserTool reg gid toolName args = do
   eEntry <- ensureBrowserForGroup reg gid
@@ -162,6 +188,7 @@ callBrowserTool reg gid toolName args = do
       r <- mcpCallTool e.beClient toolName args
       case r of
         Left err | sessionLost err -> do
+          setCamoSession reg gid Nothing
           reinit <- mcpInitialize e.beClient
           case reinit of
             Right () -> mcpCallTool e.beClient toolName args
@@ -170,11 +197,15 @@ callBrowserTool reg gid toolName args = do
               pure (Left ("browser session lost; rebuilt for next call (was: " <> err <> ")"))
         _ -> pure r
   where
-    -- Match the server's session-validation failures (see Max.MCP.Client
-    -- error text): unknown session id (404) or a server that forgot it
-    -- was initialized (400).
+    -- Match the gateway's MCP-session-validation failures (see
+    -- Max.MCP.Client error text): supergateway 400s "Bad Request: No
+    -- valid session ID provided" for an unknown/expired session; the
+    -- playwright-era "Session not found" / "not initialized" spellings
+    -- are kept as belt-and-suspenders.
     sessionLost err =
-      "Session not found" `T.isInfixOf` err || "not initialized" `T.isInfixOf` err
+      "No valid session ID" `T.isInfixOf` err
+        || "Session not found" `T.isInfixOf` err
+        || "not initialized" `T.isInfixOf` err
 
 --------------------------------------------------------------------------------
 -- Teardown.
@@ -187,6 +218,7 @@ destroyBrowsersForGroup reg gid = do
     m <- readTVar reg.brEntries
     let (mine, rest) = Map.partition (\e -> e.beGroup == gid) m
     writeTVar reg.brEntries rest
+    modifyTVar' reg.brCamoSessions (Map.delete gid)
     pure (Map.elems mine)
   for_ mEntry $ \e -> runRm e.beContainer
   pure (length mEntry)
@@ -198,5 +230,6 @@ destroyAllBrowsers reg = do
   entries <- atomically $ do
     m <- readTVar reg.brEntries
     writeTVar reg.brEntries Map.empty
+    writeTVar reg.brCamoSessions Map.empty
     pure (Map.elems m)
   void $ for_ entries $ \e -> runRm e.beContainer

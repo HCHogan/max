@@ -1,25 +1,91 @@
 # Pre-built image for max-bot's per-group browser containers (built by
 # build.sh as max-browser:latest).  Max.Browser.Docker starts one
-# container per group from this image running Playwright MCP in headless
-# Streamable-HTTP mode.
+# container per group from this image running camoufox-mcp (a stealth
+# Firefox fork driven over MCP) behind supergateway, which bridges the
+# server's stdio-only transport to the Streamable HTTP that
+# Max.MCP.Client speaks.
 #
-# Why a custom image instead of `npx @playwright/mcp` on the stock
-# Playwright image: @playwright/mcp@latest pins an *alpha* Playwright
-# whose Chromium revision the stable `mcr.microsoft.com/playwright:*`
-# images don't bundle.  We install MCP's own matching Chromium here at
-# build time so container start needs no npm/npx/browser download and is
-# version-consistent.  Rebuild when bumping the MCP pin.
-FROM mcr.microsoft.com/playwright:v1.54.1-noble
+# Why supergateway --stateful: camoufox-mcp keeps its browse_session_*
+# state (the live browser) inside its process, and stateful mode gives
+# each MCP session one long-lived child process.  Stateless mode spawns
+# a fresh child per HTTP request, which would drop the browser between
+# calls.  No --sessionTimeout on purpose: idle expiry killed sessions
+# out from under the bot in the playwright-mcp era, and container
+# teardown (!clear / bot exit) is the real GC here.  Note camoufox-mcp
+# additionally expires its *browse* session after idle
+# (CAMOUFOX_MCP_SESSION_TTL_MS, hard-capped upstream at 15 min); the
+# bot's tool layer auto-recovers by starting a fresh browse session.
+#
+# Built from the camoufox-mcp git source with its own package-lock
+# (mirroring upstream's Dockerfile) rather than `npm install -g`: the
+# transitive dep `impit` has an `npx only-allow pnpm` preinstall that
+# breaks global npm installs.  The pnpm-flavoured npm_config_user_agent
+# on the install steps placates only-allow while still running install
+# scripts (impit needs its prebuilt-binary fetch).
+#
+# The camoufox browser binary (~780MB) is fetched at build time via the
+# repo's own camoufox-js pin, so container start needs no download.
+# Rebuild to pick up new camoufox-mcp releases.
 
-# Install Playwright MCP globally, then install the exact Chromium its
-# bundled Playwright expects (resolved from within the MCP package so
-# the browser revision matches).  Browsers land in $PLAYWRIGHT_BROWSERS_PATH
-# (/ms-playwright in this base image).
-RUN npm install -g @playwright/mcp@latest \
- && cd "$(npm root -g)/@playwright/mcp" \
- && npx playwright install chromium
+FROM node:22-bookworm AS builder
 
-# The bot overrides CMD with the concrete --port/--host flags; this is a
-# harmless default so the image is runnable on its own for debugging.
-CMD ["mcp-server-playwright", "--headless", "--browser", "chromium", \
-     "--host", "0.0.0.0", "--port", "8931"]
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 build-essential git \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/whit3rabbit/camoufox-mcp /app
+WORKDIR /app
+
+RUN npm_config_user_agent="pnpm/10.0.0 npm/10.9.8 node/v22.0.0 linux x64" npm ci \
+ && npm run build \
+ && npx camoufox-js fetch \
+ && npm prune --omit=dev
+
+# The SSRF guard resolves every request host through container DNS and
+# fails closed, which breaks behind censored DNS: github's telemetry
+# domain returns NXDOMAIN (navigation aborted + session latched), and
+# google domains "resolve" to injected garbage that trips the
+# private/reserved check.  Patch in an env escape hatch that skips only
+# the resolve-and-inspect step — the string-level checks (literal
+# private IPs, localhost names) stay.  With a proxy configured the
+# domain is resolved remotely by the proxy anyway.  The grep fails the
+# build if upstream reshapes the code and the sed stops matching.
+RUN sed -i 's/if (!needsDnsCheck) {/if (!needsDnsCheck || process.env.CAMOUFOX_MCP_SKIP_DNS_CHECK === "1") {/' dist/policy.js \
+ && grep -q 'CAMOUFOX_MCP_SKIP_DNS_CHECK' dist/policy.js
+
+FROM node:22-bookworm-slim
+
+# Firefox/camoufox runtime libraries + xvfb (camoufox-mcp's own image
+# runs the server under a virtual display; headful-under-Xvfb is part
+# of the anti-detection story).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xvfb xauth \
+    libgtk-3-0 libx11-xcb1 libxfixes3 libxrandr2 libxtst6 libx11-6 libxcomposite1 \
+    libasound2 libdbus-glib-1-2 libpci3 libxss1 libnss3 libatk1.0-0 \
+    libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libatspi2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN npm install -g supergateway@latest
+
+# Run as non-root (mirrors upstream's image; Firefox is happier not
+# running as root).
+RUN useradd -m -u 1001 camoufox
+USER camoufox
+WORKDIR /home/camoufox/app
+
+COPY --from=builder --chown=camoufox:camoufox /app/package.json ./
+COPY --from=builder --chown=camoufox:camoufox /app/node_modules ./node_modules
+COPY --from=builder --chown=camoufox:camoufox /app/dist ./dist
+COPY --from=builder --chown=camoufox:camoufox /root/.cache/camoufox /home/camoufox/.cache/camoufox
+
+EXPOSE 8931
+
+# supergateway bridges: POST /mcp (Streamable HTTP, stateful sessions)
+# <-> one xvfb-wrapped camoufox-mcp child per MCP session.  The bot's
+# docker run publishes 8931 to an ephemeral loopback port.
+CMD ["supergateway", \
+     "--stateful", \
+     "--stdio", "xvfb-run -a --server-args='-screen 0 1280x1024x24' node /home/camoufox/app/dist/index.js", \
+     "--outputTransport", "streamableHttp", \
+     "--streamableHttpPath", "/mcp", \
+     "--port", "8931"]

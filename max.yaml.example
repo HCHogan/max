@@ -113,6 +113,17 @@ llm:
 #   timeout_seconds: 30
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Stealth-browser proxy.  Every camoufox browse session routes page traffic
+# through this proxy (needed for sites unreachable directly, e.g. google
+# behind censored DNS).  For a proxy running on the docker host, use the
+# host.docker.internal form — the containers add a host-gateway alias for it.
+# Omit for direct connections.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# browser:
+#   proxy: "http://host.docker.internal:7890"
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Long-term memory extraction.  When extract_profile names an LLM profile,
 # every persisted dispatch is followed by one cheap extraction call that
 # distills stable facts into the memories table (ADD/UPDATE/DELETE).
