@@ -50,6 +50,7 @@ import Control.Concurrent (myThreadId, throwTo)
 import Control.Monad (unless)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Set (Set)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -86,7 +87,12 @@ data DispatchContext = DispatchContext
     -- | Effective sticker toggle for this dispatch (config default,
     -- possibly overridden per session via !sticker on/off).  The tool
     -- factory gates the send_sticker tool on this.
-    dcStickers :: !Bool
+    dcStickers :: !Bool,
+    -- | QQ ids visible in this turn's context — the 成员对照 roster
+    -- from 'Max.Prompt.contextRoster'.  Whitelist for converting raw
+    -- @\@\<qq\>@ spans in LLM-authored outbound text into real
+    -- at-segments ('OneBot.Segment.segmentMentions').
+    dcRoster :: !(Set UserId)
   }
   deriving stock (Show)
 

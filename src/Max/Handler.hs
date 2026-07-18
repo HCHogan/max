@@ -12,6 +12,8 @@ import Data.Aeson.Types (parseEither)
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
@@ -42,7 +44,7 @@ import Max.Reply (Chunk (..), chunkSource, planReply)
 import Max.Util (catchSync)
 import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
-import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText)
+import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 -- | Decision derived from one group message.
@@ -275,29 +277,23 @@ dispatchLLM gm = void $ async $
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
       multimodal <- isProfileMultimodal s.model
-      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot s gm
+      (ctx, drained, roster) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot s gm
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff
+          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff roster
       result <- agentTurn dc s.model s.thinkingOverride ctx
-      -- The outbound message already @-mentions the sender via 'SegAt'
-      -- (rendered as their nickname).  The model, having seen prior
-      -- turns where mentions render as raw "@<qq>", tends to also write
-      -- "@<sender-qq>" into its reply text — producing a double @.
-      -- Strip the sender's raw @-mention from the model text so only the
-      -- structured SegAt remains.
       -- Stickers go out only via the send_sticker tool.  In history the
       -- bot's past sticker sends render as "[表情包: …]" text, and weaker
       -- models imitate that by *typing* the caption instead of calling
       -- the tool — leaking the description into the group.  Strip any
       -- such span as a hard backstop (the tool descriptions also tell
       -- the model not to).
-      let stripped = T.strip (stripStickerText (stripMentions gm.userId result.reply))
+      let stripped = T.strip (stripStickerText result.reply)
       -- callAction so we get the message_id back, then persist this
       -- outbound message into the messages table.  That's where
       -- subsequent dispatches will read this turn's assistant reply
       -- back from when reconstructing mention history.
-      sendAndPersistReply gm stripped
+      sendAndPersistReply gm roster stripped
       -- Drain consumed btw notes — but only when persisting; an
       -- ephemeral dispatch (e.g. !btw one-shot) must not eat the
       -- queue (the notes are still waiting for a real turn).
@@ -348,7 +344,10 @@ replyText gm body =
 -- PNG via typst (falling back to the markdown source when rendering
 -- fails) — and persist each sent chunk into the messages table (so
 -- future dispatches can read this back as mention history, and a
--- reply to *any* chunk resolves as reply-to-bot).  A table chunk
+-- reply to *any* chunk resolves as reply-to-bot).  Raw @\@\<qq\>@
+-- spans the model wrote become real at-segments when the id is in
+-- the roster ('segmentMentions'); the model decides who to @ — no
+-- at is auto-prepended, only the 'SegReply' quote.  A table chunk
 -- persists with its markdown source as rendered_text: the model
 -- should see the table it wrote, not @[image]@.  The consecutive
 -- bot rows this produces are merged back into one assistant turn at
@@ -365,23 +364,22 @@ sendAndPersistReply ::
     IOE :> es
   ) =>
   GroupMessage ->
+  Set UserId ->
   T.Text ->
   Eff es ()
-sendAndPersistReply gm body = do
+sendAndPersistReply gm roster body = do
   -- The reply already goes out over NapCat regardless — that's a
   -- real side effect we can't undo.  Only the messages-table write
   -- is gated, so an ephemeral turn doesn't show up in the next
   -- dispatch's mention history.
   ephemeral <- isEphemeral
   for_ (zip [0 :: Int ..] (planReply body)) $ \(i, chunk) -> do
-    -- Only the first chunk quotes + @s the trigger; follow-ups read
-    -- as continuation lines.
-    let prefix =
-          [SegReply gm.messageId | i == 0]
-            <> [SegAt gm.userId | i == 0, not (isPrivateChat gm.groupId)]
+    -- Only the first chunk quotes the trigger; follow-ups read as
+    -- continuation lines.
+    let prefix = [SegReply gm.messageId | i == 0]
     content <- case chunk of
       TextChunk t ->
-        pure [SegText (if i == 0 then " " <> t else t)]
+        pure (mentionSegs t)
       TableChunk src -> do
         rendered <- liftIO (renderTableImage src)
         case rendered of
@@ -390,7 +388,7 @@ sendAndPersistReply gm body = do
           Left err -> do
             logAttention "table render failed, sending source" $
               object ["error" .= err, "chunk" .= i]
-            pure [SegText (if i == 0 then " " <> src else src)]
+            pure [SegText src]
     let segs = prefix <> content
     callAction (sendChatMsg gm.groupId segs) 30000 >>= \case
       Left err ->
@@ -411,6 +409,12 @@ sendAndPersistReply gm body = do
                   (MessageId outMid)
                   (Just (T.strip (chunkSource chunk)))
                   segs
+  where
+    -- Private chats keep raw text: NapCat renders private
+    -- at-segments poorly (see 'replySegs').
+    mentionSegs t
+      | isPrivateChat gm.groupId = [SegText t]
+      | otherwise = segmentMentions (`Set.member` roster) t
 
 extractOutMid :: Value -> Maybe Int64
 extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of

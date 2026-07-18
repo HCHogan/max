@@ -6,6 +6,7 @@ module Max.Prompt
     PromptInputs (..),
     PromptImage (..),
     renderContext,
+    contextRoster,
     applyStickerCaptions,
   )
 where
@@ -141,18 +142,22 @@ systemPrompt multimodal' private envText persona mMemBlock =
       "  - 禁用 markdown 排版：不要标题/粗体/斜体/列表；只有长代码或长引用才用 ``` 块。",
       "  - 表格是例外：需要对比/罗列数据时可以写 markdown 表格，它会被渲染成图片发出。",
       "  - 数学式直接写 unicode（如 3×10⁸、α ≤ π/2），不要写 LaTeX——QQ 渲染不了。",
-      "  - 不寒暄、不总结收尾、不复读问题，直接说事。",
-      "",
-      "上下文标记：",
-      "  [HH:MM <昵称>]: 内容        — 一条历史消息",
-      "  [↩ 引用 ...]                — 用户引用的那条消息",
-      if multimodal'
-        then "  [image]                     — 图片；能看的会附在消息末尾并标注来源，其余只剩标记"
-        else "  [image]                     — 图片（你看不到内容，可以请用户描述）",
-      "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
-      "  [forward]                   — 转发聊天记录；被引用时内容展开在 [引用上下文]",
-      "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [当前环境]"
+      "  - 不寒暄、不总结收尾、不复读问题，直接说事。"
     ]
+      <> [ "  - 你的回复会自动引用触发消息，不必 @ 发话人；确实要提醒某人（含发话人）时写 @<QQ号>（对照表见 [当前环境]），发出时会转成真正的 @。"
+         | not private
+         ]
+      <> [ "",
+           "上下文标记：",
+           "  [HH:MM <昵称>]: 内容        — 一条历史消息",
+           "  [↩ 引用 ...]                — 用户引用的那条消息",
+           if multimodal'
+             then "  [image]                     — 图片；能看的会附在消息末尾并标注来源，其余只剩标记"
+             else "  [image]                     — 图片（你看不到内容，可以请用户描述）",
+           "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
+           "  [forward]                   — 转发聊天记录；被引用时内容展开在 [引用上下文]",
+           "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [当前环境]"
+         ]
       <> maybe [] (\b -> ["", b]) mMemBlock
 
 -- | Build the chat context for one @bot trigger.  Runs the DB
@@ -172,7 +177,9 @@ buildContext ::
   FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
   Session ->
   GroupMessage ->
-  Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
+  -- | (messages, drained btw notes, roster ids for outbound mention
+  -- conversion — see 'contextRoster')
+  Eff es ([ChatMessage], [Text], Set.Set UserId)
 buildContext defaultPersona n multimodal' blobRoot s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
@@ -249,22 +256,23 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
           candidates
       else pure []
   now' <- liftIO getCurrentTime
-  pure $
-    renderContext
-      PromptInputs
-        { defaultPersona = defaultPersona,
-          session = s,
-          triggerMessage = gm,
-          ambient = ambient'',
-          mention = mention'',
-          pinnedItems = pinnedItems'',
-          replyCtx = replyCtx',
-          multimodal = multimodal',
-          groupMemories = groupMems,
-          userMemories = userMems,
-          images = images',
-          now = now'
-        }
+  let inputs =
+        PromptInputs
+          { defaultPersona = defaultPersona,
+            session = s,
+            triggerMessage = gm,
+            ambient = ambient'',
+            mention = mention'',
+            pinnedItems = pinnedItems'',
+            replyCtx = replyCtx',
+            multimodal = multimodal',
+            groupMemories = groupMems,
+            userMemories = userMems,
+            images = images',
+            now = now'
+          }
+      (msgs, drained) = renderContext inputs
+  pure (msgs, drained, Set.fromList [UserId u | (u, _) <- contextRoster inputs])
 
 -- | Poll until the image worker has recorded all of the trigger's
 -- downloadable images ('message_images' rows are inserted only after
@@ -295,6 +303,28 @@ waitForTriggerImages mid expected = go 0
             _ -> do
               liftIO (threadDelay (stepMs * 1000))
               go (elapsed + stepMs)
+
+-- | Everyone appearing in this turn's context, QQ号 ↔ display name.
+-- Rendered text shows mentions as raw @<QQ号> (that's all the wire
+-- event carries), so without this table the model cannot tell who
+-- @123456 is — including itself.  Doubles as the whitelist for
+-- outbound mention conversion: only these ids turn into real
+-- at-segments (see 'OneBot.Segment.segmentMentions').
+contextRoster :: PromptInputs -> [(Int64, Text)]
+contextRoster pi' =
+  let UserId selfId' = pi'.triggerMessage.selfId
+      UserId senderId = pi'.triggerMessage.userId
+   in dedupeRoster $
+        (selfId', "Max（你自己）")
+          : (senderId, senderDisplayName pi'.triggerMessage)
+          : [ (h.userId, displayName selfId' h)
+            | h <-
+                pi'.mention
+                  <> pi'.ambient
+                  <> pi'.pinnedItems
+                  <> maybe [] (\(r, _, _) -> [r]) pi'.replyCtx,
+              h.userId /= selfId'
+            ]
 
 -- | Keep the first (name) entry per user id.
 dedupeRoster :: [(Int64, Text)] -> [(Int64, Text)]
@@ -479,22 +509,7 @@ renderContext pi' =
           pi'.groupMemories
           pi'.userMemories
       effectivePersona = fromMaybe pi'.defaultPersona pi'.session.persona
-      -- Everyone appearing in this turn's context, QQ号 ↔ display
-      -- name.  Rendered text shows mentions as raw @<QQ号> (that's
-      -- all the wire event carries), so without this table the model
-      -- cannot tell who @123456 is — including itself.
-      roster =
-        dedupeRoster $
-          (selfId', "Max（你自己）")
-            : (senderId, senderName)
-            : [ (h.userId, displayName selfId' h)
-              | h <-
-                  pi'.mention
-                    <> pi'.ambient
-                    <> pi'.pinnedItems
-                    <> maybe [] (\(r, _, _) -> [r]) pi'.replyCtx,
-                h.userId /= selfId'
-              ]
+      roster = contextRoster pi'
       envText =
         T.intercalate "\n" $
           [ "[当前环境]",

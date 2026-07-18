@@ -15,6 +15,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Foldable (asum)
 import Data.Int (Int64)
+import Data.Set qualified as Set
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -35,7 +36,7 @@ import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Persistence (PersistMode, isEphemeral)
 import OneBot.Action (Response (..), sendChatMsg)
-import OneBot.Segment (Segment (..))
+import OneBot.Segment (Segment (..), segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), isPrivateChat)
 
 builtinsFor ::
@@ -348,10 +349,14 @@ sayTool dc =
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (msg :: Text) -> do
+          -- Same outbound treatment as the final reply: quote the
+          -- trigger, convert roster-listed @<qq> spans to real ats
+          -- (groups only — private at-segments render poorly).
           let segs =
                 [SegReply dc.dcMessageId]
-                  <> [SegAt dc.dcUserId | not (isPrivateChat dc.dcGroupId)]
-                  <> [SegText (" " <> T.strip msg)]
+                  <> if isPrivateChat dc.dcGroupId
+                    then [SegText (T.strip msg)]
+                    else segmentMentions (`Set.member` dc.dcRoster) (T.strip msg)
           eres <- callAction (sendChatMsg dc.dcGroupId segs) 30000
           case eres of
             Left err -> do

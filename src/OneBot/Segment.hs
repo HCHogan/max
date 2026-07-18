@@ -6,6 +6,7 @@ module OneBot.Segment
     stickerSeg,
     isStickerImage,
     renderPlainText,
+    segmentMentions,
     mentionsUser,
   )
 where
@@ -13,7 +14,9 @@ where
 import Control.Applicative ((<|>))
 import Data.Aeson
 import Data.Aeson.Types (Parser, typeMismatch)
+import Data.Char (isAlphaNum, isAscii, isDigit)
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -36,7 +39,7 @@ data Segment
     -- separate @get_group_file_url@ call).
     SegFile !FileSegInfo
   | SegOther !Text !Value
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
 data FileSegInfo = FileSegInfo
   { fsiFileId :: !Text,
@@ -44,7 +47,7 @@ data FileSegInfo = FileSegInfo
     fsiSize :: !(Maybe Int64),
     fsiUrl :: !(Maybe Text)
   }
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
 -- | An @image@ segment.  Inbound, 'isiUrl' is the URL NapCat handed
 -- us ('Nothing' if file-id only); outbound it's the @file@ value to
@@ -58,7 +61,7 @@ data ImageSegInfo = ImageSegInfo
     isiSubType :: !(Maybe Int),
     isiSummary :: !(Maybe Text)
   }
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
 -- | A plain outbound image.
 imageSeg :: Text -> Segment
@@ -209,6 +212,43 @@ renderPlainText = T.concat . map go
       SegFace _ -> "[face]"
       SegFile fs -> "[file:" <> fs.fsiName <> "]"
       SegOther t _ -> "[" <> t <> "]"
+
+-- | Parse LLM-authored reply text into segments, converting raw
+-- @\@\<QQ号\>@ spans into structural 'SegAt's — the outbound inverse
+-- of 'renderPlainText', which is exactly the shape the model sees
+-- inbound mentions in.  A span converts only when it reads as a
+-- standalone mention — 5 to 11 digits, not glued to an ASCII word
+-- character on either side (so emails and identifiers pass through;
+-- CJK neighbours are fine) — AND @known@ accepts the id.  Callers
+-- pass the roster of users visible in the current turn, which keeps
+-- hallucinated numbers and non-members as plain text (NapCat renders
+-- an at-segment for a non-member as a dead \@数字 anyway).  One space
+-- after a converted mention is swallowed: 'renderPlainText' adds it
+-- back, so persisted history round-trips without growing padding.
+segmentMentions :: (UserId -> Bool) -> Text -> [Segment]
+segmentMentions known = go
+  where
+    go t = case T.breakOn "@" t of
+      (before, rest)
+        | T.null rest -> [SegText before | not (T.null before)]
+        | otherwise ->
+            let cand = T.drop 1 rest -- past the @
+                digits = T.takeWhile isDigit cand
+                after = T.drop (T.length digits) cand
+                n = T.length digits
+                asciiWord c = isAscii c && isAlphaNum c
+                okBefore = maybe True (not . asciiWord . snd) (T.unsnoc before)
+                okAfter = maybe True (not . asciiWord . fst) (T.uncons after)
+                uid = UserId (either (const 0) fst (TR.decimal digits))
+             in if n >= 5 && n <= 11 && okBefore && okAfter && known uid
+                  then
+                    [SegText before | not (T.null before)]
+                      <> (SegAt uid : go (fromMaybe after (T.stripPrefix " " after)))
+                  else case go cand of
+                    -- Not a mention: keep the literal @ and fold it
+                    -- into the following text run.
+                    SegText t' : segs -> SegText (before <> "@" <> t') : segs
+                    segs -> SegText (before <> "@") : segs
 
 mentionsUser :: UserId -> [Segment] -> Bool
 mentionsUser uid = any $ \case
