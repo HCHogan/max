@@ -34,6 +34,7 @@ module Max.Sandbox.Docker
     -- * Helpers
     shellQuote,
     wrapPackages,
+    stripAnsi,
   )
 where
 
@@ -203,8 +204,8 @@ runExec container cmd timeoutSecs = do
           erTruncated = False
         }
     Right (code, out, err) ->
-      let (truncatedOut, t1) = truncateBytes maxOutputBytes (T.pack out)
-          (truncatedErr, t2) = truncateBytes maxOutputBytes (T.pack err)
+      let (truncatedOut, t1) = truncateBytes maxOutputBytes (stripAnsi (T.pack out))
+          (truncatedErr, t2) = truncateBytes maxOutputBytes (stripAnsi (T.pack err))
        in ExecResult
             { erExitCode = case code of ExitSuccess -> 0; ExitFailure c -> c,
               erStdout = truncatedOut,
@@ -361,17 +362,52 @@ runCopyFromContainer container containerPath hostPath = do
 shellQuote :: Text -> Text
 shellQuote t = "'" <> T.replace "'" "'\\''" t <> "'"
 
+-- | Strip terminal control noise from captured output: ANSI escape
+-- sequences (CSI colour/cursor codes like @ESC[101m@ / @ESC[25C@, OSC
+-- strings, and lone two-char escapes) plus leftover C0 control bytes
+-- (carriage returns, bells, backspaces).  TUI programs (fastfetch,
+-- eza --color) emit these for a real terminal; in a QQ message they
+-- are garbage.  Newlines and tabs are kept.
+stripAnsi :: Text -> Text
+stripAnsi = T.filter keep . T.pack . go . T.unpack
+  where
+    keep c = c == '\n' || c == '\t' || c >= ' '
+
+    go [] = []
+    go ('\ESC' : rest) = case rest of
+      ('[' : cs) -> go (dropCsi cs) -- CSI: … <final 0x40–0x7E>
+      (']' : cs) -> go (dropOsc cs) -- OSC: … <BEL | ESC \>
+      (_ : cs) -> go cs -- other 2-byte escape
+      [] -> []
+    go (c : cs) = c : go cs
+
+    dropCsi [] = []
+    dropCsi (c : cs)
+      | c >= '\x40' && c <= '\x7E' = cs
+      | otherwise = dropCsi cs
+
+    dropOsc [] = []
+    dropOsc ('\BEL' : cs) = cs
+    dropOsc ('\ESC' : '\\' : cs) = cs
+    dropOsc (_ : cs) = dropOsc cs
+
 -- | Put @pkgs@ (bare nixpkgs attribute names) on PATH for one command
 -- via @nix shell@, which realises them from the shared store and
 -- execs the command with them available — nothing is installed into
 -- the sandbox itself.  Empty list = run the command as-is.
+--
+-- Two passes: a silenced warm-up run realises the packages (this is
+-- where nix's "these paths will be fetched … / copying path …"
+-- chatter goes — straight to @/dev/null@), then the real run executes
+-- in the now-cached shell so its captured stderr carries only the
+-- command's own output, not nix's.
 wrapPackages :: [Text] -> Text -> Text
 wrapPackages [] cmd = cmd
 wrapPackages pkgs cmd =
-  "nix shell "
-    <> T.unwords [shellQuote ("nixpkgs#" <> p) | p <- pkgs]
-    <> " -c sh -c "
-    <> shellQuote cmd
+  nixShell <> " -c true >/dev/null 2>&1; "
+    <> nixShell <> " -c sh -c " <> shellQuote cmd
+  where
+    nixShell = "nix shell " <> T.unwords [shellQuote ("nixpkgs#" <> p) | p <- pkgs]
 
 -- | Cap a Text at @n@ bytes (approximate — uses character count;
 -- close enough for log/model display).  Returns the trimmed text and
