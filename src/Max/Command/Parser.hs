@@ -40,17 +40,19 @@ type Parser = Parsec Void Text
 --     show the message back to the user.
 parseCommand :: Text -> Either Text (Maybe Command)
 parseCommand input
-  | Just body <- shellBody input = Right (Just (Shell body))
+  | Just body <- shellBody input =
+      let (pkgs, cmd) = splitLeadingPkgs body
+       in Right (Just (Shell pkgs cmd))
   | not (looksLikeCommand input) = Right Nothing
   | otherwise = case runParser (commandP <* eof) "command" input of
       Right cmd -> Right (Just cmd)
       Left bundle -> Left (T.pack (errorBundlePretty bundle))
 
 -- | Claude-Code-style shell escape: a bang, then whitespace, then a
--- non-empty rest.  Everything after the bang+space is one raw shell
--- line — no tokenizing, no flag parsing (so quotes, pipes, @--flags@
--- all pass through verbatim).  @!verb@ with no space stays the
--- structured-command path.
+-- non-empty rest.  The rest is the shell body (leading @+pkg@ tokens
+-- split off by 'splitLeadingPkgs'; everything after is raw — quotes,
+-- pipes, newlines, @--flags@ all verbatim).  @!verb@ with no space
+-- stays the structured-command path.
 shellBody :: Text -> Maybe Text
 shellBody t = case T.uncons (T.dropWhile (== ' ') t) of
   Just ('!', rest) | startsWithSpace rest ->
@@ -60,6 +62,27 @@ shellBody t = case T.uncons (T.dropWhile (== ' ') t) of
     startsWithSpace r = case T.uncons r of
       Just (c, _) -> c == ' ' || c == '\t'
       Nothing -> False
+
+-- | Peel leading @+pkg@ tokens off a shell body: each whitespace-run
+-- of the form @+name@ at the very start is a nixpkgs attribute to put
+-- on PATH.  The first token that doesn't start with @+@ ends the
+-- package list; everything from there on is the command, kept
+-- verbatim (internal newlines and spacing preserved).  A bare @+@ or
+-- empty name is skipped.
+splitLeadingPkgs :: Text -> ([Text], Text)
+splitLeadingPkgs = go []
+  where
+    go acc s =
+      let s' = T.stripStart s
+       in case T.uncons s' of
+            Just ('+', _) ->
+              let (tok, rest) = T.break isSpace s'
+                  pkg = T.drop 1 tok
+               in if T.null pkg
+                    then go acc rest -- lone '+', ignore
+                    else go (pkg : acc) rest
+            _ -> (reverse acc, s')
+    isSpace c = c == ' ' || c == '\t' || c == '\n' || c == '\r'
 
 -- | Same but never returns @Right Nothing@ — for callers that already
 -- know the input is meant to be a command.

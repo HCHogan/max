@@ -59,7 +59,7 @@ data Command
   | PsAll -- ^ '!ps --all'
   | Kill !Text -- ^ '!kill <id>'
   | KillAll -- ^ '!kill --all' — every running task, all groups
-  | Shell !Text -- ^ '! <cmd>' — run raw shell line in the group's sandbox
+  | Shell ![Text] !Text -- ^ '! [+pkg…] <cmd>' — leading +pkg tokens put nixpkgs on PATH; rest is the raw shell line, run in the group's sandbox
   | MemoryList -- ^ '!memory' — this group's memories + the caller's own
   | MemoryRm !Int64 -- ^ '!memory rm <id>'
   | StickerStats -- ^ '!sticker' — library counters + on/off state

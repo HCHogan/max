@@ -75,13 +75,24 @@ spec = do
     it "kill all" $ "!kill --all" `parsesTo` KillAll
 
   describe "! shell escape" $ do
-    it "bang-space → Shell with raw rest" $ "! ls -al" `parsesTo` Shell "ls -al"
+    it "bang-space → Shell, no packages" $ "! ls -al" `parsesTo` Shell [] "ls -al"
     it "keeps pipes and flags verbatim" $
-      "! cat a | grep -n x" `parsesTo` Shell "cat a | grep -n x"
-    it "tolerates extra spaces after the bang" $ "!   pwd" `parsesTo` Shell "pwd"
-    it "tolerates leading spaces before the bang" $ "  ! whoami" `parsesTo` Shell "whoami"
+      "! cat a | grep -n x" `parsesTo` Shell [] "cat a | grep -n x"
+    it "tolerates extra spaces after the bang" $ "!   pwd" `parsesTo` Shell [] "pwd"
+    it "tolerates leading spaces before the bang" $ "  ! whoami" `parsesTo` Shell [] "whoami"
     it "bang-space with empty body is not a command" $ notACommand "!   "
     it "bang-verb (no space) stays structured" $ "!pins" `parsesTo` Pins
+    it "preserves internal newlines (multi-line)" $
+      "! ls -al\ncd foo\ncat bar" `parsesTo` Shell [] "ls -al\ncd foo\ncat bar"
+    it "peels leading +pkg tokens, single line" $
+      "! +python3 +ffmpeg ffmpeg -i a.mp4 out.gif"
+        `parsesTo` Shell ["python3", "ffmpeg"] "ffmpeg -i a.mp4 out.gif"
+    it "peels +pkg across the newline before the command" $
+      "! +python3 +requests\npython3 script.py"
+        `parsesTo` Shell ["python3", "requests"] "python3 script.py"
+    it "does not treat a mid-command + as a package" $
+      "! echo 1 + 2" `parsesTo` Shell [] "echo 1 + 2"
+    it "ignores a lone + " $ "! + ls" `parsesTo` Shell [] "ls"
 
   describe "!memory" $ do
     it "bare memory → list" $ "!memory" `parsesTo` MemoryList

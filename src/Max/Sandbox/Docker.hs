@@ -33,6 +33,7 @@ module Max.Sandbox.Docker
     nixVolume,
     -- * Helpers
     shellQuote,
+    wrapPackages,
   )
 where
 
@@ -359,6 +360,18 @@ runCopyFromContainer container containerPath hostPath = do
 -- internal single quotes are escaped via the @'\''@ trick.
 shellQuote :: Text -> Text
 shellQuote t = "'" <> T.replace "'" "'\\''" t <> "'"
+
+-- | Put @pkgs@ (bare nixpkgs attribute names) on PATH for one command
+-- via @nix shell@, which realises them from the shared store and
+-- execs the command with them available — nothing is installed into
+-- the sandbox itself.  Empty list = run the command as-is.
+wrapPackages :: [Text] -> Text -> Text
+wrapPackages [] cmd = cmd
+wrapPackages pkgs cmd =
+  "nix shell "
+    <> T.unwords [shellQuote ("nixpkgs#" <> p) | p <- pkgs]
+    <> " -c sh -c "
+    <> shellQuote cmd
 
 -- | Cap a Text at @n@ bytes (approximate — uses character count;
 -- close enough for log/model display).  Returns the trimmed text and

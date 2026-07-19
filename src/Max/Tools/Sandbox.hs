@@ -35,7 +35,7 @@ import Data.Text qualified as T
 import Data.Time (defaultTimeLocale, formatTime)
 import Effectful
 import Max.Effects.Tools (Tool (..))
-import Max.Sandbox.Docker (ExecResult (..), maxOutputBytes, shellQuote)
+import Max.Sandbox.Docker (ExecResult (..), maxOutputBytes, shellQuote, wrapPackages)
 import Max.Sandbox.Registry
   ( SandboxCreateOpts (..),
     SandboxEntry (..),
@@ -200,17 +200,6 @@ execTool gid reg =
       pure (sid, cmd, pkgs, maybe 30 id mTo)
 
     clampTimeout n = max 1 (min 600 n)
-
-    -- 'nix shell' realises the packages (fetching from the shared
-    -- store or a substituter) and execs the command with them on
-    -- PATH; nothing is installed into the sandbox itself.
-    wrapPackages :: [Text] -> Text -> Text
-    wrapPackages [] cmd = cmd
-    wrapPackages pkgs cmd =
-      "nix shell "
-        <> T.unwords [shellQuote ("nixpkgs#" <> p) | p <- pkgs]
-        <> " -c sh -c "
-        <> shellQuote cmd
 
 --------------------------------------------------------------------------------
 -- nix_search

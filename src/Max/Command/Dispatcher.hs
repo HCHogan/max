@@ -27,7 +27,7 @@ import Max.DB.Stickers qualified as Stickers
 import Max.Effects.LLM (LLM, listProfiles)
 import Max.Browser.Registry (destroyBrowsersForGroup)
 import Max.Env (BotEnv (..))
-import Max.Sandbox.Docker (ExecResult (..))
+import Max.Sandbox.Docker (ExecResult (..), wrapPackages)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
 import Max.Session (Session (..), updateSession)
 import Max.Session qualified as Session
@@ -232,16 +232,20 @@ execute t gid uid replyTarget cmd = do
       if n == 0
         then "没有在跑的任务"
         else "✓ 已发取消信号给全部 " <> T.pack (show n) <> " 个任务"
-  Shell cmdLine -> do
+  Shell pkgs cmdLine -> do
     -- Direct passthrough to the group's default sandbox — same
     -- container the model's sandbox_exec uses, so `! ls` and the
-    -- model's file ops share state.
+    -- model's file ops share state.  Leading +pkg tokens go on PATH
+    -- for this command via the same nix-shell wrapper the tool uses.
     esb <- liftIO (ensureSandbox env.beSandboxes gid)
     case esb of
       Left err -> reply ("sandbox 启动失败: " <> err)
       Right e -> do
-        logInfo "shell" $ object ["sandbox" .= e.seId.unSandboxId, "cmd" .= cmdLine]
-        res <- liftIO (execInSandbox env.beSandboxes gid e.seId cmdLine shellTimeoutSecs)
+        logInfo "shell" $
+          object ["sandbox" .= e.seId.unSandboxId, "pkgs" .= pkgs, "cmd" .= cmdLine]
+        res <-
+          liftIO $
+            execInSandbox env.beSandboxes gid e.seId (wrapPackages pkgs cmdLine) (shellTimeoutSecs pkgs)
         reply $ case res of
           Left err -> "执行失败: " <> err
           Right er -> formatExecResult er
@@ -429,11 +433,13 @@ formatStickers rows =
 tshow :: Show a => a -> Text
 tshow = T.pack . show
 
--- | Wallclock cap for a user @! \<cmd\>@ shell command.  Fixed (no
--- per-command override): interactive convenience, not the model's
--- long build path — reach for the sandbox_exec tool for those.
-shellTimeoutSecs :: Int
-shellTimeoutSecs = 30
+-- | Wallclock cap for a user @! \<cmd\>@ shell command.  A plain
+-- command gets an interactive-snappy 30s; one that pulls @+pkg@ gets
+-- 180s, because the first fetch of a package into the shared store
+-- can take a while (later uses are instant — same store the model's
+-- sandbox_exec fills).
+shellTimeoutSecs :: [Text] -> Int
+shellTimeoutSecs pkgs = if null pkgs then 30 else 180
 
 -- | Render a sandbox exec result as a chat reply: stdout, then stderr
 -- (labelled) if any, then a trailing status line for non-zero exits
@@ -546,7 +552,8 @@ helpText Nothing =
       "  !ps --all                看所有群的任务",
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",
       "  !kill --all              砍掉所有群的全部任务",
-      "  ! <命令>                 直接在本群沙盒里跑 shell（感叹号后空一格），如 ! ls -al",
+      "  ! <命令>                 在本群沙盒里跑 shell（感叹号后空一格），如 ! ls -al；支持多行",
+      "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version",
       "  !branch                  列分支（标出 active）",
       "  !branch <name>           创建并切到新分支（fork 当前；上下文水位线设到现在）",
       "  !branch delete <name>    删除分支（不能删 active / 最后一个）",
