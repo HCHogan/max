@@ -119,6 +119,7 @@ baseInputs =
       pinnedItems = [],
       replyCtx = Nothing,
       multimodal = False,
+      groupBrief = [],
       groupMemories = [],
       userMemories = [],
       images = [],
@@ -167,6 +168,18 @@ spec = do
       sys `shouldSatisfy` ("2026-06-05" `T.isInfixOf`)
       sys `shouldSatisfy` ("7777" `T.isInfixOf`)
       sys `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
+
+    it "splices groupBrief lines into the environment block" $ do
+      let inp =
+            baseInputs
+              { groupBrief =
+                  [ "群名：测试群（3人）",
+                    "群主：Alice(6001)；管理员：Bob(6002)"
+                  ]
+              }
+          (sys, _, _) = splitMessages (fst (renderContext inp))
+      sys `shouldSatisfy` ("  群名：测试群（3人）" `T.isInfixOf`)
+      sys `shouldSatisfy` ("  群主：Alice(6001)；管理员：Bob(6002)" `T.isInfixOf`)
 
   describe "renderContext identity" $ do
     it "includes a roster mapping QQ ids to display names, bot first" $ do

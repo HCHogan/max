@@ -31,9 +31,14 @@ data Action
   | -- | Private-chat counterpart of 'UploadGroupFile'.
     UploadPrivateFile !UserId !Text !Text -- user_id, file_path, display_name
   | -- | Fetch the group's member list.  Response @data@ is an array of
-    -- member objects carrying @user_id@ (among much else).  Used to
-    -- validate outbound @-mention conversion against real membership.
+    -- member objects carrying @user_id@, @nickname@, @card@, @role@
+    -- (owner / admin / member), @title@, among much else.  Used to
+    -- validate outbound @-mention conversion against real membership
+    -- and to feed the roster surfaces (see "Max.Roster").
     GetGroupMemberList !GroupId
+  | -- | Fetch group metadata.  Response @data@ carries @group_name@ /
+    -- @member_count@ / @max_member_count@.
+    GetGroupInfo !GroupId
   deriving stock (Show)
 
 -- | Send to the conversation behind a (possibly pseudo) group id:
@@ -54,6 +59,7 @@ actionName = \case
   UploadGroupFile {} -> "upload_group_file"
   UploadPrivateFile {} -> "upload_private_file"
   GetGroupMemberList {} -> "get_group_member_list"
+  GetGroupInfo {} -> "get_group_info"
 
 actionParams :: Action -> Value
 actionParams = \case
@@ -96,6 +102,8 @@ actionParams = \case
         "name" .= name
       ]
   GetGroupMemberList gid ->
+    object ["group_id" .= gid]
+  GetGroupInfo gid ->
     object ["group_id" .= gid]
 
 data Envelope = Envelope

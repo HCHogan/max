@@ -78,6 +78,10 @@ data PromptInputs = PromptInputs
     -- | Whether the active profile accepts image content blocks.
     -- Toggles the format-guide wording for the @[image]@ marker.
     multimodal :: !Bool,
+    -- | Pre-rendered 群信息 lines for the [当前环境] block (group
+    -- name, 群主/管理员 — see 'Max.Roster.renderGroupBrief').  Empty
+    -- for private chats or when the NapCat lookups failed.
+    groupBrief :: ![Text],
     -- | Long-term memories of this group, oldest first.
     groupMemories :: ![MemoryItem],
     -- | Long-term memories of the *triggering* user (cross-group),
@@ -176,10 +180,11 @@ buildContext ::
   Int -> -- history window size
   Bool -> -- multimodal: load + attach inline images
   FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
+  [Text] -> -- pre-rendered 群信息 lines (see 'PromptInputs.groupBrief')
   Session ->
   GroupMessage ->
   Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
-buildContext defaultPersona n multimodal' blobRoot s gm = do
+buildContext defaultPersona n multimodal' blobRoot brief s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -266,6 +271,7 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
           pinnedItems = pinnedItems'',
           replyCtx = replyCtx',
           multimodal = multimodal',
+          groupBrief = brief,
           groupMemories = groupMems,
           userMemories = userMems,
           images = images',
@@ -512,11 +518,13 @@ renderContext pi' =
             "  现在：" <> formatEnvTime pi'.now,
             if isPrivateChat pi'.triggerMessage.groupId
               then "  场景：与 " <> senderName <> "（QQ " <> T.pack (show senderId) <> "）私聊"
-              else "  群号：" <> T.pack (show gidRaw),
-            "  当前模型：" <> pi'.session.model,
-            "  成员对照（@数字 即 QQ号）："
-              <> T.intercalate "、" [T.pack (show u) <> "=" <> n | (u, n) <- roster]
+              else "  群号：" <> T.pack (show gidRaw)
           ]
+            <> map ("  " <>) pi'.groupBrief
+            <> [ "  当前模型：" <> pi'.session.model,
+                 "  成员对照（@数字 即 QQ号）："
+                   <> T.intercalate "、" [T.pack (show u) <> "=" <> n | (u, n) <- roster]
+               ]
       mentionIds = [h.messageId | h <- pi'.mention]
       ambientNoDup =
         [a | a <- pi'.ambient, a.messageId `notElem` mentionIds]

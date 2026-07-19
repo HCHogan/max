@@ -71,6 +71,7 @@ library
         Max.Prompt
         Max.Render
         Max.Reply
+        Max.Roster
         Max.Sandbox.Docker
         Max.Sandbox.Registry
         Max.Session
@@ -80,6 +81,7 @@ library
         Max.Tools
         Max.Tools.Browser
         Max.Tools.Files
+        Max.Tools.Group
         Max.Tools.Memory
         Max.Tools.Sandbox
         Max.Tools.Search

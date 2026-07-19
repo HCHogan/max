@@ -40,6 +40,8 @@ module Max.Effects.Agent
     AgentLimits (..),
     AgentResult (..),
     DispatchContext (..),
+    ToolImage (..),
+    queueToolImage,
     runAgent,
     agentTurn,
     defaultLimits,
@@ -47,6 +49,7 @@ module Max.Effects.Agent
 where
 
 import Control.Concurrent (myThreadId, throwTo)
+import Control.Concurrent.STM (TVar, atomically, readTVar, writeTVar)
 import Control.Monad (unless)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
@@ -58,7 +61,7 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Exception (bracket)
 import Effectful.Log
-import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLM, ToolCall (..), chat)
+import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat)
 import Max.Effects.NapCat (NapCat, sendAction)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, drainBtwInbox, registerTask, unregisterTask)
@@ -94,9 +97,39 @@ data DispatchContext = DispatchContext
     -- ('OneBot.Segment.segmentMentions').  'Nothing' when unavailable
     -- (private chat, fetch failure) — conversion then checks syntax
     -- only.
-    dcMentionable :: !(Maybe (Set UserId))
+    dcMentionable :: !(Maybe (Set UserId)),
+    -- | Images queued by tools (e.g. @view_avatar@) via
+    -- 'queueToolImage' during the current tool round.  The loop drains
+    -- the list after each round and injects them as a user-role
+    -- image-blocks message — tool-result messages themselves are
+    -- text-only on the OpenAI wire.  The counter tracks every image
+    -- queued over the whole dispatch (it survives drains) so
+    -- 'queueToolImage' can enforce 'maxToolImages'.
+    dcToolImages :: !(TVar (Int, [ToolImage]))
   }
-  deriving stock (Show)
+
+-- | One tool-queued inline image: a context label ("[头像] Alice:")
+-- plus a @data:<mime>;base64,...@ URL.
+data ToolImage = ToolImage
+  { tiLabel :: !Text,
+    tiDataUrl :: !Text
+  }
+
+-- | Per-dispatch cap on tool-queued images — same order as the
+-- prompt builder's own image budget; keeps a chatty model from
+-- ballooning the context with base64.
+maxToolImages :: Int
+maxToolImages = 8
+
+-- | Queue an image for injection after the current tool round.
+-- 'False' when the dispatch's image budget is already spent (the
+-- tool should surface that as its error text).
+queueToolImage :: IOE :> es => DispatchContext -> ToolImage -> Eff es Bool
+queueToolImage dc img = liftIO . atomically $ do
+  (n, imgs) <- readTVar dc.dcToolImages
+  if n >= maxToolImages
+    then pure False
+    else True <$ writeTVar dc.dcToolImages (n + 1, imgs <> [img])
 
 -- | Caps on a single agent invocation.  Per-tool and per-call HTTP
 -- timeouts are configured at the 'LLM' layer; these are loop-level.
@@ -229,8 +262,9 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
               -- DeepSeek returns 400 otherwise.
               let asst = MsgAssistantToolCalls reasoning tcs
               toolMsgs <- traverse executeOne tcs
-              let appended'' = appended' <> [asst] <> toolMsgs
-              go dc h (n + 1) appended'' profile thinking (msgs' <> [asst] <> toolMsgs)
+              imgMsgs <- drainToolImages dc
+              let newMsgs = [asst] <> toolMsgs <> imgMsgs
+              go dc h (n + 1) (appended' <> newMsgs) profile thinking (msgs' <> newMsgs)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
     -- gets a real answer built from whatever the loop already gathered,
@@ -282,6 +316,22 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
 
     silentTools :: [Text]
     silentTools = ["say", "send_image_from_sandbox", "send_file_from_sandbox"]
+
+    -- Images tools queued this round, packaged as one user message of
+    -- alternating label/image blocks (leading text block, never two
+    -- adjacent text blocks — the shape strict providers accept).
+    -- Injected AFTER all tool-result messages so every tool_call id is
+    -- answered first, as the OpenAI wire requires.
+    drainToolImages :: DispatchContext -> Eff (Tools : es) [ChatMessage]
+    drainToolImages dc = do
+      imgs <- liftIO . atomically $ do
+        (n, is) <- readTVar dc.dcToolImages
+        writeTVar dc.dcToolImages (n, [])
+        pure is
+      pure
+        [ MsgUserBlocks (concat [[TextBlock i.tiLabel, ImageDataUrl i.tiDataUrl] | i <- imgs])
+        | not (null imgs)
+        ]
 
     executeOne :: ToolCall -> Eff (Tools : es) ChatMessage
     executeOne tc = do

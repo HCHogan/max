@@ -5,11 +5,11 @@ module Max.Handler
   )
 where
 
-import Control.Concurrent.STM (TQueue, atomically, readTQueue)
+import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue)
 import Control.Monad (unless, void)
-import Data.Foldable (for_, toList)
-import Data.Aeson (Value, withArray, withObject, (.:))
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Foldable (for_)
+import Data.Aeson (Value, withObject, (.:))
+import Data.Aeson.Types (parseEither)
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
@@ -38,12 +38,13 @@ import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (buildContext)
+import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Tasks (TaskCancelled (..))
 import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), chunkSource, planReply)
 import Max.Util (catchSync, trySync)
-import OneBot.Action (Action (..), Response (..), sendChatMsg)
+import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
@@ -280,11 +281,12 @@ dispatchLLM gm = void $ async $
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
       multimodal <- isProfileMultimodal s.model
-      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot s gm
-      mentionable <- fetchMentionable gm.groupId
+      (mentionable, brief) <- fetchGroupContext gm.groupId
+      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot brief s gm
+      toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff mentionable
+          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff mentionable toolImgs
       result <- agentTurn dc s.model s.thinkingOverride ctx
       -- Stickers go out only via the send_sticker tool.  In history the
       -- bot's past sticker sends render as "[表情包: …]" text, and weaker
@@ -439,37 +441,26 @@ sendAndPersistReply gm mentionable body = do
       | isPrivateChat gm.groupId = [SegText t]
       | otherwise = segmentMentions (\u -> maybe True (Set.member u) mentionable) t
 
--- | Fetch the group's member id set for outbound @-mention
--- validation.  'Nothing' when there is no meaningful list (private
--- chat) or the NapCat call fails — conversion then falls back to
--- syntax-only matching, so a flaky API never mutes legitimate @s;
--- membership is a correctness refinement, not a gate.
-fetchMentionable ::
+-- | One roster fetch serving two prompt-side consumers: the member id
+-- set for outbound @-mention validation ('Nothing' when there is no
+-- meaningful list — private chat or NapCat failure — so conversion
+-- falls back to syntax-only matching and a flaky API never mutes
+-- legitimate @s), and the rendered 群信息 lines for the system
+-- prompt's [当前环境] block (empty on the same failures — the model
+-- just doesn't get the block).
+fetchGroupContext ::
   (NapCat :> es, Log :> es) =>
   GroupId ->
-  Eff es (Maybe (Set UserId))
-fetchMentionable gid
-  | isPrivateChat gid = pure Nothing
-  | otherwise =
-      callAction (GetGroupMemberList gid) 10000 >>= \case
-        Left err -> do
-          logAttention "member list fetch failed" $ object ["error" .= err]
-          pure Nothing
-        Right (Response _ rc payload _)
-          | rc /= 0 -> do
-              logAttention "member list retcode bad" $ object ["retcode" .= rc]
-              pure Nothing
-          | otherwise -> case parseEither memberIds payload of
-              Left e -> do
-                logAttention "member list parse failed" $
-                  object ["error" .= T.pack e]
-                pure Nothing
-              Right ids -> pure (Just (Set.fromList ids))
-  where
-    memberIds :: Value -> Parser [UserId]
-    memberIds =
-      withArray "member list" $
-        fmap toList . traverse (withObject "member" (.: "user_id"))
+  Eff es (Maybe (Set UserId), [T.Text])
+fetchGroupContext gid
+  | isPrivateChat gid = pure (Nothing, [])
+  | otherwise = do
+      members <- fetchGroupMembers gid
+      meta <- fetchGroupMeta gid
+      pure
+        ( Set.fromList . map (.mUserId) <$> members,
+          renderGroupBrief meta members
+        )
 
 extractOutMid :: Value -> Maybe Int64
 extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of
