@@ -2,11 +2,23 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.Handler (stripStickerText)
+import Max.Handler (isSilentReply, stripStickerText)
 import Test.Hspec
 
 spec :: Spec
 spec = do
+  describe "isSilentReply" $ do
+    it "matches a lone [沉默] and the empty reply" $ do
+      isSilentReply "[沉默]" `shouldBe` True
+      isSilentReply "" `shouldBe` True
+
+    it "does not mute a reply that merely contains the marker" $ do
+      isSilentReply "[沉默] 算了还是说一句" `shouldBe` False
+      isSilentReply "我为什么要回 [沉默]" `shouldBe` False
+
+    it "does not mute ordinary replies" $
+      isSilentReply "今天天气不错" `shouldBe` False
+
   describe "stripStickerText" $ do
     it "leaves text without a sticker span untouched" $
       stripStickerText "你好呀，今天天气不错" `shouldBe` "你好呀，今天天气不错"

@@ -1,6 +1,7 @@
 module Max.Handler
   ( handleEvents,
     stripStickerText,
+    isSilentReply,
   )
 where
 
@@ -289,45 +290,61 @@ dispatchLLM gm = void $ async $
       -- such span as a hard backstop (the tool descriptions also tell
       -- the model not to).
       let stripped = T.strip (stripStickerText result.reply)
-      -- callAction so we get the message_id back, then persist this
-      -- outbound message into the messages table.  That's where
-      -- subsequent dispatches will read this turn's assistant reply
-      -- back from when reconstructing mention history.
-      sendAndPersistReply gm roster stripped
-      -- Drain consumed btw notes — but only when persisting; an
-      -- ephemeral dispatch (e.g. !btw one-shot) must not eat the
-      -- queue (the notes are still waiting for a real turn).
-      ephemeral <- isEphemeral
-      unless ephemeral $
-        updateSession t $ \sess ->
-          let sess' =
-                sess
-                  { btwNotes =
-                      if null drained
-                        then sess.btwNotes
-                        else drop (length drained) sess.btwNotes
-                  }
-           in (sess', ())
-      logInfo "llm replied" $
-        object
-          [ "to" .= (let UserId u = gm.userId in u),
-            "len" .= T.length stripped,
-            "turns" .= result.turnsUsed,
-            "appended" .= length result.appended,
-            "btw_drained" .= length drained,
-            "aborted" .= result.aborted
-          ]
-      -- Post-reply memory extraction: the user already has their
-      -- answer, so this costs them nothing; ephemeral (!btw) turns
-      -- must not leave traces.  A crashed extraction only logs.
-      case env.beMemoryExtract of
-        Just prof
-          | not ephemeral ->
-              extractMemories prof env.beEmbed gm (ctx <> result.appended)
-                `catchSync` \e ->
-                  logAttention "memx: crashed" $
-                    object ["error" .= T.pack (show e)]
-        _ -> pure ()
+      if isSilentReply stripped
+        then
+          -- The model opted out of replying (see 'isSilentReply') —
+          -- the escape hatch for turns that need no response, most
+          -- importantly another bot @-ing us: answering would
+          -- re-trigger it and ping-pong forever.  Nothing is sent or
+          -- persisted; btw notes are NOT drained (they wait for a
+          -- turn that actually delivers them); no memory extraction
+          -- (a turn judged not worth answering is noise).
+          logInfo "llm chose silence" $
+            object
+              [ "to" .= (let UserId u = gm.userId in u),
+                "turns" .= result.turnsUsed,
+                "aborted" .= result.aborted
+              ]
+        else do
+          -- callAction so we get the message_id back, then persist this
+          -- outbound message into the messages table.  That's where
+          -- subsequent dispatches will read this turn's assistant reply
+          -- back from when reconstructing mention history.
+          sendAndPersistReply gm roster stripped
+          -- Drain consumed btw notes — but only when persisting; an
+          -- ephemeral dispatch (e.g. !btw one-shot) must not eat the
+          -- queue (the notes are still waiting for a real turn).
+          ephemeral <- isEphemeral
+          unless ephemeral $
+            updateSession t $ \sess ->
+              let sess' =
+                    sess
+                      { btwNotes =
+                          if null drained
+                            then sess.btwNotes
+                            else drop (length drained) sess.btwNotes
+                      }
+               in (sess', ())
+          logInfo "llm replied" $
+            object
+              [ "to" .= (let UserId u = gm.userId in u),
+                "len" .= T.length stripped,
+                "turns" .= result.turnsUsed,
+                "appended" .= length result.appended,
+                "btw_drained" .= length drained,
+                "aborted" .= result.aborted
+              ]
+          -- Post-reply memory extraction: the user already has their
+          -- answer, so this costs them nothing; ephemeral (!btw) turns
+          -- must not leave traces.  A crashed extraction only logs.
+          case env.beMemoryExtract of
+            Just prof
+              | not ephemeral ->
+                  extractMemories prof env.beEmbed gm (ctx <> result.appended)
+                    `catchSync` \e ->
+                      logAttention "memx: crashed" $
+                        object ["error" .= T.pack (show e)]
+            _ -> pure ()
 
 --------------------------------------------------------------------------------
 -- Reply helper.
@@ -424,6 +441,16 @@ extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_
 stripMentions :: UserId -> T.Text -> T.Text
 stripMentions (UserId u) =
   T.replace ("@" <> T.pack (show u)) ""
+
+-- | Did the model opt out of replying?  The format guide tells it to
+-- answer with a lone @[沉默]@ when a turn calls for no response —
+-- e.g. another bot mechanically @-ing us, where any answer would
+-- re-trigger it in an endless loop.  Expects pre-stripped input; an
+-- empty reply counts as silence too.  Only an exact match qualifies:
+-- a reply that merely *contains* the marker still goes out, so the
+-- model can't accidentally mute a real answer.
+isSilentReply :: T.Text -> Bool
+isSilentReply t = T.null t || t == "[沉默]"
 
 -- | Remove any "[表情包: …]" / "[表情包…]" spans a model hallucinated
 -- into its reply text (see call site).  Scans for the "[表情包" opener
