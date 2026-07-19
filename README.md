@@ -1,22 +1,23 @@
 # max
 
-A QQ chat agent in Haskell — group chats and one-on-one private chats. Talks to QQ via [NapCatQQ](https://napneko.github.io/) over the OneBot 11 reverse-WebSocket protocol, and to any OpenAI-compatible or Anthropic-native LLM endpoint for replies.
+A QQ chat bot written in Haskell, for group chats and one-on-one private chats. It connects to QQ through [NapCatQQ](https://napneko.github.io/) (OneBot 11 over reverse WebSocket) and calls any OpenAI-compatible or Anthropic-native endpoint for the replies.
 
-## What it does today
+## What it does
 
-- **Persistence**: every message (segments, rendered text, sender nickname + 群名片, reply-to) → Postgres. Images stored content-addressed under `var/images/`; an N-worker pool fetches in parallel. Forwarded-message chains expanded into child rows.
-- **Trigger**: `@`-mention or reply-to-bot in groups; every message in private chats. `!cmd` messages go through the command parser; everything else spawns an async agent turn seeing recent context, the reconstructed bot-conversation history, pinned messages, and long-term memories.
-- **Private chats as pseudo-groups**: a private chat with user *u* is keyed as group `-u`, so sessions, history, memories, sandboxes, commands — the whole pipeline — work identically in both. Replies route to `send_private_msg` automatically; the system prompt switches its 对话场景 block.
-- **Agent loop**: multi-turn tool-call loop with cancellation (`!kill`), `!btw` side-channel injection, progress updates via the `say` tool, optional debug mode (`!debug`) that announces each tool call in the chat, and a tool-result context budget with a forced final answer at the turn cap.
-- **Long-term memory**: per-group/per-conversation memories plus cross-group per-user memories, injected wholesale into the system prompt (framed as low-salience 背景备忘). Written three ways: the agent's `memory_save/update/forget` tools, a post-dispatch extractor (a cheap configured model distills each conversation, with embedding-based semantic dedup), and audited by humans via `!memory` / `!memory rm <id>`. Capped at 30 × 300 chars per scope — hoarding is structurally impossible.
-- **Vector search** (optional, any OpenAI-compatible embeddings endpoint — siliconflow's `BAAI/bge-m3` is free): a background worker embeds all messages and memories into pgvector columns; `search_messages` gains a `semantic` mode and `memory_search` searches memories across all scopes. Without the config, everything degrades to substring/regex search.
-- **Multi-profile LLM**: as many `llm.profiles` as you like, switch per-session at runtime with `!model <name>`. OpenAI-compatible or Anthropic-native (`protocol: anthropic`); thinking-mode override via `!model think on/off` with `reasoning_content` round-tripping.
-- **Multimodal**: profiles marked `multimodal: true` get context images inlined as data URLs (trigger images awaited, reply-target images labelled as 被引用的那条), plus the browser toolset.
-- **Browser** (multimodal profiles): per-group camoufox-MCP container (stealth Firefox, stdio bridged to Streamable HTTP by supergateway) — `browser_navigate/snapshot/click/type/press_key/wait_for/scroll` driven by page snapshots whose interactive elements carry CSS selectors. Build the image once with `browser-image/build.sh`.
-- **Replies read like a person**: blank-line paragraphs in the model's answer are sent as separate consecutive messages (code fences never split, capped at 5); the prompt carries a QQ号↔名字 roster so the model knows who is who (群名片 preferred over nickname).
-- **Tools** (registered conditionally on config): `web_search` (Tavily) · file tools (`list_recent_files`, `import_file_to_sandbox`, `send_image_from_sandbox`, `send_file_from_sandbox` — private chats upload via `upload_private_file`) · sandbox tools (persistent per-group Docker workspace, Nix-based: `max-sandbox:latest` from `sandbox-image/build.sh`, packages from pinned nixpkgs via `nix_search` + `sandbox_exec`'s `packages`, one shared store volume `max-nix`) · memory tools · `search_messages` / `get_message_by_id` · browser tools.
-- **Commands**: `!help`, `!model [list|<name>|think [on|off]]`, `!debug [on|off|default]`, `!persona [<text>|clear]`, `!clear [--all]`, `!unclear`, `!pin [id]`, `!unpin [id|all]`, `!pins`, `!memory [rm <id>]` (group memories in groups; private chats also show your own cross-group memories), `!btw <text>`, `!ps [--all]`, `!kill <id>`, `!branch [list|<name>|delete <name>]`, `!switch <name>`.
-- `@bot ping` returns `pong` as a fast path with no LLM hop.
+- **Persistence.** Every message goes to Postgres (segments, rendered text, sender names, reply links); images are stored content-addressed on disk, forwarded chats expanded into child rows.
+- **Triggering.** @-mention or reply in groups, everything in private chats. `!` messages are commands; the rest start an async agent turn with recent context, prior bot conversations, pins and memories.
+- **Private chats** reuse the group pipeline (chat with user *u* = group `-u`), so sessions, memories, sandboxes and commands work the same in both.
+- **Agent loop.** Multi-turn tool calling with `!kill` cancellation, `!btw` mid-task notes, progress via the `say` tool, `!debug` tool-call echo, a tool-result context budget, and a forced final answer at the turn cap.
+- **Memory.** Per-group and per-user memories injected into the system prompt; written by the model's memory tools and a post-reply extractor, audited with `!memory`. 30 entries × 300 chars per scope.
+- **Vector search** (optional). A worker embeds messages and memories into pgvector; enables semantic `search_messages` and `memory_search`. Falls back to substring/regex without it.
+- **LLM profiles.** Multiple profiles, OpenAI-compatible or Anthropic-native, switched with `!model`; thinking mode via `!model think on/off`.
+- **Images.** Multimodal profiles get the images the user is pointing at (trigger / quoted message / pins) inline. Other history images render as `[image#id]` markers loaded on demand with `view_image`, so unrelated group pictures don't distract the model. Avatars via `view_avatar`.
+- **Group awareness.** The prompt carries group name, owner and admins; `group_members` pages through the full roster.
+- **Browser** (multimodal profiles). Per-group camoufox container (stealth Firefox over MCP): navigate, snapshot, click, type, scroll — snapshots list interactive elements with CSS selectors.
+- **Replies.** Blank-line paragraphs go out as separate messages (fences never split, five max); a QQ-id-to-name table in the prompt keeps names straight, group card over nickname.
+- **Tools** (per config): `web_search` · files · sandbox (persistent per-group Docker workspace, packages from pinned nixpkgs) · memory · message search · `group_members` / `view_avatar` / `view_image` · browser.
+- **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`, `!branch`, `!switch`.
+- `@bot ping` → `pong`, no LLM call.
 
 ## Layout
 
