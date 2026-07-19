@@ -17,8 +17,7 @@ module Max.Tools.Search
   )
 where
 
-import Control.Exception (SomeException, try)
-import Control.Lens ((&), (.~), (?~), (^.))
+import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Lazy qualified as LBS
@@ -29,10 +28,9 @@ import Effectful
 import Effectful.Log
 import Effectful.Wreq qualified as W
 import Max.Effects.Tools (Tool (..))
-import Network.HTTP.Types.Status (statusCode)
+import Max.Wreq (postAndParse)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
-import System.Timeout (timeout)
 
 -- | Knobs for the Tavily-backed search.  Everything except the key is
 -- defaulted in 'Max.Config.materialize'.
@@ -132,7 +130,7 @@ webSearchTool cfg =
 -- HTTP.
 
 callTavily ::
-  (W.Wreq :> es, IOE :> es) =>
+  (W.Wreq :> es, Log :> es, IOE :> es) =>
   SearchConfig ->
   Text ->
   Int ->
@@ -153,28 +151,7 @@ callTavily cfg query maxResults = do
         Wreq.defaults
           & WL.header "Authorization" .~ ["Bearer " <> TE.encodeUtf8 cfg.scTavilyApiKey]
           & WL.header "Content-Type" .~ ["application/json"]
-          & WL.checkResponse ?~ (\_ _ -> pure ())
-  res <- withRunInIO $ \run ->
-    timeout (cfg.scTimeoutSeconds * 1_000_000) $
-      try (run (W.postWith opts "https://api.tavily.com/search" body))
-  pure $ case res of
-    Nothing -> Left "tavily timed out"
-    Just (Left e) -> Left ("http: " <> T.pack (show (e :: SomeException)))
-    Just (Right resp) ->
-      let code = statusCode (resp ^. WL.responseStatus)
-          rbody = resp ^. WL.responseBody
-       in if code >= 400
-            then
-              Left $
-                "HTTP "
-                  <> T.pack (show code)
-                  <> ": "
-                  <> T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
-            else case eitherDecode rbody of
-              Left e -> Left ("parse: " <> T.pack e)
-              Right v -> case parseEither compactResponse v of
-                Left e -> Left ("extract: " <> T.pack e)
-                Right v' -> Right v'
+  postAndParse cfg.scTimeoutSeconds opts "https://api.tavily.com/search" body compactResponse
 
 -- | Strip everything we don't want surfaced to the model: scores
 -- (it'll just second-guess them), raw_content (already capped at

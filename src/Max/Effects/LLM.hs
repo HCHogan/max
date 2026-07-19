@@ -39,11 +39,9 @@ module Max.Effects.LLM
 where
 
 import Control.Applicative ((<|>))
-import Control.Exception (SomeException, try)
-import Control.Lens ((&), (.~), (?~), (^.))
+import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.Types (Pair, Parser, parseEither)
-import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -54,12 +52,9 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log
 import Effectful.Wreq qualified as W
-import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Client.TLS (tlsManagerSettings)
-import Network.HTTP.Types.Status (statusCode)
+import Max.Wreq (postAndParse)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
-import System.Timeout (timeout)
 
 -- | Which wire format the endpoint speaks.  Picks URL suffix, auth
 -- header shape, request body structure, and response parser.
@@ -387,67 +382,6 @@ isProfileMultimodal name = send (IsProfileMultimodal name)
 --------------------------------------------------------------------------------
 -- Shared HTTP helper.
 
--- | POST a request and run the protocol-specific parser on the
--- response body.  Overrides http-client's 30s default response
--- timeout with the per-profile budget (LLM completions routinely
--- take longer — the server sends nothing until generation is done),
--- and wraps the whole call in 'System.Timeout' as the outer
--- wallclock cap.  Surfaces structured 'Left' errors for timeout /
--- transport / HTTP-status / JSON-parse / extract failures with the
--- response body preview attached so log readers see what the
--- upstream actually sent.
-postAndParse ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
-  LLMProfile ->
-  Wreq.Options ->
-  String -> -- url
-  BS.ByteString -> -- body
-  (Value -> Parser ChatResponse) -> -- parser
-  Eff es (Either Text ChatResponse)
-postAndParse cfg opts url body parser = do
-  let mgrSettings =
-        tlsManagerSettings
-          { HTTP.managerResponseTimeout =
-              HTTP.responseTimeoutMicro (cfg.timeoutSeconds * 1_000_000)
-          }
-      opts' = opts & WL.manager .~ Left mgrSettings
-  res <- withRunInIO $ \run ->
-    timeout (cfg.timeoutSeconds * 1_000_000) $
-      try (run (W.postWith opts' url body))
-  case res of
-    Nothing -> pure (Left "request timed out")
-    Just (Left e) -> pure (Left ("http: " <> T.pack (show (e :: SomeException))))
-    Just (Right resp) -> do
-      let code = statusCode (resp ^. WL.responseStatus)
-          rbody = resp ^. WL.responseBody
-      if code >= 400
-        then do
-          -- 4xx bodies like "invalid_request_error" are
-          -- undiagnosable without seeing what we actually sent —
-          -- log a (truncated) copy of the request alongside.
-          logAttention "llm: http error request dump" $
-            object
-              [ "url" .= T.pack url,
-                "status" .= code,
-                "request_body" .= T.take 4000 (TE.decodeUtf8Lenient body)
-              ]
-          pure $
-            Left $
-              "HTTP "
-                <> T.pack (show code)
-                <> ": "
-                <> T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
-        else
-          let bodyPreview =
-                T.take 800 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
-           in pure $ case eitherDecode rbody of
-                Left e ->
-                  Left ("parse: " <> T.pack e <> "\nbody: " <> bodyPreview)
-                Right v -> case parseEither parser v of
-                  Left e ->
-                    Left ("extract: " <> T.pack e <> "\nbody: " <> bodyPreview)
-                  Right r -> Right r
-
 --------------------------------------------------------------------------------
 -- HTTP — dispatch on protocol.
 
@@ -513,8 +447,7 @@ callChatOpenAI cfg thinkingEff msgs tools = do
         Wreq.defaults
           & WL.header "Authorization" .~ ["Bearer " <> TE.encodeUtf8 cfg.apiKey]
           & WL.header "Content-Type" .~ ["application/json"]
-          & WL.checkResponse ?~ (\_ _ -> pure ())
-  postAndParse cfg opts url body parseResponseOpenAI
+  postAndParse cfg.timeoutSeconds opts url body parseResponseOpenAI
 
 -- | @temperature@ only when configured — omitting lets the server
 -- pick its default, and some providers 400 on explicit values.
@@ -595,8 +528,7 @@ callChatAnthropic cfg msgs tools = do
           & WL.header "x-api-key" .~ [TE.encodeUtf8 cfg.apiKey]
           & WL.header "anthropic-version" .~ ["2023-06-01"]
           & WL.header "Content-Type" .~ ["application/json"]
-          & WL.checkResponse ?~ (\_ _ -> pure ())
-  postAndParse cfg opts url body parseResponseAnthropic
+  postAndParse cfg.timeoutSeconds opts url body parseResponseAnthropic
 
 encodeToolSpecAnthropic :: ToolSpec -> Value
 encodeToolSpecAnthropic t =

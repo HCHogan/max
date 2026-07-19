@@ -7,7 +7,7 @@ module Max.Effects.Http
   )
 where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Text (Text)
@@ -15,6 +15,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
+import Max.Util (trySyncIO)
 import Network.Connection (TLSSettings (..))
 import Network.HTTP.Client
   ( Manager,
@@ -91,7 +92,7 @@ getBytes url limit = send (GetBytes url limit)
 
 downloadIO :: Manager -> Text -> Int -> IO (Either Text (ByteString, Text))
 downloadIO mgr url limit = do
-  eres <- try $ do
+  eres <- trySyncIO $ do
     req <- parseRequest (T.unpack url)
     withResponse req mgr $ \resp -> do
       let sc = statusCode (responseStatus resp)

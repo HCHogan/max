@@ -34,7 +34,7 @@ module Max.Tasks
 where
 
 import Control.Concurrent.STM
-import Control.Exception (Exception)
+import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -89,13 +89,19 @@ newTaskRegistry :: IO TaskRegistry
 newTaskRegistry = TaskRegistry <$> newTVarIO 0 <*> newTVarIO Map.empty
 
 -- | Custom exception so we can distinguish a user-initiated @!kill@
--- from generic 'ThreadKilled' / shutdown.  The agent's @bracket@
--- catches it for the unregister side; 'catchSync' lets it propagate
--- (we want @!kill@ to actually kill the task, not just log-and-retry).
+-- from generic 'ThreadKilled' / shutdown.  Tagged as asynchronous
+-- ('asyncExceptionToException') because it is delivered via @throwTo@:
+-- 'catchSync' / 'trySyncIO' rethrow it, so it punches through the
+-- log-and-continue handlers and error-to-Left wrappers on the worker
+-- (we want @!kill@ to actually kill the task, wherever it is — mid
+-- HTTP call included).  The agent's @bracket@ still unregisters on
+-- the way out; the dispatch root catches it for the quiet log.
 data TaskCancelled = TaskCancelled
   deriving stock (Show)
 
-instance Exception TaskCancelled
+instance Exception TaskCancelled where
+  toException = asyncExceptionToException
+  fromException = asyncExceptionFromException
 
 --------------------------------------------------------------------------------
 -- Lifecycle

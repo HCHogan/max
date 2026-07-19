@@ -17,7 +17,7 @@ module Max.Embedding
   )
 where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Lazy qualified as LBS
@@ -25,6 +25,7 @@ import Data.List (sortOn)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Max.Util (trySyncIO)
 import Network.HTTP.Client
   ( Manager,
     Request (..),
@@ -67,7 +68,7 @@ embedTexts c texts = do
   let cfg = c.emCfg
       url = T.unpack (T.dropWhileEnd (== '/') cfg.ecBaseUrl) <> "/embeddings"
       body = encode (object ["model" .= cfg.ecModel, "input" .= texts])
-  ereq <- try (parseRequest ("POST " <> url))
+  ereq <- trySyncIO (parseRequest ("POST " <> url))
   case ereq of
     Left (e :: SomeException) -> pure (Left ("bad embedding url: " <> T.pack (show e)))
     Right req0 -> do
@@ -81,7 +82,7 @@ embedTexts c texts = do
                 requestBody = RequestBodyLBS body,
                 responseTimeout = responseTimeoutMicro (cfg.ecTimeoutSeconds * 1_000_000)
               }
-      eresp <- try (httpLbs req c.emManager)
+      eresp <- trySyncIO (httpLbs req c.emManager)
       pure $ case eresp of
         Left (e :: SomeException) -> Left ("embedding request failed: " <> T.pack (show e))
         Right resp ->

@@ -19,7 +19,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
-import Effectful.Exception (SomeException, fromException, try)
+import Effectful.Exception (SomeException, catch)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
@@ -39,10 +39,10 @@ import Max.Images (ImageQueue, enqueueImages)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (buildContext)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
-import Max.Tasks (TaskCancelled)
+import Max.Tasks (TaskCancelled (..))
 import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), chunkSource, planReply)
-import Max.Util (catchSync)
+import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..), Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, segmentMentions)
@@ -127,7 +127,7 @@ handleEvents q imgQ fwdQ fileQ = loop
 
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
 persist gm =
-  try @SomeException (insertGroupMessage gm) >>= \case
+  trySync (insertGroupMessage gm) >>= \case
     Right () -> pure ()
     Left e ->
       logAttention "db insert failed" $
@@ -263,15 +263,17 @@ dispatchLLM gm = void $ async $
           "user_id" .= fromRaw,
           "message_id" .= midRaw
         ]
-    work `catchSync` \e ->
-      case fromException e :: Maybe TaskCancelled of
-        Just _ ->
-          -- User-initiated !kill — quieter log, not an error.
-          logInfo "llm dispatch cancelled" $
-            object ["group_id" .= gidRaw]
-        Nothing ->
-          logAttention "llm dispatch crashed" $
-            object ["error" .= T.pack (show (e :: SomeException))]
+    -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
+    -- (and every trySyncIO on the way up) — the outer 'catch' is the
+    -- one place a user-initiated @!kill@ comes to rest.
+    ( work `catchSync` \e ->
+        logAttention "llm dispatch crashed" $
+          object ["error" .= T.pack (show (e :: SomeException))]
+      )
+      `catch` \TaskCancelled ->
+        -- User-initiated !kill — quieter log, not an error.
+        logInfo "llm dispatch cancelled" $
+          object ["group_id" .= gidRaw]
   where
     work = do
       env :: BotEnv <- ask

@@ -30,7 +30,7 @@ module Max.MCP.Client
 where
 
 import Control.Concurrent.STM
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException)
 import Data.Aeson
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteString (ByteString)
@@ -41,6 +41,7 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Max.Util (trySyncIO)
 import Network.HTTP.Client
   ( Manager,
     Request (..),
@@ -160,7 +161,7 @@ postRpc c mId method params expectResult = do
           <> T.pack c.mcEndpoint
           <> " sid="
           <> maybe "none" (T.take 8 . TE.decodeUtf8) sess
-  ereq <- try (parseRequest ("POST " <> c.mcEndpoint))
+  ereq <- trySyncIO (parseRequest ("POST " <> c.mcEndpoint))
   case ereq of
     Left (e :: SomeException) -> pure (Left ("bad MCP endpoint: " <> T.pack (show e)))
     Right req0 -> do
@@ -169,7 +170,7 @@ postRpc c mId method params expectResult = do
               { requestHeaders = hdrs,
                 requestBody = RequestBodyLBS (encode body)
               }
-      eresp <- try (httpLbs req c.mcManager)
+      eresp <- trySyncIO (httpLbs req c.mcManager)
       case eresp of
         Left (e :: SomeException) -> pure (Left ("MCP request failed [" <> ctx <> "]: " <> T.pack (show e)))
         Right resp -> do

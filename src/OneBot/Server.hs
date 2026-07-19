@@ -6,7 +6,8 @@ module OneBot.Server
 where
 
 import Control.Concurrent.STM
-import Control.Exception (SomeException, catch, finally)
+import Control.Exception (finally)
+import Control.Monad (void)
 import Data.Foldable (for_)
 import Data.Aeson (Value (Object), decode, eitherDecode)
 import Data.Aeson.Key qualified as K
@@ -21,7 +22,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
-import Max.Util (catchSync)
+import Max.Util (catchSync, trySyncIO)
 import Network.WebSockets qualified as WS
 import OneBot.Action (Response (..))
 import OneBot.Event (Event, parseEvent)
@@ -185,5 +186,4 @@ handleResponse client raw = case eitherDecode raw :: Either String Response of
 
 closeQuietly :: WS.Connection -> IO ()
 closeQuietly conn =
-  WS.sendClose conn ("bye" :: Text)
-    `catch` \(_ :: SomeException) -> pure ()
+  void $ trySyncIO $ WS.sendClose conn ("bye" :: Text)
