@@ -350,13 +350,16 @@ sayTool dc =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (msg :: Text) -> do
           -- Same outbound treatment as the final reply: quote the
-          -- trigger, convert roster-listed @<qq> spans to real ats
+          -- trigger, convert member-listed @<qq> spans to real ats
           -- (groups only — private at-segments render poorly).
           let segs =
                 [SegReply dc.dcMessageId]
                   <> if isPrivateChat dc.dcGroupId
                     then [SegText (T.strip msg)]
-                    else segmentMentions (`Set.member` dc.dcRoster) (T.strip msg)
+                    else
+                      segmentMentions
+                        (\u -> maybe True (Set.member u) dc.dcMentionable)
+                        (T.strip msg)
           eres <- callAction (sendChatMsg dc.dcGroupId segs) 30000
           case eres of
             Left err -> do

@@ -30,6 +30,10 @@ data Action
     UploadGroupFile !GroupId !Text !Text -- group_id, file_path, display_name
   | -- | Private-chat counterpart of 'UploadGroupFile'.
     UploadPrivateFile !UserId !Text !Text -- user_id, file_path, display_name
+  | -- | Fetch the group's member list.  Response @data@ is an array of
+    -- member objects carrying @user_id@ (among much else).  Used to
+    -- validate outbound @-mention conversion against real membership.
+    GetGroupMemberList !GroupId
   deriving stock (Show)
 
 -- | Send to the conversation behind a (possibly pseudo) group id:
@@ -49,6 +53,7 @@ actionName = \case
   GetGroupFileUrl {} -> "get_group_file_url"
   UploadGroupFile {} -> "upload_group_file"
   UploadPrivateFile {} -> "upload_private_file"
+  GetGroupMemberList {} -> "get_group_member_list"
 
 actionParams :: Action -> Value
 actionParams = \case
@@ -90,6 +95,8 @@ actionParams = \case
         "file" .= path,
         "name" .= name
       ]
+  GetGroupMemberList gid ->
+    object ["group_id" .= gid]
 
 data Envelope = Envelope
   { action :: !Action,

@@ -88,11 +88,13 @@ data DispatchContext = DispatchContext
     -- possibly overridden per session via !sticker on/off).  The tool
     -- factory gates the send_sticker tool on this.
     dcStickers :: !Bool,
-    -- | QQ ids visible in this turn's context — the 成员对照 roster
-    -- from 'Max.Prompt.contextRoster'.  Whitelist for converting raw
-    -- @\@\<qq\>@ spans in LLM-authored outbound text into real
-    -- at-segments ('OneBot.Segment.segmentMentions').
-    dcRoster :: !(Set UserId)
+    -- | The group's member ids, fetched from NapCat once per dispatch.
+    -- Whitelist for converting raw @\@\<qq\>@ spans in LLM-authored
+    -- outbound text into real at-segments
+    -- ('OneBot.Segment.segmentMentions').  'Nothing' when unavailable
+    -- (private chat, fetch failure) — conversion then checks syntax
+    -- only.
+    dcMentionable :: !(Maybe (Set UserId))
   }
   deriving stock (Show)
 

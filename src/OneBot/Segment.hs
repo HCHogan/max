@@ -220,9 +220,9 @@ renderPlainText = T.concat . map go
 -- standalone mention — 5 to 11 digits, not glued to an ASCII word
 -- character on either side (so emails and identifiers pass through;
 -- CJK neighbours are fine) — AND @known@ accepts the id.  Callers
--- pass the roster of users visible in the current turn, which keeps
--- hallucinated numbers and non-members as plain text (NapCat renders
--- an at-segment for a non-member as a dead \@数字 anyway).  One space
+-- pass a membership check (typically against the group's member
+-- list), which keeps hallucinated numbers and non-members as plain
+-- text; pass @const True@ to convert on syntax alone.  One space
 -- after a converted mention is swallowed: 'renderPlainText' adds it
 -- back, so persisted history round-trips without growing padding.
 segmentMentions :: (UserId -> Bool) -> Text -> [Segment]

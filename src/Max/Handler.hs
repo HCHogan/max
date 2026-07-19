@@ -7,9 +7,9 @@ where
 
 import Control.Concurrent.STM (TQueue, atomically, readTQueue)
 import Control.Monad (unless, void)
-import Data.Foldable (for_)
-import Data.Aeson (Value, withObject, (.:))
-import Data.Aeson.Types (parseEither)
+import Data.Foldable (for_, toList)
+import Data.Aeson (Value, withArray, withObject, (.:))
+import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
@@ -43,7 +43,7 @@ import Max.Tasks (TaskCancelled)
 import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), chunkSource, planReply)
 import Max.Util (catchSync)
-import OneBot.Action (Response (..), sendChatMsg)
+import OneBot.Action (Action (..), Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
@@ -278,10 +278,11 @@ dispatchLLM gm = void $ async $
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
       multimodal <- isProfileMultimodal s.model
-      (ctx, drained, roster) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot s gm
+      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot s gm
+      mentionable <- fetchMentionable gm.groupId
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff roster
+          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff mentionable
       result <- agentTurn dc s.model s.thinkingOverride ctx
       -- Stickers go out only via the send_sticker tool.  In history the
       -- bot's past sticker sends render as "[表情包: …]" text, and weaker
@@ -310,7 +311,7 @@ dispatchLLM gm = void $ async $
           -- outbound message into the messages table.  That's where
           -- subsequent dispatches will read this turn's assistant reply
           -- back from when reconstructing mention history.
-          sendAndPersistReply gm roster stripped
+          sendAndPersistReply gm mentionable stripped
           -- Drain consumed btw notes — but only when persisting; an
           -- ephemeral dispatch (e.g. !btw one-shot) must not eat the
           -- queue (the notes are still waiting for a real turn).
@@ -362,9 +363,10 @@ replyText gm body =
 -- fails) — and persist each sent chunk into the messages table (so
 -- future dispatches can read this back as mention history, and a
 -- reply to *any* chunk resolves as reply-to-bot).  Raw @\@\<qq\>@
--- spans the model wrote become real at-segments when the id is in
--- the roster ('segmentMentions'); the model decides who to @ — no
--- at is auto-prepended, only the 'SegReply' quote.  A table chunk
+-- spans the model wrote become real at-segments when the id passes
+-- the membership check ('segmentMentions'); the model decides who
+-- to @ — no at is auto-prepended, only the 'SegReply' quote.  A
+-- table chunk
 -- persists with its markdown source as rendered_text: the model
 -- should see the table it wrote, not @[image]@.  The consecutive
 -- bot rows this produces are merged back into one assistant turn at
@@ -381,10 +383,10 @@ sendAndPersistReply ::
     IOE :> es
   ) =>
   GroupMessage ->
-  Set UserId ->
+  Maybe (Set UserId) ->
   T.Text ->
   Eff es ()
-sendAndPersistReply gm roster body = do
+sendAndPersistReply gm mentionable body = do
   -- The reply already goes out over NapCat regardless — that's a
   -- real side effect we can't undo.  Only the messages-table write
   -- is gated, so an ephemeral turn doesn't show up in the next
@@ -428,10 +430,44 @@ sendAndPersistReply gm roster body = do
                   segs
   where
     -- Private chats keep raw text: NapCat renders private
-    -- at-segments poorly (see 'replySegs').
+    -- at-segments poorly (see 'replySegs').  No member list (fetch
+    -- failed) → convert on syntax alone rather than silently
+    -- refusing to @ anyone.
     mentionSegs t
       | isPrivateChat gm.groupId = [SegText t]
-      | otherwise = segmentMentions (`Set.member` roster) t
+      | otherwise = segmentMentions (\u -> maybe True (Set.member u) mentionable) t
+
+-- | Fetch the group's member id set for outbound @-mention
+-- validation.  'Nothing' when there is no meaningful list (private
+-- chat) or the NapCat call fails — conversion then falls back to
+-- syntax-only matching, so a flaky API never mutes legitimate @s;
+-- membership is a correctness refinement, not a gate.
+fetchMentionable ::
+  (NapCat :> es, Log :> es) =>
+  GroupId ->
+  Eff es (Maybe (Set UserId))
+fetchMentionable gid
+  | isPrivateChat gid = pure Nothing
+  | otherwise =
+      callAction (GetGroupMemberList gid) 10000 >>= \case
+        Left err -> do
+          logAttention "member list fetch failed" $ object ["error" .= err]
+          pure Nothing
+        Right (Response _ rc payload _)
+          | rc /= 0 -> do
+              logAttention "member list retcode bad" $ object ["retcode" .= rc]
+              pure Nothing
+          | otherwise -> case parseEither memberIds payload of
+              Left e -> do
+                logAttention "member list parse failed" $
+                  object ["error" .= T.pack e]
+                pure Nothing
+              Right ids -> pure (Just (Set.fromList ids))
+  where
+    memberIds :: Value -> Parser [UserId]
+    memberIds =
+      withArray "member list" $
+        fmap toList . traverse (withObject "member" (.: "user_id"))
 
 extractOutMid :: Value -> Maybe Int64
 extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of

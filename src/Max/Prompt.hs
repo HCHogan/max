@@ -178,9 +178,7 @@ buildContext ::
   FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
   Session ->
   GroupMessage ->
-  -- | (messages, drained btw notes, roster ids for outbound mention
-  -- conversion — see 'contextRoster')
-  Eff es ([ChatMessage], [Text], Set.Set UserId)
+  Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
 buildContext defaultPersona n multimodal' blobRoot s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
@@ -257,23 +255,22 @@ buildContext defaultPersona n multimodal' blobRoot s gm = do
           candidates
       else pure []
   now' <- liftIO getCurrentTime
-  let inputs =
-        PromptInputs
-          { defaultPersona = defaultPersona,
-            session = s,
-            triggerMessage = gm,
-            ambient = ambient'',
-            mention = mention'',
-            pinnedItems = pinnedItems'',
-            replyCtx = replyCtx',
-            multimodal = multimodal',
-            groupMemories = groupMems,
-            userMemories = userMems,
-            images = images',
-            now = now'
-          }
-      (msgs, drained) = renderContext inputs
-  pure (msgs, drained, Set.fromList [UserId u | (u, _) <- contextRoster inputs])
+  pure $
+    renderContext
+      PromptInputs
+        { defaultPersona = defaultPersona,
+          session = s,
+          triggerMessage = gm,
+          ambient = ambient'',
+          mention = mention'',
+          pinnedItems = pinnedItems'',
+          replyCtx = replyCtx',
+          multimodal = multimodal',
+          groupMemories = groupMems,
+          userMemories = userMems,
+          images = images',
+          now = now'
+        }
 
 -- | Poll until the image worker has recorded all of the trigger's
 -- downloadable images ('message_images' rows are inserted only after
@@ -308,9 +305,7 @@ waitForTriggerImages mid expected = go 0
 -- | Everyone appearing in this turn's context, QQ号 ↔ display name.
 -- Rendered text shows mentions as raw @<QQ号> (that's all the wire
 -- event carries), so without this table the model cannot tell who
--- @123456 is — including itself.  Doubles as the whitelist for
--- outbound mention conversion: only these ids turn into real
--- at-segments (see 'OneBot.Segment.segmentMentions').
+-- @123456 is — including itself.
 contextRoster :: PromptInputs -> [(Int64, Text)]
 contextRoster pi' =
   let UserId selfId' = pi'.triggerMessage.selfId

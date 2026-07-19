@@ -191,7 +191,6 @@ test-suite max-test-db
         Max.PromptIntegrationSpec
     build-depends:
         , base                 >= 4.20 && < 5
-        , containers           >= 0.7  && < 0.9
         , hspec                >= 2.11 && < 2.12
         , log-base             >= 0.12 && < 0.13
         , log-effectful        >= 1.0  && < 1.1

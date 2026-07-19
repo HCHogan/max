@@ -7,7 +7,6 @@
 -- renderer correctly (dedup, watermark, pin resolution, reply lookup).
 module Max.PromptIntegrationSpec (spec) where
 
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
@@ -61,15 +60,12 @@ spec pool = before_ (truncateAll pool) $
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "随便聊"
       insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "另一条"
       s <- withDb pool $ fetchActiveOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, notes, roster) <-
+      (msgs, notes) <-
         withDbLog pool $ buildContext "default-persona" 20 False "var/images" s trigger
       notes `shouldBe` []
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("随便聊" `T.isInfixOf`)
       ub `shouldSatisfy` ("另一条" `T.isInfixOf`)
-      -- Everyone visible this turn is in the mention-conversion roster.
-      roster `shouldSatisfy` Set.member (UserId memberRaw)
-      roster `shouldSatisfy` Set.member (UserId botRaw)
 
     it "honours cleared_at watermark — older rows are dropped" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "旧"
@@ -77,7 +73,7 @@ spec pool = before_ (truncateAll pool) $
       s0 <- withDb pool $ fetchActiveOrInit (GroupId groupRaw) "deepseek-flash"
       let s = s0 {clearedAt = Just (timeAt 10)}
       withDb pool $ upsertSession s
-      (msgs, _, _) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s trigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s trigger
       let ub = userBodyOf msgs
       ub `shouldNotSatisfy` ("旧" `T.isInfixOf`)
       ub `shouldSatisfy` ("新" `T.isInfixOf`)
@@ -86,7 +82,7 @@ spec pool = before_ (truncateAll pool) $
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 你好"
       insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "你好 Alice"
       s <- withDb pool $ fetchActiveOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, _, _) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s trigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s trigger
       -- Expect: [system, user(mention), assistant(reply), user(current trigger)]
       length msgs `shouldBe` 4
       case msgs of
@@ -100,7 +96,7 @@ spec pool = before_ (truncateAll pool) $
       s0 <- withDb pool $ fetchActiveOrInit (GroupId groupRaw) "deepseek-flash"
       let s = s0 {pinned = [1001]}
       withDb pool $ upsertSession s
-      (msgs, _, _) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s trigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[pin 上下文" `T.isInfixOf`)
       ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
@@ -112,7 +108,7 @@ spec pool = before_ (truncateAll pool) $
             trigger
               { message = [SegReply (MessageId 1001), SegAt (UserId botRaw), SegText " 看这条"]
               }
-      (msgs, _, _) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s replyTrigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s replyTrigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[引用上下文]" `T.isInfixOf`)
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)
@@ -121,5 +117,5 @@ spec pool = before_ (truncateAll pool) $
       s0 <- withDb pool $ fetchActiveOrInit (GroupId groupRaw) "deepseek-flash"
       let s = s0 {btwNotes = ["note-1", "note-2"]}
       withDb pool $ upsertSession s
-      (_, notes, _) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s trigger
+      (_, notes) <- withDbLog pool $ buildContext "default-persona" 20 False "var/images" s trigger
       notes `shouldBe` ["note-1", "note-2"]
