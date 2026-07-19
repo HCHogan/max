@@ -74,6 +74,15 @@ spec = do
     it "kill" $ "!kill T-1" `parsesTo` Kill "T-1"
     it "kill all" $ "!kill --all" `parsesTo` KillAll
 
+  describe "! shell escape" $ do
+    it "bang-space → Shell with raw rest" $ "! ls -al" `parsesTo` Shell "ls -al"
+    it "keeps pipes and flags verbatim" $
+      "! cat a | grep -n x" `parsesTo` Shell "cat a | grep -n x"
+    it "tolerates extra spaces after the bang" $ "!   pwd" `parsesTo` Shell "pwd"
+    it "tolerates leading spaces before the bang" $ "  ! whoami" `parsesTo` Shell "whoami"
+    it "bang-space with empty body is not a command" $ notACommand "!   "
+    it "bang-verb (no space) stays structured" $ "!pins" `parsesTo` Pins
+
   describe "!memory" $ do
     it "bare memory → list" $ "!memory" `parsesTo` MemoryList
     it "memory rm with id" $ "!memory rm 42" `parsesTo` MemoryRm 42

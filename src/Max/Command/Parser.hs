@@ -40,10 +40,26 @@ type Parser = Parsec Void Text
 --     show the message back to the user.
 parseCommand :: Text -> Either Text (Maybe Command)
 parseCommand input
+  | Just body <- shellBody input = Right (Just (Shell body))
   | not (looksLikeCommand input) = Right Nothing
   | otherwise = case runParser (commandP <* eof) "command" input of
       Right cmd -> Right (Just cmd)
       Left bundle -> Left (T.pack (errorBundlePretty bundle))
+
+-- | Claude-Code-style shell escape: a bang, then whitespace, then a
+-- non-empty rest.  Everything after the bang+space is one raw shell
+-- line — no tokenizing, no flag parsing (so quotes, pipes, @--flags@
+-- all pass through verbatim).  @!verb@ with no space stays the
+-- structured-command path.
+shellBody :: Text -> Maybe Text
+shellBody t = case T.uncons (T.dropWhile (== ' ') t) of
+  Just ('!', rest) | startsWithSpace rest ->
+    let body = T.strip rest in if T.null body then Nothing else Just body
+  _ -> Nothing
+  where
+    startsWithSpace r = case T.uncons r of
+      Just (c, _) -> c == ' ' || c == '\t'
+      Nothing -> False
 
 -- | Same but never returns @Right Nothing@ — for callers that already
 -- know the input is meant to be a command.

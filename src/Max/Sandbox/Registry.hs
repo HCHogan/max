@@ -33,6 +33,7 @@ module Max.Sandbox.Registry
     defaultCreateOpts,
     -- * Operations
     createSandbox,
+    ensureSandbox,
     listSandboxesForGroup,
     listSandbox,
     execInSandbox,
@@ -50,6 +51,7 @@ import Control.Concurrent.STM
 import Control.Exception (bracket_)
 import Control.Monad (when)
 import Data.Foldable (for_)
+import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -175,6 +177,18 @@ createSandbox reg gid opts = do
               }
       atomically $ modifyTVar' reg.srEntries (Map.insert sid entry)
       pure (Right entry)
+
+-- | The group's default sandbox for user-facing @! \<cmd\>@ shell
+-- commands: reuse the group's existing sandbox if it has one (the
+-- lowest-id entry, for stability), otherwise spin one up with
+-- 'defaultCreateOpts'.  The model's own @sandbox_create@ flow is
+-- unaffected — it always makes a fresh, explicitly-managed sandbox.
+ensureSandbox :: SandboxRegistry -> GroupId -> IO (Either Text SandboxEntry)
+ensureSandbox reg gid = do
+  existing <- listSandboxesForGroup reg gid
+  case sortOn (.seId) existing of
+    (e : _) -> pure (Right e)
+    [] -> createSandbox reg gid defaultCreateOpts
 
 --------------------------------------------------------------------------------
 -- Lookup.
