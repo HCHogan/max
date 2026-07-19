@@ -33,6 +33,7 @@ import Max.Session qualified as Session
 import Max.Tasks
   ( TaskId (..),
     TaskInfo (..),
+    cancelAllTasks,
     cancelTask,
     listTasks,
     pushBtwToLatest,
@@ -224,6 +225,12 @@ execute t gid uid replyTarget cmd = do
       if ok
         then "✓ 已发取消信号给 " <> tid
         else "找不到任务 " <> tid <> " (用 !ps 看在跑的)"
+  KillAll -> do
+    n <- liftIO (cancelAllTasks env.beTasks)
+    reply $
+      if n == 0
+        then "没有在跑的任务"
+        else "✓ 已发取消信号给全部 " <> T.pack (show n) <> " 个任务"
   --
   -- In a group, group scope only: the reply is public, and a member's
   -- user-scope memories may have been learned in *other* groups —
@@ -497,6 +504,7 @@ helpText Nothing =
       "  !ps                      看本群在跑的后台任务",
       "  !ps --all                看所有群的任务",
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",
+      "  !kill --all              砍掉所有群的全部任务",
       "  !branch                  列分支（标出 active）",
       "  !branch <name>           创建并切到新分支（fork 当前；上下文水位线设到现在）",
       "  !branch delete <name>    删除分支（不能删 active / 最后一个）",

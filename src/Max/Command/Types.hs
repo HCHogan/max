@@ -58,6 +58,7 @@ data Command
   | PsLocal -- ^ '!ps' (this group)
   | PsAll -- ^ '!ps --all'
   | Kill !Text -- ^ '!kill <id>'
+  | KillAll -- ^ '!kill --all' — every running task, all groups
   | MemoryList -- ^ '!memory' — this group's memories + the caller's own
   | MemoryRm !Int64 -- ^ '!memory rm <id>'
   | StickerStats -- ^ '!sticker' — library counters + on/off state

@@ -26,6 +26,7 @@ module Max.Tasks
     TaskInfo (..),
     listTasks,
     cancelTask,
+    cancelAllTasks,
     drainBtwInbox,
     pushBtwToLatest,
     -- * Exception
@@ -190,3 +191,13 @@ cancelTask reg tid = do
   case mEntry of
     Just e -> e.teCancel >> pure True
     Nothing -> pure False
+
+-- | Trigger the cancel action for every registered task (all groups —
+-- same scope as @!ps --all@).  Returns how many were signalled.
+-- Snapshot first, then fire: a cancel action unregisters its entry
+-- via the producer's @bracket@, and we must not mutate under the fold.
+cancelAllTasks :: TaskRegistry -> IO Int
+cancelAllTasks reg = do
+  entries <- Map.elems <$> readTVarIO reg.trMap
+  mapM_ (.teCancel) entries
+  pure (length entries)

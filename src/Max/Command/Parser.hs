@@ -191,9 +191,11 @@ classify verb raw@(RawArgs pos flags) = case verb of
   "pins" -> Pins
   "btw" -> Btw (T.unwords pos)
   "ps" -> if "all" `Map.member` flags then PsAll else PsLocal
-  "kill" -> case pos of
-    [tid] -> Kill tid
-    _ -> Unknown verb raw
+  "kill"
+    | "all" `Map.member` flags -> KillAll
+    | otherwise -> case pos of
+        [tid] -> Kill tid
+        _ -> Unknown verb raw
   "memory" -> case pos of
     [] -> MemoryList
     ["rm", s] -> case parseInt64 s of

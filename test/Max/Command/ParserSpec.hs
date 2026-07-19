@@ -72,6 +72,7 @@ spec = do
     it "ps local" $ "!ps" `parsesTo` PsLocal
     it "ps all" $ "!ps --all" `parsesTo` PsAll
     it "kill" $ "!kill T-1" `parsesTo` Kill "T-1"
+    it "kill all" $ "!kill --all" `parsesTo` KillAll
 
   describe "!memory" $ do
     it "bare memory → list" $ "!memory" `parsesTo` MemoryList
