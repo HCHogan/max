@@ -82,6 +82,7 @@ library
         Max.Tools.Browser
         Max.Tools.Files
         Max.Tools.Group
+        Max.Tools.Images
         Max.Tools.Memory
         Max.Tools.Sandbox
         Max.Tools.Search

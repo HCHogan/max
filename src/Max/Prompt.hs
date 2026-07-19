@@ -21,7 +21,6 @@ import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe)
-import Data.Ord (Down (..))
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -157,9 +156,13 @@ systemPrompt multimodal' private envText persona mMemBlock =
            "  [HH:MM <昵称>]: 内容        — 一条历史消息",
            "  [↩ 引用 ...]                — 用户引用的那条消息",
            if multimodal'
-             then "  [image]                     — 图片；能看的会附在消息末尾并标注来源，其余只剩标记"
-             else "  [image]                     — 图片（你看不到内容，可以请用户描述）",
-           "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
+             then "  [image]                     — 图片；引用/pin/当前消息的图会附在消息末尾并标注来源"
+             else "  [image]                     — 图片（你看不到内容，可以请用户描述）"
+         ]
+      <> [ "  [image#<id>]                — 群历史里的图片，默认不加载；跟当前话题相关时才用 view_image 传 <id> 查看"
+         | multimodal'
+         ]
+      <> [ "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
            "  [forward]                   — 转发聊天记录；被引用时内容展开在 [引用上下文]",
            "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [当前环境]"
          ]
@@ -232,6 +235,26 @@ buildContext defaultPersona n multimodal' blobRoot brief s gm = do
       mention'' = map enrich mention'
       pinnedItems'' = map enrich pinnedItems'
       replyCtx' = fmap (\(r, f, kids) -> (enrich r, f, map enrich kids)) replyCtx0
+      replyItems = maybe [] (\(r, _, kids) -> r : kids) replyCtx'
+  -- Unrelated pictures in the ambient chatter are attention magnets:
+  -- only images the user is plausibly pointing at (reply target, the
+  -- trigger itself, pins) go inline.  Everything else keeps a text
+  -- marker, upgraded with the message id ("[image#123]") so the model
+  -- can pull it via the view_image tool when it actually matters.
+  (ambientCtx, mentionCtx) <-
+    if multimodal'
+      then do
+        let inlineIds =
+              Set.fromList (mid : map (.messageId) (replyItems <> pinnedItems''))
+            taggable =
+              [ h.messageId
+              | h <- ambient'' <> mention'',
+                h.messageId `Set.notMember` inlineIds
+              ]
+        tagIds <- messagesWithImages taggable
+        let tag = tagImageMarkers tagIds
+        pure (map tag ambient'', map tag mention'')
+      else pure (ambient'', mention'')
   images' <-
     if multimodal'
       then do
@@ -243,21 +266,15 @@ buildContext defaultPersona n multimodal' blobRoot brief s gm = do
         let expected = downloadableImageCount gm.message
         when (expected > 0) $ waitForTriggerImages mid expected
         -- Budget priority: the reply target is what the user is
-        -- pointing at, pins are explicit user signals, then plain
-        -- recency.  (Display order is chronological regardless —
-        -- 'loadPromptImages' re-sorts.)
-        let replyItems = maybe [] (\(r, _, kids) -> r : kids) replyCtx'
-            candidates =
-              dedupById $
-                replyItems
-                  <> pinnedItems''
-                  <> sortOn (Down . (.receivedAt)) (ambient'' <> mention'')
+        -- pointing at, then pins (explicit user signals).  Ambient
+        -- recency is deliberately NOT a candidate any more — see the
+        -- marker-tagging pass above.
         loadPromptImages
           blobRoot
           selfId'
           mid
           (Set.fromList (map (.messageId) replyItems))
-          candidates
+          (dedupById (replyItems <> pinnedItems''))
       else pure []
   now' <- liftIO getCurrentTime
   pure $
@@ -266,8 +283,8 @@ buildContext defaultPersona n multimodal' blobRoot brief s gm = do
         { defaultPersona = defaultPersona,
           session = s,
           triggerMessage = gm,
-          ambient = ambient'',
-          mention = mention'',
+          ambient = ambientCtx,
+          mention = mentionCtx,
           pinnedItems = pinnedItems'',
           replyCtx = replyCtx',
           multimodal = multimodal',
@@ -336,6 +353,36 @@ dedupeRoster = go Set.empty
     go seen ((u, n) : rest)
       | u `Set.member` seen = go seen rest
       | otherwise = (u, n) : go (Set.insert u seen) rest
+
+-- | Which of the given messages have at least one stored image —
+-- the candidates for @[image#\<id\>]@ marker tagging.
+messagesWithImages ::
+  (WithConnection :> es, IOE :> es) =>
+  [Int64] ->
+  Eff es (Set.Set Int64)
+messagesWithImages [] = pure Set.empty
+messagesWithImages ids = do
+  rows <-
+    query
+      "SELECT DISTINCT message_id FROM message_images WHERE message_id IN ?"
+      (Only (In ids))
+  pure (Set.fromList [m | Only m <- rows])
+
+-- | Upgrade the plain @[image]@ markers of a withheld-image message
+-- to @[image#\<message_id\>]@ so the model has a handle to pass to
+-- the view_image tool.  Runs after sticker-caption substitution, so
+-- captioned stickers are already out of marker form.
+tagImageMarkers :: Set.Set Int64 -> HistoryItem -> HistoryItem
+tagImageMarkers tagged h
+  | h.messageId `Set.member` tagged =
+      h
+        { renderedText =
+            T.replace
+              "[image]"
+              ("[image#" <> T.pack (show h.messageId) <> "]")
+              h.renderedText
+        }
+  | otherwise = h
 
 -- | Captions of already-described stickers appearing in the given
 -- messages, in seg_index order per message.

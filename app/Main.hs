@@ -47,6 +47,7 @@ import Max.Tools (builtinsFor)
 import Max.Tools.Browser (browserToolsFor)
 import Max.Tools.Files (fileToolsFor)
 import Max.Tools.Group (groupToolsFor)
+import Max.Tools.Images (imageToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
@@ -91,6 +92,7 @@ main = do
           let toolFactory dc =
                 builtinsFor mEmbed dc
                   <> groupToolsFor dc
+                  <> imageToolsFor cfg.imagesDir dc
                   <> memoryToolsFor mEmbed dc
                   <> sandboxToolsFor dc.dcGroupId sandboxes
                   <> fileToolsFor dc.dcGroupId cfg.imagesDir sandboxes
