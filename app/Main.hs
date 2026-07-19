@@ -90,12 +90,12 @@ main = do
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           mEmbed <- traverse newEmbedClient cfg.embedding
           let toolFactory dc =
-                builtinsFor mEmbed dc
+                builtinsFor cfg.timezone mEmbed dc
                   <> groupToolsFor dc
-                  <> imageToolsFor cfg.imagesDir dc
+                  <> imageToolsFor cfg.timezone cfg.imagesDir dc
                   <> memoryToolsFor mEmbed dc
-                  <> sandboxToolsFor dc.dcGroupId sandboxes
-                  <> fileToolsFor dc.dcGroupId cfg.imagesDir sandboxes
+                  <> sandboxToolsFor cfg.timezone dc.dcGroupId sandboxes
+                  <> fileToolsFor cfg.timezone dc.dcGroupId cfg.imagesDir sandboxes
                   <> (if dc.dcStickers then stickerToolsFor mEmbed cfg.imagesDir dc else [])
                   <> maybe [] searchToolsFor cfg.search
                   -- Browser toolset only for multimodal profiles (per config).
@@ -108,6 +108,7 @@ main = do
                     beDebugDefault = cfg.debug,
                     beStickerDefault = cfg.stickersEnabled,
                     beDefaultModel = cfg.llm.defaultName,
+                    beTimeZone = cfg.timezone,
                     beSessions = sessions,
                     beTasks = tasks,
                     beSandboxes = sandboxes,

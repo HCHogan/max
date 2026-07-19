@@ -20,7 +20,7 @@ import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (defaultTimeLocale, formatTime, parseTimeM)
+import Data.Time (LocalTime, TimeZone, UTCTime, defaultTimeLocale, localTimeToUTC, parseTimeM)
 import Database.PostgreSQL.Simple (SqlError (..))
 import Database.PostgreSQL.Simple.ToField qualified as PG
 import Effectful
@@ -35,6 +35,7 @@ import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Persistence (PersistMode, isEphemeral)
+import Max.Time (fmtDateHM)
 import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Segment (Segment (..), segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), isPrivateChat)
@@ -46,22 +47,23 @@ builtinsFor ::
     Log :> es,
     IOE :> es
   ) =>
+  TimeZone ->
   Maybe EmbedClient ->
   DispatchContext ->
   [Tool es]
 -- WithConnection + IOE constraints already in scope above; sayTool
 -- needs them for the insertOutbound persistence path.
-builtinsFor mEmbed dc =
-  [ getMessageByIdTool,
-    searchMessagesTool mEmbed dc.dcGroupId,
+builtinsFor tz mEmbed dc =
+  [ getMessageByIdTool tz,
+    searchMessagesTool tz mEmbed dc.dcGroupId,
     sayTool dc
   ]
 
 --------------------------------------------------------------------------------
 -- get_message_by_id
 
-getMessageByIdTool :: (WithConnection :> es, IOE :> es) => Tool es
-getMessageByIdTool =
+getMessageByIdTool :: (WithConnection :> es, IOE :> es) => TimeZone -> Tool es
+getMessageByIdTool tz =
   Tool
     { toolName = "get_message_by_id",
       toolDescription =
@@ -88,7 +90,7 @@ getMessageByIdTool =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
           m <- fetchMessage mid
-          pure $ Right (toJSON (fmap historyItemSummary m))
+          pure $ Right (toJSON (fmap (historyItemSummary tz) m))
     }
   where
     parseArgs :: Object -> Parser Int64
@@ -97,8 +99,8 @@ getMessageByIdTool =
 --------------------------------------------------------------------------------
 -- search_messages
 
-searchMessagesTool :: (WithConnection :> es, IOE :> es) => Maybe EmbedClient -> GroupId -> Tool es
-searchMessagesTool mEmbed (GroupId gid) =
+searchMessagesTool :: (WithConnection :> es, IOE :> es) => TimeZone -> Maybe EmbedClient -> GroupId -> Tool es
+searchMessagesTool tz mEmbed (GroupId gid) =
   Tool
     { toolName = "search_messages",
       toolDescription =
@@ -138,12 +140,12 @@ searchMessagesTool mEmbed (GroupId gid) =
                   "after"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("Only messages at or after this time: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (UTC)." :: Text)
+                        "description" .= ("Only messages at or after this time: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (same clock as the times in results)." :: Text)
                       ],
                   "before"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("Only messages at or before this time: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (UTC)." :: Text)
+                        "description" .= ("Only messages at or before this time: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (same clock as the times in results)." :: Text)
                       ],
                   "semantic"
                     .= object
@@ -166,7 +168,7 @@ searchMessagesTool mEmbed (GroupId gid) =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right sa ->
-          let run f mVec = fmap (toJSON . map historyItemSummary) <$> runSearch f mVec
+          let run f mVec = fmap (toJSON . map (historyItemSummary tz)) <$> runSearch f mVec
            in case toFilter sa of
                 Left e -> pure (Left e)
                 Right f -> case (sa.saSemantic, mEmbed) of
@@ -195,8 +197,8 @@ searchMessagesTool mEmbed (GroupId gid) =
 
     toFilter :: SearchArgs -> Either Text MessageFilter
     toFilter sa = do
-      after <- traverse parseTimeArg sa.saAfter
-      before <- traverse parseTimeArg sa.saBefore
+      after <- traverse (parseTimeArg tz) sa.saAfter
+      before <- traverse (parseTimeArg tz) sa.saBefore
       pure
         MessageFilter
           { mfGroupId = maybe gid id sa.saGroupId,
@@ -236,13 +238,14 @@ data MessageFilter = MessageFilter
   }
 
 -- | Accept the timestamp shapes a model plausibly emits.  Naive times
--- are UTC — the same clock 'formatTimestamp' renders, so the model can
--- round-trip times it saw in earlier results.
-parseTimeArg :: Text -> Either Text UTCTime
-parseTimeArg t =
-  case asum [parseTimeM True defaultTimeLocale f s :: Maybe UTCTime | f <- fmts] of
-    Just u -> Right u
-    Nothing -> Left ("bad time '" <> t <> "': use 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (UTC)")
+-- are read in the display timezone — the same clock the tool's results
+-- and the prompt show — then converted to the UTC the DB stores, so a
+-- time the model saw in an earlier result round-trips to the right row.
+parseTimeArg :: TimeZone -> Text -> Either Text UTCTime
+parseTimeArg tz t =
+  case asum [parseTimeM True defaultTimeLocale f s :: Maybe LocalTime | f <- fmts] of
+    Just lt -> Right (localTimeToUTC tz lt)
+    Nothing -> Left ("bad time '" <> t <> "': use 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM'")
   where
     s = T.unpack (T.strip t)
     fmts =
@@ -387,21 +390,16 @@ sayTool dc =
 -- Summary shape sent back to the model.  Keep it compact — every byte
 -- here costs prompt tokens on the next turn.
 
-historyItemSummary :: HistoryItem -> Value
-historyItemSummary h =
+historyItemSummary :: TimeZone -> HistoryItem -> Value
+historyItemSummary tz h =
   object
     [ "message_id" .= h.messageId,
       "sender_user_id" .= h.userId,
       -- 群名片 > 昵称 > QQ号, matching the prompt's context lines.
       "sender" .= maybe (T.pack (show h.userId)) id (bestName h),
-      "time" .= formatTimestamp h.receivedAt,
+      "time" .= fmtDateHM tz h.receivedAt,
       "text" .= shorten 400 h.renderedText
     ]
-
--- | ISO-ish minute-precision so the model has a sense of when without
--- a wall of microseconds.
-formatTimestamp :: UTCTime -> Text
-formatTimestamp = T.pack . formatTime defaultTimeLocale "%Y-%m-%d %H:%M"
 
 shorten :: Int -> Text -> Text
 shorten n t

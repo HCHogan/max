@@ -31,7 +31,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Time (TimeZone)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Effectful
@@ -43,6 +43,7 @@ import Max.Effects.NapCat (NapCat, callAction, sendAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
+import Max.Time (fmtDateHMS)
 import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..), sendChatMsg)
 import OneBot.Segment (Segment (..), imageSeg)
 import OneBot.Types (GroupId (..), isPrivateChat, privateChatUserId)
@@ -67,6 +68,7 @@ fileToolsFor ::
     Log :> es,
     IOE :> es
   ) =>
+  TimeZone ->
   GroupId ->
   -- | Blob store root from 'AppConfig.imagesDir' — needed to resolve
   -- 'FileRecord.local_path' (which is relative) to an absolute path
@@ -74,8 +76,8 @@ fileToolsFor ::
   FilePath ->
   SandboxRegistry ->
   [Tool es]
-fileToolsFor gid blobRoot sandboxes =
-  [ listRecentFilesTool gid,
+fileToolsFor tz gid blobRoot sandboxes =
+  [ listRecentFilesTool tz gid,
     importFileToSandboxTool gid blobRoot sandboxes,
     sendImageFromSandboxTool gid sandboxes,
     sendFileFromSandboxTool gid sandboxes
@@ -86,9 +88,10 @@ fileToolsFor gid blobRoot sandboxes =
 
 listRecentFilesTool ::
   (WithConnection :> es, IOE :> es) =>
+  TimeZone ->
   GroupId ->
   Tool es
-listRecentFilesTool (GroupId gid) =
+listRecentFilesTool tz (GroupId gid) =
   Tool
     { toolName = "list_recent_files",
       toolDescription =
@@ -135,7 +138,7 @@ listRecentFilesTool (GroupId gid) =
           "message_id" .= r.frMessageId,
           "name" .= r.frFileName,
           "sender_user_id" .= r.frSenderUserId,
-          "time" .= T.pack (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" r.frReceivedAt),
+          "time" .= fmtDateHMS tz r.frReceivedAt,
           "bytes" .= r.frBytesSize,
           "mime" .= r.frMimeType,
           "ready" .= (case r.frLocalPath of Just _ -> True; Nothing -> False)

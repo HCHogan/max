@@ -20,7 +20,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Time (TimeZone)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Log
@@ -28,6 +28,7 @@ import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessage)
 import Max.Effects.Agent (DispatchContext (..), ToolImage (..), queueToolImage)
 import Max.Effects.Tools (Tool (..))
+import Max.Time (fmtHM)
 import System.FilePath ((</>))
 
 -- | Same per-image cap as the prompt builder's inline path.
@@ -36,19 +37,21 @@ maxImageBytes = 20 * 1024 * 1024
 
 imageToolsFor ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
+  TimeZone -> -- display timezone for the image label's HH:MM
   FilePath -> -- blob store root ('AppConfig.imagesDir')
   DispatchContext ->
   [Tool es]
-imageToolsFor blobRoot dc
-  | dc.dcMultimodal = [viewImageTool blobRoot dc]
+imageToolsFor tz blobRoot dc
+  | dc.dcMultimodal = [viewImageTool tz blobRoot dc]
   | otherwise = []
 
 viewImageTool ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
+  TimeZone ->
   FilePath ->
   DispatchContext ->
   Tool es
-viewImageTool blobRoot dc =
+viewImageTool tz blobRoot dc =
   Tool
     { toolName = "view_image",
       toolDescription =
@@ -107,7 +110,7 @@ viewImageTool blobRoot dc =
         Just h ->
           pure $
             "["
-              <> T.pack (formatTime defaultTimeLocale "%H:%M" h.receivedAt)
+              <> fmtHM tz h.receivedAt
               <> " "
               <> fromMaybe (T.pack (show h.userId)) (bestName h)
               <> "] 消息里的图片"

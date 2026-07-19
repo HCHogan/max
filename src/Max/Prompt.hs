@@ -25,7 +25,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (TimeZone, UTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (In (..), Only (..))
 import Effectful
 import Effectful.Log (Log, logAttention, object, (.=))
@@ -45,6 +45,7 @@ import Max.DB.Memory (MemoryItem (..), MemoryScope (..), listMemories)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Images (downloadableImageCount)
 import Max.Session (Session (..))
+import Max.Time (fmtDate, fmtEnvStamp, fmtHM)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
@@ -96,7 +97,10 @@ data PromptInputs = PromptInputs
     -- | Wall-clock time this turn is being built.  Feeds the system
     -- prompt's environment block so the model knows the current
     -- date/time — context lines only carry HH:MM, no date.
-    now :: !UTCTime
+    now :: !UTCTime,
+    -- | Display timezone for every rendered timestamp ('now' and the
+    -- context lines' 'receivedAt' are stored UTC; this localizes them).
+    tz :: !TimeZone
   }
 
 -- | One inline image for the final user message: a data URL plus a
@@ -183,11 +187,12 @@ buildContext ::
   Int -> -- history window size
   Bool -> -- multimodal: load + attach inline images
   FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
+  TimeZone -> -- display timezone for rendered timestamps
   [Text] -> -- pre-rendered 群信息 lines (see 'PromptInputs.groupBrief')
   Session ->
   GroupMessage ->
   Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
-buildContext defaultPersona n multimodal' blobRoot brief s gm = do
+buildContext defaultPersona n multimodal' blobRoot tz' brief s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -270,6 +275,7 @@ buildContext defaultPersona n multimodal' blobRoot brief s gm = do
         -- recency is deliberately NOT a candidate any more — see the
         -- marker-tagging pass above.
         loadPromptImages
+          tz'
           blobRoot
           selfId'
           mid
@@ -292,7 +298,8 @@ buildContext defaultPersona n multimodal' blobRoot brief s gm = do
           groupMemories = groupMems,
           userMemories = userMems,
           images = images',
-          now = now'
+          now = now',
+          tz = tz'
         }
 
 -- | Poll until the image worker has recorded all of the trigger's
@@ -460,13 +467,14 @@ maxImageBytes = 20 * 1024 * 1024
 -- oversized are skipped.
 loadPromptImages ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
+  TimeZone -> -- display timezone for the image labels' HH:MM
   FilePath -> -- blob store root; images.local_path is relative to it
   Int64 -> -- bot self id (for display names in labels)
   Int64 -> -- trigger message_id
   Set.Set Int64 -> -- message ids belonging to the quoted reply (incl. forward children)
   [HistoryItem] -> -- context candidates, priority order, deduped
   Eff es [PromptImage]
-loadPromptImages blobRoot selfId' mid replyIds candidates = do
+loadPromptImages tz' blobRoot selfId' mid replyIds candidates = do
   let candidates' = filter (\h -> h.messageId /= mid) candidates
       ids = mid : map (.messageId) candidates'
   rows <-
@@ -499,13 +507,13 @@ loadPromptImages blobRoot selfId' mid replyIds candidates = do
       let label
             | h.messageId `Set.member` replyIds =
                 "[↩ 被引用的那条消息（"
-                  <> formatHM h.receivedAt
+                  <> fmtHM tz' h.receivedAt
                   <> " "
                   <> displayName selfId' h
                   <> "）] 里的图片:"
             | otherwise =
                 "["
-                  <> formatHM h.receivedAt
+                  <> fmtHM tz' h.receivedAt
                   <> " "
                   <> displayName selfId' h
                   <> "] 消息里的图片:"
@@ -553,6 +561,7 @@ renderContext pi' =
       senderName = senderDisplayName pi'.triggerMessage
       memBlock =
         renderMemories
+          pi'.tz
           (isPrivateChat pi'.triggerMessage.groupId)
           senderName
           pi'.groupMemories
@@ -562,7 +571,7 @@ renderContext pi' =
       envText =
         T.intercalate "\n" $
           [ "[当前环境]",
-            "  现在：" <> formatEnvTime pi'.now,
+            "  现在：" <> fmtEnvStamp pi'.tz pi'.now,
             if isPrivateChat pi'.triggerMessage.groupId
               then "  场景：与 " <> senderName <> "（QQ " <> T.pack (show senderId) <> "）私聊"
               else "  群号：" <> T.pack (show gidRaw)
@@ -581,6 +590,7 @@ renderContext pi' =
       mentionMessages = mergeAssistantRuns (map (historyToChat selfId') pi'.mention)
       userBody =
         renderUser
+          pi'.tz
           selfId'
           ambientNoDup
           pi'.replyCtx
@@ -614,8 +624,8 @@ renderContext pi' =
 -- and nothing for the model to fixate on).  The framing line matters
 -- as much as the content: memories are 背景备忘 the model may
 -- silently draw on, not a topic list to bring up.
-renderMemories :: Bool -> Text -> [MemoryItem] -> [MemoryItem] -> Maybe Text
-renderMemories private senderName groupMems userMems
+renderMemories :: TimeZone -> Bool -> Text -> [MemoryItem] -> [MemoryItem] -> Maybe Text
+renderMemories tz' private senderName groupMems userMems
   | null groupMems && null userMems = Nothing
   | otherwise =
       Just . T.intercalate "\n" . concat $
@@ -624,18 +634,18 @@ renderMemories private senderName groupMems userMems
           ],
           if null groupMems
             then []
-            else (if private then "本会话:" else "本群:") : map memoryLine groupMems,
+            else (if private then "本会话:" else "本群:") : map (memoryLine tz') groupMems,
           if null userMems
             then []
-            else ("关于当前发言者 <" <> senderName <> ">（跨群）:") : map memoryLine userMems
+            else ("关于当前发言者 <" <> senderName <> ">（跨群）:") : map (memoryLine tz') userMems
         ]
 
-memoryLine :: MemoryItem -> Text
-memoryLine m =
+memoryLine :: TimeZone -> MemoryItem -> Text
+memoryLine tz' m =
   "  (#"
     <> T.pack (show m.memId)
     <> " "
-    <> T.pack (formatTime defaultTimeLocale "%Y-%m-%d" m.memUpdatedAt)
+    <> fmtDate tz' m.memUpdatedAt
     <> ") "
     <> oneLine m.memContent
 
@@ -660,6 +670,7 @@ mergeAssistantRuns = foldr step []
     step m acc = m : acc
 
 renderUser ::
+  TimeZone ->
   Int64 ->
   [HistoryItem] ->
   Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
@@ -667,7 +678,7 @@ renderUser ::
   [Text] ->
   GroupMessage ->
   Text
-renderUser selfId' ambient' replyCtx' pinnedItems' notes gm =
+renderUser tz' selfId' ambient' replyCtx' pinnedItems' notes gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -675,21 +686,21 @@ renderUser selfId' ambient' replyCtx' pinnedItems' notes gm =
           then []
           else
             [ "[pin 上下文 — 用户标记长期保留的消息，!clear 也不清]",
-              T.intercalate "\n" (map (renderHistoryLine selfId') pinnedItems'),
+              T.intercalate "\n" (map (renderHistoryLine tz' selfId') pinnedItems'),
               ""
             ],
         ["[群最近上下文]"],
         if null ambient'
           then ["(无历史消息)"]
-          else map (renderHistoryLine selfId') ambient',
+          else map (renderHistoryLine tz' selfId') ambient',
         [""],
         case replyCtx' of
           Nothing -> []
           Just (r, files, kids) ->
             "[引用上下文]"
-              : renderReplyLine selfId' r
+              : renderReplyLine tz' selfId' r
               : renderReplyFiles files
-                <> renderReplyForward selfId' kids
+                <> renderReplyForward tz' selfId' kids
                 <> [""],
         if null notes
           then []
@@ -705,22 +716,22 @@ renderUser selfId' ambient' replyCtx' pinnedItems' notes gm =
         ]
       ]
 
-renderHistoryLine :: Int64 -> HistoryItem -> Text
-renderHistoryLine selfId' h =
-  "[" <> formatHM h.receivedAt <> " " <> displayName selfId' h <> "]: " <> oneLine h.renderedText
+renderHistoryLine :: TimeZone -> Int64 -> HistoryItem -> Text
+renderHistoryLine tz' selfId' h =
+  "[" <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> "]: " <> oneLine h.renderedText
 
-renderReplyLine :: Int64 -> HistoryItem -> Text
-renderReplyLine selfId' h =
-  "[↩ 引用 " <> formatHM h.receivedAt <> " " <> displayName selfId' h <> "]: " <> oneLine h.renderedText
+renderReplyLine :: TimeZone -> Int64 -> HistoryItem -> Text
+renderReplyLine tz' selfId' h =
+  "[↩ 引用 " <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> "]: " <> oneLine h.renderedText
 
 -- | The expanded contents of a quoted 转发聊天记录.  Lines carry the
 -- original send times; each line is truncated to keep a huge bundle
 -- from eating the prompt.
-renderReplyForward :: Int64 -> [HistoryItem] -> [Text]
-renderReplyForward _ [] = []
-renderReplyForward selfId' kids =
+renderReplyForward :: TimeZone -> Int64 -> [HistoryItem] -> [Text]
+renderReplyForward _ _ [] = []
+renderReplyForward tz' selfId' kids =
   ("  转发记录内容" <> capNote <> ":")
-    : map (("    " <>) . T.take 200 . renderHistoryLine selfId') kids
+    : map (("    " <>) . T.take 200 . renderHistoryLine tz' selfId') kids
   where
     capNote
       | length kids >= maxForwardLines = "（前 " <> T.pack (show maxForwardLines) <> " 条）"
@@ -772,29 +783,6 @@ senderDisplayName gm =
     nonBlank (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
     nonBlank _ = Nothing
 
-formatHM :: UTCTime -> Text
-formatHM = T.pack . formatTime defaultTimeLocale "%H:%M"
-
--- | Full date + Chinese weekday + time for the environment block, e.g.
--- @2026-07-13（周一） 15:42@.  Formatted off the raw 'UTCTime', same as
--- the @[HH:MM]@ context lines, so the model can line them up directly.
-formatEnvTime :: UTCTime -> Text
-formatEnvTime t =
-  T.pack (formatTime defaultTimeLocale "%Y-%m-%d" t)
-    <> "（"
-    <> weekdayCN t
-    <> "）"
-    <> T.pack (formatTime defaultTimeLocale " %H:%M" t)
-
-weekdayCN :: UTCTime -> Text
-weekdayCN t = case formatTime defaultTimeLocale "%u" t of
-  "1" -> "周一"
-  "2" -> "周二"
-  "3" -> "周三"
-  "4" -> "周四"
-  "5" -> "周五"
-  "6" -> "周六"
-  _ -> "周日"
 
 oneLine :: Text -> Text
 oneLine = T.replace "\n" " ⏎ "

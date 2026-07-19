@@ -55,6 +55,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (TimeZone, minutesToTimeZone)
 import Data.Version (makeVersion)
 import Max.DB.Connection (DbConfig (..))
 import Max.Effects.LLM (LLMProfile (..), LLMRegistry (..), Protocol (..), parseProtocol)
@@ -75,6 +76,9 @@ data AppConfig = AppConfig
     imageWorkers :: !Int,
     llm :: !LLMRegistry,
     historyWindow :: !Int,
+    -- | Display timezone for all model/user-facing timestamps
+    -- (stored times stay UTC).  Default UTC+8.
+    timezone :: !TimeZone,
     -- | Persona used when a session hasn't overridden it.
     persona :: !Text,
     -- | Web-search backend, if configured.  When 'Nothing' the
@@ -180,6 +184,18 @@ appConfigParser =
           metavar "N",
           value 20
         ]
+    timezone <-
+      minutesToTimeZone
+        <$> setting
+          [ help "Display timezone, minutes east of UTC (480 = UTC+8); stored times stay UTC",
+            reader auto,
+            option,
+            long "timezone-minutes",
+            env "MAX_TIMEZONE_MINUTES",
+            conf "timezone_minutes",
+            metavar "MIN",
+            value 480
+          ]
     persona <-
       setting
         [ help "Default bot persona / system-prompt identity segment",

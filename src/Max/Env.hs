@@ -16,6 +16,7 @@ module Max.Env
 where
 
 import Data.Text (Text)
+import Data.Time (TimeZone)
 import Max.Browser.Registry (BrowserRegistry)
 import Max.Embedding (EmbedClient)
 import Max.Sandbox.Registry (SandboxRegistry)
@@ -37,6 +38,8 @@ data BotEnv = BotEnv
     beStickerDefault :: !Bool,
     -- | Default LLM profile name for new sessions / NULL branch rows.
     beDefaultModel :: !Text,
+    -- | Display timezone for model/user-facing timestamps ('AppConfig.timezone').
+    beTimeZone :: !TimeZone,
     beSessions :: !SessionRegistry,
     beTasks :: !TaskRegistry,
     beSandboxes :: !SandboxRegistry,

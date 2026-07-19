@@ -78,6 +78,7 @@ library
         Max.Session.Types
         Max.Stickers
         Max.Tasks
+        Max.Time
         Max.Tools
         Max.Tools.Browser
         Max.Tools.Files

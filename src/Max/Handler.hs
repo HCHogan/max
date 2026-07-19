@@ -282,7 +282,7 @@ dispatchLLM gm = void $ async $
       s <- liftIO (readSession t)
       multimodal <- isProfileMultimodal s.model
       (mentionable, brief) <- fetchGroupContext gm.groupId
-      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot brief s gm
+      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot env.beTimeZone brief s gm
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride

@@ -32,7 +32,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Time (TimeZone)
 import Effectful
 import Max.Effects.Tools (Tool (..))
 import Max.Sandbox.Docker (ExecResult (..), maxOutputBytes, shellQuote, wrapPackages)
@@ -49,14 +49,15 @@ import Max.Sandbox.Registry
     readSandboxFile,
     writeSandboxFile,
   )
+import Max.Time (fmtDateHMS)
 import OneBot.Types (GroupId)
 
-sandboxToolsFor :: IOE :> es => GroupId -> SandboxRegistry -> [Tool es]
-sandboxToolsFor gid reg =
+sandboxToolsFor :: IOE :> es => TimeZone -> GroupId -> SandboxRegistry -> [Tool es]
+sandboxToolsFor tz gid reg =
   [ createTool gid reg,
     execTool gid reg,
     nixSearchTool gid reg,
-    listTool gid reg,
+    listTool tz gid reg,
     destroyTool gid reg,
     readFileTool gid reg,
     writeFileTool gid reg
@@ -259,8 +260,8 @@ nixSearchTool gid reg =
 --------------------------------------------------------------------------------
 -- sandbox_list
 
-listTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
-listTool gid reg =
+listTool :: IOE :> es => TimeZone -> GroupId -> SandboxRegistry -> Tool es
+listTool tz gid reg =
   Tool
     { toolName = "sandbox_list",
       toolDescription =
@@ -283,7 +284,7 @@ listTool gid reg =
       object
         [ "sandbox_id" .= e.seId.unSandboxId,
           "image" .= e.seImage,
-          "created_at" .= T.pack (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S" e.seCreatedAt)
+          "created_at" .= fmtDateHMS tz e.seCreatedAt
         ]
 
 --------------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+import Data.Time (UTCTime (..), fromGregorian, minutesToTimeZone, secondsToDiffTime, utc)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
@@ -123,7 +123,8 @@ baseInputs =
       groupMemories = [],
       userMemories = [],
       images = [],
-      now = timeAt 12
+      now = timeAt 12,
+      tz = utc
     }
 
 --------------------------------------------------------------------------------
@@ -168,6 +169,19 @@ spec = do
       sys `shouldSatisfy` ("2026-06-05" `T.isInfixOf`)
       sys `shouldSatisfy` ("7777" `T.isInfixOf`)
       sys `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
+
+    it "renders timestamps in the configured display timezone" $ do
+      -- 01:00 UTC on 2026-06-05 is 09:00 the same day at UTC+8; a
+      -- context line at 20:00 UTC rolls over to 04:00 next day.
+      let inp =
+            baseInputs
+              { now = timeAt 1,
+                tz = minutesToTimeZone 480,
+                ambient = [historyAt 20 8001 otherMemberId (Just "Bob") "晚上好"]
+              }
+          (sys, _, ub) = splitMessages (fst (renderContext inp))
+      sys `shouldSatisfy` ("2026-06-05（周五） 09:00" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[04:00 Bob]" `T.isInfixOf`)
 
     it "splices groupBrief lines into the environment block" $ do
       let inp =

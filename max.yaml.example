@@ -24,6 +24,11 @@ persona: |
 # image_workers: 4
 # history_window: 20
 
+# Display timezone for all model/user-facing timestamps (the prompt's
+# 现在/[HH:MM] lines, tool result times).  Minutes east of UTC; stored
+# times stay UTC.  Default 480 = UTC+8.
+# timezone_minutes: 480
+
 # Default debug mode (default false).  When effective debug is on, the
 # agent loop posts each tool call to the group as a "⚙ tool {args}"
 # status line.  Group members override per session with
