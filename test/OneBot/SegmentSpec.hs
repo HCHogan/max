@@ -1,7 +1,7 @@
 module OneBot.SegmentSpec (spec) where
 
 import Data.Set qualified as Set
-import OneBot.Segment (Segment (..), renderPlainText, segmentMentions)
+import OneBot.Segment (Segment (..), segmentMentions)
 import OneBot.Types (UserId (..))
 import Test.Hspec
 
@@ -10,24 +10,24 @@ spec = describe "segmentMentions" $ do
   let roster = Set.fromList [UserId 12345678, UserId 10001, UserId 99999999999]
       conv = segmentMentions (`Set.member` roster)
 
-  it "converts a known mention and swallows one trailing space" $
+  it "normalises to exactly one space after a converted mention" $
     conv "叫一下@12345678 看看"
-      `shouldBe` [SegText "叫一下", SegAt (UserId 12345678), SegText "看看"]
+      `shouldBe` [SegText "叫一下", SegAt (UserId 12345678), SegText " 看看"]
 
-  it "converts a mention at the start and end of text" $
+  it "converts a mention at the start and end of text (no trailing space at the end)" $
     conv "@12345678 收到了吗@10001"
       `shouldBe` [ SegAt (UserId 12345678),
-                   SegText "收到了吗",
+                   SegText " 收到了吗",
                    SegAt (UserId 10001)
                  ]
 
-  it "converts adjacent mentions" $
+  it "converts adjacent mentions, each followed by a space" $
     conv "@12345678 @10001 开会了"
-      `shouldBe` [SegAt (UserId 12345678), SegAt (UserId 10001), SegText "开会了"]
+      `shouldBe` [SegAt (UserId 12345678), SegText " ", SegAt (UserId 10001), SegText " 开会了"]
 
-  it "allows CJK characters flush against the mention" $
+  it "inserts a space even when CJK is flush against the mention" $
     conv "问@12345678你好"
-      `shouldBe` [SegText "问", SegAt (UserId 12345678), SegText "你好"]
+      `shouldBe` [SegText "问", SegAt (UserId 12345678), SegText " 你好"]
 
   it "keeps an id outside the roster as plain text" $
     conv "@87654321 在吗" `shouldBe` [SegText "@87654321 在吗"]
@@ -44,8 +44,12 @@ spec = describe "segmentMentions" $ do
 
   it "handles the 11-digit upper bound" $
     conv "@99999999999 hi"
-      `shouldBe` [SegAt (UserId 99999999999), SegText "hi"]
+      `shouldBe` [SegAt (UserId 99999999999), SegText " hi"]
 
-  it "round-trips through renderPlainText in the inbound shape" $
-    renderPlainText (conv "@12345678 明天@10001 记得带伞")
-      `shouldBe` "@12345678 明天@10001 记得带伞"
+  it "normalises spacing around multiple mentions in one line" $
+    conv "@12345678 明天@10001 记得带伞"
+      `shouldBe` [ SegAt (UserId 12345678),
+                   SegText " 明天",
+                   SegAt (UserId 10001),
+                   SegText " 记得带伞"
+                 ]

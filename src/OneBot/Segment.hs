@@ -243,12 +243,21 @@ segmentMentions known = go
              in if n >= 5 && n <= 11 && okBefore && okAfter && known uid
                   then
                     [SegText before | not (T.null before)]
-                      <> (SegAt uid : go (fromMaybe after (T.stripPrefix " " after)))
+                      <> (SegAt uid : spaceAfter (go (fromMaybe after (T.stripPrefix " " after))))
                   else case go cand of
                     -- Not a mention: keep the literal @ and fold it
                     -- into the following text run.
                     SegText t' : segs -> SegText (before <> "@" <> t') : segs
                     segs -> SegText (before <> "@") : segs
+
+    -- A real @ on QQ is always followed by a space; the client
+    -- inserts one after the name.  We swallow the space the author
+    -- typed (if any) above, then re-emit exactly one — merged into
+    -- the next text run to avoid adjacent segments, and dropped
+    -- entirely when the mention is the last thing in the message.
+    spaceAfter (SegText t' : segs) = SegText (" " <> t') : segs
+    spaceAfter [] = []
+    spaceAfter segs = SegText " " : segs
 
 mentionsUser :: UserId -> [Segment] -> Bool
 mentionsUser uid = any $ \case
