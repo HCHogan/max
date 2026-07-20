@@ -8,6 +8,7 @@
 -- in Phase 6.5 once sandboxing is in place.
 module Max.Tools
   ( builtinsFor,
+    parseTimeArg,
   )
 where
 
@@ -20,7 +21,7 @@ import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (LocalTime, TimeZone, UTCTime, defaultTimeLocale, localTimeToUTC, parseTimeM)
+import Data.Time (LocalTime, TimeZone, defaultTimeLocale, localTimeToUTC, parseTimeM)
 import Database.PostgreSQL.Simple (SqlError (..))
 import Database.PostgreSQL.Simple.ToField qualified as PG
 import Effectful

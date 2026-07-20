@@ -26,6 +26,7 @@ import Max.Embedder (embedWorker)
 import Max.Embedding (EmbedClient, newEmbedClient)
 import Max.Env (BotEnv (..))
 import Max.Persistence (PersistMode (Persisted))
+import Max.Reminder (ReminderScheduler, newReminderScheduler, reminderWorker)
 import Max.Files (FileQueue, fileWorker, newFileQueue)
 import Max.Forward (ForwardQueue, forwardWorker, newForwardQueue)
 import Max.Handler (handleEvents)
@@ -49,6 +50,7 @@ import Max.Tools.Files (fileToolsFor)
 import Max.Tools.Group (groupToolsFor)
 import Max.Tools.Images (imageToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
+import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
@@ -87,10 +89,12 @@ main = do
           fileQ <- newFileQueue
           sessions <- newSessionRegistry
           tasks <- newTaskRegistry
+          reminders <- newReminderScheduler
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           mEmbed <- traverse newEmbedClient cfg.embedding
           let toolFactory dc =
                 builtinsFor cfg.timezone mEmbed dc
+                  <> reminderToolsFor cfg.timezone reminders dc
                   <> groupToolsFor dc
                   <> imageToolsFor cfg.timezone cfg.imagesDir dc
                   <> memoryToolsFor mEmbed dc
@@ -128,7 +132,7 @@ main = do
             . runReader Persisted -- default mode; !btw scopes Volatile on top
             . runReader env
             . runAgent defaultLimits toolFactory tasks
-            $ runApp cfg applied mEmbed eventQ imgQ fwdQ fileQ clientRef
+            $ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ clientRef
 
 runApp ::
   ( IOE :> es,
@@ -146,13 +150,14 @@ runApp ::
   AppConfig ->
   [String] ->
   Maybe EmbedClient ->
+  ReminderScheduler ->
   TQueue Event ->
   ImageQueue ->
   ForwardQueue ->
   FileQueue ->
   TVar (Maybe Client) ->
   Eff es ()
-runApp cfg applied mEmbed eventQ imgQ fwdQ fileQ clientRef =
+runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ clientRef =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -193,6 +198,8 @@ runApp cfg applied mEmbed eventQ imgQ fwdQ fileQ clientRef =
               (for_ cfg.stickerCaptionProfile (\p -> stickerCaptionWorker p cfg.imagesDir))
               $ \aCap -> do
                 link aCap
-                withAsync (handleEvents eventQ imgQ fwdQ fileQ) $ \aH -> do
-                  link aH
-                  runServer cfg.server eventQ clientRef
+                withAsync (reminderWorker cfg.timezone reminders) $ \aRem -> do
+                  link aRem
+                  withAsync (handleEvents eventQ imgQ fwdQ fileQ) $ \aH -> do
+                    link aH
+                    runServer cfg.server eventQ clientRef
