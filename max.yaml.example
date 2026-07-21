@@ -158,8 +158,9 @@ llm:
 
 # intent:
 #   profile: deepseek-flash
-#   cooldown_seconds: 120     # min gap between proactive replies per group
-#   max_per_hour: 10          # hard cap per group
+#   cooldown_seconds: 120     # gap between "interested topic" barge-ins per group;
+#                             # name-calls and conversation follow-ups are exempt
+#   max_per_hour: 10          # hard cap per group, all trigger kinds
 #   context_lines: 15         # recent messages the classifier sees
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -14,9 +14,14 @@
 -- verdict is a hint, not a command: the main model keeps its @[沉默]@
 -- escape, so a false positive costs one dispatch, never a bad message.
 --
--- Guard rails, in order: per-group @!proactive@ toggle, a cooldown
--- after each proactive reply plus an hourly cap (the reliable defence
--- against chattiness and bot-to-bot loops), then the classifier.
+-- Guard rails: per-group @!proactive@ toggle first, then the
+-- classifier, then a throttle on its verdict.  The throttle is
+-- kind-aware — the cooldown applies only to 'KindTopic' (the bot
+-- inviting itself into a topic); 'KindCalled' and 'KindFollowup'
+-- bypass it, because going deaf for the cooldown window right after
+-- engaging someone is worse than chattiness ("干嘛" … user answers …
+-- silence).  The hourly cap still applies to every kind — that is
+-- the backstop against bot-to-bot loops.
 module Max.Intent
   ( IntentConfig (..),
     IntentState,
@@ -26,6 +31,7 @@ module Max.Intent
     intentWorker,
     -- * Exposed for tests
     IntentVerdict (..),
+    IntentKind (..),
     parseVerdict,
     Throttle (..),
     throttleAllows,
@@ -44,7 +50,8 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (TimeZone, UTCTime, diffUTCTime, getCurrentTime)
+-- UTCTime itself rides in on the Effectful.Log re-export.
+import Data.Time (TimeZone, diffUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
@@ -61,10 +68,11 @@ data IntentConfig = IntentConfig
   { -- | LLM profile the classifier calls (fast + cheap, e.g. a flash
     -- tier model).
     icProfile :: !Text,
-    -- | Seconds after a proactive reply during which the group is not
-    -- classified at all (directly-addressed triggers are unaffected).
+    -- | Seconds after a proactive reply during which 'KindTopic'
+    -- verdicts are suppressed (name-calls and conversation follow-ups
+    -- are exempt, as are directly-addressed triggers).
     icCooldownSeconds :: !Int,
-    -- | Hard cap on proactive replies per group per hour.
+    -- | Hard cap on proactive replies per group per hour, all kinds.
     icMaxPerHour :: !Int,
     -- | How many recent group messages the classifier sees.
     icContextLines :: !Int
@@ -120,13 +128,16 @@ clearPendingIntent :: IntentState -> GroupId -> IO ()
 clearPendingIntent st (GroupId gid) =
   atomically $ modifyTVar' st.isPending (Map.delete gid)
 
--- | Is a proactive trigger currently allowed for this group?
-throttleAllows :: IntentConfig -> UTCTime -> Maybe Throttle -> Bool
-throttleAllows _ _ Nothing = True
-throttleAllows cfg now (Just th) =
-  now `diffUTCTime` th.thLast >= fromIntegral cfg.icCooldownSeconds
-    && length (inWindow th.thRecent) < cfg.icMaxPerHour
+-- | Is a proactive trigger of this kind currently allowed?  The
+-- cooldown gates only 'KindTopic'; the hourly cap gates everything.
+throttleAllows :: IntentConfig -> UTCTime -> IntentKind -> Maybe Throttle -> Bool
+throttleAllows _ _ _ Nothing = True
+throttleAllows cfg now kind (Just th) =
+  cooldownOk && length (inWindow th.thRecent) < cfg.icMaxPerHour
   where
+    cooldownOk =
+      kind /= KindTopic
+        || now `diffUTCTime` th.thLast >= fromIntegral cfg.icCooldownSeconds
     inWindow = filter (\t -> now `diffUTCTime` t < 3600)
 
 recordTrigger :: IntentConfig -> UTCTime -> Maybe Throttle -> Throttle
@@ -171,13 +182,14 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
       t <- loadSession sessions defaultModel gm.groupId
       s <- liftIO (readSession t)
       now <- liftIO getCurrentTime
-      allowed <-
-        if not (fromMaybe True s.proactiveOverride)
-          then pure False
-          else liftIO $ do
-            m <- readTVarIO st.isThrottle
-            pure (throttleAllows cfg now (Map.lookup gid m))
-      when allowed $ do
+      throttle <- liftIO (Map.lookup gid <$> readTVarIO st.isThrottle)
+      -- Classify unless the feature is off for the group or even the
+      -- least-throttled kind couldn't fire (hourly cap exhausted) —
+      -- the kind-specific check happens on the verdict below.
+      let worthAsking =
+            fromMaybe True s.proactiveOverride
+              && throttleAllows cfg now KindCalled throttle
+      when worthAsking $ do
         let UserId selfId' = gm.selfId
             batchIds = Set.fromList [m | b <- batch, let MessageId m = b.messageId]
         rows <- fetchRecentInGroup gid 0 s.clearedAt (cfg.icContextLines + length batch)
@@ -192,11 +204,23 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
             | not v.ivTrigger ->
                 logInfo "intent: no trigger" $
                   object ["group_id" .= gid, "batch" .= length batch, "reason" .= v.ivReason]
+            | not (throttleAllows cfg now v.ivKind throttle) ->
+                logInfo "intent: trigger throttled" $
+                  object
+                    [ "group_id" .= gid,
+                      "kind" .= kindText v.ivKind,
+                      "reason" .= v.ivReason
+                    ]
             | otherwise -> do
                 liftIO . atomically . modifyTVar' st.isThrottle $ \m ->
                   Map.insert gid (recordTrigger cfg now (Map.lookup gid m)) m
                 logInfo "intent: proactive trigger" $
-                  object ["group_id" .= gid, "batch" .= length batch, "reason" .= v.ivReason]
+                  object
+                    [ "group_id" .= gid,
+                      "batch" .= length batch,
+                      "kind" .= kindText v.ivKind,
+                      "reason" .= v.ivReason
+                    ]
                 dispatch (last batch)
 
     classify persona ctxLines newLines = do
@@ -268,18 +292,41 @@ classifierSystem persona =
       "- 其他机器人发的机械消息（播报、复读、签到等）；",
       "- 拿不准的一律 false —— 插错话比沉默尴尬得多。",
       "",
-      "只输出一行 JSON，不要其他内容：{\"trigger\": true/false, \"reason\": \"不超过20字\"}"
+      "只输出一行 JSON，不要其他内容：",
+      "{\"trigger\": true/false, \"kind\": \"called\"|\"followup\"|\"topic\", \"reason\": \"不超过20字\"}",
+      "kind 对应上面三类：called=有人在叫它/找它帮忙；followup=它参与的对话的后续；topic=感兴趣的话题。"
     ]
+
+-- | Which of the three trigger categories fired.  Throttling depends
+-- on it: only 'KindTopic' respects the cooldown.
+data IntentKind = KindCalled | KindFollowup | KindTopic
+  deriving stock (Show, Eq)
+
+kindText :: IntentKind -> Text
+kindText = \case
+  KindCalled -> "called"
+  KindFollowup -> "followup"
+  KindTopic -> "topic"
 
 data IntentVerdict = IntentVerdict
   { ivTrigger :: !Bool,
+    -- | Defaults to 'KindTopic' (the most-throttled kind) when the
+    -- model omits or mangles the field.
+    ivKind :: !IntentKind,
     ivReason :: !(Maybe Text)
   }
   deriving stock (Show, Eq)
 
 instance FromJSON IntentVerdict where
-  parseJSON = withObject "verdict" $ \o ->
-    IntentVerdict <$> o .: "trigger" <*> o .:? "reason"
+  parseJSON = withObject "verdict" $ \o -> do
+    trig <- o .: "trigger"
+    mKind <- o .:? "kind"
+    reason <- o .:? "reason"
+    let kind = case mKind :: Maybe Text of
+          Just "called" -> KindCalled
+          Just "followup" -> KindFollowup
+          _ -> KindTopic
+    pure (IntentVerdict trig kind reason)
 
 -- | Parse the classifier's reply.  Tolerates markdown fences and
 -- prose around the JSON object — everything outside the outermost

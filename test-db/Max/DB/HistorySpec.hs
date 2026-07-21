@@ -1,7 +1,7 @@
 module Max.DB.HistorySpec (spec) where
 
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
-import Helpers (insertRawMessage, truncateAll, withDb)
+import Helpers (insertRawMessage, insertRawReply, truncateAll, withDb)
 import Max.DB.Connection (DbPool)
 import Max.DB.History
   ( HistoryItem (..),
@@ -103,6 +103,16 @@ spec pool = before_ (truncateAll pool) $
         insertRawMessage pool 1002 groupId memberA botId (timeAt 11) (Just "Alice") "@1000 new"
         rows <- withDb pool $ fetchMentionHistory groupId botId 9999 (Just (timeAt 10)) 10
         map (.messageId) rows `shouldBe` [1002]
+
+      it "includes messages the bot itself quoted (proactive replies)" $ do
+        -- No @, no reply — a proactive turn's target.  The bot's reply
+        -- quotes it, which must pull the user's side into the history:
+        -- otherwise the bot reads its own answers with no question.
+        insertRawMessage pool 1001 groupId memberA botId (timeAt 9) (Just "Alice") "max在吗"
+        insertRawReply pool 1002 groupId botId botId (timeAt 10) Nothing "在。干嘛。" 1001
+        insertRawMessage pool 1003 groupId memberB botId (timeAt 10) (Just "Bob") "无关闲聊"
+        rows <- withDb pool $ fetchMentionHistory groupId botId 9999 Nothing 10
+        map (.messageId) rows `shouldBe` [1001, 1002]
 
     describe "fetchMessagesByIds" $ do
       it "returns rows in the requested order (not DB order)" $ do

@@ -116,11 +116,14 @@ fetchMessage mid = do
 -- | Reconstruct the bot's mention-exchange history from the messages
 -- table: anything sent BY the bot (@user_id = botSelfId@), anything
 -- that mentions the bot (rendered text contains @\@<botSelfId>@),
--- plus anything that replies to (quotes) a bot message — replying
--- triggers a turn just like a mention, so it must be
--- reconstructable here too.  Filtered by @clearedAt@ watermark and
--- excluding the current triggering message.  Returned chronological
--- (oldest first), capped at @n@ rows.
+-- anything that replies to (quotes) a bot message — replying
+-- triggers a turn just like a mention — plus anything the bot itself
+-- quoted: proactive (intent-triggered) replies quote their target,
+-- and without the user's side of those exchanges the bot reads its
+-- own answers with no visible question and repeats itself.  Filtered
+-- by @clearedAt@ watermark and excluding the current triggering
+-- message.  Returned chronological (oldest first), capped at @n@
+-- rows.
 --
 -- This replaces 'session.history' (the duplicated in-memory cache):
 -- single source of truth lives in @messages@.  @!unclear@ can lift
@@ -147,10 +150,13 @@ fetchMentionHistory gid botId excludeId since n = do
         \    AND (m.user_id = ? OR m.rendered_text LIKE ? \
         \         OR EXISTS (SELECT 1 FROM messages b \
         \                     WHERE b.message_id = m.reply_to_message_id \
-        \                       AND b.user_id = ?)) \
+        \                       AND b.user_id = ?) \
+        \         OR EXISTS (SELECT 1 FROM messages r \
+        \                     WHERE r.reply_to_message_id = m.message_id \
+        \                       AND r.user_id = ?)) \
         \  ORDER BY m.received_at DESC \
         \  LIMIT ?"
-        ((gid, excludeId, botId) :. (mentionLike :: Text, botId, n))
+        ((gid, excludeId, botId) :. (mentionLike :: Text, botId, botId, n))
     Just t ->
       query
         "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at, m.reply_to_message_id \
@@ -163,10 +169,13 @@ fetchMentionHistory gid botId excludeId since n = do
         \    AND (m.user_id = ? OR m.rendered_text LIKE ? \
         \         OR EXISTS (SELECT 1 FROM messages b \
         \                     WHERE b.message_id = m.reply_to_message_id \
-        \                       AND b.user_id = ?)) \
+        \                       AND b.user_id = ?) \
+        \         OR EXISTS (SELECT 1 FROM messages r \
+        \                     WHERE r.reply_to_message_id = m.message_id \
+        \                       AND r.user_id = ?)) \
         \  ORDER BY m.received_at DESC \
         \  LIMIT ?"
-        ((gid, excludeId) :. (t, botId, mentionLike :: Text, botId, n))
+        ((gid, excludeId) :. (t, botId, mentionLike :: Text, botId, botId, n))
   pure (reverse (rows :: [HistoryItem]))
 
 -- | Bulk fetch by message id.  Preserves the order of input ids

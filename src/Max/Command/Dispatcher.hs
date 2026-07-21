@@ -316,7 +316,7 @@ execute t gid uid replyTarget cmd = do
           [ "主动插话：",
             renderStickerState True sess.proactiveOverride,
             "\n判定模型：", ic.icProfile,
-            "，冷却 ", tshow ic.icCooldownSeconds, "s",
+            "，冷却 ", tshow ic.icCooldownSeconds, "s（仅话题类；点名/对话延续不受冷却）",
             "，每小时上限 ", tshow ic.icMaxPerHour,
             "\n用 !proactive on/off/default 开关（被 @/引用的触发不受影响）"
           ]
