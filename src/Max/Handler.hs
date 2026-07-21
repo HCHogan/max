@@ -8,6 +8,7 @@ module Max.Handler
   )
 where
 
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue)
 import Control.Monad (foldM_, unless, void, when)
 import Data.Aeson (Value, withObject, (.:))
@@ -31,6 +32,7 @@ import Effectful.Exception (SomeException, catch, finally)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import System.FilePath ((</>))
+import System.Random (randomRIO)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
@@ -594,7 +596,12 @@ sendAndPersistReply gm mentionable blobRoot stickersOn body = do
         (sentImgs', mPlan) <- planChunk sentImgs chunk
         case mPlan of
           Nothing -> pure ()
-          Just (segs, rendered) ->
+          Just (segs, rendered) -> do
+            -- Typing-pace delay between chunks: instant multi-message
+            -- bursts read as a bot.  The first chunk needs none — the
+            -- LLM round-trip already was its "typing time".
+            when (i > 0) $
+              liftIO (threadDelay =<< chunkDelayMicros (T.length rendered))
             callAction (sendChatMsg gm.groupId segs) 30000 >>= \case
               Left err ->
                 logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
@@ -680,6 +687,14 @@ sendAndPersistReply gm mentionable blobRoot stickersOn body = do
     mentionSegs t
       | isPrivateChat gm.groupId = [SegText t]
       | otherwise = segmentMentions (\u -> maybe True (Set.member u) mentionable) t
+
+-- | How long to pause before a follow-up chunk, roughly scaled to how
+-- long a human would take to type it: ~35ms per character with ±30%
+-- jitter, clamped to [200ms, 2s].
+chunkDelayMicros :: Int -> IO Int
+chunkDelayMicros nChars = do
+  f <- randomRIO (0.7, 1.3 :: Double)
+  pure (max 200_000 (min 2_000_000 (round (fromIntegral nChars * 35_000 * f))))
 
 -- | One roster fetch serving two prompt-side consumers: the member id
 -- set for outbound @-mention validation ('Nothing' when there is no
