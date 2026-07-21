@@ -8,11 +8,11 @@
 --     closest matches as a numbered list of @{id, desc}@.  Nothing is
 --     sent.
 --
--- Sending is no longer a tool: the model writes @[表情包#\<id\>]@ inline
+-- Sending is no longer a tool: the model writes @[sticker#\<id\>]@ inline
 -- in its reply and the reply post-processor turns that into a real
 -- sticker segment ('Max.Sticker.resolveSticker', called from
 -- 'Max.Handler.sendAndPersistReply').  Inbound history renders stickers
--- as @[表情包#\<id\>: …]@, so the id the model reads is the same handle
+-- as @[sticker#\<id\>: …]@, so the id the model reads is the same handle
 -- it writes back — one form in and out.  An explicit integer handle
 -- keeps sending unambiguous (the old free-text auto-send made the model
 -- learn to just *type* captions).
@@ -75,7 +75,7 @@ findStickersTool ec =
         T.unwords
           [ "在表情包库里按语义搜表情，用来挑一张发。query 描述你想表达的情绪或内容",
             "（如\"嘲讽\"、\"开心的猫猫\"、\"无语\"）。返回若干候选，每个带一个整数 id 和简介。",
-            "挑中后在回复里把 [表情包#<id>] 单独写成一段就会发出去（本工具只搜不发）。"
+            "挑中后在回复里把 [sticker#<id>] 单独写成一段就会发出去（本工具只搜不发）。"
           ],
       toolSchema =
         object
@@ -119,6 +119,6 @@ findStickersTool ec =
                 "hint"
                   .= if null cands
                     then ("库里没有贴切的，就用文字吧" :: Text)
-                    else "把其中一个 id 写成 [表情包#<id>] 放进回复即可发出"
+                    else "把其中一个 id 写成 [sticker#<id>] 放进回复即可发出"
               ]
         Right _ -> pure $ Left "embedding failed: bad vector count"

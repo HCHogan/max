@@ -89,6 +89,7 @@ library
         Max.Tools.Group
         Max.Tools.Images
         Max.Tools.Memory
+        Max.Tools.Pins
         Max.Tools.Reminder
         Max.Tools.Sandbox
         Max.Tools.Search

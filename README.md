@@ -6,9 +6,9 @@ A QQ chat bot written in Haskell, for group chats and one-on-one private chats. 
 
 - **Persistence.** Every message goes to Postgres (segments, rendered text, sender names, reply links); images are stored content-addressed on disk, forwarded chats expanded into child rows.
 - **Triggering.** @-mention or reply in groups, everything in private chats. `!` messages are commands; the rest start an async agent turn with recent context, prior bot conversations, pins and memories.
-- **Proactive triggering** (optional). With `intent.profile` configured, unaddressed group chatter is batched through a cheap intent classifier — name-calls without an @, follow-ups to what the bot just said, topics it can help with — and may start a turn on its own. Topic barge-ins respect a per-group cooldown (name-calls and follow-ups don't), an hourly cap covers everything, `!proactive on/off` toggles per group, and the main model can still answer `[沉默]`.
+- **Proactive triggering** (optional). With `intent.profile` configured, unaddressed group chatter is batched through a cheap intent classifier — name-calls without an @, follow-ups to what the bot just said, topics it can help with — and may start a turn on its own. Topic barge-ins respect a per-group cooldown (name-calls and follow-ups don't), an hourly cap covers everything, `!proactive on/off` toggles per group, and the main model can still answer `[silence]`.
 - **Private chats** reuse the group pipeline (chat with user *u* = group `-u`), so sessions, memories, sandboxes and commands work the same in both.
-- **Agent loop.** Multi-turn tool calling with `!kill` cancellation, `!btw` mid-task notes, progress via the `say` tool, `!debug` tool-call echo, a tool-result context budget, and a forced final answer at the turn cap.
+- **Agent loop.** Multi-turn tool calling with `!kill` cancellation, mid-task notes (`!btw`, or implicit: an @-message during a running task is intent-classified and injected into it when it reads as steering that task), progress via the `say` tool, `!debug` tool-call echo, a tool-result context budget, and a forced final answer at the turn cap.
 - **Memory.** Per-group and per-user memories injected into the system prompt; written by the model's memory tools and a post-reply extractor, audited with `!memory`. 30 entries × 300 chars per scope.
 - **Vector search** (optional). A worker embeds messages and memories into pgvector; enables semantic `search_messages` and `memory_search`. Falls back to substring/regex without it.
 - **LLM profiles.** Multiple profiles, OpenAI-compatible or Anthropic-native, switched with `!model`; thinking mode via `!model think on/off`.
@@ -17,7 +17,8 @@ A QQ chat bot written in Haskell, for group chats and one-on-one private chats. 
 - **Browser** (multimodal profiles). Per-group camoufox container (stealth Firefox over MCP): navigate, snapshot, click, type, scroll — snapshots list interactive elements with CSS selectors.
 - **Replies.** Blank-line paragraphs go out as separate messages (fences never split, five max); a QQ-id-to-name table in the prompt keeps names straight, group card over nickname.
 - **Tools** (per config): `web_search` · files · sandbox (persistent per-group Docker workspace, packages from pinned nixpkgs) · memory · message search · `group_members` / `view_avatar` / `view_image` · browser.
-- **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!proactive`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`, `!branch`, `!switch`.
+- **Pins.** Messages worth keeping in every prompt (specs, decisions, reference images) survive `!clear`. Curated by the model itself via `pin_message`/`unpin_message` tools; `!pin`/`!unpin`/`!pins` remain as the manual override.
+- **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!proactive`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`.
 - `@bot ping` → `pong`, no LLM call.
 
 ## Layout
@@ -176,7 +177,7 @@ Effect stack at the top of `runApp`:
 | 1–3 | OneBot 11 transport, supervision, persistence (messages/images/forwards) | ✅ |
 | 4 | Vector retrieval via pgvector (semantic search_messages, memory_search) | ✅ |
 | 5 | effectful layering, LLM client, async dispatch | ✅ |
-| 6 | !cmd DSL, sessions/branches, agent loop, sandbox/files/search tools | ✅ |
+| 6 | !cmd DSL, sessions, agent loop, sandbox/files/search tools | ✅ |
 | 7 | Multimodal (inline context images) + browser toolset | ✅ |
 | 8 | Long-term memory (tools + extraction + injection) | ✅ |
 | 9 | Private chats (pseudo-group pipeline) | ✅ |
@@ -197,7 +198,7 @@ cabal test all --test-show-details=direct    # both, verbose
 Pure logic in `test/` mirroring the library layout:
 
 - `Max.Command.ParserSpec` — every `!cmd` verb + edge cases
-- `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, branch names, …)
+- `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
 - `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip + `parseToolCall` tolerance
 - `Max.MCP.ClientSpec` — Streamable-HTTP body decoding (JSON + SSE)
 - `Max.MemoryExtractSpec` — extractor op-JSON parsing (fences, prose, bad actions)

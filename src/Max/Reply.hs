@@ -67,7 +67,7 @@ planReply body =
     explode (TextChunk t) = map TextChunk (splitParagraphs (latexToUnicode t))
 
 --------------------------------------------------------------------------------
--- Outbound placeholders: [↩#<id>] quotes, [表情包#<id>] stickers,
+-- Outbound placeholders: [↩#<id>] quotes, [sticker#<id>] stickers,
 -- [image#<id>] resends, [face#<id>] QQ faces.
 
 -- | A parsed span of one planned text chunk.  'PieceText' still holds
@@ -88,8 +88,8 @@ data ReplyPiece
 --   * @[↩#\<id\>]@ — a quote.  The first one becomes the chunk's reply
 --     target ('fst' of the result); every @[↩#…]@ token is stripped
 --     from the text regardless of position.
---   * @[表情包#\<id\>]@ — a sticker, becomes a 'PieceSticker'.  The
---     inbound display form @[表情包#\<id\>: …]@ is accepted too (the
+--   * @[sticker#\<id\>]@ — a sticker, becomes a 'PieceSticker'.  The
+--     inbound display form @[sticker#\<id\>: …]@ is accepted too (the
 --     trailing caption is ignored) so echoing what was seen still sends.
 --   * @[image#\<message_id\>]@ — resend a stored group image, becomes a
 --     'PieceImage' (the same handle the model reads inbound).
@@ -135,7 +135,12 @@ matchToken :: Text -> Maybe (Token, Text)
 matchToken t =
   (do rest <- T.stripPrefix "[↩#" t; (n, r) <- idClose rest; pure (TokReply n, r))
     <|> (do rest <- T.stripPrefix "[image#" t; (n, r) <- idClose rest; pure (TokImage n, r))
-    <|> (do rest <- T.stripPrefix "[face#" t; (n, r) <- idClose rest; pure (TokFace (fromIntegral n), r))
+    -- face uses stickerClose too: inbound renders as
+    -- "[face#14: 惊讶]", so echoing that must still send.
+    <|> (do rest <- T.stripPrefix "[face#" t; (n, r) <- stickerClose rest; pure (TokFace (fromIntegral n), r))
+    <|> (do rest <- T.stripPrefix "[sticker#" t; (n, r) <- stickerClose rest; pure (TokSticker n, r))
+    -- Pre-rename sticker opener: old rows (and models echoing them)
+    -- still carry it.
     <|> (do rest <- T.stripPrefix "[表情包#" t; (n, r) <- stickerClose rest; pure (TokSticker n, r))
   where
     -- reply / image: digits then an immediate ']'.

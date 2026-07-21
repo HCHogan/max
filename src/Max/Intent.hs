@@ -11,7 +11,7 @@
 -- while the worker is busy (or during the debounce pause), so a burst
 -- of chatter costs one classification and at most one reply — like a
 -- person reading a run of messages before deciding to speak.  The
--- verdict is a hint, not a command: the main model keeps its @[沉默]@
+-- verdict is a hint, not a command: the main model keeps its @[silence]@
 -- escape, so a false positive costs one dispatch, never a bad message.
 --
 -- Guard rails: per-group @!proactive@ toggle first, then the
@@ -29,10 +29,12 @@ module Max.Intent
     enqueueIntent,
     clearPendingIntent,
     intentWorker,
+    classifySupplement,
     -- * Exposed for tests
     IntentVerdict (..),
     IntentKind (..),
     parseVerdict,
+    parseSupplement,
     Throttle (..),
     throttleAllows,
   )
@@ -226,9 +228,9 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
     classify persona ctxLines newLines = do
       let userBody =
             T.intercalate "\n" $
-              ["[群聊上下文]"]
+              ["[context]"]
                 <> (if null ctxLines then ["(无)"] else ctxLines)
-                <> ["", "[新消息（判断对象）]"]
+                <> ["", "[new messages]"]
                 <> (if null newLines then ["(见上下文末尾)"] else newLines)
       -- Thinking forced off: this is a latency-sensitive yes/no call.
       r <- chat cfg.icProfile (Just False) [MsgSystem (classifierSystem persona), MsgUser userBody] []
@@ -343,3 +345,67 @@ extractObject t =
   let afterOpen = T.dropWhile (/= '{') t
       beforeClose = T.dropWhileEnd (/= '}') afterOpen
    in if T.null beforeClose then Nothing else Just beforeClose
+
+--------------------------------------------------------------------------------
+-- Supplement routing (implicit !btw).
+
+-- | The group already has a running agent task and someone @-ed the
+-- bot again: is the new message steering that task (追加要求、修正
+-- 方向、催进度) or an independent new request?  'True' means the
+-- caller should push it into the running task's inbox instead of
+-- spawning a parallel dispatch.  Any failure (LLM error, unparseable
+-- verdict) means 'False' — falling back to today's behaviour is
+-- always safe.
+classifySupplement ::
+  (LLM :> es, Log :> es) =>
+  IntentConfig ->
+  [Text] -> -- recent history lines, chronological (trigger excluded)
+  Text -> -- the new trigger message, rendered
+  Eff es Bool
+classifySupplement cfg ctxLines newLine = do
+  let userBody =
+        T.intercalate "\n" $
+          ["[context]"]
+            <> (if null ctxLines then ["(无)"] else ctxLines)
+            <> ["", "[new messages]", newLine]
+  r <- chat cfg.icProfile (Just False) [MsgSystem supplementSystem, MsgUser userBody] []
+  case r of
+    Left err -> do
+      logAttention "intent: supplement classify failed" $ object ["error" .= err]
+      pure False
+    Right (ToolCallsResp _ _) -> pure False
+    Right (ContentResp txt) -> case parseSupplement txt of
+      Nothing -> do
+        logAttention "intent: unparseable supplement verdict" $
+          object ["raw" .= T.take 200 txt]
+        pure False
+      Just v -> pure v
+
+supplementSystem :: Text
+supplementSystem =
+  T.intercalate
+    "\n"
+    [ "你是 QQ 群聊机器人「Max」的消息路由器。Max 此刻正在执行一个任务（由上下文末尾的对话触发，还没跑完），这时有人又 @ 了它。",
+      "",
+      "判断这条新消息是不是对进行中任务的补充：追加要求、修正方向、催进度、回答任务需要的信息。",
+      "是补充（supplement=true）→ 它会被直接塞进正在运行的任务，让任务顺带处理。",
+      "是独立的新问题/新请求，跟正在跑的任务无关 → false，会正常另开一轮。",
+      "拿不准的一律 false —— 错把新问题塞进旧任务，比多开一轮更糟。",
+      "",
+      "只输出一行 JSON，不要其他内容：",
+      "{\"supplement\": true/false, \"reason\": \"不超过20字\"}"
+    ]
+
+-- | Parse the supplement verdict; same fence/prose tolerance as
+-- 'parseVerdict'.
+parseSupplement :: Text -> Maybe Bool
+parseSupplement txt = do
+  obj <- extractObject txt
+  v :: SupplementVerdict <-
+    either (const Nothing) Just (eitherDecodeStrict' (TE.encodeUtf8 obj))
+  pure v.svSupplement
+
+newtype SupplementVerdict = SupplementVerdict {svSupplement :: Bool}
+
+instance FromJSON SupplementVerdict where
+  parseJSON = withObject "verdict" $ \o -> SupplementVerdict <$> o .: "supplement"

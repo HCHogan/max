@@ -6,6 +6,7 @@ import Max.Intent
     IntentKind (..),
     IntentVerdict (..),
     Throttle (..),
+    parseSupplement,
     parseVerdict,
     throttleAllows,
   )
@@ -58,6 +59,21 @@ spec = do
 
     it "rejects an object missing the trigger field" $
       parseVerdict "{\"reason\": \"x\"}" `shouldBe` Nothing
+
+  describe "parseSupplement" $ do
+    it "parses both verdicts" $ do
+      parseSupplement "{\"supplement\": true, \"reason\": \"追加要求\"}"
+        `shouldBe` Just True
+      parseSupplement "{\"supplement\": false, \"reason\": \"新问题\"}"
+        `shouldBe` Just False
+
+    it "tolerates fences and prose around the object" $ do
+      parseSupplement "```json\n{\"supplement\": true}\n```" `shouldBe` Just True
+      parseSupplement "判断：{\"supplement\": false} 完毕" `shouldBe` Just False
+
+    it "rejects garbage and missing field" $ do
+      parseSupplement "true" `shouldBe` Nothing
+      parseSupplement "{\"reason\": \"x\"}" `shouldBe` Nothing
 
   describe "throttleAllows" $ do
     it "allows a group with no history" $

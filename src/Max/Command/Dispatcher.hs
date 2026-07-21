@@ -341,36 +341,6 @@ execute t gid uid replyTarget cmd = do
   StickerBan prefix -> banSticker True prefix
   StickerUnban prefix -> banSticker False prefix
   --
-  BranchList -> do
-    s <- liftIO (Session.readSession t)
-    bs <- Session.listBranches gid
-    reply (formatBranches s.branch bs)
-  BranchNew name -> do
-    now <- liftIO getCurrentTime
-    res <- Session.forkAndSwitch env.beSessions gid name now
-    case res of
-      Left err -> reply err
-      Right () -> do
-        logInfo "session: branch forked + switched" $
-          object ["branch" .= name]
-        reply $
-          "✓ 已创建并切到分支 " <> name
-            <> "\n（继承了 model/persona/pinned/thinking；btw 清空；上下文水位线设到现在——用 !unclear 看老群消息）"
-  BranchDelete name -> do
-    res <- Session.dropBranch gid name
-    case res of
-      Left err -> reply err
-      Right () -> do
-        logInfo "session: branch deleted" $ object ["branch" .= name]
-        reply $ "✓ 已删除分支 " <> name
-  Switch name -> do
-    res <- Session.switchToBranch env.beSessions gid name env.beDefaultModel
-    case res of
-      Left err -> reply err
-      Right () -> do
-        logInfo "session: branch switched" $ object ["branch" .= name]
-        reply $ "✓ 已切到分支 " <> name
-  --
   Unknown v _ ->
     reply $
       "不认识的命令: !"
@@ -410,18 +380,6 @@ renderStickerState defB = \case
   Nothing -> (if defB then "开" else "关") <> " (配置默认)"
   Just True -> "开 (session 覆盖)"
   Just False -> "关 (session 覆盖)"
-
---------------------------------------------------------------------------------
--- !branch formatting.
-
-formatBranches :: Text -> [Text] -> Text
-formatBranches _ [] = "(没有分支 — 异常状态，重启 bot 重建 main)"
-formatBranches active bs =
-  T.unlines $ "分支：" : map line (sort bs)
-  where
-    line b
-      | b == active = "  * " <> b <> "  (active)"
-      | otherwise = "    " <> b
 
 --------------------------------------------------------------------------------
 -- !memory formatting.
@@ -585,11 +543,7 @@ helpText Nothing =
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",
       "  !kill --all              砍掉所有群的全部任务",
       "  ! <命令>                 在本群沙盒里跑 shell（感叹号后空一格），如 ! ls -al；支持多行",
-      "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version",
-      "  !branch                  列分支（标出 active）",
-      "  !branch <name>           创建并切到新分支（fork 当前；上下文水位线设到现在）",
-      "  !branch delete <name>    删除分支（不能删 active / 最后一个）",
-      "  !switch <name>           切到已存在的分支"
+      "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version"
     ]
 helpText (Just topic) =
   "(目前没有 '" <> topic <> "' 的详细帮助，看 !help)"

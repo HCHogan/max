@@ -114,7 +114,7 @@ fetchParsed action label parser =
             pure Nothing
           Right x -> pure (Just x)
 
--- | The 群信息 lines for the system prompt's [当前环境] block
+-- | The 群信息 lines for the system prompt's [environment] block
 -- (un-indented; the renderer prefixes).  Group name and 群主/管理员
 -- names+QQ号 — the compact always-useful subset; the full roster
 -- stays behind the @group_members@ tool.

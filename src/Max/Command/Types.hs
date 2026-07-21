@@ -69,10 +69,6 @@ data Command
   | StickerUnban !Text -- ^ '!sticker unban <sha-prefix>'
   | ProactiveStatus -- ^ '!proactive' — feature + override state
   | ProactiveSet !(Maybe Bool) -- ^ '!proactive on' / 'off' / 'default'
-  | BranchList -- ^ '!branch' or '!branch list'
-  | BranchNew !Text -- ^ '!branch <name>' — fork from current + switch
-  | BranchDelete !Text -- ^ '!branch delete <name>'
-  | Switch !Text -- ^ '!switch <name>'
   | Unknown !Text !RawArgs -- ^ verb + raw args; parser succeeded but verb unknown
   deriving stock (Show, Eq)
 

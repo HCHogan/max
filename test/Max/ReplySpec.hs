@@ -86,11 +86,17 @@ spec = do
     it "returns no reply and one text piece for plain text" $
       parseReplyTokens "就一句话" `shouldBe` (Nothing, [PieceText "就一句话"])
 
-    it "splits an inline [表情包#id] out of the surrounding text" $
-      parseReplyTokens "哈哈 [表情包#42] 绝了"
+    it "splits an inline [sticker#id] out of the surrounding text" $
+      parseReplyTokens "哈哈 [sticker#42] 绝了"
         `shouldBe` (Nothing, [PieceText "哈哈 ", PieceSticker 42, PieceText " 绝了"])
 
-    it "accepts the captioned [表情包#id: …] form and ignores the caption" $
+    it "accepts the captioned [sticker#id: …] form and ignores the caption" $
+      parseReplyTokens "[sticker#42: 猫猫震惊]"
+        `shouldBe` (Nothing, [PieceSticker 42])
+
+    it "accepts the pre-rename [表情包#id] forms (old rows echo them)" $ do
+      parseReplyTokens "哈哈 [表情包#42] 绝了"
+        `shouldBe` (Nothing, [PieceText "哈哈 ", PieceSticker 42, PieceText " 绝了"])
       parseReplyTokens "[表情包#42: 猫猫震惊]"
         `shouldBe` (Nothing, [PieceSticker 42])
 
@@ -107,19 +113,23 @@ spec = do
         `shouldBe` (Just 1, [PieceText " a  b"])
 
     it "combines a quote and a sticker in one chunk" $
-      parseReplyTokens "[↩#9] 看这个 [表情包#3]"
+      parseReplyTokens "[↩#9] 看这个 [sticker#3]"
         `shouldBe` (Just 9, [PieceText " 看这个 ", PieceSticker 3])
 
     it "splits an inline [face#id] token out of the text" $
       parseReplyTokens "无语 [face#178]"
         `shouldBe` (Nothing, [PieceText "无语 ", PieceFace 178])
 
+    it "accepts the named [face#id: 名字] form and ignores the name" $
+      parseReplyTokens "[face#14: 惊讶]"
+        `shouldBe` (Nothing, [PieceFace 14])
+
     it "does not treat a bare [face] as a send token" $
       parseReplyTokens "这是 [face] 标记"
         `shouldBe` (Nothing, [PieceText "这是 [face] 标记"])
 
     it "leaves a malformed token as literal text" $ do
-      parseReplyTokens "[表情包#]" `shouldBe` (Nothing, [PieceText "[表情包#]"])
+      parseReplyTokens "[sticker#]" `shouldBe` (Nothing, [PieceText "[sticker#]"])
       parseReplyTokens "[↩#abc]" `shouldBe` (Nothing, [PieceText "[↩#abc]"])
       parseReplyTokens "[image#]" `shouldBe` (Nothing, [PieceText "[image#]"])
       parseReplyTokens "[face#]" `shouldBe` (Nothing, [PieceText "[face#]"])

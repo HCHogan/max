@@ -1,6 +1,6 @@
 -- |
 -- On-demand group roster for the agent: the full member list is too
--- big for the system prompt (the [当前环境] block only carries 群名 +
+-- big for the system prompt (the [environment] block only carries 群名 +
 -- 群主/管理员 — see "Max.Roster"), so the rest sits behind a tool the
 -- model calls when it actually needs to know who's in the group or
 -- what someone's avatar looks like.
@@ -174,7 +174,7 @@ avatarTool dc =
         Right (_, True)
           | isPrivateChat dc.dcGroupId -> pure $ Left "私聊没有群头像"
           | otherwise ->
-              fetchAndQueue dc (groupAvatarUrl dc.dcGroupId) "[群头像]:"
+              fetchAndQueue dc (groupAvatarUrl dc.dcGroupId) "[group avatar]:"
         Right (Just qq, _) -> do
           -- Best-effort name for the label so the model can tell whose
           -- face it is looking at when several avatars pile up.
@@ -188,7 +188,7 @@ avatarTool dc =
                   m <- lookupMember (UserId qq) ms
                   Just (memberName m)
           let label =
-                "[头像] "
+                "[avatar] "
                   <> fromMaybe (T.pack (show qq)) who
                   <> "("
                   <> T.pack (show qq)

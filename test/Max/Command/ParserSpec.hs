@@ -112,17 +112,6 @@ spec = do
         Right (Just (Unknown "memory" _)) -> pure ()
         other -> expectationFailure $ "expected Unknown memory, got: " <> show other
 
-  describe "!branch / !switch (Phase 6c)" $ do
-    it "bare branch → list" $ "!branch" `parsesTo` BranchList
-    it "branch list" $ "!branch list" `parsesTo` BranchList
-    it "branch new" $ "!branch feat-x" `parsesTo` BranchNew "feat-x"
-    it "branch delete" $ "!branch delete feat-x" `parsesTo` BranchDelete "feat-x"
-    it "branch with too many args → Unknown" $
-      case parseCommand "!branch feat-x extra" of
-        Right (Just (Unknown "branch" _)) -> pure ()
-        other -> expectationFailure $ "expected Unknown branch, got: " <> show other
-    it "switch named" $ "!switch main" `parsesTo` Switch "main"
-
   describe "unknown verbs" $ do
     it "fall through to Unknown with the raw verb" $
       case parseCommand "!nope foo bar" of

@@ -1,20 +1,12 @@
 -- |
--- Postgres CRUD for the @sessions@ + @session_active_branch@ tables.
--- The active branch for a group is a one-row pointer; branch rows
--- themselves are keyed by @(group_id, branch)@.
+-- Postgres CRUD for the @sessions@ table, one row per group.
 --
--- 'fetchActiveOrInit' is the boot-time path: read the active branch
--- if it exists, otherwise create a fresh @main@ branch with the given
--- default model.  'upsertSession' writes through on every mutation.
+-- 'fetchOrInit' is the boot-time path: read the group's row if it
+-- exists, otherwise create a fresh one with the given default model.
+-- 'upsertSession' writes through on every mutation.
 module Max.DB.Session
-  ( fetchActiveOrInit,
-    fetchBranch,
+  ( fetchOrInit,
     upsertSession,
-    switchActiveBranch,
-    listBranches,
-    branchExists,
-    getActiveBranch,
-    deleteBranch,
   )
 where
 
@@ -39,9 +31,7 @@ newtype Jsonb = Jsonb Value
 instance ToField Jsonb where
   toField (Jsonb v) = toJSONField v
 
--- | One row from @sessions@ alongside the active-branch pointer.  We
--- pull both in one round trip via a join so we can detect "active
--- branch points at a deleted row" cleanly.
+-- | One row from @sessions@.
 --
 -- Note: jsonb columns deserialise via @postgresql-simple@'s built-in
 -- 'Value' instance — DON'T wrap them in a Text/ByteString newtype
@@ -49,7 +39,6 @@ instance ToField Jsonb where
 -- "Text"@).
 data Row = Row
   { rGroupId :: !Int64,
-    rBranch :: !Text,
     rModel :: !(Maybe Text),
     rPersona :: !(Maybe Text),
     rBtwNotes :: !Value,
@@ -74,32 +63,27 @@ instance FromRow Row where
       <*> field
       <*> field
       <*> field
-      <*> field
 
--- | Load the active branch's session for a group, creating a fresh
--- @main@ branch (with the given default model) if nothing exists yet.
-fetchActiveOrInit ::
+-- | Load a group's session, creating a fresh row (with the given
+-- default model) if nothing exists yet.
+fetchOrInit ::
   (WithConnection :> es, IOE :> es) =>
   GroupId ->
   Text -> -- default model name (used when creating)
   Eff es Session
-fetchActiveOrInit (GroupId gid) defaultModel = do
+fetchOrInit (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT s.group_id, s.branch, s.model, s.persona, s.btw_notes, s.cleared_at, s.pinned, s.thinking_override, s.debug_override, s.sticker_override, s.proactive_override \
-      \  FROM session_active_branch a \
-      \  JOIN sessions s \
-      \    ON s.group_id = a.group_id AND s.branch = a.branch \
-      \  WHERE a.group_id = ?"
+      "SELECT group_id, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override \
+      \  FROM sessions \
+      \  WHERE group_id = ?"
       (Only gid)
   case rows :: [Row] of
     (r : _) -> pure (rowToSession defaultModel r)
     [] -> do
-      -- No active branch — create main.
       let initial =
             Session
               { groupId = GroupId gid,
-                branch = "main",
                 model = defaultModel,
                 persona = Nothing,
                 btwNotes = [],
@@ -111,11 +95,6 @@ fetchActiveOrInit (GroupId gid) defaultModel = do
                 proactiveOverride = Nothing
               }
       upsertSession initial
-      _ <-
-        execute
-          "INSERT INTO session_active_branch (group_id, branch) VALUES (?, ?) \
-          \ ON CONFLICT (group_id) DO UPDATE SET branch = EXCLUDED.branch, updated_at = now()"
-          (gid, "main" :: Text)
       pure initial
 
 -- | Idempotent write of one session row.  Updates 'updated_at'.
@@ -126,9 +105,9 @@ upsertSession s = do
       pin = Jsonb (toJSON s.pinned)
   void $
     execute
-      "INSERT INTO sessions (group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override) \
-      \ VALUES (?,?,?,?,?,?,?,?,?,?,?) \
-      \ ON CONFLICT (group_id, branch) DO UPDATE SET \
+      "INSERT INTO sessions (group_id, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override) \
+      \ VALUES (?,?,?,?,?,?,?,?,?,?) \
+      \ ON CONFLICT (group_id) DO UPDATE SET \
       \   model              = EXCLUDED.model, \
       \   persona            = EXCLUDED.persona, \
       \   btw_notes          = EXCLUDED.btw_notes, \
@@ -139,78 +118,7 @@ upsertSession s = do
       \   sticker_override   = EXCLUDED.sticker_override, \
       \   proactive_override = EXCLUDED.proactive_override, \
       \   updated_at         = now()"
-      ((gid, s.branch, s.model, s.persona, btw, s.clearedAt, pin) :. (s.thinkingOverride, s.debugOverride, s.stickerOverride, s.proactiveOverride))
-
-switchActiveBranch ::
-  (WithConnection :> es, IOE :> es) =>
-  GroupId ->
-  Text -> -- branch name
-  Eff es ()
-switchActiveBranch (GroupId gid) name =
-  void $
-    execute
-      "INSERT INTO session_active_branch (group_id, branch) VALUES (?,?) \
-      \ ON CONFLICT (group_id) DO UPDATE SET branch = EXCLUDED.branch, updated_at = now()"
-      (gid, name)
-
-listBranches :: (WithConnection :> es, IOE :> es) => GroupId -> Eff es [Text]
-listBranches (GroupId gid) = do
-  rows <-
-    query
-      "SELECT branch FROM sessions WHERE group_id = ? ORDER BY branch"
-      (Only gid)
-  pure [b | Only b <- rows :: [Only Text]]
-
--- | Load a specific branch of a group.  Returns 'Nothing' if the
--- branch row doesn't exist.
-fetchBranch ::
-  (WithConnection :> es, IOE :> es) =>
-  GroupId ->
-  Text -> -- branch name
-  Text -> -- default model (used when row.model is NULL/empty)
-  Eff es (Maybe Session)
-fetchBranch (GroupId gid) name defaultModel = do
-  rows <-
-    query
-      "SELECT group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override \
-      \  FROM sessions \
-      \  WHERE group_id = ? AND branch = ? \
-      \  LIMIT 1"
-      (gid, name)
-  pure $ case rows :: [Row] of
-    (r : _) -> Just (rowToSession defaultModel r)
-    [] -> Nothing
-
-branchExists :: (WithConnection :> es, IOE :> es) => GroupId -> Text -> Eff es Bool
-branchExists (GroupId gid) name = do
-  rows <-
-    query
-      "SELECT 1 FROM sessions WHERE group_id = ? AND branch = ? LIMIT 1"
-      (gid, name)
-  pure $ not (null (rows :: [Only Int]))
-
-getActiveBranch ::
-  (WithConnection :> es, IOE :> es) =>
-  GroupId ->
-  Eff es (Maybe Text)
-getActiveBranch (GroupId gid) = do
-  rows <-
-    query
-      "SELECT branch FROM session_active_branch WHERE group_id = ? LIMIT 1"
-      (Only gid)
-  pure $ case rows :: [Only Text] of
-    (Only b : _) -> Just b
-    [] -> Nothing
-
--- | Remove a non-active branch row.  Caller must check it's not the
--- active branch (this function will happily delete the active row,
--- leaving a dangling 'session_active_branch' pointer).
-deleteBranch :: (WithConnection :> es, IOE :> es) => GroupId -> Text -> Eff es ()
-deleteBranch (GroupId gid) name =
-  void $
-    execute
-      "DELETE FROM sessions WHERE group_id = ? AND branch = ?"
-      (gid, name)
+      ((gid, s.model, s.persona, btw, s.clearedAt, pin) :. (s.thinkingOverride, s.debugOverride, s.stickerOverride, s.proactiveOverride))
 
 --------------------------------------------------------------------------------
 
@@ -218,7 +126,6 @@ rowToSession :: Text -> Row -> Session
 rowToSession defaultModel r =
   Session
     { groupId = GroupId r.rGroupId,
-      branch = r.rBranch,
       model = case r.rModel of
         Just m | not (T.null m) -> m
         _ -> defaultModel,

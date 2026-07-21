@@ -1,6 +1,6 @@
 -- |
 -- Outbound sticker resolution: turn a @stickers.id@ (the handle the
--- model writes as @[表情包#\<id\>]@ in its reply) into the OneBot
+-- model writes as @[sticker#\<id\>]@ in its reply) into the OneBot
 -- segments that resend that sticker.  This is the send half of the
 -- library that "Max.DB.Stickers" ingests and "Max.Stickers" captions;
 -- it used to live inside a @send_sticker@ tool, but sending is now an
@@ -32,7 +32,7 @@ import System.FilePath ((</>))
 -- | Resolve a sticker id into the segments that resend it — an mface
 -- goes back natively (animates in-client) when we still have its
 -- metadata, anything else as a @sub_type=1@ image — plus the caption,
--- which the caller stores as the bot's own @[表情包#\<id\>: …]@ history
+-- which the caller stores as the bot's own @[sticker#\<id\>: …]@ history
 -- line.  'Left' when the id is unknown/banned or the blob can't be
 -- read: the caller drops the placeholder instead of failing the reply.
 -- Bumps @times_sent@ on success (the popularity signal for retrieval).

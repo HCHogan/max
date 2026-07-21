@@ -12,12 +12,11 @@ import Data.Text (Text)
 import Data.Time (UTCTime)
 import OneBot.Types (GroupId)
 
--- | One branch of one group's session.  See "Max.Session" for the
--- mutator surface; this module just defines the record so the storage
--- module doesn't have to depend on the STM-backed registry.
+-- | One group's session.  See "Max.Session" for the mutator surface;
+-- this module just defines the record so the storage module doesn't
+-- have to depend on the STM-backed registry.
 data Session = Session
   { groupId :: !GroupId,
-    branch :: !Text,
     -- | LLM profile name from @[llm.profiles.*]@.  Always resolved
     -- (never empty) — defaults from the registry are applied on load.
     model :: !Text,

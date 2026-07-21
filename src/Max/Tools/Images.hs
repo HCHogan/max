@@ -106,7 +106,7 @@ viewImageTool tz blobRoot dc =
     -- builder puts on inline images, so both kinds read the same.
     imageLabel mid =
       fetchMessage mid >>= \case
-        Nothing -> pure ("[消息 " <> T.pack (show mid) <> "] 里的图片")
+        Nothing -> pure ("[message " <> T.pack (show mid) <> "] 里的图片")
         Just h ->
           pure $
             "["

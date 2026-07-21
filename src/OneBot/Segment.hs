@@ -32,7 +32,11 @@ data Segment
   | SegAt !UserId
   | SegReply !MessageId
   | SegImage !ImageSegInfo
-  | SegFace !Int
+  | -- | A QQ built-in face.  The 'Maybe Text' is its display name
+    -- ("惊讶", "撇嘴"), pulled from NapCat's @data.raw.faceText@ on
+    -- inbound segments; 'Nothing' outbound (NapCat resolves the id
+    -- itself) or when NapCat didn't ship one.
+    SegFace !Int !(Maybe Text)
   | -- | Non-image file attached to a group message.  @data.file_id@ is
     -- the only thing guaranteed to round-trip back to QQ; @data.url@ is
     -- best-effort (sometimes inlined by NapCat, sometimes needs a
@@ -92,7 +96,16 @@ instance FromJSON Segment where
             subTy <- traverse parseFlexInt mSub
             summ <- d .:? "summary"
             pure (SegImage (ImageSegInfo url subTy summ))
-          "face" -> SegFace <$> (parseFlexInt =<< d .: "id")
+          "face" -> do
+            fid <- parseFlexInt =<< d .: "id"
+            -- NapCat attaches the whole NTQQ faceElement as data.raw;
+            -- faceText is the face's display name with a leading
+            -- slash ("/惊讶").
+            mRaw <- d .:? "raw"
+            name <- case mRaw of
+              Nothing -> pure Nothing
+              Just raw -> raw .:? "faceText"
+            pure (SegFace fid (cleanFaceText =<< name))
           "file" -> SegFile <$> parseFileSeg d
           _ -> fallback
     typed <|> fallback
@@ -124,6 +137,14 @@ parseFileSeg d = do
         fsiSize = size,
         fsiUrl = url
       }
+
+-- | Normalise NapCat's @faceText@ into a display name: drop the
+-- conventional leading slash ("/惊讶" → "惊讶") and surrounding
+-- whitespace; a blank result means no usable name.
+cleanFaceText :: Text -> Maybe Text
+cleanFaceText t =
+  let t' = T.strip (T.dropWhile (== '/') (T.strip t))
+   in if T.null t' then Nothing else Just t'
 
 -- | Accept either a JSON number or a decimal string and decode it as 'Int'.
 -- NapCat is inconsistent: e.g. face segments arrive with @id@ as a string
@@ -183,7 +204,7 @@ instance ToJSON Segment where
                   <> ["summary" .= s | Just s <- [info.isiSummary]]
               )
         ]
-    SegFace i ->
+    SegFace i _ ->
       object ["type" .= ("face" :: Text), "data" .= object ["id" .= i]]
     SegFile fs ->
       object
@@ -207,9 +228,12 @@ renderPlainText = T.concat . map go
       SegAt (UserId u) -> "@" <> T.pack (show u) <> " "
       SegReply _ -> ""
       SegImage info
-        | isStickerImage info -> "[动画表情]"
+        | isStickerImage info -> "[sticker]"
         | otherwise -> "[image]"
-      SegFace i -> "[face#" <> T.pack (show i) <> "]"
+      SegFace i mName ->
+        "[face#" <> T.pack (show i)
+          <> maybe "" (": " <>) mName
+          <> "]"
       SegFile fs -> "[file:" <> fs.fsiName <> "]"
       SegOther t _ -> "[" <> t <> "]"
 

@@ -239,11 +239,11 @@ renderInput :: Int64 -> Int64 -> [MemoryItem] -> [MemoryItem] -> Text -> Text
 renderInput gid uid groupMems userMems transcript =
   T.unlines $
     concat
-      [ ["[已有记忆 — 本群 group_id=" <> T.pack (show gid) <> "]"],
+      [ ["[existing memories — group_id=" <> T.pack (show gid) <> "]"],
         memLines groupMems,
-        ["", "[已有记忆 — 触发用户 user_id=" <> T.pack (show uid) <> "]"],
+        ["", "[existing memories — user_id=" <> T.pack (show uid) <> "]"],
         memLines userMems,
-        ["", "[本轮对话]", transcript, "", "输出操作 JSON 数组："]
+        ["", "[conversation]", transcript, "", "输出操作 JSON 数组："]
       ]
   where
     memLines [] = ["(无)"]

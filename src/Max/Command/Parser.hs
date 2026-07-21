@@ -256,15 +256,6 @@ classify verb raw@(RawArgs pos flags) = case verb of
     ["off"] -> ProactiveSet (Just False)
     ["default"] -> ProactiveSet Nothing
     _ -> Unknown verb raw
-  "branch" -> case pos of
-    [] -> BranchList
-    ["list"] -> BranchList
-    ["delete", name] -> BranchDelete name
-    [name] -> BranchNew name
-    _ -> Unknown verb raw
-  "switch" -> case pos of
-    [name] -> Switch name
-    _ -> Unknown verb raw
   _ -> Unknown verb raw
   where
     oneArg xs = case catMaybes [Just t | t <- xs] of

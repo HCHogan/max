@@ -112,7 +112,7 @@ extractReply segs =
 -- NapCat occasionally sends our own message back as an event too;
 -- whichever insert runs first claims the row, so on conflict we
 -- overwrite @rendered_text@ — ours is the normalised form (table
--- markdown source, @[表情包#\<id\>: …]@), which must win over the
+-- markdown source, @[sticker#\<id\>: …]@), which must win over the
 -- echo's plain 'renderPlainText' regardless of arrival order.  The
 -- echo's own insert is DO NOTHING, so the reverse order needs no care.
 --

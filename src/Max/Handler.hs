@@ -8,7 +8,7 @@ module Max.Handler
 where
 
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue)
-import Control.Monad (foldM_, unless, void)
+import Control.Monad (foldM_, unless, void, when)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Foldable (for_)
 import Data.Aeson.Types (parseEither)
@@ -32,7 +32,7 @@ import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Parser (parseCommand)
-import Max.DB.History (HistoryItem (..), fetchMessage)
+import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
 import Max.DB.Message (insertGroupMessage, insertOutbound)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
 import Max.Effects.LLM (LLM, isProfileMultimodal)
@@ -42,12 +42,12 @@ import Max.Files (FileQueue, enqueueFiles)
 import Max.MemoryExtract (extractMemories)
 import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
-import Max.Intent (IntentState, clearPendingIntent, enqueueIntent)
+import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
-import Max.Prompt (buildContext)
+import Max.Prompt (buildContext, renderCurrentLine, renderHistoryLine)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
-import Max.Tasks (TaskCancelled (..))
+import Max.Tasks (TaskCancelled (..), listTasks, pushBtwToLatest)
 import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply)
 import Max.Sticker (resolveSticker)
@@ -256,7 +256,7 @@ replySegs gm body =
 
 -- | Entry point for the intent worker: dispatch a message nobody
 -- @-ed at the bot, with the prompt honestly labelled as a proactive
--- turn (and @[沉默]@ explicitly on the table).
+-- turn (and @[silence]@ explicitly on the table).
 dispatchProactive ::
   ( Log :> es,
     WithConnection :> es,
@@ -318,6 +318,46 @@ dispatchLLM proactive gm = void $ async $
       env :: BotEnv <- ask
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
+      injected <- tryInjectSupplement env s
+      unless injected (dispatch env t s)
+
+    -- Implicit !btw: when the group already has a running task, a
+    -- fresh @-trigger is often steering that task（追加要求、修正
+    -- 方向、催进度）rather than starting something new.  Ask the
+    -- intent profile which it is; a supplement goes into the running
+    -- task's inbox — the task's eventual reply addresses it — instead
+    -- of spawning a parallel dispatch.  Gated on intent being
+    -- configured; proactive and ephemeral turns never reroute.  Any
+    -- doubt (classifier says no, errors out, or the task finished
+    -- while we were classifying) falls back to a normal dispatch.
+    tryInjectSupplement env s = do
+      ephemeral <- isEphemeral
+      case env.beIntent of
+        Just icfg | not proactive && not ephemeral -> do
+          running <- liftIO (listTasks env.beTasks (Just gm.groupId))
+          if null running
+            then pure False
+            else do
+              let GroupId gidRaw = gm.groupId
+                  MessageId midRaw = gm.messageId
+                  UserId selfRaw = gm.selfId
+              rows <- fetchRecentInGroup gidRaw 0 s.clearedAt icfg.icContextLines
+              let ctxLines =
+                    map (renderHistoryLine env.beTimeZone selfRaw) $
+                      filter (\h -> h.messageId /= midRaw) rows
+                  newLine = renderCurrentLine gm
+              isSupp <- classifySupplement icfg ctxLines newLine
+              if not isSupp
+                then pure False
+                else do
+                  ok <- liftIO (pushBtwToLatest env.beTasks gm.groupId newLine)
+                  when ok $
+                    logInfo "btw: implicit injection" $
+                      object ["group_id" .= gidRaw, "message_id" .= midRaw]
+                  pure ok
+        _ -> pure False
+
+    dispatch env t s = do
       multimodal <- isProfileMultimodal s.model
       (mentionable, brief) <- fetchGroupContext gm.groupId
       (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal proactive env.beBlobRoot env.beTimeZone brief s gm
@@ -326,7 +366,7 @@ dispatchLLM proactive gm = void $ async $
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
           dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff mentionable toolImgs
       result <- agentTurn dc s.model s.thinkingOverride ctx
-      -- Real stickers/images are the [表情包#<id>] / [image#<id>]
+      -- Real stickers/images are the [sticker#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
       -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
       -- forms are hallucinations — a weaker model imitating the
@@ -413,7 +453,7 @@ replyText gm body =
 --
 --   * a leading @[↩#\<id\>]@ becomes the chunk's 'SegReply' quote —
 --     nothing is auto-quoted any more, the model decides;
---   * @[表情包#\<id\>]@ becomes a sticker segment ('resolveSticker'),
+--   * @[sticker#\<id\>]@ becomes a sticker segment ('resolveSticker'),
 --     an unknown id is dropped rather than failing the reply;
 --   * @[image#\<id\>]@ resends that message's stored images; duplicate
 --     ids are dropped across the whole reply ('dedupeImagePieces') —
@@ -426,7 +466,7 @@ replyText gm body =
 -- A chunk that resolves to no content (a lone @[↩#id]@, or only a bad
 -- sticker token) is skipped.  Each chunk persists with its *resolved*
 -- surface form as rendered_text (sticker tokens normalised to
--- @[表情包#\<id\>: \<简介\>]@, image tokens keeping their @[image#\<id\>]@
+-- @[sticker#\<id\>: \<caption\>]@, image tokens keeping their @[image#\<id\>]@
 -- form, the reply token dropped — it lives in the
 -- reply_to_message_id column), so what the model reads back next turn
 -- matches what it wrote.  A table chunk persists with its markdown
@@ -518,7 +558,7 @@ sendAndPersistReply gm mentionable blobRoot stickersOn body = do
         resolve (PieceSticker sid) =
           resolveSticker blobRoot sid >>= \case
             Right (desc, segs) ->
-              pure (segs, "[表情包#" <> T.pack (show sid) <> ": " <> T.take 80 desc <> "]")
+              pure (segs, "[sticker#" <> T.pack (show sid) <> ": " <> T.take 80 desc <> "]")
             Left err -> do
               logAttention "sticker placeholder unresolved" $
                 object ["id" .= sid, "error" .= err]
@@ -536,7 +576,7 @@ sendAndPersistReply gm mentionable blobRoot stickersOn body = do
               -- was told is a hallucination.
               pure (segs, "[image#" <> T.pack (show mid) <> "]")
         resolve (PieceFace fid) =
-          pure ([SegFace fid], "[face#" <> T.pack (show fid) <> "]")
+          pure ([SegFace fid Nothing], "[face#" <> T.pack (show fid) <> "]")
 
     -- Private chats keep raw text: NapCat renders private
     -- at-segments poorly (see 'replySegs').  No member list (fetch
@@ -551,7 +591,7 @@ sendAndPersistReply gm mentionable blobRoot stickersOn body = do
 -- meaningful list — private chat or NapCat failure — so conversion
 -- falls back to syntax-only matching and a flaky API never mutes
 -- legitimate @s), and the rendered 群信息 lines for the system
--- prompt's [当前环境] block (empty on the same failures — the model
+-- prompt's [environment] block (empty on the same failures — the model
 -- just doesn't get the block).
 fetchGroupContext ::
   (NapCat :> es, Log :> es) =>
@@ -577,14 +617,14 @@ stripMentions (UserId u) =
   T.replace ("@" <> T.pack (show u)) ""
 
 -- | Did the model opt out of replying?  The format guide tells it to
--- answer with a lone @[沉默]@ when a turn calls for no response —
+-- answer with a lone @[silence]@ when a turn calls for no response —
 -- e.g. another bot mechanically @-ing us, where any answer would
 -- re-trigger it in an endless loop.  Expects pre-stripped input; an
 -- empty reply counts as silence too.  Only an exact match qualifies:
 -- a reply that merely *contains* the marker still goes out, so the
 -- model can't accidentally mute a real answer.
 isSilentReply :: T.Text -> Bool
-isSilentReply t = T.null t || t == "[沉默]"
+isSilentReply t = T.null t || t == "[silence]" || t == "[沉默]"
 
 -- | Load every stored image of a message as outbound image segments
 -- (base64 over @docker@-free NapCat send), for resolving a
@@ -617,38 +657,47 @@ messageImageSegs blobRoot mid = do
           pure [imageSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]
 
 -- | Drop bare display markers the model echoed from context —
--- @[image]@, @[动画表情]@, @[mface]@, @[face]@ (legacy rows),
--- @[forward]@.  None of them carries an id, so echoing one can only
--- produce literal marker text in the outgoing message.  The
--- id-carrying send tokens (@[image#\<id\>]@, @[face#\<id\>]@, …) are
--- left intact because they aren't literal matches for any of these.
+-- @[image]@, @[sticker]@, @[mface]@, @[face]@, @[forward]@, plus the
+-- pre-rename @[动画表情]@ still present in old rows.  None of them
+-- carries an id, so echoing one can only produce literal marker text
+-- in the outgoing message.  The id-carrying send tokens
+-- (@[image#\<id\>]@, @[face#\<id\>]@, …) are left intact because they
+-- aren't literal matches for any of these.
 stripBareMarkers :: T.Text -> T.Text
 stripBareMarkers t =
   foldl' (\acc m -> T.replace m "" acc) t
-    ["[image]", "[动画表情]", "[mface]", "[face]", "[forward]"]
+    ["[image]", "[sticker]", "[动画表情]", "[mface]", "[face]", "[forward]"]
 
--- | Remove any "[表情包: …]" / "[表情包…]" spans a model hallucinated
--- into its reply text (see call site) — the caption *display* form.
--- The real send token "[表情包#\<id\>…]" is left intact: it's the
--- placeholder the reply post-processor turns into an actual sticker
--- ('sendAndPersistReply'), so stripping it would break sending.  Scans
--- for the "[表情包" opener and drops through the next "]".
+-- | Remove any "[sticker: …]" / "[表情包…]" spans a model hallucinated
+-- into its reply text (see call site) — the caption *display* form,
+-- in either the current or the pre-rename opener.  The real send
+-- token "[sticker#\<id\>…]" is left intact: it's the placeholder the
+-- reply post-processor turns into an actual sticker
+-- ('sendAndPersistReply'), so stripping it would break sending.
+-- Scans for an opener and drops through the next "]".
+--
+-- The English opener requires the colon ("[sticker:") so ordinary
+-- prose like "[stickers are fun]" survives; the legacy opener stays
+-- loose because "[表情包" starting anything else is never real text.
 stripStickerText :: T.Text -> T.Text
-stripStickerText = go
+stripStickerText t0 = foldl' stripOpener t0 ["[sticker:", "[sticker：", "[表情包"]
   where
-    opener = "[表情包"
-    go t = case T.breakOn opener t of
-      (before, rest)
-        | T.null rest -> t -- no opener left
-        | otherwise ->
-            let afterOpener = T.drop (T.length opener) rest
-             in if isSendToken afterOpener
-                  then before <> opener <> go afterOpener -- keep the token, scan on
-                  else case T.breakOn "]" afterOpener of
-                    (_, close)
-                      | T.null close -> before -- unterminated: drop the tail too
-                      | otherwise -> before <> go (T.drop 1 close)
-    -- "[表情包#<digit>…" is a real send handle, not a hallucinated caption.
+    stripOpener t1 opener = go t1
+      where
+        go t = case T.breakOn opener t of
+          (before, rest)
+            | T.null rest -> t -- no opener left
+            | otherwise ->
+                let afterOpener = T.drop (T.length opener) rest
+                 in if isSendToken afterOpener
+                      then before <> opener <> go afterOpener -- keep the token, scan on
+                      else case T.breakOn "]" afterOpener of
+                        (_, close)
+                          | T.null close -> before -- unterminated: drop the tail too
+                          | otherwise -> before <> go (T.drop 1 close)
+    -- "…#<digit>…" after the opener is a real send handle, not a
+    -- hallucinated caption (only reachable via the legacy opener —
+    -- the colon openers can't precede a '#').
     isSendToken s = case T.uncons s of
       Just ('#', r) -> maybe False (isDigit . fst) (T.uncons r)
       _ -> False

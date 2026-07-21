@@ -37,7 +37,7 @@ data BotEnv = BotEnv
     -- | Config-level sticker default; sessions override via @!sticker
     -- on/off@.  When off, the @send_sticker@ tool isn't registered.
     beStickerDefault :: !Bool,
-    -- | Default LLM profile name for new sessions / NULL branch rows.
+    -- | Default LLM profile name for new sessions / NULL model rows.
     beDefaultModel :: !Text,
     -- | Display timezone for model/user-facing timestamps ('AppConfig.timezone').
     beTimeZone :: !TimeZone,

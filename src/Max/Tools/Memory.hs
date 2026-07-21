@@ -165,7 +165,7 @@ updateTool =
     { toolName = "memory_update",
       toolDescription =
         T.unwords
-          [ "改写一条已有的长期记忆（id 来自系统提示的 [长期记忆] 段或",
+          [ "改写一条已有的长期记忆（id 来自系统提示的 [memories] 段或",
             "memory_list）。当事实变化、或要把几条相近记忆合并成一条时用它。"
           ],
       toolSchema =
@@ -210,7 +210,7 @@ forgetTool =
     { toolName = "memory_forget",
       toolDescription =
         T.unwords
-          [ "删除一条长期记忆（id 来自系统提示的 [长期记忆] 段或 memory_list）。",
+          [ "删除一条长期记忆（id 来自系统提示的 [memories] 段或 memory_list）。",
             "记忆过时且无修订价值、或用户要求忘记时用它。"
           ],
       toolSchema =

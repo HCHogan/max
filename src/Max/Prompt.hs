@@ -8,8 +8,9 @@ module Max.Prompt
     renderContext,
     contextRoster,
     applyStickerCaptions,
-    -- * Shared line rendering (used by "Max.Intent")
+    -- * Shared line rendering (used by "Max.Intent" / "Max.Handler")
     renderHistoryLine,
+    renderCurrentLine,
   )
 where
 
@@ -82,11 +83,11 @@ data PromptInputs = PromptInputs
     multimodal :: !Bool,
     -- | 'True' when this turn was fired by the intent classifier
     -- rather than an @-mention/quote: the trigger block is labelled
-    -- honestly ("no one @-ed you") and @[沉默]@ is explicitly
+    -- honestly ("no one @-ed you") and @[silence]@ is explicitly
     -- offered, so the model joins in only when it actually has
     -- something to say.
     proactive :: !Bool,
-    -- | Pre-rendered 群信息 lines for the [当前环境] block (group
+    -- | Pre-rendered 群信息 lines for the [environment] block (group
     -- name, 群主/管理员 — see 'Max.Roster.renderGroupBrief').  Empty
     -- for private chats or when the NapCat lookups failed.
     groupBrief :: ![Text],
@@ -112,7 +113,7 @@ data PromptInputs = PromptInputs
   }
 
 -- | One inline image for the final user message: a data URL plus a
--- text label naming the source message (\"[HH:MM \<昵称\>] 消息里的
+-- text label naming the source message (\"[HH:MM \<name\>] 消息里的
 -- 图片:\") so the model can tie it back to a rendered context line.
 data PromptImage = PromptImage
   { piLabel :: !Text,
@@ -145,7 +146,7 @@ systemPrompt multimodal' private envText persona mMemBlock =
           "对话场景：QQ 一对一私聊。对方的每条消息都是直接对你说的，\
           \正常对话即可；没有其他人在看。"
         else
-          "对话场景：QQ 群聊。你同时面对多名群成员，上下文里 [HH:MM <昵称>] \
+          "对话场景：QQ 群聊。你同时面对多名群成员，上下文里 [HH:MM <name>] \
           \前缀标明谁在说话；大部分消息是成员之间的闲聊，只有 @你 或引用你的\
           \消息才是在叫你。",
       "",
@@ -158,20 +159,20 @@ systemPrompt multimodal' private envText persona mMemBlock =
       "  - 表格是例外：需要对比/罗列数据时可以写 markdown 表格，它会被渲染成图片发出。",
       "  - 数学式直接写 unicode（如 3×10⁸、α ≤ π/2），不要写 LaTeX——QQ 渲染不了。",
       "  - 不寒暄、不总结收尾、不复读问题，直接说事。",
-      "  - 想发表情包就把 [表情包#<id>] 单独写成一段（id 取自历史里出现过的表情，或先用 find_stickers 搜一个）；别把表情的文字描述打出来当话说。",
-      "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环，或者你只是被顺带提到）就整条回复只写 [沉默]，什么都不会发出去。正经问题不许用这个敷衍。"
+      "  - 想发表情包就把 [sticker#<id>] 单独写成一段（id 取自历史里出现过的表情，或先用 find_stickers 搜一个）；别把表情的文字描述打出来当话说。",
+      "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环，或者你只是被顺带提到）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍。"
     ]
-      <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<消息id>]（对方消息的 id 见行尾 #，当前 @ 你那条的 id 见 [当前 @ 你的消息]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。要 @ 某人写 @<QQ号>（对照表见 [当前环境]），发出时会转成真正的 @。"
+      <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行尾 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。要 @ 某人写 @<QQ号>（对照表见 [environment]），发出时会转成真正的 @。"
          | not private
          ]
       <> [ "",
            "上下文标记：",
-           "  [HH:MM <昵称> #<消息id>]: 内容 — 一条历史消息；末尾 #后是它的消息id，写 [↩#<消息id>] 就能引用它",
-           "  [↩ 引用 ...]                — 用户引用的那条消息（内容已展开）",
-           "  [↩#<消息id>]                — 这条消息引用了另一条；你也能在段首写它来引用，或用 get_message_by_id 展开看不到的那条",
-           "  [表情包#<id>: <简介>]        — 一个表情包；把 [表情包#<id>] 写进回复即可发出同一个",
-           "  [动画表情]                  — 一个表情包（简介还没生成，暂时没法转发）",
-           "  [face#<id>]                 — QQ 原生小黄脸表情；原样写回可发同款",
+           "  [HH:MM <name> #<msgid>]: 内容 — 一条历史消息；末尾 #后是它的消息id，写 [↩#<msgid>] 就能引用它",
+           "  [↩ quoted ...]                — 用户引用的那条消息（内容已展开）",
+           "  [↩#<msgid>]                — 这条消息引用了另一条；你也能在段首写它来引用，或用 get_message_by_id 展开看不到的那条",
+           "  [sticker#<id>: <caption>]        — 一个表情包；把 [sticker#<id>] 写进回复即可发出同一个",
+           "  [sticker]                   — 一个表情包（简介还没生成，暂时没法转发；老消息里写作 [动画表情]）",
+           "  [face#<id>: <名字>]          — QQ 原生小黄脸表情；写 [face#<id>] 可发同款",
            if multimodal'
              then "  [image]                     — 图片；引用/pin/当前消息的图会附在消息末尾并标注来源"
              else "  [image]                     — 图片（你看不到内容，可以请用户描述）"
@@ -180,8 +181,8 @@ systemPrompt multimodal' private envText persona mMemBlock =
          | multimodal'
          ]
       <> [ "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
-           "  [forward]                   — 转发聊天记录；被引用时内容展开在 [引用上下文]",
-           "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [当前环境]"
+           "  [forward]                   — 转发聊天记录；被引用时内容展开在 [quoted context]",
+           "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [environment]"
          ]
       <> maybe [] (\b -> ["", b]) mMemBlock
 
@@ -240,9 +241,9 @@ buildContext defaultPersona n multimodal' proactive' blobRoot tz' brief s gm = d
           kids <- fetchForwardChildren h.messageId maxForwardLines
           pure (Just (h, files, kids))
   -- Context stickers the caption worker has already described read
-  -- as [表情包: <简介>] instead of an opaque [动画表情] marker — a
-  -- non-multimodal model gets to "see" them, and a multimodal one
-  -- saves image budget for real photos.
+  -- as [sticker#<id>: <caption>] instead of an opaque [sticker]
+  -- marker — a non-multimodal model gets to "see" them, and a
+  -- multimodal one saves image budget for real photos.
   capMap <-
     stickerCaptionsFor . map (.messageId) $
       ambient'
@@ -434,7 +435,7 @@ applyStickerCaptions caps h = case Map.lookup h.messageId caps of
   Nothing -> h
   Just ds -> h {renderedText = replaceStickerMarkers ds h.renderedText}
 
--- | Swap opaque sticker markers for "[表情包#\<id\>: \<简介\>]".  The
+-- | Swap opaque sticker markers for "[sticker#\<id\>: \<caption\>]".  The
 -- @\#\<id\>@ is @stickers.id@ — the same handle the model writes back
 -- to *send* that sticker, so what it reads inbound and what it emits
 -- outbound share one form.
@@ -447,7 +448,8 @@ applyStickerCaptions caps h = case Map.lookup h.messageId caps of
 replaceStickerMarkers :: [(Int64, Text)] -> Text -> Text
 replaceStickerMarkers ds0 t0 = go ds0 t0
   where
-    stickerMarkers = ["[动画表情]", "[mface]"] :: [Text]
+    -- "[动画表情]" is the pre-rename form still present in old rows.
+    stickerMarkers = ["[sticker]", "[动画表情]", "[mface]"] :: [Text]
     markers
       | any (`T.isInfixOf` t0) stickerMarkers = stickerMarkers
       | otherwise = ["[image]"]
@@ -455,7 +457,7 @@ replaceStickerMarkers ds0 t0 = go ds0 t0
     go ((sid, d) : ds) rest = case firstMarker rest of
       Nothing -> rest
       Just (pre, post) ->
-        pre <> "[表情包#" <> T.pack (show sid) <> ": " <> T.take 80 d <> "]" <> go ds post
+        pre <> "[sticker#" <> T.pack (show sid) <> ": " <> T.take 80 d <> "]" <> go ds post
     firstMarker rest =
       case sortOn fst [(T.length pre, m) | m <- markers, Just pre <- [findSub m rest]] of
         [] -> Nothing
@@ -525,7 +527,7 @@ loadPromptImages tz' blobRoot selfId' mid replyIds candidates = do
       contextPicked = sortOn (\(h, _) -> h.receivedAt) [hp | Right hp <- picked]
       triggerPicked = [mp | Left mp <- picked]
   ctxImgs <- fmap concat $ traverse (uncurry loadCtx) contextPicked
-  trigImgs <- fmap concat $ traverse (loadOne "[当前消息] 里的图片:") triggerPicked
+  trigImgs <- fmap concat $ traverse (loadOne "[current message] 里的图片:") triggerPicked
   pure (ctxImgs <> trigImgs)
   where
     loadCtx h mp =
@@ -534,7 +536,7 @@ loadPromptImages tz' blobRoot selfId' mid replyIds candidates = do
       -- correlating timestamps.
       let label
             | h.messageId `Set.member` replyIds =
-                "[↩ 被引用的那条消息（"
+                "[↩ quoted message（"
                   <> fmtHM tz' h.receivedAt
                   <> " "
                   <> displayName selfId' h
@@ -598,7 +600,7 @@ renderContext pi' =
       roster = contextRoster pi'
       envText =
         T.intercalate "\n" $
-          [ "[当前环境]",
+          [ "[environment]",
             "  现在：" <> fmtEnvStamp pi'.tz pi'.now,
             if isPrivateChat pi'.triggerMessage.groupId
               then "  场景：与 " <> senderName <> "（QQ " <> T.pack (show senderId) <> "）私聊"
@@ -658,7 +660,7 @@ renderMemories tz' private senderName groupMems userMems
   | null groupMems && null userMems = Nothing
   | otherwise =
       Just . T.intercalate "\n" . concat $
-        [ [ "[长期记忆 — 背景备忘]",
+        [ [ "[memories — 背景备忘]",
             "仅在与当前话题相关时参考，不要主动提及；与对话矛盾时以对话为准（可 memory_update）。"
           ],
           if null groupMems
@@ -715,11 +717,11 @@ renderUser tz' selfId' proactive' ambient' replyCtx' pinnedItems' notes gm =
         if null pinnedItems'
           then []
           else
-            [ "[pin 上下文 — 用户标记长期保留的消息，!clear 也不清]",
+            [ "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]",
               T.intercalate "\n" (map (renderHistoryLine tz' selfId') pinnedItems'),
               ""
             ],
-        ["[群最近上下文]"],
+        ["[recent messages]"],
         if null ambient'
           then ["(无历史消息)"]
           else map (renderHistoryLine tz' selfId') ambient',
@@ -727,7 +729,7 @@ renderUser tz' selfId' proactive' ambient' replyCtx' pinnedItems' notes gm =
         case replyCtx' of
           Nothing -> []
           Just (r, files, kids) ->
-            "[引用上下文]"
+            "[quoted context]"
               : renderReplyLine tz' selfId' r
               : renderReplyFiles files
                 <> renderReplyForward tz' selfId' kids
@@ -735,22 +737,22 @@ renderUser tz' selfId' proactive' ambient' replyCtx' pinnedItems' notes gm =
         if null notes
           then []
           else
-            [ "[侧记 — 你之前的 !btw 笔记]",
+            [ "[btw — 你之前的 !btw 笔记]",
               T.intercalate "\n" (map ("  • " <>) notes),
               ""
             ],
         if proactive'
           then
-            [ "[当前消息 — 没人 @ 你，意图识别判断你可能想接话]",
+            [ "[current message — 没人 @ 你，意图识别判断你可能想接话]",
               renderCurrentLine gm,
               "",
               "你没有被 @。想接话就接，语气自然点，别表现得像被点名回答问题；\
               \插话要短，一两句说完，说完就收，别追着展开；\
-              \记得用 [↩#<消息id>] 引用你在回的那条。\
-              \不想接、没什么可说的、或话题跟你无关，就整条回复 [沉默]——主动插话宁缺毋滥。"
+              \记得用 [↩#<msgid>] 引用你在回的那条。\
+              \不想接、没什么可说的、或话题跟你无关，就整条回复 [silence]——主动插话宁缺毋滥。"
             ]
           else
-            [ "[当前 @ 你的消息]",
+            [ "[current message]",
               renderCurrentLine gm,
               "",
               "请回复当前消息。"
@@ -765,7 +767,7 @@ renderHistoryLine tz' selfId' h =
 
 renderReplyLine :: TimeZone -> Int64 -> HistoryItem -> Text
 renderReplyLine tz' selfId' h =
-  "[↩ 引用 " <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> " #" <> T.pack (show h.messageId) <> "]: "
+  "[↩ quoted " <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> " #" <> T.pack (show h.messageId) <> "]: "
     <> replyPrefix h
     <> oneLine h.renderedText
 

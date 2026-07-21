@@ -51,6 +51,7 @@ import Max.Tools.Files (fileToolsFor)
 import Max.Tools.Group (groupToolsFor)
 import Max.Tools.Images (imageToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
+import Max.Tools.Pins (pinToolsFor)
 import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
@@ -100,6 +101,7 @@ main = do
                   <> groupToolsFor dc
                   <> imageToolsFor cfg.timezone cfg.imagesDir dc
                   <> memoryToolsFor mEmbed dc
+                  <> pinToolsFor sessions cfg.llm.defaultName dc
                   <> sandboxToolsFor cfg.timezone dc.dcGroupId sandboxes
                   <> fileToolsFor cfg.timezone dc.dcGroupId cfg.imagesDir sandboxes
                   <> (if dc.dcStickers then stickerToolsFor mEmbed else [])

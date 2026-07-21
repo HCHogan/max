@@ -11,7 +11,7 @@
 -- Each iteration:
 --
 --   1. Drain pending @!btw@ notes from the task's inbox; if any,
---      append a synthetic @MsgUser "[侧记]: …"@ before the next chat
+--      append a synthetic @MsgUser "[btw]: …"@ before the next chat
 --      call so the model sees the side-channel input immediately.
 --   2. @chat(profile, msgs, specs)@.
 --   3. 'ContentResp' → return text.  'ToolCallsResp' → run each tool
@@ -108,7 +108,7 @@ data DispatchContext = DispatchContext
     dcToolImages :: !(TVar (Int, [ToolImage]))
   }
 
--- | One tool-queued inline image: a context label ("[头像] Alice:")
+-- | One tool-queued inline image: a context label ("[avatar] Alice:")
 -- plus a @data:<mime>;base64,...@ URL.
 data ToolImage = ToolImage
   { tiLabel :: !Text,
@@ -222,9 +222,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
       notes <- liftIO (drainBtwInbox h)
       let (msgs', appended') = case notes of
             [] -> (msgs, appended)
-            xs ->
-              let btw = MsgUser ("[侧记]: " <> T.intercalate " | " xs)
-               in (msgs <> [btw], appended <> [btw])
+            xs -> (msgs <> [btwMsg xs], appended <> [btwMsg xs])
       if n >= lims.maxTurns
         then finalAnswer n appended' profile thinking msgs'
         else do
@@ -240,14 +238,27 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                     aborted = Just err
                   }
             Right (ContentResp text) -> do
-              let asst = MsgAssistant text
-              pure
-                AgentResult
-                  { reply = text,
-                    appended = appended' <> [asst],
-                    turnsUsed = n + 1,
-                    aborted = Nothing
-                  }
+              -- A !btw note that raced in during this final call would
+              -- be lost — the task unregisters right after we return,
+              -- and the reply it was meant to steer is already written.
+              -- If any arrived, loop instead: the unsent draft stays in
+              -- the conversation and the model re-answers with the
+              -- note in view.
+              lateNotes <- liftIO (drainBtwInbox h)
+              case lateNotes of
+                [] ->
+                  pure
+                    AgentResult
+                      { reply = text,
+                        appended = appended' <> [MsgAssistant text],
+                        turnsUsed = n + 1,
+                        aborted = Nothing
+                      }
+                xs -> do
+                  logInfo "agent: btw notes raced final answer, continuing" $
+                    object ["count" .= length xs]
+                  let newMsgs = [MsgAssistant text, btwMsg xs]
+                  go dc h (n + 1) (appended' <> newMsgs) profile thinking (msgs' <> newMsgs)
             Right (ToolCallsResp reasoning tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -282,7 +293,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
         object ["turns" .= n]
       let capNote =
             MsgUser
-              "[系统] 工具调用轮次已用满，别再调用任何工具了。\
+              "[system] 工具调用轮次已用满，别再调用任何工具了。\
               \直接根据目前已经掌握的信息，给用户一个最终回复。"
           fallback =
             "(达到最大轮次 " <> T.pack (show lims.maxTurns) <> "，没收敛到最终回答)"
@@ -313,6 +324,9 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
       unless (not dc.dcDebug || null visible) $
         sendAction $
           sendChatMsg dc.dcGroupId [SegText (T.intercalate "\n" (map line visible))]
+
+    btwMsg :: [Text] -> ChatMessage
+    btwMsg xs = MsgUser ("[btw]: " <> T.intercalate " | " xs)
 
     silentTools :: [Text]
     silentTools = ["say", "send_image_from_sandbox", "send_file_from_sandbox"]
@@ -396,7 +410,7 @@ capToolResults budget = reverse . go budget . reverse
                   else MsgTool cid (T.take rem_ content <> elision) : go 0 rest
       _ -> m : go rem_ rest
     stub content = T.take 300 content <> elision
-    elision = "\n…[旧工具结果已截断以节省上下文]"
+    elision = "\n…[older tool results truncated]"
 
 agentTurn :: Agent :> es => DispatchContext -> Text -> Maybe Bool -> [ChatMessage] -> Eff es AgentResult
 agentTurn dc profile thinking msgs = send (AgentTurn dc profile thinking msgs)

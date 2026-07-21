@@ -9,7 +9,6 @@ import Max.Session
     clearHistory,
     clearThinkingOverride,
     drainBtwNotes,
-    isValidBranchName,
     removeAllPins,
     removePin,
     setThinkingOverride,
@@ -18,13 +17,12 @@ import Max.Session
 import OneBot.Types (GroupId (..))
 import Test.Hspec
 
--- | A canonical "fresh main branch" Session for tests.  Holds the
--- defaults you'd get from 'fetchActiveOrInit' on a never-seen group.
+-- | A canonical fresh Session for tests.  Holds the defaults you'd
+-- get from 'fetchOrInit' on a never-seen group.
 emptySession :: Session
 emptySession =
   Session
     { groupId = GroupId 1001,
-      branch = "main",
       model = "deepseek-flash",
       persona = Nothing,
       btwNotes = [],
@@ -41,25 +39,6 @@ t0 = UTCTime (fromGregorian 2026 6 5) (secondsToDiffTime 0)
 
 spec :: Spec
 spec = do
-  describe "isValidBranchName" $ do
-    it "accepts simple names" $ do
-      isValidBranchName "main" `shouldBe` True
-      isValidBranchName "feat-x" `shouldBe` True
-      isValidBranchName "v1.0_alpha" `shouldBe` True
-    it "rejects empty" $ isValidBranchName "" `shouldBe` False
-    it "rejects whitespace" $ do
-      isValidBranchName "has space" `shouldBe` False
-      isValidBranchName "tab\there" `shouldBe` False
-    it "rejects shell-flavoured chars" $ do
-      isValidBranchName "foo/bar" `shouldBe` False
-      isValidBranchName "foo;bar" `shouldBe` False
-      isValidBranchName "foo*bar" `shouldBe` False
-    it "rejects leading dot" $ isValidBranchName ".hidden" `shouldBe` False
-    it "rejects > 64 chars" $
-      isValidBranchName (mconcat (replicate 13 "abcde")) `shouldBe` False
-    it "accepts exactly 64 chars" $
-      isValidBranchName (mconcat (replicate 16 "abcd")) `shouldBe` True
-
   describe "btw note helpers" $ do
     it "append accumulates in order" $ do
       let s = appendBtwNote "b" (appendBtwNote "a" emptySession)

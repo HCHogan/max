@@ -1,12 +1,43 @@
 module OneBot.SegmentSpec (spec) where
 
+import Data.Aeson (decodeStrict')
 import Data.Set qualified as Set
-import OneBot.Segment (Segment (..), segmentMentions)
+import Data.Text (Text)
+import Data.Text.Encoding qualified as TE
+import OneBot.Segment (Segment (..), renderPlainText, segmentMentions)
 import OneBot.Types (UserId (..))
 import Test.Hspec
 
+-- | Decode a segment from a UTF-8 Text literal (a ByteString literal
+-- would latin-1-truncate the CJK).
+decodeSeg :: Text -> Maybe Segment
+decodeSeg = decodeStrict' . TE.encodeUtf8
+
 spec :: Spec
-spec = describe "segmentMentions" $ do
+spec = do
+  faceSpec
+  mentionSpec
+
+faceSpec :: Spec
+faceSpec = describe "face segments" $ do
+  it "parses NapCat's raw.faceText into the face name (leading slash dropped)" $
+    decodeSeg "{\"type\":\"face\",\"data\":{\"id\":\"14\",\"raw\":{\"faceIndex\":14,\"faceText\":\"/惊讶\"}}}"
+      `shouldBe` Just (SegFace 14 (Just "惊讶"))
+
+  it "parses a face without raw as nameless" $
+    decodeSeg "{\"type\":\"face\",\"data\":{\"id\":14}}"
+      `shouldBe` Just (SegFace 14 Nothing)
+
+  it "treats a blank faceText as absent" $
+    decodeSeg "{\"type\":\"face\",\"data\":{\"id\":\"14\",\"raw\":{\"faceText\":\"/\"}}}"
+      `shouldBe` Just (SegFace 14 Nothing)
+
+  it "renders named and nameless faces" $ do
+    renderPlainText [SegFace 14 (Just "惊讶")] `shouldBe` "[face#14: 惊讶]"
+    renderPlainText [SegFace 14 Nothing] `shouldBe` "[face#14]"
+
+mentionSpec :: Spec
+mentionSpec = describe "segmentMentions" $ do
   let roster = Set.fromList [UserId 12345678, UserId 10001, UserId 99999999999]
       conv = segmentMentions (`Set.member` roster)
 

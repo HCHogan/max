@@ -98,7 +98,6 @@ emptySession :: Session
 emptySession =
   Session
     { groupId = GroupId groupRaw,
-      branch = "main",
       model = "deepseek-flash",
       persona = Nothing,
       btwNotes = [],
@@ -168,7 +167,7 @@ spec = do
 
     it "includes an environment block with date, group, and model" $ do
       let (sys, _, _) = splitMessages (fst (renderContext baseInputs))
-      sys `shouldSatisfy` ("[当前环境]" `T.isInfixOf`)
+      sys `shouldSatisfy` ("[environment]" `T.isInfixOf`)
       sys `shouldSatisfy` ("2026-06-05" `T.isInfixOf`)
       sys `shouldSatisfy` ("7777" `T.isInfixOf`)
       sys `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
@@ -258,7 +257,7 @@ spec = do
   describe "renderContext long-term memory" $ do
     it "omits the memory block entirely when nothing is remembered" $ do
       let (sys, _, _) = splitMessages (fst (renderContext baseInputs))
-      sys `shouldSatisfy` (not . ("[长期记忆" `T.isInfixOf`))
+      sys `shouldSatisfy` (not . ("[memories" `T.isInfixOf`))
 
     it "renders group + user memories with ids, at the end of the system prompt" $ do
       let inp =
@@ -267,13 +266,13 @@ spec = do
                 userMemories = [memAt 9 "偏好 Haskell"]
               }
           (sys, _, _) = splitMessages (fst (renderContext inp))
-      sys `shouldSatisfy` ("[长期记忆 — 背景备忘]" `T.isInfixOf`)
+      sys `shouldSatisfy` ("[memories — 背景备忘]" `T.isInfixOf`)
       sys `shouldSatisfy` ("(#5 2026-06-05) 群里在开发 max bot" `T.isInfixOf`)
       sys `shouldSatisfy` ("(#9 2026-06-05) 偏好 Haskell" `T.isInfixOf`)
       sys `shouldSatisfy` ("关于当前发言者 <Alice>" `T.isInfixOf`)
       -- Low-salience placement: the block sits after the persona and
       -- format guide, i.e. the memory header appears only near the end.
-      let (upToBlock, _) = T.breakOn "[长期记忆" sys
+      let (upToBlock, _) = T.breakOn "[memories" sys
       upToBlock `shouldSatisfy` ("回复风格" `T.isInfixOf`)
 
   describe "renderContext mention history" $ do
@@ -347,8 +346,8 @@ spec = do
       let pin = historyAt 8 6001 otherMemberId (Just "Bob") "重要的话"
           inp = baseInputs {pinnedItems = [pin]}
           (_, _, ub) = splitMessages (fst (renderContext inp))
-          pinIdx = T.breakOnAll "[pin 上下文" ub
-          ambIdx = T.breakOnAll "[群最近上下文]" ub
+          pinIdx = T.breakOnAll "[pinned" ub
+          ambIdx = T.breakOnAll "[recent messages]" ub
       ub `shouldSatisfy` ("重要的话" `T.isInfixOf`)
       length pinIdx `shouldBe` 1
       length ambIdx `shouldBe` 1
@@ -359,7 +358,7 @@ spec = do
 
     it "omits pin section entirely when no pins" $ do
       let (_, _, ub) = splitMessages (fst (renderContext baseInputs))
-      ub `shouldNotSatisfy` ("[pin 上下文" `T.isInfixOf`)
+      ub `shouldNotSatisfy` ("[pinned" `T.isInfixOf`)
 
     it "renders reply context with file table when reply message has files" $ do
       let replied = historyAt 8 5001 otherMemberId (Just "Bob") "看看这个文件"
@@ -379,7 +378,7 @@ spec = do
               }
           inp = baseInputs {replyCtx = Just (replied, [file], [])}
           (_, _, ub) = splitMessages (fst (renderContext inp))
-      ub `shouldSatisfy` ("[引用上下文]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("report.pdf" `T.isInfixOf`)
       ub `shouldSatisfy` ("file_id=\"abc-123\"" `T.isInfixOf`)
       ub `shouldSatisfy` ("ready=true" `T.isInfixOf`)
@@ -407,7 +406,7 @@ spec = do
     it "renders btw notes when session has any" $ do
       let inp = baseInputs {session = emptySession {btwNotes = ["记得加引用", "今天别 typo"]}}
           (_, _, ub) = splitMessages (fst (renderContext inp))
-      ub `shouldSatisfy` ("[侧记" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[btw" `T.isInfixOf`)
       ub `shouldSatisfy` ("记得加引用" `T.isInfixOf`)
       ub `shouldSatisfy` ("今天别 typo" `T.isInfixOf`)
 
@@ -427,7 +426,7 @@ spec = do
           msgs = fst (renderContext inp)
       case last msgs of
         MsgUserBlocks (TextBlock body : blocks) -> do
-          body `shouldSatisfy` ("[当前 @ 你的消息]" `T.isInfixOf`)
+          body `shouldSatisfy` ("[current message]" `T.isInfixOf`)
           -- First label folds into the body (some providers 400 on
           -- adjacent text blocks); the rest interleave with images.
           body `shouldSatisfy` (img1.piLabel `T.isSuffixOf`)
@@ -441,7 +440,7 @@ spec = do
     it "stays a plain MsgUser when no images were loaded" $ do
       let inp = baseInputs {multimodal = True, images = []}
           (_, _, ub) = splitMessages (fst (renderContext inp))
-      ub `shouldSatisfy` ("[当前 @ 你的消息]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[current message]" `T.isInfixOf`)
 
     it "documents attached images in the format guide only when multimodal" $ do
       let (sysOff, _, _) = splitMessages (fst (renderContext baseInputs))
@@ -476,18 +475,22 @@ spec = do
     let caps = Map.fromList [(50 :: Int64, [(700 :: Int64, "柴犬歪头，配字\"啊?\"，表达疑惑")])]
         item marker = historyAt 1 50 memberId (Just "甲") ("看这个 " <> marker)
 
-    it "swaps a 动画表情 marker for its captioned handle" $ do
+    it "swaps a [sticker] marker for its captioned handle" $ do
+      (applyStickerCaptions caps (item "[sticker]")).renderedText
+        `shouldBe` "看这个 [sticker#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
+
+    it "swaps the pre-rename [动画表情] marker too (old rows)" $ do
       (applyStickerCaptions caps (item "[动画表情]")).renderedText
-        `shouldBe` "看这个 [表情包#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
+        `shouldBe` "看这个 [sticker#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
 
     it "handles legacy [image] markers too" $ do
       (applyStickerCaptions caps (item "[image]")).renderedText
-        `shouldBe` "看这个 [表情包#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
+        `shouldBe` "看这个 [sticker#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
 
     it "consumes markers in order, leaves extras alone" $ do
       let caps2 = Map.fromList [(50 :: Int64, [(11 :: Int64, "第一张"), (12, "第二张")])]
       (applyStickerCaptions caps2 (item "[mface] 和 [动画表情] 和 [image]")).renderedText
-        `shouldBe` "看这个 [表情包#11: 第一张] 和 [表情包#12: 第二张] 和 [image]"
+        `shouldBe` "看这个 [sticker#11: 第一张] 和 [sticker#12: 第二张] 和 [image]"
 
     it "leaves messages without captions untouched" $ do
       (applyStickerCaptions Map.empty (item "[动画表情]")).renderedText
@@ -495,16 +498,16 @@ spec = do
 
     it "does not let a photo's [image] swallow the sticker's caption in a mixed message" $ do
       (applyStickerCaptions caps (item "[image] 配 [动画表情]")).renderedText
-        `shouldBe` "看这个 [image] 配 [表情包#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
+        `shouldBe` "看这个 [image] 配 [sticker#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
 
   describe "renderContext proactive turns" $ do
-    it "labels the trigger block honestly and offers [沉默]" $ do
+    it "labels the trigger block honestly and offers [silence]" $ do
       let (_, _, ub) = splitMessages (fst (renderContext baseInputs {proactive = True}))
       ub `shouldSatisfy` ("没人 @ 你" `T.isInfixOf`)
-      ub `shouldSatisfy` ("[沉默]" `T.isInfixOf`)
-      ub `shouldSatisfy` (not . ("[当前 @ 你的消息]" `T.isInfixOf`))
+      ub `shouldSatisfy` ("[silence]" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("[current message]" `T.isInfixOf`))
 
     it "keeps the normal header for addressed turns" $ do
       let (_, _, ub) = splitMessages (fst (renderContext baseInputs))
-      ub `shouldSatisfy` ("[当前 @ 你的消息]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[current message]" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("没人 @ 你" `T.isInfixOf`))
