@@ -148,9 +148,12 @@ defaultLimits = AgentLimits {maxTurns = 200}
 
 -- | What one agent run produced.
 data AgentResult = AgentResult
-  { -- | Final assistant text to show the user.  Always populated, even
-    -- on abort (with a fallback explaining what went wrong).
-    reply :: !Text,
+  { -- | Final assistant text to show the user.  'Nothing' when the
+    -- loop produced no model-authored reply (LLM error, or the
+    -- turn-cap fallback call failed too) — the caller signals failure
+    -- out-of-band (reaction swap) instead of posting synthetic error
+    -- text into the chat; the reason is in 'aborted'.
+    reply :: !(Maybe Text),
     -- | Every message added to the conversation during this run —
     -- @!btw@ injections, assistant tool-call rounds, tool results,
     -- final assistant text.  Does NOT include the initial messages
@@ -232,7 +235,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
             Left err ->
               pure
                 AgentResult
-                  { reply = "(LLM 调用失败: " <> err <> ")",
+                  { reply = Nothing,
                     appended = appended',
                     turnsUsed = n + 1,
                     aborted = Just err
@@ -249,7 +252,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                 [] ->
                   pure
                     AgentResult
-                      { reply = text,
+                      { reply = Just text,
                         appended = appended' <> [MsgAssistant text],
                         turnsUsed = n + 1,
                         aborted = Nothing
@@ -295,18 +298,16 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
             MsgUser
               "[system] 工具调用轮次已用满，别再调用任何工具了。\
               \直接根据目前已经掌握的信息，给用户一个最终回复。"
-          fallback =
-            "(达到最大轮次 " <> T.pack (show lims.maxTurns) <> "，没收敛到最终回答)"
       eres <-
         chat profile thinking (capToolResults toolResultBudget (msgs <> [capNote])) []
-      let (text, ab) = case eres of
-            Right (ContentResp t) | not (T.null (T.strip t)) -> (t, Just "max-turns")
-            Right _ -> (fallback, Just "max-turns")
-            Left err -> (fallback, Just err)
+      let (mText, ab) = case eres of
+            Right (ContentResp t) | not (T.null (T.strip t)) -> (Just t, Just "max-turns")
+            Right _ -> (Nothing, Just "max-turns")
+            Left err -> (Nothing, Just err)
       pure
         AgentResult
-          { reply = text,
-            appended = appended <> [capNote, MsgAssistant text],
+          { reply = mText,
+            appended = appended <> [capNote] <> [MsgAssistant t | Just t <- [mText]],
             turnsUsed = n + 1,
             aborted = ab
           }

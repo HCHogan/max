@@ -379,6 +379,25 @@ dispatchLLM proactive gm = void $ async $
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
           dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff mentionable toolImgs
       result <- agentTurn dc s.model s.thinkingOverride ctx
+      case result.reply of
+        -- The loop produced no model-authored reply — upstream API
+        -- down, or the turn-cap fallback call failed too.  Error text
+        -- in the group would just be noise; swap the processing
+        -- reaction for a NO (face 123) so the trigger visibly failed.
+        -- Nothing is drained or persisted, same as a silent turn.
+        Nothing -> do
+          logAttention "llm dispatch failed" $
+            object
+              [ "to" .= (let UserId u = gm.userId in u),
+                "turns" .= result.turnsUsed,
+                "aborted" .= result.aborted
+              ]
+          unless proactive $ do
+            sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
+            sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
+        Just replyRaw -> handleReply env t s mentionable ctx drained result replyRaw
+
+    handleReply env t s mentionable ctx drained result replyRaw = do
       -- Real stickers/images are the [sticker#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
       -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
@@ -386,7 +405,8 @@ dispatchLLM proactive gm = void $ async $
       -- display style of something it saw — so strip those as a
       -- backstop while leaving the id-carrying send tokens intact
       -- (see 'stripStickerText' / 'stripBareMarkers').
-      let stripped = T.strip (stripBareMarkers (stripStickerText result.reply))
+      let stickersEff = maybe env.beStickerDefault id s.stickerOverride
+          stripped = T.strip (stripBareMarkers (stripStickerText replyRaw))
       if isSilentReply stripped
         then
           -- The model opted out of replying (see 'isSilentReply') —
@@ -633,6 +653,11 @@ stripMentions (UserId u) =
 -- Face ids come from NapCat's face_config.json (QSid).
 processingFaceId :: Int
 processingFaceId = 212
+
+-- | The "request failed" reaction face: NO (the red no-gesture),
+-- swapped in for 'processingFaceId' when a dispatch produced no reply.
+failureFaceId :: Int
+failureFaceId = 123
 
 -- | Did the model opt out of replying?  The format guide tells it to
 -- answer with a lone @[silence]@ when a turn calls for no response —
