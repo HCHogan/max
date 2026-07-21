@@ -19,6 +19,7 @@ import Data.Text (Text)
 import Data.Time (TimeZone)
 import Max.Browser.Registry (BrowserRegistry)
 import Max.Embedding (EmbedClient)
+import Max.Intent (IntentConfig)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
 import Max.Tasks (TaskRegistry)
@@ -46,6 +47,10 @@ data BotEnv = BotEnv
     beBrowsers :: !BrowserRegistry,
     -- | Profile for post-dispatch memory extraction ('Nothing' = off).
     beMemoryExtract :: !(Maybe Text),
+    -- | Proactive-trigger intent config ('Nothing' = feature off).
+    -- Dispatch itself lives in the intent worker; this handle is for
+    -- the @!proactive@ command's status display.
+    beIntent :: !(Maybe IntentConfig),
     -- | Embeddings client when configured — the extractor uses it for
     -- semantic dedup of new memories.
     beEmbed :: !(Maybe EmbedClient)

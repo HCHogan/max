@@ -6,6 +6,7 @@ A QQ chat bot written in Haskell, for group chats and one-on-one private chats. 
 
 - **Persistence.** Every message goes to Postgres (segments, rendered text, sender names, reply links); images are stored content-addressed on disk, forwarded chats expanded into child rows.
 - **Triggering.** @-mention or reply in groups, everything in private chats. `!` messages are commands; the rest start an async agent turn with recent context, prior bot conversations, pins and memories.
+- **Proactive triggering** (optional). With `intent.profile` configured, unaddressed group chatter is batched through a cheap intent classifier — name-calls without an @, follow-ups to what the bot just said, topics it can help with — and may start a turn on its own. Cooldown + hourly cap per group, `!proactive on/off` toggle, and the main model can still answer `[沉默]`.
 - **Private chats** reuse the group pipeline (chat with user *u* = group `-u`), so sessions, memories, sandboxes and commands work the same in both.
 - **Agent loop.** Multi-turn tool calling with `!kill` cancellation, `!btw` mid-task notes, progress via the `say` tool, `!debug` tool-call echo, a tool-result context budget, and a forced final answer at the turn cap.
 - **Memory.** Per-group and per-user memories injected into the system prompt; written by the model's memory tools and a post-reply extractor, audited with `!memory`. 30 entries × 300 chars per scope.
@@ -16,7 +17,7 @@ A QQ chat bot written in Haskell, for group chats and one-on-one private chats. 
 - **Browser** (multimodal profiles). Per-group camoufox container (stealth Firefox over MCP): navigate, snapshot, click, type, scroll — snapshots list interactive elements with CSS selectors.
 - **Replies.** Blank-line paragraphs go out as separate messages (fences never split, five max); a QQ-id-to-name table in the prompt keeps names straight, group card over nickname.
 - **Tools** (per config): `web_search` · files · sandbox (persistent per-group Docker workspace, packages from pinned nixpkgs) · memory · message search · `group_members` / `view_avatar` / `view_image` · browser.
-- **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`, `!branch`, `!switch`.
+- **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!proactive`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`, `!branch`, `!switch`.
 - `@bot ping` → `pong`, no LLM call.
 
 ## Layout
@@ -232,4 +233,4 @@ pgcli "postgresql://127.0.0.1:5433/max"
 
 Image blobs: `var/images/<2hex>/<sha256>`. Sandbox/browser containers: per-group (`max-sb-*` / `max-br-*`), destroyed on `!clear --all` or shutdown, reaped on boot. Outbox staging: `var/outbox/` (shared with NapCat container).
 
-Bot logs are JSON on stdout with a `domain` field — useful filters: `max/conn-N`, `max/image-worker`, `max/forward-worker`, `max/llm`, `max/cmd`, `max/memx` (memory extraction), plus `embed:` lines from the vector worker. `!debug on` mirrors tool calls into the chat itself.
+Bot logs are JSON on stdout with a `domain` field — useful filters: `max/conn-N`, `max/image-worker`, `max/forward-worker`, `max/llm`, `max/cmd`, `max/memx` (memory extraction), `max/intent` (proactive-trigger classification), plus `embed:` lines from the vector worker. `!debug on` mirrors tool calls into the chat itself.

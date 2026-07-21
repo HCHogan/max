@@ -67,6 +67,7 @@ library
         Max.Forward
         Max.Handler
         Max.Images
+        Max.Intent
         Max.MemoryExtract
         Max.Persistence
         Max.Prompt
@@ -159,6 +160,7 @@ test-suite max-test
     other-modules:
         Max.Command.ParserSpec
         Max.HandlerSpec
+        Max.IntentSpec
         OneBot.EventSpec
         OneBot.SegmentSpec
         Max.RenderSpec

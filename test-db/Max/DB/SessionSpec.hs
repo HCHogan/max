@@ -82,7 +82,8 @@ spec pool = before_ (truncateAll pool) $
                   pinned = [],
                   thinkingOverride = Nothing,
                   debugOverride = Nothing,
-                  stickerOverride = Nothing
+                  stickerOverride = Nothing,
+                  proactiveOverride = Nothing
                 }
         withDb pool $ upsertSession (mk "first")
         withDb pool $ upsertSession (mk "second")

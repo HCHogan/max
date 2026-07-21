@@ -46,6 +46,16 @@ spec = do
     it "set joins words" $ "!persona 你 是 一只 猫" `parsesTo` PersonaSet "你 是 一只 猫"
     it "set with quotes" $ "!persona \"hello world\"" `parsesTo` PersonaSet "hello world"
 
+  describe "!proactive" $ do
+    it "bare → status" $ "!proactive" `parsesTo` ProactiveStatus
+    it "on" $ "!proactive on" `parsesTo` ProactiveSet (Just True)
+    it "off" $ "!proactive off" `parsesTo` ProactiveSet (Just False)
+    it "default" $ "!proactive default" `parsesTo` ProactiveSet Nothing
+    it "garbage falls through to Unknown" $
+      case parseCommand "!proactive maybe" of
+        Right (Just (Unknown "proactive" _)) -> pure ()
+        other -> expectationFailure $ "expected Unknown proactive, got: " <> show other
+
   describe "!clear / !unclear" $ do
     it "plain clear" $ "!clear" `parsesTo` Clear
     it "clear --all" $ "!clear --all" `parsesTo` ClearAll

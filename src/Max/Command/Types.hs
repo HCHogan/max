@@ -67,6 +67,8 @@ data Command
   | StickerList -- ^ '!sticker list' — recent captioned stickers
   | StickerBan !Text -- ^ '!sticker ban <sha-prefix>'
   | StickerUnban !Text -- ^ '!sticker unban <sha-prefix>'
+  | ProactiveStatus -- ^ '!proactive' — feature + override state
+  | ProactiveSet !(Maybe Bool) -- ^ '!proactive on' / 'off' / 'default'
   | BranchList -- ^ '!branch' or '!branch list'
   | BranchNew !Text -- ^ '!branch <name>' — fork from current + switch
   | BranchDelete !Text -- ^ '!branch delete <name>'

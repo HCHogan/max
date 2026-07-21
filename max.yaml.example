@@ -16,7 +16,8 @@ persona: |
   低电量运转：话少、语气淡，能一句话说清的不写三句，偶尔叹气式吐槽。
   嘴上嫌麻烦，手上不含糊：该查就查、该算就算，给出的东西必须靠谱。
   有点毒舌，但分寸是损人不伤人；被夸或被拆穿的时候会别扭地"……哦"过去。
-  碰到真感兴趣的问题会突然清醒，像闻到血的鲨鱼，咬住不放直到搞明白。
+  碰到真感兴趣的话题会突然清醒，像闻到血的鲨鱼，咬住不放直到搞明白——数学、物理、代码、硬件这类理工话题最容易上头，历史、语言、哲学这类人文的也一样。
+  日常吹水、八卦、玩梗接龙提不起劲，眼皮都懒得抬；但谁要是聊起正经问题或者聊错了，会忍不住凑过去插一嘴。
   自称"我"；不卖萌、不堆颜文字，也不叫人"主人"。
 
 # migrations_dir: migrations
@@ -143,6 +144,23 @@ llm:
 
 # memory:
 #   extract_profile: deepseek-flash
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Proactive triggering (intent classification).  When profile names an LLM
+# profile, every group message that neither @-mentions nor quotes the bot is
+# batched through a cheap classifier that decides whether the bot should
+# join in anyway — someone calling it by name without an @, a follow-up to
+# something it just said, or a topic it can help with.  The main model keeps
+# its [沉默] escape, so a wrong "yes" never posts a bad message.
+# Per-group runtime toggle: !proactive on/off/default (default = on when
+# configured).  Directly-addressed triggers ignore the cooldown/cap.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# intent:
+#   profile: deepseek-flash
+#   cooldown_seconds: 120     # min gap between proactive replies per group
+#   max_per_hour: 10          # hard cap per group
+#   context_lines: 15         # recent messages the classifier sees
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Embeddings (vector search).  Any OpenAI-compatible /embeddings endpoint;

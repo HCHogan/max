@@ -1,5 +1,6 @@
 module Max.Handler
   ( handleEvents,
+    dispatchProactive,
     stripStickerText,
     stripBareMarkers,
     isSilentReply,
@@ -9,6 +10,7 @@ where
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue)
 import Control.Monad (foldM_, unless, void)
 import Data.Aeson (Value, withObject, (.:))
+import Data.Foldable (for_)
 import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
@@ -40,6 +42,7 @@ import Max.Files (FileQueue, enqueueFiles)
 import Max.MemoryExtract (extractMemories)
 import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
+import Max.Intent (IntentState, clearPendingIntent, enqueueIntent)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (buildContext)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, renderGroupBrief)
@@ -112,8 +115,9 @@ handleEvents ::
   ImageQueue ->
   ForwardQueue ->
   FileQueue ->
+  Maybe IntentState -> -- proactive-trigger buffers ('Nothing' = feature off)
   Eff es ()
-handleEvents q imgQ fwdQ fileQ = loop
+handleEvents q imgQ fwdQ fileQ mIntent = loop
   where
     loop = do
       ev <- liftIO (atomically (readTQueue q))
@@ -128,7 +132,7 @@ handleEvents q imgQ fwdQ fileQ = loop
           liftIO (enqueueImages imgQ gm)
           liftIO (enqueueForwards fwdQ gm)
           enqueueFiles fileQ gm
-          onGroupMessage gm
+          onGroupMessage mIntent gm
       loop
 
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
@@ -150,9 +154,10 @@ onGroupMessage ::
     Reader BotEnv :> es,
     IOE :> es
   ) =>
+  Maybe IntentState ->
   GroupMessage ->
   Eff es ()
-onGroupMessage gm = do
+onGroupMessage mIntent gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
   logInfo "group message" $
@@ -173,12 +178,18 @@ onGroupMessage gm = do
             Just quoted | quoted.userId == selfRaw -> classify True gm
             _ -> TriggerNone
     t -> pure t
+  -- A direct trigger clears the group's pending intent buffer: those
+  -- messages reach the model as ambient context of this turn, and
+  -- must not also produce a second, proactive reply.
+  let clearIntent = for_ mIntent $ \st -> liftIO (clearPendingIntent st gm.groupId)
   case trig of
-    TriggerNone -> pure ()
-    TriggerPong -> sendPong gm
-    TriggerCommand body -> dispatchCommand gm body
+    -- Not addressed: hand the message to the intent classifier —
+    -- maybe the bot wants to join in anyway.
+    TriggerNone -> for_ mIntent $ \st -> liftIO (enqueueIntent st gm)
+    TriggerPong -> clearIntent >> sendPong gm
+    TriggerCommand body -> clearIntent >> dispatchCommand gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
-    TriggerLLM _ -> dispatchLLM gm
+    TriggerLLM _ -> clearIntent >> dispatchLLM False gm
 
 --------------------------------------------------------------------------------
 -- Commands.
@@ -222,7 +233,7 @@ dispatchCommand gm body = localDomain "cmd" $ do
                         SegText (" " <> askBody)
                       ]
                   }
-          withEphemeral $ dispatchLLM virtualGm
+          withEphemeral $ dispatchLLM False virtualGm
 
 --------------------------------------------------------------------------------
 -- LLM dispatch.
@@ -243,9 +254,10 @@ replySegs gm body =
     <> [SegAt gm.userId | not (isPrivateChat gm.groupId)]
     <> [SegText body]
 
--- | Spawn an async to build the prompt, call the LLM, post the reply,
--- and append the (user, assistant) turn to the session history.
-dispatchLLM ::
+-- | Entry point for the intent worker: dispatch a message nobody
+-- @-ed at the bot, with the prompt honestly labelled as a proactive
+-- turn (and @[沉默]@ explicitly on the table).
+dispatchProactive ::
   ( Log :> es,
     WithConnection :> es,
     NapCat :> es,
@@ -258,7 +270,27 @@ dispatchLLM ::
   ) =>
   GroupMessage ->
   Eff es ()
-dispatchLLM gm = void $ async $
+dispatchProactive = dispatchLLM True
+
+-- | Spawn an async to build the prompt, call the LLM, post the reply,
+-- and append the (user, assistant) turn to the session history.
+-- The 'Bool' marks a proactive (intent-classifier) turn — see
+-- 'Max.Prompt.PromptInputs.proactive'.
+dispatchLLM ::
+  ( Log :> es,
+    WithConnection :> es,
+    NapCat :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader PersistMode :> es,
+    Reader BotEnv :> es,
+    IOE :> es
+  ) =>
+  Bool ->
+  GroupMessage ->
+  Eff es ()
+dispatchLLM proactive gm = void $ async $
   localDomain "llm" $ do
     let UserId fromRaw = gm.userId
         GroupId gidRaw = gm.groupId
@@ -267,7 +299,8 @@ dispatchLLM gm = void $ async $
       object
         [ "group_id" .= gidRaw,
           "user_id" .= fromRaw,
-          "message_id" .= midRaw
+          "message_id" .= midRaw,
+          "proactive" .= proactive
         ]
     -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
     -- (and every trySyncIO on the way up) — the outer 'catch' is the
@@ -287,7 +320,7 @@ dispatchLLM gm = void $ async $
       s <- liftIO (readSession t)
       multimodal <- isProfileMultimodal s.model
       (mentionable, brief) <- fetchGroupContext gm.groupId
-      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal env.beBlobRoot env.beTimeZone brief s gm
+      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal proactive env.beBlobRoot env.beTimeZone brief s gm
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride

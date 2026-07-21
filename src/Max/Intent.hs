@@ -1,0 +1,297 @@
+-- |
+-- Proactive-trigger intent classification: a cheap dedicated model
+-- watches group chatter that neither @-mentions nor quotes the bot and
+-- decides whether the bot should join in anyway — someone calling it
+-- by name without an @, a follow-up to something it just said, or a
+-- topic it can genuinely help with.  Directly-addressed messages skip
+-- this entirely ("Max.Handler" dispatches those before we ever see
+-- them).
+--
+-- Shape: per-group pending buffers + one worker.  Messages accumulate
+-- while the worker is busy (or during the debounce pause), so a burst
+-- of chatter costs one classification and at most one reply — like a
+-- person reading a run of messages before deciding to speak.  The
+-- verdict is a hint, not a command: the main model keeps its @[沉默]@
+-- escape, so a false positive costs one dispatch, never a bad message.
+--
+-- Guard rails, in order: per-group @!proactive@ toggle, a cooldown
+-- after each proactive reply plus an hourly cap (the reliable defence
+-- against chattiness and bot-to-bot loops), then the classifier.
+module Max.Intent
+  ( IntentConfig (..),
+    IntentState,
+    newIntentState,
+    enqueueIntent,
+    clearPendingIntent,
+    intentWorker,
+    -- * Exposed for tests
+    IntentVerdict (..),
+    parseVerdict,
+    Throttle (..),
+    throttleAllows,
+  )
+where
+
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.STM
+import Control.Monad (forever, when)
+import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
+import Data.Int (Int64)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
+import Data.Set qualified as Set
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Time (TimeZone, UTCTime, diffUTCTime, getCurrentTime)
+import Effectful
+import Effectful.Log
+import Effectful.PostgreSQL (WithConnection)
+import Max.DB.History (HistoryItem (..), fetchRecentInGroup)
+import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLM, chat)
+import Max.Prompt (renderHistoryLine)
+import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
+import Max.Util (catchSync)
+import OneBot.Event (GroupMessage (..))
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
+
+-- | Resolved @intent.*@ config; presence enables the whole feature.
+data IntentConfig = IntentConfig
+  { -- | LLM profile the classifier calls (fast + cheap, e.g. a flash
+    -- tier model).
+    icProfile :: !Text,
+    -- | Seconds after a proactive reply during which the group is not
+    -- classified at all (directly-addressed triggers are unaffected).
+    icCooldownSeconds :: !Int,
+    -- | Hard cap on proactive replies per group per hour.
+    icMaxPerHour :: !Int,
+    -- | How many recent group messages the classifier sees.
+    icContextLines :: !Int
+  }
+  deriving stock (Show, Eq)
+
+-- | Pending buffers + throttle bookkeeping, keyed by raw group id.
+data IntentState = IntentState
+  { isPending :: !(TVar (Map Int64 [GroupMessage])),
+    isThrottle :: !(TVar (Map Int64 Throttle))
+  }
+
+-- | When this group last got a proactive reply, and the recent
+-- trigger times inside the rolling hour window.
+data Throttle = Throttle
+  { thLast :: !UTCTime,
+    thRecent :: ![UTCTime]
+  }
+  deriving stock (Show)
+
+newIntentState :: IO IntentState
+newIntentState = IntentState <$> newTVarIO Map.empty <*> newTVarIO Map.empty
+
+-- | Newest messages a group buffer keeps while waiting for the
+-- worker; older overflow is dropped (it is still visible to the
+-- classifier as fetched context).
+maxPendingPerGroup :: Int
+maxPendingPerGroup = 30
+
+-- | Wait this long after picking up a batch, then sweep in whatever
+-- else arrived — a burst of rapid messages classifies once.
+debounceMicros :: Int
+debounceMicros = 2_000_000
+
+-- | Queue one unaddressed group message for classification.  Own
+-- echoes and private chats never enqueue (a private message already
+-- triggers directly).
+enqueueIntent :: IntentState -> GroupMessage -> IO ()
+enqueueIntent st gm
+  | gm.userId == gm.selfId || isPrivateChat gm.groupId = pure ()
+  | otherwise =
+      let GroupId gid = gm.groupId
+       in atomically . modifyTVar' st.isPending $
+            Map.insertWith (\new old -> lastN maxPendingPerGroup (old <> new)) gid [gm]
+  where
+    lastN n xs = drop (length xs - n) xs
+
+-- | Drop a group's pending buffer — called when a direct @/quote
+-- trigger dispatches for that group, so the same messages can't also
+-- produce a proactive reply (they reach the model as ambient context
+-- of the direct turn anyway).
+clearPendingIntent :: IntentState -> GroupId -> IO ()
+clearPendingIntent st (GroupId gid) =
+  atomically $ modifyTVar' st.isPending (Map.delete gid)
+
+-- | Is a proactive trigger currently allowed for this group?
+throttleAllows :: IntentConfig -> UTCTime -> Maybe Throttle -> Bool
+throttleAllows _ _ Nothing = True
+throttleAllows cfg now (Just th) =
+  now `diffUTCTime` th.thLast >= fromIntegral cfg.icCooldownSeconds
+    && length (inWindow th.thRecent) < cfg.icMaxPerHour
+  where
+    inWindow = filter (\t -> now `diffUTCTime` t < 3600)
+
+recordTrigger :: IntentConfig -> UTCTime -> Maybe Throttle -> Throttle
+recordTrigger _ now mth =
+  Throttle
+    { thLast = now,
+      thRecent = now : filter (\t -> now `diffUTCTime` t < 3600) (maybe [] (.thRecent) mth)
+    }
+
+--------------------------------------------------------------------------------
+-- Worker.
+
+-- | App-lived classification loop.  Crashes of one round are logged
+-- and never tear the worker down.
+intentWorker ::
+  (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  IntentConfig ->
+  Text -> -- default persona ('AppConfig.persona'; sessions may override)
+  Text -> -- default model name (for 'loadSession')
+  TimeZone ->
+  SessionRegistry ->
+  (GroupMessage -> Eff es ()) -> -- proactive dispatch (see 'Max.Handler.dispatchProactive')
+  IntentState ->
+  Eff es ()
+intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
+  localDomain "intent" . forever $
+    step `catchSync` \e ->
+      logAttention "intent: round crashed" $ object ["error" .= T.pack (show e)]
+  where
+    step = do
+      (gid, batch0) <- liftIO . atomically $ takeBatch st
+      -- Debounce: let the burst finish, then sweep the stragglers into
+      -- this same round.
+      liftIO (threadDelay debounceMicros)
+      extra <- liftIO . atomically $ drainGroup st gid
+      let batch = lastN maxPendingPerGroup (batch0 <> extra)
+      case batch of
+        [] -> pure ()
+        (gm : _) -> classifyBatch gid gm batch
+
+    classifyBatch gid gm batch = do
+      t <- loadSession sessions defaultModel gm.groupId
+      s <- liftIO (readSession t)
+      now <- liftIO getCurrentTime
+      allowed <-
+        if not (fromMaybe True s.proactiveOverride)
+          then pure False
+          else liftIO $ do
+            m <- readTVarIO st.isThrottle
+            pure (throttleAllows cfg now (Map.lookup gid m))
+      when allowed $ do
+        let UserId selfId' = gm.selfId
+            batchIds = Set.fromList [m | b <- batch, let MessageId m = b.messageId]
+        rows <- fetchRecentInGroup gid 0 s.clearedAt (cfg.icContextLines + length batch)
+        let (news, ctx) = spanPartition (\h -> h.messageId `Set.member` batchIds) rows
+            render = renderHistoryLine tz selfId'
+        -- Rows for the batch can be missing only in pathological
+        -- flood cases; classify anyway with whatever context we have.
+        verdict <- classify (fromMaybe defaultPersona s.persona) (map render ctx) (map render news)
+        case verdict of
+          Nothing -> pure ()
+          Just v
+            | not v.ivTrigger ->
+                logInfo "intent: no trigger" $
+                  object ["group_id" .= gid, "batch" .= length batch, "reason" .= v.ivReason]
+            | otherwise -> do
+                liftIO . atomically . modifyTVar' st.isThrottle $ \m ->
+                  Map.insert gid (recordTrigger cfg now (Map.lookup gid m)) m
+                logInfo "intent: proactive trigger" $
+                  object ["group_id" .= gid, "batch" .= length batch, "reason" .= v.ivReason]
+                dispatch (last batch)
+
+    classify persona ctxLines newLines = do
+      let userBody =
+            T.intercalate "\n" $
+              ["[群聊上下文]"]
+                <> (if null ctxLines then ["(无)"] else ctxLines)
+                <> ["", "[新消息（判断对象）]"]
+                <> (if null newLines then ["(见上下文末尾)"] else newLines)
+      -- Thinking forced off: this is a latency-sensitive yes/no call.
+      r <- chat cfg.icProfile (Just False) [MsgSystem (classifierSystem persona), MsgUser userBody] []
+      case r of
+        Left err -> do
+          logAttention "intent: classify failed" $ object ["error" .= err]
+          pure Nothing
+        Right (ToolCallsResp _ _) -> do
+          logAttention "intent: unexpected tool_calls" $ object []
+          pure Nothing
+        Right (ContentResp txt) -> case parseVerdict txt of
+          Nothing -> do
+            logAttention "intent: unparseable verdict" $ object ["raw" .= T.take 200 txt]
+            pure Nothing
+          v -> pure v
+
+    lastN n xs = drop (length xs - n) xs
+
+    -- Stable split: rows belonging to the batch vs. the rest, both in
+    -- original chronological order.
+    spanPartition p xs = (filter p xs, filter (not . p) xs)
+
+takeBatch :: IntentState -> STM (Int64, [GroupMessage])
+takeBatch st = do
+  m <- readTVar st.isPending
+  case Map.minViewWithKey m of
+    Nothing -> retry
+    Just ((gid, msgs), rest) -> do
+      writeTVar st.isPending rest
+      pure (gid, msgs)
+
+drainGroup :: IntentState -> Int64 -> STM [GroupMessage]
+drainGroup st gid = do
+  m <- readTVar st.isPending
+  case Map.lookup gid m of
+    Nothing -> pure []
+    Just msgs -> do
+      writeTVar st.isPending (Map.delete gid m)
+      pure msgs
+
+--------------------------------------------------------------------------------
+-- Classifier prompt + verdict.
+
+classifierSystem :: Text -> Text
+classifierSystem persona =
+  T.intercalate
+    "\n"
+    [ "你是 QQ 群聊机器人「Max」的触发判定器。Max 的人设：",
+      T.take 500 persona,
+      "",
+      "给你一段群聊上下文和几条新消息（都没有 @Max 也没有引用它）。判断 Max 是否应该主动接话。",
+      "",
+      "应该接话（trigger=true）：",
+      "1. 有人在叫 Max 或找它帮忙，只是没打 @ —— 如\"max帮我看看\"\"机器人查一下\"\"Max你觉得呢\"。",
+      "2. Max 刚参与的对话有了后续：有人在回应、追问或反驳 Max 刚说的话。",
+      "3. 正在讨论 Max 能实质帮上忙、或按人设明显会感兴趣的话题。",
+      "",
+      "不该接话（trigger=false）：",
+      "- 成员之间的日常闲聊，与 Max 无关；",
+      "- 只是顺带提到/议论 Max，不是在跟它说话；",
+      "- 其他机器人发的机械消息（播报、复读、签到等）；",
+      "- 拿不准的一律 false —— 插错话比沉默尴尬得多。",
+      "",
+      "只输出一行 JSON，不要其他内容：{\"trigger\": true/false, \"reason\": \"不超过20字\"}"
+    ]
+
+data IntentVerdict = IntentVerdict
+  { ivTrigger :: !Bool,
+    ivReason :: !(Maybe Text)
+  }
+  deriving stock (Show, Eq)
+
+instance FromJSON IntentVerdict where
+  parseJSON = withObject "verdict" $ \o ->
+    IntentVerdict <$> o .: "trigger" <*> o .:? "reason"
+
+-- | Parse the classifier's reply.  Tolerates markdown fences and
+-- prose around the JSON object — everything outside the outermost
+-- @{..}@ is ignored.
+parseVerdict :: Text -> Maybe IntentVerdict
+parseVerdict txt = do
+  obj <- extractObject txt
+  either (const Nothing) Just (eitherDecodeStrict' (TE.encodeUtf8 obj))
+
+-- | The substring from the first @{@ through the matching last @}@.
+extractObject :: Text -> Maybe Text
+extractObject t =
+  let afterOpen = T.dropWhile (/= '{') t
+      beforeClose = T.dropWhileEnd (/= '}') afterOpen
+   in if T.null beforeClose then Nothing else Just beforeClose

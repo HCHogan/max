@@ -250,6 +250,12 @@ classify verb raw@(RawArgs pos flags) = case verb of
     ["ban", s] -> StickerBan s
     ["unban", s] -> StickerUnban s
     _ -> Unknown verb raw
+  "proactive" -> case pos of
+    [] -> ProactiveStatus
+    ["on"] -> ProactiveSet (Just True)
+    ["off"] -> ProactiveSet (Just False)
+    ["default"] -> ProactiveSet Nothing
+    _ -> Unknown verb raw
   "branch" -> case pos of
     [] -> BranchList
     ["list"] -> BranchList

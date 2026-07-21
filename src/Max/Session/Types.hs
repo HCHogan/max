@@ -47,6 +47,12 @@ data Session = Session
     -- 'Nothing' means follow @AppConfig.stickersEnabled@.  When
     -- effective sticker sending is on, the @send_sticker@ tool is
     -- registered so the model may post stickers.
-    stickerOverride :: !(Maybe Bool)
+    stickerOverride :: !(Maybe Bool),
+    -- | Per-session proactive-trigger override, set by @!proactive
+    -- on@/@off@.  'Nothing' means follow the config default (on
+    -- whenever @intent.profile@ is configured).  When effective
+    -- proactive mode is on, the intent classifier may trigger the bot
+    -- on messages that neither @-mention nor quote it.
+    proactiveOverride :: !(Maybe Bool)
   }
   deriving stock (Show)

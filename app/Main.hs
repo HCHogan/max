@@ -11,7 +11,7 @@ import Effectful.Concurrent.Async (Concurrent, link, runConcurrent, withAsync)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
-import Effectful.Reader.Dynamic (Reader, runReader)
+import Effectful.Reader.Dynamic (Reader, ask, runReader)
 import Effectful.Wreq (runWreq)
 import Log.Backend.StandardOutput (withStdOutLogger)
 import Max.Config (AppConfig (..), loadConfig)
@@ -29,8 +29,9 @@ import Max.Persistence (PersistMode (Persisted))
 import Max.Reminder (ReminderScheduler, newReminderScheduler, reminderWorker)
 import Max.Files (FileQueue, fileWorker, newFileQueue)
 import Max.Forward (ForwardQueue, forwardWorker, newForwardQueue)
-import Max.Handler (handleEvents)
+import Max.Handler (dispatchProactive, handleEvents)
 import Max.Images (ImageQueue, imageWorker, newImageQueue)
+import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Browser.Registry
   ( destroyAllBrowsers,
     newBrowserRegistry,
@@ -92,6 +93,7 @@ main = do
           reminders <- newReminderScheduler
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           mEmbed <- traverse newEmbedClient cfg.embedding
+          mIntentSt <- traverse (const newIntentState) cfg.intent
           let toolFactory dc =
                 builtinsFor cfg.timezone mEmbed dc
                   <> reminderToolsFor cfg.timezone reminders dc
@@ -118,6 +120,7 @@ main = do
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
                     beMemoryExtract = cfg.memoryExtractProfile,
+                    beIntent = cfg.intent,
                     beEmbed = mEmbed
                   }
           runEff
@@ -132,7 +135,7 @@ main = do
             . runReader Persisted -- default mode; !btw scopes Volatile on top
             . runReader env
             . runAgent defaultLimits toolFactory tasks
-            $ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ clientRef
+            $ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef
 
 runApp ::
   ( IOE :> es,
@@ -155,9 +158,10 @@ runApp ::
   ImageQueue ->
   ForwardQueue ->
   FileQueue ->
+  Maybe IntentState ->
   TVar (Maybe Client) ->
   Eff es ()
-runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ clientRef =
+runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -200,6 +204,15 @@ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ clientRef =
                 link aCap
                 withAsync (reminderWorker cfg.timezone reminders) $ \aRem -> do
                   link aRem
-                  withAsync (handleEvents eventQ imgQ fwdQ fileQ) $ \aH -> do
-                    link aH
-                    runServer cfg.server eventQ clientRef
+                  -- No intent config → immediate no-op async, same trick
+                  -- as the caption worker above.
+                  env :: BotEnv <- ask
+                  withAsync
+                    ( for_ ((,) <$> cfg.intent <*> mIntentSt) $ \(ic, st) ->
+                        intentWorker ic cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions dispatchProactive st
+                    )
+                    $ \aInt -> do
+                      link aInt
+                      withAsync (handleEvents eventQ imgQ fwdQ fileQ mIntentSt) $ \aH -> do
+                        link aH
+                        runServer cfg.server eventQ clientRef

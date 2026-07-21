@@ -48,6 +48,8 @@ module Max.Session
     clearDebugOverride,
     setStickerOverride,
     clearStickerOverride,
+    setProactiveOverride,
+    clearProactiveOverride,
   )
 where
 
@@ -190,6 +192,15 @@ setStickerOverride b s = s {stickerOverride = Just b}
 -- | Drop the override; fall back to @AppConfig.stickersEnabled@.
 clearStickerOverride :: Session -> Session
 clearStickerOverride s = s {stickerOverride = Nothing}
+
+-- | Set the proactive override for this session (@!proactive on@/@off@).
+setProactiveOverride :: Bool -> Session -> Session
+setProactiveOverride b s = s {proactiveOverride = Just b}
+
+-- | Drop the override; fall back to the config default (on whenever
+-- @intent.profile@ is configured).
+clearProactiveOverride :: Session -> Session
+clearProactiveOverride s = s {proactiveOverride = Nothing}
 
 --------------------------------------------------------------------------------
 -- Branches.

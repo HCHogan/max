@@ -27,6 +27,7 @@ import Max.DB.Stickers qualified as Stickers
 import Max.Effects.LLM (LLM, listProfiles)
 import Max.Browser.Registry (destroyBrowsersForGroup)
 import Max.Env (BotEnv (..))
+import Max.Intent (IntentConfig (..))
 import Max.Sandbox.Docker (ExecResult (..), wrapPackages)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
 import Max.Session (Session (..), updateSession)
@@ -305,6 +306,35 @@ execute t gid uid replyTarget cmd = do
         "✓ 表情包发送回到配置默认（当前默认"
           <> (if env.beStickerDefault then "开" else "关")
           <> "）"
+  ProactiveStatus -> do
+    sess <- liftIO (Session.readSession t)
+    reply $ case env.beIntent of
+      Nothing ->
+        "主动插话：未配置（config 里设 intent.profile 启用意图识别）"
+      Just ic ->
+        T.concat
+          [ "主动插话：",
+            renderStickerState True sess.proactiveOverride,
+            "\n判定模型：", ic.icProfile,
+            "，冷却 ", tshow ic.icCooldownSeconds, "s",
+            "，每小时上限 ", tshow ic.icMaxPerHour,
+            "\n用 !proactive on/off/default 开关（被 @/引用的触发不受影响）"
+          ]
+  ProactiveSet mb -> do
+    updateSession t $ \s ->
+      ( case mb of
+          Just b -> Session.setProactiveOverride b s
+          Nothing -> Session.clearProactiveOverride s,
+        ()
+      )
+    logInfo "session: proactive override" $ object ["value" .= mb]
+    reply $ case mb of
+      Just True -> "✓ 主动插话 开 — bot 会看话题自己决定要不要接话"
+      Just False -> "✓ 主动插话 关 — 只有 @ 或引用才会触发"
+      Nothing ->
+        "✓ 主动插话回到配置默认（当前"
+          <> (case env.beIntent of Just _ -> "开"; Nothing -> "未配置")
+          <> "）"
   StickerList -> do
     rows <- Stickers.listRecentStickers 10
     reply (formatStickers rows)
@@ -548,6 +578,8 @@ helpText Nothing =
       "  !sticker on/off/default  开/关/回到配置默认 bot 主动发表情 (session 覆盖)",
       "  !sticker list            看最近识图完成的表情包",
       "  !sticker ban <sha前缀>   屏蔽某个表情（unban 恢复）",
+      "  !proactive               看主动插话状态（意图识别触发，不用 @ 也可能接话）",
+      "  !proactive on/off/default 开/关/回到配置默认 (session 覆盖)",
       "  !ps                      看本群在跑的后台任务",
       "  !ps --all                看所有群的任务",
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",

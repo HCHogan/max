@@ -106,7 +106,8 @@ emptySession =
       pinned = [],
       thinkingOverride = Nothing,
       debugOverride = Nothing,
-      stickerOverride = Nothing
+      stickerOverride = Nothing,
+      proactiveOverride = Nothing
     }
 
 baseInputs :: PromptInputs
@@ -120,6 +121,7 @@ baseInputs =
       pinnedItems = [],
       replyCtx = Nothing,
       multimodal = False,
+      proactive = False,
       groupBrief = [],
       groupMemories = [],
       userMemories = [],
@@ -494,3 +496,15 @@ spec = do
     it "does not let a photo's [image] swallow the sticker's caption in a mixed message" $ do
       (applyStickerCaptions caps (item "[image] 配 [动画表情]")).renderedText
         `shouldBe` "看这个 [image] 配 [表情包#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
+
+  describe "renderContext proactive turns" $ do
+    it "labels the trigger block honestly and offers [沉默]" $ do
+      let (_, _, ub) = splitMessages (fst (renderContext baseInputs {proactive = True}))
+      ub `shouldSatisfy` ("没人 @ 你" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[沉默]" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("[当前 @ 你的消息]" `T.isInfixOf`))
+
+    it "keeps the normal header for addressed turns" $ do
+      let (_, _, ub) = splitMessages (fst (renderContext baseInputs))
+      ub `shouldSatisfy` ("[当前 @ 你的消息]" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("没人 @ 你" `T.isInfixOf`))

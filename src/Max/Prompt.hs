@@ -8,6 +8,8 @@ module Max.Prompt
     renderContext,
     contextRoster,
     applyStickerCaptions,
+    -- * Shared line rendering (used by "Max.Intent")
+    renderHistoryLine,
   )
 where
 
@@ -78,6 +80,12 @@ data PromptInputs = PromptInputs
     -- | Whether the active profile accepts image content blocks.
     -- Toggles the format-guide wording for the @[image]@ marker.
     multimodal :: !Bool,
+    -- | 'True' when this turn was fired by the intent classifier
+    -- rather than an @-mention/quote: the trigger block is labelled
+    -- honestly ("no one @-ed you") and @[沉默]@ is explicitly
+    -- offered, so the model joins in only when it actually has
+    -- something to say.
+    proactive :: !Bool,
     -- | Pre-rendered 群信息 lines for the [当前环境] block (group
     -- name, 群主/管理员 — see 'Max.Roster.renderGroupBrief').  Empty
     -- for private chats or when the NapCat lookups failed.
@@ -191,13 +199,14 @@ buildContext ::
   Text -> -- default persona (used when session has no override)
   Int -> -- history window size
   Bool -> -- multimodal: load + attach inline images
+  Bool -> -- proactive: intent-classifier trigger (see 'PromptInputs.proactive')
   FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
   TimeZone -> -- display timezone for rendered timestamps
   [Text] -> -- pre-rendered 群信息 lines (see 'PromptInputs.groupBrief')
   Session ->
   GroupMessage ->
   Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
-buildContext defaultPersona n multimodal' blobRoot tz' brief s gm = do
+buildContext defaultPersona n multimodal' proactive' blobRoot tz' brief s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -299,6 +308,7 @@ buildContext defaultPersona n multimodal' blobRoot tz' brief s gm = do
           pinnedItems = pinnedItems'',
           replyCtx = replyCtx',
           multimodal = multimodal',
+          proactive = proactive',
           groupBrief = brief,
           groupMemories = groupMems,
           userMemories = userMems,
@@ -610,6 +620,7 @@ renderContext pi' =
         renderUser
           pi'.tz
           selfId'
+          pi'.proactive
           ambientNoDup
           pi'.replyCtx
           pi'.pinnedItems
@@ -690,13 +701,14 @@ mergeAssistantRuns = foldr step []
 renderUser ::
   TimeZone ->
   Int64 ->
+  Bool -> -- proactive trigger (no @-mention/quote)
   [HistoryItem] ->
   Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
   [HistoryItem] -> -- pinned items, in user pin order
   [Text] ->
   GroupMessage ->
   Text
-renderUser tz' selfId' ambient' replyCtx' pinnedItems' notes gm =
+renderUser tz' selfId' proactive' ambient' replyCtx' pinnedItems' notes gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -727,11 +739,21 @@ renderUser tz' selfId' ambient' replyCtx' pinnedItems' notes gm =
               T.intercalate "\n" (map ("  • " <>) notes),
               ""
             ],
-        [ "[当前 @ 你的消息]",
-          renderCurrentLine gm,
-          "",
-          "请回复当前消息。"
-        ]
+        if proactive'
+          then
+            [ "[当前消息 — 没人 @ 你，意图识别判断你可能想接话]",
+              renderCurrentLine gm,
+              "",
+              "你没有被 @。想接话就接，语气自然点，别表现得像被点名回答问题；\
+              \记得用 [↩#<消息id>] 引用你在回的那条。\
+              \不想接、没什么可说的、或话题跟你无关，就整条回复 [沉默]——主动插话宁缺毋滥。"
+            ]
+          else
+            [ "[当前 @ 你的消息]",
+              renderCurrentLine gm,
+              "",
+              "请回复当前消息。"
+            ]
       ]
 
 renderHistoryLine :: TimeZone -> Int64 -> HistoryItem -> Text

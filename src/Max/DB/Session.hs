@@ -57,13 +57,15 @@ data Row = Row
     rPinned :: !Value,
     rThinkingOverride :: !(Maybe Bool),
     rDebugOverride :: !(Maybe Bool),
-    rStickerOverride :: !(Maybe Bool)
+    rStickerOverride :: !(Maybe Bool),
+    rProactiveOverride :: !(Maybe Bool)
   }
 
 instance FromRow Row where
   fromRow =
     Row
       <$> field
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -84,7 +86,7 @@ fetchActiveOrInit ::
 fetchActiveOrInit (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT s.group_id, s.branch, s.model, s.persona, s.btw_notes, s.cleared_at, s.pinned, s.thinking_override, s.debug_override, s.sticker_override \
+      "SELECT s.group_id, s.branch, s.model, s.persona, s.btw_notes, s.cleared_at, s.pinned, s.thinking_override, s.debug_override, s.sticker_override, s.proactive_override \
       \  FROM session_active_branch a \
       \  JOIN sessions s \
       \    ON s.group_id = a.group_id AND s.branch = a.branch \
@@ -105,7 +107,8 @@ fetchActiveOrInit (GroupId gid) defaultModel = do
                 pinned = [],
                 thinkingOverride = Nothing,
                 debugOverride = Nothing,
-                stickerOverride = Nothing
+                stickerOverride = Nothing,
+                proactiveOverride = Nothing
               }
       upsertSession initial
       _ <-
@@ -123,19 +126,20 @@ upsertSession s = do
       pin = Jsonb (toJSON s.pinned)
   void $
     execute
-      "INSERT INTO sessions (group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override) \
-      \ VALUES (?,?,?,?,?,?,?,?,?,?) \
+      "INSERT INTO sessions (group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override) \
+      \ VALUES (?,?,?,?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (group_id, branch) DO UPDATE SET \
-      \   model             = EXCLUDED.model, \
-      \   persona           = EXCLUDED.persona, \
-      \   btw_notes         = EXCLUDED.btw_notes, \
-      \   cleared_at        = EXCLUDED.cleared_at, \
-      \   pinned            = EXCLUDED.pinned, \
-      \   thinking_override = EXCLUDED.thinking_override, \
-      \   debug_override    = EXCLUDED.debug_override, \
-      \   sticker_override  = EXCLUDED.sticker_override, \
-      \   updated_at        = now()"
-      ((gid, s.branch, s.model, s.persona, btw, s.clearedAt, pin) :. (s.thinkingOverride, s.debugOverride, s.stickerOverride))
+      \   model              = EXCLUDED.model, \
+      \   persona            = EXCLUDED.persona, \
+      \   btw_notes          = EXCLUDED.btw_notes, \
+      \   cleared_at         = EXCLUDED.cleared_at, \
+      \   pinned             = EXCLUDED.pinned, \
+      \   thinking_override  = EXCLUDED.thinking_override, \
+      \   debug_override     = EXCLUDED.debug_override, \
+      \   sticker_override   = EXCLUDED.sticker_override, \
+      \   proactive_override = EXCLUDED.proactive_override, \
+      \   updated_at         = now()"
+      ((gid, s.branch, s.model, s.persona, btw, s.clearedAt, pin) :. (s.thinkingOverride, s.debugOverride, s.stickerOverride, s.proactiveOverride))
 
 switchActiveBranch ::
   (WithConnection :> es, IOE :> es) =>
@@ -168,7 +172,7 @@ fetchBranch ::
 fetchBranch (GroupId gid) name defaultModel = do
   rows <-
     query
-      "SELECT group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override \
+      "SELECT group_id, branch, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override \
       \  FROM sessions \
       \  WHERE group_id = ? AND branch = ? \
       \  LIMIT 1"
@@ -224,7 +228,8 @@ rowToSession defaultModel r =
       pinned = decodeOrEmpty r.rPinned,
       thinkingOverride = r.rThinkingOverride,
       debugOverride = r.rDebugOverride,
-      stickerOverride = r.rStickerOverride
+      stickerOverride = r.rStickerOverride,
+      proactiveOverride = r.rProactiveOverride
     }
   where
     -- Tolerate junk in jsonb columns (e.g. older shape we don't know
