@@ -19,6 +19,7 @@ spec = do
       parseSilence "[silence:吃瓜]" `shouldBe` Just (Just 271)
       parseSilence "[silence:擦汗]" `shouldBe` Just (Just 97)
       parseSilence "[silence：疑问]" `shouldBe` Just (Just 32) -- full-width colon
+      parseSilence "[silence:NO]" `shouldBe` Just (Just 123) -- refused topic
 
     it "is silence-without-face for an unknown reason name" $
       parseSilence "[silence:量子纠缠]" `shouldBe` Just Nothing

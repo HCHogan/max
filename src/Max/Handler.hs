@@ -747,7 +747,10 @@ silenceFaces =
     ("哈欠", 104),
     ("吃瓜", 271),
     ("困", 25),
-    ("疑问", 32)
+    ("疑问", 32),
+    -- Refused topics (politics etc.) — the prompt directs the model
+    -- to [silence:NO] for those.
+    ("NO", 123)
   ]
 
 -- | Reaction used when a direct-trigger silence names no (known)
