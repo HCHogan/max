@@ -11,6 +11,7 @@ where
 import Data.Aeson
 import Data.Aeson.Types (Parser)
 import Data.Text (Text)
+import Data.Text qualified as T
 import OneBot.Segment (Segment)
 import OneBot.Types (GroupId, MessageId, UserId, isPrivateChat, privateChatUserId)
 
@@ -43,6 +44,9 @@ data Action
     -- face id (face_config.json QSid); 'False' removes the bot's own
     -- reaction again.
     SetMsgEmojiLike !MessageId !Int !Bool
+  | -- | 戳一戳 the user, in the conversation behind the (possibly
+    -- pseudo) group id.
+    SendPoke !GroupId !UserId
   deriving stock (Show)
 
 -- | Send to the conversation behind a (possibly pseudo) group id:
@@ -65,6 +69,7 @@ actionName = \case
   GetGroupMemberList {} -> "get_group_member_list"
   GetGroupInfo {} -> "get_group_info"
   SetMsgEmojiLike {} -> "set_msg_emoji_like"
+  SendPoke {} -> "send_poke"
 
 actionParams :: Action -> Value
 actionParams = \case
@@ -116,6 +121,14 @@ actionParams = \case
         "emoji_id" .= emojiId,
         "set" .= set'
       ]
+  -- NapCat's send_poke schema types the ids as strings; a group poke
+  -- carries the group, a friend poke only the target.
+  SendPoke gid target ->
+    let showT :: Show a => a -> Text
+        showT = T.pack . show
+     in object $
+          ["user_id" .= showT target]
+            <> ["group_id" .= showT gid | not (isPrivateChat gid)]
 
 data Envelope = Envelope
   { action :: !Action,

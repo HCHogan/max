@@ -2,6 +2,8 @@ module Max.Prompt
   ( -- * Pipeline
     buildContext,
 
+    TriggerOrigin (..),
+
     -- * Building blocks (exposed for tests)
     PromptInputs (..),
     PromptImage (..),
@@ -81,12 +83,11 @@ data PromptInputs = PromptInputs
     -- | Whether the active profile accepts image content blocks.
     -- Toggles the format-guide wording for the @[image]@ marker.
     multimodal :: !Bool,
-    -- | 'True' when this turn was fired by the intent classifier
-    -- rather than an @-mention/quote: the trigger block is labelled
-    -- honestly ("no one @-ed you") and @[silence]@ is explicitly
-    -- offered, so the model joins in only when it actually has
-    -- something to say.
-    proactive :: !Bool,
+    -- | What woke the bot — see 'TriggerOrigin'.  The trigger block
+    -- is labelled honestly per origin: proactive turns get the "no
+    -- one @-ed you" framing with @[silence]@ explicitly offered; poke
+    -- turns say who poked and skip the (empty) message line.
+    origin :: !TriggerOrigin,
     -- | Pre-rendered 群信息 lines for the [environment] block (group
     -- name, 群主/管理员 — see 'Max.Roster.renderGroupBrief').  Empty
     -- for private chats or when the NapCat lookups failed.
@@ -111,6 +112,18 @@ data PromptInputs = PromptInputs
     -- context lines' 'receivedAt' are stored UTC; this localizes them).
     tz :: !TimeZone
   }
+
+-- | What woke the bot for this turn.
+data TriggerOrigin
+  = -- | A direct @-mention, reply-to-bot, private message, or command.
+    OriginDirect
+  | -- | The intent classifier decided the bot might want to join in
+    -- (no one addressed it).
+    OriginProactive
+  | -- | Someone poked (戳一戳) the bot — a contentless nudge; the
+    -- synthesized trigger 'GroupMessage' has no message id or text.
+    OriginPoke
+  deriving stock (Show, Eq)
 
 -- | One inline image for the final user message: a data URL plus a
 -- text label naming the source message (\"[HH:MM \<name\>] 消息里的
@@ -200,14 +213,14 @@ buildContext ::
   Text -> -- default persona (used when session has no override)
   Int -> -- history window size
   Bool -> -- multimodal: load + attach inline images
-  Bool -> -- proactive: intent-classifier trigger (see 'PromptInputs.proactive')
+  TriggerOrigin -> -- what woke the bot (see 'PromptInputs.origin')
   FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
   TimeZone -> -- display timezone for rendered timestamps
   [Text] -> -- pre-rendered 群信息 lines (see 'PromptInputs.groupBrief')
   Session ->
   GroupMessage ->
   Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
-buildContext defaultPersona n multimodal' proactive' blobRoot tz' brief s gm = do
+buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -309,7 +322,7 @@ buildContext defaultPersona n multimodal' proactive' blobRoot tz' brief s gm = d
           pinnedItems = pinnedItems'',
           replyCtx = replyCtx',
           multimodal = multimodal',
-          proactive = proactive',
+          origin = origin',
           groupBrief = brief,
           groupMemories = groupMems,
           userMemories = userMems,
@@ -622,7 +635,7 @@ renderContext pi' =
         renderUser
           pi'.tz
           selfId'
-          pi'.proactive
+          pi'.origin
           ambientNoDup
           pi'.replyCtx
           pi'.pinnedItems
@@ -703,14 +716,14 @@ mergeAssistantRuns = foldr step []
 renderUser ::
   TimeZone ->
   Int64 ->
-  Bool -> -- proactive trigger (no @-mention/quote)
+  TriggerOrigin ->
   [HistoryItem] ->
   Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
   [HistoryItem] -> -- pinned items, in user pin order
   [Text] ->
   GroupMessage ->
   Text
-renderUser tz' selfId' proactive' ambient' replyCtx' pinnedItems' notes gm =
+renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' notes gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -741,8 +754,8 @@ renderUser tz' selfId' proactive' ambient' replyCtx' pinnedItems' notes gm =
               T.intercalate "\n" (map ("  • " <>) notes),
               ""
             ],
-        if proactive'
-          then
+        case origin' of
+          OriginProactive ->
             [ "[current message — 没人 @ 你，意图识别判断你可能想接话]",
               renderCurrentLine gm,
               "",
@@ -751,7 +764,15 @@ renderUser tz' selfId' proactive' ambient' replyCtx' pinnedItems' notes gm =
               \记得用 [↩#<msgid>] 引用你在回的那条。\
               \不想接、没什么可说的、或话题跟你无关，就整条回复 [silence]——主动插话宁缺毋滥。"
             ]
-          else
+          OriginPoke ->
+            [ "[current message — 戳一戳]",
+              senderDisplayName gm <> " 戳了戳你。没有文字，就是柔和版的 @。",
+              "",
+              "结合上下文猜猜 TA 想干嘛：可能在催你、想让你看看最新消息、\
+              \或者只是逗你。简短回应，一两句就够；也可以只调用 poke 工具\
+              \戳回去，然后回复 [silence]。"
+            ]
+          OriginDirect ->
             [ "[current message]",
               renderCurrentLine gm,
               "",

@@ -37,9 +37,9 @@ import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Persistence (PersistMode, isEphemeral)
 import Max.Time (fmtDateHM)
-import OneBot.Action (Response (..), sendChatMsg)
+import OneBot.Action (Action (..), Response (..), sendChatMsg)
 import OneBot.Segment (Segment (..), segmentMentions)
-import OneBot.Types (GroupId (..), MessageId (..), isPrivateChat)
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 builtinsFor ::
   ( WithConnection :> es,
@@ -57,7 +57,8 @@ builtinsFor ::
 builtinsFor tz mEmbed dc =
   [ getMessageByIdTool tz,
     searchMessagesTool tz mEmbed dc.dcGroupId,
-    sayTool dc
+    sayTool dc,
+    pokeTool dc
   ]
 
 --------------------------------------------------------------------------------
@@ -354,10 +355,11 @@ sayTool dc =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (msg :: Text) -> do
           -- Same outbound treatment as the final reply: quote the
-          -- trigger, convert member-listed @<qq> spans to real ats
-          -- (groups only — private at-segments render poorly).
+          -- trigger (unless there is none — poke dispatches carry the
+          -- id-0 sentinel), convert member-listed @<qq> spans to real
+          -- ats (groups only — private at-segments render poorly).
           let segs =
-                [SegReply dc.dcMessageId]
+                [SegReply dc.dcMessageId | dc.dcMessageId /= MessageId 0]
                   <> if isPrivateChat dc.dcGroupId
                     then [SegText (T.strip msg)]
                     else
@@ -384,6 +386,48 @@ sayTool dc =
                       logAttention "say: no message_id in response" $
                         object ["payload" .= payload]
                   logInfo "say: sent" $ object ["len" .= T.length msg, "ephemeral" .= ephemeral]
+                  pure $ Right (object ["ok" .= True])
+    }
+
+--------------------------------------------------------------------------------
+-- poke — 戳一戳
+
+pokeTool ::
+  (NapCat :> es, Log :> es, IOE :> es) =>
+  DispatchContext ->
+  Tool es
+pokeTool dc =
+  Tool
+    { toolName = "poke",
+      toolDescription =
+        T.unwords
+          [ "戳一戳（QQ 的轻互动，无文字）。适合代替说话的轻回应：",
+            "回应别人戳你、提醒某人看消息、打招呼。",
+            "一次任务最多戳一下，别对同一个人连戳。"
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "qq"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("要戳的人的 QQ号" :: Text)
+                      ]
+                ],
+            "required" .= (["qq"] :: [Text])
+          ],
+      toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "qq")) args of
+        Left e -> pure $ Left ("bad args: " <> T.pack e)
+        Right (qq :: Int64) -> do
+          eres <- callAction (SendPoke dc.dcGroupId (UserId qq)) 10000
+          case eres of
+            Left err -> pure $ Left ("poke 失败: " <> err)
+            Right (Response _ rc _ _)
+              | rc /= 0 -> pure $ Left ("poke retcode " <> T.pack (show rc))
+              | otherwise -> do
+                  logInfo "poke: sent" $ object ["qq" .= qq]
                   pure $ Right (object ["ok" .= True])
     }
 

@@ -3,7 +3,7 @@ module OneBot.EventSpec (spec) where
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.Text (Text)
-import OneBot.Event (Event (..), GroupMessage (..), parseEvent)
+import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), parseEvent)
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
@@ -22,6 +22,45 @@ spec = describe "parseEvent" $ do
         gm.groupId `shouldBe` GroupId (-2001)
         gm.userId `shouldBe` UserId 2001
       other -> expectationFailure ("expected EvGroupMessage, got: " <> show other)
+
+  it "parses a group poke notice" $
+    case parseEvent (pokeEvent ["group_id" .= (7777 :: Int)]) of
+      Right (EvPoke pk) -> do
+        pk.pkGroupId `shouldBe` GroupId 7777
+        pk.pkUserId `shouldBe` UserId 2001
+        pk.pkTargetId `shouldBe` UserId 1000
+        pk.pkSelfId `shouldBe` UserId 1000
+      other -> expectationFailure ("expected EvPoke, got: " <> show other)
+
+  it "parses a friend poke onto the pseudo group id -user_id" $
+    case parseEvent (pokeEvent []) of
+      Right (EvPoke pk) -> do
+        pk.pkGroupId `shouldBe` GroupId (-2001)
+        pk.pkUserId `shouldBe` UserId 2001
+      other -> expectationFailure ("expected EvPoke, got: " <> show other)
+
+  it "leaves other notify notices as EvRaw" $
+    case parseEvent
+      ( object
+          [ "post_type" .= ("notice" :: Text),
+            "notice_type" .= ("notify" :: Text),
+            "sub_type" .= ("lucky_king" :: Text)
+          ]
+      ) of
+      Right (EvRaw _) -> pure ()
+      other -> expectationFailure ("expected EvRaw, got: " <> show other)
+
+pokeEvent :: [Pair] -> Value
+pokeEvent extra =
+  object $
+    [ "post_type" .= ("notice" :: Text),
+      "notice_type" .= ("notify" :: Text),
+      "sub_type" .= ("poke" :: Text),
+      "self_id" .= (1000 :: Int),
+      "user_id" .= (2001 :: Int),
+      "target_id" .= (1000 :: Int)
+    ]
+      <> extra
 
 msgEvent :: Text -> [Pair] -> Value
 msgEvent kind extra =

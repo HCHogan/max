@@ -1,6 +1,7 @@
 module OneBot.Event
   ( Event (..),
     GroupMessage (..),
+    PokeEvent (..),
     Sender (..),
     parseEvent,
   )
@@ -37,10 +38,23 @@ data GroupMessage = GroupMessage
   }
   deriving stock (Show)
 
+-- | A 戳一戳 (poke) notice.  Friend pokes ride the same pseudo group
+-- id scheme as private messages.
+data PokeEvent = PokeEvent
+  { pkSelfId :: !UserId,
+    pkGroupId :: !GroupId,
+    -- | Who poked.
+    pkUserId :: !UserId,
+    -- | Who got poked.
+    pkTargetId :: !UserId
+  }
+  deriving stock (Show)
+
 -- | High-level event we care about. Anything we don't decode lands in 'EvRaw'
 -- with the original 'Value' so it can be logged or revisited later.
 data Event
   = EvGroupMessage !GroupMessage
+  | EvPoke !PokeEvent
   | EvHeartbeat
   | EvLifecycle !Text
   | EvRaw !Value
@@ -67,8 +81,26 @@ eventParser v@(Object o) = do
           sub <- o .:? "sub_type" .!= "unknown"
           pure (EvLifecycle sub)
         _ -> pure (EvRaw v)
+    Just "notice" -> do
+      noticeType <- o .:? "notice_type" :: Parser (Maybe Text)
+      subType <- o .:? "sub_type" :: Parser (Maybe Text)
+      case (noticeType, subType) of
+        (Just "notify", Just "poke") -> EvPoke <$> parsePoke o
+        _ -> pure (EvRaw v)
     _ -> pure (EvRaw v)
 eventParser v = pure (EvRaw v)
+
+-- | NapCat poke notice: @user_id@ poked @target_id@; @group_id@ is
+-- absent for friend pokes, which we map to the poker's pseudo group.
+parsePoke :: Object -> Parser PokeEvent
+parsePoke o = do
+  uid <- o .: "user_id"
+  mGid <- o .:? "group_id"
+  PokeEvent
+    <$> o .: "self_id"
+    <*> pure (maybe (privateChatGroupId uid) id mGid)
+    <*> pure uid
+    <*> o .: "target_id"
 
 parseGroupMessage :: Object -> Parser GroupMessage
 parseGroupMessage o =

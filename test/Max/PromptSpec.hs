@@ -9,7 +9,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
-import Max.Prompt (PromptImage (..), PromptInputs (..), applyStickerCaptions, renderContext)
+import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, renderContext)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -120,7 +120,7 @@ baseInputs =
       pinnedItems = [],
       replyCtx = Nothing,
       multimodal = False,
-      proactive = False,
+      origin = OriginDirect,
       groupBrief = [],
       groupMemories = [],
       userMemories = [],
@@ -502,7 +502,7 @@ spec = do
 
   describe "renderContext proactive turns" $ do
     it "labels the trigger block honestly and offers [silence]" $ do
-      let (_, _, ub) = splitMessages (fst (renderContext baseInputs {proactive = True}))
+      let (_, _, ub) = splitMessages (fst (renderContext baseInputs {origin = OriginProactive}))
       ub `shouldSatisfy` ("没人 @ 你" `T.isInfixOf`)
       ub `shouldSatisfy` ("[silence]" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("[current message]" `T.isInfixOf`))
@@ -511,3 +511,16 @@ spec = do
       let (_, _, ub) = splitMessages (fst (renderContext baseInputs))
       ub `shouldSatisfy` ("[current message]" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("没人 @ 你" `T.isInfixOf`))
+
+  describe "renderContext poke turns" $ do
+    it "names the poker and shows no message line" $ do
+      let pokeGm =
+            (triggerMsg [])
+              { messageId = MessageId 0,
+                sender = Sender (UserId memberId) (Just "Alice") Nothing
+              }
+          inp = baseInputs {origin = OriginPoke, triggerMessage = pokeGm}
+          (_, _, ub) = splitMessages (fst (renderContext inp))
+      ub `shouldSatisfy` ("[current message — 戳一戳]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("Alice 戳了戳你" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("[#0]" `T.isInfixOf`))

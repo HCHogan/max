@@ -16,6 +16,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Char (isDigit)
 import Data.Int (Int64)
+import Data.List (find)
 import Data.Maybe (listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -44,8 +45,8 @@ import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
-import Max.Prompt (buildContext, renderCurrentLine, renderHistoryLine)
-import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, renderGroupBrief)
+import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
+import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Tasks (TaskCancelled (..), listTasks, pushBtwToLatest)
 import Max.Render (renderTableImage)
@@ -53,7 +54,7 @@ import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyToke
 import Max.Sticker (resolveSticker)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..), Response (..), sendChatMsg)
-import OneBot.Event (Event (..), GroupMessage (..))
+import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
 import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
@@ -133,6 +134,7 @@ handleEvents q imgQ fwdQ fileQ mIntent = loop
           liftIO (enqueueForwards fwdQ gm)
           enqueueFiles fileQ gm
           onGroupMessage mIntent gm
+        EvPoke pk -> onPoke mIntent pk
       loop
 
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
@@ -189,7 +191,70 @@ onGroupMessage mIntent gm = do
     TriggerPong -> clearIntent >> sendPong gm
     TriggerCommand body -> clearIntent >> dispatchCommand gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
-    TriggerLLM _ -> clearIntent >> dispatchLLM False gm
+    TriggerLLM _ -> clearIntent >> dispatchLLM OriginDirect gm
+
+-- | A 戳一戳 aimed at the bot: a contentless direct wake, the soft
+-- version of an @.  If the group already has a running task the poke
+-- reads as a nudge and goes into its btw inbox; otherwise it starts a
+-- normal dispatch with 'OriginPoke' so the prompt says honestly who
+-- poked (and that there is no message).  Pokes between other members,
+-- and echoes of the bot's own outbound pokes, are ignored.
+onPoke ::
+  ( Log :> es,
+    WithConnection :> es,
+    NapCat :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader PersistMode :> es,
+    Reader BotEnv :> es,
+    IOE :> es
+  ) =>
+  Maybe IntentState ->
+  PokeEvent ->
+  Eff es ()
+onPoke mIntent pk
+  | pk.pkTargetId /= pk.pkSelfId || pk.pkUserId == pk.pkSelfId = pure ()
+  | otherwise = do
+      env :: BotEnv <- ask
+      let GroupId gidRaw = pk.pkGroupId
+          UserId pokerRaw = pk.pkUserId
+      logInfo "poked" $ object ["group_id" .= gidRaw, "user_id" .= pokerRaw]
+      -- Same as a direct trigger: the poke supersedes any pending
+      -- proactive classification for this group.
+      for_ mIntent $ \st -> liftIO (clearPendingIntent st pk.pkGroupId)
+      -- Best-effort display name for the poker (groups only; the
+      -- private-chat peer needs no introduction).
+      mName <-
+        if isPrivateChat pk.pkGroupId
+          then pure Nothing
+          else do
+            members <- fetchGroupMembers pk.pkGroupId
+            pure (memberName <$> (find (\m -> m.mUserId == pk.pkUserId) =<< members))
+      let pokerName = maybe (T.pack (show pokerRaw)) id mName
+      injected <-
+        liftIO (pushBtwToLatest env.beTasks pk.pkGroupId (pokerName <> " 戳了戳你"))
+      if injected
+        then
+          logInfo "poke: injected into running task" $
+            object ["group_id" .= gidRaw]
+        else dispatchLLM OriginPoke (pokeTrigger pk mName)
+
+-- | Synthesize the trigger 'GroupMessage' for a poke dispatch.  There
+-- is no real message: id 0 is the "no trigger message" sentinel
+-- (nothing quotes or reacts to it — see 'Max.Tools.sayTool') and the
+-- segment list is empty ('OriginPoke' rendering never shows it).
+pokeTrigger :: PokeEvent -> Maybe T.Text -> GroupMessage
+pokeTrigger pk mName =
+  GroupMessage
+    { selfId = pk.pkSelfId,
+      groupId = pk.pkGroupId,
+      userId = pk.pkUserId,
+      messageId = MessageId 0,
+      message = [],
+      rawMessage = "",
+      sender = Sender pk.pkUserId mName Nothing
+    }
 
 --------------------------------------------------------------------------------
 -- Commands.
@@ -233,7 +298,7 @@ dispatchCommand gm body = localDomain "cmd" $ do
                         SegText (" " <> askBody)
                       ]
                   }
-          withEphemeral $ dispatchLLM False virtualGm
+          withEphemeral $ dispatchLLM OriginDirect virtualGm
 
 --------------------------------------------------------------------------------
 -- LLM dispatch.
@@ -270,12 +335,12 @@ dispatchProactive ::
   ) =>
   GroupMessage ->
   Eff es ()
-dispatchProactive = dispatchLLM True
+dispatchProactive = dispatchLLM OriginProactive
 
 -- | Spawn an async to build the prompt, call the LLM, post the reply,
 -- and append the (user, assistant) turn to the session history.
--- The 'Bool' marks a proactive (intent-classifier) turn — see
--- 'Max.Prompt.PromptInputs.proactive'.
+-- The 'TriggerOrigin' says what woke the bot — see
+-- 'Max.Prompt.PromptInputs.origin'.
 dispatchLLM ::
   ( Log :> es,
     WithConnection :> es,
@@ -287,10 +352,10 @@ dispatchLLM ::
     Reader BotEnv :> es,
     IOE :> es
   ) =>
-  Bool ->
+  TriggerOrigin ->
   GroupMessage ->
   Eff es ()
-dispatchLLM proactive gm = void $ async $
+dispatchLLM origin gm = void $ async $
   localDomain "llm" $ do
     let UserId fromRaw = gm.userId
         GroupId gidRaw = gm.groupId
@@ -300,7 +365,7 @@ dispatchLLM proactive gm = void $ async $
         [ "group_id" .= gidRaw,
           "user_id" .= fromRaw,
           "message_id" .= midRaw,
-          "proactive" .= proactive
+          "origin" .= T.pack (show origin)
         ]
     -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
     -- (and every trySyncIO on the way up) — the outer 'catch' is the
@@ -329,7 +394,7 @@ dispatchLLM proactive gm = void $ async $
     -- appearing on random chatter (then vanishing on [silence])
     -- would leak that the bot was weighing in.
     withProcessingReaction act
-      | proactive = act
+      | origin /= OriginDirect = act
       | otherwise =
           (sendAction (SetMsgEmojiLike gm.messageId processingFaceId True) >> act)
             `finally` sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
@@ -346,7 +411,7 @@ dispatchLLM proactive gm = void $ async $
     tryInjectSupplement env s = do
       ephemeral <- isEphemeral
       case env.beIntent of
-        Just icfg | not proactive && not ephemeral -> do
+        Just icfg | origin == OriginDirect && not ephemeral -> do
           running <- liftIO (listTasks env.beTasks (Just gm.groupId))
           if null running
             then pure False
@@ -373,7 +438,7 @@ dispatchLLM proactive gm = void $ async $
     dispatch env t s = do
       multimodal <- isProfileMultimodal s.model
       (mentionable, brief) <- fetchGroupContext gm.groupId
-      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal proactive env.beBlobRoot env.beTimeZone brief s gm
+      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal origin env.beBlobRoot env.beTimeZone brief s gm
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
@@ -392,7 +457,7 @@ dispatchLLM proactive gm = void $ async $
                 "turns" .= result.turnsUsed,
                 "aborted" .= result.aborted
               ]
-          unless proactive $ do
+          when (origin == OriginDirect) $ do
             sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
             sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
         Just replyRaw -> handleReply env t s mentionable ctx drained result replyRaw
