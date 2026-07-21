@@ -755,11 +755,14 @@ renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' gm =
             ]
           OriginPoke ->
             [ "[current message — 戳一戳]",
-              senderDisplayName gm <> " 戳了戳你。没有文字，就是柔和版的 @。",
+              senderDisplayName gm <> " 戳了戳你。没有文字，这是柔和版的 @，意思通常是\"看一眼上面\"。",
               "",
-              "结合上下文猜猜 TA 想干嘛：可能在催你、想让你看看最新消息、\
-              \或者只是逗你。简短回应，一两句就够；也可以只调用 poke 工具\
-              \戳回去，然后回复 [silence]。"
+              "先翻上下文，重点看 TA 自己最近的发言：有可能是刚才有个问题\
+              \或话题没 @ 到你（主语不明确没触发你），戳你就是叫你回应它——\
+              \找到了就直接回答那条，用 [↩#<msgid>] 引用；也可能是在催你\
+              \正在做的事，那就报下进展。\
+              \上下文里如果找不到 TA 在等你回应的东西（比如就是逗你、\
+              \打个招呼）时，才用 poke 工具戳回去，然后回复 [silence]。"
             ]
           OriginDirect ->
             [ "[current message]",
