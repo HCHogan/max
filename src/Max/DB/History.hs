@@ -31,7 +31,11 @@ data HistoryItem = HistoryItem
     -- prefers it over the (global) nickname.
     senderCard :: !(Maybe Text),
     renderedText :: !Text,
-    receivedAt :: !UTCTime
+    receivedAt :: !UTCTime,
+    -- | The message this one quotes (@reply_to_message_id@ column), if
+    -- any.  Rendered as a @[↩#\<id\>]@ handle so the model can walk the
+    -- quote chain via @get_message_by_id@; 'Nothing' for non-replies.
+    replyTo :: !(Maybe Int64)
   }
   deriving stock (Show)
 
@@ -39,6 +43,7 @@ instance FromRow HistoryItem where
   fromRow =
     HistoryItem
       <$> field
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -71,7 +76,7 @@ fetchRecentInGroup gid excludeId since n = do
   rows <- case since of
     Nothing ->
       query
-        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
+        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND message_id <> ? \
@@ -82,7 +87,7 @@ fetchRecentInGroup gid excludeId since n = do
         (gid, excludeId, n)
     Just t ->
       query
-        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
+        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND message_id <> ? \
@@ -99,7 +104,7 @@ fetchMessage :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es (Maybe Hist
 fetchMessage mid = do
   rows <-
     query
-      "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
+      "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
       \  FROM messages \
       \  WHERE message_id = ? \
       \  LIMIT 1"
@@ -133,7 +138,7 @@ fetchMentionHistory gid botId excludeId since n = do
   rows <- case since of
     Nothing ->
       query
-        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at \
+        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at, m.reply_to_message_id \
         \  FROM messages m \
         \  WHERE m.group_id = ? \
         \    AND m.message_id <> ? \
@@ -148,7 +153,7 @@ fetchMentionHistory gid botId excludeId since n = do
         ((gid, excludeId, botId) :. (mentionLike :: Text, botId, n))
     Just t ->
       query
-        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at \
+        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at, m.reply_to_message_id \
         \  FROM messages m \
         \  WHERE m.group_id = ? \
         \    AND m.message_id <> ? \
@@ -174,7 +179,7 @@ fetchMessagesByIds [] = pure []
 fetchMessagesByIds ids = do
   rows <-
     query
-      "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
+      "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
       \  FROM messages \
       \  WHERE message_id IN ?"
       (Only (In ids))
@@ -194,7 +199,7 @@ fetchForwardChildren ::
 fetchForwardChildren containerId cap =
   query
     "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, \
-    \       COALESCE(original_sent_at, received_at) \
+    \       COALESCE(original_sent_at, received_at), reply_to_message_id \
     \  FROM messages \
     \  WHERE forwarded_in_message_id = ? \
     \  ORDER BY forward_position \

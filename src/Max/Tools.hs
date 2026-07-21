@@ -393,7 +393,7 @@ sayTool dc =
 
 historyItemSummary :: TimeZone -> HistoryItem -> Value
 historyItemSummary tz h =
-  object
+  object $
     [ "message_id" .= h.messageId,
       "sender_user_id" .= h.userId,
       -- 群名片 > 昵称 > QQ号, matching the prompt's context lines.
@@ -401,6 +401,10 @@ historyItemSummary tz h =
       "time" .= fmtDateHM tz h.receivedAt,
       "text" .= shorten 400 h.renderedText
     ]
+      -- The message this one quotes, so a quote chain is walkable one
+      -- get_message_by_id hop at a time (the same handle rendered as
+      -- [↩#<id>] in the prompt's context lines).
+      <> ["reply_to" .= r | Just r <- [h.replyTo]]
 
 shorten :: Int -> Text -> Text
 shorten n t

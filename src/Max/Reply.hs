@@ -21,14 +21,19 @@ module Max.Reply
     planReply,
     maxReplyChunks,
     latexToUnicode,
+    ReplyPiece (..),
+    parseReplyTokens,
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.Char (isAlpha, isDigit, isSpace)
+import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Read qualified as TR
 
 -- | One outgoing message.  'TableChunk' carries the markdown table
 -- source — the caller renders it to an image and falls back to
@@ -57,6 +62,94 @@ planReply body =
   where
     explode (TableChunk t) = [TableChunk t]
     explode (TextChunk t) = map TextChunk (splitParagraphs (latexToUnicode t))
+
+--------------------------------------------------------------------------------
+-- Outbound placeholders: [↩#<id>] quotes and [表情包#<id>] stickers.
+
+-- | A parsed span of one planned text chunk.  'PieceText' still holds
+-- raw @\@\<qq\>@ spans — mention conversion happens later, per piece.
+data ReplyPiece
+  = PieceText !Text
+  | PieceSticker !Int64
+  | -- | A @[image#\<message_id\>]@ resend of a stored group image.
+    PieceImage !Int64
+  deriving stock (Show, Eq)
+
+-- | Pull the reply/sticker/image placeholders out of one planned text
+-- chunk.
+--
+--   * @[↩#\<id\>]@ — a quote.  The first one becomes the chunk's reply
+--     target ('fst' of the result); every @[↩#…]@ token is stripped
+--     from the text regardless of position.
+--   * @[表情包#\<id\>]@ — a sticker, becomes a 'PieceSticker'.  The
+--     inbound display form @[表情包#\<id\>: …]@ is accepted too (the
+--     trailing caption is ignored) so echoing what was seen still sends.
+--   * @[image#\<message_id\>]@ — resend a stored group image, becomes a
+--     'PieceImage' (the same handle the model reads inbound).
+--
+-- Anything that isn't a well-formed token stays literal 'PieceText'.
+-- Pure by design: the sticker/image ids are turned into segments by the
+-- effectful caller (see 'Max.Handler.sendAndPersistReply').
+parseReplyTokens :: Text -> (Maybe Int64, [ReplyPiece])
+parseReplyTokens = go
+  where
+    go t = case T.breakOn "[" t of
+      (before, rest)
+        | T.null rest -> (Nothing, prepend before [])
+        | otherwise -> case matchToken rest of
+            Just (TokReply n, rest') ->
+              let (mrid, ps) = go rest'
+               in (Just n <|> mrid, prepend before ps)
+            Just (TokSticker n, rest') ->
+              let (mrid, ps) = go rest'
+               in (mrid, prepend before (PieceSticker n : ps))
+            Just (TokImage n, rest') ->
+              let (mrid, ps) = go rest'
+               in (mrid, prepend before (PieceImage n : ps))
+            Nothing ->
+              let (mrid, ps) = go (T.drop 1 rest)
+               in (mrid, prepend (before <> "[") ps)
+
+    -- Fold literal text into the head 'PieceText', avoiding empties and
+    -- adjacent text pieces.
+    prepend s ps
+      | T.null s = ps
+      | otherwise = case ps of
+          (PieceText t : rest) -> PieceText (s <> t) : rest
+          _ -> PieceText s : ps
+
+data Token = TokReply !Int64 | TokSticker !Int64 | TokImage !Int64
+
+matchToken :: Text -> Maybe (Token, Text)
+matchToken t =
+  (do rest <- T.stripPrefix "[↩#" t; (n, r) <- idClose rest; pure (TokReply n, r))
+    <|> (do rest <- T.stripPrefix "[image#" t; (n, r) <- idClose rest; pure (TokImage n, r))
+    <|> (do rest <- T.stripPrefix "[表情包#" t; (n, r) <- stickerClose rest; pure (TokSticker n, r))
+  where
+    -- reply / image: digits then an immediate ']'.
+    idClose s =
+      let (digits, rest) = T.span isDigit s
+       in if T.null digits
+            then Nothing
+            else (,) <$> readInt64 digits <*> T.stripPrefix "]" rest
+    -- sticker: digits then ']', or ':' + caption (up to the next ']').
+    stickerClose s =
+      let (digits, rest) = T.span isDigit s
+       in if T.null digits
+            then Nothing
+            else do
+              n <- readInt64 digits
+              case T.uncons rest of
+                Just (']', r) -> Just (n, r)
+                Just (':', r') -> case T.breakOn "]" r' of
+                  (_, close) | not (T.null close) -> Just (n, T.drop 1 close)
+                  _ -> Nothing
+                _ -> Nothing
+
+readInt64 :: Text -> Maybe Int64
+readInt64 s = case TR.decimal s of
+  Right (n, "") -> Just n
+  _ -> Nothing
 
 --------------------------------------------------------------------------------
 -- Stage 1: carve out markdown tables.

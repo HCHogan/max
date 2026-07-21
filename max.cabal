@@ -78,6 +78,7 @@ library
         Max.Sandbox.Registry
         Max.Session
         Max.Session.Types
+        Max.Sticker
         Max.Stickers
         Max.Tasks
         Max.Time

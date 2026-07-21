@@ -1,6 +1,7 @@
 module Max.Handler
   ( handleEvents,
     stripStickerText,
+    stripBareImage,
     isSilentReply,
   )
 where
@@ -10,18 +11,22 @@ import Control.Monad (unless, void)
 import Data.Foldable (for_)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (parseEither)
+import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
+import Data.Char (isDigit)
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
 import Effectful.Exception (SomeException, catch)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL (WithConnection, query)
+import System.FilePath ((</>))
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
@@ -42,7 +47,8 @@ import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, renderGr
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Tasks (TaskCancelled (..))
 import Max.Render (renderTableImage)
-import Max.Reply (Chunk (..), chunkSource, planReply)
+import Max.Reply (Chunk (..), ReplyPiece (..), parseReplyTokens, planReply)
+import Max.Sticker (resolveSticker)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
@@ -288,13 +294,13 @@ dispatchLLM gm = void $ async $
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
           dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff mentionable toolImgs
       result <- agentTurn dc s.model s.thinkingOverride ctx
-      -- Stickers go out only via the send_sticker tool.  In history the
-      -- bot's past sticker sends render as "[表情包: …]" text, and weaker
-      -- models imitate that by *typing* the caption instead of calling
-      -- the tool — leaking the description into the group.  Strip any
-      -- such span as a hard backstop (the tool descriptions also tell
-      -- the model not to).
-      let stripped = T.strip (stripStickerText result.reply)
+      -- Real stickers/images are the [表情包#<id>] / [image#<id>]
+      -- tokens, resolved when the reply is sent.  The captionless
+      -- "[表情包: …]" and bare "[image]" forms are hallucinations — a
+      -- weaker model imitating the display style of something it saw —
+      -- so strip those as a backstop while leaving the id-carrying send
+      -- tokens intact (see 'stripStickerText' / 'stripBareImage').
+      let stripped = T.strip (stripBareImage (stripStickerText result.reply))
       if isSilentReply stripped
         then
           -- The model opted out of replying (see 'isSilentReply') —
@@ -315,7 +321,7 @@ dispatchLLM gm = void $ async $
           -- outbound message into the messages table.  That's where
           -- subsequent dispatches will read this turn's assistant reply
           -- back from when reconstructing mention history.
-          sendAndPersistReply gm mentionable stripped
+          sendAndPersistReply gm mentionable env.beBlobRoot stickersEff stripped
           -- Drain consumed btw notes — but only when persisting; an
           -- ephemeral dispatch (e.g. !btw one-shot) must not eat the
           -- queue (the notes are still waiting for a real turn).
@@ -366,19 +372,30 @@ replyText gm body =
 -- PNG via typst (falling back to the markdown source when rendering
 -- fails) — and persist each sent chunk into the messages table (so
 -- future dispatches can read this back as mention history, and a
--- reply to *any* chunk resolves as reply-to-bot).  Raw @\@\<qq\>@
--- spans the model wrote become real at-segments when the id passes
--- the membership check ('segmentMentions'); the model decides who
--- to @ — no at is auto-prepended, only the 'SegReply' quote.  A
--- table chunk
--- persists with its markdown source as rendered_text: the model
--- should see the table it wrote, not @[image]@.  The consecutive
--- bot rows this produces are merged back into one assistant turn at
+-- reply to *any* chunk resolves as reply-to-bot).
+--
+-- Outgoing placeholders are resolved per chunk ('parseReplyTokens'),
+-- which is what lets the model quote a different message from each
+-- paragraph and drop a sticker inline:
+--
+--   * a leading @[↩#\<id\>]@ becomes the chunk's 'SegReply' quote —
+--     nothing is auto-quoted any more, the model decides;
+--   * @[表情包#\<id\>]@ becomes a sticker segment ('resolveSticker'),
+--     an unknown id is dropped rather than failing the reply;
+--   * raw @\@\<qq\>@ spans become real at-segments when the id passes
+--     the membership check ('segmentMentions').
+--
+-- A chunk that resolves to no content (a lone @[↩#id]@, or only a bad
+-- sticker token) is skipped.  Each chunk persists with its *resolved*
+-- surface form as rendered_text (sticker tokens normalised to
+-- @[表情包#\<id\>: \<简介\>]@, the reply token dropped — it lives in the
+-- reply_to_message_id column), so what the model reads back next turn
+-- matches what it wrote.  A table chunk persists with its markdown
+-- source.  Consecutive bot rows are merged into one assistant turn at
 -- prompt build time (see 'Max.Prompt').  Uses 'callAction' to get
 -- NapCat's assigned @message_id@ per chunk; chunks are sent
 -- sequentially so ordering is guaranteed.  If a send or message_id
--- extraction fails, logs and moves on — the user still gets the
--- delivered chunks, only the bot's memory loses them.
+-- extraction fails, logs and moves on.
 sendAndPersistReply ::
   ( NapCat :> es,
     WithConnection :> es,
@@ -388,51 +405,84 @@ sendAndPersistReply ::
   ) =>
   GroupMessage ->
   Maybe (Set UserId) ->
+  FilePath -> -- blob store root (for inline sticker resolution)
+  Bool -> -- whether sticker sending is enabled for this group
   T.Text ->
   Eff es ()
-sendAndPersistReply gm mentionable body = do
+sendAndPersistReply gm mentionable blobRoot stickersOn body = do
   -- The reply already goes out over NapCat regardless — that's a
   -- real side effect we can't undo.  Only the messages-table write
   -- is gated, so an ephemeral turn doesn't show up in the next
   -- dispatch's mention history.
   ephemeral <- isEphemeral
-  for_ (zip [0 :: Int ..] (planReply body)) $ \(i, chunk) -> do
-    -- Only the first chunk quotes the trigger; follow-ups read as
-    -- continuation lines.
-    let prefix = [SegReply gm.messageId | i == 0]
-    content <- case chunk of
-      TextChunk t ->
-        pure (mentionSegs t)
-      TableChunk src -> do
-        rendered <- liftIO (renderTableImage src)
-        case rendered of
-          Right png ->
-            pure [imageSeg ("base64://" <> TE.decodeASCII (B64.encode png))]
-          Left err -> do
-            logAttention "table render failed, sending source" $
-              object ["error" .= err, "chunk" .= i]
-            pure [SegText src]
-    let segs = prefix <> content
-    callAction (sendChatMsg gm.groupId segs) 30000 >>= \case
-      Left err ->
-        logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
-      Right (Response _ rc payload _)
-        | rc /= 0 ->
-            logAttention "llm reply retcode bad" $ object ["retcode" .= rc, "chunk" .= i]
-        | otherwise -> case extractOutMid payload of
-            Nothing ->
-              logAttention "no message_id in send response" $
-                object ["payload" .= payload, "chunk" .= i]
-            Just outMid ->
-              unless ephemeral $
-                insertOutbound
-                  gm.groupId
-                  gm.selfId
-                  "max"
-                  (MessageId outMid)
-                  (Just (T.strip (chunkSource chunk)))
-                  segs
+  for_ (zip [0 :: Int ..] (planReply body)) $ \(i, chunk) ->
+    planChunk chunk >>= \case
+      Nothing -> pure ()
+      Just (segs, rendered) ->
+        callAction (sendChatMsg gm.groupId segs) 30000 >>= \case
+          Left err ->
+            logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
+          Right (Response _ rc payload _)
+            | rc /= 0 ->
+                logAttention "llm reply retcode bad" $ object ["retcode" .= rc, "chunk" .= i]
+            | otherwise -> case extractOutMid payload of
+                Nothing ->
+                  logAttention "no message_id in send response" $
+                    object ["payload" .= payload, "chunk" .= i]
+                Just outMid ->
+                  unless ephemeral $
+                    insertOutbound
+                      gm.groupId
+                      gm.selfId
+                      "max"
+                      (MessageId outMid)
+                      (Just (T.strip rendered))
+                      segs
   where
+    -- One chunk → 'Just' (segments to send, rendered_text to store) or
+    -- 'Nothing' to skip.
+    planChunk (TableChunk src) = do
+      rendered <- liftIO (renderTableImage src)
+      case rendered of
+        Right png ->
+          pure (Just ([imageSeg ("base64://" <> TE.decodeASCII (B64.encode png))], src))
+        Left err -> do
+          logAttention "table render failed, sending source" $ object ["error" .= err]
+          pure (Just ([SegText src], src))
+    planChunk (TextChunk t) = do
+      let (mReplyId, pieces) = parseReplyTokens t
+      (content, rendered) <- resolvePieces pieces
+      if null content
+        then pure Nothing
+        else
+          let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId]]
+           in pure (Just (prefix <> content, rendered))
+
+    -- Resolve parsed pieces into (segments, normalised rendered text).
+    resolvePieces pieces = do
+      parts <- traverse resolve pieces
+      pure (concatMap fst parts, T.concat (map snd parts))
+      where
+        resolve (PieceText t) = pure (mentionSegs t, t)
+        -- Sticker sending disabled for this group: drop the token
+        -- (the model shouldn't emit one, but never leak it as text).
+        resolve (PieceSticker _) | not stickersOn = pure ([], "")
+        resolve (PieceSticker sid) =
+          resolveSticker blobRoot sid >>= \case
+            Right (desc, segs) ->
+              pure (segs, "[表情包#" <> T.pack (show sid) <> ": " <> T.take 80 desc <> "]")
+            Left err -> do
+              logAttention "sticker placeholder unresolved" $
+                object ["id" .= sid, "error" .= err]
+              pure ([], "")
+        resolve (PieceImage mid) = do
+          segs <- messageImageSegs blobRoot mid
+          if null segs
+            then do
+              logAttention "image placeholder unresolved" $ object ["message_id" .= mid]
+              pure ([], "")
+            else pure (segs, "[image]")
+
     -- Private chats keep raw text: NapCat renders private
     -- at-segments poorly (see 'replySegs').  No member list (fetch
     -- failed) → convert on syntax alone rather than silently
@@ -481,9 +531,48 @@ stripMentions (UserId u) =
 isSilentReply :: T.Text -> Bool
 isSilentReply t = T.null t || t == "[沉默]"
 
+-- | Load every stored image of a message as outbound image segments
+-- (base64 over @docker@-free NapCat send), for resolving a
+-- @[image#\<id\>]@ resend token.  Empty when the message has no stored
+-- images or a blob can't be read — the caller then drops the token
+-- rather than sending a broken message.
+messageImageSegs ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  FilePath ->
+  Int64 ->
+  Eff es [Segment]
+messageImageSegs blobRoot mid = do
+  rows <-
+    query
+      "SELECT i.local_path \
+      \  FROM message_images mi \
+      \  JOIN images i ON i.sha256 = mi.sha256 \
+      \  WHERE mi.message_id = ? \
+      \  ORDER BY mi.seg_index"
+      (Only mid)
+  fmap concat . traverse loadOne $ (rows :: [Only T.Text])
+  where
+    loadOne (Only path) =
+      trySync (liftIO (BS.readFile (blobRoot </> T.unpack path))) >>= \case
+        Left e -> do
+          logAttention "image resend: blob read failed" $
+            object ["path" .= path, "error" .= T.pack (show (e :: SomeException))]
+          pure []
+        Right bytes ->
+          pure [imageSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]
+
+-- | Drop a bare @[image]@ marker the model echoed from context — the
+-- real resend token is @[image#\<id\>]@, which is left intact because it
+-- isn't the literal @[image]@ substring (see 'sendAndPersistReply').
+stripBareImage :: T.Text -> T.Text
+stripBareImage = T.replace "[image]" ""
+
 -- | Remove any "[表情包: …]" / "[表情包…]" spans a model hallucinated
--- into its reply text (see call site).  Scans for the "[表情包" opener
--- and drops through the next "]"; leaves everything else untouched.
+-- into its reply text (see call site) — the caption *display* form.
+-- The real send token "[表情包#\<id\>…]" is left intact: it's the
+-- placeholder the reply post-processor turns into an actual sticker
+-- ('sendAndPersistReply'), so stripping it would break sending.  Scans
+-- for the "[表情包" opener and drops through the next "]".
 stripStickerText :: T.Text -> T.Text
 stripStickerText = go
   where
@@ -493,7 +582,13 @@ stripStickerText = go
         | T.null rest -> t -- no opener left
         | otherwise ->
             let afterOpener = T.drop (T.length opener) rest
-             in case T.breakOn "]" afterOpener of
-                  (_, close)
-                    | T.null close -> before -- unterminated: drop the tail too
-                    | otherwise -> before <> go (T.drop 1 close)
+             in if isSendToken afterOpener
+                  then before <> opener <> go afterOpener -- keep the token, scan on
+                  else case T.breakOn "]" afterOpener of
+                    (_, close)
+                      | T.null close -> before -- unterminated: drop the tail too
+                      | otherwise -> before <> go (T.drop 1 close)
+    -- "[表情包#<digit>…" is a real send handle, not a hallucinated caption.
+    isSendToken s = case T.uncons s of
+      Just ('#', r) -> maybe False (isDigit . fst) (T.uncons r)
+      _ -> False

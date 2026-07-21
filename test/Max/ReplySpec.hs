@@ -4,9 +4,11 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Reply
   ( Chunk (..),
+    ReplyPiece (..),
     chunkSource,
     latexToUnicode,
     maxReplyChunks,
+    parseReplyTokens,
     planReply,
   )
 import Test.Hspec
@@ -73,6 +75,43 @@ spec = do
     it "reply that is only a table yields just the TableChunk" $
       planReply "| a |\n|---|\n| 1 |"
         `shouldBe` [TableChunk "| a |\n|---|\n| 1 |"]
+
+  describe "parseReplyTokens" $ do
+    it "hoists a leading [↩#id] and strips it from the text" $
+      parseReplyTokens "[↩#8472] 说得对"
+        `shouldBe` (Just 8472, [PieceText " 说得对"])
+
+    it "returns no reply and one text piece for plain text" $
+      parseReplyTokens "就一句话" `shouldBe` (Nothing, [PieceText "就一句话"])
+
+    it "splits an inline [表情包#id] out of the surrounding text" $
+      parseReplyTokens "哈哈 [表情包#42] 绝了"
+        `shouldBe` (Nothing, [PieceText "哈哈 ", PieceSticker 42, PieceText " 绝了"])
+
+    it "accepts the captioned [表情包#id: …] form and ignores the caption" $
+      parseReplyTokens "[表情包#42: 猫猫震惊]"
+        `shouldBe` (Nothing, [PieceSticker 42])
+
+    it "splits an inline [image#id] resend token out of the text" $
+      parseReplyTokens "看这张 [image#123] 笑死"
+        `shouldBe` (Nothing, [PieceText "看这张 ", PieceImage 123, PieceText " 笑死"])
+
+    it "does not treat a bare [image] as a resend token" $
+      parseReplyTokens "这是 [image] 标记"
+        `shouldBe` (Nothing, [PieceText "这是 [image] 标记"])
+
+    it "keeps the first reply id when several appear" $
+      parseReplyTokens "[↩#1] a [↩#2] b"
+        `shouldBe` (Just 1, [PieceText " a  b"])
+
+    it "combines a quote and a sticker in one chunk" $
+      parseReplyTokens "[↩#9] 看这个 [表情包#3]"
+        `shouldBe` (Just 9, [PieceText " 看这个 ", PieceSticker 3])
+
+    it "leaves a malformed token as literal text" $ do
+      parseReplyTokens "[表情包#]" `shouldBe` (Nothing, [PieceText "[表情包#]"])
+      parseReplyTokens "[↩#abc]" `shouldBe` (Nothing, [PieceText "[↩#abc]"])
+      parseReplyTokens "[image#]" `shouldBe` (Nothing, [PieceText "[image#]"])
 
   describe "latexToUnicode" $ do
     it "converts inline \\(..\\) math" $

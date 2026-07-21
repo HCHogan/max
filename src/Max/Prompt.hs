@@ -150,20 +150,23 @@ systemPrompt multimodal' private envText persona mMemBlock =
       "  - 表格是例外：需要对比/罗列数据时可以写 markdown 表格，它会被渲染成图片发出。",
       "  - 数学式直接写 unicode（如 3×10⁸、α ≤ π/2），不要写 LaTeX——QQ 渲染不了。",
       "  - 不寒暄、不总结收尾、不复读问题，直接说事。",
+      "  - 想发表情包就把 [表情包#<id>] 单独写成一段（id 取自历史里出现过的表情，或先用 find_stickers 搜一个）；别把表情的文字描述打出来当话说。",
       "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环，或者你只是被顺带提到）就整条回复只写 [沉默]，什么都不会发出去。正经问题不许用这个敷衍。"
     ]
-      <> [ "  - 你的回复会自动引用触发消息，不必 @ 发话人；确实要提醒某人（含发话人）时写 @<QQ号>（对照表见 [当前环境]），发出时会转成真正的 @。"
+      <> [ "  - 回复不会自动引用；想引用某条消息就在那段话开头写 [↩#<消息id>]（分段回复时每段可各自引用不同消息）。要 @ 某人写 @<QQ号>（对照表见 [当前环境]），发出时会转成真正的 @。"
          | not private
          ]
       <> [ "",
            "上下文标记：",
-           "  [HH:MM <昵称>]: 内容        — 一条历史消息",
-           "  [↩ 引用 ...]                — 用户引用的那条消息",
+           "  [HH:MM <昵称> #<消息id>]: 内容 — 一条历史消息；末尾 #后是它的消息id，写 [↩#<消息id>] 就能引用它",
+           "  [↩ 引用 ...]                — 用户引用的那条消息（内容已展开）",
+           "  [↩#<消息id>]                — 这条消息引用了另一条；你也能在段首写它来引用，或用 get_message_by_id 展开看不到的那条",
+           "  [表情包#<id>: <简介>]        — 一个表情包；把 [表情包#<id>] 写进回复即可发出同一个",
            if multimodal'
              then "  [image]                     — 图片；引用/pin/当前消息的图会附在消息末尾并标注来源"
              else "  [image]                     — 图片（你看不到内容，可以请用户描述）"
          ]
-      <> [ "  [image#<id>]                — 群历史里的图片，默认不加载；跟当前话题相关时才用 view_image 传 <id> 查看"
+      <> [ "  [image#<id>]                — 群历史里的图片，默认不加载；用 view_image 传 <id> 查看，或把 [image#<id>] 写进回复把它转发到群里"
          | multimodal'
          ]
       <> [ "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
@@ -396,38 +399,42 @@ tagImageMarkers tagged h
 stickerCaptionsFor ::
   (WithConnection :> es, IOE :> es) =>
   [Int64] ->
-  Eff es (Map.Map Int64 [Text])
+  Eff es (Map.Map Int64 [(Int64, Text)])
 stickerCaptionsFor [] = pure Map.empty
 stickerCaptionsFor ids = do
   rows <-
     query
-      "SELECT mi.message_id, s.description \
+      "SELECT mi.message_id, s.id, s.description \
       \  FROM message_images mi \
       \  JOIN stickers s USING (sha256) \
       \  WHERE mi.message_id IN ? \
       \    AND s.description IS NOT NULL AND NOT s.banned \
       \  ORDER BY mi.message_id, mi.seg_index"
       (Only (In ids))
-  pure (Map.fromListWith (flip (<>)) [(m, [d]) | (m, d) <- rows :: [(Int64, Text)]])
+  pure (Map.fromListWith (flip (<>)) [(m, [(sid, d)]) | (m, sid, d) <- rows :: [(Int64, Int64, Text)]])
 
 -- | Swap sticker markers in a history item's rendered text for their
 -- captions.  Markers are consumed left-to-right in seg order;
 -- @[image]@ is accepted too because rows persisted before sub_type
 -- survived parsing rendered stickers that way.
-applyStickerCaptions :: Map.Map Int64 [Text] -> HistoryItem -> HistoryItem
+applyStickerCaptions :: Map.Map Int64 [(Int64, Text)] -> HistoryItem -> HistoryItem
 applyStickerCaptions caps h = case Map.lookup h.messageId caps of
   Nothing -> h
   Just ds -> h {renderedText = replaceStickerMarkers ds h.renderedText}
 
-replaceStickerMarkers :: [Text] -> Text -> Text
+-- | Swap opaque sticker markers for "[表情包#\<id\>: \<简介\>]".  The
+-- @\#\<id\>@ is @stickers.id@ — the same handle the model writes back
+-- to *send* that sticker, so what it reads inbound and what it emits
+-- outbound share one form.
+replaceStickerMarkers :: [(Int64, Text)] -> Text -> Text
 replaceStickerMarkers ds0 = go ds0
   where
     markers = ["[动画表情]", "[mface]", "[image]"] :: [Text]
     go [] rest = rest
-    go (d : ds) rest = case firstMarker rest of
+    go ((sid, d) : ds) rest = case firstMarker rest of
       Nothing -> rest
       Just (pre, post) ->
-        pre <> "[表情包: " <> T.take 80 d <> "]" <> go ds post
+        pre <> "[表情包#" <> T.pack (show sid) <> ": " <> T.take 80 d <> "]" <> go ds post
     firstMarker rest =
       case sortOn fst [(T.length pre, m) | m <- markers, Just pre <- [findSub m rest]] of
         [] -> Nothing
@@ -718,11 +725,22 @@ renderUser tz' selfId' ambient' replyCtx' pinnedItems' notes gm =
 
 renderHistoryLine :: TimeZone -> Int64 -> HistoryItem -> Text
 renderHistoryLine tz' selfId' h =
-  "[" <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> "]: " <> oneLine h.renderedText
+  "[" <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> " #" <> T.pack (show h.messageId) <> "]: "
+    <> replyPrefix h
+    <> oneLine h.renderedText
 
 renderReplyLine :: TimeZone -> Int64 -> HistoryItem -> Text
 renderReplyLine tz' selfId' h =
-  "[↩ 引用 " <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> "]: " <> oneLine h.renderedText
+  "[↩ 引用 " <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> " #" <> T.pack (show h.messageId) <> "]: "
+    <> replyPrefix h
+    <> oneLine h.renderedText
+
+-- | If this message itself quotes another, a "[↩#\<id\>]" handle the
+-- model can expand with @get_message_by_id@ (and re-emit to quote the
+-- same message).  Empty for non-replies.  This keeps a quote chain
+-- walkable one hop at a time instead of recursively pre-expanding it.
+replyPrefix :: HistoryItem -> Text
+replyPrefix h = maybe "" (\r -> "[↩#" <> T.pack (show r) <> "] ") h.replyTo
 
 -- | The expanded contents of a quoted 转发聊天记录.  Lines carry the
 -- original send times; each line is truncated to keep a huge bundle
@@ -761,7 +779,8 @@ renderReplyFiles xs =
 renderCurrentLine :: GroupMessage -> Text
 renderCurrentLine gm =
   let txt = stripBotMention gm.selfId (renderPlainText gm.message)
-   in "<" <> senderDisplayName gm <> ">: " <> T.strip txt
+      MessageId mid = gm.messageId
+   in "[#" <> T.pack (show mid) <> "] <" <> senderDisplayName gm <> ">: " <> T.strip txt
 
 stripBotMention :: UserId -> Text -> Text
 stripBotMention (UserId u) = T.replace ("@" <> T.pack (show u)) ""

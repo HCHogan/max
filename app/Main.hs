@@ -100,7 +100,7 @@ main = do
                   <> memoryToolsFor mEmbed dc
                   <> sandboxToolsFor cfg.timezone dc.dcGroupId sandboxes
                   <> fileToolsFor cfg.timezone dc.dcGroupId cfg.imagesDir sandboxes
-                  <> (if dc.dcStickers then stickerToolsFor mEmbed cfg.imagesDir dc else [])
+                  <> (if dc.dcStickers then stickerToolsFor mEmbed else [])
                   <> maybe [] searchToolsFor cfg.search
                   -- Browser toolset only for multimodal profiles (per config).
                   <> (if dc.dcMultimodal then browserToolsFor dc.dcGroupId browsers else [])

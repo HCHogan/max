@@ -2,7 +2,7 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.Handler (isSilentReply, stripStickerText)
+import Max.Handler (isSilentReply, stripBareImage, stripStickerText)
 import Test.Hspec
 
 spec :: Spec
@@ -38,3 +38,22 @@ spec = do
     it "keeps unrelated bracketed markers" $
       stripStickerText "[image] 和 [动画表情]"
         `shouldBe` "[image] 和 [动画表情]"
+
+    it "preserves the real [表情包#<id>] send token" $ do
+      stripStickerText "哈哈 [表情包#42] 好" `shouldBe` "哈哈 [表情包#42] 好"
+      -- the captioned inbound form is a token too (id then colon)
+      stripStickerText "[表情包#42: 猫猫震惊]" `shouldBe` "[表情包#42: 猫猫震惊]"
+
+    it "strips a caption span but keeps a token in the same text" $
+      stripStickerText "[表情包: 幻觉] 和 [表情包#7]"
+        `shouldBe` " 和 [表情包#7]"
+
+  describe "stripBareImage" $ do
+    it "removes a bare [image] marker the model echoed" $
+      stripBareImage "看这个 [image] 图" `shouldBe` "看这个  图"
+
+    it "keeps the [image#<id>] resend token intact" $
+      stripBareImage "转发 [image#123] 一下" `shouldBe` "转发 [image#123] 一下"
+
+    it "leaves unrelated text untouched" $
+      stripBareImage "没有图片标记" `shouldBe` "没有图片标记"

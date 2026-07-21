@@ -55,7 +55,8 @@ historyAt h mid uid nick body =
       senderNickname = nick,
       senderCard = Nothing,
       renderedText = body,
-      receivedAt = timeAt h
+      receivedAt = timeAt h,
+      replyTo = Nothing
     }
 
 memAt :: Int64 -> Text -> MemoryItem
@@ -181,7 +182,7 @@ spec = do
               }
           (sys, _, ub) = splitMessages (fst (renderContext inp))
       sys `shouldSatisfy` ("2026-06-05（周五） 09:00" `T.isInfixOf`)
-      ub `shouldSatisfy` ("[04:00 Bob]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[04:00 Bob #8001]" `T.isInfixOf`)
 
     it "splices groupBrief lines into the environment block" $ do
       let inp =
@@ -208,7 +209,7 @@ spec = do
       let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just "sleepy"}
           inp = baseInputs {ambient = [item]}
           (sys, _, ub) = splitMessages (fst (renderContext inp))
-      ub `shouldSatisfy` ("[09:00 sleepy]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[09:00 sleepy #8001]" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("SkyRain" `T.isInfixOf`))
       sys `shouldSatisfy` ((T.pack (show otherMemberId) <> "=sleepy") `T.isInfixOf`)
 
@@ -216,7 +217,7 @@ spec = do
       let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just ""}
           inp = baseInputs {ambient = [item]}
           (_, _, ub) = splitMessages (fst (renderContext inp))
-      ub `shouldSatisfy` ("[09:00 SkyRain]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[09:00 SkyRain #8001]" `T.isInfixOf`)
 
   describe "renderContext private chat" $ do
     it "labels the environment as 私聊 instead of 群号" $ do
@@ -324,8 +325,8 @@ spec = do
             ]
           inp = baseInputs {ambient = ambient}
           (_, _, ub) = splitMessages (fst (renderContext inp))
-      ub `shouldSatisfy` ("[09:00 Alice]" `T.isInfixOf`)
-      ub `shouldSatisfy` ("[09:00 Bob]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[09:00 Alice #7001]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[09:00 Bob #7002]" `T.isInfixOf`)
       ub `shouldSatisfy` ("今天吃啥" `T.isInfixOf`)
 
     it "dedupes ambient against mention by message_id" $ do
@@ -457,22 +458,34 @@ spec = do
       let (_, drained) = renderContext baseInputs
       drained `shouldBe` []
 
+  describe "renderContext reply handles" $ do
+    it "prefixes an ambient reply message with a [↩#<id>] handle" $ do
+      let quoter = (historyAt 9 7001 memberId (Just "Alice") "同意") {replyTo = Just 6001}
+          inp = baseInputs {ambient = [quoter]}
+          (_, _, ub) = splitMessages (fst (renderContext inp))
+      ub `shouldSatisfy` ("[↩#6001] 同意" `T.isInfixOf`)
+
+    it "leaves non-reply ambient lines without a handle" $ do
+      let inp = baseInputs {ambient = [historyAt 9 7001 memberId (Just "Alice") "随便说说"]}
+          (_, _, ub) = splitMessages (fst (renderContext inp))
+      ub `shouldSatisfy` (not . ("[↩#" `T.isInfixOf`))
+
   describe "applyStickerCaptions" $ do
-    let caps = Map.fromList [(50 :: Int64, ["柴犬歪头，配字\"啊?\"，表达疑惑"])]
+    let caps = Map.fromList [(50 :: Int64, [(700 :: Int64, "柴犬歪头，配字\"啊?\"，表达疑惑")])]
         item marker = historyAt 1 50 memberId (Just "甲") ("看这个 " <> marker)
 
-    it "swaps a 动画表情 marker for its caption" $ do
+    it "swaps a 动画表情 marker for its captioned handle" $ do
       (applyStickerCaptions caps (item "[动画表情]")).renderedText
-        `shouldBe` "看这个 [表情包: 柴犬歪头，配字\"啊?\"，表达疑惑]"
+        `shouldBe` "看这个 [表情包#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
 
     it "handles legacy [image] markers too" $ do
       (applyStickerCaptions caps (item "[image]")).renderedText
-        `shouldBe` "看这个 [表情包: 柴犬歪头，配字\"啊?\"，表达疑惑]"
+        `shouldBe` "看这个 [表情包#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"
 
     it "consumes markers in order, leaves extras alone" $ do
-      let caps2 = Map.fromList [(50 :: Int64, ["第一张", "第二张"])]
+      let caps2 = Map.fromList [(50 :: Int64, [(11 :: Int64, "第一张"), (12, "第二张")])]
       (applyStickerCaptions caps2 (item "[mface] 和 [动画表情] 和 [image]")).renderedText
-        `shouldBe` "看这个 [表情包: 第一张] 和 [表情包: 第二张] 和 [image]"
+        `shouldBe` "看这个 [表情包#11: 第一张] 和 [表情包#12: 第二张] 和 [image]"
 
     it "leaves messages without captions untouched" $ do
       (applyStickerCaptions Map.empty (item "[动画表情]")).renderedText
