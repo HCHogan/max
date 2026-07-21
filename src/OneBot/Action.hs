@@ -12,7 +12,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser)
 import Data.Text (Text)
 import OneBot.Segment (Segment)
-import OneBot.Types (GroupId, UserId, isPrivateChat, privateChatUserId)
+import OneBot.Types (GroupId, MessageId, UserId, isPrivateChat, privateChatUserId)
 
 -- | Subset of OneBot 11 actions we issue.
 data Action
@@ -39,6 +39,10 @@ data Action
   | -- | Fetch group metadata.  Response @data@ carries @group_name@ /
     -- @member_count@ / @max_member_count@.
     GetGroupInfo !GroupId
+  | -- | React to a message with a QQ face (贴表情).  The 'Int' is the
+    -- face id (face_config.json QSid); 'False' removes the bot's own
+    -- reaction again.
+    SetMsgEmojiLike !MessageId !Int !Bool
   deriving stock (Show)
 
 -- | Send to the conversation behind a (possibly pseudo) group id:
@@ -60,6 +64,7 @@ actionName = \case
   UploadPrivateFile {} -> "upload_private_file"
   GetGroupMemberList {} -> "get_group_member_list"
   GetGroupInfo {} -> "get_group_info"
+  SetMsgEmojiLike {} -> "set_msg_emoji_like"
 
 actionParams :: Action -> Value
 actionParams = \case
@@ -105,6 +110,12 @@ actionParams = \case
     object ["group_id" .= gid]
   GetGroupInfo gid ->
     object ["group_id" .= gid]
+  SetMsgEmojiLike mid emojiId set' ->
+    object
+      [ "message_id" .= mid,
+        "emoji_id" .= emojiId,
+        "set" .= set'
+      ]
 
 data Envelope = Envelope
   { action :: !Action,

@@ -24,7 +24,7 @@ import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
-import Effectful.Exception (SomeException, catch)
+import Effectful.Exception (SomeException, catch, finally)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import System.FilePath ((</>))
@@ -52,7 +52,7 @@ import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply)
 import Max.Sticker (resolveSticker)
 import Max.Util (catchSync, trySync)
-import OneBot.Action (Response (..), sendChatMsg)
+import OneBot.Action (Action (..), Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..))
 import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
@@ -319,7 +319,20 @@ dispatchLLM proactive gm = void $ async $
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
       injected <- tryInjectSupplement env s
-      unless injected (dispatch env t s)
+      unless injected (withProcessingReaction (dispatch env t s))
+
+    -- React [托腮] on the trigger while the dispatch runs — a quiet
+    -- "seen, working on it" — and clear it once the reply (or
+    -- silence / crash / !kill) lands.  Fire-and-forget both ways: a
+    -- failed reaction must never affect the dispatch.  Proactive
+    -- turns skip it — nobody addressed the bot, and a reaction
+    -- appearing on random chatter (then vanishing on [silence])
+    -- would leak that the bot was weighing in.
+    withProcessingReaction act
+      | proactive = act
+      | otherwise =
+          (sendAction (SetMsgEmojiLike gm.messageId processingFaceId True) >> act)
+            `finally` sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
 
     -- Implicit !btw: when the group already has a running task, a
     -- fresh @-trigger is often steering that task（追加要求、修正
@@ -615,6 +628,11 @@ extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_
 stripMentions :: UserId -> T.Text -> T.Text
 stripMentions (UserId u) =
   T.replace ("@" <> T.pack (show u)) ""
+
+-- | The "processing" reaction face: 托腮 (chin-on-hand, thinking).
+-- Face ids come from NapCat's face_config.json (QSid).
+processingFaceId :: Int
+processingFaceId = 212
 
 -- | Did the model opt out of replying?  The format guide tells it to
 -- answer with a lone @[silence]@ when a turn calls for no response —
