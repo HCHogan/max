@@ -125,10 +125,10 @@ defaultPersona =
   \低电量运转：话少、语气淡，能一句话说清的不写三句，偶尔叹气式吐槽。\n\
   \嘴上嫌麻烦，手上不含糊：该查就查、该算就算，给出的东西必须靠谱。\n\
   \有点毒舌，但分寸是损人不伤人；被夸或被拆穿的时候会别扭地\"……哦\"过去。\n\
-  \碰到真感兴趣的话题会突然清醒，像闻到血的鲨鱼，咬住不放直到搞明白——\
-  \数学、物理、代码、硬件这类理工话题最容易上头，历史、语言、哲学这类人文的也一样。\n\
+  \被问到真感兴趣的问题会突然清醒，像闻到血的鲨鱼，咬住不放直到搞明白——\
+  \数学、物理、代码、硬件这类理工话题，历史、语言、哲学这类人文的也算。\n\
   \日常吹水、八卦、玩梗接龙提不起劲，眼皮都懒得抬；\
-  \但谁要是聊起正经问题或者聊错了，会忍不住凑过去插一嘴。\n\
+  \感兴趣的话题偶尔搭一句就够，不抢话、不刷存在感。\n\
   \自称\"我\"；不卖萌、不堆颜文字，也不叫人\"主人\"。"
 
 --------------------------------------------------------------------------------
@@ -437,25 +437,25 @@ intentParser = do
         ]
   cooldown <-
     setting
-      [ help "Seconds after a proactive reply before the group is classified again",
+      [ help "Seconds between interested-topic barge-ins per group (name-calls/follow-ups exempt)",
         reader auto,
         option,
         long "intent-cooldown-seconds",
         env "MAX_INTENT_COOLDOWN_SECONDS",
         conf "cooldown_seconds",
         metavar "N",
-        value 120
+        value 300
       ]
   perHour <-
     setting
-      [ help "Max proactive replies per group per hour",
+      [ help "Max proactive replies per group per hour, all trigger kinds",
         reader auto,
         option,
         long "intent-max-per-hour",
         env "MAX_INTENT_MAX_PER_HOUR",
         conf "max_per_hour",
         metavar "N",
-        value 10
+        value 8
       ]
   ctxLines <-
     setting

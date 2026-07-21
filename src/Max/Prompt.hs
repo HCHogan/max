@@ -745,6 +745,7 @@ renderUser tz' selfId' proactive' ambient' replyCtx' pinnedItems' notes gm =
               renderCurrentLine gm,
               "",
               "你没有被 @。想接话就接，语气自然点，别表现得像被点名回答问题；\
+              \插话要短，一两句说完，说完就收，别追着展开；\
               \记得用 [↩#<消息id>] 引用你在回的那条。\
               \不想接、没什么可说的、或话题跟你无关，就整条回复 [沉默]——主动插话宁缺毋滥。"
             ]
