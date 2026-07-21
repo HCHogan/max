@@ -2,21 +2,30 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.Handler (isSilentReply, stripBareMarkers, stripStickerText)
+import Max.Handler (isSilentReply, parseSilence, stripBareMarkers, stripStickerText)
 import Test.Hspec
 
 spec :: Spec
 spec = do
-  describe "isSilentReply" $ do
+  describe "parseSilence / isSilentReply" $ do
     it "matches a lone [silence] and the empty reply" $ do
-      isSilentReply "[silence]" `shouldBe` True
-      isSilentReply "" `shouldBe` True
+      parseSilence "[silence]" `shouldBe` Just Nothing
+      parseSilence "" `shouldBe` Just Nothing
 
     it "accepts the pre-rename [沉默] marker" $
-      isSilentReply "[沉默]" `shouldBe` True
+      parseSilence "[沉默]" `shouldBe` Just Nothing
+
+    it "extracts a known reason face" $ do
+      parseSilence "[silence:吃瓜]" `shouldBe` Just (Just 271)
+      parseSilence "[silence:擦汗]" `shouldBe` Just (Just 97)
+      parseSilence "[silence：疑问]" `shouldBe` Just (Just 32) -- full-width colon
+
+    it "is silence-without-face for an unknown reason name" $
+      parseSilence "[silence:量子纠缠]" `shouldBe` Just Nothing
 
     it "does not mute a reply that merely contains the marker" $ do
-      isSilentReply "[silence] 算了还是说一句" `shouldBe` False
+      parseSilence "[silence] 算了还是说一句" `shouldBe` Nothing
+      parseSilence "[silence:吃瓜] 再说一句" `shouldBe` Nothing
       isSilentReply "我为什么要回 [silence]" `shouldBe` False
 
     it "does not mute ordinary replies" $

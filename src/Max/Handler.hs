@@ -4,6 +4,7 @@ module Max.Handler
     stripStickerText,
     stripBareMarkers,
     isSilentReply,
+    parseSilence,
   )
 where
 
@@ -16,8 +17,9 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Char (isDigit)
 import Data.Int (Int64)
+import Control.Applicative ((<|>))
 import Data.List (find)
-import Data.Maybe (listToMaybe)
+import Data.Maybe (isJust, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -472,22 +474,31 @@ dispatchLLM origin gm = void $ async $
       -- (see 'stripStickerText' / 'stripBareMarkers').
       let stickersEff = maybe env.beStickerDefault id s.stickerOverride
           stripped = T.strip (stripBareMarkers (stripStickerText replyRaw))
-      if isSilentReply stripped
-        then
-          -- The model opted out of replying (see 'isSilentReply') —
+      case parseSilence stripped of
+        Just mFace -> do
+          -- The model opted out of replying (see 'parseSilence') —
           -- the escape hatch for turns that need no response, most
           -- importantly another bot @-ing us: answering would
           -- re-trigger it and ping-pong forever.  Nothing is sent or
           -- persisted; btw notes are NOT drained (they wait for a
           -- turn that actually delivers them); no memory extraction
           -- (a turn judged not worth answering is noise).
+          --
+          -- On a direct trigger the silence still shows: the named
+          -- reason face (擦汗 as fallback) is reacted onto the trigger
+          -- message.  Proactive turns stay traceless, and a poke has
+          -- no message to react to.
           logInfo "llm chose silence" $
             object
               [ "to" .= (let UserId u = gm.userId in u),
                 "turns" .= result.turnsUsed,
+                "face" .= mFace,
                 "aborted" .= result.aborted
               ]
-        else do
+          when (origin == OriginDirect) $
+            sendAction
+              (SetMsgEmojiLike gm.messageId (maybe defaultSilenceFace id mFace) True)
+        Nothing -> do
           -- callAction so we get the message_id back, then persist this
           -- outbound message into the messages table.  That's where
           -- subsequent dispatches will read this turn's assistant reply
@@ -724,15 +735,48 @@ processingFaceId = 212
 failureFaceId :: Int
 failureFaceId = 123
 
+-- | Faces the model may name in a @[silence:<名>]@ reply to say *why*
+-- it stayed silent; the face gets reacted onto the trigger message.
+-- Ids from NapCat's face_config.json (QSid).
+silenceFaces :: [(T.Text, Int)]
+silenceFaces =
+  [ ("擦汗", 97),
+    ("流汗", 27),
+    ("再见", 39),
+    ("哈欠", 104),
+    ("吃瓜", 271),
+    ("困", 25),
+    ("疑问", 32)
+  ]
+
+-- | Reaction used when a direct-trigger silence names no (known)
+-- face: 擦汗 — the all-purpose "呃，没什么可说的".
+defaultSilenceFace :: Int
+defaultSilenceFace = 97
+
 -- | Did the model opt out of replying?  The format guide tells it to
--- answer with a lone @[silence]@ when a turn calls for no response —
--- e.g. another bot mechanically @-ing us, where any answer would
--- re-trigger it in an endless loop.  Expects pre-stripped input; an
--- empty reply counts as silence too.  Only an exact match qualifies:
--- a reply that merely *contains* the marker still goes out, so the
--- model can't accidentally mute a real answer.
+-- answer with a lone @[silence]@ — or @[silence:表情名]@ to say why —
+-- when a turn calls for no response, e.g. another bot mechanically
+-- @-ing us, where any answer would re-trigger it in an endless loop.
+-- Expects pre-stripped input; an empty reply counts as silence too.
+--
+-- Returns 'Nothing' when the reply is a real answer; @Just mFace@
+-- when it is silence, with the reason face (if a known one was
+-- named).  Only an exact match qualifies: a reply that merely
+-- *contains* the marker still goes out, so the model can't
+-- accidentally mute a real answer.
+parseSilence :: T.Text -> Maybe (Maybe Int)
+parseSilence t
+  | T.null t || t == "[silence]" || t == "[沉默]" = Just Nothing
+  | Just inner <- withReason = Just (lookup (T.strip inner) silenceFaces)
+  | otherwise = Nothing
+  where
+    withReason =
+      (T.stripPrefix "[silence:" t <|> T.stripPrefix "[silence：" t)
+        >>= T.stripSuffix "]"
+
 isSilentReply :: T.Text -> Bool
-isSilentReply t = T.null t || t == "[silence]" || t == "[沉默]"
+isSilentReply = isJust . parseSilence
 
 -- | Load every stored image of a message as outbound image segments
 -- (base64 over @docker@-free NapCat send), for resolving a
