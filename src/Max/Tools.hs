@@ -393,7 +393,7 @@ sayTool dc =
 -- poke — 戳一戳
 
 pokeTool ::
-  (NapCat :> es, Log :> es, IOE :> es) =>
+  (NapCat :> es, Log :> es) =>
   DispatchContext ->
   Tool es
 pokeTool dc =

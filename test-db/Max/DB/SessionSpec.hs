@@ -23,7 +23,6 @@ spec pool = before_ (truncateAll pool) $
         s.model `shouldBe` "deepseek-flash"
         s.persona `shouldBe` Nothing
         s.pinned `shouldBe` []
-        s.btwNotes `shouldBe` []
         s.thinkingOverride `shouldBe` Nothing
 
       it "is idempotent — second call returns the same row" $ do
@@ -38,7 +37,6 @@ spec pool = before_ (truncateAll pool) $
               s0
                 { persona = Just "猫娘",
                   pinned = [101, 102, 103],
-                  btwNotes = ["a", "b"],
                   clearedAt = Just t0,
                   thinkingOverride = Just True,
                   model = "deepseek-pro"
@@ -47,7 +45,6 @@ spec pool = before_ (truncateAll pool) $
         s <- withDb pool $ fetchOrInit testGroup "deepseek-flash"
         s.persona `shouldBe` Just "猫娘"
         s.pinned `shouldBe` [101, 102, 103]
-        s.btwNotes `shouldBe` ["a", "b"]
         s.clearedAt `shouldBe` Just t0
         s.thinkingOverride `shouldBe` Just True
         s.model `shouldBe` "deepseek-pro"

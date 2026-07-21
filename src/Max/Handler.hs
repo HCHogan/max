@@ -49,7 +49,7 @@ import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPend
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
-import Max.Session (Session (..), loadSession, readSession, updateSession)
+import Max.Session (Session (..), loadSession, readSession)
 import Max.Tasks (TaskCancelled (..), listTasks, pushBtwToLatest)
 import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply)
@@ -386,7 +386,7 @@ dispatchLLM origin gm = void $ async $
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
       injected <- tryInjectSupplement env s
-      unless injected (withProcessingReaction (dispatch env t s))
+      unless injected (withProcessingReaction (dispatch env s))
 
     -- React [托腮] on the trigger while the dispatch runs — a quiet
     -- "seen, working on it" — and clear it once the reply (or
@@ -437,10 +437,10 @@ dispatchLLM origin gm = void $ async $
                   pure ok
         _ -> pure False
 
-    dispatch env t s = do
+    dispatch env s = do
       multimodal <- isProfileMultimodal s.model
       (mentionable, brief) <- fetchGroupContext gm.groupId
-      (ctx, drained) <- buildContext env.bePersona env.beHistoryWindow multimodal origin env.beBlobRoot env.beTimeZone brief s gm
+      ctx <- buildContext env.bePersona env.beHistoryWindow multimodal origin env.beBlobRoot env.beTimeZone brief s gm
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
@@ -462,9 +462,9 @@ dispatchLLM origin gm = void $ async $
           when (origin == OriginDirect) $ do
             sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
             sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
-        Just replyRaw -> handleReply env t s mentionable ctx drained result replyRaw
+        Just replyRaw -> handleReply env s mentionable ctx result replyRaw
 
-    handleReply env t s mentionable ctx drained result replyRaw = do
+    handleReply env s mentionable ctx result replyRaw = do
       -- Real stickers/images are the [sticker#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
       -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
@@ -504,27 +504,13 @@ dispatchLLM origin gm = void $ async $
           -- subsequent dispatches will read this turn's assistant reply
           -- back from when reconstructing mention history.
           sendAndPersistReply gm mentionable env.beBlobRoot stickersEff stripped
-          -- Drain consumed btw notes — but only when persisting; an
-          -- ephemeral dispatch (e.g. !btw one-shot) must not eat the
-          -- queue (the notes are still waiting for a real turn).
           ephemeral <- isEphemeral
-          unless ephemeral $
-            updateSession t $ \sess ->
-              let sess' =
-                    sess
-                      { btwNotes =
-                          if null drained
-                            then sess.btwNotes
-                            else drop (length drained) sess.btwNotes
-                      }
-               in (sess', ())
           logInfo "llm replied" $
             object
               [ "to" .= (let UserId u = gm.userId in u),
                 "len" .= T.length stripped,
                 "turns" .= result.turnsUsed,
                 "appended" .= length result.appended,
-                "btw_drained" .= length drained,
                 "aborted" .= result.aborted
               ]
           -- Post-reply memory extraction: the user already has their

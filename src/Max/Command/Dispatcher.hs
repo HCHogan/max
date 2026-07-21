@@ -165,7 +165,7 @@ execute t gid uid replyTarget cmd = do
     let sboxSuffix
           | n == 0 = ""
           | otherwise = "，并销毁了 " <> T.pack (show n) <> " 个 sandbox"
-    reply $ "✓ history / btw / persona override 全清，群上下文水位线已置" <> sboxSuffix
+    reply $ "✓ history / persona override / pin 全清，群上下文水位线已置" <> sboxSuffix
   Unclear -> do
     s <- liftIO (Session.readSession t)
     case s.clearedAt of

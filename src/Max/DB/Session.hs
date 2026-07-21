@@ -41,7 +41,6 @@ data Row = Row
   { rGroupId :: !Int64,
     rModel :: !(Maybe Text),
     rPersona :: !(Maybe Text),
-    rBtwNotes :: !Value,
     rClearedAt :: !(Maybe UTCTime),
     rPinned :: !Value,
     rThinkingOverride :: !(Maybe Bool),
@@ -62,7 +61,6 @@ instance FromRow Row where
       <*> field
       <*> field
       <*> field
-      <*> field
 
 -- | Load a group's session, creating a fresh row (with the given
 -- default model) if nothing exists yet.
@@ -74,7 +72,7 @@ fetchOrInit ::
 fetchOrInit (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override \
+      "SELECT group_id, model, persona, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override \
       \  FROM sessions \
       \  WHERE group_id = ?"
       (Only gid)
@@ -86,7 +84,6 @@ fetchOrInit (GroupId gid) defaultModel = do
               { groupId = GroupId gid,
                 model = defaultModel,
                 persona = Nothing,
-                btwNotes = [],
                 clearedAt = Nothing,
                 pinned = [],
                 thinkingOverride = Nothing,
@@ -101,16 +98,14 @@ fetchOrInit (GroupId gid) defaultModel = do
 upsertSession :: (WithConnection :> es, IOE :> es) => Session -> Eff es ()
 upsertSession s = do
   let GroupId gid = s.groupId
-      btw = Jsonb (toJSON s.btwNotes)
       pin = Jsonb (toJSON s.pinned)
   void $
     execute
-      "INSERT INTO sessions (group_id, model, persona, btw_notes, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override) \
-      \ VALUES (?,?,?,?,?,?,?,?,?,?) \
+      "INSERT INTO sessions (group_id, model, persona, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override) \
+      \ VALUES (?,?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (group_id) DO UPDATE SET \
       \   model              = EXCLUDED.model, \
       \   persona            = EXCLUDED.persona, \
-      \   btw_notes          = EXCLUDED.btw_notes, \
       \   cleared_at         = EXCLUDED.cleared_at, \
       \   pinned             = EXCLUDED.pinned, \
       \   thinking_override  = EXCLUDED.thinking_override, \
@@ -118,7 +113,7 @@ upsertSession s = do
       \   sticker_override   = EXCLUDED.sticker_override, \
       \   proactive_override = EXCLUDED.proactive_override, \
       \   updated_at         = now()"
-      ((gid, s.model, s.persona, btw, s.clearedAt, pin) :. (s.thinkingOverride, s.debugOverride, s.stickerOverride, s.proactiveOverride))
+      ((gid, s.model, s.persona, s.clearedAt, pin) :. (s.thinkingOverride, s.debugOverride, s.stickerOverride, s.proactiveOverride))
 
 --------------------------------------------------------------------------------
 
@@ -130,7 +125,6 @@ rowToSession defaultModel r =
         Just m | not (T.null m) -> m
         _ -> defaultModel,
       persona = r.rPersona,
-      btwNotes = decodeOrEmpty r.rBtwNotes,
       clearedAt = r.rClearedAt,
       pinned = decodeOrEmpty r.rPinned,
       thinkingOverride = r.rThinkingOverride,

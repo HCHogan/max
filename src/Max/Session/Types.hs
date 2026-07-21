@@ -22,9 +22,6 @@ data Session = Session
     model :: !Text,
     -- | Persona override.  'Nothing' means inherit @AppConfig.persona@.
     persona :: !(Maybe Text),
-    -- | Queued !btw notes consumed by the next dispatch (Phase 6a) or
-    -- injected into a running agent task (Phase 6b).
-    btwNotes :: ![Text],
     -- | Watermark set by @!clear@.  When 'Just', ambient group context
     -- AND reconstructed mention history older than this are excluded
     -- from the prompt.  'Nothing' means no filtering.  Pinned messages

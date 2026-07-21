@@ -63,8 +63,7 @@ import System.FilePath ((</>))
 data PromptInputs = PromptInputs
   { -- | Persona from 'AppConfig' — used when 'session.persona' is 'Nothing'.
     defaultPersona :: !Text,
-    -- | The active session record (carries persona override + btw notes
-    -- + pin list; the field that flows back as "drained notes").
+    -- | The active session record (carries persona override + pin list).
     session :: !Session,
     -- | The @\@-bot@ message that triggered this turn.
     triggerMessage :: !GroupMessage,
@@ -173,7 +172,7 @@ systemPrompt multimodal' private envText persona mMemBlock =
       "  - 数学式直接写 unicode（如 3×10⁸、α ≤ π/2），不要写 LaTeX——QQ 渲染不了。",
       "  - 不寒暄、不总结收尾、不复读问题，直接说事。",
       "  - 想发表情包就把 [sticker#<id>] 单独写成一段（id 取自历史里出现过的表情，或先用 find_stickers 搜一个）；别把表情的文字描述打出来当话说。",
-      "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍；有人 @ 你往往就是想听你说两句，能接就接。",
+      "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍。",
       "  - 被 @/引用直接触发时想沉默，尽量写成 [silence:表情名] 说明原因，会悄悄贴个表情在触发消息上（不发消息）。可选：擦汗（尬住/没啥可说）、流汗（无语）、再见（不奉陪）、哈欠（无聊）、吃瓜（围观不掺和）、困、疑问（没看懂想让我干嘛）。例：[silence:吃瓜]"
     ]
       <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行尾 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。要 @ 某人写 @<QQ号>（对照表见 [environment]），发出时会转成真正的 @。"
@@ -220,7 +219,7 @@ buildContext ::
   [Text] -> -- pre-rendered 群信息 lines (see 'PromptInputs.groupBrief')
   Session ->
   GroupMessage ->
-  Eff es ([ChatMessage], [Text]) -- (messages, drained btw notes)
+  Eff es [ChatMessage]
 buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
@@ -581,8 +580,7 @@ loadPromptImages tz' blobRoot selfId' mid replyIds candidates = do
           pure []
 
 -- | Pure transformation from fetched inputs to the chat-message list
--- the LLM sees + the (consumed) btw notes the caller should clear off
--- the session.
+-- the LLM sees.
 --
 -- Structure:
 --
@@ -592,12 +590,11 @@ loadPromptImages tz' blobRoot selfId' mid replyIds candidates = do
 --     becomes a 'MsgAssistant', in chronological order.
 --   * One final @user@ message containing the ambient group context
 --     (chatter NOT directed at the bot), the reply chain (if any),
---     pinned messages, pending !btw notes, and the current
---     @-mention.
+--     pinned messages, and the current @-mention.
 --
 -- Ambient messages already present in the mention list are dropped
 -- to avoid showing the same line twice.
-renderContext :: PromptInputs -> ([ChatMessage], [Text])
+renderContext :: PromptInputs -> [ChatMessage]
 renderContext pi' =
   let UserId selfId' = pi'.triggerMessage.selfId
       GroupId gidRaw = pi'.triggerMessage.groupId
@@ -640,7 +637,6 @@ renderContext pi' =
           ambientNoDup
           pi'.replyCtx
           pi'.pinnedItems
-          pi'.session.btwNotes
           pi'.triggerMessage
       -- If we have inline image bytes, attach them as a multimodal
       -- content-block message, each prefixed with a label naming its
@@ -662,7 +658,7 @@ renderContext pi' =
         [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) envText effectivePersona memBlock)]
           <> mentionMessages
           <> [userMessage]
-   in (messages, pi'.session.btwNotes)
+   in messages
 
 -- | The injected memory block, or 'Nothing' when there is nothing
 -- remembered (no block at all beats an empty header — zero tokens,
@@ -721,10 +717,9 @@ renderUser ::
   [HistoryItem] ->
   Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
   [HistoryItem] -> -- pinned items, in user pin order
-  [Text] ->
   GroupMessage ->
   Text
-renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' notes gm =
+renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -748,13 +743,6 @@ renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' notes gm =
               : renderReplyFiles files
                 <> renderReplyForward tz' selfId' kids
                 <> [""],
-        if null notes
-          then []
-          else
-            [ "[btw — 你之前的 !btw 笔记]",
-              T.intercalate "\n" (map ("  • " <>) notes),
-              ""
-            ],
         case origin' of
           OriginProactive ->
             [ "[current message — 没人 @ 你，意图识别判断你可能想接话]",

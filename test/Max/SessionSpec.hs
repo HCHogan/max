@@ -4,11 +4,9 @@ import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Max.Session
   ( Session (..),
     addPin,
-    appendBtwNote,
     clearAll,
     clearHistory,
     clearThinkingOverride,
-    drainBtwNotes,
     removeAllPins,
     removePin,
     setThinkingOverride,
@@ -25,7 +23,6 @@ emptySession =
     { groupId = GroupId 1001,
       model = "deepseek-flash",
       persona = Nothing,
-      btwNotes = [],
       clearedAt = Nothing,
       pinned = [],
       thinkingOverride = Nothing,
@@ -39,16 +36,6 @@ t0 = UTCTime (fromGregorian 2026 6 5) (secondsToDiffTime 0)
 
 spec :: Spec
 spec = do
-  describe "btw note helpers" $ do
-    it "append accumulates in order" $ do
-      let s = appendBtwNote "b" (appendBtwNote "a" emptySession)
-      btwNotes s `shouldBe` ["a", "b"]
-    it "drain returns notes and empties" $ do
-      let withNotes = emptySession {btwNotes = ["x", "y"]}
-          (drained, afterDrain) = drainBtwNotes withNotes
-      drained `shouldBe` ["x", "y"]
-      btwNotes afterDrain `shouldBe` []
-
   describe "pin helpers" $ do
     it "addPin appends, preserving order" $ do
       let s = addPin 3 (addPin 2 (addPin 1 emptySession))
@@ -75,13 +62,11 @@ spec = do
     it "clearAll wipes ephemera AND sets watermark" $ do
       let dirty =
             emptySession
-              { btwNotes = ["a"],
-                persona = Just "x",
+              { persona = Just "x",
                 pinned = [1, 2],
                 model = "m2"
               }
           s = clearAll t0 dirty
-      btwNotes s `shouldBe` []
       persona s `shouldBe` Nothing
       pinned s `shouldBe` []
       clearedAt s `shouldBe` Just t0

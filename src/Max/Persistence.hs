@@ -3,8 +3,7 @@
 -- flag, carried through the effect stack as a 'Reader'.
 --
 -- The 'Persistent' mode is the default everywhere — outbound replies
--- land in the @messages@ table, btw notes get drained off the
--- session, sayTool persists its status updates.
+-- land in the @messages@ table, sayTool persists its status updates.
 --
 -- 'Ephemeral' mode is set by 'withEphemeral' for the duration of a
 -- subcomputation.  Inside that scope, persistence writes are

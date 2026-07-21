@@ -21,8 +21,6 @@ module Max.Session
     readSession,
     updateSession,
     -- * Convenience updates (pass to 'updateSession')
-    appendBtwNote,
-    drainBtwNotes,
     clearHistory,
     clearAll,
     unclear,
@@ -105,13 +103,6 @@ updateSession t f = do
 --------------------------------------------------------------------------------
 -- Pure helpers callable inside updateSession.
 
-appendBtwNote :: Text -> Session -> Session
-appendBtwNote note s = s {btwNotes = s.btwNotes <> [note]}
-
--- | Pull all pending notes; the returned 'Session' has 'btwNotes' empty.
-drainBtwNotes :: Session -> ([Text], Session)
-drainBtwNotes s = (s.btwNotes, s {btwNotes = []})
-
 -- | Stamp a 'clearedAt' watermark so the next prompt skips ambient
 -- group messages AND reconstructed mention history older than now.
 -- Pinned messages and explicit reply contexts still survive.  No
@@ -120,14 +111,13 @@ drainBtwNotes s = (s.btwNotes, s {btwNotes = []})
 clearHistory :: UTCTime -> Session -> Session
 clearHistory now s = s {clearedAt = Just now}
 
--- | Stamp 'clearedAt' AND wipe per-session ephemera: btw notes,
--- persona override, and pins.  Leaves the model alone (use !model to
--- change it explicitly).
+-- | Stamp 'clearedAt' AND wipe per-session ephemera: persona override
+-- and pins.  Leaves the model alone (use !model to change it
+-- explicitly).
 clearAll :: UTCTime -> Session -> Session
 clearAll now s =
   s
-    { btwNotes = [],
-      persona = Nothing,
+    { persona = Nothing,
       clearedAt = Just now,
       pinned = []
     }
