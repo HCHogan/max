@@ -236,7 +236,7 @@ forgetTool =
 -- memory_list
 
 listTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, IOE :> es) =>
   DispatchContext ->
   Tool es
 listTool dc =
@@ -292,7 +292,7 @@ memorySummary m = object ["id" .= m.memId, "content" .= m.memContent]
 -- memory_search (semantic; only registered when embedding is configured)
 
 searchTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, IOE :> es) =>
   EmbedClient ->
   Tool es
 searchTool ec =
