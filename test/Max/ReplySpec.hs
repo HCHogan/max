@@ -1,11 +1,13 @@
 module Max.ReplySpec (spec) where
 
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Reply
   ( Chunk (..),
     ReplyPiece (..),
     chunkSource,
+    dedupeImagePieces,
     latexToUnicode,
     maxReplyChunks,
     parseReplyTokens,
@@ -108,10 +110,36 @@ spec = do
       parseReplyTokens "[↩#9] 看这个 [表情包#3]"
         `shouldBe` (Just 9, [PieceText " 看这个 ", PieceSticker 3])
 
+    it "splits an inline [face#id] token out of the text" $
+      parseReplyTokens "无语 [face#178]"
+        `shouldBe` (Nothing, [PieceText "无语 ", PieceFace 178])
+
+    it "does not treat a bare [face] as a send token" $
+      parseReplyTokens "这是 [face] 标记"
+        `shouldBe` (Nothing, [PieceText "这是 [face] 标记"])
+
     it "leaves a malformed token as literal text" $ do
       parseReplyTokens "[表情包#]" `shouldBe` (Nothing, [PieceText "[表情包#]"])
       parseReplyTokens "[↩#abc]" `shouldBe` (Nothing, [PieceText "[↩#abc]"])
       parseReplyTokens "[image#]" `shouldBe` (Nothing, [PieceText "[image#]"])
+      parseReplyTokens "[face#]" `shouldBe` (Nothing, [PieceText "[face#]"])
+
+  describe "dedupeImagePieces" $ do
+    it "keeps the first [image#id] and drops later duplicates" $
+      dedupeImagePieces Set.empty [PieceImage 7, PieceText " x ", PieceImage 7]
+        `shouldBe` (Set.fromList [7], [PieceImage 7, PieceText " x "])
+
+    it "keeps distinct ids" $
+      dedupeImagePieces Set.empty [PieceImage 7, PieceImage 8]
+        `shouldBe` (Set.fromList [7, 8], [PieceImage 7, PieceImage 8])
+
+    it "drops ids already sent by an earlier chunk" $
+      dedupeImagePieces (Set.fromList [7]) [PieceImage 7, PieceText "好"]
+        `shouldBe` (Set.fromList [7], [PieceText "好"])
+
+    it "leaves stickers and faces alone" $
+      dedupeImagePieces Set.empty [PieceSticker 3, PieceFace 178, PieceSticker 3]
+        `shouldBe` (Set.empty, [PieceSticker 3, PieceFace 178, PieceSticker 3])
 
   describe "latexToUnicode" $ do
     it "converts inline \\(..\\) math" $

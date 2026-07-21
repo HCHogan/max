@@ -1,14 +1,13 @@
 module Max.Handler
   ( handleEvents,
     stripStickerText,
-    stripBareImage,
+    stripBareMarkers,
     isSilentReply,
   )
 where
 
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue)
-import Control.Monad (unless, void)
-import Data.Foldable (for_)
+import Control.Monad (foldM_, unless, void)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
@@ -47,7 +46,7 @@ import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, renderGr
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Tasks (TaskCancelled (..))
 import Max.Render (renderTableImage)
-import Max.Reply (Chunk (..), ReplyPiece (..), parseReplyTokens, planReply)
+import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply)
 import Max.Sticker (resolveSticker)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Response (..), sendChatMsg)
@@ -296,11 +295,12 @@ dispatchLLM gm = void $ async $
       result <- agentTurn dc s.model s.thinkingOverride ctx
       -- Real stickers/images are the [表情包#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
-      -- "[表情包: …]" and bare "[image]" forms are hallucinations — a
-      -- weaker model imitating the display style of something it saw —
-      -- so strip those as a backstop while leaving the id-carrying send
-      -- tokens intact (see 'stripStickerText' / 'stripBareImage').
-      let stripped = T.strip (stripBareImage (stripStickerText result.reply))
+      -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
+      -- forms are hallucinations — a weaker model imitating the
+      -- display style of something it saw — so strip those as a
+      -- backstop while leaving the id-carrying send tokens intact
+      -- (see 'stripStickerText' / 'stripBareMarkers').
+      let stripped = T.strip (stripBareMarkers (stripStickerText result.reply))
       if isSilentReply stripped
         then
           -- The model opted out of replying (see 'isSilentReply') —
@@ -382,13 +382,19 @@ replyText gm body =
 --     nothing is auto-quoted any more, the model decides;
 --   * @[表情包#\<id\>]@ becomes a sticker segment ('resolveSticker'),
 --     an unknown id is dropped rather than failing the reply;
+--   * @[image#\<id\>]@ resends that message's stored images; duplicate
+--     ids are dropped across the whole reply ('dedupeImagePieces') —
+--     a multi-image message tags all its markers with one id, so an
+--     echo would otherwise resend N images N times;
+--   * @[face#\<id\>]@ becomes a QQ built-in face segment;
 --   * raw @\@\<qq\>@ spans become real at-segments when the id passes
 --     the membership check ('segmentMentions').
 --
 -- A chunk that resolves to no content (a lone @[↩#id]@, or only a bad
 -- sticker token) is skipped.  Each chunk persists with its *resolved*
 -- surface form as rendered_text (sticker tokens normalised to
--- @[表情包#\<id\>: \<简介\>]@, the reply token dropped — it lives in the
+-- @[表情包#\<id\>: \<简介\>]@, image tokens keeping their @[image#\<id\>]@
+-- form, the reply token dropped — it lives in the
 -- reply_to_message_id column), so what the model reads back next turn
 -- matches what it wrote.  A table chunk persists with its markdown
 -- source.  Consecutive bot rows are merged into one assistant turn at
@@ -415,48 +421,57 @@ sendAndPersistReply gm mentionable blobRoot stickersOn body = do
   -- is gated, so an ephemeral turn doesn't show up in the next
   -- dispatch's mention history.
   ephemeral <- isEphemeral
-  for_ (zip [0 :: Int ..] (planReply body)) $ \(i, chunk) ->
-    planChunk chunk >>= \case
-      Nothing -> pure ()
-      Just (segs, rendered) ->
-        callAction (sendChatMsg gm.groupId segs) 30000 >>= \case
-          Left err ->
-            logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
-          Right (Response _ rc payload _)
-            | rc /= 0 ->
-                logAttention "llm reply retcode bad" $ object ["retcode" .= rc, "chunk" .= i]
-            | otherwise -> case extractOutMid payload of
-                Nothing ->
-                  logAttention "no message_id in send response" $
-                    object ["payload" .= payload, "chunk" .= i]
-                Just outMid ->
-                  unless ephemeral $
-                    insertOutbound
-                      gm.groupId
-                      gm.selfId
-                      "max"
-                      (MessageId outMid)
-                      (Just (T.strip rendered))
-                      segs
+  foldM_
+    ( \sentImgs (i, chunk) -> do
+        (sentImgs', mPlan) <- planChunk sentImgs chunk
+        case mPlan of
+          Nothing -> pure ()
+          Just (segs, rendered) ->
+            callAction (sendChatMsg gm.groupId segs) 30000 >>= \case
+              Left err ->
+                logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
+              Right (Response _ rc payload _)
+                | rc /= 0 ->
+                    logAttention "llm reply retcode bad" $ object ["retcode" .= rc, "chunk" .= i]
+                | otherwise -> case extractOutMid payload of
+                    Nothing ->
+                      logAttention "no message_id in send response" $
+                        object ["payload" .= payload, "chunk" .= i]
+                    Just outMid ->
+                      unless ephemeral $
+                        insertOutbound
+                          gm.groupId
+                          gm.selfId
+                          "max"
+                          (MessageId outMid)
+                          (Just (T.strip rendered))
+                          segs
+        pure sentImgs'
+    )
+    Set.empty
+    (zip [0 :: Int ..] (planReply body))
   where
     -- One chunk → 'Just' (segments to send, rendered_text to store) or
-    -- 'Nothing' to skip.
-    planChunk (TableChunk src) = do
+    -- 'Nothing' to skip; threads the set of already-resent image
+    -- message ids so a duplicated [image#<id>] never resends.
+    planChunk sentImgs (TableChunk src) = do
       rendered <- liftIO (renderTableImage src)
       case rendered of
         Right png ->
-          pure (Just ([imageSeg ("base64://" <> TE.decodeASCII (B64.encode png))], src))
+          pure (sentImgs, Just ([imageSeg ("base64://" <> TE.decodeASCII (B64.encode png))], src))
         Left err -> do
           logAttention "table render failed, sending source" $ object ["error" .= err]
-          pure (Just ([SegText src], src))
-    planChunk (TextChunk t) = do
-      let (mReplyId, pieces) = parseReplyTokens t
+          pure (sentImgs, Just ([SegText src], src))
+    planChunk sentImgs (TextChunk t) = do
+      let (mReplyId, pieces0) = parseReplyTokens t
+          (sentImgs', pieces) = dedupeImagePieces sentImgs pieces0
       (content, rendered) <- resolvePieces pieces
-      if null content
-        then pure Nothing
-        else
-          let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId]]
-           in pure (Just (prefix <> content, rendered))
+      pure . (sentImgs',) $
+        if null content
+          then Nothing
+          else
+            let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId]]
+             in Just (prefix <> content, rendered)
 
     -- Resolve parsed pieces into (segments, normalised rendered text).
     resolvePieces pieces = do
@@ -481,7 +496,14 @@ sendAndPersistReply gm mentionable blobRoot stickersOn body = do
             then do
               logAttention "image placeholder unresolved" $ object ["message_id" .= mid]
               pure ([], "")
-            else pure (segs, "[image]")
+            else
+              -- Keep the id in the persisted form: the model reads
+              -- back the same [image#<id>] handle it wrote (and can
+              -- resend from it again), instead of a bare [image] it
+              -- was told is a hallucination.
+              pure (segs, "[image#" <> T.pack (show mid) <> "]")
+        resolve (PieceFace fid) =
+          pure ([SegFace fid], "[face#" <> T.pack (show fid) <> "]")
 
     -- Private chats keep raw text: NapCat renders private
     -- at-segments poorly (see 'replySegs').  No member list (fetch
@@ -561,11 +583,16 @@ messageImageSegs blobRoot mid = do
         Right bytes ->
           pure [imageSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]
 
--- | Drop a bare @[image]@ marker the model echoed from context — the
--- real resend token is @[image#\<id\>]@, which is left intact because it
--- isn't the literal @[image]@ substring (see 'sendAndPersistReply').
-stripBareImage :: T.Text -> T.Text
-stripBareImage = T.replace "[image]" ""
+-- | Drop bare display markers the model echoed from context —
+-- @[image]@, @[动画表情]@, @[mface]@, @[face]@ (legacy rows),
+-- @[forward]@.  None of them carries an id, so echoing one can only
+-- produce literal marker text in the outgoing message.  The
+-- id-carrying send tokens (@[image#\<id\>]@, @[face#\<id\>]@, …) are
+-- left intact because they aren't literal matches for any of these.
+stripBareMarkers :: T.Text -> T.Text
+stripBareMarkers t =
+  foldl' (\acc m -> T.replace m "" acc) t
+    ["[image]", "[动画表情]", "[mface]", "[face]", "[forward]"]
 
 -- | Remove any "[表情包: …]" / "[表情包…]" spans a model hallucinated
 -- into its reply text (see call site) — the caption *display* form.

@@ -109,8 +109,12 @@ extractReply segs =
 -- | Insert an *outbound* message (something the bot itself sent) into
 -- the messages table.  Used by the LLM-reply path so mention history
 -- can be reconstructed from a single source of truth at dispatch time.
--- Idempotent on @message_id@ — NapCat occasionally sends our own
--- message back as an event too, and the upsert collapses the dup.
+-- NapCat occasionally sends our own message back as an event too;
+-- whichever insert runs first claims the row, so on conflict we
+-- overwrite @rendered_text@ — ours is the normalised form (table
+-- markdown source, @[表情包#\<id\>: …]@), which must win over the
+-- echo's plain 'renderPlainText' regardless of arrival order.  The
+-- echo's own insert is DO NOTHING, so the reverse order needs no care.
 --
 -- @renderedOverride@ replaces the default 'renderPlainText' of the
 -- sent segments: a table sent as an image should read back as its
@@ -135,7 +139,8 @@ insertOutbound (GroupId gid) (UserId sid) nick (MessageId mid) renderedOverride 
       \  segments, rendered_text, raw_message, \
       \  sender_nickname, sender_card, reply_to_message_id) \
       \ VALUES (?,?,?,?,?,?,?,?,?,?) \
-      \ ON CONFLICT (message_id) DO NOTHING"
+      \ ON CONFLICT (message_id) DO UPDATE \
+      \   SET rendered_text = EXCLUDED.rendered_text"
       ( mid,
         gid,
         sid, -- user_id = bot's id (bot is the sender)

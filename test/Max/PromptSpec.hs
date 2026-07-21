@@ -490,3 +490,7 @@ spec = do
     it "leaves messages without captions untouched" $ do
       (applyStickerCaptions Map.empty (item "[动画表情]")).renderedText
         `shouldBe` "看这个 [动画表情]"
+
+    it "does not let a photo's [image] swallow the sticker's caption in a mixed message" $ do
+      (applyStickerCaptions caps (item "[image] 配 [动画表情]")).renderedText
+        `shouldBe` "看这个 [image] 配 [表情包#700: 柴犬歪头，配字\"啊?\"，表达疑惑]"

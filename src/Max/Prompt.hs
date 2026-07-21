@@ -162,6 +162,8 @@ systemPrompt multimodal' private envText persona mMemBlock =
            "  [↩ 引用 ...]                — 用户引用的那条消息（内容已展开）",
            "  [↩#<消息id>]                — 这条消息引用了另一条；你也能在段首写它来引用，或用 get_message_by_id 展开看不到的那条",
            "  [表情包#<id>: <简介>]        — 一个表情包；把 [表情包#<id>] 写进回复即可发出同一个",
+           "  [动画表情]                  — 一个表情包（简介还没生成，暂时没法转发）",
+           "  [face#<id>]                 — QQ 原生小黄脸表情；原样写回可发同款",
            if multimodal'
              then "  [image]                     — 图片；引用/pin/当前消息的图会附在消息末尾并标注来源"
              else "  [image]                     — 图片（你看不到内容，可以请用户描述）"
@@ -426,10 +428,19 @@ applyStickerCaptions caps h = case Map.lookup h.messageId caps of
 -- @\#\<id\>@ is @stickers.id@ — the same handle the model writes back
 -- to *send* that sticker, so what it reads inbound and what it emits
 -- outbound share one form.
+--
+-- Only sticker-specific markers are eligible when the text has any:
+-- a photo's @[image]@ in a mixed photo+sticker message must not
+-- swallow the sticker's caption.  Rows persisted before sub_type
+-- survived parsing rendered stickers as @[image]@ too, so when no
+-- sticker-specific marker exists we fall back to consuming those.
 replaceStickerMarkers :: [(Int64, Text)] -> Text -> Text
-replaceStickerMarkers ds0 = go ds0
+replaceStickerMarkers ds0 t0 = go ds0 t0
   where
-    markers = ["[动画表情]", "[mface]", "[image]"] :: [Text]
+    stickerMarkers = ["[动画表情]", "[mface]"] :: [Text]
+    markers
+      | any (`T.isInfixOf` t0) stickerMarkers = stickerMarkers
+      | otherwise = ["[image]"]
     go [] rest = rest
     go ((sid, d) : ds) rest = case firstMarker rest of
       Nothing -> rest

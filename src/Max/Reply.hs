@@ -23,6 +23,7 @@ module Max.Reply
     latexToUnicode,
     ReplyPiece (..),
     parseReplyTokens,
+    dedupeImagePieces,
   )
 where
 
@@ -31,6 +32,8 @@ import Data.Char (isAlpha, isDigit, isSpace)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Read qualified as TR
@@ -64,7 +67,8 @@ planReply body =
     explode (TextChunk t) = map TextChunk (splitParagraphs (latexToUnicode t))
 
 --------------------------------------------------------------------------------
--- Outbound placeholders: [↩#<id>] quotes and [表情包#<id>] stickers.
+-- Outbound placeholders: [↩#<id>] quotes, [表情包#<id>] stickers,
+-- [image#<id>] resends, [face#<id>] QQ faces.
 
 -- | A parsed span of one planned text chunk.  'PieceText' still holds
 -- raw @\@\<qq\>@ spans — mention conversion happens later, per piece.
@@ -73,6 +77,9 @@ data ReplyPiece
   | PieceSticker !Int64
   | -- | A @[image#\<message_id\>]@ resend of a stored group image.
     PieceImage !Int64
+  | -- | A @[face#\<id\>]@ QQ built-in face — the same form
+    -- 'OneBot.Segment.renderPlainText' shows inbound faces in.
+    PieceFace !Int
   deriving stock (Show, Eq)
 
 -- | Pull the reply/sticker/image placeholders out of one planned text
@@ -86,6 +93,7 @@ data ReplyPiece
 --     trailing caption is ignored) so echoing what was seen still sends.
 --   * @[image#\<message_id\>]@ — resend a stored group image, becomes a
 --     'PieceImage' (the same handle the model reads inbound).
+--   * @[face#\<id\>]@ — a QQ built-in face, becomes a 'PieceFace'.
 --
 -- Anything that isn't a well-formed token stays literal 'PieceText'.
 -- Pure by design: the sticker/image ids are turned into segments by the
@@ -106,6 +114,9 @@ parseReplyTokens = go
             Just (TokImage n, rest') ->
               let (mrid, ps) = go rest'
                in (mrid, prepend before (PieceImage n : ps))
+            Just (TokFace n, rest') ->
+              let (mrid, ps) = go rest'
+               in (mrid, prepend before (PieceFace n : ps))
             Nothing ->
               let (mrid, ps) = go (T.drop 1 rest)
                in (mrid, prepend (before <> "[") ps)
@@ -118,12 +129,13 @@ parseReplyTokens = go
           (PieceText t : rest) -> PieceText (s <> t) : rest
           _ -> PieceText s : ps
 
-data Token = TokReply !Int64 | TokSticker !Int64 | TokImage !Int64
+data Token = TokReply !Int64 | TokSticker !Int64 | TokImage !Int64 | TokFace !Int
 
 matchToken :: Text -> Maybe (Token, Text)
 matchToken t =
   (do rest <- T.stripPrefix "[↩#" t; (n, r) <- idClose rest; pure (TokReply n, r))
     <|> (do rest <- T.stripPrefix "[image#" t; (n, r) <- idClose rest; pure (TokImage n, r))
+    <|> (do rest <- T.stripPrefix "[face#" t; (n, r) <- idClose rest; pure (TokFace (fromIntegral n), r))
     <|> (do rest <- T.stripPrefix "[表情包#" t; (n, r) <- stickerClose rest; pure (TokSticker n, r))
   where
     -- reply / image: digits then an immediate ']'.
@@ -150,6 +162,25 @@ readInt64 :: Text -> Maybe Int64
 readInt64 s = case TR.decimal s of
   Right (n, "") -> Just n
   _ -> Nothing
+
+-- | Drop duplicate @[image#\<id\>]@ resend tokens, keeping the first.
+-- A multi-image message renders inbound as several markers carrying
+-- the *same* message id, and each outbound token resends *all* of
+-- that message's images — echoing the markers verbatim would send
+-- N×N images.  The seen-set threads across chunks so a duplicate in
+-- a later paragraph is dropped too.
+dedupeImagePieces :: Set Int64 -> [ReplyPiece] -> (Set Int64, [ReplyPiece])
+dedupeImagePieces = go
+  where
+    go seen [] = (seen, [])
+    go seen (PieceImage m : rest)
+      | m `Set.member` seen = go seen rest
+      | otherwise =
+          let (seen', rest') = go (Set.insert m seen) rest
+           in (seen', PieceImage m : rest')
+    go seen (p : rest) =
+      let (seen', rest') = go seen rest
+       in (seen', p : rest')
 
 --------------------------------------------------------------------------------
 -- Stage 1: carve out markdown tables.

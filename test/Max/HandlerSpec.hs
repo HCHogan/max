@@ -2,7 +2,7 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.Handler (isSilentReply, stripBareImage, stripStickerText)
+import Max.Handler (isSilentReply, stripBareMarkers, stripStickerText)
 import Test.Hspec
 
 spec :: Spec
@@ -48,12 +48,20 @@ spec = do
       stripStickerText "[表情包: 幻觉] 和 [表情包#7]"
         `shouldBe` " 和 [表情包#7]"
 
-  describe "stripBareImage" $ do
+  describe "stripBareMarkers" $ do
     it "removes a bare [image] marker the model echoed" $
-      stripBareImage "看这个 [image] 图" `shouldBe` "看这个  图"
+      stripBareMarkers "看这个 [image] 图" `shouldBe` "看这个  图"
+
+    it "removes echoed [动画表情] / [face] / [forward] display markers" $ do
+      stripBareMarkers "笑死 [动画表情]" `shouldBe` "笑死 "
+      stripBareMarkers "[face] 哈哈 [forward]" `shouldBe` " 哈哈 "
+      stripBareMarkers "旧行的 [mface] 标记" `shouldBe` "旧行的  标记"
 
     it "keeps the [image#<id>] resend token intact" $
-      stripBareImage "转发 [image#123] 一下" `shouldBe` "转发 [image#123] 一下"
+      stripBareMarkers "转发 [image#123] 一下" `shouldBe` "转发 [image#123] 一下"
+
+    it "keeps the [face#<id>] send token intact" $
+      stripBareMarkers "回个 [face#178]" `shouldBe` "回个 [face#178]"
 
     it "leaves unrelated text untouched" $
-      stripBareImage "没有图片标记" `shouldBe` "没有图片标记"
+      stripBareMarkers "没有图片标记" `shouldBe` "没有图片标记"

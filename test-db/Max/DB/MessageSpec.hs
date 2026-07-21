@@ -80,10 +80,22 @@ spec pool = before_ (truncateAll pool) $
             h.senderNickname `shouldBe` Just "max"
           Nothing -> expectationFailure "expected outbound message"
 
-      it "is idempotent on message_id too" $ do
+      it "overwrites rendered_text on conflict (normalised form wins)" $ do
         withDb pool $
           insertOutbound testGroup botId "max" (MessageId 5050) Nothing [SegText "one"]
         withDb pool $
           insertOutbound testGroup botId "max" (MessageId 5050) Nothing [SegText "two"]
         m <- withDb pool $ fetchMessage 5050
-        (m >>= Just . (.renderedText)) `shouldBe` Just "one"
+        (m >>= Just . (.renderedText)) `shouldBe` Just "two"
+
+      it "wins the race against an echoed inbound insert" $ do
+        -- NapCat can echo the bot's own message back as an event; if
+        -- that insert lands first, the plain rendering claims the row.
+        -- The outbound upsert must still get its normalised
+        -- rendered_text in (e.g. table markdown source, not [image]).
+        let echo = mkInbound (MessageId 5051) memberA [SegText "[image]"]
+        withDb pool $ insertGroupMessage echo
+        withDb pool $
+          insertOutbound testGroup botId "max" (MessageId 5051) (Just "| a |\n|---|") [SegText "[image]"]
+        m <- withDb pool $ fetchMessage 5051
+        (m >>= Just . (.renderedText)) `shouldBe` Just "| a |\n|---|"

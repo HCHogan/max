@@ -209,7 +209,7 @@ renderPlainText = T.concat . map go
       SegImage info
         | isStickerImage info -> "[动画表情]"
         | otherwise -> "[image]"
-      SegFace _ -> "[face]"
+      SegFace i -> "[face#" <> T.pack (show i) <> "]"
       SegFile fs -> "[file:" <> fs.fsiName <> "]"
       SegOther t _ -> "[" <> t <> "]"
 
