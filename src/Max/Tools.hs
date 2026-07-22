@@ -301,7 +301,7 @@ runSearch f mVec = do
           )
         Nothing -> (" ORDER BY received_at DESC LIMIT ?", [PG.toField f.mfLimit])
       sql =
-        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at \
+        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND NOT is_synthetic \
