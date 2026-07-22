@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               max
-version:            0.2.5.2
+version:            0.2.6
 synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
 author:             Hank Hogan
 maintainer:         hankchogan@gmail.com
@@ -69,6 +69,7 @@ library
         Max.Handler
         Max.Images
         Max.Intent
+        Max.MediaCaption
         Max.MemoryExtract
         Max.Persistence
         Max.Prompt

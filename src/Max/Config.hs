@@ -95,9 +95,10 @@ data AppConfig = AppConfig
     -- | LLM profile for post-dispatch memory extraction; 'Nothing'
     -- disables the extractor (agent-side memory tools still work).
     memoryExtractProfile :: !(Maybe Text),
-    -- | Vision-capable LLM profile for sticker captioning; 'Nothing'
-    -- disables the caption worker (stickers are still recorded, just
-    -- never described — and thus never retrievable for sending).
+    -- | Vision-capable LLM profile for sticker AND chat-media
+    -- captioning; 'Nothing' disables both caption workers (stickers
+    -- are still recorded, just never described — and thus never
+    -- retrievable for sending; images/videos keep bare markers).
     stickerCaptionProfile :: !(Maybe Text),
     -- | Config-level default for whether the bot may post stickers via
     -- the @send_sticker@ tool.  Per-group override via @!sticker
@@ -247,7 +248,7 @@ appConfigParser =
       subConfig "stickers" $
         optional $
           setting
-            [ help "Vision-capable LLM profile for sticker captioning (presence enables it)",
+            [ help "Vision-capable LLM profile for sticker/chat-media captioning (presence enables it)",
               reader str,
               option,
               long "sticker-caption-profile",

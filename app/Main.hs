@@ -8,7 +8,7 @@ import Data.Foldable (for_)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Effectful
-import Effectful.Concurrent.Async (Concurrent, link, runConcurrent, withAsync)
+import Effectful.Concurrent.Async (Concurrent, concurrently_, link, runConcurrent, withAsync)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
@@ -44,6 +44,7 @@ import Max.Sandbox.Registry
     reapStaleSandboxes,
   )
 import Max.Session (newSessionRegistry)
+import Max.MediaCaption (mediaCaptionWorker)
 import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
 import Max.Tools (builtinsFor)
@@ -207,8 +208,17 @@ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef =
           withAsync (for_ mEmbed embedWorker) $ \aE -> do
             link aE
             -- Same trick: no caption profile → immediate no-op async.
+            -- Two independent caption loops under one async: stickers
+            -- and ordinary photos/videos poll separately, so a deep
+            -- sticker backlog can't starve fresh chat media (and vice
+            -- versa); either one crashing still takes the process down
+            -- via the link.
             withAsync
-              (for_ cfg.stickerCaptionProfile (\p -> stickerCaptionWorker p cfg.imagesDir))
+              ( for_ cfg.stickerCaptionProfile $ \p ->
+                  concurrently_
+                    (stickerCaptionWorker p cfg.imagesDir)
+                    (mediaCaptionWorker p cfg.imagesDir)
+              )
               $ \aCap -> do
                 link aCap
                 withAsync (reminderWorker cfg.timezone reminders) $ \aRem -> do

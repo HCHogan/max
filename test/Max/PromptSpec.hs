@@ -2,6 +2,7 @@ module Max.PromptSpec (spec) where
 
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, minutesToTimeZone, secondsToDiffTime, utc)
@@ -9,7 +10,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
-import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, renderContext, tagMediaMarkers)
+import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyVideoCaptions, renderContext, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -310,7 +311,20 @@ spec = do
           inp = baseInputs {mention = mention}
           (_, mid, _) = splitMessages (renderContext inp)
       case mid of
-        [MsgUser u] -> u `shouldSatisfy` ("<2002>" `T.isInfixOf`)
+        [MsgUser u] -> u `shouldSatisfy` ("2002" `T.isInfixOf`)
+        other -> expectationFailure $ "unexpected shape: " <> show other
+
+    it "prefixes member rows with [HH:MM <name> #<msgid>] but keeps bot rows verbatim" $ do
+      let mention =
+            [ historyAt 9 8001 memberId (Just "Alice") "@1000 你好",
+              historyAt 9 8002 botId Nothing "你好 Alice"
+            ]
+          inp = baseInputs {mention = mention}
+          (_, mid, _) = splitMessages (renderContext inp)
+      case mid of
+        [MsgUser u, MsgAssistant a] -> do
+          u `shouldSatisfy` ("[09:00 Alice #8001]:" `T.isPrefixOf`)
+          a `shouldBe` "你好 Alice"
         other -> expectationFailure $ "unexpected shape: " <> show other
 
   describe "renderContext user body" $ do
@@ -517,6 +531,36 @@ spec = do
     it "leaves text without the marker untouched" $
       (tagMediaMarkers (historyAt 9 8001 memberId (Just "Alice") "普通消息")).renderedText
         `shouldBe` "普通消息"
+
+  describe "tagImageMarkers" $ do
+    it "appends the caption when one exists" $ do
+      let caps = Map.fromList [(8001 :: Int64, ["一张报错截图" :: Text])]
+      (tagImageMarkers caps (Set.fromList [8001]) (historyAt 9 8001 memberId (Just "Alice") "看 [image]")).renderedText
+        `shouldBe` "看 [image#8001: 一张报错截图]"
+
+    it "falls back to the bare handle without a caption" $
+      (tagImageMarkers Map.empty (Set.fromList [8001]) (historyAt 9 8001 memberId (Just "Alice") "看 [image]")).renderedText
+        `shouldBe` "看 [image#8001]"
+
+    it "consumes captions left-to-right across several markers" $ do
+      let caps = Map.fromList [(8001 :: Int64, ["图一" :: Text])]
+      (tagImageMarkers caps (Set.fromList [8001]) (historyAt 9 8001 memberId (Just "Alice") "[image] 和 [image]")).renderedText
+        `shouldBe` "[image#8001: 图一] 和 [image#8001]"
+
+    it "does not touch untagged messages" $ do
+      let caps = Map.fromList [(8001 :: Int64, ["图一" :: Text])]
+      (tagImageMarkers caps Set.empty (historyAt 9 8001 memberId (Just "Alice") "看 [image]")).renderedText
+        `shouldBe` "看 [image]"
+
+  describe "applyVideoCaptions" $ do
+    it "appends the caption to the tagged handle" $ do
+      let caps = Map.fromList [(8002 :: Int64, ["猫打键盘" :: Text])]
+      (applyVideoCaptions caps (historyAt 9 8002 memberId (Just "Alice") "[video#8002] 好活")).renderedText
+        `shouldBe` "[video#8002: 猫打键盘] 好活"
+
+    it "leaves the handle alone without a caption" $
+      (applyVideoCaptions Map.empty (historyAt 9 8002 memberId (Just "Alice") "[video#8002] 好活")).renderedText
+        `shouldBe` "[video#8002] 好活"
 
   describe "renderContext poke turns" $ do
     it "names the poker and shows no message line" $ do

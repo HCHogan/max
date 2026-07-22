@@ -27,7 +27,9 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
    - ambient：`fetchRecentInGroup`，最近 **20** 条（`history_window`，默认 20）；
    - mention 历史：`fetchMentionHistory`，同样上限 20 行，重建成 user/assistant 轮；
    - pin、引用链（引用目标 + 其附件文件 + 转发展开 ≤30 行）、记忆、群信息；
-   - sticker 有 caption 的换成 `[sticker#id: 描述]`；
+   - sticker 有 caption 的换成 `[sticker#id: 描述]`；普通图片/视频有简介的
+     （media caption worker 用视觉模型后台生成，视频取首帧）渲染成
+     `[image#id: 简介]` / `[video#id: 简介]`——不用 view_image 也知道标记后面是什么；
    - **图片内联策略**：只有 引用目标 / pin / 当前消息 的图内联（≤8 张、单张
      ≤20MB），ambient 的图只升级成 `[image#<msgid>]` 标记留给 view_image；
    - **视频**：只有 当前消息 / 引用目标 的视频整段内联（≤2 个），其余留
@@ -93,11 +95,11 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
   [sticker]                   — 一个表情包（简介还没生成，暂时没法转发；老消息里写作 [动画表情]）
   [face#<id>: <名字>]          — QQ 原生小黄脸表情；写 [face#<id>] 可发同款
   [image]                     — 图片；引用/pin/当前消息的图会附在消息末尾并标注来源
-  [image#<id>]                — 群历史里的图片，默认不加载；用 view_image 传 <id> 查看，或把 [image#<id>] 写进回复把它转发到群里
+  [image#<id>]                — 群历史里的图片，默认不加载；用 view_image 传 <id> 查看，或把 [image#<id>] 写进回复把它转发到群里。带简介时形如 [image#<id>: <简介>]，多数时候看简介就够了
   [card: ...]                 — 分享卡片（小程序/链接分享），竖线分隔来源/标题/简介/链接；B站视频卡用 view_bilibili 传链接看详情
   [file:<name>]               — 群文件；用 import_file_to_sandbox 处理
   [forward#<id>]              — 转发聊天记录；被引用或就是当前消息时会自动展开，其余情况用 view_forward 传 <id> 看内容
-  [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看
+  [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看。带简介时形如 [video#<id>: <简介>]（据首帧生成）
   @<数字>                     — @某人；数字是 QQ 号，对照表见 [environment]
 
 [memories — 背景备忘]
@@ -110,11 +112,12 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
     },
 
     // ───── [1..k] mention 历史：从 messages 表重建的既往 @bot 往来 ─────
-    // 没有时间戳和消息 id，就是 "<名字>: 原文"；bot 的连续多段回复
-    // 已合并回一条 assistant（空行分隔）。上限 history_window=20 行。
+    // 成员行用和 recent 块一致的 [HH:MM <name> #<msgid>]: 前缀（可引用、
+    // 可判断时间）；bot 自己的行保持原文（加前缀会教模型模仿着输出前缀），
+    // 连续多段回复合并回一条 assistant（空行分隔）。上限 history_window=20 行。
     {
       "role": "user",
-      "content": "<阿飞>: @Max 帮我看下 HAL_Delay 卡死一般是什么原因"
+      "content": "[21:14 阿飞 #7390]: @Max 帮我看下 HAL_Delay 卡死一般是什么原因"
     },
     {
       "role": "assistant",
@@ -124,7 +127,7 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
     },
     {
       "role": "user",
-      "content": "<老张>: [sticker#301: 一只柴犬瘫在地上，配字\"寄\"] 这就寄了？"
+      "content": "[21:16 老张 #7392]: [sticker#301: 一只柴犬瘫在地上，配字\"寄\"] 这就寄了？"
     },
     {
       "role": "assistant",
@@ -145,9 +148,9 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 [recent messages]
 [22:48 小美 #7402]: 今晚有人打游戏吗
 [22:50 老张 #7404]: [↩#7402] 不打，在调板子
-[22:52 老张 #7405]: 我这个波形好怪 [image#7405]
+[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]
 [22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]
-[22:54 老张 #7407]: 拍了段视频你们看 [video#7407]
+[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路，接着示波器探头]
 [22:56 阿飞 #7409]: [card: 哔哩哔哩 | 【教程】示波器探头10X档到底干嘛用的 | UP主：某电子人 | https://b23.tv/abc123]
 [22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了
 [22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买
@@ -158,7 +161,7 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
     - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true
 
 [current message]
-[#7413] <阿飞>: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video#7413]
+[#7413] <阿飞>: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]
 
 请回复当前消息。
 
@@ -430,3 +433,5 @@ view_video 的描述里写"同一个视频看一次就够了"）。
 | tool result 文本总预算 | 60000 字符，超出后旧的截成 300 字符 stub | `toolResultBudget` |
 | LLM 轮次上限（每 dispatch） | 200 | `defaultLimits` |
 | 等当前消息的图 / 视频 / 转发落库 | 30s / 60s / 10s | Prompt.hs 各 wait |
+| media caption：批量 / 重试上限 / 只看最近 | 4 条 / 5 次 / 14 天内的媒体 | `Max.MediaCaption` |
+| caption 长度：入库 / 渲染截断 | 300 / 120 字符 | MediaCaption.hs / Prompt.hs |

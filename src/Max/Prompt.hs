@@ -10,6 +10,8 @@ module Max.Prompt
     renderContext,
     contextRoster,
     applyStickerCaptions,
+    applyVideoCaptions,
+    tagImageMarkers,
     -- * Shared line rendering (used by "Max.Intent" / "Max.Handler")
     renderHistoryLine,
     renderCurrentLine,
@@ -202,15 +204,15 @@ systemPrompt multimodal' private envText persona mMemBlock =
              then "  [image]                     — 图片；引用/pin/当前消息的图会附在消息末尾并标注来源"
              else "  [image]                     — 图片（你看不到内容，可以请用户描述）"
          ]
-      <> [ "  [image#<id>]                — 群历史里的图片，默认不加载；用 view_image 传 <id> 查看，或把 [image#<id>] 写进回复把它转发到群里"
+      <> [ "  [image#<id>]                — 群历史里的图片，默认不加载；用 view_image 传 <id> 查看，或把 [image#<id>] 写进回复把它转发到群里。带简介时形如 [image#<id>: <简介>]，多数时候看简介就够了"
          | multimodal'
          ]
       <> [ "  [card: ...]                 — 分享卡片（小程序/链接分享），竖线分隔来源/标题/简介/链接；B站视频卡用 view_bilibili 传链接看详情",
            "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
            "  [forward#<id>]              — 转发聊天记录；被引用或就是当前消息时会自动展开，其余情况用 view_forward 传 <id> 看内容",
            if multimodal'
-             then "  [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看"
-             else "  [video#<id>]                — 群里的视频（你看不到内容，可以请用户描述）",
+             then "  [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看。带简介时形如 [video#<id>: <简介>]（据首帧生成）"
+             else "  [video#<id>]                — 群里的视频（你看不到画面；带简介时形如 [video#<id>: <简介>]，据首帧生成）",
            "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [environment]"
          ]
       <> maybe [] (\b -> ["", b]) mMemBlock
@@ -273,13 +275,20 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
   -- as [sticker#<id>: <caption>] instead of an opaque [sticker]
   -- marker — a non-multimodal model gets to "see" them, and a
   -- multimodal one saves image budget for real photos.
-  capMap <-
-    stickerCaptionsFor . map (.messageId) $
-      ambient'
-        <> mention'
-        <> pinnedItems'
-        <> maybe [] (\(r, _, kids) -> r : kids) replyCtx0
-  let enrich = tagMediaMarkers . applyStickerCaptions capMap
+  let ctxIds =
+        map (.messageId) $
+          ambient'
+            <> mention'
+            <> pinnedItems'
+            <> maybe [] (\(r, _, kids) -> r : kids) replyCtx0
+  capMap <- stickerCaptionsFor ctxIds
+  -- Same idea for ordinary photos and videos (Max.MediaCaption):
+  -- described media renders as [image#<id>: <简介>] / [video#<id>:
+  -- <简介>], so the model knows what's behind a marker without
+  -- spending a view_image/view_video call on it.
+  imgCaps <- imageCaptionsFor ctxIds
+  vidCaps <- videoCaptionsFor ctxIds
+  let enrich = applyVideoCaptions vidCaps . tagMediaMarkers . applyStickerCaptions capMap
       ambient'' = map enrich ambient'
       mention'' = map enrich mention'
       pinnedItems'' = map enrich pinnedItems'
@@ -301,7 +310,7 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
                 h.messageId `Set.notMember` inlineIds
               ]
         tagIds <- messagesWithImages taggable
-        let tag = tagImageMarkers tagIds
+        let tag = tagImageMarkers imgCaps tagIds
         pure (map tag ambient'', map tag mention'')
       else pure (ambient'', mention'')
   -- The trigger itself may BE a 转发聊天记录 (typical in private
@@ -569,19 +578,88 @@ messagesWithImages ids = do
 
 -- | Upgrade the plain @[image]@ markers of a withheld-image message
 -- to @[image#\<message_id\>]@ so the model has a handle to pass to
--- the view_image tool.  Runs after sticker-caption substitution, so
--- captioned stickers are already out of marker form.
-tagImageMarkers :: Set.Set Int64 -> HistoryItem -> HistoryItem
-tagImageMarkers tagged h
+-- the view_image tool — with the caption appended
+-- (@[image#\<id\>: \<简介\>]@) when the media captioner has described
+-- that picture.  Markers are consumed left-to-right in seg order,
+-- matching the caption list.  Runs after sticker-caption
+-- substitution, so captioned stickers are already out of marker form
+-- (and sticker shas are excluded from the caption map).
+tagImageMarkers :: Map.Map Int64 [Text] -> Set.Set Int64 -> HistoryItem -> HistoryItem
+tagImageMarkers caps tagged h
   | h.messageId `Set.member` tagged =
-      h
-        { renderedText =
-            T.replace
-              "[image]"
-              ("[image#" <> T.pack (show h.messageId) <> "]")
-              h.renderedText
-        }
+      h {renderedText = go (Map.findWithDefault [] h.messageId caps) h.renderedText}
   | otherwise = h
+  where
+    handle = "[image#" <> T.pack (show h.messageId)
+    go cs t = case T.breakOn "[image]" t of
+      (_, "") -> t
+      (pre, suf) ->
+        let rest = T.drop (T.length ("[image]" :: Text)) suf
+            (mark, cs') = case cs of
+              (c : more) -> (handle <> ": " <> T.take 120 c <> "]", more)
+              [] -> (handle <> "]", [])
+         in pre <> mark <> go cs' rest
+
+-- | Append captions to the @[video#\<id\>]@ handles 'tagMediaMarkers'
+-- produced: @[video#\<id\>: \<简介\>]@.  Successive markers consume
+-- successive captions (seg order), the common case being one video
+-- per message.
+applyVideoCaptions :: Map.Map Int64 [Text] -> HistoryItem -> HistoryItem
+applyVideoCaptions caps h = case Map.lookup h.messageId caps of
+  Nothing -> h
+  Just ds -> h {renderedText = go ds h.renderedText}
+  where
+    marker = "[video#" <> T.pack (show h.messageId) <> "]"
+    go [] t = t
+    go (d : ds) t = case T.breakOn marker t of
+      (_, "") -> t
+      (pre, suf) ->
+        pre
+          <> "[video#"
+          <> T.pack (show h.messageId)
+          <> ": "
+          <> T.take 120 d
+          <> "]"
+          <> go ds (T.drop (T.length marker) suf)
+
+-- | Captions of already-described ordinary images (sticker shas
+-- excluded — those substitute via 'applyStickerCaptions') appearing
+-- in the given messages, in seg_index order per message.
+imageCaptionsFor ::
+  (WithConnection :> es, IOE :> es) =>
+  [Int64] ->
+  Eff es (Map.Map Int64 [Text])
+imageCaptionsFor [] = pure Map.empty
+imageCaptionsFor ids = do
+  rows <-
+    query
+      "SELECT mi.message_id, i.description \
+      \  FROM message_images mi \
+      \  JOIN images i USING (sha256) \
+      \  WHERE mi.message_id IN ? \
+      \    AND i.description IS NOT NULL \
+      \    AND NOT EXISTS (SELECT 1 FROM stickers s WHERE s.sha256 = mi.sha256) \
+      \  ORDER BY mi.message_id, mi.seg_index"
+      (Only (In ids))
+  pure (Map.fromListWith (flip (<>)) [(m, [d]) | (m, d) <- rows :: [(Int64, Text)]])
+
+-- | Same for described videos.
+videoCaptionsFor ::
+  (WithConnection :> es, IOE :> es) =>
+  [Int64] ->
+  Eff es (Map.Map Int64 [Text])
+videoCaptionsFor [] = pure Map.empty
+videoCaptionsFor ids = do
+  rows <-
+    query
+      "SELECT mv.message_id, v.description \
+      \  FROM message_videos mv \
+      \  JOIN videos v USING (sha256) \
+      \  WHERE mv.message_id IN ? \
+      \    AND v.description IS NOT NULL \
+      \  ORDER BY mv.message_id, mv.seg_index"
+      (Only (In ids))
+  pure (Map.fromListWith (flip (<>)) [(m, [d]) | (m, d) <- rows :: [(Int64, Text)]])
 
 -- | Captions of already-described stickers appearing in the given
 -- messages, in seg_index order per message.
@@ -791,7 +869,7 @@ renderContext pi' =
       -- Multi-chunk replies persist as several consecutive bot rows;
       -- merge them back into one assistant turn — consecutive
       -- same-role messages upset strict providers (Anthropic).
-      mentionMessages = mergeAssistantRuns (map (historyToChat selfId') pi'.mention)
+      mentionMessages = mergeAssistantRuns (map (historyToChat pi'.tz selfId') pi'.mention)
       userBody =
         renderUser
           pi'.tz
@@ -860,14 +938,19 @@ memoryLine tz' m =
     <> oneLine m.memContent
 
 -- | Reconstruct one bot/user turn as an OpenAI/Anthropic ChatMessage.
--- A row sent by the bot becomes 'MsgAssistant'; everything else
--- (members @-ing the bot) becomes 'MsgUser' with a sender-prefixed
--- body so the model knows who's talking when multiple members
--- address the bot.
-historyToChat :: Int64 -> HistoryItem -> ChatMessage
-historyToChat botId h
+-- A row sent by the bot becomes 'MsgAssistant', kept verbatim — a
+-- @[HH:MM Max #id]@ prefix there would teach the model to open its
+-- replies the same way.  Everything else (members @-ing the bot)
+-- becomes 'MsgUser' rendered like an ambient history line
+-- (@[HH:MM \<name\> #\<msgid\>]: …@): same format the marker guide
+-- documents, and — since mention rows are deduped *out* of the
+-- ambient block — the only place these messages get a quotable id
+-- and a timestamp at all (mention history has no time floor; without
+-- one the model can't tell yesterday's thread from this minute's).
+historyToChat :: TimeZone -> Int64 -> HistoryItem -> ChatMessage
+historyToChat tz' botId h
   | h.userId == botId = MsgAssistant h.renderedText
-  | otherwise = MsgUser ("<" <> displayName botId h <> ">: " <> h.renderedText)
+  | otherwise = MsgUser (renderHistoryLine tz' botId h)
 
 -- | Collapse runs of consecutive 'MsgAssistant' into one message,
 -- paragraphs separated by a blank line — the inverse of the
