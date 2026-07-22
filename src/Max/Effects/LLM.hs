@@ -29,19 +29,23 @@ module Max.Effects.LLM
     ToolSpec (..),
     -- * Response
     ChatResponse (..),
+    TokenUsage (..),
     -- * Effect operations
     runLLM,
     chat,
     listProfiles,
     defaultProfile,
     isProfileMultimodal,
+    -- * Exposed for tests
+    parseResponseOpenAI,
+    parseResponseAnthropic,
   )
 where
 
 import Control.Applicative ((<|>))
 import Control.Lens ((&), (.~))
 import Data.Aeson
-import Data.Aeson.Types (Pair, Parser, parseEither)
+import Data.Aeson.Types (Pair, Parser, parseEither, parseMaybe)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -52,7 +56,7 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log
 import Effectful.Wreq qualified as W
-import Max.Wreq (postAndParse)
+import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
 
@@ -209,6 +213,21 @@ data ChatResponse
     ToolCallsResp !(Maybe Text) ![ToolCall]
   deriving stock (Show)
 
+-- | Provider-reported token usage for one completion.  Logged in the
+-- interpreter (never returned to callers), so journalctl alone is
+-- enough to reconstruct token spend per profile.
+data TokenUsage = TokenUsage
+  { usagePrompt :: !Int,
+    usageCompletion :: !Int,
+    -- | Prompt tokens served from the provider's prefix cache, when
+    -- reported (DeepSeek @prompt_cache_hit_tokens@, OpenAI
+    -- @prompt_tokens_details.cached_tokens@, Anthropic
+    -- @cache_read_input_tokens@).  Cache hits bill at a steep
+    -- discount, so cost math needs the split.
+    usageCachedPrompt :: !(Maybe Int)
+  }
+  deriving stock (Show, Eq)
+
 --------------------------------------------------------------------------------
 -- JSON.
 
@@ -354,17 +373,19 @@ runLLM reg = interpret $ \_ -> \case
         Left err ->
           logAttention "llm: error" $
             object ["error" .= err, "profile" .= name]
-        Right (ContentResp text) ->
+        Right (ContentResp text, mUsage) ->
           logInfo "llm: got content" $
-            object ["len" .= T.length text, "profile" .= name]
-        Right (ToolCallsResp _ tcs) ->
+            object $
+              ["len" .= T.length text, "profile" .= name] <> usageFields mUsage
+        Right (ToolCallsResp _ tcs, mUsage) ->
           logInfo "llm: got tool_calls" $
-            object
+            object $
               [ "count" .= length tcs,
                 "names" .= map (.callName) tcs,
                 "profile" .= name
               ]
-      pure r
+                <> usageFields mUsage
+      pure (fst <$> r)
   ListProfiles -> pure (Map.keys reg.profiles)
   DefaultProfile -> pure reg.defaultName
   IsProfileMultimodal name -> pure $ case Map.lookup name reg.profiles of
@@ -390,6 +411,16 @@ defaultProfile = send DefaultProfile
 isProfileMultimodal :: LLM :> es => Text -> Eff es Bool
 isProfileMultimodal name = send (IsProfileMultimodal name)
 
+-- | Usage as extra log fields; absent wholesale when the provider
+-- reported none.
+usageFields :: Maybe TokenUsage -> [Pair]
+usageFields Nothing = []
+usageFields (Just u) =
+  [ "prompt_tokens" .= u.usagePrompt,
+    "completion_tokens" .= u.usageCompletion
+  ]
+    <> maybe [] (\c -> ["cached_prompt_tokens" .= c]) u.usageCachedPrompt
+
 --------------------------------------------------------------------------------
 -- Shared HTTP helper.
 
@@ -406,7 +437,7 @@ callChat ::
   Maybe Bool -> -- effective thinking
   [ChatMessage] ->
   [ToolSpec] ->
-  Eff es (Either Text ChatResponse)
+  Eff es (Either Text (ChatResponse, Maybe TokenUsage))
 callChat cfg thinkingEff msgs tools = case cfg.protocol of
   ProtocolOpenAI -> callChatOpenAI cfg thinkingEff msgs tools
   -- Anthropic protocol has its own thinking spec we don't bridge yet;
@@ -422,7 +453,7 @@ callChatOpenAI ::
   Maybe Bool -> -- effective thinking
   [ChatMessage] ->
   [ToolSpec] ->
-  Eff es (Either Text ChatResponse)
+  Eff es (Either Text (ChatResponse, Maybe TokenUsage))
 callChatOpenAI cfg thinkingEff msgs tools = do
   let baseFields =
         [ "model" .= cfg.model,
@@ -458,7 +489,7 @@ callChatOpenAI cfg thinkingEff msgs tools = do
         Wreq.defaults
           & WL.header "Authorization" .~ ["Bearer " <> TE.encodeUtf8 cfg.apiKey]
           & WL.header "Content-Type" .~ ["application/json"]
-  postAndParse cfg.timeoutSeconds opts url body parseResponseOpenAI
+  postAndParseRetrying defaultRetryDelaysSecs cfg.timeoutSeconds opts url body parseResponseOpenAI
 
 -- | @temperature@ only when configured — omitting lets the server
 -- pick its default, and some providers 400 on explicit values.
@@ -484,12 +515,16 @@ encodeToolSpecOpenAI t =
 -- accompanying @reasoning_content@ and stuffs it into the
 -- 'ToolCallsResp' so the agent loop can carry it forward into the
 -- next request (DeepSeek requires this — missing → 400).
-parseResponseOpenAI :: Value -> Parser ChatResponse
+-- Usage extraction is lenient: a missing or mangled @usage@ block
+-- must never fail an otherwise-good response.
+parseResponseOpenAI :: Value -> Parser (ChatResponse, Maybe TokenUsage)
 parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
   choices <- o .: "choices"
-  case choices of
+  resp <- case choices of
     (c : _) -> withObject "Choice" parseChoice c
     [] -> fail "no choices in response"
+  mUsageV <- o .:? "usage"
+  pure (resp, parseMaybe parseUsageOpenAI =<< mUsageV)
   where
     parseChoice c = do
       m <- c .: "message" :: Parser Object
@@ -505,6 +540,21 @@ parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
             Just c' -> pure (ContentResp c')
             Nothing -> fail "no content nor tool_calls in message"
 
+-- | OpenAI-shaped usage block.  The cached-prompt count hides in two
+-- places depending on provider: DeepSeek's flat
+-- @prompt_cache_hit_tokens@, OpenAI's nested
+-- @prompt_tokens_details.cached_tokens@.
+parseUsageOpenAI :: Value -> Parser TokenUsage
+parseUsageOpenAI = withObject "usage" $ \u -> do
+  p <- u .: "prompt_tokens"
+  c <- u .: "completion_tokens"
+  mHit <- u .:? "prompt_cache_hit_tokens"
+  mDetails <- u .:? "prompt_tokens_details"
+  mCached <- case mDetails of
+    Just (Object d) -> d .:? "cached_tokens"
+    _ -> pure Nothing
+  pure (TokenUsage p c (mHit <|> mCached))
+
 --------------------------------------------------------------------------------
 -- Anthropic Messages API: POST {baseUrl}/v1/messages.
 
@@ -513,7 +563,7 @@ callChatAnthropic ::
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
-  Eff es (Either Text ChatResponse)
+  Eff es (Either Text (ChatResponse, Maybe TokenUsage))
 callChatAnthropic cfg msgs tools = do
   let (systemText, anthropicMsgs) = toAnthropicMessages msgs
       baseFields =
@@ -539,7 +589,7 @@ callChatAnthropic cfg msgs tools = do
           & WL.header "x-api-key" .~ [TE.encodeUtf8 cfg.apiKey]
           & WL.header "anthropic-version" .~ ["2023-06-01"]
           & WL.header "Content-Type" .~ ["application/json"]
-  postAndParse cfg.timeoutSeconds opts url body parseResponseAnthropic
+  postAndParseRetrying defaultRetryDelaysSecs cfg.timeoutSeconds opts url body parseResponseAnthropic
 
 encodeToolSpecAnthropic :: ToolSpec -> Value
 encodeToolSpecAnthropic t =
@@ -655,19 +705,23 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
 -- collect @text@ blocks and @tool_use@ blocks.  If any tool_use
 -- present → 'ToolCallsResp' (drops the text blocks, which are
 -- typically Claude's pre-call thinking).  Else if any text →
--- 'ContentResp' with the concatenation.
-parseResponseAnthropic :: Value -> Parser ChatResponse
+-- 'ContentResp' with the concatenation.  Usage extraction is lenient,
+-- same as the OpenAI path.
+parseResponseAnthropic :: Value -> Parser (ChatResponse, Maybe TokenUsage)
 parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
   blocks <- o .: "content" :: Parser [Value]
   parsed <- traverse parseBlock blocks
   let toolCalls = [tc | Right tc <- parsed]
       texts = [t | Left t <- parsed]
-  if not (null toolCalls)
-    then pure (ToolCallsResp Nothing toolCalls)
-    else
-      if not (null texts)
-        then pure (ContentResp (T.concat texts))
-        else fail "no text nor tool_use blocks in response.content"
+  resp <-
+    if not (null toolCalls)
+      then pure (ToolCallsResp Nothing toolCalls)
+      else
+        if not (null texts)
+          then pure (ContentResp (T.concat texts))
+          else fail "no text nor tool_use blocks in response.content"
+  mUsageV <- o .:? "usage"
+  pure (resp, parseMaybe parseUsageAnthropic =<< mUsageV)
   where
     parseBlock :: Value -> Parser (Either Text ToolCall)
     parseBlock = withObject "ContentBlock" $ \b -> do
@@ -682,3 +736,13 @@ parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
           inp <- b .: "input"
           pure (Right (ToolCall tcid name inp))
         other -> fail $ "unknown content block type: " <> T.unpack other
+
+-- | Anthropic usage block.  @input_tokens@ counts only uncached
+-- prompt tokens; cache reads ride separately in
+-- @cache_read_input_tokens@.
+parseUsageAnthropic :: Value -> Parser TokenUsage
+parseUsageAnthropic = withObject "usage" $ \u ->
+  TokenUsage
+    <$> u .: "input_tokens"
+    <*> u .: "output_tokens"
+    <*> u .:? "cache_read_input_tokens"

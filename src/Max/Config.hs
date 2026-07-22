@@ -35,6 +35,9 @@
 module Max.Config
   ( AppConfig (..),
     loadConfig,
+    -- | Exposed so auxiliary executables (@max-intent-eval@) can
+    -- compose their own flags on top of the full app config.
+    appConfigParser,
     defaultPersona,
   )
 where

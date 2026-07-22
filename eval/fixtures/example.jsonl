@@ -1,0 +1,4 @@
+{"context": ["[07-22 14:01] 小明: 这段 haskell 怎么又报 type error 了", "[07-22 14:02] 小红: 你贴出来看看"], "new": ["[07-22 14:03] 小明: max帮我看看这个报错"], "expect_trigger": true, "expect_kind": "called", "note": "无@叫名求助"}
+{"context": ["[07-22 12:00] Max: 这题用二分就行，复杂度 log n", "[07-22 12:00] 小明: 真的假的"], "new": ["[07-22 12:01] 小明: 那最坏情况呢"], "expect_trigger": true, "expect_kind": "followup", "note": "追问 Max 刚说的话"}
+{"context": ["[07-22 18:00] 小红: 晚上吃什么", "[07-22 18:01] 小明: 随便"], "new": ["[07-22 18:02] 小红: 那就外卖吧"], "expect_trigger": false, "note": "日常闲聊与 Max 无关"}
+{"context": ["[07-22 20:00] 小明: 那个bot昨天又抽风了", "[07-22 20:01] 小红: 哪个，max吗"], "new": ["[07-22 20:02] 小明: 对，回了一堆乱码"], "expect_trigger": false, "note": "议论 Max 而非跟它说话"}

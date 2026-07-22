@@ -2,9 +2,18 @@ module Max.Effects.LLMSpec (spec) where
 
 import Data.Aeson (Value (..), decode, eitherDecode, encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import Data.Vector qualified as V
-import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), ToolCall (..))
+import Max.Effects.LLM
+  ( ChatMessage (..),
+    ChatResponse (..),
+    ContentBlock (..),
+    TokenUsage (..),
+    ToolCall (..),
+    parseResponseAnthropic,
+    parseResponseOpenAI,
+  )
 import Test.Hspec
 
 -- | Round-tripping a single 'ChatMessage' through aeson should be
@@ -131,6 +140,85 @@ spec = do
       case eitherDecode (encode (asstWithCalls [wire])) :: Either String ChatMessage of
         Left _ -> pure () -- expected
         Right ok -> expectationFailure $ "expected failure, got: " <> show ok
+
+  describe "usage extraction (OpenAI shape)" $ do
+    let openaiResp usage =
+          object $
+            [ "choices"
+                .= [ object
+                       ["message" .= object ["role" .= ("assistant" :: Text), "content" .= ("hi" :: Text)]]
+                   ]
+            ]
+              <> usage
+
+    it "plain prompt/completion tokens" $ do
+      let v = openaiResp ["usage" .= object ["prompt_tokens" .= (120 :: Int), "completion_tokens" .= (30 :: Int)]]
+      case parseEither parseResponseOpenAI v of
+        Right (ContentResp _, Just u) ->
+          u `shouldBe` TokenUsage 120 30 Nothing
+        other -> expectationFailure $ "expected usage, got: " <> show other
+
+    it "DeepSeek prompt_cache_hit_tokens lands in cached" $ do
+      let v =
+            openaiResp
+              [ "usage"
+                  .= object
+                    [ "prompt_tokens" .= (120 :: Int),
+                      "completion_tokens" .= (30 :: Int),
+                      "prompt_cache_hit_tokens" .= (100 :: Int)
+                    ]
+              ]
+      case parseEither parseResponseOpenAI v of
+        Right (_, Just u) -> u.usageCachedPrompt `shouldBe` Just 100
+        other -> expectationFailure $ "expected usage, got: " <> show other
+
+    it "OpenAI prompt_tokens_details.cached_tokens lands in cached" $ do
+      let v =
+            openaiResp
+              [ "usage"
+                  .= object
+                    [ "prompt_tokens" .= (120 :: Int),
+                      "completion_tokens" .= (30 :: Int),
+                      "prompt_tokens_details" .= object ["cached_tokens" .= (64 :: Int)]
+                    ]
+              ]
+      case parseEither parseResponseOpenAI v of
+        Right (_, Just u) -> u.usageCachedPrompt `shouldBe` Just 64
+        other -> expectationFailure $ "expected usage, got: " <> show other
+
+    it "absent usage → Nothing, response still parses" $ do
+      case parseEither parseResponseOpenAI (openaiResp []) of
+        Right (ContentResp t, Nothing) -> t `shouldBe` "hi"
+        other -> expectationFailure $ "expected no usage, got: " <> show other
+
+    it "mangled usage → Nothing, response still parses" $ do
+      let v = openaiResp ["usage" .= object ["prompt_tokens" .= ("what" :: Text)]]
+      case parseEither parseResponseOpenAI v of
+        Right (ContentResp _, Nothing) -> pure ()
+        other -> expectationFailure $ "expected lenient Nothing, got: " <> show other
+
+  describe "usage extraction (Anthropic shape)" $ do
+    it "input/output/cache_read tokens" $ do
+      let v =
+            object
+              [ "content" .= [object ["type" .= ("text" :: Text), "text" .= ("hi" :: Text)]],
+                "usage"
+                  .= object
+                    [ "input_tokens" .= (200 :: Int),
+                      "output_tokens" .= (50 :: Int),
+                      "cache_read_input_tokens" .= (180 :: Int)
+                    ]
+              ]
+      case parseEither parseResponseAnthropic v of
+        Right (ContentResp _, Just u) ->
+          u `shouldBe` TokenUsage 200 50 (Just 180)
+        other -> expectationFailure $ "expected usage, got: " <> show other
+
+    it "absent usage → Nothing, response still parses" $ do
+      let v = object ["content" .= [object ["type" .= ("text" :: Text), "text" .= ("hi" :: Text)]]]
+      case parseEither parseResponseAnthropic v of
+        Right (ContentResp t, Nothing) -> t `shouldBe` "hi"
+        other -> expectationFailure $ "expected no usage, got: " <> show other
 
   describe "decode of incoming assistant message" $ do
     it "treats missing content as empty string" $ do

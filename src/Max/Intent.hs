@@ -30,10 +30,12 @@ module Max.Intent
     clearPendingIntent,
     noteBotActivity,
     intentWorker,
+    classifyOnce,
     classifySupplement,
     -- * Exposed for tests
     IntentVerdict (..),
     IntentKind (..),
+    kindText,
     msgSignal,
     parseVerdict,
     parseSupplement,
@@ -273,7 +275,7 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
             render = renderHistoryLine tz selfId'
         -- Rows for the batch can be missing only in pathological
         -- flood cases; classify anyway with whatever context we have.
-        verdict <- classify (fromMaybe defaultPersona s.persona) (map render ctx) (map render news)
+        verdict <- classifyOnce cfg.icProfile (fromMaybe defaultPersona s.persona) (map render ctx) (map render news)
         case verdict of
           Nothing -> pure ()
           Just v
@@ -300,28 +302,6 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
                     ]
                 dispatch (last batch)
 
-    classify persona ctxLines newLines = do
-      let userBody =
-            T.intercalate "\n" $
-              ["[context]"]
-                <> (if null ctxLines then ["(无)"] else ctxLines)
-                <> ["", "[new messages]"]
-                <> (if null newLines then ["(见上下文末尾)"] else newLines)
-      -- Thinking forced off: this is a latency-sensitive yes/no call.
-      r <- chat cfg.icProfile (Just False) [MsgSystem (classifierSystem persona), MsgUser userBody] []
-      case r of
-        Left err -> do
-          logAttention "intent: classify failed" $ object ["error" .= err]
-          pure Nothing
-        Right (ToolCallsResp _ _) -> do
-          logAttention "intent: unexpected tool_calls" $ object []
-          pure Nothing
-        Right (ContentResp txt) -> case parseVerdict txt of
-          Nothing -> do
-            logAttention "intent: unparseable verdict" $ object ["raw" .= T.take 200 txt]
-            pure Nothing
-          v -> pure v
-
     lastN n xs = drop (length xs - n) xs
 
     -- Stable split: rows belonging to the batch vs. the rest, both in
@@ -345,6 +325,49 @@ drainGroup st gid = do
     Just msgs -> do
       writeTVar st.isPending (Map.delete gid m)
       pure msgs
+
+-- | One classifier round: build the prompt, ask the profile, parse
+-- the verdict.  On success the full input rides along with the
+-- verdict in an @intent: verdict@ log line, so production rounds can
+-- be replayed offline against a fixture (see @eval/README.md@ and
+-- the @max-intent-eval@ executable).
+classifyOnce ::
+  (LLM :> es, Log :> es) =>
+  Text -> -- LLM profile
+  Text -> -- persona
+  [Text] -> -- context lines, chronological
+  [Text] -> -- new (unclassified) lines
+  Eff es (Maybe IntentVerdict)
+classifyOnce profile persona ctxLines newLines = do
+  let userBody =
+        T.intercalate "\n" $
+          ["[context]"]
+            <> (if null ctxLines then ["(无)"] else ctxLines)
+            <> ["", "[new messages]"]
+            <> (if null newLines then ["(见上下文末尾)"] else newLines)
+  -- Thinking forced off: this is a latency-sensitive yes/no call.
+  r <- chat profile (Just False) [MsgSystem (classifierSystem persona), MsgUser userBody] []
+  case r of
+    Left err -> do
+      logAttention "intent: classify failed" $ object ["error" .= err]
+      pure Nothing
+    Right (ToolCallsResp _ _) -> do
+      logAttention "intent: unexpected tool_calls" $ object []
+      pure Nothing
+    Right (ContentResp txt) -> case parseVerdict txt of
+      Nothing -> do
+        logAttention "intent: unparseable verdict" $ object ["raw" .= T.take 200 txt]
+        pure Nothing
+      Just v -> do
+        logInfo "intent: verdict" $
+          object
+            [ "context" .= ctxLines,
+              "new" .= newLines,
+              "trigger" .= v.ivTrigger,
+              "kind" .= kindText v.ivKind,
+              "reason" .= v.ivReason
+            ]
+        pure (Just v)
 
 --------------------------------------------------------------------------------
 -- Classifier prompt + verdict.

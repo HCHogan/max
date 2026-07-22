@@ -4,9 +4,14 @@
 -- in "Max.Tools.Search").
 module Max.Wreq
   ( postAndParse,
+    postAndParseRetrying,
+    defaultRetryDelaysSecs,
+    -- * Exposed for tests
+    retryableStatus,
   )
 where
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException)
 import Control.Lens ((&), (.~), (?~), (^.))
 import Data.Aeson (Value, eitherDecode, object, (.=))
@@ -27,7 +32,46 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
 import System.Timeout (timeout)
 
+-- | Backoff schedule the LLM chat calls pass to
+-- 'postAndParseRetrying': two retries, a short wait for transient
+-- hiccups then a longer one for rate-limit windows.
+defaultRetryDelaysSecs :: [Int]
+defaultRetryDelaysSecs = [2, 8]
+
+-- | Why one POST attempt failed, split by whether replaying the same
+-- request could plausibly succeed.
+data Failure
+  = FailTimeout
+  | FailTransport !Text
+  | -- | Non-2xx status + truncated response body.
+    FailStatus !Int !Text
+  | -- | The response arrived but wasn't the JSON we wanted; a replay
+    -- would get the same confusion back.
+    FailDecode !Text
+
+renderFailure :: Failure -> Text
+renderFailure = \case
+  FailTimeout -> "request timed out"
+  FailTransport t -> "http: " <> t
+  FailStatus code body -> "HTTP " <> T.pack (show code) <> ": " <> body
+  FailDecode t -> t
+
+retryableFailure :: Failure -> Bool
+retryableFailure = \case
+  FailTimeout -> True
+  FailTransport _ -> True
+  FailStatus code _ -> retryableStatus code
+  FailDecode _ -> False
+
+-- | Statuses worth a retry: timeout-ish and rate-limit-ish (408/429)
+-- plus anything server-side.  Other 4xx mean our own request is
+-- wrong — replaying it unchanged can't help.
+retryableStatus :: Int -> Bool
+retryableStatus code = code == 408 || code == 429 || code >= 500
+
 -- | POST @body@ to @url@, parse the JSON response with @parser@.
+-- One shot, no retries — the interactive callers (search) prefer a
+-- fast error over a stalled reply.
 --
 -- The timeout is enforced twice: http-client's
 -- 'HTTP.managerResponseTimeout' is raised to @secs@ (otherwise the
@@ -50,49 +94,82 @@ postAndParse ::
   BS.ByteString -> -- body
   (Value -> Parser a) ->
   Eff es (Either Text a)
-postAndParse secs opts url body parser = do
-  let mgrSettings =
-        tlsManagerSettings
-          { HTTP.managerResponseTimeout =
-              HTTP.responseTimeoutMicro (secs * 1_000_000)
-          }
-      opts' =
-        opts
-          & WL.manager .~ Left mgrSettings
-          & WL.checkResponse ?~ (\_ _ -> pure ())
-  res <- withRunInIO $ \run ->
-    timeout (secs * 1_000_000) $
-      trySyncIO (run (W.postWith opts' url body))
-  case res of
-    Nothing -> pure (Left "request timed out")
-    Just (Left e) -> pure (Left ("http: " <> T.pack (show (e :: SomeException))))
-    Just (Right resp) -> do
-      let code = statusCode (resp ^. WL.responseStatus)
-          rbody = resp ^. WL.responseBody
-      if code >= 400
-        then do
-          -- 4xx bodies like "invalid_request_error" are
-          -- undiagnosable without seeing what we actually sent —
-          -- log a (truncated) copy of the request alongside.
-          logAttention "http error request dump" $
-            object
-              [ "url" .= T.pack url,
-                "status" .= code,
-                "request_body" .= T.take 4000 (TE.decodeUtf8Lenient body)
-              ]
-          pure $
-            Left $
-              "HTTP "
-                <> T.pack (show code)
-                <> ": "
-                <> T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
-        else
-          let bodyPreview =
-                T.take 800 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
-           in pure $ case eitherDecode rbody of
-                Left e ->
-                  Left ("parse: " <> T.pack e <> "\nbody: " <> bodyPreview)
-                Right v -> case parseEither parser v of
-                  Left e ->
-                    Left ("extract: " <> T.pack e <> "\nbody: " <> bodyPreview)
-                  Right r -> Right r
+postAndParse = postAndParseRetrying []
+
+-- | 'postAndParse' with a retry schedule: on a retryable failure
+-- (timeout, transport error, 408\/429\/5xx) wait the next delay and
+-- re-POST the same body; give up when the schedule is exhausted.
+-- Chat completions are idempotent, so the replay is safe.
+postAndParseRetrying ::
+  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  -- | Seconds to wait before each retry; length = max retries.
+  [Int] ->
+  -- | Timeout per attempt, seconds.
+  Int ->
+  Wreq.Options ->
+  String -> -- url
+  BS.ByteString -> -- body
+  (Value -> Parser a) ->
+  Eff es (Either Text a)
+postAndParseRetrying delays secs opts url body parser = go delays
+  where
+    mgrSettings =
+      tlsManagerSettings
+        { HTTP.managerResponseTimeout =
+            HTTP.responseTimeoutMicro (secs * 1_000_000)
+        }
+    opts' =
+      opts
+        & WL.manager .~ Left mgrSettings
+        & WL.checkResponse ?~ (\_ _ -> pure ())
+
+    go remaining = do
+      r <- attempt
+      case r of
+        Left f
+          | retryableFailure f,
+            (d : rest) <- remaining -> do
+              logAttention "http: retrying" $
+                object
+                  [ "url" .= T.pack url,
+                    "delay_s" .= d,
+                    "error" .= renderFailure f
+                  ]
+              liftIO (threadDelay (d * 1_000_000))
+              go rest
+        _ -> pure (either (Left . renderFailure) Right r)
+
+    attempt = do
+      res <- withRunInIO $ \run ->
+        timeout (secs * 1_000_000) $
+          trySyncIO (run (W.postWith opts' url body))
+      case res of
+        Nothing -> pure (Left FailTimeout)
+        Just (Left e) -> pure (Left (FailTransport (T.pack (show (e :: SomeException)))))
+        Just (Right resp) -> do
+          let code = statusCode (resp ^. WL.responseStatus)
+              rbody = resp ^. WL.responseBody
+          if code >= 400
+            then do
+              -- 4xx bodies like "invalid_request_error" are
+              -- undiagnosable without seeing what we actually sent —
+              -- log a (truncated) copy of the request alongside.
+              logAttention "http error request dump" $
+                object
+                  [ "url" .= T.pack url,
+                    "status" .= code,
+                    "request_body" .= T.take 4000 (TE.decodeUtf8Lenient body)
+                  ]
+              pure $
+                Left $
+                  FailStatus code (T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict rbody)))
+            else
+              let bodyPreview =
+                    T.take 800 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
+               in pure $ case eitherDecode rbody of
+                    Left e ->
+                      Left (FailDecode ("parse: " <> T.pack e <> "\nbody: " <> bodyPreview))
+                    Right v -> case parseEither parser v of
+                      Left e ->
+                        Left (FailDecode ("extract: " <> T.pack e <> "\nbody: " <> bodyPreview))
+                      Right r -> Right r
