@@ -17,9 +17,8 @@ import Max.Effects.LLM
 import Test.Hspec
 
 -- | Round-tripping a single 'ChatMessage' through aeson should be
--- value-preserving — except for 'MsgAssistantToolCalls', whose
--- arguments are stringified on the wire (we re-encode them on
--- decode, so the parsed 'callArguments' is a parsed 'Value' again).
+-- value-preserving.  'MsgAssistantToolCalls' carries the provider's
+-- wire message verbatim, so its encode is exactly what came in.
 roundTrip :: ChatMessage -> Either String ChatMessage
 roundTrip m = eitherDecode (encode m)
 
@@ -75,27 +74,29 @@ spec = do
           c `shouldBe` "{\"ok\":true}"
         other -> expectationFailure $ "bad round-trip: " <> show other
 
-    it "MsgAssistantToolCalls preserves call ids/names/args + reasoning" $ do
-      let tc = ToolCall "call_1" "web_search" (object ["q" .= ("haskell" :: Text)])
-          m = MsgAssistantToolCalls (Just "let me search…") [tc]
-      case roundTrip m of
-        Right (MsgAssistantToolCalls mr tcs) -> do
-          mr `shouldBe` Just "let me search…"
+    it "MsgAssistantToolCalls re-encodes the provider message verbatim" $ do
+      -- Whatever fields/structure the provider sent (known or not)
+      -- must come back byte-identical — thinking output round-trips
+      -- in the provider's own shape.
+      let wire =
+            object
+              [ "role" .= ("assistant" :: Text),
+                "content" .= Null,
+                "reasoning_content" .= ("let me search…" :: Text),
+                "reasoning_details" .= [object ["type" .= ("reasoning.text" :: Text)]],
+                "tool_calls" .= [toolCallWire "call_1" "web_search" "{\"q\":\"haskell\"}"]
+              ]
+      case eitherDecode (encode wire) of
+        Right m@(MsgAssistantToolCalls raw tcs) -> do
+          raw `shouldBe` wire
+          (decode (encode m) :: Maybe Value) `shouldBe` Just wire
           case tcs of
             [tc'] -> do
               tc'.callId `shouldBe` "call_1"
               tc'.callName `shouldBe` "web_search"
               tc'.callArguments `shouldBe` object ["q" .= ("haskell" :: Text)]
             _ -> expectationFailure $ "expected 1 call, got: " <> show tcs
-        other -> expectationFailure $ "bad round-trip: " <> show other
-
-    it "MsgAssistantToolCalls without reasoning omits the field on encode" $ do
-      let tc = ToolCall "call_1" "noop" (Object KM.empty)
-          m = MsgAssistantToolCalls Nothing [tc]
-          encoded = encode m
-      case decode encoded :: Maybe Value of
-        Just (Object o) -> KM.member "reasoning_content" o `shouldBe` False
-        other -> expectationFailure $ "expected object, got: " <> show other
+        other -> expectationFailure $ "bad decode: " <> show other
 
   describe "tool_call argument parsing tolerance" $ do
     it "absent arguments → empty object" $ do
@@ -140,6 +141,61 @@ spec = do
       case eitherDecode (encode (asstWithCalls [wire])) :: Either String ChatMessage of
         Left _ -> pure () -- expected
         Right ok -> expectationFailure $ "expected failure, got: " <> show ok
+
+  describe "tool-call responses carry the provider message verbatim" $ do
+    it "OpenAI: choices[0].message rides along raw, unknown fields included" $ do
+      let msg =
+            object
+              [ "role" .= ("assistant" :: Text),
+                "content" .= Null,
+                "reasoning" .= ("thinking hard…" :: Text),
+                "some_future_field" .= object ["x" .= (1 :: Int)],
+                "tool_calls" .= [toolCallWire "c1" "web_search" "{}"]
+              ]
+          v = object ["choices" .= [object ["message" .= msg]]]
+      case parseEither parseResponseOpenAI v of
+        Right (ToolCallsResp raw [tc], _) -> do
+          raw `shouldBe` msg
+          tc.callName `shouldBe` "web_search"
+        other -> expectationFailure $ "expected ToolCallsResp, got: " <> show other
+
+    it "Anthropic: thinking + text + tool_use blocks all survive in raw" $ do
+      let blocks =
+            [ object
+                [ "type" .= ("thinking" :: Text),
+                  "thinking" .= ("let me think" :: Text),
+                  "signature" .= ("sig123" :: Text)
+                ],
+              object ["type" .= ("text" :: Text), "text" .= ("calling a tool" :: Text)],
+              object
+                [ "type" .= ("tool_use" :: Text),
+                  "id" .= ("t1" :: Text),
+                  "name" .= ("web_search" :: Text),
+                  "input" .= object ["q" .= ("hi" :: Text)]
+                ]
+            ]
+          v = object ["content" .= blocks]
+      case parseEither parseResponseAnthropic v of
+        Right (ToolCallsResp raw [tc], _) -> do
+          raw
+            `shouldBe` object
+              [ "role" .= ("assistant" :: Text),
+                "content" .= blocks
+              ]
+          tc.callId `shouldBe` "t1"
+        other -> expectationFailure $ "expected ToolCallsResp, got: " <> show other
+
+    it "Anthropic: unknown block types don't fail a text response" $ do
+      let v =
+            object
+              [ "content"
+                  .= [ object ["type" .= ("thinking" :: Text), "thinking" .= ("hm" :: Text)],
+                       object ["type" .= ("text" :: Text), "text" .= ("hi" :: Text)]
+                     ]
+              ]
+      case parseEither parseResponseAnthropic v of
+        Right (ContentResp t, _) -> t `shouldBe` "hi"
+        other -> expectationFailure $ "expected ContentResp, got: " <> show other
 
   describe "usage extraction (OpenAI shape)" $ do
     let openaiResp usage =

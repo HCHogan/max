@@ -14,9 +14,12 @@ where
 import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException)
 import Control.Lens ((&), (.~), (?~), (^.))
-import Data.Aeson (Value, eitherDecode, object, (.=))
+import Data.Aeson (Value (..), decode, eitherDecode, object, (.=))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
+import Data.Foldable (toList)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -153,13 +156,18 @@ postAndParseRetrying delays secs opts url body parser = go delays
             then do
               -- 4xx bodies like "invalid_request_error" are
               -- undiagnosable without seeing what we actually sent —
-              -- log a (truncated) copy of the request alongside.
+              -- log a (truncated) copy of the request alongside, plus
+              -- a per-message structural digest: the first 4000 chars
+              -- are usually all system prompt, while the poison
+              -- (a data-URL block, a mangled assistant turn) hides in
+              -- later messages the truncation never reaches.
               logAttention "http error request dump" $
-                object
+                object $
                   [ "url" .= T.pack url,
                     "status" .= code,
                     "request_body" .= T.take 4000 (TE.decodeUtf8Lenient body)
                   ]
+                    <> maybe [] (\s -> ["request_shape" .= s]) (requestShape body)
               pure $
                 Left $
                   FailStatus code (T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict rbody)))
@@ -173,3 +181,54 @@ postAndParseRetrying delays secs opts url body parser = go delays
                       Left e ->
                         Left (FailDecode ("extract: " <> T.pack e <> "\nbody: " <> bodyPreview))
                       Right r -> Right r
+
+-- | One line per message of a chat-completion request body: role,
+-- content kind, block types with data-URL mime + base64 size, tool
+-- calls, reasoning fields.  'Nothing' when the body isn't a
+-- @{messages: [...]}@ object (e.g. the Tavily call).
+requestShape :: BS.ByteString -> Maybe [Text]
+requestShape b = do
+  Object o <- decode (LBS.fromStrict b)
+  Array msgs <- KM.lookup "messages" o
+  pure (map msgShape (toList msgs))
+  where
+    tshow :: Show a => a -> Text
+    tshow = T.pack . show
+
+    msgShape (Object m) =
+      let role = case KM.lookup "role" m of
+            Just (String r) -> r
+            _ -> "?"
+          content = case KM.lookup "content" m of
+            Just (String t) -> "text(" <> tshow (T.length t) <> ")"
+            Just (Array bs) -> T.intercalate "+" (map blockShape (toList bs))
+            Just Null -> "null"
+            Nothing -> "absent"
+            _ -> "?"
+          tcs = case KM.lookup "tool_calls" m of
+            Just (Array a) -> ",tool_calls(" <> tshow (length a) <> ")"
+            _ -> ""
+          rc =
+            if KM.member "reasoning_content" m || KM.member "reasoning" m
+              then ",reasoning"
+              else ""
+       in role <> ": " <> content <> tcs <> rc
+    msgShape _ = "?"
+
+    blockShape (Object blk) = case KM.lookup "type" blk of
+      Just (String ty)
+        | ty == "text",
+          Just (String t) <- KM.lookup "text" blk ->
+            "text(" <> tshow (T.length t) <> ")"
+        | otherwise -> ty <> "(" <> urlInfo (KM.lookup (Key.fromText ty) blk) <> ")"
+      _ -> "?"
+    blockShape _ = "?"
+
+    urlInfo (Just (Object u))
+      | Just (String url) <- KM.lookup "url" u =
+          case T.stripPrefix "data:" url of
+            Just rest ->
+              let (mime, payload) = T.breakOn ";base64," rest
+               in "data:" <> mime <> ";" <> tshow (max 0 (T.length payload - 8)) <> "-b64-chars"
+            Nothing -> T.take 60 url
+    urlInfo _ = "?"

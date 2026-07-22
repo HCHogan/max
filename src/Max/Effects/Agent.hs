@@ -260,19 +260,18 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                     object ["count" .= length xs]
                   let newMsgs = [MsgAssistant text, btwMsg xs]
                   go dc h (n + 1) (appended' <> newMsgs) profile (msgs' <> newMsgs)
-            Right (ToolCallsResp reasoning tcs) -> do
+            Right (ToolCallsResp raw tcs) -> do
               logInfo "agent: tool calls" $
                 object
                   [ "turn" .= n,
                     "count" .= length tcs,
-                    "names" .= map (.callName) tcs,
-                    "has_reasoning" .= case reasoning of Just _ -> True; Nothing -> False
+                    "names" .= map (.callName) tcs
                   ]
               announceToolCalls dc tcs
-              -- Carry reasoning_content into the assistant message so
-              -- it round-trips back to the API on the next request —
-              -- DeepSeek returns 400 otherwise.
-              let asst = MsgAssistantToolCalls reasoning tcs
+              -- Carry the provider's message verbatim so its thinking
+              -- output round-trips back to the API on the next
+              -- request — DeepSeek returns 400 otherwise.
+              let asst = MsgAssistantToolCalls raw tcs
               toolMsgs <- traverse executeOne tcs
               imgMsgs <- drainToolImages dc
               let newMsgs = [asst] <> toolMsgs <> imgMsgs

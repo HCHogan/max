@@ -45,6 +45,7 @@ where
 import Control.Applicative ((<|>))
 import Control.Lens ((&), (.~))
 import Data.Aeson
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Pair, Parser, parseEither, parseMaybe)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
@@ -164,11 +165,16 @@ data ChatMessage
     -- needed in subsequent turns when no tool call happened.
     MsgAssistant !Text
   | -- | Assistant chose to call one or more tools.  Carries the
-    -- optional @reasoning_content@ from the thinking model — must
-    -- round-trip to the API in the *next* request within the same
-    -- agent dispatch, or the API returns 400.  'Nothing' for
-    -- non-thinking models.
-    MsgAssistantToolCalls !(Maybe Text) ![ToolCall]
+    -- provider's assistant message verbatim (the raw 'Value' exactly
+    -- as received), because thinking output must round-trip to the
+    -- API in the *next* request within the same agent dispatch in
+    -- whatever field/structure the provider used
+    -- (@reasoning_content@, @reasoning_details@, thinking blocks, …)
+    -- — DeepSeek returns 400 when it's missing.  The '[ToolCall]'
+    -- list is our parsed view of the same message, used to execute
+    -- the calls.  Protocol-consistent within one dispatch: the raw
+    -- shape matches the profile that produced it.
+    MsgAssistantToolCalls !Value ![ToolCall]
   | -- | Tool result reply: @{ role: "tool", tool_call_id: ..., content: ... }@.
     -- 'content' is freeform text (typically a JSON-encoded result).
     MsgTool !Text !Text
@@ -199,11 +205,11 @@ data ChatResponse
     ContentResp !Text
   | -- | The model wants to call one or more tools.  Caller executes
     -- them and re-invokes 'chat' with the results appended.  The
-    -- optional first field is the model's @reasoning_content@
-    -- (DeepSeek thinking mode); when 'Just', it MUST be carried
-    -- into the next assistant message's @reasoning_content@ field
-    -- or DeepSeek returns 400.
-    ToolCallsResp !(Maybe Text) ![ToolCall]
+    -- first field is the provider's assistant message verbatim; build
+    -- the follow-up 'MsgAssistantToolCalls' from it so any thinking
+    -- output replays to the API exactly as it came in (providers 400
+    -- when their reasoning fields go missing or change shape).
+    ToolCallsResp !Value ![ToolCall]
   deriving stock (Show)
 
 -- | Provider-reported token usage for one completion.  Logged in the
@@ -248,34 +254,15 @@ instance ToJSON ChatMessage where
           "content" .= blocks
         ]
     MsgAssistant c -> object ["role" .= ("assistant" :: Text), "content" .= c]
-    MsgAssistantToolCalls mReasoning tcs ->
-      object $
-        [ "role" .= ("assistant" :: Text),
-          "content" .= Null,
-          "tool_calls" .= map encodeToolCall tcs
-        ]
-          <> case mReasoning of
-            Just r -> ["reasoning_content" .= r]
-            Nothing -> []
+    -- Emit the provider's message verbatim — field names and
+    -- structure must survive the round-trip untouched.
+    MsgAssistantToolCalls raw _ -> raw
     MsgTool cid c ->
       object
         [ "role" .= ("tool" :: Text),
           "tool_call_id" .= cid,
           "content" .= c
         ]
-
-encodeToolCall :: ToolCall -> Value
-encodeToolCall tc =
-  object
-    [ "id" .= tc.callId,
-      "type" .= ("function" :: Text),
-      "function"
-        .= object
-          [ "name" .= tc.callName,
-            -- OpenAI insists arguments be a JSON-encoded string.
-            "arguments" .= TE.decodeUtf8 (LBS.toStrict (encode tc.callArguments))
-          ]
-    ]
 
 instance FromJSON ChatMessage where
   parseJSON = withObject "ChatMessage" $ \o -> do
@@ -286,11 +273,10 @@ instance FromJSON ChatMessage where
       "tool" -> MsgTool <$> o .: "tool_call_id" <*> o .: "content"
       "assistant" -> do
         mTools <- o .:? "tool_calls"
-        mReasoning <- o .:? "reasoning_content"
         case mTools of
           Just tcs | not (null tcs) -> do
             tcs' <- traverse parseToolCall tcs
-            pure (MsgAssistantToolCalls mReasoning tcs')
+            pure (MsgAssistantToolCalls (Object o) tcs')
           _ -> do
             mC <- o .:? "content"
             pure (MsgAssistant (case mC of Just c -> c; Nothing -> ""))
@@ -481,10 +467,11 @@ encodeToolSpecOpenAI t =
     ]
 
 -- | Pull @choices[0].message@ off an OpenAI-style chat response.
--- For thinking-model responses with tool_calls, extracts the
--- accompanying @reasoning_content@ and stuffs it into the
--- 'ToolCallsResp' so the agent loop can carry it forward into the
--- next request (DeepSeek requires this — missing → 400).
+-- For responses with tool_calls, the raw message object rides along
+-- verbatim in the 'ToolCallsResp' so the agent loop can replay it
+-- unchanged in the next request — thinking output must go back in
+-- whatever field/structure the provider used (DeepSeek 400s when
+-- its @reasoning_content@ goes missing).
 -- Usage extraction is lenient: a missing or mangled @usage@ block
 -- must never fail an otherwise-good response.
 parseResponseOpenAI :: Value -> Parser (ChatResponse, Maybe TokenUsage)
@@ -502,8 +489,7 @@ parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
       case mTools of
         Just tcs | not (null tcs) -> do
           tcs' <- traverse parseToolCall tcs
-          reasoning <- m .:? "reasoning_content"
-          pure (ToolCallsResp reasoning tcs')
+          pure (ToolCallsResp (Object m) tcs')
         _ -> do
           mC <- m .:? "content"
           case mC of
@@ -642,10 +628,13 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
             ]
        in AnthropicMsg "user" (toJSON content) : go rest
     go (MsgAssistant t : rest) = AnthropicMsg "assistant" (toJSON t) : go rest
-    go (MsgAssistantToolCalls _reasoning tcs : rest) =
-      -- Anthropic has its own native thinking-block format; we don't
-      -- bridge OpenAI 'reasoning_content' over (drop on this path).
-      let blocks =
+    go (MsgAssistantToolCalls raw tcs : rest) =
+      -- Replay the assistant turn's content blocks verbatim —
+      -- thinking/text blocks must survive the round-trip.  Rebuild
+      -- bare tool_use blocks only when the raw message isn't
+      -- Anthropic-shaped (content not an array — e.g. history from
+      -- an OpenAI-protocol profile).
+      let rebuilt =
             [ object
                 [ "type" .= ("tool_use" :: Text),
                   "id" .= tc.callId,
@@ -654,7 +643,10 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
                 ]
               | tc <- tcs
             ]
-       in AnthropicMsg "assistant" (toJSON blocks) : go rest
+          content = case raw of
+            Object o | Just blocks@(Array _) <- KM.lookup "content" o -> blocks
+            _ -> toJSON rebuilt
+       in AnthropicMsg "assistant" content : go rest
     go ms@(MsgTool _ _ : _) =
       let (toolMsgs, after) = span isToolMsg ms
           blocks =
@@ -673,19 +665,21 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
 
 -- | Parse Anthropic Messages API response: walk the @content@ array,
 -- collect @text@ blocks and @tool_use@ blocks.  If any tool_use
--- present → 'ToolCallsResp' (drops the text blocks, which are
--- typically Claude's pre-call thinking).  Else if any text →
+-- present → 'ToolCallsResp' carrying the whole content array verbatim
+-- (thinking/text blocks included) so the next request replays the
+-- assistant turn exactly as Claude produced it.  Else if any text →
 -- 'ContentResp' with the concatenation.  Usage extraction is lenient,
 -- same as the OpenAI path.
 parseResponseAnthropic :: Value -> Parser (ChatResponse, Maybe TokenUsage)
 parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
   blocks <- o .: "content" :: Parser [Value]
   parsed <- traverse parseBlock blocks
-  let toolCalls = [tc | Right tc <- parsed]
-      texts = [t | Left t <- parsed]
+  let toolCalls = [tc | Just (Right tc) <- parsed]
+      texts = [t | Just (Left t) <- parsed]
+      rawMsg = object ["role" .= ("assistant" :: Text), "content" .= blocks]
   resp <-
     if not (null toolCalls)
-      then pure (ToolCallsResp Nothing toolCalls)
+      then pure (ToolCallsResp rawMsg toolCalls)
       else
         if not (null texts)
           then pure (ContentResp (T.concat texts))
@@ -693,19 +687,21 @@ parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
   mUsageV <- o .:? "usage"
   pure (resp, parseMaybe parseUsageAnthropic =<< mUsageV)
   where
-    parseBlock :: Value -> Parser (Either Text ToolCall)
+    parseBlock :: Value -> Parser (Maybe (Either Text ToolCall))
     parseBlock = withObject "ContentBlock" $ \b -> do
       ty <- b .: "type" :: Parser Text
       case ty of
-        "text" -> Left <$> b .: "text"
+        "text" -> Just . Left <$> b .: "text"
         "tool_use" -> do
           tcid <- b .: "id"
           name <- b .: "name"
           -- Anthropic's @input@ is already a JSON object — no
           -- stringified-JSON ceremony like OpenAI requires.
           inp <- b .: "input"
-          pure (Right (ToolCall tcid name inp))
-        other -> fail $ "unknown content block type: " <> T.unpack other
+          pure (Just (Right (ToolCall tcid name inp)))
+        -- thinking / redacted_thinking / future block types: not ours
+        -- to interpret; they still replay verbatim via the raw message.
+        _ -> pure Nothing
 
 -- | Anthropic usage block.  @input_tokens@ counts only uncached
 -- prompt tokens; cache reads ride separately in
