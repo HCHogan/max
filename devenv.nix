@@ -6,7 +6,9 @@
 }: {
   languages.haskell = {
     enable = true;
-    package = pkgs.haskell.compiler.ghc9124;
+    # Default toolchain (GHC 9.10.3 on nixpkgs 25.11): the default set
+    # is hydra-cached and its HLS actually builds — 9.12.4's does not.
+    package = pkgs.haskell.compiler.ghc9103;
     stack.enable = false;
     cabal = {
       enable = true;
@@ -14,7 +16,7 @@
     };
     lsp = {
       enable = true;
-      package = pkgs.haskell.packages.ghc9124.haskell-language-server;
+      package = pkgs.haskell-language-server;
     };
   };
 
