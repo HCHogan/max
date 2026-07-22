@@ -29,13 +29,14 @@ import Effectful.Exception (try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader)
-import Max.DB.History (HistoryItem (..), bestName, fetchMessage)
+import Max.DB.History (HistoryItem (..), bestName, fetchForwardChildren, fetchMessage)
 import Max.DB.Message (insertOutbound)
 import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Persistence (PersistMode, isEphemeral)
+import Max.Prompt (tagForwardMarkers)
 import Max.Time (fmtDateHM)
 import OneBot.Action (Action (..), Response (..), sendChatMsg)
 import OneBot.Segment (Segment (..), segmentMentions)
@@ -57,6 +58,7 @@ builtinsFor ::
 builtinsFor tz mEmbed dc =
   [ getMessageByIdTool tz,
     searchMessagesTool tz mEmbed dc.dcGroupId,
+    viewForwardTool tz,
     sayTool dc,
     pokeTool dc
   ]
@@ -92,7 +94,7 @@ getMessageByIdTool tz =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
           m <- fetchMessage mid
-          pure $ Right (toJSON (fmap (historyItemSummary tz) m))
+          pure $ Right (toJSON (fmap (historyItemSummary tz . tagForwardMarkers) m))
     }
   where
     parseArgs :: Object -> Parser Int64
@@ -170,7 +172,7 @@ searchMessagesTool tz mEmbed (GroupId gid) =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right sa ->
-          let run f mVec = fmap (toJSON . map (historyItemSummary tz)) <$> runSearch f mVec
+          let run f mVec = fmap (toJSON . map (historyItemSummary tz . tagForwardMarkers)) <$> runSearch f mVec
            in case toFilter sa of
                 Left e -> pure (Left e)
                 Right f -> case (sa.saSemantic, mEmbed) of
@@ -387,6 +389,47 @@ sayTool dc =
                         object ["payload" .= payload]
                   logInfo "say: sent" $ object ["len" .= T.length msg, "ephemeral" .= ephemeral]
                   pure $ Right (object ["ok" .= True])
+    }
+
+--------------------------------------------------------------------------------
+-- view_forward — expand a 转发聊天记录 on demand
+
+-- | Cap on child lines returned per call — a mega-bundle shouldn't
+-- flood the context (the summary shape already truncates each line).
+maxForwardChildren :: Int
+maxForwardChildren = 100
+
+viewForwardTool :: (WithConnection :> es, IOE :> es) => TimeZone -> Tool es
+viewForwardTool tz =
+  Tool
+    { toolName = "view_forward",
+      toolDescription =
+        T.unwords
+          [ "展开一条转发聊天记录：传 [forward#<id>] 里的 <id>（容器消息的 message_id），",
+            "返回里面的每条消息。嵌套的转发同样以 [forward#<id>] 出现，可以继续展开。"
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "message_id"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("[forward#<id>] 标记里的 id（可能是负数）" :: Text)
+                      ]
+                ],
+            "required" .= (["message_id"] :: [Text])
+          ],
+      toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
+        Left e -> pure $ Left ("bad args: " <> T.pack e)
+        Right (mid :: Int64) -> do
+          kids <- fetchForwardChildren mid maxForwardChildren
+          if null kids
+            then pure $ Left "这条消息没有已展开的转发内容（不是转发聊天记录，或还没抓取完）"
+            else
+              pure . Right . toJSON $
+                map (historyItemSummary tz . tagForwardMarkers) kids
     }
 
 --------------------------------------------------------------------------------

@@ -9,7 +9,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
-import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, renderContext)
+import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, renderContext, tagForwardMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -118,6 +118,7 @@ baseInputs =
       mention = [],
       pinnedItems = [],
       replyCtx = Nothing,
+      triggerForward = [],
       multimodal = False,
       origin = OriginDirect,
       groupBrief = [],
@@ -492,6 +493,27 @@ spec = do
       let (_, _, ub) = splitMessages (renderContext baseInputs)
       ub `shouldSatisfy` ("[current message]" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("没人 @ 你" `T.isInfixOf`))
+
+  describe "renderContext trigger forward" $ do
+    it "expands the trigger's own forward children under the current message" $ do
+      let kids =
+            [ historyAt 8 (-51) otherMemberId (Just "Bob") "转发里第一句",
+              historyAt 9 (-52) memberId (Just "Alice") "转发里第二句"
+            ]
+          inp = baseInputs {triggerForward = kids}
+          (_, _, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` ("转发记录内容" `T.isInfixOf`)
+      ub `shouldSatisfy` ("转发里第一句" `T.isInfixOf`)
+      ub `shouldSatisfy` ("转发里第二句" `T.isInfixOf`)
+
+  describe "tagForwardMarkers" $ do
+    it "upgrades a bare [forward] with the message's own id" $
+      (tagForwardMarkers (historyAt 9 8001 memberId (Just "Alice") "看这个 [forward]")).renderedText
+        `shouldBe` "看这个 [forward#8001]"
+
+    it "leaves text without the marker untouched" $
+      (tagForwardMarkers (historyAt 9 8001 memberId (Just "Alice") "普通消息")).renderedText
+        `shouldBe` "普通消息"
 
   describe "renderContext poke turns" $ do
     it "names the poker and shows no message line" $ do

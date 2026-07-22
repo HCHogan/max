@@ -16,7 +16,7 @@ A QQ chat bot written in Haskell, for group chats and one-on-one private chats. 
 - **Group awareness.** The prompt carries group name, owner and admins; `group_members` pages through the full roster.
 - **Browser** (multimodal profiles). Per-group camoufox container (stealth Firefox over MCP): navigate, snapshot, click, type, scroll — snapshots list interactive elements with CSS selectors.
 - **Replies.** Blank-line paragraphs go out as separate messages (fences never split, five max); a QQ-id-to-name table in the prompt keeps names straight, group card over nickname.
-- **Tools** (per config): `web_search` · files · sandbox (persistent per-group Docker workspace, packages from pinned nixpkgs) · memory · message search · `group_members` / `view_avatar` / `view_image` / `poke` · browser.
+- **Tools** (per config): `web_search` · files · sandbox (persistent per-group Docker workspace, packages from pinned nixpkgs) · memory · message search · `group_members` / `view_avatar` / `view_image` / `view_forward` / `poke` · browser.
 - **Pins.** Messages worth keeping in every prompt (specs, decisions, reference images) survive `!clear`. Curated by the model itself via `pin_message`/`unpin_message` tools; `!pin`/`!unpin`/`!pins` remain as the manual override.
 - **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!proactive`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`.
 - `@bot ping` → `pong`, no LLM call.

@@ -13,6 +13,8 @@ module Max.Prompt
     -- * Shared line rendering (used by "Max.Intent" / "Max.Handler")
     renderHistoryLine,
     renderCurrentLine,
+    -- * Forward markers (shared with "Max.Tools")
+    tagForwardMarkers,
   )
 where
 
@@ -79,6 +81,9 @@ data PromptInputs = PromptInputs
     -- — when the quoted message is a 转发聊天记录 — its stored
     -- contents, so quoting a forward makes it readable.
     replyCtx :: !(Maybe (HistoryItem, [FileRecord], [HistoryItem])),
+    -- | When the trigger message itself is a 转发聊天记录: its
+    -- expanded child rows, rendered under the current-message block.
+    triggerForward :: ![HistoryItem],
     -- | Whether the active profile accepts image content blocks.
     -- Toggles the format-guide wording for the @[image]@ marker.
     multimodal :: !Bool,
@@ -195,7 +200,7 @@ systemPrompt multimodal' private envText persona mMemBlock =
          | multimodal'
          ]
       <> [ "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
-           "  [forward]                   — 转发聊天记录；被引用时内容展开在 [quoted context]",
+           "  [forward#<id>]              — 转发聊天记录；被引用或就是当前消息时会自动展开，其余情况用 view_forward 传 <id> 看内容",
            "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [environment]"
          ]
       <> maybe [] (\b -> ["", b]) mMemBlock
@@ -264,7 +269,7 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
         <> mention'
         <> pinnedItems'
         <> maybe [] (\(r, _, kids) -> r : kids) replyCtx0
-  let enrich = applyStickerCaptions capMap
+  let enrich = tagForwardMarkers . applyStickerCaptions capMap
       ambient'' = map enrich ambient'
       mention'' = map enrich mention'
       pinnedItems'' = map enrich pinnedItems'
@@ -289,6 +294,17 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
         let tag = tagImageMarkers tagIds
         pure (map tag ambient'', map tag mention'')
       else pure (ambient'', mention'')
+  -- The trigger itself may BE a 转发聊天记录 (typical in private
+  -- chat, where any message dispatches).  Its children are being
+  -- fetched by the forward worker right now — wait for them, then
+  -- expand inline under the current message like the quoted-reply
+  -- path does.
+  triggerKids <-
+    if any isForwardSeg gm.message
+      then do
+        waitForTriggerForward mid
+        map (applyStickerCaptions capMap) <$> fetchForwardChildren mid maxForwardLines
+      else pure []
   images' <-
     if multimodal'
       then do
@@ -322,6 +338,7 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
           mention = mentionCtx,
           pinnedItems = pinnedItems'',
           replyCtx = replyCtx',
+          triggerForward = triggerKids,
           multimodal = multimodal',
           origin = origin',
           groupBrief = brief,
@@ -361,6 +378,56 @@ waitForTriggerImages mid expected = go 0
             _ -> do
               liftIO (threadDelay (stepMs * 1000))
               go (elapsed + stepMs)
+
+-- | Is this segment a 转发聊天记录 container?
+isForwardSeg :: Segment -> Bool
+isForwardSeg (SegOther "forward" _) = True
+isForwardSeg _ = False
+
+-- | Poll until the forward worker has landed at least one child row
+-- for the trigger's 转发聊天记录 (the whole chain arrives in one
+-- @get_forward_msg@ round-trip, so "any child" means "all of them").
+-- Bounded: a failed fetch never inserts rows, so give up after
+-- 'waitForwardMaxMs' and let the prompt show the bare marker.
+waitForTriggerForward ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  Int64 -> -- trigger message_id
+  Eff es ()
+waitForTriggerForward mid = go 0
+  where
+    stepMs = 300
+    waitForwardMaxMs = 10_000
+    go elapsed
+      | elapsed >= waitForwardMaxMs =
+          logAttention "prompt: trigger forward still unexpanded after wait" $
+            object ["message_id" .= mid]
+      | otherwise = do
+          rows <-
+            query
+              "SELECT count(*) FROM messages WHERE forwarded_in_message_id = ?"
+              (Only mid)
+          case rows of
+            [Only (n :: Int64)] | n > 0 -> pure ()
+            _ -> do
+              liftIO (threadDelay (stepMs * 1000))
+              go (elapsed + stepMs)
+
+-- | Upgrade bare @[forward]@ display markers to
+-- @[forward#\<message_id\>]@ so the model has a handle to pass to the
+-- @view_forward@ tool.  The id is the containing message's own id —
+-- that's what the child rows are keyed under (nested forwards inside
+-- an expansion carry their synthetic container id the same way).
+tagForwardMarkers :: HistoryItem -> HistoryItem
+tagForwardMarkers h
+  | "[forward]" `T.isInfixOf` h.renderedText =
+      h
+        { renderedText =
+            T.replace
+              "[forward]"
+              ("[forward#" <> T.pack (show h.messageId) <> "]")
+              h.renderedText
+        }
+  | otherwise = h
 
 -- | Everyone appearing in this turn's context, QQ号 ↔ display name.
 -- Rendered text shows mentions as raw @<QQ号> (that's all the wire
@@ -638,6 +705,7 @@ renderContext pi' =
           ambientNoDup
           pi'.replyCtx
           pi'.pinnedItems
+          pi'.triggerForward
           pi'.triggerMessage
       -- If we have inline image bytes, attach them as a multimodal
       -- content-block message, each prefixed with a label naming its
@@ -718,9 +786,10 @@ renderUser ::
   [HistoryItem] ->
   Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
   [HistoryItem] -> -- pinned items, in user pin order
+  [HistoryItem] -> -- trigger's own forward children (trigger IS a 转发)
   GroupMessage ->
   Text
-renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' gm =
+renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' triggerFwd' gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -747,13 +816,15 @@ renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' gm =
         case origin' of
           OriginProactive ->
             [ "[current message — 没人 @ 你，意图识别判断你可能想接话]",
-              renderCurrentLine gm,
-              "",
-              "你没有被 @。想接话就接，语气自然点，别表现得像被点名回答问题；\
-              \插话要短，一两句说完，说完就收，别追着展开；\
-              \记得用 [↩#<msgid>] 引用你在回的那条。\
-              \不想接、没什么可说的、或话题跟你无关，就整条回复 [silence]——主动插话宁缺毋滥。"
+              renderCurrentLine gm
             ]
+              <> renderReplyForward tz' selfId' triggerFwd'
+              <> [ "",
+                   "你没有被 @。想接话就接，语气自然点，别表现得像被点名回答问题；\
+                   \插话要短，一两句说完，说完就收，别追着展开；\
+                   \记得用 [↩#<msgid>] 引用你在回的那条。\
+                   \不想接、没什么可说的、或话题跟你无关，就整条回复 [silence]——主动插话宁缺毋滥。"
+                 ]
           OriginPoke ->
             [ "[current message — 戳一戳]",
               senderDisplayName gm <> " 戳了戳你。没有文字，这是柔和版的 @，意思通常是\"看一眼上面\"。",
@@ -767,10 +838,12 @@ renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' gm =
             ]
           OriginDirect ->
             [ "[current message]",
-              renderCurrentLine gm,
-              "",
-              "请回复当前消息。"
+              renderCurrentLine gm
             ]
+              <> renderReplyForward tz' selfId' triggerFwd'
+              <> [ "",
+                   "请回复当前消息。"
+                 ]
       ]
 
 renderHistoryLine :: TimeZone -> Int64 -> HistoryItem -> Text
