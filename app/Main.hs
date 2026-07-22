@@ -6,6 +6,7 @@ import Control.Exception (AsyncException (UserInterrupt), bracket, bracket_, thr
 import Control.Monad (unless)
 import Data.Foldable (for_)
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, link, runConcurrent, withAsync)
 import Effectful.Log
@@ -97,6 +98,7 @@ main = do
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           mEmbed <- traverse newEmbedClient cfg.embedding
           mIntentSt <- traverse (const newIntentState) cfg.intent
+          startedAt <- getCurrentTime
           let toolFactory dc =
                 builtinsFor cfg.timezone mEmbed dc
                   <> reminderToolsFor cfg.timezone reminders dc
@@ -121,6 +123,7 @@ main = do
                     beStickerDefault = cfg.stickersEnabled,
                     beDefaultModel = cfg.llm.defaultName,
                     beTimeZone = cfg.timezone,
+                    beStartedAt = startedAt,
                     beSessions = sessions,
                     beTasks = tasks,
                     beSandboxes = sandboxes,

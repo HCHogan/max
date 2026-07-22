@@ -21,11 +21,14 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Types
 import Data.Int (Int64)
+import Data.Text.IO qualified as TIO
 import Data.Version (showVersion)
 import Distribution.Pretty (prettyShow)
 import Distribution.Simple.Utils (cabalVersion)
+import Max.Util (trySyncIO)
 import Paths_max (version)
-import System.Info (fullCompilerVersion)
+import System.Info (arch, fullCompilerVersion, os)
+import Text.Read (readMaybe)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, fetchMemory, listMemories)
 import Max.DB.Stickers qualified as Stickers
@@ -313,17 +316,20 @@ execute t gid uid replyTarget cmd = do
       )
     logInfo "session: proactive override" $ object ["value" .= mb]
     ack
-  Version ->
+  Version -> do
+    now <- liftIO getCurrentTime
+    osName <- liftIO readOsPretty
+    hostUp <- liftIO readHostUptime
     -- Single newlines only: a blank line would split the card into
     -- separate messages ('planReply').
-    reply $
-      T.intercalate
-        "\n"
-        [ "🦈 max-bot v" <> T.pack (showVersion version),
-          "· ghc " <> T.pack (showVersion fullCompilerVersion),
-          "· cabal " <> T.pack (prettyShow cabalVersion),
-          "· github.com/HCHogan/max"
-        ]
+    reply . T.intercalate "\n" $
+      [ "🦈 max-bot v" <> T.pack (showVersion version),
+        "🌊 " <> osName <> " · " <> T.pack arch,
+        "🫧 ghc " <> T.pack (showVersion fullCompilerVersion) <> " · cabal " <> T.pack (prettyShow cabalVersion),
+        "⏱️ up " <> fmtDur (realToFrac (diffUTCTime now env.beStartedAt))
+          <> maybe "" (\u -> " · host " <> fmtDur u) hostUp,
+        "🔗 github.com/HCHogan/max"
+      ]
   StickerList -> do
     rows <- Stickers.listRecentStickers 10
     reply (formatStickers rows)
@@ -351,6 +357,43 @@ execute t gid uid replyTarget cmd = do
           if n == 0
             then reply ("没有匹配 " <> prefix <> "* 的表情")
             else ack
+
+--------------------------------------------------------------------------------
+-- !version system info (best-effort, Linux; fall back quietly).
+
+-- | Distro name from /etc/os-release's PRETTY_NAME; falls back to the
+-- compiler's notion of the OS.
+readOsPretty :: IO Text
+readOsPretty = do
+  r <- trySyncIO (TIO.readFile "/etc/os-release")
+  pure $ case r of
+    Right c
+      | (l : _) <- [l | l <- T.lines c, "PRETTY_NAME=" `T.isPrefixOf` l] ->
+          T.dropAround (== '"') (T.drop (T.length "PRETTY_NAME=") l)
+    _ -> T.pack os
+
+-- | Host uptime in seconds (/proc/uptime's first field).
+readHostUptime :: IO (Maybe Double)
+readHostUptime = do
+  r <- trySyncIO (TIO.readFile "/proc/uptime")
+  pure $ case r of
+    Right c | (w : _) <- T.words c, Just d <- readMaybe (T.unpack w) -> Just d
+    _ -> Nothing
+
+-- | Compact duration: the two most significant units ("3d 4h",
+-- "2h 13m", "5m 12s").
+fmtDur :: Double -> Text
+fmtDur secs =
+  let s = max 0 (round secs) :: Int
+      (d, s1) = s `divMod` 86400
+      (h, s2) = s1 `divMod` 3600
+      (m, sec) = s2 `divMod` 60
+   in case () of
+        _
+          | d > 0 -> tshow d <> "d " <> tshow h <> "h"
+          | h > 0 -> tshow h <> "h " <> tshow m <> "m"
+          | m > 0 -> tshow m <> "m " <> tshow sec <> "s"
+          | otherwise -> tshow sec <> "s"
 
 renderThinkingState :: Maybe Bool -> Text
 renderThinkingState = \case

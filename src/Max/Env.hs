@@ -16,7 +16,7 @@ module Max.Env
 where
 
 import Data.Text (Text)
-import Data.Time (TimeZone)
+import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
 import Max.Embedding (EmbedClient)
 import Max.Intent (IntentConfig)
@@ -41,6 +41,8 @@ data BotEnv = BotEnv
     beDefaultModel :: !Text,
     -- | Display timezone for model/user-facing timestamps ('AppConfig.timezone').
     beTimeZone :: !TimeZone,
+    -- | When this process started (for @!version@'s bot uptime).
+    beStartedAt :: !UTCTime,
     beSessions :: !SessionRegistry,
     beTasks :: !TaskRegistry,
     beSandboxes :: !SandboxRegistry,
