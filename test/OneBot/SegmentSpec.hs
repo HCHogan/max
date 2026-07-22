@@ -1,10 +1,12 @@
 module OneBot.SegmentSpec (spec) where
 
-import Data.Aeson (decodeStrict')
+import Data.Aeson (decodeStrict', encode, object, (.=))
+import Data.ByteString.Lazy qualified as BSL
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import OneBot.Segment (Segment (..), VideoSegInfo (..), renderPlainText, segmentMentions)
+import OneBot.Segment (CardInfo (..), Segment (..), VideoSegInfo (..), renderPlainText, segmentMentions)
 import OneBot.Types (UserId (..))
 import Test.Hspec
 
@@ -17,7 +19,59 @@ spec :: Spec
 spec = do
   faceSpec
   videoSpec
+  cardSpec
   mentionSpec
+
+cardSpec :: Spec
+cardSpec = describe "lightapp card segments" $ do
+  let biliCard =
+        "{\"app\":\"com.tencent.miniapp_01\",\"prompt\":\"[QQ小程序]哔哩哔哩\",\"meta\":{\"detail_1\":\
+        \{\"title\":\"哔哩哔哩\",\"desc\":\"【测试】超好看的视频\",\
+        \\"qqdocurl\":\"https://b23.tv/ab12Cd3\",\"preview\":\"pic.example/x.jpg\",\"tag\":\"哔哩哔哩\"}}}"
+      newsCard =
+        "{\"app\":\"com.tencent.structmsg\",\"meta\":{\"news\":\
+        \{\"title\":\"一篇文章\",\"desc\":\"文章摘要\",\"jumpUrl\":\"https://example.com/a\",\"tag\":\"知乎\"}}}"
+      -- Build the envelope with aeson itself — hand-rolled escaping of
+      -- the inner JSON string would mangle the CJK.
+      wrap raw =
+        TE.decodeUtf8 . BSL.toStrict . encode $
+          object ["type" .= ("json" :: Text), "data" .= object ["data" .= (raw :: Text)]]
+
+  it "parses a bilibili mini-app share card" $
+    case decodeSeg (wrap biliCard) of
+      Just (SegCard ci) -> do
+        ci.ciApp `shouldBe` "com.tencent.miniapp_01"
+        ci.ciTag `shouldBe` Just "哔哩哔哩"
+        ci.ciDesc `shouldBe` Just "【测试】超好看的视频"
+        ci.ciUrl `shouldBe` Just "https://b23.tv/ab12Cd3"
+        ci.ciPreview `shouldBe` Just "pic.example/x.jpg"
+      other -> expectationFailure ("expected SegCard, got: " <> show other)
+
+  it "parses a structmsg news card (jumpUrl form)" $
+    case decodeSeg (wrap newsCard) of
+      Just (SegCard ci) -> do
+        ci.ciTitle `shouldBe` Just "一篇文章"
+        ci.ciUrl `shouldBe` Just "https://example.com/a"
+      other -> expectationFailure ("expected SegCard, got: " <> show other)
+
+  it "renders as a compact [card: ...] line with tag/title dedup" $
+    case decodeSeg (wrap biliCard) of
+      Just seg ->
+        renderPlainText [seg]
+          `shouldBe` "[card: 哔哩哔哩 | 【测试】超好看的视频 | https://b23.tv/ab12Cd3]"
+      other -> expectationFailure ("expected a segment, got: " <> show other)
+
+  it "keeps unparseable json segments as SegOther" $
+    case decodeSeg "{\"type\":\"json\",\"data\":{\"data\":\"not json at all\"}}" of
+      Just (SegOther "json" _) -> pure ()
+      other -> expectationFailure ("expected SegOther, got: " <> show other)
+
+  it "round-trips the raw payload through ToJSON" $
+    case decodeSeg (wrap biliCard) of
+      Just seg@(SegCard ci) -> do
+        ci.ciRaw `shouldBe` biliCard
+        (decodeStrict' (BSL.toStrict (encode seg)) :: Maybe Segment) `shouldBe` Just seg
+      other -> expectationFailure ("expected SegCard, got: " <> show other)
 
 faceSpec :: Spec
 faceSpec = describe "face segments" $ do

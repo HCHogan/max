@@ -41,7 +41,7 @@ import OneBot.Types (GroupId (..), MessageId (..), UserId (..), parseIntId)
 -- | Stop recursing inline content past this depth — sanity bound against
 -- pathological NapCat responses. Anything deeper stays in jsonb.
 maxDepth :: Int
-maxDepth = 3
+maxDepth = 6
 
 data ForwardJob = ForwardJob
   { containerMessageId :: !Int64,

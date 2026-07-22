@@ -1,8 +1,10 @@
 module OneBot.Segment
   ( Segment (..),
+    CardInfo (..),
     FileSegInfo (..),
     ImageSegInfo (..),
     VideoSegInfo (..),
+    parseCard,
     imageSeg,
     stickerSeg,
     isStickerImage,
@@ -14,13 +16,17 @@ where
 
 import Control.Applicative ((<|>))
 import Data.Aeson
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser, typeMismatch)
 import Data.Char (isAlphaNum, isAscii, isDigit)
+import Data.Foldable (asum)
 import Data.Int (Int64)
+import Data.List (sortOn)
 import Data.Maybe (fromMaybe)
 import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Text.Read qualified as TR
 import OneBot.Types (MessageId (..), UserId (..))
 
@@ -47,7 +53,32 @@ data Segment
     -- receive time (falls back to a container-local file path when it
     -- can't — those we cannot fetch).
     SegVideo !VideoSegInfo
+  | -- | A structured share card (QQ lightapp @json@ segment): B站/
+    -- 音乐/文章分享等.  Parsed eagerly so history lines show the
+    -- title and jump URL instead of an opaque @[json]@; the raw
+    -- payload is kept for round-tripping and richer future uses.
+    SegCard !CardInfo
   | SegOther !Text !Value
+  deriving stock (Show, Eq)
+
+-- | What we could extract from a lightapp card.  Field meanings vary
+-- by app; 'ciUrl' prefers the most link-like of
+-- @qqdocurl@/@jumpUrl@/@musicUrl@/@webUrl@ within the richest meta
+-- entry.
+data CardInfo = CardInfo
+  { -- | Lightapp id, e.g. @com.tencent.miniapp_01@ / @com.tencent.structmsg@.
+    ciApp :: !Text,
+    -- | Source label shown by QQ (e.g. "哔哩哔哩", "网易云音乐").
+    ciTag :: !(Maybe Text),
+    ciTitle :: !(Maybe Text),
+    ciDesc :: !(Maybe Text),
+    ciUrl :: !(Maybe Text),
+    -- | Preview image URL (may lack a scheme).
+    ciPreview :: !(Maybe Text),
+    -- | The original inner JSON string, verbatim — 'ToJSON' emits
+    -- this so the segment round-trips losslessly.
+    ciRaw :: !Text
+  }
   deriving stock (Show, Eq)
 
 -- | A @video@ segment's data: NapCat file code, best-effort direct
@@ -110,6 +141,11 @@ instance FromJSON Segment where
             subTy <- traverse parseFlexInt mSub
             summ <- d .:? "summary"
             pure (SegImage (ImageSegInfo url subTy summ))
+          "json" -> do
+            raw <- d .: "data"
+            pure $ case parseCard raw of
+              Just ci -> SegCard ci
+              Nothing -> SegOther "json" (Object d)
           "video" -> do
             file <- d .:? "file" .!= ""
             url <- d .:? "url"
@@ -157,6 +193,47 @@ parseFileSeg d = do
         fsiSize = size,
         fsiUrl = url
       }
+
+-- | Drop adjacent duplicates (a B站 card often has tag == title).
+dedupAdjacent :: [Text] -> [Text]
+dedupAdjacent (a : b : rest)
+  | a == b = dedupAdjacent (a : rest)
+  | otherwise = a : dedupAdjacent (b : rest)
+dedupAdjacent xs = xs
+
+-- | Parse the inner JSON string of a lightapp card.  We require a
+-- top-level @app@ id and at least one meta entry carrying a title or
+-- description; anything else stays 'SegOther' (real payloads we don't
+-- understand should keep their raw shape for later inspection).
+parseCard :: Text -> Maybe CardInfo
+parseCard raw = do
+  Object top <- decodeStrict' (TE.encodeUtf8 raw)
+  String app <- KM.lookup "app" top
+  metas <- case KM.lookup "meta" top of
+    Just (Object m) -> Just [mv | (_, Object mv) <- KM.toList m]
+    _ -> Nothing
+  -- Pick the meta entry with the most extractable content.
+  let scored = [(cardFields mv, mv) | mv <- metas]
+      best = case sortOn (negate . fst) scored of
+        ((score, mv) : _) | score > 0 -> Just mv
+        _ -> Nothing
+  mv <- best
+  pure
+    CardInfo
+      { ciApp = app,
+        ciTag = str "tag" mv,
+        ciTitle = str "title" mv,
+        ciDesc = str "desc" mv,
+        ciUrl = asum [str k mv | k <- ["qqdocurl", "jumpUrl", "musicUrl", "webUrl", "doc_url"]],
+        ciPreview = str "preview" mv,
+        ciRaw = raw
+      }
+  where
+    str k o = case KM.lookup k o of
+      Just (String s) | not (T.null (T.strip s)) -> Just (T.strip s)
+      _ -> Nothing
+    cardFields o =
+      length (filter (\k -> maybe False (const True) (str k o)) ["title", "desc", "jumpUrl", "qqdocurl"]) :: Int
 
 -- | Normalise NapCat's @faceText@ into a display name: drop the
 -- conventional leading slash ("/惊讶" → "惊讶") and surrounding
@@ -247,6 +324,8 @@ instance ToJSON Segment where
                   <> ["file_size" .= s | Just s <- [v.vsiSize]]
               )
         ]
+    SegCard ci ->
+      object ["type" .= ("json" :: Text), "data" .= object ["data" .= ci.ciRaw]]
     SegOther t v ->
       object ["type" .= t, "data" .= v]
 
@@ -266,6 +345,14 @@ renderPlainText = T.concat . map go
           <> "]"
       SegFile fs -> "[file:" <> fs.fsiName <> "]"
       SegVideo _ -> "[video]"
+      SegCard ci ->
+        -- Compact one-liner: source | title | desc | url, deduped and
+        -- capped so a wordy card can't eat a history line.
+        let parts =
+              dedupAdjacent $
+                [t | Just t <- [ci.ciTag, ci.ciTitle, T.take 80 <$> ci.ciDesc]]
+                  <> [u | Just u <- [ci.ciUrl]]
+         in "[card: " <> T.intercalate " | " parts <> "]"
       SegOther t _ -> "[" <> t <> "]"
 
 -- | Parse LLM-authored reply text into segments, converting raw

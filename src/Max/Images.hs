@@ -180,9 +180,12 @@ processOne job = do
   where
     maxBytes = case job.kind of
       MediaImage -> 50 * 1024 * 1024
-      -- Inline base64 grows 4/3 on the wire; 60MB keeps one video
-      -- under ~80MB in the request.
-      MediaVideo -> 60 * 1024 * 1024
+      -- Kimi's documented request-body ceiling is 100MB; base64 grows
+      -- the video by 4/3, so 70MB raw ≈ 93MB on the wire, leaving a
+      -- few MB for the prompt itself.  (DashScope's inline limit is
+      -- far lower — 10MB — big videos there need their file-upload
+      -- path, which we don't speak yet.)
+      MediaVideo -> 70 * 1024 * 1024
 
 recordImage ::
   (WithConnection :> es, IOE :> es) =>

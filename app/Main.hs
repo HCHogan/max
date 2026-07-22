@@ -46,6 +46,7 @@ import Max.Session (newSessionRegistry)
 import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
 import Max.Tools (builtinsFor)
+import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
 import Max.Tools.Files (fileToolsFor)
 import Max.Tools.Group (groupToolsFor)
@@ -103,6 +104,7 @@ main = do
                   <> imageToolsFor cfg.timezone cfg.imagesDir dc
                   <> memoryToolsFor mEmbed dc
                   <> pinToolsFor sessions cfg.llm.defaultName dc
+                  <> bilibiliToolsFor cfg.timezone dc
                   <> sandboxToolsFor cfg.timezone dc.dcGroupId sandboxes
                   <> fileToolsFor cfg.timezone dc.dcGroupId cfg.imagesDir sandboxes
                   <> (if dc.dcStickers then stickerToolsFor mEmbed else [])

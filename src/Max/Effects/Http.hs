@@ -4,12 +4,15 @@ module Max.Effects.Http
   ( Http,
     runHttp,
     getBytes,
+    getBytesWith,
+    getFinalUrl,
   )
 where
 
 import Control.Exception (SomeException)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
+import Data.CaseInsensitive qualified as CI
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -23,31 +26,37 @@ import Network.HTTP.Client
     brRead,
     newManager,
     parseRequest,
+    redirectCount,
+    requestHeaders,
     responseBody,
     responseHeaders,
     responseStatus,
     withResponse,
   )
 import Network.HTTP.Client.TLS (mkManagerSettings)
-import Network.HTTP.Types.Header (hContentType)
+import Network.HTTP.Types.Header (hContentType, hLocation)
 import Network.HTTP.Types.Status (statusCode)
 import Network.TLS qualified as TLS
 import System.X509 (getSystemCertificateStore)
 
 data Http :: Effect where
-  GetBytes :: Text -> Int -> Http m (Either Text (ByteString, Text))
+  GetBytes :: Text -> [(Text, Text)] -> Int -> Http m (Either Text (ByteString, Text))
+  -- | Resolve one hop of redirection: the response's @Location@
+  -- header.  Some link shorteners (b23.tv) are only readable this way.
+  GetFinalUrl :: Text -> Http m (Either Text Text)
 
 type instance DispatchOf Http = Dynamic
 
 -- | Build one shared 'Manager' (TLS-capable, internal connection pool) and
--- serve all 'GetBytes' calls through it.
+-- serve all requests through it.
 runHttp :: IOE :> es => Eff (Http : es) a -> Eff es a
 runHttp m = do
   settings <- liftIO lenientTlsManagerSettings
   mgr <- liftIO (newManager settings)
   interpret
     ( \_ -> \case
-        GetBytes url limit -> liftIO (downloadIO mgr url limit)
+        GetBytes url headers limit -> liftIO (downloadIO mgr url headers limit)
+        GetFinalUrl url -> liftIO (finalUrlIO mgr url)
     )
     m
 
@@ -88,12 +97,27 @@ lenientTlsManagerSettings = do
 -- exceeded. Returns @(bytes, primary-mime)@. The primary mime is the
 -- @Content-Type@ header with any @;param@ tail stripped.
 getBytes :: Http :> es => Text -> Int -> Eff es (Either Text (ByteString, Text))
-getBytes url limit = send (GetBytes url limit)
+getBytes url = getBytesWith url []
 
-downloadIO :: Manager -> Text -> Int -> IO (Either Text (ByteString, Text))
-downloadIO mgr url limit = do
+-- | 'getBytes' with extra request headers — some origins (bilibili's
+-- API and CDN) refuse requests without @User-Agent@ / @Referer@.
+getBytesWith :: Http :> es => Text -> [(Text, Text)] -> Int -> Eff es (Either Text (ByteString, Text))
+getBytesWith url headers limit = send (GetBytes url headers limit)
+
+-- | Where does @url@ redirect to (single hop, @Location@ header)?
+getFinalUrl :: Http :> es => Text -> Eff es (Either Text Text)
+getFinalUrl url = send (GetFinalUrl url)
+
+downloadIO :: Manager -> Text -> [(Text, Text)] -> Int -> IO (Either Text (ByteString, Text))
+downloadIO mgr url headers limit = do
   eres <- trySyncIO $ do
-    req <- parseRequest (T.unpack url)
+    req0 <- parseRequest (T.unpack url)
+    let req =
+          req0
+            { requestHeaders =
+                requestHeaders req0
+                  <> [(CI.mk (TE.encodeUtf8 k), TE.encodeUtf8 v) | (k, v) <- headers]
+            }
     withResponse req mgr $ \resp -> do
       let sc = statusCode (responseStatus resp)
       if sc >= 400
@@ -115,6 +139,19 @@ downloadIO mgr url limit = do
           if BS.null chunk
             then pure (Right (BS.concat (reverse acc)))
             else readChunks body (remaining - BS.length chunk) (chunk : acc)
+
+finalUrlIO :: Manager -> Text -> IO (Either Text Text)
+finalUrlIO mgr url = do
+  eres <- trySyncIO $ do
+    req0 <- parseRequest (T.unpack url)
+    let req = req0 {redirectCount = 0}
+    withResponse req mgr $ \resp ->
+      pure $ case lookup hLocation (responseHeaders resp) of
+        Just loc -> Right (TE.decodeUtf8 loc)
+        Nothing -> Left ("no redirect (HTTP " <> T.pack (show (statusCode (responseStatus resp))) <> ")")
+  case eres :: Either SomeException (Either Text Text) of
+    Right r -> pure r
+    Left e -> pure (Left (T.pack (show e)))
 
 primaryMime :: Text -> Text
 primaryMime = T.strip . fst . T.breakOn ";"

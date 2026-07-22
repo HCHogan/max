@@ -199,7 +199,8 @@ systemPrompt multimodal' private envText persona mMemBlock =
       <> [ "  [image#<id>]                — 群历史里的图片，默认不加载；用 view_image 传 <id> 查看，或把 [image#<id>] 写进回复把它转发到群里"
          | multimodal'
          ]
-      <> [ "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
+      <> [ "  [card: ...]                 — 分享卡片（小程序/链接分享），竖线分隔来源/标题/简介/链接；B站视频卡用 view_bilibili 传链接看详情",
+           "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
            "  [forward#<id>]              — 转发聊天记录；被引用或就是当前消息时会自动展开，其余情况用 view_forward 传 <id> 看内容",
            if multimodal'
              then "  [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看"
@@ -306,7 +307,10 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
     if any isForwardSeg gm.message
       then do
         waitForTriggerForward mid
-        map (applyStickerCaptions capMap) <$> fetchForwardChildren mid maxForwardLines
+        -- Same enrichment as every other rendered line — in
+        -- particular nested forwards must carry their [forward#<id>]
+        -- handle so the model can view_forward one level deeper.
+        map enrich <$> fetchForwardChildren mid maxForwardLines
       else pure []
   images' <-
     if multimodal'

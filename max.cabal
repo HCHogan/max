@@ -37,6 +37,7 @@ library
         OneBot.Segment
         OneBot.Server
         OneBot.Types
+        Max.Bilibili
         Max.Browser.Docker
         Max.Browser.Registry
         Max.Command.Dispatcher
@@ -84,6 +85,7 @@ library
         Max.Tasks
         Max.Time
         Max.Tools
+        Max.Tools.Bilibili
         Max.Tools.Browser
         Max.Tools.Files
         Max.Tools.Group
@@ -161,6 +163,7 @@ test-suite max-test
     hs-source-dirs:     test
     main-is:            Spec.hs
     other-modules:
+        Max.BilibiliSpec
         Max.Command.ParserSpec
         Max.HandlerSpec
         Max.IntentSpec
