@@ -6,7 +6,7 @@
 }: {
   languages.haskell = {
     enable = true;
-    package = pkgs.haskell.compiler.ghc9122;
+    package = pkgs.haskell.compiler.ghc9124;
     stack.enable = false;
     cabal = {
       enable = true;
@@ -14,7 +14,7 @@
     };
     lsp = {
       enable = true;
-      package = pkgs.haskell.packages.ghc9122.haskell-language-server;
+      package = pkgs.haskell.packages.ghc9124.haskell-language-server;
     };
   };
 

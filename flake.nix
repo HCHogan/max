@@ -2,7 +2,7 @@
   description = "max — a QQ group chat agent over OneBot 11 (NapCatQQ)";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     devenv.url = "github:cachix/devenv";
     systems.url = "github:nix-systems/default";
   };
@@ -41,9 +41,16 @@
         pkgs:
         let
           hlib = pkgs.haskell.lib.compose;
-          hp = pkgs.haskellPackages.override {
+          # haskell.packages.ghc9124 instead of the default set
+          # (9.10.3): matches the devenv compiler, at the cost of
+          # building the dependency closure from source once (the
+          # non-default sets are not hydra-cached; the compiler is).
+          hp = pkgs.haskell.packages.ghc9124.override {
             overrides = hself: hsuper: {
-              # nixpkgs 25.11 ships opt-env-conf 0.9; we use the 0.15 API.
+              # No docs for a deployment closure — and parallel haddock
+              # (-j) deadlocks sporadically on this GHC, hanging builds.
+              mkDerivation = args: hsuper.mkDerivation (args // { doHaddock = false; });
+              # nixpkgs 26.05 still ships opt-env-conf 0.9; we use the 0.15 API.
               opt-env-conf = hlib.dontCheck (
                 hlib.doJailbreak (
                   hself.callHackageDirect {
