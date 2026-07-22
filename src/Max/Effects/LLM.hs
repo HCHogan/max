@@ -106,13 +106,6 @@ data LLMProfile = LLMProfile
     timeoutSeconds :: !Int,
     -- | Wire format spoken by the endpoint.  Default 'ProtocolOpenAI'.
     protocol :: !Protocol,
-    -- | Whether to enable thinking mode.  'Nothing' = don't send the
-    -- field, server uses its default (DeepSeek default = enabled).
-    -- 'Just True' / 'Just False' = explicitly send
-    -- @{"thinking": {"type": "enabled"|"disabled"}}@ in the OpenAI
-    -- request body.  Ignored for Anthropic protocol (Claude has its
-    -- own thinking-block format).
-    thinking :: !(Maybe Bool),
     -- | Whether the endpoint can handle multimodal (image) content
     -- blocks.  When 'True', 'Max.Prompt' embeds images from the
     -- trigger and recent context as inline image blocks (OpenAI
@@ -328,11 +321,7 @@ parseToolCall = withObject "ToolCall" $ \o -> do
 -- Effect.
 
 data LLM :: Effect where
-  -- | The optional 'Maybe Bool' is a per-call thinking-mode
-  -- override.  When 'Nothing', use the profile's setting (which may
-  -- itself be 'Nothing', meaning don't send the field at all).
-  -- When 'Just', overrides whatever the profile says.
-  Chat :: Text -> Maybe Bool -> [ChatMessage] -> [ToolSpec] -> LLM m (Either Text ChatResponse)
+  Chat :: Text -> [ChatMessage] -> [ToolSpec] -> LLM m (Either Text ChatResponse)
   ListProfiles :: LLM m [Text]
   DefaultProfile :: LLM m Text
   -- | Look up @profile.multimodal@ by profile name.  Returns 'False'
@@ -354,21 +343,19 @@ runLLM ::
   Eff (LLM : es) a ->
   Eff es a
 runLLM reg = interpret $ \_ -> \case
-  Chat name thinkingOverride msgs tools -> case Map.lookup name reg.profiles of
+  Chat name msgs tools -> case Map.lookup name reg.profiles of
     Nothing -> do
       logAttention "llm: unknown profile" $ object ["profile" .= name]
       pure $ Left ("unknown llm profile: " <> name)
     Just cfg -> do
-      let effThinking = thinkingOverride <|> cfg.thinking
       logInfo "llm: chat request" $
         object
           [ "msg_count" .= length msgs,
             "tool_count" .= length tools,
             "profile" .= name,
-            "model" .= cfg.model,
-            "thinking" .= effThinking
+            "model" .= cfg.model
           ]
-      r <- callChat cfg effThinking msgs tools
+      r <- callChat cfg msgs tools
       case r of
         Left err ->
           logAttention "llm: error" $
@@ -395,12 +382,11 @@ runLLM reg = interpret $ \_ -> \case
 chat ::
   LLM :> es =>
   Text -> -- profile name
-  Maybe Bool -> -- per-call thinking override; Nothing = use profile's
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text ChatResponse)
-chat name thinkingOverride msgs tools =
-  send (Chat name thinkingOverride msgs tools)
+chat name msgs tools =
+  send (Chat name msgs tools)
 
 listProfiles :: LLM :> es => Eff es [Text]
 listProfiles = send ListProfiles
@@ -434,14 +420,11 @@ usageFields (Just u) =
 callChat ::
   (W.Wreq :> es, Log :> es, IOE :> es) =>
   LLMProfile ->
-  Maybe Bool -> -- effective thinking
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChat cfg thinkingEff msgs tools = case cfg.protocol of
-  ProtocolOpenAI -> callChatOpenAI cfg thinkingEff msgs tools
-  -- Anthropic protocol has its own thinking spec we don't bridge yet;
-  -- ignore the override on this path.
+callChat cfg msgs tools = case cfg.protocol of
+  ProtocolOpenAI -> callChatOpenAI cfg msgs tools
   ProtocolAnthropic -> callChatAnthropic cfg msgs tools
 
 --------------------------------------------------------------------------------
@@ -450,11 +433,10 @@ callChat cfg thinkingEff msgs tools = case cfg.protocol of
 callChatOpenAI ::
   (W.Wreq :> es, Log :> es, IOE :> es) =>
   LLMProfile ->
-  Maybe Bool -> -- effective thinking
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChatOpenAI cfg thinkingEff msgs tools = do
+callChatOpenAI cfg msgs tools = do
   let baseFields =
         [ "model" .= cfg.model,
           "messages" .= msgs,
@@ -469,21 +451,9 @@ callChatOpenAI cfg thinkingEff msgs tools = do
             [ "tools" .= map encodeToolSpecOpenAI tools,
               "tool_choice" .= ("auto" :: Text)
             ]
-      -- DeepSeek thinking-mode wire: top-level `thinking: {type: ...}`
-      -- and optionally reasoning_effort=high.  Skip when 'Nothing'
-      -- (= follow server default; non-DeepSeek endpoints get no
-      -- unknown fields).
-      thinkingFields = case thinkingEff of
-        Nothing -> []
-        Just True ->
-          [ "thinking" .= object ["type" .= ("enabled" :: Text)],
-            "reasoning_effort" .= ("high" :: Text)
-          ]
-        Just False ->
-          ["thinking" .= object ["type" .= ("disabled" :: Text)]]
       body =
         LBS.toStrict
-          (encode (object (baseFields <> toolFields <> thinkingFields)))
+          (encode (object (baseFields <> toolFields)))
       url = T.unpack (cfg.baseUrl <> "/chat/completions")
       opts =
         Wreq.defaults

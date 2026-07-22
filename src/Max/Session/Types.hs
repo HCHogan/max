@@ -31,10 +31,6 @@ data Session = Session
     -- included in every prompt regardless of 'clearedAt'.  Order
     -- preserved (display reflects user's pin order).
     pinned :: ![Int64],
-    -- | Per-session thinking-mode override, set by @!model think
-    -- on@/@off@.  'Nothing' means follow the profile's (or server's)
-    -- default; 'Just' overrides for this session.
-    thinkingOverride :: !(Maybe Bool),
     -- | Per-session debug override, set by @!debug on@/@off@.
     -- 'Nothing' means follow @AppConfig.debug@.  When effective
     -- debug is on, tool calls are announced in the group.

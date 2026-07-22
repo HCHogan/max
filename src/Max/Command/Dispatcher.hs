@@ -103,11 +103,7 @@ execute t gid uid replyTarget cmd = do
   --
   ModelShow -> do
     s <- liftIO (Session.readSession t)
-    reply $
-      "当前 model: "
-        <> s.model
-        <> "  思考: "
-        <> renderThinkingState s.thinkingOverride
+    reply $ "当前 model: " <> s.model
   ModelList -> do
     profs <- listProfiles
     reply $ "可用 models:\n  " <> T.intercalate "\n  " (sort profs)
@@ -123,13 +119,6 @@ execute t gid uid replyTarget cmd = do
           "找不到 model: "
             <> name
             <> "\n用 !model list 看可用列表"
-  ModelThinkShow -> do
-    s <- liftIO (Session.readSession t)
-    reply $ "思考: " <> renderThinkingState s.thinkingOverride
-  ModelThinkSet b -> do
-    updateSession t (\s -> (Session.setThinkingOverride b s, ()))
-    logInfo "session: thinking override" $ object ["value" .= b]
-    ack
   --
   DebugShow -> do
     s <- liftIO (Session.readSession t)
@@ -395,12 +384,6 @@ fmtDur secs =
           | m > 0 -> tshow m <> "m " <> tshow sec <> "s"
           | otherwise -> tshow sec <> "s"
 
-renderThinkingState :: Maybe Bool -> Text
-renderThinkingState = \case
-  Nothing -> "(跟随 profile/服务端默认)"
-  Just True -> "开 (session 覆盖)"
-  Just False -> "关 (session 覆盖)"
-
 renderDebugState :: Bool -> Maybe Bool -> Text
 renderDebugState defB = \case
   Nothing -> (if defB then "开" else "关") <> " (配置默认)"
@@ -545,11 +528,9 @@ helpText Nothing =
   T.unlines
     [ "可用命令：",
       "  !help [topic]            这条帮助",
-      "  !model                   看当前 model + 思考状态",
+      "  !model                   看当前 model",
       "  !model list              列所有 model",
       "  !model <name>            切 model",
-      "  !model think             看当前思考开关",
-      "  !model think on/off      开/关思考模式 (session 覆盖)",
       "  !debug                   看 debug 状态（开时工具调用打印到群里）",
       "  !debug on/off/default    开/关/回到配置默认 (session 覆盖)",
       "  !persona                 看当前 persona override",

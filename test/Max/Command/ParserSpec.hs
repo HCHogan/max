@@ -32,11 +32,8 @@ spec = do
     it "bare → show" $ "!model" `parsesTo` ModelShow
     it "list" $ "!model list" `parsesTo` ModelList
     it "set" $ "!model deepseek-flash" `parsesTo` ModelSet "deepseek-flash"
-    it "think (show)" $ "!model think" `parsesTo` ModelThinkShow
-    it "think on" $ "!model think on" `parsesTo` ModelThinkSet True
-    it "think off" $ "!model think off" `parsesTo` ModelThinkSet False
-    it "think garbage falls through to Unknown" $
-      case parseCommand "!model think yes" of
+    it "two args falls through to Unknown" $
+      case parseCommand "!model foo bar" of
         Right (Just (Unknown "model" _)) -> pure ()
         other -> expectationFailure $ "expected Unknown model, got: " <> show other
 

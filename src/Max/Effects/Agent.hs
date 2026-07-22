@@ -172,7 +172,7 @@ data AgentResult = AgentResult
 data Agent :: Effect where
   -- | Run a full agent loop for the given dispatch.  Returns when the
   -- model emits a content response, hits 'maxTurns', or the LLM errors.
-  AgentTurn :: DispatchContext -> Text -> Maybe Bool -> [ChatMessage] -> Agent m AgentResult
+  AgentTurn :: DispatchContext -> Text -> [ChatMessage] -> Agent m AgentResult
 
 type instance DispatchOf Agent = Dynamic
 
@@ -192,24 +192,23 @@ runAgent ::
   Eff (Agent : es) a ->
   Eff es a
 runAgent lims toolFactory taskReg = interpret $ \_ -> \case
-  AgentTurn dc profile thinking msgs -> do
+  AgentTurn dc profile msgs -> do
     selfTid <- liftIO myThreadId
     let cancel = throwTo selfTid TaskCancelled
     bracket
       (liftIO (registerTask taskReg dc.dcGroupId "llm" cancel))
       (liftIO . unregisterTask taskReg)
       ( \handle ->
-          runTools (toolFactory dc) (loop dc handle profile thinking msgs)
+          runTools (toolFactory dc) (loop dc handle profile msgs)
       )
   where
     loop ::
       DispatchContext ->
       TaskHandle ->
       Text ->
-      Maybe Bool ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    loop dc h profile thinking = go dc h 0 [] profile thinking
+    loop dc h profile = go dc h 0 [] profile
 
     go ::
       DispatchContext ->
@@ -217,20 +216,19 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
       Int ->
       [ChatMessage] ->
       Text ->
-      Maybe Bool ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    go dc h n appended profile thinking msgs = do
+    go dc h n appended profile msgs = do
       -- Drain any !btw notes that arrived since the previous turn.
       notes <- liftIO (drainBtwInbox h)
       let (msgs', appended') = case notes of
             [] -> (msgs, appended)
             xs -> (msgs <> [btwMsg xs], appended <> [btwMsg xs])
       if n >= lims.maxTurns
-        then finalAnswer n appended' profile thinking msgs'
+        then finalAnswer n appended' profile msgs'
         else do
           specs <- listToolSpecs
-          eres <- chat profile thinking (capToolResults toolResultBudget msgs') specs
+          eres <- chat profile (capToolResults toolResultBudget msgs') specs
           case eres of
             Left err ->
               pure
@@ -261,7 +259,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                   logInfo "agent: btw notes raced final answer, continuing" $
                     object ["count" .= length xs]
                   let newMsgs = [MsgAssistant text, btwMsg xs]
-                  go dc h (n + 1) (appended' <> newMsgs) profile thinking (msgs' <> newMsgs)
+                  go dc h (n + 1) (appended' <> newMsgs) profile (msgs' <> newMsgs)
             Right (ToolCallsResp reasoning tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -278,7 +276,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
               toolMsgs <- traverse executeOne tcs
               imgMsgs <- drainToolImages dc
               let newMsgs = [asst] <> toolMsgs <> imgMsgs
-              go dc h (n + 1) (appended' <> newMsgs) profile thinking (msgs' <> newMsgs)
+              go dc h (n + 1) (appended' <> newMsgs) profile (msgs' <> newMsgs)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
     -- gets a real answer built from whatever the loop already gathered,
@@ -288,10 +286,9 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
       Int ->
       [ChatMessage] ->
       Text ->
-      Maybe Bool ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    finalAnswer n appended profile thinking msgs = do
+    finalAnswer n appended profile msgs = do
       logInfo "agent: max turns reached, forcing final answer" $
         object ["turns" .= n]
       let capNote =
@@ -299,7 +296,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
               "[system] 工具调用轮次已用满，别再调用任何工具了。\
               \直接根据目前已经掌握的信息，给用户一个最终回复。"
       eres <-
-        chat profile thinking (capToolResults toolResultBudget (msgs <> [capNote])) []
+        chat profile (capToolResults toolResultBudget (msgs <> [capNote])) []
       let (mText, ab) = case eres of
             Right (ContentResp t) | not (T.null (T.strip t)) -> (Just t, Just "max-turns")
             Right _ -> (Nothing, Just "max-turns")
@@ -419,5 +416,5 @@ capToolResults budget = reverse . go budget . reverse
     stub content = T.take 300 content <> elision
     elision = "\n…[older tool results truncated]"
 
-agentTurn :: Agent :> es => DispatchContext -> Text -> Maybe Bool -> [ChatMessage] -> Eff es AgentResult
-agentTurn dc profile thinking msgs = send (AgentTurn dc profile thinking msgs)
+agentTurn :: Agent :> es => DispatchContext -> Text -> [ChatMessage] -> Eff es AgentResult
+agentTurn dc profile msgs = send (AgentTurn dc profile msgs)

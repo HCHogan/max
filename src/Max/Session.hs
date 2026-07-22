@@ -27,8 +27,6 @@ module Max.Session
     addPin,
     removePin,
     removeAllPins,
-    setThinkingOverride,
-    clearThinkingOverride,
     setDebugOverride,
     clearDebugOverride,
     setStickerOverride,
@@ -140,15 +138,6 @@ removePin mid s = s {pinned = filter (/= mid) s.pinned}
 
 removeAllPins :: Session -> Session
 removeAllPins s = s {pinned = []}
-
--- | Set the thinking-mode override for this session.
-setThinkingOverride :: Bool -> Session -> Session
-setThinkingOverride b s = s {thinkingOverride = Just b}
-
--- | Drop the override; subsequent dispatches fall back to the
--- profile's (or server's) default.
-clearThinkingOverride :: Session -> Session
-clearThinkingOverride s = s {thinkingOverride = Nothing}
 
 -- | Set the debug override for this session (@!debug on@/@off@).
 setDebugOverride :: Bool -> Session -> Session

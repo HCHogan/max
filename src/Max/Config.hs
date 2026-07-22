@@ -560,14 +560,13 @@ data ProfileSpec = ProfileSpec
     temperature :: !(Maybe Double),
     timeoutSeconds :: !(Maybe Int),
     protocol :: !(Maybe Protocol),
-    thinking :: !(Maybe Bool),
     multimodal :: !(Maybe Bool)
   }
   deriving stock (Show, Eq)
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -580,7 +579,6 @@ mergeSpec a b =
       temperature = a.temperature <|> b.temperature,
       timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds,
       protocol = a.protocol <|> b.protocol,
-      thinking = a.thinking <|> b.thinking,
       multimodal = a.multimodal <|> b.multimodal
     }
 
@@ -595,7 +593,6 @@ instance HasCodec ProfileSpec where
         <*> optionalFieldWith "temperature" temperatureCodec "Sampling temperature; omit to not send the field (some providers reject explicit values)" .= (.temperature)
         <*> optionalField "timeout_seconds" "HTTP timeout for one completion" .= (.timeoutSeconds)
         <*> optionalFieldWith "protocol" protocolCodec "openai | anthropic" .= (.protocol)
-        <*> optionalField "thinking" "Thinking mode (DeepSeek wire format); omit for server default" .= (.thinking)
         <*> optionalField "multimodal" "Endpoint accepts image content blocks" .= (.multimodal)
 
 -- | autodocodec has no @HasCodec Double@ on purpose (lossy floats);
@@ -709,16 +706,6 @@ overlayProfileParser = do
           env "MAX_LLM_PROTOCOL",
           metavar "openai|anthropic"
         ]
-  thinking <-
-    optional $
-      setting
-        [ help "DeepSeek thinking mode for the default profile (omit for upstream default)",
-          reader auto,
-          option,
-          long "llm-thinking",
-          env "MAX_LLM_THINKING",
-          metavar "True|False"
-        ]
   multimodal <-
     optional $
       setting
@@ -780,6 +767,5 @@ materializeLLM (dn, fileProfiles, overlay) = do
             temperature = spec.temperature,
             timeoutSeconds = fromMaybe 120 spec.timeoutSeconds,
             protocol = fromMaybe ProtocolOpenAI spec.protocol,
-            thinking = spec.thinking,
             multimodal = fromMaybe False spec.multimodal
           }

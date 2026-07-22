@@ -345,8 +345,7 @@ classifyOnce profile persona ctxLines newLines = do
             <> (if null ctxLines then ["(无)"] else ctxLines)
             <> ["", "[new messages]"]
             <> (if null newLines then ["(见上下文末尾)"] else newLines)
-  -- Thinking forced off: this is a latency-sensitive yes/no call.
-  r <- chat profile (Just False) [MsgSystem (classifierSystem persona), MsgUser userBody] []
+  r <- chat profile [MsgSystem (classifierSystem persona), MsgUser userBody] []
   case r of
     Left err -> do
       logAttention "intent: classify failed" $ object ["error" .= err]
@@ -466,7 +465,7 @@ classifySupplement cfg ctxLines newLine = do
           ["[context]"]
             <> (if null ctxLines then ["(无)"] else ctxLines)
             <> ["", "[new messages]", newLine]
-  r <- chat cfg.icProfile (Just False) [MsgSystem supplementSystem, MsgUser userBody] []
+  r <- chat cfg.icProfile [MsgSystem supplementSystem, MsgUser userBody] []
   case r of
     Left err -> do
       logAttention "intent: supplement classify failed" $ object ["error" .= err]

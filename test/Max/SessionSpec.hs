@@ -6,10 +6,8 @@ import Max.Session
     addPin,
     clearAll,
     clearHistory,
-    clearThinkingOverride,
     removeAllPins,
     removePin,
-    setThinkingOverride,
     unclear,
   )
 import OneBot.Types (GroupId (..))
@@ -25,7 +23,6 @@ emptySession =
       persona = Nothing,
       clearedAt = Nothing,
       pinned = [],
-      thinkingOverride = Nothing,
       debugOverride = Nothing,
       stickerOverride = Nothing,
       proactiveOverride = Nothing
@@ -74,14 +71,3 @@ spec = do
     it "unclear removes the watermark" $ do
       let s = unclear (emptySession {clearedAt = Just t0})
       clearedAt s `shouldBe` Nothing
-
-  describe "thinking override" $ do
-    it "set then read" $ do
-      let s = setThinkingOverride True emptySession
-      thinkingOverride s `shouldBe` Just True
-    it "set overrides existing value" $ do
-      let s = setThinkingOverride False (emptySession {thinkingOverride = Just True})
-      thinkingOverride s `shouldBe` Just False
-    it "clear nulls it out" $ do
-      let s = clearThinkingOverride (emptySession {thinkingOverride = Just True})
-      thinkingOverride s `shouldBe` Nothing

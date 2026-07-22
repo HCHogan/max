@@ -43,7 +43,6 @@ data Row = Row
     rPersona :: !(Maybe Text),
     rClearedAt :: !(Maybe UTCTime),
     rPinned :: !Value,
-    rThinkingOverride :: !(Maybe Bool),
     rDebugOverride :: !(Maybe Bool),
     rStickerOverride :: !(Maybe Bool),
     rProactiveOverride :: !(Maybe Bool)
@@ -53,7 +52,6 @@ instance FromRow Row where
   fromRow =
     Row
       <$> field
-      <*> field
       <*> field
       <*> field
       <*> field
@@ -72,7 +70,7 @@ fetchOrInit ::
 fetchOrInit (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override \
+      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override \
       \  FROM sessions \
       \  WHERE group_id = ?"
       (Only gid)
@@ -86,7 +84,6 @@ fetchOrInit (GroupId gid) defaultModel = do
                 persona = Nothing,
                 clearedAt = Nothing,
                 pinned = [],
-                thinkingOverride = Nothing,
                 debugOverride = Nothing,
                 stickerOverride = Nothing,
                 proactiveOverride = Nothing
@@ -101,19 +98,18 @@ upsertSession s = do
       pin = Jsonb (toJSON s.pinned)
   void $
     execute
-      "INSERT INTO sessions (group_id, model, persona, cleared_at, pinned, thinking_override, debug_override, sticker_override, proactive_override) \
-      \ VALUES (?,?,?,?,?,?,?,?,?) \
+      "INSERT INTO sessions (group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override) \
+      \ VALUES (?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (group_id) DO UPDATE SET \
       \   model              = EXCLUDED.model, \
       \   persona            = EXCLUDED.persona, \
       \   cleared_at         = EXCLUDED.cleared_at, \
       \   pinned             = EXCLUDED.pinned, \
-      \   thinking_override  = EXCLUDED.thinking_override, \
       \   debug_override     = EXCLUDED.debug_override, \
       \   sticker_override   = EXCLUDED.sticker_override, \
       \   proactive_override = EXCLUDED.proactive_override, \
       \   updated_at         = now()"
-      ((gid, s.model, s.persona, s.clearedAt, pin) :. (s.thinkingOverride, s.debugOverride, s.stickerOverride, s.proactiveOverride))
+      ((gid, s.model, s.persona, s.clearedAt, pin) :. (s.debugOverride, s.stickerOverride, s.proactiveOverride))
 
 --------------------------------------------------------------------------------
 
@@ -127,7 +123,6 @@ rowToSession defaultModel r =
       persona = r.rPersona,
       clearedAt = r.rClearedAt,
       pinned = decodeOrEmpty r.rPinned,
-      thinkingOverride = r.rThinkingOverride,
       debugOverride = r.rDebugOverride,
       stickerOverride = r.rStickerOverride,
       proactiveOverride = r.rProactiveOverride

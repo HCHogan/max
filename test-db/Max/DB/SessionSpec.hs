@@ -23,7 +23,7 @@ spec pool = before_ (truncateAll pool) $
         s.model `shouldBe` "deepseek-flash"
         s.persona `shouldBe` Nothing
         s.pinned `shouldBe` []
-        s.thinkingOverride `shouldBe` Nothing
+        s.debugOverride `shouldBe` Nothing
 
       it "is idempotent — second call returns the same row" $ do
         s1 <- withDb pool $ fetchOrInit testGroup "deepseek-flash"
@@ -38,7 +38,7 @@ spec pool = before_ (truncateAll pool) $
                 { persona = Just "猫娘",
                   pinned = [101, 102, 103],
                   clearedAt = Just t0,
-                  thinkingOverride = Just True,
+                  debugOverride = Just True,
                   model = "deepseek-pro"
                 }
         withDb pool $ upsertSession modified
@@ -46,7 +46,7 @@ spec pool = before_ (truncateAll pool) $
         s.persona `shouldBe` Just "猫娘"
         s.pinned `shouldBe` [101, 102, 103]
         s.clearedAt `shouldBe` Just t0
-        s.thinkingOverride `shouldBe` Just True
+        s.debugOverride `shouldBe` Just True
         s.model `shouldBe` "deepseek-pro"
 
       it "ON CONFLICT updates the existing row instead of inserting" $ do

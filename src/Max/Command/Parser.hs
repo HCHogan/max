@@ -197,9 +197,6 @@ classify verb raw@(RawArgs pos flags) = case verb of
   "model" -> case pos of
     [] -> ModelShow
     ["list"] -> ModelList
-    ["think"] -> ModelThinkShow
-    ["think", "on"] -> ModelThinkSet True
-    ["think", "off"] -> ModelThinkSet False
     [name] -> ModelSet name
     _ -> Unknown verb raw -- too many args; let dispatcher complain
   "debug" -> case pos of

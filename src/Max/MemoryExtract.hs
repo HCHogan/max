@@ -80,7 +80,7 @@ extractMemories profile mEmbed gm conversation = localDomain "memx" $ do
         [ MsgSystem extractorSystem,
           MsgUser (renderInput gid uid groupMems userMems transcript)
         ]
-  chat profile (Just False) msgs [] >>= \case
+  chat profile msgs [] >>= \case
     Left err -> logAttention "memx: chat failed" $ object ["error" .= err]
     Right (ToolCallsResp _ _) ->
       logAttention "memx: unexpected tool calls" $ object []

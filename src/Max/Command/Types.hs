@@ -41,8 +41,6 @@ data Command
   | ModelShow -- ^ '!model'
   | ModelList -- ^ '!model list'
   | ModelSet !Text -- ^ '!model <name>'
-  | ModelThinkShow -- ^ '!model think'
-  | ModelThinkSet !Bool -- ^ '!model think on' / '!model think off'
   | DebugShow -- ^ '!debug'
   | DebugSet !(Maybe Bool) -- ^ '!debug on' / '!debug off' / '!debug default'
   | PersonaShow -- ^ '!persona'

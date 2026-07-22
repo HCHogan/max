@@ -456,7 +456,7 @@ dispatchLLM origin gm = void $ async $
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
           dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff mentionable toolImgs
-      result <- agentTurn dc s.model s.thinkingOverride ctx
+      result <- agentTurn dc s.model ctx
       case result.reply of
         -- The loop produced no model-authored reply — upstream API
         -- down, or the turn-cap fallback call failed too.  Error text

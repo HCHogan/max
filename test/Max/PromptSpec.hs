@@ -102,7 +102,6 @@ emptySession =
       persona = Nothing,
       clearedAt = Nothing,
       pinned = [],
-      thinkingOverride = Nothing,
       debugOverride = Nothing,
       stickerOverride = Nothing,
       proactiveOverride = Nothing
