@@ -344,9 +344,15 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
         writeTVar dc.dcToolImages (n, [])
         pure is
       pure
-        [ MsgUserBlocks (concat [[TextBlock i.tiLabel, ImageDataUrl i.tiDataUrl] | i <- imgs])
+        [ MsgUserBlocks (concat [[TextBlock i.tiLabel, mediaBlock i.tiDataUrl] | i <- imgs])
         | not (null imgs)
         ]
+      where
+        -- Videos ride the same queue (and budget); the data URL's
+        -- mime prefix decides the wire block type.
+        mediaBlock u
+          | "data:video/" `T.isPrefixOf` u = VideoDataUrl u
+          | otherwise = ImageDataUrl u
 
     executeOne :: ToolCall -> Eff (Tools : es) ChatMessage
     executeOne tc = do

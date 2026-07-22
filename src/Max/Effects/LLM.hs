@@ -140,6 +140,12 @@ data ContentBlock
     -- URL.  External http(s) URLs would also work but we don't use
     -- them (QQ CDN needs auth headers we don't share with the LLM).
     ImageDataUrl !Text
+  | -- | Inline video, as a @data:video\/mp4;base64,...@ URL.  Encoded
+    -- with the de-facto OpenAI-compatible extension
+    -- @{type: video_url, video_url: {url}}@ that natively-video models
+    -- (Kimi K3, Qwen-VL, GLM-4V…) accept.  Anthropic's protocol has no
+    -- video input; it degrades to a text marker there.
+    VideoDataUrl !Text
   deriving stock (Show, Eq)
 
 -- | A single message in the chat history.  Mirrors OpenAI's role
@@ -209,6 +215,11 @@ data ChatResponse
 instance ToJSON ContentBlock where
   toJSON = \case
     TextBlock t -> object ["type" .= ("text" :: Text), "text" .= t]
+    VideoDataUrl url ->
+      object
+        [ "type" .= ("video_url" :: Text),
+          "video_url" .= object ["url" .= url]
+        ]
     ImageDataUrl url ->
       object
         [ "type" .= ("image_url" :: Text),
@@ -591,6 +602,9 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
       let content =
             [ case b of
                 TextBlock t -> object ["type" .= ("text" :: Text), "text" .= t]
+                -- Anthropic has no video input type.
+                VideoDataUrl _ ->
+                  object ["type" .= ("text" :: Text), "text" .= ("[video：该模型协议不支持视频输入]" :: Text)]
                 ImageDataUrl url -> case splitDataUrl url of
                   Just (mime, b64) ->
                     object

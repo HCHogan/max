@@ -4,7 +4,7 @@ import Data.Aeson (decodeStrict')
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
-import OneBot.Segment (Segment (..), renderPlainText, segmentMentions)
+import OneBot.Segment (Segment (..), VideoSegInfo (..), renderPlainText, segmentMentions)
 import OneBot.Types (UserId (..))
 import Test.Hspec
 
@@ -16,6 +16,7 @@ decodeSeg = decodeStrict' . TE.encodeUtf8
 spec :: Spec
 spec = do
   faceSpec
+  videoSpec
   mentionSpec
 
 faceSpec :: Spec
@@ -35,6 +36,19 @@ faceSpec = describe "face segments" $ do
   it "renders named and nameless faces" $ do
     renderPlainText [SegFace 14 (Just "惊讶")] `shouldBe` "[face#14: 惊讶]"
     renderPlainText [SegFace 14 Nothing] `shouldBe` "[face#14]"
+
+videoSpec :: Spec
+videoSpec = describe "video segments" $ do
+  it "parses a NapCat video segment (string file_size tolerated)" $
+    decodeSeg "{\"type\":\"video\",\"data\":{\"file\":\"abc.mp4\",\"url\":\"https://x/v.mp4\",\"file_size\":\"12345\"}}"
+      `shouldBe` Just (SegVideo (VideoSegInfo "abc.mp4" (Just "https://x/v.mp4") (Just 12345)))
+
+  it "parses a video without url" $
+    decodeSeg "{\"type\":\"video\",\"data\":{\"file\":\"abc.mp4\"}}"
+      `shouldBe` Just (SegVideo (VideoSegInfo "abc.mp4" Nothing Nothing))
+
+  it "renders as the bare [video] marker" $
+    renderPlainText [SegVideo (VideoSegInfo "f" Nothing Nothing)] `shouldBe` "[video]"
 
 mentionSpec :: Spec
 mentionSpec = describe "segmentMentions" $ do

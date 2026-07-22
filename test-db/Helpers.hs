@@ -62,6 +62,8 @@ truncateAll pool = withConn pool $ \c -> do
       \  messages, \
       \  images, \
       \  message_images, \
+      \  videos, \
+      \  message_videos, \
       \  sessions, \
       \  group_files \
       \  RESTART IDENTITY CASCADE"

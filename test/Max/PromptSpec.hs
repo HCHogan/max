@@ -9,7 +9,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
-import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, renderContext, tagForwardMarkers)
+import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, renderContext, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -506,13 +506,17 @@ spec = do
       ub `shouldSatisfy` ("转发里第一句" `T.isInfixOf`)
       ub `shouldSatisfy` ("转发里第二句" `T.isInfixOf`)
 
-  describe "tagForwardMarkers" $ do
+  describe "tagMediaMarkers" $ do
     it "upgrades a bare [forward] with the message's own id" $
-      (tagForwardMarkers (historyAt 9 8001 memberId (Just "Alice") "看这个 [forward]")).renderedText
+      (tagMediaMarkers (historyAt 9 8001 memberId (Just "Alice") "看这个 [forward]")).renderedText
         `shouldBe` "看这个 [forward#8001]"
 
+    it "upgrades a bare [video] the same way" $
+      (tagMediaMarkers (historyAt 9 8002 memberId (Just "Alice") "[video] 好活")).renderedText
+        `shouldBe` "[video#8002] 好活"
+
     it "leaves text without the marker untouched" $
-      (tagForwardMarkers (historyAt 9 8001 memberId (Just "Alice") "普通消息")).renderedText
+      (tagMediaMarkers (historyAt 9 8001 memberId (Just "Alice") "普通消息")).renderedText
         `shouldBe` "普通消息"
 
   describe "renderContext poke turns" $ do

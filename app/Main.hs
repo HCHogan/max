@@ -56,6 +56,7 @@ import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
+import Max.Tools.Video (videoToolsFor)
 import OneBot.Event (Event)
 import OneBot.Server (Client, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
@@ -106,8 +107,9 @@ main = do
                   <> fileToolsFor cfg.timezone dc.dcGroupId cfg.imagesDir sandboxes
                   <> (if dc.dcStickers then stickerToolsFor mEmbed else [])
                   <> maybe [] searchToolsFor cfg.search
-                  -- Browser toolset only for multimodal profiles (per config).
+                  -- Browser + video toolsets only for multimodal profiles.
                   <> (if dc.dcMultimodal then browserToolsFor dc.dcGroupId browsers else [])
+                  <> (if dc.dcMultimodal then videoToolsFor cfg.imagesDir dc else [])
               env =
                 BotEnv
                   { bePersona = cfg.persona,

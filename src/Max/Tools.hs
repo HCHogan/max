@@ -36,7 +36,7 @@ import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Persistence (PersistMode, isEphemeral)
-import Max.Prompt (tagForwardMarkers)
+import Max.Prompt (tagMediaMarkers)
 import Max.Time (fmtDateHM)
 import OneBot.Action (Action (..), Response (..), sendChatMsg)
 import OneBot.Segment (Segment (..), segmentMentions)
@@ -94,7 +94,7 @@ getMessageByIdTool tz =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
           m <- fetchMessage mid
-          pure $ Right (toJSON (fmap (historyItemSummary tz . tagForwardMarkers) m))
+          pure $ Right (toJSON (fmap (historyItemSummary tz . tagMediaMarkers) m))
     }
   where
     parseArgs :: Object -> Parser Int64
@@ -172,7 +172,7 @@ searchMessagesTool tz mEmbed (GroupId gid) =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right sa ->
-          let run f mVec = fmap (toJSON . map (historyItemSummary tz . tagForwardMarkers)) <$> runSearch f mVec
+          let run f mVec = fmap (toJSON . map (historyItemSummary tz . tagMediaMarkers)) <$> runSearch f mVec
            in case toFilter sa of
                 Left e -> pure (Left e)
                 Right f -> case (sa.saSemantic, mEmbed) of
@@ -429,7 +429,7 @@ viewForwardTool tz =
             then pure $ Left "这条消息没有已展开的转发内容（不是转发聊天记录，或还没抓取完）"
             else
               pure . Right . toJSON $
-                map (historyItemSummary tz . tagForwardMarkers) kids
+                map (historyItemSummary tz . tagMediaMarkers) kids
     }
 
 --------------------------------------------------------------------------------

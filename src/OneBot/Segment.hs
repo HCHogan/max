@@ -2,6 +2,7 @@ module OneBot.Segment
   ( Segment (..),
     FileSegInfo (..),
     ImageSegInfo (..),
+    VideoSegInfo (..),
     imageSeg,
     stickerSeg,
     isStickerImage,
@@ -42,7 +43,20 @@ data Segment
     -- best-effort (sometimes inlined by NapCat, sometimes needs a
     -- separate @get_group_file_url@ call).
     SegFile !FileSegInfo
+  | -- | A video message.  NapCat resolves a direct download URL at
+    -- receive time (falls back to a container-local file path when it
+    -- can't — those we cannot fetch).
+    SegVideo !VideoSegInfo
   | SegOther !Text !Value
+  deriving stock (Show, Eq)
+
+-- | A @video@ segment's data: NapCat file code, best-effort direct
+-- URL, and size in bytes.
+data VideoSegInfo = VideoSegInfo
+  { vsiFile :: !Text,
+    vsiUrl :: !(Maybe Text),
+    vsiSize :: !(Maybe Int64)
+  }
   deriving stock (Show, Eq)
 
 data FileSegInfo = FileSegInfo
@@ -96,6 +110,12 @@ instance FromJSON Segment where
             subTy <- traverse parseFlexInt mSub
             summ <- d .:? "summary"
             pure (SegImage (ImageSegInfo url subTy summ))
+          "video" -> do
+            file <- d .:? "file" .!= ""
+            url <- d .:? "url"
+            mSizeV <- d .:? "file_size"
+            size <- traverse parseFlexInt64 mSizeV
+            pure (SegVideo (VideoSegInfo file url size))
           "face" -> do
             fid <- parseFlexInt =<< d .: "id"
             -- NapCat attaches the whole NTQQ faceElement as data.raw;
@@ -217,6 +237,16 @@ instance ToJSON Segment where
                 "url" .= fs.fsiUrl
               ]
         ]
+    SegVideo v ->
+      object
+        [ "type" .= ("video" :: Text),
+          "data"
+            .= object
+              ( ["file" .= v.vsiFile]
+                  <> ["url" .= u | Just u <- [v.vsiUrl]]
+                  <> ["file_size" .= s | Just s <- [v.vsiSize]]
+              )
+        ]
     SegOther t v ->
       object ["type" .= t, "data" .= v]
 
@@ -235,6 +265,7 @@ renderPlainText = T.concat . map go
           <> maybe "" (": " <>) mName
           <> "]"
       SegFile fs -> "[file:" <> fs.fsiName <> "]"
+      SegVideo _ -> "[video]"
       SegOther t _ -> "[" <> t <> "]"
 
 -- | Parse LLM-authored reply text into segments, converting raw

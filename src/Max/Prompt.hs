@@ -14,7 +14,7 @@ module Max.Prompt
     renderHistoryLine,
     renderCurrentLine,
     -- * Forward markers (shared with "Max.Tools")
-    tagForwardMarkers,
+    tagMediaMarkers,
   )
 where
 
@@ -50,7 +50,7 @@ import Max.DB.History
   )
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), listMemories)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
-import Max.Images (downloadableImageCount)
+import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtEnvStamp, fmtHM)
 import OneBot.Event (GroupMessage (..), Sender (..))
@@ -201,6 +201,9 @@ systemPrompt multimodal' private envText persona mMemBlock =
          ]
       <> [ "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
            "  [forward#<id>]              — 转发聊天记录；被引用或就是当前消息时会自动展开，其余情况用 view_forward 传 <id> 看内容",
+           if multimodal'
+             then "  [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看"
+             else "  [video#<id>]                — 群里的视频（你看不到内容，可以请用户描述）",
            "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [environment]"
          ]
       <> maybe [] (\b -> ["", b]) mMemBlock
@@ -269,7 +272,7 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
         <> mention'
         <> pinnedItems'
         <> maybe [] (\(r, _, kids) -> r : kids) replyCtx0
-  let enrich = tagForwardMarkers . applyStickerCaptions capMap
+  let enrich = tagMediaMarkers . applyStickerCaptions capMap
       ambient'' = map enrich ambient'
       mention'' = map enrich mention'
       pinnedItems'' = map enrich pinnedItems'
@@ -327,6 +330,25 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
           (Set.fromList (map (.messageId) replyItems))
           (dedupById (replyItems <> pinnedItems''))
       else pure []
+  -- Videos the user is pointing at (the trigger itself, or the quoted
+  -- message) attach whole — same policy as images.  Ambient videos
+  -- keep their [video#<id>] marker for view_video.  The video worker
+  -- (same pool as images) downloads them into the blob store at
+  -- receive time; the trigger's own video may still be in flight, so
+  -- wait for it like we do for images.
+  videos' <-
+    if multimodal'
+      then do
+        let expectedVids = downloadableVideoCount gm.message
+        when (expectedVids > 0) (waitForTriggerVideos mid expectedVids)
+        let cands =
+              maybe
+                []
+                (\(r, _, _) -> [(r.messageId, "[↩ quoted message] 里的视频:")])
+                replyCtx0
+                <> [(mid, "[current message] 里的视频:") | expectedVids > 0]
+        take maxPromptVideos . concat <$> traverse (loadMessageVideos blobRoot) cands
+      else pure []
   now' <- liftIO getCurrentTime
   pure $
     renderContext
@@ -344,7 +366,7 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
           groupBrief = brief,
           groupMemories = groupMems,
           userMemories = userMems,
-          images = images',
+          images = images' <> videos',
           now = now',
           tz = tz'
         }
@@ -384,6 +406,72 @@ isForwardSeg :: Segment -> Bool
 isForwardSeg (SegOther "forward" _) = True
 isForwardSeg _ = False
 
+-- | At most this many whole videos attached per prompt (trigger +
+-- quoted) — they're far heavier than images.
+maxPromptVideos :: Int
+maxPromptVideos = 2
+
+-- | Mirror of 'waitForTriggerImages' for the trigger's own videos:
+-- poll until the worker has landed all expected 'message_videos'
+-- rows.  Videos are bigger, so the deadline is longer; a failed or
+-- oversized download never inserts its row and we give up quietly.
+waitForTriggerVideos ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  Int64 -> -- trigger message_id
+  Int -> -- expected downloadable video count
+  Eff es ()
+waitForTriggerVideos mid expected = go 0
+  where
+    stepMs = 500
+    waitVideosMaxMs = 60_000
+    go elapsed
+      | elapsed >= waitVideosMaxMs =
+          logAttention "prompt: trigger videos still missing after wait" $
+            object ["message_id" .= mid, "expected" .= expected]
+      | otherwise = do
+          rows <-
+            query
+              "SELECT count(*) FROM message_videos WHERE message_id = ?"
+              (Only mid)
+          case rows of
+            [Only (n :: Int64)] | n >= fromIntegral expected -> pure ()
+            _ -> do
+              liftIO (threadDelay (stepMs * 1000))
+              go (elapsed + stepMs)
+
+-- | Load a message's downloaded videos from the blob store as prompt
+-- attachments.  Empty when the message has none (or the worker hasn't
+-- caught up) — the [video#<id>] marker stays.
+loadMessageVideos ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  FilePath -> -- blob store root
+  (Int64, Text) -> -- (message_id, attachment label)
+  Eff es [PromptImage]
+loadMessageVideos blobRoot' (mid, label) = do
+  rows <-
+    query
+      "SELECT v.mime_type, v.local_path \
+      \  FROM message_videos mv \
+      \  JOIN videos v USING (sha256) \
+      \  WHERE mv.message_id = ? \
+      \  ORDER BY mv.seg_index"
+      (Only mid)
+  fmap concat . traverse loadOne $ (rows :: [(Text, Text)])
+  where
+    loadOne (mime, path) = do
+      eres <- liftIO (try (BS.readFile (blobRoot' </> T.unpack path)))
+      case eres of
+        Left (e :: IOException) -> do
+          logAttention "prompt: video read failed" $
+            object ["path" .= path, "error" .= T.pack (show e)]
+          pure []
+        Right bytes ->
+          pure
+            [ PromptImage
+                label
+                ("data:" <> mime <> ";base64," <> TE.decodeUtf8 (B64.encode bytes))
+            ]
+
 -- | Poll until the forward worker has landed at least one child row
 -- for the trigger's 转发聊天记录 (the whole chain arrives in one
 -- @get_forward_msg@ round-trip, so "any child" means "all of them").
@@ -412,22 +500,19 @@ waitForTriggerForward mid = go 0
               liftIO (threadDelay (stepMs * 1000))
               go (elapsed + stepMs)
 
--- | Upgrade bare @[forward]@ display markers to
--- @[forward#\<message_id\>]@ so the model has a handle to pass to the
--- @view_forward@ tool.  The id is the containing message's own id —
--- that's what the child rows are keyed under (nested forwards inside
--- an expansion carry their synthetic container id the same way).
-tagForwardMarkers :: HistoryItem -> HistoryItem
-tagForwardMarkers h
-  | "[forward]" `T.isInfixOf` h.renderedText =
-      h
-        { renderedText =
-            T.replace
-              "[forward]"
-              ("[forward#" <> T.pack (show h.messageId) <> "]")
-              h.renderedText
-        }
-  | otherwise = h
+-- | Upgrade bare opaque-media display markers to id-carrying handles
+-- the model can pass to a tool: @[forward]@ → @[forward#\<mid\>]@
+-- (view_forward) and @[video]@ → @[video#\<mid\>]@ (view_video).  The
+-- id is the containing message's own id — that's what forward child
+-- rows are keyed under and what the video tool reads segments from.
+tagMediaMarkers :: HistoryItem -> HistoryItem
+tagMediaMarkers h = h {renderedText = foldr tag h.renderedText ["forward", "video"]}
+  where
+    tag kind t =
+      T.replace
+        ("[" <> kind <> "]")
+        ("[" <> kind <> "#" <> T.pack (show h.messageId) <> "]")
+        t
 
 -- | Everyone appearing in this turn's context, QQ号 ↔ display name.
 -- Rendered text shows mentions as raw @<QQ号> (that's all the wire
@@ -716,13 +801,18 @@ renderContext pi' =
       -- and every other label sits between two images, so no two
       -- text blocks are ever adjacent — the most conservative shape
       -- for strict OpenAI-compatible providers.
+      -- The data URL's mime prefix decides the wire block type —
+      -- pointed-at videos ride the same attachment list as images.
+      mediaBlock u
+        | "data:video/" `T.isPrefixOf` u = VideoDataUrl u
+        | otherwise = ImageDataUrl u
       userMessage = case pi'.images of
         [] -> MsgUser userBody
         (i0 : rest) ->
           MsgUserBlocks $
             TextBlock (userBody <> "\n\n" <> i0.piLabel)
-              : ImageDataUrl i0.piDataUrl
-              : concat [[TextBlock i.piLabel, ImageDataUrl i.piDataUrl] | i <- rest]
+              : mediaBlock i0.piDataUrl
+              : concat [[TextBlock i.piLabel, mediaBlock i.piDataUrl] | i <- rest]
       messages =
         [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) envText effectivePersona memBlock)]
           <> mentionMessages

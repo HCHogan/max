@@ -4,7 +4,7 @@ A QQ chat bot written in Haskell, for group chats and one-on-one private chats. 
 
 ## What it does
 
-- **Persistence.** Every message goes to Postgres (segments, rendered text, sender names, reply links); images are stored content-addressed on disk, forwarded chats expanded into child rows.
+- **Persistence.** Every message goes to Postgres (segments, rendered text, sender names, reply links); images and videos are stored content-addressed on disk, forwarded chats expanded into child rows.
 - **Triggering.** @-mention or reply in groups, everything in private chats; a 戳一戳 aimed at the bot wakes it too (the prompt says who poked — during a running task it lands as a btw note instead). `!` messages are commands; the rest start an async agent turn with recent context, prior bot conversations, pins and memories.
 - **Proactive triggering** (optional). With `intent.profile` configured, unaddressed group chatter is batched through a cheap intent classifier — name-calls without an @, follow-ups to what the bot just said, topics it can help with — and may start a turn on its own. Topic barge-ins respect a per-group cooldown (name-calls and follow-ups don't), an hourly cap covers everything, `!proactive on/off` toggles per group, and the main model can still answer `[silence]`.
 - **Private chats** reuse the group pipeline (chat with user *u* = group `-u`), so sessions, memories, sandboxes and commands work the same in both.
@@ -16,7 +16,7 @@ A QQ chat bot written in Haskell, for group chats and one-on-one private chats. 
 - **Group awareness.** The prompt carries group name, owner and admins; `group_members` pages through the full roster.
 - **Browser** (multimodal profiles). Per-group camoufox container (stealth Firefox over MCP): navigate, snapshot, click, type, scroll — snapshots list interactive elements with CSS selectors.
 - **Replies.** Blank-line paragraphs go out as separate messages (fences never split, five max); a QQ-id-to-name table in the prompt keeps names straight, group card over nickname.
-- **Tools** (per config): `web_search` · files · sandbox (persistent per-group Docker workspace, packages from pinned nixpkgs) · memory · message search · `group_members` / `view_avatar` / `view_image` / `view_forward` / `poke` · browser.
+- **Tools** (per config): `web_search` · files · sandbox (persistent per-group Docker workspace, packages from pinned nixpkgs) · memory · message search · `group_members` / `view_avatar` / `view_image` / `view_forward` / `view_video` (multimodal: whole video inline via the `video_url` block extension) / `poke` · browser.
 - **Pins.** Messages worth keeping in every prompt (specs, decisions, reference images) survive `!clear`. Curated by the model itself via `pin_message`/`unpin_message` tools; `!pin`/`!unpin`/`!pins` remain as the manual override.
 - **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!proactive`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`.
 - `@bot ping` → `pong`, no LLM call.

@@ -94,6 +94,7 @@ library
         Max.Tools.Sandbox
         Max.Tools.Search
         Max.Tools.Stickers
+        Max.Tools.Video
         Max.Util
         Max.Wreq
     build-depends:

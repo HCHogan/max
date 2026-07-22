@@ -1,10 +1,12 @@
 module Max.Images
   ( ImageJob (..),
+    MediaKind (..),
     ImageQueue,
     newImageQueue,
     enqueueImages,
     enqueueImagesFromNode,
     downloadableImageCount,
+    downloadableVideoCount,
     imageWorker,
   )
 where
@@ -30,10 +32,16 @@ import Max.Effects.Blob (Blob, blobPath, putBlob)
 import Max.Effects.Http (Http, getBytes)
 import Max.Util (catchSync)
 import OneBot.Event (GroupMessage (..))
-import OneBot.Segment (ImageSegInfo (..), Segment (..))
+import OneBot.Segment (ImageSegInfo (..), Segment (..), VideoSegInfo (..))
 import OneBot.Types (GroupId (..), MessageId (..))
 
--- | One image (or mface) waiting to be fetched and recorded.
+-- | What a queued download is.  Videos ride the same worker pool but
+-- land in their own tables ('videos' / 'message_videos') with a
+-- bigger size cap.
+data MediaKind = MediaImage | MediaVideo
+  deriving stock (Show, Eq)
+
+-- | One image / mface / video waiting to be fetched and recorded.
 -- 'sticker' carries the sticker metadata when the segment was a
 -- 动画表情/商城表情, so the worker can register it in the sticker
 -- library once the bytes (and thus the sha) are known.
@@ -42,7 +50,8 @@ data ImageJob = ImageJob
     segIndex :: !Int,
     url :: !Text,
     groupId :: !(Maybe Int64),
-    sticker :: !(Maybe StickerMeta)
+    sticker :: !(Maybe StickerMeta),
+    kind :: !MediaKind
   }
   deriving stock (Show)
 
@@ -65,7 +74,9 @@ enqueueImages q gm =
 enqueueImagesFromNode :: ImageQueue -> Int64 -> Maybe Int64 -> [Segment] -> IO ()
 enqueueImagesFromNode q mid gid segs = do
   let jobs = mapMaybe pick (zip [0 ..] segs)
-      pick (i, s) = (\u -> ImageJob mid i u gid (stickerMeta s)) <$> imageUrl s
+      pick (i, s) = case imageUrl s of
+        Just u -> Just (ImageJob mid i u gid (stickerMeta s) MediaImage)
+        Nothing -> (\u -> ImageJob mid i u gid Nothing MediaVideo) <$> videoUrl s
   atomically $ traverse_ (writeTQueue q) jobs
 
 -- | How many of a message's segments the worker will try to fetch —
@@ -75,11 +86,22 @@ enqueueImagesFromNode q mid gid segs = do
 downloadableImageCount :: [Segment] -> Int
 downloadableImageCount = length . mapMaybe imageUrl
 
+-- | Same, for 'message_videos' rows.
+downloadableVideoCount :: [Segment] -> Int
+downloadableVideoCount = length . mapMaybe videoUrl
+
 imageUrl :: Segment -> Maybe Text
 imageUrl = \case
   SegImage info -> info.isiUrl
   SegOther "mface" (Object o) -> lookupString "url" o
   SegOther "image" (Object o) -> lookupString "url" o
+  _ -> Nothing
+
+-- | NapCat's container-local-path fallback isn't fetchable by us —
+-- only real http(s) URLs enqueue.
+videoUrl :: Segment -> Maybe Text
+videoUrl = \case
+  SegVideo v | Just u <- v.vsiUrl, "http" `T.isPrefixOf` u -> Just u
   _ -> Nothing
 
 lookupString :: Text -> KM.KeyMap Value -> Maybe Text
@@ -133,22 +155,34 @@ processOne job = do
         object
           [ "error" .= err,
             "url" .= job.url,
+            "kind" .= T.pack (show job.kind),
             "message_id" .= job.messageId
           ]
     Right (bytes, mime) -> do
       sha <- putBlob bytes
       rel <- blobPath sha
-      recordImage sha mime (BS.length bytes) rel job
-      for_ job.sticker (recordSticker sha job.groupId)
-      logInfo "image stored" $
+      case job.kind of
+        MediaImage -> do
+          recordImage sha mime (BS.length bytes) rel job
+          for_ job.sticker (recordSticker sha job.groupId)
+        MediaVideo ->
+          -- QQ's CDN is sloppy about video content types; normalise
+          -- anything that isn't video/* to mp4 (what QQ serves).
+          recordVideo sha (if "video/" `T.isPrefixOf` mime then mime else "video/mp4") (BS.length bytes) rel job
+      logInfo "media stored" $
         object
           [ "sha256_short" .= T.take 8 sha,
             "size" .= BS.length bytes,
             "mime" .= mime,
+            "kind" .= T.pack (show job.kind),
             "message_id" .= job.messageId
           ]
   where
-    maxBytes = 50 * 1024 * 1024
+    maxBytes = case job.kind of
+      MediaImage -> 50 * 1024 * 1024
+      -- Inline base64 grows 4/3 on the wire; 60MB keeps one video
+      -- under ~80MB in the request.
+      MediaVideo -> 60 * 1024 * 1024
 
 recordImage ::
   (WithConnection :> es, IOE :> es) =>
@@ -167,6 +201,27 @@ recordImage sha mime size rel job = do
   _ <-
     execute
       "INSERT INTO message_images (message_id, sha256, seg_index) \
+      \ VALUES (?,?,?) ON CONFLICT DO NOTHING"
+      (job.messageId, sha, job.segIndex)
+  pure ()
+
+recordVideo ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  Text ->
+  Int ->
+  FilePath ->
+  ImageJob ->
+  Eff es ()
+recordVideo sha mime size rel job = do
+  _ <-
+    execute
+      "INSERT INTO videos (sha256, mime_type, bytes_size, local_path) \
+      \ VALUES (?,?,?,?) ON CONFLICT (sha256) DO NOTHING"
+      (sha, mime, fromIntegral size :: Int64, T.pack rel)
+  _ <-
+    execute
+      "INSERT INTO message_videos (message_id, sha256, seg_index) \
       \ VALUES (?,?,?) ON CONFLICT DO NOTHING"
       (job.messageId, sha, job.segIndex)
   pure ()
