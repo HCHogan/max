@@ -69,6 +69,7 @@ data Command
   | StickerUnban !Text -- ^ '!sticker unban <sha-prefix>'
   | ProactiveStatus -- ^ '!proactive' — feature + override state
   | ProactiveSet !(Maybe Bool) -- ^ '!proactive on' / 'off' / 'default'
+  | Version -- ^ '!version'
   | Unknown !Text !RawArgs -- ^ verb + raw args; parser succeeded but verb unknown
   deriving stock (Show, Eq)
 

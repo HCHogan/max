@@ -112,6 +112,9 @@ spec = do
         Right (Just (Unknown "memory" _)) -> pure ()
         other -> expectationFailure $ "expected Unknown memory, got: " <> show other
 
+  describe "!version" $
+    it "parses" $ "!version" `parsesTo` Version
+
   describe "unknown verbs" $ do
     it "fall through to Unknown with the raw verb" $
       case parseCommand "!nope foo bar" of

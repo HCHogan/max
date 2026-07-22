@@ -3,6 +3,8 @@ module Max.DB.Migrations
   )
 where
 
+import Control.Exception (throwIO)
+import Control.Monad (unless)
 import Data.Foldable (for_)
 import Data.ByteString qualified as BS
 import Data.List (isSuffixOf, sort)
@@ -16,6 +18,10 @@ import System.FilePath ((</>))
 -- | Apply any .sql files in @dir@ that haven't been recorded in
 -- @schema_migrations@ yet, in filename order. Returns the list of files
 -- that were applied in this run.
+--
+-- Downgrade guard: if the database records migrations this binary
+-- doesn't ship, a *newer* max-bot has migrated it — running old code
+-- against a new schema corrupts in subtle ways, so refuse to start.
 runMigrations :: DbPool -> FilePath -> IO [String]
 runMigrations pool dir = do
   exists <- doesDirectoryExist dir
@@ -25,6 +31,12 @@ runMigrations pool dir = do
       ensureTable c
       done <- listApplied c
       files <- sort . filter (".sql" `isSuffixOf`) <$> listDirectory dir
+      let unknown = Set.filter (`notElem` files) done
+      unless (Set.null unknown) $
+        throwIO . userError $
+          "database schema is newer than this binary (unknown migrations: "
+            <> unwords (Set.toList unknown)
+            <> ") — upgrade max-bot instead of running an old build"
       let pending = filter (`Set.notMember` done) files
       for_ pending (applyOne c dir)
       pure pending

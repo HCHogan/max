@@ -19,7 +19,7 @@ A QQ chat bot written in Haskell, for group chats and one-on-one private chats. 
 - **Replies.** Blank-line paragraphs go out as separate messages (fences never split, five max); a QQ-id-to-name table in the prompt keeps names straight, group card over nickname.
 - **Tools** (per config): `web_search` · files · sandbox (persistent per-group Docker workspace, packages from pinned nixpkgs) · memory · message search · `group_members` / `view_avatar` / `view_image` / `view_forward` / `view_video` (multimodal: whole video inline via the `video_url` block extension) / `view_bilibili` (metadata + top comments; `with_video` streams the 480p MP4 inline) / `poke` · browser.
 - **Pins.** Messages worth keeping in every prompt (specs, decisions, reference images) survive `!clear`. Curated by the model itself via `pin_message`/`unpin_message` tools; `!pin`/`!unpin`/`!pins` remain as the manual override.
-- **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!proactive`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`.
+- **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!proactive`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`, `!version`.
 - `@bot ping` → `pong`, no LLM call.
 
 ## Layout
@@ -218,6 +218,10 @@ cabal test max-test-db
 ```
 
 Without `MAX_TEST_DB_URL` the suite exits 0 (CI without a database stays green). Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
+
+## Versioning
+
+`version:` in `max.cabal` is the single source of truth (surfaced by `!version` via `Paths_max`). **Every feature update bumps it** — patch for fixes/tweaks, minor for features — and releases get an annotated `vX.Y.Z` git tag. Startup refuses to run against a database that records migrations this binary doesn't ship, so an old max-bot can never touch a newer schema.
 
 ## Debugging
 

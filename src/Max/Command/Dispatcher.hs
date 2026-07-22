@@ -21,6 +21,8 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Types
 import Data.Int (Int64)
+import Data.Version (showVersion)
+import Paths_max (version)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, fetchMemory, listMemories)
 import Max.DB.Stickers qualified as Stickers
@@ -308,6 +310,8 @@ execute t gid uid replyTarget cmd = do
       )
     logInfo "session: proactive override" $ object ["value" .= mb]
     ack
+  Version ->
+    reply ("max-bot v" <> T.pack (showVersion version) <> " · github.com/HCHogan/max")
   StickerList -> do
     rows <- Stickers.listRecentStickers 10
     reply (formatStickers rows)
@@ -515,6 +519,7 @@ helpText Nothing =
       "  !ps --all                看所有群的任务",
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",
       "  !kill --all              砍掉所有群的全部任务",
+      "  !version                 看 bot 版本",
       "  ! <命令>                 在本群沙盒里跑 shell（感叹号后空一格），如 ! ls -al；支持多行",
       "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version"
     ]

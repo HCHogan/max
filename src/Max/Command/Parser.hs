@@ -256,6 +256,7 @@ classify verb raw@(RawArgs pos flags) = case verb of
     ["off"] -> ProactiveSet (Just False)
     ["default"] -> ProactiveSet Nothing
     _ -> Unknown verb raw
+  "version" -> Version
   _ -> Unknown verb raw
   where
     oneArg xs = case catMaybes [Just t | t <- xs] of
