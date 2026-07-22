@@ -47,7 +47,7 @@ import Max.Files (FileQueue, enqueueFiles)
 import Max.MemoryExtract (extractMemories)
 import Max.Forward (ForwardQueue, enqueueForwards)
 import Max.Images (ImageQueue, enqueueImages)
-import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent)
+import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -184,10 +184,13 @@ onGroupMessage mIntent gm = do
             Just quoted | quoted.userId == selfRaw -> classify True gm
             _ -> TriggerNone
     t -> pure t
-  -- A direct trigger clears the group's pending intent buffer: those
+  -- A direct trigger clears the group's pending intent buffer (those
   -- messages reach the model as ambient context of this turn, and
-  -- must not also produce a second, proactive reply.
-  let clearIntent = for_ mIntent $ \st -> liftIO (clearPendingIntent st gm.groupId)
+  -- must not also produce a second, proactive reply) and stamps the
+  -- gate's followup hot window.
+  let clearIntent = for_ mIntent $ \st -> liftIO $ do
+        clearPendingIntent st gm.groupId
+        noteBotActivity st gm.groupId
   case trig of
     -- Not addressed: hand the message to the intent classifier —
     -- maybe the bot wants to join in anyway.
@@ -225,8 +228,10 @@ onPoke mIntent pk
           UserId pokerRaw = pk.pkUserId
       logInfo "poked" $ object ["group_id" .= gidRaw, "user_id" .= pokerRaw]
       -- Same as a direct trigger: the poke supersedes any pending
-      -- proactive classification for this group.
-      for_ mIntent $ \st -> liftIO (clearPendingIntent st pk.pkGroupId)
+      -- proactive classification and stamps the followup hot window.
+      for_ mIntent $ \st -> liftIO $ do
+        clearPendingIntent st pk.pkGroupId
+        noteBotActivity st pk.pkGroupId
       -- Best-effort display name for the poker (groups only; the
       -- private-chat peer needs no introduction).
       mName <-

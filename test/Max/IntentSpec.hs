@@ -6,6 +6,7 @@ import Max.Intent
     IntentKind (..),
     IntentVerdict (..),
     Throttle (..),
+    msgSignal,
     parseSupplement,
     parseVerdict,
     throttleAllows,
@@ -59,6 +60,19 @@ spec = do
 
     it "rejects an object missing the trigger field" $
       parseVerdict "{\"reason\": \"x\"}" `shouldBe` Nothing
+
+  describe "msgSignal (gate)" $ do
+    it "hits on the bot's name, any case" $ do
+      msgSignal "max帮我看看" `shouldBe` True
+      msgSignal "问问 Max 吧" `shouldBe` True
+      msgSignal "MAX?" `shouldBe` True
+
+    it "hits even when the name is about something else (classifier decides)" $
+      msgSignal "买个 Claude Max 套餐" `shouldBe` True
+
+    it "misses plain chatter" $ do
+      msgSignal "今天吃什么" `shouldBe` False
+      msgSignal "[image]" `shouldBe` False
 
   describe "parseSupplement" $ do
     it "parses both verdicts" $ do
