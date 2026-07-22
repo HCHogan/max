@@ -493,8 +493,24 @@ parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
         _ -> do
           mC <- m .:? "content"
           case mC of
-            Just c' -> pure (ContentResp c')
+            Just c' -> pure (ContentResp (stripLeadingThink c'))
             Nothing -> fail "no content nor tool_calls in message"
+
+-- | Models that inline their reasoning (MiniMax, GLM, …) open the
+-- content with a @\<think\>…\</think\>@ block instead of using a
+-- separate reasoning field.  Strip a leading block before handing the
+-- text to callers — it must never reach the group.  Content that got
+-- truncated inside the block (hit max_tokens mid-think) strips to
+-- empty rather than leaking half a monologue.  Tool-call turns are
+-- unaffected: their raw message round-trips verbatim, block included.
+stripLeadingThink :: Text -> Text
+stripLeadingThink t =
+  case T.stripPrefix "<think>" (T.stripStart t) of
+    Nothing -> t
+    Just rest -> case T.breakOn "</think>" rest of
+      (_, suf)
+        | Just after <- T.stripPrefix "</think>" suf -> T.stripStart after
+        | otherwise -> ""
 
 -- | OpenAI-shaped usage block.  The cached-prompt count hides in two
 -- places depending on provider: DeepSeek's flat

@@ -197,6 +197,27 @@ spec = do
         Right (ContentResp t, _) -> t `shouldBe` "hi"
         other -> expectationFailure $ "expected ContentResp, got: " <> show other
 
+  describe "inline <think> stripping (OpenAI content)" $ do
+    let respWith content =
+          object
+            [ "choices"
+                .= [ object
+                       ["message" .= object ["role" .= ("assistant" :: Text), "content" .= (content :: Text)]]
+                   ]
+            ]
+    it "strips a leading think block and surrounding whitespace" $ do
+      case parseEither parseResponseOpenAI (respWith "  <think>盐溶于水…</think>\n\n24斤。") of
+        Right (ContentResp t, _) -> t `shouldBe` "24斤。"
+        other -> expectationFailure $ "got: " <> show other
+    it "an unclosed think block (truncated mid-think) strips to empty" $ do
+      case parseEither parseResponseOpenAI (respWith "<think>反正就是在想") of
+        Right (ContentResp t, _) -> t `shouldBe` ""
+        other -> expectationFailure $ "got: " <> show other
+    it "content without a think block passes through untouched" $ do
+      case parseEither parseResponseOpenAI (respWith "直接回答，<think> 出现在中间不动它") of
+        Right (ContentResp t, _) -> t `shouldBe` "直接回答，<think> 出现在中间不动它"
+        other -> expectationFailure $ "got: " <> show other
+
   describe "usage extraction (OpenAI shape)" $ do
     let openaiResp usage =
           object $
