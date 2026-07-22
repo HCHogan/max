@@ -289,6 +289,10 @@ dispatchCommand gm body = localDomain "cmd" $ do
       result <- CmdDispatch.execute t gm.groupId gm.userId replyTarget cmd
       case result of
         ReplyText reply -> replyText gm reply
+        -- Pure acknowledgement: an OK reaction on the command message
+        -- beats another line of chat noise.
+        ReplyAck ->
+          sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
         EphemeralAsk askBody -> do
           logInfo "btw: ephemeral dispatch" $
             object ["len" .= T.length askBody]
@@ -730,6 +734,11 @@ stripMentions (UserId u) =
 -- Face ids come from NapCat's face_config.json (QSid).
 processingFaceId :: Int
 processingFaceId = 212
+
+-- | The command-acknowledged face: OK (the hand gesture) — replaces
+-- the old "✓ …" text replies for pure acks.
+ackFaceId :: Int
+ackFaceId = 124
 
 -- | The "request failed" reaction face: NO (the red no-gesture),
 -- swapped in for 'processingFaceId' when a dispatch produced no reply.

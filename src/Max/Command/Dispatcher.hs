@@ -53,6 +53,9 @@ import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 -- Agent/NapCat/Concurrent constraints.
 data DispatchResult
   = ReplyText !Text
+  | -- | Pure acknowledgement — the caller reacts an OK face onto the
+    -- command message instead of posting text.
+    ReplyAck
   | EphemeralAsk !Text
   deriving stock (Show, Eq)
 
@@ -84,7 +87,7 @@ execute t gid uid replyTarget cmd = do
     -- 'EphemeralAsk' and spawns a 'withEphemeral'-wrapped dispatch.
     injected <- liftIO (pushBtwToLatest env.beTasks gid note)
     if injected
-      then reply "✓ 侧记已注入运行中的任务"
+      then ack
       else case T.strip note of
         "" -> reply "用法：!btw <要临时问的内容>（不污染对话历史）"
         q -> pure (EphemeralAsk q)
@@ -106,7 +109,7 @@ execute t gid uid replyTarget cmd = do
       then do
         updateSession t (\s -> (s {model = name}, ()))
         logInfo "session: model set" $ object ["model" .= name]
-        reply $ "✓ model 切到 " <> name
+        ack
       else
         reply $
           "找不到 model: "
@@ -118,7 +121,7 @@ execute t gid uid replyTarget cmd = do
   ModelThinkSet b -> do
     updateSession t (\s -> (Session.setThinkingOverride b s, ()))
     logInfo "session: thinking override" $ object ["value" .= b]
-    reply $ "✓ 思考模式 " <> (if b then "开" else "关") <> "（覆盖 profile 默认）"
+    ack
   --
   DebugShow -> do
     s <- liftIO (Session.readSession t)
@@ -131,13 +134,7 @@ execute t gid uid replyTarget cmd = do
         ()
       )
     logInfo "session: debug override" $ object ["value" .= mb]
-    reply $ case mb of
-      Just True -> "✓ debug 开 — 工具调用会打印到群里"
-      Just False -> "✓ debug 关 — 工具调用不再打印"
-      Nothing ->
-        "✓ debug 回到配置默认（当前默认"
-          <> (if env.beDebugDefault then "开" else "关")
-          <> "）"
+    ack
   --
   PersonaShow -> do
     s <- liftIO (Session.readSession t)
@@ -146,15 +143,15 @@ execute t gid uid replyTarget cmd = do
       Just p -> "当前 persona override:\n" <> p
   PersonaClear -> do
     updateSession t (\s -> (s {persona = Nothing}, ()))
-    reply "✓ persona override 已清，回到默认"
+    ack
   PersonaSet p -> do
     updateSession t (\s -> (s {persona = Just p}, ()))
-    reply $ "✓ persona 已设 (" <> T.pack (show (T.length p)) <> " 字)"
+    ack
   --
   Clear -> do
     now <- liftIO getCurrentTime
     updateSession t (\s -> (Session.clearHistory now s, ()))
-    reply "✓ history 已清，之后的 prompt 不再带这之前的群上下文"
+    ack
   ClearAll -> do
     now <- liftIO getCurrentTime
     updateSession t (\s -> (Session.clearAll now s, ()))
@@ -162,17 +159,14 @@ execute t gid uid replyTarget cmd = do
     nb <- liftIO (destroyBrowsersForGroup env.beBrowsers gid)
     logInfo "session: clear --all" $
       object ["sandboxes_destroyed" .= n, "browsers_destroyed" .= nb]
-    let sboxSuffix
-          | n == 0 = ""
-          | otherwise = "，并销毁了 " <> T.pack (show n) <> " 个 sandbox"
-    reply $ "✓ history / persona override / pin 全清，群上下文水位线已置" <> sboxSuffix
+    ack
   Unclear -> do
     s <- liftIO (Session.readSession t)
     case s.clearedAt of
       Nothing -> reply "本来就没设水位线"
       Just _ -> do
         updateSession t (\sess -> (Session.unclear sess, ()))
-        reply "✓ 水位线已撤销，下次 prompt 又能看到 !clear 之前的群上下文了"
+        ack
   --
   Pin mExplicitId -> do
     let mTarget = mExplicitId <|> replyTarget
@@ -185,26 +179,19 @@ execute t gid uid replyTarget cmd = do
           Nothing -> reply $ "找不到 message_id=" <> T.pack (show mid)
           Just _ -> do
             updateSession t (\s -> (Session.addPin mid s, ()))
-            pinCount <- (length . (.pinned)) <$> liftIO (Session.readSession t)
             logInfo "session: pinned" $ object ["message_id" .= mid]
-            reply $
-              "✓ pinned message_id="
-                <> T.pack (show mid)
-                <> "（当前共 "
-                <> T.pack (show pinCount)
-                <> " 条 pin）"
+            ack
   Unpin UnpinAll -> do
-    n <- (length . (.pinned)) <$> liftIO (Session.readSession t)
     updateSession t (\s -> (Session.removeAllPins s, ()))
-    reply $ "✓ 清空所有 pin（共 " <> T.pack (show n) <> " 条）"
+    ack
   Unpin (UnpinOne mid) -> do
     updateSession t (\s -> (Session.removePin mid s, ()))
-    reply $ "✓ unpinned message_id=" <> T.pack (show mid)
+    ack
   Unpin UnpinReply -> case replyTarget of
     Nothing -> reply "用法：引用要 unpin 的那条消息发 !unpin，或者 !unpin <id> / !unpin all"
     Just mid -> do
       updateSession t (\s -> (Session.removePin mid s, ()))
-      reply $ "✓ unpinned message_id=" <> T.pack (show mid)
+      ack
   Pins -> do
     s <- liftIO (Session.readSession t)
     case s.pinned of
@@ -223,16 +210,14 @@ execute t gid uid replyTarget cmd = do
     reply (formatTasks now (Just gid) tasks)
   Kill tid -> do
     ok <- liftIO (cancelTask env.beTasks (TaskId tid))
-    reply $
-      if ok
-        then "✓ 已发取消信号给 " <> tid
-        else "找不到任务 " <> tid <> " (用 !ps 看在跑的)"
+    if ok
+      then ack
+      else reply ("找不到任务 " <> tid <> " (用 !ps 看在跑的)")
   KillAll -> do
     n <- liftIO (cancelAllTasks env.beTasks)
-    reply $
-      if n == 0
-        then "没有在跑的任务"
-        else "✓ 已发取消信号给全部 " <> T.pack (show n) <> " 个任务"
+    if n == 0
+      then reply "没有在跑的任务"
+      else ack
   Shell pkgs cmdLine -> do
     -- Direct passthrough to the group's default sandbox — same
     -- container the model's sandbox_exec uses, so `! ls` and the
@@ -276,7 +261,7 @@ execute t gid uid replyTarget cmd = do
             || (m.memScope == "user" && m.memScopeId == uidRaw) -> do
             _ <- deleteMemory mid
             logInfo "memory: removed via !memory" $ object ["id" .= mid]
-            reply $ "✓ 已删除记忆 #" <> T.pack (show mid)
+            ack
         | otherwise -> reply "只能删本群的记忆或你自己的记忆"
   --
   StickerStats -> do
@@ -299,13 +284,7 @@ execute t gid uid replyTarget cmd = do
         ()
       )
     logInfo "session: sticker override" $ object ["value" .= mb]
-    reply $ case mb of
-      Just True -> "✓ 表情包发送 开 — bot 可以主动发表情了"
-      Just False -> "✓ 表情包发送 关 — bot 不再发表情（仍会学习入库）"
-      Nothing ->
-        "✓ 表情包发送回到配置默认（当前默认"
-          <> (if env.beStickerDefault then "开" else "关")
-          <> "）"
+    ack
   ProactiveStatus -> do
     sess <- liftIO (Session.readSession t)
     reply $ case env.beIntent of
@@ -328,13 +307,7 @@ execute t gid uid replyTarget cmd = do
         ()
       )
     logInfo "session: proactive override" $ object ["value" .= mb]
-    reply $ case mb of
-      Just True -> "✓ 主动插话 开 — bot 会看话题自己决定要不要接话"
-      Just False -> "✓ 主动插话 关 — 只有 @ 或引用才会触发"
-      Nothing ->
-        "✓ 主动插话回到配置默认（当前"
-          <> (case env.beIntent of Just _ -> "开"; Nothing -> "未配置")
-          <> "）"
+    ack
   StickerList -> do
     rows <- Stickers.listRecentStickers 10
     reply (formatStickers rows)
@@ -350,18 +323,18 @@ execute t gid uid replyTarget cmd = do
     reply :: Applicative f => Text -> f DispatchResult
     reply = pure . ReplyText
 
+    -- Pure acknowledgement: an OK reaction on the command message.
+    ack :: Applicative f => f DispatchResult
+    ack = pure ReplyAck
+
     banSticker b prefix
       | T.length prefix < 6 =
           reply "sha 前缀至少 6 位（!sticker list 里有）"
       | otherwise = do
           n <- Stickers.setStickerBanned b prefix
-          reply $ case n of
-            0 -> "没有匹配 " <> prefix <> "* 的表情"
-            _ ->
-              "✓ 已"
-                <> (if b then "屏蔽 " else "解除屏蔽 ")
-                <> tshow n
-                <> " 个表情"
+          if n == 0
+            then reply ("没有匹配 " <> prefix <> "* 的表情")
+            else ack
 
 renderThinkingState :: Maybe Bool -> Text
 renderThinkingState = \case
