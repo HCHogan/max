@@ -746,10 +746,12 @@ processingFaceId = 212
 ackFaceId :: Int
 ackFaceId = 124
 
--- | The "request failed" reaction face: NO (the red no-gesture),
--- swapped in for 'processingFaceId' when a dispatch produced no reply.
+-- | The "request failed" reaction face: 裂开 — swapped in for
+-- 'processingFaceId' when a dispatch produced no reply.  Distinct
+-- from the /NO (123) that @[silence:NO]@ puts on refused (political)
+-- topics: broken vs refused should read differently.
 failureFaceId :: Int
-failureFaceId = 123
+failureFaceId = 357
 
 -- | Faces the model may name in a @[silence:<名>]@ reply to say *why*
 -- it stayed silent; the face gets reacted onto the trigger message.
