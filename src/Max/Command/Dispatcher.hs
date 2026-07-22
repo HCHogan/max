@@ -22,7 +22,10 @@ import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Types
 import Data.Int (Int64)
 import Data.Version (showVersion)
+import Distribution.Pretty (prettyShow)
+import Distribution.Simple.Utils (cabalVersion)
 import Paths_max (version)
+import System.Info (fullCompilerVersion)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, fetchMemory, listMemories)
 import Max.DB.Stickers qualified as Stickers
@@ -311,7 +314,16 @@ execute t gid uid replyTarget cmd = do
     logInfo "session: proactive override" $ object ["value" .= mb]
     ack
   Version ->
-    reply ("max-bot v" <> T.pack (showVersion version) <> " · github.com/HCHogan/max")
+    -- Single newlines only: a blank line would split the card into
+    -- separate messages ('planReply').
+    reply $
+      T.intercalate
+        "\n"
+        [ "🦈 max-bot v" <> T.pack (showVersion version),
+          "· ghc " <> T.pack (showVersion fullCompilerVersion),
+          "· cabal " <> T.pack (prettyShow cabalVersion),
+          "· github.com/HCHogan/max"
+        ]
   StickerList -> do
     rows <- Stickers.listRecentStickers 10
     reply (formatStickers rows)

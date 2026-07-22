@@ -539,12 +539,13 @@ dispatchLLM origin gm = void $ async $
 --------------------------------------------------------------------------------
 -- Reply helper.
 
--- | Fire-and-forget reply (no persist).  Used for pong, command
--- responses, parse errors — chitchat we don't want polluting the
--- LLM mention history.
+-- | Fire-and-forget reply (no persist).  Used for command responses
+-- and parse errors — plain text, no quote and no @: command output in
+-- the moment right after the command needs neither, and both read as
+-- noise.
 replyText :: NapCat :> es => GroupMessage -> T.Text -> Eff es ()
 replyText gm body =
-  sendAction (sendChatMsg gm.groupId (replySegs gm (" " <> body)))
+  sendAction (sendChatMsg gm.groupId [SegText body])
 
 -- | Send the LLM's final reply as planned by 'planReply' — one
 -- message per blank-line paragraph, markdown tables rendered to a
