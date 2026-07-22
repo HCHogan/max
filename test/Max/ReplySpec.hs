@@ -9,7 +9,6 @@ import Max.Reply
     chunkSource,
     dedupeImagePieces,
     latexToUnicode,
-    maxReplyChunks,
     parseReplyTokens,
     planReply,
   )
@@ -21,32 +20,35 @@ planTexts = map chunkSource . planReply
 
 spec :: Spec
 spec = do
-  describe "planReply / paragraph split" $ do
-    it "keeps a single paragraph as one message" $
+  describe "planReply / [split] marker split" $ do
+    it "keeps a reply without markers as one message" $
       planTexts "就一句话" `shouldBe` ["就一句话"]
 
-    it "splits on blank lines" $
-      planTexts "第一段\n\n第二段\n还是第二段\n\n第三段"
-        `shouldBe` ["第一段", "第二段\n还是第二段", "第三段"]
+    it "keeps blank lines inside one message (no blank-line split)" $
+      planTexts "第一段\n\n第二段" `shouldBe` ["第一段\n\n第二段"]
 
-    it "treats whitespace-only lines as blank" $
-      planTexts "a\n   \nb" `shouldBe` ["a", "b"]
+    it "splits on [split] on its own line" $
+      planTexts "第一条\n[split]\n第二条\n还是第二条\n[split]\n第三条"
+        `shouldBe` ["第一条", "第二条\n还是第二条", "第三条"]
 
-    it "collapses runs of blank lines into one break" $
-      planTexts "a\n\n\n\nb" `shouldBe` ["a", "b"]
+    it "splits on an inline [split]" $
+      planTexts "先说这个 [split] 再说那个"
+        `shouldBe` ["先说这个", "再说那个"]
 
     it "does not split inside code fences" $
-      planTexts "看这段:\n\n```python\nx = 1\n\ny = 2\n```\n\n就这样"
-        `shouldBe` ["看这段:", "```python\nx = 1\n\ny = 2\n```", "就这样"]
+      planTexts "看这段:\n[split]\n```python\nx = 1\n[split]\ny = 2\n```\n[split]\n就这样"
+        `shouldBe` ["看这段:", "```python\nx = 1\n[split]\ny = 2\n```", "就这样"]
 
-    it "caps chunk count, folding overflow into the last message" $ do
+    it "does not cap chunk count" $ do
       let paras = [T.pack ("p" <> show i) | i <- [1 .. 9 :: Int]]
-          out = planTexts (T.intercalate "\n\n" paras)
-      length out `shouldBe` maxReplyChunks
-      last out `shouldBe` T.intercalate "\n\n" (drop (maxReplyChunks - 1) paras)
+      planTexts (T.intercalate " [split] " paras) `shouldBe` paras
 
-    it "strips leading/trailing blank paragraphs" $
-      planTexts "\n\nhello\n\n" `shouldBe` ["hello"]
+    it "drops empty chunks from leading/trailing/doubled markers" $
+      planTexts "[split]hello[split][split]world[split]"
+        `shouldBe` ["hello", "world"]
+
+    it "strips surrounding whitespace per chunk" $
+      planTexts "  a  [split]\n\n b \n\n" `shouldBe` ["a", "b"]
 
     it "empty input yields one empty chunk (caller's concern)" $
       planTexts "" `shouldBe` [("" :: Text)]

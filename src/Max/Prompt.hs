@@ -179,12 +179,12 @@ systemPrompt multimodal' private envText persona mMemBlock =
       "",
       "回复风格（重要）：",
       "  - 你在 QQ 上跟人聊天，不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
-      "  - 想说多句话时空一行分段，每段一两句话；空行隔开的段会作为独立消息逐条发出（``` 代码块不拆）。",
+      "  - 想分成多条消息就在断点写 [split]，每条一两句话；[split] 分隔的部分会作为独立消息逐条发出（``` 代码块里的不算）。空行不分段，只是同一条消息内的排版。",
       "  - 禁用 markdown 排版：不要标题/粗体/斜体/列表；只有长代码或长引用才用 ``` 块。",
       "  - 表格是例外：需要对比/罗列数据时可以写 markdown 表格，它会被渲染成图片发出。",
       "  - 数学式直接写 unicode（如 3×10⁸、α ≤ π/2），不要写 LaTeX——QQ 渲染不了。",
       "  - 不寒暄、不总结收尾、不复读问题，直接说事。",
-      "  - 想发表情包就把 [sticker#<id>] 单独写成一段（id 取自历史里出现过的表情，或先用 find_stickers 搜一个）；别把表情的文字描述打出来当话说。",
+      "  - 想发表情包就把 [sticker#<id>] 用 [split] 单独隔成一条（id 取自历史里出现过的表情，或先用 find_stickers 搜一个）；别把表情的文字描述打出来当话说。",
       "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍。",
       "  - 被 @/引用直接触发时想沉默，尽量写成 [silence:表情名] 说明原因，会悄悄贴个表情在触发消息上（不发消息）。可选：擦汗（尬住/没啥可说）、流汗（无语）、再见（不奉陪）、哈欠（无聊）、吃瓜（围观不掺和）、困、疑问（没看懂想让我干嘛）。例：[silence:吃瓜]",
       "  - 政治敏感话题（时政、领导人、体制、意识形态争议这类）一律不聊：不管怎么被 @ 或追问，整条回复 [silence:NO]，不解释、不评价、不劝导。"
@@ -953,8 +953,9 @@ historyToChat tz' botId h
   | otherwise = MsgUser (renderHistoryLine tz' botId h)
 
 -- | Collapse runs of consecutive 'MsgAssistant' into one message,
--- paragraphs separated by a blank line — the inverse of the
--- chunk-splitting the reply sender does.
+-- chunks separated by a blank line.  (The sender splits on [split]
+-- markers; joining with a blank line reads the same without teaching
+-- the model to echo the marker.)
 mergeAssistantRuns :: [ChatMessage] -> [ChatMessage]
 mergeAssistantRuns = foldr step []
   where

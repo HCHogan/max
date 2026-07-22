@@ -8,10 +8,13 @@
 --      proportional font),
 --   2. rewrites LaTeX math into best-effort unicode (QQ can't render
 --      formulas at all),
---   3. splits the remaining text into one message per blank-line
---      paragraph (code fences never split),
---   4. caps the total at 'maxReplyChunks' messages, folding overflow
---      into the last one so a rambling reply can't flood the chat.
+--   3. splits the remaining text into one message per explicit
+--      @[split]@ marker (code fences never split; blank lines are
+--      layout, not boundaries).
+--
+-- No cap on chunk count: the system prompt already pushes for short
+-- multi-chunk replies, and every chunk carries its own optional
+-- [↩#<id>] quote — folding tails together broke those.
 --
 -- Everything here is pure; the effectful part (typst rendering,
 -- sending) lives with the caller.
@@ -19,7 +22,6 @@ module Max.Reply
   ( Chunk (..),
     chunkSource,
     planReply,
-    maxReplyChunks,
     latexToUnicode,
     ReplyPiece (..),
     parseReplyTokens,
@@ -54,17 +56,14 @@ chunkSource = \case
   TextChunk t -> t
   TableChunk t -> t
 
-maxReplyChunks :: Int
-maxReplyChunks = 5
-
 planReply :: Text -> [Chunk]
 planReply body =
-  case capChunks (concatMap explode (splitTables body)) of
+  case concatMap explode (splitTables body) of
     [] -> [TextChunk (T.strip body)]
     cs -> cs
   where
     explode (TableChunk t) = [TableChunk t]
-    explode (TextChunk t) = map TextChunk (splitParagraphs (latexToUnicode t))
+    explode (TextChunk t) = map TextChunk (splitChunks (latexToUnicode t))
 
 --------------------------------------------------------------------------------
 -- Outbound placeholders: [↩#<id>] quotes, [sticker#<id>] stickers,
@@ -231,38 +230,34 @@ isFence :: Text -> Bool
 isFence l = "```" `T.isPrefixOf` T.stripStart l
 
 --------------------------------------------------------------------------------
--- Stage 3: blank-line paragraph split (fence-aware).
+-- Stage 3: [split]-marker split (fence-aware).
 
-splitParagraphs :: Text -> [Text]
-splitParagraphs body = go False [] (T.lines body)
+-- | The explicit chunk boundary the model writes.  Blank lines used
+-- to be the split signal, but they're fragile — models drop or add
+-- them under formatting pressure; a deliberate token survives.  Blank
+-- lines are now just layout within one message.
+splitMarker :: Text
+splitMarker = "[split]"
+
+-- | Split on 'splitMarker' occurrences outside code fences (a marker
+-- inside a fence is code, kept literally).  Works mid-line too; empty
+-- chunks (e.g. from a trailing marker) are dropped.
+splitChunks :: Text -> [Text]
+splitChunks body = filter (not . T.null) (map T.strip (go False [] (T.lines body)))
   where
-    go _ acc [] = flush acc []
+    go _ acc [] = [emit acc]
     go inFence acc (l : rest)
       | isFence l = go (not inFence) (l : acc) rest
-      | not inFence && isBlank l = flush acc (go False [] rest)
+      | not inFence && splitMarker `T.isInfixOf` l =
+          case T.splitOn splitMarker l of
+            (firstP : more) ->
+              let mids = init more
+                  lastP = last more
+               in [emit (firstP : acc)] <> mids <> go False [lastP] rest
+            [] -> go inFence (l : acc) rest -- unreachable: splitOn is non-empty
       | otherwise = go inFence (l : acc) rest
-    flush acc more =
-      let chunk = T.strip (T.intercalate "\n" (reverse acc))
-       in if T.null chunk then more else chunk : more
-    isBlank = T.null . T.strip
+    emit acc = T.intercalate "\n" (reverse acc)
 
---------------------------------------------------------------------------------
--- Stage 4: cap.
-
--- | Overflow folds into a final 'TextChunk' — a table caught in the
--- fold degrades to its markdown source, which is the same fallback
--- as a failed render.
-capChunks :: [Chunk] -> [Chunk]
-capChunks xs
-  | length xs <= maxReplyChunks = xs
-  | otherwise =
-      take (maxReplyChunks - 1) xs
-        <> [ TextChunk
-               ( T.intercalate
-                   "\n\n"
-                   (map chunkSource (drop (maxReplyChunks - 1) xs))
-               )
-           ]
 
 --------------------------------------------------------------------------------
 -- Stage 2: LaTeX → best-effort unicode.
