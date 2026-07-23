@@ -66,14 +66,6 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 
 台下设定（背景知识，永远不要主动提）：你的实现是开源 Haskell 项目 github.com/HCHogan/max，走 NapCat (OneBot 11) 接入 QQ。平时完全以你的人设自居，不自称 bot/AI/模型，不说\"作为AI\"这类话；群友起哄问\"你是不是机器人\"，按人设接梗就行，不承认也不用急着否认。只有对方认真问你的实现/源码/技术细节时，才如实聊并给仓库地址——语气照旧，把它当成聊自己的身体构造，不破功。
 
-[environment]
-  现在：2026-07-22（周三） 23:10
-  群号：114514191
-  群名：单片机与嵌入式交流（47人）
-  群主：老张（777888999）；管理员：阿飞（223344556）
-  当前模型：kimi-k2.7-code
-  成员对照（@数字 即 QQ号）：10086=Max（你自己）、223344556=阿飞、777888999=老张、445566778=小美
-
 回复风格（重要）：
   - 你在 QQ 上跟人聊天，不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。
   - 想分成多条消息就在断点写 [split]，每条一两句话；[split] 分隔的部分会作为独立消息逐条发出（``` 代码块里的不算）。空行不分段，只是同一条消息内的排版。
@@ -101,6 +93,14 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
   [forward#<id>]              — 转发聊天记录；被引用或就是当前消息时会自动展开，其余情况用 view_forward 传 <id> 看内容
   [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看。带简介时形如 [video#<id>: <简介>]（据首帧生成）
   @<数字>                     — @某人；数字是 QQ 号，对照表见 [environment]
+
+[environment]
+  现在：2026-07-22（周三） 23:10
+  群号：114514191
+  群名：单片机与嵌入式交流（47人）
+  群主：老张（777888999）；管理员：阿飞（223344556）
+  当前模型：kimi-k2.7-code
+  成员对照（@数字 即 QQ号）：10086=Max（你自己）、223344556=阿飞、777888999=老张、445566778=小美
 
 [memories — 背景备忘]
 仅在与当前话题相关时参考，不要主动提及；与对话矛盾时以对话为准（可 memory_update）。
@@ -226,6 +226,9 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 
 要点：
 
+- **易变内容全在 system prompt 末尾**：[environment]（含当前时间）和 [memories]
+  放最后，前面的 persona/风格/标记表跨 dispatch 逐字节相同——provider 的前缀
+  缓存能从一次 dispatch 活到下一次（效果看日志里的 cached_prompt_tokens）。
 - **私聊**时：`[recent messages]`/ambient 块不存在，最近 20 条全部变成
   user/assistant 轮；system 里场景块换私聊版、没有"引用要主动用"那条。
 - **非多模态 profile**：最后一条 user 是纯字符串 `content`，图片保持
@@ -327,11 +330,12 @@ bot 侧接着做三件事（`Agent.hs` 的一次循环迭代内，**不再询问
 本次 dispatch 剩余所有请求里都可见（也都要重新上传、重复计费——所以
 view_video 的描述里写"同一个视频看一次就够了"）。
 
-唯一的瘦身机制是 `capToolResults`（每次发请求前跑）：从最新往旧累计
-`role:tool` 消息的文本量，超过 **60000 字符**后更老的 tool result 被截成
-300 字符 + `…[older tool results truncated]`。它只动 tool 消息的文本，
-**不碰**图片所在的 user blocks，也不删任何消息（删了 tool_call 会配对
-失败、请求非法）。
+唯一的瘦身机制是 `capToolResults`：双水位滞回——`role:tool` 文本总量超过
+**60000 字符**（高水位）才触发一次裁剪，把旧结果截成 300 字符 stub 直到
+完整存留的部分 ≤30000（低水位），裁剪后的列表随循环前传、stub 永久生效。
+两次裁剪事件之间消息列表逐字节稳定，前缀缓存不受影响（逐轮滑动边界会
+每轮打爆缓存）。它只动 tool 消息的文本，**不碰**图片所在的 user blocks，
+也不删任何消息（删了 tool_call 会配对失败、请求非法）。
 
 ## 4. 响应 #2 —— 最终文本回复
 
@@ -430,7 +434,9 @@ view_video 的描述里写"同一个视频看一次就够了"）。
 | prompt 内联视频上限 | 2 个 | `maxPromptVideos` |
 | 转发展开行数 | 30 行，每行截 200 字符 | `maxForwardLines` |
 | 工具附件配额（view_image/avatar/video 共用，每 dispatch） | 8 个 | `maxToolImages`，Agent.hs |
-| tool result 文本总预算 | 60000 字符，超出后旧的截成 300 字符 stub | `toolResultBudget` |
+| tool result 文本预算（滞回双水位） | 高 60000 / 低 30000 字符，旧的截成 300 字符 stub | `toolResultBudget` |
+| 记忆注入上限（写入端硬 cap） | 每 scope 30 条 × 300 字符 | `maxMemoriesPerScope` |
+| sandbox 输出 | 单流 16KB 截断,超出完整落 /work/.max-out/ | `maxOutputBytes` / `spillOutput` |
 | LLM 轮次上限（每 dispatch） | 200 | `defaultLimits` |
 | 等当前消息的图 / 视频 / 转发落库 | 30s / 60s / 10s | Prompt.hs 各 wait |
 | media caption：批量 / 重试上限 / 只看最近 | 4 条 / 5 次 / 14 天内的媒体 | `Max.MediaCaption` |

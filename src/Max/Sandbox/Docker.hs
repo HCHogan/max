@@ -8,11 +8,13 @@
 -- == Output limits
 --
 -- 'runExec' caps captured @stdout@/@stderr@ at 'maxOutputBytes'
--- each.  Past that, the rest is dropped silently and 'erTruncated'
--- is set so the tool can tell the model.  Per-call wallclock
--- deadline is enforced *inside the container* via @timeout(1)@ so
--- runaway processes are killed where they live rather than leaving
--- us a dangling 'docker exec' to wrestle with.
+-- each.  Past that, 'erTruncated' is set and the FULL output is
+-- spilled to a file inside the container ('erSpillPath', under
+-- @/work/.max-out/@) so the model can grep/head the rest with its
+-- own exec tool instead of losing it.  Per-call wallclock deadline
+-- is enforced *inside the container* via @timeout(1)@ so runaway
+-- processes are killed where they live rather than leaving us a
+-- dangling 'docker exec' to wrestle with.
 module Max.Sandbox.Docker
   ( -- * Lifecycle
     runRun,
@@ -41,6 +43,7 @@ where
 import Control.Exception (IOException, try)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import System.Exit (ExitCode (..))
 import System.Process
   ( CreateProcess (..),
@@ -68,7 +71,10 @@ data ExecResult = ExecResult
   { erExitCode :: !Int,
     erStdout :: !Text,
     erStderr :: !Text,
-    erTruncated :: !Bool
+    erTruncated :: !Bool,
+    -- | When truncated: container-side path holding the full
+    -- stdout+stderr, for the model to grep/head on demand.
+    erSpillPath :: !(Maybe Text)
   }
   deriving stock (Show)
 
@@ -195,23 +201,54 @@ runExec container cmd timeoutSecs = do
           T.unpack wrapped
         ]
   res <- try @IOException $ readProcessWithExitCode "docker" args ""
-  pure $ case res of
+  case res of
     Left e ->
-      ExecResult
-        { erExitCode = -1,
-          erStdout = "",
-          erStderr = "docker exec failed: " <> T.pack (show e),
-          erTruncated = False
-        }
-    Right (code, out, err) ->
-      let (truncatedOut, t1) = truncateBytes maxOutputBytes (stripAnsi (T.pack out))
-          (truncatedErr, t2) = truncateBytes maxOutputBytes (stripAnsi (T.pack err))
-       in ExecResult
-            { erExitCode = case code of ExitSuccess -> 0; ExitFailure c -> c,
-              erStdout = truncatedOut,
-              erStderr = truncatedErr,
-              erTruncated = t1 || t2
-            }
+      pure
+        ExecResult
+          { erExitCode = -1,
+            erStdout = "",
+            erStderr = "docker exec failed: " <> T.pack (show e),
+            erTruncated = False,
+            erSpillPath = Nothing
+          }
+    Right (code, out, err) -> do
+      let fullOut = stripAnsi (T.pack out)
+          fullErr = stripAnsi (T.pack err)
+          (truncatedOut, t1) = truncateBytes maxOutputBytes fullOut
+          (truncatedErr, t2) = truncateBytes maxOutputBytes fullErr
+      spill <-
+        if t1 || t2
+          then spillOutput container fullOut fullErr
+          else pure Nothing
+      pure
+        ExecResult
+          { erExitCode = case code of ExitSuccess -> 0; ExitFailure c -> c,
+            erStdout = truncatedOut,
+            erStderr = truncatedErr,
+            erTruncated = t1 || t2,
+            erSpillPath = spill
+          }
+
+-- | Save an over-cap exec's full output to a file inside the
+-- container, so truncation stops being lossy.  Best-effort: any
+-- failure just means no spill path (old behavior).
+spillOutput :: Text -> Text -> Text -> IO (Maybe Text)
+spillOutput container fullOut fullErr = do
+  stamp <- (show :: Int -> String) . round . (* 1000) <$> getPOSIXTime
+  let path = "/work/.max-out/exec-" <> T.pack stamp <> ".log"
+      content = "### stdout\n" <> fullOut <> "\n### stderr\n" <> fullErr
+      args =
+        [ "exec",
+          "-i",
+          T.unpack container,
+          "sh",
+          "-c",
+          T.unpack ("mkdir -p /work/.max-out && cat > " <> shellQuote path)
+        ]
+  res <- try @IOException $ readProcessWithExitCode "docker" args (T.unpack content)
+  pure $ case res of
+    Right (ExitSuccess, _, _) -> Just path
+    _ -> Nothing
 
 -- | Read a file from the container, capped at 'maxOutputBytes'.
 --

@@ -142,8 +142,11 @@ execTool gid reg =
           [ "Run a shell command inside an existing sandbox.  The command",
             "is passed verbatim to 'sh -c' inside the container, with a",
             "wallclock timeout enforced via timeout(1).  Stdout and stderr",
-            "are captured separately and capped at ~16 KiB each (truncated",
-            "results set 'truncated' = true).  Exit code 0 = success.",
+            "are captured separately and capped at ~16 KiB each; truncated",
+            "results set 'truncated' = true and save the FULL output to the",
+            "file named in 'full_output_file' — grep/head/tail that file in",
+            "a follow-up command instead of re-running with different flags.",
+            "Exit code 0 = success.",
             "To use tools that aren't preinstalled, list their nixpkgs",
             "attributes in 'packages' — they are put on PATH for this",
             "command only (no permanent install needed).  The first use of",
@@ -183,13 +186,13 @@ execTool gid reg =
             pure $ case res of
               Left err -> Left err
               Right er ->
-                Right $
-                  object
-                    [ "exit_code" .= er.erExitCode,
-                      "stdout" .= er.erStdout,
-                      "stderr" .= er.erStderr,
-                      "truncated" .= er.erTruncated
-                    ]
+                Right . object $
+                  [ "exit_code" .= er.erExitCode,
+                    "stdout" .= er.erStdout,
+                    "stderr" .= er.erStderr,
+                    "truncated" .= er.erTruncated
+                  ]
+                    <> ["full_output_file" .= p | Just p <- [er.erSpillPath]]
     }
   where
     parseArgs :: Object -> Parser (Text, Text, [Text], Int)

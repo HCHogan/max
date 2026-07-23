@@ -50,6 +50,7 @@ import Data.Aeson.Types (Pair, Parser, parseEither, parseMaybe)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Vector qualified as V
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -538,14 +539,27 @@ callChatAnthropic ::
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
 callChatAnthropic cfg msgs tools = do
   let (systemText, anthropicMsgs) = toAnthropicMessages msgs
+      -- Anthropic caches nothing without explicit breakpoints.  Two
+      -- are enough (limit is 4): one on the system block covers the
+      -- tools + system prefix across dispatches; one on the last
+      -- message makes each agent-loop turn a full prefix hit of the
+      -- previous one.
       baseFields =
         [ "model" .= cfg.model,
           "max_tokens" .= cfg.maxTokens,
-          "messages" .= map encodeAnthropicMsg anthropicMsgs
+          "messages" .= map encodeAnthropicMsg (markLastForCache anthropicMsgs)
         ]
           <> temperatureField cfg
       systemField = case systemText of
-        Just s -> ["system" .= s]
+        Just s ->
+          [ "system"
+              .= [ object
+                     [ "type" .= ("text" :: Text),
+                       "text" .= s,
+                       "cache_control" .= ephemeralCache
+                     ]
+                 ]
+          ]
         Nothing -> []
       toolFields =
         if null tools
@@ -576,6 +590,35 @@ encodeToolSpecAnthropic t =
 -- a plain string (simple turn) or an array of content blocks (tool
 -- turns).  We just carry the raw 'Value' to skip an intermediate type.
 data AnthropicMsg = AnthropicMsg !Text !Value
+
+ephemeralCache :: Value
+ephemeralCache = object ["type" .= ("ephemeral" :: Text)]
+
+-- | Put a @cache_control@ breakpoint on the request's final content
+-- block, so the next request in the agent loop (same messages + a few
+-- appended) reads everything up to here from cache.  A plain-string
+-- content is promoted to a one-block array; an empty array is left
+-- alone.
+markLastForCache :: [AnthropicMsg] -> [AnthropicMsg]
+markLastForCache [] = []
+markLastForCache ms = init ms <> [mark (last ms)]
+  where
+    mark (AnthropicMsg role content) = AnthropicMsg role (go content)
+    go = \case
+      String s ->
+        toJSON
+          [ object
+              [ "type" .= ("text" :: Text),
+                "text" .= s,
+                "cache_control" .= ephemeralCache
+              ]
+          ]
+      Array blocks
+        | not (V.null blocks) ->
+            Array (V.init blocks <> V.singleton (addCC (V.last blocks)))
+      other -> other
+    addCC (Object o) = Object (KM.insert "cache_control" ephemeralCache o)
+    addCC v = v
 
 encodeAnthropicMsg :: AnthropicMsg -> Value
 encodeAnthropicMsg (AnthropicMsg role content) =

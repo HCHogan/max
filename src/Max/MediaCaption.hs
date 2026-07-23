@@ -44,6 +44,7 @@ import Max.Effects.LLM
     LLM,
     chat,
   )
+import Max.ImagePrep (prepareImageForLLM)
 import Max.Util (catchSync)
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.Exit (ExitCode (..))
@@ -138,16 +139,18 @@ mediaCaptionWorker profile blobRoot = localDomain "media-caption" $ do
       epayload <-
         if isVideo || mime == "image/gif"
           -- Videos always go through a first-frame extraction; GIFs
-          -- too (several providers only take static images).
+          -- too (several providers only take static images).  A 4K
+          -- frame decodes to a multi-MB PNG, so it gets the same
+          -- shrink pass as regular photos.
           then
             liftIO (firstFrame file) >>= \case
               Nothing -> pure (Left "ffmpeg: no frame")
-              Just png -> pure (Right ("image/png", png))
+              Just png -> Right <$> liftIO (prepareImageForLLM "image/png" png)
           else do
             ebytes <- liftIO (try @IOException (BS.readFile file))
-            pure $ case ebytes of
-              Left e -> Left ("read: " <> T.pack (show e))
-              Right bytes -> Right (mime, bytes)
+            case ebytes of
+              Left e -> pure (Left ("read: " <> T.pack (show e)))
+              Right bytes -> Right <$> liftIO (prepareImageForLLM mime bytes)
       case epayload of
         Left reason -> failed reason
         Right (mime', bytes)

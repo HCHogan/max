@@ -15,6 +15,7 @@ module Max.DB.Memory
     insertMemory,
     updateMemory,
     deleteMemory,
+    evictOldest,
     fetchMemory,
   )
 where
@@ -117,6 +118,26 @@ deleteMemory :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es Bool
 deleteMemory mid = do
   n <- execute "DELETE FROM memories WHERE id = ?" (Only mid)
   pure (n > 0)
+
+-- | Drop the scope's least-recently-touched memory (oldest
+-- @updated_at@) and return its id and content — so the caller can
+-- log what got forgotten.  'Nothing' when the scope is empty.
+evictOldest ::
+  (WithConnection :> es, IOE :> es) =>
+  MemoryScope ->
+  Int64 ->
+  Eff es (Maybe (Int64, Text))
+evictOldest scope sid = do
+  rows <-
+    query
+      "DELETE FROM memories WHERE id = \
+      \   (SELECT id FROM memories WHERE scope = ? AND scope_id = ? \
+      \     ORDER BY updated_at ASC, id ASC LIMIT 1) \
+      \ RETURNING id, content"
+      (scopeText scope, sid)
+  pure $ case rows of
+    (r : _) -> Just r
+    [] -> Nothing
 
 fetchMemory :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es (Maybe MemoryItem)
 fetchMemory mid = do

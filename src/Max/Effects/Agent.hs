@@ -58,6 +58,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
+import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Exception (bracket)
 import Effectful.Log
@@ -185,7 +186,7 @@ type instance DispatchOf Agent = Dynamic
 --   * Drives the loop, draining the task's inbox between turns.
 runAgent ::
   forall es a.
-  (LLM :> es, NapCat :> es, Log :> es, IOE :> es) =>
+  (LLM :> es, NapCat :> es, Concurrent :> es, Log :> es, IOE :> es) =>
   AgentLimits ->
   (DispatchContext -> [Tool es]) ->
   TaskRegistry ->
@@ -228,7 +229,12 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
         then finalAnswer n appended' profile msgs'
         else do
           specs <- listToolSpecs
-          eres <- chat profile (capToolResults toolResultBudget msgs') specs
+          -- Trim before the call AND carry the trimmed list forward
+          -- (every recursion below builds on msgs''): stubs are
+          -- permanent, so between trim events the list is byte-stable
+          -- and the provider's prefix cache survives.
+          let msgs'' = capToolResults toolResultBudget msgs'
+          eres <- chat profile msgs'' specs
           case eres of
             Left err ->
               pure
@@ -259,7 +265,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                   logInfo "agent: btw notes raced final answer, continuing" $
                     object ["count" .= length xs]
                   let newMsgs = [MsgAssistant text, btwMsg xs]
-                  go dc h (n + 1) (appended' <> newMsgs) profile (msgs' <> newMsgs)
+                  go dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -272,10 +278,16 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
               -- output round-trips back to the API on the next
               -- request — DeepSeek returns 400 otherwise.
               let asst = MsgAssistantToolCalls raw tcs
-              toolMsgs <- traverse executeOne tcs
+              -- Independent calls in one round run concurrently (DB
+              -- goes through the pool, image attachment through STM);
+              -- results keep call order so each tool_call id is
+              -- answered in sequence.
+              toolMsgs <- case tcs of
+                [tc] -> (: []) <$> executeOne tc
+                _ -> mapConcurrently executeOne tcs
               imgMsgs <- drainToolImages dc
               let newMsgs = [asst] <> toolMsgs <> imgMsgs
-              go dc h (n + 1) (appended' <> newMsgs) profile (msgs' <> newMsgs)
+              go dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
     -- gets a real answer built from whatever the loop already gathered,
@@ -386,32 +398,42 @@ previewJson n v =
         then collapsed
         else T.take n collapsed <> "…"
 
--- | Total tool-result content, in characters, kept at full size before
--- older results start getting trimmed.  Individual tools already cap
--- their own output (~16 KiB), but a long multi-round sandbox loop can
--- still stack dozens of those; this bounds the whole conversation.
+-- | High watermark: total tool-result characters tolerated before a
+-- trim event.  Individual tools already cap their own output
+-- (~16 KiB), but a long multi-round sandbox loop can still stack
+-- dozens of those; this bounds the whole conversation.
 toolResultBudget :: Int
 toolResultBudget = 60000
 
 -- | Cap the combined size of tool-result content sent to the model.
--- Walks newest-first: recent 'MsgTool' results stay full until the
--- running total passes @budget@, then older ones are shrunk to a short
--- stub.  Every 'MsgTool' is preserved (so it still pairs with its
--- assistant @tool_call@ — dropping one would make the request invalid);
--- only the text content of the oldest results is trimmed.
+-- Two-watermark hysteresis: nothing is touched until the total
+-- passes @budget@; then older results are stubbed until the intact
+-- survivors fit in half of it.  The caller carries the trimmed list
+-- forward, so between (rare) trim events the message list — and with
+-- it the provider's prefix cache — stays byte-stable.  The previous
+-- per-request sliding boundary re-stubbed one more old result nearly
+-- every turn once over budget, invalidating the cache from that
+-- point on every call.  Every 'MsgTool' is preserved (dropping one
+-- would orphan its assistant @tool_call@ and make the request
+-- invalid), and an already-stubbed result is never rewritten.
 capToolResults :: Int -> [ChatMessage] -> [ChatMessage]
-capToolResults budget = reverse . go budget . reverse
+capToolResults budget msgs
+  | total <= budget = msgs
+  | otherwise = reverse (go (budget `div` 2) (reverse msgs))
   where
+    total = sum [T.length c | MsgTool _ c <- msgs]
     go _ [] = []
     go rem_ (m : rest) = case m of
       MsgTool cid content
+        | isStub content -> m : go rem_ rest
         | rem_ <= 0 -> MsgTool cid (stub content) : go 0 rest
         | otherwise ->
             let len = T.length content
              in if len <= rem_
                   then m : go (rem_ - len) rest
-                  else MsgTool cid (T.take rem_ content <> elision) : go 0 rest
+                  else MsgTool cid (stub content) : go 0 rest
       _ -> m : go rem_ rest
+    isStub = (elision `T.isSuffixOf`)
     stub content = T.take 300 content <> elision
     elision = "\n…[older tool results truncated]"
 

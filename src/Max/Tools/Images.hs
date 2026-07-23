@@ -28,6 +28,7 @@ import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessage)
 import Max.Effects.Agent (DispatchContext (..), ToolImage (..), queueToolImage)
 import Max.Effects.Tools (Tool (..))
+import Max.ImagePrep (prepareImageForLLM)
 import Max.Time (fmtHM)
 import System.FilePath ((</>))
 
@@ -126,14 +127,16 @@ viewImageTool tz blobRoot dc =
           logAttention "view_image: read failed" $
             object ["path" .= path, "error" .= T.pack (show e)]
           attachAll label rest total
-        Right bytes
-          | BS.length bytes > maxImageBytes -> do
+        Right bytes0 -> do
+          (mime', bytes) <- liftIO (prepareImageForLLM mime bytes0)
+          if BS.length bytes > maxImageBytes
+            then do
               logAttention "view_image: skipped (too large)" $
                 object ["path" .= path, "bytes" .= BS.length bytes]
               attachAll label rest total
-          | otherwise -> do
+            else do
               let b64 = TE.decodeUtf8 (B64.encode bytes)
-                  dataUrl = "data:" <> mime <> ";base64," <> b64
+                  dataUrl = "data:" <> mime' <> ";base64," <> b64
               ok <- queueToolImage dc (ToolImage numbered dataUrl)
               if ok
                 then (1 +) <$> attachAll label rest total

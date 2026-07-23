@@ -459,7 +459,11 @@ formatExecResult er =
         [ "[退出码 " <> tshow er.erExitCode <> "]"
         | er.erExitCode /= 0
         ]
-          <> ["[输出已截断]" | er.erTruncated]
+          <> [ "[输出已截断"
+                 <> maybe "" ("，完整输出在 " <>) er.erSpillPath
+                 <> "]"
+             | er.erTruncated
+             ]
       body = filter (not . T.null) [out] <> stderrPart <> statusPart
    in case body of
         [] -> "(无输出)"

@@ -18,6 +18,7 @@ module Max.MemoryExtract
   )
 where
 
+import Control.Monad (when)
 import Data.Aeson
 import Data.Foldable (traverse_)
 import Data.Int (Int64)
@@ -34,12 +35,15 @@ import Max.DB.Memory
     MemoryScope (..),
     countMemories,
     deleteMemory,
+    evictOldest,
     insertMemory,
     listMemories,
     parseScope,
     scopeText,
     updateMemory,
   )
+import Max.Time (fmtDate)
+import Data.Time (utc)
 import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, chat)
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Tools.Memory (checkContent, maxMemoriesPerScope)
@@ -89,7 +93,7 @@ extractMemories profile mEmbed gm conversation = localDomain "memx" $ do
         logAttention "memx: bad ops json" $
           object ["error" .= err, "raw" .= T.take 400 raw]
       Right [] -> logInfo "memx: no ops" $ object []
-      Right ops -> traverse_ (applyOp mEmbed gid uid) (take 6 ops)
+      Right ops -> traverse_ (applyOp profile mEmbed gid uid) (take 6 ops)
 
 -- | Parse the model's output into ops: strip code fences, find the
 -- first @[@ .. last @]@, decode.
@@ -110,13 +114,14 @@ parseOps raw =
       | otherwise = s
 
 applyOp ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  Text -> -- extractor profile (reused for full-scope compaction)
   Maybe EmbedClient ->
   Int64 -> -- group id
   Int64 -> -- trigger user id
   ExtractOp ->
   Eff es ()
-applyOp mEmbed gid triggerUid = \case
+applyOp profile mEmbed gid triggerUid = \case
   OpAdd scopeRaw mUid content -> case parseScope scopeRaw of
     Nothing -> logAttention "memx: bad scope" $ object ["scope" .= scopeRaw]
     Just scope -> case checkContent content of
@@ -138,24 +143,35 @@ applyOp mEmbed gid triggerUid = \case
               object ["existing_id" .= did, "distance" .= dist, "content" .= c]
           Nothing -> do
             n <- countMemories scope sid
-            if n >= maxMemoriesPerScope
-              then
-                logAttention "memx: scope full, add skipped" $
-                  object ["scope" .= scopeRaw, "scope_id" .= sid]
-              else do
-                mid <- insertMemory scope sid c (Just gid)
-                -- Reuse the dedup vector so the new row is instantly
-                -- searchable / dedupable (no worker lag window).
-                case mVec of
-                  Just v -> do
-                    _ <-
-                      execute
-                        "UPDATE memories SET embedding = ?::vector WHERE id = ?"
-                        (v, mid)
-                    pure ()
+            -- A full scope must not freeze learning (observed in
+            -- prod: an active user pinned at the cap stops
+            -- accumulating anything new).  Compact first — an LLM
+            -- pass that merges overlapping entries and drops stale
+            -- ones — and if that freed nothing, evict the
+            -- least-recently-touched entry.  Either way the add
+            -- proceeds.
+            when (n >= maxMemoriesPerScope) $ do
+              compactScope profile scope sid
+              n' <- countMemories scope sid
+              when (n' >= maxMemoriesPerScope) $
+                evictOldest scope sid >>= \case
+                  Just (eid, econtent) ->
+                    logInfo "memx: evicted oldest" $
+                      object ["id" .= eid, "content" .= econtent]
                   Nothing -> pure ()
-                logInfo "memx: added" $
-                  object ["id" .= mid, "scope" .= scopeRaw, "scope_id" .= sid, "content" .= c]
+            mid <- insertMemory scope sid c (Just gid)
+            -- Reuse the dedup vector so the new row is instantly
+            -- searchable / dedupable (no worker lag window).
+            case mVec of
+              Just v -> do
+                _ <-
+                  execute
+                    "UPDATE memories SET embedding = ?::vector WHERE id = ?"
+                    (v, mid)
+                pure ()
+              Nothing -> pure ()
+            logInfo "memx: added" $
+              object ["id" .= mid, "scope" .= scopeRaw, "scope_id" .= sid, "content" .= c]
   OpUpdate mid content -> case checkContent content of
     Left err -> logAttention "memx: bad content" $ object ["error" .= err]
     Right c -> do
@@ -207,6 +223,79 @@ applyOp mEmbed gid triggerUid = \case
 -- distinct facts about the same entity sit clearly above.
 dupDistance :: Double
 dupDistance = 0.15
+
+--------------------------------------------------------------------------------
+-- Full-scope compaction.
+
+-- | One LLM pass over a full scope: merge overlapping entries
+-- (update one, delete the rest) and drop stale ones.  Reuses the
+-- extraction op format/parser; @add@ ops are ignored — compaction
+-- must only ever shrink.  Best-effort: a failed pass just logs, and
+-- the caller falls back to evicting the oldest entry.
+compactScope ::
+  (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  Text ->
+  MemoryScope ->
+  Int64 ->
+  Eff es ()
+compactScope profile scope sid = do
+  mems <- listMemories scope sid
+  let memLine m =
+        T.pack (show m.memId)
+          <> " ("
+          <> fmtDate utc m.memUpdatedAt
+          <> "): "
+          <> m.memContent
+      input =
+        T.unlines $
+          ("[memories — scope=" <> scopeText scope <> " id=" <> T.pack (show sid) <> "]")
+            : map memLine mems
+            <> ["", "输出操作 JSON 数组："]
+  chat profile [MsgSystem compactorSystem, MsgUser input] [] >>= \case
+    Left err -> logAttention "memx: compact chat failed" $ object ["error" .= err]
+    Right (ToolCallsResp _ _) ->
+      logAttention "memx: compact unexpected tool calls" $ object []
+    Right (ContentResp raw) -> case parseOps raw of
+      Left err ->
+        logAttention "memx: compact bad ops json" $
+          object ["error" .= err, "raw" .= T.take 400 raw]
+      Right ops -> do
+        let shrinkOnly = [op | op <- ops, notAdd op]
+            notAdd OpAdd {} = False
+            notAdd _ = True
+        traverse_ apply (take 12 shrinkOnly)
+        logInfo "memx: compacted scope" $
+          object
+            [ "scope" .= scopeText scope,
+              "scope_id" .= sid,
+              "ops" .= length shrinkOnly
+            ]
+  where
+    apply = \case
+      OpAdd {} -> pure ()
+      OpUpdate mid content -> case checkContent content of
+        Left err -> logAttention "memx: compact bad content" $ object ["error" .= err]
+        Right c -> do
+          ok <- updateMemory mid c
+          _ <- execute "UPDATE memories SET embedding = NULL WHERE id = ?" (Only mid)
+          logInfo "memx: compact merged" $ object ["id" .= mid, "ok" .= ok, "content" .= c]
+      OpDelete mid -> do
+        ok <- deleteMemory mid
+        logInfo "memx: compact dropped" $ object ["id" .= mid, "ok" .= ok]
+
+compactorSystem :: Text
+compactorSystem =
+  T.unlines
+    [ "你在整理一个已满的长期记忆库（QQ bot 关于某个群或某个人的记忆，",
+      "每条带 id 和最后更新日期）。目标是腾出空间同时尽量少丢信息：",
+      "  - 相近/重叠/同主题的条目 → 合并：对其中一条 update 成合并后的表述，其余 delete。",
+      "  - 明显过时、被后来条目取代、或已无价值的 → delete。",
+      "  - 拿不准的保留。至少腾出 3 个位置，最多操作 12 条。",
+      "  - 合并后的 content 用第三人称陈述句，≤300 字，自包含。",
+      "只输出 JSON 数组，只允许 update / delete：",
+      "  {\"action\":\"update\",\"id\":5,\"content\":\"...\"}",
+      "  {\"action\":\"delete\",\"id\":5}"
+    ]
 
 --------------------------------------------------------------------------------
 -- Prompt.

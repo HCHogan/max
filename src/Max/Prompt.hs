@@ -52,6 +52,7 @@ import Max.DB.History
   )
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), listMemories)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
+import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtEnvStamp, fmtHM)
@@ -144,11 +145,14 @@ data PromptImage = PromptImage
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default), a scene block saying whether this is a
 -- group or a one-on-one chat (kept out of the persona so configured
--- personas stay scene-agnostic), the environment, a fixed format
--- guide, and the long-term memory block (if any) appended *last* —
--- end-of-prompt placement keeps it low-salience relative to the
--- persona and the live conversation, which is deliberate: memories
--- are background, not agenda.
+-- personas stay scene-agnostic), a fixed format guide, then the
+-- volatile tail — the environment block (current time, roster) and
+-- the long-term memory block (if any).  Ordering is deliberate
+-- twice over: everything before the environment is byte-identical
+-- across dispatches, so provider prefix caches survive between
+-- turns of a busy group; and end-of-prompt placement keeps memories
+-- low-salience relative to the persona and the live conversation —
+-- background, not agenda.
 systemPrompt ::
   Bool -> -- multimodal
   Bool -> -- private chat
@@ -174,8 +178,6 @@ systemPrompt multimodal' private envText persona mMemBlock =
       \不自称 bot/AI/模型，不说\"作为AI\"这类话；群友起哄问\"你是不是机器人\"，\
       \按人设接梗就行，不承认也不用急着否认。只有对方认真问你的实现/源码/技术细节时，\
       \才如实聊并给仓库地址——语气照旧，把它当成聊自己的身体构造，不破功。",
-      "",
-      envText,
       "",
       "回复风格（重要）：",
       "  - 你在 QQ 上跟人聊天，不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
@@ -215,6 +217,12 @@ systemPrompt multimodal' private envText persona mMemBlock =
              else "  [video#<id>]                — 群里的视频（你看不到画面；带简介时形如 [video#<id>: <简介>]，据首帧生成）",
            "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [environment]"
          ]
+      -- Volatile content (envText carries the current time and the
+      -- per-turn roster; memories change per group/speaker) sits at
+      -- the very end: everything above is byte-identical across
+      -- dispatches, so providers' prefix caches survive from one turn
+      -- of a busy group to the next.
+      <> ["", envText]
       <> maybe [] (\b -> ["", b]) mMemBlock
 
 -- | Build the chat context for one @bot trigger.  Runs the DB
@@ -807,14 +815,16 @@ loadPromptImages tz' blobRoot selfId' mid replyIds candidates = do
       -- (that's what the image worker writes); resolve before reading.
       eres <- liftIO (try (BS.readFile (blobRoot </> T.unpack path)))
       case eres of
-        Right bytes
-          | BS.length bytes > maxImageBytes -> do
+        Right bytes0 -> do
+          (mime', bytes) <- liftIO (prepareImageForLLM mime bytes0)
+          if BS.length bytes > maxImageBytes
+            then do
               logAttention "prompt: image skipped (too large)" $
                 object ["path" .= path, "bytes" .= BS.length bytes]
               pure []
-          | otherwise ->
+            else
               let b64 = TE.decodeUtf8 (B64.encode bytes)
-               in pure [PromptImage label ("data:" <> mime <> ";base64," <> b64)]
+               in pure [PromptImage label ("data:" <> mime' <> ";base64," <> b64)]
         Left (e :: IOException) -> do
           logAttention "prompt: image read failed" $
             object ["path" .= path, "error" .= T.pack (show e)]
