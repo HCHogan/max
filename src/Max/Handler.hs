@@ -676,7 +676,23 @@ sendAndPersistReply gm mentionable rosterNames blobRoot stickersOn body = do
           then Nothing
           else
             let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId]]
-             in Just (prefix <> content, rendered)
+             in Just (prefix <> trimEdgeSegs content, T.strip rendered)
+
+    -- Extracted tokens leave whitespace seams at the chunk's edges
+    -- (e.g. "[↩#id] 说得对" starts the sent text with a space once the
+    -- quote token is gone).  Trim the outermost text segments; an
+    -- edge segment that was pure whitespace disappears entirely.
+    trimEdgeSegs segs =
+      let start = case segs of
+            (SegText x : rest) ->
+              let x' = T.stripStart x
+               in if T.null x' then rest else SegText x' : rest
+            _ -> segs
+       in case reverse start of
+            (SegText x : rest) ->
+              let x' = T.stripEnd x
+               in reverse (if T.null x' then rest else SegText x' : rest)
+            _ -> start
 
     -- Resolve parsed pieces into (segments, normalised rendered text).
     resolvePieces pieces = do
