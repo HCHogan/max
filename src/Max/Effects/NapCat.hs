@@ -3,6 +3,7 @@
 module Max.Effects.NapCat
   ( NapCat,
     runNapCat,
+    qqBackend,
     sendAction,
     callAction,
   )
@@ -31,6 +32,7 @@ import Data.UUID.V4 qualified as UUID
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log (Log, logAttention_)
+import Max.Platform (PlatformBackend (..), routeAction)
 import Network.WebSockets qualified as WS
 import OneBot.Action (Action, Envelope (..), Response, encodeAction)
 import OneBot.Server (Client (..))
@@ -44,24 +46,45 @@ data NapCat :: Effect where
 
 type instance DispatchOf NapCat = Dynamic
 
--- | Build the NapCat interpreter on top of a 'TVar (Maybe Client)' that
--- 'OneBot.Server' publishes per connection.
+-- | Interpret the action effect as a router over platform backends:
+-- each op goes to the first extra backend claiming its target id
+-- ('Max.Platform.routeAction'), falling back to the default (QQ).
+-- The effect keeps its historical name — every call site speaks
+-- 'sendAction'/'callAction' regardless of where the message lands.
 runNapCat ::
   (IOE :> es, Log :> es) =>
-  TVar (Maybe Client) ->
+  PlatformBackend -> -- default backend (QQ / NapCat)
+  [PlatformBackend] -> -- foreign backends (WeChat, …)
   Eff (NapCat : es) a ->
   Eff es a
-runNapCat ref = interpret $ \_ -> \case
+runNapCat dflt extras = interpret $ \_ -> \case
   SendOp a -> do
-    mc <- liftIO (readTVarIO ref)
-    case mc of
-      Nothing -> logAttention_ "napcat send: no client connected"
-      Just c -> liftIO (sendIO c a)
+    let b = routeAction extras dflt a
+    liftIO (b.pbSend a) >>= \case
+      Left err -> logAttention_ (b.pbName <> " send failed: " <> err)
+      Right () -> pure ()
   CallOp a t -> do
-    mc <- liftIO (readTVarIO ref)
-    case mc of
-      Nothing -> pure (Left "no client connected")
-      Just c -> liftIO (callIO c a t)
+    let b = routeAction extras dflt a
+    liftIO (b.pbCall a t)
+
+-- | The NapCat (QQ) backend over the reverse-WS client that
+-- 'OneBot.Server' publishes per connection.
+qqBackend :: TVar (Maybe Client) -> PlatformBackend
+qqBackend ref =
+  PlatformBackend
+    { pbName = "napcat",
+      -- Default backend: routing falls through to it, so it never
+      -- needs to claim ids.
+      pbOwnsId = const False,
+      pbSend = \a ->
+        readTVarIO ref >>= \case
+          Nothing -> pure (Left "no client connected")
+          Just c -> Right <$> sendIO c a,
+      pbCall = \a t ->
+        readTVarIO ref >>= \case
+          Nothing -> pure (Left "no client connected")
+          Just c -> callIO c a t
+    }
 
 sendAction :: NapCat :> es => Action -> Eff es ()
 sendAction a = send (SendOp a)

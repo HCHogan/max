@@ -24,7 +24,7 @@ import Max.Effects.Agent (Agent, DispatchContext (..), defaultLimits, runAgent)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (LLM, LLMRegistry (..), runLLM)
-import Max.Effects.NapCat (NapCat, runNapCat)
+import Max.Effects.NapCat (NapCat, qqBackend, runNapCat)
 import Max.Embedder (embedWorker)
 import Max.Embedding (EmbedClient, newEmbedClient)
 import Max.Env (BotEnv (..))
@@ -33,6 +33,7 @@ import Max.Reminder (ReminderScheduler, newReminderScheduler, reminderWorker)
 import Max.Files (FileQueue, fileWorker, newFileQueue)
 import Max.Forward (ForwardQueue, forwardWorker, newForwardQueue)
 import Max.Handler (dispatchProactive, handleEvents)
+import Max.Wechatpad (wechatpadBackend, wechatpadWorker)
 import Max.Images (ImageQueue, imageWorker, newImageQueue)
 import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Browser.Registry
@@ -144,7 +145,11 @@ main = do
             . runHttp
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
-            . runNapCat clientRef
+            . runNapCat
+              (qqBackend clientRef)
+              [ wechatpadBackend (runEff . runWithConnectionPool pool) wc
+              | Just wc <- [cfg.wechatpad]
+              ]
             . runWreq
             . runLLM cfg.llm
             . runReader Persisted -- default mode; !btw scopes Volatile on top
@@ -239,4 +244,8 @@ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef =
                       link aInt
                       withAsync (handleEvents eventQ imgQ fwdQ fileQ mIntentSt) $ \aH -> do
                         link aH
-                        runServer cfg.server eventQ clientRef
+                        -- WeChat inbound (no-op async when unconfigured,
+                        -- same trick as the caption worker).
+                        withAsync (for_ cfg.wechatpad (\wc -> wechatpadWorker wc eventQ)) $ \aWx -> do
+                          link aWx
+                          runServer cfg.server eventQ clientRef
