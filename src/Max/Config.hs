@@ -194,7 +194,7 @@ appConfigParser =
           env "MAX_HISTORY_WINDOW",
           conf "history_window",
           metavar "N",
-          value 20
+          value 40
         ]
     timezone <-
       minutesToTimeZone

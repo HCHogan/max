@@ -24,8 +24,8 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
    落库到 `messages` 表；图片/视频/转发由 worker 异步下载进 blob store。
 2. `@bot` / 引用 bot / 私聊 / 意图识别 / 戳一戳 触发 dispatch。
 3. `buildContext` 查库拼上下文：
-   - ambient：`fetchRecentInGroup`，最近 **20** 条（`history_window`，默认 20）；
-   - mention 历史：`fetchMentionHistory`，同样上限 20 行，重建成 user/assistant 轮；
+   - ambient：`fetchRecentInGroup`，最近 **40** 条（`history_window`，默认 40）；
+   - mention 历史：`fetchMentionHistory`，同样上限 40 行，重建成 user/assistant 轮；
    - pin、引用链（引用目标 + 其附件文件 + 转发展开 ≤30 行）、记忆、群信息；
    - sticker 有 caption 的换成 `[sticker#id: 描述]`；普通图片/视频有简介的
      （media caption worker 用视觉模型后台生成，视频取首帧）渲染成
@@ -51,7 +51,8 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
   // temperature 未配置就整个省略（zen 网关对部分模型只接受 1.0）
   "messages": [
 
-    // ───── [0] system：persona + 场景 + 台下设定 + environment + 风格 + 标记表 + 记忆 ─────
+    // ───── [0] system：persona + 场景 + 台下设定 + 风格 + 标记表 + environment + 记忆 ─────
+    // 易变的 environment/记忆在最后：前面全部逐字节稳定，前缀缓存跨 dispatch 存活
     {
       "role": "system",
       "content": "你是 Max，一个银白头发、蓝色挑染、别着鲨鱼发夹的鲨鱼女孩——人的样子，带点鲨鱼习性，不是一条鱼。头像里那个眼睛半睁挂着泪、一副没睡醒表情的就是你，平时状态也差不多。
@@ -114,7 +115,7 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
     // ───── [1..k] mention 历史：从 messages 表重建的既往 @bot 往来 ─────
     // 成员行用和 recent 块一致的 [HH:MM <name> #<msgid>]: 前缀（可引用、
     // 可判断时间）；bot 自己的行保持原文（加前缀会教模型模仿着输出前缀），
-    // 连续多段回复合并回一条 assistant（空行分隔）。上限 history_window=20 行。
+    // 连续多段回复合并回一条 assistant（空行分隔）。上限 history_window=40 行。
     {
       "role": "user",
       "content": "[21:14 阿飞 #7390]: @Max 帮我看下 HAL_Delay 卡死一般是什么原因"
@@ -229,7 +230,7 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 - **易变内容全在 system prompt 末尾**：[environment]（含当前时间）和 [memories]
   放最后，前面的 persona/风格/标记表跨 dispatch 逐字节相同——provider 的前缀
   缓存能从一次 dispatch 活到下一次（效果看日志里的 cached_prompt_tokens）。
-- **私聊**时：`[recent messages]`/ambient 块不存在，最近 20 条全部变成
+- **私聊**时：`[recent messages]`/ambient 块不存在，最近 40 条全部变成
   user/assistant 轮；system 里场景块换私聊版、没有"引用要主动用"那条。
 - **非多模态 profile**：最后一条 user 是纯字符串 `content`，图片保持
   `[image]` 文字标记，标记表里的说明也换成"你看不到内容"。
@@ -428,7 +429,7 @@ view_video 的描述里写"同一个视频看一次就够了"）。
 
 | 项 | 值 | 出处 |
 |---|---|---|
-| 历史窗口（ambient / mention 各自） | 20 条 | `history_window` 默认，Config.hs |
+| 历史窗口（ambient / mention 各自） | 40 条 | `history_window` 默认，Config.hs |
 | prompt 内联图片上限 | 8 张 | `maxPromptImages`，Prompt.hs |
 | 单张图片字节上限 | 20 MiB | `maxImageBytes` |
 | prompt 内联视频上限 | 2 个 | `maxPromptVideos` |
