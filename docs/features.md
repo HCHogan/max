@@ -1,0 +1,22 @@
+# Feature reference
+
+The full behaviour of the bot, section by section. For a short summary see the
+[README](../README.md); for internals see [architecture.md](architecture.md).
+
+- **Persistence.** Every message goes to Postgres (segments, rendered text, sender names, reply links); images and videos are stored content-addressed on disk, forwarded chats expanded into child rows.
+- **Triggering.** @-mention or reply in groups, everything in private chats; a 戳一戳 aimed at the bot wakes it too (the prompt says who poked — during a running task it lands as a btw note instead). `!` messages are commands; the rest start an async agent turn with recent context, prior bot conversations, pins and memories.
+- **Proactive triggering** (optional). With `intent.profile` configured, unaddressed group chatter is batched through a cheap intent classifier behind a heuristic gate (name mention or a 3-min post-dispatch hot window classify immediately; plain chatter gets at most one classification per group per 15 min — ~4x fewer classifier calls, tuned on production logs) — name-calls without an @, follow-ups to what the bot just said, topics it can help with — and may start a turn on its own. Topic barge-ins respect a per-group cooldown (name-calls and follow-ups don't), an hourly cap covers everything, `!proactive on/off` toggles per group, and the main model can still answer `[silence]`.
+- **Private chats** reuse the group pipeline (chat with user *u* = group `-u`), so sessions, memories, sandboxes and commands work the same in both.
+- **Agent loop.** Multi-turn tool calling with `!kill` cancellation, mid-task notes (`!btw`, or implicit: an @-message during a running task is intent-classified and injected into it when it reads as steering that task), progress via the `say` tool, `!debug` tool-call echo, a tool-result context budget, and a forced final answer at the turn cap. While a dispatch runs, the trigger message wears a 托腮 reaction (cleared when the reply lands); if the dispatch fails (upstream API error), no error text is posted — the reaction flips to /裂开 instead. A `[silence:表情名]` reply on a direct trigger posts nothing but reacts the named reason face (擦汗/流汗/再见/哈欠/吃瓜/困/疑问) onto the trigger.
+- **Memory.** Per-group and per-user memories injected into the system prompt; written by the model's memory tools and a post-reply extractor, audited with `!memory`. 30 entries × 300 chars per scope.
+- **Vector search** (optional). A worker embeds messages and memories into pgvector; enables semantic `search_messages` and `memory_search`. Falls back to substring/regex without it.
+- **LLM profiles.** Multiple profiles, OpenAI-compatible or Anthropic-native, switched with `!model`.
+- **Share cards.** QQ lightapp `json` segments parse into `[card: 来源 | 标题 | 简介 | 链接]` lines instead of an opaque `[json]`; bilibili links (full URL / BV / b23.tv, from cards or plain text) feed `view_bilibili`.
+- **Images.** Multimodal profiles get the images the user is pointing at (trigger / quoted message / pins) inline. Other history images render as `[image#id]` markers loaded on demand with `view_image`, so unrelated group pictures don't distract the model. Avatars via `view_avatar`.
+- **Group awareness.** The prompt carries group name, owner and admins; `group_members` pages through the full roster.
+- **Browser** (multimodal profiles). Per-group camoufox container (stealth Firefox over MCP): navigate, snapshot, click, type, scroll — snapshots list interactive elements with CSS selectors.
+- **Replies.** Blank-line paragraphs go out as separate messages (fences never split, five max); a QQ-id-to-name table in the prompt keeps names straight, group card over nickname.
+- **Tools** (per config): `web_search` · files · sandbox (persistent per-group Docker workspace, packages from pinned nixpkgs) · memory · message search · `group_members` / `view_avatar` / `view_image` / `view_forward` / `view_video` (multimodal: whole video inline via the `video_url` block extension) / `view_bilibili` (metadata + top comments; `with_video` streams the 480p MP4 inline) / `poke` · browser.
+- **Pins.** Messages worth keeping in every prompt (specs, decisions, reference images) survive `!clear`. Curated by the model itself via `pin_message`/`unpin_message` tools; `!pin`/`!unpin`/`!pins` remain as the manual override.
+- **Commands**: `!help`, `!model`, `!debug`, `!persona`, `!proactive`, `!clear`, `!unclear`, `!pin`/`!unpin`/`!pins`, `!memory`, `!btw`, `!ps`, `!kill`, `!version`.
+- `@bot ping` → `pong`, no LLM call.
