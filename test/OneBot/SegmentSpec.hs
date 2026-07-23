@@ -113,6 +113,16 @@ mentionSpec = describe "segmentMentions" $ do
     conv "叫一下@12345678 看看"
       `shouldBe` [SegText "叫一下", SegAt (UserId 12345678), SegText " 看看"]
 
+  it "converts the canonical [@#qq] token" $
+    conv "叫一下[@#12345678] 看看"
+      `shouldBe` [SegText "叫一下", SegAt (UserId 12345678), SegText " 看看"]
+
+  it "keeps an unknown [@#qq] literal" $
+    conv "[@#55555]" `shouldBe` [SegText "[@#55555]"]
+
+  it "renders an inbound mention as the [@#qq] token" $
+    renderPlainText [SegAt (UserId 12345678)] `shouldBe` "[@#12345678] "
+
   it "converts a mention at the start and end of text (no trailing space at the end)" $
     conv "@12345678 收到了吗@10001"
       `shouldBe` [ SegAt (UserId 12345678),

@@ -54,7 +54,7 @@ import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberNa
 import Max.Session (Session (..), loadSession, readSession)
 import Max.Tasks (TaskCancelled (..), listTasks, pushBtwToLatest)
 import Max.Render (renderTableImage)
-import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply)
+import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply, stripHallucinatedTokens)
 import Max.Sticker (resolveSticker)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..), Response (..), sendChatMsg)
@@ -493,7 +493,11 @@ dispatchLLM origin gm = void $ async $
       -- backstop while leaving the id-carrying send tokens intact
       -- (see 'stripStickerText' / 'stripBareMarkers').
       let stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          stripped = T.strip (stripBareMarkers (stripStickerText replyRaw))
+          cleaned = stripHallucinatedTokens replyRaw
+          stripped = T.strip (stripBareMarkers (stripStickerText cleaned))
+      when (cleaned /= replyRaw) $
+        logAttention "reply: hallucinated bracket tokens stripped" $
+          object ["dropped_chars" .= (T.length replyRaw - T.length cleaned)]
       case parseSilence stripped of
         Just mFace -> do
           -- The model opted out of replying (see 'parseSilence') —

@@ -139,7 +139,13 @@ fetchMentionHistory ::
   Int -> -- max rows
   Eff es [HistoryItem]
 fetchMentionHistory gid botId excludeId since n = do
+  -- Rendered mentions of the bot come in two shapes: the canonical
+  -- "[@#<id>]" token (current renderer) and the legacy bare "@<id>"
+  -- (old rows).  "%@<id>%" matches the legacy form only — the token
+  -- has '#' between '@' and the digits — so both patterns go into
+  -- the query.
   let mentionLike = "%@" <> T.pack (show botId) <> "%"
+      mentionTokLike = "%[@#" <> T.pack (show botId) <> "]%"
   rows <- case since of
     Nothing ->
       query
@@ -149,7 +155,7 @@ fetchMentionHistory gid botId excludeId since n = do
         \    AND m.message_id <> ? \
         \    AND (NOT m.is_synthetic OR m.user_id = ?) \
         \    AND m.forwarded_in_message_id IS NULL \
-        \    AND (m.user_id = ? OR m.rendered_text LIKE ? \
+        \    AND (m.user_id = ? OR m.rendered_text LIKE ? OR m.rendered_text LIKE ? \
         \         OR EXISTS (SELECT 1 FROM messages b \
         \                     WHERE b.message_id = m.reply_to_message_id \
         \                       AND b.user_id = ?) \
@@ -158,7 +164,7 @@ fetchMentionHistory gid botId excludeId since n = do
         \                       AND r.user_id = ?)) \
         \  ORDER BY m.received_at DESC \
         \  LIMIT ?"
-        ((gid, excludeId, botId, botId) :. (mentionLike :: Text, botId, botId, n))
+        ((gid, excludeId, botId, botId) :. (mentionLike :: Text, mentionTokLike, botId, botId, n))
     Just t ->
       query
         "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at, m.reply_to_message_id \
@@ -168,7 +174,7 @@ fetchMentionHistory gid botId excludeId since n = do
         \    AND (NOT m.is_synthetic OR m.user_id = ?) \
         \    AND m.forwarded_in_message_id IS NULL \
         \    AND m.received_at > ? \
-        \    AND (m.user_id = ? OR m.rendered_text LIKE ? \
+        \    AND (m.user_id = ? OR m.rendered_text LIKE ? OR m.rendered_text LIKE ? \
         \         OR EXISTS (SELECT 1 FROM messages b \
         \                     WHERE b.message_id = m.reply_to_message_id \
         \                       AND b.user_id = ?) \
@@ -177,7 +183,7 @@ fetchMentionHistory gid botId excludeId since n = do
         \                       AND r.user_id = ?)) \
         \  ORDER BY m.received_at DESC \
         \  LIMIT ?"
-        ((gid, excludeId, botId) :. (t, botId, mentionLike :: Text, botId, botId, n))
+        ((gid, excludeId, botId) :. (t, botId, mentionLike :: Text, mentionTokLike) :. (botId, botId, n))
   pure (reverse (rows :: [HistoryItem]))
 
 -- | Bulk fetch by message id.  Preserves the order of input ids

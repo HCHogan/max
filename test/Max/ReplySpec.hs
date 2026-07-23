@@ -11,6 +11,7 @@ import Max.Reply
     latexToUnicode,
     parseReplyTokens,
     planReply,
+    stripHallucinatedTokens,
   )
 import Test.Hspec
 
@@ -130,11 +131,36 @@ spec = do
       parseReplyTokens "这是 [face] 标记"
         `shouldBe` (Nothing, [PieceText "这是 [face] 标记"])
 
+    it "consumes a trailing attribute group when echoing a decorated token" $ do
+      parseReplyTokens "[image#7405: 示波器截图](1.2MB) 笑死"
+        `shouldBe` (Nothing, [PieceImage 7405, PieceText " 笑死"])
+      parseReplyTokens "[sticker#42: 柴犬瘫地](旧图)"
+        `shouldBe` (Nothing, [PieceSticker 42])
+      parseReplyTokens "[↩#9: 引文](x) 对"
+        `shouldBe` (Just 9, [PieceText " 对"])
+
+    it "does not eat an unrelated paren after a bare token" $
+      parseReplyTokens "[sticker#42]（笑）"
+        `shouldBe` (Nothing, [PieceSticker 42, PieceText "（笑）"])
+
     it "leaves a malformed token as literal text" $ do
       parseReplyTokens "[sticker#]" `shouldBe` (Nothing, [PieceText "[sticker#]"])
       parseReplyTokens "[↩#abc]" `shouldBe` (Nothing, [PieceText "[↩#abc]"])
       parseReplyTokens "[image#]" `shouldBe` (Nothing, [PieceText "[image#]"])
       parseReplyTokens "[face#]" `shouldBe` (Nothing, [PieceText "[face#]"])
+
+  describe "stripHallucinatedTokens" $ do
+    it "drops a tool-call-looking bracket span" $
+      stripHallucinatedTokens "无语 [find_stickers query=\"钓鱼\"] 真是"
+        `shouldBe` "无语  真是"
+
+    it "keeps grammar tokens and plain bracketed prose" $ do
+      stripHallucinatedTokens "[↩#9] 看 [sticker#42]" `shouldBe` "[↩#9] 看 [sticker#42]"
+      stripHallucinatedTokens "这是 [重点] 内容" `shouldBe` "这是 [重点] 内容"
+
+    it "leaves code fences untouched" $
+      stripHallucinatedTokens "```\nx = a[i * n]  -- [q = \"hi\"]\n```"
+        `shouldBe` "```\nx = a[i * n]  -- [q = \"hi\"]\n```"
 
   describe "dedupeImagePieces" $ do
     it "keeps the first [image#id] and drops later duplicates" $

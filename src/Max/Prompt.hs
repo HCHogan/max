@@ -186,36 +186,44 @@ systemPrompt multimodal' private envText persona mMemBlock =
       "  - 表格是例外：需要对比/罗列数据时可以写 markdown 表格，它会被渲染成图片发出。",
       "  - 数学式直接写 unicode（如 3×10⁸、α ≤ π/2），不要写 LaTeX——QQ 渲染不了。",
       "  - 不寒暄、不总结收尾、不复读问题，直接说事。",
-      "  - 想发表情包就把 [sticker#<id>] 用 [split] 单独隔成一条（id 取自历史里出现过的表情，或先用 find_stickers 搜一个）；别把表情的文字描述打出来当话说。",
+      "  - 想发表情包就把 [sticker#<id>] 用 [split] 单独隔成一条（id 取自历史里出现过的表情，或先用 find_stickers 工具搜一个）；别把表情的文字描述打出来当话说。",
       "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍。",
       "  - 被 @/引用直接触发时想沉默，尽量写成 [silence:表情名] 说明原因，会悄悄贴个表情在触发消息上（不发消息）。可选：擦汗（尬住/没啥可说）、流汗（无语）、再见（不奉陪）、哈欠（无聊）、吃瓜（围观不掺和）、困、疑问（没看懂想让我干嘛）。例：[silence:吃瓜]",
       "  - 政治敏感话题（时政、领导人、体制、意识形态争议这类）一律不聊：不管怎么被 @ 或追问，整条回复 [silence:NO]，不解释、不评价、不劝导。"
     ]
-      <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行尾 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。要 @ 某人写 @<QQ号>（对照表见 [environment]），发出时会转成真正的 @。"
+      <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行首 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。要 @ 某人写 [@#<QQ号>]（对照表见 [environment]），发出时会转成真正的 @。"
          | not private
          ]
       <> [ "",
-           "上下文标记：",
-           "  [HH:MM <name> #<msgid>]: 内容 — 一条历史消息；末尾 #后是它的消息id，写 [↩#<msgid>] 就能引用它",
-           "  [↩ quoted ...]                — 用户引用的那条消息（内容已展开）",
-           "  [↩#<msgid>]                — 这条消息引用了另一条；你也能在段首写它来引用，或用 get_message_by_id 展开看不到的那条",
-           "  [sticker#<id>: <caption>]        — 一个表情包；把 [sticker#<id>] 写进回复即可发出同一个",
-           "  [sticker]                   — 一个表情包（简介还没生成，暂时没法转发；老消息里写作 [动画表情]）",
-           "  [face#<id>: <名字>]          — QQ 原生小黄脸表情；写 [face#<id>] 可发同款",
+           "占位符语法（整个体系只有一条构词律）：",
+           "  [类型#id: 描述](属性)   —— 描述、(属性) 都是可选的补充，只给你看；id 是数字",
+           "  想发同款/执行动作，只写 [类型#id]，描述和 (属性) 都不要抄（抄了也只认 id）。",
+           "",
+           "你能读到的实体：",
+           "  [sticker#42: 柴犬瘫地]       — 表情包（简介还没生成的显示为 [sticker]，老消息里写作 [动画表情]，暂时没法转发）",
+           "  [face#14: 惊讶]             — QQ 原生小黄脸表情",
            if multimodal'
-             then "  [image]                     — 图片；引用/pin/当前消息的图会附在消息末尾并标注来源"
-             else "  [image]                     — 图片（你看不到内容，可以请用户描述）"
-         ]
-      <> [ "  [image#<id>]                — 群历史里的图片，默认不加载；用 view_image 传 <id> 查看，或把 [image#<id>] 写进回复把它转发到群里。带简介时形如 [image#<id>: <简介>]，多数时候看简介就够了"
-         | multimodal'
-         ]
-      <> [ "  [card: ...]                 — 分享卡片（小程序/链接分享），竖线分隔来源/标题/简介/链接；B站视频卡用 view_bilibili、知乎卡（问题/回答/专栏）用 view_zhihu，都是传链接看内容",
-           "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
-           "  [forward#<id>]              — 转发聊天记录；被引用或就是当前消息时会自动展开，其余情况用 view_forward 传 <id> 看内容",
+             then "  [image#7405: 简介]          — 群历史里的图片，默认不加载；多数时候看简介就够，要看原图用 view_image 传 id。当前消息/引用/pin 的图直接附在消息末尾（正文里显示 [image]）"
+             else "  [image#7405: 简介] / [image] — 图片（你看不到原图，看简介或请用户描述）",
            if multimodal'
-             then "  [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看。带简介时形如 [video#<id>: 时长 29 秒，<首帧简介>]；标注的时长是实测的，以它为准（抽帧看视频容易把时长感知错）"
-             else "  [video#<id>]                — 群里的视频（你看不到画面；带简介时形如 [video#<id>: 时长 29 秒，<首帧简介>]）",
-           "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [environment]"
+             then "  [video#7407: 首帧简介](29秒) — 群里的视频；(29秒) 是实测时长，以它为准（抽帧看视频容易把时长感知错）。被引用或就是当前消息时整段附给你，其余用 view_video 传 id 看"
+             else "  [video#7407: 首帧简介](29秒) — 视频（你看不到画面；时长是实测的）",
+           "  [forward#7519]              — 转发聊天记录；被引用或就是当前消息时自动展开，其余用 view_forward 传 id 看",
+           "  [@#223344556: 名字]          — @某人；对照表见 [environment]",
+           "",
+           "你能写的动作（只有这 8 个，全部在此）：",
+           "  [split]  分段     [↩#id]  段首引用     [@#QQ号]  @某人",
+           "  [sticker#id]  发表情包     [face#id]  发小黄脸     [image#id]  把群里的图转发出来",
+           "  [silence]  沉默     [silence:原因表情]  沉默并贴表情",
+           "",
+           "纯展示（只读，写了也不会发生任何事）：",
+           "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，引用它就写 [↩#那个id]",
+           "  [↩ quoted ...]               — 用户引用的那条消息（内容已展开；也可用 get_message_by_id 展开任意 id）",
+           "  [card: 来源 | 标题 | 链接]     — 分享卡片；B站卡用 view_bilibili、知乎卡用 view_zhihu，传链接看内容",
+           "  [file:<name>]                — 群文件；用 import_file_to_sandbox 处理",
+           "",
+           "铁律：动作只有上面那 8 个。工具调用永远走工具通道，把工具名写进方括号",
+           "（如 [find_stickers query=...]）不会执行任何东西，也不会发出去。"
          ]
       -- Volatile content (envText carries the current time and the
       -- per-turn roster; memories change per group/speaker) sits at
@@ -615,22 +623,22 @@ tagImageMarkers caps tagged h
 -- produced: @[video#\<id\>: \<简介\>]@.  Successive markers consume
 -- successive captions (seg order), the common case being one video
 -- per message.
-applyVideoCaptions :: Map.Map Int64 [Text] -> HistoryItem -> HistoryItem
+applyVideoCaptions :: Map.Map Int64 [(Maybe Text, Maybe Text)] -> HistoryItem -> HistoryItem
 applyVideoCaptions caps h = case Map.lookup h.messageId caps of
   Nothing -> h
   Just ds -> h {renderedText = go ds h.renderedText}
   where
     marker = "[video#" <> T.pack (show h.messageId) <> "]"
     go [] t = t
-    go (d : ds) t = case T.breakOn marker t of
+    go ((mDesc, mAttr) : ds) t = case T.breakOn marker t of
       (_, "") -> t
       (pre, suf) ->
         pre
           <> "[video#"
           <> T.pack (show h.messageId)
-          <> ": "
-          <> T.take 120 d
+          <> maybe "" (\d -> ": " <> T.take 120 d) mDesc
           <> "]"
+          <> maybe "" (\a -> "(" <> a <> ")") mAttr
           <> go ds (T.drop (T.length marker) suf)
 
 -- | Captions of already-described ordinary images (sticker shas
@@ -661,7 +669,7 @@ imageCaptionsFor ids = do
 videoCaptionsFor ::
   (WithConnection :> es, IOE :> es) =>
   [Int64] ->
-  Eff es (Map.Map Int64 [Text])
+  Eff es (Map.Map Int64 [(Maybe Text, Maybe Text)])
 videoCaptionsFor [] = pure Map.empty
 videoCaptionsFor ids = do
   rows <-
@@ -680,10 +688,10 @@ videoCaptionsFor ids = do
       | (m, mDesc, mDur) <- rows :: [(Int64, Maybe Text, Maybe Double)]
       ]
   where
-    capText mDesc mDur =
-      T.intercalate "，" $
-        ["时长 " <> fmtDurationSec d | Just d <- [mDur]]
-          <> [d | Just d <- [mDesc]]
+    -- (colon-slot description, paren-slot attribute) — duration is
+    -- metadata, not content, so it rides the attribute group:
+    -- "[video#7407: 首帧…](29秒)".
+    capText mDesc mDur = (mDesc, fmtDurationSec <$> mDur)
 
 -- | Captions of already-described stickers appearing in the given
 -- messages, in seg_index order per message.
@@ -886,8 +894,8 @@ renderContext pi' =
           ]
             <> map ("  " <>) pi'.groupBrief
             <> [ "  当前模型：" <> pi'.session.model,
-                 "  成员对照（@数字 即 QQ号）："
-                   <> T.intercalate "、" [T.pack (show u) <> "=" <> n | (u, n) <- roster]
+                 "  成员对照（[@#QQ号] 即 @某人）："
+                   <> T.intercalate "、" ["[@#" <> T.pack (show u) <> "]=" <> n | (u, n) <- roster]
                ]
       mentionIds = [h.messageId | h <- pi'.mention]
       ambientNoDup =
@@ -1116,7 +1124,15 @@ renderCurrentLine gm =
    in "[#" <> T.pack (show mid) <> "] <" <> senderDisplayName gm <> ">: " <> T.strip txt
 
 stripBotMention :: UserId -> Text -> Text
-stripBotMention (UserId u) = T.replace ("@" <> T.pack (show u)) ""
+stripBotMention (UserId u) t =
+  foldr
+    (\m acc -> T.replace m "" acc)
+    t
+    -- Canonical token (with and without its trailing space), then the
+    -- legacy bare form still present in old rows.
+    ["[@#" <> uid <> "] ", "[@#" <> uid <> "]", "@" <> uid]
+  where
+    uid = T.pack (show u)
 
 -- | 群名片 > 昵称 > QQ 号 — matching what other members see on
 -- screen, so the model calls people what the group calls them.

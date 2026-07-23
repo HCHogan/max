@@ -22,6 +22,7 @@ module Max.Reply
   ( Chunk (..),
     chunkSource,
     planReply,
+    stripHallucinatedTokens,
     latexToUnicode,
     ReplyPiece (..),
     parseReplyTokens,
@@ -30,7 +31,7 @@ module Max.Reply
 where
 
 import Control.Applicative ((<|>))
-import Data.Char (isAlpha, isDigit, isSpace)
+import Data.Char (isAlpha, isAscii, isDigit, isSpace)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -132,40 +133,76 @@ data Token = TokReply !Int64 | TokSticker !Int64 | TokImage !Int64 | TokFace !In
 
 matchToken :: Text -> Maybe (Token, Text)
 matchToken t =
-  (do rest <- T.stripPrefix "[↩#" t; (n, r) <- idClose rest; pure (TokReply n, r))
-    <|> (do rest <- T.stripPrefix "[image#" t; (n, r) <- idClose rest; pure (TokImage n, r))
-    -- face uses stickerClose too: inbound renders as
-    -- "[face#14: 惊讶]", so echoing that must still send.
-    <|> (do rest <- T.stripPrefix "[face#" t; (n, r) <- stickerClose rest; pure (TokFace (fromIntegral n), r))
-    <|> (do rest <- T.stripPrefix "[sticker#" t; (n, r) <- stickerClose rest; pure (TokSticker n, r))
+  (do rest <- T.stripPrefix "[↩#" t; (n, r) <- tokenClose rest; pure (TokReply n, r))
+    <|> (do rest <- T.stripPrefix "[image#" t; (n, r) <- tokenClose rest; pure (TokImage n, r))
+    <|> (do rest <- T.stripPrefix "[face#" t; (n, r) <- tokenClose rest; pure (TokFace (fromIntegral n), r))
+    <|> (do rest <- T.stripPrefix "[sticker#" t; (n, r) <- tokenClose rest; pure (TokSticker n, r))
     -- Pre-rename sticker opener: old rows (and models echoing them)
     -- still carry it.
-    <|> (do rest <- T.stripPrefix "[表情包#" t; (n, r) <- stickerClose rest; pure (TokSticker n, r))
+    <|> (do rest <- T.stripPrefix "[表情包#" t; (n, r) <- tokenClose rest; pure (TokSticker n, r))
   where
-    -- reply / image: digits then an immediate ']'.
-    idClose s =
-      let (digits, rest) = T.span isDigit s
-       in if T.null digits
-            then Nothing
-            else (,) <$> readInt64 digits <*> T.stripPrefix "]" rest
-    -- sticker: digits then ']', or ':' + caption (up to the next ']').
-    stickerClose s =
+    -- One tolerant closer for every verb: digits, then ']' or a
+    -- ': description]' tail, then an optional display-attribute
+    -- group "(…)" glued after the bracket.  Models are taught to
+    -- write the bare [verb#id], but echoing the full inbound display
+    -- form ("[video#7407: 首帧…](29秒)") must still act — only the id
+    -- is trusted, decorations are consumed and dropped.
+    tokenClose s =
       let (digits, rest) = T.span isDigit s
        in if T.null digits
             then Nothing
             else do
               n <- readInt64 digits
-              case T.uncons rest of
-                Just (']', r) -> Just (n, r)
+              after <- case T.uncons rest of
+                Just (']', r) -> Just r
                 Just (':', r') -> case T.breakOn "]" r' of
-                  (_, close) | not (T.null close) -> Just (n, T.drop 1 close)
+                  (_, close) | not (T.null close) -> Just (T.drop 1 close)
                   _ -> Nothing
                 _ -> Nothing
+              pure (n, dropAttrGroup after)
+    -- "](29秒)" → the paren group is display metadata, never content;
+    -- swallow it so an echoed token doesn't leak "(29秒)" as text.
+    dropAttrGroup r = case T.stripPrefix "(" r of
+      Just r' -> case T.breakOn ")" r' of
+        (_, close) | not (T.null close) -> T.drop 1 close
+        _ -> r
+      Nothing -> r
 
 readInt64 :: Text -> Maybe Int64
 readInt64 s = case TR.decimal s of
   Right (n, "") -> Just n
   _ -> Nothing
+
+-- | Remove tool-call-looking bracket spans a model hallucinated into
+-- its reply — the observed failure shape is a tool name in brackets,
+-- e.g. @[find_stickers query="无语"]@.  A span is dropped when it
+-- opens with an ASCII identifier, has whitespace after it, and
+-- carries a '=' or quote — no legitimate grammar token or prose form
+-- looks like that.  Code fences are exempt (bracket-heavy code like
+-- @[n | n == 0]@ must survive verbatim).
+stripHallucinatedTokens :: Text -> Text
+stripHallucinatedTokens body = T.intercalate "\n" (go False (T.lines body))
+  where
+    go _ [] = []
+    go inFence (l : rest)
+      | isFence l = l : go (not inFence) rest
+      | inFence = l : go inFence rest
+      | otherwise = scrub l : go inFence rest
+    scrub line = case T.breakOn "[" line of
+      (before, rest)
+        | T.null rest -> line
+        | otherwise ->
+            let inner = T.drop 1 rest
+             in case T.breakOn "]" inner of
+                  (content, close)
+                    | not (T.null close) && looksToolCall content ->
+                        before <> scrub (T.drop 1 close)
+                  _ -> before <> "[" <> scrub inner
+    looksToolCall c =
+      let (w, r) = T.span (\ch -> isAlpha ch && isAscii ch || ch == '_') c
+       in not (T.null w)
+            && maybe False (isSpace . fst) (T.uncons r)
+            && T.any (\ch -> ch `elem` ("=\"“”" :: String)) c
 
 -- | Drop duplicate @[image#\<id\>]@ resend tokens, keeping the first.
 -- A multi-image message renders inbound as several markers carrying

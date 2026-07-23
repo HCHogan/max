@@ -202,9 +202,9 @@ spec = do
       let inp = baseInputs {ambient = [historyAt 9 8001 otherMemberId (Just "Bob") "早"]}
           (sys, _, _) = splitMessages (renderContext inp)
       sys `shouldSatisfy` ("成员对照" `T.isInfixOf`)
-      sys `shouldSatisfy` ((T.pack (show botId) <> "=Max（你自己）") `T.isInfixOf`)
-      sys `shouldSatisfy` ((T.pack (show memberId) <> "=Alice") `T.isInfixOf`)
-      sys `shouldSatisfy` ((T.pack (show otherMemberId) <> "=Bob") `T.isInfixOf`)
+      sys `shouldSatisfy` (("[@#" <> T.pack (show botId) <> "]=Max（你自己）") `T.isInfixOf`)
+      sys `shouldSatisfy` (("[@#" <> T.pack (show memberId) <> "]=Alice") `T.isInfixOf`)
+      sys `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=Bob") `T.isInfixOf`)
 
     it "prefers 群名片 over nickname in context lines and the roster" $ do
       let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just "sleepy"}
@@ -212,7 +212,7 @@ spec = do
           (sys, _, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[09:00 sleepy #8001]" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("SkyRain" `T.isInfixOf`))
-      sys `shouldSatisfy` ((T.pack (show otherMemberId) <> "=sleepy") `T.isInfixOf`)
+      sys `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=sleepy") `T.isInfixOf`)
 
     it "treats a blank card as absent" $ do
       let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just ""}
@@ -451,8 +451,8 @@ spec = do
     it "documents attached images in the format guide only when multimodal" $ do
       let (sysOff, _, _) = splitMessages (renderContext baseInputs)
           (sysOn, _, _) = splitMessages (renderContext baseInputs {multimodal = True})
-      sysOff `shouldSatisfy` ("你看不到内容" `T.isInfixOf`)
-      sysOn `shouldSatisfy` ("附在消息末尾" `T.isInfixOf`)
+      sysOff `shouldSatisfy` ("你看不到原图" `T.isInfixOf`)
+      sysOn `shouldSatisfy` ("直接附在消息末尾" `T.isInfixOf`)
 
   describe "renderContext reply handles" $ do
     it "prefixes an ambient reply message with a [↩#<id>] handle" $ do
@@ -553,10 +553,15 @@ spec = do
         `shouldBe` "看 [image]"
 
   describe "applyVideoCaptions" $ do
-    it "appends the caption to the tagged handle" $ do
-      let caps = Map.fromList [(8002 :: Int64, ["猫打键盘" :: Text])]
+    it "renders description in the colon slot and duration as a paren attribute" $ do
+      let caps = Map.fromList [(8002 :: Int64, [(Just "猫打键盘" :: Maybe Text, Just "29 秒" :: Maybe Text)])]
       (applyVideoCaptions caps (historyAt 9 8002 memberId (Just "Alice") "[video#8002] 好活")).renderedText
-        `shouldBe` "[video#8002: 猫打键盘] 好活"
+        `shouldBe` "[video#8002: 猫打键盘](29 秒) 好活"
+
+    it "renders duration alone when no caption yet" $ do
+      let caps = Map.fromList [(8002 :: Int64, [(Nothing :: Maybe Text, Just "29 秒" :: Maybe Text)])]
+      (applyVideoCaptions caps (historyAt 9 8002 memberId (Just "Alice") "[video#8002] 好活")).renderedText
+        `shouldBe` "[video#8002](29 秒) 好活"
 
     it "leaves the handle alone without a caption" $
       (applyVideoCaptions Map.empty (historyAt 9 8002 memberId (Just "Alice") "[video#8002] 好活")).renderedText

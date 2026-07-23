@@ -334,7 +334,7 @@ renderPlainText = T.concat . map go
   where
     go = \case
       SegText t -> t
-      SegAt (UserId u) -> "@" <> T.pack (show u) <> " "
+      SegAt (UserId u) -> "[@#" <> T.pack (show u) <> "] "
       SegReply _ -> ""
       SegImage info
         | isStickerImage info -> "[sticker]"
@@ -375,22 +375,45 @@ segmentMentions known = go
         | T.null rest -> [SegText before | not (T.null before)]
         | otherwise ->
             let cand = T.drop 1 rest -- past the @
-                digits = T.takeWhile isDigit cand
-                after = T.drop (T.length digits) cand
-                n = T.length digits
-                asciiWord c = isAscii c && isAlphaNum c
-                okBefore = maybe True (not . asciiWord . snd) (T.unsnoc before)
-                okAfter = maybe True (not . asciiWord . fst) (T.uncons after)
-                uid = UserId (either (const 0) fst (TR.decimal digits))
-             in if n >= 5 && n <= 11 && okBefore && okAfter && known uid
-                  then
-                    [SegText before | not (T.null before)]
+             in case bracketForm before cand of
+                  -- The canonical "[@#<qq>]" token (what the grammar
+                  -- teaches, and what inbound mentions render as) —
+                  -- unambiguous, so no boundary heuristics needed.
+                  Just (before', uid, after) | known uid ->
+                    [SegText before' | not (T.null before')]
                       <> (SegAt uid : spaceAfter (go (fromMaybe after (T.stripPrefix " " after))))
-                  else case go cand of
-                    -- Not a mention: keep the literal @ and fold it
-                    -- into the following text run.
-                    SegText t' : segs -> SegText (before <> "@" <> t') : segs
-                    segs -> SegText (before <> "@") : segs
+                  _ -> bareForm before cand
+    -- "[@#123456]" — 'before' carries the '[', 'cand' starts at '#'.
+    bracketForm before cand = do
+      before' <- T.stripSuffix "[" before
+      r <- T.stripPrefix "#" cand
+      let (digits, rest') = T.span isDigit r
+      after <- T.stripPrefix "]" rest'
+      if T.null digits
+        then Nothing
+        else do
+          (n, _) <- either (const Nothing) Just (TR.decimal digits)
+          pure (before', UserId n, after)
+    -- Legacy bare "@<qq>" span, boundary-guessed (5-11 digits, not
+    -- glued to an ASCII word char).  Kept forever: persisted history
+    -- and older models still speak it.
+    bareForm before cand =
+      let digits = T.takeWhile isDigit cand
+          after = T.drop (T.length digits) cand
+          n = T.length digits
+          asciiWord c = isAscii c && isAlphaNum c
+          okBefore = maybe True (not . asciiWord . snd) (T.unsnoc before)
+          okAfter = maybe True (not . asciiWord . fst) (T.uncons after)
+          uid = UserId (either (const 0) fst (TR.decimal digits))
+       in if n >= 5 && n <= 11 && okBefore && okAfter && known uid
+            then
+              [SegText before | not (T.null before)]
+                <> (SegAt uid : spaceAfter (go (fromMaybe after (T.stripPrefix " " after))))
+            else case go cand of
+              -- Not a mention: keep the literal @ and fold it
+              -- into the following text run.
+              SegText t' : segs -> SegText (before <> "@" <> t') : segs
+              segs -> SegText (before <> "@") : segs
 
     -- A real @ on QQ is always followed by a space; the client
     -- inserts one after the name.  We swallow the space the author
