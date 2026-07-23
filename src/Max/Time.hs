@@ -11,6 +11,7 @@ module Max.Time
     fmtDateHM,
     fmtDateHMS,
     fmtEnvStamp,
+    fmtDurationSec,
   )
 where
 
@@ -56,3 +57,18 @@ weekdayCN tz t = case formatTime defaultTimeLocale "%u" (utcToZonedTime tz t) of
   "5" -> "周五"
   "6" -> "周六"
   _ -> "周日"
+
+-- | Chinese-readable duration from seconds: @29 秒@ / @3 分 05 秒@ /
+-- @1 小时 02 分@.  Used for the video labels the prompt renders — the
+-- model's own duration perception from sampled frames is unreliable,
+-- so we always state the probed truth.
+fmtDurationSec :: Double -> Text
+fmtDurationSec secs
+  | h > 0 = T.pack (show h) <> " 小时 " <> pad2 m <> " 分"
+  | m > 0 = T.pack (show m) <> " 分 " <> pad2 sec <> " 秒"
+  | otherwise = T.pack (show sec) <> " 秒"
+  where
+    s = max 0 (round secs) :: Int
+    (h, rest) = s `divMod` 3600
+    (m, sec) = rest `divMod` 60
+    pad2 n = (if n < 10 then "0" else "") <> T.pack (show n)

@@ -54,11 +54,12 @@ viewBilibiliTool tz dc =
     { toolName = "view_bilibili",
       toolDescription =
         T.unwords
-          [ "看一个B站视频的详情：标题、UP主、简介、时长、播放/点赞/投币/收藏等数据，",
-            "以及按赞数排的热评。url 接受完整链接、BV号、b23.tv 短链（分享卡片 [card:] 里的链接也行）。",
-            "默认只返回这些文本信息——大多数问题（讲了啥/评价如何/评论区风向）用它就够了。",
-            "确实需要看画面时再传 with_video=true，整段视频（480p）会附在下一条消息里；",
-            "太长的视频（480p 下约超过 30-35 分钟）附不上，只有文本信息。"
+          [ "看一个B站视频：标题、UP主、简介、时长、播放/点赞/投币/收藏等数据、",
+            "按赞数排的热评，并且默认把整段视频（480p）附在下一条消息里给你看",
+            "（占 1 个附件配额）——聊视频内容时先真的看一眼，别只凭标题和评论下结论。",
+            "url 接受完整链接、BV号、b23.tv 短链（分享卡片 [card:] 里的链接也行）。",
+            "只需要数据/评论区风向、不关心画面时传 with_video=false 省流；",
+            "太长的视频（480p 下约超过 30-35 分钟）附不上，自动退化为只有文本信息。"
           ],
       toolSchema =
         object
@@ -73,7 +74,8 @@ viewBilibiliTool tz dc =
                   "with_video"
                     .= object
                       [ "type" .= ("boolean" :: Text),
-                        "description" .= ("true = 额外下载整段视频附给你看（仅多模态可用，占 1 个附件配额）" :: Text)
+                        "default" .= True,
+                        "description" .= ("默认 true：下载整段视频附给你看（仅多模态可用）。false = 只要文本信息。" :: Text)
                       ]
                 ],
             "required" .= (["url"] :: [Text])
@@ -125,7 +127,7 @@ viewBilibiliTool tz dc =
                           <> videoPart
     }
   where
-    parseArgs o = (,) <$> o .: "url" <*> o .:? "with_video" .!= False
+    parseArgs o = (,) <$> o .: "url" <*> o .:? "with_video" .!= True
 
     commentsJson = \case
       Left err -> toJSON ("(热评获取失败: " <> err <> ")")

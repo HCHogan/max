@@ -12,7 +12,7 @@ module Max.Images
 where
 
 import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
-import Control.Exception (SomeException)
+import Control.Exception (IOException, SomeException, try)
 import Control.Monad (forever)
 import Data.Foldable (for_, traverse_)
 import Data.Aeson (Value (Object, String), toJSON)
@@ -34,6 +34,10 @@ import Max.Util (catchSync)
 import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (ImageSegInfo (..), Segment (..), VideoSegInfo (..))
 import OneBot.Types (GroupId (..), MessageId (..))
+import System.Directory (getTemporaryDirectory, removeFile)
+import System.Exit (ExitCode (..))
+import System.IO (hClose, openTempFile)
+import System.Process (readProcessWithExitCode)
 
 -- | What a queued download is.  Videos ride the same worker pool but
 -- land in their own tables ('videos' / 'message_videos') with a
@@ -165,10 +169,14 @@ processOne job = do
         MediaImage -> do
           recordImage sha mime (BS.length bytes) rel job
           for_ job.sticker (recordSticker sha job.groupId)
-        MediaVideo ->
+        MediaVideo -> do
+          -- Probed duration rides into every label the prompt renders
+          -- for this video — the model's own duration perception from
+          -- sampled frames is unreliable.
+          dur <- liftIO (probeVideoDuration bytes)
           -- QQ's CDN is sloppy about video content types; normalise
           -- anything that isn't video/* to mp4 (what QQ serves).
-          recordVideo sha (if "video/" `T.isPrefixOf` mime then mime else "video/mp4") (BS.length bytes) rel job
+          recordVideo sha (if "video/" `T.isPrefixOf` mime then mime else "video/mp4") (BS.length bytes) rel dur job
       logInfo "media stored" $
         object
           [ "sha256_short" .= T.take 8 sha,
@@ -214,17 +222,46 @@ recordVideo ::
   Text ->
   Int ->
   FilePath ->
+  Maybe Double -> -- probed duration, seconds
   ImageJob ->
   Eff es ()
-recordVideo sha mime size rel job = do
+recordVideo sha mime size rel dur job = do
   _ <-
     execute
-      "INSERT INTO videos (sha256, mime_type, bytes_size, local_path) \
-      \ VALUES (?,?,?,?) ON CONFLICT (sha256) DO NOTHING"
-      (sha, mime, fromIntegral size :: Int64, T.pack rel)
+      "INSERT INTO videos (sha256, mime_type, bytes_size, local_path, duration_seconds) \
+      \ VALUES (?,?,?,?,?) ON CONFLICT (sha256) DO NOTHING"
+      (sha, mime, fromIntegral size :: Int64, T.pack rel, dur)
   _ <-
     execute
       "INSERT INTO message_videos (message_id, sha256, seg_index) \
       \ VALUES (?,?,?) ON CONFLICT DO NOTHING"
       (job.messageId, sha, job.segIndex)
   pure ()
+
+-- | Probe a downloaded video's duration via ffprobe (temp-file
+-- round-trip: the bytes are still in memory and mp4 needs seekable
+-- input).  Best-effort — 'Nothing' just means labels omit the
+-- duration.
+probeVideoDuration :: BS.ByteString -> IO (Maybe Double)
+probeVideoDuration bytes = do
+  r <- try @IOException run
+  pure $ case r of
+    Right d -> d
+    Left _ -> Nothing
+  where
+    run = do
+      tmp <- getTemporaryDirectory
+      (path, h) <- openTempFile tmp "max-vprobe.bin"
+      hClose h
+      BS.writeFile path bytes
+      (code, out, _) <-
+        readProcessWithExitCode
+          "ffprobe"
+          ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path]
+          ""
+      _ <- try @IOException (removeFile path)
+      pure $ case code of
+        ExitSuccess -> case reads (takeWhile (/= '\n') out) of
+          [(d, "")] -> Just d
+          _ -> Nothing
+        ExitFailure _ -> Nothing

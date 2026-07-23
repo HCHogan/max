@@ -123,7 +123,9 @@ fetchMessage mid = do
 -- own answers with no visible question and repeats itself.  Filtered
 -- by @clearedAt@ watermark and excluding the current triggering
 -- message.  Returned chronological (oldest first), capped at @n@
--- rows.
+-- rows.  Synthetic rows are excluded EXCEPT the bot's own — those
+-- are persisted @[silence]@ turns ('Max.DB.Message.insertSilence'),
+-- which must show so a declined question doesn't read as pending.
 --
 -- This replaces 'session.history' (the duplicated in-memory cache):
 -- single source of truth lives in @messages@.  @!unclear@ can lift
@@ -145,7 +147,7 @@ fetchMentionHistory gid botId excludeId since n = do
         \  FROM messages m \
         \  WHERE m.group_id = ? \
         \    AND m.message_id <> ? \
-        \    AND NOT m.is_synthetic \
+        \    AND (NOT m.is_synthetic OR m.user_id = ?) \
         \    AND m.forwarded_in_message_id IS NULL \
         \    AND (m.user_id = ? OR m.rendered_text LIKE ? \
         \         OR EXISTS (SELECT 1 FROM messages b \
@@ -156,14 +158,14 @@ fetchMentionHistory gid botId excludeId since n = do
         \                       AND r.user_id = ?)) \
         \  ORDER BY m.received_at DESC \
         \  LIMIT ?"
-        ((gid, excludeId, botId) :. (mentionLike :: Text, botId, botId, n))
+        ((gid, excludeId, botId, botId) :. (mentionLike :: Text, botId, botId, n))
     Just t ->
       query
         "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at, m.reply_to_message_id \
         \  FROM messages m \
         \  WHERE m.group_id = ? \
         \    AND m.message_id <> ? \
-        \    AND NOT m.is_synthetic \
+        \    AND (NOT m.is_synthetic OR m.user_id = ?) \
         \    AND m.forwarded_in_message_id IS NULL \
         \    AND m.received_at > ? \
         \    AND (m.user_id = ? OR m.rendered_text LIKE ? \
@@ -175,7 +177,7 @@ fetchMentionHistory gid botId excludeId since n = do
         \                       AND r.user_id = ?)) \
         \  ORDER BY m.received_at DESC \
         \  LIMIT ?"
-        ((gid, excludeId) :. (t, botId, mentionLike :: Text, botId, botId, n))
+        ((gid, excludeId, botId) :. (t, botId, mentionLike :: Text, botId, botId, n))
   pure (reverse (rows :: [HistoryItem]))
 
 -- | Bulk fetch by message id.  Preserves the order of input ids

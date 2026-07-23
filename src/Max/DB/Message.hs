@@ -50,6 +50,7 @@
 module Max.DB.Message
   ( insertGroupMessage,
     insertOutbound,
+    insertSilence,
   )
 where
 
@@ -105,6 +106,35 @@ insertGroupMessage gm = do
 extractReply :: [Segment] -> Maybe Int64
 extractReply segs =
   listToMaybe [m | SegReply (MessageId m) <- segs]
+
+-- | Persist a bot silence ('[silence]' / '[silence:表情名]') as a
+-- synthetic bot row.  Nothing goes out to QQ — this exists purely so
+-- the next dispatch's mention history shows the turn was already
+-- declined; without it the unanswered question reads as pending and
+-- the model answers it a dispatch late.  @reply_to_message_id@ points
+-- at the declined trigger, which both anchors the silence next to its
+-- question and (via the bot-quoted clause in 'fetchMentionHistory')
+-- pulls a declined *proactive* trigger into mention history at all.
+insertSilence ::
+  (WithConnection :> es, IOE :> es) =>
+  GroupMessage -> -- the declined trigger
+  Text -> -- the silence reply text, e.g. "[silence:吃瓜]"
+  Eff es ()
+insertSilence gm rendered = do
+  let GroupId gid = gm.groupId
+      UserId selfId = gm.selfId
+      MessageId mid = gm.messageId
+      -- A poke's synthesized trigger has no real message id.
+      replyTo = if mid == 0 then Nothing else Just mid
+  _ <-
+    execute
+      "INSERT INTO messages \
+      \ (message_id, group_id, user_id, self_id, \
+      \  segments, rendered_text, raw_message, \
+      \  is_synthetic, reply_to_message_id) \
+      \ VALUES (-nextval('synthetic_message_id_seq'),?,?,?,?,?,'',true,?)"
+      (gid, selfId, selfId, Jsonb (toJSON ([] :: [Segment])), rendered, replyTo)
+  pure ()
 
 -- | Insert an *outbound* message (something the bot itself sent) into
 -- the messages table.  Used by the LLM-reply path so mention history

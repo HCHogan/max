@@ -25,6 +25,7 @@ import Effectful.PostgreSQL (WithConnection, query)
 import Database.PostgreSQL.Simple (Only (..))
 import Max.Effects.Agent (DispatchContext (..), ToolImage (..), queueToolImage)
 import Max.Effects.Tools (Tool (..))
+import Max.Time (fmtDurationSec)
 import System.FilePath ((</>))
 
 videoToolsFor ::
@@ -66,27 +67,32 @@ viewVideoTool blobRoot dc =
         Right (mid :: Int64) -> do
           rows <-
             query
-              "SELECT v.mime_type, v.local_path \
+              "SELECT v.mime_type, v.local_path, v.duration_seconds \
               \  FROM message_videos mv \
               \  JOIN videos v USING (sha256) \
               \  WHERE mv.message_id = ? \
               \  ORDER BY mv.seg_index \
               \  LIMIT 1"
               (Only mid)
-          case rows :: [(Text, Text)] of
+          case rows :: [(Text, Text, Maybe Double)] of
             [] ->
               pure $
                 Left
                   "这条消息没有已下载的视频（不是视频消息、还在下载中、或超过大小上限没有保存）"
-            ((mime, path) : _) -> do
+            ((mime, path, mDur) : _) -> do
               ebytes <- liftIO (try @IOException (BS.readFile (blobRoot </> T.unpack path)))
               case ebytes of
                 Left e -> pure $ Left ("视频读取失败: " <> T.pack (show e))
-                Right bytes -> attach mid mime bytes
+                Right bytes -> attach mid mDur mime bytes
     }
   where
-    attach mid mime bytes = do
-      let label = "[视频#" <> T.pack (show mid) <> "]:"
+    -- Stated duration beats the model's own sampled-frame guess.
+    attach mid mDur mime bytes = do
+      let label =
+            "[视频#"
+              <> T.pack (show mid)
+              <> maybe "" (\d -> "，时长 " <> fmtDurationSec d) mDur
+              <> "]:"
           dataUrl = "data:" <> mime <> ";base64," <> TE.decodeUtf8 (B64.encode bytes)
       ok <- queueToolImage dc (ToolImage label dataUrl)
       if not ok

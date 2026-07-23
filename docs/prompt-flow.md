@@ -116,6 +116,8 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
     // 成员行用和 recent 块一致的 [HH:MM <name> #<msgid>]: 前缀（可引用、
     // 可判断时间）；bot 自己的行保持原文（加前缀会教模型模仿着输出前缀），
     // 连续多段回复合并回一条 assistant（空行分隔）。上限 history_window=40 行。
+    // bot 的沉默也落库（合成行，rendered_text 就是 "[silence:…]"），会作为
+    // assistant 轮出现——被拒答过的问题不会在下一次 dispatch 里显得"还没回"。
     {
       "role": "user",
       "content": "[21:14 阿飞 #7390]: @Max 帮我看下 HAL_Delay 卡死一般是什么原因"
@@ -151,7 +153,7 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 [22:50 老张 #7404]: [↩#7402] 不打，在调板子
 [22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]
 [22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]
-[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路，接着示波器探头]
+[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 时长 42 秒，首帧是一块面包板电路，接着示波器探头]
 [22:56 阿飞 #7409]: [card: 哔哩哔哩 | 【教程】示波器探头10X档到底干嘛用的 | UP主：某电子人 | https://b23.tv/abc123]
 [22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了
 [22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买
@@ -177,7 +179,7 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
           "type": "image_url",
           "image_url": { "url": "data:image/png;base64,…" }    // 触发消息 #7413 的报错截图
         },
-        { "type": "text", "text": "[current message] 里的视频:" },
+        { "type": "text", "text": "[current message] 里的视频（时长 29 秒）:" },
         {
           "type": "video_url",                                  // OpenAI 兼容视频扩展
           "video_url": { "url": "data:video/mp4;base64,…" }    // 触发消息 #7413 的视频整段

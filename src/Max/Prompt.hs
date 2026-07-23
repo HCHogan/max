@@ -55,7 +55,7 @@ import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.Session (Session (..))
-import Max.Time (fmtDate, fmtEnvStamp, fmtHM)
+import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
@@ -213,8 +213,8 @@ systemPrompt multimodal' private envText persona mMemBlock =
            "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
            "  [forward#<id>]              — 转发聊天记录；被引用或就是当前消息时会自动展开，其余情况用 view_forward 传 <id> 看内容",
            if multimodal'
-             then "  [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看。带简介时形如 [video#<id>: <简介>]（据首帧生成）"
-             else "  [video#<id>]                — 群里的视频（你看不到画面；带简介时形如 [video#<id>: <简介>]，据首帧生成）",
+             then "  [video#<id>]                — 群里的视频；被引用或就是当前消息时整段直接附给你，其余用 view_video 传 <id> 看。带简介时形如 [video#<id>: 时长 29 秒，<首帧简介>]；标注的时长是实测的，以它为准（抽帧看视频容易把时长感知错）"
+             else "  [video#<id>]                — 群里的视频（你看不到画面；带简介时形如 [video#<id>: 时长 29 秒，<首帧简介>]）",
            "  @<数字>                     — @某人；数字是 QQ 号，对照表见 [environment]"
          ]
       -- Volatile content (envText carries the current time and the
@@ -371,9 +371,9 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
         let cands =
               maybe
                 []
-                (\(r, _, _) -> [(r.messageId, "[↩ quoted message] 里的视频:")])
+                (\(r, _, _) -> [(r.messageId, "[↩ quoted message] 里的视频")])
                 replyCtx0
-                <> [(mid, "[current message] 里的视频:") | expectedVids > 0]
+                <> [(mid, "[current message] 里的视频") | expectedVids > 0]
         take maxPromptVideos . concat <$> traverse (loadMessageVideos blobRoot) cands
       else pure []
   now' <- liftIO getCurrentTime
@@ -472,20 +472,23 @@ waitForTriggerVideos mid expected = go 0
 loadMessageVideos ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   FilePath -> -- blob store root
-  (Int64, Text) -> -- (message_id, attachment label)
+  (Int64, Text) -> -- (message_id, attachment label prefix, sans colon)
   Eff es [PromptImage]
 loadMessageVideos blobRoot' (mid, label) = do
   rows <-
     query
-      "SELECT v.mime_type, v.local_path \
+      "SELECT v.mime_type, v.local_path, v.duration_seconds \
       \  FROM message_videos mv \
       \  JOIN videos v USING (sha256) \
       \  WHERE mv.message_id = ? \
       \  ORDER BY mv.seg_index"
       (Only mid)
-  fmap concat . traverse loadOne $ (rows :: [(Text, Text)])
+  fmap concat . traverse loadOne $ (rows :: [(Text, Text, Maybe Double)])
   where
-    loadOne (mime, path) = do
+    -- The probed duration goes into the label: the model's own
+    -- duration perception from sampled frames is unreliable (a 29s
+    -- clip once read back as "2.1秒").
+    loadOne (mime, path, mDur) = do
       eres <- liftIO (try (BS.readFile (blobRoot' </> T.unpack path)))
       case eres of
         Left (e :: IOException) -> do
@@ -495,7 +498,7 @@ loadMessageVideos blobRoot' (mid, label) = do
         Right bytes ->
           pure
             [ PromptImage
-                label
+                (label <> maybe "" (\d -> "（时长 " <> fmtDurationSec d <> "）") mDur <> ":")
                 ("data:" <> mime <> ";base64," <> TE.decodeUtf8 (B64.encode bytes))
             ]
 
@@ -651,7 +654,10 @@ imageCaptionsFor ids = do
       (Only (In ids))
   pure (Map.fromListWith (flip (<>)) [(m, [d]) | (m, d) <- rows :: [(Int64, Text)]])
 
--- | Same for described videos.
+-- | Same for videos: probed duration + first-frame description,
+-- joined into one caption ("时长 29 秒，首帧是…").  Duration alone
+-- still renders — it's known at ingest, before the captioner runs,
+-- and the model's own duration perception is unreliable.
 videoCaptionsFor ::
   (WithConnection :> es, IOE :> es) =>
   [Int64] ->
@@ -660,14 +666,24 @@ videoCaptionsFor [] = pure Map.empty
 videoCaptionsFor ids = do
   rows <-
     query
-      "SELECT mv.message_id, v.description \
+      "SELECT mv.message_id, v.description, v.duration_seconds \
       \  FROM message_videos mv \
       \  JOIN videos v USING (sha256) \
       \  WHERE mv.message_id IN ? \
-      \    AND v.description IS NOT NULL \
+      \    AND (v.description IS NOT NULL OR v.duration_seconds IS NOT NULL) \
       \  ORDER BY mv.message_id, mv.seg_index"
       (Only (In ids))
-  pure (Map.fromListWith (flip (<>)) [(m, [d]) | (m, d) <- rows :: [(Int64, Text)]])
+  pure $
+    Map.fromListWith
+      (flip (<>))
+      [ (m, [capText mDesc mDur])
+      | (m, mDesc, mDur) <- rows :: [(Int64, Maybe Text, Maybe Double)]
+      ]
+  where
+    capText mDesc mDur =
+      T.intercalate "，" $
+        ["时长 " <> fmtDurationSec d | Just d <- [mDur]]
+          <> [d | Just d <- [mDesc]]
 
 -- | Captions of already-described stickers appearing in the given
 -- messages, in seg_index order per message.

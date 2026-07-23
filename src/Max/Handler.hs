@@ -38,7 +38,7 @@ import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Parser (parseCommand)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
-import Max.DB.Message (insertGroupMessage, insertOutbound)
+import Max.DB.Message (insertGroupMessage, insertOutbound, insertSilence)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
 import Max.Effects.LLM (LLM, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, callAction, sendAction)
@@ -499,10 +499,13 @@ dispatchLLM origin gm = void $ async $
           -- The model opted out of replying (see 'parseSilence') —
           -- the escape hatch for turns that need no response, most
           -- importantly another bot @-ing us: answering would
-          -- re-trigger it and ping-pong forever.  Nothing is sent or
-          -- persisted; btw notes are NOT drained (they wait for a
-          -- turn that actually delivers them); no memory extraction
-          -- (a turn judged not worth answering is noise).
+          -- re-trigger it and ping-pong forever.  Nothing is sent;
+          -- btw notes are NOT drained (they wait for a turn that
+          -- actually delivers them); no memory extraction (a turn
+          -- judged not worth answering is noise).  The silence itself
+          -- IS persisted, as a synthetic bot row — without it the
+          -- declined question reads as still pending in the next
+          -- dispatch's mention history and gets answered a turn late.
           --
           -- On a direct trigger the silence still shows: the named
           -- reason face (擦汗 as fallback) is reacted onto the trigger
@@ -515,6 +518,9 @@ dispatchLLM origin gm = void $ async $
                 "face" .= mFace,
                 "aborted" .= result.aborted
               ]
+          ephemeral <- isEphemeral
+          unless ephemeral $
+            insertSilence gm (if T.null stripped then "[silence]" else stripped)
           when (origin == OriginDirect) $
             sendAction
               (SetMsgEmojiLike gm.messageId (maybe defaultSilenceFace id mFace) True)
