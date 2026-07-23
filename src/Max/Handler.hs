@@ -298,7 +298,8 @@ dispatchCommand gm body = localDomain "cmd" $ do
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
     Right (Just cmd) -> do
       env :: BotEnv <- ask
-      allowed <- checkCmdPermission env gm cmd
+      effTier <- effectiveTier env gm
+      allowed <- checkCmdPermission gm effTier cmd
       if not allowed
         then do
           let UserId uidRaw = gm.userId
@@ -306,13 +307,13 @@ dispatchCommand gm body = localDomain "cmd" $ do
             object ["cmd" .= T.pack (show cmd), "user_id" .= uidRaw]
           -- Same NO face as [silence:NO]: visibly refused, zero noise.
           sendAction (SetMsgEmojiLike gm.messageId deniedFaceId True)
-        else dispatchAllowed env cmd
+        else dispatchAllowed env effTier cmd
   where
-    dispatchAllowed env cmd = do
+    dispatchAllowed env effTier cmd = do
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
-      result <- CmdDispatch.execute t gm.groupId gm.userId replyTarget cmd
+      result <- CmdDispatch.execute t gm.groupId gm.userId effTier replyTarget cmd
       case result of
         -- In a group, textual command output (queries, error texts)
         -- goes to the sender's DMs — the group only sees an OK
@@ -834,27 +835,35 @@ stripMentions (UserId u) t =
   where
     uid = T.pack (show u)
 
+-- | The sender's effective tier: config owner list first, then the
+-- NapCat role ('actorTier').  Resolved once per command and threaded
+-- into both the permission check and 'CmdDispatch.execute' (which
+-- needs it for !grant's own constraints).
+effectiveTier :: (NapCat :> es, Log :> es) => BotEnv -> GroupMessage -> Eff es PermTier
+effectiveTier env gm
+  | let UserId uid = gm.userId, uid `elem` env.beOwners = pure TierOwner
+  | otherwise = actorTier gm
+
 -- | Resolve whether the sender may run this command.  Order (first
--- hit wins): config owner list > explicit grant/deny row (group
--- scope beats global) > NapCat role tier > member.  Commands without
--- a capability ('requiredCapability' = 'Nothing') are open to all.
+-- hit wins): owner tier > explicit grant/deny row (group scope beats
+-- global) > role tier default.  Commands without a capability
+-- ('requiredCapability' = 'Nothing') are open to all.
 checkCmdPermission ::
-  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  BotEnv ->
+  (WithConnection :> es, IOE :> es) =>
   GroupMessage ->
+  PermTier ->
   Command ->
   Eff es Bool
-checkCmdPermission env gm cmd = case requiredCapability cmd of
+checkCmdPermission gm effTier cmd = case requiredCapability cmd of
   Nothing -> pure True
-  Just (cap, tier) -> do
-    let UserId uid = gm.userId
-        GroupId gid = gm.groupId
-    if uid `elem` env.beOwners
-      then pure True
-      else
+  Just (cap, tier)
+    | effTier == TierOwner -> pure True
+    | otherwise -> do
+        let UserId uid = gm.userId
+            GroupId gid = gm.groupId
         lookupGrant uid cap gid >>= \case
           Just explicit -> pure explicit
-          Nothing -> tierSatisfied tier <$> actorTier gm
+          Nothing -> pure (tierSatisfied tier effTier)
 
 -- | The sender's role tier.  In a private chat the sender is admin
 -- of their own session by definition (persona/clear of one's own

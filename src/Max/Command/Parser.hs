@@ -194,6 +194,20 @@ commandP = do
 classify :: Text -> RawArgs -> Command
 classify verb raw@(RawArgs pos flags) = case verb of
   "help" -> Help (oneArg pos)
+  "grant" -> case pos of
+    [target, cap]
+      | Just uid <- parseUserRef target ->
+          Grant uid cap ("deny" `Map.member` flags) ("global" `Map.member` flags)
+    _ -> Unknown verb raw
+  "revoke" -> case pos of
+    [target, cap]
+      | Just uid <- parseUserRef target ->
+          Revoke uid cap ("global" `Map.member` flags)
+    _ -> Unknown verb raw
+  "perms" -> case pos of
+    [] -> Perms Nothing
+    [target] | Just uid <- parseUserRef target -> Perms (Just uid)
+    _ -> Unknown verb raw
   "model" -> case pos of
     [] -> ModelShow
     ["list"] -> ModelList
@@ -264,3 +278,12 @@ parseInt64 :: Text -> Maybe Int64
 parseInt64 t = case TR.signed TR.decimal (T.strip t) of
   Right (n, rest) | T.null rest -> Just n
   _ -> Nothing
+
+-- | A user reference in command args: the canonical @[\@#qq]@ token
+-- (what an @-mention renders as), a bare @\@qq@, or a raw QQ number.
+parseUserRef :: Text -> Maybe Int64
+parseUserRef t0 = case T.stripPrefix "[@#" t0 of
+  Just rest -> T.stripSuffix "]" rest >>= parseInt64
+  Nothing -> case T.stripPrefix "@" t0 of
+    Just bare -> parseInt64 bare
+    Nothing -> parseInt64 t0

@@ -19,7 +19,9 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
+import Max.Command.Permission (PermTier (..), adminGrantable, knownCapabilities)
 import Max.Command.Types
+import Max.DB.Permissions (deleteGrant, insertGrant, listGrantsFor)
 import Data.Int (Int64)
 import Data.Text.IO qualified as TIO
 import Data.Version (showVersion)
@@ -82,10 +84,11 @@ execute ::
   TVar Session ->
   GroupId ->
   UserId -> -- the command's sender (permission scope for !memory rm)
+  PermTier -> -- the sender's effective tier (Handler resolves it)
   Maybe Int64 -> -- replyTarget message_id, if the command was a reply
   Command ->
   Eff es DispatchResult
-execute t gid uid replyTarget cmd = do
+execute t gid uid granterTier replyTarget cmd = do
  env :: BotEnv <- ask
  case cmd of
   Btw note -> do
@@ -325,6 +328,61 @@ execute t gid uid replyTarget cmd = do
   StickerBan prefix -> banSticker True prefix
   StickerUnban prefix -> banSticker False prefix
   --
+  Grant target cap deny global
+    | cap `notElem` knownCapabilities ->
+        reply $ "未知权限名: " <> cap <> "\n可用: " <> T.intercalate "、" knownCapabilities
+    | granterTier < TierOwner && (global || deny) ->
+        reply "--global / --deny 需要 owner 权限"
+    | granterTier < TierOwner && cap `notElem` adminGrantable ->
+        reply $ "群管理员只能授予: " <> T.intercalate "、" adminGrantable
+    | otherwise -> do
+        let GroupId gidRaw = gid
+            UserId granterRaw = uid
+            scope = if global then Nothing else Just gidRaw
+        insertGrant target cap scope deny granterRaw
+        logInfo "perm: granted" $
+          object
+            [ "target" .= target,
+              "capability" .= cap,
+              "scope" .= scope,
+              "deny" .= deny,
+              "by" .= granterRaw
+            ]
+        ack
+  Revoke target cap global
+    | granterTier < TierOwner && global ->
+        reply "--global 需要 owner 权限"
+    | granterTier < TierOwner && cap `notElem` adminGrantable ->
+        reply $ "群管理员只能撤销: " <> T.intercalate "、" adminGrantable
+    | otherwise -> do
+        let GroupId gidRaw = gid
+            scope = if global then Nothing else Just gidRaw
+        ok <- deleteGrant target cap scope
+        if ok
+          then do
+            logInfo "perm: revoked" $
+              object ["target" .= target, "capability" .= cap, "scope" .= scope]
+            ack
+          else reply "没有这条授权（注意 scope：群内授权和 --global 是两条）"
+  Perms mTarget -> do
+    let UserId uidRaw = uid
+        target = maybe uidRaw id mTarget
+    rows <- listGrantsFor target
+    reply $
+      "用户 "
+        <> T.pack (show target)
+        <> " 的显式授权：\n"
+        <> if null rows
+          then "（无；生效的是身份层级：owner / 群管理员 / 成员）"
+          else
+            T.intercalate
+              "\n"
+              [ "  "
+                  <> (if deny then "✗ 禁用 " else "✓ ")
+                  <> cap
+                  <> maybe "（全局）" (\g -> "（群 " <> T.pack (show g) <> "）") mScope
+              | (cap, mScope, deny) <- rows
+              ]
   Unknown v _ ->
     reply $
       "不认识的命令: !"
@@ -560,8 +618,15 @@ helpText Nothing =
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",
       "  !kill --all              砍掉所有群的全部任务",
       "  !version                 看 bot 版本",
+      "  !grant [@#qq] <权限名>   给人授权（--deny 显式禁用、--global 全局，均需 owner）",
+      "  !revoke [@#qq] <权限名>  撤销授权（scope 需和授权时一致）",
+      "  !perms [[@#qq]]          看某人的显式授权（默认看自己）",
       "  ! <命令>                 在本群沙盒里跑 shell（感叹号后空一格），如 ! ls -al；支持多行",
-      "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version"
+      "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version",
+      "",
+      "权限：!model/!debug/!sticker/!proactive/!kill --all 仅 bot 主人；",
+      "!persona/!clear/!kill 需群主/管理员（或被授权）；其余全员可用。",
+      "群里发命令：结果私聊发你（加好友才收得到），群里只贴表情。"
     ]
 helpText (Just topic) =
   "(目前没有 '" <> topic <> "' 的详细帮助，看 !help)"

@@ -68,6 +68,9 @@ data Command
   | ProactiveStatus -- ^ '!proactive' — feature + override state
   | ProactiveSet !(Maybe Bool) -- ^ '!proactive on' / 'off' / 'default'
   | Version -- ^ '!version'
+  | Grant !Int64 !Text !Bool !Bool -- ^ '!grant <[@#qq]|qq> <capability> [--deny] [--global]'
+  | Revoke !Int64 !Text !Bool -- ^ '!revoke <[@#qq]|qq> <capability> [--global]'
+  | Perms !(Maybe Int64) -- ^ '!perms [目标]' — own grants when no target
   | Unknown !Text !RawArgs -- ^ verb + raw args; parser succeeded but verb unknown
   deriving stock (Show, Eq)
 

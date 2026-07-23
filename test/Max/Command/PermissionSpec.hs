@@ -21,6 +21,11 @@ spec = do
       requiredCapability Unclear `shouldBe` Just ("clear", TierGroupAdmin)
       requiredCapability (Kill "t1") `shouldBe` Just ("kill", TierGroupAdmin)
 
+    it "gates granting itself at group-admin tier" $ do
+      requiredCapability (Grant 1 "persona" False False) `shouldBe` Just ("grant", TierGroupAdmin)
+      requiredCapability (Revoke 1 "persona" False) `shouldBe` Just ("grant", TierGroupAdmin)
+      requiredCapability (Perms Nothing) `shouldBe` Nothing
+
     it "leaves queries and own-scope commands open" $ do
       requiredCapability (Help Nothing) `shouldBe` Nothing
       requiredCapability ModelShow `shouldBe` Nothing

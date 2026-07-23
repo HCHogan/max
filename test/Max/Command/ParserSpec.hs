@@ -37,6 +37,20 @@ spec = do
         Right (Just (Unknown "model" _)) -> pure ()
         other -> expectationFailure $ "expected Unknown model, got: " <> show other
 
+  describe "!grant / !revoke / !perms" $ do
+    it "grant with canonical mention token" $
+      "!grant [@#223344556] persona" `parsesTo` Grant 223344556 "persona" False False
+    it "grant with bare qq and flags" $
+      "!grant 223344556 model --deny --global" `parsesTo` Grant 223344556 "model" True True
+    it "revoke with @qq form" $
+      "!revoke @223344556 persona" `parsesTo` Revoke 223344556 "persona" False
+    it "perms defaults to self" $ "!perms" `parsesTo` Perms Nothing
+    it "perms with target" $ "!perms [@#10001]" `parsesTo` Perms (Just 10001)
+    it "non-numeric target falls through to Unknown" $
+      case parseCommand "!grant 阿飞 persona" of
+        Right (Just (Unknown "grant" _)) -> pure ()
+        other -> expectationFailure $ "expected Unknown grant, got: " <> show other
+
   describe "!persona" $ do
     it "show" $ "!persona" `parsesTo` PersonaShow
     it "clear" $ "!persona clear" `parsesTo` PersonaClear
