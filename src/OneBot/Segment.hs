@@ -10,6 +10,7 @@ module OneBot.Segment
     isStickerImage,
     renderPlainText,
     segmentMentions,
+    rescueNameMentions,
     mentionsUser,
   )
 where
@@ -423,6 +424,41 @@ segmentMentions known = go
     spaceAfter (SegText t' : segs) = SegText (" " <> t') : segs
     spaceAfter [] = []
     spaceAfter segs = SegText " " : segs
+
+-- | Rescue "@显示名" spans a model wrote instead of the canonical
+-- @[\@#QQ号]@ token — small local models skip the roster lookup and
+-- @ people by name, which sends as dead text.  The span converts to
+-- the canonical token when the text right after the @ starts with a
+-- roster display name (longest match wins; names shorter than 2
+-- chars or leading with a digit are ignored — too collision-prone
+-- with real text and QQ号 forms).  Runs as a textual pre-pass, so
+-- 'segmentMentions' then treats the result like any other mention.
+rescueNameMentions :: [(Text, UserId)] -> Text -> Text
+rescueNameMentions names t0
+  | null usable = t0
+  | otherwise = go t0
+  where
+    usable =
+      sortOn (negate . T.length . fst) $
+        [ (n, u)
+        | (n0, u) <- names,
+          let n = T.strip n0,
+          T.length n >= 2,
+          maybe True (not . isDigit . fst) (T.uncons n),
+          not ("@" `T.isInfixOf` n)
+        ]
+    go t = case T.breakOn "@" t of
+      (before, rest)
+        | T.null rest -> t
+        | otherwise ->
+            let cand = T.drop 1 rest
+             in case [ (u, T.drop (T.length n) cand)
+                     | (n, u) <- usable,
+                       n `T.isPrefixOf` cand
+                     ] of
+                  ((UserId u, after) : _) ->
+                    before <> "[@#" <> T.pack (show u) <> "]" <> go after
+                  [] -> before <> "@" <> go cand
 
 mentionsUser :: UserId -> [Segment] -> Bool
 mentionsUser uid = any $ \case

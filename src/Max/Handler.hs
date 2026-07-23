@@ -59,7 +59,7 @@ import Max.Sticker (resolveSticker)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..), Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
-import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, segmentMentions)
+import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, rescueNameMentions, segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 -- | Decision derived from one group message.
@@ -459,7 +459,7 @@ dispatchLLM origin gm = void $ async $
 
     dispatch env s = do
       multimodal <- isProfileMultimodal s.model
-      (mentionable, brief) <- fetchGroupContext gm.groupId
+      (mentionable, rosterNames, brief) <- fetchGroupContext gm.groupId
       ctx <- buildContext env.bePersona env.beHistoryWindow multimodal origin env.beBlobRoot env.beTimeZone brief s gm
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
@@ -482,9 +482,9 @@ dispatchLLM origin gm = void $ async $
           when (origin == OriginDirect) $ do
             sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
             sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
-        Just replyRaw -> handleReply env s mentionable ctx result replyRaw
+        Just replyRaw -> handleReply env s mentionable rosterNames ctx result replyRaw
 
-    handleReply env s mentionable ctx result replyRaw = do
+    handleReply env s mentionable rosterNames ctx result replyRaw = do
       -- Real stickers/images are the [sticker#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
       -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
@@ -533,7 +533,7 @@ dispatchLLM origin gm = void $ async $
           -- outbound message into the messages table.  That's where
           -- subsequent dispatches will read this turn's assistant reply
           -- back from when reconstructing mention history.
-          sendAndPersistReply gm mentionable env.beBlobRoot stickersEff stripped
+          sendAndPersistReply gm mentionable rosterNames env.beBlobRoot stickersEff stripped
           ephemeral <- isEphemeral
           logInfo "llm replied" $
             object
@@ -610,11 +610,12 @@ sendAndPersistReply ::
   ) =>
   GroupMessage ->
   Maybe (Set UserId) ->
+  [(T.Text, UserId)] -> -- roster display names, for "@名字" rescue
   FilePath -> -- blob store root (for inline sticker resolution)
   Bool -> -- whether sticker sending is enabled for this group
   T.Text ->
   Eff es ()
-sendAndPersistReply gm mentionable blobRoot stickersOn body = do
+sendAndPersistReply gm mentionable rosterNames blobRoot stickersOn body = do
   -- The reply already goes out over NapCat regardless — that's a
   -- real side effect we can't undo.  Only the messages-table write
   -- is gated, so an ephemeral turn doesn't show up in the next
@@ -682,7 +683,11 @@ sendAndPersistReply gm mentionable blobRoot stickersOn body = do
       parts <- traverse resolve pieces
       pure (concatMap fst parts, T.concat (map snd parts))
       where
-        resolve (PieceText t) = pure (mentionSegs t, t)
+        resolve (PieceText t0) =
+          -- "@显示名" → canonical [@#id] first (small models skip the
+          -- roster lookup), then the usual mention conversion.
+          let t = rescueNameMentions rosterNames t0
+           in pure (mentionSegs t, t)
         -- Sticker sending disabled for this group: drop the token
         -- (the model shouldn't emit one, but never leak it as text).
         resolve (PieceSticker _) | not stickersOn = pure ([], "")
@@ -735,16 +740,27 @@ chunkDelayMicros nChars = do
 fetchGroupContext ::
   (NapCat :> es, Log :> es) =>
   GroupId ->
-  Eff es (Maybe (Set UserId), [T.Text])
+  Eff es (Maybe (Set UserId), [(T.Text, UserId)], [T.Text])
 fetchGroupContext gid
-  | isPrivateChat gid = pure (Nothing, [])
+  | isPrivateChat gid = pure (Nothing, [], [])
   | otherwise = do
       members <- fetchGroupMembers gid
       meta <- fetchGroupMeta gid
+      -- Display-name → id pairs (card > nickname, blanks skipped) for
+      -- rescuing "@显示名" spans in replies — see 'rescueNameMentions'.
+      let names =
+            [ (nm, m.mUserId)
+            | m <- maybe [] id members,
+              Just nm <- [nonBlankName m.mCard <|> nonBlankName m.mNickname]
+            ]
       pure
         ( Set.fromList . map (.mUserId) <$> members,
+          names,
           renderGroupBrief meta members
         )
+  where
+    nonBlankName (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
+    nonBlankName _ = Nothing
 
 extractOutMid :: Value -> Maybe Int64
 extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of
@@ -752,8 +768,13 @@ extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_
   Left _ -> Nothing
 
 stripMentions :: UserId -> T.Text -> T.Text
-stripMentions (UserId u) =
-  T.replace ("@" <> T.pack (show u)) ""
+stripMentions (UserId u) t =
+  foldr
+    (\m acc -> T.replace m "" acc)
+    t
+    ["[@#" <> uid <> "] ", "[@#" <> uid <> "]", "@" <> uid]
+  where
+    uid = T.pack (show u)
 
 -- | The "processing" reaction face: 托腮 (chin-on-hand, thinking).
 -- Face ids come from NapCat's face_config.json (QSid).

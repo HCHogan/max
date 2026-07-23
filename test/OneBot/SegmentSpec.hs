@@ -6,7 +6,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import OneBot.Segment (CardInfo (..), Segment (..), VideoSegInfo (..), renderPlainText, segmentMentions)
+import OneBot.Segment (CardInfo (..), Segment (..), VideoSegInfo (..), renderPlainText, rescueNameMentions, segmentMentions)
 import OneBot.Types (UserId (..))
 import Test.Hspec
 
@@ -122,6 +122,13 @@ mentionSpec = describe "segmentMentions" $ do
 
   it "renders an inbound mention as the [@#qq] token" $
     renderPlainText [SegAt (UserId 12345678)] `shouldBe` "[@#12345678] "
+
+  it "rescues @displayname into the canonical token, longest name first" $ do
+    let names = [("阿飞", UserId 10001), ("阿飞哥", UserId 12345678)]
+    rescueNameMentions names "@阿飞哥 看看" `shouldBe` "[@#12345678] 看看"
+    rescueNameMentions names "@阿飞 看看" `shouldBe` "[@#10001] 看看"
+    rescueNameMentions names "@路人 看看" `shouldBe` "@路人 看看"
+    rescueNameMentions names "邮箱 a@阿飞.com" `shouldBe` "邮箱 a[@#10001].com"
 
   it "converts a mention at the start and end of text (no trailing space at the end)" $
     conv "@12345678 收到了吗@10001"

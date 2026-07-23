@@ -212,7 +212,7 @@ systemPrompt multimodal' private envText persona mMemBlock =
            "  [@#223344556: 名字]          — @某人；对照表见 [environment]",
            "",
            "你能写的动作（只有这 8 个，全部在此）：",
-           "  [split]  分段     [↩#id]  段首引用     [@#QQ号]  @某人",
+           "  [split]  分段     [↩#id]  段首引用     [@#QQ号]  @某人（直接写 @名字 只是普通文字，对方收不到提醒——必须用 [@#QQ号]，号码查 [environment] 对照表）",
            "  [sticker#id]  发表情包     [face#id]  发小黄脸     [image#id]  把群里的图转发出来",
            "  [silence]  沉默     [silence:原因表情]  沉默并贴表情",
            "",
@@ -223,7 +223,15 @@ systemPrompt multimodal' private envText persona mMemBlock =
            "  [file:<name>]                — 群文件；用 import_file_to_sandbox 处理",
            "",
            "铁律：动作只有上面那 8 个。工具调用永远走工具通道，把工具名写进方括号",
-           "（如 [find_stickers query=...]）不会执行任何东西，也不会发出去。"
+           "（如 [find_stickers query=...]）不会执行任何东西，也不会发出去。",
+           "",
+           "示范——一条带引用、@、分段、表情包的回复该长这样（id 都要取自上下文，",
+           "别照抄示范里的数字）：",
+           "  [↩#7413] 这是 HardFault，PC 指到 0x08003a2c，查一下链接脚本。",
+           "  [split]",
+           "  [↩#7405] [@#223344556] 你那个是探头打了 1X，切 10X 再看。",
+           "  [split]",
+           "  [sticker#42]"
          ]
       -- Volatile content (envText carries the current time and the
       -- per-turn roster; memories change per group/speaker) sits at
@@ -553,7 +561,7 @@ tagMediaMarkers h = h {renderedText = foldr tag h.renderedText ["forward", "vide
         t
 
 -- | Everyone appearing in this turn's context, QQ号 ↔ display name.
--- Rendered text shows mentions as raw @<QQ号> (that's all the wire
+-- Rendered text shows mentions as [@#<QQ号>] tokens (the wire
 -- event carries), so without this table the model cannot tell who
 -- @123456 is — including itself.
 contextRoster :: PromptInputs -> [(Int64, Text)]
