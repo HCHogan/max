@@ -28,6 +28,7 @@ module Max.Tools.Browser
 where
 
 import Control.Applicative ((<|>))
+import Control.Concurrent (threadDelay)
 import Control.Monad (void, when)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
@@ -50,6 +51,7 @@ import OneBot.Types (GroupId)
 browserToolsFor :: IOE :> es => GroupId -> BrowserRegistry -> [Tool es]
 browserToolsFor gid reg =
   [ navigateTool gid reg,
+    viewZhihuTool gid reg,
     snapshotTool gid reg,
     clickTool gid reg,
     typeTool gid reg,
@@ -197,22 +199,102 @@ navigateTool gid reg =
       toolRun = \args -> liftIO $ do
         case argText args "url" of
           Nothing -> pure (Left "missing required argument: url")
-          Just url -> asResult <$> runNavigate url
+          Just url -> asResult <$> navigateUrl reg gid url
+    }
+
+-- | Navigate the group's browser to a URL, starting (or transparently
+-- replacing) the camoufox session as needed — the machinery behind
+-- @browser_navigate@, shared with @view_zhihu@.
+navigateUrl :: BrowserRegistry -> GroupId -> Text -> IO (Either Text Value)
+navigateUrl reg gid url =
+  getCamoSession reg gid >>= \case
+    Nothing -> freshNavigate
+    Just sid ->
+      callBrowserTool reg gid "browse_session_navigate" (navArgs sid) >>= \case
+        Left err
+          | camoSessionWedged err -> dropSession reg gid sid True >> freshNavigate
+          | camoSessionDead err -> dropSession reg gid sid False >> freshNavigate
+        r -> pure r
+  where
+    freshNavigate =
+      startSession reg gid
+        >>= either (pure . Left) (\sid -> callBrowserTool reg gid "browse_session_navigate" (navArgs sid))
+    navArgs sid = withSid sid ["url" .= url]
+
+--------------------------------------------------------------------------------
+-- view_zhihu
+
+-- | One-call Zhihu reader for share cards.  Plain HTTP gets a 403
+-- from Zhihu's edge, and even camoufox eats a challenge page on the
+-- first visit of a fresh session — but the challenge sets cookies,
+-- and reloading the same URL in the same session goes through
+-- (verified: question / answer / zhuanlan pages all render).  So:
+-- navigate, and when the response smells like the challenge
+-- (non-200, or the slogan-only interstitial), wait and renavigate,
+-- up to 'zhihuRetries' times.
+viewZhihuTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
+viewZhihuTool gid reg =
+  Tool
+    { toolName = "view_zhihu",
+      toolDescription =
+        "看一个知乎链接的内容：问题页、回答、专栏文章都行，分享卡片 [card:] 里的\
+        \知乎链接直接传进来。用群的隐身浏览器打开并返回页面正文（知乎首访有一道\
+        \验证，工具自动重试，稍慢是正常的）。返回后页面保持打开：想看更多回答/\
+        \评论可以接着用 browser_scroll + browser_snapshot。",
+      toolSchema =
+        obj
+          [("url", str "知乎链接（zhihu.com/question/…、…/answer/…、zhuanlan.zhihu.com/p/…）")]
+          ["url"],
+      toolRun = \args -> liftIO $ do
+        case argText args "url" of
+          Nothing -> pure (Left "missing required argument: url")
+          Just url
+            | not ("zhihu.com" `T.isInfixOf` url) ->
+                pure (Left "不是知乎链接；其他网页用 browser_navigate 打开")
+            | otherwise -> go zhihuRetries url
     }
   where
-    runNavigate url =
-      getCamoSession reg gid >>= \case
-        Nothing -> freshNavigate url
-        Just sid ->
-          callBrowserTool reg gid "browse_session_navigate" (navArgs sid url) >>= \case
-            Left err
-              | camoSessionWedged err -> dropSession reg gid sid True >> freshNavigate url
-              | camoSessionDead err -> dropSession reg gid sid False >> freshNavigate url
-            r -> pure r
-    freshNavigate url =
-      startSession reg gid
-        >>= either (pure . Left) (\sid -> callBrowserTool reg gid "browse_session_navigate" (navArgs sid url))
-    navArgs sid url = withSid sid ["url" .= url]
+    go retries url =
+      navigateUrl reg gid url >>= \case
+        Left e -> pure (Left e)
+        Right v -> case navPayload v of
+          Just (status, txt)
+            | looksLikeChallenge status txt && retries > 0 -> do
+                threadDelay 2_500_000
+                go (retries - 1) url
+            | looksLikeChallenge status txt ->
+                pure (Left ("知乎的验证页没绕过去（HTTP " <> T.pack (show status) <> "），稍后再试"))
+            | otherwise ->
+                pure . Right $
+                  object
+                    [ "url" .= url,
+                      "text" .= T.take zhihuMaxChars txt,
+                      "note" .= ("页面保持打开，想看更多可用 browser_scroll / browser_snapshot" :: Text)
+                    ]
+          -- Payload shape we don't recognise: hand the raw result
+          -- over rather than guessing.
+          Nothing -> pure (asResult (Right v))
+
+    looksLikeChallenge status txt =
+      status /= (200 :: Int)
+        || ("让每一次点击都充满意义" `T.isInfixOf` txt && T.length txt < 400)
+
+zhihuRetries :: Int
+zhihuRetries = 2
+
+zhihuMaxChars :: Int
+zhihuMaxChars = 12000
+
+-- | Pull @(status, text)@ out of a @browse_session_navigate@ result:
+-- prefer MCP @structuredContent@, fall back to the JSON text block.
+navPayload :: Value -> Maybe (Int, Text)
+navPayload v =
+  parseMaybe structured v
+    <|> (decodeStrict (TE.encodeUtf8 (mcpTextContent v)) >>= parseMaybe fromPayload)
+  where
+    structured = withObject "result" $ \o -> o .: "structuredContent" >>= fromPayload
+    fromPayload :: Value -> Parser (Int, Text)
+    fromPayload = withObject "payload" $ \o -> (,) <$> o .: "status" <*> o .: "text"
 
 snapshotTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
 snapshotTool gid reg =

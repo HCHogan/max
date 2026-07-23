@@ -209,7 +209,7 @@ systemPrompt multimodal' private envText persona mMemBlock =
       <> [ "  [image#<id>]                — 群历史里的图片，默认不加载；用 view_image 传 <id> 查看，或把 [image#<id>] 写进回复把它转发到群里。带简介时形如 [image#<id>: <简介>]，多数时候看简介就够了"
          | multimodal'
          ]
-      <> [ "  [card: ...]                 — 分享卡片（小程序/链接分享），竖线分隔来源/标题/简介/链接；B站视频卡用 view_bilibili 传链接看详情",
+      <> [ "  [card: ...]                 — 分享卡片（小程序/链接分享），竖线分隔来源/标题/简介/链接；B站视频卡用 view_bilibili、知乎卡（问题/回答/专栏）用 view_zhihu，都是传链接看内容",
            "  [file:<name>]               — 群文件；用 import_file_to_sandbox 处理",
            "  [forward#<id>]              — 转发聊天记录；被引用或就是当前消息时会自动展开，其余情况用 view_forward 传 <id> 看内容",
            if multimodal'
