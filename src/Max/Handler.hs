@@ -383,9 +383,17 @@ dispatchLLM origin gm = void $ async $
     -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
     -- (and every trySyncIO on the way up) — the outer 'catch' is the
     -- one place a user-initiated @!kill@ comes to rest.
-    ( work `catchSync` \e ->
+    ( work `catchSync` \e -> do
         logAttention "llm dispatch crashed" $
           object ["error" .= T.pack (show (e :: SomeException))]
+        -- The processing reaction is already gone (its 'finally' ran
+        -- while the exception unwound), which without this looked
+        -- exactly like a silent success: 托腮 vanished, no reply, no
+        -- face.  Swap in the failure face so a crash is visibly a
+        -- crash — direct triggers only; proactive turns stay
+        -- traceless, and a poke has no message to react to.
+        when (origin == OriginDirect) $
+          sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
       )
       `catch` \TaskCancelled ->
         -- User-initiated !kill — quieter log, not an error.
@@ -403,11 +411,12 @@ dispatchLLM origin gm = void $ async $
     -- "seen, working on it" — and clear it once the reply (or
     -- silence / crash / !kill) lands.  Fire-and-forget both ways: a
     -- failed reaction must never affect the dispatch.  Proactive
-    -- turns skip it — nobody addressed the bot, and a reaction
-    -- appearing on random chatter (then vanishing on [silence])
-    -- would leak that the bot was weighing in.
+    -- turns show it too (the bot IS working; a busy pause with no
+    -- tell reads as ignoring the group) — but their [silence] leaves
+    -- no other trace: the 托腮 just vanishes, no reason face.  Pokes
+    -- have no message to react to.
     withProcessingReaction act
-      | origin /= OriginDirect = act
+      | origin == OriginPoke = act
       | otherwise =
           (sendAction (SetMsgEmojiLike gm.messageId processingFaceId True) >> act)
             `finally` sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
