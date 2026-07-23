@@ -9,7 +9,7 @@ module Max.Handler
 where
 
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue)
+import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (foldM_, unless, void, when)
 import Data.Aeson (Value, withObject, (.:))
 import Data.Foldable (for_)
@@ -20,6 +20,7 @@ import Data.Char (isDigit)
 import Data.Int (Int64)
 import Control.Applicative ((<|>))
 import Data.List (find)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -38,7 +39,7 @@ import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Parser (parseCommand)
 import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
-import Max.Command.Types (Command)
+import Max.Command.Types (Command (..))
 import Max.DB.Permissions (lookupGrant)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
 import Max.DB.Message (insertGroupMessage, insertOutbound, insertSilence)
@@ -298,8 +299,9 @@ dispatchCommand gm body = localDomain "cmd" $ do
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
     Right (Just cmd) -> do
       env :: BotEnv <- ask
-      effTier <- effectiveTier env gm
-      allowed <- checkCmdPermission gm effTier cmd
+      targetGid <- resolveAdminTarget env gm cmd
+      effTier <- effectiveTier env targetGid gm
+      allowed <- checkCmdPermission targetGid gm.userId effTier cmd
       if not allowed
         then do
           let UserId uidRaw = gm.userId
@@ -307,13 +309,13 @@ dispatchCommand gm body = localDomain "cmd" $ do
             object ["cmd" .= T.pack (show cmd), "user_id" .= uidRaw]
           -- Same NO face as [silence:NO]: visibly refused, zero noise.
           sendAction (SetMsgEmojiLike gm.messageId deniedFaceId True)
-        else dispatchAllowed env effTier cmd
+        else dispatchAllowed env targetGid effTier cmd
   where
-    dispatchAllowed env effTier cmd = do
-      t <- loadSession env.beSessions env.beDefaultModel gm.groupId
+    dispatchAllowed env targetGid effTier cmd = do
+      t <- loadSession env.beSessions env.beDefaultModel targetGid
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
-      result <- CmdDispatch.execute t gm.groupId gm.userId effTier replyTarget cmd
+      result <- CmdDispatch.execute t targetGid gm.userId effTier replyTarget cmd
       case result of
         -- In a group, textual command output (queries, error texts)
         -- goes to the sender's DMs — the group only sees an OK
@@ -323,6 +325,8 @@ dispatchCommand gm body = localDomain "cmd" $ do
         ReplyText reply
           | isPrivateChat gm.groupId -> replyText gm reply
           | otherwise -> deliverPrivate reply
+        -- Deliberately group-audience output (e.g. !version).
+        ReplyPublicText reply -> replyText gm reply
         -- Pure acknowledgement: an OK reaction on the command message
         -- beats another line of chat noise.
         ReplyAck ->
@@ -835,46 +839,82 @@ stripMentions (UserId u) t =
   where
     uid = T.pack (show u)
 
--- | The sender's effective tier: config owner list first, then the
--- NapCat role ('actorTier').  Resolved once per command and threaded
--- into both the permission check and 'CmdDispatch.execute' (which
--- needs it for !grant's own constraints).
-effectiveTier :: (NapCat :> es, Log :> es) => BotEnv -> GroupMessage -> Eff es PermTier
-effectiveTier env gm
-  | let UserId uid = gm.userId, uid `elem` env.beOwners = pure TierOwner
-  | otherwise = actorTier gm
+-- | The group a private-chat command actually operates on: the
+-- @!use@ target when one is set (and the sender is entitled to it),
+-- else the chat's own (pseudo) group.  The !use family itself never
+-- redirects — it manages the selection.  Entitlement: owners aim
+-- anywhere; anyone else must be a member of the target group, which
+-- also closes the "!use someone else's group and read its !status"
+-- hole.
+resolveAdminTarget ::
+  (NapCat :> es, Log :> es, IOE :> es) =>
+  BotEnv ->
+  GroupMessage ->
+  Command ->
+  Eff es GroupId
+resolveAdminTarget env gm cmd
+  | not (isPrivateChat gm.groupId) = pure gm.groupId
+  | useFamily cmd = pure gm.groupId
+  | otherwise = do
+      let UserId uidRaw = gm.userId
+      targets <- liftIO (readTVarIO env.beAdminTarget)
+      case Map.lookup uidRaw targets of
+        Nothing -> pure gm.groupId
+        Just g
+          | uidRaw `elem` env.beOwners -> pure (GroupId g)
+          | otherwise -> do
+              members <- fetchGroupMembers (GroupId g)
+              if any (\m -> m.mUserId == gm.userId) (maybe [] id members)
+                then pure (GroupId g)
+                else do
+                  logInfo "cmd: admin target dropped (not a member)" $
+                    object ["user_id" .= uidRaw, "target" .= g]
+                  pure gm.groupId
+  where
+    useFamily = \case
+      UseShow -> True
+      UseSet _ -> True
+      UseClear -> True
+      _ -> False
 
--- | Resolve whether the sender may run this command.  Order (first
--- hit wins): owner tier > explicit grant/deny row (group scope beats
--- global) > role tier default.  Commands without a capability
--- ('requiredCapability' = 'Nothing') are open to all.
+-- | The sender's effective tier IN THE TARGET GROUP: config owner
+-- list first, then the NapCat role there.  Resolved once per command
+-- and threaded into both the permission check and
+-- 'CmdDispatch.execute' (which needs it for !grant's constraints).
+effectiveTier :: (NapCat :> es, Log :> es) => BotEnv -> GroupId -> GroupMessage -> Eff es PermTier
+effectiveTier env targetGid gm
+  | let UserId uid = gm.userId, uid `elem` env.beOwners = pure TierOwner
+  | otherwise = actorTier targetGid gm.userId
+
+-- | Resolve whether the sender may run this command against the
+-- target group.  Order (first hit wins): owner tier > explicit
+-- grant/deny row (group scope beats global) > role tier default.
+-- Commands without a capability are open to all.
 checkCmdPermission ::
   (WithConnection :> es, IOE :> es) =>
-  GroupMessage ->
+  GroupId ->
+  UserId ->
   PermTier ->
   Command ->
   Eff es Bool
-checkCmdPermission gm effTier cmd = case requiredCapability cmd of
+checkCmdPermission (GroupId gid) (UserId uid) effTier cmd = case requiredCapability cmd of
   Nothing -> pure True
   Just (cap, tier)
     | effTier == TierOwner -> pure True
-    | otherwise -> do
-        let UserId uid = gm.userId
-            GroupId gid = gm.groupId
+    | otherwise ->
         lookupGrant uid cap gid >>= \case
           Just explicit -> pure explicit
           Nothing -> pure (tierSatisfied tier effTier)
 
--- | The sender's role tier.  In a private chat the sender is admin
--- of their own session by definition (persona/clear of one's own
--- chat is their business); owner tier is config-only and resolved by
--- the caller.
-actorTier :: (NapCat :> es, Log :> es) => GroupMessage -> Eff es PermTier
-actorTier gm
-  | isPrivateChat gm.groupId = pure TierGroupAdmin
+-- | The sender's role tier in a group.  A private pseudo-group means
+-- the sender administers their own session by definition; owner tier
+-- is config-only and resolved by the caller.
+actorTier :: (NapCat :> es, Log :> es) => GroupId -> UserId -> Eff es PermTier
+actorTier gid uid
+  | isPrivateChat gid = pure TierGroupAdmin
   | otherwise = do
-      members <- fetchGroupMembers gm.groupId
-      let role = [m.mRole | m <- maybe [] id members, m.mUserId == gm.userId]
+      members <- fetchGroupMembers gid
+      let role = [m.mRole | m <- maybe [] id members, m.mUserId == uid]
       pure $ case role of
         (r : _) | r `elem` ["owner", "admin"] -> TierGroupAdmin
         _ -> TierMember

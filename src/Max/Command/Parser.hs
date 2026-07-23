@@ -208,6 +208,14 @@ classify verb raw@(RawArgs pos flags) = case verb of
     [] -> Perms Nothing
     [target] | Just uid <- parseUserRef target -> Perms (Just uid)
     _ -> Unknown verb raw
+  "use" -> case pos of
+    [] -> UseShow
+    ["clear"] -> UseClear
+    [g] | Just gid <- parseInt64 g, gid > 0 -> UseSet gid
+    _ -> Unknown verb raw
+  "status" -> case pos of
+    [] -> Status
+    _ -> Unknown verb raw
   "model" -> case pos of
     [] -> ModelShow
     ["list"] -> ModelList

@@ -10,19 +10,21 @@ module Max.Command.Dispatcher
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent.STM (TVar)
+import Control.Concurrent.STM (TVar, atomically, modifyTVar', readTVarIO)
 import Data.List (sort)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (diffUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
+import Database.PostgreSQL.Simple (Only (..))
+import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Permission (PermTier (..), adminGrantable, knownCapabilities)
 import Max.Command.Types
 import Max.DB.Permissions (deleteGrant, insertGrant, listGrantsFor)
 import Data.Int (Int64)
+import Data.Map.Strict qualified as Map
 import Data.Text.IO qualified as TIO
 import Data.Version (showVersion)
 import Distribution.Pretty (prettyShow)
@@ -32,7 +34,7 @@ import Paths_max (version)
 import System.Info (arch, fullCompilerVersion, os)
 import Text.Read (readMaybe)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
-import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, fetchMemory, listMemories)
+import Max.DB.Memory (MemoryItem (..), MemoryScope (..), countMemories, deleteMemory, fetchMemory, listMemories)
 import Max.DB.Stickers qualified as Stickers
 import Max.Effects.LLM (LLM, listProfiles)
 import Max.Browser.Registry (destroyBrowsersForGroup)
@@ -66,6 +68,10 @@ data DispatchResult
   | -- | Pure acknowledgement — the caller reacts an OK face onto the
     -- command message instead of posting text.
     ReplyAck
+  | -- | Group-audience text: skip the private-delivery routing even
+    -- when the command came from a group (e.g. !version — a public
+    -- card, not a personal query).
+    ReplyPublicText !Text
   | EphemeralAsk !Text
   deriving stock (Show, Eq)
 
@@ -313,8 +319,9 @@ execute t gid uid granterTier replyTarget cmd = do
     osName <- liftIO readOsPretty
     hostUp <- liftIO readHostUptime
     -- Single newlines only: a blank line would split the card into
-    -- separate messages ('planReply').
-    reply . T.intercalate "\n" $
+    -- separate messages ('planReply').  Public on purpose: the
+    -- version card is group trivia, not a personal query.
+    pure . ReplyPublicText . T.intercalate "\n" $
       [ "🦈 max-bot v" <> T.pack (showVersion version),
         "🌊 " <> osName <> " · " <> T.pack arch,
         "🫧 ghc " <> T.pack (showVersion fullCompilerVersion) <> " · cabal " <> T.pack (prettyShow cabalVersion),
@@ -383,12 +390,72 @@ execute t gid uid granterTier replyTarget cmd = do
                   <> maybe "（全局）" (\g -> "（群 " <> T.pack (show g) <> "）") mScope
               | (cap, mScope, deny) <- rows
               ]
+  -- Admin-console target selection.  Only meaningful in DMs: in a
+  -- group the command already acts on that group.  NB: 'gid' here is
+  -- the ORIGINAL chat id — Handler skips target redirection for the
+  -- !use family itself.
+  UseShow
+    | not (isPrivateChat gid) -> reply "!use 只在私聊里有意义（群里发的命令就作用于本群）"
+    | otherwise -> do
+        let UserId uidRaw = uid
+        targets <- liftIO (readTVarIO env.beAdminTarget)
+        reply $ case Map.lookup uidRaw targets of
+          Just g -> "当前操作对象：群 " <> T.pack (show g) <> "（!use clear 退出）"
+          Nothing -> "没有选中的群；!use <群号> 之后，你在私聊里发的命令都作用于那个群"
+  UseSet g
+    | not (isPrivateChat gid) -> reply "!use 只在私聊里有意义"
+    | otherwise -> do
+        known <- groupKnown g
+        if not known
+          then reply $ "我没见过群 " <> T.pack (show g) <> "（bot 不在这个群，或还没收到过它的消息）"
+          else do
+            let UserId uidRaw = uid
+            liftIO (atomically (modifyTVar' env.beAdminTarget (Map.insert uidRaw g)))
+            reply $
+              "好，接下来你私聊里的命令都作用于群 "
+                <> T.pack (show g)
+                <> "。\n权限按你在那个群的身份算；!use clear 退出，!status 看概览。"
+  UseClear
+    | not (isPrivateChat gid) -> reply "!use 只在私聊里有意义"
+    | otherwise -> do
+        let UserId uidRaw = uid
+        liftIO (atomically (modifyTVar' env.beAdminTarget (Map.delete uidRaw)))
+        ack
+  Status -> do
+    s <- liftIO (Session.readSession t)
+    let GroupId gidRaw = gid
+    memCount <- countMemories ScopeGroup gidRaw
+    tasks <- liftIO (listTasks env.beTasks (Just gid))
+    reply . T.intercalate "\n" $
+      [ (if isPrivateChat gid then "本私聊" else "群 " <> T.pack (show gidRaw)) <> " 状态：",
+        "  model: " <> s.model,
+        "  persona: " <> maybe "（默认）" (\p -> T.take 40 p <> if T.length p > 40 then "…" else "") s.persona,
+        "  debug: " <> onOff env.beDebugDefault s.debugOverride,
+        "  sticker: " <> onOff env.beStickerDefault s.stickerOverride,
+        "  proactive: " <> onOff (maybe False (const True) env.beIntent) s.proactiveOverride,
+        "  pin: " <> T.pack (show (length s.pinned)) <> " 条",
+        "  记忆: " <> T.pack (show memCount) <> " 条",
+        "  任务: " <> T.pack (show (length tasks)) <> " 个在跑",
+        "  !clear 水位: " <> maybe "无" (T.pack . show) s.clearedAt
+      ]
   Unknown v _ ->
     reply $
       "不认识的命令: !"
         <> v
         <> "\n用 !help 看可用命令"
   where
+    -- Has the bot ever seen this group?  Cheap sanity check for !use.
+    groupKnown g = do
+      rows <-
+        query
+          "SELECT 1 FROM messages WHERE group_id = ? LIMIT 1"
+          (Only g)
+      pure (not (null (rows :: [Only Int])))
+
+    onOff dflt override = case override of
+      Just True -> "on（session 覆盖）"
+      Just False -> "off（session 覆盖）"
+      Nothing -> (if dflt then "on" else "off") <> "（配置默认）"
     reply :: Applicative f => Text -> f DispatchResult
     reply = pure . ReplyText
 
@@ -621,6 +688,8 @@ helpText Nothing =
       "  !grant [@#qq] <权限名>   给人授权（--deny 显式禁用、--global 全局，均需 owner）",
       "  !revoke [@#qq] <权限名>  撤销授权（scope 需和授权时一致）",
       "  !perms [[@#qq]]          看某人的显式授权（默认看自己）",
+      "  !use <群号>              （私聊）之后你发的命令都作用于那个群；!use 看当前，!use clear 退出",
+      "  !status                  看（目标）群的概览：model/persona/开关/pin/记忆/任务",
       "  ! <命令>                 在本群沙盒里跑 shell（感叹号后空一格），如 ! ls -al；支持多行",
       "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version",
       "",

@@ -8,9 +8,8 @@
 --      proportional font),
 --   2. rewrites LaTeX math into best-effort unicode (QQ can't render
 --      formulas at all),
---   3. splits the remaining text into one message per explicit
---      @[split]@ marker (code fences never split; blank lines are
---      layout, not boundaries).
+--   3. splits the remaining text into messages at blank lines and
+--      explicit @[split]@ markers (code fences never split).
 --
 -- No cap on chunk count: the system prompt already pushes for short
 -- multi-chunk replies, and every chunk carries its own optional
@@ -269,23 +268,29 @@ isFence l = "```" `T.isPrefixOf` T.stripStart l
 --------------------------------------------------------------------------------
 -- Stage 3: [split]-marker split (fence-aware).
 
--- | The explicit chunk boundary the model writes.  Blank lines used
--- to be the split signal, but they're fragile — models drop or add
--- them under formatting pressure; a deliberate token survives.  Blank
--- lines are now just layout within one message.
+-- | The explicit chunk boundary the model may write in addition to
+-- blank lines.  A marker-only regime was tried (v0.2.7) and reverted:
+-- weak models rarely emit it — deliberate tokens need instruction-
+-- following, while paragraph breaks come free with how models write.
 splitMarker :: Text
 splitMarker = "[split]"
 
--- | Split on 'splitMarker' occurrences outside code fences (a marker
--- inside a fence is code, kept literally).  Works mid-line too; empty
--- chunks (e.g. from a trailing marker) are dropped.
+-- | Split on blank lines AND 'splitMarker' occurrences, both outside
+-- code fences (fenced content is kept verbatim).  Blank lines are
+-- the workhorse: models produce paragraph breaks naturally, so even
+-- weak ones get chat-sized messages for free.  The marker is the
+-- explicit override for what a blank line can't express — mid-line
+-- splits, a sticker on its own message.  Empty chunks (blank-line
+-- runs, trailing markers) are dropped.
 splitChunks :: Text -> [Text]
 splitChunks body = filter (not . T.null) (map T.strip (go False [] (T.lines body)))
   where
     go _ acc [] = [emit acc]
     go inFence acc (l : rest)
       | isFence l = go (not inFence) (l : acc) rest
-      | not inFence && splitMarker `T.isInfixOf` l =
+      | inFence = go inFence (l : acc) rest
+      | isBlank l = emit acc : go False [] rest
+      | splitMarker `T.isInfixOf` l =
           case T.splitOn splitMarker l of
             (firstP : more) ->
               let mids = init more
@@ -294,6 +299,7 @@ splitChunks body = filter (not . T.null) (map T.strip (go False [] (T.lines body
             [] -> go inFence (l : acc) rest -- unreachable: splitOn is non-empty
       | otherwise = go inFence (l : acc) rest
     emit acc = T.intercalate "\n" (reverse acc)
+    isBlank = T.null . T.strip
 
 
 --------------------------------------------------------------------------------

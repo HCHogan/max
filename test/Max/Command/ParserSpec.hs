@@ -51,6 +51,16 @@ spec = do
         Right (Just (Unknown "grant" _)) -> pure ()
         other -> expectationFailure $ "expected Unknown grant, got: " <> show other
 
+  describe "!use / !status" $ do
+    it "use show" $ "!use" `parsesTo` UseShow
+    it "use set" $ "!use 114514191" `parsesTo` UseSet 114514191
+    it "use clear" $ "!use clear" `parsesTo` UseClear
+    it "negative group id falls through to Unknown" $
+      case parseCommand "!use -5" of
+        Right (Just (Unknown "use" _)) -> pure ()
+        other -> expectationFailure $ "expected Unknown use, got: " <> show other
+    it "status" $ "!status" `parsesTo` Status
+
   describe "!persona" $ do
     it "show" $ "!persona" `parsesTo` PersonaShow
     it "clear" $ "!persona clear" `parsesTo` PersonaClear

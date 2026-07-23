@@ -21,12 +21,21 @@ planTexts = map chunkSource . planReply
 
 spec :: Spec
 spec = do
-  describe "planReply / [split] marker split" $ do
-    it "keeps a reply without markers as one message" $
+  describe "planReply / blank-line + [split] split" $ do
+    it "keeps a reply without boundaries as one message" $
       planTexts "就一句话" `shouldBe` ["就一句话"]
 
-    it "keeps blank lines inside one message (no blank-line split)" $
-      planTexts "第一段\n\n第二段" `shouldBe` ["第一段\n\n第二段"]
+    it "splits on blank lines" $
+      planTexts "第一段\n\n第二段\n还是第二段\n\n第三段"
+        `shouldBe` ["第一段", "第二段\n还是第二段", "第三段"]
+
+    it "treats whitespace-only lines as blank and collapses runs" $ do
+      planTexts "a\n   \nb" `shouldBe` ["a", "b"]
+      planTexts "a\n\n\n\nb" `shouldBe` ["a", "b"]
+
+    it "does not split on blank lines inside code fences" $
+      planTexts "看这段:\n\n```python\nx = 1\n\ny = 2\n```\n\n就这样"
+        `shouldBe` ["看这段:", "```python\nx = 1\n\ny = 2\n```", "就这样"]
 
     it "splits on [split] on its own line" $
       planTexts "第一条\n[split]\n第二条\n还是第二条\n[split]\n第三条"

@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               max
-version:            0.3.1
+version:            0.3.2
 synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
 author:             Hank Hogan
 maintainer:         hankchogan@gmail.com
@@ -154,6 +154,7 @@ executable max-bot
     main-is:          Main.hs
     build-depends:
         , base                 >= 4.20 && < 5
+        , containers           >= 0.7  && < 0.9
         , effectful            >= 2.5  && < 2.7
         , effectful-postgresql >= 0.1  && < 0.2
         , log-base             >= 0.12 && < 0.13

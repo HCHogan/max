@@ -5,6 +5,8 @@ import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (AsyncException (UserInterrupt), bracket, bracket_, throwTo)
 import Control.Monad (unless)
 import Data.Foldable (for_)
+import Data.Int (Int64)
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Effectful
@@ -97,6 +99,7 @@ main = do
           tasks <- newTaskRegistry
           reminders <- newReminderScheduler
           clientRef <- newTVarIO (Nothing :: Maybe Client)
+          adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
           mEmbed <- traverse newEmbedClient cfg.embedding
           mIntentSt <- traverse (const newIntentState) cfg.intent
           startedAt <- getCurrentTime
@@ -127,6 +130,7 @@ main = do
                     beStartedAt = startedAt,
                     beSessions = sessions,
                     beOwners = cfg.owners,
+                    beAdminTarget = adminTargets,
                     beTasks = tasks,
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,

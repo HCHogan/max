@@ -15,7 +15,9 @@ module Max.Env
   )
 where
 
+import Control.Concurrent.STM (TVar)
 import Data.Int (Int64)
+import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
@@ -49,6 +51,11 @@ data BotEnv = BotEnv
     -- | Bot owners' QQ ids ('AppConfig.owners') — the top permission
     -- tier for the command DSL.
     beOwners :: ![Int64],
+    -- | Private-chat admin console state: per-user target group set
+    -- by @!use \<群号\>@ — commands issued in that user's DMs act on
+    -- the target instead of the DM pseudo-group.  In-memory by
+    -- design (restart forgets; just @!use@ again).
+    beAdminTarget :: !(TVar (Map Int64 Int64)),
     beSandboxes :: !SandboxRegistry,
     beBrowsers :: !BrowserRegistry,
     -- | Profile for post-dispatch memory extraction ('Nothing' = off).
