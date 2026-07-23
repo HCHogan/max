@@ -37,6 +37,9 @@ import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Parser (parseCommand)
+import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
+import Max.Command.Types (Command)
+import Max.DB.Permissions (lookupGrant)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
 import Max.DB.Message (insertGroupMessage, insertOutbound, insertSilence)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
@@ -139,6 +142,13 @@ handleEvents q imgQ fwdQ fileQ mIntent = loop
           enqueueFiles fileQ gm
           onGroupMessage mIntent gm
         EvPoke pk -> onPoke mIntent pk
+        -- Auto-approve friend requests: being friends is what makes
+        -- private query delivery (silent commands) reliable on QQ —
+        -- NapCat has no API to *initiate* friendships, so we accept
+        -- every incoming one instantly instead.
+        EvFriendRequest flag (UserId uidRaw) -> do
+          logInfo "friend request: auto-approving" $ object ["user_id" .= uidRaw]
+          sendAction (SetFriendAddRequest flag True)
       loop
 
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
@@ -288,12 +298,30 @@ dispatchCommand gm body = localDomain "cmd" $ do
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
     Right (Just cmd) -> do
       env :: BotEnv <- ask
+      allowed <- checkCmdPermission env gm cmd
+      if not allowed
+        then do
+          let UserId uidRaw = gm.userId
+          logInfo "command denied" $
+            object ["cmd" .= T.pack (show cmd), "user_id" .= uidRaw]
+          -- Same NO face as [silence:NO]: visibly refused, zero noise.
+          sendAction (SetMsgEmojiLike gm.messageId deniedFaceId True)
+        else dispatchAllowed env cmd
+  where
+    dispatchAllowed env cmd = do
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
       result <- CmdDispatch.execute t gm.groupId gm.userId replyTarget cmd
       case result of
-        ReplyText reply -> replyText gm reply
+        -- In a group, textual command output (queries, error texts)
+        -- goes to the sender's DMs — the group only sees an OK
+        -- reaction.  Private chats reply inline as before.  When the
+        -- DM can't be delivered (not friends; QQ throttles temp
+        -- sessions), fall back to the group with a befriend hint.
+        ReplyText reply
+          | isPrivateChat gm.groupId -> replyText gm reply
+          | otherwise -> deliverPrivate reply
         -- Pure acknowledgement: an OK reaction on the command message
         -- beats another line of chat noise.
         ReplyAck ->
@@ -312,6 +340,20 @@ dispatchCommand gm body = localDomain "cmd" $ do
                       ]
                   }
           withEphemeral $ dispatchLLM OriginDirect virtualGm
+
+    deliverPrivate reply = do
+      let GroupId gidRaw = gm.groupId
+          UserId uidRaw = gm.userId
+          header = "（群 " <> T.pack (show gidRaw) <> " 的命令结果）\n"
+      res <- callAction (SendPrivateMsg gm.userId [SegText (header <> reply)]) 15000
+      case res of
+        Right (Response _ rc _ _)
+          | rc == 0 ->
+              sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
+        _ -> do
+          logInfo "cmd: private delivery failed, group fallback" $
+            object ["user_id" .= uidRaw, "group_id" .= gidRaw]
+          replyText gm (reply <> "\n\n（加我好友后，这类结果会私聊发你，不刷群）")
 
 --------------------------------------------------------------------------------
 -- LLM dispatch.
@@ -791,6 +833,47 @@ stripMentions (UserId u) t =
     ["[@#" <> uid <> "] ", "[@#" <> uid <> "]", "@" <> uid]
   where
     uid = T.pack (show u)
+
+-- | Resolve whether the sender may run this command.  Order (first
+-- hit wins): config owner list > explicit grant/deny row (group
+-- scope beats global) > NapCat role tier > member.  Commands without
+-- a capability ('requiredCapability' = 'Nothing') are open to all.
+checkCmdPermission ::
+  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  BotEnv ->
+  GroupMessage ->
+  Command ->
+  Eff es Bool
+checkCmdPermission env gm cmd = case requiredCapability cmd of
+  Nothing -> pure True
+  Just (cap, tier) -> do
+    let UserId uid = gm.userId
+        GroupId gid = gm.groupId
+    if uid `elem` env.beOwners
+      then pure True
+      else
+        lookupGrant uid cap gid >>= \case
+          Just explicit -> pure explicit
+          Nothing -> tierSatisfied tier <$> actorTier gm
+
+-- | The sender's role tier.  In a private chat the sender is admin
+-- of their own session by definition (persona/clear of one's own
+-- chat is their business); owner tier is config-only and resolved by
+-- the caller.
+actorTier :: (NapCat :> es, Log :> es) => GroupMessage -> Eff es PermTier
+actorTier gm
+  | isPrivateChat gm.groupId = pure TierGroupAdmin
+  | otherwise = do
+      members <- fetchGroupMembers gm.groupId
+      let role = [m.mRole | m <- maybe [] id members, m.mUserId == gm.userId]
+      pure $ case role of
+        (r : _) | r `elem` ["owner", "admin"] -> TierGroupAdmin
+        _ -> TierMember
+
+-- | Reaction for a permission-denied command: the NO face — same one
+-- @[silence:NO]@ uses, visibly refused with zero chat noise.
+deniedFaceId :: Int
+deniedFaceId = 123
 
 -- | The "processing" reaction face: 托腮 (chin-on-hand, thinking).
 -- Face ids come from NapCat's face_config.json (QSid).

@@ -11,7 +11,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Text (Text)
 import OneBot.Segment (Segment)
-import OneBot.Types (GroupId, MessageId, UserId, privateChatGroupId)
+import OneBot.Types (GroupId, MessageId, UserId (..), privateChatGroupId)
 
 data Sender = Sender
   { userId :: !UserId,
@@ -57,6 +57,9 @@ data Event
   | EvPoke !PokeEvent
   | EvHeartbeat
   | EvLifecycle !Text
+  | -- | Incoming friend request: the @flag@ (the handle
+    -- @set_friend_add_request@ wants back) and the requester's id.
+    EvFriendRequest !Text !UserId
   | EvRaw !Value
   deriving stock (Show)
 
@@ -86,6 +89,12 @@ eventParser v@(Object o) = do
       subType <- o .:? "sub_type" :: Parser (Maybe Text)
       case (noticeType, subType) of
         (Just "notify", Just "poke") -> EvPoke <$> parsePoke o
+        _ -> pure (EvRaw v)
+    Just "request" -> do
+      reqType <- o .:? "request_type" :: Parser (Maybe Text)
+      case reqType of
+        Just "friend" ->
+          EvFriendRequest <$> o .: "flag" <*> (UserId <$> o .: "user_id")
         _ -> pure (EvRaw v)
     _ -> pure (EvRaw v)
 eventParser v = pure (EvRaw v)

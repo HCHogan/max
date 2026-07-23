@@ -15,6 +15,7 @@ module Max.Env
   )
 where
 
+import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
@@ -45,6 +46,9 @@ data BotEnv = BotEnv
     beStartedAt :: !UTCTime,
     beSessions :: !SessionRegistry,
     beTasks :: !TaskRegistry,
+    -- | Bot owners' QQ ids ('AppConfig.owners') — the top permission
+    -- tier for the command DSL.
+    beOwners :: ![Int64],
     beSandboxes :: !SandboxRegistry,
     beBrowsers :: !BrowserRegistry,
     -- | Profile for post-dispatch memory extraction ('Nothing' = off).

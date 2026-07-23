@@ -47,6 +47,10 @@ data Action
   | -- | 戳一戳 the user, in the conversation behind the (possibly
     -- pseudo) group id.
     SendPoke !GroupId !UserId
+  | -- | Approve/refuse an incoming friend request (flag comes from
+    -- the request event).  We auto-approve: being friends is what
+    -- makes private query delivery reliable on QQ.
+    SetFriendAddRequest !Text !Bool
   deriving stock (Show)
 
 -- | Send to the conversation behind a (possibly pseudo) group id:
@@ -70,6 +74,7 @@ actionName = \case
   GetGroupInfo {} -> "get_group_info"
   SetMsgEmojiLike {} -> "set_msg_emoji_like"
   SendPoke {} -> "send_poke"
+  SetFriendAddRequest {} -> "set_friend_add_request"
 
 actionParams :: Action -> Value
 actionParams = \case
@@ -129,6 +134,11 @@ actionParams = \case
      in object $
           ["user_id" .= showT target]
             <> ["group_id" .= showT gid | not (isPrivateChat gid)]
+  SetFriendAddRequest flag approve ->
+    object
+      [ "flag" .= flag,
+        "approve" .= approve
+      ]
 
 data Envelope = Envelope
   { action :: !Action,

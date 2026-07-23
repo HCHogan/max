@@ -9,6 +9,21 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "parseEvent" $ do
+  it "parses an incoming friend request" $
+    case parseEvent
+      ( object
+          [ "post_type" .= ("request" :: Text),
+            "request_type" .= ("friend" :: Text),
+            "flag" .= ("fl4g" :: Text),
+            "user_id" .= (2001 :: Int),
+            "comment" .= ("hi" :: Text)
+          ]
+      ) of
+      Right (EvFriendRequest flag uid) -> do
+        flag `shouldBe` "fl4g"
+        uid `shouldBe` UserId 2001
+      other -> expectationFailure ("expected EvFriendRequest, got: " <> show other)
+
   it "parses a group message with its real group id" $
     case parseEvent (msgEvent "group" ["group_id" .= (7777 :: Int)]) of
       Right (EvGroupMessage gm) -> do

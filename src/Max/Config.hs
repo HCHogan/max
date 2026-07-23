@@ -53,6 +53,7 @@ import Autodocodec
     scientificCodec,
     (.=),
   )
+import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, maybeToList)
@@ -105,6 +106,10 @@ data AppConfig = AppConfig
     -- on/off@.  When off, the tool isn't registered (model can't send),
     -- but ingest/captioning still run.
     stickersEnabled :: !Bool,
+    -- | Bot owners' QQ ids: the top permission tier — every command
+    -- capability everywhere, plus the exclusive ones (!model, !grant…).
+    -- Empty means no owner-tier commands work at all (safe default).
+    owners :: ![Int64],
     -- | Proactive-trigger intent classification; 'Nothing' disables
     -- it (the bot only answers @-mentions/quotes, as before).
     intent :: !(Maybe IntentConfig),
@@ -265,6 +270,17 @@ appConfigParser =
             conf "enabled",
             value True
           ]
+    owners <-
+      setting
+        [ help "Bot owners' QQ ids (top permission tier: !model, !grant, …)",
+          reader (commaSeparatedList auto),
+          option,
+          long "owners",
+          env "MAX_OWNERS",
+          conf "owners",
+          metavar "QQ[,QQ..]",
+          value []
+        ]
     intent <- subConfig "intent" intentParser
     embedding <- subConfig "embedding" embeddingParser
     debug <-

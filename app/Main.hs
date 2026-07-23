@@ -126,6 +126,7 @@ main = do
                     beTimeZone = cfg.timezone,
                     beStartedAt = startedAt,
                     beSessions = sessions,
+                    beOwners = cfg.owners,
                     beTasks = tasks,
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
