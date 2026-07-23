@@ -174,6 +174,20 @@ in
         default = "weixin123";
         description = "Password for the stack-internal MySQL (never exposed beyond the docker network).";
       };
+
+      webBindAddress = lib.mkOption {
+        type = lib.types.str;
+        default = "127.0.0.1";
+        example = "100.64.0.3";
+        description = ''
+          Address the login web UI (port 1238) binds to.  Loopback by
+          default; set your tailscale IP to reach it from the tailnet.
+          NB: docker-published ports bypass the NixOS firewall, so
+          bind to a specific interface address rather than 0.0.0.0.
+          The API port (8848) always stays on loopback — the bot runs
+          on this host.
+        '';
+      };
     };
 
     napcat = {
@@ -373,7 +387,7 @@ in
             # Bot's own WS server owns host 8080 → API rides on 8848.
             ports = [
               "127.0.0.1:8848:8080"
-              "127.0.0.1:1238:1238"
+              "${cfg.wechatpad.webBindAddress}:1238:1238"
             ];
             volumes = [ "${envFile}:/app/.env" ];
             dependsOn = [ "wechatpad-mysql" "wechatpad-redis" ];
