@@ -20,6 +20,9 @@ spec = do
       parseSilence "[silence:擦汗]" `shouldBe` Just (Just 97)
       parseSilence "[silence：疑问]" `shouldBe` Just (Just 32) -- full-width colon
       parseSilence "[silence:NO]" `shouldBe` Just (Just 123) -- refused topic
+      -- any curated face works, not just the old 8-name silence set
+      parseSilence "[silence:比心]" `shouldBe` Just (Just 319)
+      parseSilence "[silence:捂脸]" `shouldBe` Just (Just 264)
 
     it "is silence-without-face for an unknown reason name" $
       parseSilence "[silence:量子纠缠]" `shouldBe` Just Nothing

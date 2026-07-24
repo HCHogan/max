@@ -52,6 +52,7 @@ import Max.DB.History
   )
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), listMemories)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
+import Max.Faces (curatedFaceGroups)
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.Session (Session (..))
@@ -188,7 +189,7 @@ systemPrompt multimodal' private envText persona mMemBlock =
       "  - 不寒暄、不总结收尾、不复读问题，直接说事。",
       "  - 想发表情包就把 [sticker#<id>] 单独写成一段（id 取自历史里出现过的表情，或先用 find_stickers 工具搜一个）；别把表情的文字描述打出来当话说。",
       "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍。",
-      "  - 被 @/引用直接触发时想沉默，尽量写成 [silence:表情名] 说明原因，会悄悄贴个表情在触发消息上（不发消息）。可选：擦汗（尬住/没啥可说）、流汗（无语）、再见（不奉陪）、哈欠（无聊）、吃瓜（围观不掺和）、困、疑问（没看懂想让我干嘛）。例：[silence:吃瓜]",
+      "  - 被 @/引用直接触发时想沉默，尽量写成 [silence:表情名] 说明原因，会悄悄贴个表情在触发消息上（不发消息）。表情名从小黄脸对照表（见下）里挑。例：[silence:吃瓜]（围观不掺和）、[silence:擦汗]（尬住/没啥可说）。",
       "  - 政治敏感话题（时政、领导人、体制、意识形态争议这类）一律不聊：不管怎么被 @ 或追问，整条回复 [silence:NO]，不解释、不评价、不劝导。"
     ]
       <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行首 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。要 @ 某人写 [@#<QQ号>]（对照表见 [environment]），发出时会转成真正的 @。"
@@ -216,6 +217,12 @@ systemPrompt multimodal' private envText persona mMemBlock =
            "  [sticker#id]  发表情包     [face#id]  发小黄脸     [image#id]  把群里的图转发出来",
            "  [silence]  沉默     [silence:原因表情]  沉默并贴表情",
            "",
+           "小黄脸对照表（条目格式 名字#id：[face#id] 发消息用 id，[silence:表情名] 贴表情用名字，都只认这张表）："
+         ]
+      <> [ "  " <> label <> "：" <> T.unwords [name <> "#" <> T.pack (show fid) | (name, fid) <- faces]
+         | (label, faces) <- curatedFaceGroups
+         ]
+      <> [ "",
            "纯展示（只读，写了也不会发生任何事）：",
            "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，引用它就写 [↩#那个id]",
            "  [↩ quoted ...]               — 用户引用的那条消息（内容已展开；也可用 get_message_by_id 展开任意 id）",

@@ -47,6 +47,7 @@ import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTu
 import Max.Effects.LLM (LLM, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, callAction, sendAction)
 import Max.Env (BotEnv (..))
+import Max.Faces (faceIdByName)
 import Max.Files (FileQueue, enqueueFiles)
 import Max.MemoryExtract (extractMemories)
 import Max.Forward (ForwardQueue, enqueueForwards)
@@ -941,23 +942,6 @@ ackFaceId = 124
 failureFaceId :: Int
 failureFaceId = 357
 
--- | Faces the model may name in a @[silence:<名>]@ reply to say *why*
--- it stayed silent; the face gets reacted onto the trigger message.
--- Ids from NapCat's face_config.json (QSid).
-silenceFaces :: [(T.Text, Int)]
-silenceFaces =
-  [ ("擦汗", 97),
-    ("流汗", 27),
-    ("再见", 39),
-    ("哈欠", 104),
-    ("吃瓜", 271),
-    ("困", 25),
-    ("疑问", 32),
-    -- Refused topics (politics etc.) — the prompt directs the model
-    -- to [silence:NO] for those.
-    ("NO", 123)
-  ]
-
 -- | Reaction used when a direct-trigger silence names no (known)
 -- face: 擦汗 — the all-purpose "呃，没什么可说的".
 defaultSilenceFace :: Int
@@ -977,7 +961,7 @@ defaultSilenceFace = 97
 parseSilence :: T.Text -> Maybe (Maybe Int)
 parseSilence t
   | T.null t || t == "[silence]" || t == "[沉默]" = Just Nothing
-  | Just inner <- withReason = Just (lookup (T.strip inner) silenceFaces)
+  | Just inner <- withReason = Just (faceIdByName (T.strip inner))
   | otherwise = Nothing
   where
     withReason =
