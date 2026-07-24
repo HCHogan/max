@@ -147,14 +147,30 @@ valueP = lexeme (dquoted <|> squoted <|> bareword)
           '\'' <$ char '\''
         ]
 
--- | A @--flag@ or @--flag=value@.  Bare @--flag@ stores 'Nothing'.
-flagP :: Parser (Text, Maybe Text)
-flagP = lexeme $ do
-  _ <- string "--"
-  name <- T.pack <$> some (alphaNumChar <|> char '-' <|> char '_')
-  mval <- optional (char '=' *> valueRaw)
-  pure (name, mval)
+-- | A flag token: a long @--flag@ / @--flag=value@ (one entry), or a
+-- short cluster @-a@ / @-dg@ where each letter is expanded to its long
+-- name via 'shortFlagAlias' (short flags are boolean-only — bare
+-- @--flag@ and every short flag store 'Nothing').  Returns a list so a
+-- bundled short cluster becomes several flags.
+--
+-- A short cluster only parses when /every/ letter is a known alias;
+-- otherwise it fails and 'argP' backtracks, so a negative id like @-1@
+-- or free text like @-cool@ stays a positional value rather than being
+-- silently eaten as flags.
+flagP :: Parser [(Text, Maybe Text)]
+flagP = longFlag <|> shortCluster
   where
+    longFlag = fmap (: []) . try . lexeme $ do
+      _ <- string "--"
+      name <- T.pack <$> some (alphaNumChar <|> char '-' <|> char '_')
+      mval <- optional (char '=' *> valueRaw)
+      pure (name, mval)
+    shortCluster = lexeme $ do
+      _ <- char '-'
+      cs <- some letterChar
+      case traverse shortFlagAlias cs of
+        Just longs -> pure [(l, Nothing) | l <- longs]
+        Nothing -> fail "unknown short flag"
     -- inline value for --flag=value: same as 'valueP' but no surrounding lexeme
     valueRaw =
       choice
@@ -173,8 +189,21 @@ flagP = lexeme $ do
           '\'' <$ char '\''
         ]
 
--- | Either a flag or a positional arg.
-argP :: Parser (Either (Text, Maybe Text) Text)
+-- | Short single-letter flag aliases, shared across every command.  Two
+-- long flags must never share a first letter or their short forms would
+-- collide; the current set is @all@\/@deny@\/@global@ → @a@\/@d@\/@g@.
+-- Keep in sync with the flag names 'classify' checks.
+shortFlagAlias :: Char -> Maybe Text
+shortFlagAlias c = case c of
+  'a' -> Just "all"
+  'd' -> Just "deny"
+  'g' -> Just "global"
+  _ -> Nothing
+
+-- | Either a flag token or a positional arg.  A flag token yields a
+-- list ('flagP') so a bundled short cluster like @-dg@ expands to
+-- several flags.
+argP :: Parser (Either [(Text, Maybe Text)] Text)
 argP = (Left <$> try flagP) <|> (Right <$> valueP)
 
 -- | Top-level command parser: verb + zero-or-more args, then build the
@@ -183,11 +212,25 @@ commandP :: Parser Command
 commandP = do
   sc
   v <- verbP
-  args <- many argP
-  let pos = [t | Right t <- args]
-      flags = Map.fromList [(n, mv) | Left (n, mv) <- args]
-      raw = RawArgs pos flags
+  raw <-
+    if v `elem` freeTextVerbs
+      then -- These verbs take a literal free-text body (a persona, a
+           -- note): parse the remainder as plain values so a leading
+           -- @-a@- or @--flag@-looking word is kept verbatim instead of
+           -- being eaten as a flag.  'classify' ignores flags for them,
+           -- so we leave the flag map empty.
+        (\vals -> RawArgs vals mempty) <$> many valueP
+      else do
+        args <- many argP
+        pure (RawArgs [t | Right t <- args] (Map.fromList (concat [fs | Left fs <- args])))
   pure (classify v raw)
+
+-- | Verbs whose arguments are a literal free-text body, not a
+-- flag\/value arg list.  For these 'commandP' skips flag parsing so
+-- dash-prefixed words in the text survive (see 'classify' for @persona@
+-- \/ @btw@, which join their positional words with spaces).
+freeTextVerbs :: [Text]
+freeTextVerbs = ["persona", "btw"]
 
 -- | Map (verb, args) → concrete 'Command'.  Reduces the parser surface
 -- to a flat set of variants the dispatcher can pattern-match on.

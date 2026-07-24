@@ -42,6 +42,12 @@ spec = do
       "!grant [@#223344556] persona" `parsesTo` Grant 223344556 "persona" False False
     it "grant with bare qq and flags" $
       "!grant 223344556 model --deny --global" `parsesTo` Grant 223344556 "model" True True
+    it "grant with separate short flags" $
+      "!grant 223344556 model -d -g" `parsesTo` Grant 223344556 "model" True True
+    it "grant with a bundled short cluster" $
+      "!grant 223344556 model -dg" `parsesTo` Grant 223344556 "model" True True
+    it "revoke with a short flag" $
+      "!revoke @223344556 persona -g" `parsesTo` Revoke 223344556 "persona" True
     it "revoke with @qq form" $
       "!revoke @223344556 persona" `parsesTo` Revoke 223344556 "persona" False
     it "perms defaults to self" $ "!perms" `parsesTo` Perms Nothing
@@ -66,6 +72,18 @@ spec = do
     it "clear" $ "!persona clear" `parsesTo` PersonaClear
     it "set joins words" $ "!persona 你 是 一只 猫" `parsesTo` PersonaSet "你 是 一只 猫"
     it "set with quotes" $ "!persona \"hello world\"" `parsesTo` PersonaSet "hello world"
+    it "keeps a leading-dash word that isn't a known flag" $
+      "!persona -cool 型" `parsesTo` PersonaSet "-cool 型"
+    -- free-text verbs never interpret flags, so an alias-letter dash
+    -- word (-a/-dg/--foo) stays verbatim rather than being swallowed
+    it "keeps a leading -a short-flag-looking word verbatim" $
+      "!persona -a robotic tone" `parsesTo` PersonaSet "-a robotic tone"
+    it "keeps a leading -dg cluster-looking word verbatim" $
+      "!persona -dg mode" `parsesTo` PersonaSet "-dg mode"
+    it "does NOT let '-a clear' collapse to the destructive PersonaClear" $
+      "!persona -a clear" `parsesTo` PersonaSet "-a clear"
+    it "keeps a --flag-looking word verbatim too" $
+      "!persona --global bot" `parsesTo` PersonaSet "--global bot"
 
   describe "!proactive" $ do
     it "bare → status" $ "!proactive" `parsesTo` ProactiveStatus
@@ -80,6 +98,9 @@ spec = do
   describe "!clear / !unclear" $ do
     it "plain clear" $ "!clear" `parsesTo` Clear
     it "clear --all" $ "!clear --all" `parsesTo` ClearAll
+    it "clear -a (short form)" $ "!clear -a" `parsesTo` ClearAll
+    it "a partly-unknown cluster (-ax) stays a value, so no --all" $
+      "!clear -ax" `parsesTo` Clear
     it "unclear" $ "!unclear" `parsesTo` Unclear
 
   describe "!pin / !unpin / !pins" $ do
@@ -98,12 +119,18 @@ spec = do
   describe "!btw" $ do
     it "joins words" $ "!btw 别忘了 加 typeclass" `parsesTo` Btw "别忘了 加 typeclass"
     it "empty body still works" $ "!btw" `parsesTo` Btw ""
+    it "keeps a leading -a word verbatim (not eaten as a flag)" $
+      "!btw -a bit later" `parsesTo` Btw "-a bit later"
+    it "keeps a lone -a as text, not an empty note" $
+      "!btw -a" `parsesTo` Btw "-a"
 
   describe "!ps / !kill" $ do
     it "ps local" $ "!ps" `parsesTo` PsLocal
     it "ps all" $ "!ps --all" `parsesTo` PsAll
+    it "ps -a (short form)" $ "!ps -a" `parsesTo` PsAll
     it "kill" $ "!kill T-1" `parsesTo` Kill "T-1"
     it "kill all" $ "!kill --all" `parsesTo` KillAll
+    it "kill -a (short form)" $ "!kill -a" `parsesTo` KillAll
 
   describe "! shell escape" $ do
     it "bang-space → Shell, no packages" $ "! ls -al" `parsesTo` Shell [] "ls -al"

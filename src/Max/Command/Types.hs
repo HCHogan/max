@@ -5,10 +5,18 @@
 -- == Grammar
 --
 -- > command  ::= '!' ident (whitespace+ arg)*
--- > arg      ::= flag | value
--- > flag     ::= '--' ident ('=' value)?
+-- > arg      ::= longflag | shortflags | value
+-- > longflag ::= '--' ident ('=' value)?
+-- > shortflags ::= '-' letter+            -- e.g. -a, or bundled -dg
 -- > value    ::= barestring | "..." | '...'
 -- > ident    ::= [a-zA-Z][a-zA-Z0-9-]*
+--
+-- Short flags are single-letter aliases of long flags (@-a@ = @--all@,
+-- @-d@ = @--deny@, @-g@ = @--global@; see 'Max.Command.Parser.shortFlagAlias')
+-- and are boolean-only.  A cluster expands letter-by-letter, so @-dg@
+-- means @--deny --global@.  A dash-run is only treated as flags when
+-- every letter is a known alias — otherwise it stays a positional value,
+-- so a negative id (@-1@) or free text (@-cool@) is preserved.
 --
 -- Quoted strings ('"') support C-style escapes (@\\n@, @\\t@, @\\"@,
 -- @\\\\@).  Single-quoted strings are literal — useful for things
@@ -47,16 +55,16 @@ data Command
   | PersonaClear -- ^ '!persona clear'
   | PersonaSet !Text -- ^ '!persona <text>'
   | Clear -- ^ '!clear'
-  | ClearAll -- ^ '!clear --all'
+  | ClearAll -- ^ '!clear --all' / '!clear -a'
   | Unclear -- ^ '!unclear' — remove the cleared_at watermark
   | Pin !(Maybe Int64) -- ^ '!pin [id]' — Nothing = use reply target
   | Unpin !UnpinTarget -- ^ '!unpin [id|all]'
   | Pins -- ^ '!pins'
   | Btw !Text -- ^ '!btw <text>'
   | PsLocal -- ^ '!ps' (this group)
-  | PsAll -- ^ '!ps --all'
+  | PsAll -- ^ '!ps --all' / '!ps -a'
   | Kill !Text -- ^ '!kill <id>'
-  | KillAll -- ^ '!kill --all' — every running task, all groups
+  | KillAll -- ^ '!kill --all' / '!kill -a' — every running task, all groups
   | Shell ![Text] !Text -- ^ '! [+pkg…] <cmd>' — leading +pkg tokens put nixpkgs on PATH; rest is the raw shell line, run in the group's sandbox
   | MemoryList -- ^ '!memory' — this group's memories + the caller's own
   | MemoryRm !Int64 -- ^ '!memory rm <id>'
@@ -68,8 +76,8 @@ data Command
   | ProactiveStatus -- ^ '!proactive' — feature + override state
   | ProactiveSet !(Maybe Bool) -- ^ '!proactive on' / 'off' / 'default'
   | Version -- ^ '!version'
-  | Grant !Int64 !Text !Bool !Bool -- ^ '!grant <[@#qq]|qq> <capability> [--deny] [--global]'
-  | Revoke !Int64 !Text !Bool -- ^ '!revoke <[@#qq]|qq> <capability> [--global]'
+  | Grant !Int64 !Text !Bool !Bool -- ^ '!grant <[@#qq]|qq> <capability> [--deny|-d] [--global|-g]'
+  | Revoke !Int64 !Text !Bool -- ^ '!revoke <[@#qq]|qq> <capability> [--global|-g]'
   | Perms !(Maybe Int64) -- ^ '!perms [目标]' — own grants when no target
   | UseShow -- ^ '!use' — current admin target group (private chat)
   | UseSet !Int64 -- ^ '!use <群号>' — aim following commands at that group

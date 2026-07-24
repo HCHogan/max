@@ -685,7 +685,7 @@ helpText Nothing =
       "  !kill <id>               砍一个任务 (任务 id 来自 !ps)",
       "  !kill --all              砍掉所有群的全部任务",
       "  !version                 看 bot 版本",
-      "  !grant [@#qq] <权限名>   给人授权（--deny 显式禁用、--global 全局，均需 owner）",
+      "  !grant [@#qq] <权限名>   给人授权（--deny/-d 显式禁用、--global/-g 全局，均需 owner）",
       "  !revoke [@#qq] <权限名>  撤销授权（scope 需和授权时一致）",
       "  !perms [[@#qq]]          看某人的显式授权（默认看自己）",
       "  !use <群号>              （私聊）之后你发的命令都作用于那个群；!use 看当前，!use clear 退出",
@@ -693,6 +693,7 @@ helpText Nothing =
       "  ! <命令>                 在本群沙盒里跑 shell（感叹号后空一格），如 ! ls -al；支持多行",
       "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version",
       "",
+      "flag 可用短形式：--all=-a、--deny=-d、--global=-g（可合并，如 -dg）。",
       "权限：!model/!debug/!sticker/!proactive/!kill --all 仅 bot 主人；",
       "!persona/!clear/!kill 需群主/管理员（或被授权）；其余全员可用。",
       "群里发命令：结果私聊发你（加好友才收得到），群里只贴表情。"
