@@ -58,12 +58,37 @@ chunkSource = \case
 
 planReply :: Text -> [Chunk]
 planReply body =
-  case concatMap explode (splitTables body) of
+  case capChunks (concatMap explode (splitTables body)) of
     [] -> [TextChunk (T.strip body)]
     cs -> cs
   where
     explode (TableChunk t) = [TableChunk t]
     explode (TextChunk t) = map TextChunk (splitChunks (latexToUnicode t))
+
+-- | Ceiling on how many messages one reply may become.
+--
+-- 'splitChunks' breaks on every blank line and has no natural bound, so
+-- one runaway generation becomes that many QQ messages — and the sender
+-- paces them ~2s apart, so it is also that many seconds of the bot
+-- talking over everybody.  A model that echoed its own context back
+-- once turned into 26 messages spread over 54 seconds.
+--
+-- Ordinary replies are one to three chunks; this only engages on
+-- pathological output.
+maxChunks :: Int
+maxChunks = 6
+
+-- | Merge everything past the cap into the last message rather than
+-- dropping it — loud but bounded beats truncated, and the bot's own
+-- history still records what it said.  A table caught in the tail
+-- degrades to its markdown source, the same fallback a failed render
+-- already takes.
+capChunks :: [Chunk] -> [Chunk]
+capChunks cs
+  | length cs <= maxChunks = cs
+  | otherwise = keep <> [TextChunk (T.intercalate "\n\n" (map chunkSource spill))]
+  where
+    (keep, spill) = splitAt (maxChunks - 1) cs
 
 --------------------------------------------------------------------------------
 -- Outbound placeholders: [↩#<id>] quotes, [sticker#<id>] stickers,

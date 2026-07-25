@@ -45,12 +45,43 @@ spec = do
       planTexts "先说这个 [split] 再说那个"
         `shouldBe` ["先说这个", "再说那个"]
 
+  -- A reply becomes one QQ message per chunk, paced ~2s apart, so an
+  -- unbounded split is also an unbounded amount of time spent talking
+  -- over the group.  Production once turned one generation into 26
+  -- messages across 54 seconds.
+  describe "planReply / chunk ceiling" $ do
+    let paras k = T.intercalate "\n\n" ["第" <> T.pack (show i) <> "段" | i <- [1 .. k :: Int]]
+
+    it "leaves a reply at the ceiling untouched" $
+      length (planTexts (paras 6)) `shouldBe` 6
+
+    it "caps a runaway split" $
+      length (planTexts (paras 26)) `shouldBe` 6
+
+    it "merges the overflow into the last message instead of dropping it" $ do
+      let out = planTexts (paras 9)
+      length out `shouldBe` 6
+      take 5 out `shouldBe` ["第1段", "第2段", "第3段", "第4段", "第5段"]
+      last out `shouldBe` "第6段\n\n第7段\n\n第8段\n\n第9段"
+
+    it "keeps every word — nothing is truncated away" $ do
+      let out = planTexts (paras 30)
+      T.concat out `shouldSatisfy` \t ->
+        all (\i -> ("第" <> T.pack (show i) <> "段") `T.isInfixOf` t) [1 .. 30 :: Int]
+
+    -- The ceiling bounds outbound messages; it is not a formatting
+    -- rule.  A model spraying [split] costs the group exactly what one
+    -- spraying blank lines costs, so it is capped the same way.
+    it "caps explicit [split] markers too" $ do
+      let ps = [T.pack ("p" <> show i) | i <- [1 .. 9 :: Int]]
+      length (planTexts (T.intercalate " [split] " ps)) `shouldBe` 6
+
     it "does not split inside code fences" $
       planTexts "看这段:\n[split]\n```python\nx = 1\n[split]\ny = 2\n```\n[split]\n就这样"
         `shouldBe` ["看这段:", "```python\nx = 1\n[split]\ny = 2\n```", "就这样"]
 
-    it "does not cap chunk count" $ do
-      let paras = [T.pack ("p" <> show i) | i <- [1 .. 9 :: Int]]
+    it "honours explicit [split] markers up to the ceiling" $ do
+      let paras = [T.pack ("p" <> show i) | i <- [1 .. 6 :: Int]]
       planTexts (T.intercalate " [split] " paras) `shouldBe` paras
 
     it "drops empty chunks from leading/trailing/doubled markers" $
