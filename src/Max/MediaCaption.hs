@@ -167,7 +167,7 @@ mediaCaptionWorker profile blobRoot = localDomain "media-caption" $ do
                   []
               case eres of
                 Left err -> failed ("chat: " <> err)
-                Right (ToolCallsResp _ _) -> failed "chat: unexpected tool calls"
+                Right (ToolCallsResp _ _ _) -> failed "chat: unexpected tool calls"
                 Right (ContentResp raw)
                   | T.null (T.strip raw) -> failed "chat: empty caption"
                   | otherwise -> store (T.strip raw)

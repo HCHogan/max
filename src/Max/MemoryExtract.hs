@@ -86,7 +86,7 @@ extractMemories profile mEmbed gm conversation = localDomain "memx" $ do
         ]
   chat profile msgs [] >>= \case
     Left err -> logAttention "memx: chat failed" $ object ["error" .= err]
-    Right (ToolCallsResp _ _) ->
+    Right (ToolCallsResp _ _ _) ->
       logAttention "memx: unexpected tool calls" $ object []
     Right (ContentResp raw) -> case parseOps raw of
       Left err ->
@@ -262,7 +262,7 @@ compactScope profile scope sid gid = do
             <> ["", "输出操作 JSON 数组："]
   chat profile [MsgSystem compactorSystem, MsgUser input] [] >>= \case
     Left err -> logAttention "memx: compact chat failed" $ object ["error" .= err]
-    Right (ToolCallsResp _ _) ->
+    Right (ToolCallsResp _ _ _) ->
       logAttention "memx: compact unexpected tool calls" $ object []
     Right (ContentResp raw) -> case parseOps raw of
       Left err ->

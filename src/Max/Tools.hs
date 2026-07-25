@@ -16,7 +16,6 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Foldable (asum)
 import Data.Int (Int64)
-import Data.Set qualified as Set
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -28,24 +27,19 @@ import Effectful
 import Effectful.Exception (try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
-import Effectful.Reader.Dynamic (Reader)
 import Max.DB.History (HistoryItem (..), bestName, fetchForwardChildren, fetchMessage)
-import Max.DB.Message (insertOutbound)
 import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
-import Max.Persistence (PersistMode, isEphemeral)
 import Max.Prompt (tagMediaMarkers)
 import Max.Time (fmtDateHM)
-import OneBot.Action (Action (..), Response (..), sendChatMsg)
-import OneBot.Segment (Segment (..), segmentMentions)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
+import OneBot.Action (Action (..), Response (..))
+import OneBot.Types (GroupId (..), UserId (..))
 
 builtinsFor ::
   ( WithConnection :> es,
     NapCat :> es,
-    Reader PersistMode :> es,
     Log :> es,
     IOE :> es
   ) =>
@@ -53,13 +47,10 @@ builtinsFor ::
   Maybe EmbedClient ->
   DispatchContext ->
   [Tool es]
--- WithConnection + IOE constraints already in scope above; sayTool
--- needs them for the insertOutbound persistence path.
 builtinsFor tz mEmbed dc =
   [ getMessageByIdTool tz,
     searchMessagesTool tz mEmbed dc.dcGroupId,
     viewForwardTool tz,
-    sayTool dc,
     pokeTool dc
   ]
 
@@ -313,83 +304,6 @@ runSearch f mVec = do
   pure $ case eres of
     Left e -> Left ("search failed: " <> TE.decodeUtf8Lenient (sqlErrorMsg e))
     Right rows -> Right rows
-
---------------------------------------------------------------------------------
--- say — mid-task progress updates
-
--- | Send a status update to the user *during* an agent dispatch,
--- before the final answer.  The agent loop's content response is
--- still what we treat as the final reply; @say@ is for interstitial
--- updates so the user isn't staring at silence while the bot is busy
--- (especially when running sandbox commands that take real time).
-sayTool ::
-  ( NapCat :> es,
-    WithConnection :> es,
-    Reader PersistMode :> es,
-    Log :> es,
-    IOE :> es
-  ) =>
-  DispatchContext ->
-  Tool es
-sayTool dc =
-  Tool
-    { toolName = "say",
-      toolDescription =
-        T.unwords
-          [ "任务中途向用户播报一行进展（用户看不到你的工具调用，只能看到沉默）。",
-            "开工、关键步骤成败、改变计划时各说一句；连续 ~5 轮工具没吭声也该报一下。",
-            "每次一行短话；最终答案不要用 say，直接作为正文回复。"
-          ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "message"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("Text to send to the group (kept short, like a status line)." :: Text)
-                      ]
-                ],
-            "required" .= (["message"] :: [Text])
-          ],
-      toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message")) args of
-        Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (msg :: Text) -> do
-          -- Same outbound treatment as the final reply: quote the
-          -- trigger (unless there is none — poke dispatches carry the
-          -- id-0 sentinel), convert member-listed @<qq> spans to real
-          -- ats (groups only — private at-segments render poorly).
-          let segs =
-                [SegReply dc.dcMessageId | dc.dcMessageId /= MessageId 0]
-                  <> if isPrivateChat dc.dcGroupId
-                    then [SegText (T.strip msg)]
-                    else
-                      segmentMentions
-                        (\u -> maybe True (Set.member u) dc.dcMentionable)
-                        (T.strip msg)
-          eres <- callAction (sendChatMsg dc.dcGroupId segs) 30000
-          case eres of
-            Left err -> do
-              logAttention "say: send failed" $ object ["error" .= err]
-              pure $ Left ("say failed: " <> err)
-            Right (Response _ rc payload _)
-              | rc /= 0 -> do
-                  logAttention "say: bad retcode" $ object ["retcode" .= rc]
-                  pure $ Left ("say retcode " <> T.pack (show rc))
-              | otherwise -> do
-                  ephemeral <- isEphemeral
-                  case parseEither (withObject "send_resp" (\o -> o .: "message_id")) payload of
-                    Right (outMid :: Int64)
-                      | not ephemeral ->
-                          insertOutbound dc.dcGroupId dc.dcSelfId "max" (MessageId outMid) Nothing segs
-                      | otherwise -> pure ()
-                    Left _ ->
-                      logAttention "say: no message_id in response" $
-                        object ["payload" .= payload]
-                  logInfo "say: sent" $ object ["len" .= T.length msg, "ephemeral" .= ephemeral]
-                  pure $ Right (object ["ok" .= True])
-    }
 
 --------------------------------------------------------------------------------
 -- view_forward — expand a 转发聊天记录 on demand

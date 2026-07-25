@@ -67,8 +67,9 @@ import Max.Effects.NapCat (NapCat, sendAction)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, drainBtwInbox, registerTask, unregisterTask)
 import OneBot.Action (sendChatMsg)
-import OneBot.Segment (Segment (SegText))
-import OneBot.Types (GroupId, MessageId, UserId)
+import Data.Set qualified as Set
+import OneBot.Segment (Segment (SegReply, SegText), segmentMentions)
+import OneBot.Types (GroupId, MessageId (..), UserId, isPrivateChat)
 
 -- | Per-dispatch context the agent loop hands to its tool factory.
 -- Tools like @say@ need the triggering message coordinates to thread
@@ -266,13 +267,15 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                     object ["count" .= length xs]
                   let newMsgs = [MsgAssistant text, btwMsg xs]
                   go dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
-            Right (ToolCallsResp raw tcs) -> do
+            Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
                 object
                   [ "turn" .= n,
                     "count" .= length tcs,
-                    "names" .= map (.callName) tcs
+                    "names" .= map (.callName) tcs,
+                    "narration" .= T.length narration
                   ]
+              sendNarration dc narration
               announceToolCalls dc tcs
               -- Carry the provider's message verbatim so its thinking
               -- output round-trips back to the API on the next
@@ -334,11 +337,35 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
         sendAction $
           sendChatMsg dc.dcGroupId [SegText (T.intercalate "\n" (map line visible))]
 
+    -- What the model said alongside its tool calls, posted as the
+    -- progress line the @say@ tool used to exist for.  Both protocols
+    -- allow text and tool calls in one message and Claude narrates that
+    -- way by default, so this is free: no tool call spent, no prompt
+    -- instruction needed.
+    --
+    -- Not persisted, unlike @say@ was.  It doesn't need to be — the
+    -- narration already rides in 'MsgAssistantToolCalls' verbatim and
+    -- replays to the API next round, so the model stays coherent
+    -- without a messages row.  (@say@ needed one precisely because its
+    -- text lived in a tool call the model couldn't see afterwards.)
+    sendNarration :: DispatchContext -> Text -> Eff (Tools : es) ()
+    sendNarration dc narration
+      | T.null (T.strip narration) = pure ()
+      | otherwise =
+          sendAction . sendChatMsg dc.dcGroupId $
+            [SegReply dc.dcMessageId | dc.dcMessageId /= MessageId 0]
+              <> if isPrivateChat dc.dcGroupId
+                then [SegText (T.strip narration)]
+                else
+                  segmentMentions
+                    (\u -> maybe True (Set.member u) dc.dcMentionable)
+                    (T.strip narration)
+
     btwMsg :: [Text] -> ChatMessage
     btwMsg xs = MsgUser ("[btw]: " <> T.intercalate " | " xs)
 
     silentTools :: [Text]
-    silentTools = ["say", "send_image_from_sandbox", "send_file_from_sandbox"]
+    silentTools = ["send_image_from_sandbox", "send_file_from_sandbox"]
 
     -- Images tools queued this round, packaged as one user message of
     -- alternating label/image blocks (leading text block, never two

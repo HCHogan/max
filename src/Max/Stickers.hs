@@ -130,7 +130,7 @@ captionOne profile blobRoot (sha, mime, path, mSummary) = do
               []
           case eres of
             Left err -> failed ("chat: " <> err)
-            Right (ToolCallsResp _ _) -> failed "chat: unexpected tool calls"
+            Right (ToolCallsResp _ _ _) -> failed "chat: unexpected tool calls"
             Right (ContentResp raw) -> apply (T.strip raw)
   where
     failed reason = do

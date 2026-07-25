@@ -154,7 +154,7 @@ spec = do
               ]
           v = object ["choices" .= [object ["message" .= msg]]]
       case parseEither parseResponseOpenAI v of
-        Right (ToolCallsResp raw [tc], _) -> do
+        Right (ToolCallsResp raw _ [tc], _) -> do
           raw `shouldBe` msg
           tc.callName `shouldBe` "web_search"
         other -> expectationFailure $ "expected ToolCallsResp, got: " <> show other
@@ -176,7 +176,7 @@ spec = do
             ]
           v = object ["content" .= blocks]
       case parseEither parseResponseAnthropic v of
-        Right (ToolCallsResp raw [tc], _) -> do
+        Right (ToolCallsResp raw _ [tc], _) -> do
           raw
             `shouldBe` object
               [ "role" .= ("assistant" :: Text),
@@ -185,6 +185,75 @@ spec = do
           tc.callId `shouldBe` "t1"
         other -> expectationFailure $ "expected ToolCallsResp, got: " <> show other
 
+  -- Both wire formats let one assistant message carry text *and* tool
+  -- calls, and Claude narrates that way constantly.  That text used to
+  -- be dropped on the floor; it is the progress line the user would
+  -- otherwise wait through in silence.
+  describe "narration alongside tool calls" $ do
+    it "OpenAI: keeps content when tool_calls are also present" $ do
+      let msg =
+            object
+              [ "role" .= ("assistant" :: Text),
+                "content" .= ("我先查一下这个视频" :: Text),
+                "tool_calls" .= [toolCallWire "c1" "view_bilibili" "{}"]
+              ]
+          v = object ["choices" .= [object ["message" .= msg]]]
+      case parseEither parseResponseOpenAI v of
+        Right (ToolCallsResp _ narration _, _) -> narration `shouldBe` "我先查一下这个视频"
+        other -> expectationFailure $ "expected ToolCallsResp, got: " <> show other
+
+    it "OpenAI: narration is empty when the model went straight to the call" $ do
+      let msg =
+            object
+              [ "role" .= ("assistant" :: Text),
+                "content" .= Null,
+                "tool_calls" .= [toolCallWire "c1" "view_bilibili" "{}"]
+              ]
+          v = object ["choices" .= [object ["message" .= msg]]]
+      case parseEither parseResponseOpenAI v of
+        Right (ToolCallsResp _ narration _, _) -> narration `shouldBe` ""
+        other -> expectationFailure $ "expected ToolCallsResp, got: " <> show other
+
+    it "Anthropic: concatenates text blocks that precede a tool_use" $ do
+      let v =
+            object
+              [ "content"
+                  .= [ object ["type" .= ("text" :: Text), "text" .= ("先看看" :: Text)],
+                       object ["type" .= ("text" :: Text), "text" .= ("再说" :: Text)],
+                       object
+                         [ "type" .= ("tool_use" :: Text),
+                           "id" .= ("t1" :: Text),
+                           "name" .= ("web_search" :: Text),
+                           "input" .= object []
+                         ]
+                     ]
+              ]
+      case parseEither parseResponseAnthropic v of
+        Right (ToolCallsResp _ narration _, _) -> narration `shouldBe` "先看看再说"
+        other -> expectationFailure $ "expected ToolCallsResp, got: " <> show other
+
+    it "Anthropic: thinking blocks are not narration" $ do
+      let v =
+            object
+              [ "content"
+                  .= [ object
+                         [ "type" .= ("thinking" :: Text),
+                           "thinking" .= ("internal" :: Text),
+                           "signature" .= ("s" :: Text)
+                         ],
+                       object
+                         [ "type" .= ("tool_use" :: Text),
+                           "id" .= ("t1" :: Text),
+                           "name" .= ("web_search" :: Text),
+                           "input" .= object []
+                         ]
+                     ]
+              ]
+      case parseEither parseResponseAnthropic v of
+        Right (ToolCallsResp _ narration _, _) -> narration `shouldBe` ""
+        other -> expectationFailure $ "expected ToolCallsResp, got: " <> show other
+
+  describe "tool-call responses, continued" $ do
     it "Anthropic: unknown block types don't fail a text response" $ do
       let v =
             object

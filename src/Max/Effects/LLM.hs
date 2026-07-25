@@ -210,7 +210,11 @@ data ChatResponse
     -- the follow-up 'MsgAssistantToolCalls' from it so any thinking
     -- output replays to the API exactly as it came in (providers 400
     -- when their reasoning fields go missing or change shape).
-    ToolCallsResp !Value ![ToolCall]
+    -- The 'Text' is whatever the model said alongside the calls —
+    -- both protocols allow text and tool calls in one assistant
+    -- message, and Claude narrates that way constantly.  Empty when
+    -- the model went straight to the call.
+    ToolCallsResp !Value !Text ![ToolCall]
   deriving stock (Show)
 
 -- | Provider-reported token usage for one completion.  Logged in the
@@ -351,10 +355,11 @@ runLLM reg = interpret $ \_ -> \case
           logInfo "llm: got content" $
             object $
               ["len" .= T.length text, "profile" .= name] <> usageFields mUsage
-        Right (ToolCallsResp _ tcs, mUsage) ->
+        Right (ToolCallsResp _ narration tcs, mUsage) ->
           logInfo "llm: got tool_calls" $
             object $
               [ "count" .= length tcs,
+                "narration_len" .= T.length narration,
                 "names" .= map (.callName) tcs,
                 "profile" .= name
               ]
@@ -490,7 +495,12 @@ parseResponseOpenAI = withObject "ChatResponse" $ \o -> do
       case mTools of
         Just tcs | not (null tcs) -> do
           tcs' <- traverse parseToolCall tcs
-          pure (ToolCallsResp (Object m) tcs')
+          -- content and tool_calls can both be populated — the schema
+          -- allows it and models do it.  Keep the narration; the agent
+          -- loop posts it as the progress line the user would otherwise
+          -- be waiting through in silence.
+          mNarr <- m .:? "content"
+          pure (ToolCallsResp (Object m) (maybe "" stripLeadingThink mNarr) tcs')
         _ -> do
           mC <- m .:? "content"
           case mC of
@@ -738,7 +748,7 @@ parseResponseAnthropic = withObject "AnthropicResponse" $ \o -> do
       rawMsg = object ["role" .= ("assistant" :: Text), "content" .= blocks]
   resp <-
     if not (null toolCalls)
-      then pure (ToolCallsResp rawMsg toolCalls)
+      then pure (ToolCallsResp rawMsg (T.concat texts) toolCalls)
       else
         if not (null texts)
           then pure (ContentResp (T.concat texts))
