@@ -5,7 +5,7 @@
 **A QQ group-chat agent, written in Haskell.**
 
 [![CI](https://github.com/HCHogan/max/actions/workflows/ci.yml/badge.svg)](https://github.com/HCHogan/max/actions/workflows/ci.yml)
-[![GHC](https://img.shields.io/badge/GHC-9.12-5e5086.svg)](https://www.haskell.org/ghc/)
+[![GHC](https://img.shields.io/badge/GHC-9.10-5e5086.svg)](https://www.haskell.org/ghc/)
 [![Nix](https://img.shields.io/badge/Nix-flake-5277C3.svg?logo=nixos&logoColor=white)](flake.nix)
 [![Postgres](https://img.shields.io/badge/Postgres-17%20+%20pgvector-4169E1.svg?logo=postgresql&logoColor=white)](devenv.nix)
 [![License](https://img.shields.io/badge/license-MIT-000000.svg)](LICENSE)

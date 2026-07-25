@@ -7,7 +7,7 @@ Layout, runtime data flow, effect stack, and phase status. For behaviour see
 ## Layout
 
 ```
-flake.nix          devenv shell as a flake module (GHC 9.12, Postgres 17 + pgvector)
+flake.nix          devenv shell as a flake module (GHC 9.10, Postgres 17 + pgvector)
 devenv.nix         service definitions + .env sourcing on shell entry
 docker-compose.yml NapCat container; shared ./var/outbox volume
 sandbox-image/     nix-enabled sandbox base image  → max-sandbox:latest
