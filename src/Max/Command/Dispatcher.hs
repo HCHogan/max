@@ -253,8 +253,8 @@ execute t gid uid granterTier replyTarget cmd = do
     let GroupId gidRaw = gid
         UserId uidRaw = uid
         private = isPrivateChat gid
-    gms <- listMemories ScopeGroup gidRaw
-    ums <- if private then listMemories ScopeUser uidRaw else pure []
+    gms <- listMemories ScopeGroup gidRaw gidRaw
+    ums <- if private then listMemories ScopeUser uidRaw gidRaw else pure []
     reply (formatMemories private gms ums)
   MemoryRm mid -> do
     let GroupId gidRaw = gid
@@ -426,7 +426,7 @@ execute t gid uid granterTier replyTarget cmd = do
   Status -> do
     s <- liftIO (Session.readSession t)
     let GroupId gidRaw = gid
-    memCount <- countMemories ScopeGroup gidRaw
+    memCount <- countMemories ScopeGroup gidRaw gidRaw
     tasks <- liftIO (listTasks env.beTasks (Just gid))
     reply . T.intercalate "\n" $
       [ (if isPrivateChat gid then "本私聊" else "群 " <> T.pack (show gidRaw)) <> " 状态：",

@@ -109,9 +109,10 @@ data PromptInputs = PromptInputs
     groupBrief :: ![Text],
     -- | Long-term memories of this group, oldest first.
     groupMemories :: ![MemoryItem],
-    -- | Long-term memories of the *triggering* user (cross-group),
-    -- oldest first.  Other members' memories are not injected — the
-    -- model can @memory_list@ them when actually relevant.
+    -- | Long-term memories of the *triggering* user, confined to the
+    -- ones learned in this group, oldest first.  Other members'
+    -- memories are not injected — the model can @memory_list@ them
+    -- when actually relevant.
     userMemories :: ![MemoryItem],
     -- | Already-loaded images to attach to the final user message,
     -- in display order (context images chronological, trigger's
@@ -295,8 +296,8 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief inFlight' s
       then fetchRecentInGroup gid mid s.clearedAt n
       else fetchMentionHistory gid selfId' mid s.clearedAt n
   pinnedItems' <- fetchMessagesByIds s.pinned
-  groupMems <- listMemories ScopeGroup gid
-  userMems <- listMemories ScopeUser senderId
+  groupMems <- listMemories ScopeGroup gid gid
+  userMems <- listMemories ScopeUser senderId gid
   replyCtx0 <- case extractReply gm.message of
     Nothing -> pure Nothing
     Just rid -> do

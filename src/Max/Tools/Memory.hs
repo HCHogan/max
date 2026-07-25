@@ -76,7 +76,7 @@ memoryToolsFor mEmbed dc =
     forgetTool,
     listTool dc
   ]
-    <> [searchTool ec | Just ec <- [mEmbed]]
+    <> [searchTool dc ec | Just ec <- [mEmbed]]
 
 --------------------------------------------------------------------------------
 -- memory_save
@@ -136,7 +136,7 @@ saveTool dc =
                 let sid = case scope of
                       ScopeGroup -> gid
                       ScopeUser -> maybe triggerUid id mUid
-                n <- countMemories scope sid
+                n <- countMemories scope sid gid
                 if n >= maxMemoriesPerScope
                   then
                     pure $
@@ -278,7 +278,7 @@ listTool dc =
                     (_, Just s) -> s
                     (ScopeGroup, Nothing) -> gid
                     (ScopeUser, Nothing) -> triggerUid
-              items <- listMemories scope sid
+              items <- listMemories scope sid gid
               pure $ Right (toJSON (map memorySummary items))
     }
   where
@@ -293,15 +293,18 @@ memorySummary m = object ["id" .= m.memId, "content" .= m.memContent]
 
 searchTool ::
   (WithConnection :> es, IOE :> es) =>
+  DispatchContext ->
   EmbedClient ->
   Tool es
-searchTool ec =
-  Tool
+searchTool dc ec =
+  let GroupId gid = dc.dcGroupId
+   in Tool
     { toolName = "memory_search",
       toolDescription =
         T.unwords
-          [ "跨所有群、所有人的长期记忆做语义搜索（谁擅长X、哪个群在做Y）。",
-            "本群和当前发言者的记忆已在系统提示里，别重复查。"
+          [ "在本群的长期记忆里做语义搜索（谁擅长X、之前定过什么）。",
+            "只覆盖本群——本群的群记忆，以及成员在本群留下的个人记忆。",
+            "当前发言者的记忆已在系统提示里，别重复查。"
           ],
       toolSchema =
         object
@@ -329,12 +332,21 @@ searchTool ec =
           case evec of
             Left err -> pure $ Left ("embedding failed: " <> err)
             Right [vec] -> do
+              -- Confined to this conversation.  Unscoped, this ranked
+              -- every memory in the database — every other group's
+              -- facts, every other person's — and handed the model
+              -- whatever scored highest, which is how a fact learned in
+              -- one group surfaced in another.  Group rows partition on
+              -- scope_id; user rows on where they were learned.
               rows <-
                 query
                   "SELECT id, scope, scope_id, content, updated_at \
-                  \  FROM memories WHERE embedding IS NOT NULL \
+                  \  FROM memories \
+                  \  WHERE embedding IS NOT NULL \
+                  \    AND ( (scope = 'group' AND scope_id = ?) \
+                  \       OR (scope = 'user' AND source_group_id = ?) ) \
                   \  ORDER BY embedding <=> ?::vector LIMIT ?"
-                  (renderVector vec, min 20 (max 1 lim))
+                  (gid, gid, renderVector vec, min 20 (max 1 lim))
               pure $ Right (toJSON (map fullSummary (rows :: [MemoryItem])))
             Right _ -> pure $ Left "embedding failed: unexpected result shape"
     }

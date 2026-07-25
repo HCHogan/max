@@ -77,8 +77,8 @@ extractMemories ::
 extractMemories profile mEmbed gm conversation = localDomain "memx" $ do
   let GroupId gid = gm.groupId
       UserId uid = gm.userId
-  groupMems <- listMemories ScopeGroup gid
-  userMems <- listMemories ScopeUser uid
+  groupMems <- listMemories ScopeGroup gid gid
+  userMems <- listMemories ScopeUser uid gid
   let transcript = renderTranscript conversation
       msgs =
         [ MsgSystem extractorSystem,
@@ -142,7 +142,7 @@ applyOp profile mEmbed gid triggerUid = \case
             logInfo "memx: near-duplicate skipped" $
               object ["existing_id" .= did, "distance" .= dist, "content" .= c]
           Nothing -> do
-            n <- countMemories scope sid
+            n <- countMemories scope sid gid
             -- A full scope must not freeze learning (observed in
             -- prod: an active user pinned at the cap stops
             -- accumulating anything new).  Compact first — an LLM
@@ -151,10 +151,10 @@ applyOp profile mEmbed gid triggerUid = \case
             -- least-recently-touched entry.  Either way the add
             -- proceeds.
             when (n >= maxMemoriesPerScope) $ do
-              compactScope profile scope sid
-              n' <- countMemories scope sid
+              compactScope profile scope sid gid
+              n' <- countMemories scope sid gid
               when (n' >= maxMemoriesPerScope) $
-                evictOldest scope sid >>= \case
+                evictOldest scope sid gid >>= \case
                   Just (eid, econtent) ->
                     logInfo "memx: evicted oldest" $
                       object ["id" .= eid, "content" .= econtent]
@@ -188,12 +188,18 @@ applyOp profile mEmbed gid triggerUid = \case
     -- nearest same-scope duplicate within 'dupDistance' if any).
     -- Fail-open: an embedding hiccup must not block memory writes; the
     -- fallback is exact-content match.
+    -- Scoped to the current group for the same reason the reads are:
+    -- another group's memory of this person is not a duplicate of one
+    -- we're about to learn here, and treating it as one would silently
+    -- drop the write.
     findNearDup scope sid c = case mEmbed of
       Nothing -> do
         rows <-
           query
-            "SELECT id FROM memories WHERE scope = ? AND scope_id = ? AND content = ? LIMIT 1"
-            (scopeText scope, sid, c)
+            "SELECT id FROM memories \
+            \ WHERE scope = ? AND scope_id = ? AND content = ? \
+            \   AND (scope = 'group' OR source_group_id = ?) LIMIT 1"
+            (scopeText scope, sid, c, gid)
         let hit = case rows :: [Only Int64] of
               (Only did : _) -> Just (did, 0 :: Double)
               [] -> Nothing
@@ -210,8 +216,9 @@ applyOp profile mEmbed gid triggerUid = \case
               query
                 "SELECT id, embedding <=> ?::vector AS dist FROM memories \
                 \ WHERE scope = ? AND scope_id = ? AND embedding IS NOT NULL \
+                \   AND (scope = 'group' OR source_group_id = ?) \
                 \ ORDER BY dist LIMIT 1"
-                (vt, scopeText scope, sid)
+                (vt, scopeText scope, sid, gid)
             let hit = case rows :: [(Int64, Double)] of
                   ((did, dist) : _) | dist < dupDistance -> Just (did, dist)
                   _ -> Nothing
@@ -237,9 +244,11 @@ compactScope ::
   Text ->
   MemoryScope ->
   Int64 ->
+  -- | Current group; compaction sees exactly the slice the cap counts.
+  Int64 ->
   Eff es ()
-compactScope profile scope sid = do
-  mems <- listMemories scope sid
+compactScope profile scope sid gid = do
+  mems <- listMemories scope sid gid
   let memLine m =
         T.pack (show m.memId)
           <> " ("
