@@ -7,6 +7,7 @@
 -- renderer correctly (dedup, watermark, pin resolution, reply lookup).
 module Max.PromptIntegrationSpec (spec) where
 
+import Data.Int (Int64)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -30,6 +31,9 @@ botRaw = 1000
 
 memberRaw :: (Integral a) => a
 memberRaw = 2001
+
+otherMemberRaw :: (Integral a) => a
+otherMemberRaw = 2002
 
 timeAt :: Int -> UTCTime
 timeAt h =
@@ -62,7 +66,7 @@ spec pool = before_ (truncateAll pool) $
       insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "另一条"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <-
-        withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s trigger
+        withDbLog pool $ buildContext "default-persona" 20 False False OriginDirect "var/images" utc [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("随便聊" `T.isInfixOf`)
       ub `shouldSatisfy` ("另一条" `T.isInfixOf`)
@@ -73,30 +77,60 @@ spec pool = before_ (truncateAll pool) $
       s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       let s = s0 {clearedAt = Just (timeAt 10)}
       withDb pool $ upsertSession s
-      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False False OriginDirect "var/images" utc [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldNotSatisfy` ("旧" `T.isInfixOf`)
       ub `shouldSatisfy` ("新" `T.isInfixOf`)
 
-    it "renders prior @-mention as MsgUser/MsgAssistant turns" $ do
+    it "renders prior @-mention and the bot's reply as transcript lines" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 你好"
       insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "你好 Alice"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s trigger
-      -- Expect: [system, user(mention), assistant(reply), user(current trigger)]
-      length msgs `shouldBe` 4
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      -- The whole conversation is [system, user]: the bot's own past
+      -- replies are lines in the transcript, not assistant turns.
+      length msgs `shouldBe` 2
       case msgs of
-        [MsgSystem _, MsgUser u, MsgAssistant a, MsgUser _curr] -> do
-          u `shouldSatisfy` ("Alice" `T.isInfixOf`)
-          a `shouldBe` "你好 Alice"
+        [MsgSystem _, MsgUser ub] -> do
+          ub `shouldSatisfy` ("[09:00 Alice #1001]:" `T.isInfixOf`)
+          ub `shouldSatisfy` ("[10:00 Max #1002]: 你好 Alice" `T.isInfixOf`)
         other -> expectationFailure $ "unexpected message shape: " <> show other
+
+    -- The two queries reach back different distances: fetchRecentInGroup
+    -- takes the last n messages, fetchMentionHistory the last n that
+    -- involve the bot.  With a small window and chatty filler, the bot
+    -- exchange falls out of the first and must survive via the second —
+    -- that is the whole reason both are still issued.
+    it "keeps bot conversation that chatter has pushed out of the recent window" $ do
+      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 1) (Just "Alice") "@1000 昨天那事呢"
+      insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 2) Nothing "已经办好了"
+      mapM_
+        ( \i ->
+            insertRawMessage pool (2000 + i) groupRaw otherMemberRaw botRaw (timeAt (3 + fromIntegral i)) (Just "Bob") ("闲聊" <> T.pack (show i))
+        )
+        [1 .. 5 :: Int64]
+      s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
+      -- Window of 3: the bot exchange is well outside the last 3 raw
+      -- messages, but is still among the last 3 bot-related ones.
+      msgs <- withDbLog pool $ buildContext "default-persona" 3 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      let ub = userBodyOf msgs
+      ub `shouldSatisfy` ("昨天那事呢" `T.isInfixOf`)
+      ub `shouldSatisfy` ("已经办好了" `T.isInfixOf`)
+      ub `shouldSatisfy` ("闲聊5" `T.isInfixOf`)
+
+    -- A message can come back from both queries; it must appear once.
+    it "shows a message that both queries return exactly once" $ do
+      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 只此一次"
+      s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      T.count "只此一次" (userBodyOf msgs) `shouldBe` 1
 
     it "renders pinned messages in the [pinned] section" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "重要信息"
       s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       let s = s0 {pinned = [1001]}
       withDb pool $ upsertSession s
-      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False False OriginDirect "var/images" utc [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[pinned" `T.isInfixOf`)
       ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
@@ -108,7 +142,7 @@ spec pool = before_ (truncateAll pool) $
             trigger
               { message = [SegReply (MessageId 1001), SegAt (UserId botRaw), SegText " 看这条"]
               }
-      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s replyTrigger
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False False OriginDirect "var/images" utc [] Set.empty s replyTrigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)

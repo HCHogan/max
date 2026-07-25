@@ -36,6 +36,7 @@ module Max.Effects.LLM
     listProfiles,
     defaultProfile,
     isProfileMultimodal,
+    isProfileHistoryTurns,
     -- * Exposed for tests
     parseResponseOpenAI,
     parseResponseAnthropic,
@@ -115,7 +116,21 @@ data LLMProfile = LLMProfile
     -- (default), only text is sent and images stay as @[image]@
     -- markers.  Turn this on for Gemma 4 / GPT-4o / Claude vision
     -- endpoints; leave off for DeepSeek (text-only).
-    multimodal :: !Bool
+    multimodal :: !Bool,
+    -- | Which prompt shape to build for this profile.  'False'
+    -- (default) is the flat transcript: system + one user message, the
+    -- whole conversation as @[HH:MM \<name\> #\<id\>]:@ lines.  'True'
+    -- puts history back into real @user@\/@assistant@ turns.
+    --
+    -- The two shapes trade one hazard for the other and there is no
+    -- way to reason your way to a winner, so it is a per-profile
+    -- switch you can A\/B with @!model@.  Turns anchor style on the
+    -- bot's own past output and make it structurally impossible to
+    -- imitate the line prefix; flat removes the assistant slot a weak
+    -- model treats as a pattern to continue (a real production
+    -- incident), can't produce consecutive same-role messages, and is
+    -- the only shape where the bot's own messages carry a quotable id.
+    historyAsTurns :: !Bool
   }
   deriving stock (Show)
 
@@ -319,6 +334,9 @@ data LLM :: Effect where
   -- if the profile doesn't exist (caller will already fail on the
   -- subsequent 'Chat' call with a clearer error).
   IsProfileMultimodal :: Text -> LLM m Bool
+  -- | Look up @profile.history_as_turns@ by name.  'False' when the
+  -- profile doesn't exist — same fallback as 'IsProfileMultimodal'.
+  IsProfileHistoryTurns :: Text -> LLM m Bool
 
 type instance DispatchOf LLM = Dynamic
 
@@ -370,6 +388,9 @@ runLLM reg = interpret $ \_ -> \case
   IsProfileMultimodal name -> pure $ case Map.lookup name reg.profiles of
     Just cfg -> cfg.multimodal
     Nothing -> False
+  IsProfileHistoryTurns name -> pure $ case Map.lookup name reg.profiles of
+    Just cfg -> cfg.historyAsTurns
+    Nothing -> False
 
 chat ::
   LLM :> es =>
@@ -388,6 +409,9 @@ defaultProfile = send DefaultProfile
 
 isProfileMultimodal :: LLM :> es => Text -> Eff es Bool
 isProfileMultimodal name = send (IsProfileMultimodal name)
+
+isProfileHistoryTurns :: LLM :> es => Text -> Eff es Bool
+isProfileHistoryTurns name = send (IsProfileHistoryTurns name)
 
 -- | Usage as extra log fields; absent wholesale when the provider
 -- reported none.

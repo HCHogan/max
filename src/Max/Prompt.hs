@@ -27,7 +27,8 @@ import Control.Monad (when)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
-import Data.List (sortOn)
+import Data.Function (on)
+import Data.List (groupBy, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Set (Set)
@@ -74,16 +75,37 @@ data PromptInputs = PromptInputs
     session :: !Session,
     -- | The @\@-bot@ message that triggered this turn.
     triggerMessage :: !GroupMessage,
-    -- | Recent group messages, chronological.  May overlap with
-    -- 'mention'; 'renderContext' dedupes by message id.
-    ambient :: ![HistoryItem],
-    -- | Reconstructed mention/reply history with the bot, chronological.
-    mention :: ![HistoryItem],
-    -- | Message ids in 'mention' that another dispatch is answering
+    -- | One chronological transcript of the conversation: ambient
+    -- group chatter and the bot's own thread with people, interleaved
+    -- and deduped by message id.
+    --
+    -- One list rather than two, and plain text rather than
+    -- @user@\/@assistant@ turns, because a group has N speakers and
+    -- neither wire format can say so — @user@ conflates everybody, and
+    -- @assistant@ drops who the bot was talking to.  A line that names
+    -- its speaker, its time and its id carries strictly more than the
+    -- roles did, and every model reads it, because it is just text.
+    -- (The Chat Completions @name@ field exists for exactly this and is
+    -- the wrong bet: the Responses API dropped it outright, Anthropic
+    -- never had it, and it has no documented validation, so what an
+    -- OpenAI-compatible provider does with it is anyone's guess.)
+    transcript :: ![HistoryItem],
+    -- | Put history back into real @user@\/@assistant@ turns instead of
+    -- the flat transcript.  Per-profile
+    -- ('Max.Effects.LLM.historyAsTurns') so the two shapes can be
+    -- compared on the live bot rather than argued about; see that
+    -- field for the trade.
+    historyTurns :: !Bool,
+    -- | Message ids in 'transcript' that another dispatch is answering
     -- right now.  Their replies aren't in the messages table yet, so
-    -- without this they render as questions the bot still owes an
-    -- answer to and the model helpfully answers them alongside ours —
-    -- the group then gets the same question answered twice.
+    -- they would render as questions the bot still owes an answer to
+    -- and the model helpfully answers them alongside ours — the group
+    -- then gets the same question answered twice.  Dropped from the
+    -- prompt outright: the model can't double-answer what it can't
+    -- see, and unlike an explanatory annotation, an absent line is
+    -- nothing for the model to mistake for something it should say.
+    -- (That is not hypothetical — the annotation this replaced got
+    -- emitted verbatim as a reply.)
     inFlight :: !(Set Int64),
     -- | Resolved pin list (preserves the user's pin order).
     pinnedItems :: ![HistoryItem],
@@ -233,7 +255,9 @@ systemPrompt multimodal' private envText persona mMemBlock =
          ]
       <> [ "",
            "纯展示（只读，写了也不会发生任何事）：",
-           "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，引用它就写 [↩#那个id]",
+           "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，引用它就写 [↩#那个id]。\
+           \你自己以前说的话也在这份记录里，名字是 Max——那是记录格式，不是说话方式：\
+           \你的回复正文直接写内容，绝对不要带这个行首前缀。",
            "  [↩ quoted ...]               — 用户引用的那条消息（内容已展开；也可用 get_message_by_id 展开任意 id）",
            "  [card: 来源 | 标题 | 链接]     — 分享卡片；B站卡用 view_bilibili、知乎卡用 view_zhihu，传链接看内容",
            "  [file:<name>]                — 群文件；用 import_file_to_sandbox 处理",
@@ -271,6 +295,7 @@ buildContext ::
   Text -> -- default persona (used when session has no override)
   Int -> -- history window size
   Bool -> -- multimodal: load + attach inline images
+  Bool -> -- history as user/assistant turns (see 'PromptInputs.historyTurns')
   TriggerOrigin -> -- what woke the bot (see 'PromptInputs.origin')
   FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
   TimeZone -> -- display timezone for rendered timestamps
@@ -279,23 +304,28 @@ buildContext ::
   Session ->
   GroupMessage ->
   Eff es [ChatMessage]
-buildContext defaultPersona n multimodal' origin' blobRoot tz' brief inFlight' s gm = do
+buildContext defaultPersona n multimodal' historyTurns' origin' blobRoot tz' brief inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
       UserId senderId = gm.userId
-  -- In a private chat every message is part of the bot conversation:
-  -- the full recent history becomes the structured user/assistant
-  -- turn list, and the ambient section (chatter *not* directed at the
-  -- bot) is empty by definition.
-  ambient' <-
+  -- Two queries, one transcript.  Both are capped at @n@ rows but
+  -- filter differently, so they reach back different distances: the
+  -- recent-messages window is the last @n@ messages full stop, while
+  -- the mention window is the last @n@ messages that involve the bot
+  -- and in a busy group can reach back hours further.  Dropping the
+  -- second query would quietly shorten the bot's memory of its own
+  -- conversation to whatever survives the group's chatter volume.
+  --
+  -- In a private chat every message is part of the bot conversation,
+  -- so the recent-messages query already is the whole thread and the
+  -- mention query would return the same rows again.
+  recent <- fetchRecentInGroup gid mid s.clearedAt n
+  thread <-
     if isPrivateChat gm.groupId
       then pure []
-      else fetchRecentInGroup gid mid s.clearedAt n
-  mention' <-
-    if isPrivateChat gm.groupId
-      then fetchRecentInGroup gid mid s.clearedAt n
       else fetchMentionHistory gid selfId' mid s.clearedAt n
+  let transcript' = mergeHistory recent thread
   pinnedItems' <- fetchMessagesByIds s.pinned
   groupMems <- listMemories ScopeGroup gid gid
   userMems <- listMemories ScopeUser senderId gid
@@ -318,8 +348,7 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief inFlight' s
   -- multimodal one saves image budget for real photos.
   let ctxIds =
         map (.messageId) $
-          ambient'
-            <> mention'
+          transcript'
             <> pinnedItems'
             <> maybe [] (\(r, _, kids) -> r : kids) replyCtx0
   capMap <- stickerCaptionsFor ctxIds
@@ -330,8 +359,7 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief inFlight' s
   imgCaps <- imageCaptionsFor ctxIds
   vidCaps <- videoCaptionsFor ctxIds
   let enrich = applyVideoCaptions vidCaps . tagMediaMarkers . applyStickerCaptions capMap
-      ambient'' = map enrich ambient'
-      mention'' = map enrich mention'
+      transcript'' = map enrich transcript'
       pinnedItems'' = map enrich pinnedItems'
       replyCtx' = fmap (\(r, f, kids) -> (enrich r, f, map enrich kids)) replyCtx0
       replyItems = maybe [] (\(r, _, kids) -> r : kids) replyCtx'
@@ -340,20 +368,19 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief inFlight' s
   -- trigger itself, pins) go inline.  Everything else keeps a text
   -- marker, upgraded with the message id ("[image#123]") so the model
   -- can pull it via the view_image tool when it actually matters.
-  (ambientCtx, mentionCtx) <-
+  transcriptCtx <-
     if multimodal'
       then do
         let inlineIds =
               Set.fromList (mid : map (.messageId) (replyItems <> pinnedItems''))
             taggable =
               [ h.messageId
-              | h <- ambient'' <> mention'',
+              | h <- transcript'',
                 h.messageId `Set.notMember` inlineIds
               ]
         tagIds <- messagesWithImages taggable
-        let tag = tagImageMarkers imgCaps tagIds
-        pure (map tag ambient'', map tag mention'')
-      else pure (ambient'', mention'')
+        pure (map (tagImageMarkers imgCaps tagIds) transcript'')
+      else pure transcript''
   -- The trigger itself may BE a 转发聊天记录 (typical in private
   -- chat, where any message dispatches).  Its children are being
   -- fetched by the forward worker right now — wait for them, then
@@ -416,8 +443,8 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief inFlight' s
         { defaultPersona = defaultPersona,
           session = s,
           triggerMessage = gm,
-          ambient = ambientCtx,
-          mention = mentionCtx,
+          transcript = transcriptCtx,
+          historyTurns = historyTurns',
           inFlight = inFlight',
           pinnedItems = pinnedItems'',
           replyCtx = replyCtx',
@@ -591,8 +618,7 @@ contextRoster pi' =
           : (senderId, senderDisplayName pi'.triggerMessage)
           : [ (h.userId, displayName selfId' h)
             | h <-
-                pi'.mention
-                  <> pi'.ambient
+                pi'.transcript
                   <> pi'.pinnedItems
                   <> maybe [] (\(r, _, _) -> [r]) pi'.replyCtx,
               h.userId /= selfId'
@@ -923,20 +949,25 @@ renderContext pi' =
                  "  成员对照（[@#QQ号] 即 @某人）："
                    <> T.intercalate "、" ["[@#" <> T.pack (show u) <> "]=" <> n | (u, n) <- roster]
                ]
-      mentionIds = [h.messageId | h <- pi'.mention]
-      ambientNoDup =
-        [a | a <- pi'.ambient, a.messageId `notElem` mentionIds]
-      -- Multi-chunk replies persist as several consecutive bot rows;
-      -- merge them back into one assistant turn — consecutive
-      -- same-role messages upset strict providers (Anthropic).
-      mentionMessages =
-        mergeAssistantRuns (concatMap (historyToChat' pi'.tz selfId' pi'.inFlight) pi'.mention)
+      -- Questions somebody else's turn is already handling never reach
+      -- the model, whichever shape we build.
+      visible = dropInFlight selfId' pi'.inFlight pi'.transcript
+      -- Flat: everything goes in the user body.  Turns: everything up
+      -- to the bot's last message becomes turns, the rest rejoins the
+      -- user body so the turn list ends on an assistant.
+      (turnRows, bodyRows)
+        | pi'.historyTurns = splitTrailingUser selfId' visible
+        | otherwise = ([], visible)
+      mTranscript
+        | pi'.historyTurns = if null bodyRows then Nothing else Just bodyRows
+        | otherwise = Just bodyRows
       userBody =
         renderUser
           pi'.tz
+          pi'.now
           selfId'
           pi'.origin
-          ambientNoDup
+          mTranscript
           pi'.replyCtx
           pi'.pinnedItems
           pi'.triggerForward
@@ -962,9 +993,15 @@ renderContext pi' =
             TextBlock (userBody <> "\n\n" <> i0.piLabel)
               : mediaBlock i0.piDataUrl
               : concat [[TextBlock i.piLabel, mediaBlock i.piDataUrl] | i <- rest]
+      -- Default: system prompt then one user message, nothing else.
+      -- Prior bot replies live in the transcript as ordinary lines
+      -- rather than 'MsgAssistant' turns — see 'PromptInputs.transcript'
+      -- for why the roles were a lie in a group, and note that this
+      -- also removes the last way two consecutive same-role messages
+      -- could reach a strict provider: there is exactly one of each.
       messages =
         [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) envText effectivePersona memBlock)]
-          <> mentionMessages
+          <> historyTurnMessages pi'.tz selfId' turnRows
           <> [userMessage]
    in messages
 
@@ -998,65 +1035,93 @@ memoryLine tz' m =
     <> ") "
     <> oneLine m.memContent
 
--- | Reconstruct one bot/user turn as an OpenAI/Anthropic ChatMessage.
--- A row sent by the bot becomes 'MsgAssistant', kept verbatim — a
--- @[HH:MM Max #id]@ prefix there would teach the model to open its
--- replies the same way.  Everything else (members @-ing the bot)
--- becomes 'MsgUser' rendered like an ambient history line
--- (@[HH:MM \<name\> #\<msgid\>]: …@): same format the marker guide
--- documents, and — since mention rows are deduped *out* of the
--- ambient block — the only place these messages get a quotable id
--- and a timestamp at all (mention history has no time floor; without
--- one the model can't tell yesterday's thread from this minute's).
-historyToChat :: TimeZone -> Int64 -> HistoryItem -> ChatMessage
-historyToChat tz' botId h
-  | h.userId == botId = MsgAssistant h.renderedText
-  | otherwise = MsgUser (renderHistoryLine tz' botId h)
-
--- | 'historyToChat', plus a stand-in answer for questions another turn
--- is still working on ('PromptInputs.inFlight').
+-- | Interleave the two history queries into one chronological
+-- transcript, keeping one row per message id.
 --
--- Their real reply hasn't been written yet, so the row would otherwise
--- be a trailing 'MsgUser' with nothing after it — indistinguishable
--- from a question the bot ignored, and the model duly answers it on
--- top of the one it was actually asked.  Both people then get the same
--- answer, one of them twice.  Same trick as
--- 'Max.DB.Message.insertSilence': give the turn a visible outcome so
--- it stops reading as owed.
-historyToChat' :: TimeZone -> Int64 -> Set Int64 -> HistoryItem -> [ChatMessage]
-historyToChat' tz' botId inFlight h
-  | h.userId /= botId, h.messageId `Set.member` inFlight =
-      [historyToChat tz' botId h, MsgAssistant inFlightNote]
-  | otherwise = [historyToChat tz' botId h]
-
--- | Deliberately phrased as something the bot already did, not as an
--- instruction: it sits in an assistant turn, and instructions there
--- read as the model's own words and get imitated.
-inFlightNote :: Text
-inFlightNote = "（这条我已经在另一轮里单独回复了，本轮不再重复。）"
-
--- | Collapse runs of consecutive 'MsgAssistant' into one message,
--- chunks separated by a blank line.  (The sender splits on [split]
--- markers; joining with a blank line reads the same without teaching
--- the model to echo the marker.)
-mergeAssistantRuns :: [ChatMessage] -> [ChatMessage]
-mergeAssistantRuns = foldr step []
+-- Both sources are already sorted, but they overlap (every mention row
+-- recent enough is also a recent row) and neither is a superset of the
+-- other, so this is a merge and not a concatenation.  Ties break on
+-- message id: two rows can share a timestamp at second granularity,
+-- and a transcript that reorders itself between dispatches costs a
+-- prompt-cache prefix for nothing.
+mergeHistory :: [HistoryItem] -> [HistoryItem] -> [HistoryItem]
+mergeHistory as bs =
+  Map.elems . Map.fromList $
+    [(sortKey h, h) | h <- as <> bs]
   where
-    step (MsgAssistant a) (MsgAssistant b : rest) =
-      MsgAssistant (a <> "\n\n" <> b) : rest
-    step m acc = m : acc
+    sortKey h = (h.receivedAt, h.messageId)
+
+-- | Drop the messages another turn is already answering.
+--
+-- Their real reply hasn't been written yet, so each would sit in the
+-- context as a question with nothing after it — indistinguishable from
+-- one the bot ignored, and the model duly answers it on top of the one
+-- it was actually asked.  Both people then get the same answer, one of
+-- them twice.
+--
+-- Hiding rather than annotating: an explanation of why a line should
+-- be skipped is one more string in the prompt that the model has to
+-- correctly read as not-speech, and the annotation that used to live
+-- here failed exactly that way — it came back as the bot's reply.
+-- Bot rows are never dropped; nothing puts the bot's own id in flight,
+-- but losing its side of the conversation would be the worse failure.
+dropInFlight :: Int64 -> Set Int64 -> [HistoryItem] -> [HistoryItem]
+dropInFlight botId inFlight =
+  filter (\h -> h.userId == botId || h.messageId `Set.notMember` inFlight)
+
+-- | History as real @user@\/@assistant@ turns
+-- ('PromptInputs.historyTurns').
+--
+-- Runs of consecutive same-side rows collapse into one message: the
+-- group's chatter is mostly not the bot, so without this a group
+-- transcript becomes a long run of consecutive @user@ messages, which
+-- strict providers reject.  Non-bot rows keep the same
+-- @[HH:MM \<name\> #\<id\>]:@ label the flat shape uses — the role says
+-- only \"not the bot\", so in a group with N speakers the label is
+-- still doing all the work of saying who spoke.
+--
+-- Bot rows go in verbatim, deliberately unlabelled: a
+-- @[HH:MM Max #id]@ prefix in the assistant slot is the one thing most
+-- likely to teach the model to open its own replies that way.  The
+-- cost is that the bot's own messages have no quotable id in this
+-- shape — the flat transcript is the only one where they do.
+historyTurnMessages :: TimeZone -> Int64 -> [HistoryItem] -> [ChatMessage]
+historyTurnMessages tz' botId =
+  map render . groupBy ((==) `on` isBot)
+  where
+    isBot h = h.userId == botId
+    render hs
+      | all isBot hs = MsgAssistant (T.intercalate "\n\n" (map (.renderedText) hs))
+      | otherwise = MsgUser (T.intercalate "\n" (map (renderHistoryLine tz' botId) hs))
+
+-- | Split the transcript so the turn list ends on an assistant turn:
+-- any non-bot rows trailing the bot's last message go back into the
+-- final user message, which is itself a user turn.
+--
+-- Without this the handover from history to now is two consecutive
+-- user messages — precisely the thing this shape exists to avoid, and
+-- it happens on every turn where the last thing said wasn't said by
+-- the bot, which in a group is most of them.
+splitTrailingUser :: Int64 -> [HistoryItem] -> ([HistoryItem], [HistoryItem])
+splitTrailingUser botId hs =
+  let (revTail, revHead) = span (\h -> h.userId /= botId) (reverse hs)
+   in (reverse revHead, reverse revTail)
 
 renderUser ::
   TimeZone ->
+  UTCTime -> -- now; the current message carries no timestamp of its own
   Int64 ->
   TriggerOrigin ->
-  [HistoryItem] ->
+  -- | The conversation transcript, chronological — or 'Nothing' when
+  -- it is being emitted as separate turns and the @[recent messages]@
+  -- block should not appear here at all.
+  Maybe [HistoryItem] ->
   Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
   [HistoryItem] -> -- pinned items, in user pin order
   [HistoryItem] -> -- trigger's own forward children (trigger IS a 转发)
   GroupMessage ->
   Text
-renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' triggerFwd' gm =
+renderUser tz' now' selfId' origin' mTranscript replyCtx' pinnedItems' triggerFwd' gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -1067,10 +1132,10 @@ renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' triggerFwd' gm =
               T.intercalate "\n" (map (renderHistoryLine tz' selfId') pinnedItems'),
               ""
             ],
-        ["[recent messages]"],
-        if null ambient'
-          then ["(无历史消息)"]
-          else map (renderHistoryLine tz' selfId') ambient',
+        case mTranscript of
+          Nothing -> []
+          Just [] -> ["[recent messages]", "(无历史消息)"]
+          Just hs -> "[recent messages]" : map (renderHistoryLine tz' selfId') hs,
         [""],
         case replyCtx' of
           Nothing -> []
@@ -1083,7 +1148,7 @@ renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' triggerFwd' gm =
         case origin' of
           OriginProactive ->
             [ "[current message — 没人 @ 你，意图识别判断你可能想接话]",
-              renderCurrentLine gm
+              renderCurrentLine tz' now' gm
             ]
               <> renderReplyForward tz' selfId' triggerFwd'
               <> [ "",
@@ -1105,7 +1170,7 @@ renderUser tz' selfId' origin' ambient' replyCtx' pinnedItems' triggerFwd' gm =
             ]
           OriginDirect ->
             [ "[current message]",
-              renderCurrentLine gm
+              renderCurrentLine tz' now' gm
             ]
               <> renderReplyForward tz' selfId' triggerFwd'
               <> [ "",
@@ -1166,11 +1231,26 @@ renderReplyFiles xs =
     sizePart (Just n) = ", bytes=" <> T.pack (show n)
     tquote t = "\"" <> t <> "\""
 
-renderCurrentLine :: GroupMessage -> Text
-renderCurrentLine gm =
+-- | The live message, rendered in exactly the shape 'renderHistoryLine'
+-- uses.  One format for "a message in this conversation", whether it
+-- arrived a minute ago or just now — the format guide documents that
+-- one shape, and a second shape for the current line was a small lie
+-- the model had to work around.
+--
+-- Takes the clock because a 'GroupMessage' carries no timestamp: it is
+-- the message being handled right now, so "now" is its time.
+renderCurrentLine :: TimeZone -> UTCTime -> GroupMessage -> Text
+renderCurrentLine tz' now' gm =
   let txt = stripBotMention gm.selfId (renderPlainText gm.message)
       MessageId mid = gm.messageId
-   in "[#" <> T.pack (show mid) <> "] <" <> senderDisplayName gm <> ">: " <> T.strip txt
+   in "["
+        <> fmtHM tz' now'
+        <> " "
+        <> senderDisplayName gm
+        <> " #"
+        <> T.pack (show mid)
+        <> "]: "
+        <> T.strip txt
 
 stripBotMention :: UserId -> Text -> Text
 stripBotMention (UserId u) t =

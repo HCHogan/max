@@ -24,8 +24,12 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
    落库到 `messages` 表；图片/视频/转发由 worker 异步下载进 blob store。
 2. `@bot` / 引用 bot / 私聊 / 意图识别 / 戳一戳 触发 dispatch。
 3. `buildContext` 查库拼上下文：
-   - ambient：`fetchRecentInGroup`，最近 **40** 条（`history_window`，默认 40）；
-   - mention 历史：`fetchMentionHistory`，同样上限 40 行，重建成 user/assistant 轮；
+   - **transcript**：两条查询归并成一份按时间排序的转录（按 message_id 去重）——
+     `fetchRecentInGroup` 取最近 **40** 条（`history_window`，默认 40），
+     `fetchMentionHistory` 取最近 40 条**跟 bot 有关**的（bot 自己的行、@ 它的、
+     回复它的、它回复过的）。两条上限一样但过滤不同,所以回溯距离不同：热闹的群里
+     后者能捞回前者早就冲掉的往来，只查一条会让 bot 对自己对话的记忆被群里的
+     水量稀释。私聊里最近 40 条本身就是全部往来，第二条查询会返回同样的行，跳过；
    - pin、引用链（引用目标 + 其附件文件 + 转发展开 ≤30 行）、记忆、群信息；
    - sticker 有 caption 的换成 `[sticker#id: 描述]`；普通图片/视频有简介的
      （media caption worker 用视觉模型后台生成，视频取首帧）渲染成
@@ -106,32 +110,31 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 "
     },
 
-    // ───── [1..k] mention 历史：从 messages 表重建的既往 @bot 往来 ─────
-    // 成员行用和 recent 块一致的 [HH:MM <name> #<msgid>]: 前缀（可引用、
-    // 可判断时间）；bot 自己的行保持原文（加前缀会教模型模仿着输出前缀），
-    // 连续多段回复合并回一条 assistant（空行分隔）。上限 history_window=40 行。
-    // bot 的沉默也落库（合成行，rendered_text 就是 "[silence:…]"），会作为
-    // assistant 轮出现——被拒答过的问题不会在下一次 dispatch 里显得"还没回"。
-    {
-      "role": "user",
-      "content": "[21:14 阿飞 #7390]: [@#10086] 帮我看下 HAL_Delay 卡死一般是什么原因"
-    },
-    {
-      "role": "assistant",
-      "content": "十有八九是 SysTick 中断优先级被你改了，或者在中断里调了 HAL_Delay。
-
-把 stm32f1xx_it.c 里的 SysTick_Handler 贴出来看看。"
-    },
-    {
-      "role": "user",
-      "content": "[21:16 老张 #7392]: [sticker#301: 一只柴犬瘫在地上，配字\"寄\"] 这就寄了？"
-    },
-    {
-      "role": "assistant",
-      "content": "还没看到代码，先别急着立碑。"
-    },
-
     // ───── [最后一条] 本 turn 正文 + 内联附件（multimodal → content blocks 数组）─────
+    // 整个对话只有 system + user 两条。既往往来（包括 bot 自己说过的话）都在
+    // 下面 [recent messages] 的转录里，行首 [HH:MM <name> #<msgid>]:，bot 自己
+    // 那行 name 就是 "Max"。
+    //
+    // 为什么不用 user/assistant 轮：群里有 N 个说话人，两种 wire format 都表达
+    // 不了——`user` 把所有人压成一个，`assistant` 丢掉 bot 当时在回谁。带说话人 +
+    // 时间 + id 的一行严格信息更多，而且任何模型都读得懂，因为那就是正文。
+    // （Chat Completions 的 `name` 字段正是为此而生，但不能赌：Responses API
+    // 直接把它删了，Anthropic 从来没有，而且它没有任何文档化的校验，
+    // OpenAI-兼容的第三方端点拿它怎么办全凭天意。）
+    //
+    // 副作用：连续同 role 消息在结构上不可能出现了（各只有一条）；bot 的历史
+    // 回复也不再摆在 assistant 位置上，弱模型没法把"接着输出自己的话"当成
+    // 最省力的模式续下去。
+    // bot 的沉默同样落库（合成行，rendered_text 就是 "[silence:…]"），在转录里
+    // 是一条 Max 的行——被拒答过的问题不会在下一次 dispatch 里显得"还没回"。
+    // 另一轮正在回的消息**直接不进上下文**——看不见就不会被重复回答，
+    // 而且不用往 prompt 里加一句"这条别答"让模型去理解（那条批注真的被
+    // 原样当成回复发出去过）。bot 自己的行不受影响。
+    //
+    // 形状可以按 profile 切换：`history_as_turns: true` 换回
+    // user/assistant 轮（连续同侧的行合并成一条，bot 的行不带前缀）。
+    // 两种形状各有一个已知风险——轮式不可能模仿行首前缀但有 assistant
+    // 槽位可续写，扁平反过来——只有真跑才分得出高下，所以留成开关。
     // 首个附件 label 折进正文末尾；之后 label 和图交替，保证不出现两个相邻
     // text block（严格 provider 的要求）。
     {
@@ -148,6 +151,7 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 [22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]
 [22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]
 [22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路，接着示波器探头](42 秒)
+[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者你还挂在 1X 档
 [22:56 阿飞 #7409]: [card: 哔哩哔哩 | 【教程】示波器探头10X档到底干嘛用的 | UP主：某电子人 | https://b23.tv/abc123]
 [22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了
 [22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买
@@ -226,8 +230,8 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 - **易变内容全在 system prompt 末尾**：[environment]（含当前时间）和 [memories]
   放最后，前面的 persona/风格/标记表跨 dispatch 逐字节相同——provider 的前缀
   缓存能从一次 dispatch 活到下一次（效果看日志里的 cached_prompt_tokens）。
-- **私聊**时：`[recent messages]`/ambient 块不存在，最近 40 条全部变成
-  user/assistant 轮；system 里场景块换私聊版、没有"引用要主动用"那条。
+- **私聊**时：转录就是最近 40 条本身（不再另查 mention）；system 里场景块换
+  私聊版、没有"引用要主动用"那条。
 - **非多模态 profile**：最后一条 user 是纯字符串 `content`，图片保持
   `[image]` 文字标记，标记表里的说明也换成"你看不到内容"。
 - **proactive / 戳一戳** 触发时 `[current message]` 的标题和收尾指引换成

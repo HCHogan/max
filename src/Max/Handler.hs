@@ -26,6 +26,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Time (getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
@@ -44,7 +45,7 @@ import Max.DB.Permissions (lookupGrant)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
 import Max.DB.Message (insertGroupMessage, insertOutbound, insertSilence)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
-import Max.Effects.LLM (LLM, isProfileMultimodal)
+import Max.Effects.LLM (LLM, isProfileHistoryTurns, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, callAction, sendAction)
 import Max.Env (BotEnv (..))
 import Max.Faces (faceIdByName)
@@ -363,7 +364,8 @@ dispatchCommand gm body = localDomain "cmd" $ do
         -- context at all.  Nothing running anywhere is the one case
         -- with no home for it: say so with the failure face, quietly.
         FeedbackNote noteBody -> do
-          let line = renderCurrentLine (gm {message = [SegText noteBody]})
+          noteAt <- liftIO getCurrentTime
+          let line = renderCurrentLine env.beTimeZone noteAt (gm {message = [SegText noteBody]})
           aimed <- case replyTarget of
             Just tgt -> liftIO (pushToTrigger env.beTasks targetGid Nothing tgt line)
             Nothing -> pure Nothing
@@ -573,10 +575,11 @@ dispatchLLM origin gm = do
                   MessageId midRaw = gm.messageId
                   UserId selfRaw = gm.selfId
               rows <- fetchRecentInGroup gidRaw 0 s.clearedAt icfg.icContextLines
+              noteAt <- liftIO getCurrentTime
               let ctxLines =
                     map (renderHistoryLine env.beTimeZone selfRaw) $
                       filter (\h -> h.messageId /= midRaw) rows
-                  newLine = renderCurrentLine gm
+                  newLine = renderCurrentLine env.beTimeZone noteAt gm
               isSupp <- classifySupplement icfg ctxLines newLine
               if not isSupp
                 then pure False
@@ -600,12 +603,13 @@ dispatchLLM origin gm = do
 
     dispatch env s = do
       multimodal <- isProfileMultimodal s.model
+      historyTurns <- isProfileHistoryTurns s.model
       (mentionable, rosterNames, brief) <- fetchGroupContext gm.groupId
       -- Questions another turn is already working on.  Ours is in there
       -- too (claimed just above) — drop it, it isn't history yet.
       let MessageId ownMid = gm.messageId
       inFlight <- Set.delete ownMid <$> liftIO (inFlightTriggers env.beTasks gm.groupId)
-      ctx <- buildContext env.bePersona env.beHistoryWindow multimodal origin env.beBlobRoot env.beTimeZone brief inFlight s gm
+      ctx <- buildContext env.bePersona env.beHistoryWindow multimodal historyTurns origin env.beBlobRoot env.beTimeZone brief inFlight s gm
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
