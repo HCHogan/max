@@ -2,7 +2,7 @@ module Main (main) where
 
 import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
-import Control.Exception (AsyncException (UserInterrupt), bracket, bracket_, throwTo)
+import Control.Exception (AsyncException (UserInterrupt), bracket, finally, throwTo)
 import Control.Monad (unless)
 import Data.Foldable (for_)
 import Data.Int (Int64)
@@ -20,15 +20,15 @@ import Log.Backend.StandardOutput (withStdOutLogger)
 import Max.Config (AppConfig (..), loadConfig)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
-import Max.Effects.Agent (Agent, DispatchContext (..), defaultLimits, runAgent)
+import Max.Effects.Agent (Agent, defaultLimits, runAgent)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (LLM, LLMRegistry (..), runLLM)
 import Max.Effects.NapCat (NapCat, qqBackend, runNapCat)
 import Max.Embedder (embedWorker)
-import Max.Embedding (EmbedClient, newEmbedClient)
+import Max.Embedding (newEmbedClient)
 import Max.Env (BotEnv (..))
-import Max.Reminder (ReminderScheduler, newReminderScheduler, reminderWorker)
+import Max.Reminder (newReminderScheduler, reminderWorker)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
@@ -51,19 +51,7 @@ import Max.Shutdown (ShutdownState, beginDrain, drainWorker, newShutdownState)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
-import Max.Tools (builtinsFor)
-import Max.Tools.Bilibili (bilibiliToolsFor)
-import Max.Tools.Browser (browserToolsFor)
-import Max.Tools.Files (fileToolsFor)
-import Max.Tools.Group (groupToolsFor)
-import Max.Tools.Images (imageToolsFor)
-import Max.Tools.Memory (memoryToolsFor)
-import Max.Tools.Pins (pinToolsFor)
-import Max.Tools.Reminder (reminderToolsFor)
-import Max.Tools.Sandbox (sandboxToolsFor)
-import Max.Tools.Search (searchToolsFor)
-import Max.Tools.Stickers (stickerToolsFor)
-import Max.Tools.Video (videoToolsFor)
+import Max.Toolset (allToolsFor)
 import OneBot.Event (Event)
 import OneBot.Server (Client, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
@@ -86,16 +74,17 @@ main = do
   cfg <- loadConfig
   bracket (newDbPool cfg.db) closeDbPool $ \pool -> do
     applied <- runMigrations pool cfg.migrationsDir
-    -- Sandbox registry + lifecycle:
-    --   * reapStaleSandboxes on entry kills any 'max-sb-*' containers
-    --     left over from a prior unclean exit (we're the only writer
-    --     of that namespace).
-    --   * destroyAllSandboxes on exit kills everything the registry
-    --     knows about — fires on UserInterrupt (Ctrl+C / SIGTERM) too.
-    bracket_ (reapStaleSandboxes >> reapStaleBrowsers) (pure ()) $ do
-      sandboxes <- newSandboxRegistry
-      browsers <- newBrowserRegistry cfg.browserProxy
-      bracket_ (pure ()) (destroyAllSandboxes sandboxes >> destroyAllBrowsers browsers) $ do
+    -- Container lifecycle, both ends.  Reaping first kills any
+    -- 'max-sb-*' / browser containers left over from a prior unclean
+    -- exit — we are the only writer of that namespace, so anything
+    -- still standing is orphaned.  Destroying on the way out covers
+    -- everything the registries know about, and fires on
+    -- UserInterrupt (Ctrl+C / SIGTERM) too.
+    reapStaleSandboxes
+    reapStaleBrowsers
+    sandboxes <- newSandboxRegistry
+    browsers <- newBrowserRegistry cfg.browserProxy
+    ( do
         withStdOutLogger $ \logger -> do
           eventQ <- newTQueueIO
           -- One bell for all three media workers: the jobs live in
@@ -110,22 +99,7 @@ main = do
           mEmbed <- traverse newEmbedClient cfg.embedding
           mIntentSt <- traverse (const newIntentState) cfg.intent
           startedAt <- getCurrentTime
-          let toolFactory dc =
-                builtinsFor cfg.timezone mEmbed dc
-                  <> reminderToolsFor cfg.timezone reminders dc
-                  <> groupToolsFor dc
-                  <> imageToolsFor cfg.timezone cfg.imagesDir dc
-                  <> memoryToolsFor mEmbed dc
-                  <> pinToolsFor sessions cfg.llm.defaultName dc
-                  <> bilibiliToolsFor cfg.timezone dc
-                  <> sandboxToolsFor cfg.timezone dc.dcGroupId sandboxes
-                  <> fileToolsFor cfg.timezone dc.dcGroupId cfg.imagesDir sandboxes
-                  <> (if dc.dcStickers then stickerToolsFor mEmbed else [])
-                  <> maybe [] searchToolsFor cfg.search
-                  -- Browser + video toolsets only for multimodal profiles.
-                  <> (if dc.dcMultimodal then browserToolsFor dc.dcGroupId browsers else [])
-                  <> (if dc.dcMultimodal then videoToolsFor cfg.imagesDir dc else [])
-              env =
+          let env =
                 BotEnv
                   { bePersona = cfg.persona,
                     beHistoryWindow = cfg.historyWindow,
@@ -142,6 +116,8 @@ main = do
                     beShutdown = shutdown,
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
+                    beReminders = reminders,
+                    beSearch = cfg.search,
                     beMemoryExtract = cfg.memoryExtractProfile,
                     beIntent = cfg.intent,
                     beEmbed = mEmbed
@@ -160,8 +136,10 @@ main = do
             . runWreq
             . runLLM cfg.llm
             . runReader env
-            . runAgent defaultLimits toolFactory tasks
-            $ runApp cfg applied mEmbed reminders eventQ fetchSig mIntentSt clientRef mainTid
+            . runAgent defaultLimits (allToolsFor env) tasks
+            $ runApp cfg applied eventQ fetchSig mIntentSt clientRef mainTid
+      )
+      `finally` (destroyAllSandboxes sandboxes >> destroyAllBrowsers browsers)
 
 -- | SIGTERM handler.  Deliberately does no waiting itself: it flips the
 -- drain flag and returns, leaving the wait (and its logging) to
@@ -188,8 +166,6 @@ runApp ::
   ) =>
   AppConfig ->
   [String] ->
-  Maybe EmbedClient ->
-  ReminderScheduler ->
   TQueue Event ->
   FetchSignal ->
   Maybe IntentState ->
@@ -197,7 +173,7 @@ runApp ::
   -- | Main thread, for 'drainWorker' to interrupt once drained.
   ThreadId ->
   Eff es ()
-runApp cfg applied mEmbed reminders eventQ fetchSig mIntentSt clientRef mainTid =
+runApp cfg applied eventQ fetchSig mIntentSt clientRef mainTid =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -219,54 +195,46 @@ runApp cfg applied mEmbed reminders eventQ fetchSig mIntentSt clientRef mainTid 
     unless (null applied) $
       logInfo "migrations applied" $
         object ["files" .= applied]
-    -- Three long-lived siblings + the server. 'link' rethrows any worker
-    -- exception into this thread so a worker silently dying takes the whole
-    -- process down (systemd / supervisor restarts) rather than leaving a
-    -- stuck queue. Ctrl+C still cascades via withAsync as usual.
-    withAsync (imageWorker cfg.imageWorkers fetchSig) $ \aImg -> do
-      link aImg
-      withAsync (forwardWorker fetchSig) $ \aFwd -> do
-        link aFwd
-        withAsync (fileWorker fetchSig) $ \aFile -> do
-          link aFile
-          -- No embedding config → this async completes immediately;
-          -- linking a successfully-finished async is a no-op.
-          withAsync (for_ mEmbed embedWorker) $ \aE -> do
-            link aE
-            -- Same trick: no caption profile → immediate no-op async.
-            -- Two independent caption loops under one async: stickers
-            -- and ordinary photos/videos poll separately, so a deep
-            -- sticker backlog can't starve fresh chat media (and vice
-            -- versa); either one crashing still takes the process down
-            -- via the link.
-            withAsync
-              ( for_ cfg.stickerCaptionProfile $ \p ->
-                  concurrently_
-                    (stickerCaptionWorker p cfg.imagesDir)
-                    (mediaCaptionWorker p cfg.imagesDir)
-              )
-              $ \aCap -> do
-                link aCap
-                withAsync (reminderWorker cfg.timezone reminders) $ \aRem -> do
-                  link aRem
-                  -- No intent config → immediate no-op async, same trick
-                  -- as the caption worker above.
-                  env :: BotEnv <- ask
-                  withAsync
-                    ( for_ ((,) <$> cfg.intent <*> mIntentSt) $ \(ic, st) ->
-                        intentWorker ic cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions dispatchProactive st
-                    )
-                    $ \aInt -> do
-                      link aInt
-                      withAsync (handleEvents eventQ fetchSig mIntentSt) $ \aH -> do
-                        link aH
-                        -- WeChat inbound (no-op async when unconfigured,
-                        -- same trick as the caption worker).
-                        withAsync (for_ cfg.wechatpad (\wc -> wechatpadWorker wc eventQ)) $ \aWx -> do
-                          link aWx
-                          -- Parked on the shutdown flag until SIGTERM,
-                          -- then waits out the in-flight dispatches
-                          -- before interrupting main.
-                          withAsync (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown) $ \aDrain -> do
-                            link aDrain
-                            runServer cfg.server eventQ clientRef
+    env :: BotEnv <- ask
+    -- Long-lived siblings, then the server.  An optional worker is an
+    -- action that does nothing when its config is absent: the async
+    -- completes immediately and linking a finished async is a no-op, so
+    -- "off" needs no special case here.
+    withLinkedWorkers
+      [ imageWorker cfg.imageWorkers fetchSig,
+        forwardWorker fetchSig,
+        fileWorker fetchSig,
+        for_ env.beEmbed embedWorker,
+        -- Two caption loops under one worker: stickers and ordinary
+        -- photos/videos poll separately, so a deep sticker backlog
+        -- can't starve fresh chat media (and vice versa).  Either one
+        -- crashing still takes the process down.
+        for_ cfg.stickerCaptionProfile $ \p ->
+          concurrently_
+            (stickerCaptionWorker p cfg.imagesDir)
+            (mediaCaptionWorker p cfg.imagesDir),
+        reminderWorker cfg.timezone env.beReminders,
+        for_ ((,) <$> cfg.intent <*> mIntentSt) $ \(ic, st) ->
+          intentWorker ic cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions dispatchProactive st,
+        handleEvents eventQ fetchSig mIntentSt,
+        for_ cfg.wechatpad $ \wc -> wechatpadWorker wc eventQ,
+        -- Parked on the shutdown flag until SIGTERM, then waits out the
+        -- in-flight dispatches before interrupting main.
+        drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown
+      ]
+      (runServer cfg.server eventQ clientRef)
+
+-- | Run @act@ with every worker alive alongside it.
+--
+-- 'link' rethrows a worker's exception into this thread, so one dying
+-- silently takes the whole process down (systemd restarts it) instead
+-- of leaving a stuck queue behind.  Ctrl+C still cascades through
+-- 'withAsync' as usual.
+--
+-- A fold rather than a staircase of nested 'withAsync': the workers
+-- differ only in which action they run, and stating "link it" once
+-- keeps a new worker from quietly joining unlinked.
+withLinkedWorkers :: Concurrent :> es => [Eff es ()] -> Eff es a -> Eff es a
+withLinkedWorkers workers act = foldr step act workers
+  where
+    step w rest = withAsync w $ \a -> link a >> rest

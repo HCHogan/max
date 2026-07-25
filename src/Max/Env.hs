@@ -23,8 +23,10 @@ import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
 import Max.Embedding (EmbedClient)
 import Max.Intent (IntentConfig)
+import Max.Reminder (ReminderScheduler)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
+import Max.Tools.Search (SearchConfig)
 import Max.Shutdown (ShutdownState)
 import Max.Tasks (TaskRegistry)
 
@@ -63,6 +65,11 @@ data BotEnv = BotEnv
     beAdminTarget :: !(TVar (Map Int64 Int64)),
     beSandboxes :: !SandboxRegistry,
     beBrowsers :: !BrowserRegistry,
+    -- | Scheduler behind the reminder tools and the reminder worker.
+    beReminders :: !ReminderScheduler,
+    -- | Web-search backend when configured ('Nothing' = the
+    -- @web_search@ tool isn't registered).
+    beSearch :: !(Maybe SearchConfig),
     -- | Profile for post-dispatch memory extraction ('Nothing' = off).
     beMemoryExtract :: !(Maybe Text),
     -- | Proactive-trigger intent config ('Nothing' = feature off).

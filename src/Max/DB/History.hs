@@ -82,7 +82,7 @@ fetchRecentInGroup gid excludeId since n = do
         \    AND message_id <> ? \
         \    AND forwarded_in_message_id IS NULL \
         \    AND NOT is_synthetic \
-        \    AND NOT is_command \
+        \    AND kind = 'chat' \
         \  ORDER BY received_at DESC \
         \  LIMIT ?"
         (gid, excludeId, n)
@@ -94,7 +94,7 @@ fetchRecentInGroup gid excludeId since n = do
         \    AND message_id <> ? \
         \    AND forwarded_in_message_id IS NULL \
         \    AND NOT is_synthetic \
-        \    AND NOT is_command \
+        \    AND kind = 'chat' \
         \    AND received_at > ? \
         \  ORDER BY received_at DESC \
         \  LIMIT ?"
@@ -156,7 +156,7 @@ fetchMentionHistory gid botId excludeId since n = do
         \  WHERE m.group_id = ? \
         \    AND m.message_id <> ? \
         \    AND (NOT m.is_synthetic OR m.user_id = ?) \
-        \    AND NOT m.is_command \
+        \    AND m.kind = 'chat' \
         \    AND m.forwarded_in_message_id IS NULL \
         \    AND (m.user_id = ? OR m.rendered_text LIKE ? OR m.rendered_text LIKE ? \
         \         OR EXISTS (SELECT 1 FROM messages b \
@@ -175,7 +175,7 @@ fetchMentionHistory gid botId excludeId since n = do
         \  WHERE m.group_id = ? \
         \    AND m.message_id <> ? \
         \    AND (NOT m.is_synthetic OR m.user_id = ?) \
-        \    AND NOT m.is_command \
+        \    AND m.kind = 'chat' \
         \    AND m.forwarded_in_message_id IS NULL \
         \    AND m.received_at > ? \
         \    AND (m.user_id = ? OR m.rendered_text LIKE ? OR m.rendered_text LIKE ? \

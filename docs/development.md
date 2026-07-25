@@ -18,16 +18,29 @@ cabal test all --test-show-details=direct    # both, verbose
 
 Pure logic in `test/` mirroring the library layout:
 
+- `Max.BilibiliSpec` — BV / b23.tv / URL extraction from cards and plain text
 - `Max.Command.ParserSpec` — every `!cmd` verb + edge cases
-- `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
+- `Max.Command.PermissionSpec` — tier resolution and capability gating
 - `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip + `parseToolCall` tolerance
+- `Max.HandlerSpec` — `[silence]` parsing, marker stripping, `isCommandMessage`
+- `Max.IntentSpec` — proactive verdict parsing and the heuristic gate
 - `Max.MCP.ClientSpec` — Streamable-HTTP body decoding (JSON + SSE)
 - `Max.MemoryExtractSpec` — extractor op-JSON parsing (fences, prose, bad actions)
-- `Max.PersistenceSpec` — `withEphemeral` Reader scoping
-- `Max.PromptSpec` — `renderContext`: section ordering, roster/名片 identity, 私聊 scene,
-  memory block placement, quoted-forward expansion, assistant-run merging
-- `Max.UtilSpec` — reply paragraph splitting (fences, caps)
+- `Max.PlatformSpec` — platform-id mapping
+- `Max.PromptSpec` — `renderContext`: the flat transcript and the
+  `history_as_turns` shape (including that neither can produce two consecutive
+  same-role messages), section ordering, roster/名片 identity, 私聊 scene,
+  memory block placement, quoted-forward expansion, in-flight hiding
+- `Max.RenderSpec` — markdown table → typst
+- `Max.ReplySpec` — reply paragraph splitting (fences, `[split]`, chunk ceiling)
+- `Max.Sandbox.DockerSpec` — package wrapping and exec argv
+- `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
+- `Max.ShutdownSpec` — drain flag / in-flight counter transitions
+- `Max.TasksSpec` — the task registry: feeding a running turn, aiming a
+  `!feedback` by trigger, in-flight bookkeeping, `attachTask` adoption
+- `Max.WreqSpec` — HTTP wrapper behaviour
 - `OneBot.EventSpec` — group + private event parsing
+- `OneBot.SegmentSpec` — segment codec, mention conversion, card parsing
 
 ### `max-test-db` (real Postgres)
 

@@ -12,7 +12,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime, utc)
-import Helpers (insertRawCommand, insertRawMessage, truncateAll, withDb, withDbLog)
+import Helpers (insertRawKind, insertRawMessage, truncateAll, withDb, withDbLog)
 import Max.DB.Connection (DbPool)
 import Max.DB.Session (fetchOrInit, upsertSession)
 import Max.Effects.LLM (ChatMessage (..))
@@ -118,19 +118,27 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("已经办好了" `T.isInfixOf`)
       ub `shouldSatisfy` ("闲聊5" `T.isInfixOf`)
 
-    -- Commands are UI, not conversation.  This one is load-bearing for
-    -- !btw in particular: its own command message used to sit in the
-    -- transcript as a question, and a later turn would answer it again.
-    it "keeps command messages out of the transcript" $ do
+    -- Everything the chat saw is in the table; only `kind = 'chat'`
+    -- reaches the model.  Load-bearing for !btw in particular: its
+    -- command message used to sit in the transcript as a question, and
+    -- a later turn would answer it again.
+    it "shows only kind='chat' rows in the transcript" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "普通聊天"
-      insertRawCommand pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "!btw 顺便问一下"
-      insertRawCommand pool 1003 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "[@#1000] !ps"
+      insertRawKind pool "command" 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "!btw 顺便问一下"
+      insertRawKind pool "command" 1003 groupRaw botRaw botRaw (timeAt 11) (Just "max") "在跑的任务: t3"
+      insertRawKind pool "debug" 1004 groupRaw botRaw botRaw (timeAt 12) (Just "max") "⚙ web_search {\"q\":\"foo\"}"
+      insertRawKind pool "debug" 1005 groupRaw botRaw botRaw (timeAt 13) (Just "max") "↳ web_search {\"results\":[]}"
+      -- The bot's narration is conversation, so it stays.
+      insertRawMessage pool 1006 groupRaw botRaw botRaw (timeAt 14) (Just "max") "我查一下日志"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <- withDbLog pool $ buildContext "default-persona" 20 False False OriginDirect "var/images" utc [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("普通聊天" `T.isInfixOf`)
+      ub `shouldSatisfy` ("我查一下日志" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("顺便问一下" `T.isInfixOf`))
-      ub `shouldSatisfy` (not . ("!ps" `T.isInfixOf`))
+      ub `shouldSatisfy` (not . ("在跑的任务" `T.isInfixOf`))
+      ub `shouldSatisfy` (not . ("⚙" `T.isInfixOf`))
+      ub `shouldSatisfy` (not . ("↳" `T.isInfixOf`))
 
     -- A message can come back from both queries; it must appear once.
     it "shows a message that both queries return exactly once" $ do

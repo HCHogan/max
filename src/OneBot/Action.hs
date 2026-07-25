@@ -3,13 +3,15 @@ module OneBot.Action
     Envelope (..),
     Response (..),
     encodeAction,
+    extractOutMid,
     parseResponse,
     sendChatMsg,
   )
 where
 
 import Data.Aeson
-import Data.Aeson.Types (Parser)
+import Data.Aeson.Types (Parser, parseEither)
+import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import OneBot.Segment (Segment)
@@ -175,3 +177,15 @@ instance FromJSON Response where
 
 parseResponse :: Value -> Parser Response
 parseResponse = parseJSON
+
+-- | The @message_id@ QQ assigned to a message we just sent, out of the
+-- send response's payload.  It is how an outbound message gets a row —
+-- and therefore how anything can quote or reply to it later.
+--
+-- 'Nothing' when the payload doesn't carry one, which is a protocol
+-- surprise rather than an error path: callers log and carry on rather
+-- than failing whatever they were doing.
+extractOutMid :: Value -> Maybe Int64
+extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of
+  Right (mid :: Int64) -> Just mid
+  Left _ -> Nothing

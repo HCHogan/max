@@ -53,7 +53,7 @@ import Data.Time
 import Effectful
 import Effectful.Log (Log, logAttention, logInfo)
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Message (insertOutbound)
+import Max.DB.Message (MessageKind (KindChat), insertOutbound)
 import Max.DB.Reminder
   ( Reminder (..),
     dueReminders,
@@ -188,7 +188,7 @@ reminderWorker tz sched = loop
           | otherwise -> do
               case parseEither (withObject "send_resp" (.: "message_id")) payload of
                 Right (outMid :: Int64) ->
-                  insertOutbound gid (UserId r.rmSelfId) "max" (MessageId outMid) Nothing segs
+                  insertOutbound KindChat gid (UserId r.rmSelfId) "max" (MessageId outMid) Nothing segs
                 Left _ ->
                   logAttention "reminder: no message_id in response" $
                     object ["payload" .= payload]

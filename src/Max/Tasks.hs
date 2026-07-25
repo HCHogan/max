@@ -61,6 +61,7 @@ import Control.Concurrent.STM
 import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException)
 import Control.Monad (filterM)
 import Data.Int (Int64)
+import Data.Foldable (for_)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -303,8 +304,8 @@ drainInbox h = atomically $ do
 -- 'Nothing' means no live turn owns that message; callers fall back to
 -- 'pushToLatest' rather than reporting an error, because a @!feedback@
 -- that refuses to land leaves the note in nobody's context at all.
-pushToTrigger :: TaskRegistry -> GroupId -> Maybe TaskId -> Int64 -> Text -> IO (Maybe TaskId)
-pushToTrigger reg gid except mid note = atomically $ do
+pushToTrigger :: TaskRegistry -> GroupId -> Maybe TaskId -> Maybe Int64 -> Int64 -> Text -> IO (Maybe TaskId)
+pushToTrigger reg gid except absorb mid note = atomically $ do
   (_, m) <- readTVar reg.trState
   let mine =
         filter (\e -> e.teGroup == gid && Just e.teId /= except) (Map.elems m)
@@ -313,6 +314,7 @@ pushToTrigger reg gid except mid note = atomically $ do
     [] -> pure Nothing
     (e : _) -> do
       modifyTVar' e.teInbox (<> [note])
+      for_ absorb $ \a -> modifyTVar' e.teAbsorbed (Set.insert a)
       pure (Just e.teId)
   where
     owns e
@@ -346,9 +348,7 @@ pushToLatest reg gid except absorb note = atomically $ do
     [] -> pure Nothing
     (e : _) -> do
       modifyTVar' e.teInbox (<> [note])
-      case absorb of
-        Just a -> modifyTVar' e.teAbsorbed (Set.insert a)
-        Nothing -> pure ()
+      for_ absorb $ \a -> modifyTVar' e.teAbsorbed (Set.insert a)
       pure (Just e.teId)
 
 -- | Message ids in @gid@ that some turn is already handling: triggers

@@ -89,7 +89,7 @@ spec = describe "Max.Tasks" $ do
       threadDelay 2000
       _ <- beginDispatch reg gid bob (Just (MessageId 7002))
       h2 <- attachTask reg gid bob (Just (MessageId 7002)) "llm" (pure ())
-      landed <- pushToTrigger reg gid Nothing 7001 "给第一个"
+      landed <- pushToTrigger reg gid Nothing Nothing 7001 "给第一个"
       n1 <- drainInbox h1
       n2 <- drainInbox h2
       (landed, n1, n2) `shouldBe` (Just h1.thId, ["给第一个"], [])
@@ -102,9 +102,22 @@ spec = describe "Max.Tasks" $ do
       h <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
       _ <- pushToLatest reg gid Nothing (Just 7002) "[#7002] bob: 顺便"
       _ <- drainInbox h
-      landed <- pushToTrigger reg gid Nothing 7002 "再补一句"
+      landed <- pushToTrigger reg gid Nothing Nothing 7002 "再补一句"
       notes <- drainInbox h
       (landed, notes) `shouldBe` (Just h.thId, ["再补一句"])
+
+    -- A !feedback message records as chat (verb stripped), so it is a
+    -- visible question whose answer is threaded at somebody else's
+    -- message.  Marking it absorbed is what stops a concurrent dispatch
+    -- from answering it a second time.
+    it "marks the note's own message absorbed by the turn that took it" $ do
+      reg <- newTaskRegistry
+      _ <- beginDispatch reg gid alice (Just (MessageId 7001))
+      _ <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
+      landed <- pushToTrigger reg gid Nothing (Just 7050) 7001 "改成 B 方案"
+      inflight <- inFlightTriggers reg gid
+      landed `shouldSatisfy` (/= Nothing)
+      inflight `shouldBe` Set.fromList [7001, 7050]
 
     -- Callers fall back to pushToLatest rather than reporting an
     -- error: a note that refuses to land ends up in nobody's context.
@@ -112,7 +125,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (MessageId 7001))
       _ <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
-      landed <- pushToTrigger reg gid Nothing 9999 "点错了"
+      landed <- pushToTrigger reg gid Nothing Nothing 9999 "点错了"
       landed `shouldBe` Nothing
 
   describe "dispatch tracking" $ do

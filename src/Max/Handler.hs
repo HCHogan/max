@@ -1,7 +1,7 @@
 module Max.Handler
   ( handleEvents,
     dispatchProactive,
-    isCommandMessage,
+    recordAs,
     stripStickerText,
     stripBareMarkers,
     isSilentReply,
@@ -12,12 +12,10 @@ where
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (foldM_, unless, void, when)
-import Data.Aeson (Value, withObject, (.:))
 import Data.Foldable (for_)
-import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
-import Data.Char (isDigit)
+import Data.Char (isDigit, isSpace)
 import Data.Int (Int64)
 import Control.Applicative ((<|>))
 import Data.List (find)
@@ -44,7 +42,7 @@ import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
 import Max.Command.Types (Command (..))
 import Max.DB.Permissions (lookupGrant)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
-import Max.DB.Message (insertGroupMessage, insertOutbound, insertSilence)
+import Max.DB.Message (MessageKind (..), insertGroupMessage, insertOutbound, insertSilence)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
 import Max.Effects.LLM (LLM, isProfileHistoryTurns, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, callAction, sendAction)
@@ -65,7 +63,7 @@ import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply, stripHallucinatedTokens)
 import Max.Sticker (resolveSticker)
 import Max.Util (catchSync, trySync)
-import OneBot.Action (Action (..), Response (..), sendChatMsg)
+import OneBot.Action (Action (..), Response (..), extractOutMid, sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
 import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, rescueNameMentions, segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
@@ -112,15 +110,47 @@ data Trigger
     TriggerCommandError !T.Text
   deriving stock (Show)
 
--- | Does this message parse as a @!@-command?  @Right Nothing@ is the
--- parser's "not a command at all"; both other answers mean the user
--- was addressing the command surface, not the conversation.
-isCommandMessage :: GroupMessage -> Bool
-isCommandMessage gm =
-  let stripped = T.strip (stripMentions gm.selfId (T.strip (renderPlainText gm.message)))
-   in case parseCommand stripped of
-        Right Nothing -> False
-        _ -> True
+-- | How a freshly received message is recorded: its kind, and a
+-- rewritten @rendered_text@ when the stored form should differ from
+-- what was literally typed.
+--
+-- Most commands are the UI used to operate the bot, and the model has
+-- no business reading them back.  @!btw@ and @!feedback@ are the
+-- exception — their bodies are things somebody said *to* the bot, and
+-- the bot answers them.  They are conversation wearing a command
+-- prefix, so they record as 'KindChat' with the verb stripped, landing
+-- in the transcript exactly where the implicit supplement path already
+-- puts the same words.  An empty body isn't conversation, it's a
+-- mistyped command, and stays 'KindCommand'.
+--
+-- @segments@ is stored verbatim either way; only the rendered text is
+-- rewritten — the same split 'Max.DB.Message.insertOutbound' already
+-- makes for a table sent as an image.
+recordAs :: GroupMessage -> (MessageKind, Maybe T.Text)
+recordAs gm =
+  case parseCommand stripped of
+    Right Nothing -> (KindChat, Nothing)
+    Right (Just cmd)
+      | Just note <- conversational cmd,
+        not (T.null (T.strip note)) ->
+          (KindChat, Just (renderPlainText (stripVerb gm.message)))
+    _ -> (KindCommand, Nothing)
+  where
+    stripped = T.strip (stripMentions gm.selfId (T.strip (renderPlainText gm.message)))
+    conversational = \case
+      Btw note -> Just note
+      Feedback note -> Just note
+      _ -> Nothing
+
+-- | Drop the leading @!verb@ from the first text segment carrying one,
+-- leaving everything before it — notably the @-mention — in place, so
+-- the line reads like any other message to the bot.
+stripVerb :: [Segment] -> [Segment]
+stripVerb [] = []
+stripVerb (SegText t : rest)
+  | Just body <- T.stripPrefix "!" (T.stripStart t) =
+      SegText (T.stripStart (T.dropWhile (not . isSpace) body)) : rest
+stripVerb (s : rest) = s : stripVerb rest
 
 -- | @repliesToBot@ = the message quotes (replies to) one of the
 -- bot's own messages; the caller resolves that via DB lookup.  A
@@ -198,7 +228,7 @@ handleEvents q fetchSig mIntent = loop
 -- rather than an answer.
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
 persist gm =
-  trySync (insertGroupMessage (isCommandMessage gm) gm) >>= \case
+  trySync (uncurry insertGroupMessage (recordAs gm) gm) >>= \case
     Right () -> pure ()
     Left e ->
       logAttention "db insert failed" $
@@ -403,12 +433,20 @@ dispatchCommand gm body = localDomain "cmd" $ do
         FeedbackNote noteBody -> do
           noteAt <- liftIO getCurrentTime
           let line = renderCurrentLine env.beTimeZone noteAt (gm {message = [SegText noteBody]})
+              -- The !feedback message records as chat (verb stripped),
+              -- so it is a visible question in the transcript with the
+              -- answer threaded at someone else's message.  Mark it
+              -- absorbed for the lifetime of the turn that took it, or
+              -- a concurrent dispatch answers it a second time — the
+              -- implicit path has needed this all along.
+              MessageId noteMid = gm.messageId
+              absorb = Just noteMid
           aimed <- case replyTarget of
-            Just tgt -> liftIO (pushToTrigger env.beTasks targetGid Nothing tgt line)
+            Just tgt -> liftIO (pushToTrigger env.beTasks targetGid Nothing absorb tgt line)
             Nothing -> pure Nothing
           landed <- case aimed of
             Just _ -> pure aimed
-            Nothing -> liftIO (pushToLatest env.beTasks targetGid Nothing Nothing line)
+            Nothing -> liftIO (pushToLatest env.beTasks targetGid Nothing absorb line)
           case landed of
             Just (TaskId into) -> do
               logInfo "feedback: explicit note" $
@@ -419,14 +457,27 @@ dispatchCommand gm body = localDomain "cmd" $ do
               logInfo "feedback: nothing running" $ object ["group_id" .= targetRaw]
               sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
 
+    -- Recorded against the DM's pseudo-group rather than the group the
+    -- command came from: that is the conversation it actually appeared
+    -- in, and the record follows the chat.
     deliverPrivate reply = do
       let GroupId gidRaw = gm.groupId
           UserId uidRaw = gm.userId
           header = "（群 " <> T.pack (show gidRaw) <> " 的命令结果）\n"
-      res <- callAction (SendPrivateMsg gm.userId [SegText (header <> reply)]) 15000
+          segs = [SegText (header <> reply)]
+      res <- callAction (SendPrivateMsg gm.userId segs) 15000
       case res of
-        Right (Response _ rc _ _)
-          | rc == 0 ->
+        Right (Response _ rc payload _)
+          | rc == 0 -> do
+              for_ (extractOutMid payload) $ \outMid ->
+                insertOutbound
+                  KindCommand
+                  (GroupId (negate uidRaw))
+                  gm.selfId
+                  "max"
+                  (MessageId outMid)
+                  Nothing
+                  segs
               sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
         _ -> do
           logInfo "cmd: private delivery failed, group fallback" $
@@ -436,11 +487,17 @@ dispatchCommand gm body = localDomain "cmd" $ do
 --------------------------------------------------------------------------------
 -- LLM dispatch.
 
-sendPong :: (NapCat :> es, Log :> es) => GroupMessage -> Eff es ()
+-- | @ping@ is an ordinary exchange that happens not to cost an LLM
+-- call, so it records as 'KindChat' — the trigger is in the transcript
+-- and an answer that wasn't would read as a question nobody answered.
+sendPong ::
+  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  GroupMessage ->
+  Eff es ()
 sendPong gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
-  sendAction (sendChatMsg gm.groupId (replySegs gm " pong"))
+  sendAndRecord KindChat gm.groupId gm.selfId (replySegs gm " pong")
   logInfo "replied pong" $ object ["to" .= fromRaw, "group_id" .= gidRaw]
 
 -- | Reply segments for a trigger: quote it, @-the sender (groups
@@ -736,13 +793,48 @@ dispatchLLM origin absorbable gm = do
 --------------------------------------------------------------------------------
 -- Reply helper.
 
--- | Fire-and-forget reply (no persist).  Used for command responses
--- and parse errors — plain text, no quote and no @: command output in
--- the moment right after the command needs neither, and both read as
--- noise.
-replyText :: NapCat :> es => GroupMessage -> T.Text -> Eff es ()
+-- | Send a message and write it down, so the messages table mirrors
+-- what the conversation actually saw.
+--
+-- Recording requires the round-trip: @message_id@ is assigned by QQ
+-- and only comes back in the send response, and it is the table's
+-- primary key — the id every @[↩#id]@ quote and reply link resolves
+-- against.  Fire-and-forget cannot record anything.
+--
+-- Every failure only logs.  A message that went out but couldn't be
+-- written down leaves the record incomplete, which is bad; failing the
+-- dispatch over it is worse.
+sendAndRecord ::
+  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  MessageKind ->
+  GroupId ->
+  UserId -> -- bot self id
+  [Segment] ->
+  Eff es ()
+sendAndRecord kind gid selfId segs =
+  callAction (sendChatMsg gid segs) 15000 >>= \case
+    Left err -> logAttention "send failed" $ object ["error" .= err, "kind" .= T.pack (show kind)]
+    Right (Response _ rc payload _)
+      | rc /= 0 ->
+          logAttention "send retcode bad" $ object ["retcode" .= rc, "kind" .= T.pack (show kind)]
+      | otherwise -> case extractOutMid payload of
+          Nothing ->
+            logAttention "no message_id in send response" $
+              object ["payload" .= payload, "kind" .= T.pack (show kind)]
+          Just outMid ->
+            insertOutbound kind gid selfId "max" (MessageId outMid) Nothing segs
+
+-- | Command output: plain text, no quote and no @ — in the moment
+-- right after a command both read as noise.  Recorded as
+-- 'KindCommand', so the group's record is complete but the model
+-- doesn't read back the UI used to operate it.
+replyText ::
+  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  GroupMessage ->
+  T.Text ->
+  Eff es ()
 replyText gm body =
-  sendAction (sendChatMsg gm.groupId [SegText body])
+  sendAndRecord KindCommand gm.groupId gm.selfId [SegText body]
 
 -- | Send the LLM's final reply as planned by 'planReply' — one
 -- message per blank-line paragraph, markdown tables rendered to a
@@ -816,6 +908,7 @@ sendAndPersistReply gm mentionable rosterNames blobRoot stickersOn body = do
                         object ["payload" .= payload, "chunk" .= i]
                     Just outMid ->
                       insertOutbound
+                        KindChat
                         gm.groupId
                         gm.selfId
                         "max"
@@ -948,11 +1041,6 @@ fetchGroupContext gid
   where
     nonBlankName (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
     nonBlankName _ = Nothing
-
-extractOutMid :: Value -> Maybe Int64
-extractOutMid v = case parseEither (withObject "send_resp" (\o -> o .: "message_id")) v of
-  Right (mid :: Int64) -> Just mid
-  Left _ -> Nothing
 
 stripMentions :: UserId -> T.Text -> T.Text
 stripMentions (UserId u) t =

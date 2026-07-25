@@ -7,7 +7,7 @@ module Helpers
     withDbLog,
     truncateAll,
     insertRawMessage,
-    insertRawCommand,
+    insertRawKind,
     insertRawReply,
   )
 where
@@ -97,10 +97,11 @@ insertRawMessage pool mid gid uid sid receivedAt nick body = withConn pool $ \c 
       ((mid, gid, uid, sid, receivedAt, body, nick) :. Only Null)
   pure ()
 
--- | Like 'insertRawMessage' but flagged as a @!@-command, the way
--- 'Max.Handler.persist' flags one at insert time.
-insertRawCommand ::
+-- | Like 'insertRawMessage' but with an explicit @kind@ — @'command'@
+-- or @'debug'@ for rows the chat saw but the transcript must skip.
+insertRawKind ::
   DbPool ->
+  Text -> -- kind
   Int64 -> -- message_id
   Int64 -> -- group_id
   Int64 -> -- user_id
@@ -109,15 +110,15 @@ insertRawCommand ::
   Maybe Text -> -- sender_nickname
   Text -> -- rendered_text
   IO ()
-insertRawCommand pool mid gid uid sid receivedAt nick body = withConn pool $ \c -> do
+insertRawKind pool kind mid gid uid sid receivedAt nick body = withConn pool $ \c -> do
   _ <-
     execute
       c
       "INSERT INTO messages \
       \  (message_id, group_id, user_id, self_id, received_at, \
-      \   segments, rendered_text, raw_message, sender_nickname, sender_card, is_command) \
-      \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?, true)"
-      ((mid, gid, uid, sid, receivedAt, body, nick) :. Only Null)
+      \   segments, rendered_text, raw_message, sender_nickname, sender_card, kind) \
+      \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?, ?)"
+      ((mid, gid, uid, sid, receivedAt, body, nick) :. (Null, kind))
   pure ()
 
 -- | Like 'insertRawMessage' but with a @reply_to_message_id@ link.

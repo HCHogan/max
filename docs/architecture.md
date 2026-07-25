@@ -13,7 +13,8 @@ docker-compose.yml NapCat container; shared ./var/outbox volume
 sandbox-image/     nix-enabled sandbox base image  → max-sandbox:latest
 browser-image/     camoufox-mcp + supergateway + camoufox → max-browser:latest
 nix/module.nix     NixOS module for production deployment
-.github/workflows/ CI: build + max-test through the flake dev shell
+.github/workflows/ CI: build + max-test through the flake dev shell, plus a pure
+                   `nix build .#max-bot` so the packaged build can't rot
 max.cabal          library + max-bot executable
 migrations/*.sql   schema migrations, applied on boot
 
@@ -22,17 +23,22 @@ src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-gro
 src/Max/Effects/   effectful 2.5 effects: Http, Blob, NapCat, LLM (OpenAI + Anthropic),
                    Tools, Agent  (DB effect from upstream effectful-postgresql)
 src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
-                   History, Session, Files, Memory, FetchQueue (media work list)
+                   History, Session, Files, Memory, Permissions, PlatformIds,
+                   Reminder, Stickers, FetchQueue (media work list)
 src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher
 src/Max/Session/   Per-conversation session: in-memory TVar + DB persistence
 src/Max/Sandbox/   Per-group Docker workspace lifecycle + registry
 src/Max/Browser/   Per-group camoufox-MCP container lifecycle + registry
 src/Max/MCP/       Minimal MCP client (Streamable HTTP)
-src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory)
+src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory,
+                   Images, Video, Bilibili, Stickers, Pins, Group, Reminder)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
-                   MemoryExtract, Embedding + Embedder (vector worker), Forward/Image/File
-                   workers, FetchQueue (their shared claim loop), Shutdown (graceful
-                   drain), Tasks, Tools, Util
+                   Toolset (the full tool list, assembled from BotEnv), Intent
+                   (proactive classifier), MemoryExtract, Embedding + Embedder
+                   (vector worker), Forward/Image/File workers, FetchQueue (their
+                   shared claim loop), MediaCaption + Stickers (caption workers),
+                   Reminder, Reply, Render, Roster, Shutdown (graceful drain),
+                   Tasks, Tools, Util
 app/Main.hs        wires effects + workers + server
 ```
 
@@ -86,7 +92,13 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Sandbox / browser containers | destroyed on exit, reaped on boot |
 
 Effect stack at the top of `runApp`:
-`IOE → Concurrent → Log → Http → Blob → WithConnection → NapCat → Wreq → LLM → Reader PersistMode → Reader BotEnv → Agent`.
+`IOE → Concurrent → Log → Http → Blob → WithConnection → NapCat → Wreq → LLM → Reader BotEnv → Agent`.
+
+Workers are started as one flat list (`withLinkedWorkers` in `app/Main.hs`),
+each `link`ed so a worker dying silently takes the process down rather than
+leaving a stuck queue behind. An optional worker is an action that does nothing
+when its config is absent — the async finishes immediately and linking a
+finished async is a no-op, so "feature off" needs no special case.
 
 ## Phase status
 

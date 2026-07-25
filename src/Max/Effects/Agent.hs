@@ -52,7 +52,7 @@ where
 
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, readTVar, writeTVar)
-import Control.Monad (unless, when)
+import Control.Monad (when)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Set (Set)
@@ -65,10 +65,12 @@ import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Exception (bracket, throwIO)
 import Effectful.Log
 import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat)
-import Max.Effects.NapCat (NapCat, sendAction)
+import Effectful.PostgreSQL (WithConnection)
+import Max.DB.Message (MessageKind (..), insertOutbound)
+import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask)
-import OneBot.Action (sendChatMsg)
+import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
 import Data.Set qualified as Set
 import OneBot.Segment (Segment (SegReply, SegText), segmentMentions)
 import OneBot.Types (GroupId, MessageId (..), UserId, isPrivateChat)
@@ -189,7 +191,7 @@ type instance DispatchOf Agent = Dynamic
 --   * Drives the loop, draining the task's inbox between turns.
 runAgent ::
   forall es a.
-  (LLM :> es, NapCat :> es, Concurrent :> es, Log :> es, IOE :> es) =>
+  (LLM :> es, NapCat :> es, WithConnection :> es, Concurrent :> es, Log :> es, IOE :> es) =>
   AgentLimits ->
   (DispatchContext -> [Tool es]) ->
   TaskRegistry ->
@@ -292,8 +294,8 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
               -- results keep call order so each tool_call id is
               -- answered in sequence.
               toolMsgs <- case tcs of
-                [tc] -> (: []) <$> executeOne tc
-                _ -> mapConcurrently executeOne tcs
+                [tc] -> (: []) <$> executeOne dc tc
+                _ -> mapConcurrently (executeOne dc) tcs
               imgMsgs <- drainToolImages dc
               let newMsgs = [asst] <> toolMsgs <> imgMsgs
               go dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
@@ -338,10 +340,22 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
     announceToolCalls :: DispatchContext -> [ToolCall] -> Eff (Tools : es) ()
     announceToolCalls dc tcs = do
       let visible = [tc | tc <- tcs, tc.callName `notElem` silentTools]
-          line tc = "⚙ " <> tc.callName <> " " <> previewJson 1000 tc.callArguments
-      unless (not dc.dcDebug || null visible) $
-        sendAction $
-          sendChatMsg dc.dcGroupId [SegText (T.intercalate "\n" (map line visible))]
+          line tc = "⚙ " <> tc.callName <> " " <> previewJson debugPreviewChars tc.callArguments
+      when (dc.dcDebug && not (null visible)) $
+        recordSend dc KindDebug [SegText (T.intercalate "\n" (map line visible))]
+
+    -- The other half: what the call actually returned.  A call line on
+    -- its own tells you the bot tried something, not whether it worked
+    -- — which is the question you turned debug on to answer.
+    --
+    -- Posted per call rather than batched with the round, because
+    -- independent calls run concurrently and finish out of order; each
+    -- line names its tool so the pairing stays readable.  Errors are
+    -- announced too, marked ✗.
+    announceToolResult :: DispatchContext -> ToolCall -> Text -> Eff (Tools : es) ()
+    announceToolResult dc tc preview =
+      when (dc.dcDebug && tc.callName `notElem` silentTools) $
+        recordSend dc KindDebug [SegText ("↳ " <> tc.callName <> " " <> preview)]
 
     -- What the model said alongside its tool calls, posted as the
     -- progress line the @say@ tool used to exist for.  Both protocols
@@ -349,16 +363,16 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
     -- way by default, so this is free: no tool call spent, no prompt
     -- instruction needed.
     --
-    -- Not persisted, unlike @say@ was.  It doesn't need to be — the
-    -- narration already rides in 'MsgAssistantToolCalls' verbatim and
-    -- replays to the API next round, so the model stays coherent
-    -- without a messages row.  (@say@ needed one precisely because its
-    -- text lived in a tool call the model couldn't see afterwards.)
+    -- Recorded as 'KindChat': it is the bot talking in the group, and
+    -- members answer it ("查到了吗"), so the next dispatch needs to see
+    -- that it was said.  Within *this* turn the model stays coherent
+    -- either way — the narration also rides in 'MsgAssistantToolCalls'
+    -- verbatim and replays to the API next round.
     sendNarration :: DispatchContext -> Text -> Eff (Tools : es) ()
     sendNarration dc narration
       | T.null (T.strip narration) = pure ()
       | otherwise =
-          sendAction . sendChatMsg dc.dcGroupId $
+          recordSend dc KindChat $
             [SegReply dc.dcMessageId | dc.dcMessageId /= MessageId 0]
               <> if isPrivateChat dc.dcGroupId
                 then [SegText (T.strip narration)]
@@ -366,6 +380,29 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                   segmentMentions
                     (\u -> maybe True (Set.member u) dc.dcMentionable)
                     (T.strip narration)
+
+    -- Send and write down, so the messages table matches what the group
+    -- saw.  The round-trip is unavoidable: @message_id@ comes from QQ
+    -- in the send response and is the row's primary key.
+    --
+    -- Every failure only logs.  These are status lines and progress
+    -- notes; losing one must never take down the turn they describe.
+    recordSend :: DispatchContext -> MessageKind -> [Segment] -> Eff (Tools : es) ()
+    recordSend dc kind segs =
+      callAction (sendChatMsg dc.dcGroupId segs) 15000 >>= \case
+        Left err ->
+          logAttention "agent: send failed" $
+            object ["error" .= err, "kind" .= T.pack (show kind)]
+        Right (Response _ rc payload _)
+          | rc /= 0 ->
+              logAttention "agent: send retcode bad" $
+                object ["retcode" .= rc, "kind" .= T.pack (show kind)]
+          | otherwise -> case extractOutMid payload of
+              Nothing ->
+                logAttention "agent: no message_id in send response" $
+                  object ["kind" .= T.pack (show kind)]
+              Just outMid ->
+                insertOutbound kind dc.dcGroupId dc.dcSelfId "max" (MessageId outMid) Nothing segs
 
     -- Notes that arrived mid-turn, from !feedback or from a message the
     -- classifier read as steering.  Marked so the model can tell them
@@ -375,6 +412,11 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
 
     silentTools :: [Text]
     silentTools = ["send_image_from_sandbox", "send_file_from_sandbox"]
+
+    -- Long enough to be useful, short enough that a 16 KiB sandbox dump
+    -- doesn't become a wall of chat.
+    debugPreviewChars :: Int
+    debugPreviewChars = 1000
 
     -- Images tools queued this round, packaged as one user message of
     -- alternating label/image blocks (leading text block, never two
@@ -398,8 +440,8 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
           | "data:video/" `T.isPrefixOf` u = VideoDataUrl u
           | otherwise = ImageDataUrl u
 
-    executeOne :: ToolCall -> Eff (Tools : es) ChatMessage
-    executeOne tc = do
+    executeOne :: DispatchContext -> ToolCall -> Eff (Tools : es) ChatMessage
+    executeOne dc tc = do
       logInfo "agent: tool call" $
         object
           [ "id" .= tc.callId,
@@ -417,10 +459,12 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                 "result" .= previewJson 400 v,
                 "full_len" .= T.length full
               ]
+          announceToolResult dc tc (previewJson debugPreviewChars v)
           pure $ MsgTool tc.callId full
         Left err -> do
           logAttention "agent: tool failed" $
             object ["id" .= tc.callId, "name" .= tc.callName, "error" .= err]
+          announceToolResult dc tc ("✗ " <> err)
           pure $ MsgTool tc.callId ("error: " <> err)
 
 -- | Render a 'Value' as a single-line preview suitable for logs:

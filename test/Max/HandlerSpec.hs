@@ -2,7 +2,8 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.Handler (isCommandMessage, isSilentReply, parseSilence, stripBareMarkers, stripStickerText)
+import Max.Handler (isSilentReply, parseSilence, recordAs, stripBareMarkers, stripStickerText)
+import Max.DB.Message (MessageKind (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -95,11 +96,11 @@ spec = do
     it "leaves unrelated text untouched" $
       stripBareMarkers "没有图片标记" `shouldBe` "没有图片标记"
 
-  -- Command messages are persisted with this flag and then filtered out
-  -- of the transcript.  It re-derives the answer from the same parser
-  -- 'classify' uses, so the two can't drift into disagreeing about what
-  -- a command is.
-  describe "isCommandMessage" $ do
+  -- Every message is recorded; `kind` decides whether the transcript
+  -- shows it.  The answer is re-derived from the same parser 'classify'
+  -- uses, so the two can't drift into disagreeing about what a command
+  -- is.
+  describe "recordAs" $ do
     let msg segs =
           GroupMessage
             { selfId = UserId 1000,
@@ -110,30 +111,50 @@ spec = do
               rawMessage = "",
               sender = Sender (UserId 2001) (Just "Alice") Nothing
             }
-        cmd = isCommandMessage . msg
+        rec' = recordAs . msg
 
-    it "flags a bare command" $ do
-      cmd [SegText "!ps"] `shouldBe` True
-      cmd [SegText "!btw 顺便问一下"] `shouldBe` True
+    it "records ordinary chat as chat, unrewritten" $ do
+      rec' [SegText "今天吃啥"] `shouldBe` (KindChat, Nothing)
+      rec' [SegAt (UserId 1000), SegText " 帮我看下这个报错"]
+        `shouldBe` (KindChat, Nothing)
 
-    it "flags one addressed to the bot" $
-      cmd [SegAt (UserId 1000), SegText " !fb 改成 B 方案"] `shouldBe` True
+    it "records operating commands as command" $ do
+      fst (rec' [SegText "!ps"]) `shouldBe` KindCommand
+      fst (rec' [SegText "!model list"]) `shouldBe` KindCommand
 
-    -- Malformed still counts: it gets an error reply, not an answer, so
-    -- leaving it in the transcript would be a question nobody answered.
-    it "flags a malformed command" $
-      cmd [SegText "!pin abc def ghi"] `shouldBe` True
+    -- Malformed still counts as a command: it gets an error reply, not
+    -- an answer, so in the transcript it would read as a question
+    -- nobody answered.
+    it "records a malformed command as command" $
+      fst (rec' [SegText "!pin abc def ghi"]) `shouldBe` KindCommand
 
-    -- The shell escape is a command too — its output is a reply, and the
-    -- command line itself is noise in a conversation transcript.
-    it "flags the shell escape" $
-      cmd [SegText "! ls -la"] `shouldBe` True
+    it "records the shell escape as command" $
+      fst (rec' [SegText "! ls -la"]) `shouldBe` KindCommand
 
-    it "leaves ordinary chat alone" $ do
-      cmd [SegText "今天吃啥"] `shouldBe` False
-      cmd [SegAt (UserId 1000), SegText " 帮我看下这个报错"] `shouldBe` False
+    -- The carve-out: !btw and !feedback bodies are things somebody said
+    -- to the bot, which it answers.  They belong in the transcript, in
+    -- exactly the form the implicit supplement path would have stored.
+    it "records !btw and !feedback as chat, verb stripped" $ do
+      rec' [SegText "!btw 顺便问一下 X"]
+        `shouldBe` (KindChat, Just "顺便问一下 X")
+      rec' [SegText "!feedback 改成 B 方案"]
+        `shouldBe` (KindChat, Just "改成 B 方案")
+      rec' [SegText "!fb 改成 B 方案"]
+        `shouldBe` (KindChat, Just "改成 B 方案")
+
+    -- The @-mention survives: it is part of what was said, and the
+    -- implicit path keeps it too.
+    it "keeps the mention when stripping the verb" $
+      rec' [SegAt (UserId 1000), SegText " !fb 改成 B 方案"]
+        `shouldBe` (KindChat, Just "[@#1000] 改成 B 方案")
+
+    -- An empty body isn't conversation, it's a mistyped command — it
+    -- gets a usage hint back, not an answer.
+    it "records a bodiless !btw as command" $ do
+      fst (rec' [SegText "!btw"]) `shouldBe` KindCommand
+      fst (rec' [SegText "!feedback   "]) `shouldBe` KindCommand
 
     -- A bang that isn't followed by an identifier is just punctuation.
-    it "leaves bang-prefixed prose alone" $ do
-      cmd [SegText "!!!"] `shouldBe` False
-      cmd [SegText "!这什么鬼"] `shouldBe` False
+    it "leaves bang-prefixed prose as chat" $ do
+      rec' [SegText "!!!"] `shouldBe` (KindChat, Nothing)
+      rec' [SegText "!这什么鬼"] `shouldBe` (KindChat, Nothing)

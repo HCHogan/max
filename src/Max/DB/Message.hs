@@ -21,6 +21,8 @@
 --   │  forwarded_in_message_id bigint  ──► messages.message_id (FK)    │
 --   │  forward_position        int                                     │
 --   │  is_synthetic            boolean default false                   │
+--   │  kind                    text default 'chat'                     │
+--   │                          ◄── chat | command | debug              │
 --   │  original_message_id     bigint      (QQ id of forwarded node)   │
 --   │  original_sent_at        timestamptz (time the forwarded node    │
 --   │                                       was originally posted)     │
@@ -48,7 +50,8 @@
 -- @original_message_id@ for lookups; @GIN(rendered_text_tsv)@ for FTS;
 -- @sha256@ on @message_images@ for "which messages reference this blob".
 module Max.DB.Message
-  ( insertGroupMessage,
+  ( MessageKind (..),
+    insertGroupMessage,
     insertOutbound,
     insertSilence,
   )
@@ -65,6 +68,33 @@ import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
+-- | What a row is, which decides whether the prompt shows it.
+--
+-- Everything the chat saw is written down either way — the table is
+-- the record, not a curated view.  Filtering happens in
+-- "Max.DB.History", which reads only 'KindChat'.
+data MessageKind
+  = -- | Conversation: members talking, and the bot's own replies and
+    -- progress narration.  The only kind the transcript shows.
+    KindChat
+  | -- | A @!cmd@ and whatever the bot answered it with.  The model has
+    -- no use for the UI used to operate it, and a @!btw@ whose
+    -- question showed but whose answer didn't was a line it kept
+    -- re-answering.
+    KindCommand
+  | -- | The @⚙@ / @↳@ tool trace @!debug on@ prints.
+    KindDebug
+  deriving stock (Show, Eq)
+
+instance ToField MessageKind where
+  toField = toField . renderKind
+
+renderKind :: MessageKind -> Text
+renderKind = \case
+  KindChat -> "chat"
+  KindCommand -> "command"
+  KindDebug -> "debug"
+
 newtype Jsonb = Jsonb Value
 
 instance ToField Jsonb where
@@ -72,26 +102,36 @@ instance ToField Jsonb where
 
 -- | Insert a group message; idempotent on @message_id@ (NapCat may replay
 -- the same event after our reverse-WS reconnects).
--- | @isCommand@ marks a @!@-command: the caller decides, because the
--- authority on what parses as a command is "Max.Command.Parser" and a
--- DB module has no business importing it.  Command rows stay out of
--- the transcript ("Max.DB.History") — they are UI, not conversation.
-insertGroupMessage :: (WithConnection :> es, IOE :> es) => Bool -> GroupMessage -> Eff es ()
-insertGroupMessage isCommand gm = do
+--
+-- The caller decides the kind: the authority on what parses as a
+-- command is "Max.Command.Parser", and a DB module has no business
+-- importing it.
+-- @renderedOverride@ replaces the default 'renderPlainText' when the
+-- stored form should differ from what was literally typed — a
+-- @!btw@/@!feedback@ body reads back as the sentence it is, without
+-- the command verb.  @segments@ stays verbatim regardless: the raw
+-- record of what arrived must not be rewritten.
+insertGroupMessage ::
+  (WithConnection :> es, IOE :> es) =>
+  MessageKind ->
+  Maybe Text -> -- renderedOverride
+  GroupMessage ->
+  Eff es ()
+insertGroupMessage kind renderedOverride gm = do
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
       UserId uid = gm.userId
       UserId sid = gm.selfId
       Sender _ nick card = gm.sender
       segs = Jsonb (toJSON gm.message)
-      rendered = renderPlainText gm.message
+      rendered = fromMaybe (renderPlainText gm.message) renderedOverride
       replyTo = extractReply gm.message
   _ <-
     execute
       "INSERT INTO messages \
       \ (message_id, group_id, user_id, self_id, \
       \  segments, rendered_text, raw_message, \
-      \  sender_nickname, sender_card, reply_to_message_id, is_command) \
+      \  sender_nickname, sender_card, reply_to_message_id, kind) \
       \ VALUES (?,?,?,?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (message_id) DO NOTHING"
       ( mid,
@@ -104,7 +144,7 @@ insertGroupMessage isCommand gm = do
         nick,
         card,
         replyTo,
-        isCommand
+        kind
       )
   pure ()
 
@@ -156,6 +196,7 @@ insertSilence gm rendered = do
 -- markdown source in the bot's own history, not as @[image]@.
 insertOutbound ::
   (WithConnection :> es, IOE :> es) =>
+  MessageKind ->
   GroupId ->
   UserId -> -- bot's self_id; both user_id and self_id columns get this
   Text -> -- nickname for the sender column (e.g. "max")
@@ -163,7 +204,7 @@ insertOutbound ::
   Maybe Text -> -- renderedOverride
   [Segment] ->
   Eff es ()
-insertOutbound (GroupId gid) (UserId sid) nick (MessageId mid) renderedOverride segs = do
+insertOutbound kind (GroupId gid) (UserId sid) nick (MessageId mid) renderedOverride segs = do
   let segsJson = Jsonb (toJSON segs)
       rendered = fromMaybe (renderPlainText segs) renderedOverride
       replyTo = extractReply segs
@@ -172,10 +213,10 @@ insertOutbound (GroupId gid) (UserId sid) nick (MessageId mid) renderedOverride 
       "INSERT INTO messages \
       \ (message_id, group_id, user_id, self_id, \
       \  segments, rendered_text, raw_message, \
-      \  sender_nickname, sender_card, reply_to_message_id) \
-      \ VALUES (?,?,?,?,?,?,?,?,?,?) \
+      \  sender_nickname, sender_card, reply_to_message_id, kind) \
+      \ VALUES (?,?,?,?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (message_id) DO UPDATE \
-      \   SET rendered_text = EXCLUDED.rendered_text"
+      \   SET rendered_text = EXCLUDED.rendered_text, kind = EXCLUDED.kind"
       ( mid,
         gid,
         sid, -- user_id = bot's id (bot is the sender)
@@ -185,6 +226,7 @@ insertOutbound (GroupId gid) (UserId sid) nick (MessageId mid) renderedOverride 
         "" :: Text,
         Just nick,
         Nothing :: Maybe Text,
-        replyTo
+        replyTo,
+        kind
       )
   pure ()

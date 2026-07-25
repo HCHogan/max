@@ -296,6 +296,7 @@ runSearch f mVec = do
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND NOT is_synthetic \
+        \    AND kind = 'chat' \
         \    AND forwarded_in_message_id IS NULL"
           <> concatMap ((" AND " <>) . fst) conds
           <> orderSql

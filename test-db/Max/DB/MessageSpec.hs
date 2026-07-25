@@ -3,7 +3,7 @@ module Max.DB.MessageSpec (spec) where
 import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool)
 import Max.DB.History (HistoryItem (..), fetchMessage)
-import Max.DB.Message (insertGroupMessage, insertOutbound)
+import Max.DB.Message (MessageKind (..), insertGroupMessage, insertOutbound)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -41,7 +41,7 @@ spec pool = before_ (truncateAll pool) $
     describe "insertGroupMessage" $ do
       it "round-trips a basic message (looked up via fetchMessage)" $ do
         let gm = mkInbound (MessageId 5001) memberA [SegText "hello"]
-        withDb pool $ insertGroupMessage False gm
+        withDb pool $ insertGroupMessage KindChat Nothing gm
         m <- withDb pool $ fetchMessage 5001
         case m of
           Nothing -> expectationFailure "expected message to be readable"
@@ -54,8 +54,8 @@ spec pool = before_ (truncateAll pool) $
       it "is idempotent on message_id (ON CONFLICT DO NOTHING)" $ do
         let gm1 = mkInbound (MessageId 5001) memberA [SegText "first"]
             gm2 = mkInbound (MessageId 5001) memberA [SegText "second-call-different-body"]
-        withDb pool $ insertGroupMessage False gm1
-        withDb pool $ insertGroupMessage False gm2
+        withDb pool $ insertGroupMessage KindChat Nothing gm1
+        withDb pool $ insertGroupMessage KindChat Nothing gm2
         m <- withDb pool $ fetchMessage 5001
         case m of
           Just h -> h.renderedText `shouldBe` "first" -- first write wins
@@ -65,6 +65,7 @@ spec pool = before_ (truncateAll pool) $
       it "records a bot reply with user_id = bot's self_id" $ do
         withDb pool $
           insertOutbound
+            KindChat
             testGroup
             botId
             "max"
@@ -82,9 +83,9 @@ spec pool = before_ (truncateAll pool) $
 
       it "overwrites rendered_text on conflict (normalised form wins)" $ do
         withDb pool $
-          insertOutbound testGroup botId "max" (MessageId 5050) Nothing [SegText "one"]
+          insertOutbound KindChat testGroup botId "max" (MessageId 5050) Nothing [SegText "one"]
         withDb pool $
-          insertOutbound testGroup botId "max" (MessageId 5050) Nothing [SegText "two"]
+          insertOutbound KindChat testGroup botId "max" (MessageId 5050) Nothing [SegText "two"]
         m <- withDb pool $ fetchMessage 5050
         (m >>= Just . (.renderedText)) `shouldBe` Just "two"
 
@@ -94,8 +95,8 @@ spec pool = before_ (truncateAll pool) $
         -- The outbound upsert must still get its normalised
         -- rendered_text in (e.g. table markdown source, not [image]).
         let echo = mkInbound (MessageId 5051) memberA [SegText "[image]"]
-        withDb pool $ insertGroupMessage False echo
+        withDb pool $ insertGroupMessage KindChat Nothing echo
         withDb pool $
-          insertOutbound testGroup botId "max" (MessageId 5051) (Just "| a |\n|---|") [SegText "[image]"]
+          insertOutbound KindChat testGroup botId "max" (MessageId 5051) (Just "| a |\n|---|") [SegText "[image]"]
         m <- withDb pool $ fetchMessage 5051
         (m >>= Just . (.renderedText)) `shouldBe` Just "| a |\n|---|"
