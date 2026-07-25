@@ -72,8 +72,12 @@ instance ToField Jsonb where
 
 -- | Insert a group message; idempotent on @message_id@ (NapCat may replay
 -- the same event after our reverse-WS reconnects).
-insertGroupMessage :: (WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
-insertGroupMessage gm = do
+-- | @isCommand@ marks a @!@-command: the caller decides, because the
+-- authority on what parses as a command is "Max.Command.Parser" and a
+-- DB module has no business importing it.  Command rows stay out of
+-- the transcript ("Max.DB.History") — they are UI, not conversation.
+insertGroupMessage :: (WithConnection :> es, IOE :> es) => Bool -> GroupMessage -> Eff es ()
+insertGroupMessage isCommand gm = do
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
       UserId uid = gm.userId
@@ -87,8 +91,8 @@ insertGroupMessage gm = do
       "INSERT INTO messages \
       \ (message_id, group_id, user_id, self_id, \
       \  segments, rendered_text, raw_message, \
-      \  sender_nickname, sender_card, reply_to_message_id) \
-      \ VALUES (?,?,?,?,?,?,?,?,?,?) \
+      \  sender_nickname, sender_card, reply_to_message_id, is_command) \
+      \ VALUES (?,?,?,?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (message_id) DO NOTHING"
       ( mid,
         gid,
@@ -99,7 +103,8 @@ insertGroupMessage gm = do
         gm.rawMessage,
         nick,
         card,
-        replyTo
+        replyTo,
+        isCommand
       )
   pure ()
 

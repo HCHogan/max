@@ -1,6 +1,7 @@
 module Max.Handler
   ( handleEvents,
     dispatchProactive,
+    isCommandMessage,
     stripStickerText,
     stripBareMarkers,
     isSilentReply,
@@ -55,7 +56,6 @@ import Max.MemoryExtract (extractMemories)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
-import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession)
@@ -69,6 +69,31 @@ import OneBot.Action (Action (..), Response (..), sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
 import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, rescueNameMentions, segmentMentions)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
+
+-- | May this turn be swallowed by one already running?
+--
+-- The supplement classifier exists to guess what an unmarked
+-- @-message meant, so a turn that already said it outright must not be
+-- sent back for a second opinion — @!btw@ means \"leave the running
+-- turn alone\", and a classifier that disagreed would do exactly the
+-- thing the user ruled out.
+--
+-- Carried separately from 'TriggerOrigin' because the two ask
+-- different questions.  Of the five places that test @origin ==
+-- OriginDirect@, four mean \"there is a real trigger message to react
+-- to\" and want a @!btw@ turn treated like any other; only the
+-- classifier means \"this turn is up for grabs\".  A fourth origin
+-- would have to be widened back in at four sites and would turn every
+-- future @== OriginDirect@ into a trap.
+--
+-- This used to ride on 'Max.Persistence.isEphemeral' — @!btw@ ran in a
+-- non-persisting scope, and the classifier skipped non-persisting
+-- turns.  True by accident, and it broke the moment @!btw@ stopped
+-- being ephemeral.
+data Absorbable
+  = MayAbsorb
+  | NeverAbsorb
+  deriving stock (Show, Eq)
 
 -- | Decision derived from one group message.
 data Trigger
@@ -86,6 +111,16 @@ data Trigger
     -- Surface the error back to the user.
     TriggerCommandError !T.Text
   deriving stock (Show)
+
+-- | Does this message parse as a @!@-command?  @Right Nothing@ is the
+-- parser's "not a command at all"; both other answers mean the user
+-- was addressing the command surface, not the conversation.
+isCommandMessage :: GroupMessage -> Bool
+isCommandMessage gm =
+  let stripped = T.strip (stripMentions gm.selfId (T.strip (renderPlainText gm.message)))
+   in case parseCommand stripped of
+        Right Nothing -> False
+        _ -> True
 
 -- | @repliesToBot@ = the message quotes (replies to) one of the
 -- bot's own messages; the caller resolves that via DB lookup.  A
@@ -120,7 +155,6 @@ handleEvents ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
-    Reader PersistMode :> es,
     Reader BotEnv :> es,
     IOE :> es
   ) =>
@@ -156,9 +190,15 @@ handleEvents q fetchSig mIntent = loop
           sendAction (SetFriendAddRequest flag True)
       loop
 
+-- | Persistence runs before any dispatch decision, so it re-derives
+-- "is this a command" from the same parser 'classify' uses rather than
+-- waiting for the trigger — the DB lookup 'classify' needs for
+-- reply-to-bot has nothing to do with it.  A malformed command counts:
+-- it still looks like one to the reader, and it gets an error reply
+-- rather than an answer.
 persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
 persist gm =
-  trySync (insertGroupMessage gm) >>= \case
+  trySync (insertGroupMessage (isCommandMessage gm) gm) >>= \case
     Right () -> pure ()
     Left e ->
       logAttention "db insert failed" $
@@ -171,7 +211,6 @@ onGroupMessage ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
-    Reader PersistMode :> es,
     Reader BotEnv :> es,
     IOE :> es
   ) =>
@@ -213,7 +252,7 @@ onGroupMessage mIntent gm = do
     TriggerPong -> clearIntent >> sendPong gm
     TriggerCommand body -> clearIntent >> dispatchCommand gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
-    TriggerLLM _ -> clearIntent >> dispatchLLM OriginDirect gm
+    TriggerLLM _ -> clearIntent >> dispatchLLM OriginDirect MayAbsorb gm
 
 -- | A 戳一戳 aimed at the bot: a contentless direct wake, the soft
 -- version of an @.  If the group already has a running turn the poke
@@ -229,7 +268,6 @@ onPoke ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
-    Reader PersistMode :> es,
     Reader BotEnv :> es,
     IOE :> es
   ) =>
@@ -268,7 +306,7 @@ onPoke mIntent pk
         Just (TaskId into) ->
           logInfo "poke: injected into running task" $
             object ["group_id" .= gidRaw, "task" .= into]
-        Nothing -> dispatchLLM OriginPoke (pokeTrigger pk mName)
+        Nothing -> dispatchLLM OriginPoke MayAbsorb (pokeTrigger pk mName)
 
 -- | Synthesize the trigger 'GroupMessage' for a poke dispatch.  There
 -- is no real message: id 0 is the "no trigger message" sentinel —
@@ -297,7 +335,6 @@ dispatchCommand ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
-    Reader PersistMode :> es,
     Reader BotEnv :> es,
     IOE :> es
   ) =>
@@ -342,8 +379,8 @@ dispatchCommand gm body = localDomain "cmd" $ do
         -- beats another line of chat noise.
         ReplyAck ->
           sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
-        EphemeralAsk askBody -> do
-          logInfo "btw: ephemeral dispatch" $
+        SideQuestion askBody -> do
+          logInfo "btw: side question" $
             object ["len" .= T.length askBody]
           -- Rebuild the trigger with the !btw body as the user
           -- message; preserve everything else (reply target, sender,
@@ -355,7 +392,7 @@ dispatchCommand gm body = localDomain "cmd" $ do
                         SegText (" " <> askBody)
                       ]
                   }
-          withEphemeral $ dispatchLLM OriginDirect virtualGm
+          dispatchLLM OriginDirect NeverAbsorb virtualGm
         -- !feedback: aim the note at the turn whose trigger the user
         -- replied to, and at the newest running turn otherwise — a
         -- reply to something that isn't a live turn (mis-click, a turn
@@ -425,13 +462,12 @@ dispatchProactive ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
-    Reader PersistMode :> es,
     Reader BotEnv :> es,
     IOE :> es
   ) =>
   GroupMessage ->
   Eff es ()
-dispatchProactive = dispatchLLM OriginProactive
+dispatchProactive = dispatchLLM OriginProactive MayAbsorb
 
 -- | Spawn an async to build the prompt, call the LLM, post the reply,
 -- and append the (user, assistant) turn to the session history.
@@ -450,14 +486,14 @@ dispatchLLM ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
-    Reader PersistMode :> es,
     Reader BotEnv :> es,
     IOE :> es
   ) =>
   TriggerOrigin ->
+  Absorbable ->
   GroupMessage ->
   Eff es ()
-dispatchLLM origin gm = do
+dispatchLLM origin absorbable gm = do
   env :: BotEnv <- ask
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
@@ -557,14 +593,13 @@ dispatchLLM origin gm = do
     -- may steer, not just whoever started the turn: the note carries
     -- the speaker's name, so the model can address them.
     --
-    -- Gated on intent being configured; proactive and ephemeral turns
-    -- never reroute.  Any doubt (classifier says no, errors out, or
-    -- the turn finished while we were classifying) falls back to a
-    -- normal dispatch.
-    tryInjectSupplement env s tid = do
-      ephemeral <- isEphemeral
+    -- Gated on intent being configured; proactive turns and turns that
+    -- already declared themselves un-absorbable (@!btw@) never reroute.
+    -- Any doubt (classifier says no, errors out, or the turn finished
+    -- while we were classifying) falls back to a normal dispatch.
+    tryInjectSupplement env s tid =
       case env.beIntent of
-        Just icfg | origin == OriginDirect && not ephemeral -> do
+        Just icfg | origin == OriginDirect && absorbable == MayAbsorb -> do
           -- Our own entry has been in the registry since dispatch
           -- entry, so "is anybody working?" has to discount it.
           running <- liftIO (listTasks env.beTasks (Just gm.groupId))
@@ -671,9 +706,7 @@ dispatchLLM origin gm = do
                 "face" .= mFace,
                 "aborted" .= result.aborted
               ]
-          ephemeral <- isEphemeral
-          unless ephemeral $
-            insertSilence gm (if T.null stripped then "[silence]" else stripped)
+          insertSilence gm (if T.null stripped then "[silence]" else stripped)
           when (origin == OriginDirect) $
             sendAction
               (SetMsgEmojiLike gm.messageId (maybe defaultSilenceFace id mFace) True)
@@ -683,7 +716,6 @@ dispatchLLM origin gm = do
           -- subsequent dispatches will read this turn's assistant reply
           -- back from when reconstructing mention history.
           sendAndPersistReply gm mentionable rosterNames env.beBlobRoot stickersEff stripped
-          ephemeral <- isEphemeral
           logInfo "llm replied" $
             object
               [ "to" .= (let UserId u = gm.userId in u),
@@ -693,16 +725,13 @@ dispatchLLM origin gm = do
                 "aborted" .= result.aborted
               ]
           -- Post-reply memory extraction: the user already has their
-          -- answer, so this costs them nothing; ephemeral (!btw) turns
-          -- must not leave traces.  A crashed extraction only logs.
-          case env.beMemoryExtract of
-            Just prof
-              | not ephemeral ->
-                  extractMemories prof env.beEmbed gm (ctx <> result.appended)
-                    `catchSync` \e ->
-                      logAttention "memx: crashed" $
-                        object ["error" .= T.pack (show e)]
-            _ -> pure ()
+          -- answer, so this costs them nothing.  A crashed extraction
+          -- only logs.
+          for_ env.beMemoryExtract $ \prof ->
+            extractMemories prof env.beEmbed gm (ctx <> result.appended)
+              `catchSync` \e ->
+                logAttention "memx: crashed" $
+                  object ["error" .= T.pack (show e)]
 
 --------------------------------------------------------------------------------
 -- Reply helper.
@@ -753,7 +782,6 @@ replyText gm body =
 sendAndPersistReply ::
   ( NapCat :> es,
     WithConnection :> es,
-    Reader PersistMode :> es,
     Log :> es,
     IOE :> es
   ) =>
@@ -765,11 +793,6 @@ sendAndPersistReply ::
   T.Text ->
   Eff es ()
 sendAndPersistReply gm mentionable rosterNames blobRoot stickersOn body = do
-  -- The reply already goes out over NapCat regardless — that's a
-  -- real side effect we can't undo.  Only the messages-table write
-  -- is gated, so an ephemeral turn doesn't show up in the next
-  -- dispatch's mention history.
-  ephemeral <- isEphemeral
   foldM_
     ( \sentImgs (i, chunk) -> do
         (sentImgs', mPlan) <- planChunk sentImgs chunk
@@ -792,14 +815,13 @@ sendAndPersistReply gm mentionable rosterNames blobRoot stickersOn body = do
                       logAttention "no message_id in send response" $
                         object ["payload" .= payload, "chunk" .= i]
                     Just outMid ->
-                      unless ephemeral $
-                        insertOutbound
-                          gm.groupId
-                          gm.selfId
-                          "max"
-                          (MessageId outMid)
-                          (Just (T.strip rendered))
-                          segs
+                      insertOutbound
+                        gm.groupId
+                        gm.selfId
+                        "max"
+                        (MessageId outMid)
+                        (Just (T.strip rendered))
+                        segs
         pure sentImgs'
     )
     Set.empty

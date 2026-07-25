@@ -28,7 +28,6 @@ import Max.Effects.NapCat (NapCat, qqBackend, runNapCat)
 import Max.Embedder (embedWorker)
 import Max.Embedding (EmbedClient, newEmbedClient)
 import Max.Env (BotEnv (..))
-import Max.Persistence (PersistMode (Persisted))
 import Max.Reminder (ReminderScheduler, newReminderScheduler, reminderWorker)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
@@ -160,7 +159,6 @@ main = do
               ]
             . runWreq
             . runLLM cfg.llm
-            . runReader Persisted -- default mode; !btw scopes Volatile on top
             . runReader env
             . runAgent defaultLimits toolFactory tasks
             $ runApp cfg applied mEmbed reminders eventQ fetchSig mIntentSt clientRef mainTid
@@ -186,7 +184,6 @@ runApp ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
-    Reader PersistMode :> es,
     Reader BotEnv :> es
   ) =>
   AppConfig ->

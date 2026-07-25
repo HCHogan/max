@@ -56,12 +56,12 @@ import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 -- | What the caller should do after dispatching a command.
 --
 -- Most commands collapse to 'ReplyText' (just say something back).
--- 'EphemeralAsk' carries !btw: the caller should spawn a regular LLM
--- dispatch with the carried text as the user prompt, but under
--- 'Max.Persistence.withEphemeral' so the reply doesn't get persisted to
--- mention history.  Wiring it as a result rather than a direct call
--- keeps Dispatcher free of the Agent/NapCat/Concurrent constraints;
--- 'FeedbackNote' is deferred to the caller for the same reason.
+-- 'SideQuestion' carries !btw: the caller should spawn an ordinary LLM
+-- dispatch with the carried text as the user prompt, marked so the
+-- supplement classifier can't fold it into a running turn.  Wiring it
+-- as a result rather than a direct call keeps Dispatcher free of the
+-- Agent/NapCat/Concurrent constraints; 'FeedbackNote' is deferred to
+-- the caller for the same reason.
 data DispatchResult
   = ReplyText !Text
   | -- | Pure acknowledgement — the caller reacts an OK face onto the
@@ -71,7 +71,7 @@ data DispatchResult
     -- when the command came from a group (e.g. !version — a public
     -- card, not a personal query).
     ReplyPublicText !Text
-  | EphemeralAsk !Text
+  | SideQuestion !Text
   | -- | !feedback: hand this note to a turn already running.  The
     -- caller does the routing because it holds the trigger message —
     -- it needs the sender's display name to render the note the way
@@ -103,13 +103,18 @@ execute t gid uid granterTier replyTarget cmd = do
  env :: BotEnv <- ask
  case cmd of
   -- Claude Code's btw: a quick side question that deliberately leaves
-  -- the current work alone.  Always its own ephemeral turn, never an
-  -- injection — !feedback is the command for feeding a running turn.
-  -- The caller (Handler.dispatchCommand) sees 'EphemeralAsk' and spawns
-  -- a 'withEphemeral'-wrapped dispatch.
+  -- the current work alone.  Always its own turn, never an injection —
+  -- !feedback is the command for feeding a running turn.  The caller
+  -- (Handler.dispatchCommand) spawns a dispatch marked NeverAbsorb, so
+  -- the supplement classifier can't overrule the user and fold it into
+  -- the running turn after all.  Otherwise it is an ordinary turn:
+  -- reply persisted, memory live.  It used to be non-persisting, which
+  -- belonged to the old meaning of !btw ("ask without polluting
+  -- history") and left the question in the transcript with its answer
+  -- deleted — a permanently unanswered-looking line.
   Btw note -> case T.strip note of
-    "" -> reply "用法：!btw <要临时问的内容>（另起一轮，不打扰在跑的任务，也不进对话历史）"
-    q -> pure (EphemeralAsk q)
+    "" -> reply "用法：!btw <要另外问的内容>（另起一轮，不打扰在跑的任务）"
+    q -> pure (SideQuestion q)
   -- The other half of the split: hand a note to a turn already running.
   -- Routing happens in the Handler, which has the trigger message and
   -- can render the note the way history lines are rendered.
@@ -701,7 +706,7 @@ helpText Nothing =
       "  !pin [id]                pin 一条消息（不带 id 时用引用的那条）",
       "  !unpin [id|all]          移除 pin（同上语法 + all 清空）",
       "  !pins                    列出当前 pin 的消息",
-      "  !btw <text>              另起一个临时问题，不打扰在跑的任务，也不进对话历史",
+      "  !btw <text>              另起一个问题，不打扰在跑的任务",
       "  !feedback <text>         给在跑的任务补一句（别名 !fb；回复某条触发消息可指定给哪轮，不回复就给最新那轮）",
       "  !memory                  看本群的长期记忆",
       "  !memory rm <id>          删除一条记忆（本群的或你自己的）",

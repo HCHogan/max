@@ -20,8 +20,6 @@
 --   * the injection block in "Max.Prompt" is framed as 背景参考
 --     with explicit 不要复述 guidance.
 --
--- Writes are gated on 'isEphemeral': a @!btw@ one-shot must not leave
--- permanent traces.
 module Max.Tools.Memory
   ( memoryToolsFor,
     maxMemoriesPerScope,
@@ -38,7 +36,6 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
-import Effectful.Reader.Dynamic (Reader)
 import Max.DB.Memory
   ( MemoryItem (..),
     MemoryScope (..),
@@ -52,7 +49,6 @@ import Max.DB.Memory
 import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
-import Max.Persistence (PersistMode, isEphemeral)
 import OneBot.Types (GroupId (..), UserId (..))
 
 -- | Per (scope, scope_id) ceiling.  Hitting it turns 'memory_save'
@@ -66,7 +62,7 @@ maxMemoryChars :: Int
 maxMemoryChars = 300
 
 memoryToolsFor ::
-  (WithConnection :> es, Reader PersistMode :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Log :> es, IOE :> es) =>
   Maybe EmbedClient ->
   DispatchContext ->
   [Tool es]
@@ -82,7 +78,7 @@ memoryToolsFor mEmbed dc =
 -- memory_save
 
 saveTool ::
-  (WithConnection :> es, Reader PersistMode :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Log :> es, IOE :> es) =>
   DispatchContext ->
   Tool es
 saveTool dc =
@@ -125,7 +121,7 @@ saveTool dc =
           ],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (scopeRaw, content, mUid) -> guardWrites $ do
+        Right (scopeRaw, content, mUid) -> do
           let GroupId gid = dc.dcGroupId
               UserId triggerUid = dc.dcUserId
           case parseScope scopeRaw of
@@ -158,7 +154,7 @@ saveTool dc =
 -- memory_update
 
 updateTool ::
-  (WithConnection :> es, Reader PersistMode :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Log :> es, IOE :> es) =>
   Tool es
 updateTool =
   Tool
@@ -184,7 +180,7 @@ updateTool =
           ],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (mid, content) -> guardWrites $
+        Right (mid, content) ->
           case checkContent content of
             Left err -> pure (Left err)
             Right c -> do
@@ -203,7 +199,7 @@ updateTool =
 -- memory_forget
 
 forgetTool ::
-  (WithConnection :> es, Reader PersistMode :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Log :> es, IOE :> es) =>
   Tool es
 forgetTool =
   Tool
@@ -223,7 +219,7 @@ forgetTool =
           ],
       toolRun = \args -> case parseEither (withObject "args" (.: "id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (mid :: Int64) -> guardWrites $ do
+        Right (mid :: Int64) -> do
           ok <- deleteMemory mid
           if ok
             then do
@@ -364,17 +360,6 @@ searchTool dc ec =
 
 --------------------------------------------------------------------------------
 -- Shared guards.
-
--- | Reject writes inside an ephemeral (@!btw@) dispatch.
-guardWrites ::
-  Reader PersistMode :> es =>
-  Eff es (Either Text Value) ->
-  Eff es (Either Text Value)
-guardWrites act = do
-  ephemeral <- isEphemeral
-  if ephemeral
-    then pure (Left "临时对话（!btw）里不能改动长期记忆")
-    else act
 
 checkContent :: Text -> Either Text Text
 checkContent raw

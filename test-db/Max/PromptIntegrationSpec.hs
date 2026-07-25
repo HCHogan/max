@@ -12,7 +12,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime, utc)
-import Helpers (insertRawMessage, truncateAll, withDb, withDbLog)
+import Helpers (insertRawCommand, insertRawMessage, truncateAll, withDb, withDbLog)
 import Max.DB.Connection (DbPool)
 import Max.DB.Session (fetchOrInit, upsertSession)
 import Max.Effects.LLM (ChatMessage (..))
@@ -117,6 +117,20 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("昨天那事呢" `T.isInfixOf`)
       ub `shouldSatisfy` ("已经办好了" `T.isInfixOf`)
       ub `shouldSatisfy` ("闲聊5" `T.isInfixOf`)
+
+    -- Commands are UI, not conversation.  This one is load-bearing for
+    -- !btw in particular: its own command message used to sit in the
+    -- transcript as a question, and a later turn would answer it again.
+    it "keeps command messages out of the transcript" $ do
+      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "普通聊天"
+      insertRawCommand pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "!btw 顺便问一下"
+      insertRawCommand pool 1003 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "[@#1000] !ps"
+      s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      let ub = userBodyOf msgs
+      ub `shouldSatisfy` ("普通聊天" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("顺便问一下" `T.isInfixOf`))
+      ub `shouldSatisfy` (not . ("!ps" `T.isInfixOf`))
 
     -- A message can come back from both queries; it must appear once.
     it "shows a message that both queries return exactly once" $ do

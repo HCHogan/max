@@ -2,7 +2,10 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.Handler (isSilentReply, parseSilence, stripBareMarkers, stripStickerText)
+import Max.Handler (isCommandMessage, isSilentReply, parseSilence, stripBareMarkers, stripStickerText)
+import OneBot.Event (GroupMessage (..), Sender (..))
+import OneBot.Segment (Segment (..))
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
 
 spec :: Spec
@@ -91,3 +94,46 @@ spec = do
 
     it "leaves unrelated text untouched" $
       stripBareMarkers "没有图片标记" `shouldBe` "没有图片标记"
+
+  -- Command messages are persisted with this flag and then filtered out
+  -- of the transcript.  It re-derives the answer from the same parser
+  -- 'classify' uses, so the two can't drift into disagreeing about what
+  -- a command is.
+  describe "isCommandMessage" $ do
+    let msg segs =
+          GroupMessage
+            { selfId = UserId 1000,
+              groupId = GroupId 7777,
+              userId = UserId 2001,
+              messageId = MessageId 9000,
+              message = segs,
+              rawMessage = "",
+              sender = Sender (UserId 2001) (Just "Alice") Nothing
+            }
+        cmd = isCommandMessage . msg
+
+    it "flags a bare command" $ do
+      cmd [SegText "!ps"] `shouldBe` True
+      cmd [SegText "!btw 顺便问一下"] `shouldBe` True
+
+    it "flags one addressed to the bot" $
+      cmd [SegAt (UserId 1000), SegText " !fb 改成 B 方案"] `shouldBe` True
+
+    -- Malformed still counts: it gets an error reply, not an answer, so
+    -- leaving it in the transcript would be a question nobody answered.
+    it "flags a malformed command" $
+      cmd [SegText "!pin abc def ghi"] `shouldBe` True
+
+    -- The shell escape is a command too — its output is a reply, and the
+    -- command line itself is noise in a conversation transcript.
+    it "flags the shell escape" $
+      cmd [SegText "! ls -la"] `shouldBe` True
+
+    it "leaves ordinary chat alone" $ do
+      cmd [SegText "今天吃啥"] `shouldBe` False
+      cmd [SegAt (UserId 1000), SegText " 帮我看下这个报错"] `shouldBe` False
+
+    -- A bang that isn't followed by an identifier is just punctuation.
+    it "leaves bang-prefixed prose alone" $ do
+      cmd [SegText "!!!"] `shouldBe` False
+      cmd [SegText "!这什么鬼"] `shouldBe` False

@@ -7,6 +7,7 @@ module Helpers
     withDbLog,
     truncateAll,
     insertRawMessage,
+    insertRawCommand,
     insertRawReply,
   )
 where
@@ -93,6 +94,29 @@ insertRawMessage pool mid gid uid sid receivedAt nick body = withConn pool $ \c 
       \  (message_id, group_id, user_id, self_id, received_at, \
       \   segments, rendered_text, raw_message, sender_nickname, sender_card) \
       \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?)"
+      ((mid, gid, uid, sid, receivedAt, body, nick) :. Only Null)
+  pure ()
+
+-- | Like 'insertRawMessage' but flagged as a @!@-command, the way
+-- 'Max.Handler.persist' flags one at insert time.
+insertRawCommand ::
+  DbPool ->
+  Int64 -> -- message_id
+  Int64 -> -- group_id
+  Int64 -> -- user_id
+  Int64 -> -- self_id
+  UTCTime -> -- received_at
+  Maybe Text -> -- sender_nickname
+  Text -> -- rendered_text
+  IO ()
+insertRawCommand pool mid gid uid sid receivedAt nick body = withConn pool $ \c -> do
+  _ <-
+    execute
+      c
+      "INSERT INTO messages \
+      \  (message_id, group_id, user_id, self_id, received_at, \
+      \   segments, rendered_text, raw_message, sender_nickname, sender_card, is_command) \
+      \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?, true)"
       ((mid, gid, uid, sid, receivedAt, body, nick) :. Only Null)
   pure ()
 

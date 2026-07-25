@@ -41,7 +41,7 @@ spec pool = before_ (truncateAll pool) $
     describe "insertGroupMessage" $ do
       it "round-trips a basic message (looked up via fetchMessage)" $ do
         let gm = mkInbound (MessageId 5001) memberA [SegText "hello"]
-        withDb pool $ insertGroupMessage gm
+        withDb pool $ insertGroupMessage False gm
         m <- withDb pool $ fetchMessage 5001
         case m of
           Nothing -> expectationFailure "expected message to be readable"
@@ -54,8 +54,8 @@ spec pool = before_ (truncateAll pool) $
       it "is idempotent on message_id (ON CONFLICT DO NOTHING)" $ do
         let gm1 = mkInbound (MessageId 5001) memberA [SegText "first"]
             gm2 = mkInbound (MessageId 5001) memberA [SegText "second-call-different-body"]
-        withDb pool $ insertGroupMessage gm1
-        withDb pool $ insertGroupMessage gm2
+        withDb pool $ insertGroupMessage False gm1
+        withDb pool $ insertGroupMessage False gm2
         m <- withDb pool $ fetchMessage 5001
         case m of
           Just h -> h.renderedText `shouldBe` "first" -- first write wins
@@ -94,7 +94,7 @@ spec pool = before_ (truncateAll pool) $
         -- The outbound upsert must still get its normalised
         -- rendered_text in (e.g. table markdown source, not [image]).
         let echo = mkInbound (MessageId 5051) memberA [SegText "[image]"]
-        withDb pool $ insertGroupMessage echo
+        withDb pool $ insertGroupMessage False echo
         withDb pool $
           insertOutbound testGroup botId "max" (MessageId 5051) (Just "| a |\n|---|") [SegText "[image]"]
         m <- withDb pool $ fetchMessage 5051
