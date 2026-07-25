@@ -16,7 +16,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Effectful.Reader.Dynamic (Reader, ask, runReader)
 import Effectful.Wreq (runWreq)
-import Log.Backend.StandardOutput (withStdOutLogger)
+import Max.Log (withCompactLogger)
 import Max.Config (AppConfig (..), loadConfig)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
@@ -85,7 +85,7 @@ main = do
     sandboxes <- newSandboxRegistry
     browsers <- newBrowserRegistry cfg.browserProxy
     ( do
-        withStdOutLogger $ \logger -> do
+        withCompactLogger cfg.logColor $ \logger -> do
           eventQ <- newTQueueIO
           -- One bell for all three media workers: the jobs live in
           -- @fetch_jobs@ and each worker claims only its own kind, so a
@@ -124,7 +124,7 @@ main = do
                   }
           runEff
             . runConcurrent
-            . runLog "max" logger LogInfo
+            . runLog "max" logger cfg.logLevel
             . runHttp
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool

@@ -56,10 +56,14 @@ Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
 ## Versioning
 
 `version:` in `max.cabal` is the single source of truth (surfaced by `!version`
-via `Paths_max`). **Every feature update bumps it** — patch for fixes/tweaks,
-minor for features — and releases get an annotated `vX.Y.Z` git tag. Startup
-refuses to run against a database that records migrations this binary doesn't
-ship, so an old max can never touch a newer schema.
+via `Paths_max`). A version marks a batch of work worth naming — usually what
+goes out in one deploy — not one commit; several commits sharing a version is
+normal and preferred over bumping mechanically. Patch for fixes, minor for
+features or anything that changes an interface. Releases get an annotated
+`vX.Y.Z` git tag.
+
+Startup refuses to run against a database that records migrations this binary
+doesn't ship, so an old max can never touch a newer schema.
 
 ## Debugging
 
@@ -79,11 +83,32 @@ Image blobs: `var/images/<2hex>/<sha256>`. Sandbox/browser containers: per-group
 (`max-sb-*` / `max-br-*`), destroyed on `!clear --all` or shutdown, reaped on
 boot. Outbox staging: `var/outbox/` (shared with NapCat container).
 
-Bot logs are JSON on stdout with a `domain` field — useful filters: `max/conn-N`,
-`max/image-worker`, `max/forward-worker`, `max/llm`, `max/cmd`, `max/memx`
-(memory extraction), `max/intent` (proactive-trigger classification),
-`max/shutdown` (graceful drain), plus `embed:` lines from the vector worker.
-`!debug on` mirrors tool calls into the chat itself.
+One log line per event, on stdout:
+
+```
+14:32:07 INFO  llm      llm dispatch  group_id=7777 message_id=7413 origin=OriginDirect
+14:32:09 WARN  llm      agent: tool failed  error="timeout after 15s" name=web_search
+```
+
+Fixed-width time and level, then the domain (dim), the message, and the
+structured data as `key=value`. Multi-line values collapse to one line with `⏎`,
+so `grep -A` / `grep -B` count events rather than JSON braces.
+
+Useful domain filters: `conn-N`, `image-worker`, `forward-worker`, `llm`, `cmd`,
+`memx` (memory extraction), `intent` (proactive-trigger classification),
+`shutdown` (graceful drain).
+
+`log-base` has three levels and they map straight across: `TRACE` / `INFO` /
+`WARN`. There is no separate error tier — `logAttention` carries both recoverable
+warnings and outright failures, and splitting them means auditing all ~78 call
+sites, not guessing at format time.
+
+- `--log-level trace|info|warn` (`MAX_LOG_LEVEL`, `log_level:`) — the floor.
+- `--log-color auto|always|never` (`MAX_LOG_COLOR`, `log_color:`) — `auto` is
+  "stdout is a tty and `NO_COLOR` is unset". Under systemd stdout is a pipe to
+  journald, so a host whose logs are read through `journalctl` wants `always`.
+
+`!debug on` mirrors tool calls *and their results* into the chat itself.
 
 Media that never arrived: a pending fetch is a row now, so ask the database
 rather than grepping logs.

@@ -38,9 +38,18 @@ persona: |
 
 # Default debug mode (default false).  When effective debug is on, the
 # agent loop posts each tool call to the group as a "⚙ tool {args}"
-# status line.  Group members override per session with
-# !debug on / off / default.
+# line and each result as "↳ tool {result}".  Group members override
+# per session with !debug on / off / default.
 # debug: false
+
+# Logging.  One line per event; log-base has three levels and they map
+# straight across to trace / info / warn.
+# log_level: info
+#
+# ANSI colour: auto | always | never.  auto means "stdout is a tty and
+# NO_COLOR is unset" — under systemd it isn't one, so a host whose logs
+# are read through journalctl (which renders escapes fine) wants always.
+# log_color: auto
 
 # server:
 #   host: "0.0.0.0"

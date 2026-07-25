@@ -79,6 +79,7 @@ library
         Max.ImagePrep
         Max.Images
         Max.Intent
+        Max.Log
         Max.MediaCaption
         Max.MemoryExtract
         Max.Platform
@@ -137,6 +138,7 @@ library
         , http-client-tls     >= 0.3  && < 0.5
         , http-types          >= 0.12 && < 0.13
         , lens                >= 5.2  && < 5.4
+        , log-base            >= 0.12 && < 0.13
         , log-effectful       >= 1.0  && < 1.1
         , megaparsec          >= 9.5  && < 9.9
         , autodocodec         >= 0.4  && < 0.6
@@ -167,7 +169,6 @@ executable max
         , containers           >= 0.7  && < 0.9
         , effectful            >= 2.5  && < 2.7
         , effectful-postgresql >= 0.1  && < 0.2
-        , log-base             >= 0.12 && < 0.13
         , log-effectful        >= 1.0  && < 1.1
         , max
         , stm                  >= 2.5  && < 2.6
@@ -189,7 +190,6 @@ executable max-intent-eval
         , base                 >= 4.20 && < 5
         , bytestring           >= 0.12 && < 0.13
         , effectful            >= 2.5  && < 2.7
-        , log-base             >= 0.12 && < 0.13
         , log-effectful        >= 1.0  && < 1.1
         , max
         , opt-env-conf         >= 0.15 && < 0.17
@@ -208,6 +208,7 @@ test-suite max-test
         Max.Command.PermissionSpec
         Max.HandlerSpec
         Max.IntentSpec
+        Max.LogSpec
         OneBot.EventSpec
         OneBot.SegmentSpec
         Max.RenderSpec
@@ -228,6 +229,7 @@ test-suite max-test
         , bytestring      >= 0.12 && < 0.13
         , containers      >= 0.7  && < 0.9
         , hspec           >= 2.11 && < 2.12
+        , log-base        >= 0.12 && < 0.13
         , max
         , text            >= 2.1  && < 2.2
         , time            >= 1.12 && < 1.17

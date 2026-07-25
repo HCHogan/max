@@ -28,7 +28,7 @@ import Data.Version (makeVersion)
 import Effectful
 import Effectful.Log (LogLevel (LogAttention), runLog)
 import Effectful.Wreq (runWreq)
-import Log.Backend.StandardOutput (withStdOutLogger)
+import Max.Log (withCompactLogger)
 import Max.Config (AppConfig (..), appConfigParser)
 import Max.Effects.LLM (runLLM)
 import Max.Intent (IntentConfig (..), IntentVerdict (..), classifyOnce, kindText)
@@ -121,7 +121,7 @@ main = do
 
   -- LogAttention: per-case verdict logs stay quiet, real errors
   -- (HTTP failures, unparseable verdicts) still surface.
-  results <- withStdOutLogger $ \logger ->
+  results <- withCompactLogger cfg.logColor $ \logger ->
     runEff . runLog "max-intent-eval" logger LogAttention . runWreq . runLLM cfg.llm $
       traverse
         (\(i, c) -> (,) (i, c) <$> classifyOnce profile cfg.persona c.cContext c.cNew)

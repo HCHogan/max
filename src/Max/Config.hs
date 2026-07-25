@@ -65,6 +65,8 @@ import Max.DB.Connection (DbConfig (..))
 import Max.Effects.LLM (LLMProfile (..), LLMRegistry (..), Protocol (..), parseProtocol)
 import Max.Embedding (EmbeddingConfig (..))
 import Max.Intent (IntentConfig (..))
+import Log (LogLevel (..))
+import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Wechatpad (WechatpadConfig (..))
 import Max.Tools.Search (SearchConfig (..))
 import OneBot.Server (ServerConfig (..))
@@ -127,7 +129,15 @@ data AppConfig = AppConfig
     -- | Default for debug mode: when effective debug is on, the
     -- agent loop posts each tool call to the group.  Per-group
     -- override via !debug on/off.
-    debug :: !Bool
+    debug :: !Bool,
+    -- | Lowest level that reaches stdout.  @log-base@ has three
+    -- ('LogTrace' \/ 'LogInfo' \/ 'LogAttention'); this is the floor,
+    -- so @warn@ shows failures only.
+    logLevel :: !LogLevel,
+    -- | Whether log lines carry ANSI colour.  @auto@ means "stdout is
+    -- a terminal" — which under systemd it isn't, so a production host
+    -- that reads logs through @journalctl@ wants @always@.
+    logColor :: !ColorMode
   }
   deriving stock (Show)
 
@@ -314,6 +324,28 @@ appConfigParser =
           env "MAX_DEBUG",
           conf "debug",
           value False
+        ]
+    logLevel <-
+      setting
+        [ help "Lowest log level printed: trace | info | warn",
+          reader (maybeReader (parseLogLevel . T.pack)),
+          option,
+          long "log-level",
+          env "MAX_LOG_LEVEL",
+          confWith "log_level" logLevelCodec,
+          metavar "LEVEL",
+          valueWithShown (T.unpack . renderLogLevel) LogInfo
+        ]
+    logColor <-
+      setting
+        [ help "ANSI colour in log lines: auto (tty only) | always | never. journald isn't a tty, so a host read via journalctl wants 'always'",
+          reader (maybeReader (parseColorMode . T.pack)),
+          option,
+          long "log-color",
+          env "MAX_LOG_COLOR",
+          confWith "log_color" colorModeCodec,
+          metavar "auto|always|never",
+          valueWithShown renderColorMode ColorAuto
         ]
     pure AppConfig {..}
 
@@ -894,3 +926,27 @@ materializeLLM (dn, fileProfiles, overlay) = do
             multimodal = fromMaybe False spec.multimodal,
             historyAsTurns = fromMaybe False spec.historyAsTurns
           }
+
+-- | @auto@ / @always@ / @never@ — the spellings 'parseColorMode' takes.
+renderColorMode :: ColorMode -> String
+renderColorMode = \case
+  ColorAuto -> "auto"
+  ColorAlways -> "always"
+  ColorNever -> "never"
+
+-- | Same bimap-over-Text shape as 'protocolCodec': the YAML side is a
+-- plain string, and an unknown one names the accepted spellings rather
+-- than failing anonymously.
+logLevelCodec :: JSONCodec LogLevel
+logLevelCodec = bimapCodec parse (T.unpack . renderLogLevel) codec
+  where
+    parse t = case parseLogLevel (T.pack t) of
+      Just l -> Right l
+      Nothing -> Left ("expected 'trace', 'info' or 'warn', got: " <> t)
+
+colorModeCodec :: JSONCodec ColorMode
+colorModeCodec = bimapCodec parse renderColorMode codec
+  where
+    parse t = case parseColorMode (T.pack t) of
+      Just m -> Right m
+      Nothing -> Left ("expected 'auto', 'always' or 'never', got: " <> t)
