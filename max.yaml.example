@@ -4,7 +4,7 @@
 # falls back to environment variables, then to the built-in defaults.
 #
 # Config precedence (first wins): CLI flags > env vars > this file > defaults.
-# Run `max-bot --help` for the full option/env/config reference.
+# Run `max --help` for the full option/env/config reference.
 
 # Bot persona — the identity line at the top of the system prompt.
 # The format guide for [HH:MM], [↩ 引用 ...], [image], [forward] markers is

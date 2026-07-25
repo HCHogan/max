@@ -59,7 +59,7 @@ Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
 via `Paths_max`). **Every feature update bumps it** — patch for fixes/tweaks,
 minor for features — and releases get an annotated `vX.Y.Z` git tag. Startup
 refuses to run against a database that records migrations this binary doesn't
-ship, so an old max-bot can never touch a newer schema.
+ship, so an old max can never touch a newer schema.
 
 ## Debugging
 

@@ -14,8 +14,8 @@ sandbox-image/     nix-enabled sandbox base image  → max-sandbox:latest
 browser-image/     camoufox-mcp + supergateway + camoufox → max-browser:latest
 nix/module.nix     NixOS module for production deployment
 .github/workflows/ CI: build + max-test through the flake dev shell, plus a pure
-                   `nix build .#max-bot` so the packaged build can't rot
-max.cabal          library + max-bot executable
+                   `nix build .#max` so the packaged build can't rot
+max.cabal          library + max executable
 migrations/*.sql   schema migrations, applied on boot
 
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Extract intent-classifier rounds from max-bot's journald logs into a
+# Extract intent-classifier rounds from max's journald logs into a
 # JSONL fixture for max-intent-eval.
 #
 # Usage:
@@ -19,7 +19,7 @@ set -euo pipefail
 
 since="${1:-1 week ago}"
 
-journalctl -u max-bot -o cat --since "$since" \
+journalctl -u max -o cat --since "$since" \
   | grep -F 'intent: verdict {' \
   | sed 's/^[^{]*//' \
   | jq -c '{

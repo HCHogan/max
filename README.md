@@ -77,7 +77,7 @@ sandbox-image/build.sh           # code-execution sandbox
 browser-image/build.sh           # browser (multimodal profiles only)
 
 # 6. Run — migrations apply on boot, the embed worker backfills on its own
-cabal run max-bot
+cabal run max
 ```
 
 Then, in QQ:
@@ -98,7 +98,7 @@ quoted message's images.
 
 Three layered sources, first-Just wins per field:
 
-1. **CLI flags** — `max-bot --help` lists everything.
+1. **CLI flags** — `max --help` lists everything.
 2. **Environment** — `MAX_LLM_API_KEY`, `MAX_DB_URL`, `MAX_PERSONA`, … Devenv
    sources `.env` on shell entry.
 3. **YAML** — `--config-file PATH`, `MAX_CONFIG`, `./max.yaml`, or

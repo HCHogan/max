@@ -339,7 +339,7 @@ execute t gid uid granterTier replyTarget cmd = do
     -- separate messages ('planReply').  Public on purpose: the
     -- version card is group trivia, not a personal query.
     pure . ReplyPublicText . T.intercalate "\n" $
-      [ "🦈 max-bot v" <> T.pack (showVersion version),
+      [ "🦈 max v" <> T.pack (showVersion version),
         "🌊 " <> osName <> " · " <> T.pack arch,
         "🫧 ghc " <> T.pack (showVersion fullCompilerVersion) <> " · cabal " <> T.pack (prettyShow cabalVersion),
         "⏱️ up " <> fmtDur (realToFrac (diffUTCTime now env.beStartedAt))

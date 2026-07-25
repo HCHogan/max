@@ -1,7 +1,7 @@
 # NixOS module for the max QQ group-chat agent.
 #
 # Wires up everything the bot needs on one machine:
-#   * a systemd service running max-bot (config rendered to YAML from
+#   * a systemd service running max (config rendered to YAML from
 #     `settings`, secrets via `environmentFile`),
 #   * a local PostgreSQL (with pgvector) and a peer-authenticated
 #     database,
@@ -12,7 +12,7 @@
 #   * optionally the NapCat container (QQ client) with the outbox
 #     bind-mount the file tools expect.
 #
-# Import via the flake:  imports = [ max.nixosModules.max-bot ];
+# Import via the flake:  imports = [ max.nixosModules.max ];
 {
   config,
   lib,
@@ -20,10 +20,25 @@
   ...
 }:
 let
-  cfg = config.services.max-bot;
+  cfg = config.services.max;
   settingsFormat = pkgs.formats.yaml { };
   renderedConfig = settingsFormat.generate "max.yaml" cfg.settings;
   effectiveConfigFile = if cfg.configFile != null then cfg.configFile else renderedConfig;
+  # NB: the service user, its group, the database, and this directory
+  # are all still spelled "max-bot" while everything you type — the
+  # binary, `services.max.*`, the systemd unit, `nix build .#max` — is
+  # "max".  That inconsistency is deliberate: these four are identifiers
+  # bound to live state on the host, not names anyone reads.
+  #
+  # Renaming them is a migration, not an edit.  This directory holds the
+  # NapCat QQ login state and the content-addressed blob store; the
+  # database is peer-authenticated, so its role name has to match the
+  # system user.  Doing it properly means stopping the bot, moving
+  # /var/lib, ALTER DATABASE + ALTER ROLE, and renaming the unix user —
+  # for zero benefit, since nothing outside this file refers to them.
+  #
+  # So: leave them.  A tidy-up that "fixes" the inconsistency logs the
+  # bot out of QQ and orphans every stored image.
   stateDir = "/var/lib/max-bot";
   # How long the bot waits for in-flight agent dispatches on SIGTERM.
   # Mirrors Max.Config's default so TimeoutStopSec below can follow it.
@@ -64,12 +79,12 @@ let
   };
 in
 {
-  options.services.max-bot = {
+  options.services.max = {
     enable = lib.mkEnableOption "max — QQ group-chat agent over OneBot 11";
 
     package = lib.mkOption {
       type = lib.types.package;
-      description = "The max-bot package to run (defaults to the flake's build).";
+      description = "The max package to run (defaults to the flake's build).";
     };
 
     settings = lib.mkOption {
@@ -89,9 +104,9 @@ in
         }
       '';
       description = ''
-        Contents of max.yaml — schema per `max-bot --help` /
+        Contents of max.yaml — schema per `max --help` /
         max.yaml.example.  Prefer putting secrets in
-        {option}`services.max-bot.environmentFile` as `MAX_*` variables
+        {option}`services.max.environmentFile` as `MAX_*` variables
         (env beats the file in opt-env-conf's precedence), since
         `settings` ends up world-readable in the nix store.
       '';
@@ -114,7 +129,7 @@ in
     environmentFile = lib.mkOption {
       type = lib.types.nullOr lib.types.path;
       default = null;
-      example = "/run/secrets/max-bot.env";
+      example = "/run/secrets/max.env";
       description = ''
         EnvironmentFile with secrets: MAX_LLM_API_KEY,
         MAX_ACCESS_TOKEN, MAX_TAVILY_API_KEY, ...
@@ -257,7 +272,7 @@ in
       mkImageBuild "max-browser" browserImageSrc
     );
 
-    systemd.services.max-bot = {
+    systemd.services.max = {
       description = "max — QQ group-chat agent";
       after =
         [
@@ -300,7 +315,7 @@ in
         # The bot resolves images_dir and var/outbox relative paths
         # against its cwd; keep everything under the state dir.
         WorkingDirectory = stateDir;
-        ExecStart = "${cfg.package}/bin/max-bot --config-file ${effectiveConfigFile}";
+        ExecStart = "${cfg.package}/bin/max --config-file ${effectiveConfigFile}";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
         Restart = "on-failure";
         RestartSec = 5;

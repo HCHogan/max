@@ -74,19 +74,19 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in
         {
-          max-bot = maxPackage pkgs;
+          max = maxPackage pkgs;
           default = maxPackage pkgs;
         }
       );
 
       nixosModules = {
-        max-bot =
+        max =
           { pkgs, lib, ... }:
           {
             imports = [ ./nix/module.nix ];
-            services.max-bot.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.max-bot;
+            services.max.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.max;
           };
-        default = self.nixosModules.max-bot;
+        default = self.nixosModules.max;
       };
 
       devShells = forEachSystem (

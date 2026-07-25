@@ -20,7 +20,7 @@ import System.FilePath ((</>))
 -- that were applied in this run.
 --
 -- Downgrade guard: if the database records migrations this binary
--- doesn't ship, a *newer* max-bot has migrated it — running old code
+-- doesn't ship, a *newer* max has migrated it — running old code
 -- against a new schema corrupts in subtle ways, so refuse to start.
 runMigrations :: DbPool -> FilePath -> IO [String]
 runMigrations pool dir = do
@@ -36,7 +36,7 @@ runMigrations pool dir = do
         throwIO . userError $
           "database schema is newer than this binary (unknown migrations: "
             <> unwords (Set.toList unknown)
-            <> ") — upgrade max-bot instead of running an old build"
+            <> ") — upgrade max instead of running an old build"
       let pending = filter (`Set.notMember` done) files
       for_ pending (applyOne c dir)
       pure pending

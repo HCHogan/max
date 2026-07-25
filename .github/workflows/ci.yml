@@ -63,7 +63,7 @@ jobs:
 
   # The deployment path nothing else covered.  build-test compiles with
   # cabal against the devenv toolchain; nix/module.nix installs
-  # packages.max-bot, which resolves its dependencies through nixpkgs'
+  # packages.max, which resolves its dependencies through nixpkgs'
   # haskellPackages plus the overrides in flake.nix — a callHackageDirect
   # pin for opt-env-conf, markUnbroken + doJailbreak for wreq-effectful.
   # Those go stale silently on a nixpkgs bump, and without this job the
@@ -82,4 +82,4 @@ jobs:
       - uses: cachix/install-nix-action@v31
 
       - name: Build the flake package
-        run: nix build .#max-bot --print-out-paths
+        run: nix build .#max --print-out-paths
