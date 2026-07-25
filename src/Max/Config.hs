@@ -71,7 +71,6 @@ import OneBot.Server (ServerConfig (..))
 import OptEnvConf
 import Path (Abs, File, Path)
 import Path.IO (resolveFile')
-import Prelude hiding (Reader)
 
 -- | Final, fully-resolved application config.
 data AppConfig = AppConfig
@@ -851,21 +850,21 @@ materializeLLM (dn, fileProfiles, overlay) = do
         | otherwise = Map.insertWith mergeSpec resolvedDefault overlay fileProfiles
       -- Ensure the default profile exists even if nothing declared
       -- it (so the error below names it).
-      withDefault = Map.insertWith (\_ old -> old) resolvedDefault emptySpec withOverlay
-  resolved <- Map.traverseWithKey (resolveProfile resolvedDefault) withDefault
+      withDefaultProfile = Map.insertWith (\_ old -> old) resolvedDefault emptySpec withOverlay
+  resolved <- Map.traverseWithKey (resolveProfile resolvedDefault) withDefaultProfile
   pure LLMRegistry {defaultName = resolvedDefault, profiles = resolved}
   where
-    resolveProfile def name spec = do
+    resolveProfile def profName spec = do
       key <- case spec.apiKey of
         Just k | not (T.null k) -> pure k
         _ ->
           fail $
             "llm profile '"
-              <> T.unpack name
+              <> T.unpack profName
               <> "' has no api_key"
-              <> ( if name == def
-                     then "\n  set via --llm-api-key, MAX_LLM_API_KEY, or llm.profiles." <> T.unpack name <> ".api_key"
-                     else "\n  set via llm.profiles." <> T.unpack name <> ".api_key"
+              <> ( if profName == def
+                     then "\n  set via --llm-api-key, MAX_LLM_API_KEY, or llm.profiles." <> T.unpack profName <> ".api_key"
+                     else "\n  set via llm.profiles." <> T.unpack profName <> ".api_key"
                  )
       pure
         LLMProfile

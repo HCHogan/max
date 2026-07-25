@@ -4,7 +4,6 @@ import Data.Aeson (decodeStrict', encode, object, (.=))
 import Data.ByteString.Lazy qualified as BSL
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import OneBot.Segment (CardInfo (..), Segment (..), VideoSegInfo (..), renderPlainText, rescueNameMentions, segmentMentions)
 import OneBot.Types (UserId (..))

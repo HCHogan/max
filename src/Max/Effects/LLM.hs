@@ -46,7 +46,7 @@ import Control.Applicative ((<|>))
 import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
-import Data.Aeson.Types (Pair, Parser, parseEither, parseMaybe)
+import Data.Aeson.Types (Pair, Parser, parseMaybe)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map

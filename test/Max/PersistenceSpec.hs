@@ -25,12 +25,12 @@ spec = describe "Max.Persistence" $ do
     inside `shouldBe` True
 
   it "withEphemeral restores the outer mode after the scope exits" $ do
-    (inside, after) <- withMode Persisted $ do
+    (inside, afterwards) <- withMode Persisted $ do
       i <- withEphemeral isEphemeral
       a <- isEphemeral
       pure (i, a)
     inside `shouldBe` True
-    after `shouldBe` False
+    afterwards `shouldBe` False
 
   it "withEphemeral nested under itself is still ephemeral" $ do
     deep <- withMode Persisted $ withEphemeral (withEphemeral isEphemeral)

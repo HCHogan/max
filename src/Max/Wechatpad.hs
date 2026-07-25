@@ -40,7 +40,6 @@ import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
@@ -232,7 +231,12 @@ wechatpadWorker cfg q = localDomain "wechatpad" $ do
                       sender = Sender (UserId uid) nick Nothing
                     }
             logInfo "wechat message" $
-              object ["chatroom" .= wm.wmFrom, "sender" .= senderWxid, "len" .= T.length body]
+              object
+                [ "chatroom" .= wm.wmFrom,
+                  "sender" .= senderWxid,
+                  "len" .= T.length body,
+                  "create_time" .= wm.wmCreateTime
+                ]
             liftIO (atomically (writeTQueue q (EvGroupMessage gm)))
 
 -- | Chatroom frames carry the sender folded into the content as
@@ -271,6 +275,11 @@ data WMsg = WMsg
     wmContent :: !Text,
     wmPushContent :: !Text,
     wmNewMsgId :: !Int64,
+    -- | WeChat's own send timestamp (unix seconds).  We stamp
+    -- @messages.received_at@ with our /ingest/ time, so this is the
+    -- only trace of when the sender actually sent it — logged rather
+    -- than stored, which is enough to spot delivery lag or a relay
+    -- whose clock has drifted.
     wmCreateTime :: !Int64
   }
 

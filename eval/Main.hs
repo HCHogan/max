@@ -17,7 +17,6 @@
 -- yaml/env/flags, so run it next to the bot's max.yaml.
 module Main (main) where
 
-import Control.Applicative ((<|>))
 import Control.Monad (unless)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.ByteString.Char8 qualified as BS8

@@ -14,7 +14,7 @@ where
 import Control.Concurrent (threadDelay)
 import Control.Exception (SomeException)
 import Control.Lens ((&), (.~), (?~), (^.))
-import Data.Aeson (Value (..), decode, eitherDecode, object, (.=))
+import Data.Aeson (Value (..), decode, eitherDecode)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser, parseEither)

@@ -105,8 +105,8 @@ embedTexts c texts = do
 embeddingsP :: Value -> Parser [[Float]]
 embeddingsP = withObject "resp" $ \o -> do
   rows <- o .: "data"
-  pairs <- traverse rowP rows
-  pure (map snd (sortOn fst pairs))
+  indexed <- traverse rowP rows
+  pure (map snd (sortOn fst indexed))
   where
     rowP = withObject "row" $ \r -> do
       i <- r .: "index" :: Parser Int
