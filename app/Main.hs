@@ -1,6 +1,6 @@
 module Main (main) where
 
-import Control.Concurrent (myThreadId)
+import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (AsyncException (UserInterrupt), bracket, bracket_, throwTo)
 import Control.Monad (unless)
@@ -47,6 +47,7 @@ import Max.Sandbox.Registry
     reapStaleSandboxes,
   )
 import Max.Session (newSessionRegistry)
+import Max.Shutdown (ShutdownState, beginDrain, drainWorker, newShutdownState)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
@@ -72,11 +73,15 @@ main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   hSetBuffering stderr LineBuffering
-  -- Convert SIGTERM (e.g. from systemd) into the same UserInterrupt
-  -- async exception Ctrl+C produces, so all our 'bracket' cleanups
-  -- — DB pool, sandbox reaper — fire on graceful shutdown.
   mainTid <- myThreadId
-  _ <- installHandler sigTERM (Catch (throwTo mainTid UserInterrupt)) Nothing
+  shutdown <- newShutdownState
+  -- SIGTERM (e.g. from systemd) starts a graceful drain: no new agent
+  -- dispatches, wait out the running ones, then raise the same
+  -- UserInterrupt Ctrl+C produces so all our 'bracket' cleanups — DB
+  -- pool, sandbox reaper — fire exactly as they always have.  Ctrl+C
+  -- itself keeps GHC's immediate default: an interactive run wants out
+  -- now, not in two minutes.
+  _ <- installHandler sigTERM (Catch (drainOrInterrupt mainTid shutdown)) Nothing
 
   cfg <- loadConfig
   bracket (newDbPool cfg.db) closeDbPool $ \pool -> do
@@ -133,6 +138,7 @@ main = do
                     beOwners = cfg.owners,
                     beAdminTarget = adminTargets,
                     beTasks = tasks,
+                    beShutdown = shutdown,
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
                     beMemoryExtract = cfg.memoryExtractProfile,
@@ -155,7 +161,18 @@ main = do
             . runReader Persisted -- default mode; !btw scopes Volatile on top
             . runReader env
             . runAgent defaultLimits toolFactory tasks
-            $ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef
+            $ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef mainTid
+
+-- | SIGTERM handler.  Deliberately does no waiting itself: it flips the
+-- drain flag and returns, leaving the wait (and its logging) to
+-- 'drainWorker' out on the effect stack.  Until that worker is up —
+-- config load, migrations, container reaping — the flag just sits set
+-- and is honoured the moment it starts, which is what the second
+-- SIGTERM's escape hatch is for.
+drainOrInterrupt :: ThreadId -> ShutdownState -> IO ()
+drainOrInterrupt mainTid st = do
+  first <- beginDrain st
+  unless first (throwTo mainTid UserInterrupt)
 
 runApp ::
   ( IOE :> es,
@@ -180,8 +197,10 @@ runApp ::
   FileQueue ->
   Maybe IntentState ->
   TVar (Maybe Client) ->
+  -- | Main thread, for 'drainWorker' to interrupt once drained.
+  ThreadId ->
   Eff es ()
-runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef =
+runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef mainTid =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -248,4 +267,9 @@ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef =
                         -- same trick as the caption worker).
                         withAsync (for_ cfg.wechatpad (\wc -> wechatpadWorker wc eventQ)) $ \aWx -> do
                           link aWx
-                          runServer cfg.server eventQ clientRef
+                          -- Parked on the shutdown flag until SIGTERM,
+                          -- then waits out the in-flight dispatches
+                          -- before interrupting main.
+                          withAsync (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown) $ \aDrain -> do
+                            link aDrain
+                            runServer cfg.server eventQ clientRef

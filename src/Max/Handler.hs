@@ -57,6 +57,7 @@ import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession)
+import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Tasks (TaskCancelled (..), listTasks, pushBtwToLatest)
 import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply, stripHallucinatedTokens)
@@ -402,6 +403,12 @@ dispatchProactive = dispatchLLM OriginProactive
 -- and append the (user, assistant) turn to the session history.
 -- The 'TriggerOrigin' says what woke the bot — see
 -- 'Max.Prompt.PromptInputs.origin'.
+--
+-- This is the process's only asynchronous dispatch path (commands run
+-- inline on the event loop, and memory extraction runs inside this
+-- async), so it is also where graceful shutdown gates: once draining,
+-- new triggers are logged and dropped rather than started.  See
+-- "Max.Shutdown".
 dispatchLLM ::
   ( Log :> es,
     WithConnection :> es,
@@ -416,37 +423,63 @@ dispatchLLM ::
   TriggerOrigin ->
   GroupMessage ->
   Eff es ()
-dispatchLLM origin gm = void $ async $
-  localDomain "llm" $ do
-    let UserId fromRaw = gm.userId
-        GroupId gidRaw = gm.groupId
-        MessageId midRaw = gm.messageId
-    logInfo "llm dispatch" $
-      object
-        [ "group_id" .= gidRaw,
-          "user_id" .= fromRaw,
-          "message_id" .= midRaw,
-          "origin" .= T.pack (show origin)
-        ]
-    -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
-    -- (and every trySyncIO on the way up) — the outer 'catch' is the
-    -- one place a user-initiated @!kill@ comes to rest.
-    ( work `catchSync` \e -> do
-        logAttention "llm dispatch crashed" $
-          object ["error" .= T.pack (show (e :: SomeException))]
-        -- The processing reaction is already gone (its 'finally' ran
-        -- while the exception unwound), which without this looked
-        -- exactly like a silent success: 托腮 vanished, no reply, no
-        -- face.  Swap in the failure face so a crash is visibly a
-        -- crash — direct triggers only; proactive turns stay
-        -- traceless, and a poke has no message to react to.
-        when (origin == OriginDirect) $
-          sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
-      )
-      `catch` \TaskCancelled ->
-        -- User-initiated !kill — quieter log, not an error.
-        logInfo "llm dispatch cancelled" $
-          object ["group_id" .= gidRaw]
+dispatchLLM origin gm = do
+  env :: BotEnv <- ask
+  let UserId fromRaw = gm.userId
+      GroupId gidRaw = gm.groupId
+      MessageId midRaw = gm.messageId
+      ident =
+        object
+          [ "group_id" .= gidRaw,
+            "user_id" .= fromRaw,
+            "message_id" .= midRaw,
+            "origin" .= T.pack (show origin)
+          ]
+  -- Claim the shutdown slot out here rather than inside the async:
+  -- 'Max.Effects.Agent.agentTurn' doesn't reach its 'registerTask'
+  -- until after 'Max.Prompt.buildContext', which on its own can spend
+  -- 30s waiting for the trigger's images, so a drain watching only the
+  -- task registry would walk straight past a dispatch sitting in that
+  -- gap.  Claiming before the spawn also closes the race the other
+  -- way: 'enterDispatch' and the drain flag share one transaction.
+  started <- liftIO (enterDispatch env.beShutdown)
+  if not started
+    then do
+      logInfo "llm dispatch declined: draining" ident
+      -- The drain can run for a couple of minutes behind a long turn,
+      -- and every @ landing in that window would otherwise get total
+      -- silence — the one failure mode worth being loud about.  A face
+      -- says "seen, not doing it" without a line of chat noise, same
+      -- as the crash and denied-command paths.  Direct triggers only:
+      -- proactive turns stay traceless and a poke has no message to
+      -- react to.
+      when (origin == OriginDirect) $
+        sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
+    else
+      void . async $
+        ( localDomain "llm" $ do
+            logInfo "llm dispatch" ident
+            -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
+            -- (and every trySyncIO on the way up) — the outer 'catch' is the
+            -- one place a user-initiated @!kill@ comes to rest.
+            ( work `catchSync` \e -> do
+                logAttention "llm dispatch crashed" $
+                  object ["error" .= T.pack (show (e :: SomeException))]
+                -- The processing reaction is already gone (its 'finally' ran
+                -- while the exception unwound), which without this looked
+                -- exactly like a silent success: 托腮 vanished, no reply, no
+                -- face.  Swap in the failure face so a crash is visibly a
+                -- crash — direct triggers only; proactive turns stay
+                -- traceless, and a poke has no message to react to.
+                when (origin == OriginDirect) $
+                  sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
+              )
+              `catch` \TaskCancelled ->
+                -- User-initiated !kill — quieter log, not an error.
+                logInfo "llm dispatch cancelled" $
+                  object ["group_id" .= gidRaw]
+        )
+          `finally` liftIO (leaveDispatch env.beShutdown)
   where
     work = do
       env :: BotEnv <- ask

@@ -80,6 +80,11 @@ data AppConfig = AppConfig
     migrationsDir :: !FilePath,
     imagesDir :: !FilePath,
     imageWorkers :: !Int,
+    -- | How long SIGTERM waits for in-flight agent dispatches before
+    -- giving up and tearing down anyway (see "Max.Shutdown").  Should
+    -- sit comfortably under systemd's @TimeoutStopSec@, or systemd
+    -- SIGKILLs us mid-drain and the wait bought nothing.
+    shutdownDrainSeconds :: !Int,
     llm :: !LLMRegistry,
     historyWindow :: !Int,
     -- | Display timezone for all model/user-facing timestamps
@@ -196,6 +201,17 @@ appConfigParser =
           conf "image_workers",
           metavar "N",
           value 4
+        ]
+    shutdownDrainSeconds <-
+      setting
+        [ help "On SIGTERM, seconds to wait for in-flight agent dispatches",
+          reader auto,
+          option,
+          long "shutdown-drain-seconds",
+          env "MAX_SHUTDOWN_DRAIN_SECONDS",
+          conf "shutdown_drain_seconds",
+          metavar "SECS",
+          value 120
         ]
     llm <- llmParser
     historyWindow <-

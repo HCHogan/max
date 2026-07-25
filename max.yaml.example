@@ -25,6 +25,12 @@ persona: |
 # image_workers: 4
 # history_window: 20
 
+# On SIGTERM the bot stops taking new @-triggers and waits this long for
+# the dispatches already running before tearing down.  Keep systemd's
+# TimeoutStopSec comfortably above it (the NixOS module does this for
+# you), or the drain gets SIGKILLed halfway through.
+# shutdown_drain_seconds: 120
+
 # Display timezone for all model/user-facing timestamps (the prompt's
 # 现在/[HH:MM] lines, tool result times).  Minutes east of UTC; stored
 # times stay UTC.  Default 480 = UTC+8.

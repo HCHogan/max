@@ -25,6 +25,7 @@ import Max.Embedding (EmbedClient)
 import Max.Intent (IntentConfig)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
+import Max.Shutdown (ShutdownState)
 import Max.Tasks (TaskRegistry)
 
 data BotEnv = BotEnv
@@ -48,6 +49,10 @@ data BotEnv = BotEnv
     beStartedAt :: !UTCTime,
     beSessions :: !SessionRegistry,
     beTasks :: !TaskRegistry,
+    -- | Graceful-shutdown gate: 'Max.Handler.dispatchLLM' claims a slot
+    -- here so SIGTERM can wait out the dispatches already running, and
+    -- declines to start once draining.  See "Max.Shutdown".
+    beShutdown :: !ShutdownState,
     -- | Bot owners' QQ ids ('AppConfig.owners') — the top permission
     -- tier for the command DSL.
     beOwners :: ![Int64],

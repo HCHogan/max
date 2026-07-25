@@ -31,7 +31,7 @@ src/Max/MCP/       Minimal MCP client (Streamable HTTP)
 src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    MemoryExtract, Embedding + Embedder (vector worker), Forward/Image/File
-                   workers, Tasks, Tools, Util
+                   workers, Shutdown (graceful drain), Tasks, Tools, Util
 app/Main.hs        wires effects + workers + server
 ```
 
@@ -63,6 +63,26 @@ app/Main.hs        wires effects + workers + server
                                             │  → memory extraction    │
                                             └─────────────────────────┘
 ```
+
+## Durability
+
+What a restart keeps and what it drops. Postgres is authoritative throughout;
+the in-memory handles are read caches and wakeup bells, never the record.
+
+| Survives a restart | How |
+|---|---|
+| Messages, sessions, memories, stickers, permissions | written through on every mutation |
+| Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
+| Embeddings, captions | workers poll for `NULL` columns, so any gap backfills itself |
+
+| Lost on restart | Why |
+|---|---|
+| In-flight agent turns | ephemeral by design (`Max.Tasks`). SIGTERM drains them first — `shutdown_drain_seconds`, default 120 — but a crash, or a drain that times out, abandons them |
+| Queued image / video / forward / file fetches | in-memory `TQueue`s, and nothing ever goes back for them |
+| Triggers arriving mid-drain | persisted to `messages` and logged, but not dispatched |
+| Anything NapCat sends while we're down | it dials in over reverse-WS and doesn't buffer; closing this needs history backfill on reconnect |
+| `!use` admin targets | deliberate — just `!use` again |
+| Sandbox / browser containers | destroyed on exit, reaped on boot |
 
 Effect stack at the top of `runApp`:
 `IOE → Concurrent → Log → Http → Blob → WithConnection → NapCat → Wreq → LLM → Reader PersistMode → Reader BotEnv → Agent`.

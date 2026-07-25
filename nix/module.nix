@@ -25,6 +25,11 @@ let
   renderedConfig = settingsFormat.generate "max.yaml" cfg.settings;
   effectiveConfigFile = if cfg.configFile != null then cfg.configFile else renderedConfig;
   stateDir = "/var/lib/max-bot";
+  # How long the bot waits for in-flight agent dispatches on SIGTERM.
+  # Mirrors Max.Config's default so TimeoutStopSec below can follow it.
+  # Only visible when the config comes from `settings`; a hand-managed
+  # `configFile` that raises the drain needs TimeoutStopSec raised too.
+  drainSeconds = cfg.settings.shutdown_drain_seconds or 120;
   sandboxImageSrc = ../sandbox-image;
   browserImageSrc = ../browser-image;
 
@@ -299,8 +304,11 @@ in
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
         Restart = "on-failure";
         RestartSec = 5;
-        # SIGTERM triggers the bot's graceful shutdown (sandbox teardown).
-        TimeoutStopSec = 60;
+        # SIGTERM starts the bot's graceful drain: no new agent
+        # dispatches, finish the running ones, then tear down sandboxes
+        # and the DB pool.  Systemd has to outwait that, or it SIGKILLs
+        # mid-drain and the waiting bought nothing.
+        TimeoutStopSec = drainSeconds + 30;
       };
     };
 

@@ -68,6 +68,6 @@ boot. Outbox staging: `var/outbox/` (shared with NapCat container).
 
 Bot logs are JSON on stdout with a `domain` field — useful filters: `max/conn-N`,
 `max/image-worker`, `max/forward-worker`, `max/llm`, `max/cmd`, `max/memx`
-(memory extraction), `max/intent` (proactive-trigger classification), plus
-`embed:` lines from the vector worker. `!debug on` mirrors tool calls into the
-chat itself.
+(memory extraction), `max/intent` (proactive-trigger classification),
+`max/shutdown` (graceful drain), plus `embed:` lines from the vector worker.
+`!debug on` mirrors tool calls into the chat itself.

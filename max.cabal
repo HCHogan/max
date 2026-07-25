@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               max
-version:            0.4.2
+version:            0.4.3
 synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
 author:             Hank Hogan
 maintainer:         hankchogan@gmail.com
@@ -87,6 +87,7 @@ library
         Max.Sandbox.Registry
         Max.Session
         Max.Session.Types
+        Max.Shutdown
         Max.Sticker
         Max.Stickers
         Max.Tasks
@@ -207,6 +208,7 @@ test-suite max-test
         Max.RenderSpec
         Max.ReplySpec
         Max.SessionSpec
+        Max.ShutdownSpec
         Max.Effects.LLMSpec
         Max.MCP.ClientSpec
         Max.PersistenceSpec
