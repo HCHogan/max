@@ -7,6 +7,7 @@
 -- renderer correctly (dedup, watermark, pin resolution, reply lookup).
 module Max.PromptIntegrationSpec (spec) where
 
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime, utc)
@@ -61,7 +62,7 @@ spec pool = before_ (truncateAll pool) $
       insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "另一条"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <-
-        withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] s trigger
+        withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("随便聊" `T.isInfixOf`)
       ub `shouldSatisfy` ("另一条" `T.isInfixOf`)
@@ -72,7 +73,7 @@ spec pool = before_ (truncateAll pool) $
       s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       let s = s0 {clearedAt = Just (timeAt 10)}
       withDb pool $ upsertSession s
-      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldNotSatisfy` ("旧" `T.isInfixOf`)
       ub `shouldSatisfy` ("新" `T.isInfixOf`)
@@ -81,7 +82,7 @@ spec pool = before_ (truncateAll pool) $
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 你好"
       insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "你好 Alice"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s trigger
       -- Expect: [system, user(mention), assistant(reply), user(current trigger)]
       length msgs `shouldBe` 4
       case msgs of
@@ -95,7 +96,7 @@ spec pool = before_ (truncateAll pool) $
       s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       let s = s0 {pinned = [1001]}
       withDb pool $ upsertSession s
-      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[pinned" `T.isInfixOf`)
       ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
@@ -107,7 +108,7 @@ spec pool = before_ (truncateAll pool) $
             trigger
               { message = [SegReply (MessageId 1001), SegAt (UserId botRaw), SegText " 看这条"]
               }
-      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] s replyTrigger
+      msgs <- withDbLog pool $ buildContext "default-persona" 20 False OriginDirect "var/images" utc [] Set.empty s replyTrigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)

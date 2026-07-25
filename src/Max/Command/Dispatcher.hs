@@ -50,7 +50,7 @@ import Max.Tasks
     cancelAllTasks,
     cancelTask,
     listTasks,
-    pushBtwToLatest,
+    pushBtwToOwnTask,
   )
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 
@@ -98,11 +98,13 @@ execute t gid uid granterTier replyTarget cmd = do
  env :: BotEnv <- ask
  case cmd of
   Btw note -> do
-    -- Prefer injecting into a running task in this group.  Otherwise
-    -- become the new !btw: an ephemeral one-shot LLM ask using
-    -- current context.  The caller (Handler.dispatchCommand) sees
-    -- 'EphemeralAsk' and spawns a 'withEphemeral'-wrapped dispatch.
-    injected <- liftIO (pushBtwToLatest env.beTasks gid note)
+    -- Prefer steering the sender's own running turn.  Otherwise — no
+    -- turn of theirs, or only somebody else's — become the new !btw:
+    -- an ephemeral one-shot LLM ask using current context.  The caller
+    -- (Handler.dispatchCommand) sees 'EphemeralAsk' and spawns a
+    -- 'withEphemeral'-wrapped dispatch, so a bystander still gets their
+    -- own answer rather than having it folded into someone else's.
+    injected <- liftIO (pushBtwToOwnTask env.beTasks gid uid note)
     if injected
       then ack
       else case T.strip note of
@@ -632,12 +634,16 @@ formatOne now callerGid ti =
   T.intercalate "  " $
     [ "  " <> (ti.tiId.unTaskId),
       ti.tiKind,
-      ageText now ti.tiStartedAt
+      ageText now ti.tiStartedAt,
+      -- Who started it, because that is now who can !btw at it.
+      byTag
     ]
       <> [groupTag | Just _ <- [callerGid]]
       <> [pendingTag | ti.tiPendingBtw > 0]
   where
     GroupId raw = ti.tiGroup
+    UserId uidRaw = ti.tiUser
+    byTag = "by=" <> T.pack (show uidRaw)
     groupTag = "group=" <> T.pack (show raw)
     pendingTag = "btw=" <> T.pack (show ti.tiPendingBtw)
 
@@ -671,7 +677,7 @@ helpText Nothing =
       "  !pin [id]                pin 一条消息（不带 id 时用引用的那条）",
       "  !unpin [id|all]          移除 pin（同上语法 + all 清空）",
       "  !pins                    列出当前 pin 的消息",
-      "  !btw <text>              在跑的任务里就注入侧记；否则当前上下文临时问一句（不入对话历史）",
+      "  !btw <text>              你自己有任务在跑就注入侧记；否则当前上下文临时问一句（不入对话历史）",
       "  !memory                  看本群的长期记忆",
       "  !memory rm <id>          删除一条记忆（本群的或你自己的）",
       "  !sticker                 表情包库统计 + 发送开关状态（bot 从群里学表情包）",

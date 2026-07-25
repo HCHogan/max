@@ -197,7 +197,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
     selfTid <- liftIO myThreadId
     let cancel = throwTo selfTid TaskCancelled
     bracket
-      (liftIO (registerTask taskReg dc.dcGroupId "llm" cancel))
+      (liftIO (registerTask taskReg dc.dcGroupId dc.dcUserId "llm" cancel))
       (liftIO . unregisterTask taskReg)
       ( \handle ->
           runTools (toolFactory dc) (loop dc handle profile msgs)

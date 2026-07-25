@@ -5,9 +5,26 @@
 -- ephemeral work-in-progress.
 --
 -- Each task carries a 'btwInbox' 'TVar' the agent loop drains between
--- turns; @!btw@ pushes into the latest task's inbox.  @!ps@ enumerates
--- them; @!kill@ throws a 'TaskCancelled' exception into the task's
--- thread (the agent's @bracket@ unregisters cleanly on the way out).
+-- turns; @!btw@, an implicit supplement and a poke all push into it via
+-- 'pushBtwToOwnTask'.  @!ps@ enumerates them; @!kill@ throws a
+-- 'TaskCancelled' exception into the task's thread (the agent's
+-- @bracket@ unregisters cleanly on the way out).
+--
+-- __Steering is scoped to whoever started the turn.__  Claude Code's
+-- equivalent has exactly one \"you\"; a group has N people, so a note
+-- from someone else would steer a turn whose reply is threaded to a
+-- different person's message — they'd watch their words answered at
+-- somebody else.  A non-owner's note falls through to its own dispatch
+-- instead, which every caller already has a path for.
+--
+-- __'trPending' exists because registration is late.__  'registerTask'
+-- runs inside 'Max.Effects.Agent.agentTurn', and everything before it —
+-- session load, the supplement classifier's own LLM round-trip,
+-- 'Max.Prompt.buildContext' waiting up to 30s for the trigger's images
+-- — can burn tens of seconds during which the dispatch is invisible.
+-- That is exactly the window in which somebody else asks their own
+-- question, so 'inFlightTriggers' reads the pending set rather than the
+-- task map.
 --
 -- Not an effect (yet): the registry is a plain handle threaded
 -- through @main@.  If we ever need to mock for tests, we can swap to
@@ -22,13 +39,19 @@ module Max.Tasks
     TaskId (..),
     registerTask,
     unregisterTask,
+
+    -- * Dispatch tracking
+    beginDispatch,
+    endDispatch,
+    inFlightTriggers,
+
     -- * Operations
     TaskInfo (..),
     listTasks,
     cancelTask,
     cancelAllTasks,
     drainBtwInbox,
-    pushBtwToLatest,
+    pushBtwToOwnTask,
     -- * Exception
     TaskCancelled (..),
   )
@@ -36,14 +59,17 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException)
+import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Ord (Down (..))
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
-import OneBot.Types (GroupId (..))
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
 -- | Short, human-typeable id like @t17@ — easy to !kill from the
 -- group.  Counter resets on restart.
@@ -61,6 +87,9 @@ data TaskHandle = TaskHandle
 data TaskEntry = TaskEntry
   { teId :: !TaskId,
     teGroup :: !GroupId,
+    -- | Who triggered this turn.  Only they may steer it — see the
+    -- module header.
+    teUser :: !UserId,
     teKind :: !Text,
     teStartedAt :: !UTCTime,
     teInbox :: !(TVar [Text]),
@@ -73,6 +102,9 @@ data TaskEntry = TaskEntry
 data TaskInfo = TaskInfo
   { tiId :: !TaskId,
     tiGroup :: !GroupId,
+    -- | Shown by @!ps@: with steering owner-scoped, whose turn it is
+    -- decides whether you can @!btw@ at it.
+    tiUser :: !UserId,
     tiKind :: !Text,
     tiStartedAt :: !UTCTime,
     -- | Notes currently pending in the inbox (useful to see whether
@@ -83,11 +115,16 @@ data TaskInfo = TaskInfo
 
 data TaskRegistry = TaskRegistry
   { trNextId :: !(TVar Int),
-    trMap :: !(TVar (Map TaskId TaskEntry))
+    trMap :: !(TVar (Map TaskId TaskEntry)),
+    -- | Trigger message ids with a dispatch under way, registered or
+    -- not — see the module header for why this can't just read
+    -- 'trMap'.  Claimed at dispatch entry, released by its @finally@.
+    trPending :: !(TVar (Map GroupId (Set Int64)))
   }
 
 newTaskRegistry :: IO TaskRegistry
-newTaskRegistry = TaskRegistry <$> newTVarIO 0 <*> newTVarIO Map.empty
+newTaskRegistry =
+  TaskRegistry <$> newTVarIO 0 <*> newTVarIO Map.empty <*> newTVarIO Map.empty
 
 -- | Custom exception so we can distinguish a user-initiated @!kill@
 -- from generic 'ThreadKilled' / shutdown.  Tagged as asynchronous
@@ -110,12 +147,14 @@ instance Exception TaskCancelled where
 registerTask ::
   TaskRegistry ->
   GroupId ->
+  -- | Who triggered the turn; only they may steer it.
+  UserId ->
   -- | Kind label shown in @!ps@; "llm" / "search" / etc.
   Text ->
   -- | Cancel action; runs when 'cancelTask' targets this entry.
   IO () ->
   IO TaskHandle
-registerTask reg gid kind cancel = do
+registerTask reg gid uid kind cancel = do
   now <- getCurrentTime
   inbox <- newTVarIO []
   tid <- atomically $ do
@@ -126,6 +165,7 @@ registerTask reg gid kind cancel = do
           TaskEntry
             { teId = tid,
               teGroup = gid,
+              teUser = uid,
               teKind = kind,
               teStartedAt = now,
               teInbox = inbox,
@@ -148,17 +188,49 @@ drainBtwInbox h = atomically $ do
   writeTVar h.thInbox []
   pure xs
 
--- | Append a note to the most-recently-started task in @gid@'s inbox.
--- Returns 'False' if the group has no active task.
-pushBtwToLatest :: TaskRegistry -> GroupId -> Text -> IO Bool
-pushBtwToLatest reg gid note = atomically $ do
+-- | Append a note to @uid@'s most-recently-started task in @gid@.
+--
+-- 'False' means they have none running — not that the group is idle.
+-- Someone else's turn is deliberately not steerable (module header):
+-- every caller treats 'False' as \"handle this as its own dispatch\",
+-- which is the behaviour we want for a bystander's note.
+pushBtwToOwnTask :: TaskRegistry -> GroupId -> UserId -> Text -> IO Bool
+pushBtwToOwnTask reg gid uid note = atomically $ do
   m <- readTVar reg.trMap
-  let inGroup = Map.elems (Map.filter (\e -> e.teGroup == gid) m)
-  case sortOn (Down . teStartedAt) inGroup of
+  let own = Map.elems (Map.filter (\e -> e.teGroup == gid && e.teUser == uid) m)
+  case sortOn (Down . teStartedAt) own of
     [] -> pure False
     (latest : _) -> do
       modifyTVar' latest.teInbox (<> [note])
       pure True
+
+--------------------------------------------------------------------------------
+-- Dispatch tracking
+
+-- | Mark a trigger as being worked on.  Call at dispatch entry, before
+-- any of the slow prologue that runs ahead of 'registerTask'.
+beginDispatch :: TaskRegistry -> GroupId -> MessageId -> IO ()
+beginDispatch reg gid (MessageId mid) =
+  atomically $
+    modifyTVar' reg.trPending (Map.insertWith Set.union gid (Set.singleton mid))
+
+-- | Release it.  Belongs in the same @finally@ that releases the
+-- shutdown slot; a leak here would make a finished question look
+-- permanently in-flight to every later turn.
+endDispatch :: TaskRegistry -> GroupId -> MessageId -> IO ()
+endDispatch reg gid (MessageId mid) =
+  atomically $ modifyTVar' reg.trPending (Map.update drop' gid)
+  where
+    drop' s =
+      let s' = Set.delete mid s
+       in if Set.null s' then Nothing else Just s'
+
+-- | Trigger ids in @gid@ that some other turn is already handling.
+-- 'Max.Prompt.buildContext' uses this to stop a concurrent dispatch
+-- answering a question that is already being answered.
+inFlightTriggers :: TaskRegistry -> GroupId -> IO (Set Int64)
+inFlightTriggers reg gid =
+  Map.findWithDefault Set.empty gid <$> readTVarIO reg.trPending
 
 listTasks :: TaskRegistry -> Maybe GroupId -> IO [TaskInfo]
 listTasks reg mGid = do
@@ -175,6 +247,7 @@ listTasks reg mGid = do
         TaskInfo
           { tiId = e.teId,
             tiGroup = e.teGroup,
+            tiUser = e.teUser,
             tiKind = e.teKind,
             tiStartedAt = e.teStartedAt,
             tiPendingBtw = pending

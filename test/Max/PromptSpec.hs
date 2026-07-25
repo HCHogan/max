@@ -116,6 +116,7 @@ baseInputs =
       triggerMessage = triggerMsg [SegAt (UserId botId), SegText " hello"],
       ambient = [],
       mention = [],
+      inFlight = Set.empty,
       pinnedItems = [],
       replyCtx = Nothing,
       triggerForward = [],
@@ -304,6 +305,54 @@ spec = do
       case mid of
         [MsgUser _, MsgAssistant a, MsgUser _] ->
           a `shouldBe` "第一段\n\n第二段"
+        other -> expectationFailure $ "unexpected shape: " <> show other
+
+    -- The A-then-B collision: A's turn is still running, so its reply
+    -- isn't in the messages table and A's question would otherwise be
+    -- the last thing before B's — a question the bot visibly owes an
+    -- answer to.  The model then answers both, and A gets answered
+    -- twice.
+    it "leaves an unanswered question dangling when nothing is in flight" $ do
+      let mention =
+            [ historyAt 9 8001 memberId (Just "Alice") "@1000 Qa",
+              historyAt 9 8002 botId Nothing "答 Qa",
+              historyAt 10 8003 otherMemberId (Just "Bob") "@1000 Qb"
+            ]
+          inp = baseInputs {mention = mention}
+          (_, mid, _) = splitMessages (renderContext inp)
+      case mid of
+        [MsgUser _, MsgAssistant _, MsgUser u] ->
+          u `shouldSatisfy` ("Qb" `T.isInfixOf`)
+        other -> expectationFailure $ "unexpected shape: " <> show other
+
+    it "marks a question another turn is already answering" $ do
+      let mention =
+            [ historyAt 9 8001 memberId (Just "Alice") "@1000 Qa",
+              historyAt 10 8003 otherMemberId (Just "Bob") "@1000 Qb"
+            ]
+          inp = baseInputs {mention = mention, inFlight = Set.fromList [8001]}
+          (_, mid, _) = splitMessages (renderContext inp)
+      case mid of
+        [MsgUser u1, MsgAssistant a, MsgUser u2] -> do
+          u1 `shouldSatisfy` ("Qa" `T.isInfixOf`)
+          -- Stands in for the reply that hasn't landed yet, so Qa stops
+          -- reading as owed.
+          a `shouldSatisfy` ("另一轮" `T.isInfixOf`)
+          u2 `shouldSatisfy` ("Qb" `T.isInfixOf`)
+        other -> expectationFailure $ "unexpected shape: " <> show other
+
+    it "never marks the bot's own rows, whatever ids are in flight" $ do
+      let mention =
+            [ historyAt 9 8001 memberId (Just "Alice") "@1000 Qa",
+              historyAt 9 8002 botId Nothing "答 Qa"
+            ]
+          inp = baseInputs {mention = mention, inFlight = Set.fromList [8001, 8002]}
+          (_, mid, _) = splitMessages (renderContext inp)
+      case mid of
+        -- The note merges into the real bot row rather than doubling it.
+        [MsgUser _, MsgAssistant a] -> do
+          a `shouldSatisfy` ("另一轮" `T.isInfixOf`)
+          a `shouldSatisfy` ("答 Qa" `T.isInfixOf`)
         other -> expectationFailure $ "unexpected shape: " <> show other
 
     it "uses numeric user id when nickname is missing" $ do

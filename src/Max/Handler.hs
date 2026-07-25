@@ -59,7 +59,7 @@ import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHi
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
-import Max.Tasks (TaskCancelled (..), listTasks, pushBtwToLatest)
+import Max.Tasks (TaskCancelled (..), beginDispatch, endDispatch, inFlightTriggers, listTasks, pushBtwToOwnTask)
 import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply, stripHallucinatedTokens)
 import Max.Sticker (resolveSticker)
@@ -256,7 +256,10 @@ onPoke mIntent pk
             pure (memberName <$> (find (\m -> m.mUserId == pk.pkUserId) =<< members))
       let pokerName = maybe (T.pack (show pokerRaw)) id mName
       injected <-
-        liftIO (pushBtwToLatest env.beTasks pk.pkGroupId (pokerName <> " 戳了戳你"))
+        -- Only into the poker's own turn.  A poke at somebody else's
+        -- running turn falls through to a dispatch of its own, same as
+        -- any other trigger from a bystander.
+        liftIO (pushBtwToOwnTask env.beTasks pk.pkGroupId pk.pkUserId (pokerName <> " 戳了戳你"))
       if injected
         then
           logInfo "poke: injected into running task" $
@@ -444,6 +447,11 @@ dispatchLLM origin gm = do
   -- gap.  Claiming before the spawn also closes the race the other
   -- way: 'enterDispatch' and the drain flag share one transaction.
   started <- liftIO (enterDispatch env.beShutdown)
+  -- Same reason the shutdown slot is claimed here: registerTask is
+  -- tens of seconds away, and a concurrent trigger arriving in that
+  -- window has to be able to see this question is already taken.
+  when started $
+    liftIO (beginDispatch env.beTasks gm.groupId gm.messageId)
   if not started
     then do
       logInfo "llm dispatch declined: draining" ident
@@ -480,7 +488,11 @@ dispatchLLM origin gm = do
                 logInfo "llm dispatch cancelled" $
                   object ["group_id" .= gidRaw]
         )
-          `finally` liftIO (leaveDispatch env.beShutdown)
+          `finally` liftIO
+            ( do
+                leaveDispatch env.beShutdown
+                endDispatch env.beTasks gm.groupId gm.messageId
+            )
   where
     work = do
       env :: BotEnv <- ask
@@ -532,7 +544,7 @@ dispatchLLM origin gm = do
               if not isSupp
                 then pure False
                 else do
-                  ok <- liftIO (pushBtwToLatest env.beTasks gm.groupId newLine)
+                  ok <- liftIO (pushBtwToOwnTask env.beTasks gm.groupId gm.userId newLine)
                   when ok $
                     logInfo "btw: implicit injection" $
                       object ["group_id" .= gidRaw, "message_id" .= midRaw]
@@ -542,7 +554,11 @@ dispatchLLM origin gm = do
     dispatch env s = do
       multimodal <- isProfileMultimodal s.model
       (mentionable, rosterNames, brief) <- fetchGroupContext gm.groupId
-      ctx <- buildContext env.bePersona env.beHistoryWindow multimodal origin env.beBlobRoot env.beTimeZone brief s gm
+      -- Questions another turn is already working on.  Ours is in there
+      -- too (claimed just above) — drop it, it isn't history yet.
+      let MessageId ownMid = gm.messageId
+      inFlight <- Set.delete ownMid <$> liftIO (inFlightTriggers env.beTasks gm.groupId)
+      ctx <- buildContext env.bePersona env.beHistoryWindow multimodal origin env.beBlobRoot env.beTimeZone brief inFlight s gm
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride

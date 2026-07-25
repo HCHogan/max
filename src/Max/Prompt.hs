@@ -30,6 +30,7 @@ import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -78,6 +79,12 @@ data PromptInputs = PromptInputs
     ambient :: ![HistoryItem],
     -- | Reconstructed mention/reply history with the bot, chronological.
     mention :: ![HistoryItem],
+    -- | Message ids in 'mention' that another dispatch is answering
+    -- right now.  Their replies aren't in the messages table yet, so
+    -- without this they render as questions the bot still owes an
+    -- answer to and the model helpfully answers them alongside ours —
+    -- the group then gets the same question answered twice.
+    inFlight :: !(Set Int64),
     -- | Resolved pin list (preserves the user's pin order).
     pinnedItems :: ![HistoryItem],
     -- | If the trigger replied to a message: that message, the files
@@ -266,10 +273,11 @@ buildContext ::
   FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
   TimeZone -> -- display timezone for rendered timestamps
   [Text] -> -- pre-rendered 群信息 lines (see 'PromptInputs.groupBrief')
+  Set Int64 -> -- triggers another turn is already answering (see 'PromptInputs.inFlight')
   Session ->
   GroupMessage ->
   Eff es [ChatMessage]
-buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
+buildContext defaultPersona n multimodal' origin' blobRoot tz' brief inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -408,6 +416,7 @@ buildContext defaultPersona n multimodal' origin' blobRoot tz' brief s gm = do
           triggerMessage = gm,
           ambient = ambientCtx,
           mention = mentionCtx,
+          inFlight = inFlight',
           pinnedItems = pinnedItems'',
           replyCtx = replyCtx',
           triggerForward = triggerKids,
@@ -918,7 +927,8 @@ renderContext pi' =
       -- Multi-chunk replies persist as several consecutive bot rows;
       -- merge them back into one assistant turn — consecutive
       -- same-role messages upset strict providers (Anthropic).
-      mentionMessages = mergeAssistantRuns (map (historyToChat pi'.tz selfId') pi'.mention)
+      mentionMessages =
+        mergeAssistantRuns (concatMap (historyToChat' pi'.tz selfId' pi'.inFlight) pi'.mention)
       userBody =
         renderUser
           pi'.tz
@@ -1000,6 +1010,28 @@ historyToChat :: TimeZone -> Int64 -> HistoryItem -> ChatMessage
 historyToChat tz' botId h
   | h.userId == botId = MsgAssistant h.renderedText
   | otherwise = MsgUser (renderHistoryLine tz' botId h)
+
+-- | 'historyToChat', plus a stand-in answer for questions another turn
+-- is still working on ('PromptInputs.inFlight').
+--
+-- Their real reply hasn't been written yet, so the row would otherwise
+-- be a trailing 'MsgUser' with nothing after it — indistinguishable
+-- from a question the bot ignored, and the model duly answers it on
+-- top of the one it was actually asked.  Both people then get the same
+-- answer, one of them twice.  Same trick as
+-- 'Max.DB.Message.insertSilence': give the turn a visible outcome so
+-- it stops reading as owed.
+historyToChat' :: TimeZone -> Int64 -> Set Int64 -> HistoryItem -> [ChatMessage]
+historyToChat' tz' botId inFlight h
+  | h.userId /= botId, h.messageId `Set.member` inFlight =
+      [historyToChat tz' botId h, MsgAssistant inFlightNote]
+  | otherwise = [historyToChat tz' botId h]
+
+-- | Deliberately phrased as something the bot already did, not as an
+-- instruction: it sits in an assistant turn, and instructions there
+-- read as the model's own words and get imitated.
+inFlightNote :: Text
+inFlightNote = "（这条我已经在另一轮里单独回复了，本轮不再重复。）"
 
 -- | Collapse runs of consecutive 'MsgAssistant' into one message,
 -- chunks separated by a blank line.  (The sender splits on [split]
