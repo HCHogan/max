@@ -73,16 +73,24 @@ planReply body =
 -- talking over everybody.  A model that echoed its own context back
 -- once turned into 26 messages spread over 54 seconds.
 --
--- Ordinary replies are one to three chunks; this only engages on
--- pathological output.
+-- __Deliberately far above ordinary use.__  A 5-chunk cap existed once
+-- and was removed in v0.2.7 for a good reason: folding the tail
+-- together breaks per-chunk @[↩#id]@ quotes, since 'parseReplyTokens'
+-- keeps only the first quote in a chunk and strips the rest.  That
+-- tradeoff is still real, so the ceiling sits where only pathological
+-- output reaches it rather than where deliberate multi-part replies do
+-- — this is a safety bound on how long the bot may monopolise a group,
+-- not a formatting rule.  Normal replies run one to three chunks; a
+-- model using @[split]@ on purpose does not approach ten.
 maxChunks :: Int
-maxChunks = 6
+maxChunks = 10
 
 -- | Merge everything past the cap into the last message rather than
 -- dropping it — loud but bounded beats truncated, and the bot's own
 -- history still records what it said.  A table caught in the tail
 -- degrades to its markdown source, the same fallback a failed render
--- already takes.
+-- already takes; a second @[↩#id]@ in the tail is lost, which is the
+-- cost 'maxChunks' documents.
 capChunks :: [Chunk] -> [Chunk]
 capChunks cs
   | length cs <= maxChunks = cs

@@ -53,16 +53,16 @@ spec = do
     let paras k = T.intercalate "\n\n" ["第" <> T.pack (show i) <> "段" | i <- [1 .. k :: Int]]
 
     it "leaves a reply at the ceiling untouched" $
-      length (planTexts (paras 6)) `shouldBe` 6
+      length (planTexts (paras 10)) `shouldBe` 10
 
     it "caps a runaway split" $
-      length (planTexts (paras 26)) `shouldBe` 6
+      length (planTexts (paras 26)) `shouldBe` 10
 
     it "merges the overflow into the last message instead of dropping it" $ do
-      let out = planTexts (paras 9)
-      length out `shouldBe` 6
-      take 5 out `shouldBe` ["第1段", "第2段", "第3段", "第4段", "第5段"]
-      last out `shouldBe` "第6段\n\n第7段\n\n第8段\n\n第9段"
+      let out = planTexts (paras 13)
+      length out `shouldBe` 10
+      take 3 out `shouldBe` ["第1段", "第2段", "第3段"]
+      last out `shouldBe` "第10段\n\n第11段\n\n第12段\n\n第13段"
 
     it "keeps every word — nothing is truncated away" $ do
       let out = planTexts (paras 30)
@@ -73,16 +73,16 @@ spec = do
     -- rule.  A model spraying [split] costs the group exactly what one
     -- spraying blank lines costs, so it is capped the same way.
     it "caps explicit [split] markers too" $ do
-      let ps = [T.pack ("p" <> show i) | i <- [1 .. 9 :: Int]]
-      length (planTexts (T.intercalate " [split] " ps)) `shouldBe` 6
+      let ps = [T.pack ("p" <> show i) | i <- [1 .. 26 :: Int]]
+      length (planTexts (T.intercalate " [split] " ps)) `shouldBe` 10
 
     it "does not split inside code fences" $
       planTexts "看这段:\n[split]\n```python\nx = 1\n[split]\ny = 2\n```\n[split]\n就这样"
         `shouldBe` ["看这段:", "```python\nx = 1\n[split]\ny = 2\n```", "就这样"]
 
     it "honours explicit [split] markers up to the ceiling" $ do
-      let paras = [T.pack ("p" <> show i) | i <- [1 .. 6 :: Int]]
-      planTexts (T.intercalate " [split] " paras) `shouldBe` paras
+      let ps = [T.pack ("p" <> show i) | i <- [1 .. 8 :: Int]]
+      planTexts (T.intercalate " [split] " ps) `shouldBe` ps
 
     it "drops empty chunks from leading/trailing/doubled markers" $
       planTexts "[split]hello[split][split]world[split]"

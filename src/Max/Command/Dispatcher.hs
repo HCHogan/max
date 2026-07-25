@@ -34,7 +34,7 @@ import Paths_max (version)
 import System.Info (arch, fullCompilerVersion, os)
 import Text.Read (readMaybe)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
-import Max.DB.Memory (MemoryItem (..), MemoryScope (..), countMemories, deleteMemory, fetchMemory, listMemories)
+import Max.DB.Memory (MemoryItem (..), MemoryScope (..), countMemories, deleteMemory, fetchMemory, listMemories, listUserMemoriesEverywhere)
 import Max.DB.Stickers qualified as Stickers
 import Max.Effects.LLM (LLM, listProfiles)
 import Max.Browser.Registry (destroyBrowsersForGroup)
@@ -254,7 +254,11 @@ execute t gid uid granterTier replyTarget cmd = do
         UserId uidRaw = uid
         private = isPrivateChat gid
     gms <- listMemories ScopeGroup gidRaw gidRaw
-    ums <- if private then listMemories ScopeUser uidRaw gidRaw else pure []
+    -- Deliberately unscoped: this is the self-audit channel, and with
+    -- memories partitioned per group it is the only place someone can
+    -- see the whole record the bot keeps on them.  Private chats only,
+    -- and the subject is the audience.
+    ums <- if private then listUserMemoriesEverywhere uidRaw else pure []
     reply (formatMemories private gms ums)
   MemoryRm mid -> do
     let GroupId gidRaw = gid
@@ -526,7 +530,7 @@ renderStickerState defB = \case
 --------------------------------------------------------------------------------
 -- !memory formatting.
 
-formatMemories :: Bool -> [MemoryItem] -> [MemoryItem] -> Text
+formatMemories :: Bool -> [MemoryItem] -> [(MemoryItem, Maybe Int64)] -> Text
 formatMemories _ [] [] = "没有长期记忆（bot 觉得值得记的东西会存在这里）"
 formatMemories private gms ums =
   T.unlines . concat $
@@ -535,11 +539,20 @@ formatMemories private gms ums =
         else (if private then "本会话记忆:" else "本群记忆:") : map memLine gms,
       if null ums
         then []
-        else "你的记忆（跨群，只在私聊显示）:" : map memLine ums,
+        else "你的记忆（全部会话，只在私聊显示）:" : map userLine ums,
       ["用 !memory rm <id> 删除"]
     ]
   where
     memLine m = "  #" <> T.pack (show m.memId) <> "  " <> m.memContent
+    -- Each carries where it was learned: they only apply in that
+    -- conversation now, so a bare list would say nothing about where
+    -- the bot will actually use them.
+    userLine (m, mSrc) =
+      "  #" <> T.pack (show m.memId) <> "  " <> srcTag mSrc <> " " <> m.memContent
+    srcTag Nothing = "[来源未知]"
+    srcTag (Just g)
+      | isPrivateChat (GroupId g) = "[私聊]"
+      | otherwise = "[群" <> T.pack (show g) <> "]"
 
 --------------------------------------------------------------------------------
 -- !sticker formatting.

@@ -24,6 +24,7 @@ module Max.DB.Memory
     scopeText,
     parseScope,
     listMemories,
+    listUserMemoriesEverywhere,
     countMemories,
     insertMemory,
     updateMemory,
@@ -36,7 +37,7 @@ where
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (UTCTime)
-import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple (Only (..), (:.) (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow, field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
@@ -85,6 +86,31 @@ listMemories scope sid gid =
     \    AND (scope = 'group' OR source_group_id = ?) \
     \  ORDER BY id"
     (scopeText scope, sid, gid)
+
+-- | Every memory of one person, whatever conversation taught it, each
+-- paired with that conversation.
+--
+-- The one deliberate exception to the scoping above, and it exists
+-- because of it: once user memories are partitioned per group, there is
+-- no longer any single place to see what the bot knows about you.  This
+-- backs @!memory@ in a DM, where the audience /is/ the subject and the
+-- output goes to them privately — showing someone their own record
+-- leaks nothing to anybody else.
+--
+-- Not for any path that feeds the model.  That is what 'listMemories'
+-- is for.
+listUserMemoriesEverywhere ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Eff es [(MemoryItem, Maybe Int64)]
+listUserMemoriesEverywhere uid = do
+  rows <-
+    query
+      "SELECT id, scope, scope_id, content, updated_at, source_group_id \
+      \  FROM memories WHERE scope = 'user' AND scope_id = ? \
+      \  ORDER BY source_group_id NULLS FIRST, id"
+      (Only uid)
+  pure [(m, g) | (m :. Only g) <- rows]
 
 -- | Counts what 'listMemories' would return, so the per-scope cap is
 -- measured over the same rows the prompt actually sees.
