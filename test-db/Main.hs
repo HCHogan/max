@@ -19,6 +19,7 @@ import Data.Text qualified as T
 import Helpers (truncateAll)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
+import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.MessageSpec qualified as MessageSpec
 import Max.DB.SessionSpec qualified as SessionSpec
@@ -44,6 +45,7 @@ main = do
         SessionSpec.spec pool
         HistorySpec.spec pool
         MessageSpec.spec pool
+        FetchQueueSpec.spec pool
         PromptIntegrationSpec.spec pool
       -- Final wipe so a developer running tests against the dev DB
       -- doesn't leave random fixture rows behind.

@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               max
-version:            0.4.3
+version:            0.4.4
 synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
 author:             Hank Hogan
 maintainer:         hankchogan@gmail.com
@@ -47,6 +47,7 @@ library
         Max.Config
         Max.MCP.Client
         Max.DB.Connection
+        Max.DB.FetchQueue
         Max.DB.Files
         Max.DB.Forward
         Max.DB.History
@@ -68,6 +69,7 @@ library
         Max.Embedding
         Max.Env
         Max.Faces
+        Max.FetchQueue
         Max.Files
         Max.Forward
         Max.Handler
@@ -241,6 +243,7 @@ test-suite max-test-db
     main-is:            Main.hs
     other-modules:
         Helpers
+        Max.DB.FetchQueueSpec
         Max.DB.SessionSpec
         Max.DB.HistorySpec
         Max.DB.MessageSpec

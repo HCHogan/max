@@ -30,11 +30,12 @@ import Max.Embedding (EmbedClient, newEmbedClient)
 import Max.Env (BotEnv (..))
 import Max.Persistence (PersistMode (Persisted))
 import Max.Reminder (ReminderScheduler, newReminderScheduler, reminderWorker)
-import Max.Files (FileQueue, fileWorker, newFileQueue)
-import Max.Forward (ForwardQueue, forwardWorker, newForwardQueue)
+import Max.FetchQueue (FetchSignal, newFetchSignal)
+import Max.Files (fileWorker)
+import Max.Forward (forwardWorker)
 import Max.Handler (dispatchProactive, handleEvents)
 import Max.Wechatpad (wechatpadBackend, wechatpadWorker)
-import Max.Images (ImageQueue, imageWorker, newImageQueue)
+import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Browser.Registry
   ( destroyAllBrowsers,
@@ -98,9 +99,10 @@ main = do
       bracket_ (pure ()) (destroyAllSandboxes sandboxes >> destroyAllBrowsers browsers) $ do
         withStdOutLogger $ \logger -> do
           eventQ <- newTQueueIO
-          imgQ <- newImageQueue
-          fwdQ <- newForwardQueue
-          fileQ <- newFileQueue
+          -- One bell for all three media workers: the jobs live in
+          -- @fetch_jobs@ and each worker claims only its own kind, so a
+          -- shared wakeup costs the other two one indexed query.
+          fetchSig <- newFetchSignal
           sessions <- newSessionRegistry
           tasks <- newTaskRegistry
           reminders <- newReminderScheduler
@@ -161,7 +163,7 @@ main = do
             . runReader Persisted -- default mode; !btw scopes Volatile on top
             . runReader env
             . runAgent defaultLimits toolFactory tasks
-            $ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef mainTid
+            $ runApp cfg applied mEmbed reminders eventQ fetchSig mIntentSt clientRef mainTid
 
 -- | SIGTERM handler.  Deliberately does no waiting itself: it flips the
 -- drain flag and returns, leaving the wait (and its logging) to
@@ -192,15 +194,13 @@ runApp ::
   Maybe EmbedClient ->
   ReminderScheduler ->
   TQueue Event ->
-  ImageQueue ->
-  ForwardQueue ->
-  FileQueue ->
+  FetchSignal ->
   Maybe IntentState ->
   TVar (Maybe Client) ->
   -- | Main thread, for 'drainWorker' to interrupt once drained.
   ThreadId ->
   Eff es ()
-runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef mainTid =
+runApp cfg applied mEmbed reminders eventQ fetchSig mIntentSt clientRef mainTid =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -226,11 +226,11 @@ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef m
     -- exception into this thread so a worker silently dying takes the whole
     -- process down (systemd / supervisor restarts) rather than leaving a
     -- stuck queue. Ctrl+C still cascades via withAsync as usual.
-    withAsync (imageWorker cfg.imageWorkers imgQ) $ \aImg -> do
+    withAsync (imageWorker cfg.imageWorkers fetchSig) $ \aImg -> do
       link aImg
-      withAsync (forwardWorker imgQ fwdQ) $ \aFwd -> do
+      withAsync (forwardWorker fetchSig) $ \aFwd -> do
         link aFwd
-        withAsync (fileWorker fileQ) $ \aFile -> do
+        withAsync (fileWorker fetchSig) $ \aFile -> do
           link aFile
           -- No embedding config → this async completes immediately;
           -- linking a successfully-finished async is a no-op.
@@ -261,7 +261,7 @@ runApp cfg applied mEmbed reminders eventQ imgQ fwdQ fileQ mIntentSt clientRef m
                     )
                     $ \aInt -> do
                       link aInt
-                      withAsync (handleEvents eventQ imgQ fwdQ fileQ mIntentSt) $ \aH -> do
+                      withAsync (handleEvents eventQ fetchSig mIntentSt) $ \aH -> do
                         link aH
                         -- WeChat inbound (no-op async when unconfigured,
                         -- same trick as the caption worker).

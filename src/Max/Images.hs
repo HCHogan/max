@@ -1,8 +1,6 @@
 module Max.Images
   ( ImageJob (..),
     MediaKind (..),
-    ImageQueue,
-    newImageQueue,
     enqueueImages,
     enqueueImagesFromNode,
     downloadableImageCount,
@@ -11,14 +9,20 @@ module Max.Images
   )
 where
 
-import Control.Concurrent.STM (TQueue, atomically, newTQueueIO, readTQueue, writeTQueue)
-import Control.Exception (IOException, SomeException, try)
-import Control.Monad (forever)
-import Data.Foldable (for_, traverse_)
-import Data.Aeson (Value (Object, String), toJSON)
+import Control.Exception (IOException, try)
+import Data.Aeson
+  ( FromJSON (..),
+    ToJSON (..),
+    Value (Object, String),
+    withObject,
+    withText,
+    (.:),
+    (.:?),
+  )
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
+import Data.Foldable (for_, traverse_)
 import Data.Int (Int64)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -27,10 +31,11 @@ import Effectful
 import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute)
+import Max.DB.FetchQueue (JobKind (JobImage), enqueueJob)
 import Max.DB.Stickers (StickerMeta, recordSticker, stickerMeta)
 import Max.Effects.Blob (Blob, blobPath, putBlob)
 import Max.Effects.Http (Http, getBytes)
-import Max.Util (catchSync)
+import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (ImageSegInfo (..), Segment (..), VideoSegInfo (..))
 import OneBot.Types (GroupId (..), MessageId (..))
@@ -59,29 +64,75 @@ data ImageJob = ImageJob
   }
   deriving stock (Show)
 
-type ImageQueue = TQueue ImageJob
+-- The JSON below is a persisted format, not a wire detail: rows can
+-- outlive a deploy, so fields are named (never positional) and
+-- decoding stays tolerant of ones we no longer write.
 
-newImageQueue :: IO ImageQueue
-newImageQueue = newTQueueIO
+instance ToJSON MediaKind where
+  toJSON MediaImage = String "image"
+  toJSON MediaVideo = String "video"
+
+instance FromJSON MediaKind where
+  parseJSON = withText "MediaKind" $ \case
+    "image" -> pure MediaImage
+    "video" -> pure MediaVideo
+    other -> fail ("unknown media kind: " <> T.unpack other)
+
+instance ToJSON ImageJob where
+  toJSON j =
+    object
+      [ "message_id" .= j.messageId,
+        "seg_index" .= j.segIndex,
+        "url" .= j.url,
+        "group_id" .= j.groupId,
+        "sticker" .= j.sticker,
+        "kind" .= j.kind
+      ]
+
+instance FromJSON ImageJob where
+  parseJSON = withObject "ImageJob" $ \o ->
+    ImageJob
+      <$> o .: "message_id"
+      <*> o .: "seg_index"
+      <*> o .: "url"
+      <*> o .:? "group_id"
+      <*> o .:? "sticker"
+      <*> o .: "kind"
 
 -- | Walk a group message's segments and enqueue every downloadable image
 -- (or mface). Segments without URLs (file-id only) are skipped silently —
 -- 'get_image' fallback can come later.
-enqueueImages :: ImageQueue -> GroupMessage -> IO ()
-enqueueImages q gm =
+enqueueImages ::
+  (WithConnection :> es, IOE :> es) =>
+  FetchSignal ->
+  GroupMessage ->
+  Eff es ()
+enqueueImages sig gm =
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
-   in enqueueImagesFromNode q mid (Just gid) gm.message
+   in enqueueImagesFromNode sig mid (Just gid) gm.message
 
 -- | Enqueue images belonging to an arbitrary 'message_id' — used by the
 -- forward worker to feed synthetic ids for forwarded nodes.
-enqueueImagesFromNode :: ImageQueue -> Int64 -> Maybe Int64 -> [Segment] -> IO ()
-enqueueImagesFromNode q mid gid segs = do
+enqueueImagesFromNode ::
+  (WithConnection :> es, IOE :> es) =>
+  FetchSignal ->
+  Int64 ->
+  Maybe Int64 ->
+  [Segment] ->
+  Eff es ()
+enqueueImagesFromNode sig mid gid segs = do
   let jobs = mapMaybe pick (zip [0 ..] segs)
       pick (i, s) = case imageUrl s of
         Just u -> Just (ImageJob mid i u gid (stickerMeta s) MediaImage)
         Nothing -> (\u -> ImageJob mid i u gid Nothing MediaVideo) <$> videoUrl s
-  atomically $ traverse_ (writeTQueue q) jobs
+  traverse_ enqueueOne jobs
+  liftIO (notifyFetch sig)
+  where
+    -- One segment holds at most one downloadable thing, so its index
+    -- within the message is the whole natural key.
+    enqueueOne j =
+      enqueueJob JobImage (T.pack (show j.messageId <> ":" <> show j.segIndex)) j
 
 -- | How many of a message's segments the worker will try to fetch —
 -- i.e. how many 'message_images' rows will eventually exist for it
@@ -113,55 +164,44 @@ lookupString k o = case KM.lookup (K.fromText k) o of
   Just (String s) | not (T.null s) -> Just s
   _ -> Nothing
 
--- | Pool of @poolSize@ workers reading from a shared queue. HTTP fetch,
--- blob store, and DB writes all go through their respective effects.
+-- | Lease per download.  Generous: the cap is 70 MiB over QQ's CDN,
+-- and over-waiting only delays a retry, while under-waiting lets a
+-- second worker start the same fetch.
+imageLeaseSeconds :: Int
+imageLeaseSeconds = 600
+
+-- | Pool of @poolSize@ workers over the shared @fetch_jobs@ queue. HTTP
+-- fetch, blob store, and DB writes all go through their respective
+-- effects.  One job claimed at a time per worker: a download is slow
+-- enough that batching would just hold leases on work nobody is doing.
 imageWorker ::
   (Log :> es, Http :> es, Blob :> es, WithConnection :> es, Concurrent :> es, IOE :> es) =>
   Int ->
-  ImageQueue ->
+  FetchSignal ->
   Eff es ()
-imageWorker poolSize q = localDomain "image-worker" $ do
+imageWorker poolSize sig = localDomain "image-worker" $ do
   logInfo "image worker pool started" $ object ["workers" .= poolSize]
   forConcurrently_ [1 .. poolSize] $ \wid ->
     localData [("w", toJSON (wid :: Int))] $
-      workerLoop q
+      runFetchLoop sig JobImage imageLeaseSeconds 1 processOne
 
-workerLoop ::
+processOne ::
   (Log :> es, Http :> es, Blob :> es, WithConnection :> es, IOE :> es) =>
-  ImageQueue ->
-  Eff es ()
-workerLoop q = forever $ do
-  job <- liftIO (atomically (readTQueue q))
+  ImageJob ->
+  Eff es (Either Text ())
+processOne job = do
   logInfo "image downloading" $
     object
       [ "url" .= job.url,
         "message_id" .= job.messageId,
         "seg_index" .= job.segIndex
       ]
-  processOne job
-    `catchSync` \e ->
-      logAttention "image worker crash" $
-        object
-          [ "error" .= T.pack (show (e :: SomeException)),
-            "url" .= job.url,
-            "message_id" .= job.messageId
-          ]
-
-processOne ::
-  (Log :> es, Http :> es, Blob :> es, WithConnection :> es, IOE :> es) =>
-  ImageJob ->
-  Eff es ()
-processOne job = do
   r <- getBytes job.url maxBytes
   case r of
+    -- Carries the URL because the queue's own failure log is generic;
+    -- this is what someone reads when a picture never showed up.
     Left err ->
-      logAttention "image download failed" $
-        object
-          [ "error" .= err,
-            "url" .= job.url,
-            "kind" .= T.pack (show job.kind),
-            "message_id" .= job.messageId
-          ]
+      pure (Left ("download failed (" <> job.url <> "): " <> err))
     Right (bytes, mime) -> do
       sha <- putBlob bytes
       rel <- blobPath sha
@@ -185,6 +225,7 @@ processOne job = do
             "kind" .= T.pack (show job.kind),
             "message_id" .= job.messageId
           ]
+      pure (Right ())
   where
     maxBytes = case job.kind of
       MediaImage -> 50 * 1024 * 1024

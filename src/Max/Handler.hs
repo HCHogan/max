@@ -48,10 +48,11 @@ import Max.Effects.LLM (LLM, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, callAction, sendAction)
 import Max.Env (BotEnv (..))
 import Max.Faces (faceIdByName)
-import Max.Files (FileQueue, enqueueFiles)
+import Max.FetchQueue (FetchSignal)
+import Max.Files (enqueueFiles)
 import Max.MemoryExtract (extractMemories)
-import Max.Forward (ForwardQueue, enqueueForwards)
-import Max.Images (ImageQueue, enqueueImages)
+import Max.Forward (enqueueForwards)
+import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.Persistence (PersistMode, isEphemeral, withEphemeral)
 import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
@@ -123,12 +124,12 @@ handleEvents ::
     IOE :> es
   ) =>
   TQueue Event ->
-  ImageQueue ->
-  ForwardQueue ->
-  FileQueue ->
+  -- | Wakes the media workers after each ingest; the jobs themselves
+  -- go to @fetch_jobs@ (see "Max.FetchQueue").
+  FetchSignal ->
   Maybe IntentState -> -- proactive-trigger buffers ('Nothing' = feature off)
   Eff es ()
-handleEvents q imgQ fwdQ fileQ mIntent = loop
+handleEvents q fetchSig mIntent = loop
   where
     loop = do
       ev <- liftIO (atomically (readTQueue q))
@@ -140,9 +141,9 @@ handleEvents q imgQ fwdQ fileQ mIntent = loop
           logTrace "unhandled event" v
         EvGroupMessage gm -> do
           persist gm
-          liftIO (enqueueImages imgQ gm)
-          liftIO (enqueueForwards fwdQ gm)
-          enqueueFiles fileQ gm
+          enqueueImages fetchSig gm
+          enqueueForwards fetchSig gm
+          enqueueFiles fetchSig gm
           onGroupMessage mIntent gm
         EvPoke pk -> onPoke mIntent pk
         -- Auto-approve friend requests: being friends is what makes

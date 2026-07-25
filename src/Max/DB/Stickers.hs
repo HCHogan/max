@@ -16,7 +16,16 @@ module Max.DB.Stickers
   )
 where
 
-import Data.Aeson (Value (Number, Object, String))
+import Data.Aeson
+  ( FromJSON (..),
+    ToJSON (..),
+    Value (Number, Object, String),
+    object,
+    withObject,
+    (.:),
+    (.:?),
+    (.=),
+  )
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Int (Int64)
@@ -37,6 +46,28 @@ data StickerMeta = StickerMeta
     smSummary :: !(Maybe Text)
   }
   deriving stock (Show)
+
+-- Rides along inside an 'Max.Images.ImageJob' in @fetch_jobs@, so
+-- these values now outlive the process: named fields, and everything
+-- optional stays optional on the way back in.
+instance ToJSON StickerMeta where
+  toJSON m =
+    object
+      [ "kind" .= m.smKind,
+        "emoji_id" .= m.smEmojiId,
+        "package_id" .= m.smPackageId,
+        "key" .= m.smKey,
+        "summary" .= m.smSummary
+      ]
+
+instance FromJSON StickerMeta where
+  parseJSON = withObject "StickerMeta" $ \o ->
+    StickerMeta
+      <$> o .: "kind"
+      <*> o .:? "emoji_id"
+      <*> o .:? "package_id"
+      <*> o .:? "key"
+      <*> o .:? "summary"
 
 -- | Is this segment a sticker, and if so which kind?  Saved 动画表情
 -- arrive as image segments with @sub_type=1@; marketplace 商城表情 as

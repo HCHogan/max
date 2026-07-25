@@ -71,3 +71,14 @@ Bot logs are JSON on stdout with a `domain` field — useful filters: `max/conn-
 (memory extraction), `max/intent` (proactive-trigger classification),
 `max/shutdown` (graceful drain), plus `embed:` lines from the vector worker.
 `!debug on` mirrors tool calls into the chat itself.
+
+Media that never arrived: a pending fetch is a row now, so ask the database
+rather than grepping logs.
+
+```sql
+SELECT kind, dedupe_key, attempts, parked_at, last_error FROM fetch_jobs;
+```
+
+Rows still present are in flight, waiting, or — with `parked_at` set — gave up
+after `Max.DB.FetchQueue.maxAttempts` tries. Nothing there means the download
+succeeded and the row was dropped.

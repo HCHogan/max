@@ -22,7 +22,7 @@ src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-gro
 src/Max/Effects/   effectful 2.5 effects: Http, Blob, NapCat, LLM (OpenAI + Anthropic),
                    Tools, Agent  (DB effect from upstream effectful-postgresql)
 src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
-                   History, Session, Files, Memory
+                   History, Session, Files, Memory, FetchQueue (media work list)
 src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher
 src/Max/Session/   Per-conversation session: in-memory TVar + DB persistence
 src/Max/Sandbox/   Per-group Docker workspace lifecycle + registry
@@ -31,7 +31,8 @@ src/Max/MCP/       Minimal MCP client (Streamable HTTP)
 src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    MemoryExtract, Embedding + Embedder (vector worker), Forward/Image/File
-                   workers, Shutdown (graceful drain), Tasks, Tools, Util
+                   workers, FetchQueue (their shared claim loop), Shutdown (graceful
+                   drain), Tasks, Tools, Util
 app/Main.hs        wires effects + workers + server
 ```
 
@@ -47,7 +48,7 @@ app/Main.hs        wires effects + workers + server
        ┌──────────────────────── handleEvents ───────────────────────────┐
        │ EvGroupMessage gm (group, or private as pseudo-group)  →        │
        │   1. insertGroupMessage   (Postgres, idempotent on message_id)  │
-       │   2. enqueueImages / enqueueForwards / enqueueFiles             │
+       │   2. enqueueImages / enqueueForwards / enqueueFiles → fetch_jobs│
        │   3. classify (@bot / reply-to-bot / private / !cmd) →          │
        │        none / ping / !cmd / agent-turn                          │
        └──────┬──────────┬──────────┬──────────────┬─────────────────────┘
@@ -55,10 +56,10 @@ app/Main.hs        wires effects + workers + server
         ┌─────▼────┐ ┌───▼────┐ ┌───▼─────┐ ┌──────▼──────────────────┐
         │img/fwd/  │ │embedWkr│ │!cmd     │ │ agentTurn (async task)  │
         │file wkrs │ │pgvector│ │dispatch │ │  buildContext (+memory) │
-        │          │ │backfill│ │(session,│ │  → LLM (tools)          │
-        │          │ │+ tail  │ │ memory, │ │    └─ tool loop ◀──┐    │
-        └──────────┘ └────────┘ │ tasks)  │ │  (sandbox/browser/ │    │
-                                └─────────┘ │   search/files/mem)┘    │
+        │(claim    │ │backfill│ │(session,│ │  → LLM (tools)          │
+        │ fetch_   │ │+ tail  │ │ memory, │ │    └─ tool loop ◀──┐    │
+        │ jobs)    │ └────────┘ │ tasks)  │ │  (sandbox/browser/ │    │
+        └──────────┘            └─────────┘ │   search/files/mem)┘    │
                                             │  → send chunks + persist│
                                             │  → memory extraction    │
                                             └─────────────────────────┘
@@ -72,13 +73,13 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Survives a restart | How |
 |---|---|
 | Messages, sessions, memories, stickers, permissions | written through on every mutation |
+| Pending image / video / forward / file fetches | `fetch_jobs` rows claimed under a lease — a dead process's lease expires and the next claim picks the job back up |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll for `NULL` columns, so any gap backfills itself |
 
 | Lost on restart | Why |
 |---|---|
 | In-flight agent turns | ephemeral by design (`Max.Tasks`). SIGTERM drains them first — `shutdown_drain_seconds`, default 120 — but a crash, or a drain that times out, abandons them |
-| Queued image / video / forward / file fetches | in-memory `TQueue`s, and nothing ever goes back for them |
 | Triggers arriving mid-drain | persisted to `messages` and logged, but not dispatched |
 | Anything NapCat sends while we're down | it dials in over reverse-WS and doesn't buffer; closing this needs history backfill on reconnect |
 | `!use` admin targets | deliberate — just `!use` again |

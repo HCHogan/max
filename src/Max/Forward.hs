@@ -1,23 +1,13 @@
 module Max.Forward
   ( ForwardJob (..),
-    ForwardQueue,
-    newForwardQueue,
     enqueueForwards,
     forwardWorker,
   )
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent.STM
-  ( TQueue,
-    atomically,
-    newTQueueIO,
-    readTQueue,
-    writeTQueue,
-  )
-import Control.Exception (SomeException)
-import Control.Monad (forever, unless)
-import Data.Aeson (Value (Array, Object, String))
+import Control.Monad (unless)
+import Data.Aeson (FromJSON (..), ToJSON (..), Value (Array, Object, String))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Object, Parser, parseEither, withObject, (.:), (.:?))
@@ -29,10 +19,11 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
+import Max.DB.FetchQueue (JobKind (JobForward), enqueueJob)
 import Max.DB.Forward (ForwardNodeInsert (..), insertForwardNode)
 import Max.Effects.NapCat (NapCat, callAction)
-import Max.Images (ImageQueue, enqueueImagesFromNode)
-import Max.Util (catchSync)
+import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
+import Max.Images (enqueueImagesFromNode)
 import OneBot.Action (Action (GetForwardMsg), Response (..))
 import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (Segment (..))
@@ -51,21 +42,46 @@ data ForwardJob = ForwardJob
   }
   deriving stock (Show)
 
-type ForwardQueue = TQueue ForwardJob
+-- Persisted in @fetch_jobs@, so this is a stored format rather than a
+-- wire one: named fields, decodable by a binary that no longer writes
+-- them the same way.
+instance ToJSON ForwardJob where
+  toJSON j =
+    object
+      [ "container_message_id" .= j.containerMessageId,
+        "forward_id" .= j.forwardId,
+        "group_id" .= j.groupId,
+        "self_id" .= j.selfId
+      ]
 
-newForwardQueue :: IO ForwardQueue
-newForwardQueue = newTQueueIO
+instance FromJSON ForwardJob where
+  parseJSON = withObject "ForwardJob" $ \o ->
+    ForwardJob
+      <$> o .: "container_message_id"
+      <*> o .: "forward_id"
+      <*> o .: "group_id"
+      <*> o .: "self_id"
 
 -- | Enqueue every top-level forward chain in a real group message.
 -- Nested forwards arrive inlined inside the @get_forward_msg@ response,
 -- so we never enqueue more jobs from inside the worker.
-enqueueForwards :: ForwardQueue -> GroupMessage -> IO ()
-enqueueForwards q gm = do
+enqueueForwards ::
+  (WithConnection :> es, IOE :> es) =>
+  FetchSignal ->
+  GroupMessage ->
+  Eff es ()
+enqueueForwards sig gm = do
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
       UserId sid = gm.selfId
       jobs = mapMaybe (mkJob mid gid sid) gm.message
-  atomically $ traverse_ (writeTQueue q) jobs
+  traverse_ enqueueOne jobs
+  liftIO (notifyFetch sig)
+  where
+    -- The same chain can be forwarded into several messages, so the
+    -- container is part of the key: each lands its own set of nodes.
+    enqueueOne j =
+      enqueueJob JobForward (T.pack (show j.containerMessageId) <> ":" <> j.forwardId) j
 
 mkJob :: Int64 -> Int64 -> Int64 -> Segment -> Maybe ForwardJob
 mkJob container gid sid = \case
@@ -80,65 +96,60 @@ forwardIdFromValue (Object o) = case KM.lookup (K.fromText "id") o of
   _ -> Nothing
 forwardIdFromValue _ = Nothing
 
+-- | One expansion is a single RPC plus a burst of inserts, so a batch
+-- of a few keeps the round-trips down without holding leases long.
+forwardLeaseSeconds :: Int
+forwardLeaseSeconds = 300
+
 forwardWorker ::
   (Log :> es, NapCat :> es, WithConnection :> es, IOE :> es) =>
-  ImageQueue ->
-  ForwardQueue ->
+  FetchSignal ->
   Eff es ()
-forwardWorker imgQ q = localDomain "forward-worker" $ do
+forwardWorker sig = localDomain "forward-worker" $ do
   logInfo_ "forward worker started"
-  forever $ do
-    job <- liftIO (atomically (readTQueue q))
-    logInfo "forward expanding" $
-      object
-        [ "forward_id" .= job.forwardId,
-          "container_message_id" .= job.containerMessageId
-        ]
-    processJob imgQ job
-      `catchSync` \e ->
-        logAttention "forward worker crash" $
-          object
-            [ "error" .= T.pack (show (e :: SomeException)),
-              "forward_id" .= job.forwardId,
-              "container_message_id" .= job.containerMessageId
-            ]
+  runFetchLoop sig JobForward forwardLeaseSeconds 4 (processJob sig)
 
 processJob ::
   (Log :> es, NapCat :> es, WithConnection :> es, IOE :> es) =>
-  ImageQueue ->
+  FetchSignal ->
   ForwardJob ->
-  Eff es ()
-processJob imgQ job = do
+  Eff es (Either Text ())
+processJob sig job = do
+  logInfo "forward expanding" $
+    object
+      [ "forward_id" .= job.forwardId,
+        "container_message_id" .= job.containerMessageId
+      ]
   eres <- callAction (GetForwardMsg job.forwardId) timeoutMs
   case eres of
     Left err ->
-      logAttention "get_forward_msg failed" $
-        object ["error" .= err, "forward_id" .= job.forwardId]
-    Right (Response _ rc _ _) | rc /= 0 ->
-      logAttention "get_forward_msg bad retcode" $
-        object ["retcode" .= rc, "forward_id" .= job.forwardId]
+      pure (Left ("get_forward_msg failed (" <> job.forwardId <> "): " <> err))
+    Right (Response _ rc _ _)
+      | rc /= 0 ->
+          -- Usually a chain QQ has since expired; the attempt budget
+          -- turns that into a few retries and then a parked row.
+          pure (Left ("get_forward_msg retcode " <> T.pack (show rc) <> " (" <> job.forwardId <> ")"))
     Right (Response _ _ payload _) ->
       case parseEither nodesParser payload of
         Left perr ->
-          logAttention "forward response parse error" $
-            object ["error" .= T.pack perr, "forward_id" .= job.forwardId]
-        Right nodes -> ingestNodes imgQ job nodes
+          pure (Left ("forward response parse error (" <> job.forwardId <> "): " <> T.pack perr))
+        Right nodes -> Right <$> ingestNodes sig job nodes
   where
     timeoutMs = 30000
 
 ingestNodes ::
   (Log :> es, WithConnection :> es, IOE :> es) =>
-  ImageQueue ->
+  FetchSignal ->
   ForwardJob ->
   [ForwardNode] ->
   Eff es ()
-ingestNodes imgQ job nodes =
+ingestNodes sig job nodes =
   for_ (zip [0 ..] nodes) $ \(i, node) ->
-    ingestNode imgQ job.containerMessageId job.groupId job.selfId 1 i node
+    ingestNode sig job.containerMessageId job.groupId job.selfId 1 i node
 
 ingestNode ::
   (Log :> es, WithConnection :> es, IOE :> es) =>
-  ImageQueue ->
+  FetchSignal ->
   Int64 -> -- containerSid
   Int64 -> -- groupId
   Int64 -> -- selfId
@@ -146,7 +157,7 @@ ingestNode ::
   Int -> -- position
   ForwardNode ->
   Eff es ()
-ingestNode imgQ containerSid gid sid depth pos node = do
+ingestNode sig containerSid gid sid depth pos node = do
   let ins =
         ForwardNodeInsert
           { containerMessageId = containerSid,
@@ -160,7 +171,7 @@ ingestNode imgQ containerSid gid sid depth pos node = do
             segments = node.segments
           }
   insSid <- insertForwardNode ins
-  liftIO (enqueueImagesFromNode imgQ insSid (Just gid) node.segments)
+  enqueueImagesFromNode sig insSid (Just gid) node.segments
   let inlineChildren = concatMap extractInlineNodes node.segments
   logInfo "forward node ingested" $
     object
@@ -182,7 +193,7 @@ ingestNode imgQ containerSid gid sid depth pos node = do
             ]
     else
       for_ (zip [0 ..] inlineChildren) $ \(i, child) ->
-        ingestNode imgQ insSid gid sid (depth + 1) i child
+        ingestNode sig insSid gid sid (depth + 1) i child
 
 -- | Pull nested-forward children inlined in a @forward@ segment's
 -- @data.content@ (NapCat-style; whole tree comes in one @get_forward_msg@
