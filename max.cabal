@@ -2,8 +2,11 @@ cabal-version:      3.0
 name:               max
 version:            0.4.4
 synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
+license:            MIT
+license-file:       LICENSE
 author:             Hank Hogan
 maintainer:         hankchogan@gmail.com
+copyright:          (c) 2026 Hank Hogan
 build-type:         Simple
 
 common warnings
