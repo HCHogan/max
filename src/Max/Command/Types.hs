@@ -60,7 +60,8 @@ data Command
   | Pin !(Maybe Int64) -- ^ '!pin [id]' — Nothing = use reply target
   | Unpin !UnpinTarget -- ^ '!unpin [id|all]'
   | Pins -- ^ '!pins'
-  | Btw !Text -- ^ '!btw <text>'
+  | Btw !Text -- ^ '!btw <text>' — a side question that leaves a running turn alone
+  | Feedback !Text -- ^ '!feedback <text>' / '!fb <text>' — hand a note to a running turn
   | PsLocal -- ^ '!ps' (this group)
   | PsAll -- ^ '!ps --all' / '!ps -a'
   | Kill !Text -- ^ '!kill <id>'

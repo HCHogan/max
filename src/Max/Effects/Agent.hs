@@ -10,9 +10,9 @@
 --
 -- Each iteration:
 --
---   1. Drain pending @!btw@ notes from the task's inbox; if any,
---      append a synthetic @MsgUser "[btw]: …"@ before the next chat
---      call so the model sees the side-channel input immediately.
+--   1. Drain pending feedback notes from the task's inbox; if any,
+--      append a synthetic @MsgUser "[feedback]: …"@ before the next
+--      chat call so the model sees the side-channel input immediately.
 --   2. @chat(profile, msgs, specs)@.
 --   3. 'ContentResp' → return text.  'ToolCallsResp' → run each tool
 --      via 'Tools', append assistant-with-tool-calls + tool-result
@@ -23,11 +23,13 @@
 --
 -- == Task lifecycle
 --
--- 'runAgent' takes a 'TaskRegistry'.  Each 'AgentTurn' brackets a
--- register/unregister around the loop, so @!ps@ sees the running
--- dispatch and @!kill@ can cancel it via 'TaskCancelled' (which the
--- bracket cleans up before propagating).  The same task's inbox is
--- what @!btw@ pushes into.
+-- 'runAgent' takes a 'TaskRegistry'.  The registry entry already exists
+-- — 'Max.Tasks.beginDispatch' opened it when the dispatch started, well
+-- before this loop — so each 'AgentTurn' brackets an
+-- 'Max.Tasks.attachTask' that adopts it, supplying the cancel action
+-- @!kill@ needs and picking up a kill that arrived while the context
+-- was still being built.  The same entry's inbox is what @!feedback@
+-- and the supplement classifier push into.
 --
 -- == Per-group tools
 --
@@ -50,7 +52,7 @@ where
 
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, readTVar, writeTVar)
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Set (Set)
@@ -60,12 +62,12 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Dispatch.Dynamic (interpret, send)
-import Effectful.Exception (bracket)
+import Effectful.Exception (bracket, throwIO)
 import Effectful.Log
 import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat)
 import Max.Effects.NapCat (NapCat, sendAction)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
-import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, drainBtwInbox, registerTask, unregisterTask)
+import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask)
 import OneBot.Action (sendChatMsg)
 import Data.Set qualified as Set
 import OneBot.Segment (Segment (SegReply, SegText), segmentMentions)
@@ -157,7 +159,7 @@ data AgentResult = AgentResult
     -- text into the chat; the reason is in 'aborted'.
     reply :: !(Maybe Text),
     -- | Every message added to the conversation during this run —
-    -- @!btw@ injections, assistant tool-call rounds, tool results,
+    -- feedback injections, assistant tool-call rounds, tool results,
     -- final assistant text.  Does NOT include the initial messages
     -- the caller passed in.
     appended :: ![ChatMessage],
@@ -198,9 +200,13 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
     selfTid <- liftIO myThreadId
     let cancel = throwTo selfTid TaskCancelled
     bracket
-      (liftIO (registerTask taskReg dc.dcGroupId dc.dcUserId "llm" cancel))
-      (liftIO . unregisterTask taskReg)
-      ( \handle ->
+      (liftIO (attachTask taskReg dc.dcGroupId dc.dcUserId (Just dc.dcMessageId) "llm" cancel))
+      (liftIO . releaseTask taskReg)
+      ( \handle -> do
+          -- A !kill that landed while the dispatch was still building
+          -- its context has no thread to interrupt yet; the registry
+          -- held it for us.  Honour it before spending a turn.
+          when handle.thPreKilled $ throwIO TaskCancelled
           runTools (toolFactory dc) (loop dc handle profile msgs)
       )
   where
@@ -221,11 +227,11 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
     go dc h n appended profile msgs = do
-      -- Drain any !btw notes that arrived since the previous turn.
-      notes <- liftIO (drainBtwInbox h)
+      -- Drain any feedback notes that arrived since the previous turn.
+      notes <- liftIO (drainInbox h)
       let (msgs', appended') = case notes of
             [] -> (msgs, appended)
-            xs -> (msgs <> [btwMsg xs], appended <> [btwMsg xs])
+            xs -> (msgs <> [feedbackMsg xs], appended <> [feedbackMsg xs])
       if n >= lims.maxTurns
         then finalAnswer n appended' profile msgs'
         else do
@@ -246,13 +252,13 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                     aborted = Just err
                   }
             Right (ContentResp text) -> do
-              -- A !btw note that raced in during this final call would
-              -- be lost — the task unregisters right after we return,
-              -- and the reply it was meant to steer is already written.
-              -- If any arrived, loop instead: the unsent draft stays in
-              -- the conversation and the model re-answers with the
-              -- note in view.
-              lateNotes <- liftIO (drainBtwInbox h)
+              -- A feedback note that raced in during this final call
+              -- would be lost — the task is released right after we
+              -- return, and the reply it was meant to steer is already
+              -- written.  If any arrived, loop instead: the unsent draft
+              -- stays in the conversation and the model re-answers with
+              -- the note in view.
+              lateNotes <- liftIO (drainInbox h)
               case lateNotes of
                 [] ->
                   pure
@@ -265,7 +271,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                 xs -> do
                   logInfo "agent: btw notes raced final answer, continuing" $
                     object ["count" .= length xs]
-                  let newMsgs = [MsgAssistant text, btwMsg xs]
+                  let newMsgs = [MsgAssistant text, feedbackMsg xs]
                   go dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
@@ -361,8 +367,11 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                     (\u -> maybe True (Set.member u) dc.dcMentionable)
                     (T.strip narration)
 
-    btwMsg :: [Text] -> ChatMessage
-    btwMsg xs = MsgUser ("[btw]: " <> T.intercalate " | " xs)
+    -- Notes that arrived mid-turn, from !feedback or from a message the
+    -- classifier read as steering.  Marked so the model can tell them
+    -- from the original request without being told twice.
+    feedbackMsg :: [Text] -> ChatMessage
+    feedbackMsg xs = MsgUser ("[feedback]: " <> T.intercalate " | " xs)
 
     silentTools :: [Text]
     silentTools = ["send_image_from_sandbox", "send_file_from_sandbox"]

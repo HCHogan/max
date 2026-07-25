@@ -124,6 +124,15 @@ spec = do
     it "keeps a lone -a as text, not an empty note" $
       "!btw -a" `parsesTo` Btw "-a"
 
+  describe "!feedback" $ do
+    it "joins words" $ "!feedback 改成 B 方案" `parsesTo` Feedback "改成 B 方案"
+    it "!fb is the same command" $ "!fb 改成 B 方案" `parsesTo` Feedback "改成 B 方案"
+    it "empty body still works" $ "!feedback" `parsesTo` Feedback ""
+    -- Same free-text treatment as !btw: a note is prose, so a
+    -- dash-prefixed word in it is text and not a flag.
+    it "keeps a leading -a word verbatim" $
+      "!fb -a bit more detail" `parsesTo` Feedback "-a bit more detail"
+
   describe "!ps / !kill" $ do
     it "ps local" $ "!ps" `parsesTo` PsLocal
     it "ps all" $ "!ps --all" `parsesTo` PsAll

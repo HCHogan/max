@@ -26,8 +26,9 @@ QQ ──▶ NapCat ──OneBot 11 / reverse-WS──▶ max ──▶ LLM (Ope
 
 ## Features
 
-- **Agent loop** — multi-turn tool calling, with `!kill` to cancel, `!btw` to
-  steer a running task, and reaction-based status on the trigger message.
+- **Agent loop** — multi-turn tool calling, with `!kill` to cancel, `!feedback`
+  to steer a running turn, `!btw` to ask something else without disturbing it,
+  and reaction-based status on the trigger message.
 - **Persistence** — every message in Postgres, images and videos
   content-addressed on disk, forwarded chats expanded inline. Pending media
   downloads survive a restart, and SIGTERM lets in-flight turns finish first.
@@ -40,7 +41,7 @@ QQ ──▶ NapCat ──OneBot 11 / reverse-WS──▶ max ──▶ LLM (Ope
 - **Multiple LLM profiles** — OpenAI-compatible or Anthropic-native, switched at
   runtime with `!model`.
 - **Commands** — `!help`, `!model`, `!persona`, `!proactive`, `!memory`,
-  `!clear`, `!pin`, `!btw`, `!kill`, `!version`, …
+  `!clear`, `!pin`, `!btw`, `!feedback`, `!kill`, `!version`, …
 - *Optional:* **proactive triggering** (a cheap intent classifier can start a
   turn on unaddressed chatter) and **vector search** (pgvector-backed semantic
   search over messages and memories).

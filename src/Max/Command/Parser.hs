@@ -228,9 +228,10 @@ commandP = do
 -- | Verbs whose arguments are a literal free-text body, not a
 -- flag\/value arg list.  For these 'commandP' skips flag parsing so
 -- dash-prefixed words in the text survive (see 'classify' for @persona@
--- \/ @btw@, which join their positional words with spaces).
+-- \/ @btw@ \/ @feedback@, which join their positional words with
+-- spaces).
 freeTextVerbs :: [Text]
-freeTextVerbs = ["persona", "btw"]
+freeTextVerbs = ["persona", "btw", "feedback", "fb"]
 
 -- | Map (verb, args) → concrete 'Command'.  Reduces the parser surface
 -- to a flat set of variants the dispatcher can pattern-match on.
@@ -291,6 +292,8 @@ classify verb raw@(RawArgs pos flags) = case verb of
     _ -> Unknown verb raw
   "pins" -> Pins
   "btw" -> Btw (T.unwords pos)
+  "feedback" -> Feedback (T.unwords pos)
+  "fb" -> Feedback (T.unwords pos)
   "ps" -> if "all" `Map.member` flags then PsAll else PsLocal
   "kill"
     | "all" `Map.member` flags -> KillAll

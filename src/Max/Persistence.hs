@@ -3,15 +3,15 @@
 -- flag, carried through the effect stack as a 'Reader'.
 --
 -- The 'Persistent' mode is the default everywhere — outbound replies
--- land in the @messages@ table, sayTool persists its status updates.
+-- land in the @messages@ table.
 --
 -- 'Ephemeral' mode is set by 'withEphemeral' for the duration of a
 -- subcomputation.  Inside that scope, persistence writes are
 -- suppressed (the reply still goes out over NapCat — that's a real
 -- side effect we can't undo — but the messages-table write and any
--- session-state mutations don't happen).  This is what powers the
--- new !btw semantics: ask a one-off question using the current
--- context without polluting the bot's memory of the conversation.
+-- session-state mutations don't happen).  This is what powers @!btw@:
+-- ask a one-off side question using the current context without
+-- polluting the bot's memory of the conversation.
 --
 -- We use 'Effectful.Reader.Dynamic' specifically (rather than
 -- 'Effectful.Reader.Static') because 'local' on the dynamic Reader

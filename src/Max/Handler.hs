@@ -59,7 +59,7 @@ import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHi
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
-import Max.Tasks (TaskCancelled (..), beginDispatch, endDispatch, inFlightTriggers, listTasks, pushBtwToOwnTask)
+import Max.Tasks (TaskCancelled (..), TaskId (..), TaskInfo (..), beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
 import Max.Render (renderTableImage)
 import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply, stripHallucinatedTokens)
 import Max.Sticker (resolveSticker)
@@ -215,11 +215,12 @@ onGroupMessage mIntent gm = do
     TriggerLLM _ -> clearIntent >> dispatchLLM OriginDirect gm
 
 -- | A 戳一戳 aimed at the bot: a contentless direct wake, the soft
--- version of an @.  If the group already has a running task the poke
--- reads as a nudge and goes into its btw inbox; otherwise it starts a
--- normal dispatch with 'OriginPoke' so the prompt says honestly who
--- poked (and that there is no message).  Pokes between other members,
--- and echoes of the bot's own outbound pokes, are ignored.
+-- version of an @.  If the group already has a running turn the poke
+-- reads as a nudge and goes into its feedback inbox; otherwise it
+-- starts a normal dispatch with 'OriginPoke' so the prompt says
+-- honestly who poked (and that there is no message).  Pokes between
+-- other members, and echoes of the bot's own outbound pokes, are
+-- ignored.
 onPoke ::
   ( Log :> es,
     WithConnection :> es,
@@ -255,20 +256,23 @@ onPoke mIntent pk
             members <- fetchGroupMembers pk.pkGroupId
             pure (memberName <$> (find (\m -> m.mUserId == pk.pkUserId) =<< members))
       let pokerName = maybe (T.pack (show pokerRaw)) id mName
-      injected <-
-        -- Only into the poker's own turn.  A poke at somebody else's
-        -- running turn falls through to a dispatch of its own, same as
-        -- any other trigger from a bystander.
-        liftIO (pushBtwToOwnTask env.beTasks pk.pkGroupId pk.pkUserId (pokerName <> " 戳了戳你"))
-      if injected
-        then
+      -- A poke has no content for the classifier to judge, so it takes
+      -- the same route an explicit !feedback does: into whatever turn
+      -- the group has running, whoever started it.  Nothing running →
+      -- a dispatch of its own.
+      landed <-
+        liftIO $
+          pushToLatest env.beTasks pk.pkGroupId Nothing Nothing (pokerName <> " 戳了戳你")
+      case landed of
+        Just (TaskId into) ->
           logInfo "poke: injected into running task" $
-            object ["group_id" .= gidRaw]
-        else dispatchLLM OriginPoke (pokeTrigger pk mName)
+            object ["group_id" .= gidRaw, "task" .= into]
+        Nothing -> dispatchLLM OriginPoke (pokeTrigger pk mName)
 
 -- | Synthesize the trigger 'GroupMessage' for a poke dispatch.  There
--- is no real message: id 0 is the "no trigger message" sentinel
--- (nothing quotes or reacts to it — see 'Max.Tools.sayTool') and the
+-- is no real message: id 0 is the "no trigger message" sentinel —
+-- nothing quotes or reacts to it, and 'Max.Tasks.beginDispatch' reads
+-- it as no trigger rather than as an id every poke shares — and the
 -- segment list is empty ('OriginPoke' rendering never shows it).
 pokeTrigger :: PokeEvent -> Maybe T.Text -> GroupMessage
 pokeTrigger pk mName =
@@ -351,6 +355,30 @@ dispatchCommand gm body = localDomain "cmd" $ do
                       ]
                   }
           withEphemeral $ dispatchLLM OriginDirect virtualGm
+        -- !feedback: aim the note at the turn whose trigger the user
+        -- replied to, and at the newest running turn otherwise — a
+        -- reply to something that isn't a live turn (mis-click, a turn
+        -- that has since finished) falls through rather than erroring,
+        -- because a note that refuses to land ends up in nobody's
+        -- context at all.  Nothing running anywhere is the one case
+        -- with no home for it: say so with the failure face, quietly.
+        FeedbackNote noteBody -> do
+          let line = renderCurrentLine (gm {message = [SegText noteBody]})
+          aimed <- case replyTarget of
+            Just tgt -> liftIO (pushToTrigger env.beTasks targetGid Nothing tgt line)
+            Nothing -> pure Nothing
+          landed <- case aimed of
+            Just _ -> pure aimed
+            Nothing -> liftIO (pushToLatest env.beTasks targetGid Nothing Nothing line)
+          case landed of
+            Just (TaskId into) -> do
+              logInfo "feedback: explicit note" $
+                object ["task" .= into, "aimed" .= isJust replyTarget]
+              sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
+            Nothing -> do
+              let GroupId targetRaw = targetGid
+              logInfo "feedback: nothing running" $ object ["group_id" .= targetRaw]
+              sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
 
     deliverPrivate reply = do
       let GroupId gidRaw = gm.groupId
@@ -447,13 +475,16 @@ dispatchLLM origin gm = do
   -- gap.  Claiming before the spawn also closes the race the other
   -- way: 'enterDispatch' and the drain flag share one transaction.
   started <- liftIO (enterDispatch env.beShutdown)
-  -- Same reason the shutdown slot is claimed here: registerTask is
-  -- tens of seconds away, and a concurrent trigger arriving in that
-  -- window has to be able to see this question is already taken.
-  when started $
-    liftIO (beginDispatch env.beTasks gm.groupId gm.messageId)
-  if not started
-    then do
+  -- Same reason the shutdown slot is claimed here: the agent loop is
+  -- tens of seconds away, and until it attaches, a concurrent trigger
+  -- has to be able to see this question is already taken — as do !ps
+  -- and !kill.  The registry entry opens now and the loop adopts it.
+  mTask <-
+    if started
+      then Just <$> liftIO (beginDispatch env.beTasks gm.groupId gm.userId (Just gm.messageId))
+      else pure Nothing
+  case mTask of
+    Nothing -> do
       logInfo "llm dispatch declined: draining" ident
       -- The drain can run for a couple of minutes behind a long turn,
       -- and every @ landing in that window would otherwise get total
@@ -464,14 +495,14 @@ dispatchLLM origin gm = do
       -- react to.
       when (origin == OriginDirect) $
         sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
-    else
+    Just tid ->
       void . async $
         ( localDomain "llm" $ do
             logInfo "llm dispatch" ident
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
             -- (and every trySyncIO on the way up) — the outer 'catch' is the
             -- one place a user-initiated @!kill@ comes to rest.
-            ( work `catchSync` \e -> do
+            ( work tid `catchSync` \e -> do
                 logAttention "llm dispatch crashed" $
                   object ["error" .= T.pack (show (e :: SomeException))]
                 -- The processing reaction is already gone (its 'finally' ran
@@ -491,14 +522,14 @@ dispatchLLM origin gm = do
           `finally` liftIO
             ( do
                 leaveDispatch env.beShutdown
-                endDispatch env.beTasks gm.groupId gm.messageId
+                endDispatch env.beTasks tid
             )
   where
-    work = do
+    work tid = do
       env :: BotEnv <- ask
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
-      injected <- tryInjectSupplement env s
+      injected <- tryInjectSupplement env s tid
       unless injected (withProcessingReaction (dispatch env s))
 
     -- React [托腮] on the trigger while the dispatch runs — a quiet
@@ -515,21 +546,27 @@ dispatchLLM origin gm = do
           (sendAction (SetMsgEmojiLike gm.messageId processingFaceId True) >> act)
             `finally` sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
 
-    -- Implicit !btw: when the group already has a running task, a
-    -- fresh @-trigger is often steering that task（追加要求、修正
-    -- 方向、催进度）rather than starting something new.  Ask the
-    -- intent profile which it is; a supplement goes into the running
-    -- task's inbox — the task's eventual reply addresses it — instead
-    -- of spawning a parallel dispatch.  Gated on intent being
-    -- configured; proactive and ephemeral turns never reroute.  Any
-    -- doubt (classifier says no, errors out, or the task finished
-    -- while we were classifying) falls back to a normal dispatch.
-    tryInjectSupplement env s = do
+    -- The implicit half of the feedback split: when the group already
+    -- has another turn running, a fresh @-trigger is often steering
+    -- that turn（追加要求、修正方向、催进度）rather than starting
+    -- something new.  Ask the intent profile which it is; a supplement
+    -- goes into the running turn's inbox — that turn's eventual reply
+    -- addresses it — instead of spawning a parallel dispatch.  Anyone
+    -- may steer, not just whoever started the turn: the note carries
+    -- the speaker's name, so the model can address them.
+    --
+    -- Gated on intent being configured; proactive and ephemeral turns
+    -- never reroute.  Any doubt (classifier says no, errors out, or
+    -- the turn finished while we were classifying) falls back to a
+    -- normal dispatch.
+    tryInjectSupplement env s tid = do
       ephemeral <- isEphemeral
       case env.beIntent of
         Just icfg | origin == OriginDirect && not ephemeral -> do
+          -- Our own entry has been in the registry since dispatch
+          -- entry, so "is anybody working?" has to discount it.
           running <- liftIO (listTasks env.beTasks (Just gm.groupId))
-          if null running
+          if all (\ti -> ti.tiId == tid) running
             then pure False
             else do
               let GroupId gidRaw = gm.groupId
@@ -544,11 +581,21 @@ dispatchLLM origin gm = do
               if not isSupp
                 then pure False
                 else do
-                  ok <- liftIO (pushBtwToOwnTask env.beTasks gm.groupId gm.userId newLine)
-                  when ok $
-                    logInfo "btw: implicit injection" $
-                      object ["group_id" .= gidRaw, "message_id" .= midRaw]
-                  pure ok
+                  -- Record the trigger as absorbed by whichever turn
+                  -- takes it: ours is about to exit and unmark it, and
+                  -- a question that looks unanswered gets answered
+                  -- again by the next dispatch.
+                  landed <-
+                    liftIO $
+                      pushToLatest env.beTasks gm.groupId (Just tid) (Just midRaw) newLine
+                  for_ landed $ \(TaskId into) ->
+                    logInfo "feedback: implicit injection" $
+                      object
+                        [ "group_id" .= gidRaw,
+                          "message_id" .= midRaw,
+                          "task" .= into
+                        ]
+                  pure (isJust landed)
         _ -> pure False
 
     dispatch env s = do

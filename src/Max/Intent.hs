@@ -444,7 +444,7 @@ extractObject t =
    in if T.null beforeClose then Nothing else Just beforeClose
 
 --------------------------------------------------------------------------------
--- Supplement routing (implicit !btw).
+-- Supplement routing (the implicit half of the !feedback / !btw split).
 
 -- | The group already has a running agent task and someone @-ed the
 -- bot again: is the new message steering that task (追加要求、修正

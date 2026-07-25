@@ -50,19 +50,18 @@ import Max.Tasks
     cancelAllTasks,
     cancelTask,
     listTasks,
-    pushBtwToOwnTask,
   )
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 
 -- | What the caller should do after dispatching a command.
 --
 -- Most commands collapse to 'ReplyText' (just say something back).
--- 'EphemeralAsk' is reserved for the new !btw semantics: the caller
--- should spawn a regular LLM dispatch with the carried text as the
--- user prompt, but under 'Max.Persistence.withEphemeral' so the
--- reply doesn't get persisted to mention history.  Wiring it as a
--- result rather than a direct call keeps Dispatcher free of the
--- Agent/NapCat/Concurrent constraints.
+-- 'EphemeralAsk' carries !btw: the caller should spawn a regular LLM
+-- dispatch with the carried text as the user prompt, but under
+-- 'Max.Persistence.withEphemeral' so the reply doesn't get persisted to
+-- mention history.  Wiring it as a result rather than a direct call
+-- keeps Dispatcher free of the Agent/NapCat/Concurrent constraints;
+-- 'FeedbackNote' is deferred to the caller for the same reason.
 data DispatchResult
   = ReplyText !Text
   | -- | Pure acknowledgement — the caller reacts an OK face onto the
@@ -73,6 +72,12 @@ data DispatchResult
     -- card, not a personal query).
     ReplyPublicText !Text
   | EphemeralAsk !Text
+  | -- | !feedback: hand this note to a turn already running.  The
+    -- caller does the routing because it holds the trigger message —
+    -- it needs the sender's display name to render the note the way
+    -- history lines are rendered, and its reply target to decide which
+    -- turn the note is aimed at.
+    FeedbackNote !Text
   deriving stock (Show, Eq)
 
 -- | Run one command and produce a 'DispatchResult'.
@@ -97,19 +102,20 @@ execute ::
 execute t gid uid granterTier replyTarget cmd = do
  env :: BotEnv <- ask
  case cmd of
-  Btw note -> do
-    -- Prefer steering the sender's own running turn.  Otherwise — no
-    -- turn of theirs, or only somebody else's — become the new !btw:
-    -- an ephemeral one-shot LLM ask using current context.  The caller
-    -- (Handler.dispatchCommand) sees 'EphemeralAsk' and spawns a
-    -- 'withEphemeral'-wrapped dispatch, so a bystander still gets their
-    -- own answer rather than having it folded into someone else's.
-    injected <- liftIO (pushBtwToOwnTask env.beTasks gid uid note)
-    if injected
-      then ack
-      else case T.strip note of
-        "" -> reply "用法：!btw <要临时问的内容>（不污染对话历史）"
-        q -> pure (EphemeralAsk q)
+  -- Claude Code's btw: a quick side question that deliberately leaves
+  -- the current work alone.  Always its own ephemeral turn, never an
+  -- injection — !feedback is the command for feeding a running turn.
+  -- The caller (Handler.dispatchCommand) sees 'EphemeralAsk' and spawns
+  -- a 'withEphemeral'-wrapped dispatch.
+  Btw note -> case T.strip note of
+    "" -> reply "用法：!btw <要临时问的内容>（另起一轮，不打扰在跑的任务，也不进对话历史）"
+    q -> pure (EphemeralAsk q)
+  -- The other half of the split: hand a note to a turn already running.
+  -- Routing happens in the Handler, which has the trigger message and
+  -- can render the note the way history lines are rendered.
+  Feedback note -> case T.strip note of
+    "" -> reply "用法：!feedback <要补充的内容>（回复某轮的触发消息可指定给哪轮，不回复就给最新那轮）"
+    body -> pure (FeedbackNote body)
   Help mTopic -> reply (helpText mTopic)
   --
   ModelShow -> do
@@ -648,17 +654,22 @@ formatOne now callerGid ti =
     [ "  " <> (ti.tiId.unTaskId),
       ti.tiKind,
       ageText now ti.tiStartedAt,
-      -- Who started it, because that is now who can !btw at it.
+      -- Who started it.  Informational only — anyone may !feedback at
+      -- any running turn.
       byTag
     ]
+      <> [triggerTag | Just _ <- [ti.tiTrigger]]
       <> [groupTag | Just _ <- [callerGid]]
-      <> [pendingTag | ti.tiPendingBtw > 0]
+      <> [pendingTag | ti.tiPending > 0]
   where
     GroupId raw = ti.tiGroup
     UserId uidRaw = ti.tiUser
     byTag = "by=" <> T.pack (show uidRaw)
+    -- The message to reply to when aiming a !feedback at this turn
+    -- rather than at whatever is newest.
+    triggerTag = "on=#" <> maybe "" (T.pack . show) ti.tiTrigger
     groupTag = "group=" <> T.pack (show raw)
-    pendingTag = "btw=" <> T.pack (show ti.tiPendingBtw)
+    pendingTag = "fb=" <> T.pack (show ti.tiPending)
 
 ageText :: UTCTime -> UTCTime -> Text
 ageText now started =
@@ -690,7 +701,8 @@ helpText Nothing =
       "  !pin [id]                pin 一条消息（不带 id 时用引用的那条）",
       "  !unpin [id|all]          移除 pin（同上语法 + all 清空）",
       "  !pins                    列出当前 pin 的消息",
-      "  !btw <text>              你自己有任务在跑就注入侧记；否则当前上下文临时问一句（不入对话历史）",
+      "  !btw <text>              另起一个临时问题，不打扰在跑的任务，也不进对话历史",
+      "  !feedback <text>         给在跑的任务补一句（别名 !fb；回复某条触发消息可指定给哪轮，不回复就给最新那轮）",
       "  !memory                  看本群的长期记忆",
       "  !memory rm <id>          删除一条记忆（本群的或你自己的）",
       "  !sticker                 表情包库统计 + 发送开关状态（bot 从群里学表情包）",
