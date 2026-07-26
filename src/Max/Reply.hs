@@ -25,6 +25,7 @@ module Max.Reply
     latexToUnicode,
     ReplyPiece (..),
     parseReplyTokens,
+    readyPrefix,
     dedupeImagePieces,
   )
 where
@@ -567,3 +568,32 @@ symbols =
       ("bigl", ""), ("bigr", ""), ("Bigl", ""), ("Bigr", ""),
       ("quad", " "), ("qquad", "  "), ("displaystyle", ""), ("limits", "")
     ]
+
+-- | Split accumulated streaming text into the part that is safe to
+-- send now and the part that must keep growing.
+--
+-- @fst <> snd == input@ exactly, so the caller can send the prefix and
+-- hand the rest to 'planReply' at the end without the two disagreeing
+-- about where a chunk began.
+--
+-- Safe means "no later byte can change how this splits":
+--
+--   * only up to the last blank line — the trailing paragraph may
+--     still grow, and a single-paragraph reply therefore never emits
+--     early.  That is also what keeps @[silence]@ from being sent
+--     before we know the reply was only that;
+--   * nothing while a code fence is open, since a blank line inside
+--     one is not a chunk boundary.
+--
+-- Both failure directions are deliberate: not splitting costs latency,
+-- splitting wrongly sends a fragment that can't be recalled.  Anything
+-- uncertain therefore holds.
+readyPrefix :: Text -> (Text, Text)
+readyPrefix acc
+  | T.null safe = ("", acc)
+  | odd (length (filter isFence (T.lines safe))) = ("", acc)
+  | otherwise = (safe, held)
+  where
+    -- breakOnEnd keeps the separator on the left, so the boundary
+    -- lands after the blank line rather than before it.
+    (safe, held) = T.breakOnEnd "\n\n" acc

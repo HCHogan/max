@@ -10,6 +10,7 @@ import Max.Reply
     dedupeImagePieces,
     latexToUnicode,
     parseReplyTokens,
+    readyPrefix,
     planReply,
     stripHallucinatedTokens,
   )
@@ -271,3 +272,63 @@ spec = do
 
     it "unknown commands lose only the backslash" $
       latexToUnicode "\\(\\weird{x}\\)" `shouldBe` "weirdx"
+
+  -- Streaming sends a paragraph as soon as it can't change any more.
+  -- Every case here is really the same question: could a later byte
+  -- alter where this splits?  If yes, hold — a sent fragment can't be
+  -- recalled.
+  describe "readyPrefix" $ do
+    let roundTrips t = let (a, b) = readyPrefix t in a <> b `shouldBe` t
+
+    it "reassembles exactly, whatever it decides" $
+      mapM_
+        roundTrips
+        [ "",
+          "一段",
+          "一段\n\n二段",
+          "一段\n\n二段\n\n",
+          "```\ncode\n\nmore\n```\n\n尾巴"
+        ]
+
+    -- The common case, and the reason single-paragraph replies get no
+    -- benefit from streaming at all: nothing is safe until a second
+    -- paragraph starts.
+    it "holds a lone paragraph" $
+      readyPrefix "还在写这一段" `shouldBe` ("", "还在写这一段")
+
+    it "releases every paragraph but the last" $
+      readyPrefix "第一段\n\n第二段\n\n第三段还没写完"
+        `shouldBe` ("第一段\n\n第二段\n\n", "第三段还没写完")
+
+    -- [silence] is a whole reply, never more than one paragraph — so
+    -- the rule above is also what stops it being sent as text.
+    it "never releases a bare [silence]" $ do
+      readyPrefix "[silence]" `shouldBe` ("", "[silence]")
+      readyPrefix "[silence:吃瓜]" `shouldBe` ("", "[silence:吃瓜]")
+
+    -- A blank line inside a fence is not a chunk boundary, and while
+    -- the fence is open we cannot know the line we are looking at is
+    -- outside it.
+    it "holds everything while a code fence is open" $
+      readyPrefix "看这个\n\n```haskell\nfoo = 1\n\nbar = 2"
+        `shouldBe` ("", "看这个\n\n```haskell\nfoo = 1\n\nbar = 2")
+
+    it "releases again once the fence closes" $ do
+      let (safe, held) = readyPrefix "```\nfoo\n\nbar\n```\n\n然后呢"
+      safe `shouldBe` "```\nfoo\n\nbar\n```\n\n"
+      held `shouldBe` "然后呢"
+
+    -- A table ends at the blank line after it like any other block, so
+    -- it needs no special case — but it must not go out half-written.
+    it "holds a half-written table" $
+      readyPrefix "对比：\n\n| a | b |\n| - | - |\n| 1 |"
+        `shouldBe` ("对比：\n\n", "| a | b |\n| - | - |\n| 1 |")
+
+    -- What is released must split the same way whether it is planned
+    -- alone or as part of the finished reply; otherwise the streamed
+    -- prefix and the final remainder disagree about chunk boundaries.
+    it "splits the same as planReply does on the whole text" $ do
+      let whole = "第一段\n\n第二段\n\n第三段"
+          (safe, held) = readyPrefix whole
+      map chunkSource (planReply safe <> planReply held)
+        `shouldBe` map chunkSource (planReply whole)
