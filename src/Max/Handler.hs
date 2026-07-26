@@ -65,7 +65,7 @@ import Max.Sticker (resolveSticker)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..), Response (..), extractOutMid, sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
-import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, rescueNameMentions, segmentMentions)
+import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, rescueNameMentions, segmentMentions, trimEdgeSegs)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 -- | May this turn be swallowed by one already running?
@@ -964,22 +964,6 @@ sendAndPersistReply gm mentionable rosterNames blobRoot stickersOn body = do
           else
             let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId]]
              in Just (prefix <> trimEdgeSegs content, T.strip rendered)
-
-    -- Extracted tokens leave whitespace seams at the chunk's edges
-    -- (e.g. "[↩#id] 说得对" starts the sent text with a space once the
-    -- quote token is gone).  Trim the outermost text segments; an
-    -- edge segment that was pure whitespace disappears entirely.
-    trimEdgeSegs segs =
-      let start = case segs of
-            (SegText x : rest) ->
-              let x' = T.stripStart x
-               in if T.null x' then rest else SegText x' : rest
-            _ -> segs
-       in case reverse start of
-            (SegText x : rest) ->
-              let x' = T.stripEnd x
-               in reverse (if T.null x' then rest else SegText x' : rest)
-            _ -> start
 
     -- Resolve parsed pieces into (segments, normalised rendered text).
     resolvePieces pieces = do

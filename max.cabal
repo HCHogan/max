@@ -218,6 +218,7 @@ test-suite max-test
         Max.SessionSpec
         Max.ShutdownSpec
         Max.TasksSpec
+        Max.Effects.AgentSpec
         Max.Effects.LLMSpec
         Max.MCP.ClientSpec
         Max.PlatformSpec
@@ -231,6 +232,7 @@ test-suite max-test
         , bytestring      >= 0.12 && < 0.13
         , containers      >= 0.7  && < 0.9
         , hspec           >= 2.11 && < 2.12
+        , stm             >= 2.5  && < 2.6
         , log-base        >= 0.12 && < 0.13
         , max
         , text            >= 2.1  && < 2.2

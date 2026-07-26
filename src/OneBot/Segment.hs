@@ -10,6 +10,7 @@ module OneBot.Segment
     isStickerImage,
     renderPlainText,
     segmentMentions,
+    trimEdgeSegs,
     rescueNameMentions,
     mentionsUser,
   )
@@ -464,3 +465,25 @@ mentionsUser :: UserId -> [Segment] -> Bool
 mentionsUser uid = any $ \case
   SegAt u -> u == uid
   _ -> False
+
+-- | Trim whitespace at the outer edges of a segment list.
+--
+-- Removing a placeholder leaves a seam: @"[↩#id] 说得对"@ becomes a
+-- text segment starting with a space once the quote token is gone.
+-- An edge segment that was nothing but whitespace disappears entirely.
+--
+-- Shared because both outbound paths need it and only one used to have
+-- it — the narration path leaked a leading space for exactly as long as
+-- it had its own copy of "turn model text into segments".
+trimEdgeSegs :: [Segment] -> [Segment]
+trimEdgeSegs segs =
+  let start = case segs of
+        (SegText x : rest) ->
+          let x' = T.stripStart x
+           in if T.null x' then rest else SegText x' : rest
+        _ -> segs
+   in case reverse start of
+        (SegText x : rest) ->
+          let x' = T.stripEnd x
+           in reverse (if T.null x' then rest else SegText x' : rest)
+        _ -> start

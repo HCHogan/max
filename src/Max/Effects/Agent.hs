@@ -44,12 +44,14 @@ module Max.Effects.Agent
     DispatchContext (..),
     ToolImage (..),
     queueToolImage,
+    narrationSegments,
     runAgent,
     agentTurn,
     defaultLimits,
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, readTVar, writeTVar)
 import Control.Monad (when)
@@ -72,7 +74,8 @@ import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask)
 import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
 import Data.Set qualified as Set
-import OneBot.Segment (Segment (SegReply, SegText), segmentMentions)
+import Max.Reply (ReplyPiece (..), parseReplyTokens)
+import OneBot.Segment (Segment (SegFace, SegReply, SegText), segmentMentions, trimEdgeSegs)
 import OneBot.Types (GroupId, MessageId (..), UserId, isPrivateChat)
 
 -- | Per-dispatch context the agent loop hands to its tool factory.
@@ -369,17 +372,9 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
     -- either way — the narration also rides in 'MsgAssistantToolCalls'
     -- verbatim and replays to the API next round.
     sendNarration :: DispatchContext -> Text -> Eff (Tools : es) ()
-    sendNarration dc narration
-      | T.null (T.strip narration) = pure ()
-      | otherwise =
-          recordSend dc KindChat $
-            [SegReply dc.dcMessageId | dc.dcMessageId /= MessageId 0]
-              <> if isPrivateChat dc.dcGroupId
-                then [SegText (T.strip narration)]
-                else
-                  segmentMentions
-                    (\u -> maybe True (Set.member u) dc.dcMentionable)
-                    (T.strip narration)
+    sendNarration dc narration = case narrationSegments dc narration of
+      [] -> pure ()
+      segs -> recordSend dc KindChat segs
 
     -- Send and write down, so the messages table matches what the group
     -- saw.  The round-trip is unavoidable: @message_id@ comes from QQ
@@ -519,3 +514,41 @@ capToolResults budget msgs
 
 agentTurn :: Agent :> es => DispatchContext -> Text -> [ChatMessage] -> Eff es AgentResult
 agentTurn dc profile msgs = send (AgentTurn dc profile msgs)
+
+-- | The segments one progress narration becomes.  Empty for blank
+-- narration, which is most rounds.
+--
+-- Pure and top-level because this is where a real bug lived: narration
+-- is model-authored text and the format guide asks the model to quote
+-- what it is answering, so it arrives carrying the same placeholders a
+-- reply does — but only the reply path ran 'parseReplyTokens'.  A
+-- literal @[↩#111091811]@ went out as visible text.
+--
+-- Stickers and image resends are dropped rather than rendered:
+-- resolving either needs a DB round-trip apiece and a progress line is
+-- the wrong place to spend one.  Dropping loses something invisible;
+-- leaking the raw token is the bug being fixed.  Faces are pure, so
+-- they survive.
+narrationSegments :: DispatchContext -> Text -> [Segment]
+narrationSegments dc narration
+  | T.null stripped = []
+  | otherwise = quote <> trimEdgeSegs (concatMap piece pieces)
+  where
+    stripped = T.strip narration
+    (mQuoted, pieces) = parseReplyTokens stripped
+    -- The model's own choice of what to quote beats the default of
+    -- quoting the trigger.
+    quote = case mQuoted <|> defaultQuote of
+      Just target -> [SegReply (MessageId target)]
+      Nothing -> []
+    defaultQuote = case dc.dcMessageId of
+      MessageId 0 -> Nothing
+      MessageId m -> Just m
+    piece = \case
+      PieceText t
+        | isPrivateChat dc.dcGroupId -> [SegText t]
+        | otherwise ->
+            segmentMentions (\u -> maybe True (Set.member u) dc.dcMentionable) t
+      PieceFace fid -> [SegFace fid Nothing]
+      PieceSticker _ -> []
+      PieceImage _ -> []
