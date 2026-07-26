@@ -109,6 +109,12 @@ data PartialCall = PartialCall
 data StreamAcc = StreamAcc
   { -- | Assistant text, in order.
     saText :: !Text,
+    -- | Inline reasoning, when the provider streams it as a delta of
+    -- its own (DeepSeek's @reasoning_content@).  Accumulated because a
+    -- tool-call turn has to replay the assistant message on the next
+    -- request and DeepSeek answers 400 when its reasoning field goes
+    -- missing — a streamed call can only replay what it kept.
+    saReasoning :: !Text,
     -- | Tool calls by their wire index, so out-of-order fragments still
     -- land on the right call.
     saCalls :: !(Map Int PartialCall),
@@ -129,6 +135,7 @@ emptyAcc :: StreamAcc
 emptyAcc =
   StreamAcc
     { saText = "",
+      saReasoning = "",
       saCalls = Map.empty,
       saPromptTokens = Nothing,
       saCompletionTokens = Nothing,
@@ -166,9 +173,12 @@ stepOpenAI payload acc
         let withText = case fld "content" delta of
               Just (String t) -> a {saText = a.saText <> t}
               _ -> a
+            withReasoning = case fld "reasoning_content" delta of
+              Just (String t) -> withText {saReasoning = withText.saReasoning <> t}
+              _ -> withText
          in case fld "tool_calls" delta :: Maybe [Value] of
-              Just calls -> foldl (flip mergeCall) withText calls
-              Nothing -> withText
+              Just calls -> foldl (flip mergeCall) withReasoning calls
+              Nothing -> withReasoning
 
     -- finish_reason marks the end of the message.  Some gateways then
     -- send a usage-only frame and never a [DONE]; treating the finish

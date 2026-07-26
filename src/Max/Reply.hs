@@ -21,6 +21,7 @@ module Max.Reply
   ( Chunk (..),
     chunkSource,
     planReply,
+    maxChunks,
     stripHallucinatedTokens,
     latexToUnicode,
     ReplyPiece (..),

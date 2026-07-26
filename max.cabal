@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               max
-version:            0.8.0
+version:            0.9.0
 synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
 license:            MIT
 license-file:       LICENSE
@@ -76,6 +76,7 @@ library
         Max.Files
         Max.Forward
         Max.Handler
+        Max.Http.Stream
         Max.ImagePrep
         Max.Images
         Max.Intent
@@ -88,6 +89,7 @@ library
         Max.Reminder
         Max.Render
         Max.Reply
+        Max.ReplySend
         Max.Roster
         Max.Sandbox.Docker
         Max.Sandbox.Registry
@@ -215,6 +217,7 @@ test-suite max-test
         OneBot.SegmentSpec
         Max.RenderSpec
         Max.ReplySpec
+        Max.ReplySendSpec
         Max.SessionSpec
         Max.ShutdownSpec
         Max.TasksSpec

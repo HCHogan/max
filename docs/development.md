@@ -21,7 +21,12 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.BilibiliSpec` — BV / b23.tv / URL extraction from cards and plain text
 - `Max.Command.ParserSpec` — every `!cmd` verb + edge cases
 - `Max.Command.PermissionSpec` — tier resolution and capability gating
-- `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip + `parseToolCall` tolerance
+- `Max.Effects.AgentSpec` — narration → segments (placeholder handling, mentions)
+- `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip, `parseToolCall`
+  tolerance, and the streamed assistant message rebuilt from deltas
+- `Max.LLM.StreamSpec` — SSE framing and the OpenAI/Anthropic delta reducers,
+  replayed from recorded wire bytes
+- `Max.LogSpec` — compact log line formatting
 - `Max.HandlerSpec` — `[silence]` parsing, marker stripping, `isCommandMessage`
 - `Max.IntentSpec` — proactive verdict parsing and the heuristic gate
 - `Max.MCP.ClientSpec` — Streamable-HTTP body decoding (JSON + SSE)
@@ -33,6 +38,8 @@ Pure logic in `test/` mirroring the library layout:
   memory block placement, quoted-forward expansion, in-flight hiding
 - `Max.RenderSpec` — markdown table → typst
 - `Max.ReplySpec` — reply paragraph splitting (fences, `[split]`, chunk ceiling)
+- `Max.ReplySendSpec` — that splitting a reply at a `readyPrefix` boundary sends
+  the same messages as never splitting it, plus the per-reply chunk ceiling
 - `Max.Sandbox.DockerSpec` — package wrapping and exec argv
 - `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
 - `Max.ShutdownSpec` — drain flag / in-flight counter transitions

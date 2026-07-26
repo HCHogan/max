@@ -2,6 +2,8 @@ module Max.Effects.LLMSpec (spec) where
 
 import Data.Aeson (Value (..), decode, eitherDecode, encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KM
+import Data.Map.Strict qualified as Map
+import Data.Text (isPrefixOf)
 import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import Data.Vector qualified as V
@@ -13,7 +15,11 @@ import Max.Effects.LLM
     ToolCall (..),
     parseResponseAnthropic,
     parseResponseOpenAI,
+    rebuildAnthropic,
+    rebuildOpenAI,
+    stripLeadingThink,
   )
+import Max.LLM.Stream (PartialCall (..), StreamAcc (..), emptyAcc)
 import Test.Hspec
 
 -- | Round-tripping a single 'ChatMessage' through aeson should be
@@ -47,6 +53,7 @@ asstWithCalls calls =
 
 spec :: Spec
 spec = do
+  streamingSpec
   describe "ChatMessage JSON round-trip" $ do
     it "MsgSystem" $ do
       let m = MsgSystem "you are a bot"
@@ -428,3 +435,111 @@ spec = do
             other -> expectationFailure $ "block 0: " <> show other
           other -> expectationFailure $ "content: " <> show other
         other -> expectationFailure $ "object: " <> show other
+
+--------------------------------------------------------------------------------
+-- Streaming reconstruction.
+--
+-- A streamed call never sees the provider's assistant message; it sees
+-- deltas and has to rebuild one.  The rebuild is what goes back on the
+-- next request, so if it is wrong the failure is a 400 two turns later
+-- — far from the cause.  These pin the shape.
+
+streamAcc :: Text -> Text -> [(Int, PartialCall)] -> StreamAcc
+streamAcc text reasoning calls =
+  emptyAcc
+    { saText = text,
+      saReasoning = reasoning,
+      saCalls = Map.fromList calls
+    }
+
+-- | Follow the same path a real reply takes: rebuild, then encode as
+-- 'MsgAssistantToolCalls' would.
+wireOf :: ChatResponse -> Maybe Value
+wireOf (ToolCallsResp raw _ _) = Just raw
+wireOf _ = Nothing
+
+streamingSpec :: Spec
+streamingSpec = do
+  describe "rebuildOpenAI" $ do
+    it "returns plain content when no call arrived" $
+      case rebuildOpenAI (streamAcc "上升沿圆角" "" []) of
+        ContentResp t -> t `shouldBe` "上升沿圆角"
+        other -> expectationFailure ("expected content: " <> show other)
+
+    -- The reconstructed message has to parse back as the same thing,
+    -- because that is literally what happens: it is appended to the
+    -- conversation and re-sent.
+    it "round-trips through the ChatMessage parser" $ do
+      let acc = streamAcc "我查一下" "" [(0, PartialCall "call_a" "web_search" "{\"q\":\"探头\"}")]
+      case rebuildOpenAI acc of
+        r@(ToolCallsResp _ narration tcs) -> do
+          narration `shouldBe` "我查一下"
+          map (\t -> (t.callId, t.callName)) tcs `shouldBe` [("call_a", "web_search")]
+          case wireOf r of
+            Just raw -> roundTrip (MsgAssistantToolCalls raw tcs) `shouldSatisfy` isRight
+            Nothing -> expectationFailure "no raw message"
+        other -> expectationFailure ("expected tool calls: " <> show other)
+
+    -- DeepSeek 400s when reasoning_content goes missing from a replayed
+    -- assistant turn.  Streaming can only replay what it accumulated,
+    -- which is the reason StreamAcc keeps it at all.
+    it "carries reasoning_content back into the rebuilt message" $ do
+      let acc = streamAcc "好" "先想想" [(0, PartialCall "c" "f" "{}")]
+      case wireOf (rebuildOpenAI acc) of
+        Just (Object o) -> KM.lookup "reasoning_content" o `shouldBe` Just (String "先想想")
+        other -> expectationFailure ("expected an object: " <> show other)
+
+    it "omits reasoning_content when the provider streamed none" $
+      case wireOf (rebuildOpenAI (streamAcc "好" "" [(0, PartialCall "c" "f" "{}")])) of
+        Just (Object o) -> KM.member "reasoning_content" o `shouldBe` False
+        other -> expectationFailure ("expected an object: " <> show other)
+
+    -- Argument fragments are individually invalid JSON, so "didn't
+    -- parse" means "didn't finish arriving".  Executing that on a guess
+    -- is how a tool gets called with half its arguments.
+    it "drops a call whose arguments never finished arriving" $
+      case rebuildOpenAI (streamAcc "" "" [(0, PartialCall "c" "f" "{\"q\":")]) of
+        ContentResp t -> t `shouldBe` ""
+        other -> expectationFailure ("expected the call to be dropped: " <> show other)
+
+    it "treats absent arguments as an empty object" $
+      case rebuildOpenAI (streamAcc "" "" [(0, PartialCall "c" "no_args" "")]) of
+        ToolCallsResp _ _ [tc] -> tc.callArguments `shouldBe` Object mempty
+        other -> expectationFailure ("expected one call: " <> show other)
+
+  describe "rebuildAnthropic" $
+    it "puts text and tool_use in one content array" $
+      case wireOf (rebuildAnthropic (streamAcc "我看一眼" "" [(0, PartialCall "toolu_x" "view_image" "{\"id\":7405}")])) of
+        Just (Object o) -> case KM.lookup "content" o of
+          Just (Array blocks) ->
+            map (blockType . V.toList . V.singleton) (V.toList blocks)
+              `shouldBe` [Just "text", Just "tool_use"]
+          other -> expectationFailure ("expected a content array: " <> show other)
+        other -> expectationFailure ("expected an object: " <> show other)
+
+  -- Models that inline reasoning (MiniMax, GLM) open with a <think>
+  -- block.  Streaming it out would put the monologue in the group, so
+  -- the sink only ever sees post-strip text — and an unclosed block
+  -- strips to nothing rather than to its contents.
+  describe "stripLeadingThink, as the stream sees it" $ do
+    it "yields nothing while the block is still open" $
+      stripLeadingThink "<think>先看看用户在问什么\n\n然后" `shouldBe` ""
+
+    it "yields only what follows once the block closes" $
+      stripLeadingThink "<think>想好了</think>\n\n上升沿圆角" `shouldBe` "上升沿圆角"
+
+    -- Monotone: what the sink released earlier stays a prefix of what
+    -- it sees later, which is what makes 'sentPrefix' arithmetic valid.
+    it "grows by appending as more text arrives" $ do
+      let steps = ["<think>a</think>答案", "<think>a</think>答案是", "<think>a</think>答案是这个"]
+          outs = map stripLeadingThink steps
+      zip outs (drop 1 outs) `shouldSatisfy` all (uncurry isPrefixOf)
+
+blockType :: [Value] -> Maybe Text
+blockType [Object b] = case KM.lookup "type" b of
+  Just (String t) -> Just t
+  _ -> Nothing
+blockType _ = Nothing
+
+isRight :: Either a b -> Bool
+isRight = either (const False) (const True)

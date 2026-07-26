@@ -13,13 +13,25 @@
 --   1. Drain pending feedback notes from the task's inbox; if any,
 --      append a synthetic @MsgUser "[feedback]: …"@ before the next
 --      chat call so the model sees the side-channel input immediately.
---   2. @chat(profile, msgs, specs)@.
+--   2. @chatStreaming(profile, msgs, specs, sink)@.  On a profile with
+--      @stream: false@ this is an ordinary blocking call and the sink is
+--      never used.
 --   3. 'ContentResp' → return text.  'ToolCallsResp' → run each tool
 --      via 'Tools', append assistant-with-tool-calls + tool-result
 --      messages, re-enter.
 --
 -- After 'maxTurns' the loop stops with @aborted = Just "max-turns"@
 -- and a fallback reply.  Hard cap to keep cost bounded.
+--
+-- == Streaming
+--
+-- When the profile streams, the loop watches the text arrive and hands
+-- each finished paragraph to the caller's sink, then reports how much it
+-- released as 'sentPrefix' so the caller sends only the rest.  The
+-- bookkeeping resets per chat call, because one call is one utterance: a
+-- progress narration, or the final answer.  Deciding /when/ a paragraph
+-- is done belongs here; deciding what sending one /means/ does not — see
+-- 'AgentTurn'.
 --
 -- == Task lifecycle
 --
@@ -52,7 +64,7 @@ module Max.Effects.Agent
 where
 
 import Control.Concurrent (myThreadId, throwTo)
-import Control.Concurrent.STM (TVar, atomically, readTVar, writeTVar)
+import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Monad (when)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
@@ -62,10 +74,10 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
-import Effectful.Dispatch.Dynamic (interpret, send)
+import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Exception (bracket, throwIO)
 import Effectful.Log
-import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat)
+import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Message (MessageKind (..), insertOutbound)
 import Max.Effects.NapCat (NapCat, callAction)
@@ -73,7 +85,7 @@ import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask)
 import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
 import Data.Set qualified as Set
-import Max.Reply (ReplyPiece (..), parseReplyTokens)
+import Max.Reply (ReplyPiece (..), parseReplyTokens, readyPrefix)
 import OneBot.Segment (Segment (SegFace, SegReply, SegText), segmentMentions, trimEdgeSegs)
 import OneBot.Types (GroupId, MessageId (..), UserId, isPrivateChat)
 
@@ -170,7 +182,19 @@ data AgentResult = AgentResult
     turnsUsed :: !Int,
     -- | 'Just' iff the loop ended for a reason other than the model
     -- producing a content response (e.g. hit 'maxTurns', LLM error).
-    aborted :: !(Maybe Text)
+    aborted :: !(Maybe Text),
+    -- | The leading slice of 'reply' that the streaming sink already
+    -- sent, verbatim.  Empty for a non-streamed turn, which is every
+    -- turn on a profile with @stream = false@.
+    --
+    -- The caller sends @T.drop (T.length sentPrefix) reply@.  Matching
+    -- by /prefix/ rather than by chunk count is deliberate:
+    -- 'Max.Reply.readyPrefix' guarantees the two halves concatenate
+    -- back to the input and only ever cuts at a blank line, so the
+    -- streamed prefix and the remainder split identically under
+    -- 'Max.Reply.planReply'.  Counting chunks instead would rely on
+    -- two code paths happening to agree.
+    sentPrefix :: !Text
   }
   deriving stock (Show)
 
@@ -180,7 +204,21 @@ data AgentResult = AgentResult
 data Agent :: Effect where
   -- | Run a full agent loop for the given dispatch.  Returns when the
   -- model emits a content response, hits 'maxTurns', or the LLM errors.
-  AgentTurn :: DispatchContext -> Text -> [ChatMessage] -> Agent m AgentResult
+  --
+  -- The last argument is where finished paragraphs go while the model
+  -- is still writing.  The loop decides /when/ a paragraph is finished
+  -- ('Max.Reply.readyPrefix') and the caller decides what sending one
+  -- means — which is the whole reason this is a callback rather than
+  -- the loop doing it: the placeholder resolution, hallucination
+  -- stripping and persistence all live on the reply path, and giving
+  -- the agent a second copy of them is the mistake that produced two
+  -- bugs in one day.  Never called for a profile with @stream: false@.
+  AgentTurn ::
+    DispatchContext ->
+    Text ->
+    [ChatMessage] ->
+    (Text -> m ()) ->
+    Agent m AgentResult
 
 type instance DispatchOf Agent = Dynamic
 
@@ -199,8 +237,8 @@ runAgent ::
   TaskRegistry ->
   Eff (Agent : es) a ->
   Eff es a
-runAgent lims toolFactory taskReg = interpret $ \_ -> \case
-  AgentTurn dc profile msgs -> do
+runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
+  AgentTurn dc profile msgs emit -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
     let cancel = throwTo selfTid TaskCancelled
     bracket
@@ -211,18 +249,20 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
           -- its context has no thread to interrupt yet; the registry
           -- held it for us.  Honour it before spending a turn.
           when handle.thPreKilled $ throwIO TaskCancelled
-          runTools (toolFactory dc) (loop dc handle profile msgs)
+          runTools (toolFactory dc) (loop (raise . unlift . emit) dc handle profile msgs)
       )
   where
     loop ::
+      (Text -> Eff (Tools : es) ()) ->
       DispatchContext ->
       TaskHandle ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    loop dc h profile = go dc h 0 [] profile
+    loop emit dc h profile = go emit dc h 0 [] profile
 
     go ::
+      (Text -> Eff (Tools : es) ()) ->
       DispatchContext ->
       TaskHandle ->
       Int ->
@@ -230,7 +270,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
       Text ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    go dc h n appended profile msgs = do
+    go emit dc h n appended profile msgs = do
       -- Drain any feedback notes that arrived since the previous turn.
       notes <- liftIO (drainInbox h)
       let (msgs', appended') = case notes of
@@ -245,7 +285,12 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
           -- permanent, so between trim events the list is byte-stable
           -- and the provider's prefix cache survives.
           let msgs'' = capToolResults toolResultBudget msgs'
-          eres <- chat profile msgs'' specs
+          -- Reset per call: one chat call is one utterance (a progress
+          -- narration, or the final answer), and each gets its own
+          -- prefix bookkeeping.
+          sentRef <- liftIO (newTVarIO "")
+          eres <- chatStreaming profile msgs'' specs (releaseParagraphs emit sentRef)
+          sent <- liftIO (readTVarIO sentRef)
           case eres of
             Left err ->
               pure
@@ -253,7 +298,8 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                   { reply = Nothing,
                     appended = appended',
                     turnsUsed = n + 1,
-                    aborted = Just err
+                    aborted = Just err,
+                    sentPrefix = sent
                   }
             Right (ContentResp text) -> do
               -- A feedback note that raced in during this final call
@@ -263,20 +309,33 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
               -- stays in the conversation and the model re-answers with
               -- the note in view.
               lateNotes <- liftIO (drainInbox h)
+              let done =
+                    pure
+                      AgentResult
+                        { reply = Just text,
+                          appended = appended' <> [MsgAssistant text],
+                          turnsUsed = n + 1,
+                          aborted = Nothing,
+                          sentPrefix = sent
+                        }
               case lateNotes of
-                [] ->
-                  pure
-                    AgentResult
-                      { reply = Just text,
-                        appended = appended' <> [MsgAssistant text],
-                        turnsUsed = n + 1,
-                        aborted = Nothing
-                      }
-                xs -> do
-                  logInfo "agent: btw notes raced final answer, continuing" $
-                    object ["count" .= length xs]
-                  let newMsgs = [MsgAssistant text, feedbackMsg xs]
-                  go dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                [] -> done
+                xs
+                  -- Re-answering is only free while nothing has been
+                  -- said.  Once streaming has put part of this draft in
+                  -- the group, looping would leave half an abandoned
+                  -- answer standing above its replacement — worse than
+                  -- losing the note, which at least the sender can
+                  -- repeat.
+                  | not (T.null sent) -> do
+                      logAttention "agent: feedback lost to an already-streamed answer" $
+                        object ["count" .= length xs, "sent_chars" .= T.length sent]
+                      done
+                  | otherwise -> do
+                      logInfo "agent: btw notes raced final answer, continuing" $
+                        object ["count" .= length xs]
+                      let newMsgs = [MsgAssistant text, feedbackMsg xs]
+                      go emit dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -285,7 +344,9 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                     "names" .= map (.callName) tcs,
                     "narration" .= T.length narration
                   ]
-              sendNarration dc narration
+              -- Whatever streaming already released of this narration is
+              -- in the group; only the tail is left to post.
+              sendNarration dc (T.drop (T.length sent) narration)
               announceToolCalls dc tcs
               -- Carry the provider's message verbatim so its thinking
               -- output round-trips back to the API on the next
@@ -300,7 +361,7 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                 _ -> mapConcurrently (executeOne dc) tcs
               imgMsgs <- drainToolImages dc
               let newMsgs = [asst] <> toolMsgs <> imgMsgs
-              go dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+              go emit dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
     -- gets a real answer built from whatever the loop already gathered,
@@ -330,7 +391,11 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
           { reply = mText,
             appended = appended <> [capNote] <> [MsgAssistant t | Just t <- [mText]],
             turnsUsed = n + 1,
-            aborted = ab
+            aborted = ab,
+            -- The wrap-up call is not streamed: it exists to salvage
+            -- a turn that already went wrong, and one more moving part
+            -- is the last thing that path needs.
+            sentPrefix = ""
           }
 
     -- Post one compact status line per tool call to the group so
@@ -397,6 +462,31 @@ runAgent lims toolFactory taskReg = interpret $ \_ -> \case
                   object ["kind" .= T.pack (show kind)]
               Just outMid ->
                 insertOutbound kind dc.dcGroupId dc.dcSelfId "max" (MessageId outMid) Nothing segs
+
+    -- Hand the caller every paragraph that is safe to send, and
+    -- remember how much of the text that accounted for.
+    --
+    -- Called with the assistant text /so far/, once per frame that
+    -- extended it.  'readyPrefix' holds back the trailing paragraph
+    -- (it may still grow) and refuses to cut inside a code fence, so
+    -- most calls release nothing — and a single-paragraph reply, which
+    -- is most replies, releases nothing at all.  That bound is the
+    -- honest limit of what streaming buys here.
+    --
+    -- The TVar is written before the send, not after: if sending throws
+    -- we have still said that much, and re-releasing the same paragraph
+    -- on the next frame would say it twice.
+    releaseParagraphs ::
+      (Text -> Eff (Tools : es) ()) ->
+      TVar Text ->
+      Text ->
+      Eff (Tools : es) ()
+    releaseParagraphs emit sentRef soFar = do
+      sent <- liftIO (readTVarIO sentRef)
+      let (ready, _held) = readyPrefix (T.drop (T.length sent) soFar)
+      when (not (T.null (T.strip ready))) $ do
+        liftIO (atomically (writeTVar sentRef (sent <> ready)))
+        emit ready
 
     -- Notes that arrived mid-turn, from !feedback or from a message the
     -- classifier read as steering.  Marked so the model can tell them
@@ -511,8 +601,16 @@ capToolResults budget msgs
     stub content = T.take 300 content <> elision
     elision = "\n…[older tool results truncated]"
 
-agentTurn :: Agent :> es => DispatchContext -> Text -> [ChatMessage] -> Eff es AgentResult
-agentTurn dc profile msgs = send (AgentTurn dc profile msgs)
+agentTurn ::
+  Agent :> es =>
+  DispatchContext ->
+  Text ->
+  [ChatMessage] ->
+  -- | Where finished paragraphs go while the model is still writing.
+  -- See 'AgentTurn'.
+  (Text -> Eff es ()) ->
+  Eff es AgentResult
+agentTurn dc profile msgs emit = send (AgentTurn dc profile msgs emit)
 
 -- | The segments one progress narration becomes.  Empty for blank
 -- narration, which is most rounds.

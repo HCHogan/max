@@ -723,13 +723,14 @@ data ProfileSpec = ProfileSpec
     timeoutSeconds :: !(Maybe Int),
     protocol :: !(Maybe Protocol),
     multimodal :: !(Maybe Bool),
-    historyAsTurns :: !(Maybe Bool)
+    historyAsTurns :: !(Maybe Bool),
+    stream :: !(Maybe Bool)
   }
   deriving stock (Show, Eq)
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -743,7 +744,8 @@ mergeSpec a b =
       timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds,
       protocol = a.protocol <|> b.protocol,
       multimodal = a.multimodal <|> b.multimodal,
-      historyAsTurns = a.historyAsTurns <|> b.historyAsTurns
+      historyAsTurns = a.historyAsTurns <|> b.historyAsTurns,
+      stream = a.stream <|> b.stream
     }
 
 instance HasCodec ProfileSpec where
@@ -759,6 +761,7 @@ instance HasCodec ProfileSpec where
         <*> optionalFieldWith "protocol" protocolCodec "openai | anthropic" .= (.protocol)
         <*> optionalField "multimodal" "Endpoint accepts image content blocks" .= (.multimodal)
         <*> optionalField "history_as_turns" "Render history as user/assistant turns instead of one flat transcript" .= (.historyAsTurns)
+        <*> optionalField "stream" "Stream the completion over SSE, sending finished paragraphs as they arrive" .= (.stream)
 
 -- | autodocodec has no @HasCodec Double@ on purpose (lossy floats);
 -- bridge through Scientific, which is fine for temperature values.
@@ -891,6 +894,16 @@ overlayProfileParser = do
           env "MAX_LLM_HISTORY_AS_TURNS",
           metavar "True|False"
         ]
+  stream <-
+    optional $
+      setting
+        [ help "Default profile streams completions over SSE",
+          reader auto,
+          option,
+          long "llm-stream",
+          env "MAX_LLM_STREAM",
+          metavar "True|False"
+        ]
   pure ProfileSpec {..}
   where
     protoReader = eitherReader $ \s -> case parseProtocol (T.pack s) of
@@ -943,7 +956,8 @@ materializeLLM (dn, fileProfiles, overlay) = do
             timeoutSeconds = fromMaybe 120 spec.timeoutSeconds,
             protocol = fromMaybe ProtocolOpenAI spec.protocol,
             multimodal = fromMaybe False spec.multimodal,
-            historyAsTurns = fromMaybe False spec.historyAsTurns
+            historyAsTurns = fromMaybe False spec.historyAsTurns,
+            stream = fromMaybe True spec.stream
           }
 
 -- | @auto@ / @always@ / @never@ — the spellings 'parseColorMode' takes.

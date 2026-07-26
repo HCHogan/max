@@ -121,6 +121,20 @@ spec = do
           a = runWith stepOpenAI cut
       (a.saText, a.saDone) `shouldBe` ("半句", False)
 
+    -- DeepSeek streams its reasoning as a delta of its own, and the
+    -- replayed assistant turn has to carry it back or the next request
+    -- 400s.  It must never join saText: that is what goes to the group.
+    it "keeps reasoning_content apart from the visible content" $ do
+      let mixed =
+            rec_
+              [ "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先想\"}}]}",
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"一下\"}}]}",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"答案是\"}}]}",
+                ""
+              ]
+          a = runWith stepOpenAI mixed
+      (a.saReasoning, a.saText) `shouldBe` ("先想一下", "答案是")
+
     it "survives an unfamiliar frame between real ones" $ do
       let noisy =
             rec_

@@ -9,14 +9,10 @@ module Max.Handler
   )
 where
 
-import Control.Concurrent (threadDelay)
-import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
-import Control.Monad (foldM_, unless, void, when)
+import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO, writeTVar)
+import Control.Monad (unless, void, when)
 import Data.Foldable (for_)
-import Data.ByteString qualified as BS
-import Data.ByteString.Base64 qualified as B64
 import Data.Char (isDigit, isSpace)
-import Data.Int (Int64)
 import Control.Applicative ((<|>))
 import Data.List (find)
 import Data.Map.Strict qualified as Map
@@ -24,16 +20,12 @@ import Data.Maybe (isJust, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Time (getCurrentTime)
-import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
 import Effectful.Exception (SomeException, catch, finally)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection, query)
-import System.FilePath ((</>))
-import System.Random (randomRIO)
+import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
@@ -59,13 +51,12 @@ import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberNa
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Tasks (TaskCancelled (..), TaskId (..), TaskInfo (..), beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
-import Max.Render (renderTableImage)
-import Max.Reply (Chunk (..), ReplyPiece (..), dedupeImagePieces, parseReplyTokens, planReply, stripHallucinatedTokens)
-import Max.Sticker (resolveSticker)
+import Max.Reply (stripHallucinatedTokens)
+import Max.ReplySend (ReplyTarget (..), freshBudget, sendAndPersistReply)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..), Response (..), extractOutMid, sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
-import OneBot.Segment (Segment (..), imageSeg, mentionsUser, renderPlainText, rescueNameMentions, segmentMentions, trimEdgeSegs)
+import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 -- | May this turn be swallowed by one already running?
@@ -729,7 +720,17 @@ dispatchLLM origin absorbable gm = do
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
           dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff mentionable toolImgs
-      result <- agentTurn dc s.model ctx
+          target = sendTarget env gm mentionable rosterNames stickersEff
+      -- The streaming sink.  It sends whole paragraphs the model has
+      -- finished with, down the same path the final reply takes — the
+      -- budget TVar is what keeps the two halves of one split reply
+      -- bounded together (see "Max.ReplySend").
+      streamBudget <- liftIO (newTVarIO freshBudget)
+      let emit para = do
+            b <- liftIO (readTVarIO streamBudget)
+            b' <- sendAndPersistReply target b (cleanReply para)
+            liftIO (atomically (writeTVar streamBudget b'))
+      result <- agentTurn dc s.model ctx emit
       case result.reply of
         -- The loop produced no model-authored reply — upstream API
         -- down, or the turn-cap fallback call failed too.  Error text
@@ -746,9 +747,9 @@ dispatchLLM origin absorbable gm = do
           when (origin == OriginDirect) $ do
             sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
             sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
-        Just replyRaw -> handleReply env s mentionable rosterNames ctx result replyRaw
+        Just replyRaw -> handleReply env s mentionable rosterNames streamBudget ctx result replyRaw
 
-    handleReply env s mentionable rosterNames ctx result replyRaw = do
+    handleReply env s mentionable rosterNames streamBudget ctx result replyRaw = do
       -- Real stickers/images are the [sticker#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
       -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
@@ -756,13 +757,23 @@ dispatchLLM origin absorbable gm = do
       -- display style of something it saw — so strip those as a
       -- backstop while leaving the id-carrying send tokens intact
       -- (see 'stripStickerText' / 'stripBareMarkers').
-      let stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          cleaned = stripHallucinatedTokens replyRaw
+      -- Whatever streaming already put in the group is gone from here:
+      -- what's left to send is the tail.  'Max.Reply.readyPrefix' only
+      -- ever cuts at a blank line, so dropping the prefix cannot split
+      -- a paragraph — the remainder plans into chunks exactly as it
+      -- would have on its own.
+      let remaining = T.drop (T.length result.sentPrefix) replyRaw
+          stickersEff = maybe env.beStickerDefault id s.stickerOverride
+          cleaned = stripHallucinatedTokens remaining
           stripped = T.strip (stripBareMarkers (stripStickerText cleaned))
-      when (cleaned /= replyRaw) $
+      when (cleaned /= remaining) $
         logAttention "reply: hallucinated bracket tokens stripped" $
-          object ["dropped_chars" .= (T.length replyRaw - T.length cleaned)]
-      case parseSilence stripped of
+          object ["dropped_chars" .= (T.length remaining - T.length cleaned)]
+      -- A non-empty prefix means this reply already ran to at least two
+      -- paragraphs, and the opt-out is never more than one — so it can
+      -- only be the tail of a real answer, never a silence marker that
+      -- happens to sit at the end.
+      case if T.null result.sentPrefix then parseSilence stripped else Nothing of
         Just mFace -> do
           -- The model opted out of replying (see 'parseSilence') —
           -- the escape hatch for turns that need no response, most
@@ -795,11 +806,20 @@ dispatchLLM origin absorbable gm = do
           -- outbound message into the messages table.  That's where
           -- subsequent dispatches will read this turn's assistant reply
           -- back from when reconstructing mention history.
-          sendAndPersistReply gm mentionable rosterNames env.beBlobRoot stickersEff stripped
+          -- The same budget the streaming sink spent from: one reply
+          -- split across two senders still gets one message ceiling and
+          -- one image-dedupe set (see "Max.ReplySend").
+          budget <- liftIO (readTVarIO streamBudget)
+          _ <-
+            sendAndPersistReply
+              (sendTarget env gm mentionable rosterNames stickersEff)
+              budget
+              stripped
           logInfo "llm replied" $
             object
               [ "to" .= (let UserId u = gm.userId in u),
                 "len" .= T.length stripped,
+                "streamed" .= T.length result.sentPrefix,
                 "turns" .= result.turnsUsed,
                 "appended" .= length result.appended,
                 "aborted" .= result.aborted
@@ -815,6 +835,27 @@ dispatchLLM origin absorbable gm = do
 
 --------------------------------------------------------------------------------
 -- Reply helper.
+
+-- | The send-side view of a dispatch: what "Max.ReplySend" needs that
+-- the handler already has.  Built here rather than carried around,
+-- because every field is derived from something the caller holds
+-- anyway.
+sendTarget ::
+  BotEnv ->
+  GroupMessage ->
+  Maybe (Set UserId) ->
+  [(T.Text, UserId)] ->
+  Bool ->
+  ReplyTarget
+sendTarget env gm mentionable rosterNames stickersOn =
+  ReplyTarget
+    { rtGroupId = gm.groupId,
+      rtSelfId = gm.selfId,
+      rtMentionable = mentionable,
+      rtRosterNames = rosterNames,
+      rtBlobRoot = env.beBlobRoot,
+      rtStickers = stickersOn
+    }
 
 -- | Send a message and write it down, so the messages table mirrors
 -- what the conversation actually saw.
@@ -858,164 +899,6 @@ replyText ::
   Eff es ()
 replyText gm body =
   sendAndRecord KindCommand gm.groupId gm.selfId [SegText body]
-
--- | Send the LLM's final reply as planned by 'planReply' — one
--- message per blank-line paragraph, markdown tables rendered to a
--- PNG via typst (falling back to the markdown source when rendering
--- fails) — and persist each sent chunk into the messages table (so
--- future dispatches can read this back as mention history, and a
--- reply to *any* chunk resolves as reply-to-bot).
---
--- Outgoing placeholders are resolved per chunk ('parseReplyTokens'),
--- which is what lets the model quote a different message from each
--- paragraph and drop a sticker inline:
---
---   * a leading @[↩#\<id\>]@ becomes the chunk's 'SegReply' quote —
---     nothing is auto-quoted any more, the model decides;
---   * @[sticker#\<id\>]@ becomes a sticker segment ('resolveSticker'),
---     an unknown id is dropped rather than failing the reply;
---   * @[image#\<id\>]@ resends that message's stored images; duplicate
---     ids are dropped across the whole reply ('dedupeImagePieces') —
---     a multi-image message tags all its markers with one id, so an
---     echo would otherwise resend N images N times;
---   * @[face#\<id\>]@ becomes a QQ built-in face segment;
---   * raw @\@\<qq\>@ spans become real at-segments when the id passes
---     the membership check ('segmentMentions').
---
--- A chunk that resolves to no content (a lone @[↩#id]@, or only a bad
--- sticker token) is skipped.  Each chunk persists with its *resolved*
--- surface form as rendered_text (sticker tokens normalised to
--- @[sticker#\<id\>: \<caption\>]@, image tokens keeping their @[image#\<id\>]@
--- form, the reply token dropped — it lives in the
--- reply_to_message_id column), so what the model reads back next turn
--- matches what it wrote.  A table chunk persists with its markdown
--- source.  Consecutive bot rows are merged into one assistant turn at
--- prompt build time (see 'Max.Prompt').  Uses 'callAction' to get
--- NapCat's assigned @message_id@ per chunk; chunks are sent
--- sequentially so ordering is guaranteed.  If a send or message_id
--- extraction fails, logs and moves on.
-sendAndPersistReply ::
-  ( NapCat :> es,
-    WithConnection :> es,
-    Log :> es,
-    IOE :> es
-  ) =>
-  GroupMessage ->
-  Maybe (Set UserId) ->
-  [(T.Text, UserId)] -> -- roster display names, for "@名字" rescue
-  FilePath -> -- blob store root (for inline sticker resolution)
-  Bool -> -- whether sticker sending is enabled for this group
-  T.Text ->
-  Eff es ()
-sendAndPersistReply gm mentionable rosterNames blobRoot stickersOn body = do
-  foldM_
-    ( \sentImgs (i, chunk) -> do
-        (sentImgs', mPlan) <- planChunk sentImgs chunk
-        case mPlan of
-          Nothing -> pure ()
-          Just (segs, rendered) -> do
-            -- Typing-pace delay between chunks: instant multi-message
-            -- bursts read as a bot.  The first chunk needs none — the
-            -- LLM round-trip already was its "typing time".
-            when (i > 0) $
-              liftIO (threadDelay =<< chunkDelayMicros (T.length rendered))
-            callAction (sendChatMsg gm.groupId segs) 30000 >>= \case
-              Left err ->
-                logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
-              Right (Response _ rc payload _)
-                | rc /= 0 ->
-                    logAttention "llm reply retcode bad" $ object ["retcode" .= rc, "chunk" .= i]
-                | otherwise -> case extractOutMid payload of
-                    Nothing ->
-                      logAttention "no message_id in send response" $
-                        object ["payload" .= payload, "chunk" .= i]
-                    Just outMid ->
-                      insertOutbound
-                        KindChat
-                        gm.groupId
-                        gm.selfId
-                        "max"
-                        (MessageId outMid)
-                        (Just (T.strip rendered))
-                        segs
-        pure sentImgs'
-    )
-    Set.empty
-    (zip [0 :: Int ..] (planReply body))
-  where
-    -- One chunk → 'Just' (segments to send, rendered_text to store) or
-    -- 'Nothing' to skip; threads the set of already-resent image
-    -- message ids so a duplicated [image#<id>] never resends.
-    planChunk sentImgs (TableChunk src) = do
-      rendered <- liftIO (renderTableImage src)
-      case rendered of
-        Right png ->
-          pure (sentImgs, Just ([imageSeg ("base64://" <> TE.decodeASCII (B64.encode png))], src))
-        Left err -> do
-          logAttention "table render failed, sending source" $ object ["error" .= err]
-          pure (sentImgs, Just ([SegText src], src))
-    planChunk sentImgs (TextChunk t) = do
-      let (mReplyId, pieces0) = parseReplyTokens t
-          (sentImgs', pieces) = dedupeImagePieces sentImgs pieces0
-      (content, rendered) <- resolvePieces pieces
-      pure . (sentImgs',) $
-        if null content
-          then Nothing
-          else
-            let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId]]
-             in Just (prefix <> trimEdgeSegs content, T.strip rendered)
-
-    -- Resolve parsed pieces into (segments, normalised rendered text).
-    resolvePieces pieces = do
-      parts <- traverse resolve pieces
-      pure (concatMap fst parts, T.concat (map snd parts))
-      where
-        resolve (PieceText t0) =
-          -- "@显示名" → canonical [@#id] first (small models skip the
-          -- roster lookup), then the usual mention conversion.
-          let t = rescueNameMentions rosterNames t0
-           in pure (mentionSegs t, t)
-        -- Sticker sending disabled for this group: drop the token
-        -- (the model shouldn't emit one, but never leak it as text).
-        resolve (PieceSticker _) | not stickersOn = pure ([], "")
-        resolve (PieceSticker sid) =
-          resolveSticker blobRoot sid >>= \case
-            Right (desc, segs) ->
-              pure (segs, "[sticker#" <> T.pack (show sid) <> ": " <> T.take 80 desc <> "]")
-            Left err -> do
-              logAttention "sticker placeholder unresolved" $
-                object ["id" .= sid, "error" .= err]
-              pure ([], "")
-        resolve (PieceImage mid) = do
-          segs <- messageImageSegs blobRoot mid
-          if null segs
-            then do
-              logAttention "image placeholder unresolved" $ object ["message_id" .= mid]
-              pure ([], "")
-            else
-              -- Keep the id in the persisted form: the model reads
-              -- back the same [image#<id>] handle it wrote (and can
-              -- resend from it again), instead of a bare [image] it
-              -- was told is a hallucination.
-              pure (segs, "[image#" <> T.pack (show mid) <> "]")
-        resolve (PieceFace fid) =
-          pure ([SegFace fid Nothing], "[face#" <> T.pack (show fid) <> "]")
-
-    -- Private chats keep raw text: NapCat renders private
-    -- at-segments poorly (see 'replySegs').  No member list (fetch
-    -- failed) → convert on syntax alone rather than silently
-    -- refusing to @ anyone.
-    mentionSegs t
-      | isPrivateChat gm.groupId = [SegText t]
-      | otherwise = segmentMentions (\u -> maybe True (Set.member u) mentionable) t
-
--- | How long to pause before a follow-up chunk, roughly scaled to how
--- long a human would take to type it: ~35ms per character with ±30%
--- jitter, clamped to [200ms, 2s].
-chunkDelayMicros :: Int -> IO Int
-chunkDelayMicros nChars = do
-  f <- randomRIO (0.7, 1.3 :: Double)
-  pure (max 200_000 (min 2_000_000 (round (fromIntegral nChars * 35_000 * f))))
 
 -- | One roster fetch serving two prompt-side consumers: the member id
 -- set for outbound @-mention validation ('Nothing' when there is no
@@ -1189,35 +1072,13 @@ parseSilence t
 isSilentReply :: T.Text -> Bool
 isSilentReply = isJust . parseSilence
 
--- | Load every stored image of a message as outbound image segments
--- (base64 over @docker@-free NapCat send), for resolving a
--- @[image#\<id\>]@ resend token.  Empty when the message has no stored
--- images or a blob can't be read — the caller then drops the token
--- rather than sending a broken message.
-messageImageSegs ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  FilePath ->
-  Int64 ->
-  Eff es [Segment]
-messageImageSegs blobRoot mid = do
-  rows <-
-    query
-      "SELECT i.local_path \
-      \  FROM message_images mi \
-      \  JOIN images i ON i.sha256 = mi.sha256 \
-      \  WHERE mi.message_id = ? \
-      \  ORDER BY mi.seg_index"
-      (Only mid)
-  fmap concat . traverse loadOne $ (rows :: [Only T.Text])
-  where
-    loadOne (Only path) =
-      trySync (liftIO (BS.readFile (blobRoot </> T.unpack path))) >>= \case
-        Left e -> do
-          logAttention "image resend: blob read failed" $
-            object ["path" .= path, "error" .= T.pack (show (e :: SomeException))]
-          pure []
-        Right bytes ->
-          pure [imageSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]
+-- | Everything that has to happen to model text before it can be sent:
+-- drop the hallucinated bracket tokens, drop the bare display markers,
+-- trim.  Shared by the streaming sink and the final reply so a
+-- paragraph is cleaned the same whichever half of the split it lands
+-- in.
+cleanReply :: T.Text -> T.Text
+cleanReply = T.strip . stripBareMarkers . stripStickerText . stripHallucinatedTokens
 
 -- | Drop bare display markers the model echoed from context —
 -- @[image]@, @[sticker]@, @[mface]@, @[face]@, @[forward]@, plus the

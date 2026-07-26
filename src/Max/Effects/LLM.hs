@@ -9,6 +9,15 @@
 -- response out, no looping.  The agent loop lives in
 -- "Max.Effects.Agent".
 --
+-- == Streaming
+--
+-- 'chatStreaming' is the same call with a sink for the assistant text as
+-- it arrives.  Whether it actually streams is a per-profile switch: with
+-- it off the sink is never called and the call behaves exactly like
+-- 'chat', so callers need no branch.  The SSE framing and delta
+-- reducers live in "Max.LLM.Stream" (pure, tested against recorded wire
+-- bytes) and the incremental POST in "Max.Http.Stream".
+--
 -- == Tools
 --
 -- 'chat' accepts a list of 'ToolSpec's (name + JSON schema + free-text
@@ -37,13 +46,19 @@ module Max.Effects.LLM
     defaultProfile,
     isProfileMultimodal,
     isProfileHistoryTurns,
+    chatStreaming,
     -- * Exposed for tests
     parseResponseOpenAI,
     parseResponseAnthropic,
+    rebuildOpenAI,
+    rebuildAnthropic,
+    stripLeadingThink,
+    interruptionMarker,
   )
 where
 
 import Control.Applicative ((<|>))
+import Data.Maybe (isJust)
 import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
@@ -56,9 +71,11 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
-import Effectful.Dispatch.Dynamic (interpret, send)
+import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Log
 import Effectful.Wreq qualified as W
+import Max.Http.Stream (StreamOutcome (..), streamPost)
+import Max.LLM.Stream (StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, PartialCall (..))
 import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
@@ -130,7 +147,20 @@ data LLMProfile = LLMProfile
     -- model treats as a pattern to continue (a real production
     -- incident), can't produce consecutive same-role messages, and is
     -- the only shape where the bot's own messages carry a quotable id.
-    historyAsTurns :: !Bool
+    historyAsTurns :: !Bool,
+    -- | Read the completion incrementally over SSE, so finished
+    -- paragraphs can go out while the model is still writing.  Default
+    -- 'True'.
+    --
+    -- Per-profile because every provider ships its own SSE dialect
+    -- (usage in a terminal frame or not at all, @[DONE]@ or a bare
+    -- @finish_reason@, keep-alive comment lines), and because
+    -- reconstructing a tool-call turn from deltas is lossy — see
+    -- 'rebuildOpenAI'.  Turn it off when a provider misbehaves, or on
+    -- an Anthropic profile running extended thinking, whose block
+    -- signatures cannot be rebuilt.  With it off the profile takes the
+    -- ordinary request-response path and nothing about it changes.
+    stream :: !Bool
   }
   deriving stock (Show)
 
@@ -328,6 +358,22 @@ parseToolCall = withObject "ToolCall" $ \o -> do
 
 data LLM :: Effect where
   Chat :: Text -> [ChatMessage] -> [ToolSpec] -> LLM m (Either Text ChatResponse)
+  -- | 'Chat', but the assistant text is handed over as it arrives.
+  --
+  -- The sink receives the text /so far/, not the delta: the accumulator
+  -- already holds the whole thing, and a caller deciding \"is a
+  -- paragraph finished\" has to look at the accumulation anyway.  It
+  -- runs on the reading thread, so a slow sink backpressures the socket
+  -- — which is what we want, since it is sending QQ messages.
+  --
+  -- Falls back to a plain 'Chat' when the profile has streaming off;
+  -- the sink is then simply never called, so callers need no branch.
+  ChatStreaming ::
+    Text ->
+    [ChatMessage] ->
+    [ToolSpec] ->
+    (Text -> m ()) ->
+    LLM m (Either Text ChatResponse)
   ListProfiles :: LLM m [Text]
   DefaultProfile :: LLM m Text
   -- | Look up @profile.multimodal@ by profile name.  Returns 'False'
@@ -351,38 +397,15 @@ runLLM ::
   LLMRegistry ->
   Eff (LLM : es) a ->
   Eff es a
-runLLM reg = interpret $ \_ -> \case
-  Chat name msgs tools -> case Map.lookup name reg.profiles of
-    Nothing -> do
-      logAttention "llm: unknown profile" $ object ["profile" .= name]
-      pure $ Left ("unknown llm profile: " <> name)
-    Just cfg -> do
-      logInfo "llm: chat request" $
-        object
-          [ "msg_count" .= length msgs,
-            "tool_count" .= length tools,
-            "profile" .= name,
-            "model" .= cfg.model
-          ]
-      r <- callChat cfg msgs tools
-      case r of
-        Left err ->
-          logAttention "llm: error" $
-            object ["error" .= err, "profile" .= name]
-        Right (ContentResp text, mUsage) ->
-          logInfo "llm: got content" $
-            object $
-              ["len" .= T.length text, "profile" .= name] <> usageFields mUsage
-        Right (ToolCallsResp _ narration tcs, mUsage) ->
-          logInfo "llm: got tool_calls" $
-            object $
-              [ "count" .= length tcs,
-                "narration_len" .= T.length narration,
-                "names" .= map (.callName) tcs,
-                "profile" .= name
-              ]
-                <> usageFields mUsage
-      pure (fst <$> r)
+runLLM reg = interpret $ \localEnv -> \case
+  Chat name msgs tools -> runOneChat reg name msgs tools Nothing
+  ChatStreaming name msgs tools sink ->
+    -- The sink sends messages, so it is 'Eff', not IO; unlifting it
+    -- here is what lets the transport call back into the caller's
+    -- effect stack.  Sequential unlift is right: the read loop is
+    -- single-threaded and calls the sink one frame at a time.
+    localSeqUnlift localEnv $ \unlift ->
+      runOneChat reg name msgs tools (Just (unlift . sink))
   ListProfiles -> pure (Map.keys reg.profiles)
   DefaultProfile -> pure reg.defaultName
   IsProfileMultimodal name -> pure $ case Map.lookup name reg.profiles of
@@ -392,6 +415,54 @@ runLLM reg = interpret $ \_ -> \case
     Just cfg -> cfg.historyAsTurns
     Nothing -> False
 
+-- | One chat call, shared by the streaming and non-streaming
+-- operations.  A 'Just' sink means \"stream if the profile allows it\";
+-- 'Nothing', or a profile with @stream = false@, takes the ordinary
+-- request-response path.
+runOneChat ::
+  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  LLMRegistry ->
+  Text ->
+  [ChatMessage] ->
+  [ToolSpec] ->
+  Maybe (Text -> Eff es ()) ->
+  Eff es (Either Text ChatResponse)
+runOneChat reg name msgs tools mSink = case Map.lookup name reg.profiles of
+  Nothing -> do
+    logAttention "llm: unknown profile" $ object ["profile" .= name]
+    pure $ Left ("unknown llm profile: " <> name)
+  Just cfg -> do
+    let streaming = cfg.stream && isJust mSink
+    logInfo "llm: chat request" $
+      object
+        [ "msg_count" .= length msgs,
+          "tool_count" .= length tools,
+          "profile" .= name,
+          "model" .= cfg.model,
+          "stream" .= streaming
+        ]
+    r <- case mSink of
+      Just sink | cfg.stream -> callChatStream cfg msgs tools sink
+      _ -> callChat cfg msgs tools
+    case r of
+      Left err ->
+        logAttention "llm: error" $
+          object ["error" .= err, "profile" .= name]
+      Right (ContentResp text, mUsage) ->
+        logInfo "llm: got content" $
+          object $
+            ["len" .= T.length text, "profile" .= name] <> usageFields mUsage
+      Right (ToolCallsResp _ narration tcs, mUsage) ->
+        logInfo "llm: got tool_calls" $
+          object $
+            [ "count" .= length tcs,
+              "narration_len" .= T.length narration,
+              "names" .= map (.callName) tcs,
+              "profile" .= name
+            ]
+              <> usageFields mUsage
+    pure (fst <$> r)
+
 chat ::
   LLM :> es =>
   Text -> -- profile name
@@ -400,6 +471,18 @@ chat ::
   Eff es (Either Text ChatResponse)
 chat name msgs tools =
   send (Chat name msgs tools)
+
+-- | 'chat' with a sink for the assistant text as it streams in.  See
+-- 'ChatStreaming'.
+chatStreaming ::
+  LLM :> es =>
+  Text ->
+  [ChatMessage] ->
+  [ToolSpec] ->
+  (Text -> Eff es ()) ->
+  Eff es (Either Text ChatResponse)
+chatStreaming name msgs tools sink =
+  send (ChatStreaming name msgs tools sink)
 
 listProfiles :: LLM :> es => Eff es [Text]
 listProfiles = send ListProfiles
@@ -444,6 +527,180 @@ callChat cfg msgs tools = case cfg.protocol of
   ProtocolAnthropic -> callChatAnthropic cfg msgs tools
 
 --------------------------------------------------------------------------------
+-- Streaming.
+
+-- | Appended to a reply whose stream died before the provider said it
+-- was finished.  The fragment stays: it is already in the group, and
+-- the reader needs to know the sentence stops there because the
+-- connection broke, not because the bot meant it to.
+interruptionMarker :: Text
+interruptionMarker = "\n\n⚠ 断了，上面这条没写完"
+
+-- | Streamed chat completion.  Same request as 'callChat' plus the
+-- provider's stream switches; the response is assembled from SSE
+-- frames by "Max.LLM.Stream" instead of parsed from one JSON body.
+callChatStream ::
+  (Log :> es, IOE :> es) =>
+  LLMProfile ->
+  [ChatMessage] ->
+  [ToolSpec] ->
+  (Text -> Eff es ()) ->
+  Eff es (Either Text (ChatResponse, Maybe TokenUsage))
+callChatStream cfg msgs tools sink = case cfg.protocol of
+  ProtocolOpenAI ->
+    run
+      (T.unpack (cfg.baseUrl <> "/chat/completions"))
+      [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.apiKey),
+        ("Content-Type", "application/json"),
+        ("Accept", "text/event-stream")
+      ]
+      (LBS.toStrict (encode (object (openAIFields cfg msgs tools <> streamFieldsOpenAI))))
+      stepOpenAI
+      rebuildOpenAI
+  ProtocolAnthropic ->
+    run
+      (T.unpack (cfg.baseUrl <> "/v1/messages"))
+      [ ("x-api-key", TE.encodeUtf8 cfg.apiKey),
+        ("anthropic-version", "2023-06-01"),
+        ("Content-Type", "application/json"),
+        ("Accept", "text/event-stream")
+      ]
+      (LBS.toStrict (encode (object (anthropicFields cfg msgs tools <> [("stream", toJSON True)]))))
+      stepAnthropic
+      rebuildAnthropic
+  where
+    run url hdrs body step rebuild = do
+      outcome <-
+        streamPost defaultRetryDelaysSecs cfg.timeoutSeconds hdrs url body step $ \acc ->
+          -- Strip before the sink, never after: models that inline
+          -- their reasoning (MiniMax, GLM) open with a
+          -- @\<think\>…\</think\>@ block, and streaming it straight
+          -- out would put the monologue in the group.
+          -- 'stripLeadingThink' returns "" for an unclosed block, so
+          -- nothing escapes until the block ends.  The only window it
+          -- doesn't cover is a half-arrived opening tag (@\<thi@),
+          -- which can't contain the blank line a paragraph needs.
+          sink (stripLeadingThink acc.saText)
+      case outcome of
+        StreamFailed err -> pure (Left err)
+        StreamComplete acc -> pure (Right (rebuild acc, accUsage acc))
+        StreamTruncated acc why -> do
+          -- Tool-call arguments arrive as JSON text fragments, so a
+          -- stream cut mid-call leaves arguments that are syntactically
+          -- broken or — worse — accidentally valid but missing fields.
+          -- Neither is safe to execute, so a truncated round degrades
+          -- to whatever text it managed, plus the marker.
+          logAttention "llm: stream truncated" $
+            object
+              [ "reason" .= why,
+                "len" .= T.length acc.saText,
+                "partial_calls" .= length (accToolCalls acc)
+              ]
+          pure (Right (ContentResp (stripLeadingThink acc.saText <> interruptionMarker), accUsage acc))
+
+    accUsage acc = case (acc.saPromptTokens, acc.saCompletionTokens) of
+      (Just p, Just c) -> Just (TokenUsage p c acc.saCachedTokens)
+      -- Several gateways send no usage frame at all when streaming.
+      -- Half a reading would be worse than none: it would look like a
+      -- 0% cache hit rather than an absent measurement.
+      _ -> Nothing
+
+-- | @stream_options@ is required or an OpenAI-compatible endpoint
+-- reports no usage whatsoever for a streamed call — and
+-- @cached_tokens@ is the only way to see whether prefix caching is
+-- working.
+streamFieldsOpenAI :: [Pair]
+streamFieldsOpenAI =
+  [ "stream" .= True,
+    "stream_options" .= object ["include_usage" .= True]
+  ]
+
+-- | Rebuild an OpenAI assistant message from the accumulator.
+--
+-- __Lossy on purpose, and this is the reason streaming is opt-in per
+-- profile.__  'ToolCallsResp' normally carries the provider's message
+-- byte-for-byte so reasoning fields round-trip; a stream gives us
+-- deltas, so the message is reconstructed from the parts we model.
+-- @reasoning_content@ survives (it streams as its own delta and
+-- DeepSeek 400s without it); anything else a provider hides in the
+-- assistant turn does not.  A profile that needs more keeps
+-- @stream = false@.
+rebuildOpenAI :: StreamAcc -> ChatResponse
+rebuildOpenAI acc = case parsedCalls acc of
+  [] -> ContentResp (stripLeadingThink acc.saText)
+  tcs ->
+    ToolCallsResp
+      ( object $
+          [ "role" .= ("assistant" :: Text),
+            "content" .= if T.null acc.saText then Null else toJSON acc.saText,
+            "tool_calls"
+              .= [ object
+                     [ "id" .= tc.callId,
+                       "type" .= ("function" :: Text),
+                       "function"
+                         .= object
+                           [ "name" .= tc.callName,
+                             -- Back to the stringified form the wire
+                             -- wants; we parsed it only to validate.
+                             "arguments" .= TE.decodeUtf8 (LBS.toStrict (encode tc.callArguments))
+                           ]
+                     ]
+                   | tc <- tcs
+                 ]
+          ]
+            <> ["reasoning_content" .= acc.saReasoning | not (T.null acc.saReasoning)]
+      )
+      (stripLeadingThink acc.saText)
+      tcs
+
+-- | Rebuild an Anthropic assistant turn: text blocks then @tool_use@
+-- blocks.
+--
+-- Same caveat as 'rebuildOpenAI', and one more: @thinking@ blocks
+-- carry a signature that must replay exactly, and a reconstruction
+-- can't produce one.  Do not enable streaming on an Anthropic profile
+-- running extended thinking.
+rebuildAnthropic :: StreamAcc -> ChatResponse
+rebuildAnthropic acc = case parsedCalls acc of
+  [] -> ContentResp (stripLeadingThink acc.saText)
+  tcs ->
+    ToolCallsResp
+      ( object
+          [ "role" .= ("assistant" :: Text),
+            "content"
+              .= ( [ object ["type" .= ("text" :: Text), "text" .= acc.saText]
+                   | not (T.null acc.saText)
+                   ]
+                     <> [ object
+                            [ "type" .= ("tool_use" :: Text),
+                              "id" .= tc.callId,
+                              "name" .= tc.callName,
+                              "input" .= tc.callArguments
+                            ]
+                          | tc <- tcs
+                        ]
+                 )
+          ]
+      )
+      (stripLeadingThink acc.saText)
+      tcs
+
+-- | Tool calls whose accumulated argument text is whole, valid JSON.
+-- A call that isn't gets dropped rather than executed on a guess: the
+-- fragments are individually invalid by design, so \"didn't parse\"
+-- means \"didn't finish arriving\".
+parsedCalls :: StreamAcc -> [ToolCall]
+parsedCalls acc =
+  [ ToolCall pc.pcId pc.pcName v
+    | pc <- accToolCalls acc,
+      Just v <- [argsOf pc.pcArgs]
+  ]
+  where
+    argsOf t
+      | T.null (T.strip t) = Just (Object mempty)
+      | otherwise = decodeStrict' (TE.encodeUtf8 t)
+
+--------------------------------------------------------------------------------
 -- OpenAI / OpenAI-compatible: POST {baseUrl}/chat/completions.
 
 callChatOpenAI ::
@@ -453,29 +710,33 @@ callChatOpenAI ::
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
 callChatOpenAI cfg msgs tools = do
-  let baseFields =
-        [ "model" .= cfg.model,
-          "messages" .= msgs,
-          "max_tokens" .= cfg.maxTokens,
-          "stream" .= False
-        ]
-          <> temperatureField cfg
-      toolFields =
-        if null tools
-          then []
-          else
-            [ "tools" .= map encodeToolSpecOpenAI tools,
-              "tool_choice" .= ("auto" :: Text)
-            ]
-      body =
+  let body =
         LBS.toStrict
-          (encode (object (baseFields <> toolFields)))
+          (encode (object (openAIFields cfg msgs tools <> ["stream" .= False])))
       url = T.unpack (cfg.baseUrl <> "/chat/completions")
       opts =
         Wreq.defaults
           & WL.header "Authorization" .~ ["Bearer " <> TE.encodeUtf8 cfg.apiKey]
           & WL.header "Content-Type" .~ ["application/json"]
   postAndParseRetrying defaultRetryDelaysSecs cfg.timeoutSeconds opts url body parseResponseOpenAI
+
+-- | Everything an OpenAI chat-completions request carries except the
+-- stream switches, so the streaming and non-streaming paths can't drift
+-- apart on what they actually ask for.
+openAIFields :: LLMProfile -> [ChatMessage] -> [ToolSpec] -> [Pair]
+openAIFields cfg msgs tools =
+  [ "model" .= cfg.model,
+    "messages" .= msgs,
+    "max_tokens" .= cfg.maxTokens
+  ]
+    <> temperatureField cfg
+    <> [ f
+         | not (null tools),
+           f <-
+             [ "tools" .= map encodeToolSpecOpenAI tools,
+               "tool_choice" .= ("auto" :: Text)
+             ]
+       ]
 
 -- | @temperature@ only when configured — omitting lets the server
 -- pick its default, and some providers 400 on explicit values.
@@ -572,37 +833,7 @@ callChatAnthropic ::
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
 callChatAnthropic cfg msgs tools = do
-  let (systemText, anthropicMsgs) = toAnthropicMessages msgs
-      -- Anthropic caches nothing without explicit breakpoints.  Two
-      -- are enough (limit is 4): one on the system block covers the
-      -- tools + system prefix across dispatches; one on the last
-      -- message makes each agent-loop turn a full prefix hit of the
-      -- previous one.
-      baseFields =
-        [ "model" .= cfg.model,
-          "max_tokens" .= cfg.maxTokens,
-          "messages" .= map encodeAnthropicMsg (markLastForCache anthropicMsgs)
-        ]
-          <> temperatureField cfg
-      systemField = case systemText of
-        Just s ->
-          [ "system"
-              .= [ object
-                     [ "type" .= ("text" :: Text),
-                       "text" .= s,
-                       "cache_control" .= ephemeralCache
-                     ]
-                 ]
-          ]
-        Nothing -> []
-      toolFields =
-        if null tools
-          then []
-          else
-            [ "tools" .= map encodeToolSpecAnthropic tools,
-              "tool_choice" .= object ["type" .= ("auto" :: Text)]
-            ]
-      body = LBS.toStrict (encode (object (baseFields <> systemField <> toolFields)))
+  let body = LBS.toStrict (encode (object (anthropicFields cfg msgs tools)))
       url = T.unpack (cfg.baseUrl <> "/v1/messages")
       opts =
         Wreq.defaults
@@ -610,6 +841,41 @@ callChatAnthropic cfg msgs tools = do
           & WL.header "anthropic-version" .~ ["2023-06-01"]
           & WL.header "Content-Type" .~ ["application/json"]
   postAndParseRetrying defaultRetryDelaysSecs cfg.timeoutSeconds opts url body parseResponseAnthropic
+
+-- | The Anthropic counterpart of 'openAIFields', minus @stream@.
+--
+-- Anthropic caches nothing without explicit breakpoints.  Two are
+-- enough (the limit is 4): one on the system block covers the tools +
+-- system prefix across dispatches; one on the last message makes each
+-- agent-loop turn a full prefix hit of the previous one.
+anthropicFields :: LLMProfile -> [ChatMessage] -> [ToolSpec] -> [Pair]
+anthropicFields cfg msgs tools =
+  [ "model" .= cfg.model,
+    "max_tokens" .= cfg.maxTokens,
+    "messages" .= map encodeAnthropicMsg (markLastForCache anthropicMsgs)
+  ]
+    <> temperatureField cfg
+    <> systemField
+    <> [ f
+         | not (null tools),
+           f <-
+             [ "tools" .= map encodeToolSpecAnthropic tools,
+               "tool_choice" .= object ["type" .= ("auto" :: Text)]
+             ]
+       ]
+  where
+    (systemText, anthropicMsgs) = toAnthropicMessages msgs
+    systemField = case systemText of
+      Just s ->
+        [ "system"
+            .= [ object
+                   [ "type" .= ("text" :: Text),
+                     "text" .= s,
+                     "cache_control" .= ephemeralCache
+                   ]
+               ]
+        ]
+      Nothing -> []
 
 encodeToolSpecAnthropic :: ToolSpec -> Value
 encodeToolSpecAnthropic t =

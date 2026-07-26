@@ -20,8 +20,11 @@ migrations/*.sql   schema migrations, applied on boot
 
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),
                    segments, events, actions, server
-src/Max/Effects/   effectful 2.5 effects: Http, Blob, NapCat, LLM (OpenAI + Anthropic),
-                   Tools, Agent  (DB effect from upstream effectful-postgresql)
+src/Max/Effects/   effectful 2.5 effects: Http, Blob, NapCat, LLM (OpenAI + Anthropic,
+                   buffered or streamed), Tools, Agent  (DB effect from upstream
+                   effectful-postgresql)
+src/Max/LLM/       Stream: SSE framing + the two protocols' delta reducers, pure
+src/Max/Http/      Stream: the incremental POST wreq can't do (http-client withResponse)
 src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
                    History, Session, Files, Memory, Permissions, PlatformIds,
                    Reminder, Stickers, FetchQueue (media work list)
@@ -37,8 +40,10 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    (proactive classifier), MemoryExtract, Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    shared claim loop), MediaCaption + Stickers (caption workers),
-                   Reminder, Reply, Render, Roster, Shutdown (graceful drain),
-                   Tasks, Tools, Util
+                   Reminder, Reply (planning), ReplySend (planning made real:
+                   placeholders, sending, persistence — shared by the final
+                   reply and the streamed one), Render, Roster, Shutdown (graceful
+                   drain), Tasks, Tools, Util
 app/Main.hs        wires effects + workers + server
 ```
 
@@ -70,6 +75,13 @@ app/Main.hs        wires effects + workers + server
                                             │  → memory extraction    │
                                             └─────────────────────────┘
 ```
+
+Unless a profile sets `stream: false` the LLM box reads the completion over SSE
+instead of waiting for a whole body. Paragraphs the model has finished with go
+out mid-generation, down the same `ReplySend` path as the final reply; the loop
+reports how much it sent as `AgentResult.sentPrefix` and the handler sends the
+rest. `readyPrefix` will not release a trailing paragraph — it may still grow —
+so a one-paragraph reply, which is most of them, still arrives all at once.
 
 ## Durability
 
