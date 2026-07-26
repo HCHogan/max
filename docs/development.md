@@ -115,6 +115,29 @@ sites, not guessing at format time.
   "stdout is a tty and `NO_COLOR` is unset". Under systemd stdout is a pipe to
   journald, so a host whose logs are read through `journalctl` wants `always`.
 
+**Reading a coloured log needs `-o cat`:**
+
+```sh
+journalctl -u max -f -o cat
+```
+
+journald stores the escapes fine, but every `short*` / `with-unit` / `verbose`
+format strips control characters out of the message — terminal escapes in a log
+line are an injection vector, and `cat` is the "raw, you asked for it" format.
+It is also the only one that prints no timestamp prefix, which is why the log's
+own clock is rendered in the host's timezone rather than UTC: on that path it is
+the only clock there is. (Not `timezone_minutes` — that one is what the group
+and the model see; this line is read next to `systemctl status`, so it follows
+the machine.)
+
+On NixOS, note that `services.max.settings` is discarded outright when
+`services.max.configFile` is set (the module warns). To add one key on top of a
+hand-managed max.yaml, use the environment instead:
+
+```nix
+systemd.services.max.environment.MAX_LOG_COLOR = "always";
+```
+
 `!debug on` mirrors tool calls *and their results* into the chat itself.
 
 Media that never arrived: a pending fetch is a row now, so ask the database

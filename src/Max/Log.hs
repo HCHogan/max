@@ -49,7 +49,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.IO qualified as TIO
 import Data.Text.Lazy qualified as TL
-import Data.Time (UTCTime, defaultTimeLocale, formatTime)
+import Data.Time (TimeZone, UTCTime, defaultTimeLocale, formatTime, getCurrentTimeZone, utcToLocalTime)
 import Log (LogLevel (..), LogMessage (..), Logger, mkLogger, waitForLogger)
 import System.Environment (lookupEnv)
 import System.IO (hFlush, hIsTerminalDevice, stdout)
@@ -103,7 +103,14 @@ withCompactLogger mode act = do
   colored <- resolveColor mode
   bracket (mkLogger "compact" (emit colored)) waitForLogger act
   where
-    emit colored msg = TIO.putStrLn (formatLogMessage colored msg) >> hFlush stdout
+    -- Per message rather than resolved once: a process that stays up
+    -- for months would otherwise keep a zone that a DST change had
+    -- moved.  glibc caches the parsed tzfile, so this costs nothing at
+    -- the rate a bot logs.
+    emit colored msg = do
+      tz <- getCurrentTimeZone
+      TIO.putStrLn (formatLogMessage tz colored msg)
+      hFlush stdout
 
 resolveColor :: ColorMode -> IO Bool
 resolveColor = \case
@@ -120,11 +127,11 @@ resolveColor = \case
 --------------------------------------------------------------------------------
 -- Rendering
 
-formatLogMessage :: Bool -> LogMessage -> Text
-formatLogMessage colored msg =
+formatLogMessage :: TimeZone -> Bool -> LogMessage -> Text
+formatLogMessage tz colored msg =
   T.intercalate
     " "
-    [ dim (fmtClock msg.lmTime),
+    [ dim (fmtClock tz msg.lmTime),
       levelTag colored msg.lmLevel,
       pad domainWidth (dim (domainOf msg)),
       body
@@ -141,10 +148,25 @@ formatLogMessage colored msg =
       | T.null msg.lmMessage = T.unwords fields
       | otherwise = msg.lmMessage <> "  " <> T.unwords fields
 
--- | Wall-clock only.  The date is in journald's own stamp in
--- production, and a local run rarely spans midnight.
-fmtClock :: UTCTime -> Text
-fmtClock = T.pack . formatTime defaultTimeLocale "%H:%M:%S"
+-- | Wall-clock in the /host's/ timezone — not UTC, and not the config's
+-- @timezone_minutes@.
+--
+-- Those are two clocks for two readers and it is worth keeping them
+-- apart.  @timezone_minutes@ is what the group and the model see; this
+-- line is read on the machine, next to @systemctl status@ and
+-- journald's own prefix, so it follows the machine.  The two coincide
+-- on a host serving its local groups and come apart the moment one
+-- group is somewhere else.
+--
+-- It used to be UTC with no date, on the grounds that journald stamps
+-- both in production.  It does — but only in the output formats that
+-- strip ANSI escapes.  @journalctl -o cat@ is the one format that keeps
+-- colour, and it prints no prefix at all, so the reading path this
+-- logger exists for is exactly the one where nothing else supplies a
+-- clock.  Still no date: a log being read live is today's, and anyone
+-- who needs one can drop the flag.
+fmtClock :: TimeZone -> UTCTime -> Text
+fmtClock tz = T.pack . formatTime defaultTimeLocale "%H:%M:%S" . utcToLocalTime tz
 
 domainOf :: LogMessage -> Text
 domainOf msg = T.intercalate "/" msg.lmDomain
