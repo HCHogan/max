@@ -63,11 +63,18 @@ Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
 ## Versioning
 
 `version:` in `max.cabal` is the single source of truth (surfaced by `!version`
-via `Paths_max`). A version marks a batch of work worth naming — usually what
-goes out in one deploy — not one commit; several commits sharing a version is
-normal and preferred over bumping mechanically. Patch for fixes, minor for
-features or anything that changes an interface. Releases get an annotated
-`vX.Y.Z` git tag.
+via `Paths_max`).
+
+**Bump only for a large feature or a refactor.** Fixes, small features and
+ordinary follow-ups ride along at the current version — a long run of commits
+sharing one is the normal case, not a lapse. The number is there to name work
+worth naming and to fence old binaries off new schemas; a version per deploy or
+per commit makes it noise, and the history it produces says nothing you couldn't
+read from the log. Minor for the feature or refactor itself, patch only when
+something already released needs correcting on its own.
+
+Tags are lightweight `vX.Y.Z`, placed on the commit that bumps the version —
+later commits at the same version stay behind the tag rather than moving it.
 
 Startup refuses to run against a database that records migrations this binary
 doesn't ship, so an old max can never touch a newer schema.
