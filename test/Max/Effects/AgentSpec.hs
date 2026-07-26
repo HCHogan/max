@@ -35,10 +35,12 @@ spec = describe "narrationSegments" $ do
     dc <- ctx
     narrationSegments dc "   \n " `shouldBe` []
 
-  it "quotes the trigger and sends the text" $ do
+  -- Nothing auto-quotes any more: the reply path gave that up once the
+  -- model proved it quotes on its own, and narration was the last
+  -- holdout.
+  it "sends plain text when the model named no quote target" $ do
     dc <- ctx
-    narrationSegments dc "我查一下日志"
-      `shouldBe` [SegReply (MessageId 7413), SegText "我查一下日志"]
+    narrationSegments dc "我查一下日志" `shouldBe` [SegText "我查一下日志"]
 
   -- The regression: this used to go out with the token visible.
   it "consumes a leading reply token instead of printing it" $ do
@@ -48,14 +50,15 @@ spec = describe "narrationSegments" $ do
                    SegText "wreq 是 Haskell 的 HTTP 客户端"
                  ]
 
-  it "lets the model's own quote target beat the trigger" $ do
+  it "quotes what the model named" $ do
     dc <- ctx
     case narrationSegments dc "[↩#999] 看这条" of
       (SegReply m : _) -> m `shouldBe` MessageId 999
       other -> expectationFailure ("expected a reply segment: " <> show other)
 
-  -- A poke has no trigger message to quote.
-  it "omits the quote when there is no trigger message" $ do
+  -- A poke has no trigger message at all; nothing changes, because
+  -- nothing was quoting the trigger anyway.
+  it "is unaffected by there being no trigger message" $ do
     dc <- ctx
     narrationSegments dc {dcMessageId = MessageId 0} "在看了"
       `shouldBe` [SegText "在看了"]
@@ -63,8 +66,7 @@ spec = describe "narrationSegments" $ do
   it "converts mentions and keeps faces" $ do
     dc <- ctx
     narrationSegments dc "[@#2001] 稍等 [face#187]"
-      `shouldBe` [ SegReply (MessageId 7413),
-                   SegAt (UserId 2001),
+      `shouldBe` [ SegAt (UserId 2001),
                    SegText " 稍等 ",
                    SegFace 187 Nothing
                  ]
@@ -75,7 +77,7 @@ spec = describe "narrationSegments" $ do
   it "drops sticker and image placeholders rather than leaking them" $ do
     dc <- ctx
     narrationSegments dc "马上 [sticker#42] 好 [image#7405]"
-      `shouldBe` [SegReply (MessageId 7413), SegText "马上 ", SegText " 好"]
+      `shouldBe` [SegText "马上 ", SegText " 好"]
 
   -- Removing a token leaves a seam.  The reply path has always trimmed
   -- it; narration didn't, because it had its own copy of "turn model
@@ -89,4 +91,4 @@ spec = describe "narrationSegments" $ do
   it "leaves a malformed token alone" $ do
     dc <- ctx
     narrationSegments dc "看看 [↩#abc] 这个"
-      `shouldBe` [SegReply (MessageId 7413), SegText "看看 [↩#abc] 这个"]
+      `shouldBe` [SegText "看看 [↩#abc] 这个"]

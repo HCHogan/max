@@ -51,7 +51,6 @@ module Max.Effects.Agent
   )
 where
 
-import Control.Applicative ((<|>))
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, readTVar, writeTVar)
 import Control.Monad (when)
@@ -536,14 +535,14 @@ narrationSegments dc narration
   where
     stripped = T.strip narration
     (mQuoted, pieces) = parseReplyTokens stripped
-    -- The model's own choice of what to quote beats the default of
-    -- quoting the trigger.
-    quote = case mQuoted <|> defaultQuote of
+    -- Quoted only when the model said what to quote.  Narration used to
+    -- quote the trigger by default, which made it the last place that
+    -- auto-quoted anything — the reply path stopped doing that once the
+    -- model proved it quotes on its own, and there was no reason for
+    -- the progress line to keep a rule its own reply had dropped.
+    quote = case mQuoted of
       Just target -> [SegReply (MessageId target)]
       Nothing -> []
-    defaultQuote = case dc.dcMessageId of
-      MessageId 0 -> Nothing
-      MessageId m -> Just m
     piece = \case
       PieceText t
         | isPrivateChat dc.dcGroupId -> [SegText t]
