@@ -31,6 +31,7 @@ module Max.LLM.Stream
     -- * Accumulation
     StreamAcc (..),
     emptyAcc,
+    mergeDelta,
     stepOpenAI,
     stepAnthropic,
     accToolCalls,
@@ -39,6 +40,8 @@ module Max.LLM.Stream
 where
 
 import Data.Aeson (FromJSON, Key, Value (..), decodeStrict', withObject, (.:))
+import Data.Aeson.KeyMap qualified as KM
+import Data.Vector qualified as V
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BC
@@ -106,18 +109,30 @@ data PartialCall = PartialCall
   deriving stock (Show, Eq)
 
 -- | What the stream has produced so far.
+--
+-- Three views of the same message, kept apart because they answer
+-- different questions and only one of them may be lossy:
+--
+--   * 'saText' — what to show the group.
+--   * 'saCalls' — what to execute.
+--   * 'saMessage' \/ 'saBlocks' — what to send /back/ on the next
+--     request.  The assistant turn has to replay whole or providers
+--     reject it (DeepSeek 400s without its @reasoning_content@,
+--     Anthropic rejects a @thinking@ block whose signature went
+--     missing), and a streamed call can only replay what it kept.  So
+--     these keep every field the wire carried, not the handful we
+--     model.
 data StreamAcc = StreamAcc
   { -- | Assistant text, in order.
     saText :: !Text,
-    -- | Inline reasoning, when the provider streams it as a delta of
-    -- its own (DeepSeek's @reasoning_content@).  Accumulated because a
-    -- tool-call turn has to replay the assistant message on the next
-    -- request and DeepSeek answers 400 when its reasoning field goes
-    -- missing — a streamed call can only replay what it kept.
-    saReasoning :: !Text,
     -- | Tool calls by their wire index, so out-of-order fragments still
     -- land on the right call.
     saCalls :: !(Map Int PartialCall),
+    -- | OpenAI: every @delta@ merged back into one assistant message.
+    saMessage :: !Value,
+    -- | Anthropic: content blocks by index, each starting from its
+    -- @content_block_start@ shape and grown by its deltas.
+    saBlocks :: !(Map Int Value),
     -- | Reported once the provider says so; absent when it never does,
     -- which several OpenAI-compatible gateways don't unless asked.
     saPromptTokens :: !(Maybe Int),
@@ -135,8 +150,9 @@ emptyAcc :: StreamAcc
 emptyAcc =
   StreamAcc
     { saText = "",
-      saReasoning = "",
       saCalls = Map.empty,
+      saMessage = Object mempty,
+      saBlocks = Map.empty,
       saPromptTokens = Nothing,
       saCompletionTokens = Nothing,
       saCachedTokens = Nothing,
@@ -170,15 +186,13 @@ stepOpenAI payload acc
     applyDelta choice a = case fld "delta" choice of
       Nothing -> a
       Just delta ->
-        let withText = case fld "content" delta of
-              Just (String t) -> a {saText = a.saText <> t}
-              _ -> a
-            withReasoning = case fld "reasoning_content" delta of
-              Just (String t) -> withText {saReasoning = withText.saReasoning <> t}
-              _ -> withText
+        let withRaw = a {saMessage = mergeDelta a.saMessage delta}
+            withText = case fld "content" delta of
+              Just (String t) -> withRaw {saText = withRaw.saText <> t}
+              _ -> withRaw
          in case fld "tool_calls" delta :: Maybe [Value] of
-              Just calls -> foldl (flip mergeCall) withReasoning calls
-              Nothing -> withReasoning
+              Just calls -> foldl (flip mergeCall) withText calls
+              Nothing -> withText
 
     -- finish_reason marks the end of the message.  Some gateways then
     -- send a usage-only frame and never a [DONE]; treating the finish
@@ -197,6 +211,55 @@ stepOpenAI payload acc
               (fld "prompt_tokens_details" usage >>= fld "cached_tokens")
                 <|>? a.saCachedTokens
           }
+
+-- | Keys whose values arrive in fragments and therefore concatenate.
+--
+-- Everything else is an identifier or an enum that arrives whole, and
+-- gateways that repeat one would turn @call_a@ into @call_acall_a@ —
+-- so the default is last-writer-wins and this is the exception list.
+--
+-- It is a list rather than a rule because the wire format doesn't
+-- define a generic merge: the official SDK accumulators
+-- (@ChatCompletionStreamState@ and friends) special-case exactly these
+-- fields too.  An unmodelled field that /did/ stream in fragments would
+-- keep only its last piece — a truncation, which beats the corruption
+-- the other default risks, and beats today's behaviour of dropping it
+-- outright.
+streamedTextKeys :: [Key]
+streamedTextKeys =
+  ["content", "reasoning_content", "reasoning", "arguments", "refusal"]
+
+-- | Merge one OpenAI @delta@ object into the message being assembled.
+--
+-- Objects merge recursively, arrays merge by their entries' @index@
+-- (that is how @tool_calls@ fragments find their call), strings
+-- concatenate when the key says they should, everything else takes the
+-- newer value.
+mergeDelta :: Value -> Value -> Value
+mergeDelta (Object a) (Object b) = Object (KM.foldrWithKey step a b)
+  where
+    step k v m = KM.insert k (maybe v (combine k v) (KM.lookup k m)) m
+    -- foldrWithKey hands us (key, new value); the accumulator holds the
+    -- old, so combine takes them in that order.
+    combine k new old = case (old, new) of
+      (String x, String y) | k `elem` streamedTextKeys -> String (x <> y)
+      (Object _, Object _) -> mergeDelta old new
+      (Array x, Array y) -> Array (mergeIndexed x y)
+      _ -> new
+mergeDelta _ b = b
+
+-- | Merge two arrays of delta fragments by each entry's @index@ field.
+-- Entries without one are appended, since there is nothing to match
+-- them against.
+mergeIndexed :: V.Vector Value -> V.Vector Value -> V.Vector Value
+mergeIndexed = V.foldl' place
+  where
+    place acc new = case indexOf new of
+      Nothing -> V.snoc acc new
+      Just i -> case V.findIndex ((== Just i) . indexOf) acc of
+        Nothing -> V.snoc acc new
+        Just at -> acc V.// [(at, mergeDelta (acc V.! at) new)]
+    indexOf v = fld "index" v :: Maybe Int
 
 -- | Fold one @tool_calls@ entry into the accumulator.  The first
 -- fragment for an index carries id and name; later ones carry only more
@@ -233,15 +296,20 @@ stepAnthropic payload acc = case decodeStrict' payload of
     Just "message_stop" -> acc {saDone = True}
     _ -> acc
   where
+    -- Keep the block exactly as the provider opened it, whatever its
+    -- type: that shape is what has to go back on the next request, and
+    -- a block type we don't model still replays correctly as long as we
+    -- don't paraphrase it.
     startBlock v a = fromMaybe a $ do
       idx <- fld "index" v
       block <- fld "content_block" v
+      let withBlock = a {saBlocks = Map.insert idx block a.saBlocks}
       case fld "type" block :: Maybe Text of
         Just "tool_use" -> do
           cid <- fld "id" block
           nm <- fld "name" block
-          pure a {saCalls = Map.insert idx (PartialCall cid nm "") a.saCalls}
-        _ -> pure a
+          pure withBlock {saCalls = Map.insert idx (PartialCall cid nm "") withBlock.saCalls}
+        _ -> pure withBlock
 
     deltaBlock v a = fromMaybe a $ do
       idx <- fld "index" v
@@ -249,7 +317,18 @@ stepAnthropic payload acc = case decodeStrict' payload of
       case fld "type" delta :: Maybe Text of
         Just "text_delta" -> do
           t <- fld "text" delta
-          pure a {saText = a.saText <> t}
+          pure (growBlock idx "text" t a) {saText = a.saText <> t}
+        -- Thinking rides back to the API with a signature that proves it
+        -- wasn't tampered with, and 'signature_delta' arrives just
+        -- before the block closes precisely so a client can rebuild the
+        -- block.  Accumulate both or an extended-thinking turn cannot
+        -- replay at all.
+        Just "thinking_delta" -> do
+          t <- fld "thinking" delta
+          pure (growBlock idx "thinking" t a)
+        Just "signature_delta" -> do
+          t <- fld "signature" delta
+          pure (growBlock idx "signature" t a)
         Just "input_json_delta" -> do
           frag <- fld "partial_json" delta
           let prev = Map.findWithDefault (PartialCall "" "" "") idx a.saCalls
@@ -269,6 +348,18 @@ stepAnthropic payload acc = case decodeStrict' payload of
     messageDelta v a = fromMaybe a $ do
       usage <- fld "usage" v
       pure a {saCompletionTokens = fld "output_tokens" usage <|>? a.saCompletionTokens}
+
+-- | Append streamed text to one field of the block at @idx@.  A delta
+-- for a block we never saw open still lands somewhere rather than being
+-- dropped.
+growBlock :: Int -> Key -> Text -> StreamAcc -> StreamAcc
+growBlock idx key t a = a {saBlocks = Map.alter bump idx a.saBlocks}
+  where
+    bump mBlock = Just $ case fromMaybe (Object mempty) mBlock of
+      Object o -> Object (KM.insertWith joinText key (String t) o)
+      other -> other
+    joinText (String new) (String old) = String (old <> new)
+    joinText new _ = new
 
 --------------------------------------------------------------------------------
 

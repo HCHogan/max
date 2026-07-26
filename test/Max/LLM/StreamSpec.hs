@@ -5,7 +5,9 @@
 -- parsed before it was whole.
 module Max.LLM.StreamSpec (spec) where
 
-import Data.Aeson (Value (..), decodeStrict')
+import Data.Aeson (Value (..), decodeStrict', object, (.=))
+import Data.Aeson.Key (Key)
+import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BC
 import Data.Text (Text)
@@ -121,10 +123,10 @@ spec = do
           a = runWith stepOpenAI cut
       (a.saText, a.saDone) `shouldBe` ("半句", False)
 
-    -- DeepSeek streams its reasoning as a delta of its own, and the
-    -- replayed assistant turn has to carry it back or the next request
-    -- 400s.  It must never join saText: that is what goes to the group.
-    it "keeps reasoning_content apart from the visible content" $ do
+    -- DeepSeek streams its reasoning as a delta of its own.  It has to
+    -- reach the replayed message (the next request 400s without it) and
+    -- must never join saText, which is what goes to the group.
+    it "keeps reasoning_content out of the visible text but in the replay" $ do
       let mixed =
             rec_
               [ "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"先想\"}}]}",
@@ -133,7 +135,9 @@ spec = do
                 ""
               ]
           a = runWith stepOpenAI mixed
-      (a.saReasoning, a.saText) `shouldBe` ("先想一下", "答案是")
+      a.saText `shouldBe` "答案是"
+      fld_ "reasoning_content" a.saMessage `shouldBe` Just (String "先想一下")
+      fld_ "content" a.saMessage `shouldBe` Just (String "答案是")
 
     it "survives an unfamiliar frame between real ones" $ do
       let noisy =
@@ -203,6 +207,62 @@ spec = do
           a = runWith stepAnthropic cut
       (a.saText, a.saDone) `shouldBe` ("半", False)
 
+  describe "faithful replay" $ do
+    -- The whole reason streaming needed a second look: the assistant
+    -- turn goes back on the next request, so the merged message has to
+    -- match what a non-streamed call would have returned.
+    it "merges deltas back into one assistant message" $ do
+      let s =
+            rec_
+              [ "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"\"}}]}",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"上升\",\"vendor_extra\":{\"k\":1}}}]}",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"沿\"}}]}",
+                ""
+              ]
+          m = (runWith stepOpenAI s).saMessage
+      fld_ "role" m `shouldBe` Just (String "assistant")
+      fld_ "content" m `shouldBe` Just (String "上升沿")
+      -- A field we model nothing about still survives the round-trip.
+      fld_ "vendor_extra" m `shouldBe` Just (object ["k" .= (1 :: Int)])
+
+    -- Concatenating a repeated identifier would turn call_a into
+    -- call_acall_a and the provider would reject the replay.  Only the
+    -- fields that genuinely stream in pieces may concatenate.
+    it "does not concatenate an id a gateway repeats" $ do
+      let s =
+            rec_
+              [ "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"f\",\"arguments\":\"{\\\"q\\\":\"}}]}}]}",
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_a\",\"function\":{\"name\":\"f\",\"arguments\":\"1}\"}}]}}]}",
+                ""
+              ]
+          calls = accToolCalls (runWith stepOpenAI s)
+      map (\c -> (c.pcId, c.pcName, c.pcArgs)) calls
+        `shouldBe` [("call_a", "f", "{\"q\":1}")]
+
+    -- Extended thinking replays only if the signature comes back with
+    -- it; the API streams signature_delta for exactly this.
+    it "rebuilds an Anthropic thinking block with its signature" $ do
+      let s =
+            rec_
+              [ "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"\"}}",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"用辗转\"}}",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"相除\"}}",
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"EqQBCgIYAhIM\"}}",
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+                ""
+              ]
+          a = runWith stepAnthropic s
+      Map.lookup 0 a.saBlocks
+        `shouldBe` Just
+          ( object
+              [ "type" .= ("thinking" :: Text),
+                "thinking" .= ("用辗转相除" :: Text),
+                "signature" .= ("EqQBCgIYAhIM" :: Text)
+              ]
+          )
+      -- and the monologue never reaches what the group sees
+      a.saText `shouldBe` ""
+
   describe "accToolCalls" $
     it "returns calls in wire index order, not map order" $ do
       let a =
@@ -215,3 +275,9 @@ spec = do
                     ]
               }
       map pcName (accToolCalls a) `shouldBe` ["first", "second", "third"]
+
+-- | Read one field off a JSON object, for asserting on the rebuilt
+-- assistant message.
+fld_ :: Key -> Value -> Maybe Value
+fld_ k (Object o) = KM.lookup k o
+fld_ _ _ = Nothing

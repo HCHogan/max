@@ -2,6 +2,7 @@ module Max.Effects.LLMSpec (spec) where
 
 import Data.Aeson (Value (..), decode, eitherDecode, encode, object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Key (Key)
 import Data.Map.Strict qualified as Map
 import Data.Text (isPrefixOf)
 import Data.Aeson.Types (parseEither)
@@ -444,11 +445,21 @@ spec = do
 -- next request, so if it is wrong the failure is a 400 two turns later
 -- — far from the cause.  These pin the shape.
 
-streamAcc :: Text -> Text -> [(Int, PartialCall)] -> StreamAcc
-streamAcc text reasoning calls =
+streamAcc :: Text -> Value -> [(Int, PartialCall)] -> StreamAcc
+streamAcc text message calls =
   emptyAcc
     { saText = text,
-      saReasoning = reasoning,
+      saMessage = message,
+      saCalls = Map.fromList calls
+    }
+
+-- | An Anthropic accumulator: content blocks as the provider opened
+-- them, plus whatever tool arguments streamed in.
+blockAcc :: Text -> [(Int, Value)] -> [(Int, PartialCall)] -> StreamAcc
+blockAcc text blocks calls =
+  emptyAcc
+    { saText = text,
+      saBlocks = Map.fromList blocks,
       saCalls = Map.fromList calls
     }
 
@@ -462,7 +473,7 @@ streamingSpec :: Spec
 streamingSpec = do
   describe "rebuildOpenAI" $ do
     it "returns plain content when no call arrived" $
-      case rebuildOpenAI (streamAcc "上升沿圆角" "" []) of
+      case rebuildOpenAI (streamAcc "上升沿圆角" (Object mempty) []) of
         ContentResp t -> t `shouldBe` "上升沿圆角"
         other -> expectationFailure ("expected content: " <> show other)
 
@@ -470,7 +481,11 @@ streamingSpec = do
     -- because that is literally what happens: it is appended to the
     -- conversation and re-sent.
     it "round-trips through the ChatMessage parser" $ do
-      let acc = streamAcc "我查一下" "" [(0, PartialCall "call_a" "web_search" "{\"q\":\"探头\"}")]
+      let acc =
+            streamAcc
+              "我查一下"
+              (object ["role" .= ("assistant" :: Text), "content" .= ("我查一下" :: Text)])
+              [(0, PartialCall "call_a" "web_search" "{\"q\":\"探头\"}")]
       case rebuildOpenAI acc of
         r@(ToolCallsResp _ narration tcs) -> do
           narration `shouldBe` "我查一下"
@@ -480,40 +495,122 @@ streamingSpec = do
             Nothing -> expectationFailure "no raw message"
         other -> expectationFailure ("expected tool calls: " <> show other)
 
-    -- DeepSeek 400s when reasoning_content goes missing from a replayed
-    -- assistant turn.  Streaming can only replay what it accumulated,
-    -- which is the reason StreamAcc keeps it at all.
-    it "carries reasoning_content back into the rebuilt message" $ do
-      let acc = streamAcc "好" "先想想" [(0, PartialCall "c" "f" "{}")]
+    -- The replay is read off the merged message, not re-derived from
+    -- the handful of fields we model, so a provider field we know
+    -- nothing about still goes back.  DeepSeek's reasoning_content is
+    -- the one that bites (it 400s without it); vendor_extra stands in
+    -- for every field we haven't met yet.
+    it "carries every field the wire sent back into the replay" $ do
+      let acc =
+            streamAcc
+              "好"
+              ( object
+                  [ "role" .= ("assistant" :: Text),
+                    "reasoning_content" .= ("先想想" :: Text),
+                    "vendor_extra" .= ("keep me" :: Text)
+                  ]
+              )
+              [(0, PartialCall "c" "f" "{}")]
       case wireOf (rebuildOpenAI acc) of
-        Just (Object o) -> KM.lookup "reasoning_content" o `shouldBe` Just (String "先想想")
+        Just (Object o) -> do
+          KM.lookup "reasoning_content" o `shouldBe` Just (String "先想想")
+          KM.lookup "vendor_extra" o `shouldBe` Just (String "keep me")
         other -> expectationFailure ("expected an object: " <> show other)
 
-    it "omits reasoning_content when the provider streamed none" $
-      case wireOf (rebuildOpenAI (streamAcc "好" "" [(0, PartialCall "c" "f" "{}")])) of
-        Just (Object o) -> KM.member "reasoning_content" o `shouldBe` False
+    it "supplies role when a gateway never sent one" $
+      case wireOf (rebuildOpenAI (streamAcc "好" (Object mempty) [(0, PartialCall "c" "f" "{}")])) of
+        Just (Object o) -> KM.lookup "role" o `shouldBe` Just (String "assistant")
         other -> expectationFailure ("expected an object: " <> show other)
 
     -- Argument fragments are individually invalid JSON, so "didn't
     -- parse" means "didn't finish arriving".  Executing that on a guess
     -- is how a tool gets called with half its arguments.
     it "drops a call whose arguments never finished arriving" $
-      case rebuildOpenAI (streamAcc "" "" [(0, PartialCall "c" "f" "{\"q\":")]) of
+      case rebuildOpenAI (streamAcc "" (Object mempty) [(0, PartialCall "c" "f" "{\"q\":")]) of
         ContentResp t -> t `shouldBe` ""
         other -> expectationFailure ("expected the call to be dropped: " <> show other)
 
+    -- Replaying a call we never ran would leave the provider waiting
+    -- for a tool result that can't exist, so tool_calls comes from what
+    -- we execute — not from the merged message, which still holds the
+    -- broken fragment.
+    it "replays only the calls it actually executed" $ do
+      let acc =
+            streamAcc
+              ""
+              (object ["tool_calls" .= [object ["id" .= ("stale" :: Text)]]])
+              [(0, PartialCall "good" "f" "{}")]
+      case wireOf (rebuildOpenAI acc) of
+        Just (Object o) -> case KM.lookup "tool_calls" o of
+          Just (Array cs) ->
+            [fieldText "id" c | c <- V.toList cs] `shouldBe` [Just "good"]
+          other -> expectationFailure ("expected tool_calls: " <> show other)
+        other -> expectationFailure ("expected an object: " <> show other)
+
     it "treats absent arguments as an empty object" $
-      case rebuildOpenAI (streamAcc "" "" [(0, PartialCall "c" "no_args" "")]) of
+      case rebuildOpenAI (streamAcc "" (Object mempty) [(0, PartialCall "c" "no_args" "")]) of
         ToolCallsResp _ _ [tc] -> tc.callArguments `shouldBe` Object mempty
         other -> expectationFailure ("expected one call: " <> show other)
 
-  describe "rebuildAnthropic" $
-    it "puts text and tool_use in one content array" $
-      case wireOf (rebuildAnthropic (streamAcc "我看一眼" "" [(0, PartialCall "toolu_x" "view_image" "{\"id\":7405}")])) of
+  describe "rebuildAnthropic" $ do
+    it "puts the blocks back in wire order" $
+      case wireOf
+        ( rebuildAnthropic
+            ( blockAcc
+                "我看一眼"
+                [ (0, object ["type" .= ("text" :: Text), "text" .= ("我看一眼" :: Text)]),
+                  (1, object ["type" .= ("tool_use" :: Text), "id" .= ("toolu_x" :: Text), "name" .= ("view_image" :: Text)])
+                ]
+                [(1, PartialCall "toolu_x" "view_image" "{\"id\":7405}")]
+            )
+        ) of
         Just (Object o) -> case KM.lookup "content" o of
           Just (Array blocks) ->
-            map (blockType . V.toList . V.singleton) (V.toList blocks)
-              `shouldBe` [Just "text", Just "tool_use"]
+            [fieldText "type" b | b <- V.toList blocks] `shouldBe` [Just "text", Just "tool_use"]
+          other -> expectationFailure ("expected a content array: " <> show other)
+        other -> expectationFailure ("expected an object: " <> show other)
+
+    -- The one that used to be impossible.  A thinking block replays
+    -- with its signature, which the API streams as signature_delta
+    -- precisely so a client can rebuild the block; without it the
+    -- replayed turn is rejected.
+    it "replays a thinking block with its signature intact" $ do
+      let acc =
+            blockAcc
+              "答案是 21"
+              [ ( 0,
+                  object
+                    [ "type" .= ("thinking" :: Text),
+                      "thinking" .= ("用辗转相除" :: Text),
+                      "signature" .= ("EqQBCgIYAhIM" :: Text)
+                    ]
+                ),
+                (1, object ["type" .= ("tool_use" :: Text), "id" .= ("t1" :: Text), "name" .= ("f" :: Text)])
+              ]
+              [(1, PartialCall "t1" "f" "{}")]
+      case wireOf (rebuildAnthropic acc) of
+        Just (Object o) -> case KM.lookup "content" o of
+          Just (Array blocks) -> case V.toList blocks of
+            (Object t : _) -> do
+              KM.lookup "thinking" t `shouldBe` Just (String "用辗转相除")
+              KM.lookup "signature" t `shouldBe` Just (String "EqQBCgIYAhIM")
+            other -> expectationFailure ("expected a thinking block: " <> show other)
+          other -> expectationFailure ("expected a content array: " <> show other)
+        other -> expectationFailure ("expected an object: " <> show other)
+
+    it "fills a tool_use block's input from the accumulated arguments" $
+      case wireOf
+        ( rebuildAnthropic
+            ( blockAcc
+                ""
+                [(0, object ["type" .= ("tool_use" :: Text), "id" .= ("t1" :: Text), "name" .= ("view_image" :: Text)])]
+                [(0, PartialCall "t1" "view_image" "{\"id\":7405}")]
+            )
+        ) of
+        Just (Object o) -> case KM.lookup "content" o of
+          Just (Array blocks) -> case V.toList blocks of
+            [Object b] -> KM.lookup "input" b `shouldBe` Just (object ["id" .= (7405 :: Int)])
+            other -> expectationFailure ("expected one block: " <> show other)
           other -> expectationFailure ("expected a content array: " <> show other)
         other -> expectationFailure ("expected an object: " <> show other)
 
@@ -535,11 +632,11 @@ streamingSpec = do
           outs = map stripLeadingThink steps
       zip outs (drop 1 outs) `shouldSatisfy` all (uncurry isPrefixOf)
 
-blockType :: [Value] -> Maybe Text
-blockType [Object b] = case KM.lookup "type" b of
+fieldText :: Key -> Value -> Maybe Text
+fieldText k (Object o) = case KM.lookup k o of
   Just (String t) -> Just t
   _ -> Nothing
-blockType _ = Nothing
+fieldText _ _ = Nothing
 
 isRight :: Either a b -> Bool
 isRight = either (const False) (const True)

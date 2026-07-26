@@ -58,6 +58,7 @@ module Max.Effects.LLM
 where
 
 import Control.Applicative ((<|>))
+import Data.List (find)
 import Data.Maybe (isJust)
 import Control.Lens ((&), (.~))
 import Data.Aeson
@@ -152,14 +153,17 @@ data LLMProfile = LLMProfile
     -- paragraphs can go out while the model is still writing.  Default
     -- 'True'.
     --
-    -- Per-profile because every provider ships its own SSE dialect
-    -- (usage in a terminal frame or not at all, @[DONE]@ or a bare
-    -- @finish_reason@, keep-alive comment lines), and because
-    -- reconstructing a tool-call turn from deltas is lossy — see
-    -- 'rebuildOpenAI'.  Turn it off when a provider misbehaves, or on
-    -- an Anthropic profile running extended thinking, whose block
-    -- signatures cannot be rebuilt.  With it off the profile takes the
-    -- ordinary request-response path and nothing about it changes.
+    -- Per-profile purely as an escape hatch: every provider ships its
+    -- own SSE dialect (usage in a terminal frame or not at all,
+    -- @[DONE]@ or a bare @finish_reason@, keep-alive comment lines),
+    -- and when one misbehaves the fix should be a config edit rather
+    -- than a deploy.  With it off the profile takes the ordinary
+    -- request-response path and nothing about it changes.
+    --
+    -- Replaying the assistant turn is /not/ a reason to turn it off:
+    -- both protocols are designed so a stream reconstructs the message
+    -- (see 'rebuildOpenAI', 'rebuildAnthropic'), reasoning and thinking
+    -- blocks included.
     stream :: !Bool
   }
   deriving stock (Show)
@@ -617,73 +621,93 @@ streamFieldsOpenAI =
 
 -- | Rebuild an OpenAI assistant message from the accumulator.
 --
--- __Lossy on purpose, and this is the reason streaming is opt-in per
--- profile.__  'ToolCallsResp' normally carries the provider's message
--- byte-for-byte so reasoning fields round-trip; a stream gives us
--- deltas, so the message is reconstructed from the parts we model.
--- @reasoning_content@ survives (it streams as its own delta and
--- DeepSeek 400s without it); anything else a provider hides in the
--- assistant turn does not.  A profile that needs more keeps
--- @stream = false@.
+-- 'ToolCallsResp' normally carries the provider's message byte-for-byte
+-- so its reasoning fields round-trip (DeepSeek 400s when
+-- @reasoning_content@ goes missing).  A stream never sends that message
+-- — it sends deltas — so "Max.LLM.Stream" merges them back into one,
+-- and this reads the result rather than re-deriving a message from the
+-- few fields we happen to model.
+--
+-- @tool_calls@ is the exception: it comes from 'parsedCalls', not from
+-- the merged message.  A call whose arguments never finished arriving
+-- is dropped, and replaying a call we never executed would leave the
+-- provider waiting for a tool result that can't exist.  What we send
+-- back must match what we answer.
 rebuildOpenAI :: StreamAcc -> ChatResponse
 rebuildOpenAI acc = case parsedCalls acc of
   [] -> ContentResp (stripLeadingThink acc.saText)
   tcs ->
     ToolCallsResp
-      ( object $
-          [ "role" .= ("assistant" :: Text),
-            "content" .= if T.null acc.saText then Null else toJSON acc.saText,
-            "tool_calls"
-              .= [ object
-                     [ "id" .= tc.callId,
-                       "type" .= ("function" :: Text),
-                       "function"
-                         .= object
-                           [ "name" .= tc.callName,
-                             -- Back to the stringified form the wire
-                             -- wants; we parsed it only to validate.
-                             "arguments" .= TE.decodeUtf8 (LBS.toStrict (encode tc.callArguments))
-                           ]
-                     ]
-                   | tc <- tcs
-                 ]
-          ]
-            <> ["reasoning_content" .= acc.saReasoning | not (T.null acc.saReasoning)]
-      )
+      (withFields acc.saMessage (roleField <> [("tool_calls", toJSON (map wireCall tcs))]))
       (stripLeadingThink acc.saText)
       tcs
+  where
+    -- Present in the first delta; supplied only if some gateway omits it.
+    roleField
+      | hasKey "role" acc.saMessage = []
+      | otherwise = ["role" .= ("assistant" :: Text)]
+    wireCall tc =
+      object
+        [ "id" .= tc.callId,
+          "type" .= ("function" :: Text),
+          "function"
+            .= object
+              [ "name" .= tc.callName,
+                -- Back to the stringified form the wire wants; we parsed
+                -- it only to check it was whole.
+                "arguments" .= TE.decodeUtf8 (LBS.toStrict (encode tc.callArguments))
+              ]
+        ]
 
--- | Rebuild an Anthropic assistant turn: text blocks then @tool_use@
--- blocks.
+-- | Rebuild an Anthropic assistant turn from the accumulated content
+-- blocks, in wire order and in the shape the provider opened them with.
 --
--- Same caveat as 'rebuildOpenAI', and one more: @thinking@ blocks
--- carry a signature that must replay exactly, and a reconstruction
--- can't produce one.  Do not enable streaming on an Anthropic profile
--- running extended thinking.
+-- @thinking@ blocks replay intact: the API streams a @signature_delta@
+-- just before the block closes precisely so a client can rebuild one,
+-- and a thinking block without its signature is rejected.  Blocks of a
+-- type we don't model survive too, because they are carried rather than
+-- paraphrased.
+--
+-- @tool_use@ blocks take their @input@ from 'parsedCalls' — the deltas
+-- carry it as partial JSON text, and a call that never finished
+-- arriving is dropped from both the replay and the execution list, for
+-- the reason 'rebuildOpenAI' gives.
 rebuildAnthropic :: StreamAcc -> ChatResponse
 rebuildAnthropic acc = case parsedCalls acc of
   [] -> ContentResp (stripLeadingThink acc.saText)
   tcs ->
     ToolCallsResp
-      ( object
-          [ "role" .= ("assistant" :: Text),
-            "content"
-              .= ( [ object ["type" .= ("text" :: Text), "text" .= acc.saText]
-                   | not (T.null acc.saText)
-                   ]
-                     <> [ object
-                            [ "type" .= ("tool_use" :: Text),
-                              "id" .= tc.callId,
-                              "name" .= tc.callName,
-                              "input" .= tc.callArguments
-                            ]
-                          | tc <- tcs
-                        ]
-                 )
-          ]
-      )
+      (object ["role" .= ("assistant" :: Text), "content" .= content tcs])
       (stripLeadingThink acc.saText)
       tcs
+  where
+    content tcs =
+      [ block
+        | b <- Map.elems acc.saBlocks,
+          Just block <- [finish tcs b]
+      ]
+    finish tcs b = case fieldOf "type" b of
+      Just (String "tool_use") -> do
+        cid <- fieldOf "id" b
+        tc <- find ((== cid) . toJSON . (.callId)) tcs
+        pure (withFields b ["input" .= tc.callArguments])
+      _ -> Just b
+
+fieldOf :: Key -> Value -> Maybe Value
+fieldOf k (Object o) = KM.lookup k o
+fieldOf _ _ = Nothing
+
+hasKey :: Key -> Value -> Bool
+hasKey k (Object o) = KM.member k o
+hasKey _ _ = False
+
+-- | Overwrite fields on a JSON object, leaving everything else as it
+-- came off the wire.
+withFields :: Value -> [Pair] -> Value
+withFields (Object o) extra = Object (KM.union (KM.fromList extra) o')
+  where
+    o' = foldr (KM.delete . fst) o extra
+withFields v _ = v
 
 -- | Tool calls whose accumulated argument text is whole, valid JSON.
 -- A call that isn't gets dropped rather than executed on a guess: the
