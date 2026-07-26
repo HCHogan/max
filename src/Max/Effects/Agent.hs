@@ -217,7 +217,7 @@ data Agent :: Effect where
     DispatchContext ->
     Text ->
     [ChatMessage] ->
-    (Text -> m ()) ->
+    (Text -> m Bool) ->
     Agent m AgentResult
 
 type instance DispatchOf Agent = Dynamic
@@ -253,7 +253,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
       )
   where
     loop ::
-      (Text -> Eff (Tools : es) ()) ->
+      (Text -> Eff (Tools : es) Bool) ->
       DispatchContext ->
       TaskHandle ->
       Text ->
@@ -262,7 +262,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     loop emit dc h profile = go emit dc h 0 [] profile
 
     go ::
-      (Text -> Eff (Tools : es) ()) ->
+      (Text -> Eff (Tools : es) Bool) ->
       DispatchContext ->
       TaskHandle ->
       Int ->
@@ -477,7 +477,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     -- we have still said that much, and re-releasing the same paragraph
     -- on the next frame would say it twice.
     releaseParagraphs ::
-      (Text -> Eff (Tools : es) ()) ->
+      (Text -> Eff (Tools : es) Bool) ->
       TVar Text ->
       Text ->
       Eff (Tools : es) ()
@@ -485,8 +485,14 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
       sent <- liftIO (readTVarIO sentRef)
       let (ready, _held) = readyPrefix (T.drop (T.length sent) soFar)
       when (not (T.null (T.strip ready))) $ do
-        liftIO (atomically (writeTVar sentRef (sent <> ready)))
-        emit ready
+        -- The sink may refuse — it is the one holding the message
+        -- budget, and once that is down to its last slot everything
+        -- further belongs to the final send.  Only advance the mark
+        -- when it actually took the text, or the refused paragraph
+        -- would count as said and never go out at all.
+        taken <- emit ready
+        when taken $
+          liftIO (atomically (writeTVar sentRef (sent <> ready)))
 
     -- Notes that arrived mid-turn, from !feedback or from a message the
     -- classifier read as steering.  Marked so the model can tell them
@@ -608,7 +614,7 @@ agentTurn ::
   [ChatMessage] ->
   -- | Where finished paragraphs go while the model is still writing.
   -- See 'AgentTurn'.
-  (Text -> Eff es ()) ->
+  (Text -> Eff es Bool) ->
   Eff es AgentResult
 agentTurn dc profile msgs emit = send (AgentTurn dc profile msgs emit)
 

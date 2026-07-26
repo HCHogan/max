@@ -40,6 +40,7 @@ module Max.ReplySend
   ( ReplyTarget (..),
     SendBudget (..),
     freshBudget,
+    canStream,
     sendAndPersistReply,
     messageImageSegs,
     chunkDelayMicros,
@@ -116,6 +117,24 @@ data SendBudget = SendBudget
 
 freshBudget :: SendBudget
 freshBudget = SendBudget {sbSentImages = Set.empty, sbChunksLeft = maxChunks}
+
+-- | May a streaming sink still send, or must it hold what it has for
+-- the final send?
+--
+-- The last slot is reserved on purpose.  'sendAndPersistReply' folds an
+-- over-budget reply into one last message rather than dropping its tail
+-- — right for a call that sends a whole reply, and a hole when a reply
+-- arrives as N calls, because each one then gets that fold for free and
+-- the ceiling stops existing.  Production found it immediately: a
+-- 12-paragraph answer went out as 12 messages against a cap of 10, with
+-- the fold landing in the /middle/ of the reply.
+--
+-- Stopping at one leaves exactly the room 'Max.Reply.capChunks' would
+-- have used, so a streamed reply and an unstreamed one produce the same
+-- number of messages, and anything the sink declines accumulates into
+-- that final merged message where it belongs.
+canStream :: SendBudget -> Bool
+canStream b = b.sbChunksLeft > 1
 
 -- | Send the model's text as planned by 'planReply' — one message per
 -- blank-line paragraph, markdown tables rendered to a PNG via typst

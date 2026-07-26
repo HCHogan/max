@@ -10,7 +10,7 @@ module Max.ReplySendSpec (spec) where
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Reply (Chunk (..), chunkSource, maxChunks, planReply, readyPrefix)
-import Max.ReplySend (capTo)
+import Max.ReplySend (SendBudget (..), canStream, capTo, freshBudget)
 import Test.Hspec
 
 -- | What the group ends up seeing, as plain text per message.
@@ -131,7 +131,49 @@ spec = do
       mapM_ (\c -> folded `shouldSatisfy` T.isInfixOf (chunkSource c)) cs
 
     -- An exhausted budget still says the rest rather than dropping it;
-    -- a dropped tail would read as the bot trailing off.
+    -- a dropped tail would read as the bot trailing off.  Correct for a
+    -- call that sends a whole reply — and the exact hole 'canStream'
+    -- closes for a reply that arrives as many calls.
     it "still sends one merged message on an exhausted budget" $ do
       let cs = map (TextChunk . T.pack . show) [1 :: Int .. 3]
       capTo 0 cs `shouldBe` [TextChunk "1\n\n2\n\n3"]
+
+  -- Production found this within two minutes of the deploy: a
+  -- 12-paragraph answer went out as 12 messages against a cap of 10,
+  -- with the over-budget fold landing in the middle of the reply
+  -- instead of at its end.  Each streamed paragraph is its own call to
+  -- 'sendAndPersistReply', and "always send at least one" per call adds
+  -- up to no ceiling at all.
+  describe "canStream" $ do
+    it "lets a sink spend while there is room to spare" $
+      canStream freshBudget {sbChunksLeft = 2} `shouldBe` True
+
+    -- The last slot belongs to the final send, which is where the fold
+    -- has to happen for the merged message to land at the end.
+    it "reserves the last slot for the final send" $
+      canStream freshBudget {sbChunksLeft = 1} `shouldBe` False
+
+    it "stays refused once spent" $
+      canStream freshBudget {sbChunksLeft = 0} `shouldBe` False
+
+    -- The property that was actually violated: however a reply is cut
+    -- up, it costs the same number of messages as sending it whole.
+    it "makes a streamed reply cost the same as an unstreamed one" $ do
+      let paras = [T.pack ("段落 " <> show i) | i <- [1 :: Int .. 14]]
+          -- Walk the paragraphs the way the sink does: spend while
+          -- allowed, then hand everything left to the final send.
+          step (budget, sent) p
+            | canStream budget =
+                let planned = capTo budget.sbChunksLeft (planReply p)
+                 in ( budget {sbChunksLeft = budget.sbChunksLeft - length planned},
+                      sent <> planned
+                    )
+            | otherwise = (budget, sent)
+          (leftover, streamed) = foldl step (freshBudget, []) paras
+          heldBack = drop (length streamed) paras
+          final = capTo leftover.sbChunksLeft (planReply (T.intercalate "\n\n" heldBack))
+      length (streamed <> final) `shouldBe` maxChunks
+      length (planReply (T.intercalate "\n\n" paras)) `shouldBe` maxChunks
+      -- and nothing the model wrote was dropped on the way
+      let saidAll = T.concat (map chunkSource (streamed <> final))
+      mapM_ (\p -> saidAll `shouldSatisfy` T.isInfixOf p) paras

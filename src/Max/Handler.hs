@@ -52,7 +52,7 @@ import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Tasks (TaskCancelled (..), TaskId (..), TaskInfo (..), beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
 import Max.Reply (stripHallucinatedTokens)
-import Max.ReplySend (ReplyTarget (..), freshBudget, sendAndPersistReply)
+import Max.ReplySend (ReplyTarget (..), canStream, freshBudget, sendAndPersistReply)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..), Response (..), extractOutMid, sendChatMsg)
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
@@ -728,8 +728,15 @@ dispatchLLM origin absorbable gm = do
       streamBudget <- liftIO (newTVarIO freshBudget)
       let emit para = do
             b <- liftIO (readTVarIO streamBudget)
-            b' <- sendAndPersistReply target b (cleanReply para)
-            liftIO (atomically (writeTVar streamBudget b'))
+            -- Refusing is how the message ceiling survives being split
+            -- across N sends; see 'canStream'.  The loop keeps whatever
+            -- we decline and it goes out with the final reply.
+            if not (canStream b)
+              then pure False
+              else do
+                b' <- sendAndPersistReply target b (cleanReply para)
+                liftIO (atomically (writeTVar streamBudget b'))
+                pure True
       result <- agentTurn dc s.model ctx emit
       case result.reply of
         -- The loop produced no model-authored reply — upstream API
