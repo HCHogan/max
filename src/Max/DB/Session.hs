@@ -45,13 +45,15 @@ data Row = Row
     rPinned :: !Value,
     rDebugOverride :: !(Maybe Bool),
     rStickerOverride :: !(Maybe Bool),
-    rProactiveOverride :: !(Maybe Bool)
+    rProactiveOverride :: !(Maybe Bool),
+    rContextAnchor :: !(Maybe UTCTime)
   }
 
 instance FromRow Row where
   fromRow =
     Row
       <$> field
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -70,7 +72,7 @@ fetchOrInit ::
 fetchOrInit (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override \
+      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor \
       \  FROM sessions \
       \  WHERE group_id = ?"
       (Only gid)
@@ -86,7 +88,8 @@ fetchOrInit (GroupId gid) defaultModel = do
                 pinned = [],
                 debugOverride = Nothing,
                 stickerOverride = Nothing,
-                proactiveOverride = Nothing
+                proactiveOverride = Nothing,
+                contextAnchor = Nothing
               }
       upsertSession initial
       pure initial
@@ -98,8 +101,8 @@ upsertSession s = do
       pin = Jsonb (toJSON s.pinned)
   void $
     execute
-      "INSERT INTO sessions (group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override) \
-      \ VALUES (?,?,?,?,?,?,?,?) \
+      "INSERT INTO sessions (group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor) \
+      \ VALUES (?,?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (group_id) DO UPDATE SET \
       \   model              = EXCLUDED.model, \
       \   persona            = EXCLUDED.persona, \
@@ -108,8 +111,9 @@ upsertSession s = do
       \   debug_override     = EXCLUDED.debug_override, \
       \   sticker_override   = EXCLUDED.sticker_override, \
       \   proactive_override = EXCLUDED.proactive_override, \
+      \   context_anchor     = EXCLUDED.context_anchor, \
       \   updated_at         = now()"
-      ((gid, s.model, s.persona, s.clearedAt, pin) :. (s.debugOverride, s.stickerOverride, s.proactiveOverride))
+      ((gid, s.model, s.persona, s.clearedAt, pin) :. (s.debugOverride, s.stickerOverride, s.proactiveOverride, s.contextAnchor))
 
 --------------------------------------------------------------------------------
 
@@ -125,7 +129,8 @@ rowToSession defaultModel r =
       pinned = decodeOrEmpty r.rPinned,
       debugOverride = r.rDebugOverride,
       stickerOverride = r.rStickerOverride,
-      proactiveOverride = r.rProactiveOverride
+      proactiveOverride = r.rProactiveOverride,
+      contextAnchor = r.rContextAnchor
     }
   where
     -- Tolerate junk in jsonb columns (e.g. older shape we don't know

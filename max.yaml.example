@@ -23,7 +23,21 @@ persona: |
 # migrations_dir: migrations
 # images_dir: var/images
 # image_workers: 4
-# history_window: 20
+
+# How much conversation the prompt carries.  The transcript grows
+# rather than slides: it is "everything since an anchor", so its
+# rendered prefix stays byte-identical between dispatches and a
+# provider's prefix cache can cover it.  Past history_max the anchor
+# jumps forward, leaving history_window messages.
+#
+# The gap between them is how many dispatches share a cached prefix.
+# Widening it raises the hit rate but also the average prompt, which
+# you pay for in full on the calls that miss — a quiet group whose
+# dispatches are further apart than the provider's cache TTL
+# (Anthropic: 5 min) misses every time.  Watch cached_prompt_tokens
+# against prompt_tokens in the logs before opening it up.
+# history_window: 40
+# history_max: 80
 
 # On SIGTERM the bot stops taking new @-triggers and waits this long for
 # the dispatches already running before tearing down.  Keep systemd's

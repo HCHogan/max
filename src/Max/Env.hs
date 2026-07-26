@@ -33,8 +33,10 @@ import Max.Tasks (TaskRegistry)
 data BotEnv = BotEnv
   { -- | Persona used when a session hasn't overridden it ('AppConfig.persona').
     bePersona :: !Text,
-    -- | Ambient history window size ('AppConfig.historyWindow').
+    -- | Transcript low-water mark (see 'Max.Config.historyWindow').
     beHistoryWindow :: !Int,
+    -- | Transcript high-water mark (see 'Max.Config.historyMax').
+    beHistoryMax :: !Int,
     -- | Blob store root ('AppConfig.imagesDir'); image local paths are
     -- relative to it.
     beBlobRoot :: !FilePath,

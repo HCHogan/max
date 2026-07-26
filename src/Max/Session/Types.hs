@@ -27,6 +27,15 @@ data Session = Session
     -- from the prompt.  'Nothing' means no filtering.  Pinned messages
     -- (see 'pinned') bypass this entirely.  Survives across restarts.
     clearedAt :: !(Maybe UTCTime),
+    -- | Where the prompt's transcript starts, so it grows instead of
+    -- sliding: "everything since this" is a prefix that only gets
+    -- longer, which is what lets a provider's prefix cache cover it.
+    -- Moves in one step when the message count passes the high-water
+    -- mark, back down to the low-water mark ('AppConfig.historyWindow'
+    -- \/ 'AppConfig.historyMax').  'Nothing' until the first dispatch
+    -- that overflows.  Distinct from 'clearedAt', which is a user
+    -- decision @!unclear@ can undo; this is bookkeeping.
+    contextAnchor :: !(Maybe UTCTime),
     -- | Explicit message_ids the user pinned via @!pin@.  These get
     -- included in every prompt regardless of 'clearedAt'.  Order
     -- preserved (display reflects user's pin order).

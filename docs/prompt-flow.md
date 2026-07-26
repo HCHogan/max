@@ -25,11 +25,17 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 2. `@bot` / 引用 bot / 私聊 / 意图识别 / 戳一戳 触发 dispatch。
 3. `buildContext` 查库拼上下文：
    - **transcript**：两条查询归并成一份按时间排序的转录（按 message_id 去重）——
-     `fetchRecentInGroup` 取最近 **40** 条（`history_window`，默认 40），
-     `fetchMentionHistory` 取最近 40 条**跟 bot 有关**的（bot 自己的行、@ 它的、
-     回复它的、它回复过的）。两条上限一样但过滤不同,所以回溯距离不同：热闹的群里
-     后者能捞回前者早就冲掉的往来，只查一条会让 bot 对自己对话的记忆被群里的
-     水量稀释。私聊里最近 40 条本身就是全部往来，第二条查询会返回同样的行，跳过；
+     `fetchRecentInGroup` 取最近的消息，`fetchMentionHistory` 取最近**跟 bot 有关**
+     的（bot 自己的行、@ 它的、回复它的、它回复过的）。两条上限一样但过滤不同，
+     所以回溯距离不同：热闹的群里后者能捞回前者早就冲掉的往来，只查一条会让 bot
+     对自己对话的记忆被群里的水量稀释。私聊里最近的消息本身就是全部往来，第二条
+     查询会返回同样的行，跳过；
+   - **窗口是"锚点以来"而不是"最近 N 条"**。滑动窗口每来一条消息就会换掉转录的
+     第一行，而前缀缓存在第一个变化的字节处就断了——于是每次 dispatch 都要为整份
+     转录付全价。锚点让转录只增不减（是个真正的前缀），攒到 `history_max`（默认 80）
+     时一次性前跳，留下 `history_window`（默认 40）条。两个数之间的差就是多少次
+     dispatch 共用一份缓存前缀。锚点存在 `sessions.context_anchor`，和 `!clear`
+     的水位线取较晚者；`!unclear` 不动它（那撤的是用户的决定，这个是记账）。
    - pin、引用链（引用目标 + 其附件文件 + 转发展开 ≤30 行）、记忆、群信息；
    - sticker 有 caption 的换成 `[sticker#id: 描述]`；普通图片/视频有简介的
      （media caption worker 用视觉模型后台生成，视频取首帧）渲染成
@@ -55,8 +61,10 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
   // temperature 未配置就整个省略（zen 网关对部分模型只接受 1.0）
   "messages": [
 
-    // ───── [0] system：persona + 场景 + 台下设定 + 风格 + 标记表 + environment + 记忆 ─────
-    // 易变的 environment/记忆在最后：前面全部逐字节稳定，前缀缓存跨 dispatch 存活
+    // ───── [0] system：persona + 场景 + 台下设定 + 风格 + 标记表 ─────
+    // 整块跨 dispatch 逐字节相同。environment（含时钟）和记忆都不在这里——
+    // 前缀缓存在第一个变化的字节处就断，system 里放个时钟等于把缓存上限
+    // 锁死在这一段。它们挪到了下面 user 正文的转录之后。
     {
       "role": "system",
       "content": "你是 Max，一个银白头发、蓝色挑染、别着鲨鱼发夹的鲨鱼女孩——人的样子，带点鲨鱼习性，不是一条鱼。头像里那个眼睛半睁挂着泪、没睡醒表情的就是你：常年低电量，慵懒待机，能躺着绝不坐着。
@@ -92,21 +100,6 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 [@#223344556: 名字]、[forward#7519]；纯展示：行首 [HH:MM <name> #id]:、[↩ quoted …]、
 [card: …]（B站卡 view_bilibili、知乎卡 view_zhihu）、[file:<name>]（import_file_to_sandbox）。
 铁律：动作只有那 8 个；工具名写进方括号（如 [find_stickers query=...]）不会执行。
-
-[environment]
-  现在：2026-07-22（周三） 23:10
-  群号：114514191
-  群名：单片机与嵌入式交流（47人）
-  群主：老张（777888999）；管理员：阿飞（223344556）
-  当前模型：kimi-k2.7-code
-  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#777888999]=老张、[@#445566778]=小美
-
-[memories — 背景备忘]
-仅在与当前话题相关时参考，不要主动提及；与对话矛盾时以对话为准（可 memory_update）。
-本群:
-  (#12 2026-07-01) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅
-关于当前发言者 <阿飞>（跨群）:
-  (#31 2026-06-18) 阿飞在做一个 LoRa 气象站毕设
 "
     },
 
@@ -155,6 +148,21 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 [22:56 阿飞 #7409]: [card: 哔哩哔哩 | 【教程】示波器探头10X档到底干嘛用的 | UP主：某电子人 | https://b23.tv/abc123]
 [22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了
 [22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买
+
+[environment]
+  现在：2026-07-22（周三） 23:10
+  群号：114514191
+  群名：单片机与嵌入式交流（47人）
+  群主：老张（777888999）；管理员：阿飞（223344556）
+  当前模型：kimi-k2.7-code
+  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#777888999]=老张、[@#445566778]=小美
+
+[memories — 背景备忘]
+仅在与当前话题相关时参考，不要主动提及；与对话矛盾时以对话为准（可 memory_update）。
+本群:
+  (#12 2026-07-01) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅
+关于当前发言者 <阿飞>（跨群）:
+  (#31 2026-06-18) 阿飞在做一个 LoRa 气象站毕设
 
 [quoted context]
 [↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]
@@ -227,10 +235,14 @@ JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →
 
 要点：
 
-- **易变内容全在 system prompt 末尾**：[environment]（含当前时间）和 [memories]
-  放最后，前面的 persona/风格/标记表跨 dispatch 逐字节相同——provider 的前缀
-  缓存能从一次 dispatch 活到下一次（效果看日志里的 cached_prompt_tokens）。
-- **私聊**时：转录就是最近 40 条本身（不再另查 mention）；system 里场景块换
+- **易变内容排在可缓存内容之后**。system prompt 只剩 persona + 格式指南，跨
+  dispatch 逐字节相同；`[environment]`（含当前时间）和 `[memories]` 挪进了
+  user 正文，位置在转录之后、当前消息之前。前缀缓存在第一个变化的字节处就断，
+  所以 system prompt 里放一个时钟等于把缓存上限锁死在"persona + 格式指南"，
+  不管下面的对话多稳定。顺序：`[pinned]` → `[recent messages]` → `[environment]`
+  → `[memories]` → `[quoted context]` → `[current message]`（效果看日志里的
+  cached_prompt_tokens / prompt_tokens）。
+- **私聊**时：转录就是最近的消息本身（不再另查 mention）；system 里场景块换
   私聊版、没有"引用要主动用"那条。
 - **非多模态 profile**：最后一条 user 是纯字符串 `content`，图片保持
   `[image]` 文字标记，标记表里的说明也换成"你看不到内容"。
@@ -458,7 +470,8 @@ view_video 的描述里写"同一个视频看一次就够了"）。
 
 | 项 | 值 | 出处 |
 |---|---|---|
-| 历史窗口（ambient / mention 各自） | 40 条 | `history_window` 默认，Config.hs |
+| 转录低水位（锚点前跳后留下的条数） | 40 条 | `history_window` 默认，Config.hs |
+| 转录高水位（触发前跳的条数） | 80 条 | `history_max` 默认，Config.hs |
 | prompt 内联图片上限 | 8 张 | `maxPromptImages`，Prompt.hs |
 | 单张图片字节上限 | 20 MiB | `maxImageBytes` |
 | prompt 内联视频上限 | 2 个 | `maxPromptVideos` |

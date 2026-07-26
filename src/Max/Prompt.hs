@@ -8,6 +8,7 @@ module Max.Prompt
     PromptInputs (..),
     PromptImage (..),
     renderContext,
+    applyWatermark,
     contextRoster,
     applyStickerCaptions,
     applyVideoCaptions,
@@ -187,11 +188,9 @@ data PromptImage = PromptImage
 systemPrompt ::
   Bool -> -- multimodal
   Bool -> -- private chat
-  Text -> -- environment block
   Text -> -- persona
-  Maybe Text -> -- memory block
   Text
-systemPrompt multimodal' private envText persona mMemBlock =
+systemPrompt multimodal' private persona =
   T.unlines $
     [ persona,
       "",
@@ -273,13 +272,13 @@ systemPrompt multimodal' private envText persona mMemBlock =
            "  [split]",
            "  [sticker#42]"
          ]
-      -- Volatile content (envText carries the current time and the
-      -- per-turn roster; memories change per group/speaker) sits at
-      -- the very end: everything above is byte-identical across
-      -- dispatches, so providers' prefix caches survive from one turn
-      -- of a busy group to the next.
-      <> ["", envText]
-      <> maybe [] (\b -> ["", b]) mMemBlock
+      -- Nothing volatile below this point.  The environment block
+      -- (current time, per-turn roster) and the memory block used to
+      -- sit here at the end; they now live in the user message, after
+      -- the transcript.  A prefix cache stops at the first byte that
+      -- changed, so a clock in the system prompt capped every provider
+      -- cache at "persona + format guide" no matter how stable the
+      -- conversation below it was.
 
 -- | Build the chat context for one @bot trigger.  Runs the DB
 -- fetches, then hands off to the pure 'renderContext'.
@@ -293,7 +292,8 @@ systemPrompt multimodal' private envText persona mMemBlock =
 buildContext ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   Text -> -- default persona (used when session has no override)
-  Int -> -- history window size
+  Int -> -- transcript low-water mark: what an overflow trims back to
+  Int -> -- transcript high-water mark: the count that triggers a trim
   Bool -> -- multimodal: load + attach inline images
   Bool -> -- history as user/assistant turns (see 'PromptInputs.historyTurns')
   TriggerOrigin -> -- what woke the bot (see 'PromptInputs.origin')
@@ -303,29 +303,44 @@ buildContext ::
   Set Int64 -> -- triggers another turn is already answering (see 'PromptInputs.inFlight')
   Session ->
   GroupMessage ->
-  Eff es [ChatMessage]
-buildContext defaultPersona n multimodal' historyTurns' origin' blobRoot tz' brief inFlight' s gm = do
+  -- | The prompt, and the new 'Session.contextAnchor' when this
+  -- dispatch moved it.  Returned rather than written here so the
+  -- caller commits it through the session registry it already owns —
+  -- and so a dispatch that crashes before replying doesn't leave a
+  -- moved anchor behind.
+  Eff es ([ChatMessage], Maybe UTCTime)
+buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin' blobRoot tz' brief inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
       UserId senderId = gm.userId
-  -- Two queries, one transcript.  Both are capped at @n@ rows but
-  -- filter differently, so they reach back different distances: the
-  -- recent-messages window is the last @n@ messages full stop, while
-  -- the mention window is the last @n@ messages that involve the bot
-  -- and in a busy group can reach back hours further.  Dropping the
-  -- second query would quietly shorten the bot's memory of its own
-  -- conversation to whatever survives the group's chatter volume.
+  -- Two queries, one transcript.  They filter differently, so they
+  -- reach back different distances: the recent-messages query is the
+  -- last N messages full stop, the mention query the last N that
+  -- involve the bot — which in a busy group is hours further back.
+  -- Dropping the second would quietly shorten the bot's memory of its
+  -- own conversation to whatever survives the group's chatter volume.
   --
   -- In a private chat every message is part of the bot conversation,
   -- so the recent-messages query already is the whole thread and the
   -- mention query would return the same rows again.
-  recent <- fetchRecentInGroup gid mid s.clearedAt n
+  --
+  -- The floor is the later of @!clear@'s watermark and the transcript
+  -- anchor, and both queries fetch one row past the high-water mark so
+  -- an overflow is detectable rather than silently truncated by LIMIT.
+  let floor' = laterOf s.clearedAt s.contextAnchor
+      fetchLimit = highWater + 1
+  recent <- fetchRecentInGroup gid mid floor' fetchLimit
   thread <-
     if isPrivateChat gm.groupId
       then pure []
-      else fetchMentionHistory gid selfId' mid s.clearedAt n
-  let transcript' = mergeHistory recent thread
+      else fetchMentionHistory gid selfId' mid floor' fetchLimit
+  let merged = mergeHistory recent thread
+      -- Growing, not sliding: the anchor holds still for many
+      -- dispatches so the rendered prefix stays byte-identical and a
+      -- provider cache can cover it, then jumps in one step.  One miss
+      -- every (high - low) dispatches beats one every dispatch.
+      (transcript', movedAnchor) = applyWatermark lowWater highWater merged
   pinnedItems' <- fetchMessagesByIds s.pinned
   groupMems <- listMemories ScopeGroup gid gid
   userMems <- listMemories ScopeUser senderId gid
@@ -437,7 +452,7 @@ buildContext defaultPersona n multimodal' historyTurns' origin' blobRoot tz' bri
         take maxPromptVideos . concat <$> traverse (loadMessageVideos blobRoot) cands
       else pure []
   now' <- liftIO getCurrentTime
-  pure $
+  pure . (,movedAnchor) $
     renderContext
       PromptInputs
         { defaultPersona = defaultPersona,
@@ -968,6 +983,8 @@ renderContext pi' =
           selfId'
           pi'.origin
           mTranscript
+          envText
+          memBlock
           pi'.replyCtx
           pi'.pinnedItems
           pi'.triggerForward
@@ -1000,7 +1017,7 @@ renderContext pi' =
       -- also removes the last way two consecutive same-role messages
       -- could reach a strict provider: there is exactly one of each.
       messages =
-        [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) envText effectivePersona memBlock)]
+        [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) effectivePersona)]
           <> historyTurnMessages pi'.tz selfId' turnRows
           <> [userMessage]
    in messages
@@ -1034,6 +1051,41 @@ memoryLine tz' m =
     <> fmtDate tz' m.memUpdatedAt
     <> ") "
     <> oneLine m.memContent
+
+-- | The later of two optional floors — @!clear@'s watermark and the
+-- transcript anchor.  Either may be absent; both present means the
+-- stricter one wins.
+laterOf :: Maybe UTCTime -> Maybe UTCTime -> Maybe UTCTime
+laterOf a b = case (a, b) of
+  (Just x, Just y) -> Just (max x y)
+  (Just x, Nothing) -> Just x
+  (Nothing, y) -> y
+
+-- | Trim the transcript when it has grown past @high@, back to @low@,
+-- and report the anchor the caller should persist.
+--
+-- Trimming in one step is the whole point: cutting a row per dispatch
+-- would change the transcript's first line every time, which is
+-- exactly the sliding window this replaced.  Under the mark nothing
+-- moves and 'Nothing' comes back, so the common case writes no anchor
+-- at all.
+applyWatermark :: Int -> Int -> [HistoryItem] -> ([HistoryItem], Maybe UTCTime)
+applyWatermark low high rows
+  | length rows <= high = (rows, Nothing)
+  | otherwise = case kept of
+      -- The anchor is the kept window's own first row: the floor is
+      -- exclusive downstream (@received_at > floor@ in the queries),
+      -- so anchoring *at* the oldest kept row would drop it next time.
+      -- Stepping back to the row before it keeps the window exactly
+      -- @low@ long.
+      [] -> (rows, Nothing)
+      (oldestKept : _) -> (kept, Just (predecessorOf oldestKept))
+  where
+    kept = drop (length rows - low) rows
+    predecessorOf r =
+      case reverse (takeWhile (\x -> x.messageId /= r.messageId) rows) of
+        (prev : _) -> prev.receivedAt
+        [] -> r.receivedAt
 
 -- | Interleave the two history queries into one chronological
 -- transcript, keeping one row per message id.
@@ -1116,12 +1168,14 @@ renderUser ::
   -- it is being emitted as separate turns and the @[recent messages]@
   -- block should not appear here at all.
   Maybe [HistoryItem] ->
+  Text -> -- environment block (volatile; goes after the transcript)
+  Maybe Text -> -- memory block (volatile; likewise)
   Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
   [HistoryItem] -> -- pinned items, in user pin order
   [HistoryItem] -> -- trigger's own forward children (trigger IS a 转发)
   GroupMessage ->
   Text
-renderUser tz' now' selfId' origin' mTranscript replyCtx' pinnedItems' triggerFwd' gm =
+renderUser tz' now' selfId' origin' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -1136,6 +1190,13 @@ renderUser tz' now' selfId' origin' mTranscript replyCtx' pinnedItems' triggerFw
           Nothing -> []
           Just [] -> ["[recent messages]", "(无历史消息)"]
           Just hs -> "[recent messages]" : map (renderHistoryLine tz' selfId') hs,
+        -- Everything above this line is meant to be byte-stable across
+        -- dispatches so a provider's prefix cache can cover it; the
+        -- clock and the per-turn roster necessarily aren't, so they go
+        -- below.  Placing them next to the message they describe reads
+        -- better anyway than a clock buried in the system prompt.
+        ["", envText],
+        maybe [] (\b -> ["", b]) mMemBlock,
         [""],
         case replyCtx' of
           Nothing -> []

@@ -10,7 +10,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
-import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyVideoCaptions, renderContext, tagImageMarkers, tagMediaMarkers)
+import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyWatermark, applyVideoCaptions, renderContext, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -102,6 +102,7 @@ emptySession =
       model = "deepseek-flash",
       persona = Nothing,
       clearedAt = Nothing,
+      contextAnchor = Nothing,
       pinned = [],
       debugOverride = Nothing,
       stickerOverride = Nothing,
@@ -160,12 +161,15 @@ spec = do
           (sys, _) = splitMessages (renderContext inp)
       sys `shouldSatisfy` ("猫娘 mode" `T.isPrefixOf`)
 
+    -- The environment block lives in the user message now, after the
+    -- transcript: it carries the clock, so leaving it in the system
+    -- prompt capped every provider cache at "persona + format guide".
     it "includes an environment block with date, group, and model" $ do
-      let (sys, _) = splitMessages (renderContext baseInputs)
-      sys `shouldSatisfy` ("[environment]" `T.isInfixOf`)
-      sys `shouldSatisfy` ("2026-06-05" `T.isInfixOf`)
-      sys `shouldSatisfy` ("7777" `T.isInfixOf`)
-      sys `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
+      let (_, ub) = splitMessages (renderContext baseInputs)
+      ub `shouldSatisfy` ("[environment]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("2026-06-05" `T.isInfixOf`)
+      ub `shouldSatisfy` ("7777" `T.isInfixOf`)
+      ub `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
 
     it "renders timestamps in the configured display timezone" $ do
       -- 01:00 UTC on 2026-06-05 is 09:00 the same day at UTC+8; a
@@ -176,8 +180,8 @@ spec = do
                 tz = minutesToTimeZone 480,
                 transcript = [historyAt 20 8001 otherMemberId (Just "Bob") "晚上好"]
               }
-          (sys, ub) = splitMessages (renderContext inp)
-      sys `shouldSatisfy` ("2026-06-05（周五） 09:00" `T.isInfixOf`)
+          (_, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` ("2026-06-05（周五） 09:00" `T.isInfixOf`)
       ub `shouldSatisfy` ("[04:00 Bob #8001]" `T.isInfixOf`)
 
     it "splices groupBrief lines into the environment block" $ do
@@ -188,26 +192,26 @@ spec = do
                     "群主：Alice(6001)；管理员：Bob(6002)"
                   ]
               }
-          (sys, _) = splitMessages (renderContext inp)
-      sys `shouldSatisfy` ("  群名：测试群（3人）" `T.isInfixOf`)
-      sys `shouldSatisfy` ("  群主：Alice(6001)；管理员：Bob(6002)" `T.isInfixOf`)
+          (_, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` ("  群名：测试群（3人）" `T.isInfixOf`)
+      ub `shouldSatisfy` ("  群主：Alice(6001)；管理员：Bob(6002)" `T.isInfixOf`)
 
   describe "renderContext identity" $ do
     it "includes a roster mapping QQ ids to display names, bot first" $ do
       let inp = baseInputs {transcript = [historyAt 9 8001 otherMemberId (Just "Bob") "早"]}
-          (sys, _) = splitMessages (renderContext inp)
-      sys `shouldSatisfy` ("成员对照" `T.isInfixOf`)
-      sys `shouldSatisfy` (("[@#" <> T.pack (show botId) <> "]=Max（你自己）") `T.isInfixOf`)
-      sys `shouldSatisfy` (("[@#" <> T.pack (show memberId) <> "]=Alice") `T.isInfixOf`)
-      sys `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=Bob") `T.isInfixOf`)
+          (_, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` ("成员对照" `T.isInfixOf`)
+      ub `shouldSatisfy` (("[@#" <> T.pack (show botId) <> "]=Max（你自己）") `T.isInfixOf`)
+      ub `shouldSatisfy` (("[@#" <> T.pack (show memberId) <> "]=Alice") `T.isInfixOf`)
+      ub `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=Bob") `T.isInfixOf`)
 
     it "prefers 群名片 over nickname in context lines and the roster" $ do
       let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just "sleepy"}
           inp = baseInputs {transcript = [item]}
-          (sys, ub) = splitMessages (renderContext inp)
+          (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[09:00 sleepy #8001]" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("SkyRain" `T.isInfixOf`))
-      sys `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=sleepy") `T.isInfixOf`)
+      ub `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=sleepy") `T.isInfixOf`)
 
     it "treats a blank card as absent" $ do
       let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just ""}
@@ -254,21 +258,27 @@ spec = do
       let (sys, _) = splitMessages (renderContext baseInputs)
       sys `shouldSatisfy` (not . ("[memories" `T.isInfixOf`))
 
-    it "renders group + user memories with ids, at the end of the system prompt" $ do
+    -- Memories change per group and per speaker, so like the
+    -- environment block they sit in the user message below the
+    -- transcript — everything a prefix cache could cover has to come
+    -- before the first byte that varies.
+    it "renders group + user memories with ids, below the transcript" $ do
       let inp =
             baseInputs
               { groupMemories = [memAt 5 "群里在开发 max bot"],
-                userMemories = [memAt 9 "偏好 Haskell"]
+                userMemories = [memAt 9 "偏好 Haskell"],
+                transcript = [historyAt 9 8001 memberId (Just "Alice") "早"]
               }
-          (sys, _) = splitMessages (renderContext inp)
-      sys `shouldSatisfy` ("[memories — 背景备忘]" `T.isInfixOf`)
-      sys `shouldSatisfy` ("(#5 2026-06-05) 群里在开发 max bot" `T.isInfixOf`)
-      sys `shouldSatisfy` ("(#9 2026-06-05) 偏好 Haskell" `T.isInfixOf`)
-      sys `shouldSatisfy` ("关于当前发言者 <Alice>" `T.isInfixOf`)
-      -- Low-salience placement: the block sits after the persona and
-      -- format guide, i.e. the memory header appears only near the end.
-      let (upToBlock, _) = T.breakOn "[memories" sys
-      upToBlock `shouldSatisfy` ("回复风格" `T.isInfixOf`)
+          (_, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` ("[memories — 背景备忘]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("(#5 2026-06-05) 群里在开发 max bot" `T.isInfixOf`)
+      ub `shouldSatisfy` ("(#9 2026-06-05) 偏好 Haskell" `T.isInfixOf`)
+      ub `shouldSatisfy` ("关于当前发言者 <Alice>" `T.isInfixOf`)
+      -- Order within the user body: transcript, then the volatile
+      -- blocks, then the message being answered.
+      let (upToBlock, _) = T.breakOn "[memories" ub
+      upToBlock `shouldSatisfy` ("[recent messages]" `T.isInfixOf`)
+      upToBlock `shouldSatisfy` (not . ("[current message]" `T.isInfixOf`))
 
   describe "renderContext transcript" $ do
     -- The whole conversation is one system message plus one user
@@ -693,3 +703,38 @@ spec = do
       ub `shouldSatisfy` ("[current message — 戳一戳]" `T.isInfixOf`)
       ub `shouldSatisfy` ("Alice 戳了戳你" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("[#0]" `T.isInfixOf`))
+
+  -- The anchor is what lets a provider's prefix cache cover the
+  -- transcript: it holds still for many dispatches so the rendered
+  -- prefix stays byte-identical, then jumps in one step.  Trimming a
+  -- row per dispatch instead would change the first line every time —
+  -- which is exactly the sliding window this replaced.
+  describe "applyWatermark" $ do
+    let rows n = [historyAt 9 (7000 + i) memberId (Just "Alice") "x" | i <- [1 .. fromIntegral n]]
+
+    it "leaves the transcript alone below the high-water mark" $ do
+      let (kept, moved) = applyWatermark 40 80 (rows (80 :: Int))
+      (length kept, moved) `shouldBe` (80, Nothing)
+
+    it "trims to the low-water mark in one step once over" $ do
+      let (kept, moved) = applyWatermark 40 80 (rows (81 :: Int))
+      length kept `shouldBe` 40
+      moved `shouldSatisfy` (/= Nothing)
+
+    -- The floor is exclusive downstream (received_at > floor), so
+    -- anchoring at the oldest kept row would drop it next dispatch.
+    it "anchors just before the oldest kept row, not at it" $ do
+      let allRows =
+            [ (historyAt 9 (7000 + i) memberId (Just "Alice") "x")
+                {receivedAt = timeAt (fromIntegral i)}
+            | i <- [1 .. 5 :: Int64]
+            ]
+          (kept, moved) = applyWatermark 2 4 allRows
+      map (.messageId) kept `shouldBe` [7004, 7005]
+      -- #7004 is the oldest kept; the anchor is #7003's timestamp, so
+      -- "> anchor" still admits #7004.
+      moved `shouldBe` Just (timeAt 3)
+
+    it "keeps the newest rows, not the oldest" $ do
+      let (kept, _) = applyWatermark 2 3 (rows (5 :: Int))
+      map (.messageId) kept `shouldBe` [7004, 7005]

@@ -87,7 +87,15 @@ data AppConfig = AppConfig
     -- SIGKILLs us mid-drain and the wait bought nothing.
     shutdownDrainSeconds :: !Int,
     llm :: !LLMRegistry,
+    -- | Transcript low-water mark: the message count an overflow
+    -- trims back to.  Named for the knob it used to be (a fixed
+    -- sliding window) and still the floor.
     historyWindow :: !Int,
+    -- | Transcript high-water mark: the count that triggers the trim.
+    -- The gap between the two is how many dispatches share a stable
+    -- prompt prefix — bigger gap, better cache hit rate, but a larger
+    -- average prompt to pay for on the calls that miss.
+    historyMax :: !Int,
     -- | Display timezone for all model/user-facing timestamps
     -- (stored times stay UTC).  Default UTC+8.
     timezone :: !TimeZone,
@@ -233,6 +241,17 @@ appConfigParser =
           conf "history_window",
           metavar "N",
           value 40
+        ]
+    historyMax <-
+      setting
+        [ help "Transcript high-water mark: past this many messages the context anchor jumps forward to history_window, so the prompt prefix stays byte-stable in between",
+          reader auto,
+          option,
+          long "history-max",
+          env "MAX_HISTORY_MAX",
+          conf "history_max",
+          metavar "N",
+          value 80
         ]
     timezone <-
       minutesToTimeZone

@@ -103,6 +103,7 @@ main = do
                 BotEnv
                   { bePersona = cfg.persona,
                     beHistoryWindow = cfg.historyWindow,
+                    beHistoryMax = cfg.historyMax,
                     beBlobRoot = cfg.imagesDir,
                     beDebugDefault = cfg.debug,
                     beStickerDefault = cfg.stickersEnabled,

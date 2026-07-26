@@ -56,7 +56,7 @@ import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
-import Max.Session (Session (..), loadSession, readSession)
+import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Tasks (TaskCancelled (..), TaskId (..), TaskInfo (..), beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
 import Max.Render (renderTableImage)
@@ -701,7 +701,30 @@ dispatchLLM origin absorbable gm = do
       -- too (claimed just above) — drop it, it isn't history yet.
       let MessageId ownMid = gm.messageId
       inFlight <- Set.delete ownMid <$> liftIO (inFlightTriggers env.beTasks gm.groupId)
-      ctx <- buildContext env.bePersona env.beHistoryWindow multimodal historyTurns origin env.beBlobRoot env.beTimeZone brief inFlight s gm
+      (ctx, movedAnchor) <-
+        buildContext
+          env.bePersona
+          env.beHistoryWindow
+          env.beHistoryMax
+          multimodal
+          historyTurns
+          origin
+          env.beBlobRoot
+          env.beTimeZone
+          brief
+          inFlight
+          s
+          gm
+      -- Commit the transcript anchor before the turn runs, not after:
+      -- a crash mid-dispatch would otherwise rebuild the same
+      -- over-long window next time and re-decide the same move.  It is
+      -- bookkeeping either way — the worst a lost write costs is one
+      -- more cache miss.
+      for_ movedAnchor $ \anchor -> do
+        t <- loadSession env.beSessions env.beDefaultModel gm.groupId
+        updateSession t (\sess -> (sess {contextAnchor = Just anchor}, ()))
+        logInfo "context anchor moved" $
+          object ["group_id" .= (let GroupId g = gm.groupId in g)]
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
