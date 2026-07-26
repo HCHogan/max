@@ -109,6 +109,10 @@ in
         {option}`services.max.environmentFile` as `MAX_*` variables
         (env beats the file in opt-env-conf's precedence), since
         `settings` ends up world-readable in the nix store.
+
+        Ignored entirely when {option}`services.max.configFile` is set —
+        the two are alternatives, not layers.  A `MAX_*` variable is the
+        way to add one key on top of a hand-managed file.
       '';
     };
 
@@ -120,9 +124,13 @@ in
         Use this max.yaml instead of rendering one from `settings`.
         For configs full of per-profile API keys (which must stay out
         of the world-readable store) point this at a root-deployed or
-        sops-managed file readable by the max-bot user.  The module
-        still wires db/paths via MAX_* environment variables, which
-        take precedence over the file.
+        sops-managed file readable by the max-bot user.
+
+        Setting this discards {option}`services.max.settings` — the
+        module warns rather than merging, because merging a store-
+        rendered file with a hand-managed one has no sane answer.  To
+        override a single key, set its `MAX_*` variable: the module
+        already wires db/paths that way, and env beats the file.
       '';
     };
 
@@ -232,6 +240,18 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    # `configFile` wins outright, so anything in `settings` is silently
+    # discarded — which reads as "I set that and it didn't work".  Say
+    # so, and point at the channel that does work with a hand-managed
+    # file: MAX_* environment variables, which beat the file either way.
+    warnings = lib.optional (cfg.configFile != null && cfg.settings != { }) ''
+      services.max: `settings` is ignored because `configFile` is set
+      (${toString cfg.configFile}). Move these keys into that file, or
+      set them as MAX_* variables via
+      `systemd.services.max.environment` / `services.max.environmentFile`:
+      ${lib.concatStringsSep ", " (lib.attrNames cfg.settings)}
+    '';
+
     virtualisation.docker.enable = true;
 
     users.users.max-bot = {
