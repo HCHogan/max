@@ -343,8 +343,7 @@ execute t gid uid granterTier replyTarget cmd = do
         "🌊 " <> osName <> " · " <> T.pack arch,
         "🫧 ghc " <> T.pack (showVersion fullCompilerVersion) <> " · cabal " <> T.pack (prettyShow cabalVersion),
         "⏱️ up " <> fmtDur (realToFrac (diffUTCTime now env.beStartedAt))
-          <> maybe "" (\u -> " · host " <> fmtDur u) hostUp,
-        "🔗 github.com/HCHogan/max"
+          <> maybe "" (\u -> " · host " <> fmtDur u) hostUp
       ]
   StickerList -> do
     rows <- Stickers.listRecentStickers 10
