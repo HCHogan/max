@@ -14,7 +14,7 @@ import Control.Monad (unless, void, when)
 import Data.Foldable (for_)
 import Data.Char (isDigit, isSpace)
 import Control.Applicative ((<|>))
-import Data.List (find)
+import Data.List (find, partition)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, listToMaybe)
 import Data.Set (Set)
@@ -50,7 +50,7 @@ import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHi
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
-import Max.Tasks (TaskCancelled (..), TaskId (..), TaskInfo (..), beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
+import Max.Tasks (TaskCancelled (..), TaskId (..), TaskInfo (..), absorbedTriggers, beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
 import Max.Reply (stripHallucinatedTokens)
 import Max.ReplySend (ReplyTarget (..), canStream, freshBudget, sendAndPersistReply)
 import Max.Util (catchSync, trySync)
@@ -62,18 +62,21 @@ import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 -- | May this turn be swallowed by one already running?
 --
 -- The supplement classifier exists to guess what an unmarked
--- @-message meant, so a turn that already said it outright must not be
+-- message meant, so a turn that already said it outright must not be
 -- sent back for a second opinion — @!btw@ means \"leave the running
 -- turn alone\", and a classifier that disagreed would do exactly the
 -- thing the user ruled out.
 --
 -- Carried separately from 'TriggerOrigin' because the two ask
--- different questions.  Of the five places that test @origin ==
--- OriginDirect@, four mean \"there is a real trigger message to react
--- to\" and want a @!btw@ turn treated like any other; only the
--- classifier means \"this turn is up for grabs\".  A fourth origin
--- would have to be widened back in at four sites and would turn every
--- future @== OriginDirect@ into a trap.
+-- different questions.  Origin says what woke the bot (and the
+-- reaction sites test it for \"is there a real trigger message to
+-- react to\"); absorbable says whether this turn is up for grabs.
+-- Direct and proactive triggers both are — a proactive followup
+-- (\"不对，改成X\" said without an @) steers a running turn exactly
+-- like the @-ed version of the same words.  A poke is not: it lands
+-- in a running turn's inbox before ever dispatching (see 'onPoke'),
+-- and the sentinel trigger it dispatches with has no message for the
+-- classifier to read.
 --
 -- This used to ride on 'Max.Persistence.isEphemeral' — @!btw@ ran in a
 -- non-persisting scope, and the classifier skipped non-persisting
@@ -259,21 +262,22 @@ onGroupMessage mIntent gm = do
             Just quoted | quoted.userId == selfRaw -> classify True gm
             _ -> TriggerNone
     t -> pure t
-  -- A direct trigger clears the group's pending intent buffer (those
-  -- messages reach the model as ambient context of this turn, and
-  -- must not also produce a second, proactive reply) and stamps the
-  -- gate's followup hot window.
-  let clearIntent = for_ mIntent $ \st -> liftIO $ do
-        clearPendingIntent st gm.groupId
-        noteBotActivity st gm.groupId
+  -- Any addressed trigger stamps the gate's followup hot window.  The
+  -- pending intent buffer is NOT cleared here: that happens inside
+  -- 'dispatchLLM' at the moment a turn commits to building context —
+  -- only then do the buffered messages actually reach a model as
+  -- ambient text.  Clearing on every command was a hole: a pending
+  -- "max帮我看看" (no @) was silently swallowed by an unrelated
+  -- @!status@, which feeds no model at all.
+  let noteActivity = for_ mIntent $ \st -> liftIO (noteBotActivity st gm.groupId)
   case trig of
     -- Not addressed: hand the message to the intent classifier —
     -- maybe the bot wants to join in anyway.
     TriggerNone -> for_ mIntent $ \st -> liftIO (enqueueIntent st gm)
-    TriggerPong -> clearIntent >> sendPong gm
-    TriggerCommand body -> clearIntent >> dispatchCommand gm body
+    TriggerPong -> noteActivity >> sendPong gm
+    TriggerCommand body -> noteActivity >> dispatchCommand mIntent gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
-    TriggerLLM _ -> clearIntent >> dispatchLLM OriginDirect MayAbsorb gm
+    TriggerLLM _ -> noteActivity >> dispatchLLM mIntent OriginDirect MayAbsorb [] gm
 
 -- | A 戳一戳 aimed at the bot: a contentless direct wake, the soft
 -- version of an @.  If the group already has a running turn the poke
@@ -302,11 +306,10 @@ onPoke mIntent pk
       let GroupId gidRaw = pk.pkGroupId
           UserId pokerRaw = pk.pkUserId
       logInfo "poked" $ object ["group_id" .= gidRaw, "user_id" .= pokerRaw]
-      -- Same as a direct trigger: the poke supersedes any pending
-      -- proactive classification and stamps the followup hot window.
-      for_ mIntent $ \st -> liftIO $ do
-        clearPendingIntent st pk.pkGroupId
-        noteBotActivity st pk.pkGroupId
+      -- Stamp the followup hot window; the pending buffer survives —
+      -- an injected poke feeds no model, so 'dispatchLLM' clears it
+      -- only when the fallback dispatch actually builds context.
+      for_ mIntent $ \st -> liftIO (noteBotActivity st pk.pkGroupId)
       -- Best-effort display name for the poker (groups only; the
       -- private-chat peer needs no introduction).
       mName <-
@@ -327,7 +330,7 @@ onPoke mIntent pk
         Just (TaskId into) ->
           logInfo "poke: injected into running task" $
             object ["group_id" .= gidRaw, "task" .= into]
-        Nothing -> dispatchLLM OriginPoke MayAbsorb (pokeTrigger pk mName)
+        Nothing -> dispatchLLM mIntent OriginPoke NeverAbsorb [] (pokeTrigger pk mName)
 
 -- | Synthesize the trigger 'GroupMessage' for a poke dispatch.  There
 -- is no real message: id 0 is the "no trigger message" sentinel —
@@ -359,10 +362,11 @@ dispatchCommand ::
     Reader BotEnv :> es,
     IOE :> es
   ) =>
+  Maybe IntentState ->
   GroupMessage ->
   T.Text ->
   Eff es ()
-dispatchCommand gm body = localDomain "cmd" $ do
+dispatchCommand mIntent gm body = localDomain "cmd" $ do
   case parseCommand body of
     Left err -> replyText gm ("命令解析失败:\n" <> err)
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
@@ -403,24 +407,26 @@ dispatchCommand gm body = localDomain "cmd" $ do
         SideQuestion askBody -> do
           logInfo "btw: side question" $
             object ["len" .= T.length askBody]
-          -- Rebuild the trigger with the !btw body as the user
-          -- message; preserve everything else (reply target, sender,
-          -- self id) so buildContext sees a normal @-mention.
-          let virtualGm =
-                gm
-                  { message =
-                      [ SegAt gm.selfId,
-                        SegText (" " <> askBody)
-                      ]
-                  }
-          dispatchLLM OriginDirect NeverAbsorb virtualGm
+          -- Dispatch the message itself with only the !btw verb
+          -- stripped — the same form 'recordAs' persisted.  Keeping
+          -- the original segments is the point: a @!btw@ typed as a
+          -- reply keeps its quote (buildContext reads the reply
+          -- target out of the segments), and attached images keep
+          -- their markers.  An earlier version rebuilt the segment
+          -- list from the parsed body and silently dropped both.
+          dispatchLLM mIntent OriginDirect NeverAbsorb [] (gm {message = stripVerb gm.message})
         -- !feedback: aim the note at the turn whose trigger the user
         -- replied to, and at the newest running turn otherwise — a
         -- reply to something that isn't a live turn (mis-click, a turn
         -- that has since finished) falls through rather than erroring,
         -- because a note that refuses to land ends up in nobody's
-        -- context at all.  Nothing running anywhere is the one case
-        -- with no home for it: say so with the failure face, quietly.
+        -- context at all.  Nothing running is not an error either: the
+        -- note is a question somebody asked the bot, so answer it as
+        -- one — a fresh dispatch, absorbable so that a turn starting
+        -- in the race window can still take it.  The one dead end is a
+        -- @!use@-redirected note (a DM steering a group task) with no
+        -- task to steer: a turn in the DM isn't what was asked for,
+        -- so that alone keeps the failure face.
         FeedbackNote noteBody -> do
           noteAt <- liftIO getCurrentTime
           let line = renderCurrentLine env.beTimeZone noteAt (gm {message = [SegText noteBody]})
@@ -432,9 +438,14 @@ dispatchCommand gm body = localDomain "cmd" $ do
               -- implicit path has needed this all along.
               MessageId noteMid = gm.messageId
               absorb = Just noteMid
+              -- A reply target only means something in the chat it was
+              -- typed in: under a !use redirect the quoted mid belongs
+              -- to the DM, and aiming it at the target group's turns
+              -- could only ever miss.
+              redirected = targetGid /= gm.groupId
           aimed <- case replyTarget of
-            Just tgt -> liftIO (pushToTrigger env.beTasks targetGid Nothing absorb tgt line)
-            Nothing -> pure Nothing
+            Just tgt | not redirected -> liftIO (pushToTrigger env.beTasks targetGid Nothing absorb tgt line)
+            _ -> pure Nothing
           landed <- case aimed of
             Just _ -> pure aimed
             Nothing -> liftIO (pushToLatest env.beTasks targetGid Nothing absorb line)
@@ -442,11 +453,23 @@ dispatchCommand gm body = localDomain "cmd" $ do
             Just (TaskId into) -> do
               logInfo "feedback: explicit note" $
                 object ["task" .= into, "aimed" .= isJust replyTarget]
-              sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
-            Nothing -> do
-              let GroupId targetRaw = targetGid
-              logInfo "feedback: nothing running" $ object ["group_id" .= targetRaw]
-              sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
+              -- 托腮, not OK: the note is queued for a turn that may
+              -- or may not still drain it, so the honest claim is
+              -- "being chewed on", the same face the turn's own
+              -- trigger wears.  The absorbing turn takes it back off
+              -- when it ends (see the 'absorbedTriggers' sweep in
+              -- 'dispatchLLM').
+              sendAction (SetMsgEmojiLike gm.messageId processingFaceId True)
+            Nothing
+              | redirected -> do
+                  let GroupId targetRaw = targetGid
+                  logInfo "feedback: nothing running in redirect target" $
+                    object ["group_id" .= targetRaw]
+                  sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
+              | otherwise -> do
+                  logInfo "feedback: nothing running, answering as a turn" $
+                    object ["len" .= T.length noteBody]
+                  dispatchLLM mIntent OriginDirect MayAbsorb [] (gm {message = stripVerb gm.message})
 
     -- Recorded against the DM's pseudo-group rather than the group the
     -- command came from: that is the conversation it actually appeared
@@ -500,9 +523,15 @@ replySegs gm body =
     <> [SegAt gm.userId | not (isPrivateChat gm.groupId)]
     <> [SegText body]
 
--- | Entry point for the intent worker: dispatch a message nobody
--- @-ed at the bot, with the prompt honestly labelled as a proactive
--- turn (and @[silence]@ explicitly on the table).
+-- | Entry point for the intent worker: dispatch a batch of messages
+-- nobody @-ed at the bot (chronological, newest last), with the
+-- prompt honestly labelled as a proactive turn (and @[silence]@
+-- explicitly on the table).  The newest message is the trigger — a
+-- fresh turn sees the rest as ambient history anyway — and the
+-- earlier ones ride along as companions so that an absorbed batch
+-- reaches the running turn whole.  Absorbable like a direct trigger:
+-- an unaddressed followup landing while a turn is still running
+-- steers that turn, it doesn't talk over it.
 dispatchProactive ::
   ( Log :> es,
     WithConnection :> es,
@@ -513,9 +542,13 @@ dispatchProactive ::
     Reader BotEnv :> es,
     IOE :> es
   ) =>
-  GroupMessage ->
+  Maybe IntentState ->
+  [GroupMessage] ->
   Eff es ()
-dispatchProactive = dispatchLLM OriginProactive MayAbsorb
+dispatchProactive mIntent batch = case reverse batch of
+  [] -> pure ()
+  (trigger : older) ->
+    dispatchLLM mIntent OriginProactive MayAbsorb (reverse older) trigger
 
 -- | Spawn an async to build the prompt, call the LLM, post the reply,
 -- and append the (user, assistant) turn to the session history.
@@ -537,11 +570,17 @@ dispatchLLM ::
     Reader BotEnv :> es,
     IOE :> es
   ) =>
+  Maybe IntentState ->
   TriggerOrigin ->
   Absorbable ->
+  -- | Earlier messages of the same proactive batch (chronological),
+  -- steering context that must ride along in the note if this turn is
+  -- absorbed.  Empty for every other origin: a direct trigger or poke
+  -- is one message.
+  [GroupMessage] ->
   GroupMessage ->
   Eff es ()
-dispatchLLM origin absorbable gm = do
+dispatchLLM mIntent origin absorbable companions gm = do
   env :: BotEnv <- ask
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
@@ -605,18 +644,35 @@ dispatchLLM origin absorbable gm = do
                 logInfo "llm dispatch cancelled" $
                   object ["group_id" .= gidRaw]
         )
-          `finally` liftIO
-            ( do
-                leaveDispatch env.beShutdown
-                endDispatch env.beTasks tid
-            )
+          `finally` do
+            -- Take the 托腮 back off everything this turn absorbed —
+            -- implicit supplements and explicit !feedback notes both
+            -- wear it from the moment they land in the inbox.  Read
+            -- before 'endDispatch' drops the entry, but send after the
+            -- bookkeeping: a throwing send must not leak the shutdown
+            -- slot.  A mid that never had the reaction un-reacts as a
+            -- no-op.
+            absorbed <- liftIO (absorbedTriggers env.beTasks tid)
+            liftIO $ do
+              leaveDispatch env.beShutdown
+              endDispatch env.beTasks tid
+            for_ absorbed $ \m ->
+              sendAction (SetMsgEmojiLike (MessageId m) processingFaceId False)
   where
     work tid = do
       env :: BotEnv <- ask
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
       injected <- tryInjectSupplement env s tid
-      unless injected (withProcessingReaction (dispatch env s))
+      unless injected $ do
+        -- Commit point: this turn is going to build context, and the
+        -- group's pending intent buffer reaches the model as ambient
+        -- text of it — clear the buffer so the same messages can't
+        -- also produce a proactive reply.  Not earlier (an absorbed
+        -- trigger builds nothing, and the buffer must survive it) and
+        -- not later (buildContext is about to read history).
+        for_ mIntent $ \st -> liftIO (clearPendingIntent st gm.groupId)
+        withProcessingReaction (dispatch env s)
 
     -- React [托腮] on the trigger while the dispatch runs — a quiet
     -- "seen, working on it" — and clear it once the reply (or
@@ -633,21 +689,29 @@ dispatchLLM origin absorbable gm = do
             `finally` sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
 
     -- The implicit half of the feedback split: when the group already
-    -- has another turn running, a fresh @-trigger is often steering
+    -- has another turn running, a fresh trigger is often steering
     -- that turn（追加要求、修正方向、催进度）rather than starting
     -- something new.  Ask the intent profile which it is; a supplement
-    -- goes into the running turn's inbox — that turn's eventual reply
+    -- goes into a running turn's inbox — that turn's eventual reply
     -- addresses it — instead of spawning a parallel dispatch.  Anyone
     -- may steer, not just whoever started the turn: the note carries
     -- the speaker's name, so the model can address them.
     --
-    -- Gated on intent being configured; proactive turns and turns that
-    -- already declared themselves un-absorbable (@!btw@) never reroute.
-    -- Any doubt (classifier says no, errors out, or the turn finished
-    -- while we were classifying) falls back to a normal dispatch.
+    -- Aiming mirrors @!feedback@: a trigger that replies to a running
+    -- turn's trigger (or to a message that turn already absorbed) is
+    -- steering THAT turn, not whichever started last — 'pushToTrigger'
+    -- first, newest turn as the fallback.
+    --
+    -- Gated on intent being configured; turns that declared themselves
+    -- un-absorbable never reroute — @!btw@ said so outright, and a
+    -- poke has no message for the classifier to read.  Direct and
+    -- proactive triggers both may: the same "不对，改成X" steers the
+    -- running turn whether or not it carried an @.  Any doubt
+    -- (classifier says no, errors out, or the turn finished while we
+    -- were classifying) falls back to a normal dispatch.
     tryInjectSupplement env s tid =
       case env.beIntent of
-        Just icfg | origin == OriginDirect && absorbable == MayAbsorb -> do
+        Just icfg | absorbable == MayAbsorb -> do
           -- Our own entry has been in the registry since dispatch
           -- entry, so "is anybody working?" has to discount it.
           running <- liftIO (listTasks env.beTasks (Just gm.groupId))
@@ -657,12 +721,27 @@ dispatchLLM origin absorbable gm = do
               let GroupId gidRaw = gm.groupId
                   MessageId midRaw = gm.messageId
                   UserId selfRaw = gm.selfId
-              rows <- fetchRecentInGroup gidRaw 0 s.clearedAt icfg.icContextLines
+              rows <- fetchRecentInGroup gidRaw 0 s.clearedAt (icfg.icContextLines + length companions)
               noteAt <- liftIO getCurrentTime
-              let ctxLines =
-                    map (renderHistoryLine env.beTimeZone selfRaw) $
-                      filter (\h -> h.messageId /= midRaw) rows
-                  newLine = renderCurrentLine env.beTimeZone noteAt gm
+              -- Companions (the earlier messages of a proactive batch)
+              -- count as new alongside the trigger, not as context:
+              -- the classifier judges the batch it was fired for, and
+              -- if the turn absorbs, the whole batch is the note — the
+              -- running turn never re-reads history, so a line left
+              -- behind here is a line it never sees.  Rendered from
+              -- their DB rows for real timestamps; a row missing in a
+              -- pathological flood just drops its line, same call the
+              -- intent worker already makes.
+              let render = renderHistoryLine env.beTimeZone selfRaw
+                  companionMids =
+                    Set.fromList [m | c <- companions, let MessageId m = c.messageId]
+                  rest = filter (\h -> h.messageId /= midRaw) rows
+                  (companionRows, ctxRows) =
+                    partition (\h -> h.messageId `Set.member` companionMids) rest
+                  ctxLines = map render ctxRows
+                  newLine =
+                    T.intercalate "\n" $
+                      map render companionRows <> [renderCurrentLine env.beTimeZone noteAt gm]
               isSupp <- classifySupplement icfg ctxLines newLine
               if not isSupp
                 then pure False
@@ -671,16 +750,29 @@ dispatchLLM origin absorbable gm = do
                   -- takes it: ours is about to exit and unmark it, and
                   -- a question that looks unanswered gets answered
                   -- again by the next dispatch.
-                  landed <-
-                    liftIO $
-                      pushToLatest env.beTasks gm.groupId (Just tid) (Just midRaw) newLine
-                  for_ landed $ \(TaskId into) ->
+                  aimed <- case listToMaybe [m | SegReply (MessageId m) <- gm.message] of
+                    Just tgt ->
+                      liftIO (pushToTrigger env.beTasks gm.groupId (Just tid) (Just midRaw) tgt newLine)
+                    Nothing -> pure Nothing
+                  landed <- case aimed of
+                    Just _ -> pure aimed
+                    Nothing ->
+                      liftIO (pushToLatest env.beTasks gm.groupId (Just tid) (Just midRaw) newLine)
+                  for_ landed $ \(TaskId into) -> do
                     logInfo "feedback: implicit injection" $
                       object
                         [ "group_id" .= gidRaw,
                           "message_id" .= midRaw,
+                          "aimed" .= isJust aimed,
                           "task" .= into
                         ]
+                    -- Same 托腮 an explicit !feedback gets, cleared by
+                    -- the absorbing turn's epilogue.  Direct triggers
+                    -- only: an absorbed proactive candidate was never
+                    -- addressed to the bot, and reacting would break
+                    -- the "traceless until it speaks" rule.
+                    when (origin == OriginDirect) $
+                      sendAction (SetMsgEmojiLike gm.messageId processingFaceId True)
                   pure (isJust landed)
         _ -> pure False
 

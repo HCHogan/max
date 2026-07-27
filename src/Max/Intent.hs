@@ -235,7 +235,7 @@ intentWorker ::
   Text -> -- default model name (for 'loadSession')
   TimeZone ->
   SessionRegistry ->
-  (GroupMessage -> Eff es ()) -> -- proactive dispatch (see 'Max.Handler.dispatchProactive')
+  ([GroupMessage] -> Eff es ()) -> -- proactive dispatch of the whole batch, newest last (see 'Max.Handler.dispatchProactive')
   IntentState ->
   Eff es ()
 intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
@@ -300,7 +300,13 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
                       "kind" .= kindText v.ivKind,
                       "reason" .= v.ivReason
                     ]
-                dispatch (last batch)
+                -- The whole batch, not just its newest message: the
+                -- dispatch triggers on the last one (the rest is
+                -- ambient context for a fresh turn), but if the turn
+                -- is absorbed into one already running, the earlier
+                -- lines must ride along in the note — the running
+                -- turn never re-reads history.
+                dispatch batch
 
     lastN n xs = drop (length xs - n) xs
 
@@ -482,9 +488,9 @@ supplementSystem :: Text
 supplementSystem =
   T.intercalate
     "\n"
-    [ "你是 QQ 群聊机器人「Max」的消息路由器。Max 此刻正在执行一个任务（由上下文末尾的对话触发，还没跑完），这时有人又 @ 了它。",
+    [ "你是 QQ 群聊机器人「Max」的消息路由器。Max 此刻正在执行一个任务（由上下文末尾的对话触发，还没跑完），这时群里又来了一条（或紧挨着的几条）它准备回应的消息（@ 它的，或没 @ 但判定是在跟它说话的）。",
       "",
-      "判断这条新消息是不是对进行中任务的补充：追加要求、修正方向、催进度、回答任务需要的信息。",
+      "判断这些新消息是不是对进行中任务的补充：追加要求、修正方向、催进度、回答任务需要的信息。",
       "是补充（supplement=true）→ 它会被直接塞进正在运行的任务，让任务顺带处理。",
       "是独立的新问题/新请求，跟正在跑的任务无关 → false，会正常另开一轮。",
       "拿不准的一律 false —— 错把新问题塞进旧任务，比多开一轮更糟。",

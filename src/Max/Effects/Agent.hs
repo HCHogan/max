@@ -63,9 +63,10 @@ module Max.Effects.Agent
   )
 where
 
-import Control.Concurrent (myThreadId, throwTo)
+import Control.Concurrent (myThreadId, threadDelay, throwTo)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Monad (when)
+import Data.Foldable (for_)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Set (Set)
@@ -85,7 +86,8 @@ import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask)
 import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
 import Data.Set qualified as Set
-import Max.Reply (ReplyPiece (..), parseReplyTokens, readyPrefix)
+import Max.Reply (ReplyPiece (..), chunkSource, parseReplyTokens, planReply, readyPrefix)
+import Max.ReplySend (chunkDelayMicros)
 import OneBot.Segment (Segment (SegFace, SegReply, SegText), segmentMentions, trimEdgeSegs)
 import OneBot.Types (GroupId, MessageId (..), UserId, isPrivateChat)
 
@@ -435,10 +437,21 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     -- that it was said.  Within *this* turn the model stays coherent
     -- either way — the narration also rides in 'MsgAssistantToolCalls'
     -- verbatim and replays to the API next round.
+    --
+    -- Split by 'planReply' like every other model-authored text: the
+    -- format guide sells @[split]@ and blank lines as universal, and
+    -- narration was the one sender that took neither — a narration
+    -- ending in "…[split]" went to the group with the marker as
+    -- literal text.  Same pacing between chunks as the reply path.
     sendNarration :: DispatchContext -> Text -> Eff (Tools : es) ()
-    sendNarration dc narration = case narrationSegments dc narration of
-      [] -> pure ()
-      segs -> recordSend dc KindChat segs
+    sendNarration dc narration =
+      for_ (zip [0 :: Int ..] (map chunkSource (planReply narration))) $ \(i, chunk) ->
+        case narrationSegments dc chunk of
+          [] -> pure ()
+          segs -> do
+            when (i > 0) $
+              liftIO (threadDelay =<< chunkDelayMicros (T.length chunk))
+            recordSend dc KindChat segs
 
     -- Send and write down, so the messages table matches what the group
     -- saw.  The round-trip is unavoidable: @message_id@ comes from QQ

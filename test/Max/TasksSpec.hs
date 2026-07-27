@@ -15,6 +15,7 @@ import Data.Set qualified as Set
 import Max.Tasks
   ( TaskHandle (..),
     TaskInfo (..),
+    absorbedTriggers,
     attachTask,
     beginDispatch,
     drainInbox,
@@ -176,6 +177,18 @@ spec = describe "Max.Tasks" $ do
     -- ends immediately, but its question is still being answered by
     -- somebody else's turn.  If it stopped counting as in-flight here,
     -- the next dispatch would answer it a second time.
+    -- The dispatch epilogue reads this to take the 托腮 reaction back
+    -- off every note the turn swallowed — so it must list exactly the
+    -- absorbed mids, and only while the entry still exists.
+    it "lists a turn's absorbed messages until the turn ends" $ do
+      reg <- newTaskRegistry
+      tid <- beginDispatch reg gid alice (Just (MessageId 7001))
+      _ <- pushToLatest reg gid Nothing (Just 7002) "[#7002] bob: 顺便"
+      before <- absorbedTriggers reg tid
+      endDispatch reg tid
+      after <- absorbedTriggers reg tid
+      (before, after) `shouldBe` ([7002], [])
+
     it "keeps an absorbed message in flight after its own entry ends" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (MessageId 7001))

@@ -51,6 +51,7 @@ module Max.Tasks
     pushToTrigger,
     pushToLatest,
     inFlightTriggers,
+    absorbedTriggers,
 
     -- * Exception
     TaskCancelled (..),
@@ -350,6 +351,17 @@ pushToLatest reg gid except absorb note = atomically $ do
       modifyTVar' e.teInbox (<> [note])
       for_ absorb $ \a -> modifyTVar' e.teAbsorbed (Set.insert a)
       pure (Just e.teId)
+
+-- | Message ids one task has swallowed — the turn's own trigger not
+-- included.  Read by the dispatch epilogue to take the 托腮 reaction
+-- back off each absorbed message (the turn that owns them is done);
+-- must run before 'endDispatch' drops the entry.
+absorbedTriggers :: TaskRegistry -> TaskId -> IO [Int64]
+absorbedTriggers reg tid = atomically $ do
+  (_, m) <- readTVar reg.trState
+  case Map.lookup tid m of
+    Nothing -> pure []
+    Just e -> Set.toList <$> readTVar e.teAbsorbed
 
 -- | Message ids in @gid@ that some turn is already handling: triggers
 -- and anything they have absorbed.  'Max.Prompt.buildContext' uses this

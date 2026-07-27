@@ -46,6 +46,14 @@ spec = do
       planTexts "先说这个 [split] 再说那个"
         `shouldBe` ["先说这个", "再说那个"]
 
+    -- The production leak shape: a narration ending in a marker went
+    -- out with "\n\n[split]" as literal text, because the narration
+    -- sender skipped planReply entirely.  The planner itself must eat
+    -- a trailing marker without producing an empty chunk.
+    it "drops a trailing [split] with nothing after it" $
+      planTexts "手写完你们等到明年。\n\n[split]"
+        `shouldBe` ["手写完你们等到明年。"]
+
   -- A reply becomes one QQ message per chunk, paced ~2s apart, so an
   -- unbounded split is also an unbounded amount of time spent talking
   -- over the group.  Production once turned one generation into 26

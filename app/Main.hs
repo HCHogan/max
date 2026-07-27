@@ -216,7 +216,7 @@ runApp cfg applied eventQ fetchSig mIntentSt clientRef mainTid =
             (mediaCaptionWorker p cfg.imagesDir),
         reminderWorker cfg.timezone env.beReminders,
         for_ ((,) <$> cfg.intent <*> mIntentSt) $ \(ic, st) ->
-          intentWorker ic cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions dispatchProactive st,
+          intentWorker ic cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions (dispatchProactive (Just st)) st,
         handleEvents eventQ fetchSig mIntentSt,
         for_ cfg.wechatpad $ \wc -> wechatpadWorker wc eventQ,
         -- Parked on the shutdown flag until SIGTERM, then waits out the
