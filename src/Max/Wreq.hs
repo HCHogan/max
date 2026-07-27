@@ -6,6 +6,8 @@ module Max.Wreq
   ( postAndParse,
     postAndParseRetrying,
     defaultRetryDelaysSecs,
+    replyRetryDelaysSecs,
+    retryableStatusBody,
     -- * Exposed for tests
     retryableStatus,
   )
@@ -35,11 +37,26 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
 import System.Timeout (timeout)
 
--- | Backoff schedule the LLM chat calls pass to
--- 'postAndParseRetrying': two retries, a short wait for transient
--- hiccups then a longer one for rate-limit windows.
+-- | Backoff schedule for background LLM calls (intent classifiers,
+-- captions, memory extraction): two retries, a short wait for
+-- transient hiccups then a longer one for rate-limit windows.  Kept
+-- deliberately shallow — the supplement classifier sits inside the
+-- latency of a user's @, and the intent worker serves every group
+-- from one loop, so neither may stall out a relay outage.
 defaultRetryDelaysSecs :: [Int]
 defaultRetryDelaysSecs = [2, 8]
+
+-- | Backoff schedule for the streamed reply call — the one whose
+-- failure the group actually sees (裂开 on the trigger).  Production
+-- failures come in relay outage windows measured in minutes, not
+-- hiccups (2026-07: "Upstream request failed" / "No healthy … account"
+-- bursts of 5+ minutes), so the reply is worth waiting out most of
+-- one: ~2¾ minutes of backoff across five retries.  The turn holds
+-- its 托腮 the whole time, which is the honest signal.  Status
+-- failures fail fast, so the schedule *is* the wall clock; only a
+-- hanging endpoint stacks the per-attempt timeout on top.
+replyRetryDelaysSecs :: [Int]
+replyRetryDelaysSecs = [2, 8, 20, 45, 90]
 
 -- | Why one POST attempt failed, split by whether replaying the same
 -- request could plausibly succeed.
@@ -63,7 +80,7 @@ retryableFailure :: Failure -> Bool
 retryableFailure = \case
   FailTimeout -> True
   FailTransport _ -> True
-  FailStatus code _ -> retryableStatus code
+  FailStatus code body -> retryableStatusBody code body
   FailDecode _ -> False
 
 -- | Statuses worth a retry: timeout-ish and rate-limit-ish (408/429)
@@ -71,6 +88,23 @@ retryableFailure = \case
 -- wrong — replaying it unchanged can't help.
 retryableStatus :: Int -> Bool
 retryableStatus code = code == 408 || code == 429 || code >= 500
+
+-- | 'retryableStatus', plus the relay exception: gateways that fan
+-- out to upstream providers (opencode zen, openrouter) wrap upstream
+-- failures in a 4xx of their own — production sees
+-- @400 "Error from provider (Console Go): Upstream request failed"@
+-- filed under @invalid_request_error@, which is transient in every
+-- way except its status code.  A 4xx whose body blames an upstream
+-- or a provider is therefore worth replaying; a genuine
+-- bad-request body (@messages: field required@, auth failures)
+-- names neither.  The body arrives pre-truncated — the markers sit
+-- in the first line of the error JSON.
+retryableStatusBody :: Int -> Text -> Bool
+retryableStatusBody code body =
+  retryableStatus code
+    || (code >= 400 && smellsUpstream (T.toLower body))
+  where
+    smellsUpstream low = "upstream" `T.isInfixOf` low || "provider" `T.isInfixOf` low
 
 -- | POST @body@ to @url@, parse the JSON response with @parser@.
 -- One shot, no retries — the interactive callers (search) prefer a

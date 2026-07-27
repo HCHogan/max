@@ -77,7 +77,7 @@ import Effectful.Log
 import Effectful.Wreq qualified as W
 import Max.Http.Stream (StreamOutcome (..), streamPost)
 import Max.LLM.Stream (StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, PartialCall (..))
-import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying)
+import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying, replyRetryDelaysSecs)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
 
@@ -575,7 +575,11 @@ callChatStream cfg msgs tools sink = case cfg.protocol of
   where
     run url hdrs body step rebuild = do
       outcome <-
-        streamPost defaultRetryDelaysSecs cfg.timeoutSeconds hdrs url body step $ \acc ->
+        -- The patient schedule: streaming is only ever the reply the
+        -- group is waiting on, so it rides out a relay outage where
+        -- the background 'chat' calls (classifiers, captions) fail
+        -- fast on 'defaultRetryDelaysSecs' instead.
+        streamPost replyRetryDelaysSecs cfg.timeoutSeconds hdrs url body step $ \acc ->
           -- Strip before the sink, never after: models that inline
           -- their reasoning (MiniMax, GLM) open with a
           -- @\<think\>…\</think\>@ block, and streaming it straight

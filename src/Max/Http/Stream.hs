@@ -18,6 +18,14 @@
 -- nothing has arrived — once there is any assistant text the failure is
 -- returned with whatever was accumulated, and the caller decides what
 -- to do with a half-written reply.
+--
+-- And only when the failure looks transient: transport errors,
+-- timeouts, empty streams, and the statuses
+-- 'Max.Wreq.retryableStatusBody' accepts (408\/429\/5xx, plus
+-- relay-wrapped 4xx that blame an upstream).  A genuine bad request
+-- fails once and fails identically forever — with the reply path's
+-- schedule now stretching into minutes, replaying one would turn a
+-- fast, diagnosable 400 into a three-minute stall before the same 400.
 module Max.Http.Stream
   ( streamPost,
     StreamOutcome (..),
@@ -37,6 +45,7 @@ import Effectful
 import Effectful.Log
 import Max.LLM.Stream (StreamAcc (..), emptyAcc, sseFrames)
 import Max.Util (trySyncIO)
+import Max.Wreq (retryableStatusBody)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Header (Header)
@@ -83,10 +92,10 @@ streamPost ::
 streamPost delays secs hdrs url body step onGrow = go delays
   where
     go remaining = do
-      out <- attempt
+      (out, retryOk) <- attempt
       case out of
         StreamFailed err
-          | (d : rest) <- remaining -> do
+          | retryOk, (d : rest) <- remaining -> do
               -- Only reachable when nothing arrived: any outcome with
               -- text comes back Truncated, never Failed.
               logAttention "stream: retrying" $
@@ -124,29 +133,28 @@ streamPost delays secs hdrs url body step onGrow = go delays
             if code >= 400
               then do
                 preview <- HTTP.brReadSome (HTTP.responseBody resp) 2000
-                pure . Left $
-                  "HTTP "
-                    <> T.pack (show code)
-                    <> ": "
-                    <> T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict preview))
+                pure (Left (code, T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict preview))))
               else Right <$> readLoop run progress (HTTP.responseBody resp)
       soFar <- liftIO (readIORef progress)
       pure $ case res of
         Nothing -> stalled soFar "stream timed out"
         Just (Left e) -> stalled soFar ("http: " <> T.pack (show e))
-        Just (Right (Left httpErr)) -> StreamFailed httpErr
+        Just (Right (Left (code, rbody))) ->
+          ( StreamFailed ("HTTP " <> T.pack (show code) <> ": " <> rbody),
+            retryableStatusBody code rbody
+          )
         Just (Right (Right acc))
-          | acc.saDone -> StreamComplete acc
+          | acc.saDone -> (StreamComplete acc, False)
           | T.null acc.saText && null acc.saCalls ->
-              StreamFailed "stream ended with no content"
-          | otherwise -> StreamTruncated acc "stream ended without a terminal frame"
+              (StreamFailed "stream ended with no content", True)
+          | otherwise -> (StreamTruncated acc "stream ended without a terminal frame", False)
 
     -- A connection that died before producing anything is
     -- indistinguishable from an ordinary failed POST, so it stays
     -- retryable.  Once there is text, replaying would say it twice.
     stalled acc err
-      | T.null acc.saText && null acc.saCalls = StreamFailed err
-      | otherwise = StreamTruncated acc err
+      | T.null acc.saText && null acc.saCalls = (StreamFailed err, True)
+      | otherwise = (StreamTruncated acc err, False)
 
     readLoop run progress bodyReader = loop "" emptyAcc
       where
