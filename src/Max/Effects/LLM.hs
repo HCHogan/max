@@ -39,6 +39,9 @@ module Max.Effects.LLM
     -- * Response
     ChatResponse (..),
     TokenUsage (..),
+    -- * Call attribution
+    ChatCtx (..),
+    UsageWriter,
     -- * Effect operations
     runLLM,
     chat,
@@ -58,8 +61,11 @@ module Max.Effects.LLM
 where
 
 import Control.Applicative ((<|>))
+import Data.Foldable (for_)
+import Data.Int (Int64)
 import Data.List (find)
 import Data.Maybe (isJust)
+import Effectful.Exception (SomeException)
 import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
@@ -77,6 +83,7 @@ import Effectful.Log
 import Effectful.Wreq qualified as W
 import Max.Http.Stream (StreamOutcome (..), streamPost)
 import Max.LLM.Stream (StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, PartialCall (..))
+import Max.Util (trySync)
 import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying, replyRetryDelaysSecs)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
@@ -266,9 +273,31 @@ data ChatResponse
     ToolCallsResp !Value !Text ![ToolCall]
   deriving stock (Show)
 
--- | Provider-reported token usage for one completion.  Logged in the
--- interpreter (never returned to callers), so journalctl alone is
--- enough to reconstruct token spend per profile.
+-- | Who a chat call is for, threaded through every 'Chat' /
+-- 'ChatStreaming' op so the interpreter can persist token usage with
+-- attribution.  A parameter rather than ambient context on purpose:
+-- the interpreter runs in "Main"'s stack, so a caller-side @Reader@
+-- can't reach it, and an attribution the compiler doesn't demand is
+-- an attribution that rots.
+data ChatCtx = ChatCtx
+  { -- | Which subsystem is spending: @turn@ \/ @wrapup@ \/ @intent@ \/
+    -- @supplement@ \/ @memx@ \/ @memx-compact@ \/ @caption@.
+    ccSource :: !Text,
+    -- | The group the call serves; 'Nothing' for groupless work
+    -- (caption workers run against a shared library).
+    ccGroup :: !(Maybe Int64)
+  }
+  deriving stock (Show, Eq)
+
+-- | Where the interpreter reports usage after each completed call.
+-- Plain IO so stacks without a database (the intent-eval harness,
+-- tests) can pass @\\_ _ _ -> pure ()@ instead of growing a
+-- 'WithConnection' constraint they can't satisfy.
+type UsageWriter = ChatCtx -> Text -> TokenUsage -> IO ()
+
+-- | Provider-reported token usage for one completion.  Persisted via
+-- the interpreter's 'UsageWriter' (see @llm_usage@) and logged, so
+-- both the admin API and journalctl can reconstruct token spend.
 data TokenUsage = TokenUsage
   { usagePrompt :: !Int,
     usageCompletion :: !Int,
@@ -361,7 +390,7 @@ parseToolCall = withObject "ToolCall" $ \o -> do
 -- Effect.
 
 data LLM :: Effect where
-  Chat :: Text -> [ChatMessage] -> [ToolSpec] -> LLM m (Either Text ChatResponse)
+  Chat :: ChatCtx -> Text -> [ChatMessage] -> [ToolSpec] -> LLM m (Either Text ChatResponse)
   -- | 'Chat', but the assistant text is handed over as it arrives.
   --
   -- The sink receives the text /so far/, not the delta: the accumulator
@@ -373,6 +402,7 @@ data LLM :: Effect where
   -- Falls back to a plain 'Chat' when the profile has streaming off;
   -- the sink is then simply never called, so callers need no branch.
   ChatStreaming ::
+    ChatCtx ->
     Text ->
     [ChatMessage] ->
     [ToolSpec] ->
@@ -398,18 +428,19 @@ type instance DispatchOf LLM = Dynamic
 -- wraps the whole call as the wallclock belt-and-braces.
 runLLM ::
   (W.Wreq :> es, Log :> es, IOE :> es) =>
+  UsageWriter ->
   LLMRegistry ->
   Eff (LLM : es) a ->
   Eff es a
-runLLM reg = interpret $ \localEnv -> \case
-  Chat name msgs tools -> runOneChat reg name msgs tools Nothing
-  ChatStreaming name msgs tools sink ->
+runLLM usageWriter reg = interpret $ \localEnv -> \case
+  Chat ctx name msgs tools -> runOneChat usageWriter reg ctx name msgs tools Nothing
+  ChatStreaming ctx name msgs tools sink ->
     -- The sink sends messages, so it is 'Eff', not IO; unlifting it
     -- here is what lets the transport call back into the caller's
     -- effect stack.  Sequential unlift is right: the read loop is
     -- single-threaded and calls the sink one frame at a time.
     localSeqUnlift localEnv $ \unlift ->
-      runOneChat reg name msgs tools (Just (unlift . sink))
+      runOneChat usageWriter reg ctx name msgs tools (Just (unlift . sink))
   ListProfiles -> pure (Map.keys reg.profiles)
   DefaultProfile -> pure reg.defaultName
   IsProfileMultimodal name -> pure $ case Map.lookup name reg.profiles of
@@ -425,13 +456,15 @@ runLLM reg = interpret $ \localEnv -> \case
 -- request-response path.
 runOneChat ::
   (W.Wreq :> es, Log :> es, IOE :> es) =>
+  UsageWriter ->
   LLMRegistry ->
+  ChatCtx ->
   Text ->
   [ChatMessage] ->
   [ToolSpec] ->
   Maybe (Text -> Eff es ()) ->
   Eff es (Either Text ChatResponse)
-runOneChat reg name msgs tools mSink = case Map.lookup name reg.profiles of
+runOneChat usageWriter reg ctx name msgs tools mSink = case Map.lookup name reg.profiles of
   Nothing -> do
     logAttention "llm: unknown profile" $ object ["profile" .= name]
     pure $ Left ("unknown llm profile: " <> name)
@@ -465,28 +498,38 @@ runOneChat reg name msgs tools mSink = case Map.lookup name reg.profiles of
               "profile" .= name
             ]
               <> usageFields mUsage
+    -- Book the spend.  Guarded: a lost accounting row must never fail
+    -- the call it describes.
+    for_ [u | Right (_, Just u) <- [r]] $ \u ->
+      trySync (liftIO (usageWriter ctx name u)) >>= \case
+        Left e ->
+          logAttention "llm: usage write failed" $
+            object ["error" .= T.pack (show (e :: SomeException))]
+        Right () -> pure ()
     pure (fst <$> r)
 
 chat ::
   LLM :> es =>
+  ChatCtx ->
   Text -> -- profile name
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text ChatResponse)
-chat name msgs tools =
-  send (Chat name msgs tools)
+chat ctx name msgs tools =
+  send (Chat ctx name msgs tools)
 
 -- | 'chat' with a sink for the assistant text as it streams in.  See
 -- 'ChatStreaming'.
 chatStreaming ::
   LLM :> es =>
+  ChatCtx ->
   Text ->
   [ChatMessage] ->
   [ToolSpec] ->
   (Text -> Eff es ()) ->
   Eff es (Either Text ChatResponse)
-chatStreaming name msgs tools sink =
-  send (ChatStreaming name msgs tools sink)
+chatStreaming ctx name msgs tools sink =
+  send (ChatStreaming ctx name msgs tools sink)
 
 listProfiles :: LLM :> es => Eff es [Text]
 listProfiles = send ListProfiles

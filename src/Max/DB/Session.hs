@@ -7,6 +7,7 @@
 module Max.DB.Session
   ( fetchOrInit,
     upsertSession,
+    listSessions,
   )
 where
 
@@ -93,6 +94,19 @@ fetchOrInit (GroupId gid) defaultModel = do
               }
       upsertSession initial
       pure initial
+
+-- | Every session row, resolved the same way 'fetchOrInit' resolves
+-- one (NULL model → the default).  The admin surface's group list —
+-- note these are the DB rows, not the in-memory registry: a group the
+-- bot has never spoken in has no row yet.
+listSessions :: (WithConnection :> es, IOE :> es) => Text -> Eff es [Session]
+listSessions defaultModel = do
+  rows <-
+    query
+      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor \
+      \  FROM sessions ORDER BY group_id"
+      ()
+  pure (map (rowToSession defaultModel) (rows :: [Row]))
 
 -- | Idempotent write of one session row.  Updates 'updated_at'.
 upsertSession :: (WithConnection :> es, IOE :> es) => Session -> Eff es ()

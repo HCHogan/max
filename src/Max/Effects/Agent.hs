@@ -78,7 +78,7 @@ import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Exception (bracket, throwIO)
 import Effectful.Log
-import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
+import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Message (MessageKind (..), insertOutbound)
 import Max.Effects.NapCat (NapCat, callAction)
@@ -89,7 +89,7 @@ import Data.Set qualified as Set
 import Max.Reply (ReplyPiece (..), chunkSource, parseReplyTokens, planReply, readyPrefix)
 import Max.ReplySend (chunkDelayMicros)
 import OneBot.Segment (Segment (SegFace, SegReply, SegText), segmentMentions, trimEdgeSegs)
-import OneBot.Types (GroupId, MessageId (..), UserId, isPrivateChat)
+import OneBot.Types (GroupId (..), MessageId (..), UserId, isPrivateChat)
 
 -- | Per-dispatch context the agent loop hands to its tool factory.
 -- Tools like @say@ need the triggering message coordinates to thread
@@ -146,6 +146,12 @@ maxToolImages = 8
 -- | Queue an image for injection after the current tool round.
 -- 'False' when the dispatch's image budget is already spent (the
 -- tool should surface that as its error text).
+-- | Usage attribution for a dispatch's own LLM calls.  Private chats
+-- report their pseudo-group id — that is the conversation the spend
+-- belongs to.
+turnCtx :: DispatchContext -> Text -> ChatCtx
+turnCtx dc source = let GroupId g = dc.dcGroupId in ChatCtx source (Just g)
+
 queueToolImage :: IOE :> es => DispatchContext -> ToolImage -> Eff es Bool
 queueToolImage dc img = liftIO . atomically $ do
   (n, imgs) <- readTVar dc.dcToolImages
@@ -279,7 +285,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
             [] -> (msgs, appended)
             xs -> (msgs <> [feedbackMsg xs], appended <> [feedbackMsg xs])
       if n >= lims.maxTurns
-        then finalAnswer n appended' profile msgs'
+        then finalAnswer dc n appended' profile msgs'
         else do
           specs <- listToolSpecs
           -- Trim before the call AND carry the trimmed list forward
@@ -291,7 +297,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
           -- narration, or the final answer), and each gets its own
           -- prefix bookkeeping.
           sentRef <- liftIO (newTVarIO "")
-          eres <- chatStreaming profile msgs'' specs (releaseParagraphs emit sentRef)
+          eres <- chatStreaming (turnCtx dc "turn") profile msgs'' specs (releaseParagraphs emit sentRef)
           sent <- liftIO (readTVarIO sentRef)
           case eres of
             Left err ->
@@ -370,12 +376,13 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     -- rather than a bare "max turns" error.  Empty tool specs force a
     -- content response; a synthetic note tells the model to wrap up.
     finalAnswer ::
+      DispatchContext ->
       Int ->
       [ChatMessage] ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : es) AgentResult
-    finalAnswer n appended profile msgs = do
+    finalAnswer dc n appended profile msgs = do
       logInfo "agent: max turns reached, forcing final answer" $
         object ["turns" .= n]
       let capNote =
@@ -383,7 +390,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
               "[system] 工具调用轮次已用满，别再调用任何工具了。\
               \直接根据目前已经掌握的信息，给用户一个最终回复。"
       eres <-
-        chat profile (capToolResults toolResultBudget (msgs <> [capNote])) []
+        chat (turnCtx dc "wrapup") profile (capToolResults toolResultBudget (msgs <> [capNote])) []
       let (mText, ab) = case eres of
             Right (ContentResp t) | not (T.null (T.strip t)) -> (Just t, Just "max-turns")
             Right _ -> (Nothing, Just "max-turns")

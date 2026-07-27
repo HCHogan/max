@@ -34,7 +34,8 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query_)
 import Max.Effects.LLM
-  ( ChatMessage (..),
+  ( ChatCtx (..),
+    ChatMessage (..),
     ChatResponse (..),
     ContentBlock (..),
     LLM,
@@ -123,6 +124,7 @@ captionOne profile blobRoot (sha, mime, path, mSummary) = do
                 _ -> ""
           eres <-
             chat
+              (ChatCtx "caption" Nothing)
               profile
               [ MsgSystem captionSystem,
                 MsgUserBlocks [TextBlock ("这个表情包" <> hint <> "："), ImageDataUrl dataUrl]

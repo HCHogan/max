@@ -8,11 +8,15 @@ module Max.DB.Permissions
     insertGrant,
     deleteGrant,
     listGrantsFor,
+    GrantRow (..),
+    listGrants,
+    deleteGrantById,
   )
 where
 
 import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
@@ -72,6 +76,37 @@ deleteGrant uid cap scope = do
       "DELETE FROM permissions WHERE user_id = ? AND capability = ? \
       \ AND scope_group_id IS NOT DISTINCT FROM ?"
       (uid, cap, scope)
+  pure (n > 0)
+
+-- | One full permissions row, id and audit trail included — the
+-- admin surface's view, where rows are deleted by id rather than by
+-- (user, capability, scope) triple.
+data GrantRow = GrantRow
+  { grId :: !Int64,
+    grUser :: !Int64,
+    grCapability :: !Text,
+    grScope :: !(Maybe Int64),
+    grDeny :: !Bool,
+    grGrantedBy :: !Int64,
+    grGrantedAt :: !UTCTime
+  }
+  deriving stock (Show, Eq)
+
+-- | Every explicit grant/deny row.  Small by construction (one row
+-- per deliberate !grant), so no pagination.
+listGrants :: (WithConnection :> es, IOE :> es) => Eff es [GrantRow]
+listGrants = do
+  rows <-
+    query
+      "SELECT id, user_id, capability, scope_group_id, deny, granted_by, granted_at \
+      \  FROM permissions ORDER BY user_id, capability, scope_group_id NULLS FIRST"
+      ()
+  pure [GrantRow i u c s d by at | (i, u, c, s, d, by, at) <- rows]
+
+-- | Drop one row by primary key; 'False' when the id is unknown.
+deleteGrantById :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es Bool
+deleteGrantById rid = do
+  n <- execute "DELETE FROM permissions WHERE id = ?" (Only rid)
   pure (n > 0)
 
 -- | All explicit rows for a user (for @!perms@): (capability, scope, deny).

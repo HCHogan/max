@@ -742,7 +742,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                   newLine =
                     T.intercalate "\n" $
                       map render companionRows <> [renderCurrentLine env.beTimeZone noteAt gm]
-              isSupp <- classifySupplement icfg ctxLines newLine
+              isSupp <- classifySupplement icfg gidRaw ctxLines newLine
               if not isSupp
                 then pure False
                 else do

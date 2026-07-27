@@ -19,11 +19,13 @@ import Effectful.Wreq (runWreq)
 import Max.Log (withCompactLogger)
 import Max.Config (AppConfig (..), loadConfig)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
+import Max.Admin (adminServer)
 import Max.DB.Migrations (runMigrations)
+import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits, runAgent)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
-import Max.Effects.LLM (LLM, LLMRegistry (..), runLLM)
+import Max.Effects.LLM (ChatCtx (..), LLM, LLMRegistry (..), TokenUsage (..), runLLM)
 import Max.Effects.NapCat (NapCat, qqBackend, runNapCat)
 import Max.Embedder (embedWorker)
 import Max.Embedding (newEmbedClient)
@@ -135,7 +137,17 @@ main = do
               | Just wc <- [cfg.wechatpad]
               ]
             . runWreq
-            . runLLM cfg.llm
+            -- Token accounting goes through its own pooled connection
+            -- (a plain IO writer): the LLM interpreter sits outside
+            -- the WithConnection effect and the eval harness has no
+            -- database at all, so the dependency stays out of the
+            -- effect stack.
+            . runLLM
+              ( \ctx profile u ->
+                  runEff . runWithConnectionPool pool $
+                    insertUsage ctx.ccGroup ctx.ccSource profile u.usagePrompt u.usageCompletion u.usageCachedPrompt
+              )
+              cfg.llm
             . runReader env
             . runAgent defaultLimits (allToolsFor env) tasks
             $ runApp cfg applied eventQ fetchSig mIntentSt clientRef mainTid
@@ -218,6 +230,7 @@ runApp cfg applied eventQ fetchSig mIntentSt clientRef mainTid =
         for_ ((,) <$> cfg.intent <*> mIntentSt) $ \(ic, st) ->
           intentWorker ic cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions (dispatchProactive (Just st)) st,
         handleEvents eventQ fetchSig mIntentSt,
+        for_ cfg.admin $ \ac -> adminServer ac env (Map.keys cfg.llm.profiles),
         for_ cfg.wechatpad $ \wc -> wechatpadWorker wc eventQ,
         -- Parked on the shutdown flag until SIGTERM, then waits out the
         -- in-flight dispatches before interrupting main.

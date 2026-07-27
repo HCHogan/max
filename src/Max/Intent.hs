@@ -62,7 +62,7 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.History (HistoryItem (..), fetchRecentInGroup)
-import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLM, chat)
+import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
 import Max.Prompt (renderHistoryLine)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
 import Max.Util (catchSync)
@@ -275,7 +275,7 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
             render = renderHistoryLine tz selfId'
         -- Rows for the batch can be missing only in pathological
         -- flood cases; classify anyway with whatever context we have.
-        verdict <- classifyOnce cfg.icProfile (fromMaybe defaultPersona s.persona) (map render ctx) (map render news)
+        verdict <- classifyOnce (Just gid) cfg.icProfile (fromMaybe defaultPersona s.persona) (map render ctx) (map render news)
         case verdict of
           Nothing -> pure ()
           Just v
@@ -339,19 +339,20 @@ drainGroup st gid = do
 -- the @max-intent-eval@ executable).
 classifyOnce ::
   (LLM :> es, Log :> es) =>
+  Maybe Int64 -> -- group under classification (usage attribution; Nothing in the eval harness)
   Text -> -- LLM profile
   Text -> -- persona
   [Text] -> -- context lines, chronological
   [Text] -> -- new (unclassified) lines
   Eff es (Maybe IntentVerdict)
-classifyOnce profile persona ctxLines newLines = do
+classifyOnce mGid profile persona ctxLines newLines = do
   let userBody =
         T.intercalate "\n" $
           ["[context]"]
             <> (if null ctxLines then ["(无)"] else ctxLines)
             <> ["", "[new messages]"]
             <> (if null newLines then ["(见上下文末尾)"] else newLines)
-  r <- chat profile [MsgSystem (classifierSystem persona), MsgUser userBody] []
+  r <- chat (ChatCtx "intent" mGid) profile [MsgSystem (classifierSystem persona), MsgUser userBody] []
   case r of
     Left err -> do
       logAttention "intent: classify failed" $ object ["error" .= err]
@@ -462,16 +463,17 @@ extractObject t =
 classifySupplement ::
   (LLM :> es, Log :> es) =>
   IntentConfig ->
+  Int64 -> -- group being served (usage attribution)
   [Text] -> -- recent history lines, chronological (trigger excluded)
   Text -> -- the new trigger message, rendered
   Eff es Bool
-classifySupplement cfg ctxLines newLine = do
+classifySupplement cfg gid ctxLines newLine = do
   let userBody =
         T.intercalate "\n" $
           ["[context]"]
             <> (if null ctxLines then ["(无)"] else ctxLines)
             <> ["", "[new messages]", newLine]
-  r <- chat cfg.icProfile [MsgSystem supplementSystem, MsgUser userBody] []
+  r <- chat (ChatCtx "supplement" (Just gid)) cfg.icProfile [MsgSystem supplementSystem, MsgUser userBody] []
   case r of
     Left err -> do
       logAttention "intent: supplement classify failed" $ object ["error" .= err]

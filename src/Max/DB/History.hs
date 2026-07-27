@@ -6,6 +6,7 @@ module Max.DB.History
     fetchMentionHistory,
     fetchMessagesByIds,
     fetchForwardChildren,
+    messageStatsDaily,
   )
 where
 
@@ -14,7 +15,7 @@ import Control.Applicative ((<|>))
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
+import Data.Time (Day, UTCTime)
 import Database.PostgreSQL.Simple (FromRow, In (..), Only (..), (:.) (..))
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Effectful
@@ -226,3 +227,22 @@ fetchForwardChildren containerId cap =
     \  ORDER BY forward_position \
     \  LIMIT ?"
     (containerId, cap)
+
+-- | Message volume per (day, group, kind) over the last @days@ days,
+-- for the admin stats endpoint.  Day boundaries in the configured
+-- display timezone, passed as a minute offset (the config zone is
+-- fixed-offset — no DST to honour).
+messageStatsDaily ::
+  (WithConnection :> es, IOE :> es) =>
+  Int -> -- timezone offset, minutes east of UTC
+  Int -> -- how many days back
+  Eff es [(Day, Int64, Text, Int64)]
+messageStatsDaily tzMinutes days =
+  query
+    "SELECT (received_at + make_interval(mins => ?))::date AS day, \
+    \       group_id, kind, count(*)::bigint \
+    \  FROM messages \
+    \ WHERE received_at > now() - make_interval(days => ?) \
+    \ GROUP BY 1, 2, 3 \
+    \ ORDER BY 1 DESC, 2, 3"
+    (tzMinutes, days)

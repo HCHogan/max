@@ -61,6 +61,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone, minutesToTimeZone)
 import Data.Version (makeVersion)
+import Max.Admin (AdminConfig (..))
 import Max.DB.Connection (DbConfig (..))
 import Max.Effects.LLM (LLMProfile (..), LLMRegistry (..), Protocol (..), parseProtocol)
 import Max.Embedding (EmbeddingConfig (..))
@@ -131,6 +132,9 @@ data AppConfig = AppConfig
     -- | Proactive-trigger intent classification; 'Nothing' disables
     -- it (the bot only answers @-mentions/quotes, as before).
     intent :: !(Maybe IntentConfig),
+    -- | Admin JSON API (loopback warp server); 'Nothing' = never
+    -- started.  See "Max.Admin".
+    admin :: !(Maybe AdminConfig),
     -- | Embeddings endpoint; presence enables the embed worker and
     -- the semantic-search surfaces (search_messages, memory_search).
     embedding :: !(Maybe EmbeddingConfig),
@@ -339,6 +343,7 @@ appConfigParser =
         ]
     wechatpad <- subConfig "wechatpad" wechatpadParser
     intent <- subConfig "intent" intentParser
+    admin <- subConfig "admin" adminParser
     embedding <- subConfig "embedding" embeddingParser
     debug <-
       yesNoSwitch
@@ -649,6 +654,51 @@ intentParser = do
                 icContextLines = ctxLines
               }
     _ -> Nothing
+
+--------------------------------------------------------------------------------
+-- Admin API.
+
+-- | Enabled iff @port@ is present.  The default bind is loopback on
+-- purpose: auth beyond the optional bearer token is the reverse
+-- proxy's job.
+adminParser :: Parser (Maybe AdminConfig)
+adminParser = do
+  mPort <-
+    optional $
+      setting
+        [ help "Admin JSON API port (presence enables the server)",
+          reader auto,
+          option,
+          long "admin-port",
+          env "MAX_ADMIN_PORT",
+          conf "port",
+          metavar "PORT"
+        ]
+  host <-
+    setting
+      [ help "Admin API bind address",
+        reader str,
+        option,
+        long "admin-host",
+        env "MAX_ADMIN_HOST",
+        conf "host",
+        metavar "ADDR",
+        value "127.0.0.1"
+      ]
+  token <-
+    optional $
+      setting
+        [ help "Bearer token required on every admin request",
+          reader str,
+          option,
+          long "admin-token",
+          env "MAX_ADMIN_TOKEN",
+          conf "token",
+          metavar "TOKEN"
+        ]
+  pure $ case mPort of
+    Just p -> Just AdminConfig {acHost = host, acPort = p, acToken = token}
+    Nothing -> Nothing
 
 --------------------------------------------------------------------------------
 -- Embeddings.

@@ -193,6 +193,19 @@ llm:
 #   context_lines: 15         # recent messages the classifier sees
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Admin JSON API.  Presence of port starts a loopback warp server inside the
+# bot process: sessions/permissions/memories/tasks read+write, token usage
+# and message stats read-only.  No TLS, no users — put cloudflared/Zitadel
+# or an ssh forward in front, and set token if anything else can reach the
+# port.  See docs/features.md for the endpoint list.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# admin:
+#   port: 7700
+#   host: 127.0.0.1           # default; think twice before widening
+#   token: change-me          # optional; Authorization: Bearer <token>
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Embeddings (vector search).  Any OpenAI-compatible /embeddings endpoint;
 # presence of base_url + model enables the background embed worker plus
 # semantic search in search_messages and the memory_search tool.

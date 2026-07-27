@@ -44,7 +44,7 @@ import Max.DB.Memory
   )
 import Max.Time (fmtDate)
 import Data.Time (utc)
-import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, chat)
+import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, chat)
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Tools.Memory (checkContent, maxMemoriesPerScope)
 import OneBot.Event (GroupMessage (..))
@@ -84,7 +84,7 @@ extractMemories profile mEmbed gm conversation = localDomain "memx" $ do
         [ MsgSystem extractorSystem,
           MsgUser (renderInput gid uid groupMems userMems transcript)
         ]
-  chat profile msgs [] >>= \case
+  chat (ChatCtx "memx" (Just gid)) profile msgs [] >>= \case
     Left err -> logAttention "memx: chat failed" $ object ["error" .= err]
     Right (ToolCallsResp _ _ _) ->
       logAttention "memx: unexpected tool calls" $ object []
@@ -260,7 +260,7 @@ compactScope profile scope sid gid = do
           ("[memories — scope=" <> scopeText scope <> " id=" <> T.pack (show sid) <> "]")
             : map memLine mems
             <> ["", "输出操作 JSON 数组："]
-  chat profile [MsgSystem compactorSystem, MsgUser input] [] >>= \case
+  chat (ChatCtx "memx-compact" (Just gid)) profile [MsgSystem compactorSystem, MsgUser input] [] >>= \case
     Left err -> logAttention "memx: compact chat failed" $ object ["error" .= err]
     Right (ToolCallsResp _ _ _) ->
       logAttention "memx: compact unexpected tool calls" $ object []

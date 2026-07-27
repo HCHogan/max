@@ -38,7 +38,8 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query_)
 import Max.Effects.LLM
-  ( ChatMessage (..),
+  ( ChatCtx (..),
+    ChatMessage (..),
     ChatResponse (..),
     ContentBlock (..),
     LLM,
@@ -160,6 +161,7 @@ mediaCaptionWorker profile blobRoot = localDomain "media-caption" $ do
               let dataUrl = "data:" <> mime' <> ";base64," <> TE.decodeUtf8 (B64.encode bytes)
               eres <-
                 chat
+                  (ChatCtx "caption" Nothing)
                   profile
                   [ MsgSystem sys,
                     MsgUserBlocks [TextBlock lead, ImageDataUrl dataUrl]

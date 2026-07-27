@@ -122,9 +122,11 @@ main = do
   -- LogAttention: per-case verdict logs stay quiet, real errors
   -- (HTTP failures, unparseable verdicts) still surface.
   results <- withCompactLogger cfg.logColor $ \logger ->
-    runEff . runLog "max-intent-eval" logger LogAttention . runWreq . runLLM cfg.llm $
+    -- No database in this stack, so token usage from replayed rounds
+    -- is deliberately unaccounted.
+    runEff . runLog "max-intent-eval" logger LogAttention . runWreq . runLLM (\_ _ _ -> pure ()) cfg.llm $
       traverse
-        (\(i, c) -> (,) (i, c) <$> classifyOnce profile cfg.persona c.cContext c.cNew)
+        (\(i, c) -> (,) (i, c) <$> classifyOnce Nothing profile cfg.persona c.cContext c.cNew)
         cases
 
   let infraFails = [(i, c) | ((i, c), Nothing) <- results]
