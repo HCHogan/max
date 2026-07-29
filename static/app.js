@@ -63,7 +63,12 @@ function admin() {
       const headers = Object.assign({}, opts.headers);
       if (this.token) headers['Authorization'] = 'Bearer ' + this.token;
       if (opts.body) headers['Content-Type'] = 'application/json';
-      const res = await fetch('/api' + path, Object.assign({}, opts, { headers }));
+      // Relative, so the panel works wherever it is mounted: at the
+      // server's root, or under a reverse-proxy prefix that strips
+      // itself (`location /max/ { proxy_pass http://…:7700/; }`).
+      // Every asset href is relative for the same reason — which is
+      // why the mount point must keep its trailing slash.
+      const res = await fetch('api' + path, Object.assign({}, opts, { headers }));
       if (res.status === 401) {
         this.needToken = true;
         throw new Error('unauthorized');
