@@ -5,6 +5,28 @@
 #
 # Config precedence (first wins): CLI flags > env vars > this file > defaults.
 # Run `max --help` for the full option/env/config reference.
+#
+# ── The env layer bites, and it bites quietly ────────────────────────────────
+# "env vars > this file" means a MAX_* variable in scope makes the
+# corresponding key here dead.  Nothing warns you; the value simply isn't the
+# one you wrote.  Two places set them behind your back:
+#
+#   * the devenv/direnv dev shell exports MAX_DB_URL, MAX_WS_HOST, MAX_WS_PORT
+#     and MAX_WS_PATH (see devenv.nix) — and their values happen to equal the
+#     built-in defaults, so an ignored key looks exactly like a key that took
+#     its default.  To test this file's values, run outside direnv or clear
+#     them: `env -u MAX_DB_URL -u MAX_WS_PORT ... max --config-file ...`
+#   * the NixOS module exports db.url, images_dir, migrations_dir,
+#     server.host, log_color and server.access_token (nix/module.nix), on
+#     purpose, so they hold for hand-managed configFile setups too.  Setting
+#     those six here has no effect on a module-managed deployment.
+#
+# To see where every setting actually came from, ask the binary:
+#   max --run-settings-check --config-file /path/to/max.yaml
+# It prints one line per setting ("set based on config value" / "set based on
+# env" / default), parses nothing else, and exits.  A key you wrote that
+# doesn't show up as "config value" was either overridden or misspelled —
+# unknown keys are silently ignored.
 
 # Bot persona — the identity line at the top of the system prompt.
 # The format guide for [HH:MM], [↩ 引用 ...], [image], [forward] markers is
@@ -78,6 +100,28 @@ persona: |
 #   max_conns: 8
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Bot owners: the top permission tier — every command capability in every
+# group, plus the owner-only ones (!model, !grant, !kill --all, !use).
+#
+# Worth double-checking, because getting it wrong fails silently and
+# completely: a misspelled key leaves the list empty, nobody is an owner, and
+# every owner-tier command answers with the refusal face and no explanation.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# owners: [10001, 10002]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stickers.  The bot learns them from the groups it sits in; captioning makes
+# them retrievable (and thus sendable).  `enabled` is the config-level default
+# for whether it may post one — per-group override is !sticker on/off.
+# Turning it off still ingests and captions; it only stops the sending.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# stickers:
+#   enabled: true
+#   caption_profile: qwen-vl      # vision profile; also captions chat media
+
+# ─────────────────────────────────────────────────────────────────────────────
 # LLM profiles.  You can define as many as you like; group members switch
 # between them at runtime via !model <name>.  The 'default' field picks which
 # one is used when a session has no per-group override.
@@ -142,6 +186,27 @@ llm:
     #   temperature: 0.7      # model card default is 1.0; lower for chat
     #   multimodal: true
 
+    # Two more per-profile switches, both defaulting to false:
+    #
+    #   stream: true
+    #     Send each finished paragraph as it arrives instead of waiting
+    #     for the whole reply.  The message ceiling still applies across
+    #     the split, and a stream that dies mid-sentence appends the
+    #     interruption marker rather than pretending it finished.
+    #
+    #   history_as_turns: true
+    #     Feed the bot's own past replies as real `assistant` turns
+    #     instead of folding them into the one chronological transcript.
+    #     The transcript is the default because roles cannot express a
+    #     group (`user` conflates N speakers); flip this to compare the
+    #     two shapes with !model rather than arguing about them.
+    # kimi:
+    #   api_key: sk-...
+    #   base_url: "https://api.moonshot.cn/v1"
+    #   model: "kimi-k2"
+    #   stream: true
+    #   history_as_turns: false
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Web search.  When tavily_api_key is set (here or via MAX_TAVILY_API_KEY
 # / --tavily-api-key) the agent gets a web_search tool backed by Tavily.
@@ -203,7 +268,27 @@ llm:
 # admin:
 #   port: 7700
 #   host: 127.0.0.1           # default; think twice before widening
-#   token: change-me          # optional; Authorization: Bearer <token>
+#   token: change-me          # prefer MAX_ADMIN_TOKEN — under the NixOS
+#                             # module this file is world-readable in the
+#                             # nix store, so a token here is public
+
+# Days of full LLM request/response bodies kept for the panel's call view.
+# Only those are pruned — the token counters behind the usage chart are
+# never deleted.  Top level, not under `admin:`.
+# admin_call_retention_days: 7
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WeChat via a WeChatPadPro relay (demo scope: whitelisted chatrooms, text
+# in and out).  Absent = QQ only.  The three big QQ affordances degrade:
+# no reactions, no quote-replies, no pokes.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# wechatpad:
+#   api_url: http://127.0.0.1:8059
+#   auth_key: your-pad-key
+#   self_wxid: wxid_xxxxxxxx     # the bot's own wxid
+#   bot_name: Max                # name members @ it by
+#   chatrooms: ["12345678@chatroom"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Embeddings (vector search).  Any OpenAI-compatible /embeddings endpoint;

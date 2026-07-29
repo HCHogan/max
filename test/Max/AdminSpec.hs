@@ -1,6 +1,6 @@
 module Max.AdminSpec (spec) where
 
-import Max.Admin (Route (..), authOk, route)
+import Max.Admin (Route (..), authOk, needsAuth, route)
 import Test.Hspec
 
 spec :: Spec
@@ -29,6 +29,43 @@ spec = describe "Max.Admin" $ do
       route "POST" ["api", "overview"] `shouldBe` Nothing
       route "GET" ["api", "nope"] `shouldBe` Nothing
       route "PUT" ["api", "permissions"] `shouldBe` Nothing
+
+  describe "static asset routes" $ do
+    it "serves the panel at the root" $ do
+      route "GET" [] `shouldBe` Just (RStatic ["index.html"])
+      route "GET" [""] `shouldBe` Just (RStatic ["index.html"])
+
+    it "serves nested assets under /static" $ do
+      route "GET" ["static", "app.js"] `shouldBe` Just (RStatic ["app.js"])
+      route "GET" ["static", "vendor", "uplot.iife.min.js"]
+        `shouldBe` Just (RStatic ["vendor", "uplot.iife.min.js"])
+
+    it "refuses traversal and empty segments" $ do
+      route "GET" ["static", "..", "etc", "passwd"] `shouldBe` Nothing
+      route "GET" ["static", ""] `shouldBe` Nothing
+      route "GET" ["static"] `shouldBe` Nothing
+
+  -- A <script> tag can't send an Authorization header, so gating the
+  -- panel's own files would make the token unusable from a browser.
+  -- They carry no data; every byte of state comes from /api.
+  describe "needsAuth" $ do
+    it "exempts the panel's own assets" $ do
+      needsAuth (RStatic ["index.html"]) `shouldBe` False
+      needsAuth (RStatic ["vendor", "alpine.min.js"]) `shouldBe` False
+
+    it "gates every data route" $ do
+      needsAuth ROverview `shouldBe` True
+      needsAuth RGroups `shouldBe` True
+      needsAuth (RSessionPatch 1) `shouldBe` True
+      needsAuth RMemoriesList `shouldBe` True
+      needsAuth (RMemoryDelete 1) `shouldBe` True
+      needsAuth RGrantsList `shouldBe` True
+      needsAuth RGrantCreate `shouldBe` True
+      needsAuth (RGrantDelete 1) `shouldBe` True
+      needsAuth RTasksList `shouldBe` True
+      needsAuth (RTaskKill "t1") `shouldBe` True
+      needsAuth RUsage `shouldBe` True
+      needsAuth RMessageStats `shouldBe` True
 
   describe "authOk" $ do
     it "is open when no token is configured (loopback is the guard)" $

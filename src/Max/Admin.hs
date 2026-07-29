@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- |
 -- The admin JSON API: a warp server inside the bot process, because
 -- half of what it manages only exists inside the process.  Sessions
@@ -25,6 +27,7 @@ module Max.Admin
     Route (..),
     route,
     authOk,
+    needsAuth,
   )
 where
 
@@ -35,6 +38,7 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.FileEmbed (embedDir)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
@@ -47,16 +51,20 @@ import Data.Version (showVersion)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
+import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
 import Max.DB.History (messageStatsDaily)
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, listMemories, listUserMemoriesEverywhere)
 import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGrants)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
 import Max.Env (BotEnv (..))
+import Max.Log (parseLogLevel, renderLogLevel)
+import Max.LogBuffer (LogBuffer, LogEntry (..), LogQuery (..), queryLogs)
+import Max.LogBuffer qualified as LogBuffer
 import Max.Session (Session (..), loadSession, updateSession)
 import Max.Tasks (TaskId (..), TaskInfo (..), cancelTask, listTasks)
 import Max.Util (trySync)
-import Network.HTTP.Types (Method, Status, hAuthorization, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status500)
+import Network.HTTP.Types (Method, Status, hAuthorization, hCacheControl, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status500)
 import Network.Wai (Response, pathInfo, queryString, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp qualified as Warp
 import OneBot.Types (GroupId (..), UserId (..))
@@ -94,6 +102,13 @@ data Route
   | RTaskKill !Text
   | RUsage
   | RMessageStats
+  | RLogs
+  | RCalls
+  | RCallDetail !Int64
+  | -- | A baked-in static asset (the panel itself).  Carries the
+    -- asset's own path so the handler can look it up; @\/@ is the
+    -- index.  Unauthenticated — see 'needsAuth'.
+    RStatic ![Text]
   deriving stock (Show, Eq)
 
 -- | Method + path → endpoint.  'Nothing' is a 404.
@@ -107,6 +122,18 @@ route m path
       ["api", "tasks"] -> Just RTasksList
       ["api", "usage"] -> Just RUsage
       ["api", "stats", "messages"] -> Just RMessageStats
+      ["api", "logs"] -> Just RLogs
+      ["api", "calls"] -> Just RCalls
+      ["api", "calls", i] -> RCallDetail <$> int i
+      [] -> Just (RStatic ["index.html"])
+      [""] -> Just (RStatic ["index.html"])
+      ("static" : rest)
+        -- No ".." can appear: every asset is baked into the binary and
+        -- looked up in a fixed table, so the path is a key, not a
+        -- filesystem walk.  Guarded anyway — the day this grows a real
+        -- directory the guard is already here.
+        | not (null rest), all (`notElem` ["..", ""]) rest ->
+            Just (RStatic rest)
       _ -> Nothing
   | m == methodPatch = case path of
       ["api", "groups", g, "session"] -> RSessionPatch <$> int g
@@ -132,6 +159,18 @@ authOk Nothing _ = True
 authOk (Just tok) (Just header) = header == "Bearer " <> TE.encodeUtf8 tok
 authOk (Just _) Nothing = False
 
+-- | Which routes the bearer token gates.  The panel's own assets are
+-- exempt: a @\<script\>@ tag and a page navigation cannot carry an
+-- Authorization header, so gating them would make the token
+-- unusable from a browser.  They are HTML/CSS/JS with no data in
+-- them — every byte of state still comes from an @\/api@ call that
+-- does check.  The panel asks for the token on its first 401 and
+-- keeps it in localStorage.
+needsAuth :: Route -> Bool
+needsAuth = \case
+  RStatic _ -> False
+  _ -> True
+
 --------------------------------------------------------------------------------
 -- Server.
 
@@ -142,21 +181,25 @@ adminServer ::
   BotEnv ->
   -- | Configured LLM profile names, for validating a model PATCH.
   [Text] ->
+  -- | The process's log tail, served by @\/api\/logs@.
+  LogBuffer ->
   Eff es ()
-adminServer cfg env profiles = localDomain "admin" $ do
+adminServer cfg env profiles logBuf = localDomain "admin" $ do
   logInfo "admin: listening" $ object ["host" .= cfg.acHost, "port" .= cfg.acPort]
   -- Warp serves each request on its own thread, so the unlift has to
   -- be reusable across threads — hence the concurrent strategy.
   withEffToIO (ConcUnlift Ephemeral Unlimited) $ \run ->
     Warp.runSettings settings $ \req respond -> do
-      resp <-
-        if not (authOk cfg.acToken (lookup hAuthorization (requestHeaders req)))
-          then pure (jsonResponse status401 (object ["error" .= ("unauthorized" :: Text)]))
-          else case route (requestMethod req) (pathInfo req) of
-            Nothing -> pure (jsonResponse status404 (object ["error" .= ("not found" :: Text)]))
-            Just r -> do
-              body <- strictRequestBody req
-              run (guarded r (handle env profiles r (queryPairs req) body))
+      resp <- case route (requestMethod req) (pathInfo req) of
+        Nothing -> pure (jsonResponse status404 (object ["error" .= ("not found" :: Text)]))
+        Just r
+          | needsAuth r,
+            not (authOk cfg.acToken (lookup hAuthorization (requestHeaders req))) ->
+              pure (jsonResponse status401 (object ["error" .= ("unauthorized" :: Text)]))
+        Just (RStatic p) -> pure (staticResponse p)
+        Just r -> do
+          body <- strictRequestBody req
+          run (guarded r (handle env profiles logBuf r (queryPairs req) body))
       respond resp
   where
     settings =
@@ -183,17 +226,63 @@ jsonResponse st v =
   responseLBS st [(hContentType, "application/json; charset=utf-8")] (A.encode v)
 
 --------------------------------------------------------------------------------
+-- The panel itself.
+
+-- | Every file under @static\/@, baked into the binary at compile
+-- time.  Embedding rather than reading from disk keeps the deployment
+-- story ("one binary, systemd starts it") intact — a panel that
+-- needed its assets installed next to it would be a second thing to
+-- get right in the nix derivation.  The tree is ~100 KB of vendored
+-- JS/CSS, which is noise next to the RTS.
+staticAssets :: [(FilePath, BS.ByteString)]
+staticAssets = $(embedDir "static")
+
+-- | Serve one embedded asset.  Assets are content-addressed by build
+-- (they change only when the binary does), so vendored libraries get
+-- a long cache lifetime while the panel's own files stay
+-- revalidated — otherwise a bot upgrade would serve yesterday's
+-- app.js out of the browser cache.
+staticResponse :: [Text] -> Response
+staticResponse segs = case lookup key staticAssets of
+  Nothing -> jsonResponse status404 (object ["error" .= ("not found" :: Text)])
+  Just bytes ->
+    responseLBS
+      status200
+      [ (hContentType, contentType),
+        ( hCacheControl,
+          if "vendor/" `T.isPrefixOf` T.pack key
+            then "public, max-age=31536000, immutable"
+            else "no-cache"
+        )
+      ]
+      (LBS.fromStrict bytes)
+  where
+    key = T.unpack (T.intercalate "/" segs)
+    ext s = s `T.isSuffixOf` T.pack key
+    contentType
+      | ext ".html" = "text/html; charset=utf-8"
+      | ext ".js" = "text/javascript; charset=utf-8"
+      | ext ".css" = "text/css; charset=utf-8"
+      -- Fonts load from @font-face either way, but a wrong type is
+      -- the kind of thing that only bites once something in front
+      -- (a CSP, a caching proxy) starts caring.
+      | ext ".woff2" = "font/woff2"
+      | ext ".svg" = "image/svg+xml"
+      | otherwise = "application/octet-stream"
+
+--------------------------------------------------------------------------------
 -- Handlers.
 
 handle ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   BotEnv ->
   [Text] ->
+  LogBuffer ->
   Route ->
   [(Text, Text)] ->
   LBS.ByteString ->
   Eff es Response
-handle env profiles r params body = case r of
+handle env profiles logBuf r params body = case r of
   ROverview -> do
     now <- liftIO getCurrentTime
     tasks <- liftIO (listTasks env.beTasks Nothing)
@@ -268,7 +357,64 @@ handle env profiles r params body = case r of
       [ object ["day" .= d, "group_id" .= g, "kind" .= k, "count" .= n]
       | (d, g, k, n) <- rows
       ]
+  -- The panel polls this with ?after=<seq> to tail, so the response
+  -- carries the highest sequence number it contains — the client
+  -- echoes it back and never re-reads a line it already has.
+  RLogs -> do
+    entries <-
+      liftIO . queryLogs logBuf $
+        LogBuffer.emptyQuery
+          { lqMinLevel = parseLogLevel =<< lookup "level" params,
+            lqDomain = nonBlank =<< lookup "domain" params,
+            lqSearch = nonBlank =<< lookup "q" params,
+            lqAfter = intParam "after",
+            lqLimit = max 1 (min 1000 (fromMaybe 200 (intParam "limit")))
+          }
+    pure . ok $
+      object
+        [ "entries"
+            .= [ object
+                   [ "seq" .= e.leSeq,
+                     "at" .= e.leAt,
+                     "level" .= renderLogLevel e.leLevel,
+                     "domain" .= e.leDomain,
+                     "message" .= e.leMessage,
+                     "data" .= e.leData
+                   ]
+               | e <- entries
+               ],
+          -- Newest first, so the head is the high-water mark.
+          "latest" .= case entries of
+            (e : _) -> Just e.leSeq
+            [] -> Nothing
+        ]
+  -- The list omits the bodies — they are tens of kilobytes apiece and
+  -- the list is the index, not the reading.  Sizes ride along so you
+  -- can see which call is the big one before opening it.
+  RCalls -> do
+    rows <-
+      listCalls
+        (intParam "group")
+        (nonBlank =<< lookup "source" params)
+        (lookup "failed" params == Just "1")
+        (intParam "before")
+        (max 1 (min 200 (fromMaybe 50 (intParam "limit"))))
+    pure (ok (map callRowJson rows))
+  RCallDetail cid ->
+    fetchCall cid >>= \case
+      Nothing -> pure notFound
+      Just d ->
+        pure . ok $
+          case callRowJson d.cdRow of
+            Object o ->
+              Object (o <> KM.fromList ["request" .= d.cdRequest, "response" .= d.cdResponse])
+            v -> v
+  -- Answered by 'staticResponse' before the effectful handler is
+  -- entered (it needs no database and no unlift); listed so the match
+  -- stays total if that ever changes.
+  RStatic p -> pure (staticResponse p)
   where
+    nonBlank t = if T.null (T.strip t) then Nothing else Just (T.strip t)
     ok :: A.ToJSON a => a -> Response
     ok = jsonResponse status200
     bad msg = jsonResponse status400 (object ["error" .= (msg :: Text)])
@@ -368,6 +514,25 @@ grantJson g =
       "deny" .= g.grDeny,
       "granted_by" .= g.grGrantedBy,
       "granted_at" .= g.grGrantedAt
+    ]
+
+callRowJson :: CallRow -> Value
+callRowJson c =
+  object
+    [ "id" .= c.crId,
+      "at" .= c.crAt,
+      "group_id" .= c.crGroup,
+      "source" .= c.crSource,
+      "profile" .= c.crProfile,
+      "model" .= c.crModel,
+      "streamed" .= c.crStreamed,
+      "duration_ms" .= c.crDurationMs,
+      "error" .= c.crError,
+      "prompt_tokens" .= c.crPrompt,
+      "completion_tokens" .= c.crCompletion,
+      "cached_prompt_tokens" .= c.crCached,
+      "request_bytes" .= c.crReqBytes,
+      "response_bytes" .= c.crRespBytes
     ]
 
 taskJson :: TaskInfo -> Value

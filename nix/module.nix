@@ -12,6 +12,13 @@
 #   * optionally the NapCat container (QQ client) with the outbox
 #     bind-mount the file tools expect.
 #
+# The admin panel (settings.admin.port) rides inside the bot process,
+# so it needs no unit of its own — but it opens a port this module does
+# not touch the firewall for, deliberately: it has no TLS and one
+# optional bearer token, so exposure is a decision for whoever puts a
+# proxy in front.  Its token belongs in `environmentFile` as
+# MAX_ADMIN_TOKEN, not in `settings` (see the warnings below).
+#
 # Import via the flake:  imports = [ max.nixosModules.max ];
 {
   config,
@@ -244,13 +251,33 @@ in
     # discarded — which reads as "I set that and it didn't work".  Say
     # so, and point at the channel that does work with a hand-managed
     # file: MAX_* environment variables, which beat the file either way.
-    warnings = lib.optional (cfg.configFile != null && cfg.settings != { }) ''
-      services.max: `settings` is ignored because `configFile` is set
-      (${toString cfg.configFile}). Move these keys into that file, or
-      set them as MAX_* variables via
-      `systemd.services.max.environment` / `services.max.environmentFile`:
-      ${lib.concatStringsSep ", " (lib.attrNames cfg.settings)}
-    '';
+    warnings =
+      lib.optional (cfg.configFile != null && cfg.settings != { }) ''
+        services.max: `settings` is ignored because `configFile` is set
+        (${toString cfg.configFile}). Move these keys into that file, or
+        set them as MAX_* variables via
+        `systemd.services.max.environment` / `services.max.environmentFile`:
+        ${lib.concatStringsSep ", " (lib.attrNames cfg.settings)}
+      ''
+      # The rendered max.yaml lands in the world-readable nix store, so a
+      # token written here is a token every local user can read.  It is
+      # the panel's only credential, hence its own warning rather than a
+      # line in the docs nobody reads twice.
+      ++ lib.optional ((cfg.settings.admin.token or null) != null) ''
+        services.max: `settings.admin.token` ends up world-readable in the
+        nix store. Put it in `services.max.environmentFile` as
+        MAX_ADMIN_TOKEN instead (env beats the file) and drop the key here.
+      ''
+      # Loopback is the deployment story: the panel serves no TLS and
+      # authenticates with at most one bearer token, so anything reachable
+      # from off-box wants a proxy in front doing both.  A specific
+      # LAN/tailnet address is a deliberate choice; 0.0.0.0 usually isn't.
+      ++ lib.optional ((cfg.settings.admin.host or "127.0.0.1") == "0.0.0.0") ''
+        services.max: `settings.admin.host` is 0.0.0.0, so the admin panel
+        answers on every interface. It has no TLS and no users — put a
+        reverse proxy in front, or bind one address (a tailnet IP,
+        127.0.0.1) instead.
+      '';
 
     virtualisation.docker.enable = true;
 

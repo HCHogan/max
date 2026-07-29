@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               max
-version:            0.10.0
+version:            0.11.0
 synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
 license:            MIT
 license-file:       LICENSE
@@ -8,6 +8,21 @@ author:             Hank Hogan
 maintainer:         hankchogan@gmail.com
 copyright:          (c) 2026 Hank Hogan
 build-type:         Simple
+
+-- The admin panel, baked into the binary by 'Max.Admin.staticAssets'
+-- (file-embed).  GHC records each file as a dependency of Max.Admin
+-- and would recompile on a change — but cabal decides whether to call
+-- GHC at all from its own monitored set, which covers hs-source-dirs
+-- and these fields only.  Without them, editing app.css leaves cabal
+-- reporting "Up to date" and the old bytes stay embedded, which is a
+-- silent stale deploy rather than a build error.
+extra-source-files:
+    static/*.html
+    static/*.js
+    static/*.css
+    static/vendor/*.js
+    static/vendor/*.css
+    static/vendor/*.woff2
 
 common warnings
     ghc-options:
@@ -50,6 +65,7 @@ library
         Max.Command.Types
         Max.Config
         Max.MCP.Client
+        Max.DB.Calls
         Max.DB.Connection
         Max.DB.FetchQueue
         Max.DB.Files
@@ -84,6 +100,7 @@ library
         Max.Intent
         Max.LLM.Stream
         Max.Log
+        Max.LogBuffer
         Max.MediaCaption
         Max.MemoryExtract
         Max.Platform
@@ -161,6 +178,7 @@ library
         , vector              >= 0.13 && < 0.14
         , tls                 >= 2.0  && < 3.0
         , uuid                >= 1.3  && < 1.4
+        , file-embed          >= 0.0.15 && < 0.1
         , wai                 >= 3.2  && < 3.3
         , warp                >= 3.3  && < 3.5
         , websockets          >= 0.13 && < 0.14

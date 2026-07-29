@@ -42,6 +42,9 @@ module Max.Effects.LLM
     -- * Call attribution
     ChatCtx (..),
     UsageWriter,
+    CallWriter,
+    CallRecord (..),
+    requestBodyFor,
     -- * Effect operations
     runLLM,
     chat,
@@ -66,6 +69,7 @@ import Data.Int (Int64)
 import Data.List (find)
 import Data.Maybe (isJust)
 import Effectful.Exception (SomeException)
+import GHC.Clock (getMonotonicTimeNSec)
 import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
@@ -295,6 +299,26 @@ data ChatCtx = ChatCtx
 -- 'WithConnection' constraint they can't satisfy.
 type UsageWriter = ChatCtx -> Text -> TokenUsage -> IO ()
 
+-- | Everything one call did, handed to 'CallWriter' whether it
+-- succeeded or not — a failed call is exactly the one you want the
+-- request body of, and until this existed it left only a log line.
+data CallRecord = CallRecord
+  { crCtx :: !ChatCtx,
+    crProfile :: !Text,
+    crModel :: !Text,
+    crStreamed :: !Bool,
+    crDurationMs :: !Int,
+    -- | The JSON body as sent, minus base64 payloads.
+    crRequest :: !Value,
+    crResponse :: !(Maybe Value),
+    crError :: !(Maybe Text),
+    crUsage :: !(Maybe TokenUsage)
+  }
+
+-- | Sink for the full request/response log.  Same plain-IO shape and
+-- same reason as 'UsageWriter'.
+type CallWriter = CallRecord -> IO ()
+
 -- | Provider-reported token usage for one completion.  Persisted via
 -- the interpreter's 'UsageWriter' (see @llm_usage@) and logged, so
 -- both the admin API and journalctl can reconstruct token spend.
@@ -429,18 +453,19 @@ type instance DispatchOf LLM = Dynamic
 runLLM ::
   (W.Wreq :> es, Log :> es, IOE :> es) =>
   UsageWriter ->
+  CallWriter ->
   LLMRegistry ->
   Eff (LLM : es) a ->
   Eff es a
-runLLM usageWriter reg = interpret $ \localEnv -> \case
-  Chat ctx name msgs tools -> runOneChat usageWriter reg ctx name msgs tools Nothing
+runLLM usageWriter callWriter reg = interpret $ \localEnv -> \case
+  Chat ctx name msgs tools -> runOneChat usageWriter callWriter reg ctx name msgs tools Nothing
   ChatStreaming ctx name msgs tools sink ->
     -- The sink sends messages, so it is 'Eff', not IO; unlifting it
     -- here is what lets the transport call back into the caller's
     -- effect stack.  Sequential unlift is right: the read loop is
     -- single-threaded and calls the sink one frame at a time.
     localSeqUnlift localEnv $ \unlift ->
-      runOneChat usageWriter reg ctx name msgs tools (Just (unlift . sink))
+      runOneChat usageWriter callWriter reg ctx name msgs tools (Just (unlift . sink))
   ListProfiles -> pure (Map.keys reg.profiles)
   DefaultProfile -> pure reg.defaultName
   IsProfileMultimodal name -> pure $ case Map.lookup name reg.profiles of
@@ -457,6 +482,7 @@ runLLM usageWriter reg = interpret $ \localEnv -> \case
 runOneChat ::
   (W.Wreq :> es, Log :> es, IOE :> es) =>
   UsageWriter ->
+  CallWriter ->
   LLMRegistry ->
   ChatCtx ->
   Text ->
@@ -464,7 +490,7 @@ runOneChat ::
   [ToolSpec] ->
   Maybe (Text -> Eff es ()) ->
   Eff es (Either Text ChatResponse)
-runOneChat usageWriter reg ctx name msgs tools mSink = case Map.lookup name reg.profiles of
+runOneChat usageWriter callWriter reg ctx name msgs tools mSink = case Map.lookup name reg.profiles of
   Nothing -> do
     logAttention "llm: unknown profile" $ object ["profile" .= name]
     pure $ Left ("unknown llm profile: " <> name)
@@ -478,9 +504,11 @@ runOneChat usageWriter reg ctx name msgs tools mSink = case Map.lookup name reg.
           "model" .= cfg.model,
           "stream" .= streaming
         ]
+    t0 <- liftIO getMonotonicTimeNSec
     r <- case mSink of
       Just sink | cfg.stream -> callChatStream cfg msgs tools sink
       _ -> callChat cfg msgs tools
+    t1 <- liftIO getMonotonicTimeNSec
     case r of
       Left err ->
         logAttention "llm: error" $
@@ -504,6 +532,28 @@ runOneChat usageWriter reg ctx name msgs tools mSink = case Map.lookup name reg.
       trySync (liftIO (usageWriter ctx name u)) >>= \case
         Left e ->
           logAttention "llm: usage write failed" $
+            object ["error" .= T.pack (show (e :: SomeException))]
+        Right () -> pure ()
+    -- Record the whole exchange, success or not.  Same guard, same
+    -- reason — and note this runs on the failure branch too, which is
+    -- the branch whose request body you actually want to read.
+    trySync
+      ( liftIO . callWriter $
+          CallRecord
+            { crCtx = ctx,
+              crProfile = name,
+              crModel = cfg.model,
+              crStreamed = streaming,
+              crDurationMs = fromIntegral ((t1 - t0) `div` 1_000_000),
+              crRequest = requestBodyFor cfg msgs tools streaming,
+              crResponse = either (const Nothing) (Just . responseJson . fst) r,
+              crError = either Just (const Nothing) r,
+              crUsage = either (const Nothing) snd r
+            }
+      )
+      >>= \case
+        Left e ->
+          logAttention "llm: call log write failed" $
             object ["error" .= T.pack (show (e :: SomeException))]
         Right () -> pure ()
     pure (fst <$> r)
@@ -542,6 +592,35 @@ isProfileMultimodal name = send (IsProfileMultimodal name)
 
 isProfileHistoryTurns :: LLM :> es => Text -> Eff es Bool
 isProfileHistoryTurns name = send (IsProfileHistoryTurns name)
+
+-- | The JSON body a call sends, rebuilt from the same pure field
+-- builders the transport uses — so what the call log shows is what
+-- went out, not a paraphrase of it.  Recomputing beats threading the
+-- bytes back out of two protocol branches and three call sites.
+requestBodyFor :: LLMProfile -> [ChatMessage] -> [ToolSpec] -> Bool -> Value
+requestBodyFor cfg msgs tools streaming =
+  object $ case cfg.protocol of
+    ProtocolOpenAI ->
+      openAIFields cfg msgs tools
+        <> (if streaming then streamFieldsOpenAI else ["stream" .= False])
+    ProtocolAnthropic -> anthropicFields cfg msgs tools <> ["stream" .= streaming]
+
+-- | The reply as stored in the call log.  Tool calls keep the
+-- provider's verbatim message ('ToolCallsResp' already carries it),
+-- because a malformed tool call is one of the things you come to this
+-- log to look at.
+responseJson :: ChatResponse -> Value
+responseJson = \case
+  ContentResp t -> object ["content" .= t]
+  ToolCallsResp raw narration tcs ->
+    object
+      [ "raw" .= raw,
+        "narration" .= narration,
+        "tool_calls"
+          .= [ object ["name" .= tc.callName, "arguments" .= tc.callArguments]
+             | tc <- tcs
+             ]
+      ]
 
 -- | Usage as extra log fields; absent wholesale when the provider
 -- reported none.

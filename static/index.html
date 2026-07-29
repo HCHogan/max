@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>max</title>
+<link rel="preload" href="/static/vendor/plex-mono-400.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/vendor/uplot.min.css">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="app" x-data="admin()" x-init="boot()" x-cloak>
+
+  <!-- The static assets are public (they carry no data); everything
+       under /api needs the bearer token, so the first fetch 401s and
+       we ask for it here. -->
+  <div class="gate" x-show="needToken">
+    <form @submit.prevent="saveToken()">
+      <h1>max</h1>
+      <p class="muted">这台机器要 admin token。</p>
+      <input type="password" x-model="tokenInput" placeholder="token" autofocus>
+      <button type="submit">进入</button>
+      <p class="err" x-show="gateErr" x-text="gateErr" style="margin-bottom:0"></p>
+    </form>
+  </div>
+
+  <template x-if="!needToken">
+  <div>
+    <!-- One line out of journalctl, live.  Same facts the stat cards
+         carried, a quarter of the height, and it says whose console
+         this is. -->
+    <header class="logline">
+      <time x-text="clock"></time>
+      <span class="app">max</span>
+      <span class="ver" x-text="overview.version"></span>
+      <span class="dot" :class="{ busy: overview.running_tasks > 0 }"></span>
+      <span><b x-text="overview.groups"></b> 群</span>
+      <span><b x-text="overview.running_tasks"></b> 在跑</span>
+      <span><i>uptime=</i><b x-text="fmtUptime(overview.uptime_seconds)"></b></span>
+      <span><i>model=</i><b x-text="overview.default_model"></b></span>
+    </header>
+
+    <nav>
+      <template x-for="t in tabs" :key="t.id">
+        <button :class="{ active: tab === t.id }" @click="go(t.id)" x-text="t.name"></button>
+      </template>
+    </nav>
+
+    <p class="err" x-show="err" x-text="err" @click="err = ''"></p>
+
+    <!-- ── overview ─────────────────────────────────────────────── -->
+    <section x-show="tab === 'overview'">
+      <h2>token 用量 · 30 天</h2>
+      <div class="chart" id="chart-usage"></div>
+      <h2>消息量 · 14 天</h2>
+      <div class="chart" id="chart-msgs"></div>
+    </section>
+
+    <!-- ── groups ───────────────────────────────────────────────── -->
+    <section x-show="tab === 'groups'">
+      <table>
+        <thead><tr>
+          <th>群</th><th>model</th><th>debug</th><th>表情</th><th>主动说话</th><th>persona</th>
+        </tr></thead>
+        <tbody>
+          <template x-for="g in groups" :key="g.group_id">
+            <tr>
+              <td class="rowkey" data-label="群"><span class="id" x-text="gname(g.group_id)"></span></td>
+              <td data-label="model">
+                <select :value="g.model" @change="patch(g, { model: $event.target.value })">
+                  <template x-for="p in overview.profiles" :key="p">
+                    <option :value="p" :selected="p === g.model" x-text="p"></option>
+                  </template>
+                </select>
+              </td>
+              <template x-for="f in ['debug', 'sticker', 'proactive']" :key="f">
+                <td :data-label="fieldLabel[f]">
+                  <select :value="tri(g[f])" @change="patch(g, { [f]: untri($event.target.value) })">
+                    <option value="default">跟随默认</option>
+                    <option value="on">开</option>
+                    <option value="off">关</option>
+                  </select>
+                </td>
+              </template>
+              <td class="persona wide" data-label="persona" :title="g.persona || ''"
+                  x-text="g.persona ? g.persona.slice(0, 36) + '…' : '默认人设'"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <p class="empty" x-show="!groups.length">还没有群。bot 在群里说过话之后才会有记录。</p>
+    </section>
+
+    <!-- ── memories ─────────────────────────────────────────────── -->
+    <section x-show="tab === 'memories'">
+      <form class="row" @submit.prevent="loadMemories()">
+        <select x-model="mem.scope">
+          <option value="group">群记忆</option>
+          <option value="user">个人记忆</option>
+        </select>
+        <input x-model="mem.id" placeholder="群号 / QQ 号" inputmode="numeric">
+        <button type="submit">查</button>
+      </form>
+      <table x-show="memories.length">
+        <thead><tr><th>id</th><th>记住的事</th><th>更新</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="m in memories" :key="m.id">
+            <tr>
+              <td class="rowkey" data-label="id"><span class="id" x-text="m.id"></span></td>
+              <td class="wide" data-label="记住的事" x-text="m.content"></td>
+              <td class="stamp" data-label="更新" x-text="fmtDate(m.updated_at)"></td>
+              <td class="act"><button class="danger" @click="delMemory(m)">删</button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <p class="empty" x-show="mem.loaded && !memories.length">这里还没有记忆。</p>
+      <p class="empty" x-show="!mem.loaded">输入群号或 QQ 号来查。</p>
+    </section>
+
+    <!-- ── permissions ──────────────────────────────────────────── -->
+    <section x-show="tab === 'perms'">
+      <form class="row" @submit.prevent="addGrant()">
+        <input x-model="grant.user_id" placeholder="QQ 号" inputmode="numeric" required>
+        <input x-model="grant.capability" placeholder="capability" required>
+        <input x-model="grant.scope_group_id" placeholder="群号(留空=全局)" inputmode="numeric">
+        <label class="check"><input type="checkbox" x-model="grant.deny"> 改为禁止</label>
+        <button type="submit">授权</button>
+      </form>
+      <table x-show="perms.length">
+        <thead><tr><th>用户</th><th>capability</th><th>范围</th><th></th><th>授予</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="p in perms" :key="p.id">
+            <tr>
+              <td class="rowkey" data-label="用户"><span class="id" x-text="p.user_id"></span></td>
+              <td data-label="capability" x-text="p.capability"></td>
+              <td data-label="范围">
+                <span class="id" x-show="p.scope_group_id" x-text="p.scope_group_id"></span>
+                <span class="muted" x-show="!p.scope_group_id">全局</span>
+              </td>
+              <td data-label="效果"><span class="verdict" :class="{ deny: p.deny }" x-text="p.deny ? '禁止' : '允许'"></span></td>
+              <td class="stamp" data-label="授予" x-text="fmtDate(p.granted_at)"></td>
+              <td class="act"><button class="danger" @click="delGrant(p)">删</button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <p class="empty" x-show="!perms.length">没有显式授权,全部按角色默认走。</p>
+    </section>
+
+    <!-- ── llm calls ────────────────────────────────────────────── -->
+    <section class="logs-page" x-show="tab === 'calls'">
+      <form class="filters" @submit.prevent="loadCalls()">
+        <select x-model="callq.source" @change="loadCalls()">
+          <option value="">全部来源</option>
+          <template x-for="s in callSources" :key="s">
+            <option :value="s" x-text="s"></option>
+          </template>
+        </select>
+        <input class="search" x-model="callq.group" @change="loadCalls()"
+               placeholder="群号(留空=全部)" inputmode="numeric">
+        <label class="check"><input type="checkbox" x-model="callq.failed" @change="loadCalls()"> 只看失败</label>
+      </form>
+
+      <div class="logs">
+        <template x-for="c in calls" :key="c.id">
+          <div class="line" :class="[c.error ? 'warn' : 'info', open['c' + c.id] ? 'open' : '']"
+               @click="openCall(c)">
+            <span class="head">
+              <span class="lt" x-text="fmtTime(c.at)"></span>
+              <span class="lv" x-text="c.error ? 'fail' : 'ok'"></span>
+              <span class="ld" x-text="c.source"></span>
+              <span class="lm" x-text="c.profile"></span>
+            </span>
+            <span class="lf"><i>群</i><b x-text="c.group_id === null ? '—' : gname(c.group_id)"></b></span>
+            <span class="lf"><i>耗时</i><b x-text="fmtMs(c.duration_ms)"></b></span>
+            <span class="lf" x-show="c.prompt_tokens !== null">
+              <i>tokens</i><b x-text="c.prompt_tokens + '→' + c.completion_tokens"></b></span>
+            <span class="lf"><i>大小</i><b x-text="fmtBytes(c.request_bytes + c.response_bytes)"></b></span>
+            <span class="lf" x-show="c.error"><i>error</i><b x-text="c.error"></b></span>
+
+            <!-- The bodies arrive only when a call is opened; the list
+                 would be megabytes if it carried them. -->
+            <div class="detail" x-show="open['c' + c.id]" @click.stop>
+              <template x-if="!detail[c.id]"><p class="empty">读取中…</p></template>
+              <template x-if="detail[c.id]">
+                <div>
+                  <h3>请求 <span class="muted" x-text="fmtBytes(c.request_bytes)"></span></h3>
+                  <template x-for="(m, i) in (detail[c.id].request.messages || [])" :key="i">
+                    <div class="msg">
+                      <span class="role" x-text="m.role"></span>
+                      <pre x-text="msgText(m)"></pre>
+                    </div>
+                  </template>
+                  <details>
+                    <summary>完整请求 JSON</summary>
+                    <pre x-text="pretty(detail[c.id].request)"></pre>
+                  </details>
+                  <h3>响应 <span class="muted" x-text="fmtBytes(c.response_bytes)"></span></h3>
+                  <pre x-show="detail[c.id].response" x-text="pretty(detail[c.id].response)"></pre>
+                  <p class="empty" x-show="!detail[c.id].response">这次调用失败了,没有响应。</p>
+                </div>
+              </template>
+            </div>
+          </div>
+        </template>
+      </div>
+      <p class="empty" x-show="!calls.length">没有匹配的调用记录。</p>
+      <p class="empty" x-show="calls.length">
+        完整请求/响应保留 7 天,图片已换成占位符。token 计数在概览页,永久保留。
+      </p>
+    </section>
+
+    <!-- ── logs ─────────────────────────────────────────────────── -->
+    <section class="logs-page" x-show="tab === 'logs'">
+      <form class="filters" @submit.prevent="reloadLogs()">
+        <select x-model="logq.level" @change="reloadLogs()">
+          <option value="">全部级别</option>
+          <option value="info">info 及以上</option>
+          <option value="warn">只看 warn</option>
+        </select>
+        <select x-model="logq.domain" @change="reloadLogs()">
+          <option value="">全部来源</option>
+          <template x-for="d in domains" :key="d">
+            <option :value="d" x-text="d"></option>
+          </template>
+        </select>
+        <input class="search" x-model.debounce.300ms="logq.q" @input="reloadLogs()"
+               placeholder="搜索消息和字段">
+        <label class="check"><input type="checkbox" x-model="tailing" @change="tailToggled()"> 实时</label>
+      </form>
+
+      <!-- Tapping a line expands it: on a phone the fields are
+           truncated to keep one event to one or two lines, and the
+           full values are a tap away rather than a horizontal
+           scroll. -->
+      <div class="logs">
+        <template x-for="e in logs" :key="e.seq">
+          <div class="line" :class="[e.level, open[e.seq] ? 'open' : '']" @click="toggle(e.seq)">
+            <span class="head">
+              <span class="lt" x-text="fmtTime(e.at)"></span>
+              <span class="lv" x-text="e.level"></span>
+              <span class="ld" x-text="e.domain"></span>
+              <span class="lm" x-text="e.message"></span>
+            </span>
+            <template x-for="[k, v] in kv(e.data)" :key="k">
+              <span class="lf"><i x-text="k"></i><b x-text="v"></b></span>
+            </template>
+          </div>
+        </template>
+      </div>
+      <p class="empty" x-show="!logs.length">没有匹配的日志行。</p>
+      <p class="empty" x-show="logs.length">
+        进程内保留最近 2000 行,重启即清空。更早的用 <code>journalctl -u max</code>。
+      </p>
+    </section>
+
+    <!-- ── tasks ────────────────────────────────────────────────── -->
+    <section x-show="tab === 'tasks'">
+      <div class="row"><button @click="loadTasks()">刷新</button></div>
+      <table x-show="tasks.length">
+        <thead><tr><th>任务</th><th>群</th><th>发起</th><th>类型</th><th>开始</th><th>待处理</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="t in tasks" :key="t.id">
+            <tr>
+              <td class="rowkey" data-label="任务"><span class="id" x-text="t.id"></span></td>
+              <td data-label="群"><span class="id" x-text="gname(t.group_id)"></span></td>
+              <td data-label="发起"><span class="id" x-text="t.user_id"></span></td>
+              <td data-label="类型" x-text="t.kind"></td>
+              <td class="stamp" data-label="开始" x-text="fmtDate(t.started_at)"></td>
+              <td class="stamp" data-label="待处理" x-text="t.pending_notes || ''"></td>
+              <td class="act"><button class="danger" @click="kill(t)">kill</button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <p class="empty" x-show="!tasks.length">现在没有在跑的任务。</p>
+    </section>
+  </div>
+  </template>
+</div>
+
+<script src="/static/vendor/uplot.iife.min.js"></script>
+<script src="/static/app.js"></script>
+<script defer src="/static/vendor/alpine.min.js"></script>
+</body>
+</html>
+

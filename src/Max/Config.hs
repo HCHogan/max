@@ -71,13 +71,20 @@ import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Wechatpad (WechatpadConfig (..))
 import Max.Tools.Search (SearchConfig (..))
 import OneBot.Server (ServerConfig (..))
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import OptEnvConf
-import Path (Abs, File, Path)
+import Path (Abs, File, Path, toFilePath)
+import System.Directory (doesFileExist)
 import Path.IO (resolveFile')
 
 -- | Final, fully-resolved application config.
 data AppConfig = AppConfig
-  { server :: !ServerConfig,
+  { -- | The YAML file the settings were actually read from, if any.
+    -- Filled in by 'loadConfig' after parsing (see the note there);
+    -- reported at startup so "which file did it read" never has to be
+    -- guessed from behaviour.
+    configFileUsed :: !(Maybe FilePath),
+    server :: !ServerConfig,
     db :: !DbConfig,
     migrationsDir :: !FilePath,
     imagesDir :: !FilePath,
@@ -135,6 +142,9 @@ data AppConfig = AppConfig
     -- | Admin JSON API (loopback warp server); 'Nothing' = never
     -- started.  See "Max.Admin".
     admin :: !(Maybe AdminConfig),
+    -- | How long @llm_calls@ keeps request/response bodies.  Only the
+    -- fat table is pruned; @llm_usage@'s counters are kept forever.
+    adminCallRetentionDays :: !Int,
     -- | Embeddings endpoint; presence enables the embed worker and
     -- the semantic-search surfaces (search_messages, memory_search).
     embedding :: !(Maybe EmbeddingConfig),
@@ -183,15 +193,26 @@ defaultPersona =
 -- Entry point.
 
 loadConfig :: IO AppConfig
-loadConfig =
-  runParser
-    (makeVersion [0, 1, 0])
-    "max — QQ group-chat agent over OneBot 11 / NapCatQQ"
-    appConfigParser
+loadConfig = do
+  -- The parser knows which file it read but has no way to hand it
+  -- back with the settings: 'withYamlConfig' consumes the path to
+  -- produce the config object, and opt-env-conf parsers are
+  -- applicative, so no field of the record can depend on it.  A ref
+  -- filled during resolution is the contained way to get it out, and
+  -- it is worth getting out — "which file did you actually read" is
+  -- the first question when a key looks ignored.
+  usedRef <- newIORef Nothing
+  cfg <-
+    runParser
+      (makeVersion [0, 1, 0])
+      "max — QQ group-chat agent over OneBot 11 / NapCatQQ"
+      (appConfigParser usedRef)
+  used <- readIORef usedRef
+  pure cfg {configFileUsed = used}
 
-appConfigParser :: Parser AppConfig
-appConfigParser =
-  withFirstYamlConfig configFileCandidates $ do
+appConfigParser :: IORef (Maybe FilePath) -> Parser AppConfig
+appConfigParser usedRef =
+  withYamlConfig (resolveConfigFile usedRef) $ do
     server <- subConfig "server" serverParser
     db <- subConfig "db" dbParser
     migrationsDir <-
@@ -344,6 +365,17 @@ appConfigParser =
     wechatpad <- subConfig "wechatpad" wechatpadParser
     intent <- subConfig "intent" intentParser
     admin <- subConfig "admin" adminParser
+    adminCallRetentionDays <-
+      setting
+        [ help "Days of full LLM request/response bodies to keep (token counters are kept forever)",
+          reader auto,
+          option,
+          long "admin-call-retention-days",
+          env "MAX_ADMIN_CALL_RETENTION_DAYS",
+          conf "admin_call_retention_days",
+          metavar "N",
+          value 7
+        ]
     embedding <- subConfig "embedding" embeddingParser
     debug <-
       yesNoSwitch
@@ -375,26 +407,65 @@ appConfigParser =
           metavar "auto|always|never",
           valueWithShown renderColorMode ColorAuto
         ]
+    -- Filled by 'loadConfig' once the parser has run; the resolution
+    -- happens outside this record and can't be threaded in.
+    let configFileUsed = Nothing
     pure AppConfig {..}
 
--- | Config file discovery: @--config-file@ (added automatically by
--- 'withFirstYamlConfig') > @MAX_CONFIG@ > @./max.yaml@ >
--- @$XDG_CONFIG_HOME/max/config.yaml@.
-configFileCandidates :: Parser [Path Abs File]
-configFileCandidates = do
-  fromEnv <-
-    optional $
-      mapIO resolveFile' $
-        setting
-          [ help "Config file path (env-only alias for --config-file)",
-            reader str,
-            env "MAX_CONFIG",
-            metavar "PATH",
-            hidden
-          ]
-  local <- mapIO resolveFile' (pure "max.yaml")
-  xdg <- xdgYamlConfigFile "max"
-  pure (maybeToList fromEnv <> [local, xdg])
+-- | Which YAML file to read.
+--
+-- An explicitly named file must exist.  The library's own
+-- 'withFirstYamlConfig' treats @--config-file@ as merely the first
+-- /candidate/, so a typo'd path silently fell through to @./max.yaml@
+-- and then to the built-in defaults — the run looked completely
+-- normal while reading a different file, or none.  Naming a file is a
+-- statement that it is the one to use, so a missing one is an error
+-- rather than a hint.
+--
+-- Without an explicit path the old search order stands, first hit
+-- wins: @./max.yaml@ > @$XDG_CONFIG_HOME/max/config.yaml@.
+--
+-- @MAX_CONFIG@ is the env spelling of the same setting, which is what
+-- this module's header always claimed; it used to be a separate
+-- candidate while @--config-file@ answered to @CONFIG_FILE@.
+resolveConfigFile :: IORef (Maybe FilePath) -> Parser (Maybe (Path Abs File))
+resolveConfigFile usedRef =
+  checkMapIO pick $
+    (,)
+      <$> optional
+        ( filePathSetting
+            [ option,
+              long "config-file",
+              env "MAX_CONFIG",
+              help "Path to the configuration file (must exist when given)"
+            ]
+        )
+      <*> fallbacks
+  where
+    fallbacks = do
+      local <- mapIO resolveFile' (pure "max.yaml")
+      xdg <- xdgYamlConfigFile "max"
+      pure [local, xdg]
+
+    pick (Just p, _) = do
+      let fp = toFilePath p
+      exists <- doesFileExist fp
+      if exists
+        then Right (Just p) <$ note fp
+        else
+          pure . Left $
+            "config file not found: "
+              <> fp
+              <> "\n(--config-file / MAX_CONFIG names the file to use; \
+                 \omit it to search ./max.yaml then XDG)"
+    pick (Nothing, candidates) = Right <$> firstExisting candidates
+
+    firstExisting [] = Nothing <$ writeIORef usedRef Nothing
+    firstExisting (p : ps) = do
+      exists <- doesFileExist (toFilePath p)
+      if exists then Just p <$ note (toFilePath p) else firstExisting ps
+
+    note fp = writeIORef usedRef (Just fp)
 
 --------------------------------------------------------------------------------
 -- Server / DB.

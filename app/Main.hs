@@ -3,7 +3,8 @@ module Main (main) where
 import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (AsyncException (UserInterrupt), bracket, finally, throwTo)
-import Control.Monad (unless)
+import Control.Monad (forever, unless, when)
+import Data.Maybe (isJust)
 import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
@@ -17,15 +18,19 @@ import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Effectful.Reader.Dynamic (Reader, ask, runReader)
 import Effectful.Wreq (runWreq)
 import Max.Log (withCompactLogger)
+import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.Config (AppConfig (..), loadConfig)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.Admin (adminServer)
 import Max.DB.Migrations (runMigrations)
+import Effectful.Concurrent (threadDelay)
+import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
+import Max.Util (trySync)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits, runAgent)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
-import Max.Effects.LLM (ChatCtx (..), LLM, LLMRegistry (..), TokenUsage (..), runLLM)
+import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, LLMRegistry (..), TokenUsage (..), runLLM)
 import Max.Effects.NapCat (NapCat, qqBackend, runNapCat)
 import Max.Embedder (embedWorker)
 import Max.Embedding (newEmbedClient)
@@ -87,7 +92,11 @@ main = do
     sandboxes <- newSandboxRegistry
     browsers <- newBrowserRegistry cfg.browserProxy
     ( do
-        withCompactLogger cfg.logColor $ \logger -> do
+        -- The panel's log view reads this ring; it fills only when
+        -- the admin API is configured, so a bot without a panel pays
+        -- nothing for it.
+        logBuf <- traverse (const (newLogBuffer logBufferLines)) cfg.admin
+        withCompactLogger cfg.logColor (pushLog <$> logBuf) $ \logger -> do
           eventQ <- newTQueueIO
           -- One bell for all three media workers: the jobs live in
           -- @fetch_jobs@ and each worker claims only its own kind, so a
@@ -147,10 +156,29 @@ main = do
                   runEff . runWithConnectionPool pool $
                     insertUsage ctx.ccGroup ctx.ccSource profile u.usagePrompt u.usageCompletion u.usageCachedPrompt
               )
+              -- The full-body log only exists when the panel does:
+              -- without somewhere to read it, it would be disk spent
+              -- on nothing.
+              ( \(rec :: CallRecord) ->
+                  when (isJust cfg.admin) . runEff . runWithConnectionPool pool $
+                    insertCall
+                      rec.crCtx.ccGroup
+                      rec.crCtx.ccSource
+                      rec.crProfile
+                      rec.crModel
+                      rec.crStreamed
+                      rec.crDurationMs
+                      (redactDataUrls rec.crRequest)
+                      rec.crResponse
+                      rec.crError
+                      ( (\u -> (u.usagePrompt, u.usageCompletion, u.usageCachedPrompt))
+                          <$> rec.crUsage
+                      )
+              )
               cfg.llm
             . runReader env
             . runAgent defaultLimits (allToolsFor env) tasks
-            $ runApp cfg applied eventQ fetchSig mIntentSt clientRef mainTid
+            $ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid
       )
       `finally` (destroyAllSandboxes sandboxes >> destroyAllBrowsers browsers)
 
@@ -182,11 +210,14 @@ runApp ::
   TQueue Event ->
   FetchSignal ->
   Maybe IntentState ->
+  -- | The log tail the admin panel serves; 'Nothing' when the panel
+  -- is not configured, in which case nothing was captured either.
+  Maybe LogBuffer ->
   TVar (Maybe Client) ->
   -- | Main thread, for 'drainWorker' to interrupt once drained.
   ThreadId ->
   Eff es ()
-runApp cfg applied eventQ fetchSig mIntentSt clientRef mainTid =
+runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -203,7 +234,13 @@ runApp cfg applied eventQ fetchSig mIntentSt clientRef mainTid =
           "path" .= s.path,
           "db_url" .= cfg.db.url,
           "images_dir" .= T.pack cfg.imagesDir,
-          "image_workers" .= cfg.imageWorkers
+          "image_workers" .= cfg.imageWorkers,
+          -- Which file the settings came from, or that none was
+          -- found.  Every value above can also come from a flag or an
+          -- env var that silently outranks the file, so knowing the
+          -- file was read at all is the first thing you need when one
+          -- of them looks wrong.
+          "config_file" .= maybe "(none)" T.pack cfg.configFileUsed
         ]
     unless (null applied) $
       logInfo "migrations applied" $
@@ -230,13 +267,41 @@ runApp cfg applied eventQ fetchSig mIntentSt clientRef mainTid =
         for_ ((,) <$> cfg.intent <*> mIntentSt) $ \(ic, st) ->
           intentWorker ic cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions (dispatchProactive (Just st)) st,
         handleEvents eventQ fetchSig mIntentSt,
-        for_ cfg.admin $ \ac -> adminServer ac env (Map.keys cfg.llm.profiles),
+        for_ ((,) <$> cfg.admin <*> logBuf) $ \(ac, lb) ->
+          adminServer ac env (Map.keys cfg.llm.profiles) lb,
+        for_ cfg.admin (const (callPruner cfg.adminCallRetentionDays)),
         for_ cfg.wechatpad $ \wc -> wechatpadWorker wc eventQ,
         -- Parked on the shutdown flag until SIGTERM, then waits out the
         -- in-flight dispatches before interrupting main.
         drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown
       ]
       (runServer cfg.server eventQ clientRef)
+
+-- | Log lines the admin panel can look back over.  A busy dispatch
+-- prints on the order of ten, so this is a few hundred dispatches —
+-- past "what just happened", which is the question it answers.
+-- Anything older is journalctl's job.
+logBufferLines :: Int
+logBufferLines = 2000
+
+-- | Roll the @llm_calls@ bodies off on a schedule.
+--
+-- Once an hour rather than on a timer tied to the retention window:
+-- the deletion is a single indexed range delete, and running it often
+-- keeps each one small instead of letting a day's worth pile up for
+-- one long transaction.  Runs once at startup too, so a bot that was
+-- down over the weekend cleans up as soon as it is back rather than
+-- an hour later.
+callPruner :: (WithConnection :> es, Log :> es, Concurrent :> es, IOE :> es) => Int -> Eff es ()
+callPruner days = localDomain "calls" . forever $ do
+  r <- trySync (pruneCalls days)
+  case r of
+    Left e ->
+      logAttention "calls: prune failed" $ object ["error" .= T.pack (show e)]
+    Right 0 -> pure ()
+    Right n ->
+      logInfo "calls: pruned" $ object ["rows" .= n, "older_than_days" .= days]
+  threadDelay (3600 * 1_000_000)
 
 -- | Run @act@ with every worker alive alongside it.
 --

@@ -1,0 +1,400 @@
+/* max admin panel.
+ *
+ * The palette is not chosen from a swatch library — it is lifted from
+ * the artifact the operator already reads every day: `journalctl -u
+ * max` with colour on.  INFO renders cyan, WARN amber, and the bot's
+ * own reaction-face vocabulary supplies the rest (裂开 = failed, OK =
+ * green, silence = grey).  Status colour in here therefore means the
+ * same thing it means in the logs and in the group.
+ *
+ * Type follows the transcript line — `[11:32 Max #761459602]: 文本`.
+ * Identity is monospace, payload is prose.  Every id in this panel is
+ * a `#nnnn` handle you scan, never text you read, and it is set that
+ * way.  CJK falls back to system faces on purpose: a subsetted Han
+ * webfont is megabytes, and this is a tool one person opens over a
+ * tailnet.
+ */
+
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('/static/vendor/plex-mono-400.woff2') format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Plex Mono';
+  src: url('/static/vendor/plex-mono-600.woff2') format('woff2');
+  font-weight: 600;
+  font-display: swap;
+}
+
+:root {
+  --ground: #0c1114;
+  --panel: #131b1f;
+  --rule: #1e2a30;
+  --fg: #dbe4e7;
+  --dim: #78898f;
+
+  /* Semantics, straight from the bot's own vocabulary. */
+  --info: #47b6c8;  /* journalctl INFO — also the interactive accent */
+  --warn: #d7a13f;  /* journalctl WARN — and 托腮, "working on it" */
+  --fail: #e06a52;  /* 裂开 */
+  --ok: #57b183;
+
+  --mono: 'Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+/* Light stays cool rather than turning to cream: the panel is the
+   same instrument in daylight, not a different one. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --ground: #eef2f3;
+    --panel: #fff;
+    --rule: #dae1e4;
+    --fg: #16232a;
+    --dim: #5d6f76;
+    --info: #15788a;
+    --warn: #8f6413;
+    --fail: #b5442c;
+    --ok: #2f7c56;
+  }
+}
+
+[x-cloak] { display: none !important; }
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 1rem 3rem;
+  background: var(--ground);
+  color: var(--fg);
+  font: 15px/1.55 var(--sans);
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ── the log line ────────────────────────────────────────────────
+   The signature.  Reads as one line out of `journalctl -u max`,
+   because that is what this panel is a window onto.  It replaces the
+   stat-card row: same facts, a quarter of the height, and it says
+   whose console this is. */
+
+.logline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .3rem .85rem;
+  font: 400 13px/2.6 var(--mono);
+  color: var(--dim);
+  border-bottom: 1px solid var(--rule);
+}
+.logline time { color: var(--dim); }
+.logline .app { color: var(--fg); font-weight: 600; }
+.logline .ver { color: var(--info); }
+.logline b { color: var(--fg); font-weight: 600; }
+.logline i { font-style: normal; }
+
+/* Breathing only while the bot is actually working — the pulse
+   carries state, so an idle panel holds still. */
+.dot {
+  width: .5rem; height: .5rem; border-radius: 50%;
+  background: var(--ok); align-self: center;
+}
+.dot.busy { background: var(--warn); animation: breathe 2.4s ease-in-out infinite; }
+@keyframes breathe { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) {
+  .dot.busy { animation: none; }
+}
+
+nav {
+  display: flex; gap: .15rem; flex-wrap: wrap;
+  padding: .6rem 0 0;
+}
+nav button {
+  background: none; border: 0; border-bottom: 2px solid transparent;
+  color: var(--dim); padding: .3rem .7rem; border-radius: 0;
+  font: inherit;
+}
+nav button:hover { color: var(--fg); }
+nav button.active { color: var(--fg); border-bottom-color: var(--info); }
+
+section { padding-top: 1.4rem; }
+
+h2 {
+  font: 600 11px/1 var(--mono);
+  letter-spacing: .08em; text-transform: uppercase;
+  color: var(--dim); margin: 1.75rem 0 .6rem;
+}
+h2:first-child { margin-top: 0; }
+
+/* ── identity vs payload ─────────────────────────────────────────
+   Every opaque handle the bot uses — group, QQ, message, task —
+   wears the same `#nnnn` form it has in the transcript. */
+
+.id { font: 400 .9em var(--mono); color: var(--fg); }
+.id::before { content: '#'; color: var(--dim); }
+.muted { color: var(--dim); }
+.stamp { font: 400 .85em var(--mono); color: var(--dim); }
+
+/* ── token gate ──────────────────────────────────────────────── */
+
+.gate { display: flex; align-items: center; justify-content: center; min-height: 82vh; }
+.gate form {
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 6px;
+  padding: 1.5rem; width: min(21rem, 100%);
+}
+.gate h1 { font: 600 15px/1 var(--mono); margin: 0 0 .35rem; }
+.gate p { margin: 0; font-size: .85rem; }
+.gate input { width: 100%; margin: 1rem 0 .6rem; }
+.gate button { width: 100%; }
+
+/* ── controls ────────────────────────────────────────────────── */
+
+button, input, select {
+  font: inherit; color: var(--fg);
+  background: var(--panel); border: 1px solid var(--rule);
+  border-radius: 4px; padding: .3rem .55rem;
+}
+input, select { font-family: var(--mono); font-size: .9em; }
+button { cursor: pointer; font-size: .9em; }
+button:hover { border-color: var(--info); }
+:focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+
+button[type='submit'] { color: var(--info); border-color: color-mix(in srgb, var(--info) 45%, var(--rule)); }
+button.danger { color: var(--fail); border-color: transparent; padding: .15rem .45rem; }
+button.danger:hover { border-color: var(--fail); }
+
+.row { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.1rem; }
+.row input { min-width: 7rem; flex: 1 1 7rem; }
+.check { display: flex; align-items: center; gap: .3rem; color: var(--dim); font-size: .9em; }
+
+/* Log filters.  Declared before the mobile override below, which
+   regrids them — same specificity, so source order decides. */
+.filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.1rem; }
+.filters .search { flex: 1 1 12rem; min-width: 8rem; }
+
+.err {
+  border-left: 2px solid var(--fail);
+  background: color-mix(in srgb, var(--fail) 8%, transparent);
+  padding: .5rem .7rem; margin: .9rem 0; cursor: pointer;
+  font: 400 .9em var(--mono);
+}
+
+/* ── charts ──────────────────────────────────────────────────── */
+
+.chart {
+  background: var(--panel); border: 1px solid var(--rule); border-radius: 6px;
+  padding: .6rem .4rem .2rem; overflow: hidden;
+}
+.u-legend { font: 400 11px var(--mono); color: var(--dim); padding-top: .2rem; }
+/* uPlot underlines each legend label with the series stroke, which
+   reads as a mis-clicked link; the marker square already carries the
+   colour. */
+.u-legend .u-series > * { border-bottom: 0 !important; }
+.u-legend .u-marker { width: 8px; height: 8px; border-width: 2px; }
+
+/* ── tables ──────────────────────────────────────────────────── */
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: .45rem .55rem; border-bottom: 1px solid var(--rule); }
+th {
+  font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--dim); padding-bottom: .5rem;
+}
+tbody tr:hover { background: var(--panel); }
+td select { padding: .15rem .35rem; }
+.persona { color: var(--dim); font-size: .9em; }
+
+/* Allow/deny is a two-value fact; a dot and a word beats a pill. */
+.verdict::before {
+  content: ''; display: inline-block; width: .45rem; height: .45rem;
+  border-radius: 50%; margin-right: .4rem; vertical-align: .05em;
+  background: var(--ok);
+}
+.verdict.deny::before { background: var(--fail); }
+.verdict { font: 400 .85em var(--mono); }
+
+.empty { color: var(--dim); font: 400 .9em var(--mono); padding: .5rem 0; }
+.empty code { color: var(--info); }
+
+/* ── logs ────────────────────────────────────────────────────────
+   The same line the terminal prints: fixed-width time and level so
+   the eye can track a column, dim domain (the usual filter), message,
+   then key=value.  Wrapping rather than truncating — a log line you
+   have to scroll to finish is a log line you don't read. */
+
+.logs { font: 400 12px/1.7 var(--mono); }
+.line {
+  padding: .15rem 0 .15rem .5rem;
+  border-left: 2px solid transparent;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.line:hover { background: var(--panel); }
+.line.warn { border-left-color: var(--warn); }
+.line.open { background: var(--panel); }
+/* Expanding is a UI state; the level owns the rail's colour and must
+   keep it, or a warning stops looking like one the moment you open it
+   to read why.  Only lines with no colour of their own borrow the
+   accent to show they are expanded. */
+.line.open:not(.warn) { border-left-color: var(--info); }
+.line .lt { color: var(--dim); }
+.line .lv { text-transform: uppercase; font-size: .85em; margin: 0 .35rem; }
+.line.info .lv { color: var(--info); }
+.line.warn .lv { color: var(--warn); }
+.line.trace .lv { color: var(--dim); }
+.line .ld { color: var(--dim); margin-right: .5rem; }
+.line .lm { color: var(--fg); }
+.line .lf { margin-left: .6rem; white-space: nowrap; }
+.line .lf i { color: var(--dim); font-style: normal; }
+.line .lf i::after { content: '='; }
+.line .lf b { font-weight: 400; color: var(--fg); }
+
+/* ── call detail ─────────────────────────────────────────────────
+   The prompt is the thing you came to read, so it gets the room: one
+   block per message, role in the margin, text preserved as written.
+   The raw JSON is behind a <details> — it is the fallback, not the
+   view. */
+
+.detail { margin: .6rem 0 .3rem; cursor: auto; }
+.detail h3 {
+  font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
+  color: var(--dim); margin: 1rem 0 .4rem;
+}
+.detail pre {
+  margin: 0; padding: .5rem .6rem;
+  background: var(--ground); border: 1px solid var(--rule); border-radius: 4px;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+  font: 400 11.5px/1.6 var(--mono); color: var(--fg);
+  max-height: 22rem; overflow-y: auto;
+}
+.detail .msg { margin-bottom: .4rem; }
+.detail .role {
+  display: inline-block; margin-bottom: .2rem;
+  font: 600 10px var(--mono); letter-spacing: .06em; text-transform: uppercase;
+  color: var(--info);
+}
+.detail details { margin-top: .5rem; }
+.detail summary {
+  cursor: pointer; color: var(--dim);
+  font: 400 11px var(--mono); padding: .2rem 0;
+}
+.detail summary:hover { color: var(--fg); }
+
+/* Expanded: every field on its own row, full value, wrapped.  This is
+   the desktop shape too — a long db_url is unreadable inline at any
+   width. */
+.line.open .lf {
+  display: block;
+  margin: .1rem 0 0 1.2rem;
+  white-space: normal;
+}
+.line.open .head { display: block; }
+
+@media (max-width: 40rem) {
+  body { padding: 0 .55rem 2rem; }
+
+  /* One line, always.  The status header is glanced at, not read, so
+     it must not steal a second row from the content — the `uptime=` /
+     `model=` keys go (their values are self-describing), and anything
+     still over the edge scrolls rather than wrapping. */
+  .logline {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    font-size: 11.5px;
+    line-height: 2.4;
+    gap: .55rem;
+  }
+  .logline::-webkit-scrollbar { display: none; }
+  .logline > * { flex: none; }
+  .logline i { display: none; }
+
+  /* Nothing scrolls sideways.  A table wide enough to need a swipe is
+     a table you stop reading, so each row becomes a card instead: the
+     first cell is its heading, the rest are labelled key/value rows.
+     The labels come from data-label, so there is one set of markup
+     for both layouts rather than a phone copy that drifts. */
+  section { overflow-x: visible; }
+  table, tbody, tr, td { display: block; width: auto; }
+  thead { display: none; }
+  table { min-width: 0; }
+
+  tbody tr {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: .3rem .6rem .45rem;
+    margin-bottom: .6rem;
+    position: relative;
+  }
+  tbody tr:hover { background: var(--panel); }
+
+  td {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: .75rem;
+    padding: .22rem 0;
+    border-bottom: 0;
+  }
+  td::before {
+    content: attr(data-label);
+    color: var(--dim);
+    font: 600 10px/1.6 var(--mono);
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    flex: none;
+  }
+  td > * { text-align: right; }
+  td select { max-width: 11rem; }
+
+  /* The row's identity leads the card, so it gets no label and sits
+     on its own line above the fields. */
+  td.rowkey {
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: .2rem;
+    padding-bottom: .35rem;
+  }
+  td.rowkey::before { display: none; }
+  td.rowkey > * { text-align: left; font-size: 1.05em; }
+
+  /* Prose (a memory, a persona) reads badly right-aligned in a narrow
+     column; give it the full width under its label. */
+  td.wide { display: block; }
+  td.wide::before { display: block; margin-bottom: .15rem; }
+  td.wide > *, td.wide { text-align: left; }
+
+  /* The delete/kill button belongs to the card, not to a field. */
+  td.act { position: absolute; top: .3rem; right: .5rem; padding: 0; }
+  td.act::before { display: none; }
+
+  /* Logs are not a table: they must wrap inside the viewport, never
+     scroll sideways — a log you have to swipe to finish is a log you
+     skip.  Collapsed lines cap each field so one event stays one or
+     two rows; tapping opens the full values. */
+  .logs-page { overflow-x: visible; }
+  .logs { font-size: 11.5px; line-height: 1.65; }
+  .line { padding-left: .4rem; }
+  .line .lf { margin-left: .5rem; }
+  .line:not(.open) .lf b {
+    display: inline-block;
+    max-width: 11rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    vertical-align: bottom;
+  }
+
+  /* Two selects share a row, the search box takes its own, and the
+     tail toggle sits beside it — the previous single flex row pushed
+     the checkbox and its label apart. */
+  .filters {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: .4rem;
+    margin-bottom: .9rem;
+  }
+  .filters .search { grid-column: 1 / -1; }
+  .filters .check { grid-column: 1 / -1; }
+}

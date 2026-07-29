@@ -98,8 +98,13 @@ renderLogLevel = \case
 -- Mirrors @Log.Backend.StandardOutput.withStdOutLogger@'s contract:
 -- the logger is flushed and shut down on the way out, so nothing
 -- buffered is lost when the process exits.
-withCompactLogger :: ColorMode -> (Logger -> IO a) -> IO a
-withCompactLogger mode act = do
+--
+-- @tee@ sees every message that reaches stdout, in addition to it —
+-- that is how "Max.LogBuffer" fills the admin panel's log view.  It
+-- runs inline on the logger's own thread, so it must be cheap and
+-- must not throw; a tee that fails would take the line down with it.
+withCompactLogger :: ColorMode -> Maybe (LogMessage -> IO ()) -> (Logger -> IO a) -> IO a
+withCompactLogger mode tee act = do
   colored <- resolveColor mode
   bracket (mkLogger "compact" (emit colored)) waitForLogger act
   where
@@ -111,6 +116,7 @@ withCompactLogger mode act = do
       tz <- getCurrentTimeZone
       TIO.putStrLn (formatLogMessage tz colored msg)
       hFlush stdout
+      maybe (pure ()) ($ msg) tee
 
 resolveColor :: ColorMode -> IO Bool
 resolveColor = \case

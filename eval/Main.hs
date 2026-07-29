@@ -21,6 +21,7 @@ import Control.Monad (unless)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.ByteString.Char8 qualified as BS8
 import Data.Char (isSpace)
+import Data.IORef (newIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -95,11 +96,14 @@ instance FromJSON Case where
 
 main :: IO ()
 main = do
+  -- This harness never reports which config file it read, so the ref
+  -- 'appConfigParser' fills is written and dropped.
+  usedRef <- newIORef Nothing
   (cfg, opts) <-
     runParser
       (makeVersion [0, 1, 0])
       "max-intent-eval — replay intent-classifier fixtures against a live profile"
-      ((,) <$> appConfigParser <*> evalOptsParser)
+      ((,) <$> appConfigParser usedRef <*> evalOptsParser)
   profile <- case opts.eoProfile <|> ((.icProfile) <$> cfg.intent) of
     Just p -> pure p
     Nothing -> die "no profile: pass --eval-profile or configure intent.profile"
@@ -121,10 +125,10 @@ main = do
 
   -- LogAttention: per-case verdict logs stay quiet, real errors
   -- (HTTP failures, unparseable verdicts) still surface.
-  results <- withCompactLogger cfg.logColor $ \logger ->
+  results <- withCompactLogger cfg.logColor Nothing $ \logger ->
     -- No database in this stack, so token usage from replayed rounds
     -- is deliberately unaccounted.
-    runEff . runLog "max-intent-eval" logger LogAttention . runWreq . runLLM (\_ _ _ -> pure ()) cfg.llm $
+    runEff . runLog "max-intent-eval" logger LogAttention . runWreq . runLLM (\_ _ _ -> pure ()) (\_ -> pure ()) cfg.llm $
       traverse
         (\(i, c) -> (,) (i, c) <$> classifyOnce Nothing profile cfg.persona c.cContext c.cNew)
         cases

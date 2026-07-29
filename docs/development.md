@@ -60,6 +60,38 @@ cabal test max-test-db
 Without `MAX_TEST_DB_URL` the suite exits 0 (CI without a database stays green).
 Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
 
+## Config: finding out where a value came from
+
+Settings are layered CLI > env > YAML > default, and the env layer is the one
+that surprises people: a `MAX_*` variable in scope makes the matching YAML key
+dead, with no warning. The dev shell exports `MAX_DB_URL`, `MAX_WS_HOST`,
+`MAX_WS_PORT` and `MAX_WS_PATH` (`devenv.nix`), and their values equal the
+built-in defaults — so an overridden key looks exactly like a key that fell
+back to its default. The NixOS module exports six more on purpose
+(`nix/module.nix`), which is why `db.url`, `images_dir`, `migrations_dir`,
+`server.host`, `log_color` and `server.access_token` have no effect in a
+module-managed deployment's yaml.
+
+Two flags settle it, neither listed in `--help`:
+
+```sh
+max --run-settings-check --config-file max.yaml   # one line per setting, and where it came from
+max --debug-optparse                              # the parser tree, when that isn't enough
+```
+
+`--run-settings-check` parses and exits — no database, no server, so it is safe
+to point at a live deployment's config (as its user:
+`sudo -u max-bot env $(systemctl show max -p Environment --value) … --run-settings-check`).
+A key you wrote that doesn't show up as *"set based on config value"* was
+either overridden by env or misspelled.
+
+**Unknown keys are ignored silently.** opt-env-conf looks up only the paths the
+parser declares; nothing enumerates the leftovers. A typo'd `owners` means
+nobody is an owner and every owner-tier command refuses with no explanation.
+Two things are loud now: an explicitly named `--config-file` that doesn't exist
+is an error rather than a fall-through to `./max.yaml` (`resolveConfigFile`),
+and startup logs `config_file=` so which file was read is never a guess.
+
 ## Versioning
 
 `version:` in `max.cabal` is the single source of truth (surfaced by `!version`
