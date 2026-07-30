@@ -933,9 +933,9 @@ dispatchLLM mIntent origin absorbable companions gm = do
           -- dispatch's mention history and gets answered a turn late.
           --
           -- On a direct trigger the silence still shows: the named
-          -- reason face (擦汗 as fallback) is reacted onto the trigger
-          -- message.  Proactive turns stay traceless, and a poke has
-          -- no message to react to.
+          -- reason face (闭嘴 as the bare-[silence] fallback) is
+          -- reacted onto the trigger message.  Proactive turns stay
+          -- traceless, and a poke has no message to react to.
           logInfo "llm chose silence" $
             object
               [ "to" .= (let UserId u = gm.userId in u),
@@ -1188,9 +1188,11 @@ failureFaceId :: Int
 failureFaceId = 357
 
 -- | Reaction used when a direct-trigger silence names no (known)
--- face: 擦汗 — the all-purpose "呃，没什么可说的".
+-- face: 闭嘴 — the mechanical "不接这条".  The format guide no longer
+-- pushes the model to always name a reason; a bare [silence] gets
+-- this face by machinery instead of by prompt pressure.
 defaultSilenceFace :: Int
-defaultSilenceFace = 97
+defaultSilenceFace = 7
 
 -- | Did the model opt out of replying?  The format guide tells it to
 -- answer with a lone @[silence]@ — or @[silence:表情名]@ to say why —
