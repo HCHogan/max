@@ -72,17 +72,12 @@ createTool gid reg =
     { toolName = "sandbox_create",
       toolDescription =
         T.unwords
-          [ "Create a new Linux sandbox (Docker container) for running commands.",
-            "The default image is nix-based (nixpkgs pinned to 26.05, package store",
-            "shared across sandboxes): do NOT apt/yum install — to use a tool that",
-            "isn't preinstalled, pass its nixpkgs attribute in the 'packages' arg of",
-            "sandbox_exec (find attributes with nix_search).",
-            "Returns a 'sandbox_id' you pass to sandbox_exec / sandbox_read_file etc.",
-            "Sandboxes persist across your subsequent dispatches in this group's session,",
-            "so prefer reusing an existing one (sandbox_list) over creating a new one",
-            "for each turn.  They are destroyed only by sandbox_destroy, !clear --all,",
-            "or bot restart.  IMPORTANT: this group's other concurrent dispatches share",
-            "the same sandboxes — don't assume exclusive access."
+          [ "Create a Linux sandbox (Docker container) and get the 'sandbox_id' the",
+            "other sandbox_* tools take.  Nix-based: do NOT apt/yum install — pass",
+            "nixpkgs attributes in sandbox_exec's 'packages' instead.  Sandboxes",
+            "persist across dispatches and are shared with this group's other",
+            "running tasks: prefer reusing one from sandbox_list.",
+            "开工前先 use_skill 取 sandbox 手册。"
           ],
       toolSchema =
         object
@@ -139,19 +134,12 @@ execTool gid reg =
     { toolName = "sandbox_exec",
       toolDescription =
         T.unwords
-          [ "Run a shell command inside an existing sandbox.  The command",
-            "is passed verbatim to 'sh -c' inside the container, with a",
-            "wallclock timeout enforced via timeout(1).  Stdout and stderr",
-            "are captured separately and capped at ~16 KiB each; truncated",
-            "results set 'truncated' = true and save the FULL output to the",
-            "file named in 'full_output_file' — grep/head/tail that file in",
-            "a follow-up command instead of re-running with different flags.",
-            "Exit code 0 = success.",
-            "To use tools that aren't preinstalled, list their nixpkgs",
-            "attributes in 'packages' — they are put on PATH for this",
-            "command only (no permanent install needed).  The first use of",
-            "a package downloads it into the shared store: raise",
-            "timeout_seconds to 120-300 for that call; later uses are instant."
+          [ "Run a shell command in a sandbox (verbatim 'sh -c', wallclock",
+            "timeout, exit_code 0 = success).  Output capped ~16 KiB per",
+            "stream; when 'truncated' is true the full output is saved to",
+            "'full_output_file' — grep/tail that file next, don't re-run.",
+            "Tools not preinstalled: list nixpkgs attributes in 'packages'",
+            "(first use downloads — raise timeout_seconds to 120-300)."
           ],
       toolSchema =
         object
@@ -165,9 +153,7 @@ execTool gid reg =
                       [ "type" .= ("array" :: Text),
                         "items" .= object ["type" .= ("string" :: Text)],
                         "description"
-                          .= ( "nixpkgs attributes to put on PATH for this command, e.g. [\"python3\", \"ffmpeg\", \"imagemagick\"]. Use nix_search to find attribute names."
-                                 :: Text
-                             )
+                          .= ("nixpkgs attributes to put on PATH for this command (find them with nix_search)." :: Text)
                       ],
                   "timeout_seconds"
                     .= object
@@ -218,11 +204,10 @@ nixSearchTool gid reg =
     { toolName = "nix_search",
       toolDescription =
         T.unwords
-          [ "Search the sandbox's package set (nixpkgs 26.05) by regex.",
-            "Returns up to 30 matches, one per line: 'attribute version description'.",
-            "Pass the attribute (first column) in sandbox_exec's 'packages' to use it.",
-            "Example queries: 'ffmpeg', 'python.*opencv', '^nodejs$'.",
-            "An empty result means no package matched — try a broader regex."
+          [ "Search the sandbox's pinned nixpkgs by regex (e.g. 'ffmpeg',",
+            "'python.*opencv').  Returns 'attribute version description' lines;",
+            "pass the attribute in sandbox_exec's 'packages'.  Empty result:",
+            "broaden the regex."
           ],
       toolSchema =
         object
@@ -298,13 +283,8 @@ destroyTool gid reg =
   Tool
     { toolName = "sandbox_destroy",
       toolDescription =
-        T.unwords
-          [ "Permanently destroy a sandbox and its data volume.",
-            "All state inside (/work files, processes) is lost, though",
-            "downloaded packages survive in the shared store and stay",
-            "instant for future sandboxes.",
-            "Use this when you're done with a sandbox to free resources."
-          ],
+        "Permanently destroy a sandbox and its /work data (downloaded packages \
+        \survive in the shared store).  Use when done, to free resources.",
       toolSchema =
         object
           [ "type" .= ("object" :: Text),
@@ -332,12 +312,8 @@ readFileTool gid reg =
   Tool
     { toolName = "sandbox_read_file",
       toolDescription =
-        T.unwords
-          [ "Read up to max_bytes from a file inside a sandbox (paths relative",
-            "to /work, or absolute).  Returns the text content; assumes UTF-8.",
-            "Truncated transparently at the byte cap — pass a smaller max_bytes",
-            "if you just want a peek."
-          ],
+        "Read up to max_bytes of a text file in a sandbox (path relative to \
+        \/work, or absolute; UTF-8, silently truncated at the cap).",
       toolSchema =
         object
           [ "type" .= ("object" :: Text),
@@ -385,11 +361,8 @@ writeFileTool gid reg =
   Tool
     { toolName = "sandbox_write_file",
       toolDescription =
-        T.unwords
-          [ "Write text content to a file inside a sandbox, creating parent",
-            "directories as needed.  Overwrites if the file exists.",
-            "Useful for dropping a script before sandbox_exec runs it."
-          ],
+        "Write a text file in a sandbox (creates parent dirs, overwrites) — \
+        \e.g. drop a script before sandbox_exec runs it.",
       toolSchema =
         object
           [ "type" .= ("object" :: Text),

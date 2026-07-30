@@ -23,9 +23,10 @@
 --
 -- == Builtin skills
 --
--- Files under @skills\/@ are baked into the binary (file-embed, same
--- deployment story as the admin panel's assets) and seeded into the
--- registry with negative ids.  They exist for content that is coupled
+-- Files under @skills\/@ (currently: self-knowledge, sandbox, web)
+-- are baked into the binary (file-embed, same deployment story as the
+-- admin panel's assets) and seeded into the registry with negative
+-- ids.  They exist for content that is coupled
 -- to the code it ships with — @self-knowledge@ describes THIS
 -- binary's architecture and commands, and a DB copy would go stale a
 -- little more every release.  Builtins are immutable through the API;
@@ -35,6 +36,11 @@
 -- File format: the first line is the description (the index line),
 -- everything after the first blank line is the body.  The name is the
 -- filename minus @.md@.
+--
+-- Caveat: 'embedDir' registers only the files it saw as compile
+-- dependencies, so ADDING a file under @skills\/@ does not recompile
+-- this module on its own (and @touch@ doesn't either — cabal tracks
+-- content hashes).  Make any byte-level change here when adding one.
 {-# LANGUAGE TemplateHaskell #-}
 
 module Max.Skills

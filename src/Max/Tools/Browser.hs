@@ -237,10 +237,9 @@ viewZhihuTool gid reg =
   Tool
     { toolName = "view_zhihu",
       toolDescription =
-        "看一个知乎链接的内容：问题页、回答、专栏文章都行，分享卡片 [card:] 里的\
-        \知乎链接直接传进来。用群的隐身浏览器打开并返回页面正文（知乎首访有一道\
-        \验证，工具自动重试，稍慢是正常的）。返回后页面保持打开：想看更多回答/\
-        \评论可以接着用 browser_scroll + browser_snapshot。",
+        "看一个知乎链接的内容（问题页、回答、专栏文章；分享卡片 [card:] 里的\
+        \知乎链接直接传）。自动过知乎的首访验证，稍慢是正常的；翻页看更多的\
+        \流程见 use_skill 的 web 手册。",
       toolSchema =
         obj
           [("url", str "知乎链接（zhihu.com/question/…、…/answer/…、zhuanlan.zhihu.com/p/…）")]

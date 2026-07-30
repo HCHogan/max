@@ -11,11 +11,11 @@ import Test.Hspec
 -- skill file at CI time instead of as a silently missing skill.
 spec :: Spec
 spec = describe "Max.Skills builtins" $ do
-  it "ships self-knowledge plus the two docs-backed skills" $ do
+  it "ships the manuals, self-knowledge, and the two docs-backed skills" $ do
     reg <- newSkillRegistry
     skills <- skillsForGroup reg (GroupId 7777)
     map (.skillName) skills
-      `shouldContain` ["self-architecture", "self-features", "self-knowledge"]
+      `shouldContain` ["sandbox", "self-architecture", "self-features", "self-knowledge", "web"]
 
   it "gives builtins negative ids, a one-line description, and a body" $ do
     reg <- newSkillRegistry

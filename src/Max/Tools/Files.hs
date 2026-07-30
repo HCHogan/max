@@ -100,13 +100,9 @@ listRecentFilesTool tz (GroupId gid) =
   Tool
     { toolName = "list_recent_files",
       toolDescription =
-        T.unwords
-          [ "List non-image files recently sent to this group.",
-            "Returns id, name, sender, time, size, and whether the bot",
-            "has finished downloading the bytes ('ready').  Use the id",
-            "with import_file_to_sandbox to make a file available to",
-            "code running in a sandbox."
-          ],
+        "List non-image files recently sent to this group (file_id, name, \
+        \sender, size, 'ready').  Once ready, import_file_to_sandbox takes \
+        \the file_id.",
       toolSchema =
         object
           [ "type" .= ("object" :: Text),
@@ -165,13 +161,8 @@ importFileToSandboxTool gid blobRoot sandboxes =
   Tool
     { toolName = "import_file_to_sandbox",
       toolDescription =
-        T.unwords
-          [ "Copy a file the group sent into a sandbox's /work directory.",
-            "Pass the file_id from list_recent_files.  Optionally choose",
-            "dest_path (relative to /work; defaults to the original",
-            "filename).  Fails if the bot hasn't finished downloading",
-            "the file yet ('ready: false' from list_recent_files)."
-          ],
+        "Copy a group file (file_id from list_recent_files) into a sandbox's \
+        \/work.  Fails while its download hasn't finished (ready=false).",
       toolSchema =
         object
           [ "type" .= ("object" :: Text),
@@ -239,14 +230,9 @@ sendImageFromSandboxTool gid sandboxes =
   Tool
     { toolName = "send_image_from_sandbox",
       toolDescription =
-        T.unwords
-          [ "Send an image file from a sandbox into the group as an inline image.",
-            "The image is read out via 'docker cp', base64-encoded, and posted.",
-            "Use for charts, screenshots, generated PNGs, etc.  Up to a few MB",
-            "per image is fine; for large or non-image artifacts use",
-            "send_file_from_sandbox.  An optional 'caption' is posted as a",
-            "text segment before the image."
-          ],
+        "Send an image file from a sandbox into the chat as an inline picture \
+        \(charts, screenshots; a few MB max — larger or non-image artifacts go \
+        \via send_file_from_sandbox).  Optional 'caption' text precedes it.",
       toolSchema =
         object
           [ "type" .= ("object" :: Text),
@@ -362,14 +348,8 @@ sendFileFromSandboxTool gid sandboxes =
   Tool
     { toolName = "send_file_from_sandbox",
       toolDescription =
-        T.unwords
-          [ "Upload a file from a sandbox into the group's 群文件 area.",
-            "Use for arbitrary artifacts (.csv, .pdf, .zip, .log, ...).",
-            "An optional 'name' overrides the displayed filename in QQ;",
-            "default is the basename of the sandbox path.  Note: files",
-            "staged this way accumulate in var/outbox/ on the host; the",
-            "bot does not garbage-collect them yet."
-          ],
+        "Upload a file from a sandbox into the group's 群文件 (any artifact: \
+        \.csv/.pdf/.zip/…).  Optional 'name' overrides the displayed filename.",
       toolSchema =
         object
           [ "type" .= ("object" :: Text),
