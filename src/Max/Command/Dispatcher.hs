@@ -349,7 +349,7 @@ execute t gid uid granterTier replyTarget cmd = do
       [ "🦈 max v" <> T.pack (showVersion version) <> maybe "" (\r -> " (" <> T.pack r <> ")") gitRev,
         "🌊 " <> osName <> " · " <> T.pack arch,
         "🫧 ghc " <> T.pack (showVersion fullCompilerVersion) <> " · cabal " <> T.pack (prettyShow cabalVersion),
-        "🐚 " <> tshow skillCount <> " 项技能",
+        "🐚 " <> tshow skillCount <> " skills loaded",
         "⏱️ up " <> fmtDur (realToFrac (diffUTCTime now env.beStartedAt))
           <> maybe "" (\u -> " · host " <> fmtDur u) hostUp
       ]
