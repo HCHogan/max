@@ -22,6 +22,7 @@ import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.BuildInfo (gitRev)
 import Max.Command.Help (helpText)
+import Max.Skills (skillsForGroup)
 import Max.Command.Permission (PermTier (..), adminGrantable, knownCapabilities)
 import Max.Command.Types
 import Max.DB.Permissions (deleteGrant, insertGrant, listGrantsFor)
@@ -337,6 +338,10 @@ execute t gid uid granterTier replyTarget cmd = do
     now <- liftIO getCurrentTime
     osName <- liftIO readOsPretty
     hostUp <- liftIO readHostUptime
+    -- What THIS group's dispatches see (global + group, shadowed),
+    -- not the whole registry — the card answers "what can you do
+    -- here", and the counts differ once a group grows local skills.
+    skillCount <- liftIO (length <$> skillsForGroup env.beSkills gid)
     -- Single newlines only: a blank line would split the card into
     -- separate messages ('planReply').  Public on purpose: the
     -- version card is group trivia, not a personal query.
@@ -344,6 +349,7 @@ execute t gid uid granterTier replyTarget cmd = do
       [ "🦈 max v" <> T.pack (showVersion version) <> maybe "" (\r -> " (" <> T.pack r <> ")") gitRev,
         "🌊 " <> osName <> " · " <> T.pack arch,
         "🫧 ghc " <> T.pack (showVersion fullCompilerVersion) <> " · cabal " <> T.pack (prettyShow cabalVersion),
+        "🐚 " <> tshow skillCount <> " 项技能",
         "⏱️ up " <> fmtDur (realToFrac (diffUTCTime now env.beStartedAt))
           <> maybe "" (\u -> " · host " <> fmtDur u) hostUp
       ]
