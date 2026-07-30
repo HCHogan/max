@@ -115,47 +115,47 @@ searchMessagesTool tz mEmbed (GroupId gid) =
                 [ "query"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("Literal substring to match in message text (case-insensitive)." :: Text)
+                        "description" .= ("Substring match (case-insensitive)." :: Text)
                       ],
                   "regex"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("POSIX regex to match against message text (case-insensitive, Postgres ~* semantics)." :: Text)
+                        "description" .= ("POSIX regex (case-insensitive)." :: Text)
                       ],
                   "sender_id"
                     .= object
                       [ "type" .= ("integer" :: Text),
-                        "description" .= ("Only messages sent by this QQ user id." :: Text)
+                        "description" .= ("Sender's QQ id." :: Text)
                       ],
                   "sender"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("Only messages whose sender nickname or group card contains this substring (case-insensitive)." :: Text)
+                        "description" .= ("Sender name contains this (nickname or 群名片)." :: Text)
                       ],
                   "after"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("Only messages at or after this time: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (same clock as the times in results)." :: Text)
+                        "description" .= ("At or after 'YYYY-MM-DD [HH:MM]' (result-display clock)." :: Text)
                       ],
                   "before"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("Only messages at or before this time: 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM' (same clock as the times in results)." :: Text)
+                        "description" .= ("At or before 'YYYY-MM-DD [HH:MM]'." :: Text)
                       ],
                   "semantic"
                     .= object
                       [ "type" .= ("string" :: Text),
-                        "description" .= ("Natural-language meaning search; needs no exact wording. Requires embedding to be configured." :: Text)
+                        "description" .= ("Natural-language meaning search (no exact wording needed)." :: Text)
                       ],
                   "group_id"
                     .= object
                       [ "type" .= ("integer" :: Text),
-                        "description" .= ("Group to search (defaults to the current group)." :: Text)
+                        "description" .= ("Defaults to the current group." :: Text)
                       ],
                   "limit"
                     .= object
                       [ "type" .= ("integer" :: Text),
-                        "description" .= ("Max results (default 10, max 30)." :: Text),
+                        "description" .= ("Default 10, max 30." :: Text),
                         "default" .= (10 :: Int)
                       ]
                 ]

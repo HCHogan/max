@@ -53,7 +53,7 @@ import Max.DB.History
     fetchMessagesByIds,
     fetchRecentInGroup,
   )
-import Max.DB.Memory (MemoryItem (..), MemoryScope (..), listMemories)
+import Max.DB.Memory (MemoryItem (..), MemoryScope (..), listRecentMemories)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Faces (curatedFaceGroups)
 import Max.ImagePrep (prepareImageForLLM)
@@ -365,8 +365,13 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
       -- every (high - low) dispatches beats one every dispatch.
       (transcript', movedAnchor) = applyWatermark lowWater highWater merged
   pinnedItems' <- fetchMessagesByIds s.pinned
-  groupMems <- listMemories ScopeGroup gid gid
-  userMems <- listMemories ScopeUser senderId gid
+  -- Injection is capped to the freshest entries per scope: the block
+  -- is in the volatile tail, re-tokenised at full price every
+  -- dispatch, and a scope at the 30-entry cap was costing thousands
+  -- of uncached tokens.  The long tail stays reachable through
+  -- memory_list / memory_search.
+  groupMems <- listRecentMemories ScopeGroup gid gid memoryInjectCap
+  userMems <- listRecentMemories ScopeUser senderId gid memoryInjectCap
   replyCtx0 <- case extractReply gm.message of
     Nothing -> pure Nothing
     Just rid -> do
@@ -1046,6 +1051,12 @@ renderContext pi' =
           <> [userMessage]
    in messages
 
+-- | How many entries per scope the prompt carries.  Injection policy,
+-- not a storage cap — 'Max.Tools.Memory.maxMemoriesPerScope' still
+-- governs what a scope may hold.
+memoryInjectCap :: Int
+memoryInjectCap = 12
+
 -- | The injected memory block, or 'Nothing' when there is nothing
 -- remembered (no block at all beats an empty header — zero tokens,
 -- and nothing for the model to fixate on).  The framing line matters
@@ -1057,7 +1068,9 @@ renderMemories tz' private senderName groupMems userMems
   | otherwise =
       Just . T.intercalate "\n" . concat $
         [ [ "[memories — 背景备忘]",
-            "仅在与当前话题相关时参考，不要主动提及；与对话矛盾时以对话为准（可 memory_update）。"
+            "仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，\
+            \与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，\
+            \更早的用 memory_search / memory_list 查。"
           ],
           if null groupMems
             then []

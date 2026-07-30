@@ -24,6 +24,7 @@ module Max.DB.Memory
     scopeText,
     parseScope,
     listMemories,
+    listRecentMemories,
     listUserMemoriesEverywhere,
     countMemories,
     insertMemory,
@@ -86,6 +87,29 @@ listMemories scope sid gid =
     \    AND (scope = 'group' OR source_group_id = ?) \
     \  ORDER BY id"
     (scopeText scope, sid, gid)
+
+-- | The @limit@ most recently touched entries of one scope, returned
+-- oldest-first like 'listMemories'.  The prompt's @[memories]@ block
+-- reads this — injection is capped, while the tools and the extractor
+-- keep reading whole scopes.
+listRecentMemories ::
+  (WithConnection :> es, IOE :> es) =>
+  MemoryScope ->
+  Int64 ->
+  -- | Current group (same scoping rule as 'listMemories').
+  Int64 ->
+  Int ->
+  Eff es [MemoryItem]
+listRecentMemories scope sid gid limit = do
+  rows <-
+    query
+      "SELECT id, scope, scope_id, content, updated_at \
+      \  FROM memories \
+      \  WHERE scope = ? AND scope_id = ? \
+      \    AND (scope = 'group' OR source_group_id = ?) \
+      \  ORDER BY updated_at DESC, id DESC LIMIT ?"
+      (scopeText scope, sid, gid, limit)
+  pure (reverse rows)
 
 -- | Every memory of one person, whatever conversation taught it, each
 -- paired with that conversation.

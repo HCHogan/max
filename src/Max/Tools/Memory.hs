@@ -86,10 +86,9 @@ saveTool dc =
     { toolName = "memory_save",
       toolDescription =
         T.unwords
-          [ "保存一条长期记忆。只存将来还会用到的稳定信息（身份、偏好、约定、",
-            "长期项目）；闲聊和一次性细节不存，大多数对话不需要动记忆。",
-            "已有相近记忆就 memory_update，别重复存。存了不必在回复里宣布",
-            "（用户可用 !memory 查看）。"
+          [ "保存一条长期记忆。一般不用主动存——对话结束后有后台抽取器负责记；",
+            "只在用户明确让你记住某事时用。已有相近记忆就 memory_update，",
+            "别重复存。存了不必在回复里宣布。"
           ],
       toolSchema =
         object
@@ -240,8 +239,8 @@ listTool dc =
     { toolName = "memory_list",
       toolDescription =
         T.unwords
-          [ "查看某个 scope 的全部长期记忆。本群和当前发言者的记忆已在系统",
-            "提示里，别重复查；只在涉及别的人或别的群时用。"
+          [ "查看某个 scope 的全部长期记忆。系统提示的 [memories] 只有最近",
+            "更新的一部分——要看全量、或涉及别的人时用这个。"
           ],
       toolSchema =
         object
@@ -299,8 +298,8 @@ searchTool dc ec =
       toolDescription =
         T.unwords
           [ "在本群的长期记忆里做语义搜索（谁擅长X、之前定过什么）。",
-            "只覆盖本群——本群的群记忆，以及成员在本群留下的个人记忆。",
-            "当前发言者的记忆已在系统提示里，别重复查。"
+            "只覆盖本群的群记忆和成员在本群留下的个人记忆；系统提示里",
+            "只注入了最近的条目，翻旧账用这个。"
           ],
       toolSchema =
         object
