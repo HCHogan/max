@@ -1204,16 +1204,34 @@ defaultSilenceFace = 7
 -- when it is silence, with the reason face (if a known one was
 -- named).  Only an exact match qualifies: a reply that merely
 -- *contains* the marker still goes out, so the model can't
--- accidentally mute a real answer.
+-- accidentally mute a real answer.  Leading quote handles are the one
+-- exception — the guide drills "回谁就引谁" so hard that the model
+-- writes @[↩#id] [silence]@, and that used to fail the exact match
+-- and send the marker as literal text.
 parseSilence :: T.Text -> Maybe (Maybe Int)
-parseSilence t
+parseSilence t0
   | T.null t || t == "[silence]" || t == "[沉默]" = Just Nothing
   | Just inner <- withReason = Just (faceIdByName (T.strip inner))
   | otherwise = Nothing
   where
+    t = dropQuoteHandles t0
     withReason =
       (T.stripPrefix "[silence:" t <|> T.stripPrefix "[silence：" t)
         >>= T.stripSuffix "]"
+
+-- | Strip leading @[↩#id]@ handles (ids may be negative — forward
+-- children) and surrounding whitespace.  Only the prefix: a quote in
+-- the middle of real text is content.
+dropQuoteHandles :: T.Text -> T.Text
+dropQuoteHandles s =
+  let s' = T.stripStart s
+   in case T.stripPrefix "[↩#" s' of
+        Just rest
+          | (num, rest') <- T.span (\c -> isDigit c || c == '-') rest,
+            not (T.null (T.filter isDigit num)),
+            Just rest'' <- T.stripPrefix "]" rest' ->
+              dropQuoteHandles rest''
+        _ -> s'
 
 isSilentReply :: T.Text -> Bool
 isSilentReply = isJust . parseSilence
