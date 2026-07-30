@@ -15,7 +15,7 @@ spec = describe "Max.Skills builtins" $ do
     reg <- newSkillRegistry
     skills <- skillsForGroup reg (GroupId 7777)
     map (.skillName) skills
-      `shouldContain` ["sandbox", "self-architecture", "self-features", "self-knowledge", "web"]
+      `shouldContain` ["office", "sandbox", "self-architecture", "self-features", "self-knowledge", "web"]
 
   it "gives builtins negative ids, a one-line description, and a body" $ do
     reg <- newSkillRegistry

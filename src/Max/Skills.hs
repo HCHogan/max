@@ -23,10 +23,10 @@
 --
 -- == Builtin skills
 --
--- Files under @skills\/@ (currently: self-knowledge, sandbox, web)
--- are baked into the binary (file-embed, same deployment story as the
--- admin panel's assets) and seeded into the registry with negative
--- ids.  They exist for content that is coupled
+-- Files under @skills\/@ (currently: self-knowledge, sandbox, web,
+-- office) are baked into the binary (file-embed, same deployment
+-- story as the admin panel's assets) and seeded into the registry
+-- with negative ids.  They exist for content that is coupled
 -- to the code it ships with — @self-knowledge@ describes THIS
 -- binary's architecture and commands, and a DB copy would go stale a
 -- little more every release.  Builtins are immutable through the API;

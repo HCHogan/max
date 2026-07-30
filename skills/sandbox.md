@@ -48,3 +48,19 @@ import_file_to_sandbox 才能把它拷进 /work（dest_path 可改名；ready=fa
 几 MB 以内；caption 参数在图前带一句话，支持引用/@ 占位符）；其他产物
 （.csv/.pdf/.zip/.log…）用 send_file_from_sandbox 传进群文件（name 参数改
 显示名，默认取文件名）。
+
+# 中文字体（画图、转文档，凡是要渲染中文都会踩）
+
+沙箱默认没有中文字体：matplotlib 画图、LibreOffice 转文档、ImageMagick 写字，
+中文都会变豆腐块。字体文件走 nix 拿：
+`nix build nixpkgs#noto-fonts-cjk-sans --print-out-paths`，输出路径的
+share/fonts/ 下就是字体文件。
+走 fontconfig 的程序（LibreOffice、ImageMagick 等）：把字体拷进 ~/.fonts/，
+packages 里加 "fontconfig" 跑一次 `fc-cache -f`。
+matplotlib 另有一层：字体装了它也不会自动用——先试直接喂文件
+`font_manager.fontManager.addfont(<字体文件>)`，然后
+`rcParams['font.sans-serif'] = ['Noto Sans CJK SC']`；.ttc 认不了就退回
+fontconfig 路线再指定家族名。顺手 `rcParams['axes.unicode_minus'] = False`，
+不然负号也是方块。
+无论哪条路：**先出一张含中文的小样自查**（画个带中文标题的图 / 转一页出图），
+确认没豆腐块再跑正式任务、再发给人。
