@@ -20,6 +20,7 @@ import Effectful.Log
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader, ask)
+import Max.BuildInfo (gitRev)
 import Max.Command.Help (helpText)
 import Max.Command.Permission (PermTier (..), adminGrantable, knownCapabilities)
 import Max.Command.Types
@@ -340,7 +341,7 @@ execute t gid uid granterTier replyTarget cmd = do
     -- separate messages ('planReply').  Public on purpose: the
     -- version card is group trivia, not a personal query.
     pure . ReplyPublicText . T.intercalate "\n" $
-      [ "🦈 max v" <> T.pack (showVersion version),
+      [ "🦈 max v" <> T.pack (showVersion version) <> maybe "" (\r -> " (" <> T.pack r <> ")") gitRev,
         "🌊 " <> osName <> " · " <> T.pack arch,
         "🫧 ghc " <> T.pack (showVersion fullCompilerVersion) <> " · cabal " <> T.pack (prettyShow cabalVersion),
         "⏱️ up " <> fmtDur (realToFrac (diffUTCTime now env.beStartedAt))

@@ -57,6 +57,7 @@ import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, listMemor
 import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGrants)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
+import Max.BuildInfo (gitRev)
 import Max.Env (BotEnv (..))
 import Max.Log (parseLogLevel, renderLogLevel)
 import Max.LogBuffer (LogBuffer, LogEntry (..), LogQuery (..), queryLogs)
@@ -299,6 +300,7 @@ handle env profiles logBuf r params body = case r of
     pure . ok $
       object
         [ "version" .= showVersion version,
+          "git_rev" .= fmap T.pack gitRev,
           "uptime_seconds" .= (round (diffUTCTime now env.beStartedAt) :: Int64),
           "default_model" .= env.beDefaultModel,
           "profiles" .= profiles,

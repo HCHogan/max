@@ -61,7 +61,15 @@
               # against the current set once the bounds are relaxed.
               wreq-effectful = hlib.markUnbroken (hlib.doJailbreak hsuper.wreq-effectful);
               # dontCheck: max-test-db wants a live PostgreSQL.
-              max = hlib.dontCheck (hself.callCabal2nix "max" (cleanSrc pkgs) { });
+              # MAX_GIT_REV: the cleaned source has no .git, so
+              # Max.BuildInfo's compile-time splice reads the rev from
+              # the environment instead; "unknown" (e.g. a tarball
+              # build) renders as no rev at all.
+              max = hlib.dontCheck (
+                (hself.callCabal2nix "max" (cleanSrc pkgs) { }).overrideAttrs (_: {
+                  MAX_GIT_REV = self.shortRev or self.dirtyShortRev or "unknown";
+                })
+              );
             };
           };
         in
