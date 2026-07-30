@@ -10,8 +10,9 @@
 --
 -- Not in "Max.Tools": that module is imported by "Max.Tools.Reminder",
 -- so assembling the full set there would close a cycle.
-module Max.Toolset (allToolsFor) where
+module Max.Toolset (allToolsFor, toolCountFor) where
 
+import Control.Concurrent.STM (newTVarIO)
 import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
@@ -22,6 +23,7 @@ import Max.Effects.NapCat (NapCat)
 import Max.Effects.Tools (Tool)
 import Max.Env (BotEnv (..))
 import Max.Tools (builtinsFor)
+import OneBot.Types (GroupId, MessageId (..), UserId (..))
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
 import Max.Tools.Files (fileToolsFor)
@@ -69,3 +71,33 @@ allToolsFor env dc =
     <> maybe [] searchToolsFor env.beSearch
     <> [t | dc.dcMultimodal, t <- browserToolsFor dc.dcGroupId env.beBrowsers]
     <> [t | dc.dcMultimodal, t <- videoToolsFor env.beBlobRoot dc]
+
+-- | How many tools a dispatch with these gates would get — the
+-- @!version@ card's number.  The context is a throwaway (ids zeroed,
+-- a fresh image TVar): the list's shape depends only on the gate
+-- booleans and 'BotEnv', and nothing here ever runs a tool.  The
+-- element type is pinned to an arbitrary concrete stack because
+-- @(:>)@ only asks for membership — no interpreters are involved.
+toolCountFor ::
+  BotEnv ->
+  GroupId ->
+  Bool -> -- multimodal profile
+  Bool -> -- stickers effective
+  Bool -> -- skills visible
+  IO Int
+toolCountFor env gid multimodal stickers skills = do
+  imgs <- newTVarIO (0, [])
+  let dc =
+        DispatchContext
+          { dcGroupId = gid,
+            dcMessageId = MessageId 0,
+            dcUserId = UserId 0,
+            dcSelfId = UserId 0,
+            dcDebug = False,
+            dcMultimodal = multimodal,
+            dcStickers = stickers,
+            dcSkills = skills,
+            dcMentionable = Nothing,
+            dcToolImages = imgs
+          }
+  pure (length (allToolsFor env dc :: [Tool '[Http, Log, NapCat, W.Wreq, WithConnection, IOE]]))
