@@ -43,11 +43,13 @@ module Max.Tasks
     releaseTask,
 
     -- * Operations
+    Note (..),
     TaskInfo (..),
     listTasks,
     cancelTask,
     cancelAllTasks,
     drainInbox,
+    requeueInbox,
     pushToTrigger,
     pushToLatest,
     inFlightTriggers,
@@ -73,6 +75,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
+import OneBot.Event (GroupMessage)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
 -- | Short, human-typeable id like @t17@ — easy to !kill from the
@@ -80,11 +83,22 @@ import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 newtype TaskId = TaskId {unTaskId :: Text}
   deriving stock (Show, Eq, Ord)
 
+-- | One inbox note: the rendered line the model reads, plus — when
+-- the note IS a message (the implicit-supplement path swallowing a
+-- real trigger) rather than a note about one — the original event.
+-- The source is what lets a note a dying turn accepted but never
+-- served be re-dispatched as a turn of its own; the registry only
+-- carries it, 'Max.Handler''s dispatch epilogue owns the decision.
+data Note = Note
+  { noteLine :: !Text,
+    noteSource :: !(Maybe GroupMessage)
+  }
+
 -- | The handle the agent loop keeps once it has 'attachTask'ed.  Used
 -- to drain its own inbox and (via 'releaseTask') to release the slot.
 data TaskHandle = TaskHandle
   { thId :: !TaskId,
-    thInbox :: !(TVar [Text]),
+    thInbox :: !(TVar [Note]),
     -- | A @!kill@ landed while the dispatch was still in its prologue,
     -- before there was a cancel action to run.  The loop honours it
     -- immediately instead of doing a turn's worth of work first.
@@ -108,7 +122,7 @@ data TaskEntry = TaskEntry
     -- This is what @!feedback@ resolves a reply against.
     teTrigger :: !(Maybe Int64),
     teStartedAt :: !UTCTime,
-    teInbox :: !(TVar [Text]),
+    teInbox :: !(TVar [Note]),
     -- | Messages this turn swallowed as supplements.  Reported by
     -- 'inFlightTriggers' alongside 'teTrigger' so a concurrent dispatch
     -- doesn't helpfully answer them a second time, and accepted by
@@ -205,9 +219,22 @@ beginDispatch reg gid uid mTrigger = do
 -- | Close it.  Belongs in the same @finally@ that releases the shutdown
 -- slot: a leak here would make a finished question look permanently
 -- in-flight to every later turn.
-endDispatch :: TaskRegistry -> TaskId -> IO ()
-endDispatch reg tid =
-  atomically $ modifyTVar' reg.trState (fmap (Map.delete tid))
+--
+-- Returns the notes the entry accepted but nobody consumed — pushing
+-- into an inbox came with a 托腮 on the message, and ending the task
+-- is where that promise either transfers (the caller re-dispatches
+-- what carries a source) or is formally dropped.  A killed task
+-- returns none: @!kill@ means "stop this thread of work", notes
+-- included, and quietly reviving them would surprise whoever killed it.
+endDispatch :: TaskRegistry -> TaskId -> IO [Note]
+endDispatch reg tid = atomically $ do
+  (n, m) <- readTVar reg.trState
+  writeTVar reg.trState (n, Map.delete tid m)
+  case Map.lookup tid m of
+    Nothing -> pure []
+    Just e -> do
+      killed <- readTVar e.teKilled
+      if killed then pure [] else readTVar e.teInbox
 
 -- | The agent loop takes ownership of the entry 'beginDispatch' opened
 -- for it, identified by the trigger it was given.  Supplies the cancel
@@ -284,19 +311,30 @@ attachTask reg gid uid mTrigger kind cancel = do
 -- dispatch's own @finally@ calls 'endDispatch' for that one, and
 -- deleting it here would drop the entry while the shutdown slot and
 -- the reaction cleanup still believe it exists.
+-- | (Unserved notes from a self-owned entry are dropped: a standalone
+-- 'Max.Effects.Agent.agentTurn' has no dispatch epilogue to hand them
+-- to.)
 releaseTask :: TaskRegistry -> TaskHandle -> IO ()
 releaseTask reg h
-  | h.thOwned = endDispatch reg h.thId
+  | h.thOwned = () <$ endDispatch reg h.thId
   | otherwise = pure ()
 
 --------------------------------------------------------------------------------
 -- Operations
 
-drainInbox :: TaskHandle -> IO [Text]
+drainInbox :: TaskHandle -> IO [Note]
 drainInbox h = atomically $ do
   xs <- readTVar h.thInbox
   writeTVar h.thInbox []
   pure xs
+
+-- | Put drained notes back (at the front, preserving order).  For the
+-- loop discovering it can no longer answer them — the invariant is
+-- that a note leaves the inbox only by entering the conversation, so
+-- what the loop can't consume must go back for 'endDispatch' to
+-- surface.
+requeueInbox :: TaskHandle -> [Note] -> IO ()
+requeueInbox h xs = atomically $ modifyTVar' h.thInbox (xs <>)
 
 -- | Append a note to the turn triggered by @mid@ — or to the turn that
 -- swallowed @mid@ as a supplement, so replying to your own absorbed
@@ -305,7 +343,7 @@ drainInbox h = atomically $ do
 -- 'Nothing' means no live turn owns that message; callers fall back to
 -- 'pushToLatest' rather than reporting an error, because a @!feedback@
 -- that refuses to land leaves the note in nobody's context at all.
-pushToTrigger :: TaskRegistry -> GroupId -> Maybe TaskId -> Maybe Int64 -> Int64 -> Text -> IO (Maybe TaskId)
+pushToTrigger :: TaskRegistry -> GroupId -> Maybe TaskId -> Maybe Int64 -> Int64 -> Note -> IO (Maybe TaskId)
 pushToTrigger reg gid except absorb mid note = atomically $ do
   (_, m) <- readTVar reg.trState
   let mine =
@@ -340,7 +378,7 @@ pushToTrigger reg gid except absorb mid note = atomically $ do
 -- unanswered question.
 --
 -- 'Nothing' means the group has no other turn running.
-pushToLatest :: TaskRegistry -> GroupId -> Maybe TaskId -> Maybe Int64 -> Text -> IO (Maybe TaskId)
+pushToLatest :: TaskRegistry -> GroupId -> Maybe TaskId -> Maybe Int64 -> Note -> IO (Maybe TaskId)
 pushToLatest reg gid except absorb note = atomically $ do
   (_, m) <- readTVar reg.trState
   let mine =

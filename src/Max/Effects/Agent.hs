@@ -83,7 +83,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Message (MessageKind (..), insertOutbound)
 import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
-import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask)
+import Max.Tasks (Note (..), TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask, requeueInbox)
 import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
 import Max.Reply (chunkSource, planReply, readyPrefix)
 import Max.ReplySend (chunkDelayMicros, modelTextSegs)
@@ -336,11 +336,14 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
                   -- Re-answering is only free while nothing has been
                   -- said.  Once streaming has put part of this draft in
                   -- the group, looping would leave half an abandoned
-                  -- answer standing above its replacement — worse than
-                  -- losing the note, which at least the sender can
-                  -- repeat.
+                  -- answer standing above its replacement — so the notes
+                  -- go back to the inbox instead: a note leaves it only
+                  -- by entering the conversation, and what stays behind
+                  -- surfaces at 'Max.Tasks.endDispatch' for the dispatch
+                  -- epilogue to re-dispatch or formally drop.
                   | not (T.null sent) -> do
-                      logAttention "agent: feedback lost to an already-streamed answer" $
+                      liftIO (requeueInbox h xs)
+                      logInfo "agent: feedback raced a streamed answer, returned to inbox" $
                         object ["count" .= length xs, "sent_chars" .= T.length sent]
                       done
                   | otherwise -> do
@@ -521,8 +524,8 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     -- Notes that arrived mid-turn, from !feedback or from a message the
     -- classifier read as steering.  Marked so the model can tell them
     -- from the original request without being told twice.
-    feedbackMsg :: [Text] -> ChatMessage
-    feedbackMsg xs = MsgUser ("[feedback]: " <> T.intercalate " | " xs)
+    feedbackMsg :: [Note] -> ChatMessage
+    feedbackMsg xs = MsgUser ("[feedback]: " <> T.intercalate " | " (map (.noteLine) xs))
 
     silentTools :: [Text]
     silentTools = ["send_image_from_sandbox", "send_file_from_sandbox"]

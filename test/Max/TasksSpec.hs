@@ -13,7 +13,8 @@ module Max.TasksSpec (spec) where
 import Control.Concurrent (threadDelay)
 import Data.Set qualified as Set
 import Max.Tasks
-  ( TaskHandle (..),
+  ( Note (..),
+    TaskHandle (..),
     TaskInfo (..),
     absorbedTriggers,
     attachTask,
@@ -26,6 +27,7 @@ import Max.Tasks
     newTaskRegistry,
     pushToLatest,
     pushToTrigger,
+    requeueInbox,
   )
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
@@ -44,13 +46,13 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (MessageId 7001))
       h <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
-      landed <- pushToLatest reg gid Nothing Nothing "我也问一句"
+      landed <- pushToLatest reg gid Nothing Nothing (Note "我也问一句" Nothing)
       notes <- drainInbox h
-      (landed, notes) `shouldBe` (Just h.thId, ["我也问一句"])
+      (landed, map (.noteLine) notes) `shouldBe` (Just h.thId, ["我也问一句"])
 
     it "returns Nothing when the group has nothing running" $ do
       reg <- newTaskRegistry
-      landed <- pushToLatest reg gid Nothing Nothing "喂"
+      landed <- pushToLatest reg gid Nothing Nothing (Note "喂" Nothing)
       landed `shouldBe` Nothing
 
     it "picks the newest turn when several are running" $ do
@@ -62,10 +64,10 @@ spec = describe "Max.Tasks" $ do
       threadDelay 2000
       _ <- beginDispatch reg gid bob (Just (MessageId 7002))
       h2 <- attachTask reg gid bob (Just (MessageId 7002)) "llm" (pure ())
-      _ <- pushToLatest reg gid Nothing Nothing "给第二个"
+      _ <- pushToLatest reg gid Nothing Nothing (Note "给第二个" Nothing)
       n1 <- drainInbox h1
       n2 <- drainInbox h2
-      (n1, n2) `shouldBe` ([], ["给第二个"])
+      (map (.noteLine) n1, map (.noteLine) n2) `shouldBe` ([], ["给第二个"])
 
     -- A dispatch asking "is anybody else working?" registered itself on
     -- the way in.  Without the exclusion it would inject into its own
@@ -73,13 +75,13 @@ spec = describe "Max.Tasks" $ do
     it "skips the caller's own entry" $ do
       reg <- newTaskRegistry
       mine <- beginDispatch reg gid alice (Just (MessageId 7001))
-      landed <- pushToLatest reg gid (Just mine) Nothing "别给我自己"
+      landed <- pushToLatest reg gid (Just mine) Nothing (Note "别给我自己" Nothing)
       landed `shouldBe` Nothing
 
     it "keeps groups apart" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg (GroupId 999) alice (Just (MessageId 7001))
-      landed <- pushToLatest reg gid Nothing Nothing "喂"
+      landed <- pushToLatest reg gid Nothing Nothing (Note "喂" Nothing)
       landed `shouldBe` Nothing
 
   describe "pushToTrigger" $ do
@@ -90,10 +92,10 @@ spec = describe "Max.Tasks" $ do
       threadDelay 2000
       _ <- beginDispatch reg gid bob (Just (MessageId 7002))
       h2 <- attachTask reg gid bob (Just (MessageId 7002)) "llm" (pure ())
-      landed <- pushToTrigger reg gid Nothing Nothing 7001 "给第一个"
+      landed <- pushToTrigger reg gid Nothing Nothing 7001 (Note "给第一个" Nothing)
       n1 <- drainInbox h1
       n2 <- drainInbox h2
-      (landed, n1, n2) `shouldBe` (Just h1.thId, ["给第一个"], [])
+      (landed, map (.noteLine) n1, map (.noteLine) n2) `shouldBe` (Just h1.thId, ["给第一个"], [])
 
     -- Replying to your own message after it got swallowed as a
     -- supplement should still reach the turn now carrying it.
@@ -101,11 +103,11 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (MessageId 7001))
       h <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
-      _ <- pushToLatest reg gid Nothing (Just 7002) "[#7002] bob: 顺便"
+      _ <- pushToLatest reg gid Nothing (Just 7002) (Note "[#7002] bob: 顺便" Nothing)
       _ <- drainInbox h
-      landed <- pushToTrigger reg gid Nothing Nothing 7002 "再补一句"
+      landed <- pushToTrigger reg gid Nothing Nothing 7002 (Note "再补一句" Nothing)
       notes <- drainInbox h
-      (landed, notes) `shouldBe` (Just h.thId, ["再补一句"])
+      (landed, map (.noteLine) notes) `shouldBe` (Just h.thId, ["再补一句"])
 
     -- A !feedback message records as chat (verb stripped), so it is a
     -- visible question whose answer is threaded at somebody else's
@@ -115,7 +117,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (MessageId 7001))
       _ <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
-      landed <- pushToTrigger reg gid Nothing (Just 7050) 7001 "改成 B 方案"
+      landed <- pushToTrigger reg gid Nothing (Just 7050) 7001 (Note "改成 B 方案" Nothing)
       inflight <- inFlightTriggers reg gid
       landed `shouldSatisfy` (/= Nothing)
       inflight `shouldBe` Set.fromList [7001, 7050]
@@ -126,7 +128,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (MessageId 7001))
       _ <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
-      landed <- pushToTrigger reg gid Nothing Nothing 9999 "点错了"
+      landed <- pushToTrigger reg gid Nothing Nothing 9999 (Note "点错了" Nothing)
       landed `shouldBe` Nothing
 
   describe "dispatch tracking" $ do
@@ -183,7 +185,7 @@ spec = describe "Max.Tasks" $ do
     it "lists a turn's absorbed messages until the turn ends" $ do
       reg <- newTaskRegistry
       tid <- beginDispatch reg gid alice (Just (MessageId 7001))
-      _ <- pushToLatest reg gid Nothing (Just 7002) "[#7002] bob: 顺便"
+      _ <- pushToLatest reg gid Nothing (Just 7002) (Note "[#7002] bob: 顺便" Nothing)
       before <- absorbedTriggers reg tid
       endDispatch reg tid
       after <- absorbedTriggers reg tid
@@ -194,10 +196,52 @@ spec = describe "Max.Tasks" $ do
       _ <- beginDispatch reg gid alice (Just (MessageId 7001))
       _ <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
       absorbed <- beginDispatch reg gid bob (Just (MessageId 7002))
-      _ <- pushToLatest reg gid (Just absorbed) (Just 7002) "[#7002] bob: 顺便"
+      _ <- pushToLatest reg gid (Just absorbed) (Just 7002) (Note "[#7002] bob: 顺便" Nothing)
       endDispatch reg absorbed
       inflight <- inFlightTriggers reg gid
       inflight `shouldBe` Set.fromList [7001, 7002]
+
+  -- The invariant behind the unserved-note recovery: a note leaves
+  -- the inbox only by entering the conversation; what stays behind
+  -- surfaces exactly once, at endDispatch — unless the turn was
+  -- killed, in which case the notes die with it by contract.
+  describe "unserved notes" $ do
+    it "endDispatch returns what nobody drained" $ do
+      reg <- newTaskRegistry
+      tid <- beginDispatch reg gid alice (Just (MessageId 7001))
+      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing)
+      notes <- endDispatch reg tid
+      map (.noteLine) notes `shouldBe` ["改成 B"]
+
+    it "returns nothing when the loop drained everything" $ do
+      reg <- newTaskRegistry
+      tid <- beginDispatch reg gid alice (Just (MessageId 7001))
+      h <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
+      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing)
+      _ <- drainInbox h
+      notes <- endDispatch reg tid
+      map (.noteLine) notes `shouldBe` []
+
+    it "a killed turn takes its notes with it" $ do
+      reg <- newTaskRegistry
+      tid <- beginDispatch reg gid alice (Just (MessageId 7001))
+      _ <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
+      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing)
+      _ <- cancelTask reg tid
+      notes <- endDispatch reg tid
+      map (.noteLine) notes `shouldBe` []
+
+    it "requeued notes keep their order, ahead of later arrivals" $ do
+      reg <- newTaskRegistry
+      _ <- beginDispatch reg gid alice (Just (MessageId 7001))
+      h <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
+      _ <- pushToLatest reg gid Nothing Nothing (Note "一" Nothing)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "二" Nothing)
+      drained <- drainInbox h
+      _ <- pushToLatest reg gid Nothing Nothing (Note "三" Nothing)
+      requeueInbox h drained
+      notes <- drainInbox h
+      map (.noteLine) notes `shouldBe` ["一", "二", "三"]
 
   describe "attachTask" $ do
     it "adopts the entry beginDispatch opened instead of adding one" $ do
@@ -214,10 +258,10 @@ spec = describe "Max.Tasks" $ do
     it "inherits notes pushed before the loop existed" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (MessageId 7001))
-      _ <- pushToLatest reg gid Nothing Nothing "等一下，改成 B"
+      _ <- pushToLatest reg gid Nothing Nothing (Note "等一下，改成 B" Nothing)
       h <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
       notes <- drainInbox h
-      notes `shouldBe` ["等一下，改成 B"]
+      map (.noteLine) notes `shouldBe` ["等一下，改成 B"]
 
     -- !kill during the prologue has no thread to interrupt yet.  The
     -- registry accepts it (telling the user the truth) and hands it to

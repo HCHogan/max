@@ -261,12 +261,28 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
       throttle <- liftIO (Map.lookup gid <$> readTVarIO st.isThrottle)
       -- Classify unless the feature is off for the group or even the
       -- least-throttled kind couldn't fire (hourly cap exhausted) —
-      -- the kind-specific check happens on the verdict below.
+      -- the kind-specific check happens on the verdict below.  The
+      -- cap-block logs: it is rare, temporary, and looks exactly like
+      -- a dead classifier from the outside (a production debugging
+      -- session started from this very silence).  The feature-off and
+      -- chatter-lane drops stay silent — those fire constantly and
+      -- are working as configured.
+      let enabled = fromMaybe True s.proactiveOverride
+          capped = not (throttleAllows cfg now KindCalled throttle)
       gated <-
-        if fromMaybe True s.proactiveOverride
-          && throttleAllows cfg now KindCalled throttle
-          then liftIO (passesGate st gid now batch)
-          else pure False
+        if not enabled
+          then pure False
+          else
+            if capped
+              then do
+                logInfo "intent: gate throttled" $
+                  object
+                    [ "group_id" .= gid,
+                      "batch" .= length batch,
+                      "reason" .= ("hourly cap" :: Text)
+                    ]
+                pure False
+              else liftIO (passesGate st gid now batch)
       when gated $ do
         let UserId selfId' = gm.selfId
             batchIds = Set.fromList [m | b <- batch, let MessageId m = b.messageId]

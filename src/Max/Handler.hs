@@ -51,7 +51,7 @@ import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberNa
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
-import Max.Tasks (TaskCancelled (..), TaskId (..), TaskInfo (..), absorbedTriggers, beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
+import Max.Tasks (Note (..), TaskCancelled (..), TaskId (..), TaskInfo (..), absorbedTriggers, beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
 import Max.Reply (stripHallucinatedTokens)
 import Max.ReplySend (ReplyTarget (..), canStream, freshBudget, sendAndPersistReply)
 import Max.Util (catchSync, trySync)
@@ -326,7 +326,7 @@ onPoke mIntent pk
       -- a dispatch of its own.
       landed <-
         liftIO $
-          pushToLatest env.beTasks pk.pkGroupId Nothing Nothing (pokerName <> " 戳了戳你")
+          pushToLatest env.beTasks pk.pkGroupId Nothing Nothing (Note (pokerName <> " 戳了戳你") Nothing)
       case landed of
         Just (TaskId into) ->
           logInfo "poke: injected into running task" $
@@ -444,12 +444,20 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               -- to the DM, and aiming it at the target group's turns
               -- could only ever miss.
               redirected = targetGid /= gm.groupId
+              -- The source is the same stripped shape the
+              -- nothing-running fallback below dispatches — a turn
+              -- that dies without serving the note falls back to
+              -- exactly that.  Not under a redirect: a DM turn isn't
+              -- the group task that was being steered.
+              note =
+                Note line $
+                  if redirected then Nothing else Just (gm {message = stripVerb gm.message})
           aimed <- case replyTarget of
-            Just tgt | not redirected -> liftIO (pushToTrigger env.beTasks targetGid Nothing absorb tgt line)
+            Just tgt | not redirected -> liftIO (pushToTrigger env.beTasks targetGid Nothing absorb tgt note)
             _ -> pure Nothing
           landed <- case aimed of
             Just _ -> pure aimed
-            Nothing -> liftIO (pushToLatest env.beTasks targetGid Nothing absorb line)
+            Nothing -> liftIO (pushToLatest env.beTasks targetGid Nothing absorb note)
           case landed of
             Just (TaskId into) -> do
               logInfo "feedback: explicit note" $
@@ -654,11 +662,32 @@ dispatchLLM mIntent origin absorbable companions gm = do
             -- slot.  A mid that never had the reaction un-reacts as a
             -- no-op.
             absorbed <- liftIO (absorbedTriggers env.beTasks tid)
-            liftIO $ do
+            unserved <- liftIO $ do
               leaveDispatch env.beShutdown
               endDispatch env.beTasks tid
             for_ absorbed $ \m ->
               sendAction (SetMsgEmojiLike (MessageId m) processingFaceId False)
+            -- Notes this turn accepted but never answered ('endDispatch'
+            -- returns none for a killed turn — !kill drops them by
+            -- contract).  Ones that ARE a message get a turn of their
+            -- own: the streamed answer they raced is in the transcript
+            -- by now, so the fresh turn sees both it and them.
+            -- NeverAbsorb — absorption already failed this note once.
+            -- Origin re-derived from the message itself, because an
+            -- un-@'d supplement still deserves the option of [silence];
+            -- sourceless notes (pokes) have nothing left to say.
+            let (revivable, dead) = partition (isJust . (.noteSource)) unserved
+            unless (null dead) $
+              logAttention "dispatch: unserved notes dropped" $
+                object ["count" .= length dead]
+            for_ [src | n <- revivable, Just src <- [n.noteSource]] $ \src -> do
+              let orig
+                    | isPrivateChat src.groupId || mentionsUser src.selfId src.message = OriginDirect
+                    | otherwise = OriginProactive
+                  MessageId srcMid = src.messageId
+              logInfo "dispatch: unserved note re-dispatched" $
+                object ["message_id" .= srcMid]
+              dispatchLLM mIntent orig NeverAbsorb [] src
   where
     work tid = do
       env :: BotEnv <- ask
@@ -751,14 +780,19 @@ dispatchLLM mIntent origin absorbable companions gm = do
                   -- takes it: ours is about to exit and unmark it, and
                   -- a question that looks unanswered gets answered
                   -- again by the next dispatch.
+                  -- The note carries the swallowed message itself: if
+                  -- the absorbing turn dies without serving it, the
+                  -- dispatch epilogue re-dispatches it as the turn it
+                  -- would have been.
+                  let note = Note newLine (Just gm)
                   aimed <- case listToMaybe [m | SegReply (MessageId m) <- gm.message] of
                     Just tgt ->
-                      liftIO (pushToTrigger env.beTasks gm.groupId (Just tid) (Just midRaw) tgt newLine)
+                      liftIO (pushToTrigger env.beTasks gm.groupId (Just tid) (Just midRaw) tgt note)
                     Nothing -> pure Nothing
                   landed <- case aimed of
                     Just _ -> pure aimed
                     Nothing ->
-                      liftIO (pushToLatest env.beTasks gm.groupId (Just tid) (Just midRaw) newLine)
+                      liftIO (pushToLatest env.beTasks gm.groupId (Just tid) (Just midRaw) note)
                   for_ landed $ \(TaskId into) -> do
                     logInfo "feedback: implicit injection" $
                       object
