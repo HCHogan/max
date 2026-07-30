@@ -23,6 +23,7 @@ import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
 import Max.Embedding (EmbedClient)
 import Max.Intent (IntentConfig)
+import Max.MemoryExtract (MemxScheduler)
 import Max.Reminder (ReminderScheduler)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
@@ -78,8 +79,12 @@ data BotEnv = BotEnv
     -- | Web-search backend when configured ('Nothing' = the
     -- @web_search@ tool isn't registered).
     beSearch :: !(Maybe SearchConfig),
-    -- | Profile for post-dispatch memory extraction ('Nothing' = off).
+    -- | Profile for episode memory extraction ('Nothing' = off).
     beMemoryExtract :: !(Maybe Text),
+    -- | The extraction scheduler, present iff 'beMemoryExtract' is:
+    -- dispatches arm its idle timer, incoming messages push it back
+    -- ("Max.MemoryExtract").
+    beMemx :: !(Maybe MemxScheduler),
     -- | Proactive-trigger intent config ('Nothing' = feature off).
     -- Dispatch itself lives in the intent worker; this handle is for
     -- the @!proactive@ command's status display.

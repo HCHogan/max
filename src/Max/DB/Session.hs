@@ -47,13 +47,15 @@ data Row = Row
     rDebugOverride :: !(Maybe Bool),
     rStickerOverride :: !(Maybe Bool),
     rProactiveOverride :: !(Maybe Bool),
-    rContextAnchor :: !(Maybe UTCTime)
+    rContextAnchor :: !(Maybe UTCTime),
+    rMemxAnchor :: !(Maybe UTCTime)
   }
 
 instance FromRow Row where
   fromRow =
     Row
       <$> field
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -73,7 +75,7 @@ fetchOrInit ::
 fetchOrInit (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor \
+      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor \
       \  FROM sessions \
       \  WHERE group_id = ?"
       (Only gid)
@@ -90,7 +92,8 @@ fetchOrInit (GroupId gid) defaultModel = do
                 debugOverride = Nothing,
                 stickerOverride = Nothing,
                 proactiveOverride = Nothing,
-                contextAnchor = Nothing
+                contextAnchor = Nothing,
+                memxAnchor = Nothing
               }
       upsertSession initial
       pure initial
@@ -103,7 +106,7 @@ listSessions :: (WithConnection :> es, IOE :> es) => Text -> Eff es [Session]
 listSessions defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor \
+      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor \
       \  FROM sessions ORDER BY group_id"
       ()
   pure (map (rowToSession defaultModel) (rows :: [Row]))
@@ -115,8 +118,8 @@ upsertSession s = do
       pin = Jsonb (toJSON s.pinned)
   void $
     execute
-      "INSERT INTO sessions (group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor) \
-      \ VALUES (?,?,?,?,?,?,?,?,?) \
+      "INSERT INTO sessions (group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor) \
+      \ VALUES (?,?,?,?,?,?,?,?,?,?) \
       \ ON CONFLICT (group_id) DO UPDATE SET \
       \   model              = EXCLUDED.model, \
       \   persona            = EXCLUDED.persona, \
@@ -126,8 +129,9 @@ upsertSession s = do
       \   sticker_override   = EXCLUDED.sticker_override, \
       \   proactive_override = EXCLUDED.proactive_override, \
       \   context_anchor     = EXCLUDED.context_anchor, \
+      \   memx_anchor        = EXCLUDED.memx_anchor, \
       \   updated_at         = now()"
-      ((gid, s.model, s.persona, s.clearedAt, pin) :. (s.debugOverride, s.stickerOverride, s.proactiveOverride, s.contextAnchor))
+      ((gid, s.model, s.persona, s.clearedAt, pin) :. (s.debugOverride, s.stickerOverride, s.proactiveOverride, s.contextAnchor, s.memxAnchor))
 
 --------------------------------------------------------------------------------
 
@@ -144,7 +148,8 @@ rowToSession defaultModel r =
       debugOverride = r.rDebugOverride,
       stickerOverride = r.rStickerOverride,
       proactiveOverride = r.rProactiveOverride,
-      contextAnchor = r.rContextAnchor
+      contextAnchor = r.rContextAnchor,
+      memxAnchor = r.rMemxAnchor
     }
   where
     -- Tolerate junk in jsonb columns (e.g. older shape we don't know

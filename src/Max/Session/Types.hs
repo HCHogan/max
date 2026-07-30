@@ -54,6 +54,11 @@ data Session = Session
     -- whenever @intent.profile@ is configured).  When effective
     -- proactive mode is on, the intent classifier may trigger the bot
     -- on messages that neither @-mention nor quote it.
-    proactiveOverride :: !(Maybe Bool)
+    proactiveOverride :: !(Maybe Bool),
+    -- | Memory-extraction watermark: chat up to this instant has been
+    -- through (or deliberately skipped by) the episode extractor
+    -- ("Max.MemoryExtract").  Bookkeeping like 'contextAnchor', not a
+    -- user decision.  'Nothing' = never extracted.
+    memxAnchor :: !(Maybe UTCTime)
   }
   deriving stock (Show)

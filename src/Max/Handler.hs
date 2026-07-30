@@ -42,7 +42,7 @@ import Max.Env (BotEnv (..))
 import Max.Faces (faceIdByName)
 import Max.FetchQueue (FetchSignal)
 import Max.Files (enqueueFiles)
-import Max.MemoryExtract (extractMemories)
+import Max.MemoryExtract (armMemx, bumpMemx)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
@@ -251,6 +251,12 @@ onGroupMessage mIntent gm = do
         "user_id" .= fromRaw,
         "text" .= renderPlainText gm.message
       ]
+  -- Group traffic pushes the episode-extraction idle timer back: the
+  -- conversation is still going, so the episode isn't over.  A no-op
+  -- for unarmed groups (cheap STM read).
+  do
+    env :: BotEnv <- ask
+    for_ env.beMemx $ \ms -> liftIO (bumpMemx ms gm.groupId)
   -- Cheap pure pass first; only when it says "not addressed" AND the
   -- message quotes something do we pay a PK lookup to see whether
   -- the quoted message was ours (reply-to-bot counts as addressing).
@@ -887,9 +893,9 @@ dispatchLLM mIntent origin absorbable companions gm = do
           when (origin == OriginDirect) $ do
             sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
             sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
-        Just replyRaw -> handleReply env s mentionable rosterNames streamBudget ctx result replyRaw
+        Just replyRaw -> handleReply env s mentionable rosterNames streamBudget result replyRaw
 
-    handleReply env s mentionable rosterNames streamBudget ctx result replyRaw = do
+    handleReply env s mentionable rosterNames streamBudget result replyRaw = do
       -- Real stickers/images are the [sticker#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
       -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
@@ -964,14 +970,12 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "appended" .= length result.appended,
                 "aborted" .= result.aborted
               ]
-          -- Post-reply memory extraction: the user already has their
-          -- answer, so this costs them nothing.  A crashed extraction
-          -- only logs.
-          for_ env.beMemoryExtract $ \prof ->
-            extractMemories prof env.beEmbed gm (ctx <> result.appended)
-              `catchSync` \e ->
-                logAttention "memx: crashed" $
-                  object ["error" .= T.pack (show e)]
+          -- Post-reply: arm the group's episode-extraction idle timer
+          -- ("Max.MemoryExtract").  Extraction itself runs once the
+          -- conversation goes quiet, reading the whole arc at once —
+          -- per-dispatch extraction fragmented one conversation into
+          -- overlapping half-memories.
+          for_ env.beMemx $ \ms -> liftIO (armMemx ms gm.groupId)
 
 --------------------------------------------------------------------------------
 -- Reply helper.

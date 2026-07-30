@@ -57,6 +57,7 @@ import Max.Session (newSessionRegistry)
 import Max.Shutdown (ShutdownState, beginDrain, drainWorker, newShutdownState)
 import Max.Skills (loadSkills, newSkillRegistry)
 import Max.MediaCaption (mediaCaptionWorker)
+import Max.MemoryExtract (dreamWorker, memxWorker, newMemxScheduler)
 import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
 import Max.Toolset (allToolsFor)
@@ -110,6 +111,7 @@ main = do
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
           mEmbed <- traverse newEmbedClient cfg.embedding
+          memxSched <- traverse (const newMemxScheduler) cfg.memoryExtractProfile
           mIntentSt <- traverse (const newIntentState) cfg.intent
           startedAt <- getCurrentTime
           let env =
@@ -134,6 +136,7 @@ main = do
                     beReminders = reminders,
                     beSearch = cfg.search,
                     beMemoryExtract = cfg.memoryExtractProfile,
+                    beMemx = memxSched,
                     beIntent = cfg.intent,
                     beEmbed = mEmbed
                   }
@@ -272,6 +275,10 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
             (stickerCaptionWorker p cfg.imagesDir)
             (mediaCaptionWorker p cfg.imagesDir),
         reminderWorker cfg.timezone env.beReminders,
+        for_ ((,) <$> cfg.memoryExtractProfile <*> env.beMemx) $ \(prof, ms) ->
+          memxWorker prof env.beEmbed cfg.timezone env.beSessions cfg.llm.defaultName ms,
+        for_ cfg.memoryExtractProfile $ \prof ->
+          dreamWorker prof cfg.timezone,
         for_ ((,) <$> cfg.intent <*> mIntentSt) $ \(ic, st) ->
           intentWorker ic cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions (dispatchProactive (Just st)) st,
         handleEvents eventQ fetchSig mIntentSt,

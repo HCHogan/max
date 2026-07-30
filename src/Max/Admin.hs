@@ -587,7 +587,8 @@ sessionJson s =
       "debug" .= s.debugOverride,
       "sticker" .= s.stickerOverride,
       "proactive" .= s.proactiveOverride,
-      "context_anchor" .= s.contextAnchor
+      "context_anchor" .= s.contextAnchor,
+      "memx_anchor" .= s.memxAnchor
     ]
 
 memoryJson :: Maybe Int64 -> MemoryItem -> Value

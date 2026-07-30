@@ -106,7 +106,8 @@ emptySession =
       pinned = [],
       debugOverride = Nothing,
       stickerOverride = Nothing,
-      proactiveOverride = Nothing
+      proactiveOverride = Nothing,
+      memxAnchor = Nothing
     }
 
 baseInputs :: PromptInputs
