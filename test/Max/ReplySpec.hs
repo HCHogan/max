@@ -100,8 +100,25 @@ spec = do
     it "strips surrounding whitespace per chunk" $
       planTexts "  a  [split]\n\n b \n\n" `shouldBe` ["a", "b"]
 
-    it "empty input yields one empty chunk (caller's concern)" $
-      planTexts "" `shouldBe` [("" :: Text)]
+    it "plans nothing out of nothing" $ do
+      planTexts "" `shouldBe` []
+      planTexts "  \n\n " `shouldBe` []
+
+    -- The v0.9.1 leak, one layer down.  Streaming releases up to the
+    -- last blank line, so "…\n\n[split]" hands the final send exactly
+    -- "[split]" — and the planner's old empty-plan fallback handed that
+    -- body straight back as a chunk, which went out as a message
+    -- reading "[split]" and nothing else (production, 7 of them).
+    it "plans a body of nothing but markers to nothing" $ do
+      planTexts "[split]" `shouldBe` []
+      planTexts "\n\n[split]" `shouldBe` []
+      planTexts "[split][split]" `shouldBe` []
+
+    -- What streaming actually hands the two senders, in order.
+    it "drops the marker whichever side of the stream boundary it lands on" $ do
+      let (safe, held) = readyPrefix "手写完你们等到明年。\n\n[split]"
+      planTexts safe `shouldBe` ["手写完你们等到明年。"]
+      planTexts held `shouldBe` []
 
   describe "planReply / table carving" $ do
     it "carves a GFM table into its own TableChunk" $

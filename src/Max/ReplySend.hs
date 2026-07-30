@@ -42,6 +42,7 @@ module Max.ReplySend
     freshBudget,
     canStream,
     sendAndPersistReply,
+    modelTextSegs,
     messageImageSegs,
     chunkDelayMicros,
 
@@ -179,10 +180,9 @@ sendAndPersistReply ::
   T.Text ->
   Eff es SendBudget
 sendAndPersistReply rt budget body
-  -- 'planReply' answers a blank body with one blank chunk, which would
-  -- go out as an empty QQ message and spend a slot of the budget.  That
-  -- was unreachable while a reply arrived whole; streaming makes it
-  -- routine, because a reply released down to its last paragraph leaves
+  -- Nothing left to say.  'planReply' plans this to no chunks on its
+  -- own, so the guard is belt-and-braces — but the case is routine, not
+  -- exotic: a streamed reply released down to its last paragraph leaves
   -- exactly nothing for the final send.
   | T.null (T.strip body) = pure budget
   | otherwise = foldM sendOne budget' (zip [0 :: Int ..] chunks)
@@ -290,6 +290,53 @@ sendAndPersistReply rt budget body
     mentionSegs t
       | isPrivateChat rt.rtGroupId = [SegText t]
       | otherwise = segmentMentions (\u -> maybe True (Set.member u) rt.rtMentionable) t
+
+-- | Model-authored text → the segments of __one__ message, for the
+-- senders that build their message inline instead of going through
+-- 'sendAndPersistReply': progress narration
+-- ('Max.Effects.Agent.narrationSegments'), and the caption a tool posts
+-- alongside an image.
+--
+-- Every such sender is a place the placeholder handling can drift out
+-- of, and every one of them has: narration leaked @[↩#111091811]@ into
+-- a group, then @send_image_from_sandbox@'s caption leaked
+-- @[↩#493645310]@ into another, months apart, for the same reason both
+-- times.  The text arrives carrying the same tokens a reply does
+-- because the format guide is written once, for all of it.
+--
+-- The quote target comes back separately from the body because the
+-- callers disagree about an empty body: narration with nothing left to
+-- say sends nothing at all, while a caption rides with an image that
+-- goes out either way, so its quote still counts.
+--
+-- Sticker and image placeholders are dropped rather than resolved —
+-- either needs a DB round-trip apiece and neither sender is worth one.
+-- Dropping loses something invisible; leaking the raw token is the bug
+-- this exists to prevent.  Faces are pure, so they survive.
+--
+-- Note this handles /tokens/, not /chunking/: @[split]@ is
+-- 'planReply''s job, and a caller that can only send one message has to
+-- decide what to do with it before calling here.
+modelTextSegs ::
+  -- | Private chat?  NapCat renders private at-segments poorly, so
+  -- mentions stay as plain text there.
+  Bool ->
+  -- | Mentionable ids, as in 'rtMentionable' — 'Nothing' checks syntax
+  -- only rather than refusing to @ anyone.
+  Maybe (Set UserId) ->
+  T.Text ->
+  (Maybe MessageId, [Segment])
+modelTextSegs private mentionable raw =
+  (MessageId <$> mQuoted, trimEdgeSegs (concatMap piece pieces))
+  where
+    (mQuoted, pieces) = parseReplyTokens (T.strip raw)
+    piece = \case
+      PieceText t
+        | private -> [SegText t]
+        | otherwise -> segmentMentions (\u -> maybe True (Set.member u) mentionable) t
+      PieceFace fid -> [SegFace fid Nothing]
+      PieceSticker _ -> []
+      PieceImage _ -> []
 
 -- | Fold everything past the remaining allowance into one last message,
 -- the same way 'Max.Reply.capChunks' does within a single call — loud

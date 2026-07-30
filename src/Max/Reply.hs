@@ -58,11 +58,23 @@ chunkSource = \case
   TextChunk t -> t
   TableChunk t -> t
 
+-- | Plan one blob of model-authored text into outgoing messages.
+--
+-- __Empty when nothing survives planning__ — a blank body, or one that
+-- was nothing but @[split]@ markers.  The second case is not
+-- hypothetical: streaming releases up to the last blank line, so a
+-- reply or narration ending in @"…\\n\\n[split]"@ hands the sender
+-- exactly @"[split]"@ as its remainder.  This used to fall back to
+-- @[TextChunk (T.strip body)]@ for an empty plan, which resurrected
+-- that marker verbatim and put it in the group as a message reading
+-- @[split]@ and nothing else — production did this seven times in the
+-- two days after v0.9.1 taught 'Max.Effects.Agent.sendNarration' to
+-- plan, because the planner it was pointed at handed the marker back.
+--
+-- "Nothing to send" is a real answer, and both callers already read
+-- @[]@ that way.
 planReply :: Text -> [Chunk]
-planReply body =
-  case capChunks (concatMap explode (splitTables body)) of
-    [] -> [TextChunk (T.strip body)]
-    cs -> cs
+planReply body = capChunks (concatMap explode (splitTables body))
   where
     explode (TableChunk t) = [TableChunk t]
     explode (TextChunk t) = map TextChunk (splitChunks (latexToUnicode t))

@@ -85,10 +85,9 @@ import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Tasks (TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask)
 import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
-import Data.Set qualified as Set
-import Max.Reply (ReplyPiece (..), chunkSource, parseReplyTokens, planReply, readyPrefix)
-import Max.ReplySend (chunkDelayMicros)
-import OneBot.Segment (Segment (SegFace, SegReply, SegText), segmentMentions, trimEdgeSegs)
+import Max.Reply (chunkSource, planReply, readyPrefix)
+import Max.ReplySend (chunkDelayMicros, modelTextSegs)
+import OneBot.Segment (Segment (SegReply, SegText))
 import OneBot.Types (GroupId (..), MessageId (..), UserId, isPrivateChat)
 
 -- | Per-dispatch context the agent loop hands to its tool factory.
@@ -638,40 +637,31 @@ agentTurn ::
   Eff es AgentResult
 agentTurn dc profile msgs emit = send (AgentTurn dc profile msgs emit)
 
--- | The segments one progress narration becomes.  Empty for blank
+-- | The segments one progress narration chunk becomes.  Empty for blank
 -- narration, which is most rounds.
 --
 -- Pure and top-level because this is where a real bug lived: narration
 -- is model-authored text and the format guide asks the model to quote
 -- what it is answering, so it arrives carrying the same placeholders a
 -- reply does — but only the reply path ran 'parseReplyTokens'.  A
--- literal @[↩#111091811]@ went out as visible text.
---
--- Stickers and image resends are dropped rather than rendered:
--- resolving either needs a DB round-trip apiece and a progress line is
--- the wrong place to spend one.  Dropping loses something invisible;
--- leaking the raw token is the bug being fixed.  Faces are pure, so
--- they survive.
+-- literal @[↩#111091811]@ went out as visible text.  The token handling
+-- now lives in 'modelTextSegs', shared with the other inline sender, so
+-- there is no copy left here to drift.
 narrationSegments :: DispatchContext -> Text -> [Segment]
 narrationSegments dc narration
-  | T.null stripped = []
-  | otherwise = quote <> trimEdgeSegs (concatMap piece pieces)
+  -- A chunk that is only a quote token has nothing to say.  The reply
+  -- path has always skipped that chunk; narration would have sent an
+  -- empty message wearing a quote, which is exactly what a paragraph
+  -- consisting of a lone @[↩#id]@ produces once streaming has released
+  -- everything above it.
+  | null body = []
+  | otherwise = quote <> body
   where
-    stripped = T.strip narration
-    (mQuoted, pieces) = parseReplyTokens stripped
+    (mQuoted, body) =
+      modelTextSegs (isPrivateChat dc.dcGroupId) dc.dcMentionable narration
     -- Quoted only when the model said what to quote.  Narration used to
     -- quote the trigger by default, which made it the last place that
     -- auto-quoted anything — the reply path stopped doing that once the
     -- model proved it quotes on its own, and there was no reason for
     -- the progress line to keep a rule its own reply had dropped.
-    quote = case mQuoted of
-      Just target -> [SegReply (MessageId target)]
-      Nothing -> []
-    piece = \case
-      PieceText t
-        | isPrivateChat dc.dcGroupId -> [SegText t]
-        | otherwise ->
-            segmentMentions (\u -> maybe True (Set.member u) dc.dcMentionable) t
-      PieceFace fid -> [SegFace fid Nothing]
-      PieceSticker _ -> []
-      PieceImage _ -> []
+    quote = [SegReply m | Just m <- [mQuoted]]

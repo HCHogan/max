@@ -92,3 +92,12 @@ spec = describe "narrationSegments" $ do
     dc <- ctx
     narrationSegments dc "看看 [↩#abc] 这个"
       `shouldBe` [SegText "看看 [↩#abc] 这个"]
+
+  -- Streaming releases up to the last blank line, so a narration ending
+  -- in "…\n\n[↩#999]" hands the tail sender a chunk that is only a
+  -- quote.  Sending it posts an empty message wearing a quote; the
+  -- reply path has always skipped a chunk that resolves to no content.
+  it "says nothing for a chunk that is only a quote token" $ do
+    dc <- ctx
+    narrationSegments dc "[↩#999]" `shouldBe` []
+    narrationSegments dc "[sticker#42]" `shouldBe` []

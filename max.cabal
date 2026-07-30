@@ -251,6 +251,7 @@ test-suite max-test
         Max.MemoryExtractSpec
         Max.PromptSpec
         Max.Sandbox.DockerSpec
+        Max.Tools.FilesSpec
         Max.WreqSpec
     build-depends:
         , aeson           >= 2.2  && < 2.4

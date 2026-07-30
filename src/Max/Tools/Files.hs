@@ -19,6 +19,9 @@
 --   docker-compose.yml.
 module Max.Tools.Files
   ( fileToolsFor,
+
+    -- * Exposed for tests
+    captionSegs,
   )
 where
 
@@ -41,6 +44,8 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.Effects.NapCat (NapCat, callAction, sendAction)
 import Max.Effects.Tools (Tool (..))
+import Max.Reply (chunkSource, planReply)
+import Max.ReplySend (modelTextSegs)
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
@@ -269,10 +274,7 @@ sendImageFromSandboxTool gid sandboxes =
                 Left err -> pure (Left err)
                 Right bytes -> do
                   let b64 = "base64://" <> TE.decodeUtf8 (B64.encode bytes)
-                      caption = case mCaption of
-                        Just c | not (T.null (T.strip c)) -> [SegText (T.strip c <> "\n")]
-                        _ -> []
-                      segs = caption <> [imageSeg b64]
+                      segs = captionSegs gid mCaption <> [imageSeg b64]
                   sendAction (sendChatMsg gid segs)
                   logInfo "image sent from sandbox" $
                     object
@@ -289,6 +291,38 @@ sendImageFromSandboxTool gid sandboxes =
   where
     parseArgs :: Object -> Parser (Text, Text, Maybe Text)
     parseArgs o = (,,) <$> o .: "sandbox_id" <*> o .: "path" <*> o .:? "caption"
+
+-- | The segments an image caption becomes, ahead of the image itself.
+--
+-- The caption is model-authored text, written under the same format
+-- guide as a reply, so it arrives carrying the same placeholders — and
+-- this was the last sender that never learned to read them.
+-- Production: @"[↩#493645310] 画好了，macOS belike：…"@ went to the
+-- group with the token visible, weeks after the reply and narration
+-- paths were both taught to consume it.  Pure and top-level for the
+-- same reason 'Max.Effects.Agent.narrationSegments' is: a sender with
+-- its own private idea of what model text means is how this keeps
+-- happening.
+--
+-- One message, so @[split]@ cannot be honoured the way it is elsewhere;
+-- plan the caption anyway and rejoin, which eats the markers instead of
+-- printing them.  The trailing newline keeps the caption off the image,
+-- as it always did.  Mentions are checked for syntax only — a tool has
+-- no roster to check membership against.  A caption that is nothing but
+-- a quote still quotes: unlike a narration line, the message it rides
+-- on is going out regardless.
+captionSegs :: GroupId -> Maybe Text -> [Segment]
+captionSegs _ Nothing = []
+captionSegs gid (Just c)
+  | null body = quote
+  | otherwise = quote <> body <> [SegText "\n"]
+  where
+    (mQuoted, body) =
+      modelTextSegs
+        (isPrivateChat gid)
+        Nothing
+        (T.intercalate "\n" (map chunkSource (planReply c)))
+    quote = [SegReply m | Just m <- [mQuoted]]
 
 -- | Stage a file from a container into a host temp file, read it,
 -- delete the temp.  Used for the base64-image path; bytes stay in
