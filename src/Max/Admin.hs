@@ -62,6 +62,7 @@ import Max.Log (parseLogLevel, renderLogLevel)
 import Max.LogBuffer (LogBuffer, LogEntry (..), LogQuery (..), queryLogs)
 import Max.LogBuffer qualified as LogBuffer
 import Max.Session (Session (..), loadSession, updateSession)
+import Max.Skills (NewSkill (..), Skill (..), createSkill, deleteSkill, listAllSkills, updateSkill)
 import Max.Tasks (TaskId (..), TaskInfo (..), cancelTask, listTasks)
 import Max.Util (trySync)
 import Network.HTTP.Types (Method, Status, hAuthorization, hCacheControl, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status500)
@@ -95,6 +96,10 @@ data Route
   | RSessionPatch !Int64
   | RMemoriesList
   | RMemoryDelete !Int64
+  | RSkillsList
+  | RSkillCreate
+  | RSkillPatch !Int64
+  | RSkillDelete !Int64
   | RGrantsList
   | RGrantCreate
   | RGrantDelete !Int64
@@ -118,6 +123,7 @@ route m path
       ["api", "overview"] -> Just ROverview
       ["api", "groups"] -> Just RGroups
       ["api", "memories"] -> Just RMemoriesList
+      ["api", "skills"] -> Just RSkillsList
       ["api", "permissions"] -> Just RGrantsList
       ["api", "tasks"] -> Just RTasksList
       ["api", "usage"] -> Just RUsage
@@ -137,14 +143,17 @@ route m path
       _ -> Nothing
   | m == methodPatch = case path of
       ["api", "groups", g, "session"] -> RSessionPatch <$> int g
+      ["api", "skills", i] -> RSkillPatch <$> int i
       _ -> Nothing
   | m == methodDelete = case path of
       ["api", "memories", i] -> RMemoryDelete <$> int i
+      ["api", "skills", i] -> RSkillDelete <$> int i
       ["api", "permissions", i] -> RGrantDelete <$> int i
       ["api", "tasks", t] | not (T.null t) -> Just (RTaskKill t)
       _ -> Nothing
   | m == methodPost = case path of
       ["api", "permissions"] -> Just RGrantCreate
+      ["api", "skills"] -> Just RSkillCreate
       _ -> Nothing
   | otherwise = Nothing
   where
@@ -316,6 +325,49 @@ handle env profiles logBuf r params body = case r of
   RMemoryDelete mid -> do
     gone <- deleteMemory mid
     pure (if gone then deleted else notFound)
+  -- ?group=<gid> narrows to what that group's dispatches can see
+  -- (global + own, before enabled-filtering/shadowing); without it,
+  -- every row.
+  RSkillsList -> do
+    skills <- liftIO (listAllSkills env.beSkills)
+    let wanted = case intParam "group" of
+          Nothing -> skills
+          Just g -> [s | s <- skills, maybe True (== g) s.skillGroup]
+    pure (ok (map skillJson wanted))
+  RSkillCreate ->
+    case A.eitherDecode body :: Either String PostSkill of
+      Left err -> pure (bad ("invalid json: " <> T.pack err))
+      Right ps -> do
+        res <-
+          createSkill
+            env.beSkills
+            NewSkill
+              { nsName = T.strip ps.psName,
+                nsGroup = ps.psGroup,
+                nsDescription = T.strip ps.psDescription,
+                nsBody = ps.psBody,
+                nsEnabled = ps.psEnabled,
+                -- NULL marks rows minted here rather than taught from
+                -- chat; same audit convention as grants' granted_by 0.
+                nsCreatedBy = Nothing
+              }
+        case res of
+          Left err -> pure (bad err)
+          Right s -> do
+            logInfo "admin: skill created" $ object ["id" .= s.skillId, "name" .= s.skillName]
+            pure (ok (skillJson s))
+  RSkillPatch sid ->
+    case A.eitherDecode body of
+      Left err -> pure (bad ("invalid json: " <> T.pack err))
+      Right (Object o) -> applySkillPatch env sid o
+      Right _ -> pure (bad "body must be a json object")
+  RSkillDelete sid -> do
+    gone <- deleteSkill env.beSkills sid
+    if gone
+      then do
+        logInfo "admin: skill deleted" $ object ["id" .= sid]
+        pure deleted
+      else pure notFound
   RGrantsList -> ok . map grantJson <$> listGrants
   RGrantCreate ->
     case A.eitherDecode body :: Either String PostGrant of
@@ -476,6 +528,49 @@ applySessionPatch env profiles gidRaw o =
       ("proactive", Null) -> Right (\s -> s {proactiveOverride = Nothing})
       (k, _) -> Left ("bad value for field: " <> k)
 
+-- | Apply a skill PATCH through the registry.  Same field semantics
+-- as the session patch: absent = untouched, @null@ = clear (only
+-- @group_id@ is clearable — that's "make it global"), value = set.
+-- Validation and duplicate-name rejection live in
+-- 'Max.Skills.updateSkill'.
+applySkillPatch ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  BotEnv ->
+  Int64 ->
+  A.Object ->
+  Eff es Response
+applySkillPatch env sid o =
+  case edits of
+    Left err -> pure (jsonResponse status400 (object ["error" .= err]))
+    Right [] -> pure (jsonResponse status400 (object ["error" .= ("no recognised fields" :: Text)]))
+    Right es ->
+      updateSkill env.beSkills sid (\s -> foldl (flip ($)) s es) >>= \case
+        Left "not found" -> pure (jsonResponse status404 (object ["error" .= ("not found" :: Text)]))
+        Left err -> pure (jsonResponse status400 (object ["error" .= err]))
+        Right s -> do
+          logInfo "admin: skill patched" $
+            object ["id" .= sid, "fields" .= map fst recognised]
+          pure (jsonResponse status200 (skillJson s))
+  where
+    recognised =
+      [ (k, v)
+      | (key, v) <- KM.toList o,
+        let k = Key.toText key,
+        k `elem` (["name", "group_id", "description", "body", "enabled"] :: [Text])
+      ]
+    edits :: Either Text [Skill -> Skill]
+    edits = traverse toEdit recognised
+    toEdit = \case
+      ("name", String n) -> Right (\s -> s {skillName = T.strip n})
+      ("group_id", v@(Number _)) -> case A.fromJSON v of
+        A.Success (g :: Int64) -> Right (\s -> s {skillGroup = Just g})
+        A.Error e -> Left ("bad value for field: group_id (" <> T.pack e <> ")")
+      ("group_id", Null) -> Right (\s -> s {skillGroup = Nothing})
+      ("description", String d) -> Right (\s -> s {skillDescription = T.strip d})
+      ("body", String b) -> Right (\s -> s {skillBody = b})
+      ("enabled", Bool b) -> Right (\s -> s {skillEnabled = b})
+      (k, _) -> Left ("bad value for field: " <> k)
+
 --------------------------------------------------------------------------------
 -- JSON shapes.
 
@@ -502,6 +597,23 @@ memoryJson sourceGroup m =
       "content" .= m.memContent,
       "updated_at" .= m.memUpdatedAt,
       "source_group_id" .= sourceGroup
+    ]
+
+skillJson :: Skill -> Value
+skillJson s =
+  object
+    [ "id" .= s.skillId,
+      -- Negative ids ship inside the binary (skills/*.md) and are
+      -- immutable through this API; a DB skill with the same name
+      -- overrides one.
+      "builtin" .= (s.skillId < 0),
+      "name" .= s.skillName,
+      "group_id" .= s.skillGroup,
+      "description" .= s.skillDescription,
+      "body" .= s.skillBody,
+      "enabled" .= s.skillEnabled,
+      "created_by" .= s.skillCreatedBy,
+      "updated_at" .= s.skillUpdatedAt
     ]
 
 grantJson :: GrantRow -> Value
@@ -546,6 +658,24 @@ taskJson ti =
       "started_at" .= ti.tiStartedAt,
       "pending_notes" .= ti.tiPending
     ]
+
+-- | Body of @POST /api/skills@.
+data PostSkill = PostSkill
+  { psName :: !Text,
+    psGroup :: !(Maybe Int64),
+    psDescription :: !Text,
+    psBody :: !Text,
+    psEnabled :: !Bool
+  }
+
+instance A.FromJSON PostSkill where
+  parseJSON = A.withObject "skill" $ \o ->
+    PostSkill
+      <$> o A..: "name"
+      <*> o A..:? "group_id"
+      <*> o A..: "description"
+      <*> o A..: "body"
+      <*> (fromMaybe True <$> o A..:? "enabled")
 
 -- | Body of @POST /api/permissions@.
 data PostGrant = PostGrant

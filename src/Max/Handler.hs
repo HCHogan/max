@@ -50,6 +50,7 @@ import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHi
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
+import Max.Skills (Skill (..), skillsForGroup)
 import Max.Tasks (TaskCancelled (..), TaskId (..), TaskInfo (..), absorbedTriggers, beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
 import Max.Reply (stripHallucinatedTokens)
 import Max.ReplySend (ReplyTarget (..), canStream, freshBudget, sendAndPersistReply)
@@ -784,6 +785,11 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- too (claimed just above) — drop it, it isn't history yet.
       let MessageId ownMid = gm.messageId
       inFlight <- Set.delete ownMid <$> liftIO (inFlightTriggers env.beTasks gm.groupId)
+      -- One registry snapshot serves both halves of the disclosure:
+      -- the index rendered into the system prompt and the dcSkills
+      -- gate that registers the use_skill tool reading the bodies.
+      skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
+      let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
       (ctx, movedAnchor) <-
         buildContext
           env.bePersona
@@ -795,6 +801,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           env.beBlobRoot
           env.beTimeZone
           brief
+          skillIndex
           inFlight
           s
           gm
@@ -811,7 +818,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff mentionable toolImgs
+          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff (not (null skills)) mentionable toolImgs
           target = sendTarget env gm mentionable rosterNames stickersEff
       -- The streaming sink.  It sends whole paragraphs the model has
       -- finished with, down the same path the final reply takes — the

@@ -66,7 +66,7 @@ spec pool = before_ (truncateAll pool) $
       insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "另一条"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       (msgs, _) <-
-        withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] Set.empty s trigger
+        withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("随便聊" `T.isInfixOf`)
       ub `shouldSatisfy` ("另一条" `T.isInfixOf`)
@@ -77,7 +77,7 @@ spec pool = before_ (truncateAll pool) $
       s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       let s = s0 {clearedAt = Just (timeAt 10)}
       withDb pool $ upsertSession s
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldNotSatisfy` ("旧" `T.isInfixOf`)
       ub `shouldSatisfy` ("新" `T.isInfixOf`)
@@ -86,7 +86,7 @@ spec pool = before_ (truncateAll pool) $
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 你好"
       insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "你好 Alice"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] [] Set.empty s trigger
       -- The whole conversation is [system, user]: the bot's own past
       -- replies are lines in the transcript, not assistant turns.
       length msgs `shouldBe` 2
@@ -112,7 +112,7 @@ spec pool = before_ (truncateAll pool) $
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       -- Window of 3: the bot exchange is well outside the last 3 raw
       -- messages, but is still among the last 3 bot-related ones.
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 3 80 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 3 80 False False OriginDirect "var/images" utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("昨天那事呢" `T.isInfixOf`)
       ub `shouldSatisfy` ("已经办好了" `T.isInfixOf`)
@@ -131,7 +131,7 @@ spec pool = before_ (truncateAll pool) $
       -- The bot's narration is conversation, so it stays.
       insertRawMessage pool 1006 groupRaw botRaw botRaw (timeAt 14) (Just "max") "我查一下日志"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("普通聊天" `T.isInfixOf`)
       ub `shouldSatisfy` ("我查一下日志" `T.isInfixOf`)
@@ -148,7 +148,7 @@ spec pool = before_ (truncateAll pool) $
         (\i -> insertRawMessage pool (3000 + i) groupRaw memberRaw botRaw (timeAt (fromIntegral i)) (Just "Alice") ("行" <> T.pack (show i)))
         [1 .. 5 :: Int64]
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (_, moved) <- withDbLog pool $ buildContext "default-persona" 2 10 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      (_, moved) <- withDbLog pool $ buildContext "default-persona" 2 10 False False OriginDirect "var/images" utc [] [] Set.empty s trigger
       moved `shouldBe` Nothing
 
     it "moves the anchor once past it, and the anchor then narrows the window" $ do
@@ -158,7 +158,7 @@ spec pool = before_ (truncateAll pool) $
       s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       -- Low 2 / high 4: six rows overflow, so the anchor moves and the
       -- rendered transcript keeps the newest two.
-      (msgs, moved) <- withDbLog pool $ buildContext "default-persona" 2 4 False False OriginDirect "var/images" utc [] Set.empty s0 trigger
+      (msgs, moved) <- withDbLog pool $ buildContext "default-persona" 2 4 False False OriginDirect "var/images" utc [] [] Set.empty s0 trigger
       moved `shouldSatisfy` (/= Nothing)
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("行6" `T.isInfixOf`)
@@ -168,7 +168,7 @@ spec pool = before_ (truncateAll pool) $
       -- and nothing moves again.
       let s1 = s0 {contextAnchor = moved}
       withDb pool $ upsertSession s1
-      (msgs', moved') <- withDbLog pool $ buildContext "default-persona" 2 4 False False OriginDirect "var/images" utc [] Set.empty s1 trigger
+      (msgs', moved') <- withDbLog pool $ buildContext "default-persona" 2 4 False False OriginDirect "var/images" utc [] [] Set.empty s1 trigger
       moved' `shouldBe` Nothing
       userBodyOf msgs' `shouldSatisfy` (not . ("行1" `T.isInfixOf`))
       userBodyOf msgs' `shouldSatisfy` ("行6" `T.isInfixOf`)
@@ -177,7 +177,7 @@ spec pool = before_ (truncateAll pool) $
     it "shows a message that both queries return exactly once" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 只此一次"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] [] Set.empty s trigger
       T.count "只此一次" (userBodyOf msgs) `shouldBe` 1
 
     it "renders pinned messages in the [pinned] section" $ do
@@ -185,7 +185,7 @@ spec pool = before_ (truncateAll pool) $
       s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       let s = s0 {pinned = [1001]}
       withDb pool $ upsertSession s
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] Set.empty s trigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[pinned" `T.isInfixOf`)
       ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
@@ -197,7 +197,7 @@ spec pool = before_ (truncateAll pool) $
             trigger
               { message = [SegReply (MessageId 1001), SegAt (UserId botRaw), SegText " 看这条"]
               }
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] Set.empty s replyTrigger
+      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect "var/images" utc [] [] Set.empty s replyTrigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)

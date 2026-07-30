@@ -112,6 +112,11 @@ data DispatchContext = DispatchContext
     -- possibly overridden per session via !sticker on/off).  The tool
     -- factory gates the send_sticker tool on this.
     dcStickers :: !Bool,
+    -- | Whether this group has any skills visible (the system prompt
+    -- then carries a 技能对照表).  The tool factory gates the
+    -- use_skill tool on this — a group with no skills shouldn't pay
+    -- schema tokens for a tool that could only fail.
+    dcSkills :: !Bool,
     -- | The group's member ids, fetched from NapCat once per dispatch.
     -- Whitelist for converting raw @\@\<qq\>@ spans in LLM-authored
     -- outbound text into real at-segments

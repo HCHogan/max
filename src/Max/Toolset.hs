@@ -32,6 +32,7 @@ import Max.Tools.Pins (pinToolsFor)
 import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
+import Max.Tools.Skills (skillToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
 import Max.Tools.Video (videoToolsFor)
 
@@ -60,6 +61,7 @@ allToolsFor env dc =
     <> imageToolsFor env.beTimeZone env.beBlobRoot dc
     <> memoryToolsFor env.beEmbed dc
     <> pinToolsFor env.beSessions env.beDefaultModel dc
+    <> skillToolsFor env.beSkills dc
     <> bilibiliToolsFor env.beTimeZone dc
     <> sandboxToolsFor env.beTimeZone dc.dcGroupId env.beSandboxes
     <> fileToolsFor env.beTimeZone dc.dcGroupId env.beBlobRoot env.beSandboxes

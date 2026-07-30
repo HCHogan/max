@@ -22,6 +22,10 @@ spec = describe "Max.Admin" $ do
       route "DELETE" ["api", "permissions", "3"] `shouldBe` Just (RGrantDelete 3)
       route "DELETE" ["api", "tasks", "t17"] `shouldBe` Just (RTaskKill "t17")
       route "POST" ["api", "permissions"] `shouldBe` Just RGrantCreate
+      route "GET" ["api", "skills"] `shouldBe` Just RSkillsList
+      route "POST" ["api", "skills"] `shouldBe` Just RSkillCreate
+      route "PATCH" ["api", "skills", "9"] `shouldBe` Just (RSkillPatch 9)
+      route "DELETE" ["api", "skills", "9"] `shouldBe` Just (RSkillDelete 9)
 
     it "rejects junk ids, wrong methods and unknown paths" $ do
       route "PATCH" ["api", "groups", "abc", "session"] `shouldBe` Nothing
@@ -66,6 +70,10 @@ spec = describe "Max.Admin" $ do
       needsAuth (RTaskKill "t1") `shouldBe` True
       needsAuth RUsage `shouldBe` True
       needsAuth RMessageStats `shouldBe` True
+      needsAuth RSkillsList `shouldBe` True
+      needsAuth RSkillCreate `shouldBe` True
+      needsAuth (RSkillPatch 1) `shouldBe` True
+      needsAuth (RSkillDelete 1) `shouldBe` True
 
   describe "authOk" $ do
     it "is open when no token is configured (loopback is the guard)" $

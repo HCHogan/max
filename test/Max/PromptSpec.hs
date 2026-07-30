@@ -127,6 +127,7 @@ baseInputs =
       groupMemories = [],
       userMemories = [],
       images = [],
+      skills = [],
       now = timeAt 12,
       tz = utc
     }
@@ -195,6 +196,29 @@ spec = do
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("  群名：测试群（3人）" `T.isInfixOf`)
       ub `shouldSatisfy` ("  群主：Alice(6001)；管理员：Bob(6002)" `T.isInfixOf`)
+
+    -- Progressive disclosure, index half: one line per skill in the
+    -- system prompt, bodies nowhere in sight (they arrive as
+    -- use_skill tool results).
+    it "renders the skill index when the group has skills" $ do
+      let inp =
+            baseInputs
+              { skills =
+                  [ ("bilibili-dl", "下载 B 站视频转 gif 的流程"),
+                    ("server-status", "查询服务器状态的命令和判读")
+                  ]
+              }
+          (sys, _) = splitMessages (renderContext inp)
+      sys `shouldSatisfy` ("技能对照表" `T.isInfixOf`)
+      sys `shouldSatisfy` ("  bilibili-dl：下载 B 站视频转 gif 的流程" `T.isInfixOf`)
+      sys `shouldSatisfy` ("  server-status：查询服务器状态的命令和判读" `T.isInfixOf`)
+
+    -- The 台下设定 line still names use_skill (self-knowledge ships
+    -- builtin, so in production the tool always exists); only the
+    -- index section itself must vanish.
+    it "omits the skill section entirely when there are none" $ do
+      let (sys, _) = splitMessages (renderContext baseInputs)
+      sys `shouldNotSatisfy` ("技能对照表" `T.isInfixOf`)
 
   describe "renderContext identity" $ do
     it "includes a roster mapping QQ ids to display names, bot first" $ do

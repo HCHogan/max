@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               max
-version:            0.11.0
+version:            0.12.0
 synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
 license:            MIT
 license-file:       LICENSE
@@ -17,6 +17,9 @@ build-type:         Simple
 -- reporting "Up to date" and the old bytes stay embedded, which is a
 -- silent stale deploy rather than a build error.
 extra-source-files:
+    docs/architecture.md
+    docs/features.md
+    skills/*.md
     static/*.html
     static/*.js
     static/*.css
@@ -60,6 +63,7 @@ library
         Max.Browser.Docker
         Max.Browser.Registry
         Max.Command.Dispatcher
+        Max.Command.Help
         Max.Command.Parser
         Max.Command.Permission
         Max.Command.Types
@@ -115,6 +119,7 @@ library
         Max.Session
         Max.Session.Types
         Max.Shutdown
+        Max.Skills
         Max.Sticker
         Max.Stickers
         Max.Tasks
@@ -131,6 +136,7 @@ library
         Max.Tools.Reminder
         Max.Tools.Sandbox
         Max.Tools.Search
+        Max.Tools.Skills
         Max.Tools.Stickers
         Max.Tools.Video
         Max.Util
@@ -243,6 +249,7 @@ test-suite max-test
         Max.ReplySendSpec
         Max.SessionSpec
         Max.ShutdownSpec
+        Max.SkillsSpec
         Max.TasksSpec
         Max.Effects.AgentSpec
         Max.Effects.LLMSpec

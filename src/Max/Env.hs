@@ -26,6 +26,7 @@ import Max.Intent (IntentConfig)
 import Max.Reminder (ReminderScheduler)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
+import Max.Skills (SkillRegistry)
 import Max.Tools.Search (SearchConfig)
 import Max.Shutdown (ShutdownState)
 import Max.Tasks (TaskRegistry)
@@ -52,6 +53,11 @@ data BotEnv = BotEnv
     -- | When this process started (for @!version@'s bot uptime).
     beStartedAt :: !UTCTime,
     beSessions :: !SessionRegistry,
+    -- | Skill packs (global + per-group): the write-through registry
+    -- behind the system prompt's 技能对照表, the @use_skill@ tool and
+    -- the admin API's @\/api\/skills@.  Loaded whole at boot
+    -- ('Max.Skills.loadSkills').
+    beSkills :: !SkillRegistry,
     beTasks :: !TaskRegistry,
     -- | Graceful-shutdown gate: 'Max.Handler.dispatchLLM' claims a slot
     -- here so SIGTERM can wait out the dispatches already running, and

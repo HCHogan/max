@@ -55,6 +55,7 @@ import Max.Sandbox.Registry
   )
 import Max.Session (newSessionRegistry)
 import Max.Shutdown (ShutdownState, beginDrain, drainWorker, newShutdownState)
+import Max.Skills (loadSkills, newSkillRegistry)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
@@ -103,6 +104,7 @@ main = do
           -- shared wakeup costs the other two one indexed query.
           fetchSig <- newFetchSignal
           sessions <- newSessionRegistry
+          skillReg <- newSkillRegistry
           tasks <- newTaskRegistry
           reminders <- newReminderScheduler
           clientRef <- newTVarIO (Nothing :: Maybe Client)
@@ -122,6 +124,7 @@ main = do
                     beTimeZone = cfg.timezone,
                     beStartedAt = startedAt,
                     beSessions = sessions,
+                    beSkills = skillReg,
                     beOwners = cfg.owners,
                     beAdminTarget = adminTargets,
                     beTasks = tasks,
@@ -246,6 +249,11 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
       logInfo "migrations applied" $
         object ["files" .= applied]
     env :: BotEnv <- ask
+    -- The skill cache is authoritative once loaded (write-through, same
+    -- rule as sessions), so it has to fill before the first dispatch or
+    -- the admin server can consult it.
+    nSkills <- loadSkills env.beSkills
+    logInfo "skills loaded" $ object ["count" .= nSkills]
     -- Long-lived siblings, then the server.  An optional worker is an
     -- action that does nothing when its config is absent: the async
     -- completes immediately and linking a finished async is a no-op, so

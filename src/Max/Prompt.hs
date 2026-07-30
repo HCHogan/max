@@ -143,6 +143,13 @@ data PromptInputs = PromptInputs
     -- has finished fetching; otherwise empty and images remain as
     -- @[image]@ markers in the rendered text.
     images :: ![PromptImage],
+    -- | Skill index for this group: (name, one-line description)
+    -- pairs, global + group-scoped merged, name-sorted (see
+    -- 'Max.Skills.skillsForGroup').  Rendered into the system prompt's
+    -- 技能对照表; empty = no section, and no @use_skill@ tool either.
+    -- Pairs rather than the full skill record so rendering stays a
+    -- pure function of small fixture-friendly inputs.
+    skills :: ![(Text, Text)],
     -- | Wall-clock time this turn is being built.  Feeds the system
     -- prompt's environment block so the model knows the current
     -- date/time — context lines only carry HH:MM, no date.
@@ -189,8 +196,9 @@ systemPrompt ::
   Bool -> -- multimodal
   Bool -> -- private chat
   Text -> -- persona
+  [(Text, Text)] -> -- skill index: (name, description), name-sorted
   Text
-systemPrompt multimodal' private persona =
+systemPrompt multimodal' private persona skills' =
   T.unlines $
     [ persona,
       "",
@@ -207,7 +215,8 @@ systemPrompt multimodal' private persona =
       \github.com/HCHogan/max，走 NapCat (OneBot 11) 接入 QQ。平时完全以你的人设自居，\
       \不自称 bot/AI/模型，不说\"作为AI\"这类话；群友起哄问\"你是不是机器人\"，\
       \按人设接梗就行，不承认也不用急着否认。只有对方认真问你的实现/源码/技术细节时，\
-      \才如实聊并给仓库地址——语气照旧，把它当成聊自己的身体构造，不破功。",
+      \才如实聊并给仓库地址——语气照旧，把它当成聊自己的身体构造，不破功。\
+      \认真聊实现/部署/命令用法之前，先用 use_skill 取 self-knowledge 对着说，别凭印象编。",
       "",
       "回复风格（重要）：",
       "  - 你在 QQ 上跟人聊天，不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
@@ -271,6 +280,20 @@ systemPrompt multimodal' private persona =
            "  [split]",
            "  [↩#7405] [@#223344556] 你那个是探头打了 1X，切 10X 再看。"
          ]
+      -- The skill index: one line per skill, name-sorted upstream, so
+      -- the section is byte-identical across dispatches until someone
+      -- edits a skill.  The body lives behind the use_skill tool —
+      -- progressive disclosure keeps a 20-skill group from paying 20
+      -- bodies per dispatch.
+      <> ( if null skills'
+             then []
+             else
+               [ "",
+                 "技能对照表（预先写好的做事流程；条目只有一句简介，用 use_skill 传名字\
+                 \取完整说明再照着做。只在简介和手头的事明确对上时取用，日常聊天用不到）："
+               ]
+                 <> ["  " <> n <> "：" <> d | (n, d) <- skills']
+         )
       -- Nothing volatile below this point.  The environment block
       -- (current time, per-turn roster) and the memory block used to
       -- sit here at the end; they now live in the user message, after
@@ -299,6 +322,7 @@ buildContext ::
   FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
   TimeZone -> -- display timezone for rendered timestamps
   [Text] -> -- pre-rendered 群信息 lines (see 'PromptInputs.groupBrief')
+  [(Text, Text)] -> -- skill index for this group (see 'PromptInputs.skills')
   Set Int64 -> -- triggers another turn is already answering (see 'PromptInputs.inFlight')
   Session ->
   GroupMessage ->
@@ -308,7 +332,7 @@ buildContext ::
   -- and so a dispatch that crashes before replying doesn't leave a
   -- moved anchor behind.
   Eff es ([ChatMessage], Maybe UTCTime)
-buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin' blobRoot tz' brief inFlight' s gm = do
+buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin' blobRoot tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -469,6 +493,7 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
           groupMemories = groupMems,
           userMemories = userMems,
           images = images' <> videos',
+          skills = skills',
           now = now',
           tz = tz'
         }
@@ -1016,7 +1041,7 @@ renderContext pi' =
       -- also removes the last way two consecutive same-role messages
       -- could reach a strict provider: there is exactly one of each.
       messages =
-        [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) effectivePersona)]
+        [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) effectivePersona pi'.skills)]
           <> historyTurnMessages pi'.tz selfId' turnRows
           <> [userMessage]
    in messages
