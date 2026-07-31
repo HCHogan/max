@@ -209,6 +209,25 @@ spec = do
       parseReplyTokens "[sticker#42]（笑）"
         `shouldBe` (Nothing, [PieceSticker 42, PieceText "（笑）"])
 
+    -- The model sometimes copies the caption instead of the number
+    -- out of the display form ([sticker#42: 柴犬瘫地] → [sticker#柴犬
+    -- 瘫地]); that must read as a caption reference for the send layer
+    -- to resolve, never go out as literal text.
+    it "accepts a caption in the sticker id slot" $ do
+      parseReplyTokens "[sticker#柴犬瘫地]"
+        `shouldBe` (Nothing, [PieceStickerDesc "柴犬瘫地"])
+      parseReplyTokens "哈哈 [表情包#猫猫震惊] 绝了"
+        `shouldBe` (Nothing, [PieceText "哈哈 ", PieceStickerDesc "猫猫震惊", PieceText " 绝了"])
+      -- digits keep their fast path; captions are the fallback read
+      parseReplyTokens "[sticker#42]" `shouldBe` (Nothing, [PieceSticker 42])
+
+    it "keeps an overlong or nested caption slot literal" $ do
+      let long = T.replicate 61 "喵"
+      parseReplyTokens ("[sticker#" <> long <> "]")
+        `shouldBe` (Nothing, [PieceText ("[sticker#" <> long <> "]")])
+      parseReplyTokens "[sticker#[嵌套]]"
+        `shouldBe` (Nothing, [PieceText "[sticker#[嵌套]]"])
+
     it "leaves a malformed token as literal text" $ do
       parseReplyTokens "[sticker#]" `shouldBe` (Nothing, [PieceText "[sticker#]"])
       parseReplyTokens "[↩#abc]" `shouldBe` (Nothing, [PieceText "[↩#abc]"])

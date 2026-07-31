@@ -121,6 +121,11 @@ capChunks cs
 data ReplyPiece
   = PieceText !Text
   | PieceSticker !Int64
+  | -- | A @[sticker#\<描述文本\>]@ where the id slot holds prose: the
+    -- model copied the caption instead of the number.  Resolved
+    -- against sticker captions at send time; unresolvable ones are
+    -- dropped, never leaked as text.
+    PieceStickerDesc !Text
   | -- | A @[image#\<message_id\>]@ resend of a stored group image.
     PieceImage !Int64
   | -- | A @[face#\<id\>]@ QQ built-in face — the same form
@@ -157,6 +162,9 @@ parseReplyTokens = go
             Just (TokSticker n, rest') ->
               let (mrid, ps) = go rest'
                in (mrid, prepend before (PieceSticker n : ps))
+            Just (TokStickerDesc d, rest') ->
+              let (mrid, ps) = go rest'
+               in (mrid, prepend before (PieceStickerDesc d : ps))
             Just (TokImage n, rest') ->
               let (mrid, ps) = go rest'
                in (mrid, prepend before (PieceImage n : ps))
@@ -175,7 +183,7 @@ parseReplyTokens = go
           (PieceText t : rest) -> PieceText (s <> t) : rest
           _ -> PieceText s : ps
 
-data Token = TokReply !Int64 | TokSticker !Int64 | TokImage !Int64 | TokFace !Int
+data Token = TokReply !Int64 | TokSticker !Int64 | TokStickerDesc !Text | TokImage !Int64 | TokFace !Int
 
 matchToken :: Text -> Maybe (Token, Text)
 matchToken t =
@@ -186,6 +194,13 @@ matchToken t =
     -- Pre-rename sticker opener: old rows (and models echoing them)
     -- still carry it.
     <|> (do rest <- T.stripPrefix "[表情包#" t; (n, r) <- tokenClose rest; pure (TokSticker n, r))
+    -- The id slot holding prose instead of digits: the model copied
+    -- the caption out of the display form ([sticker#42: 柴犬瘫地]) and
+    -- lost the number.  Accept it as a caption reference — the send
+    -- layer resolves or drops it; the one thing that must not happen
+    -- is the marker going out as literal text.
+    <|> (do rest <- T.stripPrefix "[sticker#" t; (d, r) <- descClose rest; pure (TokStickerDesc d, r))
+    <|> (do rest <- T.stripPrefix "[表情包#" t; (d, r) <- descClose rest; pure (TokStickerDesc d, r))
   where
     -- One tolerant closer for every verb: digits, then ']' or a
     -- ': description]' tail, then an optional display-attribute
@@ -206,6 +221,19 @@ matchToken t =
                   _ -> Nothing
                 _ -> Nothing
               pure (n, dropAttrGroup after)
+    -- Caption text in the id slot: short, single-line, no nested
+    -- bracket.  Deliberately narrow — anything wider risks eating a
+    -- legitimate "[...]" prose span that happens to follow the word
+    -- sticker.
+    descClose s = case T.breakOn "]" s of
+      (d0, close)
+        | not (T.null close),
+          d <- T.strip d0,
+          not (T.null d),
+          T.length d <= 60,
+          not (T.any (\c -> c == '\n' || c == '[') d) ->
+            Just (d, dropAttrGroup (T.drop 1 close))
+      _ -> Nothing
     -- "](29秒)" → the paren group is display metadata, never content;
     -- swallow it so an echoed token doesn't leak "(29秒)" as text.
     dropAttrGroup r = case T.stripPrefix "(" r of

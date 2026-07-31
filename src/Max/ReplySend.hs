@@ -77,6 +77,7 @@ import Max.Reply
     parseReplyTokens,
     planReply,
   )
+import Max.DB.Stickers (findStickerByCaption)
 import Max.Sticker (resolveSticker)
 import Max.Util (trySync)
 import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
@@ -262,6 +263,16 @@ sendAndPersistReply rt budget body
         -- Sticker sending disabled for this group: drop the token
         -- (the model shouldn't emit one, but never leak it as text).
         resolve (PieceSticker _) | not rt.rtStickers = pure ([], "")
+        resolve (PieceStickerDesc _) | not rt.rtStickers = pure ([], "")
+        -- Caption in the id slot ('PieceStickerDesc'): resolve it
+        -- against the library, then proceed as if the id had been
+        -- written.  No match → drop, same rule as an unknown id.
+        resolve (PieceStickerDesc d) =
+          findStickerByCaption d >>= \case
+            Just sid -> resolve (PieceSticker sid)
+            Nothing -> do
+              logAttention "sticker caption unresolved" $ object ["caption" .= d]
+              pure ([], "")
         resolve (PieceSticker sid) =
           resolveSticker rt.rtBlobRoot sid >>= \case
             Right (desc, segs) ->
@@ -336,6 +347,7 @@ modelTextSegs private mentionable raw =
         | otherwise -> segmentMentions (\u -> maybe True (Set.member u) mentionable) t
       PieceFace fid -> [SegFace fid Nothing]
       PieceSticker _ -> []
+      PieceStickerDesc _ -> []
       PieceImage _ -> []
 
 -- | Fold everything past the remaining allowance into one last message,

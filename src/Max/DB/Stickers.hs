@@ -13,6 +13,7 @@ module Max.DB.Stickers
     stickerStats,
     listRecentStickers,
     setStickerBanned,
+    findStickerByCaption,
   )
 where
 
@@ -32,6 +33,7 @@ import Data.Int (Int64)
 import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Database.PostgreSQL.Simple (Only (..))
 import Effectful (Eff, IOE, (:>))
 import Effectful.PostgreSQL (WithConnection, execute, query, query_)
 import OneBot.Segment (ImageSegInfo (..), Segment (..), isStickerImage)
@@ -191,3 +193,24 @@ setStickerBanned b prefix =
     <$> execute
       "UPDATE stickers SET banned = ? WHERE sha256 LIKE ?"
       (b, prefix <> "%")
+
+-- | Resolve a caption fragment to a sticker id — the recovery path
+-- for a model that wrote @[sticker#柴犬瘫地]@ instead of the number.
+-- The display form truncates captions at 80 chars, so an echoed
+-- caption is a *prefix* of the stored description; exact and prefix
+-- hits outrank substring hits, popularity breaks ties.  LIKE
+-- wildcards in model text are escaped, not interpreted.
+findStickerByCaption :: (WithConnection :> es, IOE :> es) => Text -> Eff es (Maybe Int64)
+findStickerByCaption cap = do
+  let esc = T.concatMap (\c -> if c `elem` ("%_\\" :: String) then T.pack ['\\', c] else T.singleton c) cap
+  rows <-
+    query
+      "SELECT s.id FROM stickers s \
+      \ WHERE NOT s.banned AND s.description IS NOT NULL \
+      \   AND (s.description = ? OR s.description LIKE ? OR s.description LIKE ?) \
+      \ ORDER BY (s.description = ?) DESC, (s.description LIKE ?) DESC, s.times_sent DESC, s.id DESC \
+      \ LIMIT 1"
+      (cap, esc <> "%", "%" <> esc <> "%", cap, esc <> "%")
+  pure $ case rows of
+    (Only sid : _) -> Just sid
+    [] -> Nothing
