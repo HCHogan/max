@@ -117,6 +117,10 @@ data DispatchContext = DispatchContext
     -- use_skill tool on this — a group with no skills shouldn't pay
     -- schema tokens for a tool that could only fail.
     dcSkills :: !Bool,
+    -- | The session's @!effort@ override, threaded into every LLM
+    -- call this turn makes ('turnCtx').  'Nothing' = the profile's
+    -- configured effort.
+    dcEffort :: !(Maybe Text),
     -- | The group's member ids, fetched from NapCat once per dispatch.
     -- Whitelist for converting raw @\@\<qq\>@ spans in LLM-authored
     -- outbound text into real at-segments
@@ -154,7 +158,7 @@ maxToolImages = 8
 -- report their pseudo-group id — that is the conversation the spend
 -- belongs to.
 turnCtx :: DispatchContext -> Text -> ChatCtx
-turnCtx dc source = let GroupId g = dc.dcGroupId in ChatCtx source (Just g)
+turnCtx dc source = let GroupId g = dc.dcGroupId in ChatCtx source (Just g) dc.dcEffort
 
 queueToolImage :: IOE :> es => DispatchContext -> ToolImage -> Eff es Bool
 queueToolImage dc img = liftIO . atomically $ do

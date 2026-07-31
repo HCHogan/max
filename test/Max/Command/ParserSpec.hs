@@ -37,6 +37,16 @@ spec = do
         Right (Just (Unknown "model" _)) -> pure ()
         other -> expectationFailure $ "expected Unknown model, got: " <> show other
 
+  describe "!effort" $ do
+    it "bare → show" $ "!effort" `parsesTo` EffortShow
+    it "level sets, lowercased" $ "!effort High" `parsesTo` EffortSet (Just "high")
+    it "xhigh accepted" $ "!effort xhigh" `parsesTo` EffortSet (Just "xhigh")
+    it "default clears" $ "!effort default" `parsesTo` EffortSet Nothing
+    it "unknown level falls through to Unknown" $
+      case parseCommand "!effort turbo" of
+        Right (Just (Unknown "effort" _)) -> pure ()
+        other -> expectationFailure $ "expected Unknown effort, got: " <> show other
+
   describe "!grant / !revoke / !perms" $ do
     it "grant with canonical mention token" $
       "!grant [@#223344556] persona" `parsesTo` Grant 223344556 "persona" False False

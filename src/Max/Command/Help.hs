@@ -24,6 +24,8 @@ helpText Nothing =
       "  !model <name>            切 model",
       "  !debug                   看 debug 状态（开时工具调用打印到群里）",
       "  !debug on/off/default    开/关/回到配置默认 (session 覆盖)",
+      "  !effort                  看当前推理力度（session 覆盖 > profile 配置）",
+      "  !effort <级别>/default   设/清 session 覆盖（low/medium/high/xhigh/max…，按 provider 支持）",
       "  !persona                 看当前 persona override",
       "  !persona <text>          设 persona override",
       "  !persona clear           回到默认 persona",
@@ -57,7 +59,7 @@ helpText Nothing =
       "  ! +包名… <命令>          开头 +pkg 把 nixpkgs 放进 PATH，如 ! +ffmpeg ffmpeg -version",
       "",
       "flag 可用短形式：--all=-a、--deny=-d、--global=-g（可合并，如 -dg）。",
-      "权限：!model/!debug/!sticker/!proactive/!kill --all 仅 bot 主人；",
+      "权限：!model/!effort/!debug/!sticker/!proactive/!kill --all 仅 bot 主人；",
       "!persona/!clear/!kill 需群主/管理员（或被授权）；其余全员可用。",
       "群里发命令：结果私聊发你（加好友才收得到），群里只贴表情。"
     ]

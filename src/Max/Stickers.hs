@@ -124,7 +124,7 @@ captionOne profile blobRoot (sha, mime, path, mSummary) = do
                 _ -> ""
           eres <-
             chat
-              (ChatCtx "caption" Nothing)
+              (ChatCtx "caption" Nothing Nothing)
               profile
               [ MsgSystem captionSystem,
                 MsgUserBlocks [TextBlock ("这个表情包" <> hint <> "："), ImageDataUrl dataUrl]

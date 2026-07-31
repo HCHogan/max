@@ -40,7 +40,7 @@ import Text.Read (readMaybe)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), countMemories, deleteMemory, fetchMemory, listMemories, listUserMemoriesEverywhere)
 import Max.DB.Stickers qualified as Stickers
-import Max.Effects.LLM (LLM, isProfileMultimodal, listProfiles)
+import Max.Effects.LLM (LLM, isProfileMultimodal, listProfiles, profileEffort)
 import Max.Browser.Registry (destroyBrowsersForGroup)
 import Max.Env (BotEnv (..))
 import Max.Intent (IntentConfig (..))
@@ -157,6 +157,22 @@ execute t gid uid granterTier replyTarget cmd = do
         ()
       )
     logInfo "session: debug override" $ object ["value" .= mb]
+    ack
+  EffortShow -> do
+    s <- liftIO (Session.readSession t)
+    profEffort <- profileEffort s.model
+    reply $ case (s.effortOverride, profEffort) of
+      (Just e, _) -> "effort: " <> e <> "（session 覆盖；!effort default 撤销）"
+      (Nothing, Just e) -> "effort: " <> e <> "（profile 配置）"
+      (Nothing, Nothing) -> "effort: 未设置（不发送该字段，服务端默认）"
+  EffortSet mv -> do
+    updateSession t $ \s ->
+      ( case mv of
+          Just v -> Session.setEffortOverride v s
+          Nothing -> Session.clearEffortOverride s,
+        ()
+      )
+    logInfo "session: effort override" $ object ["value" .= mv]
     ack
   --
   PersonaShow -> do

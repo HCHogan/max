@@ -97,6 +97,7 @@ toolCountFor env gid multimodal stickers skills = do
             dcMultimodal = multimodal,
             dcStickers = stickers,
             dcSkills = skills,
+            dcEffort = Nothing,
             dcMentionable = Nothing,
             dcToolImages = imgs
           }

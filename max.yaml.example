@@ -165,6 +165,11 @@ llm:
     #   base_url: "https://api.anthropic.com"
     #   model: claude-opus-4-5-20250101
     #   max_tokens: 4096
+    #   # Reasoning effort — omit to not send the field (older models and
+    #   # many OpenAI-compatible providers reject it).  Anthropic protocol
+    #   # sends output_config.effort (low/medium/high/xhigh/max), OpenAI
+    #   # protocol sends reasoning_effort.  Session override: !effort.
+    #   effort: high
 
     # local:
     #   api_key: any          # llama.cpp ignores it but the field is required

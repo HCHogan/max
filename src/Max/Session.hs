@@ -33,6 +33,8 @@ module Max.Session
     clearStickerOverride,
     setProactiveOverride,
     clearProactiveOverride,
+    setEffortOverride,
+    clearEffortOverride,
   )
 where
 
@@ -163,3 +165,11 @@ setProactiveOverride b s = s {proactiveOverride = Just b}
 -- @intent.profile@ is configured).
 clearProactiveOverride :: Session -> Session
 clearProactiveOverride s = s {proactiveOverride = Nothing}
+
+-- | Set the reasoning-effort override (@!effort <level>@).
+setEffortOverride :: Text -> Session -> Session
+setEffortOverride e s = s {effortOverride = Just e}
+
+-- | Drop the override; fall back to the profile's configured effort.
+clearEffortOverride :: Session -> Session
+clearEffortOverride s = s {effortOverride = Nothing}

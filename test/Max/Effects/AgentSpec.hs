@@ -26,6 +26,7 @@ ctx = do
         dcMultimodal = False,
         dcStickers = True,
         dcSkills = False,
+        dcEffort = Nothing,
         dcMentionable = Just (Set.fromList [UserId 2001, UserId 2002]),
         dcToolImages = imgs
       }

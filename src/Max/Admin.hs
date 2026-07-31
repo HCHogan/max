@@ -511,7 +511,7 @@ applySessionPatch env profiles gidRaw o =
       [ (k, v)
       | (key, v) <- KM.toList o,
         let k = Key.toText key,
-        k `elem` (["model", "persona", "debug", "sticker", "proactive"] :: [Text])
+        k `elem` (["model", "persona", "debug", "sticker", "proactive", "effort"] :: [Text])
       ]
     badModel = case KM.lookup "model" o of
       Just (String m) | m `notElem` profiles -> Just m
@@ -528,6 +528,8 @@ applySessionPatch env profiles gidRaw o =
       ("sticker", Null) -> Right (\s -> s {stickerOverride = Nothing})
       ("proactive", Bool b) -> Right (\s -> s {proactiveOverride = Just b})
       ("proactive", Null) -> Right (\s -> s {proactiveOverride = Nothing})
+      ("effort", String e) -> Right (\s -> s {effortOverride = Just e})
+      ("effort", Null) -> Right (\s -> s {effortOverride = Nothing})
       (k, _) -> Left ("bad value for field: " <> k)
 
 -- | Apply a skill PATCH through the registry.  Same field semantics
@@ -587,6 +589,7 @@ sessionJson s =
       "debug" .= s.debugOverride,
       "sticker" .= s.stickerOverride,
       "proactive" .= s.proactiveOverride,
+      "effort" .= s.effortOverride,
       "context_anchor" .= s.contextAnchor,
       "memx_anchor" .= s.memxAnchor
     ]

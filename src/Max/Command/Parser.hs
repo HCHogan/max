@@ -271,6 +271,13 @@ classify verb raw@(RawArgs pos flags) = case verb of
     ["off"] -> DebugSet (Just False)
     ["default"] -> DebugSet Nothing
     _ -> Unknown verb raw
+  "effort" -> case pos of
+    [] -> EffortShow
+    ["default"] -> EffortSet Nothing
+    -- Validated here rather than in the dispatcher: a typo'd level
+    -- would otherwise 400 every dispatch until someone noticed.
+    [lvl] | T.toLower lvl `elem` effortLevels -> EffortSet (Just (T.toLower lvl))
+    _ -> Unknown verb raw
   "persona" -> case pos of
     [] -> PersonaShow
     ["clear"] -> PersonaClear
@@ -341,3 +348,11 @@ parseUserRef t0 = case T.stripPrefix "[@#" t0 of
   Nothing -> case T.stripPrefix "@" t0 of
     Just bare -> parseInt64 bare
     Nothing -> parseInt64 t0
+
+-- | Effort levels @!effort@ accepts — the union of Anthropic's
+-- (low/medium/high/xhigh/max) and OpenAI-compatible spellings
+-- (minimal/none).  Whether the active profile's provider honours a
+-- given level is between it and the config; this list only catches
+-- typos.
+effortLevels :: [Text]
+effortLevels = ["minimal", "low", "medium", "high", "xhigh", "max", "none"]

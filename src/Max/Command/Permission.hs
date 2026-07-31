@@ -43,6 +43,8 @@ requiredCapability = \case
   -- owner tier: cross-group or cost/identity-level switches
   ModelSet _ -> Just ("model", TierOwner)
   DebugSet _ -> Just ("debug", TierOwner)
+  -- Same capability as !model: effort is a cost dial on every dispatch.
+  EffortSet _ -> Just ("model", TierOwner)
   StickerSet _ -> Just ("sticker", TierOwner)
   StickerBan _ -> Just ("sticker", TierOwner)
   StickerUnban _ -> Just ("sticker", TierOwner)

@@ -858,7 +858,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff (not (null skills)) mentionable toolImgs
+          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff (not (null skills)) s.effortOverride mentionable toolImgs
           target = sendTarget env gm mentionable rosterNames stickersEff
       -- The streaming sink.  It sends whole paragraphs the model has
       -- finished with, down the same path the final reply takes — the

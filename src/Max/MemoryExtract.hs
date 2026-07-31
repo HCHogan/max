@@ -294,7 +294,7 @@ extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
             [ MsgSystem extractorSystem,
               MsgUser (renderInput tz now gid groupMems userMemSets transcript)
             ]
-      chat (ChatCtx "memx" (Just gid)) profile msgs [] >>= \case
+      chat (ChatCtx "memx" (Just gid) Nothing) profile msgs [] >>= \case
         Left err -> logAttention "memx: chat failed" $ object ["error" .= err]
         Right (ToolCallsResp _ _ _) ->
           logAttention "memx: unexpected tool calls" $ object []
@@ -557,7 +557,7 @@ shrinkScope label sys header profile scope sid gid = do
                    : map memLine mems
                )
             <> ["", "输出操作 JSON 数组："]
-  chat (ChatCtx label (Just gid)) profile [MsgSystem sys, MsgUser input] [] >>= \case
+  chat (ChatCtx label (Just gid) Nothing) profile [MsgSystem sys, MsgUser input] [] >>= \case
     Left err -> logAttention (label <> ": chat failed") $ object ["error" .= err]
     Right (ToolCallsResp _ _ _) ->
       logAttention (label <> ": unexpected tool calls") $ object []

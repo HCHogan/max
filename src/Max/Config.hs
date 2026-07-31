@@ -845,6 +845,7 @@ data ProfileSpec = ProfileSpec
     model :: !(Maybe Text),
     maxTokens :: !(Maybe Int),
     temperature :: !(Maybe Double),
+    effort :: !(Maybe Text),
     timeoutSeconds :: !(Maybe Int),
     protocol :: !(Maybe Protocol),
     multimodal :: !(Maybe Bool),
@@ -855,7 +856,7 @@ data ProfileSpec = ProfileSpec
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -866,6 +867,7 @@ mergeSpec a b =
       model = a.model <|> b.model,
       maxTokens = a.maxTokens <|> b.maxTokens,
       temperature = a.temperature <|> b.temperature,
+      effort = a.effort <|> b.effort,
       timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds,
       protocol = a.protocol <|> b.protocol,
       multimodal = a.multimodal <|> b.multimodal,
@@ -882,6 +884,7 @@ instance HasCodec ProfileSpec where
         <*> optionalField "model" "Model id" .= (.model)
         <*> optionalField "max_tokens" "Max tokens per completion" .= (.maxTokens)
         <*> optionalFieldWith "temperature" temperatureCodec "Sampling temperature; omit to not send the field (some providers reject explicit values)" .= (.temperature)
+        <*> optionalField "effort" "Reasoning effort (low/medium/high/xhigh/max on Anthropic; reasoning_effort on OpenAI protocol); omit to not send the field" .= (.effort)
         <*> optionalField "timeout_seconds" "HTTP timeout for one completion" .= (.timeoutSeconds)
         <*> optionalFieldWith "protocol" protocolCodec "openai | anthropic" .= (.protocol)
         <*> optionalField "multimodal" "Endpoint accepts image content blocks" .= (.multimodal)
@@ -1029,6 +1032,16 @@ overlayProfileParser = do
           env "MAX_LLM_STREAM",
           metavar "True|False"
         ]
+  effort <-
+    optional $
+      setting
+        [ help "Reasoning effort for the default profile (omit to not send the field)",
+          reader str,
+          option,
+          long "llm-effort",
+          env "MAX_LLM_EFFORT",
+          metavar "LEVEL"
+        ]
   pure ProfileSpec {..}
   where
     protoReader = eitherReader $ \s -> case parseProtocol (T.pack s) of
@@ -1078,6 +1091,7 @@ materializeLLM (dn, fileProfiles, overlay) = do
             -- field" — some providers (kimi via opencode zen) 400 on
             -- any explicit value other than 1.0.
             temperature = spec.temperature,
+            effort = spec.effort,
             timeoutSeconds = fromMaybe 120 spec.timeoutSeconds,
             protocol = fromMaybe ProtocolOpenAI spec.protocol,
             multimodal = fromMaybe False spec.multimodal,

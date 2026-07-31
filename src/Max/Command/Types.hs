@@ -51,6 +51,8 @@ data Command
   | ModelSet !Text -- ^ '!model <name>'
   | DebugShow -- ^ '!debug'
   | DebugSet !(Maybe Bool) -- ^ '!debug on' / '!debug off' / '!debug default'
+  | EffortShow -- ^ '!effort'
+  | EffortSet !(Maybe Text) -- ^ '!effort <level>' / '!effort default'
   | PersonaShow -- ^ '!persona'
   | PersonaClear -- ^ '!persona clear'
   | PersonaSet !Text -- ^ '!persona <text>'

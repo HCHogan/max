@@ -59,6 +59,11 @@ data Session = Session
     -- through (or deliberately skipped by) the episode extractor
     -- ("Max.MemoryExtract").  Bookkeeping like 'contextAnchor', not a
     -- user decision.  'Nothing' = never extracted.
-    memxAnchor :: !(Maybe UTCTime)
+    memxAnchor :: !(Maybe UTCTime),
+    -- | Per-session reasoning-effort override, set by @!effort@.
+    -- 'Nothing' = follow the active profile's configured effort.
+    -- Applies to agent turns only — background workers keep their
+    -- profiles' own settings.
+    effortOverride :: !(Maybe Text)
   }
   deriving stock (Show)

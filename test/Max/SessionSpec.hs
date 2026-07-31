@@ -27,7 +27,8 @@ emptySession =
       debugOverride = Nothing,
       stickerOverride = Nothing,
       proactiveOverride = Nothing,
-      memxAnchor = Nothing
+      memxAnchor = Nothing,
+      effortOverride = Nothing
     }
 
 t0 :: UTCTime

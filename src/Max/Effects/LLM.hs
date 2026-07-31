@@ -51,6 +51,7 @@ module Max.Effects.LLM
     listProfiles,
     defaultProfile,
     isProfileMultimodal,
+    profileEffort,
     isProfileHistoryTurns,
     chatStreaming,
     -- * Exposed for tests
@@ -134,6 +135,12 @@ data LLMProfile = LLMProfile
     -- other than 1.0 with a generic 400, so only send when the user
     -- configured one.
     temperature :: !(Maybe Double),
+    -- | Reasoning effort.  OpenAI protocol: top-level
+    -- @reasoning_effort@; Anthropic: @output_config.effort@
+    -- (low\/medium\/high\/xhigh\/max on Opus 4.5+\/Sonnet 4.6\/Fable).
+    -- 'Nothing' = omit the field — older models and many
+    -- OpenAI-compatible providers reject it outright.
+    effort :: !(Maybe Text),
     -- | HTTP timeout for one chat completion.  LLMs are slow, default 120.
     timeoutSeconds :: !Int,
     -- | Wire format spoken by the endpoint.  Default 'ProtocolOpenAI'.
@@ -289,7 +296,13 @@ data ChatCtx = ChatCtx
     ccSource :: !Text,
     -- | The group the call serves; 'Nothing' for groupless work
     -- (caption workers run against a shared library).
-    ccGroup :: !(Maybe Int64)
+    ccGroup :: !(Maybe Int64),
+    -- | Per-call reasoning-effort override (the @!effort@ session
+    -- override, threaded in by the agent turn).  'Nothing' = the
+    -- profile's configured 'LLMProfile.effort'.  On 'ChatCtx' rather
+    -- than a new @chat@ parameter so background workers keep their
+    -- profiles' own settings without every call site changing shape.
+    ccEffort :: !(Maybe Text)
   }
   deriving stock (Show, Eq)
 
@@ -438,6 +451,9 @@ data LLM :: Effect where
   -- if the profile doesn't exist (caller will already fail on the
   -- subsequent 'Chat' call with a clearer error).
   IsProfileMultimodal :: Text -> LLM m Bool
+  -- | The profile's configured reasoning effort; 'Nothing' when unset
+  -- or the profile doesn't exist.  For @!effort@'s status display.
+  ProfileEffort :: Text -> LLM m (Maybe Text)
   -- | Look up @profile.history_as_turns@ by name.  'False' when the
   -- profile doesn't exist — same fallback as 'IsProfileMultimodal'.
   IsProfileHistoryTurns :: Text -> LLM m Bool
@@ -468,6 +484,9 @@ runLLM usageWriter callWriter reg = interpret $ \localEnv -> \case
       runOneChat usageWriter callWriter reg ctx name msgs tools (Just (unlift . sink))
   ListProfiles -> pure (Map.keys reg.profiles)
   DefaultProfile -> pure reg.defaultName
+  ProfileEffort name -> pure $ case Map.lookup name reg.profiles of
+    Just cfg -> cfg.effort
+    Nothing -> Nothing
   IsProfileMultimodal name -> pure $ case Map.lookup name reg.profiles of
     Just cfg -> cfg.multimodal
     Nothing -> False
@@ -494,8 +513,12 @@ runOneChat usageWriter callWriter reg ctx name msgs tools mSink = case Map.looku
   Nothing -> do
     logAttention "llm: unknown profile" $ object ["profile" .= name]
     pure $ Left ("unknown llm profile: " <> name)
-  Just cfg -> do
-    let streaming = cfg.stream && isJust mSink
+  Just cfg0 -> do
+    -- The session's !effort override rewrites the profile before any
+    -- request is built — one place covers both protocols, streaming
+    -- and buffered paths, and the call log alike.
+    let cfg = maybe cfg0 (\e -> cfg0 {effort = Just e}) ctx.ccEffort
+        streaming = cfg.stream && isJust mSink
     logInfo "llm: chat request" $
       object
         [ "msg_count" .= length msgs,
@@ -589,6 +612,9 @@ defaultProfile = send DefaultProfile
 
 isProfileMultimodal :: LLM :> es => Text -> Eff es Bool
 isProfileMultimodal name = send (IsProfileMultimodal name)
+
+profileEffort :: LLM :> es => Text -> Eff es (Maybe Text)
+profileEffort name = send (ProfileEffort name)
 
 isProfileHistoryTurns :: LLM :> es => Text -> Eff es Bool
 isProfileHistoryTurns name = send (IsProfileHistoryTurns name)
@@ -880,6 +906,7 @@ openAIFields cfg msgs tools =
     "max_tokens" .= cfg.maxTokens
   ]
     <> temperatureField cfg
+    <> effortFieldOpenAI cfg
     <> [ f
          | not (null tools),
            f <-
@@ -893,6 +920,20 @@ openAIFields cfg msgs tools =
 temperatureField :: LLMProfile -> [Pair]
 temperatureField cfg = case cfg.temperature of
   Just t -> ["temperature" .= t]
+  Nothing -> []
+
+-- | OpenAI wire shape: top-level @reasoning_effort@.  Absent = don't
+-- send, same rationale as temperature.
+effortFieldOpenAI :: LLMProfile -> [Pair]
+effortFieldOpenAI cfg = case cfg.effort of
+  Just e -> ["reasoning_effort" .= e]
+  Nothing -> []
+
+-- | Anthropic wire shape: @output_config.effort@ — nested, not
+-- top-level (the top-level spelling is rejected).
+effortFieldAnthropic :: LLMProfile -> [Pair]
+effortFieldAnthropic cfg = case cfg.effort of
+  Just e -> ["output_config" .= object ["effort" .= e]]
   Nothing -> []
 
 encodeToolSpecOpenAI :: ToolSpec -> Value
@@ -1005,6 +1046,7 @@ anthropicFields cfg msgs tools =
     "messages" .= map encodeAnthropicMsg (markLastForCache anthropicMsgs)
   ]
     <> temperatureField cfg
+    <> effortFieldAnthropic cfg
     <> systemField
     <> [ f
          | not (null tools),
