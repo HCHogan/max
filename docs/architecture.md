@@ -17,6 +17,8 @@ nix/module.nix     NixOS module for production deployment
                    `nix build .#max` so the packaged build can't rot
 max.cabal          library + max executable
 migrations/*.sql   schema migrations, applied on boot
+skills/*.md        builtin skill manuals, baked into the binary (file-embed);
+                   first line = index description, body behind use_skill
 
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),
                    segments, events, actions, server
@@ -27,23 +29,30 @@ src/Max/LLM/       Stream: SSE framing + the two protocols' delta reducers, pure
 src/Max/Http/      Stream: the incremental POST wreq can't do (http-client withResponse)
 src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
                    History, Session, Files, Memory, Permissions, PlatformIds,
-                   Reminder, Stickers, FetchQueue (media work list)
-src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher
+                   Reminder, Stickers, FetchQueue (media work list), Calls, Usage
+src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher, Help (the
+                   !help text — a leaf module so the self-knowledge skill can
+                   splice it at registry init)
 src/Max/Session/   Per-conversation session: in-memory TVar + DB persistence
 src/Max/Sandbox/   Per-group Docker workspace lifecycle + registry
 src/Max/Browser/   Per-group camoufox-MCP container lifecycle + registry
 src/Max/MCP/       Minimal MCP client (Streamable HTTP)
 src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory,
-                   Images, Video, Bilibili, Stickers, Pins, Group, Reminder)
+                   Images, Video, Bilibili, Stickers, Pins, Group, Reminder,
+                   Skills — use_skill, the progressive-disclosure reader)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    Toolset (the full tool list, assembled from BotEnv), Intent
-                   (proactive classifier), MemoryExtract, Embedding + Embedder
+                   (proactive classifier), Skills (write-through registry:
+                   builtins baked from skills/ + docs/, DB rows shadowing them),
+                   MemoryExtract (episode extraction: watermark + idle-timer
+                   scheduler, nightly dream consolidation), Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    shared claim loop), MediaCaption + Stickers (caption workers),
                    Reminder, Reply (planning), ReplySend (planning made real:
                    placeholders, sending, persistence — shared by the final
                    reply and the streamed one), Render, Roster, Shutdown (graceful
-                   drain), Tasks, Tools, Util
+                   drain), Tasks, Tools, BuildInfo (compile-time git rev), Admin
+                   (JSON API + panel), Util
 app/Main.hs        wires effects + workers + server
 ```
 
@@ -72,8 +81,14 @@ app/Main.hs        wires effects + workers + server
         │ jobs)    │ └────────┘ │ tasks)  │ │  (sandbox/browser/ │    │
         └──────────┘            └─────────┘ │   search/files/mem)┘    │
                                             │  → send chunks + persist│
-                                            │  → memory extraction    │
+                                            │  → arm memx idle timer  │
                                             └─────────────────────────┘
+
+Memory extraction is episode-scoped rather than per-dispatch: the memx worker
+fires when a group has been quiet for ten minutes (or sixty messages pile up),
+reads everything since the `sessions.memx_anchor` watermark in one pass, and
+advances the watermark after applying the ADD/UPDATE/DELETE ops.  A nightly
+dream pass (4am local) consolidates scopes that grew past fifteen entries.
 ```
 
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
@@ -90,8 +105,9 @@ the in-memory handles are read caches and wakeup bells, never the record.
 
 | Survives a restart | How |
 |---|---|
-| Messages, sessions, memories, stickers, permissions | written through on every mutation |
+| Messages, sessions, memories, stickers, permissions, skills | written through on every mutation (builtin skills re-seed from the binary) |
 | Pending image / video / forward / file fetches | `fetch_jobs` rows claimed under a lease — a dead process's lease expires and the next claim picks the job back up |
+| Pending memory-extraction windows | `sessions.memx_anchor` watermark; boot re-arms any group whose chat outran its anchor |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll for `NULL` columns, so any gap backfills itself |
 
@@ -123,4 +139,6 @@ finished async is a no-op, so "feature off" needs no special case.
 | 7 | Multimodal (inline context images) + browser toolset | ✅ |
 | 8 | Long-term memory (tools + extraction + injection) | ✅ |
 | 9 | Private chats (pseudo-group pipeline) | ✅ |
-| 10 | NixOS module + production deployment | module ready; deployment pending |
+| 10 | NixOS module + production deployment | ✅ |
+| 11 | Admin JSON API + panel | ✅ |
+| 12 | Skills (progressive disclosure) + episode memory extraction | ✅ |

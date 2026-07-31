@@ -1,5 +1,10 @@
 # Prompt 全流程：每次发给 API 的完整 JSON
 
+> **时效性（2026-07 记）**：本文捕获于 v0.11 时代，骨架至今成立，但 v0.12 起有
+> 三处偏差：system prompt 末尾多了技能对照表（每技能一行，`use_skill` 取全文）；
+> `[memories]` 只注入每 scope 最近 12 条并带过期提示；工具 description 大幅
+> 瘦身（操作手册移入 skills）。示例 JSON 中的这些区域以现行代码为准。
+
 以一次真实形态的多模态群聊 dispatch 为例（profile `kimi-k2.7-code`，OpenAI
 协议，`multimodal: true`），从触发到最终回复，逐个展示每次 HTTP 请求的完整
 JSON 和它是怎么拼出来的。代码入口：`Max.Prompt.buildContext` →

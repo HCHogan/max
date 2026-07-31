@@ -32,8 +32,13 @@ QQ ──▶ NapCat ──OneBot 11 / reverse-WS──▶ max ──▶ LLM (Ope
 - **Persistence** — every message in Postgres, images and videos
   content-addressed on disk, forwarded chats expanded inline. Pending media
   downloads survive a restart, and SIGTERM lets in-flight turns finish first.
-- **Memory** — per-group and per-user facts injected into the prompt, curated by
-  the model and by a post-reply extractor.
+- **Memory** — per-group and per-user facts injected into the prompt, written by
+  an episode extractor when the conversation goes quiet (whole-arc extraction
+  behind a watermark), consolidated by a nightly dream pass.
+- **Skills** — progressive disclosure: a one-line index in the system prompt,
+  full manuals fetched on demand with `use_skill`. Builtin manuals ship inside
+  the binary (self-knowledge, sandbox, web, office — the docs double as the
+  bot's self-image); DB rows add or shadow them at runtime via the admin API.
 - **Multimodal** — inline images, video and avatars on capable profiles;
   unrelated history images loaded on demand.
 - **Tools** — web search, code sandbox (per-group Docker workspace), files,
@@ -42,6 +47,8 @@ QQ ──▶ NapCat ──OneBot 11 / reverse-WS──▶ max ──▶ LLM (Ope
   runtime with `!model`.
 - **Commands** — `!help`, `!model`, `!persona`, `!proactive`, `!memory`,
   `!clear`, `!pin`, `!btw`, `!feedback`, `!kill`, `!version`, …
+- **Admin panel** — a loopback JSON API + baked-in web panel (sessions, skills,
+  memories, permissions, tasks, usage, logs, full LLM call bodies).
 - *Optional:* **proactive triggering** (a cheap intent classifier can start a
   turn on unaddressed chatter) and **vector search** (pgvector-backed semantic
   search over messages and memories).

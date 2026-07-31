@@ -43,8 +43,11 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.Sandbox.DockerSpec` — package wrapping and exec argv
 - `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
 - `Max.ShutdownSpec` — drain flag / in-flight counter transitions
+- `Max.SkillsSpec` — builtin skills parsed from `skills/` (and the
+  `{{commands}}` splice really happened)
 - `Max.TasksSpec` — the task registry: feeding a running turn, aiming a
-  `!feedback` by trigger, in-flight bookkeeping, `attachTask` adoption
+  `!feedback` by trigger, in-flight bookkeeping, `attachTask` adoption,
+  unserved-note return at `endDispatch` (killed turns keep nothing)
 - `Max.WreqSpec` — HTTP wrapper behaviour
 - `OneBot.EventSpec` — group + private event parsing
 - `OneBot.SegmentSpec` — segment codec, mention conversion, card parsing
