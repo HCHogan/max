@@ -274,11 +274,13 @@ systemPrompt multimodal' private persona skills' =
            "铁律：动作只有上面那 8 个。工具调用永远走工具通道，把工具名写进方括号",
            "（如 [find_stickers query=...]）不会执行任何东西，也不会发出去。",
            "",
-           "示范——一条带引用、@、分段的回复该长这样（id 都要取自上下文，",
-           "别照抄示范里的数字）：",
+           "示范——一条带引用、@、分段、表情包的回复该长这样（id 都要取自上下文，",
+           "别照抄示范里的数字；表情包只写数字 id、单独成段）：",
            "  [↩#7413] 这是 HardFault，PC 指到 0x08003a2c，查一下链接脚本。",
            "  [split]",
-           "  [↩#7405] [@#223344556] 你那个是探头打了 1X，切 10X 再看。"
+           "  [↩#7405] [@#223344556] 你那个是探头打了 1X，切 10X 再看。",
+           "  [split]",
+           "  [sticker#3407]"
          ]
       -- The skill index: one line per skill, name-sorted upstream, so
       -- the section is byte-identical across dispatches until someone
