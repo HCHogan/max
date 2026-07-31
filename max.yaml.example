@@ -309,3 +309,16 @@ llm:
 #   model: bge-m3
 #   # api_key: "sk-..."       # cloud endpoints only
 #   # timeout_seconds: 60
+
+    # OpenAI Responses API — required for GPT-5.x reasoning models,
+    # whose reasoning items must round-trip between tool calls (chat
+    # completions has nowhere to put them).  Runs stateless: store=false,
+    # encrypted reasoning replayed verbatim.  base_url includes /v1;
+    # we append /responses.
+    # gpt-5-6:
+    #   protocol: responses
+    #   api_key: "sk-..."
+    #   base_url: "https://api.openai.com/v1"
+    #   model: gpt-5.6
+    #   max_tokens: 8192
+    #   effort: high          # sent as reasoning.effort

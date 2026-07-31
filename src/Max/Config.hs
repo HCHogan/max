@@ -886,7 +886,7 @@ instance HasCodec ProfileSpec where
         <*> optionalFieldWith "temperature" temperatureCodec "Sampling temperature; omit to not send the field (some providers reject explicit values)" .= (.temperature)
         <*> optionalField "effort" "Reasoning effort (low/medium/high/xhigh/max on Anthropic; reasoning_effort on OpenAI protocol); omit to not send the field" .= (.effort)
         <*> optionalField "timeout_seconds" "HTTP timeout for one completion" .= (.timeoutSeconds)
-        <*> optionalFieldWith "protocol" protocolCodec "openai | anthropic" .= (.protocol)
+        <*> optionalFieldWith "protocol" protocolCodec "openai | anthropic | responses" .= (.protocol)
         <*> optionalField "multimodal" "Endpoint accepts image content blocks" .= (.multimodal)
         <*> optionalField "history_as_turns" "Render history as user/assistant turns instead of one flat transcript" .= (.historyAsTurns)
         <*> optionalField "stream" "Stream the completion over SSE, sending finished paragraphs as they arrive" .= (.stream)
@@ -901,9 +901,10 @@ protocolCodec = bimapCodec parse render codec
   where
     parse t = case parseProtocol t of
       Just p -> Right p
-      Nothing -> Left ("expected 'openai' or 'anthropic', got: " <> T.unpack t)
+      Nothing -> Left ("expected 'openai', 'anthropic' or 'responses', got: " <> T.unpack t)
     render ProtocolOpenAI = "openai" :: Text
     render ProtocolAnthropic = "anthropic"
+    render ProtocolResponses = "responses"
 
 llmParser :: Parser LLMRegistry
 llmParser =
@@ -1000,7 +1001,7 @@ overlayProfileParser = do
           option,
           long "llm-protocol",
           env "MAX_LLM_PROTOCOL",
-          metavar "openai|anthropic"
+          metavar "openai|anthropic|responses"
         ]
   multimodal <-
     optional $
@@ -1046,7 +1047,7 @@ overlayProfileParser = do
   where
     protoReader = eitherReader $ \s -> case parseProtocol (T.pack s) of
       Just p -> Right p
-      Nothing -> Left ("expected 'openai' or 'anthropic', got: " <> s)
+      Nothing -> Left ("expected 'openai', 'anthropic' or 'responses', got: " <> s)
 
 -- | Same resolution rules as the old hand-rolled config: pick the
 -- default profile name, overlay env/CLI values onto it, apply

@@ -16,6 +16,7 @@ import Max.Effects.LLM
     ToolCall (..),
     parseResponseAnthropic,
     parseResponseOpenAI,
+    parseResponseResponses,
     rebuildAnthropic,
     rebuildOpenAI,
     stripLeadingThink,
@@ -55,6 +56,7 @@ asstWithCalls calls =
 spec :: Spec
 spec = do
   streamingSpec
+  responsesSpec
   describe "ChatMessage JSON round-trip" $ do
     it "MsgSystem" $ do
       let m = MsgSystem "you are a bot"
@@ -640,3 +642,74 @@ fieldText _ _ = Nothing
 
 isRight :: Either a b -> Bool
 isRight = either (const False) (const True)
+
+--------------------------------------------------------------------------------
+-- Responses API (GPT-5.x).
+
+responsesSpec :: Spec
+responsesSpec = describe "Responses API parsing" $ do
+  it "reads a text-only response with usage (cached tokens included)" $ do
+    let v =
+          object
+            [ "output"
+                .= [ object
+                       [ "type" .= ("reasoning" :: Text),
+                         "encrypted_content" .= ("opaque" :: Text)
+                       ],
+                     object
+                       [ "type" .= ("message" :: Text),
+                         "role" .= ("assistant" :: Text),
+                         "content"
+                           .= [object ["type" .= ("output_text" :: Text), "text" .= ("你好" :: Text)]]
+                       ]
+                   ],
+              "usage"
+                .= object
+                  [ "input_tokens" .= (100 :: Int),
+                    "output_tokens" .= (7 :: Int),
+                    "input_tokens_details" .= object ["cached_tokens" .= (64 :: Int)]
+                  ]
+            ]
+    case parseEither parseResponseResponses v of
+      Right (ContentResp t, Just u) -> do
+        t `shouldBe` "你好"
+        (u.usagePrompt, u.usageCompletion, u.usageCachedPrompt) `shouldBe` (100, 7, Just 64)
+      other -> expectationFailure ("unexpected: " <> show other)
+
+  -- The whole output array is the raw round-trip value: reasoning items
+  -- (encrypted content included) must replay verbatim, and call_id is
+  -- what function_call_output has to echo.
+  it "keeps the full output array raw and keys calls by call_id" $ do
+    let reasoning =
+          object ["type" .= ("reasoning" :: Text), "encrypted_content" .= ("blob" :: Text)]
+        fnCall =
+          object
+            [ "type" .= ("function_call" :: Text),
+              "id" .= ("fc_item_9" :: Text),
+              "call_id" .= ("call_abc" :: Text),
+              "name" .= ("get_weather" :: Text),
+              "arguments" .= ("{\"city\":\"Tokyo\"}" :: Text)
+            ]
+        v = object ["output" .= [reasoning, fnCall]]
+    case parseEither parseResponseResponses v of
+      Right (ToolCallsResp raw narration [tc], Nothing) -> do
+        raw `shouldBe` toJSON [reasoning, fnCall]
+        narration `shouldBe` ""
+        tc.callId `shouldBe` "call_abc"
+        tc.callName `shouldBe` "get_weather"
+      other -> expectationFailure ("unexpected: " <> show other)
+
+  it "empty arguments default to {}" $ do
+    let v =
+          object
+            [ "output"
+                .= [ object
+                       [ "type" .= ("function_call" :: Text),
+                         "call_id" .= ("call_1" :: Text),
+                         "name" .= ("poke" :: Text)
+                       ]
+                   ]
+            ]
+    case parseEither parseResponseResponses v of
+      Right (ToolCallsResp _ _ [tc], _) -> tc.callArguments `shouldBe` object []
+      other -> expectationFailure ("unexpected: " <> show other)

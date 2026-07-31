@@ -57,6 +57,9 @@ module Max.Effects.LLM
     -- * Exposed for tests
     parseResponseOpenAI,
     parseResponseAnthropic,
+    parseResponseResponses,
+    responsesFields,
+    rebuildResponses,
     rebuildOpenAI,
     rebuildAnthropic,
     stripLeadingThink,
@@ -68,7 +71,8 @@ import Control.Applicative ((<|>))
 import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.List (find)
-import Data.Maybe (isJust)
+import Data.Traversable (for)
+import Data.Maybe (fromMaybe, isJust)
 import Effectful.Exception (SomeException)
 import GHC.Clock (getMonotonicTimeNSec)
 import Control.Lens ((&), (.~))
@@ -87,7 +91,7 @@ import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Log
 import Effectful.Wreq qualified as W
 import Max.Http.Stream (StreamOutcome (..), streamPost)
-import Max.LLM.Stream (StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, PartialCall (..))
+import Max.LLM.Stream (StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, stepResponses, PartialCall (..))
 import Max.Util (trySync)
 import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying, replyRetryDelaysSecs)
 import Network.Wreq qualified as Wreq
@@ -108,15 +112,25 @@ data Protocol
     -- translation layer.  Set 'baseUrl' to the API root (no @/v1@
     -- suffix); we append @/v1/messages@.
     ProtocolAnthropic
+  | -- | OpenAI Responses API: POST @{baseUrl}\/responses@ with
+    -- @Authorization: Bearer@.  Required for GPT-5.x reasoning models,
+    -- whose reasoning items must round-trip between tool calls —
+    -- chat-completions has nowhere to put them.  Run stateless:
+    -- @store: false@ + @include: reasoning.encrypted_content@, with
+    -- the response's whole @output@ array (reasoning + function
+    -- calls) replayed verbatim on the next request.
+    ProtocolResponses
   deriving stock (Show, Eq)
 
 -- | Parse a protocol name from config (TOML / env / CLI).
 -- Case-insensitive.  Returns 'Nothing' for anything other than
--- @openai@ / @anthropic@.
+-- @openai@ / @anthropic@ / @responses@.
 parseProtocol :: Text -> Maybe Protocol
 parseProtocol t = case T.toLower (T.strip t) of
   "openai" -> Just ProtocolOpenAI
   "anthropic" -> Just ProtocolAnthropic
+  "responses" -> Just ProtocolResponses
+  "openai-responses" -> Just ProtocolResponses
   _ -> Nothing
 
 -- | A single named LLM endpoint.  Materialized from one entry of the
@@ -630,6 +644,7 @@ requestBodyFor cfg msgs tools streaming =
       openAIFields cfg msgs tools
         <> (if streaming then streamFieldsOpenAI else ["stream" .= False])
     ProtocolAnthropic -> anthropicFields cfg msgs tools <> ["stream" .= streaming]
+    ProtocolResponses -> responsesFields cfg msgs tools <> ["stream" .= streaming]
 
 -- | The reply as stored in the call log.  Tool calls keep the
 -- provider's verbatim message ('ToolCallsResp' already carries it),
@@ -677,6 +692,7 @@ callChat ::
 callChat cfg msgs tools = case cfg.protocol of
   ProtocolOpenAI -> callChatOpenAI cfg msgs tools
   ProtocolAnthropic -> callChatAnthropic cfg msgs tools
+  ProtocolResponses -> callChatResponses cfg msgs tools
 
 --------------------------------------------------------------------------------
 -- Streaming.
@@ -720,6 +736,16 @@ callChatStream cfg msgs tools sink = case cfg.protocol of
       (LBS.toStrict (encode (object (anthropicFields cfg msgs tools <> [("stream", toJSON True)]))))
       stepAnthropic
       rebuildAnthropic
+  ProtocolResponses ->
+    run
+      (T.unpack (cfg.baseUrl <> "/responses"))
+      [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.apiKey),
+        ("Content-Type", "application/json"),
+        ("Accept", "text/event-stream")
+      ]
+      (LBS.toStrict (encode (object (responsesFields cfg msgs tools <> ["stream" .= True]))))
+      stepResponses
+      rebuildResponses
   where
     run url hdrs body step rebuild = do
       outcome <-
@@ -947,6 +973,156 @@ encodeToolSpecOpenAI t =
             "parameters" .= t.specSchema
           ]
     ]
+
+--------------------------------------------------------------------------------
+-- OpenAI Responses API: POST {baseUrl}/responses.
+
+callChatResponses ::
+  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  LLMProfile ->
+  [ChatMessage] ->
+  [ToolSpec] ->
+  Eff es (Either Text (ChatResponse, Maybe TokenUsage))
+callChatResponses cfg msgs tools = do
+  let body =
+        LBS.toStrict
+          (encode (object (responsesFields cfg msgs tools <> ["stream" .= False])))
+      url = T.unpack (cfg.baseUrl <> "/responses")
+      opts =
+        Wreq.defaults
+          & WL.header "Authorization" .~ ["Bearer " <> TE.encodeUtf8 cfg.apiKey]
+          & WL.header "Content-Type" .~ ["application/json"]
+  postAndParseRetrying defaultRetryDelaysSecs cfg.timeoutSeconds opts url body parseResponseResponses
+
+-- | The Responses request, minus the stream switch.  Stateless on
+-- purpose (@store: false@): nothing accumulates server-side, and the
+-- encrypted reasoning items come back inline so the next request can
+-- replay them — GPT-5.x tool loops degrade without their reasoning.
+responsesFields :: LLMProfile -> [ChatMessage] -> [ToolSpec] -> [Pair]
+responsesFields cfg msgs tools =
+  [ "model" .= cfg.model,
+    "input" .= inputItems,
+    "max_output_tokens" .= cfg.maxTokens,
+    "store" .= False,
+    "include" .= (["reasoning.encrypted_content"] :: [Text])
+  ]
+    <> ["instructions" .= i | Just i <- [instructions]]
+    <> temperatureField cfg
+    <> [f | Just e <- [cfg.effort], f <- ["reasoning" .= object ["effort" .= e]]]
+    <> [ f
+         | not (null tools),
+           f <-
+             [ "tools" .= map encodeToolSpecResponses tools,
+               "tool_choice" .= ("auto" :: Text)
+             ]
+       ]
+  where
+    (instructions, inputItems) = responsesInput msgs
+
+-- | Split the conversation into the request's @instructions@ (system
+-- text) and @input@ items.  A 'MsgAssistantToolCalls' stores the
+-- provider's whole @output@ array as its raw value, so replay splices
+-- the array back in — reasoning items, encrypted content, function
+-- calls, all byte-identical.
+responsesInput :: [ChatMessage] -> (Maybe Text, [Value])
+responsesInput msgs = (instructions, concatMap item msgs)
+  where
+    systems = [c | MsgSystem c <- msgs]
+    instructions
+      | null systems = Nothing
+      | otherwise = Just (T.intercalate "\n\n" systems)
+    item = \case
+      MsgSystem _ -> []
+      MsgUser c -> [object ["role" .= ("user" :: Text), "content" .= c]]
+      MsgUserBlocks blocks ->
+        [object ["role" .= ("user" :: Text), "content" .= map inputBlock blocks]]
+      MsgAssistant c -> [object ["role" .= ("assistant" :: Text), "content" .= c]]
+      MsgAssistantToolCalls raw _ -> case raw of
+        Array xs -> V.toList xs
+        v -> [v]
+      MsgTool cid c ->
+        [ object
+            [ "type" .= ("function_call_output" :: Text),
+              "call_id" .= cid,
+              "output" .= c
+            ]
+        ]
+    inputBlock = \case
+      TextBlock t -> object ["type" .= ("input_text" :: Text), "text" .= t]
+      ImageDataUrl u -> object ["type" .= ("input_image" :: Text), "image_url" .= u]
+      -- No video input on this API; a marker beats a 400.
+      VideoDataUrl _ -> object ["type" .= ("input_text" :: Text), "text" .= ("[video omitted]" :: Text)]
+
+-- | Responses tools are flat — no @function@ wrapper.
+encodeToolSpecResponses :: ToolSpec -> Value
+encodeToolSpecResponses t =
+  object
+    [ "type" .= ("function" :: Text),
+      "name" .= t.specName,
+      "description" .= t.specDescription,
+      "parameters" .= t.specSchema
+    ]
+
+-- | Walk the @output@ array: @function_call@ items become tool calls
+-- (keyed by @call_id@ — that is what @function_call_output@ must echo),
+-- @message@ items contribute their @output_text@.  When calls are
+-- present the whole array is kept as the raw round-trip value.
+parseResponseResponses :: Value -> Parser (ChatResponse, Maybe TokenUsage)
+parseResponseResponses = withObject "Response" $ \o -> do
+  outputs <- o .: "output" :: Parser [Value]
+  mUsageV <- o .:? "usage"
+  calls <- traverse parseFnCall [v | v <- outputs, itemType v == Just "function_call"]
+  let text = T.intercalate "" (concatMap messageText outputs)
+  resp <- case calls of
+    [] | T.null (T.strip text) -> fail "no output_text nor function_call in output"
+    [] -> pure (ContentResp text)
+    tcs -> pure (ToolCallsResp (toJSON outputs) text tcs)
+  pure (resp, parseMaybe parseUsageResponses =<< mUsageV)
+  where
+    itemType :: Value -> Maybe Text
+    itemType = parseMaybe (withObject "item" (.: "type"))
+    messageText v = fromMaybe [] $ flip parseMaybe v $
+      withObject "item" $ \i -> do
+        ty <- i .: "type"
+        if ty /= ("message" :: Text)
+          then pure []
+          else do
+            content <- i .: "content" :: Parser [Object]
+            fmap concat . for content $ \c -> do
+              cty <- c .: "type"
+              if cty == ("output_text" :: Text)
+                then (: []) <$> c .: "text"
+                else pure []
+    parseFnCall = withObject "function_call" $ \i -> do
+      cid <- i .: "call_id"
+      name <- i .: "name"
+      argsStr <- i .:? "arguments" :: Parser (Maybe Text)
+      args <- case argsStr of
+        Nothing -> pure (Object mempty)
+        Just s | T.null (T.strip s) -> pure (Object mempty)
+        Just s -> case eitherDecode (LBS.fromStrict (TE.encodeUtf8 s)) of
+          Right v -> pure v
+          Left e -> fail ("decoding function_call arguments: " <> e)
+      pure (ToolCall cid name args)
+
+parseUsageResponses :: Value -> Parser TokenUsage
+parseUsageResponses = withObject "usage" $ \o -> do
+  p <- o .: "input_tokens"
+  c <- o .: "output_tokens"
+  mDetails <- o .:? "input_tokens_details"
+  cached <- case mDetails of
+    Nothing -> pure Nothing
+    Just d -> d .:? "cached_tokens"
+  pure (TokenUsage p c cached)
+
+-- | The terminal @response.completed@ frame carried the entire
+-- response object, so rebuilding is just parsing it; a stream that
+-- died first degrades to the accumulated text.
+rebuildResponses :: StreamAcc -> ChatResponse
+rebuildResponses acc =
+  case parseMaybe parseResponseResponses acc.saMessage of
+    Just (resp, _) -> resp
+    Nothing -> ContentResp acc.saText
 
 -- | Pull @choices[0].message@ off an OpenAI-style chat response.
 -- For responses with tool_calls, the raw message object rides along

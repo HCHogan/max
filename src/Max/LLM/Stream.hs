@@ -34,6 +34,7 @@ module Max.LLM.Stream
     mergeDelta,
     stepOpenAI,
     stepAnthropic,
+    stepResponses,
     accToolCalls,
     PartialCall (..),
   )
@@ -377,3 +378,37 @@ Just x <|>? _ = Just x
 Nothing <|>? y = y
 
 infixl 3 <|>?
+
+--------------------------------------------------------------------------------
+-- OpenAI Responses API.
+
+-- | Reducer for the Responses API's SSE dialect.  Every event's data
+-- object carries a @type@.  Two kinds matter: @response.output_text.delta@
+-- feeds the live sink, and @response.completed@ delivers the finished
+-- response object whole — so instead of reconstructing the message from
+-- fragments (the chat-completions treatment), the rebuild simply parses
+-- what the terminal frame handed over.  Reasoning items, encrypted
+-- content and function calls all ride along verbatim that way.
+stepResponses :: ByteString -> StreamAcc -> StreamAcc
+stepResponses payload acc = case decodeStrict' payload of
+  Nothing -> acc
+  Just v -> case fld "type" v :: Maybe Text of
+    Just "response.output_text.delta" -> case fld "delta" v of
+      Just t -> acc {saText = acc.saText <> t}
+      Nothing -> acc
+    Just "response.completed" -> case fld "response" v of
+      Just r -> (applyRespUsage r acc) {saMessage = r, saDone = True}
+      Nothing -> acc {saDone = True}
+    -- Terminal-but-unhappy states: keep whatever arrived; saDone stays
+    -- False so the caller treats it as truncated, marker and all.
+    _ -> acc
+  where
+    applyRespUsage r a = case fld "usage" r of
+      Nothing -> a
+      Just u ->
+        a
+          { saPromptTokens = a.saPromptTokens <|>? fld "input_tokens" u,
+            saCompletionTokens = a.saCompletionTokens <|>? fld "output_tokens" u,
+            saCachedTokens =
+              a.saCachedTokens <|>? (fld "input_tokens_details" u >>= fld "cached_tokens")
+          }
