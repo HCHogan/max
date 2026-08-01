@@ -3,7 +3,6 @@
 
 module Max.Effects.AgentSpec (spec) where
 
-import Control.Concurrent.STM (newTVarIO)
 import Data.Aeson (object, (.=))
 import Data.Foldable (for_)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
@@ -14,17 +13,20 @@ import Effectful.Concurrent.Async (runConcurrent)
 import Effectful.Log (runLog)
 import Log (LogLevel (LogAttention))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
-import Max.Effects.Agent (AgentLimits (..), AgentResult (..), DispatchContext (..), agentTurn, runAgent)
+import Max.Effects.Agent (AgentContext (..), AgentLimits (..), AgentResult (..), agentTurn, runAgent)
 import Max.Effects.LLM
   ( ChatMessage (..),
     ChatResponse (..),
+    ContentBlock (..),
     LLMInterpreter (..),
     ToolCall (..),
     runLLMWith,
   )
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Tasks (newTaskRegistry)
+import Max.ToolContext (ToolContext (..), TurnCapabilities (..), TurnIdentity (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
 
@@ -74,30 +76,25 @@ fakeLLM calls =
       liIsProfileHistoryTurns = const (pure False)
     }
 
-echoTool :: Tool es
+echoTool :: (ToolOutput :> es) => Tool es
 echoTool =
   Tool
     { toolName = "echo",
       toolDescription = "echo test input",
       toolSchema = object ["type" .= ("object" :: Text)],
-      toolRun = \args -> pure (Right (object ["echo" .= args]))
+      toolRun = \args -> do
+        _ <- queueInlineMedia (InlineMedia "[tool image]:" "data:image/png;base64,AA==")
+        pure (Right (object ["echo" .= args]))
     }
 
-dispatchContext :: IO DispatchContext
-dispatchContext = do
-  images <- newTVarIO (0, [])
-  pure
-    DispatchContext
-      { dcGroupId = GroupId 7777,
-        dcMessageId = MessageId 7413,
-        dcUserId = UserId 2001,
-        dcSelfId = UserId 1000,
-        dcMultimodal = False,
-        dcStickers = True,
-        dcSkills = False,
-        dcEffort = Nothing,
-        dcToolImages = images
-      }
+dispatchContext :: AgentContext
+dispatchContext =
+  AgentContext
+    ( ToolContext
+        (TurnIdentity (GroupId 7777) (MessageId 7413) (UserId 2001) (UserId 1000))
+        (TurnCapabilities False True False)
+    )
+    Nothing
 
 spec :: Spec
 spec = describe "Agent full loop" $ do
@@ -105,7 +102,6 @@ spec = describe "Agent full loop" $ do
     events <- newIORef []
     calls <- newIORef 0
     tasks <- newTaskRegistry
-    dc <- dispatchContext
     result <-
       withCompactLogger ColorNever Nothing $ \logger ->
         runEff
@@ -113,18 +109,24 @@ spec = describe "Agent full loop" $ do
           . runLog "agent-test" logger LogAttention
           . runLLMWith (fakeLLM calls)
           . runAgent (AgentLimits {maxTurns = 4}) (const [echoTool]) tasks
-          $ agentTurn dc "fake" [MsgUser "question"] (eventSink events)
+          $ agentTurn dispatchContext "fake" [MsgUser "question"] (eventSink events)
 
     result.reply `shouldBe` Just "第一段\n\n第二段"
     result.sentPrefix `shouldBe` "第一段\n\n"
     result.turnsUsed `shouldBe` 2
     result.aborted `shouldBe` Nothing
     case result.appended of
-      [MsgAssistantToolCalls _ [tc], MsgTool callId payload, MsgAssistant final] -> do
-        tc.callName `shouldBe` "echo"
-        callId `shouldBe` "call-1"
-        payload `shouldSatisfy` T.isInfixOf "\"value\":7"
-        final `shouldBe` "第一段\n\n第二段"
+      [ MsgAssistantToolCalls _ [tc],
+        MsgTool callId payload,
+        MsgUserBlocks [TextBlock label, ImageDataUrl dataUrl],
+        MsgAssistant final
+        ] -> do
+          tc.callName `shouldBe` "echo"
+          callId `shouldBe` "call-1"
+          payload `shouldSatisfy` T.isInfixOf "\"value\":7"
+          label `shouldBe` "[tool image]:"
+          dataUrl `shouldBe` "data:image/png;base64,AA=="
+          final `shouldBe` "第一段\n\n第二段"
       other -> expectationFailure ("unexpected appended conversation: " <> show other)
     readIORef calls `shouldReturn` 2
     readIORef events

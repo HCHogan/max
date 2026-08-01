@@ -27,11 +27,12 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessage)
-import Max.Effects.Agent (DispatchContext (..), ToolImage (..), queueToolImage)
 import Max.Effects.LLM (ToolSpec (..))
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Time (fmtHM)
+import Max.ToolContext (ToolContext, toolMultimodal)
 import System.FilePath ((</>))
 
 -- | Same per-image cap as the prompt builder's inline path.
@@ -39,22 +40,21 @@ maxImageBytes :: Int
 maxImageBytes = 20 * 1024 * 1024
 
 imageToolsFor ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
   TimeZone -> -- display timezone for the image label's HH:MM
   FilePath -> -- blob store root ('AppConfig.imagesDir')
-  DispatchContext ->
+  ToolContext ->
   [Tool es]
 imageToolsFor tz blobRoot dc
-  | dc.dcMultimodal = [viewImageTool tz blobRoot dc]
+  | toolMultimodal dc = [viewImageTool tz blobRoot]
   | otherwise = []
 
 viewImageTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
   TimeZone ->
   FilePath ->
-  DispatchContext ->
   Tool es
-viewImageTool tz blobRoot dc =
+viewImageTool tz blobRoot =
   Tool
     { toolName = viewImageSpec.specName,
       toolDescription = viewImageSpec.specDescription,
@@ -124,7 +124,7 @@ viewImageTool tz blobRoot dc =
             else do
               let b64 = TE.decodeUtf8 (B64.encode bytes)
                   dataUrl = "data:" <> mime' <> ";base64," <> b64
-              ok <- queueToolImage dc (ToolImage numbered dataUrl)
+              ok <- queueInlineMedia (InlineMedia numbered dataUrl)
               if ok
                 then (1 +) <$> attachAll label rest total
                 else pure 0

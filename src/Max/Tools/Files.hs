@@ -307,7 +307,7 @@ sendImageFromSandboxTool gid selfId sandboxes =
 -- Production: @"[↩#493645310] 画好了，macOS belike：…"@ went to the
 -- group with the token visible, weeks after the reply and narration
 -- paths were both taught to consume it.  Pure and top-level for the
--- same reason 'Max.Effects.Agent.narrationSegments' is: a sender with
+-- same reason 'Max.ReplySend.modelTextSegs' is: a sender with
 -- its own private idea of what model text means is how this keeps
 -- happening.
 --

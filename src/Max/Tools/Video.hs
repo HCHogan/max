@@ -24,25 +24,23 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Database.PostgreSQL.Simple (Only (..))
-import Max.Effects.Agent (DispatchContext (..), ToolImage (..), queueToolImage)
 import Max.Effects.LLM (ToolSpec (..))
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.Time (fmtDurationSec)
 import System.FilePath ((</>))
 
 videoToolsFor ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
   FilePath -> -- blob store root
-  DispatchContext ->
   [Tool es]
-videoToolsFor blobRoot dc = [viewVideoTool blobRoot dc]
+videoToolsFor blobRoot = [viewVideoTool blobRoot]
 
 viewVideoTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
   FilePath ->
-  DispatchContext ->
   Tool es
-viewVideoTool blobRoot dc =
+viewVideoTool blobRoot =
   Tool
     { toolName = viewVideoSpec.specName,
       toolDescription = viewVideoSpec.specDescription,
@@ -79,7 +77,7 @@ viewVideoTool blobRoot dc =
               <> maybe "" (\d -> "，时长 " <> fmtDurationSec d) mDur
               <> "]:"
           dataUrl = "data:" <> mime <> ";base64," <> TE.decodeUtf8 (B64.encode bytes)
-      ok <- queueToolImage dc (ToolImage label dataUrl)
+      ok <- queueInlineMedia (InlineMedia label dataUrl)
       if not ok
         then pure $ Left "本次任务的附件配额（8 个）已用完"
         else do

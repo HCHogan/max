@@ -22,9 +22,9 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
-import Max.Effects.Agent (DispatchContext (..), ToolImage (..), queueToolImage)
 import Max.Effects.Http (Http, getBytes)
 import Max.Effects.NapCat (NapCat)
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.Roster
   ( GroupMember (..),
@@ -35,19 +35,20 @@ import Max.Roster
     memberName,
     userAvatarUrl,
   )
+import Max.ToolContext (ToolContext, toolGroupId, toolMultimodal)
 import OneBot.Types (GroupId, UserId (..), isPrivateChat)
 
 groupToolsFor ::
-  (NapCat :> es, Http :> es, Log :> es, IOE :> es) =>
-  DispatchContext ->
+  (NapCat :> es, Http :> es, Log :> es, ToolOutput :> es) =>
+  ToolContext ->
   [Tool es]
 groupToolsFor dc =
   concat
-    [ [membersTool dc.dcGroupId | not private],
-      [avatarTool dc | dc.dcMultimodal]
+    [ [membersTool (toolGroupId dc) | not private],
+      [avatarTool dc | toolMultimodal dc]
     ]
   where
-    private = isPrivateChat dc.dcGroupId
+    private = isPrivateChat (toolGroupId dc)
 
 -- | Cap on members returned per call; @offset@ pages through the rest.
 pageSize :: Int
@@ -142,8 +143,8 @@ maxAvatarBytes :: Int
 maxAvatarBytes = 2 * 1024 * 1024
 
 avatarTool ::
-  (NapCat :> es, Http :> es, Log :> es, IOE :> es) =>
-  DispatchContext ->
+  (NapCat :> es, Http :> es, Log :> es, ToolOutput :> es) =>
+  ToolContext ->
   Tool es
 avatarTool dc =
   Tool
@@ -172,17 +173,17 @@ avatarTool dc =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (Nothing, False) -> pure $ Left "要么传 qq，要么传 group=true"
         Right (_, True)
-          | isPrivateChat dc.dcGroupId -> pure $ Left "私聊没有群头像"
+          | isPrivateChat (toolGroupId dc) -> pure $ Left "私聊没有群头像"
           | otherwise ->
-              fetchAndQueue dc (groupAvatarUrl dc.dcGroupId) "[group avatar]:"
+              fetchAndQueue (groupAvatarUrl (toolGroupId dc)) "[group avatar]:"
         Right (Just qq, _) -> do
           -- Best-effort name for the label so the model can tell whose
           -- face it is looking at when several avatars pile up.
           who <-
-            if isPrivateChat dc.dcGroupId
+            if isPrivateChat (toolGroupId dc)
               then pure Nothing
               else do
-                members <- fetchGroupMembers dc.dcGroupId
+                members <- fetchGroupMembers (toolGroupId dc)
                 pure $ do
                   ms <- members
                   m <- lookupMember (UserId qq) ms
@@ -193,7 +194,7 @@ avatarTool dc =
                   <> "("
                   <> T.pack (show qq)
                   <> "):"
-          fetchAndQueue dc (userAvatarUrl (UserId qq)) label
+          fetchAndQueue (userAvatarUrl (UserId qq)) label
     }
   where
     parseArgs :: Object -> Parser (Maybe Int64, Bool)
@@ -207,12 +208,11 @@ avatarTool dc =
 -- not reliable), queue as an inline data URL for the post-round
 -- injection.
 fetchAndQueue ::
-  (Http :> es, Log :> es, IOE :> es) =>
-  DispatchContext ->
+  (Http :> es, Log :> es, ToolOutput :> es) =>
   Text -> -- avatar url
   Text -> -- label for the injected image block
   Eff es (Either Text Value)
-fetchAndQueue dc url label =
+fetchAndQueue url label =
   getBytes url maxAvatarBytes >>= \case
     Left err -> do
       logAttention "view_avatar: fetch failed" $
@@ -222,7 +222,7 @@ fetchAndQueue dc url label =
       let mime' = fromMaybe (defaultMime mime) (sniffImageMime bytes)
           b64 = TE.decodeUtf8 (B64.encode bytes)
           dataUrl = "data:" <> mime' <> ";base64," <> b64
-      ok <- queueToolImage dc (ToolImage label dataUrl)
+      ok <- queueInlineMedia (InlineMedia label dataUrl)
       pure $
         if ok
           then Right (object ["attached" .= True, "note" .= ("头像已附在下一条消息里" :: Text)])

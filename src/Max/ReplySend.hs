@@ -32,7 +32,7 @@
 -- discards the result.
 --
 -- This module deliberately does __not__ import
--- 'Max.Effects.Agent.DispatchContext': the agent loop imports this one,
+-- 'Max.ToolContext.ToolContext': the agent loop imports this one,
 -- and taking the context back would close the cycle.  Hence
 -- 'ReplyTarget', which is the handful of fields both callers already
 -- have.

@@ -362,14 +362,13 @@ execute t gid uid granterTier replyTarget cmd = do
     sess <- liftIO (Session.readSession t)
     multimodal <- isProfileMultimodal sess.model
     skillCount <- liftIO (length <$> skillsForGroup env.beSkills gid)
-    toolCount <-
-      liftIO $
-        toolCountFor
-          env
-          gid
-          multimodal
-          (maybe env.beStickerDefault id sess.stickerOverride)
-          (skillCount > 0)
+    let toolCount =
+          toolCountFor
+            env
+            gid
+            multimodal
+            (maybe env.beStickerDefault id sess.stickerOverride)
+            (skillCount > 0)
     -- Single newlines only: a blank line would split the card into
     -- separate messages ('planReply').  Public on purpose: the
     -- version card is group trivia, not a personal query.

@@ -6,7 +6,7 @@
 -- carries the valid names to steer it back.
 --
 -- Registration is gated on the dispatch actually having skills
--- visible ('Max.Effects.Agent.dcSkills'): a group with none pays no
+-- visible ('Max.ToolContext.toolSkills'): a group with none pays no
 -- schema tokens for a tool that could only fail.
 module Max.Tools.Skills
   ( skillToolsFor,
@@ -18,16 +18,16 @@ import Data.Aeson.Types (parseEither)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
-import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.Tools (Tool (..))
 import Max.Skills (Skill (..), SkillRegistry, lookupSkill, skillsForGroup)
+import Max.ToolContext (ToolContext, toolGroupId, toolSkills)
 
-skillToolsFor :: IOE :> es => SkillRegistry -> DispatchContext -> [Tool es]
+skillToolsFor :: IOE :> es => SkillRegistry -> ToolContext -> [Tool es]
 skillToolsFor reg dc
-  | dc.dcSkills = [useSkillTool reg dc]
+  | toolSkills dc = [useSkillTool reg dc]
   | otherwise = []
 
-useSkillTool :: IOE :> es => SkillRegistry -> DispatchContext -> Tool es
+useSkillTool :: IOE :> es => SkillRegistry -> ToolContext -> Tool es
 useSkillTool reg dc =
   Tool
     { toolName = "use_skill",
@@ -53,7 +53,7 @@ useSkillTool reg dc =
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "name")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (name :: Text) -> do
-          found <- liftIO (lookupSkill reg dc.dcGroupId (T.strip name))
+          found <- liftIO (lookupSkill reg (toolGroupId dc) (T.strip name))
           case found of
             Just s ->
               pure . Right $
@@ -62,7 +62,7 @@ useSkillTool reg dc =
                     "instructions" .= frame s
                   ]
             Nothing -> do
-              skills <- liftIO (skillsForGroup reg dc.dcGroupId)
+              skills <- liftIO (skillsForGroup reg (toolGroupId dc))
               pure . Left $
                 "没有叫 '"
                   <> name

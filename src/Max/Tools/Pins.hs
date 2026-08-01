@@ -19,16 +19,16 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.History (fetchMessage)
-import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.Tools (Tool (..))
 import Max.Session (Session (..), SessionRegistry, loadSession, updateSession)
 import Max.Session qualified as Session
+import Max.ToolContext (ToolContext, toolGroupId)
 
 pinToolsFor ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   SessionRegistry ->
   Text -> -- default model name (for 'loadSession')
-  DispatchContext ->
+  ToolContext ->
   [Tool es]
 pinToolsFor sessions defaultModel dc =
   [ pinTool sessions defaultModel dc,
@@ -45,7 +45,7 @@ pinTool ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   SessionRegistry ->
   Text ->
-  DispatchContext ->
+  ToolContext ->
   Tool es
 pinTool sessions defaultModel dc =
   Tool
@@ -76,7 +76,7 @@ pinTool sessions defaultModel dc =
           fetchMessage mid >>= \case
             Nothing -> pure $ Left ("找不到 message_id=" <> tshow mid)
             Just _ -> do
-              t <- loadSession sessions defaultModel dc.dcGroupId
+              t <- loadSession sessions defaultModel (toolGroupId dc)
               res <- updateSession t $ \s ->
                 if length s.pinned >= maxToolPins && mid `notElem` s.pinned
                   then (s, Left (length s.pinned))
@@ -99,7 +99,7 @@ unpinTool ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   SessionRegistry ->
   Text ->
-  DispatchContext ->
+  ToolContext ->
   Tool es
 unpinTool sessions defaultModel dc =
   Tool
@@ -125,7 +125,7 @@ unpinTool sessions defaultModel dc =
       toolRun = \args -> case parseEither (withObject "args" parseMessageId) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
-          t <- loadSession sessions defaultModel dc.dcGroupId
+          t <- loadSession sessions defaultModel (toolGroupId dc)
           removed <- updateSession t $ \s ->
             if mid `elem` s.pinned
               then (Session.removePin mid s, True)

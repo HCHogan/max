@@ -12,15 +12,15 @@
 -- so assembling the full set there would close a cycle.
 module Max.Toolset (allToolsFor, toolCountFor) where
 
-import Control.Concurrent.STM (newTVarIO)
+import Data.Text (Text)
 import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Wreq qualified as W
-import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.Http (Http)
 import Max.Effects.NapCat (NapCat)
 import Max.Effects.Outbound (Outbound)
+import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (Tool)
 import Max.Env (BotEnv (..))
 import Max.Tools (builtinsFor)
@@ -37,7 +37,8 @@ import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Skills (skillToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
 import Max.Tools.Video (videoToolsFor)
-import OneBot.Types (GroupId, MessageId (..), UserId (..))
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolGroupId, toolMultimodal, toolSelfId, toolStickers)
+import OneBot.Types (GroupId, isPrivateChat)
 
 -- | The tool list for one dispatch.
 --
@@ -51,12 +52,13 @@ allToolsFor ::
     Log :> es,
     NapCat :> es,
     Outbound :> es,
+    ToolOutput :> es,
     W.Wreq :> es,
     WithConnection :> es,
     IOE :> es
   ) =>
   BotEnv ->
-  DispatchContext ->
+  ToolContext ->
   [Tool es]
 allToolsFor env dc =
   builtinsFor env.beTimeZone env.beEmbed dc
@@ -67,38 +69,73 @@ allToolsFor env dc =
     <> pinToolsFor env.beSessions env.beDefaultModel dc
     <> skillToolsFor env.beSkills dc
     <> bilibiliToolsFor env.beTimeZone dc
-    <> sandboxToolsFor env.beTimeZone dc.dcGroupId env.beSandboxes
-    <> fileToolsFor env.beTimeZone dc.dcGroupId dc.dcSelfId env.beBlobRoot env.beSandboxes
-    <> [t | dc.dcStickers, t <- stickerToolsFor env.beEmbed]
+    <> sandboxToolsFor env.beTimeZone (toolGroupId dc) env.beSandboxes
+    <> fileToolsFor env.beTimeZone (toolGroupId dc) (toolSelfId dc) env.beBlobRoot env.beSandboxes
+    <> [t | toolStickers dc, t <- stickerToolsFor env.beEmbed]
     <> maybe [] searchToolsFor env.beSearch
-    <> [t | dc.dcMultimodal, t <- browserToolsFor dc.dcGroupId env.beBrowsers]
-    <> [t | dc.dcMultimodal, t <- videoToolsFor env.beBlobRoot dc]
+    <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]
+    <> [t | toolMultimodal dc, t <- videoToolsFor env.beBlobRoot]
 
 -- | How many tools a dispatch with these gates would get — the
--- @!version@ card's number.  The context is a throwaway (ids zeroed,
--- a fresh image TVar): the list's shape depends only on the gate
--- booleans and 'BotEnv', and nothing here ever runs a tool.  The
--- element type is pinned to an arbitrary concrete stack because
--- @(:>)@ only asks for membership — no interpreters are involved.
+-- @!version@ card's number.  This is intentionally a pure projection
+-- of the same gates as 'allToolsFor': reporting capabilities must not
+-- manufacture fake turn identities or mutable output queues.
 toolCountFor ::
   BotEnv ->
   GroupId ->
   Bool -> -- multimodal profile
   Bool -> -- stickers effective
   Bool -> -- skills visible
-  IO Int
-toolCountFor env gid multimodal stickers skills = do
-  imgs <- newTVarIO (0, [])
-  let dc =
-        DispatchContext
-          { dcGroupId = gid,
-            dcMessageId = MessageId 0,
-            dcUserId = UserId 0,
-            dcSelfId = UserId 0,
-            dcMultimodal = multimodal,
-            dcStickers = stickers,
-            dcSkills = skills,
-            dcEffort = Nothing,
-            dcToolImages = imgs
-          }
-  pure (length (allToolsFor env dc :: [Tool '[Http, Log, NapCat, Outbound, W.Wreq, WithConnection, IOE]]))
+  Int
+toolCountFor env gid multimodal stickers skills =
+  length (toolNamesFor env gid (TurnCapabilities multimodal stickers skills))
+
+-- Keep the live registration order visible here.  Adding or removing a tool
+-- requires updating this projection; unlike constructing live 'Tool' values,
+-- it cannot accidentally acquire effects or demand fabricated ids.
+toolNamesFor :: BotEnv -> GroupId -> TurnCapabilities -> [Text]
+toolNamesFor env gid caps =
+  [ "get_message_by_id",
+    "search_messages",
+    "view_forward",
+    "poke",
+    "set_reminder",
+    "list_reminders",
+    "cancel_reminder"
+  ]
+    <> ["group_members" | not (isPrivateChat gid)]
+    <> [name | caps.tcMultimodal, name <- ["view_avatar", "view_image"]]
+    <> ["memory_save", "memory_update", "memory_forget", "memory_list"]
+    <> ["memory_search" | Just _ <- [env.beEmbed]]
+    <> ["pin_message", "unpin_message"]
+    <> ["use_skill" | caps.tcSkills]
+    <> ["view_bilibili"]
+    <> [ "sandbox_create",
+         "sandbox_exec",
+         "nix_search",
+         "sandbox_list",
+         "sandbox_destroy",
+         "sandbox_read_file",
+         "sandbox_write_file"
+       ]
+    <> [ "list_recent_files",
+         "import_file_to_sandbox",
+         "send_image_from_sandbox",
+         "send_file_from_sandbox"
+       ]
+    <> ["find_stickers" | caps.tcStickers, Just _ <- [env.beEmbed]]
+    <> ["web_search" | Just _ <- [env.beSearch]]
+    <> [ name
+       | caps.tcMultimodal,
+         name <-
+           [ "browser_navigate",
+             "view_zhihu",
+             "browser_snapshot",
+             "browser_click",
+             "browser_type",
+             "browser_press_key",
+             "browser_wait_for",
+             "browser_scroll",
+             "view_video"
+           ]
+       ]

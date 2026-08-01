@@ -34,7 +34,7 @@ import Max.Command.Types (Command (..))
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
 import Max.DB.Message (MessageKind (..), insertGroupMessage, insertSilence)
 import Max.DB.Permissions (lookupGrant)
-import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
+import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.LLM (LLM, isProfileHistoryTurns, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, sendAction)
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded, wasDelivered)
@@ -53,6 +53,7 @@ import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
 import Max.Tasks (Note (..), TaskCancelled (..), TaskId (..), TaskInfo (..), absorbedTriggers, beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
+import Max.ToolContext (ToolContext (..), TurnCapabilities (..), TurnIdentity (..))
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..))
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
@@ -829,7 +830,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       let MessageId ownMid = gm.messageId
       inFlight <- Set.delete ownMid <$> liftIO (inFlightTriggers env.beTasks gm.groupId)
       -- One registry snapshot serves both halves of the disclosure:
-      -- the index rendered into the system prompt and the dcSkills
+      -- the index rendered into the system prompt and the tool-capability
       -- gate that registers the use_skill tool reading the bodies.
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
@@ -858,10 +859,13 @@ dispatchLLM mIntent origin absorbable companions gm = do
         updateSession t (\sess -> (sess {contextAnchor = Just anchor}, ()))
         logInfo "context anchor moved" $
           object ["group_id" .= (let GroupId g = gm.groupId in g)]
-      toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId multimodal stickersEff (not (null skills)) s.effortOverride toolImgs
+          toolCtx =
+            ToolContext
+              (TurnIdentity gm.groupId gm.messageId gm.userId gm.selfId)
+              (TurnCapabilities multimodal stickersEff (not (null skills)))
+          agentCtx = AgentContext toolCtx s.effortOverride
           target = sendTarget env gm mentionable rosterNames stickersEff
       -- The streaming sink.  It sends whole paragraphs the model has
       -- finished with, down the same path the final reply takes — the
@@ -869,7 +873,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- bounded together (see "Max.ReplySend").
       streamBudget <- liftIO (newTVarIO freshBudget)
       let output = AgentOutputContext target debugEff streamBudget
-      result <- agentTurn dc s.model ctx (handleAgentEvent output)
+      result <- agentTurn agentCtx s.model ctx (handleAgentEvent output)
       case result.reply of
         -- The loop produced no model-authored reply — upstream API
         -- down, or the turn-cap fallback call failed too.  Error text

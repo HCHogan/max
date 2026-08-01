@@ -46,9 +46,9 @@ import Max.DB.Memory
     parseScope,
     updateMemory,
   )
-import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
+import Max.ToolContext (ToolContext, toolGroupId, toolUserId)
 import OneBot.Types (GroupId (..), UserId (..))
 
 -- | Per (scope, scope_id) ceiling.  Hitting it turns 'memory_save'
@@ -64,7 +64,7 @@ maxMemoryChars = 300
 memoryToolsFor ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   Maybe EmbedClient ->
-  DispatchContext ->
+  ToolContext ->
   [Tool es]
 memoryToolsFor mEmbed dc =
   [ saveTool dc,
@@ -79,7 +79,7 @@ memoryToolsFor mEmbed dc =
 
 saveTool ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
-  DispatchContext ->
+  ToolContext ->
   Tool es
 saveTool dc =
   Tool
@@ -121,8 +121,8 @@ saveTool dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, content, mUid) -> do
-          let GroupId gid = dc.dcGroupId
-              UserId triggerUid = dc.dcUserId
+          let GroupId gid = toolGroupId dc
+              UserId triggerUid = toolUserId dc
           case parseScope scopeRaw of
             Nothing -> pure $ Left "scope 必须是 group 或 user"
             Just scope -> case checkContent content of
@@ -232,7 +232,7 @@ forgetTool =
 
 listTool ::
   (WithConnection :> es, IOE :> es) =>
-  DispatchContext ->
+  ToolContext ->
   Tool es
 listTool dc =
   Tool
@@ -264,8 +264,8 @@ listTool dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, mSid) -> do
-          let GroupId gid = dc.dcGroupId
-              UserId triggerUid = dc.dcUserId
+          let GroupId gid = toolGroupId dc
+              UserId triggerUid = toolUserId dc
           case parseScope scopeRaw of
             Nothing -> pure $ Left "scope 必须是 group 或 user"
             Just scope -> do
@@ -288,11 +288,11 @@ memorySummary m = object ["id" .= m.memId, "content" .= m.memContent]
 
 searchTool ::
   (WithConnection :> es, IOE :> es) =>
-  DispatchContext ->
+  ToolContext ->
   EmbedClient ->
   Tool es
 searchTool dc ec =
-  let GroupId gid = dc.dcGroupId
+  let GroupId gid = toolGroupId dc
    in Tool
     { toolName = "memory_search",
       toolDescription =

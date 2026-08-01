@@ -47,17 +47,15 @@
 --
 -- == Per-group tools
 --
--- The interpreter is parameterised by a @GroupId -> [Tool es]@
+-- The interpreter is parameterised by a @ToolContext -> [Tool es]@
 -- factory.  When 'AgentTurn' fires, the factory produces the right
--- tool list for that group; the interpreter spins up a 'Tools'
--- interpreter just for that call.
+-- tool list for that turn; the interpreter spins up scoped 'ToolOutput'
+-- and 'Tools' interpreters just for that call.
 module Max.Effects.Agent
   ( Agent,
     AgentLimits (..),
     AgentResult (..),
-    DispatchContext (..),
-    ToolImage (..),
-    queueToolImage,
+    AgentContext (..),
     assembleToolRound,
     toolResultMessage,
     runAgent,
@@ -67,7 +65,7 @@ module Max.Effects.Agent
 where
 
 import Control.Concurrent (myThreadId, throwTo)
-import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, readTVarIO, writeTVar)
+import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, writeTVar)
 import Control.Monad (when)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
@@ -82,75 +80,29 @@ import Effectful.Exception (bracket, throwIO)
 import Effectful.Log
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, defaultInlineMediaLimit, drainInlineMedia, runToolOutput)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
 import Max.Reply (readyPrefix)
 import Max.Tasks (Note (..), TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask, requeueInbox)
-import OneBot.Types (GroupId (..), MessageId, UserId)
+import Max.ToolContext (ToolContext, toolGroupId, toolMessageId, toolUserId)
+import OneBot.Types (GroupId (..))
 
--- | Per-dispatch context the agent loop hands to its tool factory.
--- Tools like @say@ need the triggering message coordinates to thread
--- their reply correctly; ambient tools that only care about the group
--- can just project 'dcGroupId'.  'dcSelfId' is the bot's own QQ id,
--- needed by visible-output and reminder tools.
-data DispatchContext = DispatchContext
-  { dcGroupId :: !GroupId,
-    dcMessageId :: !MessageId,
-    dcUserId :: !UserId,
-    dcSelfId :: !UserId,
-    -- | Whether the active profile is multimodal.  The tool factory
-    -- gates capability-heavy tools (e.g. the browser toolset) on this.
-    dcMultimodal :: !Bool,
-    -- | Effective sticker toggle for this dispatch (config default,
-    -- possibly overridden per session via !sticker on/off).  The tool
-    -- factory gates the send_sticker tool on this.
-    dcStickers :: !Bool,
-    -- | Whether this group has any skills visible (the system prompt
-    -- then carries a 技能对照表).  The tool factory gates the
-    -- use_skill tool on this — a group with no skills shouldn't pay
-    -- schema tokens for a tool that could only fail.
-    dcSkills :: !Bool,
+-- | Agent-only data around the neutral context handed to tools.
+data AgentContext = AgentContext
+  { acTools :: !ToolContext,
     -- | The session's @!effort@ override, threaded into every LLM
     -- call this turn makes ('turnCtx').  'Nothing' = the profile's
     -- configured effort.
-    dcEffort :: !(Maybe Text),
-    -- | Images queued by tools (e.g. @view_avatar@) via
-    -- 'queueToolImage' during the current tool round.  The loop drains
-    -- the list after each round and injects them as a user-role
-    -- image-blocks message — tool-result messages themselves are
-    -- text-only on the OpenAI wire.  The counter tracks every image
-    -- queued over the whole dispatch (it survives drains) so
-    -- 'queueToolImage' can enforce 'maxToolImages'.
-    dcToolImages :: !(TVar (Int, [ToolImage]))
+    acEffort :: !(Maybe Text)
   }
 
--- | One tool-queued inline image: a context label ("[avatar] Alice:")
--- plus a @data:<mime>;base64,...@ URL.
-data ToolImage = ToolImage
-  { tiLabel :: !Text,
-    tiDataUrl :: !Text
-  }
-
--- | Per-dispatch cap on tool-queued images — same order as the
--- prompt builder's own image budget; keeps a chatty model from
--- ballooning the context with base64.
-maxToolImages :: Int
-maxToolImages = 8
-
--- | Queue an image for injection after the current tool round.
--- 'False' when the dispatch's image budget is already spent (the
--- tool should surface that as its error text).
 -- | Usage attribution for a dispatch's own LLM calls.  Private chats
 -- report their pseudo-group id — that is the conversation the spend
 -- belongs to.
-turnCtx :: DispatchContext -> Text -> ChatCtx
-turnCtx dc source = let GroupId g = dc.dcGroupId in ChatCtx source (Just g) dc.dcEffort
-
-queueToolImage :: (IOE :> es) => DispatchContext -> ToolImage -> Eff es Bool
-queueToolImage dc img = liftIO . atomically $ do
-  (n, imgs) <- readTVar dc.dcToolImages
-  if n >= maxToolImages
-    then pure False
-    else True <$ writeTVar dc.dcToolImages (n + 1, imgs <> [img])
+turnCtx :: AgentContext -> Text -> ChatCtx
+turnCtx ctx source =
+  let GroupId gid = toolGroupId ctx.acTools
+   in ChatCtx source (Just gid) ctx.acEffort
 
 -- | Caps on a single agent invocation.  Per-tool and per-call HTTP
 -- timeouts are configured at the 'LLM' layer; these are loop-level.
@@ -212,7 +164,7 @@ data Agent :: Effect where
   -- rendering, and persistence policy without the loop importing any of
   -- those mechanisms.
   AgentTurn ::
-    DispatchContext ->
+    AgentContext ->
     Text ->
     [ChatMessage] ->
     AgentEventSink m ->
@@ -233,53 +185,55 @@ runAgent ::
   forall es a.
   (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
   AgentLimits ->
-  (DispatchContext -> [Tool es]) ->
+  (ToolContext -> [Tool (ToolOutput : es)]) ->
   TaskRegistry ->
   Eff (Agent : es) a ->
   Eff es a
 runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
-  AgentTurn dc profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
+  AgentTurn ctx profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
     let cancel = throwTo selfTid TaskCancelled
-        emit :: AgentEventSink (Eff (Tools : es))
-        emit event = raise (unlift (sink event))
+        toolCtx = ctx.acTools
+        emit :: AgentEventSink (Eff (Tools : ToolOutput : es))
+        emit event = raise (raise (unlift (sink event)))
     bracket
-      (liftIO (attachTask taskReg dc.dcGroupId dc.dcUserId (Just dc.dcMessageId) "llm" cancel))
+      (liftIO (attachTask taskReg (toolGroupId toolCtx) (toolUserId toolCtx) (Just (toolMessageId toolCtx)) "llm" cancel))
       (liftIO . releaseTask taskReg)
       ( \handle -> do
           -- A !kill that landed while the dispatch was still building
           -- its context has no thread to interrupt yet; the registry
           -- held it for us.  Honour it before spending a turn.
           when handle.thPreKilled $ throwIO TaskCancelled
-          runTools (toolFactory dc) (loop emit dc handle profile msgs)
+          runToolOutput defaultInlineMediaLimit $
+            runTools (toolFactory toolCtx) (loop emit ctx handle profile msgs)
       )
   where
     loop ::
-      AgentEventSink (Eff (Tools : es)) ->
-      DispatchContext ->
+      AgentEventSink (Eff (Tools : ToolOutput : es)) ->
+      AgentContext ->
       TaskHandle ->
       Text ->
       [ChatMessage] ->
-      Eff (Tools : es) AgentResult
-    loop emit dc h profile = go emit dc h 0 [] profile
+      Eff (Tools : ToolOutput : es) AgentResult
+    loop emit ctx h profile = go emit ctx h 0 [] profile
 
     go ::
-      AgentEventSink (Eff (Tools : es)) ->
-      DispatchContext ->
+      AgentEventSink (Eff (Tools : ToolOutput : es)) ->
+      AgentContext ->
       TaskHandle ->
       Int ->
       [ChatMessage] ->
       Text ->
       [ChatMessage] ->
-      Eff (Tools : es) AgentResult
-    go emit dc h n appended profile msgs = do
+      Eff (Tools : ToolOutput : es) AgentResult
+    go emit ctx h n appended profile msgs = do
       -- Drain any feedback notes that arrived since the previous turn.
       notes <- liftIO (drainInbox h)
       let (msgs', appended') = case notes of
             [] -> (msgs, appended)
             xs -> (msgs <> [feedbackMsg xs], appended <> [feedbackMsg xs])
       if n >= lims.maxTurns
-        then finalAnswer dc n appended' profile msgs'
+        then finalAnswer ctx n appended' profile msgs'
         else do
           specs <- listToolSpecs
           -- Trim before the call AND carry the trimmed list forward
@@ -291,7 +245,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
           -- narration, or the final answer), and each gets its own
           -- prefix bookkeeping.
           sentRef <- liftIO (newTVarIO "")
-          eres <- chatStreaming (turnCtx dc "turn") profile msgs'' specs (releaseParagraphs emit sentRef)
+          eres <- chatStreaming (turnCtx ctx "turn") profile msgs'' specs (releaseParagraphs emit sentRef)
           sent <- liftIO (readTVarIO sentRef)
           case eres of
             Left err ->
@@ -340,7 +294,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
                       logInfo "agent: btw notes raced final answer, continuing" $
                         object ["count" .= length xs]
                       let newMsgs = [MsgAssistant text, feedbackMsg xs]
-                      go emit dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                      go emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -371,22 +325,22 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
               -- gives debug output a deterministic call order.
               for_ executed $ \(_, event) -> emit (AgentToolDebug event)
               let toolMsgs = map fst executed
-              imgs <- drainToolImages dc
+              imgs <- drainToolMedia
               let newMsgs = assembleToolRound raw tcs toolMsgs imgs
-              go emit dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+              go emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
     -- gets a real answer built from whatever the loop already gathered,
     -- rather than a bare "max turns" error.  Empty tool specs force a
     -- content response; a synthetic note tells the model to wrap up.
     finalAnswer ::
-      DispatchContext ->
+      AgentContext ->
       Int ->
       [ChatMessage] ->
       Text ->
       [ChatMessage] ->
-      Eff (Tools : es) AgentResult
-    finalAnswer dc n appended profile msgs = do
+      Eff (Tools : ToolOutput : es) AgentResult
+    finalAnswer ctx n appended profile msgs = do
       logInfo "agent: max turns reached, forcing final answer" $
         object ["turns" .= n]
       let capNote =
@@ -394,7 +348,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
               "[system] 工具调用轮次已用满，别再调用任何工具了。\
               \直接根据目前已经掌握的信息，给用户一个最终回复。"
       eres <-
-        chat (turnCtx dc "wrapup") profile (capToolResults toolResultBudget (msgs <> [capNote])) []
+        chat (turnCtx ctx "wrapup") profile (capToolResults toolResultBudget (msgs <> [capNote])) []
       let (mText, ab) = case eres of
             Right (ContentResp t) | not (T.null (T.strip t)) -> (Just t, Just "max-turns")
             Right _ -> (Nothing, Just "max-turns")
@@ -425,10 +379,10 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     -- we have still said that much, and re-releasing the same paragraph
     -- on the next frame would say it twice.
     releaseParagraphs ::
-      AgentEventSink (Eff (Tools : es)) ->
+      AgentEventSink (Eff (Tools : ToolOutput : es)) ->
       TVar Text ->
       Text ->
-      Eff (Tools : es) ()
+      Eff (Tools : ToolOutput : es) ()
     releaseParagraphs emit sentRef soFar = do
       sent <- liftIO (readTVarIO sentRef)
       let (ready, _held) = readyPrefix (T.drop (T.length sent) soFar)
@@ -448,19 +402,15 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     feedbackMsg :: [Note] -> ChatMessage
     feedbackMsg xs = MsgUser ("[feedback]: " <> T.intercalate " | " (map (.noteLine) xs))
 
-    -- Images tools queued this round, packaged as one user message of
-    -- alternating label/image blocks (leading text block, never two
+    -- Media queued by tools this round, packaged as one user message of
+    -- alternating label/media blocks (leading text block, never two
     -- adjacent text blocks — the shape strict providers accept).
     -- Injected AFTER all tool-result messages so every tool_call id is
     -- answered first, as the OpenAI wire requires.
-    drainToolImages :: DispatchContext -> Eff (Tools : es) [ToolImage]
-    drainToolImages dc = do
-      liftIO . atomically $ do
-        (n, is) <- readTVar dc.dcToolImages
-        writeTVar dc.dcToolImages (n, [])
-        pure is
+    drainToolMedia :: Eff (Tools : ToolOutput : es) [InlineMedia]
+    drainToolMedia = drainInlineMedia
 
-    executeOne :: ToolCall -> Eff (Tools : es) (ChatMessage, ToolDebugEvent)
+    executeOne :: ToolCall -> Eff (Tools : ToolOutput : es) (ChatMessage, ToolDebugEvent)
     executeOne tc = do
       logInfo "agent: tool call" $
         object
@@ -487,7 +437,8 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
 
 -- | Build the messages appended after one tool-call response.  This is
 -- deliberately a pure seam between the effectful pieces of the loop:
--- tool execution happens through 'Tools', image collection through STM,
+-- tool execution happens through 'Tools', media collection through the
+-- scoped 'ToolOutput' effect,
 -- while the protocol-neutral conversation transition is just data.
 -- Keeping it here also gives documentation/tests the exact production
 -- shape without standing up Postgres, NapCat, or an LLM endpoint.
@@ -495,7 +446,7 @@ assembleToolRound ::
   Value -> -- provider's assistant message, verbatim
   [ToolCall] ->
   [ChatMessage] -> -- one 'MsgTool' per call, in call order
-  [ToolImage] ->
+  [InlineMedia] ->
   [ChatMessage]
 assembleToolRound raw tcs toolMsgs imgs =
   [MsgAssistantToolCalls raw tcs]
@@ -504,7 +455,7 @@ assembleToolRound raw tcs toolMsgs imgs =
        | not (null imgs)
        ]
   where
-    imageBlocks i = [TextBlock i.tiLabel, mediaBlock i.tiDataUrl]
+    imageBlocks i = [TextBlock i.imLabel, mediaBlock i.imDataUrl]
     -- Videos ride the same queue (and budget); the data URL's mime
     -- prefix decides the wire block type.
     mediaBlock u
@@ -572,9 +523,9 @@ capToolResults budget msgs
 
 agentTurn ::
   (Agent :> es) =>
-  DispatchContext ->
+  AgentContext ->
   Text ->
   [ChatMessage] ->
   AgentEventSink (Eff es) ->
   Eff es AgentResult
-agentTurn dc profile msgs sink = send (AgentTurn dc profile msgs sink)
+agentTurn ctx profile msgs sink = send (AgentTurn ctx profile msgs sink)

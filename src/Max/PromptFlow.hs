@@ -38,7 +38,7 @@ import Max.DB.Calls (redactDataUrls)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
-import Max.Effects.Agent (ToolImage (..), assembleToolRound, toolResultMessage)
+import Max.Effects.Agent (assembleToolRound, toolResultMessage)
 import Max.Effects.LLM
   ( ChatMessage,
     LLMProfile (..),
@@ -47,6 +47,7 @@ import Max.Effects.LLM
     ToolSpec,
     requestBodyFor,
   )
+import Max.Effects.ToolOutput (InlineMedia (..))
 import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), renderContext)
 import Max.Session (Session (..))
 import Max.Tools.Images (viewImageSpec)
@@ -268,11 +269,11 @@ toolResult =
       "note" .= ("图片已附在下一条消息里" :: Text)
     ]
 
-toolImage :: ToolImage
+toolImage :: InlineMedia
 toolImage =
-  ToolImage
-    { tiLabel = "[22:52 老张] 消息里的图片:",
-      tiDataUrl = "data:image/jpeg;base64,dG9vbC1pbWFnZQ=="
+  InlineMedia
+    { imLabel = "[22:52 老张] 消息里的图片:",
+      imDataUrl = "data:image/jpeg;base64,dG9vbC1pbWFnZQ=="
     }
 
 initialMessages :: [ChatMessage]

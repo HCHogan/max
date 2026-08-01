@@ -9,7 +9,7 @@
 -- Nothing here is per-dispatch state: these are process-lifetime
 -- handles and config defaults.  Per-dispatch data (group, sender,
 -- trigger message) keeps travelling as explicit arguments /
--- 'Max.Effects.Agent.DispatchContext'.
+-- 'Max.ToolContext.ToolContext'.
 module Max.Env
   ( BotEnv (..),
   )

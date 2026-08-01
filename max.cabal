@@ -94,6 +94,7 @@ library
         Max.Effects.LLM
         Max.Effects.NapCat
         Max.Effects.Outbound
+        Max.Effects.ToolOutput
         Max.Effects.Tools
         Max.Embedder
         Max.Embedding
@@ -131,6 +132,7 @@ library
         Max.Tasks
         Max.Time
         Max.Toolset
+        Max.ToolContext
         Max.Tools
         Max.Tools.Bilibili
         Max.Tools.Browser
@@ -275,6 +277,7 @@ test-suite max-test
         Max.Effects.AgentSpec
         Max.Effects.LLMSpec
         Max.Effects.OutboundSpec
+        Max.Effects.ToolOutputSpec
         Max.MCP.ClientSpec
         Max.PlatformSpec
         Max.PromptFlowSpec

@@ -24,7 +24,8 @@ src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-gro
                    segments, events, actions, server
 src/Max/Effects/   effectful 2.5 effects: Http, Blob, NapCat, Outbound (visible send
                    + persistence), LLM (OpenAI + Anthropic, buffered or streamed),
-                   Tools, Agent  (DB effect from upstream effectful-postgresql)
+                   Tools, ToolOutput (turn-scoped tool media), Agent
+                   (DB effect from upstream effectful-postgresql)
 src/Max/LLM/       Stream: SSE framing + the two protocols' delta reducers, pure
 src/Max/Http/      Stream: the incremental POST wreq can't do (http-client withResponse)
 src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
@@ -43,6 +44,7 @@ src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    AgentEvent (typed progress/debug/final-stream port and its
                    ReplySend/Outbound interpreter),
+                   ToolContext (neutral per-turn identity/capabilities),
                    Toolset (the full tool list, assembled from BotEnv), Intent
                    (proactive classifier), Skills (write-through registry:
                    builtins baked from skills/ + docs/, DB rows shadowing them),
@@ -139,6 +141,24 @@ and its typed `AgentEventSink`; it has no OneBot segment, `Outbound`, or message
 persistence dependency.  The production sink is assembled per dispatch in
 `Handler`, where reply target, debug policy, and the shared stream budget are
 known.
+
+Each `AgentTurn` adds two narrower scopes inside the process stack:
+
+```
+Handler
+  └─ AgentContext (ToolContext + LLM effort)
+       └─ Agent
+            ├─ runTools (allToolsFor ToolContext)
+            │    └─ concrete tool ──queueInlineMedia──▶ ToolOutput
+            └─ drainInlineMedia ──▶ next LLM tool round
+```
+
+`ToolContext` contains only turn identity and capability gates, so concrete
+tools do not import `Agent`. `ToolOutput` owns a fresh media queue per turn;
+draining a round clears queued media but preserves the turn-wide attachment
+counter. This prevents concurrent turns from sharing output state and keeps
+mutable queue mechanics out of context records. Capability reporting uses a
+pure gate projection rather than constructing tools with dummy ids.
 
 Workers are started as one flat list (`withLinkedWorkers` in `app/Main.hs`),
 each `link`ed so a worker dying silently takes the process down rather than

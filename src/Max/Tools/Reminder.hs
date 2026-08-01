@@ -6,7 +6,7 @@
 -- fire time, and poke the scheduler awake.
 --
 -- The conversation is implicit: group/user/self come from the
--- 'DispatchContext', so the model never passes ids.
+-- 'ToolContext', so the model never passes ids.
 module Max.Tools.Reminder
   ( reminderToolsFor,
   )
@@ -27,18 +27,18 @@ import Max.DB.Reminder
     insertReminder,
     listPending,
   )
-import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.Tools (Tool (..))
 import Max.Reminder (ReminderScheduler, nextCronFire, notifyReminderChange)
 import Max.Time (fmtDateHM)
 import Max.Tools (parseTimeArg)
+import Max.ToolContext (ToolContext, toolGroupId, toolSelfId, toolUserId)
 import System.Cron.Parser (parseCronSchedule)
 
 reminderToolsFor ::
   (WithConnection :> es, IOE :> es) =>
   TimeZone ->
   ReminderScheduler ->
-  DispatchContext ->
+  ToolContext ->
   [Tool es]
 reminderToolsFor tz sched dc =
   [ setReminderTool tz sched dc,
@@ -60,7 +60,7 @@ setReminderTool ::
   (WithConnection :> es, IOE :> es) =>
   TimeZone ->
   ReminderScheduler ->
-  DispatchContext ->
+  ToolContext ->
   Tool es
 setReminderTool tz sched dc =
   Tool
@@ -116,9 +116,9 @@ setReminderTool tz sched dc =
             Right (cron, fireAt) -> do
               rid <-
                 insertReminder
-                  dc.dcGroupId
-                  dc.dcUserId
-                  dc.dcSelfId
+                  (toolGroupId dc)
+                  (toolUserId dc)
+                  (toolSelfId dc)
                   (T.strip sa.saText)
                   cron
                   fireAt
@@ -168,14 +168,14 @@ resolveWhen tz sa now =
 --------------------------------------------------------------------------------
 -- list_reminders
 
-listRemindersTool :: (WithConnection :> es, IOE :> es) => TimeZone -> DispatchContext -> Tool es
+listRemindersTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
 listRemindersTool tz dc =
   Tool
     { toolName = "list_reminders",
       toolDescription = "列出本会话所有还没触发的提醒（含 id、下次触发时间、内容，循环的还有 cron）。",
       toolSchema = object ["type" .= ("object" :: Text), "properties" .= object []],
       toolRun = \_ -> do
-        rs <- listPending dc.dcGroupId
+        rs <- listPending (toolGroupId dc)
         pure $ Right $ toJSON (map summarize rs)
     }
   where
@@ -190,7 +190,7 @@ listRemindersTool tz dc =
 --------------------------------------------------------------------------------
 -- cancel_reminder
 
-cancelReminderTool :: (WithConnection :> es, IOE :> es) => ReminderScheduler -> DispatchContext -> Tool es
+cancelReminderTool :: (WithConnection :> es, IOE :> es) => ReminderScheduler -> ToolContext -> Tool es
 cancelReminderTool sched dc =
   Tool
     { toolName = "cancel_reminder",
@@ -211,7 +211,7 @@ cancelReminderTool sched dc =
       toolRun = \args -> case parseEither (withObject "args" (.: "id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (rid :: Int64) -> do
-          ok <- cancelReminder dc.dcGroupId rid
+          ok <- cancelReminder (toolGroupId dc) rid
           if ok
             then do
               liftIO (notifyReminderChange sched)

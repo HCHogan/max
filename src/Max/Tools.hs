@@ -28,12 +28,12 @@ import Effectful.Exception (try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.History (HistoryItem (..), bestName, fetchForwardChildren, fetchMessage)
-import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Prompt (tagMediaMarkers)
 import Max.Time (fmtDateHM)
+import Max.ToolContext (ToolContext, toolGroupId)
 import OneBot.Action (Action (..), Response (..))
 import OneBot.Types (GroupId (..), UserId (..))
 
@@ -45,11 +45,11 @@ builtinsFor ::
   ) =>
   TimeZone ->
   Maybe EmbedClient ->
-  DispatchContext ->
+  ToolContext ->
   [Tool es]
 builtinsFor tz mEmbed dc =
   [ getMessageByIdTool tz,
-    searchMessagesTool tz mEmbed dc.dcGroupId,
+    searchMessagesTool tz mEmbed (toolGroupId dc),
     viewForwardTool tz,
     pokeTool dc
   ]
@@ -352,7 +352,7 @@ viewForwardTool tz =
 
 pokeTool ::
   (NapCat :> es, Log :> es) =>
-  DispatchContext ->
+  ToolContext ->
   Tool es
 pokeTool dc =
   Tool
@@ -379,7 +379,7 @@ pokeTool dc =
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "qq")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (qq :: Int64) -> do
-          eres <- callAction (SendPoke dc.dcGroupId (UserId qq)) 10000
+          eres <- callAction (SendPoke (toolGroupId dc) (UserId qq)) 10000
           case eres of
             Left err -> pure $ Left ("poke 失败: " <> err)
             Right (Response _ rc _ _)

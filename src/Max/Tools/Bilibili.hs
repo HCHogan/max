@@ -23,15 +23,16 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.Log
 import Max.Bilibili
-import Max.Effects.Agent (DispatchContext (..), ToolImage (..), queueToolImage)
 import Max.Effects.Http (Http, getBytesWith)
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.Time (fmtDateHM)
+import Max.ToolContext (ToolContext, toolMultimodal)
 
 bilibiliToolsFor ::
-  (Http :> es, Log :> es, IOE :> es) =>
+  (Http :> es, Log :> es, ToolOutput :> es) =>
   TimeZone ->
-  DispatchContext ->
+  ToolContext ->
   [Tool es]
 bilibiliToolsFor tz dc = [viewBilibiliTool tz dc]
 
@@ -45,9 +46,9 @@ topCommentCount :: Int
 topCommentCount = 15
 
 viewBilibiliTool ::
-  (Http :> es, Log :> es, IOE :> es) =>
+  (Http :> es, Log :> es, ToolOutput :> es) =>
   TimeZone ->
-  DispatchContext ->
+  ToolContext ->
   Tool es
 viewBilibiliTool tz dc =
   Tool
@@ -136,7 +137,7 @@ viewBilibiliTool tz dc =
           ]
 
     attachStream info
-      | not dc.dcMultimodal =
+      | not (toolMultimodal dc) =
           pure
             [ "video_attached" .= False,
               "video_note" .= ("当前模型不是多模态，看不了画面" :: Text)
@@ -161,7 +162,7 @@ viewBilibiliTool tz dc =
                     Right (bytes, _) -> do
                       let label = "[B站 " <> info.bvBvid <> " " <> info.bvTitle <> "]:"
                           dataUrl = "data:video/mp4;base64," <> TE.decodeUtf8 (B64.encode bytes)
-                      ok <- queueToolImage dc (ToolImage label dataUrl)
+                      ok <- queueInlineMedia (InlineMedia label dataUrl)
                       if ok
                         then do
                           logInfo "view_bilibili: stream attached" $
