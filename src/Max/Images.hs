@@ -33,7 +33,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute)
 import Max.DB.FetchQueue (JobKind (JobImage), enqueueJob)
 import Max.DB.Stickers (StickerMeta, recordSticker, stickerMeta)
-import Max.Effects.Blob (Blob, blobPath, putBlob)
+import Max.Effects.Blob (Blob, blobRefSha256, blobRefStoredPath, putBlob)
 import Max.Effects.Http (Http, getBytes)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import OneBot.Event (GroupMessage (..))
@@ -203,8 +203,9 @@ processOne job = do
     Left err ->
       pure (Left ("download failed (" <> job.url <> "): " <> err))
     Right (bytes, mime) -> do
-      sha <- putBlob bytes
-      rel <- blobPath sha
+      ref <- putBlob bytes
+      let sha = blobRefSha256 ref
+          rel = blobRefStoredPath ref
       case job.kind of
         MediaImage -> do
           recordImage sha mime (BS.length bytes) rel job
@@ -241,7 +242,7 @@ recordImage ::
   Text ->
   Text ->
   Int ->
-  FilePath ->
+  Text ->
   ImageJob ->
   Eff es ()
 recordImage sha mime size rel job = do
@@ -249,7 +250,7 @@ recordImage sha mime size rel job = do
     execute
       "INSERT INTO images (sha256, mime_type, bytes_size, local_path) \
       \ VALUES (?,?,?,?) ON CONFLICT (sha256) DO NOTHING"
-      (sha, mime, fromIntegral size :: Int64, T.pack rel)
+      (sha, mime, fromIntegral size :: Int64, rel)
   _ <-
     execute
       "INSERT INTO message_images (message_id, sha256, seg_index) \
@@ -262,7 +263,7 @@ recordVideo ::
   Text ->
   Text ->
   Int ->
-  FilePath ->
+  Text ->
   Maybe Double -> -- probed duration, seconds
   ImageJob ->
   Eff es ()
@@ -271,7 +272,7 @@ recordVideo sha mime size rel dur job = do
     execute
       "INSERT INTO videos (sha256, mime_type, bytes_size, local_path, duration_seconds) \
       \ VALUES (?,?,?,?,?) ON CONFLICT (sha256) DO NOTHING"
-      (sha, mime, fromIntegral size :: Int64, T.pack rel, dur)
+      (sha, mime, fromIntegral size :: Int64, rel, dur)
   _ <-
     execute
       "INSERT INTO message_videos (message_id, sha256, seg_index) \

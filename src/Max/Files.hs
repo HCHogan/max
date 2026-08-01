@@ -25,7 +25,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobFile), enqueueJob)
 import Max.DB.Files qualified as DB
-import Max.Effects.Blob (Blob, blobPath, putBlob)
+import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.Effects.Http (Http, getBytes)
 import Max.Effects.NapCat (NapCat, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
@@ -164,12 +164,11 @@ processOne job = do
         Left err ->
           pure (Left ("download failed (" <> job.fjFileId <> "): " <> err))
         Right (bytes, mime) -> do
-          sha <- putBlob bytes
-          rel <- blobPath sha
+          ref <- putBlob bytes
+          let sha = blobRefSha256 ref
           DB.markStored
             job.fjFileId
-            sha
-            (T.pack rel)
+            ref
             (Just mime)
             (fromIntegral (BS.length bytes))
           logInfo "file stored" $

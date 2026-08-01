@@ -23,7 +23,6 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Concurrent (threadDelay)
-import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
@@ -40,6 +39,7 @@ import Data.Text.Encoding qualified as TE
 import Data.Time (TimeZone, UTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (In (..), Only (..))
 import Effectful
+import Effectful.Exception (IOException, try)
 import Effectful.Log (Log, logAttention, object, (.=))
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.Files (FileRecord (..))
@@ -54,6 +54,7 @@ import Max.DB.History
     fetchRecentInGroup,
   )
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), listRecentMemories)
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Faces (curatedFaceGroups)
 import Max.ImagePrep (prepareImageForLLM)
@@ -63,7 +64,6 @@ import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
-import System.FilePath ((</>))
 
 -- | Everything 'renderContext' needs in one record.  Splitting the
 -- pipeline into 'PromptInputs' + 'renderContext' lets us unit-test the
@@ -314,14 +314,13 @@ systemPrompt multimodal' private persona skills' =
 -- Falls back gracefully when the image worker hasn't caught up yet —
 -- those images stay as @[image]@ markers.
 buildContext ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Text -> -- default persona (used when session has no override)
   Int -> -- transcript low-water mark: what an overflow trims back to
   Int -> -- transcript high-water mark: the count that triggers a trim
   Bool -> -- multimodal: load + attach inline images
   Bool -> -- history as user/assistant turns (see 'PromptInputs.historyTurns')
   TriggerOrigin -> -- what woke the bot (see 'PromptInputs.origin')
-  FilePath -> -- blob store root ('AppConfig.imagesDir'); images.local_path is relative to it
   TimeZone -> -- display timezone for rendered timestamps
   [Text] -> -- pre-rendered 群信息 lines (see 'PromptInputs.groupBrief')
   [(Text, Text)] -> -- skill index for this group (see 'PromptInputs.skills')
@@ -334,7 +333,7 @@ buildContext ::
   -- and so a dispatch that crashes before replying doesn't leave a
   -- moved anchor behind.
   Eff es ([ChatMessage], Maybe UTCTime)
-buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin' blobRoot tz' brief skills' inFlight' s gm = do
+buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -456,7 +455,6 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
         -- marker-tagging pass above.
         loadPromptImages
           tz'
-          blobRoot
           selfId'
           mid
           (Set.fromList (map (.messageId) replyItems))
@@ -479,7 +477,7 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
                 (\(r, _, _) -> [(r.messageId, "[↩ quoted message] 里的视频")])
                 replyCtx0
                 <> [(mid, "[current message] 里的视频") | expectedVids > 0]
-        take maxPromptVideos . concat <$> traverse (loadMessageVideos blobRoot) cands
+        take maxPromptVideos . concat <$> traverse loadMessageVideos cands
       else pure []
   now' <- liftIO getCurrentTime
   pure . (,movedAnchor) $
@@ -577,14 +575,13 @@ waitForTriggerVideos mid expected = go 0
 -- attachments.  Empty when the message has none (or the worker hasn't
 -- caught up) — the [video#<id>] marker stays.
 loadMessageVideos ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  FilePath -> -- blob store root
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   (Int64, Text) -> -- (message_id, attachment label prefix, sans colon)
   Eff es [PromptImage]
-loadMessageVideos blobRoot' (mid, label) = do
+loadMessageVideos (mid, label) = do
   rows <-
     query
-      "SELECT v.mime_type, v.local_path, v.duration_seconds \
+      "SELECT v.mime_type, v.sha256, v.duration_seconds \
       \  FROM message_videos mv \
       \  JOIN videos v USING (sha256) \
       \  WHERE mv.message_id = ? \
@@ -595,19 +592,23 @@ loadMessageVideos blobRoot' (mid, label) = do
     -- The probed duration goes into the label: the model's own
     -- duration perception from sampled frames is unreliable (a 29s
     -- clip once read back as "2.1秒").
-    loadOne (mime, path, mDur) = do
-      eres <- liftIO (try (BS.readFile (blobRoot' </> T.unpack path)))
-      case eres of
-        Left (e :: IOException) -> do
-          logAttention "prompt: video read failed" $
-            object ["path" .= path, "error" .= T.pack (show e)]
-          pure []
-        Right bytes ->
-          pure
-            [ PromptImage
-                (label <> maybe "" (\d -> "（时长 " <> fmtDurationSec d <> "）") mDur <> ":")
-                ("data:" <> mime <> ";base64," <> TE.decodeUtf8 (B64.encode bytes))
-            ]
+    loadOne (mime, sha, mDur) = case blobRefFromSha256 sha of
+      Nothing -> do
+        logAttention "prompt: invalid video blob ref" $ object ["sha256" .= sha]
+        pure []
+      Just ref -> do
+        eres <- try @IOException (readBlob ref)
+        case eres of
+          Left e -> do
+            logAttention "prompt: video read failed" $
+              object ["sha256" .= sha, "error" .= T.pack (show e)]
+            pure []
+          Right bytes ->
+            pure
+              [ PromptImage
+                  (label <> maybe "" (\d -> "（时长 " <> fmtDurationSec d <> "）") mDur <> ":")
+                  ("data:" <> mime <> ";base64," <> TE.decodeUtf8 (B64.encode bytes))
+              ]
 
 -- | Poll until the forward worker has landed at least one child row
 -- for the trigger's 转发聊天记录 (the whole chain arrives in one
@@ -880,20 +881,19 @@ maxImageBytes = 20 * 1024 * 1024
 -- Images whose local file is missing (worker hasn't caught up) or
 -- oversized are skipped.
 loadPromptImages ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   TimeZone -> -- display timezone for the image labels' HH:MM
-  FilePath -> -- blob store root; images.local_path is relative to it
   Int64 -> -- bot self id (for display names in labels)
   Int64 -> -- trigger message_id
   Set.Set Int64 -> -- message ids belonging to the quoted reply (incl. forward children)
   [HistoryItem] -> -- context candidates, priority order, deduped
   Eff es [PromptImage]
-loadPromptImages tz' blobRoot selfId' mid replyIds candidates = do
+loadPromptImages tz' selfId' mid replyIds candidates = do
   let candidates' = filter (\h -> h.messageId /= mid) candidates
       ids = mid : map (.messageId) candidates'
   rows <-
     query
-      "SELECT mi.message_id, i.mime_type, i.local_path \
+      "SELECT mi.message_id, i.mime_type, i.sha256 \
       \  FROM message_images mi \
       \  JOIN images i ON i.sha256 = mi.sha256 \
       \  WHERE mi.message_id IN ? \
@@ -932,25 +932,27 @@ loadPromptImages tz' blobRoot selfId' mid replyIds candidates = do
                   <> displayName selfId' h
                   <> "] 消息里的图片:"
        in loadOne label mp
-    loadOne label (mime, path) = do
-      -- images.local_path is stored relative to the blob root
-      -- (that's what the image worker writes); resolve before reading.
-      eres <- liftIO (try (BS.readFile (blobRoot </> T.unpack path)))
-      case eres of
-        Right bytes0 -> do
-          (mime', bytes) <- liftIO (prepareImageForLLM mime bytes0)
-          if BS.length bytes > maxImageBytes
-            then do
-              logAttention "prompt: image skipped (too large)" $
-                object ["path" .= path, "bytes" .= BS.length bytes]
-              pure []
-            else
-              let b64 = TE.decodeUtf8 (B64.encode bytes)
-               in pure [PromptImage label ("data:" <> mime' <> ";base64," <> b64)]
-        Left (e :: IOException) -> do
-          logAttention "prompt: image read failed" $
-            object ["path" .= path, "error" .= T.pack (show e)]
-          pure []
+    loadOne label (mime, sha) = case blobRefFromSha256 sha of
+      Nothing -> do
+        logAttention "prompt: invalid image blob ref" $ object ["sha256" .= sha]
+        pure []
+      Just ref -> do
+        eres <- try @IOException (readBlob ref)
+        case eres of
+          Right bytes0 -> do
+            (mime', bytes) <- liftIO (prepareImageForLLM mime bytes0)
+            if BS.length bytes > maxImageBytes
+              then do
+                logAttention "prompt: image skipped (too large)" $
+                  object ["sha256" .= sha, "bytes" .= BS.length bytes]
+                pure []
+              else
+                let b64 = TE.decodeUtf8 (B64.encode bytes)
+                 in pure [PromptImage label ("data:" <> mime' <> ";base64," <> b64)]
+          Left e -> do
+            logAttention "prompt: image read failed" $
+              object ["sha256" .= sha, "error" .= T.pack (show e)]
+            pure []
 
 -- | Pure transformation from fetched inputs to the chat-message list
 -- the LLM sees.
@@ -1326,7 +1328,7 @@ renderReplyFiles xs =
         <> tquote r.frFileName
         <> sizePart r.frBytesSize
         <> ", ready="
-        <> (case r.frLocalPath of Just _ -> "true"; Nothing -> "false")
+        <> (case r.frBlobRef of Just _ -> "true"; Nothing -> "false")
     sizePart Nothing = ""
     sizePart (Just n) = ", bytes=" <> T.pack (show n)
     tquote t = "\"" <> t <> "\""

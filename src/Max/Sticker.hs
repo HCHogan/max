@@ -15,7 +15,6 @@ where
 import Data.Aeson (Value (Number, Object, String))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
-import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
 import Data.Text (Text)
@@ -26,8 +25,8 @@ import Database.PostgreSQL.Simple (Only (..), (:.) (..))
 import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import OneBot.Segment (Segment (..), stickerSeg)
-import System.FilePath ((</>))
 
 -- | Resolve a sticker id into the segments that resend it — an mface
 -- goes back natively (animates in-client) when we still have its
@@ -37,26 +36,25 @@ import System.FilePath ((</>))
 -- read: the caller drops the placeholder instead of failing the reply.
 -- Bumps @times_sent@ on success (the popularity signal for retrieval).
 resolveSticker ::
-  (WithConnection :> es, IOE :> es) =>
-  FilePath -> -- blob store root
+  (Blob :> es, WithConnection :> es, IOE :> es) =>
   Int64 ->
   Eff es (Either Text (Text, [Segment]))
-resolveSticker blobRoot sid = do
+resolveSticker sid = do
   rows <-
     query
       "SELECT s.sha256, s.kind, s.emoji_id, s.emoji_package_id, s.mface_key \
-      \     , s.summary, s.description, i.local_path \
-      \  FROM stickers s JOIN images i USING (sha256) \
+      \     , s.summary, s.description \
+      \  FROM stickers s \
       \  WHERE s.id = ? AND NOT s.banned \
       \  LIMIT 1"
       (Only sid)
   case rows ::
-         [ (Text, Text, Maybe Text, Maybe Text, Maybe Text)
-             :. (Maybe Text, Text, Text)
+    [ (Text, Text, Maybe Text, Maybe Text, Maybe Text)
+             :. (Maybe Text, Text)
          ] of
     [] -> pure (Left ("no sticker id=" <> T.pack (show sid)))
-    (((sha, kind, eid, pid, key) :. (summ, desc, path)) : _) ->
-      buildSegs kind eid pid key summ path >>= \case
+    (((sha, kind, eid, pid, key) :. (summ, desc)) : _) ->
+      buildSegs sha kind eid pid key summ >>= \case
         Left err -> pure (Left err)
         Right segs -> do
           _ <-
@@ -65,7 +63,7 @@ resolveSticker blobRoot sid = do
               (Only sha)
           pure (Right (desc, segs))
   where
-    buildSegs kind eid pid key summ path = case (kind, eid, pid, key) of
+    buildSegs sha kind eid pid key summ = case (kind, eid, pid, key) of
       ("mface", Just e, Just p, Just k) ->
         pure . Right $
           [ SegOther "mface" . Object . mkObj $
@@ -75,12 +73,14 @@ resolveSticker blobRoot sid = do
               ]
                 <> [("summary", String s) | Just s <- [summ]]
           ]
-      _ -> do
-        ebytes <- try @IOException (liftIO (BS.readFile (blobRoot </> T.unpack path)))
-        pure $ case ebytes of
-          Left e -> Left ("sticker blob read failed: " <> T.pack (show e))
-          Right bytes ->
-            Right [stickerSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]
+      _ -> case blobRefFromSha256 sha of
+        Nothing -> pure (Left "sticker blob reference is invalid")
+        Just ref -> do
+          ebytes <- try @IOException (readBlob ref)
+          pure $ case ebytes of
+            Left e -> Left ("sticker blob read failed: " <> T.pack (show e))
+            Right bytes ->
+              Right [stickerSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]
 
     mkObj = KM.fromList . map (\(k, v) -> (K.fromText k, v))
     -- NapCat ships emoji_package_id as a JSON number; send back what

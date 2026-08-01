@@ -9,6 +9,7 @@ import Data.Time (UTCTime (..), fromGregorian, minutesToTimeZone, secondsToDiffT
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
+import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyWatermark, applyVideoCaptions, renderContext, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
@@ -528,8 +529,7 @@ spec = do
                 frFileName = "report.pdf",
                 frMimeType = Just "application/pdf",
                 frBytesSize = Just 2048,
-                frSha256 = Nothing,
-                frLocalPath = Just "/data/x",
+                frBlobRef = blobRefFromSha256 (T.replicate 64 "a"),
                 frReceivedAt = timeAt 8,
                 frFetchedAt = Just (timeAt 8)
               }
@@ -540,7 +540,7 @@ spec = do
       ub `shouldSatisfy` ("file_id=\"abc-123\"" `T.isInfixOf`)
       ub `shouldSatisfy` ("ready=true" `T.isInfixOf`)
 
-    it "marks ready=false when reply file has no local path" $ do
+    it "marks ready=false when reply file has no blob reference" $ do
       let replied = historyAt 8 5001 otherMemberId Nothing "see file"
           file =
             FileRecord
@@ -551,8 +551,7 @@ spec = do
                 frFileName = "a.txt",
                 frMimeType = Nothing,
                 frBytesSize = Nothing,
-                frSha256 = Nothing,
-                frLocalPath = Nothing,
+                frBlobRef = Nothing,
                 frReceivedAt = timeAt 8,
                 frFetchedAt = Nothing
               }

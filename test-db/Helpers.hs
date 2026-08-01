@@ -23,6 +23,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Log.Logger (Logger, mkLogger)
 import Max.DB.Connection (DbPool, withConn)
+import Max.Effects.Blob (Blob, runBlob)
 import System.IO.Unsafe (unsafePerformIO)
 
 -- | Run an effectful, DB-touching action in plain 'IO'.  The set of
@@ -31,14 +32,14 @@ import System.IO.Unsafe (unsafePerformIO)
 withDb :: DbPool -> Eff '[WithConnection, IOE] a -> IO a
 withDb pool = runEff . runWithConnectionPool pool
 
--- | Variant that includes a (silent) 'Log' effect, for code paths
--- that take @'Log' ':>' es@ — currently just 'Max.Prompt.buildContext'.
--- Log messages are dropped.
-withDbLog :: DbPool -> Eff '[WithConnection, Log, IOE] a -> IO a
+-- | Variant that includes a local 'Blob' store and a (silent) 'Log' effect for
+-- 'Max.Prompt.buildContext'.  Log messages are dropped.
+withDbLog :: DbPool -> Eff '[Blob, WithConnection, Log, IOE] a -> IO a
 withDbLog pool =
   runEff
     . runLog "max-test" silentLogger LogTrace
     . runWithConnectionPool pool
+    . runBlob "var/images"
 
 -- | Drop-everything log backend.  Shared singleton built lazily; safe
 -- because 'mkLogger' with a pure no-op consumer doesn't spawn worker

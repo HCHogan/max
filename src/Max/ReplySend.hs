@@ -56,7 +56,6 @@ where
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (foldM, when)
-import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Char (isDigit)
 import Data.Int (Int64)
@@ -71,6 +70,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.Message (MessageKind (..))
 import Max.DB.Stickers (findStickerByCaption)
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Render (renderTableImage)
 import Max.Reply
@@ -87,7 +87,6 @@ import Max.Sticker (resolveSticker)
 import Max.Util (trySync)
 import OneBot.Segment (Segment (..), imageSeg, rescueNameMentions, segmentMentions, trimEdgeSegs)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
-import System.FilePath ((</>))
 import System.Random (randomRIO)
 
 -- | Where a reply is going and what it may do when it gets there.
@@ -104,8 +103,6 @@ data ReplyTarget = ReplyTarget
     -- | Display-name → id, so @\@显示名@ can be rescued into the
     -- canonical @[\@#id]@ form small models keep forgetting to write.
     rtRosterNames :: ![(T.Text, UserId)],
-    -- | Blob store root, for resolving sticker and image resends.
-    rtBlobRoot :: !FilePath,
     -- | Whether sticker sending is enabled for this group.
     rtStickers :: !Bool
   }
@@ -179,7 +176,7 @@ canStream b = b.sbChunksLeft > 1
 -- down leaves the record incomplete, which is bad; failing the dispatch
 -- over it is worse.
 sendAndPersistReply ::
-  (Outbound :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, Outbound :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   ReplyTarget ->
   SendBudget ->
   T.Text ->
@@ -275,7 +272,7 @@ sendAndPersistReply rt budget rawBody
               logAttention "sticker caption unresolved" $ object ["caption" .= d]
               pure ([], "")
         resolve (PieceSticker sid) =
-          resolveSticker rt.rtBlobRoot sid >>= \case
+          resolveSticker sid >>= \case
             Right (desc, segs) ->
               pure (segs, "[sticker#" <> T.pack (show sid) <> ": " <> T.take 80 desc <> "]")
             Left err -> do
@@ -283,7 +280,7 @@ sendAndPersistReply rt budget rawBody
                 object ["id" .= sid, "error" .= err]
               pure ([], "")
         resolve (PieceImage mid) = do
-          segs <- messageImageSegs rt.rtBlobRoot mid
+          segs <- messageImageSegs mid
           if null segs
             then do
               logAttention "image placeholder unresolved" $ object ["message_id" .= mid]
@@ -404,14 +401,13 @@ chunkDelayMicros nChars = do
 -- A blob that can't be read is skipped, not fatal: resending N-1 of N
 -- pictures beats failing the reply.
 messageImageSegs ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  FilePath ->
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Int64 ->
   Eff es [Segment]
-messageImageSegs blobRoot mid = do
+messageImageSegs mid = do
   rows <-
     query
-      "SELECT i.local_path \
+      "SELECT i.sha256 \
       \  FROM message_images mi \
       \  JOIN images i ON i.sha256 = mi.sha256 \
       \  WHERE mi.message_id = ? \
@@ -419,11 +415,15 @@ messageImageSegs blobRoot mid = do
       (Only mid)
   fmap concat . traverse loadOne $ (rows :: [Only T.Text])
   where
-    loadOne (Only path) =
-      trySync (liftIO (BS.readFile (blobRoot </> T.unpack path))) >>= \case
-        Left e -> do
-          logAttention "image resend: blob read failed" $
-            object ["path" .= path, "error" .= T.pack (show (e :: SomeException))]
-          pure []
-        Right bytes ->
-          pure [imageSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]
+    loadOne (Only sha) = case blobRefFromSha256 sha of
+      Nothing -> do
+        logAttention "image resend: invalid blob ref" $ object ["sha256" .= sha]
+        pure []
+      Just ref ->
+        trySync (readBlob ref) >>= \case
+          Left e -> do
+            logAttention "image resend: blob read failed" $
+              object ["sha256" .= sha, "error" .= T.pack (show (e :: SomeException))]
+            pure []
+          Right bytes ->
+            pure [imageSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]

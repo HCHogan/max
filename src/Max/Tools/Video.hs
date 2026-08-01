@@ -11,7 +11,6 @@ module Max.Tools.Video
   )
 where
 
-import Control.Exception (IOException, try)
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import Data.ByteString qualified as BS
@@ -21,26 +20,25 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
+import Effectful.Exception (IOException, try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Database.PostgreSQL.Simple (Only (..))
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.Time (fmtDurationSec)
-import System.FilePath ((</>))
 
 videoToolsFor ::
-  (WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
-  FilePath -> -- blob store root
+  (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
   [Tool es]
-videoToolsFor blobRoot = [viewVideoTool blobRoot]
+videoToolsFor = [viewVideoTool]
 
 viewVideoTool ::
-  (WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
-  FilePath ->
+  (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
   Tool es
-viewVideoTool blobRoot =
+viewVideoTool =
   Tool
     { toolName = viewVideoSpec.specName,
       toolDescription = viewVideoSpec.specDescription,
@@ -50,7 +48,7 @@ viewVideoTool blobRoot =
         Right (mid :: Int64) -> do
           rows <-
             query
-              "SELECT v.mime_type, v.local_path, v.duration_seconds \
+              "SELECT v.mime_type, v.sha256, v.duration_seconds \
               \  FROM message_videos mv \
               \  JOIN videos v USING (sha256) \
               \  WHERE mv.message_id = ? \
@@ -62,11 +60,13 @@ viewVideoTool blobRoot =
               pure $
                 Left
                   "这条消息没有已下载的视频（不是视频消息、还在下载中、或超过大小上限没有保存）"
-            ((mime, path, mDur) : _) -> do
-              ebytes <- liftIO (try @IOException (BS.readFile (blobRoot </> T.unpack path)))
-              case ebytes of
-                Left e -> pure $ Left ("视频读取失败: " <> T.pack (show e))
-                Right bytes -> attach mid mDur mime bytes
+            ((mime, sha, mDur) : _) -> case blobRefFromSha256 sha of
+              Nothing -> pure $ Left "视频存储引用无效"
+              Just ref -> do
+                ebytes <- try @IOException (readBlob ref)
+                case ebytes of
+                  Left e -> pure $ Left ("视频读取失败: " <> T.pack (show e))
+                  Right bytes -> attach mid mDur mime bytes
     }
   where
     -- Stated duration beats the model's own sampled-frame guess.

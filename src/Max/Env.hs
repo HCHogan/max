@@ -40,9 +40,6 @@ data BotEnv = BotEnv
     beHistoryWindow :: !Int,
     -- | Transcript high-water mark (see 'Max.Config.historyMax').
     beHistoryMax :: !Int,
-    -- | Blob store root ('AppConfig.imagesDir'); image local paths are
-    -- relative to it.
-    beBlobRoot :: !FilePath,
     -- | Config-level debug default; sessions override via @!debug@.
     beDebugDefault :: !Bool,
     -- | Config-level sticker default; sessions override via @!sticker

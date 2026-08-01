@@ -11,7 +11,6 @@ module Max.Tools.Images
   )
 where
 
-import Control.Exception (IOException, try)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
@@ -24,37 +23,36 @@ import Data.Text.Encoding qualified as TE
 import Data.Time (TimeZone)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
+import Effectful.Exception (IOException, try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessage)
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Time (fmtHM)
 import Max.ToolContext (ToolContext, toolMultimodal)
-import System.FilePath ((</>))
 
 -- | Same per-image cap as the prompt builder's inline path.
 maxImageBytes :: Int
 maxImageBytes = 20 * 1024 * 1024
 
 imageToolsFor ::
-  (WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
   TimeZone -> -- display timezone for the image label's HH:MM
-  FilePath -> -- blob store root ('AppConfig.imagesDir')
   ToolContext ->
   [Tool es]
-imageToolsFor tz blobRoot dc
-  | toolMultimodal dc = [viewImageTool tz blobRoot]
+imageToolsFor tz dc
+  | toolMultimodal dc = [viewImageTool tz]
   | otherwise = []
 
 viewImageTool ::
-  (WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
   TimeZone ->
-  FilePath ->
   Tool es
-viewImageTool tz blobRoot =
+viewImageTool tz =
   Tool
     { toolName = viewImageSpec.specName,
       toolDescription = viewImageSpec.specDescription,
@@ -64,7 +62,7 @@ viewImageTool tz blobRoot =
         Right mid -> do
           rows <-
             query
-              "SELECT i.mime_type, i.local_path \
+              "SELECT i.mime_type, i.sha256 \
               \  FROM message_images mi \
               \  JOIN images i ON i.sha256 = mi.sha256 \
               \  WHERE mi.message_id = ? \
@@ -104,30 +102,35 @@ viewImageTool tz blobRoot =
               <> "] 消息里的图片"
 
     attachAll _ [] _ = pure (0 :: Int)
-    attachAll label ((i, (mime, path)) : rest) total = do
+    attachAll label ((i, (mime, sha)) : rest) total = do
       let numbered
             | total == 1 = label <> ":"
             | otherwise = label <> " (" <> T.pack (show i) <> "/" <> T.pack (show total) <> "):"
-      eres <- liftIO (try (BS.readFile (blobRoot </> T.unpack path)))
-      case eres of
-        Left (e :: IOException) -> do
-          logAttention "view_image: read failed" $
-            object ["path" .= path, "error" .= T.pack (show e)]
+      case blobRefFromSha256 sha of
+        Nothing -> do
+          logAttention "view_image: invalid blob ref" $ object ["sha256" .= sha]
           attachAll label rest total
-        Right bytes0 -> do
-          (mime', bytes) <- liftIO (prepareImageForLLM mime bytes0)
-          if BS.length bytes > maxImageBytes
-            then do
-              logAttention "view_image: skipped (too large)" $
-                object ["path" .= path, "bytes" .= BS.length bytes]
+        Just ref -> do
+          eres <- try @IOException (readBlob ref)
+          case eres of
+            Left e -> do
+              logAttention "view_image: read failed" $
+                object ["sha256" .= sha, "error" .= T.pack (show e)]
               attachAll label rest total
-            else do
-              let b64 = TE.decodeUtf8 (B64.encode bytes)
-                  dataUrl = "data:" <> mime' <> ";base64," <> b64
-              ok <- queueInlineMedia (InlineMedia numbered dataUrl)
-              if ok
-                then (1 +) <$> attachAll label rest total
-                else pure 0
+            Right bytes0 -> do
+              (mime', bytes) <- liftIO (prepareImageForLLM mime bytes0)
+              if BS.length bytes > maxImageBytes
+                then do
+                  logAttention "view_image: skipped (too large)" $
+                    object ["sha256" .= sha, "bytes" .= BS.length bytes]
+                  attachAll label rest total
+                else do
+                  let b64 = TE.decodeUtf8 (B64.encode bytes)
+                      dataUrl = "data:" <> mime' <> ";base64," <> b64
+                  ok <- queueInlineMedia (InlineMedia numbered dataUrl)
+                  if ok
+                    then (1 +) <$> attachAll label rest total
+                    else pure 0
 
 -- | Protocol-neutral metadata advertised for @view_image@.  Kept apart
 -- from the effectful runner so request renderers (including the generated

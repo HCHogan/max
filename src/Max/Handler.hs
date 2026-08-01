@@ -35,6 +35,7 @@ import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
 import Max.DB.Message (MessageKind (..), insertGroupMessage, insertSilence)
 import Max.DB.Permissions (lookupGrant)
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
+import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (LLM, isProfileHistoryTurns, isProfileMultimodal)
 import Max.Effects.NapCat (NapCat, sendAction)
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded, wasDelivered)
@@ -174,7 +175,8 @@ classify repliesToBot gm =
 -- and forward jobs, dispatches @\@bot@ traffic. DB and dispatch failures
 -- are logged but never tear down the loop.
 handleEvents ::
-  ( Log :> es,
+  ( Blob :> es,
+    Log :> es,
     WithConnection :> es,
     NapCat :> es,
     Outbound :> es,
@@ -231,7 +233,8 @@ persist gm =
         object ["error" .= T.pack (show e)]
 
 onGroupMessage ::
-  ( Log :> es,
+  ( Blob :> es,
+    Log :> es,
     WithConnection :> es,
     NapCat :> es,
     Outbound :> es,
@@ -296,7 +299,8 @@ onGroupMessage mIntent gm = do
 -- other members, and echoes of the bot's own outbound pokes, are
 -- ignored.
 onPoke ::
-  ( Log :> es,
+  ( Blob :> es,
+    Log :> es,
     WithConnection :> es,
     NapCat :> es,
     Outbound :> es,
@@ -363,7 +367,8 @@ pokeTrigger pk mName =
 -- Commands.
 
 dispatchCommand ::
-  ( Log :> es,
+  ( Blob :> es,
+    Log :> es,
     WithConnection :> es,
     NapCat :> es,
     Outbound :> es,
@@ -550,7 +555,8 @@ replySegs gm body =
 -- an unaddressed followup landing while a turn is still running
 -- steers that turn, it doesn't talk over it.
 dispatchProactive ::
-  ( Log :> es,
+  ( Blob :> es,
+    Log :> es,
     WithConnection :> es,
     NapCat :> es,
     Outbound :> es,
@@ -579,7 +585,8 @@ dispatchProactive mIntent batch = case reverse batch of
 -- new triggers are logged and dropped rather than started.  See
 -- "Max.Shutdown".
 dispatchLLM ::
-  ( Log :> es,
+  ( Blob :> es,
+    Log :> es,
     WithConnection :> es,
     NapCat :> es,
     Outbound :> es,
@@ -842,7 +849,6 @@ dispatchLLM mIntent origin absorbable companions gm = do
           multimodal
           historyTurns
           origin
-          env.beBlobRoot
           env.beTimeZone
           brief
           skillIndex
@@ -866,7 +872,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
               (TurnIdentity gm.groupId gm.messageId gm.userId gm.selfId)
               (TurnCapabilities multimodal stickersEff (not (null skills)))
           agentCtx = AgentContext toolCtx s.effortOverride
-          target = sendTarget env gm mentionable rosterNames stickersEff
+          target = sendTarget gm mentionable rosterNames stickersEff
       -- The streaming sink.  It sends whole paragraphs the model has
       -- finished with, down the same path the final reply takes — the
       -- budget TVar is what keeps the two halves of one split reply
@@ -954,7 +960,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           budget <- liftIO (readTVarIO streamBudget)
           _ <-
             sendAndPersistReply
-              (sendTarget env gm mentionable rosterNames stickersEff)
+              (sendTarget gm mentionable rosterNames stickersEff)
               budget
               stripped
           logInfo "llm replied" $
@@ -981,19 +987,17 @@ dispatchLLM mIntent origin absorbable companions gm = do
 -- because every field is derived from something the caller holds
 -- anyway.
 sendTarget ::
-  BotEnv ->
   GroupMessage ->
   Maybe (Set UserId) ->
   [(T.Text, UserId)] ->
   Bool ->
   ReplyTarget
-sendTarget env gm mentionable rosterNames stickersOn =
+sendTarget gm mentionable rosterNames stickersOn =
   ReplyTarget
     { rtGroupId = gm.groupId,
       rtSelfId = gm.selfId,
       rtMentionable = mentionable,
       rtRosterNames = rosterNames,
-      rtBlobRoot = env.beBlobRoot,
       rtStickers = stickersOn
     }
 

@@ -19,6 +19,7 @@ import Database.PostgreSQL.Simple (FromRow, Only (..))
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.Effects.Blob (BlobRef, blobRefFromSha256, blobRefSha256, blobRefStoredPath)
 
 -- | One row in 'group_files'.  Fields after 'fileName' may be
 -- 'Nothing' until the file worker has finished fetching.
@@ -30,27 +31,37 @@ data FileRecord = FileRecord
     frFileName :: !Text,
     frMimeType :: !(Maybe Text),
     frBytesSize :: !(Maybe Int64),
-    frSha256 :: !(Maybe Text),
-    frLocalPath :: !(Maybe Text),
+    frBlobRef :: !(Maybe BlobRef),
     frReceivedAt :: !UTCTime,
     frFetchedAt :: !(Maybe UTCTime)
   }
   deriving stock (Show)
 
 instance FromRow FileRecord where
-  fromRow =
-    FileRecord
-      <$> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
+  fromRow = do
+    fileId <- field
+    groupId <- field
+    messageId <- field
+    senderUserId <- field
+    fileName <- field
+    mimeType <- field
+    bytesSize <- field
+    sha <- field
+    receivedAt <- field
+    fetchedAt <- field
+    pure
+      FileRecord
+        { frFileId = fileId,
+          frGroupId = groupId,
+          frMessageId = messageId,
+          frSenderUserId = senderUserId,
+          frFileName = fileName,
+          frMimeType = mimeType,
+          frBytesSize = bytesSize,
+          frBlobRef = sha >>= blobRefFromSha256,
+          frReceivedAt = receivedAt,
+          frFetchedAt = fetchedAt
+        }
 
 -- | Idempotent insert on first sight.  The file worker fills in the
 -- storage columns afterwards via 'markStored'.  Returning @()@; the
@@ -80,19 +91,18 @@ insertSeen fid gid mid sender name size = do
 markStored ::
   (WithConnection :> es, IOE :> es) =>
   Text -> -- file_id
-  Text -> -- sha256
-  Text -> -- local_path (relative to blob root)
+  BlobRef ->
   Maybe Text -> -- mime
   Int64 -> -- bytes
   Eff es ()
-markStored fid sha rel mime size = do
+markStored fid ref mime size = do
   _ <-
     execute
       "UPDATE group_files \
       \  SET sha256 = ?, local_path = ?, mime_type = ?, \
       \      bytes_size = ?, fetched_at = now() \
       \ WHERE file_id = ?"
-      (sha, rel, mime, size, fid)
+      (blobRefSha256 ref, blobRefStoredPath ref, mime, size, fid)
   pure ()
 
 fetchByFileId ::
@@ -103,7 +113,7 @@ fetchByFileId fid = do
   rows <-
     query
       "SELECT file_id, group_id, message_id, sender_user_id, file_name, \
-      \       mime_type, bytes_size, sha256, local_path, received_at, fetched_at \
+      \       mime_type, bytes_size, sha256, received_at, fetched_at \
       \  FROM group_files \
       \  WHERE file_id = ? \
       \  LIMIT 1"
@@ -122,7 +132,7 @@ fetchFilesForMessage ::
 fetchFilesForMessage mid =
   query
     "SELECT file_id, group_id, message_id, sender_user_id, file_name, \
-    \       mime_type, bytes_size, sha256, local_path, received_at, fetched_at \
+    \       mime_type, bytes_size, sha256, received_at, fetched_at \
     \  FROM group_files \
     \  WHERE message_id = ? \
     \  ORDER BY received_at ASC"
@@ -137,7 +147,7 @@ listRecentInGroup ::
 listRecentInGroup gid lim = do
   query
     "SELECT file_id, group_id, message_id, sender_user_id, file_name, \
-    \       mime_type, bytes_size, sha256, local_path, received_at, fetched_at \
+    \       mime_type, bytes_size, sha256, received_at, fetched_at \
     \  FROM group_files \
     \  WHERE group_id = ? \
     \  ORDER BY received_at DESC \

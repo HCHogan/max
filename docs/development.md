@@ -23,6 +23,8 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.Command.PermissionSpec` — tier resolution and capability gating
 - `Max.Effects.AgentSpec` — full in-memory Agent loop using a fake LLM, fake
   tool, and typed AgentEvent sink (tool round, progress, and streamed final)
+- `Max.Effects.BlobSpec` — opaque digest references, byte round-trips, the
+  explicit host-path escape hatch, and rejection of path-shaped references
 - `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip, `parseToolCall`
   tolerance, and the streamed assistant message rebuilt from deltas
 - `Max.Effects.OutboundSpec` — in-memory interpreter seam and the distinction

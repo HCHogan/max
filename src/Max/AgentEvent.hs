@@ -33,6 +33,7 @@ import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Message (MessageKind (KindDebug))
+import Max.Effects.Blob (Blob)
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded)
 import Max.ReplySend (ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
 import OneBot.Segment (Segment (SegText))
@@ -66,7 +67,7 @@ data AgentOutputContext = AgentOutputContext
 -- path; non-model debug UI goes straight to Outbound as 'KindDebug'.
 handleAgentEvent ::
   forall es a.
-  (Outbound :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, Outbound :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   AgentOutputContext ->
   AgentEvent a ->
   Eff es a

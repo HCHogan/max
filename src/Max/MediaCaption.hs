@@ -37,6 +37,7 @@ import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query_)
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob, resolveBlobHostPath)
 import Max.Effects.LLM
   ( ChatCtx (..),
     ChatMessage (..),
@@ -46,10 +47,9 @@ import Max.Effects.LLM
     chat,
   )
 import Max.ImagePrep (prepareImageForLLM)
-import Max.Util (catchSync)
+import Max.Util (catchSync, trySync)
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
 import System.Process (readProcessWithExitCode)
 
@@ -78,11 +78,10 @@ maxCaptionBytes :: Int
 maxCaptionBytes = 5 * 1024 * 1024
 
 mediaCaptionWorker ::
-  (WithConnection :> es, LLM :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, LLM :> es, Log :> es, IOE :> es) =>
   Text -> -- vision-capable LLM profile name
-  FilePath -> -- blob store root
   Eff es ()
-mediaCaptionWorker profile blobRoot = localDomain "media-caption" $ do
+mediaCaptionWorker profile = localDomain "media-caption" $ do
   logInfo "media caption worker started" $ object ["profile" .= profile]
   forever $
     tick `catchSync` \e -> do
@@ -92,7 +91,7 @@ mediaCaptionWorker profile blobRoot = localDomain "media-caption" $ do
     tick = do
       imgs <-
         query_ . fromString $
-          "SELECT i.sha256, i.mime_type, i.local_path \
+          "SELECT i.sha256, i.mime_type \
           \ FROM images i \
           \ WHERE i.description IS NULL AND i.caption_attempts < "
             <> show maxCaptionAttempts
@@ -104,7 +103,7 @@ mediaCaptionWorker profile blobRoot = localDomain "media-caption" $ do
             <> show batchSize
       vids <-
         query_ . fromString $
-          "SELECT v.sha256, v.mime_type, v.local_path \
+          "SELECT v.sha256, v.mime_type \
           \ FROM videos v \
           \ WHERE v.description IS NULL AND v.caption_attempts < "
             <> show maxCaptionAttempts
@@ -113,16 +112,15 @@ mediaCaptionWorker profile blobRoot = localDomain "media-caption" $ do
             <> " days' \
               \ ORDER BY v.first_seen_at DESC LIMIT "
             <> show batchSize
-      if null (imgs :: [(Text, Text, Text)]) && null (vids :: [(Text, Text, Text)])
+      if null (imgs :: [(Text, Text)]) && null (vids :: [(Text, Text)])
         then liftIO (threadDelay idleMicros)
         else do
           traverse_ (captionOne "images" imageSystem False) imgs
           traverse_ (captionOne "videos" videoSystem True) vids
           liftIO (threadDelay busyMicros)
 
-    captionOne table sys isVideo (sha, mime, path) = do
-      let file = blobRoot </> T.unpack path
-          failed reason = do
+    captionOne table sys isVideo (sha, mime) = do
+      let failed reason = do
             logAttention "media-caption: failed" $
               object ["table" .= (table :: Text), "sha" .= sha, "reason" .= (reason :: Text)]
             _ <-
@@ -137,42 +135,44 @@ mediaCaptionWorker profile blobRoot = localDomain "media-caption" $ do
                 (T.take 300 t, sha)
             logInfo "media-caption: stored" $
               object ["table" .= (table :: Text), "sha" .= sha, "caption" .= T.take 80 t]
-      epayload <-
-        if isVideo || mime == "image/gif"
-          -- Videos always go through a first-frame extraction; GIFs
-          -- too (several providers only take static images).  A 4K
-          -- frame decodes to a multi-MB PNG, so it gets the same
-          -- shrink pass as regular photos.
-          then
-            liftIO (firstFrame file) >>= \case
-              Nothing -> pure (Left "ffmpeg: no frame")
-              Just png -> Right <$> liftIO (prepareImageForLLM "image/png" png)
-          else do
-            ebytes <- liftIO (try @IOException (BS.readFile file))
-            case ebytes of
-              Left e -> pure (Left ("read: " <> T.pack (show e)))
-              Right bytes -> Right <$> liftIO (prepareImageForLLM mime bytes)
-      case epayload of
-        Left reason -> failed reason
-        Right (mime', bytes)
-          | BS.length bytes > maxCaptionBytes ->
-              failed ("too large: " <> T.pack (show (BS.length bytes)))
-          | otherwise -> do
-              let dataUrl = "data:" <> mime' <> ";base64," <> TE.decodeUtf8 (B64.encode bytes)
-              eres <-
-                chat
-                  (ChatCtx "caption" Nothing Nothing)
-                  profile
-                  [ MsgSystem sys,
-                    MsgUserBlocks [TextBlock lead, ImageDataUrl dataUrl]
-                  ]
-                  []
-              case eres of
-                Left err -> failed ("chat: " <> err)
-                Right (ToolCallsResp _ _ _) -> failed "chat: unexpected tool calls"
-                Right (ContentResp raw)
-                  | T.null (T.strip raw) -> failed "chat: empty caption"
-                  | otherwise -> store (T.strip raw)
+      case blobRefFromSha256 sha of
+        Nothing -> failed "invalid blob reference"
+        Just ref -> do
+          epayload <-
+            if isVideo || mime == "image/gif"
+              -- Videos and GIFs need a real path because ffmpeg owns the
+              -- input handle; keep that boundary escape explicit.
+              then do
+                file <- resolveBlobHostPath ref
+                liftIO (firstFrame file) >>= \case
+                  Nothing -> pure (Left "ffmpeg: no frame")
+                  Just png -> Right <$> liftIO (prepareImageForLLM "image/png" png)
+              else do
+                ebytes <- trySync (readBlob ref)
+                case ebytes of
+                  Left e -> pure (Left ("read: " <> T.pack (show e)))
+                  Right bytes -> Right <$> liftIO (prepareImageForLLM mime bytes)
+          case epayload of
+            Left reason -> failed reason
+            Right (mime', bytes)
+              | BS.length bytes > maxCaptionBytes ->
+                  failed ("too large: " <> T.pack (show (BS.length bytes)))
+              | otherwise -> do
+                  let dataUrl = "data:" <> mime' <> ";base64," <> TE.decodeUtf8 (B64.encode bytes)
+                  eres <-
+                    chat
+                      (ChatCtx "caption" Nothing Nothing)
+                      profile
+                      [ MsgSystem sys,
+                        MsgUserBlocks [TextBlock lead, ImageDataUrl dataUrl]
+                      ]
+                      []
+                  case eres of
+                    Left err -> failed ("chat: " <> err)
+                    Right (ToolCallsResp _ _ _) -> failed "chat: unexpected tool calls"
+                    Right (ContentResp raw)
+                      | T.null (T.strip raw) -> failed "chat: empty caption"
+                      | otherwise -> store (T.strip raw)
       where
         lead
           | isVideo = "这段视频的第一帧："

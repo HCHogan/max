@@ -33,6 +33,7 @@ import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query_)
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM
   ( ChatCtx (..),
     ChatMessage (..),
@@ -41,9 +42,8 @@ import Max.Effects.LLM
     LLM,
     chat,
   )
-import Max.Util (catchSync)
+import Max.Util (catchSync, trySync)
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
 import System.IO (hClose, openTempFile)
 import System.Directory (getTemporaryDirectory, removeFile)
 import System.Process (readProcessWithExitCode)
@@ -69,11 +69,10 @@ maxCaptionBytes :: Int
 maxCaptionBytes = 5 * 1024 * 1024
 
 stickerCaptionWorker ::
-  (WithConnection :> es, LLM :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, LLM :> es, Log :> es, IOE :> es) =>
   Text -> -- vision-capable LLM profile name
-  FilePath -> -- blob store root
   Eff es ()
-stickerCaptionWorker profile blobRoot = localDomain "sticker-caption" $ do
+stickerCaptionWorker profile = localDomain "sticker-caption" $ do
   logInfo "sticker caption worker started" $ object ["profile" .= profile]
   forever $
     tick `catchSync` \e -> do
@@ -83,57 +82,59 @@ stickerCaptionWorker profile blobRoot = localDomain "sticker-caption" $ do
     tick = do
       rows <-
         query_ . fromString $
-          "SELECT s.sha256, i.mime_type, i.local_path, s.summary \
+          "SELECT s.sha256, i.mime_type, s.summary \
           \ FROM stickers s JOIN images i USING (sha256) \
           \ WHERE s.description IS NULL AND NOT s.banned \
           \   AND s.caption_attempts < "
             <> show maxCaptionAttempts
             <> " ORDER BY s.last_seen_at DESC LIMIT "
             <> show batchSize
-      if null (rows :: [(Text, Text, Text, Maybe Text)])
+      if null (rows :: [(Text, Text, Maybe Text)])
         then liftIO (threadDelay idleMicros)
         else do
-          traverse_ (captionOne profile blobRoot) rows
+          traverse_ (captionOne profile) rows
           liftIO (threadDelay busyMicros)
 
 captionOne ::
-  (WithConnection :> es, LLM :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, LLM :> es, Log :> es, IOE :> es) =>
   Text ->
-  FilePath ->
-  (Text, Text, Text, Maybe Text) ->
+  (Text, Text, Maybe Text) ->
   Eff es ()
-captionOne profile blobRoot (sha, mime, path, mSummary) = do
-  ebytes <- liftIO (try @IOException (BS.readFile (blobRoot </> T.unpack path)))
-  case ebytes of
-    Left e -> failed ("read: " <> T.pack (show e))
-    Right bytes
-      | BS.length bytes > maxCaptionBytes ->
-          failed ("too large: " <> T.pack (show (BS.length bytes)))
-      | otherwise -> do
-          -- Animated GIFs get a first-frame PNG extracted (several
-          -- providers only take static images); if ffmpeg isn't
-          -- around, try our luck with the GIF itself.
-          (mime', bytes') <-
-            if mime == "image/gif"
-              then liftIO (firstFrame bytes)
-              else pure (mime, bytes)
-          let dataUrl =
-                "data:" <> mime' <> ";base64," <> TE.decodeUtf8 (B64.encode bytes')
-              hint = case mSummary of
-                Just s | not (T.null s) -> "（发送方标注：" <> s <> "）"
-                _ -> ""
-          eres <-
-            chat
-              (ChatCtx "caption" Nothing Nothing)
-              profile
-              [ MsgSystem captionSystem,
-                MsgUserBlocks [TextBlock ("这个表情包" <> hint <> "："), ImageDataUrl dataUrl]
-              ]
-              []
-          case eres of
-            Left err -> failed ("chat: " <> err)
-            Right (ToolCallsResp _ _ _) -> failed "chat: unexpected tool calls"
-            Right (ContentResp raw) -> apply (T.strip raw)
+captionOne profile (sha, mime, mSummary) =
+  case blobRefFromSha256 sha of
+    Nothing -> failed "invalid blob reference"
+    Just ref -> do
+      ebytes <- trySync (readBlob ref)
+      case ebytes of
+        Left e -> failed ("read: " <> T.pack (show e))
+        Right bytes
+          | BS.length bytes > maxCaptionBytes ->
+              failed ("too large: " <> T.pack (show (BS.length bytes)))
+          | otherwise -> do
+              -- Animated GIFs get a first-frame PNG extracted (several
+              -- providers only take static images); if ffmpeg isn't
+              -- around, try our luck with the GIF itself.
+              (mime', bytes') <-
+                if mime == "image/gif"
+                  then liftIO (firstFrame bytes)
+                  else pure (mime, bytes)
+              let dataUrl =
+                    "data:" <> mime' <> ";base64," <> TE.decodeUtf8 (B64.encode bytes')
+                  hint = case mSummary of
+                    Just s | not (T.null s) -> "（发送方标注：" <> s <> "）"
+                    _ -> ""
+              eres <-
+                chat
+                  (ChatCtx "caption" Nothing Nothing)
+                  profile
+                  [ MsgSystem captionSystem,
+                    MsgUserBlocks [TextBlock ("这个表情包" <> hint <> "："), ImageDataUrl dataUrl]
+                  ]
+                  []
+              case eres of
+                Left err -> failed ("chat: " <> err)
+                Right (ToolCallsResp _ _ _) -> failed "chat: unexpected tool calls"
+                Right (ContentResp raw) -> apply (T.strip raw)
   where
     failed reason = do
       logAttention "caption: failed" $ object ["sha" .= sha, "reason" .= reason]

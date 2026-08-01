@@ -39,6 +39,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.Agent (assembleToolRound, toolResultMessage)
+import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM
   ( ChatMessage,
     LLMProfile (..),
@@ -373,8 +374,7 @@ quotedFile =
       frFileName = "firmware.bin",
       frMimeType = Just "application/octet-stream",
       frBytesSize = Just 2188038,
-      frSha256 = Just "fixture-sha256",
-      frLocalPath = Just "fixture/firmware.bin",
+      frBlobRef = blobRefFromSha256 (T.replicate 64 "a"),
       frReceivedAt = hkAt 22 45,
       frFetchedAt = Just (hkAt 22 46)
     }

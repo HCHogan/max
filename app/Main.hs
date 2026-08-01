@@ -120,7 +120,6 @@ main = do
                   { bePersona = cfg.persona,
                     beHistoryWindow = cfg.historyWindow,
                     beHistoryMax = cfg.historyMax,
-                    beBlobRoot = cfg.imagesDir,
                     beDebugDefault = cfg.debug,
                     beStickerDefault = cfg.stickersEnabled,
                     beDefaultModel = cfg.llm.defaultName,
@@ -276,8 +275,8 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
         -- crashing still takes the process down.
         for_ cfg.stickerCaptionProfile $ \p ->
           concurrently_
-            (stickerCaptionWorker p cfg.imagesDir)
-            (mediaCaptionWorker p cfg.imagesDir),
+            (stickerCaptionWorker p)
+            (mediaCaptionWorker p),
         reminderWorker cfg.timezone env.beReminders,
         for_ ((,) <$> cfg.memoryExtractProfile <*> env.beMemx) $ \(prof, ms) ->
           memxWorker prof env.beEmbed cfg.timezone env.beSessions cfg.llm.defaultName ms,

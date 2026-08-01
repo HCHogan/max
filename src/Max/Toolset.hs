@@ -17,6 +17,7 @@ import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Wreq qualified as W
+import Max.Effects.Blob (Blob)
 import Max.Effects.Http (Http)
 import Max.Effects.NapCat (NapCat)
 import Max.Effects.Outbound (Outbound)
@@ -48,7 +49,8 @@ import OneBot.Types (GroupId, isPrivateChat)
 -- a browser or a video reader would burn turns discovering it can't
 -- use them.
 allToolsFor ::
-  ( Http :> es,
+  ( Blob :> es,
+    Http :> es,
     Log :> es,
     NapCat :> es,
     Outbound :> es,
@@ -64,17 +66,17 @@ allToolsFor env dc =
   builtinsFor env.beTimeZone env.beEmbed dc
     <> reminderToolsFor env.beTimeZone env.beReminders dc
     <> groupToolsFor dc
-    <> imageToolsFor env.beTimeZone env.beBlobRoot dc
+    <> imageToolsFor env.beTimeZone dc
     <> memoryToolsFor env.beEmbed dc
     <> pinToolsFor env.beSessions env.beDefaultModel dc
     <> skillToolsFor env.beSkills dc
     <> bilibiliToolsFor env.beTimeZone dc
     <> sandboxToolsFor env.beTimeZone (toolGroupId dc) env.beSandboxes
-    <> fileToolsFor env.beTimeZone (toolGroupId dc) (toolSelfId dc) env.beBlobRoot env.beSandboxes
+    <> fileToolsFor env.beTimeZone (toolGroupId dc) (toolSelfId dc) env.beSandboxes
     <> [t | toolStickers dc, t <- stickerToolsFor env.beEmbed]
     <> maybe [] searchToolsFor env.beSearch
     <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]
-    <> [t | toolMultimodal dc, t <- videoToolsFor env.beBlobRoot]
+    <> [t | toolMultimodal dc, t <- videoToolsFor]
 
 -- | How many tools a dispatch with these gates would get — the
 -- @!version@ card's number.  This is intentionally a pure projection

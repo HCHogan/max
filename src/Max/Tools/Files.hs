@@ -43,6 +43,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.Message (MessageKind (KindChat))
+import Max.Effects.Blob (Blob, resolveBlobHostPath)
 import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Effects.Tools (Tool (..))
@@ -70,7 +71,8 @@ outboxHostDir = "var/outbox"
 outboxContainerDir = "/data/outbox"
 
 fileToolsFor ::
-  ( WithConnection :> es,
+  ( Blob :> es,
+    WithConnection :> es,
     NapCat :> es,
     Outbound :> es,
     Log :> es,
@@ -79,16 +81,11 @@ fileToolsFor ::
   TimeZone ->
   GroupId ->
   UserId -> -- bot self id, for persisted visible tool output
-
-  -- | Blob store root from 'AppConfig.imagesDir' — needed to resolve
-  -- 'FileRecord.local_path' (which is relative) to an absolute path
-  -- 'docker cp' can read.
-  FilePath ->
   SandboxRegistry ->
   [Tool es]
-fileToolsFor tz gid selfId blobRoot sandboxes =
+fileToolsFor tz gid selfId sandboxes =
   [ listRecentFilesTool tz gid,
-    importFileToSandboxTool gid blobRoot sandboxes,
+    importFileToSandboxTool gid sandboxes,
     sendImageFromSandboxTool gid selfId sandboxes,
     sendFileFromSandboxTool gid sandboxes
   ]
@@ -147,22 +144,22 @@ listRecentFilesTool tz (GroupId gid) =
           "time" .= fmtDateHMS tz r.frReceivedAt,
           "bytes" .= r.frBytesSize,
           "mime" .= r.frMimeType,
-          "ready" .= (case r.frLocalPath of Just _ -> True; Nothing -> False)
+          "ready" .= (case r.frBlobRef of Just _ -> True; Nothing -> False)
         ]
 
 --------------------------------------------------------------------------------
 -- import_file_to_sandbox
 
 importFileToSandboxTool ::
-  ( WithConnection :> es,
+  ( Blob :> es,
+    WithConnection :> es,
     Log :> es,
     IOE :> es
   ) =>
   GroupId ->
-  FilePath ->
   SandboxRegistry ->
   Tool es
-importFileToSandboxTool gid blobRoot sandboxes =
+importFileToSandboxTool gid sandboxes =
   Tool
     { toolName = "import_file_to_sandbox",
       toolDescription =
@@ -189,15 +186,17 @@ importFileToSandboxTool gid blobRoot sandboxes =
           mFile <- DBFiles.fetchByFileId fid
           case mFile of
             Nothing -> pure (Left "unknown file_id (try list_recent_files first)")
-            Just r -> case r.frLocalPath of
+            Just r -> case r.frBlobRef of
               Nothing -> pure (Left "file not yet downloaded — try again in a moment")
-              Just rel -> do
+              Just ref -> do
                 mEntry <- liftIO (listSandbox sandboxes gid (SandboxId sid))
                 case mEntry of
                   Nothing -> pure (Left "sandbox not found")
                   Just e -> do
-                    let hostPath = blobRoot </> T.unpack rel
-                        destName = maybe r.frFileName id mDest
+                    -- docker cp requires a host path; this is one of the
+                    -- deliberately explicit Blob boundary escapes.
+                    hostPath <- resolveBlobHostPath ref
+                    let destName = maybe r.frFileName id mDest
                         containerPath = "/work/" <> destName
                     cpRes <- liftIO (runCopyToContainer e.seContainer hostPath containerPath)
                     case cpRes of

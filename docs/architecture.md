@@ -130,6 +130,24 @@ the in-memory handles are read caches and wakeup bells, never the record.
 Effect stack at the top of `runApp`:
 `IOE → Concurrent → Log → Http → Blob → WithConnection → NapCat → Outbound → Wreq → LLM → Reader BotEnv → Agent`.
 
+`Blob` is the sole owner of the configured storage root. Producers receive an
+opaque, validated `BlobRef` from `putBlob`; ordinary consumers pass that
+reference back to `readBlob` and never assemble a host path themselves. The
+boundary has one deliberately loud escape hatch:
+
+```
+runBlob(root)
+  ├─ putBlob bytes             ──▶ BlobRef
+  ├─ readBlob BlobRef          ──▶ bytes
+  └─ resolveBlobHostPath ref   ──▶ host path
+                                   ├─ Docker cp import
+                                   └─ ffmpeg video/GIF frame extraction
+```
+
+`BotEnv` therefore carries no blob root. The database still receives derived
+`sha256` and `local_path` values for schema compatibility, but readers recover a
+`BlobRef` from the digest and do not treat the persisted path as authority.
+
 `Outbound` owns the send-response-persist invariant: a visible message is sent
 through the platform router, its assigned `message_id` is extracted, and the
 exact surface segments are recorded.  A result distinguishes rejection from
