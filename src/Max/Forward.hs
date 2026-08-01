@@ -21,7 +21,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobForward), enqueueJob)
 import Max.DB.Forward (ForwardNodeInsert (..), insertForwardNode)
-import Max.Effects.NapCat (NapCat, callAction)
+import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.Images (enqueueImagesFromNode)
 import OneBot.Action (Action (GetForwardMsg), Response (..))
@@ -102,7 +102,7 @@ forwardLeaseSeconds :: Int
 forwardLeaseSeconds = 300
 
 forwardWorker ::
-  (Log :> es, NapCat :> es, WithConnection :> es, IOE :> es) =>
+  (Log :> es, PlatformApi :> es, WithConnection :> es, IOE :> es) =>
   FetchSignal ->
   Eff es ()
 forwardWorker sig = localDomain "forward-worker" $ do
@@ -110,7 +110,7 @@ forwardWorker sig = localDomain "forward-worker" $ do
   runFetchLoop sig JobForward forwardLeaseSeconds 4 (processJob sig)
 
 processJob ::
-  (Log :> es, NapCat :> es, WithConnection :> es, IOE :> es) =>
+  (Log :> es, PlatformApi :> es, WithConnection :> es, IOE :> es) =>
   FetchSignal ->
   ForwardJob ->
   Eff es (Either Text ())

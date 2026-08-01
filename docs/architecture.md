@@ -22,7 +22,7 @@ skills/*.md        builtin skill manuals, baked into the binary (file-embed);
 
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),
                    segments, events, actions, server
-src/Max/Effects/   effectful 2.5 effects: Http, Blob, NapCat, Outbound (visible send
+src/Max/Effects/   effectful 2.5 effects: Http, Blob, PlatformApi, Outbound (visible send
                    + persistence), LLM (OpenAI + Anthropic, buffered or streamed),
                    Tools, ToolOutput (turn-scoped tool media), Agent
                    (DB effect from upstream effectful-postgresql)
@@ -128,7 +128,13 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Sandbox / browser containers | destroyed on exit, reaped on boot |
 
 Effect stack at the top of `runApp`:
-`IOE → Concurrent → Log → Http → Blob → WithConnection → NapCat → Outbound → Wreq → LLM → Reader BotEnv → Agent`.
+`IOE → Concurrent → Log → Http → Blob → WithConnection → PlatformApi → Outbound → Wreq → LLM → Reader BotEnv → Agent`.
+
+`PlatformApi` is the low-level capability for raw platform actions and
+request/response calls. Its interpreter routes each action to a
+`PlatformBackend`; the default QQ backend is implemented by NapCat over the
+reverse WebSocket, while backend-specific names stay at that protocol edge.
+Visible conversation sends sit one layer above it in `Outbound`.
 
 `Blob` is the sole owner of the configured storage root. Producers receive an
 opaque, validated `BlobRef` from `putBlob`; ordinary consumers pass that

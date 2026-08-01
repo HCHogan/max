@@ -6,7 +6,7 @@
 -- __Event-driven, not polling.__  The worker asks the DB for the
 -- earliest pending reminder and sleeps exactly until that instant,
 -- using the same @registerDelay@ + STM @orElse@/@retry@ idiom as
--- 'Max.Effects.NapCat.awaitWithTimeout'.  Adding or cancelling a
+-- 'Max.Effects.PlatformApi.awaitWithTimeout'.  Adding or cancelling a
 -- reminder bumps 'rsSignal' via 'notifyReminderChange', which wakes the
 -- sleep early so the schedule is re-evaluated immediately — no periodic
 -- scan.  The DB is the single source of truth; the in-memory handle is

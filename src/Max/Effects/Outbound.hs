@@ -37,7 +37,7 @@ import Effectful.Exception (SomeException)
 import Effectful.Log (Log, logAttention)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Message (MessageKind, insertOutbound)
-import Max.Effects.NapCat (NapCat, callAction)
+import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Util (trySync)
 import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
 import OneBot.Segment (Segment)
@@ -81,7 +81,7 @@ type instance DispatchOf Outbound = Dynamic
 -- exact segments under the id returned by that platform.
 runOutbound ::
   forall es a.
-  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (PlatformApi :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Eff (Outbound : es) a ->
   Eff es a
 runOutbound = runOutboundWith deliver
@@ -138,7 +138,7 @@ runOutbound = runOutboundWith deliver
 
 -- | Install any request handler as the interpreter.  Besides keeping
 -- 'runOutbound' small, this is the in-memory seam for Handler/Agent tests: a
--- fake can capture requests and choose any delivery state without NapCat or a
+-- fake can capture requests and choose any delivery state without PlatformApi or a
 -- database.
 runOutboundWith ::
   (OutboundRequest -> Eff es SendOutcome) ->

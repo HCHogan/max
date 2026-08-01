@@ -37,8 +37,8 @@ import Max.DB.Permissions (lookupGrant)
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (LLM, isProfileHistoryTurns, isProfileMultimodal)
-import Max.Effects.NapCat (NapCat, sendAction)
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded, wasDelivered)
+import Max.Effects.PlatformApi (PlatformApi, sendAction)
 import Max.Env (BotEnv (..))
 import Max.Faces (faceIdByName)
 import Max.FetchQueue (FetchSignal)
@@ -178,7 +178,7 @@ handleEvents ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -236,7 +236,7 @@ onGroupMessage ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -302,7 +302,7 @@ onPoke ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -370,7 +370,7 @@ dispatchCommand ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -558,7 +558,7 @@ dispatchProactive ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -588,7 +588,7 @@ dispatchLLM ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1051,7 +1051,7 @@ replyText gm body =
 -- prompt's [environment] block (empty on the same failures — the model
 -- just doesn't get the block).
 fetchGroupContext ::
-  (NapCat :> es, Log :> es) =>
+  (PlatformApi :> es, Log :> es) =>
   GroupId ->
   Eff es (Maybe (Set UserId), [(T.Text, UserId)], [T.Text])
 fetchGroupContext gid
@@ -1092,7 +1092,7 @@ stripMentions (UserId u) t =
 -- also closes the "!use someone else's group and read its !status"
 -- hole.
 resolveAdminTarget ::
-  (NapCat :> es, Log :> es, IOE :> es) =>
+  (PlatformApi :> es, Log :> es, IOE :> es) =>
   BotEnv ->
   GroupMessage ->
   Command ->
@@ -1126,7 +1126,7 @@ resolveAdminTarget env gm cmd
 -- list first, then the NapCat role there.  Resolved once per command
 -- and threaded into both the permission check and
 -- 'CmdDispatch.execute' (which needs it for !grant's constraints).
-effectiveTier :: (NapCat :> es, Log :> es) => BotEnv -> GroupId -> GroupMessage -> Eff es PermTier
+effectiveTier :: (PlatformApi :> es, Log :> es) => BotEnv -> GroupId -> GroupMessage -> Eff es PermTier
 effectiveTier env targetGid gm
   | let UserId uid = gm.userId, uid `elem` env.beOwners = pure TierOwner
   | otherwise = actorTier targetGid gm.userId
@@ -1154,7 +1154,7 @@ checkCmdPermission (GroupId gid) (UserId uid) effTier cmd = case requiredCapabil
 -- | The sender's role tier in a group.  A private pseudo-group means
 -- the sender administers their own session by definition; owner tier
 -- is config-only and resolved by the caller.
-actorTier :: (NapCat :> es, Log :> es) => GroupId -> UserId -> Eff es PermTier
+actorTier :: (PlatformApi :> es, Log :> es) => GroupId -> UserId -> Eff es PermTier
 actorTier gid uid
   | isPrivateChat gid = pure TierGroupAdmin
   | otherwise = do

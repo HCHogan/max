@@ -84,7 +84,7 @@ renderPromptFlow =
       "## 生成路径",
       "",
       "```text",
-      "DB / NapCat effects",
+      "DB / PlatformApi effects",
       "        │",
       "        ▼",
       "PromptInputs ── renderContext ──▶ [ChatMessage]",

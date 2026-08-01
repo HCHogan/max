@@ -1,8 +1,8 @@
 {-# LANGUAGE TypeFamilies #-}
 
-module Max.Effects.NapCat
-  ( NapCat,
-    runNapCat,
+module Max.Effects.PlatformApi
+  ( PlatformApi,
+    runPlatformApi,
     qqBackend,
     sendAction,
     callAction,
@@ -37,27 +37,27 @@ import Network.WebSockets qualified as WS
 import OneBot.Action (Action, Envelope (..), Response, encodeAction)
 import OneBot.Server (Client (..))
 
-data NapCat :: Effect where
+data PlatformApi :: Effect where
   -- | Fire and forget. Silently drops if no client connected (logs).
-  SendOp :: Action -> NapCat m ()
+  SendOp :: Action -> PlatformApi m ()
   -- | Send and await response. Times out per millisecond budget; returns
   -- @Left@ on send failure, timeout, or disconnect mid-flight.
-  CallOp :: Action -> Int -> NapCat m (Either Text Response)
+  CallOp :: Action -> Int -> PlatformApi m (Either Text Response)
 
-type instance DispatchOf NapCat = Dynamic
+type instance DispatchOf PlatformApi = Dynamic
 
 -- | Interpret the action effect as a router over platform backends:
 -- each op goes to the first extra backend claiming its target id
 -- ('Max.Platform.routeAction'), falling back to the default (QQ).
--- The effect keeps its historical name — every call site speaks
+-- The capability name is backend-neutral; every call site speaks
 -- 'sendAction'/'callAction' regardless of where the message lands.
-runNapCat ::
+runPlatformApi ::
   (IOE :> es, Log :> es) =>
   PlatformBackend -> -- default backend (QQ / NapCat)
   [PlatformBackend] -> -- foreign backends (WeChat, …)
-  Eff (NapCat : es) a ->
+  Eff (PlatformApi : es) a ->
   Eff es a
-runNapCat dflt extras = interpret $ \_ -> \case
+runPlatformApi dflt extras = interpret $ \_ -> \case
   SendOp a -> do
     let b = routeAction extras dflt a
     liftIO (b.pbSend a) >>= \case
@@ -86,10 +86,10 @@ qqBackend ref =
           Just c -> callIO c a t
     }
 
-sendAction :: NapCat :> es => Action -> Eff es ()
+sendAction :: (PlatformApi :> es) => Action -> Eff es ()
 sendAction a = send (SendOp a)
 
-callAction :: NapCat :> es => Action -> Int -> Eff es (Either Text Response)
+callAction :: (PlatformApi :> es) => Action -> Int -> Eff es (Either Text Response)
 callAction a t = send (CallOp a t)
 
 sendIO :: Client -> Action -> IO ()

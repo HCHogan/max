@@ -44,8 +44,8 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.Message (MessageKind (KindChat))
 import Max.Effects.Blob (Blob, resolveBlobHostPath)
-import Max.Effects.NapCat (NapCat, callAction)
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
+import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Reply (chunkSource, planReply)
 import Max.ReplySend (modelTextSegs)
@@ -73,7 +73,7 @@ outboxContainerDir = "/data/outbox"
 fileToolsFor ::
   ( Blob :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Outbound :> es,
     Log :> es,
     IOE :> es
@@ -357,7 +357,7 @@ tryRemove p = void $ try @IOException (removeFile p)
 -- send_file_from_sandbox
 
 sendFileFromSandboxTool ::
-  ( NapCat :> es,
+  ( PlatformApi :> es,
     Log :> es,
     IOE :> es
   ) =>

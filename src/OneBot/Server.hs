@@ -37,7 +37,7 @@ data ServerConfig = ServerConfig
 
 -- | Handle to talk to a connected NapCat client. Carries the websocket plus
 -- a pending-call registry (echo id → TMVar) shared between the read loop
--- (which fills incoming responses) and the NapCat effect's 'call' (which
+-- (which fills incoming responses) and the PlatformApi effect's 'call' (which
 -- creates entries and waits on them).
 data Client = Client
   { connection :: !WS.Connection,
@@ -47,7 +47,7 @@ data Client = Client
 -- | Run the reverse-WS server. Each accepted connection gets its own
 -- @conn-N@ log domain. Decoded events are pushed onto 'eventQ' for the
 -- app-lived handler to consume. The current 'Client' (if any) is
--- published on 'clientRef' for the NapCat effect to read.
+-- published on 'clientRef' for the PlatformApi effect to read.
 runServer ::
   (Log :> es, IOE :> es) =>
   ServerConfig ->

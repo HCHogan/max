@@ -64,7 +64,7 @@ import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 -- dispatch with the carried text as the user prompt, marked so the
 -- supplement classifier can't fold it into a running turn.  Wiring it
 -- as a result rather than a direct call keeps Dispatcher free of the
--- Agent/NapCat/Concurrent constraints; 'FeedbackNote' is deferred to
+-- Agent/PlatformApi/Concurrent constraints; 'FeedbackNote' is deferred to
 -- the caller for the same reason.
 data DispatchResult
   = ReplyText !Text

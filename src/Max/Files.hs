@@ -27,7 +27,7 @@ import Max.DB.FetchQueue (JobKind (JobFile), enqueueJob)
 import Max.DB.Files qualified as DB
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.Effects.Http (Http, getBytes)
-import Max.Effects.NapCat (NapCat, callAction)
+import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import OneBot.Action (Action (GetGroupFileUrl), Response (..))
 import OneBot.Event (GroupMessage (..))
@@ -130,7 +130,7 @@ fileWorker ::
     Http :> es,
     Blob :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     IOE :> es
   ) =>
   FetchSignal ->
@@ -144,7 +144,7 @@ processOne ::
     Http :> es,
     Blob :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     IOE :> es
   ) =>
   FileJob ->
@@ -190,7 +190,7 @@ processOne job = do
 -- worth another go, since the commonest cause is NapCat not being
 -- connected yet after a restart.
 resolveUrl ::
-  NapCat :> es =>
+  PlatformApi :> es =>
   FileJob ->
   Eff es (Either Text Text)
 resolveUrl job = case job.fjUrlHint of

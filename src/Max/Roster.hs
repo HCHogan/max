@@ -28,7 +28,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log
-import Max.Effects.NapCat (NapCat, callAction)
+import Max.Effects.PlatformApi (PlatformApi, callAction)
 import OneBot.Action (Action (GetGroupInfo, GetGroupMemberList), Response (..))
 import OneBot.Types (GroupId (..), UserId (..))
 
@@ -62,7 +62,7 @@ memberName m =
 -- | Group name / member count.  'Nothing' on any RPC or parse
 -- failure — callers degrade to not knowing, never to erroring.
 fetchGroupMeta ::
-  (NapCat :> es, Log :> es) =>
+  (PlatformApi :> es, Log :> es) =>
   GroupId ->
   Eff es (Maybe GroupMeta)
 fetchGroupMeta gid = fetchParsed (GetGroupInfo gid) "group info" metaP
@@ -74,7 +74,7 @@ fetchGroupMeta gid = fetchParsed (GetGroupInfo gid) "group info" metaP
 
 -- | Full member list, NapCat order.  'Nothing' on failure.
 fetchGroupMembers ::
-  (NapCat :> es, Log :> es) =>
+  (PlatformApi :> es, Log :> es) =>
   GroupId ->
   Eff es (Maybe [GroupMember])
 fetchGroupMembers gid =
@@ -93,7 +93,7 @@ fetchGroupMembers gid =
 
 -- | Shared call/retcode/parse skeleton for the two lookups.
 fetchParsed ::
-  (NapCat :> es, Log :> es) =>
+  (PlatformApi :> es, Log :> es) =>
   Action ->
   Text -> -- label for log lines
   (Value -> Parser a) ->

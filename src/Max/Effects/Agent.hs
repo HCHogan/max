@@ -441,7 +441,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
 -- scoped 'ToolOutput' effect,
 -- while the protocol-neutral conversation transition is just data.
 -- Keeping it here also gives documentation/tests the exact production
--- shape without standing up Postgres, NapCat, or an LLM endpoint.
+-- shape without standing up Postgres, PlatformApi, or an LLM endpoint.
 assembleToolRound ::
   Value -> -- provider's assistant message, verbatim
   [ToolCall] ->

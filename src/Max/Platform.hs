@@ -8,7 +8,7 @@
 --   * inbound: the adapter parses platform traffic into 'OneBot.Event'
 --     values and writes them to the shared event queue (nothing to
 --     abstract — the queue already decouples sources);
---   * outbound: every send goes through "Max.Effects.NapCat"'s
+--   * outbound: every send goes through "Max.Effects.PlatformApi"'s
 --     effect, whose interpreter routes each 'Action' to the backend
 --     that owns the target id.
 --

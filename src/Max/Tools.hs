@@ -28,7 +28,7 @@ import Effectful.Exception (try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.History (HistoryItem (..), bestName, fetchForwardChildren, fetchMessage)
-import Max.Effects.NapCat (NapCat, callAction)
+import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Prompt (tagMediaMarkers)
@@ -39,7 +39,7 @@ import OneBot.Types (GroupId (..), UserId (..))
 
 builtinsFor ::
   ( WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Log :> es,
     IOE :> es
   ) =>
@@ -351,7 +351,7 @@ viewForwardTool tz =
 -- poke — 戳一戳
 
 pokeTool ::
-  (NapCat :> es, Log :> es) =>
+  (PlatformApi :> es, Log :> es) =>
   ToolContext ->
   Tool es
 pokeTool dc =

@@ -33,8 +33,8 @@ import Max.Effects.Agent (Agent, defaultLimits, runAgent)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, LLMRegistry (..), TokenUsage (..), runLLM)
-import Max.Effects.NapCat (NapCat, qqBackend, runNapCat)
 import Max.Effects.Outbound (Outbound, runOutbound)
+import Max.Effects.PlatformApi (PlatformApi, qqBackend, runPlatformApi)
 import Max.Embedder (embedWorker)
 import Max.Embedding (newEmbedClient)
 import Max.Env (BotEnv (..))
@@ -147,7 +147,7 @@ main = do
             . runHttp
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
-            . runNapCat
+            . runPlatformApi
               (qqBackend clientRef)
               [ wechatpadBackend (runEff . runWithConnectionPool pool) wc
               | Just wc <- [cfg.wechatpad]
@@ -207,7 +207,7 @@ runApp ::
     Http :> es,
     Blob :> es,
     WithConnection :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,

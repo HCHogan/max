@@ -19,8 +19,8 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.Wreq qualified as W
 import Max.Effects.Blob (Blob)
 import Max.Effects.Http (Http)
-import Max.Effects.NapCat (NapCat)
 import Max.Effects.Outbound (Outbound)
+import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (Tool)
 import Max.Env (BotEnv (..))
@@ -52,7 +52,7 @@ allToolsFor ::
   ( Blob :> es,
     Http :> es,
     Log :> es,
-    NapCat :> es,
+    PlatformApi :> es,
     Outbound :> es,
     ToolOutput :> es,
     W.Wreq :> es,

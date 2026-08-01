@@ -23,7 +23,7 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
 import Max.Effects.Http (Http, getBytes)
-import Max.Effects.NapCat (NapCat)
+import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.Roster
@@ -39,7 +39,7 @@ import Max.ToolContext (ToolContext, toolGroupId, toolMultimodal)
 import OneBot.Types (GroupId, UserId (..), isPrivateChat)
 
 groupToolsFor ::
-  (NapCat :> es, Http :> es, Log :> es, ToolOutput :> es) =>
+  (PlatformApi :> es, Http :> es, Log :> es, ToolOutput :> es) =>
   ToolContext ->
   [Tool es]
 groupToolsFor dc =
@@ -54,7 +54,7 @@ groupToolsFor dc =
 pageSize :: Int
 pageSize = 80
 
-membersTool :: (NapCat :> es, Log :> es) => GroupId -> Tool es
+membersTool :: (PlatformApi :> es, Log :> es) => GroupId -> Tool es
 membersTool gid =
   Tool
     { toolName = "group_members",
@@ -143,7 +143,7 @@ maxAvatarBytes :: Int
 maxAvatarBytes = 2 * 1024 * 1024
 
 avatarTool ::
-  (NapCat :> es, Http :> es, Log :> es, ToolOutput :> es) =>
+  (PlatformApi :> es, Http :> es, Log :> es, ToolOutput :> es) =>
   ToolContext ->
   Tool es
 avatarTool dc =

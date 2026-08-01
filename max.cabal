@@ -92,7 +92,7 @@ library
         Max.Effects.Blob
         Max.Effects.Http
         Max.Effects.LLM
-        Max.Effects.NapCat
+        Max.Effects.PlatformApi
         Max.Effects.Outbound
         Max.Effects.ToolOutput
         Max.Effects.Tools
