@@ -172,7 +172,7 @@ listRemindersTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContex
 listRemindersTool tz dc =
   Tool
     { toolName = "list_reminders",
-      toolDescription = "列出本会话所有还没触发的提醒（含 id、下次触发时间、内容，循环的还有 cron）。",
+      toolDescription = "列出本会话所有还没触发的提醒（含投递重试或已暂停状态）。",
       toolSchema = object ["type" .= ("object" :: Text), "properties" .= object []],
       toolRun = \_ -> do
         rs <- listPending (toolGroupId dc)
@@ -183,9 +183,17 @@ listRemindersTool tz dc =
       object
         [ "id" .= r.rmId,
           "next_fire" .= fmtDateHM tz r.rmFireAt,
+          "status" .= status r,
+          "next_attempt" .= fmap (fmtDateHM tz) r.rmNextAttemptAt,
+          "delivery_attempts" .= r.rmDeliveryAttempts,
+          "last_error" .= r.rmLastError,
           "text" .= r.rmText,
           "cron" .= r.rmCron
         ]
+    status r
+      | isJust r.rmParkedAt = ("parked" :: Text)
+      | isJust r.rmNextAttemptAt = "retrying"
+      | otherwise = "scheduled"
 
 --------------------------------------------------------------------------------
 -- cancel_reminder

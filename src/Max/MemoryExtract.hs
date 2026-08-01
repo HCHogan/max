@@ -23,7 +23,8 @@
 -- arming any group whose chat is newer than its anchor, so an
 -- extraction lost to a crash or redeploy is caught up, not dropped.
 --
--- Failures only log; a lost extraction is a non-event.
+-- A failed extraction keeps the watermark where it was and is re-armed with
+-- a short backoff.  Restart recovery remains the second line of defence.
 module Max.MemoryExtract
   ( MemxScheduler,
     newMemxScheduler,
@@ -34,7 +35,9 @@ module Max.MemoryExtract
 
     -- * Exposed for tests
     ExtractOp (..),
+    memxPendingDeadline,
     parseOps,
+    retryMemxAfterFailureAt,
   )
 where
 
@@ -92,7 +95,7 @@ import Data.Time
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Tools.Memory (checkContent, maxMemoriesPerScope)
-import Max.Util (catchSync)
+import Max.Util (catchSync, trySync)
 import OneBot.Types (GroupId (..))
 
 -- | One operation the extractor model may emit.
@@ -144,6 +147,11 @@ windowFetch = 120
 minWindowMsgs :: Int
 minWindowMsgs = 4
 
+-- | Avoid a transient DB/provider failure turning into a hot loop while still
+-- retrying well before the ordinary ten-minute idle boundary.
+memxRetrySecs :: Int
+memxRetrySecs = 60
+
 -- | How many speakers' user-scope memories ride along as context.
 maxSpeakerScopes :: Int
 maxSpeakerScopes = 3
@@ -174,6 +182,22 @@ bumpMemx sched (GroupId gid) = do
       writeTVar sched.msPending (Map.insert gid entry m)
       modifyTVar' sched.msVersion (+ 1)
 
+-- | Re-arm a failed extraction without overwriting a newer schedule that may
+-- have been installed while the extraction was running.
+retryMemxAfterFailureAt :: MemxScheduler -> GroupId -> UTCTime -> IO ()
+retryMemxAfterFailureAt sched (GroupId gid) now = atomically $ do
+  modifyTVar' sched.msPending $
+    Map.insertWith
+      (\_ newer -> newer)
+      gid
+      (fromIntegral memxRetrySecs `addTo` now, 0)
+  modifyTVar' sched.msVersion (+ 1)
+
+-- | Test/diagnostic view that keeps the scheduler representation opaque.
+memxPendingDeadline :: MemxScheduler -> GroupId -> IO (Maybe UTCTime)
+memxPendingDeadline sched (GroupId gid) =
+  fmap fst . Map.lookup gid <$> readTVarIO sched.msPending
+
 addTo :: NominalDiffTime -> UTCTime -> UTCTime
 addTo = addUTCTime
 
@@ -196,12 +220,24 @@ memxWorker profile mEmbed tz sessions defaultModel sched = localDomain "memx" $ 
       logAttention "memx: round crashed" $ object ["error" .= T.pack (show e)]
   where
     step = do
-      due <- liftIO (awaitDue sched)
-      for_ due $ \gid ->
-        extractEpisode profile mEmbed tz sessions defaultModel (GroupId gid)
-          `catchSync` \e ->
-            logAttention "memx: episode crashed" $
-              object ["group_id" .= gid, "error" .= T.pack (show e)]
+      gid <- liftIO (awaitDue sched)
+      result <-
+        trySync $
+          extractEpisode profile mEmbed tz sessions defaultModel (GroupId gid)
+      case result of
+        Right True -> pure ()
+        Right False -> scheduleRetry gid "extractor rejected the round"
+        Left e -> scheduleRetry gid (T.pack (show e))
+
+    scheduleRetry gid reason = do
+      now <- liftIO getCurrentTime
+      liftIO (retryMemxAfterFailureAt sched (GroupId gid) now)
+      logAttention "memx: episode retry scheduled" $
+        object
+          [ "group_id" .= gid,
+            "retry_seconds" .= memxRetrySecs,
+            "error" .= reason
+          ]
 
     -- Chat newer than the watermark with no timer running = an
     -- extraction a restart swallowed.  Arm rather than fire: the
@@ -217,20 +253,24 @@ memxWorker profile mEmbed tz sessions defaultModel sched = localDomain "memx" $ 
           liftIO (armMemx sched s.groupId)
           logInfo "memx: recovered pending window" $ object ["group_id" .= gid]
 
--- | Block until at least one group's deadline has passed; remove and
--- return those groups.
-awaitDue :: MemxScheduler -> IO [Int64]
+-- | Block until one group's deadline has passed, then claim only that group.
+-- Removing a whole due batch made the unstarted tail disappear if processing
+-- the first group failed unexpectedly.
+awaitDue :: MemxScheduler -> IO Int64
 awaitDue sched = do
   now <- getCurrentTime
-  (due, mNext, ver) <- atomically $ do
+  (claimed, mNext, ver) <- atomically $ do
     m <- readTVar sched.msPending
     let (dueM, rest) = Map.partition (\(d, _) -> d <= now) m
-    writeTVar sched.msPending rest
     ver <- readTVar sched.msVersion
-    pure (Map.keys dueM, minimum' (map fst (Map.elems rest)), ver)
-  if not (null due)
-    then pure due
-    else do
+    case Map.lookupMin dueM of
+      Just (gid, _) -> do
+        writeTVar sched.msPending (Map.delete gid m)
+        pure (Just gid, Nothing, ver)
+      Nothing -> pure (Nothing, minimum' (map fst (Map.elems rest)), ver)
+  case claimed of
+    Just gid -> pure gid
+    Nothing -> do
       case mNext of
         Nothing ->
           -- Nothing armed: sleep until somebody arms.
@@ -261,7 +301,7 @@ extractEpisode ::
   SessionRegistry ->
   Text ->
   GroupId ->
-  Eff es ()
+  Eff es Bool
 extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
   t <- loadSession sessions defaultModel g
   s <- liftIO (readSession t)
@@ -270,11 +310,16 @@ extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
   rows <- fetchRecentInGroup gid 0 floor' windowFetch
   let botInvolved = any (\h -> h.userId == h.selfId) rows
       advance = updateSession t (\sess -> (sess {memxAnchor = Just now}, ()))
+      complete = advance >> pure True
+      incomplete reason = do
+        logAttention "memx: extraction incomplete" $
+          object ["group_id" .= gid, "error" .= reason]
+        pure False
   if length rows < minWindowMsgs || not botInvolved
     then do
-      advance
       logInfo "memx: window skipped" $
         object ["group_id" .= gid, "messages" .= length rows, "bot_involved" .= botInvolved]
+      complete
     else do
       let selfId' = case rows of (h : _) -> h.selfId; [] -> 0
           render = renderHistoryLine tz selfId'
@@ -295,19 +340,23 @@ extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
               MsgUser (renderInput tz now gid groupMems userMemSets transcript)
             ]
       chat (ChatCtx "memx" (Just gid) Nothing) profile msgs [] >>= \case
-        Left err -> logAttention "memx: chat failed" $ object ["error" .= err]
+        Left err -> incomplete ("chat: " <> err)
         Right (ToolCallsResp _ _ _) ->
-          logAttention "memx: unexpected tool calls" $ object []
+          incomplete "unexpected tool calls"
         Right (ContentResp raw) -> case parseOps raw of
-          Left err ->
+          Left err -> do
             logAttention "memx: bad ops json" $
               object ["error" .= err, "raw" .= T.take 400 raw]
-          Right [] -> logInfo "memx: no ops" $ object ["group_id" .= gid, "messages" .= length rows]
-          Right ops -> traverse_ (applyOp profile mEmbed gid) (take 6 ops)
-      -- Advance only after the pass: a crash above leaves the window
-      -- unextracted and boot recovery re-arms it — at-least-once, with
-      -- the op-level dedup absorbing the rare replay.
-      advance
+            pure False
+          Right [] -> do
+            logInfo "memx: no ops" $ object ["group_id" .= gid, "messages" .= length rows]
+            complete
+          Right ops -> do
+            traverse_ (applyOp profile mEmbed gid) (take 6 ops)
+            -- Advance only after a complete pass: a crash or rejected
+            -- response leaves the window unextracted and the worker
+            -- re-arms it. Op-level dedup absorbs the rare replay.
+            complete
 
 -- | Parse the model's output into ops: strip code fences, find the
 -- first @[@ .. last @]@, decode.

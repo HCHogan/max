@@ -23,6 +23,9 @@ module Max.Reminder
     notifyReminderChange,
     reminderWorker,
     nextCronFire,
+    ReminderRetry (..),
+    maxReminderAttempts,
+    reminderRetryDecision,
   )
 where
 
@@ -42,6 +45,7 @@ import Data.Text qualified as T
 import Data.Time
   ( TimeZone,
     UTCTime,
+    addUTCTime,
     diffUTCTime,
     getCurrentTime,
     localTimeToUTC,
@@ -57,6 +61,8 @@ import Max.DB.Reminder
     dueReminders,
     markFired,
     nextPending,
+    recordDeliveryFailure,
+    reminderDueAt,
     rescheduleReminder,
   )
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
@@ -114,6 +120,29 @@ delayMicrosFor now fireAt =
   let micros = realToFrac (diffUTCTime fireAt now) * 1e6 :: Double
    in round (max 0 (min (fromIntegral capMicros) micros))
 
+-- | Five failed external deliveries park a reminder for diagnosis instead of
+-- retrying forever. The four retry delays are deliberately bounded and much
+-- shorter than the normal one-hour scheduler sleep cap.
+maxReminderAttempts :: Int
+maxReminderAttempts = 5
+
+data ReminderRetry
+  = RetryReminderAt !UTCTime
+  | ParkReminder
+  deriving stock (Show, Eq)
+
+reminderRetryDecision :: UTCTime -> Int -> ReminderRetry
+reminderRetryDecision now failedAttempt
+  | failedAttempt >= maxReminderAttempts = ParkReminder
+  | otherwise = RetryReminderAt (addUTCTime (fromIntegral delaySecs) now)
+  where
+    delaySecs :: Int
+    delaySecs = case failedAttempt of
+      1 -> 30
+      2 -> 120
+      3 -> 600
+      _ -> 1800
+
 reminderWorker ::
   (WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) =>
   TimeZone ->
@@ -133,12 +162,12 @@ reminderWorker tz sched = loop
           liftIO (waitSignal v0)
           loop
         Just r
-          | r.rmFireAt <= now -> do
+          | reminderDueAt r <= now -> do
               due <- dueReminders now
               mapM_ (process now) due
               loop
           | otherwise -> do
-              liftIO (waitUntil v0 (delayMicrosFor now r.rmFireAt))
+              liftIO (waitUntil v0 (delayMicrosFor now (reminderDueAt r)))
               loop
 
     -- Block until the pending set changes.
@@ -154,21 +183,45 @@ reminderWorker tz sched = loop
         v <- readTVar sched.rsSignal
         if fired || v /= v0 then pure () else retry
 
-    -- Deliver, then advance past this reminder *unconditionally* — even
-    -- if delivery failed (e.g. no client connected), advancing prevents
-    -- a persistent failure from hot-looping the scheduler.
+    -- Delivery is the claim/ack boundary. Only confirmed platform delivery
+    -- advances the schedule; failures persist a bounded retry deadline.
     process now r = do
-      catchSync (deliver r) $ \e ->
-        logAttention "reminder: delivery crashed" $
-          object ["id" .= r.rmId, "error" .= T.pack (show e)]
-      case r.rmCron of
-        Nothing -> markFired r.rmId now
-        Just expr -> case parseCronSchedule expr of
-          Right s | Just nextAt <- nextCronFire tz s now -> rescheduleReminder r.rmId nextAt
-          _ -> do
-            logAttention "reminder: cannot advance cron; closing" $
-              object ["id" .= r.rmId, "cron" .= expr]
-            markFired r.rmId now
+      delivery <-
+        catchSync (deliver r) $ \e ->
+          pure (Left (T.pack (show e)))
+      case delivery of
+        Left err -> failDelivery now r err
+        Right () -> advance now r
+
+    advance now r = case r.rmCron of
+      Nothing -> markFired r.rmId now
+      Just expr -> case parseCronSchedule expr of
+        Right s | Just nextAt <- nextCronFire tz s now -> rescheduleReminder r.rmId nextAt
+        _ -> do
+          logAttention "reminder: cannot advance cron; closing" $
+            object ["id" .= r.rmId, "cron" .= expr]
+          markFired r.rmId now
+
+    failDelivery now r err = do
+      let failedAttempt = r.rmDeliveryAttempts + 1
+      case reminderRetryDecision now failedAttempt of
+        RetryReminderAt retryAt -> do
+          recordDeliveryFailure r.rmId err (Just retryAt)
+          logAttention "reminder: delivery retry scheduled" $
+            object
+              [ "id" .= r.rmId,
+                "attempt" .= failedAttempt,
+                "retry_at" .= retryAt,
+                "error" .= err
+              ]
+        ParkReminder -> do
+          recordDeliveryFailure r.rmId err Nothing
+          logAttention "reminder: delivery parked" $
+            object
+              [ "id" .= r.rmId,
+                "attempts" .= failedAttempt,
+                "error" .= err
+              ]
 
     deliver r = do
       let gid = GroupId r.rmGroupId
@@ -184,11 +237,9 @@ reminderWorker tz sched = loop
               orTimeoutMs = 30000
             }
       case outcome of
-        SendFailed err ->
-          logAttention "reminder: send failed" $
-            object ["id" .= r.rmId, "error" .= err]
-        SentUnrecorded {} -> sentLog r
-        SentRecorded {} -> sentLog r
+        SendFailed err -> pure (Left err)
+        SentUnrecorded {} -> Right () <$ sentLog r
+        SentRecorded {} -> Right () <$ sentLog r
 
     sentLog r =
       logInfo "reminder: sent" $

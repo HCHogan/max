@@ -1,16 +1,26 @@
 module Max.IntentSpec (spec) where
 
-import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+import Data.Maybe (isNothing)
+import Data.Text (Text)
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime, secondsToDiffTime)
 import Max.Intent
   ( IntentConfig (..),
     IntentKind (..),
+    IntentRetry (..),
     IntentVerdict (..),
     Throttle (..),
+    claimIntentBatchAt,
+    enqueueIntent,
     msgSignal,
+    newIntentState,
     parseSupplement,
     parseVerdict,
+    retryIntentBatchAt,
     throttleAllows,
   )
+import OneBot.Event (GroupMessage (..), Sender (..))
+import OneBot.Segment (Segment (SegText))
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
 
 cfg :: IntentConfig
@@ -27,6 +37,34 @@ at s = UTCTime (fromGregorian 2026 7 21) (secondsToDiffTime s)
 
 spec :: Spec
 spec = do
+  describe "batch retries" $ do
+    it "backs off transient failures and drops the third failed attempt" $ do
+      st <- newIntentState
+      enqueueIntent st (mkMessage 42 1 "max?")
+      now <- getCurrentTime
+      Just (gid, attempt0, batch0) <- claimIntentBatchAt st (addUTCTime 1 now)
+      map (.messageId) batch0 `shouldBe` [MessageId 1]
+
+      first <- retryIntentBatchAt st gid attempt0 batch0 now
+      first `shouldBe` IntentRetryScheduled (addUTCTime 15 now)
+      enqueueIntent st (mkMessage 43 2 "other group")
+      Just (otherGid, _, _) <- claimIntentBatchAt st (addUTCTime 1 now)
+      otherGid `shouldBe` 43
+      enqueueIntent st (mkMessage 42 3 "newer")
+      beforeRetry <- claimIntentBatchAt st (addUTCTime 14 now)
+      beforeRetry `shouldSatisfy` isNothing
+
+      Just (_, attempt1, batch1) <- claimIntentBatchAt st (addUTCTime 15 now)
+      map (.messageId) batch1 `shouldBe` [MessageId 1, MessageId 3]
+      second <- retryIntentBatchAt st gid attempt1 batch1 now
+      second `shouldBe` IntentRetryScheduled (addUTCTime 60 now)
+
+      Just (_, attempt2, batch2) <- claimIntentBatchAt st (addUTCTime 60 now)
+      third <- retryIntentBatchAt st gid attempt2 batch2 now
+      third `shouldBe` IntentRetryExhausted
+      afterExhaustion <- claimIntentBatchAt st (addUTCTime 3600 now)
+      afterExhaustion `shouldSatisfy` isNothing
+
   describe "parseVerdict" $ do
     it "parses a full verdict with kind" $
       parseVerdict "{\"trigger\": true, \"kind\": \"called\", \"reason\": \"有人叫Max\"}"
@@ -120,3 +158,15 @@ spec = do
       let recent = [at (fromIntegral (i * 130)) | i <- [0 .. 9 :: Int]]
       throttleAllows cfg (at 5000) KindTopic (Just (Throttle (at 1170) recent))
         `shouldBe` True
+
+mkMessage :: Int -> Int -> Text -> GroupMessage
+mkMessage gid mid body =
+  GroupMessage
+    { selfId = UserId 99,
+      groupId = GroupId (fromIntegral gid),
+      userId = UserId 7,
+      messageId = MessageId (fromIntegral mid),
+      message = [SegText body],
+      rawMessage = body,
+      sender = Sender (UserId 7) (Just "alice") Nothing
+    }

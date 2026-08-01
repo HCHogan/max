@@ -35,29 +35,33 @@ module Max.Intent
     -- * Exposed for tests
     IntentVerdict (..),
     IntentKind (..),
+    IntentRetry (..),
+    claimIntentBatchAt,
     kindText,
     msgSignal,
     parseVerdict,
     parseSupplement,
     Throttle (..),
+    retryIntentBatchAt,
     throttleAllows,
   )
 where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM
-import Control.Monad (forever, when)
+import Control.Monad (forever)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.Int (Int64)
+import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 -- UTCTime itself rides in on the Effectful.Log re-export.
-import Data.Time (NominalDiffTime, TimeZone, diffUTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, TimeZone, addUTCTime, diffUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
@@ -65,7 +69,7 @@ import Max.DB.History (HistoryItem (..), fetchRecentInGroup)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
 import Max.Prompt (renderHistoryLine)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
-import Max.Util (catchSync)
+import Max.Util (catchSync, trySync)
 import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
@@ -88,7 +92,8 @@ data IntentConfig = IntentConfig
 
 -- | Pending buffers + throttle bookkeeping, keyed by raw group id.
 data IntentState = IntentState
-  { isPending :: !(TVar (Map Int64 [GroupMessage])),
+  { isPending :: !(TVar (Map Int64 PendingIntent)),
+    isPendingVersion :: !(TVar Int),
     isThrottle :: !(TVar (Map Int64 Throttle)),
     -- | When the bot last dispatched anything in a group (direct
     -- trigger, poke, or proactive) — the followup hot-window signal
@@ -97,6 +102,18 @@ data IntentState = IntentState
     -- | When a group last spent its chatter-lane classification slot.
     isChatterLast :: !(TVar (Map Int64 UTCTime))
   }
+
+data PendingIntent = PendingIntent
+  { piReadyAt :: !UTCTime,
+    piAttempt :: !Int,
+    piMessages :: ![GroupMessage]
+  }
+
+-- | Observable retry decision for logs and deterministic scheduler tests.
+data IntentRetry
+  = IntentRetryScheduled !UTCTime
+  | IntentRetryExhausted
+  deriving stock (Show, Eq)
 
 -- | When this group last got a proactive reply, and the recent
 -- trigger times inside the rolling hour window.
@@ -110,6 +127,7 @@ newIntentState :: IO IntentState
 newIntentState =
   IntentState
     <$> newTVarIO Map.empty
+    <*> newTVarIO 0
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
@@ -183,18 +201,37 @@ maxPendingPerGroup = 30
 debounceMicros :: Int
 debounceMicros = 2_000_000
 
+-- | Intent is advisory rather than durable user work. Retry transient
+-- classifier/DB failures in memory, but do not let a broken profile loop
+-- forever. The original messages remain durable in chat history.
+maxIntentAttempts :: Int
+maxIntentAttempts = 3
+
+intentRetryDelaySecs :: Int -> Int
+intentRetryDelaySecs attempt
+  | attempt <= 1 = 15
+  | otherwise = 60
+
+lastN :: Int -> [a] -> [a]
+lastN n xs = drop (length xs - n) xs
+
 -- | Queue one unaddressed group message for classification.  Own
 -- echoes and private chats never enqueue (a private message already
 -- triggers directly).
 enqueueIntent :: IntentState -> GroupMessage -> IO ()
 enqueueIntent st gm
   | gm.userId == gm.selfId || isPrivateChat gm.groupId = pure ()
-  | otherwise =
+  | otherwise = do
+      now <- getCurrentTime
       let GroupId gid = gm.groupId
-       in atomically . modifyTVar' st.isPending $
-            Map.insertWith (\new old -> lastN maxPendingPerGroup (old <> new)) gid [gm]
-  where
-    lastN n xs = drop (length xs - n) xs
+          fresh = PendingIntent now 0 [gm]
+      atomically $ do
+        modifyTVar' st.isPending $
+          Map.insertWith
+            (\new old -> old {piMessages = lastN maxPendingPerGroup (old.piMessages <> new.piMessages)})
+            gid
+            fresh
+        modifyTVar' st.isPendingVersion (+ 1)
 
 -- | Drop a group's pending buffer — called when a direct @/quote
 -- trigger dispatches for that group, so the same messages can't also
@@ -202,7 +239,9 @@ enqueueIntent st gm
 -- of the direct turn anyway).
 clearPendingIntent :: IntentState -> GroupId -> IO ()
 clearPendingIntent st (GroupId gid) =
-  atomically $ modifyTVar' st.isPending (Map.delete gid)
+  atomically $ do
+    modifyTVar' st.isPending (Map.delete gid)
+    modifyTVar' st.isPendingVersion (+ 1)
 
 -- | Is a proactive trigger of this kind currently allowed?  The
 -- cooldown gates only 'KindTopic'; the hourly cap gates everything.
@@ -244,7 +283,7 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
       logAttention "intent: round crashed" $ object ["error" .= T.pack (show e)]
   where
     step = do
-      (gid, batch0) <- liftIO . atomically $ takeBatch st
+      (gid, attempt, batch0) <- liftIO (awaitIntentBatch st)
       -- Debounce: let the burst finish, then sweep the stragglers into
       -- this same round.
       liftIO (threadDelay debounceMicros)
@@ -252,9 +291,35 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
       let batch = lastN maxPendingPerGroup (batch0 <> extra)
       case batch of
         [] -> pure ()
-        (gm : _) -> classifyBatch gid gm batch
+        (gm : _) -> do
+          result <- trySync (classifyBatch gid attempt gm batch)
+          case result of
+            Right True -> pure ()
+            Right False -> retryBatch gid attempt batch "classifier returned no usable verdict"
+            Left e -> retryBatch gid attempt batch (T.pack (show e))
 
-    classifyBatch gid gm batch = do
+    retryBatch gid attempt batch reason = do
+      now <- liftIO getCurrentTime
+      decision <- liftIO (retryIntentBatchAt st gid attempt batch now)
+      case decision of
+        IntentRetryScheduled readyAt ->
+          logAttention "intent: batch retry scheduled" $
+            object
+              [ "group_id" .= gid,
+                "attempt" .= (attempt + 1),
+                "ready_at" .= readyAt,
+                "error" .= reason
+              ]
+        IntentRetryExhausted ->
+          logAttention "intent: retry budget exhausted; dropping best-effort batch" $
+            object
+              [ "group_id" .= gid,
+                "attempts" .= maxIntentAttempts,
+                "batch" .= length batch,
+                "error" .= reason
+              ]
+
+    classifyBatch gid attempt gm batch = do
       t <- loadSession sessions defaultModel gm.groupId
       s <- liftIO (readSession t)
       now <- liftIO getCurrentTime
@@ -282,62 +347,131 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
                       "reason" .= ("hourly cap" :: Text)
                     ]
                 pure False
-              else liftIO (passesGate st gid now batch)
-      when gated $ do
-        let UserId selfId' = gm.selfId
-            batchIds = Set.fromList [m | b <- batch, let MessageId m = b.messageId]
-        rows <- fetchRecentInGroup gid 0 s.clearedAt (cfg.icContextLines + length batch)
-        let (news, ctx) = spanPartition (\h -> h.messageId `Set.member` batchIds) rows
-            render = renderHistoryLine tz selfId'
-        -- Rows for the batch can be missing only in pathological
-        -- flood cases; classify anyway with whatever context we have.
-        verdict <- classifyOnce (Just gid) cfg.icProfile (fromMaybe defaultPersona s.persona) (map render ctx) (map render news)
-        case verdict of
-          Nothing -> pure ()
-          Just v
-            | not v.ivTrigger ->
-                logInfo "intent: no trigger" $
-                  object ["group_id" .= gid, "batch" .= length batch, "reason" .= v.ivReason]
-            | not (throttleAllows cfg now v.ivKind throttle) ->
-                logInfo "intent: trigger throttled" $
-                  object
-                    [ "group_id" .= gid,
-                      "kind" .= kindText v.ivKind,
-                      "reason" .= v.ivReason
-                    ]
-            | otherwise -> do
-                liftIO . atomically . modifyTVar' st.isThrottle $ \m ->
-                  Map.insert gid (recordTrigger cfg now (Map.lookup gid m)) m
-                liftIO (noteBotActivity st gm.groupId)
-                logInfo "intent: proactive trigger" $
-                  object
-                    [ "group_id" .= gid,
-                      "batch" .= length batch,
-                      "kind" .= kindText v.ivKind,
-                      "reason" .= v.ivReason
-                    ]
-                -- The whole batch, not just its newest message: the
-                -- dispatch triggers on the last one (the rest is
-                -- ambient context for a fresh turn), but if the turn
-                -- is absorbed into one already running, the earlier
-                -- lines must ride along in the note — the running
-                -- turn never re-reads history.
-                dispatch batch
-
-    lastN n xs = drop (length xs - n) xs
+              else
+                if attempt > 0
+                  then pure True -- retry owns the gate claim from attempt zero
+                  else liftIO (passesGate st gid now batch)
+      if not gated
+        then pure True
+        else do
+          let UserId selfId' = gm.selfId
+              batchIds = Set.fromList [m | b <- batch, let MessageId m = b.messageId]
+          rows <- fetchRecentInGroup gid 0 s.clearedAt (cfg.icContextLines + length batch)
+          let (news, ctx) = spanPartition (\h -> h.messageId `Set.member` batchIds) rows
+              render = renderHistoryLine tz selfId'
+          -- Rows for the batch can be missing only in pathological
+          -- flood cases; classify anyway with whatever context we have.
+          verdict <- classifyOnce (Just gid) cfg.icProfile (fromMaybe defaultPersona s.persona) (map render ctx) (map render news)
+          case verdict of
+            Nothing -> pure False
+            Just v
+              | not v.ivTrigger -> do
+                  logInfo "intent: no trigger" $
+                    object
+                      [ "group_id" .= gid,
+                        "batch" .= length batch,
+                        "reason" .= v.ivReason
+                      ]
+                  pure True
+              | not (throttleAllows cfg now v.ivKind throttle) -> do
+                  logInfo "intent: trigger throttled" $
+                    object
+                      [ "group_id" .= gid,
+                        "kind" .= kindText v.ivKind,
+                        "reason" .= v.ivReason
+                      ]
+                  pure True
+              | otherwise -> do
+                  logInfo "intent: proactive trigger" $
+                    object
+                      [ "group_id" .= gid,
+                        "batch" .= length batch,
+                        "kind" .= kindText v.ivKind,
+                        "reason" .= v.ivReason
+                      ]
+                  -- The whole batch, not just its newest message: the
+                  -- dispatch triggers on the last one (the rest is
+                  -- ambient context for a fresh turn), but if the turn
+                  -- is absorbed into one already running, the earlier
+                  -- lines must ride along in the note — the running
+                  -- turn never re-reads history.
+                  dispatch batch
+                  liftIO . atomically . modifyTVar' st.isThrottle $ \m ->
+                    Map.insert gid (recordTrigger cfg now (Map.lookup gid m)) m
+                  liftIO (noteBotActivity st gm.groupId)
+                  pure True
 
     -- Stable split: rows belonging to the batch vs. the rest, both in
     -- original chronological order.
     spanPartition p xs = (filter p xs, filter (not . p) xs)
 
-takeBatch :: IntentState -> STM (Int64, [GroupMessage])
-takeBatch st = do
-  m <- readTVar st.isPending
-  case Map.minViewWithKey m of
-    Nothing -> retry
-    Just ((gid, msgs), rest) -> do
-      writeTVar st.isPending rest
-      pure (gid, msgs)
+-- | Non-blocking deterministic claim used by the worker scheduler and tests.
+claimIntentBatchAt :: IntentState -> UTCTime -> IO (Maybe (Int64, Int, [GroupMessage]))
+claimIntentBatchAt st now = atomically $ do
+  (claimed, _, _) <- claimSnapshot st now
+  pure claimed
+
+awaitIntentBatch :: IntentState -> IO (Int64, Int, [GroupMessage])
+awaitIntentBatch st = do
+  now <- getCurrentTime
+  (claimed, mNext, ver) <- atomically (claimSnapshot st now)
+  case claimed of
+    Just batch -> pure batch
+    Nothing -> do
+      case mNext of
+        Nothing ->
+          atomically $ readTVar st.isPendingVersion >>= \v -> check (v /= ver)
+        Just readyAt -> do
+          let micros = max 0 (ceiling (diffUTCTime readyAt now * 1_000_000)) :: Integer
+          timer <- registerDelay (fromIntegral (min micros 3_600_000_000))
+          atomically $
+            (readTVar timer >>= check)
+              `orElse` (readTVar st.isPendingVersion >>= \v -> check (v /= ver))
+      awaitIntentBatch st
+
+claimSnapshot ::
+  IntentState ->
+  UTCTime ->
+  STM (Maybe (Int64, Int, [GroupMessage]), Maybe UTCTime, Int)
+claimSnapshot st now = do
+  queued <- readTVar st.isPending
+  ver <- readTVar st.isPendingVersion
+  let ordered = sortOn (\(gid, p) -> (p.piReadyAt, gid)) (Map.toList queued)
+      ready = filter (\(_, p) -> p.piReadyAt <= now) ordered
+  case ready of
+    ((gid, p) : _) -> do
+      writeTVar st.isPending (Map.delete gid queued)
+      pure (Just (gid, p.piAttempt, p.piMessages), Nothing, ver)
+    [] -> pure (Nothing, (.piReadyAt) . snd <$> listToMaybe ordered, ver)
+
+-- | Put a failed batch back behind a bounded delay. New messages that arrived
+-- for the same group are merged behind it so chronology is preserved.
+retryIntentBatchAt ::
+  IntentState ->
+  Int64 ->
+  Int ->
+  [GroupMessage] ->
+  UTCTime ->
+  IO IntentRetry
+retryIntentBatchAt st gid previousAttempt batch now = do
+  let attempt = previousAttempt + 1
+  if attempt >= maxIntentAttempts
+    then pure IntentRetryExhausted
+    else do
+      let readyAt = addUTCTime (fromIntegral (intentRetryDelaySecs attempt)) now
+          retried = PendingIntent readyAt attempt batch
+      atomically $ do
+        queued <- readTVar st.isPending
+        let merged = case Map.lookup gid queued of
+              Nothing -> retried
+              Just newer ->
+                retried
+                  { piMessages =
+                      lastN maxPendingPerGroup (retried.piMessages <> newer.piMessages)
+                  }
+        writeTVar st.isPending (Map.insert gid merged queued)
+        modifyTVar' st.isPendingVersion (+ 1)
+      pure (IntentRetryScheduled readyAt)
 
 drainGroup :: IntentState -> Int64 -> STM [GroupMessage]
 drainGroup st gid = do
@@ -346,7 +480,7 @@ drainGroup st gid = do
     Nothing -> pure []
     Just msgs -> do
       writeTVar st.isPending (Map.delete gid m)
-      pure msgs
+      pure msgs.piMessages
 
 -- | One classifier round: build the prompt, ask the profile, parse
 -- the verdict.  On success the full input rides along with the

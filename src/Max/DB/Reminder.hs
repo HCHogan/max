@@ -6,21 +6,24 @@
 --
 -- A reminder is one-shot ('rmCron' == 'Nothing', closed with
 -- 'markFired') or recurring ('rmCron' == @Just expr@, kept pending and
--- rolled forward with 'rescheduleReminder').  'rmFireAt' is always the
--- next/only delivery instant.
+-- rolled forward with 'rescheduleReminder'). Delivery retry state is separate
+-- from 'rmFireAt', so a transient failure never rewrites the user's schedule.
 module Max.DB.Reminder
   ( Reminder (..),
+    reminderDueAt,
     insertReminder,
     dueReminders,
     nextPending,
     markFired,
     rescheduleReminder,
+    recordDeliveryFailure,
     listPending,
     cancelReminder,
   )
 where
 
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), Query)
@@ -40,7 +43,11 @@ data Reminder = Reminder
     rmText :: !Text,
     rmCron :: !(Maybe Text),
     rmFireAt :: !UTCTime,
-    rmCreatedAt :: !UTCTime
+    rmCreatedAt :: !UTCTime,
+    rmDeliveryAttempts :: !Int,
+    rmNextAttemptAt :: !(Maybe UTCTime),
+    rmLastError :: !(Maybe Text),
+    rmParkedAt :: !(Maybe UTCTime)
   }
   deriving stock (Show, Eq)
 
@@ -55,11 +62,21 @@ instance FromRow Reminder where
       <*> field
       <*> field
       <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
 
 -- | Column list matching 'FromRow', for every SELECT below.
 selectCols :: Query
 selectCols =
-  "id, group_id, user_id, self_id, text, cron_expr, fire_at, created_at"
+  "id, group_id, user_id, self_id, text, cron_expr, fire_at, created_at, \
+  \delivery_attempts, next_attempt_at, last_error, parked_at"
+
+-- | Effective scheduler deadline: the original/next cron fire unless a
+-- delivery retry is pending.
+reminderDueAt :: Reminder -> UTCTime
+reminderDueAt r = fromMaybe r.rmFireAt r.rmNextAttemptAt
 
 -- | Insert a reminder, returning its new id.
 insertReminder ::
@@ -81,7 +98,7 @@ insertReminder (GroupId gid) (UserId uid) (UserId sid) body cron fireAt = do
     [Only n] -> n
     _ -> 0 -- unreachable: RETURNING on a successful insert yields one row
 
--- | Every pending reminder due at or before @now@, earliest first.
+-- | Every deliverable reminder due at or before @now@, earliest first.
 -- The scheduler drains these in one shot so a backlog accrued while
 -- the process was down is delivered together.
 dueReminders ::
@@ -91,13 +108,14 @@ dueReminders ::
 dueReminders now =
   query
     ( "SELECT " <> selectCols <> " FROM reminders \
-      \  WHERE fired_at IS NULL AND fire_at <= ? \
-      \  ORDER BY fire_at"
+      \  WHERE fired_at IS NULL AND parked_at IS NULL \
+      \    AND COALESCE(next_attempt_at, fire_at) <= ? \
+      \  ORDER BY COALESCE(next_attempt_at, fire_at)"
     )
     (Only now)
 
--- | The single earliest pending reminder, if any — the scheduler uses
--- its 'rmFireAt' to compute how long to sleep.
+-- | The single earliest deliverable reminder, if any — parked rows stay
+-- visible to the list/cancel tools but do not wake the worker.
 nextPending ::
   (WithConnection :> es, IOE :> es) =>
   Eff es (Maybe Reminder)
@@ -105,7 +123,8 @@ nextPending = do
   rows <-
     query
       ( "SELECT " <> selectCols <> " FROM reminders \
-        \  WHERE fired_at IS NULL ORDER BY fire_at LIMIT 1"
+        \  WHERE fired_at IS NULL AND parked_at IS NULL \
+        \  ORDER BY COALESCE(next_attempt_at, fire_at) LIMIT 1"
       )
       ()
   pure $ case rows of
@@ -119,7 +138,11 @@ markFired ::
   UTCTime ->
   Eff es ()
 markFired rid firedAt = do
-  _ <- execute "UPDATE reminders SET fired_at = ? WHERE id = ?" (firedAt, rid)
+  _ <-
+    execute
+      "UPDATE reminders SET fired_at = ?, next_attempt_at = NULL, \
+      \ delivery_attempts = 0, last_error = NULL, parked_at = NULL WHERE id = ?"
+      (firedAt, rid)
   pure ()
 
 -- | Roll a recurring reminder forward to its next fire time; the row
@@ -130,7 +153,30 @@ rescheduleReminder ::
   UTCTime ->
   Eff es ()
 rescheduleReminder rid nextAt = do
-  _ <- execute "UPDATE reminders SET fire_at = ? WHERE id = ?" (nextAt, rid)
+  _ <-
+    execute
+      "UPDATE reminders SET fire_at = ?, next_attempt_at = NULL, \
+      \ delivery_attempts = 0, last_error = NULL, parked_at = NULL WHERE id = ?"
+      (nextAt, rid)
+  pure ()
+
+-- | Record one failed delivery. 'Nothing' parks the reminder; 'Just' is the
+-- durable retry deadline. The caller owns the bounded backoff policy.
+recordDeliveryFailure ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Text ->
+  Maybe UTCTime ->
+  Eff es ()
+recordDeliveryFailure rid err mRetryAt = do
+  _ <-
+    execute
+      "UPDATE reminders \
+      \   SET delivery_attempts = delivery_attempts + 1, \
+      \       next_attempt_at = ?, last_error = ?, \
+      \       parked_at = CASE WHEN ?::timestamptz IS NULL THEN now() ELSE NULL END \
+      \ WHERE id = ? AND fired_at IS NULL"
+      (mRetryAt, err, mRetryAt, rid)
   pure ()
 
 -- | Pending reminders for one conversation, earliest first — backs the
@@ -143,7 +189,7 @@ listPending (GroupId gid) =
   query
     ( "SELECT " <> selectCols <> " FROM reminders \
       \  WHERE group_id = ? AND fired_at IS NULL \
-      \  ORDER BY fire_at"
+      \  ORDER BY COALESCE(next_attempt_at, fire_at)"
     )
     (Only gid)
 

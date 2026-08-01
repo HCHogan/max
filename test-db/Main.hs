@@ -22,6 +22,7 @@ import Max.DB.Migrations (runMigrations)
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.MessageSpec qualified as MessageSpec
+import Max.DB.ReminderSpec qualified as ReminderSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import System.Environment (lookupEnv)
@@ -46,6 +47,7 @@ main = do
         HistorySpec.spec pool
         MessageSpec.spec pool
         FetchQueueSpec.spec pool
+        ReminderSpec.spec pool
         PromptIntegrationSpec.spec pool
       -- Final wipe so a developer running tests against the dev DB
       -- doesn't leave random fixture rows behind.

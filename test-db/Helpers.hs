@@ -68,7 +68,8 @@ truncateAll pool = withConn pool $ \c -> do
       \  message_videos, \
       \  sessions, \
       \  group_files, \
-      \  fetch_jobs \
+      \  fetch_jobs, \
+      \  reminders \
       \  RESTART IDENTITY CASCADE"
   pure ()
 
