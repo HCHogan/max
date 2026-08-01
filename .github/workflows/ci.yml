@@ -58,6 +58,9 @@ jobs:
       - name: Build
         run: nix develop --impure -c cabal build all
 
+      - name: Verify generated docs
+        run: nix develop --impure -c cabal run max-prompt-flow -- --check
+
       - name: Test
         run: nix develop --impure -c cabal test max-test --test-show-details=direct
 

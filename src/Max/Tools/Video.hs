@@ -7,6 +7,7 @@
 -- Qwen-VL, …) take it directly.
 module Max.Tools.Video
   ( videoToolsFor,
+    viewVideoSpec,
   )
 where
 
@@ -24,6 +25,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Database.PostgreSQL.Simple (Only (..))
 import Max.Effects.Agent (DispatchContext (..), ToolImage (..), queueToolImage)
+import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.Tools (Tool (..))
 import Max.Time (fmtDurationSec)
 import System.FilePath ((</>))
@@ -42,26 +44,9 @@ viewVideoTool ::
   Tool es
 viewVideoTool blobRoot dc =
   Tool
-    { toolName = "view_video",
-      toolDescription =
-        T.unwords
-          [ "看一条群里发的视频：传 [video#<id>] 里的 <id>，整段视频会附在",
-            "下一条消息里给你看（占用本次任务 8 个附件配额中的 1 个）。",
-            "同一个视频看一次就够了。"
-          ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "message_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("[video#<id>] 标记里的消息 id" :: Text)
-                      ]
-                ],
-            "required" .= (["message_id"] :: [Text])
-          ],
+    { toolName = viewVideoSpec.specName,
+      toolDescription = viewVideoSpec.specDescription,
+      toolSchema = viewVideoSpec.specSchema,
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid :: Int64) -> do
@@ -106,3 +91,30 @@ viewVideoTool blobRoot dc =
                 "bytes" .= BS.length bytes,
                 "note" .= ("视频已附在下一条消息里" :: Text)
               ]
+
+-- | Protocol-neutral metadata advertised for @view_video@.  The live
+-- runner and generated wire examples share this single value.
+viewVideoSpec :: ToolSpec
+viewVideoSpec =
+  ToolSpec
+    { specName = "view_video",
+      specDescription =
+        T.unwords
+          [ "看一条群里发的视频：传 [video#<id>] 里的 <id>，整段视频会附在",
+            "下一条消息里给你看（占用本次任务 8 个附件配额中的 1 个）。",
+            "同一个视频看一次就够了。"
+          ],
+      specSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "message_id"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("[video#<id>] 标记里的消息 id" :: Text)
+                      ]
+                ],
+            "required" .= (["message_id"] :: [Text])
+          ]
+    }

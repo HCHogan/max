@@ -17,7 +17,7 @@ module Max.DB.Calls
 where
 
 import Data.Aeson (Value (..))
-import Data.Aeson qualified as A
+import Data.Aeson.KeyMap qualified as KM
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -145,8 +145,10 @@ pruneCalls days =
 
 --------------------------------------------------------------------------------
 
--- | Replace every base64 data URL anywhere in a JSON value with a
--- placeholder naming its mime type and size.
+-- | Replace inline base64 media anywhere in a JSON value with a
+-- placeholder naming its mime type and size.  Covers both shapes the LLM
+-- layer emits: OpenAI/Responses data URLs, and Anthropic's
+-- @{type:"base64", media_type:"image/…", data:"…"}@ source object.
 --
 -- This is what keeps the table small enough to be worth having: one
 -- multimodal turn carries images at a megabyte apiece, and none of
@@ -160,12 +162,23 @@ redactDataUrls = go
     go = \case
       String s -> String (redact s)
       Array a -> Array (fmap go a)
-      Object o -> Object (fmap go o)
+      Object o -> Object . fmap go $ case anthropicPayload o of
+        Just payload -> KM.insert "data" (String (placeholder payload)) o
+        Nothing -> o
       v -> v
+    anthropicPayload o = do
+      String "base64" <- KM.lookup "type" o
+      String mime <- KM.lookup "media_type" o
+      if "image/" `T.isPrefixOf` mime
+        then do
+          String payload <- KM.lookup "data" o
+          pure payload
+        else Nothing
+    placeholder payload = "…(" <> T.pack (show (T.length payload)) <> " chars)"
     redact s = case T.breakOn ";base64," s of
       (before, rest)
         | T.null rest -> s
         | not ("data:" `T.isPrefixOf` before) -> s
         | otherwise ->
             let payload = T.drop 8 rest
-             in before <> ";base64,…(" <> T.pack (show (T.length payload)) <> " chars)"
+             in before <> ";base64," <> placeholder payload

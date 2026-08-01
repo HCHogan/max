@@ -56,6 +56,8 @@ module Max.Effects.Agent
     DispatchContext (..),
     ToolImage (..),
     queueToolImage,
+    assembleToolRound,
+    toolResultMessage,
     narrationSegments,
     runAgent,
     agentTurn,
@@ -370,7 +372,6 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
               -- Carry the provider's message verbatim so its thinking
               -- output round-trips back to the API on the next
               -- request — DeepSeek returns 400 otherwise.
-              let asst = MsgAssistantToolCalls raw tcs
               -- Independent calls in one round run concurrently (DB
               -- goes through the pool, image attachment through STM);
               -- results keep call order so each tool_call id is
@@ -378,8 +379,8 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
               toolMsgs <- case tcs of
                 [tc] -> (: []) <$> executeOne dc tc
                 _ -> mapConcurrently (executeOne dc) tcs
-              imgMsgs <- drainToolImages dc
-              let newMsgs = [asst] <> toolMsgs <> imgMsgs
+              imgs <- drainToolImages dc
+              let newMsgs = assembleToolRound raw tcs toolMsgs imgs
               go emit dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
@@ -544,22 +545,12 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     -- adjacent text blocks — the shape strict providers accept).
     -- Injected AFTER all tool-result messages so every tool_call id is
     -- answered first, as the OpenAI wire requires.
-    drainToolImages :: DispatchContext -> Eff (Tools : es) [ChatMessage]
+    drainToolImages :: DispatchContext -> Eff (Tools : es) [ToolImage]
     drainToolImages dc = do
-      imgs <- liftIO . atomically $ do
+      liftIO . atomically $ do
         (n, is) <- readTVar dc.dcToolImages
         writeTVar dc.dcToolImages (n, [])
         pure is
-      pure
-        [ MsgUserBlocks (concat [[TextBlock i.tiLabel, mediaBlock i.tiDataUrl] | i <- imgs])
-        | not (null imgs)
-        ]
-      where
-        -- Videos ride the same queue (and budget); the data URL's
-        -- mime prefix decides the wire block type.
-        mediaBlock u
-          | "data:video/" `T.isPrefixOf` u = VideoDataUrl u
-          | otherwise = ImageDataUrl u
 
     executeOne :: DispatchContext -> ToolCall -> Eff (Tools : es) ChatMessage
     executeOne dc tc = do
@@ -581,12 +572,47 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
                 "full_len" .= T.length full
               ]
           announceToolResult dc tc (previewJson debugPreviewChars v)
-          pure $ MsgTool tc.callId full
+          pure $ toolResultMessage tc (Right v)
         Left err -> do
           logAttention "agent: tool failed" $
             object ["id" .= tc.callId, "name" .= tc.callName, "error" .= err]
           announceToolResult dc tc ("✗ " <> err)
-          pure $ MsgTool tc.callId ("error: " <> err)
+          pure $ toolResultMessage tc (Left err)
+
+-- | Build the messages appended after one tool-call response.  This is
+-- deliberately a pure seam between the effectful pieces of the loop:
+-- tool execution happens through 'Tools', image collection through STM,
+-- while the protocol-neutral conversation transition is just data.
+-- Keeping it here also gives documentation/tests the exact production
+-- shape without standing up Postgres, NapCat, or an LLM endpoint.
+assembleToolRound ::
+  Value -> -- provider's assistant message, verbatim
+  [ToolCall] ->
+  [ChatMessage] -> -- one 'MsgTool' per call, in call order
+  [ToolImage] ->
+  [ChatMessage]
+assembleToolRound raw tcs toolMsgs imgs =
+  [MsgAssistantToolCalls raw tcs]
+    <> toolMsgs
+    <> [ MsgUserBlocks (concatMap imageBlocks imgs)
+       | not (null imgs)
+       ]
+  where
+    imageBlocks i = [TextBlock i.tiLabel, mediaBlock i.tiDataUrl]
+    -- Videos ride the same queue (and budget); the data URL's mime
+    -- prefix decides the wire block type.
+    mediaBlock u
+      | "data:video/" `T.isPrefixOf` u = VideoDataUrl u
+      | otherwise = ImageDataUrl u
+
+-- | Turn a tool runner's result into the text-only message paired with
+-- its call id on the wire.  Successful JSON uses the same compact Aeson
+-- encoding as the live loop; failures keep the long-standing @error:@
+-- prefix the model knows how to recover from.
+toolResultMessage :: ToolCall -> Either Text Value -> ChatMessage
+toolResultMessage tc = \case
+  Right v -> MsgTool tc.callId (TE.decodeUtf8 (LBS.toStrict (encode v)))
+  Left err -> MsgTool tc.callId ("error: " <> err)
 
 -- | Render a 'Value' as a single-line preview suitable for logs:
 -- newlines/whitespace collapsed, truncated to @n@ characters with an

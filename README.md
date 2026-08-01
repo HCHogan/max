@@ -130,7 +130,7 @@ cabal test max-test-db     # DB integration; needs MAX_TEST_DB_URL
 | [features.md](docs/features.md) | full behaviour reference |
 | [architecture.md](docs/architecture.md) | layout, data flow, durability, effect stack |
 | [development.md](docs/development.md) | tests, versioning, debugging |
-| [prompt-flow.md](docs/prompt-flow.md) | the complete JSON of a real dispatch |
+| [prompt-flow.md](docs/prompt-flow.md) | generated wire JSON for a complete dispatch and tool round |
 
 ## License
 

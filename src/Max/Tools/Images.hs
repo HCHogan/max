@@ -7,6 +7,7 @@
 -- budget) as @view_avatar@.
 module Max.Tools.Images
   ( imageToolsFor,
+    viewImageSpec,
   )
 where
 
@@ -27,6 +28,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessage)
 import Max.Effects.Agent (DispatchContext (..), ToolImage (..), queueToolImage)
+import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.Tools (Tool (..))
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Time (fmtHM)
@@ -54,24 +56,9 @@ viewImageTool ::
   Tool es
 viewImageTool tz blobRoot dc =
   Tool
-    { toolName = "view_image",
-      toolDescription =
-        "查看上下文里标记为 [image#<id>] 的图片：传 message_id，那条消息的图\
-        \会附在下一条消息里给你看。只在图片跟当前话题相关时用；\
-        \与 view_avatar 共用每次任务 8 张的配额。",
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "message_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("[image#<id>] 里的那个 id" :: Text)
-                      ]
-                ],
-            "required" .= (["message_id"] :: [Text])
-          ],
+    { toolName = viewImageSpec.specName,
+      toolDescription = viewImageSpec.specDescription,
+      toolSchema = viewImageSpec.specSchema,
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
@@ -141,3 +128,30 @@ viewImageTool tz blobRoot dc =
               if ok
                 then (1 +) <$> attachAll label rest total
                 else pure 0
+
+-- | Protocol-neutral metadata advertised for @view_image@.  Kept apart
+-- from the effectful runner so request renderers (including the generated
+-- prompt-flow reference) can use the exact live schema without needing a
+-- database or blob store.
+viewImageSpec :: ToolSpec
+viewImageSpec =
+  ToolSpec
+    { specName = "view_image",
+      specDescription =
+        "查看上下文里标记为 [image#<id>] 的图片：传 message_id，那条消息的图\
+        \会附在下一条消息里给你看。只在图片跟当前话题相关时用；\
+        \与 view_avatar 共用每次任务 8 张的配额。",
+      specSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "message_id"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("[image#<id>] 里的那个 id" :: Text)
+                      ]
+                ],
+            "required" .= (["message_id"] :: [Text])
+          ]
+    }

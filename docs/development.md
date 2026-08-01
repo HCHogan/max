@@ -36,6 +36,9 @@ Pure logic in `test/` mirroring the library layout:
   `history_as_turns` shape (including that neither can produce two consecutive
   same-role messages), section ordering, roster/名片 identity, 私聊 scene,
   memory block placement, quoted-forward expansion, in-flight hiding
+- `Max.PromptFlowSpec` — generated `docs/prompt-flow.md` matches the live
+  Prompt → Agent → LLM rendering path (regenerate with
+  `cabal run max-prompt-flow`)
 - `Max.RenderSpec` — markdown table → typst
 - `Max.ReplySpec` — reply paragraph splitting (fences, `[split]`, chunk ceiling)
 - `Max.ReplySendSpec` — that splitting a reply at a `readyPrefix` boundary sends

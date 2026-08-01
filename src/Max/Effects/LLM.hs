@@ -120,7 +120,7 @@ data Protocol
     -- the response's whole @output@ array (reasoning + function
     -- calls) replayed verbatim on the next request.
     ProtocolResponses
-  deriving stock (Show, Eq)
+  deriving stock (Show, Eq, Enum, Bounded)
 
 -- | Parse a protocol name from config (TOML / env / CLI).
 -- Case-insensitive.  Returns 'Nothing' for anything other than
