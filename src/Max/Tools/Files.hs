@@ -25,8 +25,6 @@ module Max.Tools.Files
   )
 where
 
-import Control.Exception (IOException, bracket, try)
-import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
@@ -52,16 +50,12 @@ import Max.ReplySend (modelTextSegs)
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
+import Max.Util (withTempDirectory)
 import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..))
 import OneBot.Segment (Segment (..), imageSeg)
 import OneBot.Types (GroupId (..), UserId, isPrivateChat, privateChatUserId)
-import System.Directory
-  ( createDirectoryIfMissing,
-    getTemporaryDirectory,
-    removeFile,
-  )
+import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeFileName, (</>))
-import System.IO (hClose, openBinaryTempFile)
 
 -- | Where staged outbound files live on the host, and the
 -- corresponding path inside the NapCat container (see
@@ -334,24 +328,13 @@ captionSegs gid (Just c)
 -- delete the temp.  Used for the base64-image path; bytes stay in
 -- memory for one HTTP request and then go.
 readSandboxArtifact :: Text -> Text -> IO (Either Text BS.ByteString)
-readSandboxArtifact container path = do
-  bracket
-    ( do
-        tmpDir <- getTemporaryDirectory
-        (p, h) <- openBinaryTempFile tmpDir "max-artifact-"
-        hClose h
-        pure p
-    )
-    tryRemove
-    ( \tmp -> do
-        cpRes <- runCopyFromContainer container path tmp
-        case cpRes of
-          Left err -> pure (Left err)
-          Right () -> Right <$> BS.readFile tmp
-    )
-
-tryRemove :: FilePath -> IO ()
-tryRemove p = void $ try @IOException (removeFile p)
+readSandboxArtifact container path =
+  withTempDirectory "max-artifact-" $ \workspace -> do
+    let tmp = workspace </> "artifact"
+    cpRes <- runCopyFromContainer container path tmp
+    case cpRes of
+      Left err -> pure (Left err)
+      Right () -> Right <$> BS.readFile tmp
 
 --------------------------------------------------------------------------------
 -- send_file_from_sandbox

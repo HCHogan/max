@@ -20,9 +20,9 @@ import Control.Exception (IOException, try)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Text (Text)
-import System.Directory (getTemporaryDirectory, removeFile)
+import Max.Util (withTempDirectory)
 import System.Exit (ExitCode (..))
-import System.IO (hClose, openTempFile)
+import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
 import System.Timeout (timeout)
 
@@ -50,13 +50,11 @@ prepareImageForLLM mime bytes
         Right (Just out) | BS.length out < BS.length bytes -> ("image/jpeg", out)
         _ -> (mime, bytes)
   where
-    compress = do
-      tmp <- getTemporaryDirectory
-      (inPath, hIn) <- openTempFile tmp "max-imgprep.bin"
-      hClose hIn
+    compress = withTempDirectory "max-imgprep-" $ \workspace -> do
+      let inPath = workspace </> "input.bin"
+          outPath = workspace </> "output.jpg"
       BS.writeFile inPath bytes
-      let outPath = inPath <> ".jpg"
-          -- Fit within a maxLongEdge box, aspect preserved.  The
+      let -- Fit within a maxLongEdge box, aspect preserved.  The
           -- min() terms stop small-but-heavy images from being
           -- upscaled; force_divisible_by keeps dimensions even for
           -- the encoder.
@@ -73,6 +71,4 @@ prepareImageForLLM mime bytes
       out <- case res of
         Just (ExitSuccess, _, _) -> Just <$> BS.readFile outPath
         _ -> pure Nothing
-      _ <- try @IOException (removeFile inPath)
-      _ <- try @IOException (removeFile outPath)
       pure out

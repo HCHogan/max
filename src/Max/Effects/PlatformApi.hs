@@ -6,6 +6,9 @@ module Max.Effects.PlatformApi
     qqBackend,
     sendAction,
     callAction,
+
+    -- * Exposed for cancellation-safety tests
+    withPendingCall,
   )
 where
 
@@ -22,7 +25,7 @@ import Control.Concurrent.STM
     retry,
     takeTMVar,
   )
-import Control.Exception (try)
+import Control.Exception (bracket_, try)
 import Data.Aeson (encode)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -79,7 +82,7 @@ qqBackend ref =
       pbSend = \a ->
         readTVarIO ref >>= \case
           Nothing -> pure (Left "no client connected")
-          Just c -> Right <$> sendIO c a,
+          Just c -> sendIO c a,
       pbCall = \a t ->
         readTVarIO ref >>= \case
           Nothing -> pure (Left "no client connected")
@@ -92,35 +95,46 @@ sendAction a = send (SendOp a)
 callAction :: (PlatformApi :> es) => Action -> Int -> Eff es (Either Text Response)
 callAction a t = send (CallOp a t)
 
-sendIO :: Client -> Action -> IO ()
+sendIO :: Client -> Action -> IO (Either Text ())
 sendIO client a = do
   eid <- T.pack . UUID.toString <$> UUID.nextRandom
   let env = Envelope {action = a, echo = eid}
   eres <- try (WS.sendTextData client.connection (encode (encodeAction env)))
   case eres :: Either WS.ConnectionException () of
-    Right () -> pure ()
-    Left _ -> pure () -- read loop will detect disconnect
+    Right () -> pure (Right ())
+    Left e -> pure (Left ("send failed: " <> T.pack (show e)))
 
 callIO :: Client -> Action -> Int -> IO (Either Text Response)
 callIO client a timeoutMs = do
   eid <- T.pack . UUID.toString <$> UUID.nextRandom
   tm <- newEmptyTMVarIO
-  atomically (modifyTVar' client.pending (Map.insert eid tm))
-  let env = Envelope {action = a, echo = eid}
-  eres <- try (WS.sendTextData client.connection (encode (encodeAction env)))
-  case eres :: Either WS.ConnectionException () of
-    Left e -> do
-      atomically (modifyTVar' client.pending (Map.delete eid))
-      pure (Left ("send failed: " <> T.pack (show e)))
-    Right () -> awaitWithTimeout client tm eid timeoutMs
+  withPendingCall client.pending eid tm $ do
+    let env = Envelope {action = a, echo = eid}
+    eres <- try (WS.sendTextData client.connection (encode (encodeAction env)))
+    case eres :: Either WS.ConnectionException () of
+      Left e -> pure (Left ("send failed: " <> T.pack (show e)))
+      Right () -> awaitWithTimeout tm timeoutMs
+
+-- | Register an in-flight call for exactly the lifetime of its send/wait
+-- action.  'bracket_' masks the insertion and removal commit points while
+-- restoring the caller's masking state for the body, so cancellation cannot
+-- strand a pending entry.
+withPendingCall ::
+  TVar (Map.Map Text (TMVar (Either Text Response))) ->
+  Text ->
+  TMVar (Either Text Response) ->
+  IO a ->
+  IO a
+withPendingCall pending eid tm =
+  bracket_
+    (atomically (modifyTVar' pending (Map.insert eid tm)))
+    (atomically (modifyTVar' pending (Map.delete eid)))
 
 awaitWithTimeout ::
-  Client ->
   TMVar (Either Text Response) ->
-  Text ->
   Int ->
   IO (Either Text Response)
-awaitWithTimeout client tm eid timeoutMs = do
+awaitWithTimeout tm timeoutMs = do
   timer <- registerDelay (timeoutMs * 1000)
   res <-
     atomically $
@@ -129,8 +143,4 @@ awaitWithTimeout client tm eid timeoutMs = do
                      done <- readTVar timer
                      if done then pure (Left "timeout") else retry
                  )
-  case res of
-    Left _ -> do
-      atomically (modifyTVar' client.pending (Map.delete eid))
-      pure res
-    Right _ -> pure res
+  pure res

@@ -36,12 +36,12 @@ import Max.DB.Stickers (StickerMeta, recordSticker, stickerMeta)
 import Max.Effects.Blob (Blob, blobRefSha256, blobRefStoredPath, putBlob)
 import Max.Effects.Http (Http, getBytes)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
+import Max.Util (withTempDirectory)
 import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (ImageSegInfo (..), Segment (..), VideoSegInfo (..))
 import OneBot.Types (GroupId (..), MessageId (..))
-import System.Directory (getTemporaryDirectory, removeFile)
 import System.Exit (ExitCode (..))
-import System.IO (hClose, openTempFile)
+import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
 
 -- | What a queued download is.  Videos ride the same worker pool but
@@ -291,17 +291,14 @@ probeVideoDuration bytes = do
     Right d -> d
     Left _ -> Nothing
   where
-    run = do
-      tmp <- getTemporaryDirectory
-      (path, h) <- openTempFile tmp "max-vprobe.bin"
-      hClose h
+    run = withTempDirectory "max-vprobe-" $ \workspace -> do
+      let path = workspace </> "input.bin"
       BS.writeFile path bytes
       (code, out, _) <-
         readProcessWithExitCode
           "ffprobe"
           ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path]
           ""
-      _ <- try @IOException (removeFile path)
       pure $ case code of
         ExitSuccess -> case reads (takeWhile (/= '\n') out) of
           [(d, "")] -> Just d

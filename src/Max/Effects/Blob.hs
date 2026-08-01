@@ -22,9 +22,10 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
+import Max.Util (withBinaryTempFile)
 import System.Directory (createDirectoryIfMissing, doesFileExist, renameFile)
 import System.FilePath (takeFileName, (</>))
-import System.IO qualified as IO
+import System.IO (hClose)
 
 -- | Opaque content address for one object in the blob store.  Keeping this
 -- distinct from database paths and arbitrary text prevents ordinary consumers
@@ -50,10 +51,11 @@ data Blob :: Effect where
 type instance DispatchOf Blob = Dynamic
 
 -- | Content-addressed filesystem store under @root/<2-hex-prefix>/<sha>@.
--- Concurrent writes for the same sha are safe: a unique tmp filename is
--- used per call ('openBinaryTempFile') and the final 'renameFile' is an
--- atomic POSIX move. If a writer loses the race, its tmp file is renamed
--- on top of byte-identical content.
+-- Concurrent writes for the same sha are safe: a unique scoped tmp filename
+-- is used per call and the final 'renameFile' is an atomic POSIX move. If a
+-- writer loses the race, its tmp file is renamed on top of byte-identical
+-- content. Cancellation before that commit removes the temp file and closes
+-- its handle.
 runBlob :: (IOE :> es) => FilePath -> Eff (Blob : es) a -> Eff es a
 runBlob root = interpret $ \_ -> \case
   PutBlob bs -> do
@@ -107,7 +109,7 @@ writeFileSafe root rel bytes = do
     else do
       let subdir = root </> take 2 rel
       createDirectoryIfMissing True subdir
-      (tmp, h) <- IO.openBinaryTempFile subdir (takeFileName rel <> ".tmp")
-      BS.hPut h bytes
-      IO.hClose h
-      renameFile tmp final
+      withBinaryTempFile subdir (takeFileName rel <> ".tmp") $ \tmp h -> do
+        BS.hPut h bytes
+        hClose h
+        renameFile tmp final

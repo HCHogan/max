@@ -14,9 +14,9 @@ import Data.ByteString qualified as BS
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import System.Directory (getTemporaryDirectory, removeFile)
+import Max.Util (withTempDirectory)
 import System.Exit (ExitCode (..))
-import System.IO (hClose, openTempFile)
+import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
 import System.Timeout (timeout)
 
@@ -108,12 +108,10 @@ compileTypst source = do
     Left e -> Left ("typst spawn failed: " <> T.pack (show e))
     Right res -> res
   where
-    run = do
-      tmp <- getTemporaryDirectory
-      (inPath, h) <- openTempFile tmp "max-table.typ"
-      hClose h
+    run = withTempDirectory "max-table-" $ \workspace -> do
+      let inPath = workspace </> "table.typ"
+          outPath = workspace </> "table.png"
       BS.writeFile inPath (TE.encodeUtf8 source)
-      let outPath = inPath <> ".png"
       result <-
         timeout 15_000_000 $
           readProcessWithExitCode
@@ -126,6 +124,4 @@ compileTypst source = do
         Just (ExitFailure c, _, err) ->
           pure . Left $
             "typst exited " <> T.pack (show c) <> ": " <> T.pack (take 500 err)
-      _ <- try @IOException (removeFile inPath)
-      _ <- try @IOException (removeFile outPath)
       pure out

@@ -47,10 +47,9 @@ import Max.Effects.LLM
     chat,
   )
 import Max.ImagePrep (prepareImageForLLM)
-import Max.Util (catchSync, trySync)
-import System.Directory (getTemporaryDirectory, removeFile)
+import Max.Util (catchSync, trySync, withTempDirectory)
 import System.Exit (ExitCode (..))
-import System.IO (hClose, openTempFile)
+import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
 
 maxCaptionAttempts :: Int
@@ -204,10 +203,8 @@ firstFrame inPath = do
     Right out -> out
     Left _ -> Nothing
   where
-    run = do
-      tmp <- getTemporaryDirectory
-      (outPath, h) <- openTempFile tmp "max-frame.png"
-      hClose h
+    run = withTempDirectory "max-frame-" $ \workspace -> do
+      let outPath = workspace </> "frame.png"
       (code, _, _) <-
         readProcessWithExitCode
           "ffmpeg"
@@ -216,5 +213,4 @@ firstFrame inPath = do
       out <- case code of
         ExitSuccess -> Just <$> BS.readFile outPath
         ExitFailure _ -> pure Nothing
-      _ <- try @IOException (removeFile outPath)
       pure out

@@ -42,10 +42,9 @@ import Max.Effects.LLM
     LLM,
     chat,
   )
-import Max.Util (catchSync, trySync)
+import Max.Util (catchSync, trySync, withTempDirectory)
 import System.Exit (ExitCode (..))
-import System.IO (hClose, openTempFile)
-import System.Directory (getTemporaryDirectory, removeFile)
+import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
 
 maxCaptionAttempts :: Int
@@ -180,12 +179,10 @@ firstFrame gif = do
     Right (Just png) -> ("image/png", png)
     _ -> ("image/gif", gif)
   where
-    run = do
-      tmp <- getTemporaryDirectory
-      (inPath, h) <- openTempFile tmp "max-sticker.gif"
-      hClose h
+    run = withTempDirectory "max-sticker-" $ \workspace -> do
+      let inPath = workspace </> "input.gif"
+          outPath = workspace </> "frame.png"
       BS.writeFile inPath gif
-      let outPath = inPath <> ".png"
       (code, _, _) <-
         readProcessWithExitCode
           "ffmpeg"
@@ -194,6 +191,4 @@ firstFrame gif = do
       out <- case code of
         ExitSuccess -> Just <$> BS.readFile outPath
         ExitFailure _ -> pure Nothing
-      _ <- try @IOException (removeFile inPath)
-      _ <- try @IOException (removeFile outPath)
       pure out

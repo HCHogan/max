@@ -2,10 +2,13 @@ module Max.Util
   ( catchSync,
     trySync,
     trySyncIO,
+    withBinaryTempFile,
+    withTempDirectory,
   )
 where
 
 import Control.Exception qualified as CE
+import Control.Monad (void)
 import Effectful (Eff)
 import Effectful.Exception
   ( SomeAsyncException,
@@ -14,6 +17,13 @@ import Effectful.Exception
     fromException,
     throwIO,
   )
+import System.Directory
+  ( createDirectory,
+    getTemporaryDirectory,
+    removeFile,
+    removePathForcibly,
+  )
+import System.IO (Handle, hClose, openBinaryTempFile)
 
 -- | Catch only synchronous exceptions; re-raise anything tagged
 -- 'SomeAsyncException' so cancellation and signals propagate normally.
@@ -44,3 +54,40 @@ trySyncIO act =
     case fromException e :: Maybe SomeAsyncException of
       Just _ -> CE.throwIO e
       Nothing -> pure (Left e)
+
+-- | A unique binary temp file whose handle and path are owned by the
+-- callback's scope.  Cleanup is idempotent, so callers may close the handle
+-- before handing the path to another process, or rename the path as their
+-- commit step.  Synchronous failures and asynchronous cancellation both run
+-- the finalizer.
+withBinaryTempFile ::
+  FilePath ->
+  String ->
+  (FilePath -> Handle -> IO a) ->
+  IO a
+withBinaryTempFile dir template use =
+  CE.bracket
+    (openBinaryTempFile dir template)
+    (\(path, handle) -> ignoreIO (hClose handle) >> ignoreIO (removeFile path))
+    (uncurry use)
+
+-- | Give one conversion a private temporary directory and remove the entire
+-- workspace afterwards.  Keeping all derived output beside the input avoids
+-- a trail of per-file cleanup actions that can be skipped by cancellation.
+withTempDirectory :: String -> (FilePath -> IO a) -> IO a
+withTempDirectory template = CE.bracket acquire (ignoreIO . removePathForcibly)
+  where
+    acquire = do
+      root <- getTemporaryDirectory
+      (seed, handle) <- openBinaryTempFile root template
+      let discardSeed = ignoreIO (hClose handle) >> ignoreIO (removeFile seed)
+      ( do
+          hClose handle
+          removeFile seed
+          createDirectory seed
+          pure seed
+        )
+        `CE.onException` discardSeed
+
+ignoreIO :: IO a -> IO ()
+ignoreIO action = void (CE.try @CE.IOException action)
