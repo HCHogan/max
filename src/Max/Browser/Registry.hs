@@ -31,8 +31,8 @@ where
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM
 import Control.Exception (bracket_)
-import Control.Monad (void)
 import Data.Aeson (Value)
+import Data.Bifunctor (first)
 import Data.Foldable (for_)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -45,7 +45,16 @@ import Max.Browser.Docker
     defaultBrowserImage,
     runRunBrowser,
   )
-import Max.MCP.Client (McpClient, mcpCallTool, mcpInitialize, newMcpClient)
+import Max.MCP.Client
+  ( McpClient,
+    McpErrorKind (McpSessionError),
+    mcpCallTool,
+    mcpErrorKind,
+    mcpInitialize,
+    newMcpClient,
+    renderMcpError,
+  )
+import Max.Resource (acquireRegistered, releaseRegistered)
 import Max.Sandbox.Docker (listContainersByPrefix, runRm)
 import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import OneBot.Types (GroupId (..))
@@ -123,33 +132,34 @@ createEntry reg gid = do
   now <- getCurrentTime
   let GroupId raw = gid
       name = browserNamePrefix <> T.pack (show raw)
-  runRes <- runRunBrowser name defaultBrowserImage
-  case runRes of
-    Left err -> pure (Left err)
-    Right _cid -> do
-      portRes <- browserHostPort name
-      case portRes of
-        Left err -> runRm name >> pure (Left err)
-        Right port -> do
-          let endpoint = "http://127.0.0.1:" <> show port <> "/mcp"
-              -- supergateway does no Host validation; send the
-              -- container-internal bind anyway so a future server
-              -- with a rebinding guard (as playwright-mcp had) works.
-              hostHeader = "localhost:" <> show containerPort
-          client <- newMcpClient reg.brManager endpoint hostHeader
-          ready <- waitReady client
-          case ready of
-            Left err -> runRm name >> pure (Left err)
-            Right () -> do
-              let entry =
-                    BrowserEntry
-                      { beGroup = gid,
-                        beContainer = name,
-                        beClient = client,
-                        beCreatedAt = now
-                      }
-              atomically $ modifyTVar' reg.brEntries (Map.insert gid entry)
-              pure (Right entry)
+      prepare = do
+        runRes <- runRunBrowser name defaultBrowserImage
+        case runRes of
+          Left err -> pure (Left err)
+          Right _cid -> do
+            portRes <- browserHostPort name
+            case portRes of
+              Left err -> pure (Left err)
+              Right port -> do
+                let endpoint = "http://127.0.0.1:" <> show port <> "/mcp"
+                    -- supergateway does no Host validation; send the
+                    -- container-internal bind anyway so a future server
+                    -- with a rebinding guard works.
+                    hostHeader = "localhost:" <> show containerPort
+                client <- newMcpClient reg.brManager endpoint hostHeader
+                ready <- waitReady client
+                pure $ case ready of
+                  Left err -> Left err
+                  Right () ->
+                    Right
+                      BrowserEntry
+                        { beGroup = gid,
+                          beContainer = name,
+                          beClient = client,
+                          beCreatedAt = now
+                        }
+      register entry = atomically $ modifyTVar' reg.brEntries (Map.insert gid entry)
+  acquireRegistered prepare (runRm name) register
 
 -- | Poll @initialize@ until the MCP server answers or we give up.
 -- supergateway spawns a camoufox-mcp child per @initialize@, so the
@@ -187,25 +197,15 @@ callBrowserTool reg gid toolName args = do
     Right e -> do
       r <- mcpCallTool e.beClient toolName args
       case r of
-        Left err | sessionLost err -> do
+        Left err | err.mcpErrorKind == McpSessionError -> do
           setCamoSession reg gid Nothing
           reinit <- mcpInitialize e.beClient
           case reinit of
-            Right () -> mcpCallTool e.beClient toolName args
+            Right () -> first renderMcpError <$> mcpCallTool e.beClient toolName args
             Left _ -> do
               _ <- destroyBrowsersForGroup reg gid
-              pure (Left ("browser session lost; rebuilt for next call (was: " <> err <> ")"))
-        _ -> pure r
-  where
-    -- Match the gateway's MCP-session-validation failures (see
-    -- Max.MCP.Client error text): supergateway 400s "Bad Request: No
-    -- valid session ID provided" for an unknown/expired session; the
-    -- playwright-era "Session not found" / "not initialized" spellings
-    -- are kept as belt-and-suspenders.
-    sessionLost err =
-      "No valid session ID" `T.isInfixOf` err
-        || "Session not found" `T.isInfixOf` err
-        || "not initialized" `T.isInfixOf` err
+              pure (Left ("browser session lost; rebuilt for next call (was: " <> renderMcpError err <> ")"))
+        _ -> pure (first renderMcpError r)
 
 --------------------------------------------------------------------------------
 -- Teardown.
@@ -214,22 +214,21 @@ callBrowserTool reg gid toolName args = do
 -- were removed (0 or 1).  Used by @!clear --all@.
 destroyBrowsersForGroup :: BrowserRegistry -> GroupId -> IO Int
 destroyBrowsersForGroup reg gid = do
-  mEntry <- atomically $ do
-    m <- readTVar reg.brEntries
-    let (mine, rest) = Map.partition (\e -> e.beGroup == gid) m
-    writeTVar reg.brEntries rest
-    modifyTVar' reg.brCamoSessions (Map.delete gid)
-    pure (Map.elems mine)
-  for_ mEntry $ \e -> runRm e.beContainer
-  pure (length mEntry)
+  entries <- filter ((== gid) . (.beGroup)) . Map.elems <$> readTVarIO reg.brEntries
+  for_ entries (releaseBrowser reg)
+  atomically $ modifyTVar' reg.brCamoSessions (Map.delete gid)
+  pure (length entries)
 
 -- | Tear down every browser container.  Used by the top-level bracket
 -- in @main@ on bot exit.
 destroyAllBrowsers :: BrowserRegistry -> IO ()
 destroyAllBrowsers reg = do
-  entries <- atomically $ do
-    m <- readTVar reg.brEntries
-    writeTVar reg.brEntries Map.empty
-    writeTVar reg.brCamoSessions Map.empty
-    pure (Map.elems m)
-  void $ for_ entries $ \e -> runRm e.beContainer
+  entries <- Map.elems <$> readTVarIO reg.brEntries
+  for_ entries (releaseBrowser reg)
+  atomically $ writeTVar reg.brCamoSessions Map.empty
+
+releaseBrowser :: BrowserRegistry -> BrowserEntry -> IO ()
+releaseBrowser reg entry =
+  releaseRegistered
+    (runRm entry.beContainer)
+    (atomically $ modifyTVar' reg.brEntries (Map.delete entry.beGroup))

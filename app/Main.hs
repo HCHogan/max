@@ -4,15 +4,14 @@ import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (AsyncException (UserInterrupt), bracket, finally, throwTo)
 import Control.Monad (forever, unless, when)
-import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, maybeToList)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Concurrent (threadDelay)
-import Effectful.Concurrent.Async (Concurrent, concurrently_, link, runConcurrent, withAsync)
+import Effectful.Concurrent.Async (Concurrent, concurrently_, runConcurrent)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
@@ -62,6 +61,7 @@ import Max.Tasks (newTaskRegistry)
 import Max.Toolset (allToolsFor)
 import Max.Util (trySync)
 import Max.Wechatpad (wechatpadBackend, wechatpadWorker)
+import Max.Worker (WorkerCriticality (..), withWorkers, worker)
 import OneBot.Event (Event)
 import OneBot.Server (Client, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
@@ -188,7 +188,7 @@ main = do
             . runAgent defaultLimits (allToolsFor env) tasks
             $ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid
       )
-      `finally` (destroyAllSandboxes sandboxes >> destroyAllBrowsers browsers)
+      `finally` (destroyAllSandboxes sandboxes `finally` destroyAllBrowsers browsers)
 
 -- | SIGTERM handler.  Deliberately does no waiting itself: it flips the
 -- drain flag and returns, leaving the wait (and its logging) to
@@ -260,39 +260,63 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
     -- the admin server can consult it.
     nSkills <- loadSkills env.beSkills
     logInfo "skills loaded" $ object ["count" .= nSkills]
-    -- Long-lived siblings, then the server.  An optional worker is an
-    -- action that does nothing when its config is absent: the async
-    -- completes immediately and linking a finished async is a no-op, so
-    -- "off" needs no special case here.
-    withLinkedWorkers
-      [ imageWorker cfg.imageWorkers fetchSig,
-        forwardWorker fetchSig,
-        fileWorker fetchSig,
-        for_ env.beEmbed embedWorker,
-        -- Two caption loops under one worker: stickers and ordinary
-        -- photos/videos poll separately, so a deep sticker backlog
-        -- can't starve fresh chat media (and vice versa).  Either one
-        -- crashing still takes the process down.
-        for_ cfg.stickerCaptionProfile $ \p ->
-          concurrently_
-            (stickerCaptionWorker p)
-            (mediaCaptionWorker p),
-        reminderWorker cfg.timezone env.beReminders,
-        for_ ((,) <$> cfg.memoryExtractProfile <*> env.beMemx) $ \(prof, ms) ->
-          memxWorker prof env.beEmbed cfg.timezone env.beSessions cfg.llm.defaultName ms,
-        for_ cfg.memoryExtractProfile $ \prof ->
-          dreamWorker prof cfg.timezone,
-        for_ ((,) <$> cfg.intent <*> mIntentSt) $ \(ic, st) ->
-          intentWorker ic cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions (dispatchProactive (Just st)) st,
-        handleEvents eventQ fetchSig mIntentSt,
-        for_ ((,) <$> cfg.admin <*> logBuf) $ \(ac, lb) ->
-          adminServer ac env (Map.keys cfg.llm.profiles) lb,
-        for_ cfg.admin (const (callPruner cfg.adminCallRetentionDays)),
-        for_ cfg.wechatpad $ \wc -> wechatpadWorker wc eventQ,
-        -- Parked on the shutdown flag until SIGTERM, then waits out the
-        -- in-flight dispatches before interrupting main.
-        drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown
-      ]
+    -- Long-lived siblings, then the server.  Config-disabled optional
+    -- workers are omitted entirely; enabled optional features remain linked,
+    -- while a clean exit is fatal only for the process's required services.
+    let requiredWorkers =
+          [ worker "image-fetch" RequiredWorker (imageWorker cfg.imageWorkers fetchSig),
+            worker "forward-fetch" RequiredWorker (forwardWorker fetchSig),
+            worker "file-fetch" RequiredWorker (fileWorker fetchSig),
+            worker "reminders" RequiredWorker (reminderWorker cfg.timezone env.beReminders),
+            worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig mIntentSt)
+          ]
+        optionalWorkers =
+          [ -- This one is always enabled, but unlike a permanent worker its
+            -- clean return is intentional: it has already raised
+            -- UserInterrupt on main to start graceful unwinding.
+            worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
+          ]
+            <> [ worker "embeddings" OptionalWorker (embedWorker embed)
+               | embed <- maybeToList env.beEmbed
+               ]
+            <> [ worker
+                   "media-captions"
+                   OptionalWorker
+                   -- Two caption loops under one worker: stickers and
+                   -- ordinary photos/videos poll separately, so a deep
+                   -- sticker backlog cannot starve fresh chat media.
+                   ( concurrently_
+                       (stickerCaptionWorker profile)
+                       (mediaCaptionWorker profile)
+                   )
+               | profile <- maybeToList cfg.stickerCaptionProfile
+               ]
+            <> [ worker
+                   "memory-extract"
+                   OptionalWorker
+                   (memxWorker profile env.beEmbed cfg.timezone env.beSessions cfg.llm.defaultName scheduler)
+               | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beMemx)
+               ]
+            <> [ worker "memory-dream" OptionalWorker (dreamWorker profile cfg.timezone)
+               | profile <- maybeToList cfg.memoryExtractProfile
+               ]
+            <> [ worker
+                   "intent"
+                   OptionalWorker
+                   (intentWorker intentCfg cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions (dispatchProactive (Just intentState)) intentState)
+               | (intentCfg, intentState) <- maybeToList ((,) <$> cfg.intent <*> mIntentSt)
+               ]
+            <> [ worker "admin-server" OptionalWorker (adminServer adminCfg env (Map.keys cfg.llm.profiles) buffer)
+               | (adminCfg, buffer) <- maybeToList ((,) <$> cfg.admin <*> logBuf)
+               ]
+            <> [ worker "call-pruner" OptionalWorker (callPruner cfg.adminCallRetentionDays)
+               | _ <- maybeToList cfg.admin
+               ]
+            <> [ worker "wechatpad" OptionalWorker (wechatpadWorker wc eventQ)
+               | wc <- maybeToList cfg.wechatpad
+               ]
+    withWorkers
+      (requiredWorkers <> optionalWorkers)
       (runServer cfg.server eventQ clientRef)
 
 -- | Log lines the admin panel can look back over.  A busy dispatch
@@ -320,18 +344,3 @@ callPruner days = localDomain "calls" . forever $ do
     Right n ->
       logInfo "calls: pruned" $ object ["rows" .= n, "older_than_days" .= days]
   threadDelay (3600 * 1_000_000)
-
--- | Run @act@ with every worker alive alongside it.
---
--- 'link' rethrows a worker's exception into this thread, so one dying
--- silently takes the whole process down (systemd restarts it) instead
--- of leaving a stuck queue behind.  Ctrl+C still cascades through
--- 'withAsync' as usual.
---
--- A fold rather than a staircase of nested 'withAsync': the workers
--- differ only in which action they run, and stating "link it" once
--- keeps a new worker from quietly joining unlinked.
-withLinkedWorkers :: (Concurrent :> es) => [Eff es ()] -> Eff es a -> Eff es a
-withLinkedWorkers workers act = foldr step act workers
-  where
-    step w rest = withAsync w $ \a -> link a >> rest

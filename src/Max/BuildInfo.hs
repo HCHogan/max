@@ -19,7 +19,7 @@ module Max.BuildInfo
   )
 where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (IOException, try)
 import Control.Monad (when)
 import Data.Char (isSpace)
 import Data.List (dropWhileEnd)
@@ -45,7 +45,7 @@ gitRev =
                -- unavailable, e.g. a tarball build) = unset.
                Just r | not (null r), r /= "unknown" -> pure (Just r)
                _ -> do
-                 eres <- try @SomeException $ do
+                 eres <- try @IOException $ do
                    (code, out, _) <- readProcessWithExitCode "git" ["rev-parse", "--short", "HEAD"] ""
                    (scode, sout, _) <- readProcessWithExitCode "git" ["status", "--porcelain"] ""
                    pure (code, strip out, scode == ExitSuccess && not (null (strip sout)))

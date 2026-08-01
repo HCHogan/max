@@ -26,11 +26,13 @@ module Max.Sandbox.Registry
     SandboxRegistry,
     newSandboxRegistry,
     reapStaleSandboxes,
+
     -- * Entries
     SandboxId (..),
     SandboxEntry (..),
     SandboxCreateOpts (..),
     defaultCreateOpts,
+
     -- * Operations
     createSandbox,
     ensureSandbox,
@@ -42,14 +44,14 @@ module Max.Sandbox.Registry
     destroySandbox,
     destroySandboxesForGroup,
     destroyAllSandboxes,
+
     -- * Naming
     namePrefix,
   )
 where
 
 import Control.Concurrent.STM
-import Control.Exception (bracket_)
-import Control.Monad (when)
+import Control.Exception (bracket_, finally)
 import Data.Foldable (for_)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
@@ -57,6 +59,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
+import Max.Resource (acquireRegistered, releaseRegistered)
 import Max.Sandbox.Docker
   ( ExecResult (..),
     listContainersByPrefix,
@@ -152,31 +155,19 @@ createSandbox reg gid opts = do
         volume = namePrefix <> nameBody <> "-data"
     lock <- newTMVar ()
     pure (sid, container, volume, lock)
-  res <-
-    runRun
-      container
-      opts.scoImage
-      volume
-      opts.scoNetwork
-  case res of
-    Left err -> do
-      -- docker run failed; nothing to clean (no container created),
-      -- but volume may have been auto-created on the way.  Best-effort.
-      runVolumeRm volume
-      pure (Left err)
-    Right _cid -> do
-      let entry =
-            SandboxEntry
-              { seId = sid,
-                seGroup = gid,
-                seContainer = container,
-                seVolume = volume,
-                seImage = opts.scoImage,
-                seCreatedAt = now,
-                seExecLock = lock
-              }
-      atomically $ modifyTVar' reg.srEntries (Map.insert sid entry)
-      pure (Right entry)
+  let entry =
+        SandboxEntry
+          { seId = sid,
+            seGroup = gid,
+            seContainer = container,
+            seVolume = volume,
+            seImage = opts.scoImage,
+            seCreatedAt = now,
+            seExecLock = lock
+          }
+      acquire = fmap (entry <$) (runRun container opts.scoImage volume opts.scoNetwork)
+      register e = atomically $ modifyTVar' reg.srEntries (Map.insert sid e)
+  acquireRegistered acquire (cleanupSandbox entry) register
 
 -- | The group's default sandbox for user-facing @! \<cmd\>@ shell
 -- commands: reuse the group's existing sandbox if it has one (the
@@ -278,34 +269,33 @@ destroySandbox reg gid sid = do
   case mEntry of
     Nothing -> pure (Left "sandbox not found")
     Just e -> do
-      atomically $ modifyTVar' reg.srEntries (Map.delete sid)
-      runRm e.seContainer
-      runVolumeRm e.seVolume
+      releaseSandbox reg e
       pure (Right ())
 
 -- | Destroy every sandbox owned by @gid@.  Returns count destroyed.
 -- Used by @!clear --all@.
 destroySandboxesForGroup :: SandboxRegistry -> GroupId -> IO Int
 destroySandboxesForGroup reg gid = do
-  entries <- atomically $ do
-    m <- readTVar reg.srEntries
-    let (mine, rest) = Map.partition (\e -> e.seGroup == gid) m
-    writeTVar reg.srEntries rest
-    pure (Map.elems mine)
-  for_ entries $ \e -> do
-    runRm e.seContainer
-    runVolumeRm e.seVolume
+  entries <- filter ((== gid) . (.seGroup)) . Map.elems <$> readTVarIO reg.srEntries
+  for_ entries (releaseSandbox reg)
   pure (length entries)
 
 -- | Tear down every sandbox.  Used by the top-level bracket in
 -- @main@ on bot exit (clean shutdown or async exception).
 destroyAllSandboxes :: SandboxRegistry -> IO ()
 destroyAllSandboxes reg = do
-  entries <- atomically $ do
-    m <- readTVar reg.srEntries
-    writeTVar reg.srEntries Map.empty
-    pure (Map.elems m)
-  when (not (null entries)) $ pure ()
-  for_ entries $ \e -> do
-    runRm e.seContainer
-    runVolumeRm e.seVolume
+  entries <- Map.elems <$> readTVarIO reg.srEntries
+  for_ entries (releaseSandbox reg)
+
+-- Ownership stays in @srEntries@ until both external resources have been
+-- cleaned.  The finalizer keeps volume cleanup independent from container
+-- cleanup; 'releaseRegistered' keeps the entry if either step is cancelled.
+releaseSandbox :: SandboxRegistry -> SandboxEntry -> IO ()
+releaseSandbox reg entry =
+  releaseRegistered
+    (cleanupSandbox entry)
+    (atomically $ modifyTVar' reg.srEntries (Map.delete entry.seId))
+
+cleanupSandbox :: SandboxEntry -> IO ()
+cleanupSandbox entry =
+  runRm entry.seContainer `finally` runVolumeRm entry.seVolume

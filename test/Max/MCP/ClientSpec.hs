@@ -2,7 +2,13 @@ module Max.MCP.ClientSpec (spec) where
 
 import Data.Aeson (Value, object, (.=))
 import Data.ByteString.Lazy.Char8 qualified as LBS8
-import Max.MCP.Client (decodeRpcBody, mcpTextContent)
+import Max.MCP.Client
+  ( McpErrorKind (..),
+    classifyHttpError,
+    decodeRpcBody,
+    mcpErrorKind,
+    mcpTextContent,
+  )
 import Test.Hspec
 
 -- The JSON-RPC envelope both success cases should decode to.
@@ -47,6 +53,19 @@ spec = do
 
     it "returns empty when there is no content" $
       mcpTextContent (object []) `shouldBe` ""
+
+  describe "classifyHttpError" $ do
+    it "classifies a 400 with an attached session as session loss" $
+      mcpErrorKind (classifyHttpError True 400 "gateway wording can change")
+        `shouldBe` McpSessionError
+
+    it "keeps the same status as an ordinary HTTP error before initialization" $
+      mcpErrorKind (classifyHttpError False 400 "bad initialize request")
+        `shouldBe` McpHttpError 400
+
+    it "does not infer session loss from response prose" $
+      mcpErrorKind (classifyHttpError True 500 "No valid session ID provided")
+        `shouldBe` McpHttpError 500
   where
     s :: String -> String
     s = id

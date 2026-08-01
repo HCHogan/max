@@ -120,6 +120,7 @@ library
         Max.Render
         Max.Reply
         Max.ReplySend
+        Max.Resource
         Max.Roster
         Max.Sandbox.Docker
         Max.Sandbox.Registry
@@ -149,6 +150,7 @@ library
         Max.Tools.Video
         Max.Util
         Max.Wechatpad
+        Max.Worker
         Max.Wreq
     other-modules:    Paths_max
     autogen-modules:  Paths_max
@@ -271,6 +273,7 @@ test-suite max-test
         Max.ReminderSpec
         Max.ReplySpec
         Max.ReplySendSpec
+        Max.ResourceSpec
         Max.SessionSpec
         Max.ShutdownSpec
         Max.SkillsSpec
@@ -289,6 +292,7 @@ test-suite max-test
         Max.Sandbox.DockerSpec
         Max.Tools.FilesSpec
         Max.UtilSpec
+        Max.WorkerSpec
         Max.WreqSpec
     build-depends:
         , aeson           >= 2.2  && < 2.4

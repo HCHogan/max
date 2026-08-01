@@ -19,12 +19,18 @@
 -- needed for request/response tool calls.
 module Max.MCP.Client
   ( McpClient,
+    McpError (..),
+    McpErrorKind (..),
     newMcpClient,
     mcpInitialize,
     mcpCallTool,
+    renderMcpError,
+
     -- * Result helpers
     mcpTextContent,
+
     -- * Exposed for tests
+    classifyHttpError,
     decodeRpcBody,
   )
 where
@@ -37,7 +43,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
-import Data.Maybe (mapMaybe)
+import Data.Maybe (isJust, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -72,6 +78,27 @@ data McpClient = McpClient
     mcNextId :: !(TVar Int)
   }
 
+-- | Stable classification at the MCP transport boundary.  Callers decide
+-- recovery from this tag, never by inspecting provider or gateway prose.
+data McpErrorKind
+  = McpEndpointError
+  | McpTransportError
+  | McpHttpError !Int
+  | McpSessionError
+  | McpProtocolError
+  | McpRemoteError
+  | McpToolError
+  deriving stock (Show, Eq)
+
+data McpError = McpError
+  { mcpErrorKind :: !McpErrorKind,
+    mcpErrorMessage :: !Text
+  }
+  deriving stock (Show, Eq)
+
+renderMcpError :: McpError -> Text
+renderMcpError = (.mcpErrorMessage)
+
 -- | Build a client for @http://host:port/mcp@.  @hostHeader@ is the
 -- value to send as @Host@ (see 'mcHost').  Does no I/O beyond
 -- allocating the mutable cells; call 'mcpInitialize' before any tool
@@ -86,7 +113,7 @@ protocolVersion = "2025-06-18"
 -- | Run the @initialize@ handshake and send the follow-up
 -- @notifications/initialized@.  Captures the @Mcp-Session-Id@ response
 -- header for subsequent requests.
-mcpInitialize :: McpClient -> IO (Either Text ())
+mcpInitialize :: McpClient -> IO (Either McpError ())
 mcpInitialize c = do
   -- Start a *fresh* handshake: drop any prior session id first.  The
   -- server issues the session on this request and 404s an initialize
@@ -102,19 +129,20 @@ mcpInitialize c = do
   eres <- request c "initialize" params
   case eres of
     Left e -> pure (Left e)
-    Right _ -> Right <$> notify c "notifications/initialized"
+    Right _ -> notify c "notifications/initialized"
 
 -- | Call one tool.  Returns the JSON-RPC @result@ object (which for
 -- MCP carries @content@ + @isError@), or a 'Left' with a transport /
 -- protocol / tool error.
-mcpCallTool :: McpClient -> Text -> Value -> IO (Either Text Value)
+mcpCallTool :: McpClient -> Text -> Value -> IO (Either McpError Value)
 mcpCallTool c name args = do
   let params = object ["name" .= name, "arguments" .= args]
   eres <- request c "tools/call" params
   pure $ case eres of
     Left e -> Left e
     Right result
-      | isToolError result -> Left (mcpTextContent result)
+      | isToolError result ->
+          Left (McpError McpToolError (mcpTextContent result))
       | otherwise -> Right result
   where
     isToolError v = parseMaybe (withObject "r" (.: "isError")) v == Just True
@@ -123,7 +151,7 @@ mcpCallTool c name args = do
 -- JSON-RPC plumbing.
 
 -- | A JSON-RPC request: allocate an id, POST, expect a @result@.
-request :: McpClient -> Text -> Value -> IO (Either Text Value)
+request :: McpClient -> Text -> Value -> IO (Either McpError Value)
 request c method params = do
   n <- atomically $ do
     i <- readTVar c.mcNextId
@@ -132,12 +160,12 @@ request c method params = do
   postRpc c (Just n) method params True
 
 -- | A JSON-RPC notification: no id, no result body expected.
-notify :: McpClient -> Text -> IO ()
-notify c method = () <$ postRpc c Nothing method (object []) False
+notify :: McpClient -> Text -> IO (Either McpError ())
+notify c method = fmap (() <$) (postRpc c Nothing method (object []) False)
 
 -- | Encode + POST a JSON-RPC message, attach the session header if we
 -- have one, capture it from the response, and decode the result.
-postRpc :: McpClient -> Maybe Int -> Text -> Value -> Bool -> IO (Either Text Value)
+postRpc :: McpClient -> Maybe Int -> Text -> Value -> Bool -> IO (Either McpError Value)
 postRpc c mId method params expectResult = do
   sess <- readTVarIO c.mcSession
   let body =
@@ -163,7 +191,8 @@ postRpc c mId method params expectResult = do
           <> maybe "none" (T.take 8 . TE.decodeUtf8) sess
   ereq <- trySyncIO (parseRequest ("POST " <> c.mcEndpoint))
   case ereq of
-    Left (e :: SomeException) -> pure (Left ("bad MCP endpoint: " <> T.pack (show e)))
+    Left (e :: SomeException) ->
+      pure . Left $ McpError McpEndpointError ("bad MCP endpoint: " <> T.pack (show e))
     Right req0 -> do
       let req =
             req0
@@ -172,7 +201,8 @@ postRpc c mId method params expectResult = do
               }
       eresp <- trySyncIO (httpLbs req c.mcManager)
       case eresp of
-        Left (e :: SomeException) -> pure (Left ("MCP request failed [" <> ctx <> "]: " <> T.pack (show e)))
+        Left (e :: SomeException) ->
+          pure . Left $ McpError McpTransportError ("MCP request failed [" <> ctx <> "]: " <> T.pack (show e))
         Right resp -> do
           -- Capture / refresh the session id whenever the server sends one.
           case lookup (CI.mk "Mcp-Session-Id") (responseHeaders resp) of
@@ -180,23 +210,37 @@ postRpc c mId method params expectResult = do
             Nothing -> pure ()
           let code = statusCode (responseStatus resp)
           if code >= 300
-            then pure (Left ("MCP HTTP " <> T.pack (show code) <> " [" <> ctx <> "]: " <> shortBody resp))
+            then
+              pure . Left $
+                classifyHttpError
+                  (isJust sess)
+                  code
+                  ("MCP HTTP " <> T.pack (show code) <> " [" <> ctx <> "]: " <> shortBody resp)
             else
               if not expectResult
                 then pure (Right Null)
                 else case decodeRpcBody (responseBody resp) of
-                  Left e -> pure (Left e)
+                  Left e -> pure (Left (McpError McpProtocolError e))
                   Right v -> pure (extractResult v)
   where
-    shortBody r = T.take 200 (TE.decodeUtf8 (LBS.toStrict (responseBody r)))
+    shortBody r = T.take 200 (TE.decodeUtf8Lenient (LBS.toStrict (responseBody r)))
+
+-- | Classify an HTTP failure using transport state, not a gateway's
+-- human-readable response body.  Streamable HTTP uses 400/404 for an
+-- unknown session; without an attached session the same statuses remain
+-- ordinary request failures.
+classifyHttpError :: Bool -> Int -> Text -> McpError
+classifyHttpError hadSession code message
+  | hadSession && code `elem` [400, 404] = McpError McpSessionError message
+  | otherwise = McpError (McpHttpError code) message
 
 -- | Pull the @result@ out of a JSON-RPC envelope, or surface @error@.
-extractResult :: Value -> Either Text Value
+extractResult :: Value -> Either McpError Value
 extractResult v =
   case parseMaybe (withObject "rpc" (\o -> (,) <$> o .:? "result" <*> o .:? "error")) v of
     Just (Just result, _) -> Right result
-    Just (_, Just err) -> Left ("MCP error: " <> renderErr err)
-    _ -> Left "MCP response had neither result nor error"
+    Just (_, Just err) -> Left (McpError McpRemoteError ("MCP error: " <> renderErr err))
+    _ -> Left (McpError McpProtocolError "MCP response had neither result nor error")
   where
     renderErr e =
       case parseMaybe (withObject "e" (.: "message")) e of
