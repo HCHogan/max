@@ -13,6 +13,7 @@
 module Max.Command.Parser
   ( parseCommand,
     parseCommandText,
+    effortLevels,
   )
 where
 
@@ -334,6 +335,7 @@ classify verb raw@(RawArgs pos flags) = case verb of
     _ -> Unknown verb raw
   "version" -> Version
   _ -> Unknown verb raw
+
 parseInt64 :: Text -> Maybe Int64
 parseInt64 t = case TR.signed TR.decimal (T.strip t) of
   Right (n, rest) | T.null rest -> Just n

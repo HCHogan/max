@@ -25,7 +25,7 @@ function admin() {
     err: '',
     clock: '',
 
-    overview: { profiles: [] },
+    overview: { profiles: [], effort_levels: [] },
     groups: [],
     memories: [],
     perms: [],

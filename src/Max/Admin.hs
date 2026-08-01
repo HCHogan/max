@@ -54,6 +54,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.BuildInfo (gitRev)
 import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
+import Max.Command.Parser (effortLevels)
 import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
 import Max.DB.History (messageStatsDaily)
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, listMemories, listUserMemoriesEverywhere)
@@ -311,6 +312,7 @@ handle env profiles logBuf r params body = case r of
           "uptime_seconds" .= (round (diffUTCTime now env.beStartedAt) :: Int64),
           "default_model" .= env.beDefaultModel,
           "profiles" .= profiles,
+          "effort_levels" .= effortLevels,
           "owners" .= env.beOwners,
           "groups" .= length sessions,
           "running_tasks" .= length tasks

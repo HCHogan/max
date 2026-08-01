@@ -60,7 +60,7 @@
     <section x-show="tab === 'groups'">
       <table>
         <thead><tr>
-          <th>群</th><th>model</th><th>debug</th><th>表情</th><th>主动说话</th><th>persona</th>
+          <th>群</th><th>model</th><th>effort</th><th>debug</th><th>表情</th><th>主动说话</th><th>persona</th>
         </tr></thead>
         <tbody>
           <template x-for="g in groups" :key="g.group_id">
@@ -70,6 +70,15 @@
                 <select :value="g.model" @change="patch(g, { model: $event.target.value })">
                   <template x-for="p in overview.profiles" :key="p">
                     <option :value="p" :selected="p === g.model" x-text="p"></option>
+                  </template>
+                </select>
+              </td>
+              <td data-label="effort">
+                <select :value="g.effort || 'default'"
+                        @change="patch(g, { effort: $event.target.value === 'default' ? null : $event.target.value })">
+                  <option value="default" :selected="g.effort == null">跟随 profile</option>
+                  <template x-for="e in overview.effort_levels" :key="e">
+                    <option :value="e" :selected="e === g.effort" x-text="e"></option>
                   </template>
                 </select>
               </td>
@@ -285,4 +294,3 @@
 <script defer src="static/vendor/alpine.min.js"></script>
 </body>
 </html>
-
