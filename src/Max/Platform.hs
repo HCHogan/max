@@ -29,6 +29,8 @@ module Max.Platform
 where
 
 import Data.Int (Int64)
+import Data.List (find)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import OneBot.Action (Action (..), Response)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -78,7 +80,4 @@ actionTargetId = \case
 routeAction :: [PlatformBackend] -> PlatformBackend -> Action -> PlatformBackend
 routeAction extras dflt a = case actionTargetId a of
   Nothing -> dflt
-  Just target ->
-    case [b | b <- extras, b.pbOwnsId target] of
-      (b : _) -> b
-      [] -> dflt
+  Just target -> fromMaybe dflt (find (\b -> b.pbOwnsId target) extras)

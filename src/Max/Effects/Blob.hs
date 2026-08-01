@@ -17,6 +17,7 @@ import Crypto.Hash.SHA256 qualified as SHA256
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
+import Data.Char (isDigit)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -83,7 +84,7 @@ blobRefFromSha256 sha
   | T.length sha == 64 && T.all isLowerHex sha = Just (BlobRef sha)
   | otherwise = Nothing
   where
-    isLowerHex c = ('0' <= c && c <= '9') || ('a' <= c && c <= 'f')
+    isLowerHex c = isDigit c || ('a' <= c && c <= 'f')
 
 -- | Legacy relative path persisted in @local_path@ columns.  New readers use
 -- the sha256 as a 'BlobRef'; producers still fill this field until a schema

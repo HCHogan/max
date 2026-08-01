@@ -17,10 +17,13 @@ module Max.Browser.Docker
 where
 
 import Control.Exception (IOException, try)
+import Data.List (unsnoc)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import System.Exit (ExitCode (..))
 import System.Process (readProcessWithExitCode)
+import Text.Read (readMaybe)
 
 -- | Our pre-built browser image (@browser-image/build.sh@ → this tag).
 -- It bakes @camoufox-mcp-server@, @supergateway@ and the camoufox
@@ -107,11 +110,7 @@ browserHostPort name = do
     Right (ExitFailure c, _, err) ->
       Left ("docker port exited " <> T.pack (show c) <> ": " <> T.strip (T.pack err))
   where
-    parsePort out = case T.lines out of
-      (l : _) -> case T.splitOn ":" (T.strip l) of
-        parts@(_ : _) -> readMaybeInt (last parts)
-        _ -> Nothing
-      _ -> Nothing
-    readMaybeInt t = case reads (T.unpack (T.strip t)) of
-      [(n, "")] -> Just n
-      _ -> Nothing
+    parsePort out = do
+      line <- listToMaybe (T.lines out)
+      (_, port) <- unsnoc (T.splitOn ":" (T.strip line))
+      readMaybe (T.unpack (T.strip port))

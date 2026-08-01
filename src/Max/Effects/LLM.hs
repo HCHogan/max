@@ -421,7 +421,7 @@ instance FromJSON ChatMessage where
             pure (MsgAssistantToolCalls (Object o) tcs')
           _ -> do
             mC <- o .:? "content"
-            pure (MsgAssistant (case mC of Just c -> c; Nothing -> ""))
+            pure (MsgAssistant (fromMaybe "" mC))
       r -> fail $ "unknown chat role: " <> T.unpack r
 
 parseToolCall :: Value -> Parser ToolCall

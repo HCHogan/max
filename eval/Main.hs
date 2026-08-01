@@ -17,7 +17,7 @@
 -- yaml/env/flags, so run it next to the bot's max.yaml.
 module Main (main) where
 
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.ByteString.Char8 qualified as BS8
 import Data.Char (isSpace)
@@ -121,7 +121,7 @@ main = do
       unlines $
         "fixture has unparseable lines:"
           : [printf "  line %d: %s" i e | (i, e) <- bad]
-  unless (not (null cases)) $ die "fixture is empty"
+  when (null cases) $ die "fixture is empty"
 
   -- LogAttention: per-case verdict logs stay quiet, real errors
   -- (HTTP failures, unparseable verdicts) still surface.

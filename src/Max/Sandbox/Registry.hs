@@ -56,6 +56,7 @@ import Data.Foldable (for_)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
@@ -177,9 +178,9 @@ createSandbox reg gid opts = do
 ensureSandbox :: SandboxRegistry -> GroupId -> IO (Either Text SandboxEntry)
 ensureSandbox reg gid = do
   existing <- listSandboxesForGroup reg gid
-  case sortOn (.seId) existing of
-    (e : _) -> pure (Right e)
-    [] -> createSandbox reg gid defaultCreateOpts
+  case listToMaybe (sortOn (.seId) existing) of
+    Just e -> pure (Right e)
+    Nothing -> createSandbox reg gid defaultCreateOpts
 
 --------------------------------------------------------------------------------
 -- Lookup.

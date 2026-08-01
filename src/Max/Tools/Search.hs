@@ -21,6 +21,8 @@ import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Maybe (fromMaybe)
+import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -96,7 +98,7 @@ webSearchTool cfg =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (q, mMax) -> do
-          let maxR = clamp 1 10 (maybe cfg.scDefaultMaxResults id mMax)
+          let maxR = clamp (1, 10) (fromMaybe cfg.scDefaultMaxResults mMax)
           logInfo "search: tavily request" $
             object ["query" .= q, "max_results" .= maxR]
           eres <- callTavily cfg q maxR
@@ -114,8 +116,6 @@ webSearchTool cfg =
   where
     parseArgs :: Object -> Parser (Text, Maybe Int)
     parseArgs o = (,) <$> o .: "query" <*> o .:? "max_results"
-
-    clamp lo hi = max lo . min hi
 
     countResults v = case parseEither extractCount v of
       Right n -> n

@@ -62,9 +62,9 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException)
-import Control.Monad (filterM)
-import Data.Int (Int64)
+import Control.Monad (filterM, void)
 import Data.Foldable (for_)
+import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -316,7 +316,7 @@ attachTask reg gid uid mTrigger kind cancel = do
 -- to.)
 releaseTask :: TaskRegistry -> TaskHandle -> IO ()
 releaseTask reg h
-  | h.thOwned = () <$ endDispatch reg h.thId
+  | h.thOwned = void (endDispatch reg h.thId)
   | otherwise = pure ()
 
 --------------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 module Max.DB.ReminderSpec (spec) where
 
+import Data.Maybe (isJust)
 import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool)
@@ -72,7 +73,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Reminder delivery stat
     withDb pool nextPending `shouldReturn` Nothing
     [parked] <- withDb pool (listPending (GroupId 42))
     parked.rmDeliveryAttempts `shouldBe` 5
-    parked.rmParkedAt `shouldSatisfy` maybe False (const True)
+    parked.rmParkedAt `shouldSatisfy` isJust
     withDb pool (cancelReminder (GroupId 42) rid) `shouldReturn` True
 
   it "clears retry metadata when a recurring delivery is acknowledged" $ do

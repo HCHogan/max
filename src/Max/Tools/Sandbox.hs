@@ -30,6 +30,8 @@ where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
+import Data.Maybe (fromMaybe)
+import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone)
@@ -52,7 +54,7 @@ import Max.Sandbox.Registry
 import Max.Time (fmtDateHMS)
 import OneBot.Types (GroupId)
 
-sandboxToolsFor :: IOE :> es => TimeZone -> GroupId -> SandboxRegistry -> [Tool es]
+sandboxToolsFor :: (IOE :> es) => TimeZone -> GroupId -> SandboxRegistry -> [Tool es]
 sandboxToolsFor tz gid reg =
   [ createTool gid reg,
     execTool gid reg,
@@ -66,7 +68,7 @@ sandboxToolsFor tz gid reg =
 --------------------------------------------------------------------------------
 -- sandbox_create
 
-createTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+createTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
 createTool gid reg =
   Tool
     { toolName = "sandbox_create",
@@ -121,14 +123,14 @@ createTool gid reg =
       mNet <- o .:? "network"
       pure
         defaultCreateOpts
-          { scoImage = maybe (scoImage defaultCreateOpts) id mImg,
-            scoNetwork = maybe (scoNetwork defaultCreateOpts) id mNet
+          { scoImage = fromMaybe (scoImage defaultCreateOpts) mImg,
+            scoNetwork = fromMaybe (scoNetwork defaultCreateOpts) mNet
           }
 
 --------------------------------------------------------------------------------
 -- sandbox_exec
 
-execTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+execTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
 execTool gid reg =
   Tool
     { toolName = "sandbox_exec",
@@ -168,7 +170,7 @@ execTool gid reg =
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
           Right (sid, cmd, pkgs, t) -> do
-            res <- liftIO (execInSandbox reg gid (SandboxId sid) (wrapPackages pkgs cmd) (clampTimeout t))
+            res <- liftIO (execInSandbox reg gid (SandboxId sid) (wrapPackages pkgs cmd) (clamp (1, 600) t))
             pure $ case res of
               Left err -> Left err
               Right er ->
@@ -187,9 +189,7 @@ execTool gid reg =
       cmd <- o .: "command"
       pkgs <- o .:? "packages" .!= []
       mTo <- o .:? "timeout_seconds"
-      pure (sid, cmd, pkgs, maybe 30 id mTo)
-
-    clampTimeout n = max 1 (min 600 n)
+      pure (sid, cmd, pkgs, fromMaybe 30 mTo)
 
 --------------------------------------------------------------------------------
 -- nix_search
@@ -198,7 +198,7 @@ execTool gid reg =
 -- the base image ships) so results come from the same pinned
 -- nixpkgs the sandbox will fetch from.  The image bakes the eval
 -- cache, so searches are cheap after the first.
-nixSearchTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+nixSearchTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
 nixSearchTool gid reg =
   Tool
     { toolName = "nix_search",
@@ -248,7 +248,7 @@ nixSearchTool gid reg =
 --------------------------------------------------------------------------------
 -- sandbox_list
 
-listTool :: IOE :> es => TimeZone -> GroupId -> SandboxRegistry -> Tool es
+listTool :: (IOE :> es) => TimeZone -> GroupId -> SandboxRegistry -> Tool es
 listTool tz gid reg =
   Tool
     { toolName = "sandbox_list",
@@ -278,7 +278,7 @@ listTool tz gid reg =
 --------------------------------------------------------------------------------
 -- sandbox_destroy
 
-destroyTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+destroyTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
 destroyTool gid reg =
   Tool
     { toolName = "sandbox_destroy",
@@ -307,7 +307,7 @@ destroyTool gid reg =
 --------------------------------------------------------------------------------
 -- sandbox_read_file
 
-readFileTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+readFileTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
 readFileTool gid reg =
   Tool
     { toolName = "sandbox_read_file",
@@ -334,7 +334,7 @@ readFileTool gid reg =
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
           Right (sid, path, mx) -> do
-            res <- liftIO (readSandboxFile reg gid (SandboxId sid) path (clampMax mx))
+            res <- liftIO (readSandboxFile reg gid (SandboxId sid) path (clamp (1, 65536) mx))
             pure $ case res of
               Left err -> Left err
               Right content ->
@@ -350,13 +350,12 @@ readFileTool gid reg =
       sid <- o .: "sandbox_id"
       path <- o .: "path"
       mx <- o .:? "max_bytes"
-      pure (sid, path, maybe maxOutputBytes id mx)
-    clampMax n = max 1 (min 65536 n)
+      pure (sid, path, fromMaybe maxOutputBytes mx)
 
 --------------------------------------------------------------------------------
 -- sandbox_write_file
 
-writeFileTool :: IOE :> es => GroupId -> SandboxRegistry -> Tool es
+writeFileTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
 writeFileTool gid reg =
   Tool
     { toolName = "sandbox_write_file",

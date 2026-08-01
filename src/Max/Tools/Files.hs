@@ -29,6 +29,8 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
+import Data.Maybe (fromMaybe)
+import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -116,15 +118,14 @@ listRecentFilesTool tz (GroupId gid) =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right lim -> do
-          rows <- DBFiles.listRecentInGroup gid (clampLimit lim)
+          rows <- DBFiles.listRecentInGroup gid (clamp (1, 50) lim)
           pure $ Right (toJSON (map summarize rows))
     }
   where
     parseArgs :: Object -> Parser Int
     parseArgs o = do
       mL <- o .:? "limit"
-      pure (maybe 10 id mL)
-    clampLimit n = max 1 (min 50 n)
+      pure (fromMaybe 10 mL)
 
     summarize :: FileRecord -> Value
     summarize r =
@@ -190,7 +191,7 @@ importFileToSandboxTool gid sandboxes =
                     -- docker cp requires a host path; this is one of the
                     -- deliberately explicit Blob boundary escapes.
                     hostPath <- resolveBlobHostPath ref
-                    let destName = maybe r.frFileName id mDest
+                    let destName = fromMaybe r.frFileName mDest
                         containerPath = "/work/" <> destName
                     cpRes <- liftIO (runCopyToContainer e.seContainer hostPath containerPath)
                     case cpRes of
@@ -381,7 +382,7 @@ sendFileFromSandboxTool gid sandboxes =
                   staged = UUID.toString uuid <> "-" <> basename
                   hostStaged = outboxHostDir </> staged
                   containerStaged = T.pack (outboxContainerDir <> "/" <> staged)
-                  displayName = maybe (T.pack basename) id mName
+                  displayName = fromMaybe (T.pack basename) mName
               cpRes <- liftIO (runCopyFromContainer e.seContainer path hostStaged)
               case cpRes of
                 Left err -> pure (Left ("docker cp failed: " <> err))

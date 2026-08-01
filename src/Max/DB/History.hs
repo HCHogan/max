@@ -11,8 +11,8 @@ module Max.DB.History
 where
 
 import Control.Applicative ((<|>))
-
 import Data.Int (Int64)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime)
@@ -112,9 +112,7 @@ fetchMessage mid = do
       \  WHERE message_id = ? \
       \  LIMIT 1"
       [mid]
-  pure $ case rows :: [HistoryItem] of
-    (h : _) -> Just h
-    [] -> Nothing
+  pure (listToMaybe (rows :: [HistoryItem]))
 
 -- | Reconstruct the bot's mention-exchange history from the messages
 -- table: anything sent BY the bot (@user_id = botSelfId@), anything

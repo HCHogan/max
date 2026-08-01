@@ -29,6 +29,7 @@ import Max.Command.Types
 import Max.DB.Permissions (deleteGrant, insertGrant, listGrantsFor)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text.IO qualified as TIO
 import Data.Version (showVersion)
 import Distribution.Pretty (prettyShow)
@@ -367,7 +368,7 @@ execute t gid uid granterTier replyTarget cmd = do
             env
             gid
             multimodal
-            (maybe env.beStickerDefault id sess.stickerOverride)
+            (fromMaybe env.beStickerDefault sess.stickerOverride)
             (skillCount > 0)
     -- Single newlines only: a blank line would split the card into
     -- separate messages ('planReply').  Public on purpose: the
@@ -424,7 +425,7 @@ execute t gid uid granterTier replyTarget cmd = do
           else reply "没有这条授权（注意 scope：群内授权和 --global 是两条）"
   Perms mTarget -> do
     let UserId uidRaw = uid
-        target = maybe uidRaw id mTarget
+        target = fromMaybe uidRaw mTarget
     rows <- listGrantsFor target
     reply $
       "用户 "
@@ -483,7 +484,7 @@ execute t gid uid granterTier replyTarget cmd = do
         "  persona: " <> maybe "（默认）" (\p -> T.take 40 p <> if T.length p > 40 then "…" else "") s.persona,
         "  debug: " <> onOff env.beDebugDefault s.debugOverride,
         "  sticker: " <> onOff env.beStickerDefault s.stickerOverride,
-        "  proactive: " <> onOff (maybe False (const True) env.beIntent) s.proactiveOverride,
+        "  proactive: " <> onOff (isJust env.beIntent) s.proactiveOverride,
         "  pin: " <> T.pack (show (length s.pinned)) <> " 条",
         "  记忆: " <> T.pack (show memCount) <> " 条",
         "  任务: " <> T.pack (show (length tasks)) <> " 个在跑",

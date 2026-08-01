@@ -31,6 +31,8 @@ where
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
+import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
@@ -130,7 +132,7 @@ saveTool dc =
               Right c -> do
                 let sid = case scope of
                       ScopeGroup -> gid
-                      ScopeUser -> maybe triggerUid id mUid
+                      ScopeUser -> fromMaybe triggerUid mUid
                 n <- countMemories scope sid gid
                 if n >= maxMemoriesPerScope
                   then
@@ -341,13 +343,13 @@ searchTool dc ec =
                   \    AND ( (scope = 'group' AND scope_id = ?) \
                   \       OR (scope = 'user' AND source_group_id = ?) ) \
                   \  ORDER BY embedding <=> ?::vector LIMIT ?"
-                  (gid, gid, renderVector vec, min 20 (max 1 lim))
+                  (gid, gid, renderVector vec, clamp (1, 20) lim)
               pure $ Right (toJSON (map fullSummary (rows :: [MemoryItem])))
             Right _ -> pure $ Left "embedding failed: unexpected result shape"
     }
   where
     parseArgs :: Object -> Parser (Text, Int)
-    parseArgs o = (,) <$> o .: "query" <*> (maybe 8 id <$> o .:? "limit")
+    parseArgs o = (,) <$> o .: "query" <*> (fromMaybe 8 <$> o .:? "limit")
 
     fullSummary m =
       object

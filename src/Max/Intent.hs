@@ -212,8 +212,11 @@ intentRetryDelaySecs attempt
   | attempt <= 1 = 15
   | otherwise = 60
 
-lastN :: Int -> [a] -> [a]
-lastN n xs = drop (length xs - n) xs
+-- Keep this domain-specific while the project builds on @base-4.20@, whose
+-- "Data.List" does not yet export @takeEnd@.  Do not grow another generic
+-- list utility around it: a future base bump can replace this body directly.
+capPendingMessages :: [GroupMessage] -> [GroupMessage]
+capPendingMessages xs = drop (length xs - maxPendingPerGroup) xs
 
 -- | Queue one unaddressed group message for classification.  Own
 -- echoes and private chats never enqueue (a private message already
@@ -228,7 +231,7 @@ enqueueIntent st gm
       atomically $ do
         modifyTVar' st.isPending $
           Map.insertWith
-            (\new old -> old {piMessages = lastN maxPendingPerGroup (old.piMessages <> new.piMessages)})
+            (\new old -> old {piMessages = capPendingMessages (old.piMessages <> new.piMessages)})
             gid
             fresh
         modifyTVar' st.isPendingVersion (+ 1)
@@ -288,7 +291,7 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
       -- this same round.
       liftIO (threadDelay debounceMicros)
       extra <- liftIO . atomically $ drainGroup st gid
-      let batch = lastN maxPendingPerGroup (batch0 <> extra)
+      let batch = capPendingMessages (batch0 <> extra)
       case batch of
         [] -> pure ()
         (gm : _) -> do
@@ -467,7 +470,7 @@ retryIntentBatchAt st gid previousAttempt batch now = do
               Just newer ->
                 retried
                   { piMessages =
-                      lastN maxPendingPerGroup (retried.piMessages <> newer.piMessages)
+                      capPendingMessages (retried.piMessages <> newer.piMessages)
                   }
         writeTVar st.isPending (Map.insert gid merged queued)
         modifyTVar' st.isPendingVersion (+ 1)

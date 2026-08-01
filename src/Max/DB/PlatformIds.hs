@@ -9,6 +9,7 @@ module Max.DB.PlatformIds
 where
 
 import Data.Int (Int64)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
@@ -49,6 +50,4 @@ nativeId platform kind mapped = do
       "SELECT native_id FROM platform_ids \
       \ WHERE platform = ? AND kind = ? AND mapped_id = ?"
       (platform, kind, mapped)
-  pure $ case rows of
-    (Only n : _) -> Just n
-    [] -> Nothing
+  pure (fromOnly <$> listToMaybe rows)

@@ -15,7 +15,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
-import Data.List (sortOn)
+import Data.List (find, sortOn)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -200,9 +200,7 @@ avatarTool dc =
     parseArgs :: Object -> Parser (Maybe Int64, Bool)
     parseArgs o = (,) <$> o .:? "qq" <*> o .:? "group" .!= False
 
-    lookupMember uid ms = case [m | m <- ms, m.mUserId == uid] of
-      (m : _) -> Just m
-      [] -> Nothing
+    lookupMember uid = find (\m -> m.mUserId == uid)
 
 -- | Download, sniff the real image type (qlogo's @Content-Type@ is
 -- not reliable), queue as an inline data URL for the post-round

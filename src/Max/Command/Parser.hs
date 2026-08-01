@@ -17,12 +17,14 @@ module Max.Command.Parser
 where
 
 import Control.Monad (void)
-import Data.Map.Strict qualified as Map
+import Data.Char (isAsciiLower, isAsciiUpper)
+import Data.Either (partitionEithers)
 import Data.Int (Int64)
-import Data.Maybe (catMaybes)
-import Data.Text.Read qualified as TR
+import Data.Map.Strict qualified as Map
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Read qualified as TR
 import Data.Void (Void)
 import Max.Command.Types
 import Text.Megaparsec
@@ -55,8 +57,9 @@ parseCommand input
 -- stays the structured-command path.
 shellBody :: Text -> Maybe Text
 shellBody t = case T.uncons (T.dropWhile (== ' ') t) of
-  Just ('!', rest) | startsWithSpace rest ->
-    let body = T.strip rest in if T.null body then Nothing else Just body
+  Just ('!', rest)
+    | startsWithSpace rest ->
+        let body = T.strip rest in if T.null body then Nothing else Just body
   _ -> Nothing
   where
     startsWithSpace r = case T.uncons r of
@@ -102,7 +105,7 @@ looksLikeCommand t = case T.uncons (T.dropWhile (== ' ') t) of
     _ -> False
   _ -> False
   where
-    isIdentStart c = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+    isIdentStart c = isAsciiLower c || isAsciiUpper c
 
 --------------------------------------------------------------------------------
 -- megaparsec
@@ -215,14 +218,15 @@ commandP = do
   raw <-
     if v `elem` freeTextVerbs
       then -- These verbs take a literal free-text body (a persona, a
-           -- note): parse the remainder as plain values so a leading
-           -- @-a@- or @--flag@-looking word is kept verbatim instead of
-           -- being eaten as a flag.  'classify' ignores flags for them,
-           -- so we leave the flag map empty.
+      -- note): parse the remainder as plain values so a leading
+      -- @-a@- or @--flag@-looking word is kept verbatim instead of
+      -- being eaten as a flag.  'classify' ignores flags for them,
+      -- so we leave the flag map empty.
         (\vals -> RawArgs vals mempty) <$> many valueP
       else do
         args <- many argP
-        pure (RawArgs [t | Right t <- args] (Map.fromList (concat [fs | Left fs <- args])))
+        let (flagArgs, positionalArgs) = partitionEithers args
+        pure (RawArgs positionalArgs (Map.fromList (concat flagArgs)))
   pure (classify v raw)
 
 -- | Verbs whose arguments are a literal free-text body, not a
@@ -237,7 +241,7 @@ freeTextVerbs = ["persona", "btw", "feedback", "fb"]
 -- to a flat set of variants the dispatcher can pattern-match on.
 classify :: Text -> RawArgs -> Command
 classify verb raw@(RawArgs pos flags) = case verb of
-  "help" -> Help (oneArg pos)
+  "help" -> Help (listToMaybe pos)
   "grant" -> case pos of
     [target, cap]
       | Just uid <- parseUserRef target ->
@@ -330,11 +334,6 @@ classify verb raw@(RawArgs pos flags) = case verb of
     _ -> Unknown verb raw
   "version" -> Version
   _ -> Unknown verb raw
-  where
-    oneArg xs = case catMaybes [Just t | t <- xs] of
-      [] -> Nothing
-      (t : _) -> Just t
-
 parseInt64 :: Text -> Maybe Int64
 parseInt64 t = case TR.signed TR.decimal (T.strip t) of
   Right (n, rest) | T.null rest -> Just n

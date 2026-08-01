@@ -16,6 +16,8 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Foldable (asum)
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
+import Data.Ord (clamp)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -188,7 +190,7 @@ searchMessagesTool tz mEmbed (GroupId gid) =
         <*> o .:? "before"
         <*> o .:? "semantic"
         <*> o .:? "group_id"
-        <*> (maybe 10 id <$> o .:? "limit")
+        <*> (fromMaybe 10 <$> o .:? "limit")
 
     toFilter :: SearchArgs -> Either Text MessageFilter
     toFilter sa = do
@@ -196,14 +198,14 @@ searchMessagesTool tz mEmbed (GroupId gid) =
       before <- traverse (parseTimeArg tz) sa.saBefore
       pure
         MessageFilter
-          { mfGroupId = maybe gid id sa.saGroupId,
+          { mfGroupId = fromMaybe gid sa.saGroupId,
             mfQuery = sa.saQuery,
             mfRegex = sa.saRegex,
             mfSenderId = sa.saSenderId,
             mfSender = sa.saSender,
             mfAfter = after,
             mfBefore = before,
-            mfLimit = min 30 (max 1 sa.saLimit)
+            mfLimit = clamp (1, 30) sa.saLimit
           }
 
 -- | Raw tool arguments, straight out of the JSON.
@@ -399,7 +401,7 @@ historyItemSummary tz h =
     [ "message_id" .= h.messageId,
       "sender_user_id" .= h.userId,
       -- 群名片 > 昵称 > QQ号, matching the prompt's context lines.
-      "sender" .= maybe (T.pack (show h.userId)) id (bestName h),
+      "sender" .= fromMaybe (T.pack (show h.userId)) (bestName h),
       "time" .= fmtDateHM tz h.receivedAt,
       "text" .= shorten 400 h.renderedText
     ]

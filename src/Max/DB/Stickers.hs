@@ -30,6 +30,7 @@ import Data.Aeson
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Int (Int64)
+import Data.Maybe (listToMaybe)
 import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -211,6 +212,4 @@ findStickerByCaption cap = do
       \ ORDER BY (s.description = ?) DESC, (s.description LIKE ?) DESC, s.times_sent DESC, s.id DESC \
       \ LIMIT 1"
       (cap, esc <> "%", "%" <> esc <> "%", cap, esc <> "%")
-  pure $ case rows of
-    (Only sid : _) -> Just sid
-    [] -> Nothing
+  pure (fromOnly <$> listToMaybe rows)

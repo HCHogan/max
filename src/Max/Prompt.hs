@@ -1,7 +1,6 @@
 module Max.Prompt
   ( -- * Pipeline
     buildContext,
-
     TriggerOrigin (..),
 
     -- * Building blocks (exposed for tests)
@@ -13,9 +12,11 @@ module Max.Prompt
     applyStickerCaptions,
     applyVideoCaptions,
     tagImageMarkers,
+
     -- * Shared line rendering (used by "Max.Intent" / "Max.Handler")
     renderHistoryLine,
     renderCurrentLine,
+
     -- * Forward markers (shared with "Max.Tools")
     tagMediaMarkers,
   )
@@ -26,9 +27,10 @@ import Control.Concurrent (threadDelay)
 import Control.Monad (when)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
-import Data.Int (Int64)
+import Data.Either (partitionEithers)
 import Data.Function (on)
-import Data.List (groupBy, sortOn)
+import Data.Int (Int64)
+import Data.List (groupBy, sortOn, unsnoc)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Set (Set)
@@ -296,13 +298,14 @@ systemPrompt multimodal' private persona skills' =
                ]
                  <> ["  " <> n <> "：" <> d | (n, d) <- skills']
          )
-      -- Nothing volatile below this point.  The environment block
-      -- (current time, per-turn roster) and the memory block used to
-      -- sit here at the end; they now live in the user message, after
-      -- the transcript.  A prefix cache stops at the first byte that
-      -- changed, so a clock in the system prompt capped every provider
-      -- cache at "persona + format guide" no matter how stable the
-      -- conversation below it was.
+
+-- Nothing volatile below this point.  The environment block
+-- (current time, per-turn roster) and the memory block used to
+-- sit here at the end; they now live in the user message, after
+-- the transcript.  A prefix cache stops at the first byte that
+-- changed, so a clock in the system prompt capped every provider
+-- cache at "persona + format guide" no matter how stable the
+-- conversation below it was.
 
 -- | Build the chat context for one @bot trigger.  Runs the DB
 -- fetches, then hands off to the pure 'renderContext'.
@@ -352,7 +355,7 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
   -- The floor is the later of @!clear@'s watermark and the transcript
   -- anchor, and both queries fetch one row past the high-water mark so
   -- an overflow is detectable rather than silently truncated by LIMIT.
-  let floor' = laterOf s.clearedAt s.contextAnchor
+  let floor' = max s.clearedAt s.contextAnchor
       fetchLimit = highWater + 1
   recent <- fetchRecentInGroup gid mid floor' fetchLimit
   thread <-
@@ -908,8 +911,8 @@ loadPromptImages tz' selfId' mid replyIds candidates = do
         take maxPromptImages $
           map Left (imagesOf mid)
             <> [Right (h, mp) | h <- candidates', mp <- imagesOf h.messageId]
-      contextPicked = sortOn (\(h, _) -> h.receivedAt) [hp | Right hp <- picked]
-      triggerPicked = [mp | Left mp <- picked]
+      (triggerPicked, contextUnsorted) = partitionEithers picked
+      contextPicked = sortOn (\(h, _) -> h.receivedAt) contextUnsorted
   ctxImgs <- fmap concat $ traverse (uncurry loadCtx) contextPicked
   trigImgs <- fmap concat $ traverse (loadOne "[current message] 里的图片:") triggerPicked
   pure (ctxImgs <> trigImgs)
@@ -1093,15 +1096,6 @@ memoryLine tz' m =
     <> ") "
     <> oneLine m.memContent
 
--- | The later of two optional floors — @!clear@'s watermark and the
--- transcript anchor.  Either may be absent; both present means the
--- stricter one wins.
-laterOf :: Maybe UTCTime -> Maybe UTCTime -> Maybe UTCTime
-laterOf a b = case (a, b) of
-  (Just x, Just y) -> Just (max x y)
-  (Just x, Nothing) -> Just x
-  (Nothing, y) -> y
-
 -- | Trim the transcript when it has grown past @high@, back to @low@,
 -- and report the anchor the caller should persist.
 --
@@ -1113,20 +1107,19 @@ laterOf a b = case (a, b) of
 applyWatermark :: Int -> Int -> [HistoryItem] -> ([HistoryItem], Maybe UTCTime)
 applyWatermark low high rows
   | length rows <= high = (rows, Nothing)
-  | otherwise = case kept of
+  | otherwise = case splitAt (length rows - low) rows of
       -- The anchor is the kept window's own first row: the floor is
       -- exclusive downstream (@received_at > floor@ in the queries),
       -- so anchoring *at* the oldest kept row would drop it next time.
       -- Stepping back to the row before it keeps the window exactly
       -- @low@ long.
-      [] -> (rows, Nothing)
-      (oldestKept : _) -> (kept, Just (predecessorOf oldestKept))
-  where
-    kept = drop (length rows - low) rows
-    predecessorOf r =
-      case reverse (takeWhile (\x -> x.messageId /= r.messageId) rows) of
-        (prev : _) -> prev.receivedAt
-        [] -> r.receivedAt
+      (_, []) -> (rows, Nothing)
+      (dropped, kept@(oldestKept : _)) ->
+        ( kept,
+          Just $ case unsnoc dropped of
+            Just (_, predecessor) -> predecessor.receivedAt
+            Nothing -> oldestKept.receivedAt
+        )
 
 -- | Interleave the two history queries into one chronological
 -- transcript, keeping one row per message id.
@@ -1282,13 +1275,25 @@ renderUser tz' now' selfId' origin' mTranscript envText mMemBlock replyCtx' pinn
 
 renderHistoryLine :: TimeZone -> Int64 -> HistoryItem -> Text
 renderHistoryLine tz' selfId' h =
-  "[" <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> " #" <> T.pack (show h.messageId) <> "]: "
+  "["
+    <> fmtHM tz' h.receivedAt
+    <> " "
+    <> displayName selfId' h
+    <> " #"
+    <> T.pack (show h.messageId)
+    <> "]: "
     <> replyPrefix h
     <> oneLine h.renderedText
 
 renderReplyLine :: TimeZone -> Int64 -> HistoryItem -> Text
 renderReplyLine tz' selfId' h =
-  "[↩ quoted " <> fmtHM tz' h.receivedAt <> " " <> displayName selfId' h <> " #" <> T.pack (show h.messageId) <> "]: "
+  "[↩ quoted "
+    <> fmtHM tz' h.receivedAt
+    <> " "
+    <> displayName selfId' h
+    <> " #"
+    <> T.pack (show h.messageId)
+    <> "]: "
     <> replyPrefix h
     <> oneLine h.renderedText
 
@@ -1381,7 +1386,6 @@ senderDisplayName gm =
   where
     nonBlank (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
     nonBlank _ = Nothing
-
 
 oneLine :: Text -> Text
 oneLine = T.replace "\n" " ⏎ "

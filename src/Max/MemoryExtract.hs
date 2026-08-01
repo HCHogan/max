@@ -48,8 +48,10 @@ import Data.Aeson
 import Data.Foldable (for_, traverse_)
 import Data.Int (Int64)
 import Data.List (sortOn)
+import Data.List.NonEmpty (nonEmpty)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -247,7 +249,7 @@ memxWorker profile mEmbed tz sessions defaultModel sched = localDomain "memx" $ 
       sessions' <- listSessions defaultModel
       for_ sessions' $ \s -> do
         let GroupId gid = s.groupId
-            floor' = laterOf s.memxAnchor s.clearedAt
+            floor' = max s.memxAnchor s.clearedAt
         rows <- fetchRecentInGroup gid 0 floor' 1
         unless (null rows) $ do
           liftIO (armMemx sched s.groupId)
@@ -267,7 +269,7 @@ awaitDue sched = do
       Just (gid, _) -> do
         writeTVar sched.msPending (Map.delete gid m)
         pure (Just gid, Nothing, ver)
-      Nothing -> pure (Nothing, minimum' (map fst (Map.elems rest)), ver)
+      Nothing -> pure (Nothing, minimum <$> nonEmpty (map fst (Map.elems rest)), ver)
   case claimed of
     Just gid -> pure gid
     Nothing -> do
@@ -282,13 +284,6 @@ awaitDue sched = do
             (readTVar delay >>= check)
               `orElse` (readTVar sched.msVersion >>= \v -> check (v /= ver))
       awaitDue sched
-  where
-    minimum' [] = Nothing
-    minimum' xs = Just (minimum xs)
-
-laterOf :: Maybe UTCTime -> Maybe UTCTime -> Maybe UTCTime
-laterOf a b = max a b
-
 --------------------------------------------------------------------------------
 -- One episode.
 
@@ -306,7 +301,7 @@ extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
   t <- loadSession sessions defaultModel g
   s <- liftIO (readSession t)
   now <- liftIO getCurrentTime
-  let floor' = laterOf s.memxAnchor s.clearedAt
+  let floor' = max s.memxAnchor s.clearedAt
   rows <- fetchRecentInGroup gid 0 floor' windowFetch
   let botInvolved = any (\h -> h.userId == h.selfId) rows
       advance = updateSession t (\sess -> (sess {memxAnchor = Just now}, ()))
@@ -396,7 +391,7 @@ applyOp profile mEmbed gid = \case
       Right c -> do
         let sid = case scope of
               ScopeGroup -> gid
-              ScopeUser -> maybe gid id mUid -- unreachable Nothing: guarded above
+              ScopeUser -> fromMaybe gid mUid -- unreachable Nothing: guarded above
         -- The prompt says "don't re-add near-duplicates", but small
         -- extractor models re-add anyway (observed on day one).
         -- Enforce in code: embed the candidate and skip when an
@@ -467,9 +462,7 @@ applyOp profile mEmbed gid = \case
             \ WHERE scope = ? AND scope_id = ? AND content = ? \
             \   AND (scope = 'group' OR source_group_id = ?) LIMIT 1"
             (scopeText scope, sid, c, gid)
-        let hit = case rows :: [Only Int64] of
-              (Only did : _) -> Just (did, 0 :: Double)
-              [] -> Nothing
+        let hit = (\(Only did) -> (did, 0 :: Double)) <$> listToMaybe rows
         pure (Nothing, hit)
       Just ec -> do
         evec <- liftIO (embedTexts ec [c])

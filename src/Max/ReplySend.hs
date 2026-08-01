@@ -59,6 +59,7 @@ import Control.Monad (foldM, when)
 import Data.ByteString.Base64 qualified as B64
 import Data.Char (isDigit)
 import Data.Int (Int64)
+import Data.Ord (clamp)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -395,7 +396,7 @@ capTo n cs
 chunkDelayMicros :: Int -> IO Int
 chunkDelayMicros nChars = do
   f <- randomRIO (0.7, 1.3 :: Double)
-  pure (max 200_000 (min 2_000_000 (round (fromIntegral nChars * 35_000 * f))))
+  pure (clamp (200_000, 2_000_000) (round (fromIntegral nChars * 35_000 * f)))
 
 -- | Load a stored message's images back off disk as outgoing segments.
 -- A blob that can't be read is skipped, not fatal: resending N-1 of N

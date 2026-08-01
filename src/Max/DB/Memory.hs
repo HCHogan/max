@@ -36,6 +36,7 @@ module Max.DB.Memory
 where
 
 import Data.Int (Int64)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), (:.) (..))
@@ -214,9 +215,7 @@ evictOldest scope sid gid = do
       \     ORDER BY updated_at ASC, id ASC LIMIT 1) \
       \ RETURNING id, content"
       (scopeText scope, sid, gid)
-  pure $ case rows of
-    (r : _) -> Just r
-    [] -> Nothing
+  pure (listToMaybe rows)
 
 fetchMemory :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es (Maybe MemoryItem)
 fetchMemory mid = do
@@ -225,6 +224,4 @@ fetchMemory mid = do
       "SELECT id, scope, scope_id, content, updated_at \
       \  FROM memories WHERE id = ?"
       (Only mid)
-  pure $ case rows of
-    (m : _) -> Just m
-    [] -> Nothing
+  pure (listToMaybe rows)

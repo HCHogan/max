@@ -39,7 +39,10 @@ import Control.Concurrent.STM
     registerDelay,
     retry,
   )
+import Control.Monad (unless)
 import Data.Aeson (object, (.=))
+import Data.Maybe (isJust)
+import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time
@@ -118,7 +121,7 @@ capMicros = 3600 * 1000000
 delayMicrosFor :: UTCTime -> UTCTime -> Int
 delayMicrosFor now fireAt =
   let micros = realToFrac (diffUTCTime fireAt now) * 1e6 :: Double
-   in round (max 0 (min (fromIntegral capMicros) micros))
+   in round (clamp (0, fromIntegral capMicros) micros)
 
 -- | Five failed external deliveries park a reminder for diagnosis instead of
 -- retrying forever. The four retry delays are deliberately bounded and much
@@ -173,7 +176,7 @@ reminderWorker tz sched = loop
     -- Block until the pending set changes.
     waitSignal v0 = atomically $ do
       v <- readTVar sched.rsSignal
-      if v /= v0 then pure () else retry
+      unless (v /= v0) retry
 
     -- Block until the timer elapses or the pending set changes.
     waitUntil v0 micros = do
@@ -181,7 +184,7 @@ reminderWorker tz sched = loop
       atomically $ do
         fired <- readTVar timer
         v <- readTVar sched.rsSignal
-        if fired || v /= v0 then pure () else retry
+        unless (fired || v /= v0) retry
 
     -- Delivery is the claim/ack boundary. Only confirmed platform delivery
     -- advances the schedule; failures persist a bounded retry deadline.
@@ -243,7 +246,7 @@ reminderWorker tz sched = loop
 
     sentLog r =
       logInfo "reminder: sent" $
-        object ["id" .= r.rmId, "recurring" .= maybe False (const True) r.rmCron]
+        object ["id" .= r.rmId, "recurring" .= isJust r.rmCron]
 
 -- | @-mention the asker in groups; plain text in private chats (private
 -- at-segments render poorly — same reasoning as the @say@ tool).

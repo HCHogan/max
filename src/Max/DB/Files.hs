@@ -13,6 +13,7 @@ module Max.DB.Files
 where
 
 import Data.Int (Int64)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (FromRow, Only (..))
@@ -118,9 +119,7 @@ fetchByFileId fid = do
       \  WHERE file_id = ? \
       \  LIMIT 1"
       (Only fid)
-  pure $ case rows of
-    (r : _) -> Just r
-    [] -> Nothing
+  pure (listToMaybe rows)
 
 -- | All files attached to one message — used by the prompt builder
 -- to enrich reply context (\"the user is asking about the file in

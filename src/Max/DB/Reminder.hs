@@ -23,7 +23,7 @@ module Max.DB.Reminder
 where
 
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), Query)
@@ -127,9 +127,7 @@ nextPending = do
         \  ORDER BY COALESCE(next_attempt_at, fire_at) LIMIT 1"
       )
       ()
-  pure $ case rows of
-    (r : _) -> Just r
-    [] -> Nothing
+  pure (listToMaybe rows)
 
 -- | Close out a one-shot reminder after delivery.
 markFired ::

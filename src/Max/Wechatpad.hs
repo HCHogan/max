@@ -35,11 +35,12 @@ import Control.Concurrent.STM (TQueue, atomically, writeTQueue)
 import Control.Monad (forever, unless)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseMaybe)
-import Data.Text.Read qualified as TR
+import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Read qualified as TR
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
@@ -199,9 +200,7 @@ wechatpadWorker cfg q = localDomain "wechatpad" $ do
     handleFrame selfMapped raw =
       case decodeStrictText raw of
         Nothing -> pure ()
-        Just frame -> case parseMaybe frameParser frame of
-          Nothing -> pure ()
-          Just wm -> translate selfMapped wm
+        Just frame -> for_ (parseMaybe frameParser frame) (translate selfMapped)
 
     translate selfMapped wm
       -- Demo scope: whitelisted chatroom text messages only.

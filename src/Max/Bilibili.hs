@@ -26,6 +26,7 @@ module Max.Bilibili
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Char (isAlphaNum, isDigit)
@@ -35,6 +36,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Max.Effects.Http (Http, getBytesWith, getFinalUrl)
+import Text.Read (readMaybe)
 
 -- | A bilibili video reference found in message text.
 data BiliRef
@@ -52,8 +54,6 @@ findBiliRef t =
   (RefBvid <$> findBv t)
     <|> (RefAvid <$> findAv t)
     <|> (RefShort <$> findB23 t)
-  where
-    (<|>) l r = maybe r Just l
 
 -- | @BV@ + 10 alphanumerics, wherever it appears.
 findBv :: Text -> Maybe Text
@@ -74,11 +74,7 @@ findAv t = case T.breakOn "/video/av" t of
     | T.null rest -> Nothing
     | otherwise ->
         let digits = T.takeWhile isDigit (T.drop 9 rest)
-         in if T.null digits
-              then Nothing
-              else case reads (T.unpack digits) of
-                [(n, "")] -> Just n
-                _ -> Nothing
+         in if T.null digits then Nothing else readMaybe (T.unpack digits)
 
 findB23 :: Text -> Maybe Text
 findB23 t = case T.breakOn "b23.tv/" t of

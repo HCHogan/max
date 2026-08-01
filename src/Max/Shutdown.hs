@@ -56,6 +56,7 @@ import Control.Concurrent.STM
   )
 import Control.Exception (AsyncException (UserInterrupt), throwTo)
 import Control.Monad (unless)
+import Data.Ord (clamp)
 import Effectful
 import Effectful.Log
 
@@ -133,7 +134,7 @@ awaitQuiescent seconds st = do
 -- | Seconds to microseconds, clamped to @[0, 1h]@ so a fat-fingered
 -- config value can't overflow the 'Int' 'registerDelay' takes.
 delayMicros :: Int -> Int
-delayMicros s = max 0 (min 3600 s) * 1_000_000
+delayMicros s = clamp (0, 3600) s * 1_000_000
 
 --------------------------------------------------------------------------------
 -- Supervisor

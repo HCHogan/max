@@ -4,10 +4,9 @@ import Control.Concurrent (forkFinally, killThread)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
   ( TMVar,
-    atomically,
     newEmptyTMVarIO,
     newTVarIO,
-    readTVar,
+    readTVarIO,
   )
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -31,9 +30,9 @@ spec = describe "PlatformApi pending calls" $ do
         )
         (putMVar done)
     takeMVar ready
-    registered <- atomically (readTVar pendingCalls)
+    registered <- readTVarIO pendingCalls
     Map.member "echo-1" registered `shouldBe` True
     killThread tid
     _ <- takeMVar done
-    remaining <- atomically (readTVar pendingCalls)
+    remaining <- readTVarIO pendingCalls
     Map.null remaining `shouldBe` True

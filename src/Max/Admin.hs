@@ -40,7 +40,8 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.FileEmbed (embedDir)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Ord (clamp)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -51,14 +52,14 @@ import Data.Version (showVersion)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
+import Max.BuildInfo (gitRev)
+import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
 import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
 import Max.DB.History (messageStatsDaily)
 import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, listMemories, listUserMemoriesEverywhere)
 import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGrants)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
-import Max.BuildInfo (gitRev)
-import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
 import Max.Effects.Http (Http)
 import Max.Env (BotEnv (..))
 import Max.Log (parseLogLevel, renderLogLevel)
@@ -144,7 +145,8 @@ route m path
         -- looked up in a fixed table, so the path is a key, not a
         -- filesystem walk.  Guarded anyway — the day this grows a real
         -- directory the guard is already here.
-        | not (null rest), all (`notElem` ["..", ""]) rest ->
+        | not (null rest),
+          all (`notElem` ["..", ""]) rest ->
             Just (RStatic rest)
       _ -> Nothing
   | m == methodPatch = case path of
@@ -236,7 +238,7 @@ adminServer cfg env profiles logBuf = localDomain "admin" $ do
       | (k, Just v) <- queryString req
       ]
 
-jsonResponse :: A.ToJSON a => Status -> a -> Response
+jsonResponse :: (A.ToJSON a) => Status -> a -> Response
 jsonResponse st v =
   responseLBS st [(hContentType, "application/json; charset=utf-8")] (A.encode v)
 
@@ -394,7 +396,7 @@ handle env profiles logBuf r params body = case r of
     killed <- liftIO (cancelTask env.beTasks (TaskId tid))
     pure (if killed then deleted else notFound)
   RUsage -> do
-    let days = clampDays (fromMaybe 30 (intParam "days"))
+    let days = clamp (1, 365) (fromMaybe 30 (intParam "days"))
     rows <- usageDaily (timeZoneMinutes env.beTimeZone) days
     pure . ok $
       [ object
@@ -434,7 +436,7 @@ handle env profiles logBuf r params body = case r of
                 "credentials" .= map credentialJson creds
               ]
   RMessageStats -> do
-    let days = clampDays (fromMaybe 14 (intParam "days"))
+    let days = clamp (1, 365) (fromMaybe 14 (intParam "days"))
     rows <- messageStatsDaily (timeZoneMinutes env.beTimeZone) days
     pure . ok $
       [ object ["day" .= d, "group_id" .= g, "kind" .= k, "count" .= n]
@@ -451,7 +453,7 @@ handle env profiles logBuf r params body = case r of
             lqDomain = nonBlank =<< lookup "domain" params,
             lqSearch = nonBlank =<< lookup "q" params,
             lqAfter = intParam "after",
-            lqLimit = max 1 (min 1000 (fromMaybe 200 (intParam "limit")))
+            lqLimit = clamp (1, 1000) (fromMaybe 200 (intParam "limit"))
           }
     pure . ok $
       object
@@ -467,9 +469,7 @@ handle env profiles logBuf r params body = case r of
                | e <- entries
                ],
           -- Newest first, so the head is the high-water mark.
-          "latest" .= case entries of
-            (e : _) -> Just e.leSeq
-            [] -> Nothing
+          "latest" .= ((.leSeq) <$> listToMaybe entries)
         ]
   -- The list omits the bodies — they are tens of kilobytes apiece and
   -- the list is the index, not the reading.  Sizes ride along so you
@@ -481,7 +481,7 @@ handle env profiles logBuf r params body = case r of
         (nonBlank =<< lookup "source" params)
         (lookup "failed" params == Just "1")
         (intParam "before")
-        (max 1 (min 200 (fromMaybe 50 (intParam "limit"))))
+        (clamp (1, 200) (fromMaybe 50 (intParam "limit")))
     pure (ok (map callRowJson rows))
   RCallDetail cid ->
     fetchCall cid >>= \case
@@ -498,19 +498,17 @@ handle env profiles logBuf r params body = case r of
   RStatic p -> pure (staticResponse p)
   where
     nonBlank t = if T.null (T.strip t) then Nothing else Just (T.strip t)
-    ok :: A.ToJSON a => a -> Response
+    ok :: (A.ToJSON a) => a -> Response
     ok = jsonResponse status200
     bad msg = jsonResponse status400 (object ["error" .= (msg :: Text)])
     notFound = jsonResponse status404 (object ["error" .= ("not found" :: Text)])
     deleted = jsonResponse status200 (object ["deleted" .= True])
-    intParam :: Integral a => Text -> Maybe a
+    intParam :: (Integral a) => Text -> Maybe a
     intParam k = do
       v <- lookup k params
       case TR.signed TR.decimal v of
         Right (n, "") -> Just n
         _ -> Nothing
-    -- A runaway ?days= must not turn into a full-table scan festival.
-    clampDays n = max 1 (min 365 n)
 
 -- | Apply a session PATCH through the registry, never the DB alone —
 -- the running process trusts its in-memory copy.  Field semantics:

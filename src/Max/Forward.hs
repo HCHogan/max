@@ -11,6 +11,7 @@ import Data.Aeson (FromJSON (..), ToJSON (..), Value (Array, Object, String))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Object, Parser, parseEither, withObject, (.:), (.:?))
+import Data.Either (rights)
 import Data.Foldable (for_, toList, traverse_)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -191,9 +192,8 @@ ingestNode sig containerSid gid sid depth pos node = do
               "skipped" .= length inlineChildren,
               "synthetic_message_id" .= insSid
             ]
-    else
-      for_ (zip [0 ..] inlineChildren) $ \(i, child) ->
-        ingestNode sig insSid gid sid (depth + 1) i child
+    else for_ (zip [0 ..] inlineChildren) $ \(i, child) ->
+      ingestNode sig insSid gid sid (depth + 1) i child
 
 -- | Pull nested-forward children inlined in a @forward@ segment's
 -- @data.content@ (NapCat-style; whole tree comes in one @get_forward_msg@
@@ -203,7 +203,7 @@ extractInlineNodes (SegOther "forward" (Object o)) =
   case KM.lookup (K.fromText "content") o of
     Just (Array arr) ->
       let parsedEach = map (parseEither nodeParser) (toList arr)
-       in [n | Right n <- parsedEach]
+       in rights parsedEach
     _ -> []
 extractInlineNodes _ = []
 

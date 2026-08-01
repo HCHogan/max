@@ -43,6 +43,7 @@ import OneBot.Types (GroupId (..), MessageId (..))
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
+import Text.Read (readMaybe)
 
 -- | What a queued download is.  Videos ride the same worker pool but
 -- land in their own tables ('videos' / 'message_videos') with a
@@ -300,7 +301,5 @@ probeVideoDuration bytes = do
           ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", path]
           ""
       pure $ case code of
-        ExitSuccess -> case reads (takeWhile (/= '\n') out) of
-          [(d, "")] -> Just d
-          _ -> Nothing
+        ExitSuccess -> readMaybe (takeWhile (/= '\n') out)
         ExitFailure _ -> Nothing

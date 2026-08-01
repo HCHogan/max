@@ -23,8 +23,8 @@ import Data.Aeson.Types (Parser, typeMismatch)
 import Data.Char (isAlphaNum, isAscii, isDigit)
 import Data.Foldable (asum)
 import Data.Int (Int64)
-import Data.List (sortOn)
-import Data.Maybe (fromMaybe)
+import Data.List (sortOn, unsnoc)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -235,7 +235,7 @@ parseCard raw = do
       Just (String s) | not (T.null (T.strip s)) -> Just (T.strip s)
       _ -> Nothing
     cardFields o =
-      length (filter (\k -> maybe False (const True) (str k o)) ["title", "desc", "jumpUrl", "qqdocurl"]) :: Int
+      length (filter (isJust . (`str` o)) ["title", "desc", "jumpUrl", "qqdocurl"]) :: Int
 
 -- | Normalise NapCat's @faceText@ into a display name: drop the
 -- conventional leading slash ("/惊讶" → "惊讶") and surrounding
@@ -285,13 +285,13 @@ instance ToJSON Segment where
       -- particular truncates numeric input through Int32, mangling any QQ
       -- number > 2_147_483_647.
       object
-        [ "type" .= ("at" :: Text)
-        , "data" .= object ["qq" .= T.pack (show u)]
+        [ "type" .= ("at" :: Text),
+          "data" .= object ["qq" .= T.pack (show u)]
         ]
     SegReply (MessageId m) ->
       object
-        [ "type" .= ("reply" :: Text)
-        , "data" .= object ["id" .= T.pack (show m)]
+        [ "type" .= ("reply" :: Text),
+          "data" .= object ["id" .= T.pack (show m)]
         ]
     SegImage info ->
       object
@@ -342,7 +342,8 @@ renderPlainText = T.concat . map go
         | isStickerImage info -> "[sticker]"
         | otherwise -> "[image]"
       SegFace i mName ->
-        "[face#" <> T.pack (show i)
+        "[face#"
+          <> T.pack (show i)
           <> maybe "" (": " <>) mName
           <> "]"
       SegFile fs -> "[file:" <> fs.fsiName <> "]"
@@ -352,8 +353,7 @@ renderPlainText = T.concat . map go
         -- capped so a wordy card can't eat a history line.
         let parts =
               dedupAdjacent $
-                [t | Just t <- [ci.ciTag, ci.ciTitle, T.take 80 <$> ci.ciDesc]]
-                  <> [u | Just u <- [ci.ciUrl]]
+                catMaybes [ci.ciTag, ci.ciTitle, T.take 80 <$> ci.ciDesc, ci.ciUrl]
          in "[card: " <> T.intercalate " | " parts <> "]"
       SegOther t _ -> "[" <> t <> "]"
 
@@ -381,9 +381,10 @@ segmentMentions known = go
                   -- The canonical "[@#<qq>]" token (what the grammar
                   -- teaches, and what inbound mentions render as) —
                   -- unambiguous, so no boundary heuristics needed.
-                  Just (before', uid, after) | known uid ->
-                    [SegText before' | not (T.null before')]
-                      <> (SegAt uid : spaceAfter (go (fromMaybe after (T.stripPrefix " " after))))
+                  Just (before', uid, after)
+                    | known uid ->
+                        [SegText before' | not (T.null before')]
+                          <> (SegAt uid : spaceAfter (go (fromMaybe after (T.stripPrefix " " after))))
                   _ -> bareForm before cand
     -- "[@#123456]" — 'before' carries the '[', 'cand' starts at '#'.
     bracketForm before cand = do
@@ -482,8 +483,8 @@ trimEdgeSegs segs =
           let x' = T.stripStart x
            in if T.null x' then rest else SegText x' : rest
         _ -> segs
-   in case reverse start of
-        (SegText x : rest) ->
+   in case unsnoc start of
+        Just (rest, SegText x) ->
           let x' = T.stripEnd x
-           in reverse (if T.null x' then rest else SegText x' : rest)
+           in if T.null x' then rest else rest <> [SegText x']
         _ -> start

@@ -12,9 +12,9 @@ import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTV
 import Control.Monad (unless, void, when)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
-import Data.List (find, partition)
+import Data.List (find, partition, unsnoc)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -332,7 +332,7 @@ onPoke mIntent pk
           else do
             members <- fetchGroupMembers pk.pkGroupId
             pure (memberName <$> (find (\m -> m.mUserId == pk.pkUserId) =<< members))
-      let pokerName = maybe (T.pack (show pokerRaw)) id mName
+      let pokerName = fromMaybe (T.pack (show pokerRaw)) mName
       -- A poke has no content for the classifier to judge, so it takes
       -- the same route an explicit !feedback does: into whatever turn
       -- the group has running, whoever started it.  Nothing running →
@@ -569,10 +569,10 @@ dispatchProactive ::
   Maybe IntentState ->
   [GroupMessage] ->
   Eff es ()
-dispatchProactive mIntent batch = case reverse batch of
-  [] -> pure ()
-  (trigger : older) ->
-    dispatchLLM mIntent OriginProactive MayAbsorb (reverse older) trigger
+dispatchProactive mIntent batch = case unsnoc batch of
+  Nothing -> pure ()
+  Just (older, trigger) ->
+    dispatchLLM mIntent OriginProactive MayAbsorb older trigger
 
 -- | Spawn an async to build the prompt, call the LLM, post the reply,
 -- and append the (user, assistant) turn to the session history.
@@ -865,8 +865,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
         updateSession t (\sess -> (sess {contextAnchor = Just anchor}, ()))
         logInfo "context anchor moved" $
           object ["group_id" .= (let GroupId g = gm.groupId in g)]
-      let debugEff = maybe env.beDebugDefault id s.debugOverride
-          stickersEff = maybe env.beStickerDefault id s.stickerOverride
+      let debugEff = fromMaybe env.beDebugDefault s.debugOverride
+          stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
           toolCtx =
             ToolContext
               (TurnIdentity gm.groupId gm.messageId gm.userId gm.selfId)
@@ -912,7 +912,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- a paragraph — the remainder plans into chunks exactly as it
       -- would have on its own.
       let remaining = T.drop (T.length result.sentPrefix) replyRaw
-          stickersEff = maybe env.beStickerDefault id s.stickerOverride
+          stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
           stripped = cleanModelText remaining
       when (stripped /= T.strip remaining) $
         logAttention "reply: hallucinated model markers stripped" $
@@ -948,7 +948,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           insertSilence gm (if T.null stripped then "[silence]" else stripped)
           when (origin == OriginDirect) $
             sendAction
-              (SetMsgEmojiLike gm.messageId (maybe defaultSilenceFace id mFace) True)
+              (SetMsgEmojiLike gm.messageId (fromMaybe defaultSilenceFace mFace) True)
         Nothing -> do
           -- Outbound gets the platform message_id and persists this
           -- message into the messages table.  That's where
@@ -1063,7 +1063,7 @@ fetchGroupContext gid
       -- rescuing "@显示名" spans in replies — see 'rescueNameMentions'.
       let names =
             [ (nm, m.mUserId)
-            | m <- maybe [] id members,
+            | m <- fromMaybe [] members,
               Just nm <- [nonBlankName m.mCard <|> nonBlankName m.mNickname]
             ]
       pure
@@ -1109,7 +1109,7 @@ resolveAdminTarget env gm cmd
           | uidRaw `elem` env.beOwners -> pure (GroupId g)
           | otherwise -> do
               members <- fetchGroupMembers (GroupId g)
-              if any (\m -> m.mUserId == gm.userId) (maybe [] id members)
+              if any (\m -> m.mUserId == gm.userId) (fromMaybe [] members)
                 then pure (GroupId g)
                 else do
                   logInfo "cmd: admin target dropped (not a member)" $
@@ -1159,7 +1159,7 @@ actorTier gid uid
   | isPrivateChat gid = pure TierGroupAdmin
   | otherwise = do
       members <- fetchGroupMembers gid
-      let role = [m.mRole | m <- maybe [] id members, m.mUserId == uid]
+      let role = [m.mRole | m <- fromMaybe [] members, m.mUserId == uid]
       pure $ case role of
         (r : _) | r `elem` ["owner", "admin"] -> TierGroupAdmin
         _ -> TierMember

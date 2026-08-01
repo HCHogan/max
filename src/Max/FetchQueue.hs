@@ -36,6 +36,7 @@ import Control.Concurrent.STM
     registerDelay,
     retry,
   )
+import Control.Monad (unless)
 import Data.Aeson (FromJSON)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -105,7 +106,7 @@ runFetchLoop signal kind leaseSeconds batch process = loop
       atomically $ do
         v <- readTVar signal.fsTick
         fired <- readTVar timer
-        if fired || v /= v0 then pure () else retry
+        unless (fired || v /= v0) retry
 
     one j = do
       r <- trySync (process j.cjPayload)

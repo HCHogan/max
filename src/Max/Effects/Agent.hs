@@ -66,7 +66,7 @@ where
 
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, writeTVar)
-import Control.Monad (when)
+import Control.Monad (unless, when)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
@@ -386,7 +386,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     releaseParagraphs emit sentRef soFar = do
       sent <- liftIO (readTVarIO sentRef)
       let (ready, _held) = readyPrefix (T.drop (T.length sent) soFar)
-      when (not (T.null (T.strip ready))) $ do
+      unless (T.null (T.strip ready)) $ do
         -- The sink may refuse — it is the one holding the message
         -- budget, and once that is down to its last slot everything
         -- further belongs to the final send.  Only advance the mark

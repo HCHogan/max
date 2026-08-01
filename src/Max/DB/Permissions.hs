@@ -15,6 +15,7 @@ module Max.DB.Permissions
 where
 
 import Data.Int (Int64)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..))
@@ -40,9 +41,7 @@ lookupGrant uid cap gid = do
       \ ORDER BY scope_group_id NULLS LAST \
       \ LIMIT 1"
       (uid, cap, gid)
-  pure $ case rows of
-    (Only deny : _) -> Just (not deny)
-    [] -> Nothing
+  pure (not . fromOnly <$> listToMaybe rows)
 
 -- | Upsert one grant/deny row.  Returns the row id.
 insertGrant ::

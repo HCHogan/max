@@ -9,6 +9,7 @@ where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import OneBot.Segment (Segment)
 import OneBot.Types (GroupId, MessageId, UserId (..), privateChatGroupId)
@@ -107,7 +108,7 @@ parsePoke o = do
   mGid <- o .:? "group_id"
   PokeEvent
     <$> o .: "self_id"
-    <*> pure (maybe (privateChatGroupId uid) id mGid)
+    <*> pure (fromMaybe (privateChatGroupId uid) mGid)
     <*> pure uid
     <*> o .: "target_id"
 

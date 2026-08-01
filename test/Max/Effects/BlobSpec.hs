@@ -2,6 +2,7 @@ module Max.Effects.BlobSpec (spec) where
 
 import Control.Exception (bracket)
 import Data.ByteString.Char8 qualified as BS8
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Effectful (runEff)
 import Max.Effects.Blob
@@ -46,7 +47,7 @@ spec = describe "Blob" $ do
     blobRefFromSha256 (T.replicate 63 "a") `shouldBe` Nothing
     blobRefFromSha256 (T.replicate 64 "A") `shouldBe` Nothing
     blobRefFromSha256 "../../outside" `shouldBe` Nothing
-    blobRefFromSha256 (T.replicate 64 "f") `shouldSatisfy` maybe False (const True)
+    blobRefFromSha256 (T.replicate 64 "f") `shouldSatisfy` isJust
 
 withBlobRoot :: (FilePath -> IO a) -> IO a
 withBlobRoot = bracket acquire removePathForcibly
