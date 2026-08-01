@@ -58,6 +58,8 @@ import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGran
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
 import Max.BuildInfo (gitRev)
+import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
+import Max.Effects.Http (Http)
 import Max.Env (BotEnv (..))
 import Max.Log (parseLogLevel, renderLogLevel)
 import Max.LogBuffer (LogBuffer, LogEntry (..), LogQuery (..), queryLogs)
@@ -66,7 +68,7 @@ import Max.Session (Session (..), loadSession, updateSession)
 import Max.Skills (NewSkill (..), Skill (..), createSkill, deleteSkill, listAllSkills, updateSkill)
 import Max.Tasks (TaskId (..), TaskInfo (..), cancelTask, listTasks)
 import Max.Util (trySync)
-import Network.HTTP.Types (Method, Status, hAuthorization, hCacheControl, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status500)
+import Network.HTTP.Types (Method, Status, hAuthorization, hCacheControl, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status500, status502)
 import Network.Wai (Response, pathInfo, queryString, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp qualified as Warp
 import OneBot.Types (GroupId (..), UserId (..))
@@ -107,6 +109,8 @@ data Route
   | RTasksList
   | RTaskKill !Text
   | RUsage
+  | -- | Health of the credential pool serving our LLM base URL.
+    RQuota
   | RMessageStats
   | RLogs
   | RCalls
@@ -128,6 +132,7 @@ route m path
       ["api", "permissions"] -> Just RGrantsList
       ["api", "tasks"] -> Just RTasksList
       ["api", "usage"] -> Just RUsage
+      ["api", "quota"] -> Just RQuota
       ["api", "stats", "messages"] -> Just RMessageStats
       ["api", "logs"] -> Just RLogs
       ["api", "calls"] -> Just RCalls
@@ -186,7 +191,7 @@ needsAuth = \case
 
 -- | App-lived worker: serve the admin API until the process dies.
 adminServer ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (Http :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   AdminConfig ->
   BotEnv ->
   -- | Configured LLM profile names, for validating a model PATCH.
@@ -284,7 +289,7 @@ staticResponse segs = case lookup key staticAssets of
 -- Handlers.
 
 handle ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (Http :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   BotEnv ->
   [Text] ->
   LogBuffer ->
@@ -404,6 +409,30 @@ handle env profiles logBuf r params body = case r of
           ]
       | u <- rows
       ]
+  -- The only endpoint whose answer lives in another process, so it is
+  -- also the only one that can be up while its data source is down —
+  -- hence the 502 rather than an empty list, which would read as
+  -- "pool is fine, nothing in it".
+  RQuota -> case env.beCliProxy of
+    Nothing ->
+      pure . ok $
+        object ["configured" .= False, "credentials" .= ([] :: [Value])]
+    Just cp ->
+      fetchCredentials cp >>= \case
+        Left err ->
+          pure . jsonResponse status502 $
+            object
+              [ "configured" .= True,
+                "base_url" .= cp.cpBaseUrl,
+                "error" .= err
+              ]
+        Right creds ->
+          pure . ok $
+            object
+              [ "configured" .= True,
+                "base_url" .= cp.cpBaseUrl,
+                "credentials" .= map credentialJson creds
+              ]
   RMessageStats -> do
     let days = clampDays (fromMaybe 14 (intParam "days"))
     rows <- messageStatsDaily (timeZoneMinutes env.beTimeZone) days

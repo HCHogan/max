@@ -28,6 +28,7 @@ import Max.Reminder (ReminderScheduler)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
 import Max.Skills (SkillRegistry)
+import Max.CliProxy (CliProxyConfig)
 import Max.Tools.Search (SearchConfig)
 import Max.Shutdown (ShutdownState)
 import Max.Tasks (TaskRegistry)
@@ -79,6 +80,9 @@ data BotEnv = BotEnv
     -- | Web-search backend when configured ('Nothing' = the
     -- @web_search@ tool isn't registered).
     beSearch :: !(Maybe SearchConfig),
+    -- | Management access to the credential pool serving our LLM base
+    -- URL ('Nothing' = @\/api\/quota@ reports itself unconfigured).
+    beCliProxy :: !(Maybe CliProxyConfig),
     -- | Profile for episode memory extraction ('Nothing' = off).
     beMemoryExtract :: !(Maybe Text),
     -- | The extraction scheduler, present iff 'beMemoryExtract' is:

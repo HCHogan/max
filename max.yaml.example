@@ -224,6 +224,31 @@ llm:
 #   timeout_seconds: 30
 
 # ─────────────────────────────────────────────────────────────────────────────
+# The credential pool in front of a subscription.  When the LLM base_url above
+# points at a CLIProxyAPI holding ChatGPT/Gemini/Claude OAuth credentials, a
+# management key here lets `GET /api/quota` report which of them are still
+# serving and when a burnt one comes back — the answer to "why is everything
+# 503 right now" without an ssh session.
+#
+# Needs the other side switched on too; CLIProxyAPI serves no management API
+# until its own config has:
+#
+#   remote-management:
+#     secret-key: "same-key-as-below"
+#
+# base_url is the proxy's root.  A /v1 tail is tolerated, so the LLM base_url
+# can be pasted here verbatim.
+#
+# Note what this cannot tell you: how much of the ChatGPT 5-hour and weekly
+# windows is left.  Codex reports that on every response, but CLIProxyAPI
+# neither reads those headers nor forwards them — it finds out a credential is
+# spent by being told so, after the fact.
+
+# cliproxy:
+#   base_url: "http://127.0.0.1:8317"
+#   management_key: "..."
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Stealth-browser proxy.  Every camoufox browse session routes page traffic
 # through this proxy (needed for sites unreachable directly, e.g. google
 # behind censored DNS).  For a proxy running on the docker host, use the

@@ -68,6 +68,7 @@ library
         Max.Command.Parser
         Max.Command.Permission
         Max.Command.Types
+        Max.CliProxy
         Max.Config
         Max.MCP.Client
         Max.DB.Calls
@@ -237,6 +238,7 @@ test-suite max-test
     main-is:            Spec.hs
     other-modules:
         Max.AdminSpec
+        Max.CliProxySpec
         Max.BilibiliSpec
         Max.Command.ParserSpec
         Max.Command.PermissionSpec

@@ -42,7 +42,10 @@ PostgreSQL 可由 module 本地起（peer 认证）；migrations 在进程启动
 顺序应用，记录在 schema_migrations，库比二进制新时拒绝启动（防降级）。
 NapCat 走 docker-compose 单独跑，反向 WS 连进来，可选 access_token 校验。
 admin 面板（可选 admin: 配置段）：进程内 warp，默认 127.0.0.1 + bearer token，
-看群/记忆/权限/任务/用量/日志/LLM 调用详情，管技能。
+看群/记忆/权限/任务/用量/日志/LLM 调用详情，管技能。若 LLM base_url 指向
+CLIProxyAPI（拿 ChatGPT 订阅当 API 用的那种代理），配 cliproxy.management_key
+后 GET /api/quota 能看到池子里每个凭据是否还在服务、烧完的什么时候回来；
+但看不到 5 小时/每周窗口还剩多少——代理不读也不转发 Codex 的那几个响应头。
 日志看 journalctl -u max；LLM token 用量在 llm_usage 表和面板里。
 
 # 配置要点（max.yaml）
@@ -51,5 +54,5 @@ llm.profiles 每档：base_url/api_key/model/protocol(openai|anthropic|responses
 multimodal/history_as_turns/effort(推理力度，!effort 可按会话覆盖)。顶级：owners、persona、timezone、history_window/max、
 db.url、server(host/port/path/access_token)。可选段开可选功能：intent（主动插话）、
 stickers（表情包+识图 profile）、embedding（语义搜索）、search（tavily）、memory
-（提取 profile）、admin、browser、wechatpad。找配置文件顺序：--config-file >
+（提取 profile）、admin、browser、wechatpad、cliproxy（订阅池健康度）。找配置文件顺序：--config-file >
 ./max.yaml > ~/.config/max/config.yaml。

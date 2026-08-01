@@ -69,6 +69,7 @@ import Max.Intent (IntentConfig (..))
 import Log (LogLevel (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Wechatpad (WechatpadConfig (..))
+import Max.CliProxy (CliProxyConfig (..))
 import Max.Tools.Search (SearchConfig (..))
 import OneBot.Server (ServerConfig (..))
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
@@ -112,6 +113,10 @@ data AppConfig = AppConfig
     -- | Web-search backend, if configured.  When 'Nothing' the
     -- @web_search@ tool is not registered (model doesn't see it).
     search :: !(Maybe SearchConfig),
+    -- | Credential pool behind the LLM base URL, if it is a
+    -- CLIProxyAPI we hold a management key for.  'Nothing' = the
+    -- @\/api\/quota@ endpoint reports itself unconfigured.
+    cliproxy :: !(Maybe CliProxyConfig),
     -- | Proxy URL the stealth-browser containers route page traffic
     -- through, e.g. @http://host.docker.internal:7890@ for a proxy on
     -- the docker host.  'Nothing' = direct connections.
@@ -306,6 +311,7 @@ appConfigParser usedRef =
           valueWithShown (const "(built-in Chinese default)") defaultPersona
         ]
     search <- subConfig "search" searchParser
+    cliproxy <- subConfig "cliproxy" cliproxyParser
     browserProxy <-
       subConfig "browser" $
         optional $
@@ -591,6 +597,43 @@ searchParser = do
                 scDefaultMaxResults = maxResults,
                 scTimeoutSeconds = timeoutSecs
               }
+    _ -> Nothing
+
+--------------------------------------------------------------------------------
+-- The credential pool in front of the subscription.
+
+-- | @cliproxy@ block: presence of @management_key@ enables the
+-- @\/api\/quota@ endpoint.  The base URL defaults to the loopback port
+-- CLIProxyAPI ships with, since the common deployment runs it beside
+-- the bot.
+cliproxyParser :: Parser (Maybe CliProxyConfig)
+cliproxyParser = do
+  mKey <-
+    optional $
+      setting
+        [ help "CLIProxyAPI management key (enables /api/quota)",
+          reader str,
+          option,
+          long "cliproxy-management-key",
+          env "MAX_CLIPROXY_MANAGEMENT_KEY",
+          conf "management_key",
+          metavar "KEY"
+        ]
+  baseUrl <-
+    setting
+      [ help "CLIProxyAPI root URL (a /v1 tail is tolerated)",
+        reader str,
+        option,
+        long "cliproxy-base-url",
+        env "MAX_CLIPROXY_BASE_URL",
+        conf "base_url",
+        metavar "URL",
+        value "http://127.0.0.1:8317"
+      ]
+  pure $ case mKey of
+    Just key
+      | not (T.null key) ->
+          Just CliProxyConfig {cpBaseUrl = baseUrl, cpManagementKey = key}
     _ -> Nothing
 
 --------------------------------------------------------------------------------

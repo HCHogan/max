@@ -135,6 +135,7 @@ main = do
                     beBrowsers = browsers,
                     beReminders = reminders,
                     beSearch = cfg.search,
+                    beCliProxy = cfg.cliproxy,
                     beMemoryExtract = cfg.memoryExtractProfile,
                     beMemx = memxSched,
                     beIntent = cfg.intent,
