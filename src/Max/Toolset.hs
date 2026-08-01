@@ -20,10 +20,10 @@ import Effectful.Wreq qualified as W
 import Max.Effects.Agent (DispatchContext (..))
 import Max.Effects.Http (Http)
 import Max.Effects.NapCat (NapCat)
+import Max.Effects.Outbound (Outbound)
 import Max.Effects.Tools (Tool)
 import Max.Env (BotEnv (..))
 import Max.Tools (builtinsFor)
-import OneBot.Types (GroupId, MessageId (..), UserId (..))
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
 import Max.Tools.Files (fileToolsFor)
@@ -37,6 +37,7 @@ import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Skills (skillToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
 import Max.Tools.Video (videoToolsFor)
+import OneBot.Types (GroupId, MessageId (..), UserId (..))
 
 -- | The tool list for one dispatch.
 --
@@ -49,6 +50,7 @@ allToolsFor ::
   ( Http :> es,
     Log :> es,
     NapCat :> es,
+    Outbound :> es,
     W.Wreq :> es,
     WithConnection :> es,
     IOE :> es
@@ -66,7 +68,7 @@ allToolsFor env dc =
     <> skillToolsFor env.beSkills dc
     <> bilibiliToolsFor env.beTimeZone dc
     <> sandboxToolsFor env.beTimeZone dc.dcGroupId env.beSandboxes
-    <> fileToolsFor env.beTimeZone dc.dcGroupId env.beBlobRoot env.beSandboxes
+    <> fileToolsFor env.beTimeZone dc.dcGroupId dc.dcSelfId env.beBlobRoot env.beSandboxes
     <> [t | dc.dcStickers, t <- stickerToolsFor env.beEmbed]
     <> maybe [] searchToolsFor env.beSearch
     <> [t | dc.dcMultimodal, t <- browserToolsFor dc.dcGroupId env.beBrowsers]
@@ -101,4 +103,4 @@ toolCountFor env gid multimodal stickers skills = do
             dcMentionable = Nothing,
             dcToolImages = imgs
           }
-  pure (length (allToolsFor env dc :: [Tool '[Http, Log, NapCat, W.Wreq, WithConnection, IOE]]))
+  pure (length (allToolsFor env dc :: [Tool '[Http, Log, NapCat, Outbound, W.Wreq, WithConnection, IOE]]))

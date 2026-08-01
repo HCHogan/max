@@ -36,9 +36,7 @@ import Control.Concurrent.STM
     registerDelay,
     retry,
   )
-import Data.Aeson (object, withObject, (.:), (.=))
-import Data.Aeson.Types (parseEither)
-import Data.Int (Int64)
+import Data.Aeson (object, (.=))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time
@@ -53,7 +51,7 @@ import Data.Time
 import Effectful
 import Effectful.Log (Log, logAttention, logInfo)
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Message (MessageKind (KindChat), insertOutbound)
+import Max.DB.Message (MessageKind (KindChat))
 import Max.DB.Reminder
   ( Reminder (..),
     dueReminders,
@@ -61,11 +59,10 @@ import Max.DB.Reminder
     nextPending,
     rescheduleReminder,
   )
-import Max.Effects.NapCat (NapCat, callAction)
+import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Util (catchSync)
-import OneBot.Action (Response (..), sendChatMsg)
 import OneBot.Segment (Segment (..))
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
+import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 import System.Cron (CronSchedule, nextMatch)
 import System.Cron.Parser (parseCronSchedule)
 
@@ -118,7 +115,7 @@ delayMicrosFor now fireAt =
    in round (max 0 (min (fromIntegral capMicros) micros))
 
 reminderWorker ::
-  (WithConnection :> es, NapCat :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) =>
   TimeZone ->
   ReminderScheduler ->
   Eff es ()
@@ -176,24 +173,26 @@ reminderWorker tz sched = loop
     deliver r = do
       let gid = GroupId r.rmGroupId
           segs = deliverySegments gid (UserId r.rmUserId) r.rmText
-      eres <- callAction (sendChatMsg gid segs) 30000
-      case eres of
-        Left err ->
+      outcome <-
+        sendRecorded
+          OutboundRequest
+            { orKind = KindChat,
+              orGroupId = gid,
+              orSelfId = UserId r.rmSelfId,
+              orRenderedText = Nothing,
+              orSegments = segs,
+              orTimeoutMs = 30000
+            }
+      case outcome of
+        SendFailed err ->
           logAttention "reminder: send failed" $
             object ["id" .= r.rmId, "error" .= err]
-        Right (Response _ rc payload _)
-          | rc /= 0 ->
-              logAttention "reminder: bad retcode" $
-                object ["id" .= r.rmId, "retcode" .= rc]
-          | otherwise -> do
-              case parseEither (withObject "send_resp" (.: "message_id")) payload of
-                Right (outMid :: Int64) ->
-                  insertOutbound KindChat gid (UserId r.rmSelfId) "max" (MessageId outMid) Nothing segs
-                Left _ ->
-                  logAttention "reminder: no message_id in response" $
-                    object ["payload" .= payload]
-              logInfo "reminder: sent" $
-                object ["id" .= r.rmId, "recurring" .= maybe False (const True) r.rmCron]
+        SentUnrecorded {} -> sentLog r
+        SentRecorded {} -> sentLog r
+
+    sentLog r =
+      logInfo "reminder: sent" $
+        object ["id" .= r.rmId, "recurring" .= maybe False (const True) r.rmCron]
 
 -- | @-mention the asker in groups; plain text in private chats (private
 -- at-segments render poorly — same reasoning as the @say@ tool).

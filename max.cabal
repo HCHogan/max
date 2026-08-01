@@ -92,6 +92,7 @@ library
         Max.Effects.Http
         Max.Effects.LLM
         Max.Effects.NapCat
+        Max.Effects.Outbound
         Max.Effects.Tools
         Max.Embedder
         Max.Embedding
@@ -272,6 +273,7 @@ test-suite max-test
         Max.TasksSpec
         Max.Effects.AgentSpec
         Max.Effects.LLMSpec
+        Max.Effects.OutboundSpec
         Max.MCP.ClientSpec
         Max.PlatformSpec
         Max.PromptFlowSpec
@@ -285,6 +287,7 @@ test-suite max-test
         , base            >= 4.20 && < 5
         , bytestring      >= 0.12 && < 0.13
         , containers      >= 0.7  && < 0.9
+        , effectful       >= 2.5  && < 2.7
         , file-embed      >= 0.0.15 && < 0.1
         , hspec           >= 2.11 && < 2.12
         , stm             >= 2.5  && < 2.6

@@ -65,8 +65,9 @@ import Effectful
 import Effectful.Exception (SomeException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
-import Max.DB.Message (MessageKind (..), insertOutbound)
-import Max.Effects.NapCat (NapCat, callAction)
+import Max.DB.Message (MessageKind (..))
+import Max.DB.Stickers (findStickerByCaption)
+import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Render (renderTableImage)
 import Max.Reply
   ( Chunk (..),
@@ -77,10 +78,8 @@ import Max.Reply
     parseReplyTokens,
     planReply,
   )
-import Max.DB.Stickers (findStickerByCaption)
 import Max.Sticker (resolveSticker)
 import Max.Util (trySync)
-import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
 import OneBot.Segment (Segment (..), imageSeg, rescueNameMentions, segmentMentions, trimEdgeSegs)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 import System.FilePath ((</>))
@@ -175,7 +174,7 @@ canStream b = b.sbChunksLeft > 1
 -- down leaves the record incomplete, which is bad; failing the dispatch
 -- over it is worse.
 sendAndPersistReply ::
-  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Outbound :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   ReplyTarget ->
   SendBudget ->
   T.Text ->
@@ -206,25 +205,20 @@ sendAndPersistReply rt budget body
           -- streaming) the wait for the paragraph to complete was.
           when (i > 0) $
             liftIO (threadDelay =<< chunkDelayMicros (T.length rendered))
-          callAction (sendChatMsg rt.rtGroupId segs) 30000 >>= \case
-            Left err ->
-              logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
-            Right (Response _ rc payload _)
-              | rc /= 0 ->
-                  logAttention "llm reply retcode bad" $ object ["retcode" .= rc, "chunk" .= i]
-              | otherwise -> case extractOutMid payload of
-                  Nothing ->
-                    logAttention "no message_id in send response" $
-                      object ["payload" .= payload, "chunk" .= i]
-                  Just outMid ->
-                    insertOutbound
-                      KindChat
-                      rt.rtGroupId
-                      rt.rtSelfId
-                      "max"
-                      (MessageId outMid)
-                      (Just (T.strip rendered))
-                      segs
+          sendRecorded
+            OutboundRequest
+              { orKind = KindChat,
+                orGroupId = rt.rtGroupId,
+                orSelfId = rt.rtSelfId,
+                orRenderedText = Just (T.strip rendered),
+                orSegments = segs,
+                orTimeoutMs = 30000
+              }
+            >>= \case
+              SendFailed err ->
+                logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
+              SentUnrecorded {} -> pure ()
+              SentRecorded {} -> pure ()
           pure b'
 
     -- One chunk → 'Just' (segments to send, rendered_text to store) or

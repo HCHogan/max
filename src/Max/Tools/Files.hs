@@ -42,16 +42,18 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
-import Max.Effects.NapCat (NapCat, callAction, sendAction)
+import Max.DB.Message (MessageKind (KindChat))
+import Max.Effects.NapCat (NapCat, callAction)
+import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Effects.Tools (Tool (..))
 import Max.Reply (chunkSource, planReply)
 import Max.ReplySend (modelTextSegs)
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
-import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..), sendChatMsg)
+import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..))
 import OneBot.Segment (Segment (..), imageSeg)
-import OneBot.Types (GroupId (..), isPrivateChat, privateChatUserId)
+import OneBot.Types (GroupId (..), UserId, isPrivateChat, privateChatUserId)
 import System.Directory
   ( createDirectoryIfMissing,
     getTemporaryDirectory,
@@ -70,21 +72,24 @@ outboxContainerDir = "/data/outbox"
 fileToolsFor ::
   ( WithConnection :> es,
     NapCat :> es,
+    Outbound :> es,
     Log :> es,
     IOE :> es
   ) =>
   TimeZone ->
   GroupId ->
+  UserId -> -- bot self id, for persisted visible tool output
+
   -- | Blob store root from 'AppConfig.imagesDir' — needed to resolve
   -- 'FileRecord.local_path' (which is relative) to an absolute path
   -- 'docker cp' can read.
   FilePath ->
   SandboxRegistry ->
   [Tool es]
-fileToolsFor tz gid blobRoot sandboxes =
+fileToolsFor tz gid selfId blobRoot sandboxes =
   [ listRecentFilesTool tz gid,
     importFileToSandboxTool gid blobRoot sandboxes,
-    sendImageFromSandboxTool gid sandboxes,
+    sendImageFromSandboxTool gid selfId sandboxes,
     sendFileFromSandboxTool gid sandboxes
   ]
 
@@ -219,14 +224,15 @@ importFileToSandboxTool gid blobRoot sandboxes =
 -- send_image_from_sandbox
 
 sendImageFromSandboxTool ::
-  ( NapCat :> es,
+  ( Outbound :> es,
     Log :> es,
     IOE :> es
   ) =>
   GroupId ->
+  UserId ->
   SandboxRegistry ->
   Tool es
-sendImageFromSandboxTool gid sandboxes =
+sendImageFromSandboxTool gid selfId sandboxes =
   Tool
     { toolName = "send_image_from_sandbox",
       toolDescription =
@@ -261,20 +267,35 @@ sendImageFromSandboxTool gid sandboxes =
                 Right bytes -> do
                   let b64 = "base64://" <> TE.decodeUtf8 (B64.encode bytes)
                       segs = captionSegs gid mCaption <> [imageSeg b64]
-                  sendAction (sendChatMsg gid segs)
-                  logInfo "image sent from sandbox" $
-                    object
-                      [ "sandbox_id" .= sid,
-                        "bytes" .= BS.length bytes
-                      ]
-                  pure $
-                    Right $
-                      object
-                        [ "ok" .= True,
-                          "bytes" .= BS.length bytes
-                        ]
+                  outcome <-
+                    sendRecorded
+                      OutboundRequest
+                        { orKind = KindChat,
+                          orGroupId = gid,
+                          orSelfId = selfId,
+                          orRenderedText = Nothing,
+                          orSegments = segs,
+                          orTimeoutMs = 30000
+                        }
+                  case outcome of
+                    SendFailed err -> pure (Left ("图片发送失败: " <> err))
+                    SentUnrecorded {} -> sent sid bytes
+                    SentRecorded {} -> sent sid bytes
     }
   where
+    sent sid bytes = do
+      logInfo "image sent from sandbox" $
+        object
+          [ "sandbox_id" .= sid,
+            "bytes" .= BS.length bytes
+          ]
+      pure $
+        Right $
+          object
+            [ "ok" .= True,
+              "bytes" .= BS.length bytes
+            ]
+
     parseArgs :: Object -> Parser (Text, Text, Maybe Text)
     parseArgs o = (,,) <$> o .: "sandbox_id" <*> o .: "path" <*> o .:? "caption"
 
@@ -390,10 +411,11 @@ sendFileFromSandboxTool gid sandboxes =
                   callRes <- callAction uploadAction 60000
                   case callRes of
                     Left err -> pure (Left ("upload_group_file failed: " <> err))
-                    Right (Response _ rc _ _) | rc /= 0 ->
-                      pure $
-                        Left $
-                          "upload_group_file retcode " <> T.pack (show rc)
+                    Right (Response _ rc _ _)
+                      | rc /= 0 ->
+                          pure $
+                            Left $
+                              "upload_group_file retcode " <> T.pack (show rc)
                     Right _ -> do
                       logInfo "file uploaded from sandbox" $
                         object

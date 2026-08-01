@@ -4,50 +4,51 @@ import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (AsyncException (UserInterrupt), bracket, finally, throwTo)
 import Control.Monad (forever, unless, when)
-import Data.Maybe (isJust)
 import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Effectful
+import Effectful.Concurrent (threadDelay)
 import Effectful.Concurrent.Async (Concurrent, concurrently_, link, runConcurrent, withAsync)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Effectful.Reader.Dynamic (Reader, ask, runReader)
 import Effectful.Wreq (runWreq)
-import Max.Log (withCompactLogger)
-import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
-import Max.Config (AppConfig (..), loadConfig)
-import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.Admin (adminServer)
-import Max.DB.Migrations (runMigrations)
-import Effectful.Concurrent (threadDelay)
+import Max.Browser.Registry
+  ( destroyAllBrowsers,
+    newBrowserRegistry,
+    reapStaleBrowsers,
+  )
+import Max.Config (AppConfig (..), loadConfig)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
-import Max.Util (trySync)
+import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
+import Max.DB.Migrations (runMigrations)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits, runAgent)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, LLMRegistry (..), TokenUsage (..), runLLM)
 import Max.Effects.NapCat (NapCat, qqBackend, runNapCat)
+import Max.Effects.Outbound (Outbound, runOutbound)
 import Max.Embedder (embedWorker)
 import Max.Embedding (newEmbedClient)
 import Max.Env (BotEnv (..))
-import Max.Reminder (newReminderScheduler, reminderWorker)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
 import Max.Handler (dispatchProactive, handleEvents)
-import Max.Wechatpad (wechatpadBackend, wechatpadWorker)
 import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
-import Max.Browser.Registry
-  ( destroyAllBrowsers,
-    newBrowserRegistry,
-    reapStaleBrowsers,
-  )
+import Max.Log (withCompactLogger)
+import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
+import Max.MediaCaption (mediaCaptionWorker)
+import Max.MemoryExtract (dreamWorker, memxWorker, newMemxScheduler)
+import Max.Reminder (newReminderScheduler, reminderWorker)
 import Max.Sandbox.Registry
   ( destroyAllSandboxes,
     newSandboxRegistry,
@@ -56,11 +57,11 @@ import Max.Sandbox.Registry
 import Max.Session (newSessionRegistry)
 import Max.Shutdown (ShutdownState, beginDrain, drainWorker, newShutdownState)
 import Max.Skills (loadSkills, newSkillRegistry)
-import Max.MediaCaption (mediaCaptionWorker)
-import Max.MemoryExtract (dreamWorker, memxWorker, newMemxScheduler)
 import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
 import Max.Toolset (allToolsFor)
+import Max.Util (trySync)
+import Max.Wechatpad (wechatpadBackend, wechatpadWorker)
 import OneBot.Event (Event)
 import OneBot.Server (Client, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
@@ -152,6 +153,7 @@ main = do
               [ wechatpadBackend (runEff . runWithConnectionPool pool) wc
               | Just wc <- [cfg.wechatpad]
               ]
+            . runOutbound
             . runWreq
             -- Token accounting goes through its own pooled connection
             -- (a plain IO writer): the LLM interpreter sits outside
@@ -207,6 +209,7 @@ runApp ::
     Blob :> es,
     WithConnection :> es,
     NapCat :> es,
+    Outbound :> es,
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
@@ -329,7 +332,7 @@ callPruner days = localDomain "calls" . forever $ do
 -- A fold rather than a staircase of nested 'withAsync': the workers
 -- differ only in which action they run, and stating "link it" once
 -- keeps a new worker from quietly joining unlinked.
-withLinkedWorkers :: Concurrent :> es => [Eff es ()] -> Eff es a -> Eff es a
+withLinkedWorkers :: (Concurrent :> es) => [Eff es ()] -> Eff es a -> Eff es a
 withLinkedWorkers workers act = foldr step act workers
   where
     step w rest = withAsync w $ \a -> link a >> rest

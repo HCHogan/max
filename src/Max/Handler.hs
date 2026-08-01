@@ -9,11 +9,11 @@ module Max.Handler
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO, writeTVar)
 import Control.Monad (unless, void, when)
-import Data.Foldable (for_)
 import Data.Char (isDigit, isSpace)
-import Control.Applicative ((<|>))
+import Data.Foldable (for_)
 import Data.List (find, partition)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, listToMaybe)
@@ -27,35 +27,36 @@ import Effectful.Exception (SomeException, catch, finally)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
-import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Dispatcher (DispatchResult (..))
+import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Parser (parseCommand)
 import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
 import Max.Command.Types (Command (..))
-import Max.DB.Permissions (lookupGrant)
 import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
-import Max.DB.Message (MessageKind (..), insertGroupMessage, insertOutbound, insertSilence)
+import Max.DB.Message (MessageKind (..), insertGroupMessage, insertSilence)
+import Max.DB.Permissions (lookupGrant)
 import Max.Effects.Agent (Agent, AgentResult (..), DispatchContext (..), agentTurn)
 import Max.Effects.LLM (LLM, isProfileHistoryTurns, isProfileMultimodal)
-import Max.Effects.NapCat (NapCat, callAction, sendAction)
+import Max.Effects.NapCat (NapCat, sendAction)
+import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded, wasDelivered)
 import Max.Env (BotEnv (..))
 import Max.Faces (faceIdByName)
 import Max.FetchQueue (FetchSignal)
 import Max.Files (enqueueFiles)
-import Max.MemoryExtract (armMemx, bumpMemx)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
+import Max.MemoryExtract (armMemx, bumpMemx)
 import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
+import Max.Reply (stripHallucinatedTokens)
+import Max.ReplySend (ReplyTarget (..), canStream, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
 import Max.Tasks (Note (..), TaskCancelled (..), TaskId (..), TaskInfo (..), absorbedTriggers, beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
-import Max.Reply (stripHallucinatedTokens)
-import Max.ReplySend (ReplyTarget (..), canStream, freshBudget, sendAndPersistReply)
 import Max.Util (catchSync, trySync)
-import OneBot.Action (Action (..), Response (..), extractOutMid, sendChatMsg)
+import OneBot.Action (Action (..))
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
 import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
@@ -177,6 +178,7 @@ handleEvents ::
   ( Log :> es,
     WithConnection :> es,
     NapCat :> es,
+    Outbound :> es,
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
@@ -233,6 +235,7 @@ onGroupMessage ::
   ( Log :> es,
     WithConnection :> es,
     NapCat :> es,
+    Outbound :> es,
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
@@ -297,6 +300,7 @@ onPoke ::
   ( Log :> es,
     WithConnection :> es,
     NapCat :> es,
+    Outbound :> es,
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
@@ -363,6 +367,7 @@ dispatchCommand ::
   ( Log :> es,
     WithConnection :> es,
     NapCat :> es,
+    Outbound :> es,
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
@@ -494,21 +499,19 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
           UserId uidRaw = gm.userId
           header = "（群 " <> T.pack (show gidRaw) <> " 的命令结果）\n"
           segs = [SegText (header <> reply)]
-      res <- callAction (SendPrivateMsg gm.userId segs) 15000
-      case res of
-        Right (Response _ rc payload _)
-          | rc == 0 -> do
-              for_ (extractOutMid payload) $ \outMid ->
-                insertOutbound
-                  KindCommand
-                  (GroupId (negate uidRaw))
-                  gm.selfId
-                  "max"
-                  (MessageId outMid)
-                  Nothing
-                  segs
-              sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
-        _ -> do
+      outcome <-
+        sendRecorded
+          OutboundRequest
+            { orKind = KindCommand,
+              orGroupId = GroupId (negate uidRaw),
+              orSelfId = gm.selfId,
+              orRenderedText = Nothing,
+              orSegments = segs,
+              orTimeoutMs = 15000
+            }
+      if wasDelivered outcome
+        then sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
+        else do
           logInfo "cmd: private delivery failed, group fallback" $
             object ["user_id" .= uidRaw, "group_id" .= gidRaw]
           replyText gm (reply <> "\n\n（加我好友后，这类结果会私聊发你，不刷群）")
@@ -520,7 +523,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
 -- call, so it records as 'KindChat' — the trigger is in the transcript
 -- and an answer that wasn't would read as a question nobody answered.
 sendPong ::
-  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Outbound :> es, Log :> es) =>
   GroupMessage ->
   Eff es ()
 sendPong gm = do
@@ -551,6 +554,7 @@ dispatchProactive ::
   ( Log :> es,
     WithConnection :> es,
     NapCat :> es,
+    Outbound :> es,
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
@@ -579,6 +583,7 @@ dispatchLLM ::
   ( Log :> es,
     WithConnection :> es,
     NapCat :> es,
+    Outbound :> es,
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
@@ -948,8 +953,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
             sendAction
               (SetMsgEmojiLike gm.messageId (maybe defaultSilenceFace id mFace) True)
         Nothing -> do
-          -- callAction so we get the message_id back, then persist this
-          -- outbound message into the messages table.  That's where
+          -- Outbound gets the platform message_id and persists this
+          -- message into the messages table.  That's where
           -- subsequent dispatches will read this turn's assistant reply
           -- back from when reconstructing mention history.
           -- The same budget the streaming sink spent from: one reply
@@ -1013,31 +1018,30 @@ sendTarget env gm mentionable rosterNames stickersOn =
 -- written down leaves the record incomplete, which is bad; failing the
 -- dispatch over it is worse.
 sendAndRecord ::
-  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Outbound :> es) =>
   MessageKind ->
   GroupId ->
   UserId -> -- bot self id
   [Segment] ->
   Eff es ()
 sendAndRecord kind gid selfId segs =
-  callAction (sendChatMsg gid segs) 15000 >>= \case
-    Left err -> logAttention "send failed" $ object ["error" .= err, "kind" .= T.pack (show kind)]
-    Right (Response _ rc payload _)
-      | rc /= 0 ->
-          logAttention "send retcode bad" $ object ["retcode" .= rc, "kind" .= T.pack (show kind)]
-      | otherwise -> case extractOutMid payload of
-          Nothing ->
-            logAttention "no message_id in send response" $
-              object ["payload" .= payload, "kind" .= T.pack (show kind)]
-          Just outMid ->
-            insertOutbound kind gid selfId "max" (MessageId outMid) Nothing segs
+  void $
+    sendRecorded
+      OutboundRequest
+        { orKind = kind,
+          orGroupId = gid,
+          orSelfId = selfId,
+          orRenderedText = Nothing,
+          orSegments = segs,
+          orTimeoutMs = 15000
+        }
 
 -- | Command output: plain text, no quote and no @ — in the moment
 -- right after a command both read as noise.  Recorded as
 -- 'KindCommand', so the group's record is complete but the model
 -- doesn't read back the UI used to operate it.
 replyText ::
-  (NapCat :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Outbound :> es) =>
   GroupMessage ->
   T.Text ->
   Eff es ()
@@ -1253,7 +1257,9 @@ cleanReply = T.strip . stripBareMarkers . stripStickerText . stripHallucinatedTo
 -- aren't literal matches for any of these.
 stripBareMarkers :: T.Text -> T.Text
 stripBareMarkers t =
-  foldl' (\acc m -> T.replace m "" acc) t
+  foldl'
+    (\acc m -> T.replace m "" acc)
+    t
     ["[image]", "[sticker]", "[动画表情]", "[mface]", "[face]", "[forward]"]
 
 -- | Remove any "[sticker: …]" / "[表情包…]" spans a model hallucinated

@@ -68,9 +68,9 @@ where
 import Control.Concurrent (myThreadId, threadDelay, throwTo)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Monad (when)
-import Data.Foldable (for_)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Foldable (for_)
 import Data.Set (Set)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -80,15 +80,13 @@ import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Exception (bracket, throwIO)
 import Effectful.Log
+import Max.DB.Message (MessageKind (..))
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
-import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Message (MessageKind (..), insertOutbound)
-import Max.Effects.NapCat (NapCat, callAction)
+import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
-import Max.Tasks (Note (..), TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask, requeueInbox)
-import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
 import Max.Reply (chunkSource, planReply, readyPrefix)
 import Max.ReplySend (chunkDelayMicros, modelTextSegs)
+import Max.Tasks (Note (..), TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask, requeueInbox)
 import OneBot.Segment (Segment (SegReply, SegText))
 import OneBot.Types (GroupId (..), MessageId (..), UserId, isPrivateChat)
 
@@ -162,7 +160,7 @@ maxToolImages = 8
 turnCtx :: DispatchContext -> Text -> ChatCtx
 turnCtx dc source = let GroupId g = dc.dcGroupId in ChatCtx source (Just g) dc.dcEffort
 
-queueToolImage :: IOE :> es => DispatchContext -> ToolImage -> Eff es Bool
+queueToolImage :: (IOE :> es) => DispatchContext -> ToolImage -> Eff es Bool
 queueToolImage dc img = liftIO . atomically $ do
   (n, imgs) <- readTVar dc.dcToolImages
   if n >= maxToolImages
@@ -249,7 +247,7 @@ type instance DispatchOf Agent = Dynamic
 --   * Drives the loop, draining the task's inbox between turns.
 runAgent ::
   forall es a.
-  (LLM :> es, NapCat :> es, WithConnection :> es, Concurrent :> es, Log :> es, IOE :> es) =>
+  (LLM :> es, Outbound :> es, Concurrent :> es, Log :> es, IOE :> es) =>
   AgentLimits ->
   (DispatchContext -> [Tool es]) ->
   TaskRegistry ->
@@ -479,21 +477,18 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     -- Every failure only logs.  These are status lines and progress
     -- notes; losing one must never take down the turn they describe.
     recordSend :: DispatchContext -> MessageKind -> [Segment] -> Eff (Tools : es) ()
-    recordSend dc kind segs =
-      callAction (sendChatMsg dc.dcGroupId segs) 15000 >>= \case
-        Left err ->
-          logAttention "agent: send failed" $
-            object ["error" .= err, "kind" .= T.pack (show kind)]
-        Right (Response _ rc payload _)
-          | rc /= 0 ->
-              logAttention "agent: send retcode bad" $
-                object ["retcode" .= rc, "kind" .= T.pack (show kind)]
-          | otherwise -> case extractOutMid payload of
-              Nothing ->
-                logAttention "agent: no message_id in send response" $
-                  object ["kind" .= T.pack (show kind)]
-              Just outMid ->
-                insertOutbound kind dc.dcGroupId dc.dcSelfId "max" (MessageId outMid) Nothing segs
+    recordSend dc kind segs = do
+      _ <-
+        sendRecorded
+          OutboundRequest
+            { orKind = kind,
+              orGroupId = dc.dcGroupId,
+              orSelfId = dc.dcSelfId,
+              orRenderedText = Nothing,
+              orSegments = segs,
+              orTimeoutMs = 15000
+            }
+      pure ()
 
     -- Hand the caller every paragraph that is safe to send, and
     -- remember how much of the text that accounted for.
@@ -665,7 +660,7 @@ capToolResults budget msgs
     elision = "\n…[older tool results truncated]"
 
 agentTurn ::
-  Agent :> es =>
+  (Agent :> es) =>
   DispatchContext ->
   Text ->
   [ChatMessage] ->

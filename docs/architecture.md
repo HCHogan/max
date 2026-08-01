@@ -22,9 +22,9 @@ skills/*.md        builtin skill manuals, baked into the binary (file-embed);
 
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),
                    segments, events, actions, server
-src/Max/Effects/   effectful 2.5 effects: Http, Blob, NapCat, LLM (OpenAI + Anthropic,
-                   buffered or streamed), Tools, Agent  (DB effect from upstream
-                   effectful-postgresql)
+src/Max/Effects/   effectful 2.5 effects: Http, Blob, NapCat, Outbound (visible send
+                   + persistence), LLM (OpenAI + Anthropic, buffered or streamed),
+                   Tools, Agent  (DB effect from upstream effectful-postgresql)
 src/Max/LLM/       Stream: SSE framing + the two protocols' delta reducers, pure
 src/Max/Http/      Stream: the incremental POST wreq can't do (http-client withResponse)
 src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
@@ -80,7 +80,7 @@ app/Main.hs        wires effects + workers + server
         │ fetch_   │ │+ tail  │ │ memory, │ │    └─ tool loop ◀──┐    │
         │ jobs)    │ └────────┘ │ tasks)  │ │  (sandbox/browser/ │    │
         └──────────┘            └─────────┘ │   search/files/mem)┘    │
-                                            │  → send chunks + persist│
+                                            │  → ReplySend → Outbound │
                                             │  → arm memx idle timer  │
                                             └─────────────────────────┘
 
@@ -120,7 +120,13 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Sandbox / browser containers | destroyed on exit, reaped on boot |
 
 Effect stack at the top of `runApp`:
-`IOE → Concurrent → Log → Http → Blob → WithConnection → NapCat → Wreq → LLM → Reader BotEnv → Agent`.
+`IOE → Concurrent → Log → Http → Blob → WithConnection → NapCat → Outbound → Wreq → LLM → Reader BotEnv → Agent`.
+
+`Outbound` owns the send-response-persist invariant: a visible message is sent
+through the platform router, its assigned `message_id` is extracted, and the
+exact surface segments are recorded.  A result distinguishes rejection from
+delivery without a durable row, so callers never retry something the user may
+already have seen.
 
 Workers are started as one flat list (`withLinkedWorkers` in `app/Main.hs`),
 each `link`ed so a worker dying silently takes the process down rather than

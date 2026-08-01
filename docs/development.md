@@ -24,6 +24,8 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.Effects.AgentSpec` — narration → segments (placeholder handling, mentions)
 - `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip, `parseToolCall`
   tolerance, and the streamed assistant message rebuilt from deltas
+- `Max.Effects.OutboundSpec` — in-memory interpreter seam and the distinction
+  between failed, delivered-unrecorded, and durably recorded sends
 - `Max.LLM.StreamSpec` — SSE framing and the OpenAI/Anthropic delta reducers,
   replayed from recorded wire bytes
 - `Max.LogSpec` — compact log line formatting
