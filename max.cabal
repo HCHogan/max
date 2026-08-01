@@ -59,6 +59,7 @@ library
         OneBot.Segment
         OneBot.Server
         OneBot.Types
+        Max.AgentEvent
         Max.Admin
         Max.Bilibili
         Max.Browser.Docker
@@ -290,6 +291,7 @@ test-suite max-test
         , effectful       >= 2.5  && < 2.7
         , file-embed      >= 0.0.15 && < 0.1
         , hspec           >= 2.11 && < 2.12
+        , log-effectful   >= 1.0  && < 1.1
         , stm             >= 2.5  && < 2.6
         , log-base        >= 0.12 && < 0.13
         , max

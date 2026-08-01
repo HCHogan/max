@@ -21,7 +21,8 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.BilibiliSpec` — BV / b23.tv / URL extraction from cards and plain text
 - `Max.Command.ParserSpec` — every `!cmd` verb + edge cases
 - `Max.Command.PermissionSpec` — tier resolution and capability gating
-- `Max.Effects.AgentSpec` — narration → segments (placeholder handling, mentions)
+- `Max.Effects.AgentSpec` — full in-memory Agent loop using a fake LLM, fake
+  tool, and typed AgentEvent sink (tool round, progress, and streamed final)
 - `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip, `parseToolCall`
   tolerance, and the streamed assistant message rebuilt from deltas
 - `Max.Effects.OutboundSpec` — in-memory interpreter seam and the distinction
@@ -29,7 +30,8 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.LLM.StreamSpec` — SSE framing and the OpenAI/Anthropic delta reducers,
   replayed from recorded wire bytes
 - `Max.LogSpec` — compact log line formatting
-- `Max.HandlerSpec` — `[silence]` parsing, marker stripping, `isCommandMessage`
+- `Max.HandlerSpec` — `[silence]` parsing, message recording classification,
+  and ReplySend marker-cleanup regressions
 - `Max.IntentSpec` — proactive verdict parsing and the heuristic gate
 - `Max.MCP.ClientSpec` — Streamable-HTTP body decoding (JSON + SSE)
 - `Max.MemoryExtractSpec` — extractor op-JSON parsing (fences, prose, bad actions)

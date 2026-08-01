@@ -41,6 +41,8 @@ src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory
                    Images, Video, Bilibili, Stickers, Pins, Group, Reminder,
                    Skills — use_skill, the progressive-disclosure reader)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
+                   AgentEvent (typed progress/debug/final-stream port and its
+                   ReplySend/Outbound interpreter),
                    Toolset (the full tool list, assembled from BotEnv), Intent
                    (proactive classifier), Skills (write-through registry:
                    builtins baked from skills/ + docs/, DB rows shadowing them),
@@ -49,8 +51,8 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    shared claim loop), MediaCaption + Stickers (caption workers),
                    Reminder, Reply (planning), ReplySend (planning made real:
-                   placeholders, sending, persistence — shared by the final
-                   reply and the streamed one), Render, Roster, Shutdown (graceful
+                   placeholders, sending, persistence — shared by final,
+                   streamed, and progress text), Render, Roster, Shutdown (graceful
                    drain), Tasks, Tools, BuildInfo (compile-time git rev), Admin
                    (JSON API + panel), Util
 app/Main.hs        wires effects + workers + server
@@ -80,7 +82,9 @@ app/Main.hs        wires effects + workers + server
         │ fetch_   │ │+ tail  │ │ memory, │ │    └─ tool loop ◀──┐    │
         │ jobs)    │ └────────┘ │ tasks)  │ │  (sandbox/browser/ │    │
         └──────────┘            └─────────┘ │   search/files/mem)┘    │
-                                            │  → ReplySend → Outbound │
+                                            │  → AgentEvent           │
+                                            │      → ReplySend        │
+                                            │          → Outbound     │
                                             │  → arm memx idle timer  │
                                             └─────────────────────────┘
 
@@ -93,10 +97,12 @@ dream pass (4am local) consolidates scopes that grew past fifteen entries.
 
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
 instead of waiting for a whole body. Paragraphs the model has finished with go
-out mid-generation, down the same `ReplySend` path as the final reply; the loop
-reports how much it sent as `AgentResult.sentPrefix` and the handler sends the
-rest. `readyPrefix` will not release a trailing paragraph — it may still grow —
-so a one-paragraph reply, which is most of them, still arrives all at once.
+out mid-generation as typed `AgentFinalStreamText` events; tool narration and
+debug facts use distinct event constructors. `Max.AgentEvent` interprets all
+model-authored text through `ReplySend`, while the loop only reports how much
+was accepted as `AgentResult.sentPrefix` and the handler sends the rest.
+`readyPrefix` will not release a trailing paragraph — it may still grow — so a
+one-paragraph reply, which is most of them, still arrives all at once.
 
 ## Durability
 
@@ -127,6 +133,12 @@ through the platform router, its assigned `message_id` is extracted, and the
 exact surface segments are recorded.  A result distinguishes rejection from
 delivery without a durable row, so callers never retry something the user may
 already have seen.
+
+`Agent` depends on `LLM`, scoped `Tools`, task/concurrency primitives, logging,
+and its typed `AgentEventSink`; it has no OneBot segment, `Outbound`, or message
+persistence dependency.  The production sink is assembled per dispatch in
+`Handler`, where reply target, debug policy, and the shared stream budget are
+known.
 
 Workers are started as one flat list (`withLinkedWorkers` in `app/Main.hs`),
 each `link`ed so a worker dying silently takes the process down rather than

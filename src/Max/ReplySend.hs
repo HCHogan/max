@@ -6,8 +6,8 @@
 -- == Why this is a module and not a function in "Max.Handler"
 --
 -- There are now two callers.  The handler sends the final reply; the
--- agent loop sends paragraphs as they stream in, and the progress
--- narration that rides alongside tool calls.  Every previous attempt to
+-- typed sink in "Max.AgentEvent" sends streamed paragraphs and progress
+-- narration.  Every previous attempt to
 -- give one of those its own copy of \"turn model text into messages\"
 -- produced the same bug twice in one day (@a0faa5b@, @d7f8177@):
 -- narration had a private copy, so it missed 'parseReplyTokens' and
@@ -42,6 +42,9 @@ module Max.ReplySend
     freshBudget,
     canStream,
     sendAndPersistReply,
+    cleanModelText,
+    stripStickerText,
+    stripBareMarkers,
     modelTextSegs,
     messageImageSegs,
     chunkDelayMicros,
@@ -55,6 +58,7 @@ import Control.Concurrent (threadDelay)
 import Control.Monad (foldM, when)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
+import Data.Char (isDigit)
 import Data.Int (Int64)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -77,6 +81,7 @@ import Max.Reply
     maxChunks,
     parseReplyTokens,
     planReply,
+    stripHallucinatedTokens,
   )
 import Max.Sticker (resolveSticker)
 import Max.Util (trySync)
@@ -179,7 +184,7 @@ sendAndPersistReply ::
   SendBudget ->
   T.Text ->
   Eff es SendBudget
-sendAndPersistReply rt budget body
+sendAndPersistReply rt budget rawBody
   -- Nothing left to say.  'planReply' plans this to no chunks on its
   -- own, so the guard is belt-and-braces — but the case is routine, not
   -- exotic: a streamed reply released down to its last paragraph leaves
@@ -187,6 +192,8 @@ sendAndPersistReply rt budget body
   | T.null (T.strip body) = pure budget
   | otherwise = foldM sendOne budget' (zip [0 :: Int ..] chunks)
   where
+    body = cleanModelText rawBody
+
     -- Apply the reply-wide chunk ceiling here rather than inside
     -- 'planReply': only this layer knows how much of the budget an
     -- earlier fragment of the same reply already spent.
@@ -296,23 +303,52 @@ sendAndPersistReply rt budget body
       | isPrivateChat rt.rtGroupId = [SegText t]
       | otherwise = segmentMentions (\u -> maybe True (Set.member u) rt.rtMentionable) t
 
--- | Model-authored text → the segments of __one__ message, for the
--- senders that build their message inline instead of going through
--- 'sendAndPersistReply': progress narration
--- ('Max.Effects.Agent.narrationSegments'), and the caption a tool posts
--- alongside an image.
+-- | Everything model text must lose before it can become visible.  Kept in
+-- the same module as sending so streamed final text, progress narration, and
+-- the final remainder cannot drift into subtly different grammars.
+cleanModelText :: T.Text -> T.Text
+cleanModelText = T.strip . stripBareMarkers . stripStickerText . stripHallucinatedTokens
+
+-- | Drop bare display markers echoed from transcript context.  Id-carrying
+-- send tokens remain intact for 'sendAndPersistReply' to resolve.
+stripBareMarkers :: T.Text -> T.Text
+stripBareMarkers t =
+  foldl'
+    (\acc marker -> T.replace marker "" acc)
+    t
+    ["[image]", "[sticker]", "[动画表情]", "[mface]", "[face]", "[forward]"]
+
+-- | Drop hallucinated sticker-caption display spans while preserving the
+-- real @[sticker#id]@ / legacy @[表情包#id]@ send forms.
+stripStickerText :: T.Text -> T.Text
+stripStickerText t0 = foldl' stripOpener t0 ["[sticker:", "[sticker：", "[表情包"]
+  where
+    stripOpener t1 opener = go t1
+      where
+        go t = case T.breakOn opener t of
+          (before, rest)
+            | T.null rest -> t
+            | otherwise ->
+                let afterOpener = T.drop (T.length opener) rest
+                 in if isSendToken afterOpener
+                      then before <> opener <> go afterOpener
+                      else case T.breakOn "]" afterOpener of
+                        (_, close)
+                          | T.null close -> before
+                          | otherwise -> before <> go (T.drop 1 close)
+    isSendToken s = case T.uncons s of
+      Just ('#', r) -> maybe False (isDigit . fst) (T.uncons r)
+      _ -> False
+
+-- | Model-authored text → the segments of __one__ message, for the remaining
+-- inline sender: the caption a sandbox image tool posts alongside its image.
 --
--- Every such sender is a place the placeholder handling can drift out
--- of, and every one of them has: narration leaked @[↩#111091811]@ into
--- a group, then @send_image_from_sandbox@'s caption leaked
--- @[↩#493645310]@ into another, months apart, for the same reason both
--- times.  The text arrives carrying the same tokens a reply does
--- because the format guide is written once, for all of it.
+-- This remaining inline sender has drifted before: a sandbox caption leaked
+-- @[↩#493645310]@ because the format guide is written once for all model text,
+-- while the caption originally skipped its token handling.
 --
--- The quote target comes back separately from the body because the
--- callers disagree about an empty body: narration with nothing left to
--- say sends nothing at all, while a caption rides with an image that
--- goes out either way, so its quote still counts.
+-- The quote target comes back separately because the caption rides with an
+-- image even when no text remains, so the quote still counts.
 --
 -- Sticker and image placeholders are dropped rather than resolved —
 -- either needs a DB round-trip apiece and neither sender is worth one.

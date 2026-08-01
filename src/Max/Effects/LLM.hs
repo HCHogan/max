@@ -30,23 +30,30 @@ module Max.Effects.LLM
     LLMRegistry (..),
     Protocol (..),
     parseProtocol,
+
     -- * Messages
     ChatMessage (..),
     ContentBlock (..),
     ToolCall (..),
+
     -- * Tool descriptions for the wire
     ToolSpec (..),
+
     -- * Response
     ChatResponse (..),
     TokenUsage (..),
+
     -- * Call attribution
     ChatCtx (..),
     UsageWriter,
     CallWriter,
     CallRecord (..),
     requestBodyFor,
+
     -- * Effect operations
     runLLM,
+    LLMInterpreter (..),
+    runLLMWith,
     chat,
     listProfiles,
     defaultProfile,
@@ -54,6 +61,7 @@ module Max.Effects.LLM
     profileEffort,
     isProfileHistoryTurns,
     chatStreaming,
+
     -- * Exposed for tests
     parseResponseOpenAI,
     parseResponseAnthropic,
@@ -68,30 +76,30 @@ module Max.Effects.LLM
 where
 
 import Control.Applicative ((<|>))
-import Data.Foldable (for_)
-import Data.Int (Int64)
-import Data.List (find)
-import Data.Traversable (for)
-import Data.Maybe (fromMaybe, isJust)
-import Effectful.Exception (SomeException)
-import GHC.Clock (getMonotonicTimeNSec)
 import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Pair, Parser, parseMaybe)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Foldable (for_)
+import Data.Int (Int64)
+import Data.List (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Vector qualified as V
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Traversable (for)
+import Data.Vector qualified as V
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
+import Effectful.Exception (SomeException)
 import Effectful.Log
 import Effectful.Wreq qualified as W
+import GHC.Clock (getMonotonicTimeNSec)
 import Max.Http.Stream (StreamOutcome (..), streamPost)
-import Max.LLM.Stream (StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, stepResponses, PartialCall (..))
+import Max.LLM.Stream (PartialCall (..), StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, stepResponses)
 import Max.Util (trySync)
 import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying, replyRetryDelaysSecs)
 import Network.Wreq qualified as Wreq
@@ -474,6 +482,43 @@ data LLM :: Effect where
 
 type instance DispatchOf LLM = Dynamic
 
+-- | A first-class interpreter record for tests and alternate in-process
+-- backends.  'liChat' receives 'Nothing' for a buffered call and a sink for a
+-- streaming call; the sink has already been safely unlifted into @es@.
+data LLMInterpreter es = LLMInterpreter
+  { liChat ::
+      ChatCtx ->
+      Text ->
+      [ChatMessage] ->
+      [ToolSpec] ->
+      Maybe (Text -> Eff es ()) ->
+      Eff es (Either Text ChatResponse),
+    liListProfiles :: Eff es [Text],
+    liDefaultProfile :: Eff es Text,
+    liIsProfileMultimodal :: Text -> Eff es Bool,
+    liProfileEffort :: Text -> Eff es (Maybe Text),
+    liIsProfileHistoryTurns :: Text -> Eff es Bool
+  }
+
+-- | Install a supplied interpreter without HTTP, credentials, or a model
+-- registry.  This is the seam used by full-loop Agent tests: it can inspect
+-- the exact conversation, drive streaming frames, and return tool calls.
+runLLMWith ::
+  LLMInterpreter es ->
+  Eff (LLM : es) a ->
+  Eff es a
+runLLMWith backend = interpret $ \localEnv -> \case
+  Chat ctx profile msgs tools ->
+    backend.liChat ctx profile msgs tools Nothing
+  ChatStreaming ctx profile msgs tools sink ->
+    localSeqUnlift localEnv $ \unlift ->
+      backend.liChat ctx profile msgs tools (Just (unlift . sink))
+  ListProfiles -> backend.liListProfiles
+  DefaultProfile -> backend.liDefaultProfile
+  IsProfileMultimodal profile -> backend.liIsProfileMultimodal profile
+  ProfileEffort profile -> backend.liProfileEffort profile
+  IsProfileHistoryTurns profile -> backend.liIsProfileHistoryTurns profile
+
 -- | Per-profile timeout is enforced twice: the http-client
 -- 'HTTP.managerResponseTimeout' is set to @timeoutSeconds@ inside
 -- 'postAndParse' (otherwise the manager's built-in 30s default kills
@@ -596,7 +641,7 @@ runOneChat usageWriter callWriter reg ctx name msgs tools mSink = case Map.looku
     pure (fst <$> r)
 
 chat ::
-  LLM :> es =>
+  (LLM :> es) =>
   ChatCtx ->
   Text -> -- profile name
   [ChatMessage] ->
@@ -608,7 +653,7 @@ chat ctx name msgs tools =
 -- | 'chat' with a sink for the assistant text as it streams in.  See
 -- 'ChatStreaming'.
 chatStreaming ::
-  LLM :> es =>
+  (LLM :> es) =>
   ChatCtx ->
   Text ->
   [ChatMessage] ->
@@ -618,19 +663,19 @@ chatStreaming ::
 chatStreaming ctx name msgs tools sink =
   send (ChatStreaming ctx name msgs tools sink)
 
-listProfiles :: LLM :> es => Eff es [Text]
+listProfiles :: (LLM :> es) => Eff es [Text]
 listProfiles = send ListProfiles
 
-defaultProfile :: LLM :> es => Eff es Text
+defaultProfile :: (LLM :> es) => Eff es Text
 defaultProfile = send DefaultProfile
 
-isProfileMultimodal :: LLM :> es => Text -> Eff es Bool
+isProfileMultimodal :: (LLM :> es) => Text -> Eff es Bool
 isProfileMultimodal name = send (IsProfileMultimodal name)
 
-profileEffort :: LLM :> es => Text -> Eff es (Maybe Text)
+profileEffort :: (LLM :> es) => Text -> Eff es (Maybe Text)
 profileEffort name = send (ProfileEffort name)
 
-isProfileHistoryTurns :: LLM :> es => Text -> Eff es Bool
+isProfileHistoryTurns :: (LLM :> es) => Text -> Eff es Bool
 isProfileHistoryTurns name = send (IsProfileHistoryTurns name)
 
 -- | The JSON body a call sends, rebuilt from the same pure field
@@ -861,8 +906,8 @@ rebuildAnthropic acc = case parsedCalls acc of
   where
     content tcs =
       [ block
-        | b <- Map.elems acc.saBlocks,
-          Just block <- [finish tcs b]
+      | b <- Map.elems acc.saBlocks,
+        Just block <- [finish tcs b]
       ]
     finish tcs b = case fieldOf "type" b of
       Just (String "tool_use") -> do
@@ -894,8 +939,8 @@ withFields v _ = v
 parsedCalls :: StreamAcc -> [ToolCall]
 parsedCalls acc =
   [ ToolCall pc.pcId pc.pcName v
-    | pc <- accToolCalls acc,
-      Just v <- [argsOf pc.pcArgs]
+  | pc <- accToolCalls acc,
+    Just v <- [argsOf pc.pcArgs]
   ]
   where
     argsOf t
@@ -934,11 +979,11 @@ openAIFields cfg msgs tools =
     <> temperatureField cfg
     <> effortFieldOpenAI cfg
     <> [ f
-         | not (null tools),
-           f <-
-             [ "tools" .= map encodeToolSpecOpenAI tools,
-               "tool_choice" .= ("auto" :: Text)
-             ]
+       | not (null tools),
+         f <-
+           [ "tools" .= map encodeToolSpecOpenAI tools,
+             "tool_choice" .= ("auto" :: Text)
+           ]
        ]
 
 -- | @temperature@ only when configured — omitting lets the server
@@ -1010,11 +1055,11 @@ responsesFields cfg msgs tools =
     <> temperatureField cfg
     <> [f | Just e <- [cfg.effort], f <- ["reasoning" .= object ["effort" .= e]]]
     <> [ f
-         | not (null tools),
-           f <-
-             [ "tools" .= map encodeToolSpecResponses tools,
-               "tool_choice" .= ("auto" :: Text)
-             ]
+       | not (null tools),
+         f <-
+           [ "tools" .= map encodeToolSpecResponses tools,
+             "tool_choice" .= ("auto" :: Text)
+           ]
        ]
   where
     (instructions, inputItems) = responsesInput msgs
@@ -1081,18 +1126,19 @@ parseResponseResponses = withObject "Response" $ \o -> do
   where
     itemType :: Value -> Maybe Text
     itemType = parseMaybe (withObject "item" (.: "type"))
-    messageText v = fromMaybe [] $ flip parseMaybe v $
-      withObject "item" $ \i -> do
-        ty <- i .: "type"
-        if ty /= ("message" :: Text)
-          then pure []
-          else do
-            content <- i .: "content" :: Parser [Object]
-            fmap concat . for content $ \c -> do
-              cty <- c .: "type"
-              if cty == ("output_text" :: Text)
-                then (: []) <$> c .: "text"
-                else pure []
+    messageText v = fromMaybe [] $
+      flip parseMaybe v $
+        withObject "item" $ \i -> do
+          ty <- i .: "type"
+          if ty /= ("message" :: Text)
+            then pure []
+            else do
+              content <- i .: "content" :: Parser [Object]
+              fmap concat . for content $ \c -> do
+                cty <- c .: "type"
+                if cty == ("output_text" :: Text)
+                  then (: []) <$> c .: "text"
+                  else pure []
     parseFnCall = withObject "function_call" $ \i -> do
       cid <- i .: "call_id"
       name <- i .: "name"
@@ -1225,11 +1271,11 @@ anthropicFields cfg msgs tools =
     <> effortFieldAnthropic cfg
     <> systemField
     <> [ f
-         | not (null tools),
-           f <-
-             [ "tools" .= map encodeToolSpecAnthropic tools,
-               "tool_choice" .= object ["type" .= ("auto" :: Text)]
-             ]
+       | not (null tools),
+         f <-
+           [ "tools" .= map encodeToolSpecAnthropic tools,
+             "tool_choice" .= object ["type" .= ("auto" :: Text)]
+           ]
        ]
   where
     (systemText, anthropicMsgs) = toAnthropicMessages msgs
@@ -1351,7 +1397,7 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
                       ]
                   Nothing ->
                     object ["type" .= ("text" :: Text), "text" .= ("[image]" :: Text)]
-              | b <- blocks
+            | b <- blocks
             ]
        in AnthropicMsg "user" (toJSON content) : go rest
     go (MsgAssistant t : rest) = AnthropicMsg "assistant" (toJSON t) : go rest
@@ -1368,7 +1414,7 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
                   "name" .= tc.callName,
                   "input" .= tc.callArguments
                 ]
-              | tc <- tcs
+            | tc <- tcs
             ]
           content = case raw of
             Object o | Just blocks@(Array _) <- KM.lookup "content" o -> blocks
@@ -1382,11 +1428,10 @@ toAnthropicMessages msgs = (systemPrompt, go nonSystems)
                   "tool_use_id" .= tcid,
                   "content" .= c
                 ]
-              | MsgTool tcid c <- toolMsgs
+            | MsgTool tcid c <- toolMsgs
             ]
        in AnthropicMsg "user" (toJSON blocks) : go after
     go (MsgSystem _ : rest) = go rest -- already pulled out
-
     isToolMsg (MsgTool _ _) = True
     isToolMsg _ = False
 

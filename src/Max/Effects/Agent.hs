@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeFamilies #-}
 
 -- |
@@ -25,13 +26,14 @@
 --
 -- == Streaming
 --
--- When the profile streams, the loop watches the text arrive and hands
--- each finished paragraph to the caller's sink, then reports how much it
--- released as 'sentPrefix' so the caller sends only the rest.  The
+-- When the profile streams, the loop watches the text arrive and emits each
+-- finished paragraph as an 'Max.AgentEvent.AgentFinalStreamText'.  It then
+-- reports how much was accepted as 'sentPrefix' so the caller sends only the
+-- rest.  The
 -- bookkeeping resets per chat call, because one call is one utterance: a
 -- progress narration, or the final answer.  Deciding /when/ a paragraph
--- is done belongs here; deciding what sending one /means/ does not — see
--- 'AgentTurn'.
+-- is done belongs here; deciding how any event is rendered or delivered
+-- belongs to the typed event sink — see 'AgentTurn'.
 --
 -- == Task lifecycle
 --
@@ -58,20 +60,18 @@ module Max.Effects.Agent
     queueToolImage,
     assembleToolRound,
     toolResultMessage,
-    narrationSegments,
     runAgent,
     agentTurn,
     defaultLimits,
   )
 where
 
-import Control.Concurrent (myThreadId, threadDelay, throwTo)
+import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, readTVarIO, writeTVar)
 import Control.Monad (when)
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
-import Data.Set (Set)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -80,31 +80,23 @@ import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Exception (bracket, throwIO)
 import Effectful.Log
-import Max.DB.Message (MessageKind (..))
+import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
-import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded)
 import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
-import Max.Reply (chunkSource, planReply, readyPrefix)
-import Max.ReplySend (chunkDelayMicros, modelTextSegs)
+import Max.Reply (readyPrefix)
 import Max.Tasks (Note (..), TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask, requeueInbox)
-import OneBot.Segment (Segment (SegReply, SegText))
-import OneBot.Types (GroupId (..), MessageId (..), UserId, isPrivateChat)
+import OneBot.Types (GroupId (..), MessageId, UserId)
 
 -- | Per-dispatch context the agent loop hands to its tool factory.
 -- Tools like @say@ need the triggering message coordinates to thread
 -- their reply correctly; ambient tools that only care about the group
--- can just project 'dcGroupId'.  'dcSelfId' is the bot's own QQ id —
--- needed when persisting outbound messages so we can attribute them
--- to the bot.
+-- can just project 'dcGroupId'.  'dcSelfId' is the bot's own QQ id,
+-- needed by visible-output and reminder tools.
 data DispatchContext = DispatchContext
   { dcGroupId :: !GroupId,
     dcMessageId :: !MessageId,
     dcUserId :: !UserId,
     dcSelfId :: !UserId,
-    -- | Effective debug mode for this dispatch (config default,
-    -- possibly overridden per session via !debug).  When on, each
-    -- tool-call round is announced in the group.
-    dcDebug :: !Bool,
     -- | Whether the active profile is multimodal.  The tool factory
     -- gates capability-heavy tools (e.g. the browser toolset) on this.
     dcMultimodal :: !Bool,
@@ -121,13 +113,6 @@ data DispatchContext = DispatchContext
     -- call this turn makes ('turnCtx').  'Nothing' = the profile's
     -- configured effort.
     dcEffort :: !(Maybe Text),
-    -- | The group's member ids, fetched from NapCat once per dispatch.
-    -- Whitelist for converting raw @\@\<qq\>@ spans in LLM-authored
-    -- outbound text into real at-segments
-    -- ('OneBot.Segment.segmentMentions').  'Nothing' when unavailable
-    -- (private chat, fetch failure) — conversion then checks syntax
-    -- only.
-    dcMentionable :: !(Maybe (Set UserId)),
     -- | Images queued by tools (e.g. @view_avatar@) via
     -- 'queueToolImage' during the current tool round.  The loop drains
     -- the list after each round and injects them as a user-role
@@ -221,25 +206,24 @@ data Agent :: Effect where
   -- | Run a full agent loop for the given dispatch.  Returns when the
   -- model emits a content response, hits 'maxTurns', or the LLM errors.
   --
-  -- The last argument is where finished paragraphs go while the model
-  -- is still writing.  The loop decides /when/ a paragraph is finished
-  -- ('Max.Reply.readyPrefix') and the caller decides what sending one
-  -- means — which is the whole reason this is a callback rather than
-  -- the loop doing it: the placeholder resolution, hallucination
-  -- stripping and persistence all live on the reply path, and giving
-  -- the agent a second copy of them is the mistake that produced two
-  -- bugs in one day.  Never called for a profile with @stream: false@.
+  -- The last argument is a typed event sink.  Progress narration, tool
+  -- debug facts, and streamed final paragraphs are distinct constructors,
+  -- so the output boundary can apply the right visibility, reply budget,
+  -- rendering, and persistence policy without the loop importing any of
+  -- those mechanisms.
   AgentTurn ::
     DispatchContext ->
     Text ->
     [ChatMessage] ->
-    (Text -> m Bool) ->
+    AgentEventSink m ->
     Agent m AgentResult
 
 type instance DispatchOf Agent = Dynamic
 
 -- | Install the agent loop on top of a stack that already has 'LLM'
--- (and 'Log', 'IOE').  The interpreter, on each 'AgentTurn':
+-- (and 'Log', 'IOE').  Output leaves only through the typed event sink;
+-- this interpreter has no platform, segment, or persistence dependency.
+-- On each 'AgentTurn' it:
 --
 --   * Registers a task in the 'TaskRegistry' (and unregisters via
 --     'bracket' on exit, including 'TaskCancelled' from @!kill@).
@@ -247,16 +231,18 @@ type instance DispatchOf Agent = Dynamic
 --   * Drives the loop, draining the task's inbox between turns.
 runAgent ::
   forall es a.
-  (LLM :> es, Outbound :> es, Concurrent :> es, Log :> es, IOE :> es) =>
+  (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
   AgentLimits ->
   (DispatchContext -> [Tool es]) ->
   TaskRegistry ->
   Eff (Agent : es) a ->
   Eff es a
 runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
-  AgentTurn dc profile msgs emit -> localSeqUnlift localEnv $ \unlift -> do
+  AgentTurn dc profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
     let cancel = throwTo selfTid TaskCancelled
+        emit :: AgentEventSink (Eff (Tools : es))
+        emit event = raise (unlift (sink event))
     bracket
       (liftIO (attachTask taskReg dc.dcGroupId dc.dcUserId (Just dc.dcMessageId) "llm" cancel))
       (liftIO . releaseTask taskReg)
@@ -265,11 +251,11 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
           -- its context has no thread to interrupt yet; the registry
           -- held it for us.  Honour it before spending a turn.
           when handle.thPreKilled $ throwIO TaskCancelled
-          runTools (toolFactory dc) (loop (raise . unlift . emit) dc handle profile msgs)
+          runTools (toolFactory dc) (loop emit dc handle profile msgs)
       )
   where
     loop ::
-      (Text -> Eff (Tools : es) Bool) ->
+      AgentEventSink (Eff (Tools : es)) ->
       DispatchContext ->
       TaskHandle ->
       Text ->
@@ -278,7 +264,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     loop emit dc h profile = go emit dc h 0 [] profile
 
     go ::
-      (Text -> Eff (Tools : es) Bool) ->
+      AgentEventSink (Eff (Tools : es)) ->
       DispatchContext ->
       TaskHandle ->
       Int ->
@@ -364,9 +350,12 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
                     "narration" .= T.length narration
                   ]
               -- Whatever streaming already released of this narration is
-              -- in the group; only the tail is left to post.
-              sendNarration dc (T.drop (T.length sent) narration)
-              announceToolCalls dc tcs
+              -- in the group; only the tail is left to post.  Rendering and
+              -- visibility are output-boundary decisions.
+              emit (AgentProgressText (T.drop (T.length sent) narration))
+              emit $
+                AgentToolDebug $
+                  ToolCallsStarted [(tc.callName, tc.callArguments) | tc <- tcs]
               -- Carry the provider's message verbatim so its thinking
               -- output round-trips back to the API on the next
               -- request — DeepSeek returns 400 otherwise.
@@ -374,9 +363,14 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
               -- goes through the pool, image attachment through STM);
               -- results keep call order so each tool_call id is
               -- answered in sequence.
-              toolMsgs <- case tcs of
-                [tc] -> (: []) <$> executeOne dc tc
-                _ -> mapConcurrently (executeOne dc) tcs
+              executed <- case tcs of
+                [tc] -> (: []) <$> executeOne tc
+                _ -> mapConcurrently executeOne tcs
+              -- Emit result facts after the concurrent round rejoins.  This
+              -- keeps the higher-rank callback on its sequential unlift and
+              -- gives debug output a deterministic call order.
+              for_ executed $ \(_, event) -> emit (AgentToolDebug event)
+              let toolMsgs = map fst executed
               imgs <- drainToolImages dc
               let newMsgs = assembleToolRound raw tcs toolMsgs imgs
               go emit dc h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
@@ -417,79 +411,6 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
             sentPrefix = ""
           }
 
-    -- Post one compact status line per tool call to the group so
-    -- members can see what the bot is doing mid-task.  Only when the
-    -- dispatch runs with debug on (config default / !debug).
-    -- Fire-and-forget: a lost status line must never fail the
-    -- dispatch.  Tools whose whole point is visible group output are
-    -- skipped — announcing them would just double the noise.
-    announceToolCalls :: DispatchContext -> [ToolCall] -> Eff (Tools : es) ()
-    announceToolCalls dc tcs = do
-      let visible = [tc | tc <- tcs, tc.callName `notElem` silentTools]
-          line tc = "⚙ " <> tc.callName <> " " <> previewJson debugPreviewChars tc.callArguments
-      when (dc.dcDebug && not (null visible)) $
-        recordSend dc KindDebug [SegText (T.intercalate "\n" (map line visible))]
-
-    -- The other half: what the call actually returned.  A call line on
-    -- its own tells you the bot tried something, not whether it worked
-    -- — which is the question you turned debug on to answer.
-    --
-    -- Posted per call rather than batched with the round, because
-    -- independent calls run concurrently and finish out of order; each
-    -- line names its tool so the pairing stays readable.  Errors are
-    -- announced too, marked ✗.
-    announceToolResult :: DispatchContext -> ToolCall -> Text -> Eff (Tools : es) ()
-    announceToolResult dc tc preview =
-      when (dc.dcDebug && tc.callName `notElem` silentTools) $
-        recordSend dc KindDebug [SegText ("↳ " <> tc.callName <> " " <> preview)]
-
-    -- What the model said alongside its tool calls, posted as the
-    -- progress line the @say@ tool used to exist for.  Both protocols
-    -- allow text and tool calls in one message and Claude narrates that
-    -- way by default, so this is free: no tool call spent, no prompt
-    -- instruction needed.
-    --
-    -- Recorded as 'KindChat': it is the bot talking in the group, and
-    -- members answer it ("查到了吗"), so the next dispatch needs to see
-    -- that it was said.  Within *this* turn the model stays coherent
-    -- either way — the narration also rides in 'MsgAssistantToolCalls'
-    -- verbatim and replays to the API next round.
-    --
-    -- Split by 'planReply' like every other model-authored text: the
-    -- format guide sells @[split]@ and blank lines as universal, and
-    -- narration was the one sender that took neither — a narration
-    -- ending in "…[split]" went to the group with the marker as
-    -- literal text.  Same pacing between chunks as the reply path.
-    sendNarration :: DispatchContext -> Text -> Eff (Tools : es) ()
-    sendNarration dc narration =
-      for_ (zip [0 :: Int ..] (map chunkSource (planReply narration))) $ \(i, chunk) ->
-        case narrationSegments dc chunk of
-          [] -> pure ()
-          segs -> do
-            when (i > 0) $
-              liftIO (threadDelay =<< chunkDelayMicros (T.length chunk))
-            recordSend dc KindChat segs
-
-    -- Send and write down, so the messages table matches what the group
-    -- saw.  The round-trip is unavoidable: @message_id@ comes from QQ
-    -- in the send response and is the row's primary key.
-    --
-    -- Every failure only logs.  These are status lines and progress
-    -- notes; losing one must never take down the turn they describe.
-    recordSend :: DispatchContext -> MessageKind -> [Segment] -> Eff (Tools : es) ()
-    recordSend dc kind segs = do
-      _ <-
-        sendRecorded
-          OutboundRequest
-            { orKind = kind,
-              orGroupId = dc.dcGroupId,
-              orSelfId = dc.dcSelfId,
-              orRenderedText = Nothing,
-              orSegments = segs,
-              orTimeoutMs = 15000
-            }
-      pure ()
-
     -- Hand the caller every paragraph that is safe to send, and
     -- remember how much of the text that accounted for.
     --
@@ -504,7 +425,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     -- we have still said that much, and re-releasing the same paragraph
     -- on the next frame would say it twice.
     releaseParagraphs ::
-      (Text -> Eff (Tools : es) Bool) ->
+      AgentEventSink (Eff (Tools : es)) ->
       TVar Text ->
       Text ->
       Eff (Tools : es) ()
@@ -517,7 +438,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
         -- further belongs to the final send.  Only advance the mark
         -- when it actually took the text, or the refused paragraph
         -- would count as said and never go out at all.
-        taken <- emit ready
+        taken <- emit (AgentFinalStreamText ready)
         when taken $
           liftIO (atomically (writeTVar sentRef (sent <> ready)))
 
@@ -526,14 +447,6 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     -- from the original request without being told twice.
     feedbackMsg :: [Note] -> ChatMessage
     feedbackMsg xs = MsgUser ("[feedback]: " <> T.intercalate " | " (map (.noteLine) xs))
-
-    silentTools :: [Text]
-    silentTools = ["send_image_from_sandbox", "send_file_from_sandbox"]
-
-    -- Long enough to be useful, short enough that a 16 KiB sandbox dump
-    -- doesn't become a wall of chat.
-    debugPreviewChars :: Int
-    debugPreviewChars = 1000
 
     -- Images tools queued this round, packaged as one user message of
     -- alternating label/image blocks (leading text block, never two
@@ -547,8 +460,8 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
         writeTVar dc.dcToolImages (n, [])
         pure is
 
-    executeOne :: DispatchContext -> ToolCall -> Eff (Tools : es) ChatMessage
-    executeOne dc tc = do
+    executeOne :: ToolCall -> Eff (Tools : es) (ChatMessage, ToolDebugEvent)
+    executeOne tc = do
       logInfo "agent: tool call" $
         object
           [ "id" .= tc.callId,
@@ -566,13 +479,11 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
                 "result" .= previewJson 400 v,
                 "full_len" .= T.length full
               ]
-          announceToolResult dc tc (previewJson debugPreviewChars v)
-          pure $ toolResultMessage tc (Right v)
+          pure (toolResultMessage tc (Right v), ToolCallFinished tc.callName (Right v))
         Left err -> do
           logAttention "agent: tool failed" $
             object ["id" .= tc.callId, "name" .= tc.callName, "error" .= err]
-          announceToolResult dc tc ("✗ " <> err)
-          pure $ toolResultMessage tc (Left err)
+          pure (toolResultMessage tc (Left err), ToolCallFinished tc.callName (Left err))
 
 -- | Build the messages appended after one tool-call response.  This is
 -- deliberately a pure seam between the effectful pieces of the loop:
@@ -664,37 +575,6 @@ agentTurn ::
   DispatchContext ->
   Text ->
   [ChatMessage] ->
-  -- | Where finished paragraphs go while the model is still writing.
-  -- See 'AgentTurn'.
-  (Text -> Eff es Bool) ->
+  AgentEventSink (Eff es) ->
   Eff es AgentResult
-agentTurn dc profile msgs emit = send (AgentTurn dc profile msgs emit)
-
--- | The segments one progress narration chunk becomes.  Empty for blank
--- narration, which is most rounds.
---
--- Pure and top-level because this is where a real bug lived: narration
--- is model-authored text and the format guide asks the model to quote
--- what it is answering, so it arrives carrying the same placeholders a
--- reply does — but only the reply path ran 'parseReplyTokens'.  A
--- literal @[↩#111091811]@ went out as visible text.  The token handling
--- now lives in 'modelTextSegs', shared with the other inline sender, so
--- there is no copy left here to drift.
-narrationSegments :: DispatchContext -> Text -> [Segment]
-narrationSegments dc narration
-  -- A chunk that is only a quote token has nothing to say.  The reply
-  -- path has always skipped that chunk; narration would have sent an
-  -- empty message wearing a quote, which is exactly what a paragraph
-  -- consisting of a lone @[↩#id]@ produces once streaming has released
-  -- everything above it.
-  | null body = []
-  | otherwise = quote <> body
-  where
-    (mQuoted, body) =
-      modelTextSegs (isPrivateChat dc.dcGroupId) dc.dcMentionable narration
-    -- Quoted only when the model said what to quote.  Narration used to
-    -- quote the trigger by default, which made it the last place that
-    -- auto-quoted anything — the reply path stopped doing that once the
-    -- model proved it quotes on its own, and there was no reason for
-    -- the progress line to keep a rule its own reply had dropped.
-    quote = [SegReply m | Just m <- [mQuoted]]
+agentTurn dc profile msgs sink = send (AgentTurn dc profile msgs sink)

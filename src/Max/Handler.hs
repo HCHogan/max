@@ -2,15 +2,13 @@ module Max.Handler
   ( handleEvents,
     dispatchProactive,
     recordAs,
-    stripStickerText,
-    stripBareMarkers,
     isSilentReply,
     parseSilence,
   )
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO, writeTVar)
+import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (unless, void, when)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
@@ -27,6 +25,7 @@ import Effectful.Exception (SomeException, catch, finally)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
+import Max.AgentEvent (AgentOutputContext (..), handleAgentEvent)
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Parser (parseCommand)
@@ -48,8 +47,7 @@ import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.MemoryExtract (armMemx, bumpMemx)
 import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
-import Max.Reply (stripHallucinatedTokens)
-import Max.ReplySend (ReplyTarget (..), canStream, freshBudget, sendAndPersistReply)
+import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
@@ -863,25 +861,15 @@ dispatchLLM mIntent origin absorbable companions gm = do
       toolImgs <- liftIO (newTVarIO (0, []))
       let debugEff = maybe env.beDebugDefault id s.debugOverride
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId debugEff multimodal stickersEff (not (null skills)) s.effortOverride mentionable toolImgs
+          dc = DispatchContext gm.groupId gm.messageId gm.userId gm.selfId multimodal stickersEff (not (null skills)) s.effortOverride toolImgs
           target = sendTarget env gm mentionable rosterNames stickersEff
       -- The streaming sink.  It sends whole paragraphs the model has
       -- finished with, down the same path the final reply takes — the
       -- budget TVar is what keeps the two halves of one split reply
       -- bounded together (see "Max.ReplySend").
       streamBudget <- liftIO (newTVarIO freshBudget)
-      let emit para = do
-            b <- liftIO (readTVarIO streamBudget)
-            -- Refusing is how the message ceiling survives being split
-            -- across N sends; see 'canStream'.  The loop keeps whatever
-            -- we decline and it goes out with the final reply.
-            if not (canStream b)
-              then pure False
-              else do
-                b' <- sendAndPersistReply target b (cleanReply para)
-                liftIO (atomically (writeTVar streamBudget b'))
-                pure True
-      result <- agentTurn dc s.model ctx emit
+      let output = AgentOutputContext target debugEff streamBudget
+      result <- agentTurn dc s.model ctx (handleAgentEvent output)
       case result.reply of
         -- The loop produced no model-authored reply — upstream API
         -- down, or the turn-cap fallback call failed too.  Error text
@@ -907,7 +895,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- forms are hallucinations — a weaker model imitating the
       -- display style of something it saw — so strip those as a
       -- backstop while leaving the id-carrying send tokens intact
-      -- (see 'stripStickerText' / 'stripBareMarkers').
+      -- (see 'Max.ReplySend.cleanModelText').
       -- Whatever streaming already put in the group is gone from here:
       -- what's left to send is the tail.  'Max.Reply.readyPrefix' only
       -- ever cuts at a blank line, so dropping the prefix cannot split
@@ -915,11 +903,10 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- would have on its own.
       let remaining = T.drop (T.length result.sentPrefix) replyRaw
           stickersEff = maybe env.beStickerDefault id s.stickerOverride
-          cleaned = stripHallucinatedTokens remaining
-          stripped = T.strip (stripBareMarkers (stripStickerText cleaned))
-      when (cleaned /= remaining) $
-        logAttention "reply: hallucinated bracket tokens stripped" $
-          object ["dropped_chars" .= (T.length remaining - T.length cleaned)]
+          stripped = cleanModelText remaining
+      when (stripped /= T.strip remaining) $
+        logAttention "reply: hallucinated model markers stripped" $
+          object ["dropped_chars" .= (T.length remaining - T.length stripped)]
       -- A non-empty prefix means this reply already ran to at least two
       -- paragraphs, and the opt-out is never more than one — so it can
       -- only be the tail of a real answer, never a silence marker that
@@ -1239,59 +1226,3 @@ dropQuoteHandles s =
 
 isSilentReply :: T.Text -> Bool
 isSilentReply = isJust . parseSilence
-
--- | Everything that has to happen to model text before it can be sent:
--- drop the hallucinated bracket tokens, drop the bare display markers,
--- trim.  Shared by the streaming sink and the final reply so a
--- paragraph is cleaned the same whichever half of the split it lands
--- in.
-cleanReply :: T.Text -> T.Text
-cleanReply = T.strip . stripBareMarkers . stripStickerText . stripHallucinatedTokens
-
--- | Drop bare display markers the model echoed from context —
--- @[image]@, @[sticker]@, @[mface]@, @[face]@, @[forward]@, plus the
--- pre-rename @[动画表情]@ still present in old rows.  None of them
--- carries an id, so echoing one can only produce literal marker text
--- in the outgoing message.  The id-carrying send tokens
--- (@[image#\<id\>]@, @[face#\<id\>]@, …) are left intact because they
--- aren't literal matches for any of these.
-stripBareMarkers :: T.Text -> T.Text
-stripBareMarkers t =
-  foldl'
-    (\acc m -> T.replace m "" acc)
-    t
-    ["[image]", "[sticker]", "[动画表情]", "[mface]", "[face]", "[forward]"]
-
--- | Remove any "[sticker: …]" / "[表情包…]" spans a model hallucinated
--- into its reply text (see call site) — the caption *display* form,
--- in either the current or the pre-rename opener.  The real send
--- token "[sticker#\<id\>…]" is left intact: it's the placeholder the
--- reply post-processor turns into an actual sticker
--- ('sendAndPersistReply'), so stripping it would break sending.
--- Scans for an opener and drops through the next "]".
---
--- The English opener requires the colon ("[sticker:") so ordinary
--- prose like "[stickers are fun]" survives; the legacy opener stays
--- loose because "[表情包" starting anything else is never real text.
-stripStickerText :: T.Text -> T.Text
-stripStickerText t0 = foldl' stripOpener t0 ["[sticker:", "[sticker：", "[表情包"]
-  where
-    stripOpener t1 opener = go t1
-      where
-        go t = case T.breakOn opener t of
-          (before, rest)
-            | T.null rest -> t -- no opener left
-            | otherwise ->
-                let afterOpener = T.drop (T.length opener) rest
-                 in if isSendToken afterOpener
-                      then before <> opener <> go afterOpener -- keep the token, scan on
-                      else case T.breakOn "]" afterOpener of
-                        (_, close)
-                          | T.null close -> before -- unterminated: drop the tail too
-                          | otherwise -> before <> go (T.drop 1 close)
-    -- "…#<digit>…" after the opener is a real send handle, not a
-    -- hallucinated caption (only reachable via the legacy opener —
-    -- the colon openers can't precede a '#').
-    isSendToken s = case T.uncons s of
-      Just ('#', r) -> maybe False (isDigit . fst) (T.uncons r)
-      _ -> False

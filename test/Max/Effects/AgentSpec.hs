@@ -1,105 +1,135 @@
--- |
--- Narration is model-authored text sent on a path of its own, and it
--- drifted: the reply path grew placeholder handling and this one
--- didn't, so a literal @[↩#111091811]@ went out as visible text in the
--- group.  These pin the shared behaviour down on both sides.
+{-# LANGUAGE GADTs #-}
+{-# LANGUAGE RankNTypes #-}
+
 module Max.Effects.AgentSpec (spec) where
 
 import Control.Concurrent.STM (newTVarIO)
-import Data.Set qualified as Set
-import Max.Effects.Agent (DispatchContext (..), narrationSegments)
-import OneBot.Segment (Segment (..))
+import Data.Aeson (object, (.=))
+import Data.Foldable (for_)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.Text (Text)
+import Data.Text qualified as T
+import Effectful (Eff, IOE, liftIO, runEff, (:>))
+import Effectful.Concurrent.Async (runConcurrent)
+import Effectful.Log (runLog)
+import Log (LogLevel (LogAttention))
+import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
+import Max.Effects.Agent (AgentLimits (..), AgentResult (..), DispatchContext (..), agentTurn, runAgent)
+import Max.Effects.LLM
+  ( ChatMessage (..),
+    ChatResponse (..),
+    LLMInterpreter (..),
+    ToolCall (..),
+    runLLMWith,
+  )
+import Max.Effects.Tools (Tool (..))
+import Max.Log (ColorMode (ColorNever), withCompactLogger)
+import Max.Tasks (newTaskRegistry)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
 
--- | A group dispatch triggered by message #7413.
-ctx :: IO DispatchContext
-ctx = do
-  imgs <- newTVarIO (0, [])
+data SeenEvent
+  = SeenProgress !Text
+  | SeenToolsStarted ![Text]
+  | SeenToolFinished !Text !Bool
+  | SeenFinalStream !Text
+  deriving stock (Show, Eq)
+
+appendRef :: IORef [a] -> a -> IO ()
+appendRef ref value = atomicModifyIORef' ref (\xs -> (xs <> [value], ()))
+
+eventSink :: (IOE :> es) => IORef [SeenEvent] -> AgentEventSink (Eff es)
+eventSink ref = \case
+  AgentProgressText body -> liftIO (appendRef ref (SeenProgress body))
+  AgentToolDebug (ToolCallsStarted calls) ->
+    liftIO (appendRef ref (SeenToolsStarted (map fst calls)))
+  AgentToolDebug (ToolCallFinished name result) ->
+    liftIO (appendRef ref (SeenToolFinished name (either (const False) (const True) result)))
+  AgentFinalStreamText body ->
+    True <$ liftIO (appendRef ref (SeenFinalStream body))
+
+fakeLLM :: (IOE :> es) => IORef Int -> LLMInterpreter es
+fakeLLM calls =
+  LLMInterpreter
+    { liChat = \_ctx _profile _messages _tools mSink -> do
+        callNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
+        case callNo of
+          0 ->
+            pure $
+              Right $
+                ToolCallsResp
+                  (object ["role" .= ("assistant" :: Text)])
+                  "我先查一下"
+                  [ToolCall "call-1" "echo" (object ["value" .= (7 :: Int)])]
+          1 -> do
+            for_ mSink $ \sink -> do
+              sink "第一段"
+              sink "第一段\n\n第二段"
+            pure (Right (ContentResp "第一段\n\n第二段"))
+          _ -> pure (Left "unexpected extra LLM call"),
+      liListProfiles = pure ["fake"],
+      liDefaultProfile = pure "fake",
+      liIsProfileMultimodal = const (pure False),
+      liProfileEffort = const (pure Nothing),
+      liIsProfileHistoryTurns = const (pure False)
+    }
+
+echoTool :: Tool es
+echoTool =
+  Tool
+    { toolName = "echo",
+      toolDescription = "echo test input",
+      toolSchema = object ["type" .= ("object" :: Text)],
+      toolRun = \args -> pure (Right (object ["echo" .= args]))
+    }
+
+dispatchContext :: IO DispatchContext
+dispatchContext = do
+  images <- newTVarIO (0, [])
   pure
     DispatchContext
       { dcGroupId = GroupId 7777,
         dcMessageId = MessageId 7413,
         dcUserId = UserId 2001,
         dcSelfId = UserId 1000,
-        dcDebug = False,
         dcMultimodal = False,
         dcStickers = True,
         dcSkills = False,
         dcEffort = Nothing,
-        dcMentionable = Just (Set.fromList [UserId 2001, UserId 2002]),
-        dcToolImages = imgs
+        dcToolImages = images
       }
 
 spec :: Spec
-spec = describe "narrationSegments" $ do
-  it "says nothing for blank narration" $ do
-    dc <- ctx
-    narrationSegments dc "   \n " `shouldBe` []
+spec = describe "Agent full loop" $ do
+  it "runs fake LLM + tool rounds and emits typed output events in memory" $ do
+    events <- newIORef []
+    calls <- newIORef 0
+    tasks <- newTaskRegistry
+    dc <- dispatchContext
+    result <-
+      withCompactLogger ColorNever Nothing $ \logger ->
+        runEff
+          . runConcurrent
+          . runLog "agent-test" logger LogAttention
+          . runLLMWith (fakeLLM calls)
+          . runAgent (AgentLimits {maxTurns = 4}) (const [echoTool]) tasks
+          $ agentTurn dc "fake" [MsgUser "question"] (eventSink events)
 
-  -- Nothing auto-quotes any more: the reply path gave that up once the
-  -- model proved it quotes on its own, and narration was the last
-  -- holdout.
-  it "sends plain text when the model named no quote target" $ do
-    dc <- ctx
-    narrationSegments dc "我查一下日志" `shouldBe` [SegText "我查一下日志"]
-
-  -- The regression: this used to go out with the token visible.
-  it "consumes a leading reply token instead of printing it" $ do
-    dc <- ctx
-    narrationSegments dc "[↩#111091811] wreq 是 Haskell 的 HTTP 客户端"
-      `shouldBe` [ SegReply (MessageId 111091811),
-                   SegText "wreq 是 Haskell 的 HTTP 客户端"
-                 ]
-
-  it "quotes what the model named" $ do
-    dc <- ctx
-    case narrationSegments dc "[↩#999] 看这条" of
-      (SegReply m : _) -> m `shouldBe` MessageId 999
-      other -> expectationFailure ("expected a reply segment: " <> show other)
-
-  -- A poke has no trigger message at all; nothing changes, because
-  -- nothing was quoting the trigger anyway.
-  it "is unaffected by there being no trigger message" $ do
-    dc <- ctx
-    narrationSegments dc {dcMessageId = MessageId 0} "在看了"
-      `shouldBe` [SegText "在看了"]
-
-  it "converts mentions and keeps faces" $ do
-    dc <- ctx
-    narrationSegments dc "[@#2001] 稍等 [face#187]"
-      `shouldBe` [ SegAt (UserId 2001),
-                   SegText " 稍等 ",
-                   SegFace 187 Nothing
-                 ]
-
-  -- Dropped, not printed: resolving either needs a DB round-trip, and
-  -- a leaked "[sticker#42]" is worse than a missing sticker in a
-  -- progress line.
-  it "drops sticker and image placeholders rather than leaking them" $ do
-    dc <- ctx
-    narrationSegments dc "马上 [sticker#42] 好 [image#7405]"
-      `shouldBe` [SegText "马上 ", SegText " 好"]
-
-  -- Removing a token leaves a seam.  The reply path has always trimmed
-  -- it; narration didn't, because it had its own copy of "turn model
-  -- text into segments" — which is how it also missed the token
-  -- handling.  Both now share 'trimEdgeSegs'.
-  it "trims the space a consumed token leaves behind" $ do
-    dc <- ctx
-    narrationSegments dc "[↩#999] 稍等   "
-      `shouldBe` [SegReply (MessageId 999), SegText "稍等"]
-
-  it "leaves a malformed token alone" $ do
-    dc <- ctx
-    narrationSegments dc "看看 [↩#abc] 这个"
-      `shouldBe` [SegText "看看 [↩#abc] 这个"]
-
-  -- Streaming releases up to the last blank line, so a narration ending
-  -- in "…\n\n[↩#999]" hands the tail sender a chunk that is only a
-  -- quote.  Sending it posts an empty message wearing a quote; the
-  -- reply path has always skipped a chunk that resolves to no content.
-  it "says nothing for a chunk that is only a quote token" $ do
-    dc <- ctx
-    narrationSegments dc "[↩#999]" `shouldBe` []
-    narrationSegments dc "[sticker#42]" `shouldBe` []
+    result.reply `shouldBe` Just "第一段\n\n第二段"
+    result.sentPrefix `shouldBe` "第一段\n\n"
+    result.turnsUsed `shouldBe` 2
+    result.aborted `shouldBe` Nothing
+    case result.appended of
+      [MsgAssistantToolCalls _ [tc], MsgTool callId payload, MsgAssistant final] -> do
+        tc.callName `shouldBe` "echo"
+        callId `shouldBe` "call-1"
+        payload `shouldSatisfy` T.isInfixOf "\"value\":7"
+        final `shouldBe` "第一段\n\n第二段"
+      other -> expectationFailure ("unexpected appended conversation: " <> show other)
+    readIORef calls `shouldReturn` 2
+    readIORef events
+      `shouldReturn` [ SeenProgress "我先查一下",
+                       SeenToolsStarted ["echo"],
+                       SeenToolFinished "echo" True,
+                       SeenFinalStream "第一段\n\n"
+                     ]

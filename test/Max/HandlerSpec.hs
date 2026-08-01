@@ -2,8 +2,9 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.Handler (isSilentReply, parseSilence, recordAs, stripBareMarkers, stripStickerText)
 import Max.DB.Message (MessageKind (..))
+import Max.Handler (isSilentReply, parseSilence, recordAs)
+import Max.ReplySend (stripBareMarkers, stripStickerText)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -45,7 +46,6 @@ spec = do
       parseSilence "[↩#-88][↩#7413] [silence]" `shouldBe` Just Nothing -- forward-child id
       parseSilence "[↩#7413] 这条不用回但我说两句" `shouldBe` Nothing
       parseSilence "[↩#7413]" `shouldBe` Just Nothing -- a bare quote says nothing at all
-
     it "does not mute ordinary replies" $
       isSilentReply "今天天气不错" `shouldBe` False
 

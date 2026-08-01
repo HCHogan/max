@@ -95,12 +95,10 @@ toolCountFor env gid multimodal stickers skills = do
             dcMessageId = MessageId 0,
             dcUserId = UserId 0,
             dcSelfId = UserId 0,
-            dcDebug = False,
             dcMultimodal = multimodal,
             dcStickers = stickers,
             dcSkills = skills,
             dcEffort = Nothing,
-            dcMentionable = Nothing,
             dcToolImages = imgs
           }
   pure (length (allToolsFor env dc :: [Tool '[Http, Log, NapCat, Outbound, W.Wreq, WithConnection, IOE]]))
