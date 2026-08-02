@@ -1,18 +1,22 @@
 module Max.DB.HistorySpec (spec) where
 
+import Data.Int (Int64)
 import Data.Maybe (isNothing)
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
-import Database.PostgreSQL.Simple (execute)
+import Database.PostgreSQL.Simple (Only (..), execute)
+import Effectful.PostgreSQL (query)
 import Helpers (insertRawMessage, insertRawReply, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History
   ( HistoryItem (..),
+    MessageCursor (..),
     fetchForwardChildrenInScope,
     fetchMentionHistory,
     fetchMessageInScope,
     fetchMessagesByIdsInScope,
     fetchRecentInGroup,
+    fetchTranscriptAfter,
   )
 import OneBot.Types (GroupId (..))
 import Test.Hspec
@@ -66,6 +70,26 @@ spec pool = before_ (truncateAll pool) $
         insertRawMessage pool 1003 groupId memberA botId (timeAt 11) Nothing "after"
         rows <- withDb pool $ fetchRecentInGroup groupId 9999 (Just (timeAt 10)) 10
         -- Strictly newer than the watermark — equal-to is excluded too
+        map (.messageId) rows `shouldBe` [1003]
+
+    describe "fetchTranscriptAfter" $ do
+      it "reads the complete exact-cursor tail without a message-count lane" $ do
+        insertRawMessage pool 1001 groupId memberA botId (timeAt 9) Nothing "covered"
+        insertRawMessage pool 1002 groupId memberA botId (timeAt 10) Nothing "tail-a"
+        insertRawMessage pool 1003 groupId memberB botId (timeAt 11) Nothing "tail-b"
+        insertRawMessage pool 1004 groupId memberA botId (timeAt 12) Nothing "current"
+        cursorRows <- withDb pool $ query "SELECT ingest_seq FROM messages WHERE message_id = ?" (Only (1001 :: Int))
+        coveredCursor <- case cursorRows :: [Only Int64] of
+          Only cursor : _ -> pure (MessageCursor cursor)
+          _ -> expectationFailure "missing covered cursor" >> pure (MessageCursor 0)
+        rows <- withDb pool $ fetchTranscriptAfter scope coveredCursor 1004 Nothing
+        map (.messageId) rows `shouldBe` [1002, 1003]
+
+      it "keeps scope and clear-watermark filtering on the raw tail" $ do
+        insertRawMessage pool 1001 groupId memberA botId (timeAt 9) Nothing "old"
+        insertRawMessage pool 1002 (groupId + 1) memberB botId (timeAt 11) Nothing "other-group"
+        insertRawMessage pool 1003 groupId memberA botId (timeAt 12) Nothing "visible"
+        rows <- withDb pool $ fetchTranscriptAfter scope (MessageCursor 0) 9999 (Just (timeAt 10))
         map (.messageId) rows `shouldBe` [1003]
 
     describe "fetchMessageInScope" $ do

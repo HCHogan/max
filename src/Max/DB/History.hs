@@ -5,6 +5,7 @@ module Max.DB.History
     HistoryPage (..),
     bestName,
     fetchRecentInGroup,
+    fetchTranscriptAfter,
     fetchOldestPageAfter,
     pageEndCursor,
     hasMessagesAfter,
@@ -137,6 +138,41 @@ fetchRecentInGroup gid excludeId since n = do
         \  LIMIT ?"
         ((gid, excludeId) :. Only t :. Only n)
   pure (reverse (rows :: [HistoryItem]))
+
+-- | Every prompt-eligible chat row after an exact conversation cursor,
+-- ordered by the database ingestion sequence.  This is the raw live-tail
+-- reader used once active compartments own the settled prefix.  It has no
+-- message-count limit: the pure ContextPolicy sizes the tail by tokens.
+--
+-- The current trigger is excluded because it is rendered separately.  A
+-- user's @!clear@ watermark remains a prompt-visibility boundary even though
+-- the immutable source ledger and its compartments are retained.
+fetchTranscriptAfter ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  MessageCursor ->
+  Int64 ->
+  Maybe UTCTime ->
+  Eff es [HistoryItem]
+fetchTranscriptAfter scope (MessageCursor after) excludeId since =
+  case since of
+    Nothing ->
+      query
+        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
+        \  FROM messages \
+        \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
+        \    AND forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat' \
+        \  ORDER BY ingest_seq ASC"
+        (conversationStorageId scope, after, excludeId)
+    Just cleared ->
+      query
+        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
+        \  FROM messages \
+        \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
+        \    AND forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat' \
+        \    AND received_at > ? \
+        \  ORDER BY ingest_seq ASC"
+        ((conversationStorageId scope, after, excludeId) :. Only cleared)
 
 -- | Read the oldest raw ledger rows strictly after a cursor.  Fetching one
 -- extra row makes continuation explicit without advancing beyond data the

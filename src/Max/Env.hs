@@ -40,6 +40,8 @@ data BotEnv = BotEnv
     beHistoryWindow :: !Int,
     -- | Migration-era transcript high-water mark (see 'Max.Config.historyMax').
     beHistoryMax :: !Int,
+    -- | Per-conversation canary/rollback allowlist for tiered context.
+    beUnboundedContextGroups :: ![Int64],
     -- | Config-level debug default; sessions override via @!debug@.
     beDebugDefault :: !Bool,
     -- | Config-level sticker default; sessions override via @!sticker

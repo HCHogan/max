@@ -49,7 +49,7 @@ import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
-import Max.Prompt (TriggerOrigin (..), buildContextWithLimits, renderCurrentLine, renderHistoryLine)
+import Max.Prompt (ContextHistoryMode (..), TriggerOrigin (..), buildContextWithLimitsMode, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
@@ -841,6 +841,11 @@ dispatchLLM mIntent origin absorbable companions gm = do
           multimodal = maybe False supportsMultimodal capabilities
           historyTurns = maybe False usesHistoryTurns capabilities
           limits = maybe defaultContextLimits (.contextLimits) capabilities
+          GroupId conversationId = gm.groupId
+          historyMode =
+            if conversationId `elem` env.beUnboundedContextGroups
+              then TieredContextHistory
+              else LegacyContextHistory
       (mentionable, rosterNames, brief) <- fetchGroupContext gm.groupId
       -- Questions another turn is already working on.  Ours is in there
       -- too (claimed just above) — drop it, it isn't history yet.
@@ -852,8 +857,9 @@ dispatchLLM mIntent origin absorbable companions gm = do
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
       (ctx, movedAnchor) <-
-        buildContextWithLimits
+        buildContextWithLimitsMode
           limits
+          historyMode
           env.bePersona
           env.beHistoryWindow
           env.beHistoryMax

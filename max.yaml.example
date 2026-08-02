@@ -63,6 +63,14 @@ persona: |
 # history_window: 40
 # history_max: 80
 
+# Canary the tiered history reader per conversation.  A listed group reads a
+# single chronological stream of active P1/P2/P3/P4 compartments followed by
+# every raw message after the last exact compartment cursor; ContextPolicy,
+# not a message count, sizes that live tail.  Empty is the safe default.  Remove
+# an id to roll that conversation back to the legacy reader without deleting
+# raw messages or projections.
+# unbounded_context_groups: []
+
 # On SIGTERM the bot stops taking new @-triggers and waits this long for
 # the dispatches already running before tearing down.  Keep systemd's
 # TimeoutStopSec comfortably above it (the NixOS module does this for

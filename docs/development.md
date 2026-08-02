@@ -48,7 +48,8 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.PromptSpec` — `renderContext`: the flat transcript and the
   `history_as_turns` shape (including that neither can produce two consecutive
   same-role messages), section ordering, roster/名片 identity, 私聊 scene,
-  memory block placement, quoted-forward expansion, in-flight hiding
+  memory block placement, quoted-forward expansion, in-flight hiding, and
+  deterministic P1/P2/P3/P4 decay before a token-sized raw tail
 - `Max.PromptFlowSpec` — generated `docs/prompt-flow.md` matches the live
   Prompt → Agent → LLM rendering path (regenerate with
   `cabal run max-prompt-flow`)
@@ -80,6 +81,9 @@ cabal test max-test-db
 
 Without `MAX_TEST_DB_URL` the suite exits 0 (CI without a database stays green).
 Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
+The prompt integration cases also publish real active compartments, assert
+gap annotations for partial backfill, and exercise the feature-gated
+compartment-to-raw-tail cutover end to end.
 
 ## Config: finding out where a value came from
 

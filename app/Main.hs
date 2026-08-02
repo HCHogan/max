@@ -124,6 +124,7 @@ main = do
                   { bePersona = cfg.persona,
                     beHistoryWindow = cfg.historyWindow,
                     beHistoryMax = cfg.historyMax,
+                    beUnboundedContextGroups = cfg.unboundedContextGroups,
                     beDebugDefault = cfg.debug,
                     beStickerDefault = cfg.stickersEnabled,
                     beDefaultModel = defaultModelName cfg.llm,

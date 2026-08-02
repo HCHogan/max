@@ -2,11 +2,15 @@ module Max.Prompt
   ( -- * Pipeline
     buildContext,
     buildContextWithLimits,
+    buildContextWithLimitsMode,
     TriggerOrigin (..),
+    ContextHistoryMode (..),
 
     -- * Building blocks (exposed for tests)
     PromptInputs (..),
     PromptImage (..),
+    ContextCompartment (..),
+    CompartmentTier (..),
     ContextSnapshot (..),
     ContextPlan (..),
     collectContext,
@@ -38,17 +42,17 @@ import Data.Function (on)
 import Data.Int (Int64)
 import Data.List (groupBy, minimumBy, sortOn, unsnoc)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (TimeZone, UTCTime, getCurrentTime)
+import Data.Time (TimeZone, UTCTime, diffUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (In (..), Only (..))
 import Effectful
 import Effectful.Exception (IOException, try)
-import Effectful.Log (Log, logAttention, object, (.=))
+import Effectful.Log (Log, logAttention, logInfo, object, (.=))
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.Context
   ( ContextBudget (..),
@@ -69,12 +73,14 @@ import Max.DB.History
     fetchMessageInScope,
     fetchMessagesByIdsInScope,
     fetchRecentInGroup,
+    fetchTranscriptAfter,
   )
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Faces (curatedFaceGroups)
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
+import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), SourceRange (..), listActiveCompartments)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
 import Max.Session (Session (..))
@@ -109,6 +115,10 @@ data PromptInputs = PromptInputs
     -- never had it, and it has no documented validation, so what an
     -- OpenAI-compatible provider does with it is anyone's guess.)
     transcript :: ![HistoryItem],
+    -- | Settled chronological history preceding 'transcript'.  Each item
+    -- carries all precomputed fidelity levels; ContextPolicy chooses one
+    -- without invoking an LLM.  Empty in legacy mode.
+    compartments :: ![ContextCompartment],
     -- | Put history back into real @user@\/@assistant@ turns instead of
     -- the flat transcript.  Per-profile
     -- ('Max.ModelCatalog.usesHistoryTurns') so the two shapes can be
@@ -189,6 +199,33 @@ data TriggerOrigin
     OriginPoke
   deriving stock (Show, Eq)
 
+-- | Reversible history-reader cutover.  The default remains legacy until a
+-- conversation id is explicitly canaried in configuration.
+data ContextHistoryMode
+  = LegacyContextHistory
+  | TieredContextHistory
+  deriving stock (Show, Eq)
+
+data CompartmentTier = TierP1 | TierP2 | TierP3 | TierP4
+  deriving stock (Show, Eq, Ord, Enum, Bounded)
+
+-- | Pure prompt-facing form of an immutable active compartment.  Keeping all
+-- three summaries in the snapshot makes fidelity selection deterministic and
+-- rebuild-free inside ContextPolicy.
+data ContextCompartment = ContextCompartment
+  { contextCompartmentId :: !Int64,
+    contextStartedAt :: !UTCTime,
+    contextEndedAt :: !UTCTime,
+    contextImportance :: !Double,
+    contextConfidence :: !Double,
+    contextMaterializationVersion :: !Int64,
+    contextSummaryP1 :: !Text,
+    contextSummaryP2 :: !Text,
+    contextSummaryP3 :: !Text,
+    contextTier :: !CompartmentTier
+  }
+  deriving stock (Show, Eq)
+
 -- | One inline image for the final user message: a data URL plus a
 -- text label naming the source message (\"[HH:MM \<name\>] 消息里的
 -- 图片:\") so the model can tie it back to a rendered context line.
@@ -205,7 +242,8 @@ data PromptImage = PromptImage
 data ContextSnapshot = ContextSnapshot
   { csInputs :: !PromptInputs,
     csLegacyLowWater :: !Int,
-    csLegacyHighWater :: !Int
+    csLegacyHighWater :: !Int,
+    csHistoryMode :: !ContextHistoryMode
   }
 
 -- | Deterministic, fully selected context with its budget and decision trace.
@@ -394,9 +432,33 @@ buildContextWithLimits ::
   Session ->
   GroupMessage ->
   Eff es ([ChatMessage], Maybe UTCTime)
-buildContextWithLimits limits defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+buildContextWithLimits limits =
+  buildContextWithLimitsMode limits LegacyContextHistory
+
+-- | Feature-gated production entry point for the tiered chronological reader.
+-- Keeping the mode explicit makes rollback a configuration change and leaves
+-- all legacy callers byte-compatible.
+buildContextWithLimitsMode ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  ContextLimits ->
+  ContextHistoryMode ->
+  Text ->
+  Int ->
+  Int ->
+  Bool ->
+  Bool ->
+  TriggerOrigin ->
+  TimeZone ->
+  [Text] ->
+  [(Text, Text)] ->
+  Set Int64 ->
+  Session ->
+  GroupMessage ->
+  Eff es ([ChatMessage], Maybe UTCTime)
+buildContextWithLimitsMode limits historyMode defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   snapshot <-
-    collectContext
+    collectContextWithMode
+      historyMode
       defaultPersona
       lowWater
       highWater
@@ -437,34 +499,66 @@ collectContext ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContext defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+collectContext = collectContextWithMode LegacyContextHistory
+
+collectContextWithMode ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  ContextHistoryMode ->
+  Text ->
+  Int ->
+  Int ->
+  Bool ->
+  Bool ->
+  TriggerOrigin ->
+  TimeZone ->
+  [Text] ->
+  [(Text, Text)] ->
+  Set Int64 ->
+  Session ->
+  GroupMessage ->
+  Eff es ContextSnapshot
+collectContextWithMode requestedMode defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
       UserId senderId = gm.userId
       scope = conversationScopeFor gm.groupId
-  -- Two queries, one transcript.  They filter differently, so they
-  -- reach back different distances: the recent-messages query is the
-  -- last N messages full stop, the mention query the last N that
-  -- involve the bot — which in a busy group is hours further back.
-  -- Dropping the second would quietly shorten the bot's memory of its
-  -- own conversation to whatever survives the group's chatter volume.
-  --
-  -- In a private chat every message is part of the bot conversation,
-  -- so the recent-messages query already is the whole thread and the
-  -- mention query would return the same rows again.
-  --
-  -- The floor is the later of @!clear@'s watermark and the transcript
-  -- anchor, and both queries fetch one row past the high-water mark so
-  -- an overflow is detectable rather than silently truncated by LIMIT.
-  let floor' = max s.clearedAt s.contextAnchor
-      fetchLimit = highWater + 1
-  recent <- fetchRecentInGroup gid mid floor' fetchLimit
-  thread <-
-    if isPrivateChat gm.groupId
-      then pure []
-      else fetchMentionHistory gid selfId' mid floor' fetchLimit
-  let transcript' = mergeHistory recent thread
+  -- Legacy mode keeps the migration-era two-query lane byte-for-byte.  A
+  -- canaried conversation instead reads the newest gap-free compartment
+  -- suffix followed by every raw row after its exact end cursor.  There is no
+  -- fixed message count in that path; ContextPolicy owns the token boundary.
+  let collectLegacyHistory = do
+        let floor' = max s.clearedAt s.contextAnchor
+            fetchLimit = highWater + 1
+        recent <- fetchRecentInGroup gid mid floor' fetchLimit
+        thread <-
+          if isPrivateChat gm.groupId
+            then pure []
+            else fetchMentionHistory gid selfId' mid floor' fetchLimit
+        pure (LegacyContextHistory, [], mergeHistory recent thread)
+  (historyMode, compartments', transcript') <- case requestedMode of
+    LegacyContextHistory -> collectLegacyHistory
+    TieredContextHistory -> do
+      active <- listActiveCompartments scope
+      let visibleAfterClear = case s.clearedAt of
+            Nothing -> active
+            Just cleared -> filter ((> cleared) . (.activeStartedAt)) active
+          covered = latestGapFreeSuffix visibleAfterClear
+      case reverse covered of
+        [] -> do
+          logInfo "context: tiered reader awaiting its first active compartment" $
+            object ["group_id" .= gid]
+          collectLegacyHistory
+        newest : _ -> do
+          rawTail <- fetchTranscriptAfter scope newest.activeRange.srEnd mid s.clearedAt
+          when (any (.activeGapBefore) (drop 1 covered)) $
+            logAttention "context: invalid gap inside selected compartment suffix" $
+              object ["group_id" .= gid]
+          pure
+            ( TieredContextHistory,
+              map contextCompartmentFromActive covered,
+              rawTail
+            )
   pinnedItems' <- fetchMessagesByIdsInScope scope s.pinned
   -- Injection is capped to the freshest entries per scope: the block
   -- is in the volatile tail, re-tokenised at full price every
@@ -588,6 +682,7 @@ collectContext defaultPersona lowWater highWater multimodal' historyTurns' origi
               session = s,
               triggerMessage = gm,
               transcript = transcriptCtx,
+              compartments = compartments',
               historyTurns = historyTurns',
               inFlight = inFlight',
               pinnedItems = pinnedItems'',
@@ -604,7 +699,8 @@ collectContext defaultPersona lowWater highWater multimodal' historyTurns' origi
               tz = tz'
             },
         csLegacyLowWater = lowWater,
-        csLegacyHighWater = highWater
+        csLegacyHighWater = highWater,
+        csHistoryMode = historyMode
       }
 
 -- | Poll until the image worker has recorded all of the trigger's
@@ -1119,6 +1215,7 @@ renderContext pi' =
           pi'.now
           selfId'
           pi'.origin
+          pi'.compartments
           mTranscript
           envText
           memBlock
@@ -1166,12 +1263,23 @@ renderContext pi' =
 -- message, environment, and attached media are protected here.
 planContext :: ContextLimits -> ContextSnapshot -> ContextPlan
 planContext limits snapshot =
-  let (watermarked, movedAnchor) =
-        applyWatermark
-          snapshot.csLegacyLowWater
-          snapshot.csLegacyHighWater
-          snapshot.csInputs.transcript
-      initial = snapshot.csInputs {transcript = watermarked}
+  let (initial, movedAnchor) = case snapshot.csHistoryMode of
+        LegacyContextHistory ->
+          let (watermarked, moved) =
+                applyWatermark
+                  snapshot.csLegacyLowWater
+                  snapshot.csLegacyHighWater
+                  snapshot.csInputs.transcript
+           in (snapshot.csInputs {transcript = watermarked}, moved)
+        TieredContextHistory ->
+          ( snapshot.csInputs
+              { compartments =
+                  applyBaseCompartmentTiers
+                    snapshot.csInputs.now
+                    snapshot.csInputs.compartments
+              },
+            Nothing
+          )
       budget = contextBudget limits (not (null initial.images))
       (selected, drops) = fitContextTo budget.cbPromptTokenLimit initial
       messages = renderContext selected
@@ -1184,8 +1292,33 @@ planContext limits snapshot =
           cpWithinBudget = withinBudget,
           cpMovedAnchor = movedAnchor,
           cpTrace = contextTrace budget selected messages drops withinBudget,
-          cpPolicyVersion = "context-policy/v1"
+          cpPolicyVersion = "context-policy/v2"
         }
+
+-- | Stable, LLM-free generational decay.  Wall-clock age is rounded into
+-- coarse thresholds, while episode distance and importance keep recent or
+-- consequential episodes at higher fidelity.  Topic relevance belongs in the
+-- volatile recall lane and deliberately does not rewrite this prefix.
+applyBaseCompartmentTiers :: UTCTime -> [ContextCompartment] -> [ContextCompartment]
+applyBaseCompartmentTiers now' compartments' =
+  [ compartment {contextTier = baseTier distance compartment}
+  | (distance, compartment) <- zip [count - 1, count - 2 .. 0] compartments'
+  ]
+  where
+    count = length compartments'
+    ageDays compartment =
+      max 0 (realToFrac (diffUTCTime now' compartment.contextEndedAt) / 86400 :: Double)
+    baseTier distance compartment
+      | compartment.contextImportance >= 0.9 = TierP1
+      | ageDays compartment <= 7 && compartment.contextConfidence >= 0.5 = TierP1
+      | distance <= 3 && ageDays compartment <= 30 && compartment.contextConfidence >= 0.5 = TierP1
+      | compartment.contextImportance >= 0.7 = TierP2
+      | ageDays compartment <= 30 = TierP2
+      | distance <= 15 && ageDays compartment <= 90 = TierP2
+      | compartment.contextImportance >= 0.4 = TierP3
+      | ageDays compartment <= 180 = TierP3
+      | distance <= 63 && ageDays compartment <= 365 = TierP3
+      | otherwise = TierP4
 
 renderContextPlan :: ContextPlan -> [ChatMessage]
 renderContextPlan = renderContext . (.cpInputs)
@@ -1202,12 +1335,46 @@ fitContextTo tokenLimit = go []
       | estimateMessagesTokens (renderContext inputs) <= tokenLimit = (inputs, reverse dropped)
       | Just (memory, withoutMemory) <- dropOldestMemory (== "active") inputs =
           go (memoryDrop "memory.active" memory : dropped) withoutMemory
+      | Just (source, savedTokens, degraded) <- degradeOneCompartment inputs =
+          go (PolicyDrop source savedTokens : dropped) degraded
       | oldest : rest <- inputs.transcript =
           let tokens = max 1 (estimateTextTokens oldest.renderedText)
            in go (PolicyDrop "history.raw" tokens : dropped) (inputs {transcript = rest})
       | Just (memory, withoutMemory) <- dropOldestMemory (== "permanent") inputs =
           go (memoryDrop "memory.permanent" memory : dropped) withoutMemory
       | otherwise = (inputs, reverse dropped)
+
+degradeOneCompartment :: PromptInputs -> Maybe (Text, Int, PromptInputs)
+degradeOneCompartment inputs = case filter ((/= TierP4) . (.contextTier)) inputs.compartments of
+  [] -> Nothing
+  candidates ->
+    let selected = minimumBy (compare `on` degradationKey) candidates
+        nextTier = succ selected.contextTier
+        degraded = selected {contextTier = nextTier}
+        oldTokens = maybe 0 estimateTextTokens (selectedCompartmentSummary selected)
+        newTokens = maybe 0 estimateTextTokens (selectedCompartmentSummary degraded)
+        source =
+          "history.compartment."
+            <> T.toLower (compartmentTierText selected.contextTier)
+            <> "->"
+            <> T.toLower (compartmentTierText nextTier)
+     in Just
+          ( source,
+            max 1 (oldTokens - newTokens),
+            inputs
+              { compartments =
+                  map
+                    (\compartment -> if compartment.contextCompartmentId == selected.contextCompartmentId then degraded else compartment)
+                    inputs.compartments
+              }
+          )
+  where
+    degradationKey compartment =
+      ( compartment.contextImportance,
+        compartment.contextEndedAt,
+        compartment.contextMaterializationVersion,
+        compartment.contextCompartmentId
+      )
 
 memoryDrop :: Text -> MemoryItem -> PolicyDrop
 memoryDrop source memory =
@@ -1251,6 +1418,16 @@ contextTrace budget inputs messages drops withinBudget =
       (sum [estimateTextTokens row.renderedText | row <- inputs.transcript])
       ContextIncluded
       "selected chronological raw transcript",
+    ContextTrace
+      "history.compartment"
+      (sum (map compartmentSelectedTokens inputs.compartments))
+      ContextIncluded
+      "selected deterministic P1/P2/P3 chronological projections",
+    ContextTrace
+      "history.compartment.p4"
+      0
+      (if any ((== TierP4) . (.contextTier)) inputs.compartments then ContextDropped else ContextIncluded)
+      "P4 episodes remain searchable and expandable but are omitted from the default prompt",
     ContextTrace
       "reply"
       (replyContextTokens inputs.replyCtx)
@@ -1303,6 +1480,9 @@ contextTrace budget inputs messages drops withinBudget =
     <> [ ContextTrace source tokens ContextDropped "removed deterministically under token pressure"
        | (source, tokens) <- Map.toAscList (Map.fromListWith (+) [(drop'.pdSource, drop'.pdTokens) | drop' <- drops])
        ]
+
+compartmentSelectedTokens :: ContextCompartment -> Int
+compartmentSelectedTokens = maybe 0 estimateTextTokens . selectedCompartmentSummary
 
 systemTokens :: [ChatMessage] -> Int
 systemTokens = \case
@@ -1401,6 +1581,34 @@ mergeHistory as bs =
   where
     sortKey h = (h.receivedAt, h.messageId)
 
+-- | Keep the newest coverage island.  Explicit historical backfill may have
+-- produced older active compartments separated from the live historian
+-- cursor by raw rows; those projections remain searchable but cannot be
+-- rendered as if the gap did not exist.
+latestGapFreeSuffix :: [ActiveCompartment] -> [ActiveCompartment]
+latestGapFreeSuffix compartments' = drop lastBreak compartments'
+  where
+    lastBreak =
+      foldl
+        (\latest (index, compartment) -> if compartment.activeGapBefore then index else latest)
+        0
+        (zip [0 ..] compartments')
+
+contextCompartmentFromActive :: ActiveCompartment -> ContextCompartment
+contextCompartmentFromActive active =
+  ContextCompartment
+    { contextCompartmentId = active.activeCompartmentId.unCompartmentId,
+      contextStartedAt = active.activeStartedAt,
+      contextEndedAt = active.activeEndedAt,
+      contextImportance = active.activeImportance,
+      contextConfidence = active.activeConfidence,
+      contextMaterializationVersion = active.activeMaterializationVersion,
+      contextSummaryP1 = active.activeSummaryP1,
+      contextSummaryP2 = active.activeSummaryP2,
+      contextSummaryP3 = active.activeSummaryP3,
+      contextTier = TierP1
+    }
+
 -- | Drop the messages another turn is already answering.
 --
 -- Their real reply hasn't been written yet, so each would sit in the
@@ -1462,6 +1670,7 @@ renderUser ::
   UTCTime -> -- now; the current message carries no timestamp of its own
   Int64 ->
   TriggerOrigin ->
+  [ContextCompartment] ->
   -- | The conversation transcript, chronological — or 'Nothing' when
   -- it is being emitted as separate turns and the @[recent messages]@
   -- block should not appear here at all.
@@ -1473,7 +1682,7 @@ renderUser ::
   [HistoryItem] -> -- trigger's own forward children (trigger IS a 转发)
   GroupMessage ->
   Text
-renderUser tz' now' selfId' origin' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
+renderUser tz' now' selfId' origin' compartments' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -1484,6 +1693,7 @@ renderUser tz' now' selfId' origin' mTranscript envText mMemBlock replyCtx' pinn
               T.intercalate "\n" (map (renderHistoryLine tz' selfId') pinnedItems'),
               ""
             ],
+        renderCompartments tz' compartments',
         case mTranscript of
           Nothing -> []
           Just [] -> ["[recent messages]", "(无历史消息)"]
@@ -1536,6 +1746,42 @@ renderUser tz' now' selfId' origin' mTranscript envText mMemBlock replyCtx' pinn
                    "请回复当前消息。"
                  ]
       ]
+
+renderCompartments :: TimeZone -> [ContextCompartment] -> [Text]
+renderCompartments tz' compartments' = case mapMaybe renderOne compartments' of
+  [] -> []
+  rows ->
+    ["[earlier conversation — rebuildable chronological summaries]"]
+      <> rows
+      <> [""]
+  where
+    renderOne compartment = do
+      summary <- selectedCompartmentSummary compartment
+      pure $
+        "[episode#"
+          <> T.pack (show compartment.contextCompartmentId)
+          <> " "
+          <> fmtDate tz' compartment.contextStartedAt
+          <> ".."
+          <> fmtDate tz' compartment.contextEndedAt
+          <> " "
+          <> compartmentTierText compartment.contextTier
+          <> "]: "
+          <> oneLine summary
+
+selectedCompartmentSummary :: ContextCompartment -> Maybe Text
+selectedCompartmentSummary compartment = case compartment.contextTier of
+  TierP1 -> Just compartment.contextSummaryP1
+  TierP2 -> Just compartment.contextSummaryP2
+  TierP3 -> Just compartment.contextSummaryP3
+  TierP4 -> Nothing
+
+compartmentTierText :: CompartmentTier -> Text
+compartmentTierText = \case
+  TierP1 -> "P1"
+  TierP2 -> "P2"
+  TierP3 -> "P3"
+  TierP4 -> "P4"
 
 renderHistoryLine :: TimeZone -> Int64 -> HistoryItem -> Text
 renderHistoryLine tz' selfId' h =

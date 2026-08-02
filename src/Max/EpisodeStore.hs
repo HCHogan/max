@@ -1203,6 +1203,13 @@ activateCompartment run compartment = do
 data ActiveCompartment = ActiveCompartment
   { activeCompartmentId :: !CompartmentId,
     activeRange :: !SourceRange,
+    activeStartedAt :: !UTCTime,
+    activeEndedAt :: !UTCTime,
+    -- | True when raw rows for this conversation exist between the previous
+    -- active compartment and this one.  The prompt collector uses the newest
+    -- gap-free suffix, so a partial historical backfill can never masquerade
+    -- as complete chronological coverage.
+    activeGapBefore :: !Bool,
     activeSummaryP1 :: !Text,
     activeSummaryP2 :: !Text,
     activeSummaryP3 :: !Text,
@@ -1225,6 +1232,9 @@ instance FromRow ActiveCompartment where
       <*> field
       <*> field
       <*> field
+      <*> field
+      <*> field
+      <*> field
 
 listActiveCompartments ::
   (WithConnection :> es, IOE :> es) =>
@@ -1232,12 +1242,27 @@ listActiveCompartments ::
   Eff es [ActiveCompartment]
 listActiveCompartments scope =
   query
-    "SELECT id, start_ingest_seq, end_ingest_seq, source_hash, source_message_count, \
-    \       summary_p1, summary_p2, summary_p3, episode_kind, importance, confidence, \
-    \       materialization_version \
-    \ FROM conversation_compartments \
-    \ WHERE conversation_id = ? AND state = 'active' \
-    \ ORDER BY start_ingest_seq, end_ingest_seq"
+    "WITH active AS ( \
+    \  SELECT c.*, lag(c.end_ingest_seq) OVER (ORDER BY c.start_ingest_seq, c.end_ingest_seq) AS previous_end \
+    \  FROM conversation_compartments AS c \
+    \  WHERE c.conversation_id = ? AND c.state = 'active' \
+    \) \
+    \ SELECT a.id, a.start_ingest_seq, a.end_ingest_seq, a.source_hash, a.source_message_count, \
+    \        first_message.received_at, last_message.received_at, \
+    \        (a.previous_end IS NOT NULL AND EXISTS ( \
+    \          SELECT 1 FROM messages AS gap_message \
+    \          WHERE gap_message.group_id = a.conversation_id \
+    \            AND gap_message.ingest_seq > a.previous_end \
+    \            AND gap_message.ingest_seq < a.start_ingest_seq \
+    \        )), \
+    \        a.summary_p1, a.summary_p2, a.summary_p3, a.episode_kind, a.importance, a.confidence, \
+    \        a.materialization_version \
+    \ FROM active AS a \
+    \ JOIN messages AS first_message \
+    \   ON first_message.group_id = a.conversation_id AND first_message.ingest_seq = a.start_ingest_seq \
+    \ JOIN messages AS last_message \
+    \   ON last_message.group_id = a.conversation_id AND last_message.ingest_seq = a.end_ingest_seq \
+    \ ORDER BY a.start_ingest_seq, a.end_ingest_seq"
     (Only (conversationStorageId scope))
 
 publicationFailure :: (IOE :> es) => String -> Eff es a

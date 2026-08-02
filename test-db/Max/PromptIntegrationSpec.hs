@@ -12,11 +12,17 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime, utc)
+import Database.PostgreSQL.Simple (Only (..))
+import Effectful.PostgreSQL (query)
 import Helpers (insertRawKind, insertRawMessage, truncateAll, updateDbSession, withDb, withDbLog)
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
+import Max.DB.History (MessageCursor (..))
 import Max.DB.Session (fetchOrInit)
 import Max.Effects.LLM (ChatMessage (..))
-import Max.Prompt (TriggerOrigin (..), buildContext)
+import Max.EpisodeStore
+import Max.ModelCatalog (defaultContextLimits)
+import Max.Prompt (ContextHistoryMode (..), TriggerOrigin (..), buildContext, buildContextWithLimitsMode)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -118,6 +124,69 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("已经办好了" `T.isInfixOf`)
       ub `shouldSatisfy` ("闲聊5" `T.isInfixOf`)
 
+    it "canaries one chronological compartment stream plus its complete raw tail" $ do
+      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "settled raw one"
+      insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "settled raw two"
+      let scope = conversationScopeFor (GroupId groupRaw)
+      end <- cursorFor pool 1002
+      run <-
+        withDb
+          pool
+          ( enqueueCaptureRun
+              scope
+              (MessageCursor 0)
+              end
+              CaptureRequest
+                { requestReason = CaptureIdle,
+                  requestHistorianProfile = "test",
+                  requestPromptVersion = "historian/test",
+                  requestSchemaVersion = 1
+                }
+          )
+          >>= requireJust "capture run"
+      lease <- withDb pool (claimCaptureRun "prompt-test" 60) >>= requireJust "capture lease"
+      source <- withDb pool $ loadCaptureSource run
+      let capture =
+            EpisodeCapture
+              { captureSummaryP1 = CitedSummary "settled full summary" [1001, 1002],
+                captureSummaryP2 = CitedSummary "settled compact summary" [1001, 1002],
+                captureSummaryP3 = CitedSummary "settled anchor" [1002],
+                captureImportance = 0.8,
+                captureConfidence = 1,
+                captureEpisodeKind = MaxInteraction,
+                captureMemoryProposals = []
+              }
+      validated <- case validateEpisodeCapture run source capture of
+        Right value -> pure value
+        Left errors -> expectationFailure (show errors) >> error "invalid capture"
+      _ <- withDb pool $ recordCaptureGenerated lease "exact raw historian response" capture []
+      _ <- withDb pool $ publishCaptureRun scope lease validated
+      insertRawMessage pool 1003 groupRaw otherMemberRaw botRaw (timeAt 11) (Just "Bob") "ambient raw tail"
+
+      s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
+      (msgs, moved) <-
+        withDbLog pool $
+          buildContextWithLimitsMode
+            defaultContextLimits
+            TieredContextHistory
+            "default-persona"
+            1
+            1
+            False
+            False
+            OriginDirect
+            utc
+            []
+            []
+            Set.empty
+            s
+            trigger
+      let ub = userBodyOf msgs
+      ub `shouldSatisfy` ("settled compact summary" `T.isInfixOf`)
+      ub `shouldSatisfy` ("ambient raw tail" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("settled raw one" `T.isInfixOf`))
+      moved `shouldBe` Nothing
+
     -- Everything the chat saw is in the table; only `kind = 'chat'`
     -- reaches the model.  Load-bearing for !btw in particular: its
     -- command message used to sit in the transcript as a question, and
@@ -202,3 +271,15 @@ spec pool = before_ (truncateAll pool) $
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)
+
+cursorFor :: DbPool -> Int64 -> IO MessageCursor
+cursorFor pool messageId = do
+  rows <- withDb pool $ query "SELECT ingest_seq FROM messages WHERE message_id = ?" (Only messageId)
+  case rows :: [Only Int64] of
+    Only cursor : _ -> pure (MessageCursor cursor)
+    _ -> expectationFailure "missing message cursor" >> pure (MessageCursor 0)
+
+requireJust :: String -> Maybe a -> IO a
+requireJust label = \case
+  Just value -> pure value
+  Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)

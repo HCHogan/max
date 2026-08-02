@@ -13,7 +13,7 @@ import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
-import Max.Prompt (ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyVideoCaptions, applyWatermark, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
+import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextHistoryMode (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyVideoCaptions, applyWatermark, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -124,6 +124,7 @@ baseInputs =
       session = emptySession,
       triggerMessage = triggerMsg [SegAt (UserId botId), SegText " hello"],
       transcript = [],
+      compartments = [],
       historyTurns = False,
       inFlight = Set.empty,
       pinnedItems = [],
@@ -823,8 +824,50 @@ spec = do
       plan.cpTrace
         `shouldSatisfy` any (\trace -> trace.ctSource == "prompt.total" && trace.ctDecision == ContextOverBudget)
 
+    it "renders a tiered compartment prefix before the token-sized raw tail" $ do
+      let raw = historyAt 11 101 otherMemberId (Just "Bob") "live tail"
+          old = compartmentAt 1 (UTCTime (fromGregorian 2025 1 1) 0) 0.1 "old P1" "old P2" "old P3"
+          recent = compartmentAt 2 (timeAt 10) 0.5 "recent P1" "recent P2" "recent P3"
+          plan = planContext generousLimits (tieredSnapshot baseInputs {compartments = [old, recent], transcript = [raw]})
+          (_, body) = splitMessages (renderContextPlan plan)
+      map (.contextTier) plan.cpInputs.compartments `shouldBe` [TierP4, TierP1]
+      body `shouldSatisfy` ("[episode#2" `T.isInfixOf`)
+      body `shouldSatisfy` ("recent P1" `T.isInfixOf`)
+      body `shouldSatisfy` (not . ("old P3" `T.isInfixOf`))
+      body `shouldSatisfy` ("live tail" `T.isInfixOf`)
+      plan.cpMovedAnchor `shouldBe` Nothing
+
+    it "degrades all compartment fidelity before dropping the raw tail" $ do
+      let raw = historyAt 11 101 otherMemberId (Just "Bob") "protected live tail"
+          rawPlan = planContext generousLimits (tieredSnapshot baseInputs {transcript = [raw]})
+          tightLimits = ContextLimits rawPlan.cpEstimatedPromptTokens 512 0 0
+          large = compartmentAt 1 (timeAt 10) 0.5 (T.replicate 4000 "P1 ") (T.replicate 2000 "P2 ") (T.replicate 500 "P3 ")
+          pressured = planContext tightLimits (tieredSnapshot baseInputs {compartments = [large], transcript = [raw]})
+      map (.messageId) pressured.cpInputs.transcript `shouldBe` [raw.messageId]
+      map (.contextTier) pressured.cpInputs.compartments `shouldBe` [TierP4]
+      pressured.cpTrace
+        `shouldSatisfy` any (\trace -> trace.ctSource == "history.compartment.p3->p4" && trace.ctDecision == ContextDropped)
+
+compartmentAt :: Int64 -> UTCTime -> Double -> Text -> Text -> Text -> ContextCompartment
+compartmentAt cid ended importance p1 p2 p3 =
+  ContextCompartment
+    { contextCompartmentId = cid,
+      contextStartedAt = ended,
+      contextEndedAt = ended,
+      contextImportance = importance,
+      contextConfidence = 1,
+      contextMaterializationVersion = cid,
+      contextSummaryP1 = p1,
+      contextSummaryP2 = p2,
+      contextSummaryP3 = p3,
+      contextTier = TierP1
+    }
+
 snapshot :: PromptInputs -> ContextSnapshot
-snapshot inputs = ContextSnapshot inputs 1000 2000
+snapshot inputs = ContextSnapshot inputs 1000 2000 LegacyContextHistory
+
+tieredSnapshot :: PromptInputs -> ContextSnapshot
+tieredSnapshot inputs = ContextSnapshot inputs 1 1 TieredContextHistory
 
 generousLimits :: ContextLimits
 generousLimits = ContextLimits 200000 4096 0 0

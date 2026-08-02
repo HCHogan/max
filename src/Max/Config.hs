@@ -107,6 +107,10 @@ data AppConfig = AppConfig
     -- compatibility fold.  It is not the model-window safety boundary;
     -- ContextBudget is.
     historyMax :: !Int,
+    -- | Conversation storage ids explicitly canaried onto active
+    -- compartments plus a token-budgeted raw tail.  Empty keeps the legacy
+    -- reader everywhere; removing an id is the rollback switch.
+    unboundedContextGroups :: ![Int64],
     -- | Display timezone for all model/user-facing timestamps
     -- (stored times stay UTC).  Default UTC+8.
     timezone :: !TimeZone,
@@ -289,6 +293,17 @@ appConfigParser usedRef =
           conf "history_max",
           metavar "N",
           value 80
+        ]
+    unboundedContextGroups <-
+      setting
+        [ help "Conversation/group ids canaried onto tiered unbounded context",
+          reader (commaSeparatedList auto),
+          option,
+          long "unbounded-context-groups",
+          env "MAX_UNBOUNDED_CONTEXT_GROUPS",
+          conf "unbounded_context_groups",
+          metavar "ID[,ID..]",
+          value []
         ]
     timezone <-
       minutesToTimeZone

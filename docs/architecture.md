@@ -57,7 +57,9 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    builtins baked from skills/ + docs/, DB rows shadowing them),
                    EpisodeScheduler (protected quiet-tail timing), Historian +
                    EpisodeStore (durable exact-range P1/P2/P3 capture and scoped
-                   memory proposals), MemoryExtract (nightly memory maintenance),
+                   memory proposals), Prompt context pipeline (feature-gated
+                   compartment generations + token-sized raw tail),
+                   MemoryExtract (nightly memory maintenance),
                    Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    shared claim loop), MediaCaption + Stickers (caption workers),
@@ -112,6 +114,19 @@ filtering, and active ranges have a database non-overlap constraint. The legacy
 deployment boundary can be backfilled explicitly without rewinding the live
 cursor. A nightly dream pass (4am local) remains a separate semantic-memory
 maintenance lifecycle.
+
+Prompt reads are cut over per conversation with
+`unbounded_context_groups`. A canaried conversation takes the newest active
+compartment suffix that has no uncovered raw rows, then reads every
+prompt-eligible message after the suffix's exact end cursor. Partial older
+backfills stay out of the stable prefix when a raw gap separates them. The pure
+ContextPolicy assigns P1/P2/P3/P4 using coarse age, episode distance,
+importance, confidence, and token pressure; P4 remains stored but is omitted
+from the default prompt. Under pressure active memory is removed first,
+compartments degrade one tier at a time, and only then is the oldest raw tail
+trimmed. A conversation with no active compartment automatically uses the
+legacy reader, and removing it from the allowlist rolls back prompt reads
+without changing raw messages, capture jobs, or projections.
 ```
 
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE

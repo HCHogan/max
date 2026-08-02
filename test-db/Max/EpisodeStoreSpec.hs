@@ -5,6 +5,7 @@ import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), execute)
@@ -236,6 +237,37 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     map (.activeRange) <$> withDb pool (listActiveCompartments scopeA)
       `shouldReturn` [run.crRange]
 
+  it "marks a raw-message hole between independently backfilled compartments" $ do
+    mapM_
+      (\mid -> insertRawMessage pool mid groupA member botId testTime Nothing ("message-" <> T.pack (show mid)))
+      [1001 .. 1005]
+    end2 <- cursorFor pool 1002
+    cursor3 <- cursorFor pool 1003
+    end5 <- cursorFor pool 1005
+
+    firstRun <-
+      withDb pool (enqueueBackfillRun scopeA (MessageCursor 0) end2 (request CaptureBackfill))
+        >>= requireJust "first backfill"
+    firstLease <- withDb pool (claimCaptureRun "backfill-1" 60) >>= requireJust "first backfill lease"
+    firstSource <- withDb pool $ loadCaptureSource firstRun
+    firstValidated <- requireValid firstRun firstSource (validCapture [1001, 1002] [])
+    _ <- withDb pool $ recordCaptureGenerated firstLease (captureJson (validCapture [1001, 1002] [])) (validCapture [1001, 1002] []) []
+    _ <- withDb pool $ publishCaptureRun scopeA firstLease firstValidated
+
+    secondRun <-
+      withDb pool (enqueueBackfillRun scopeA cursor3 end5 (request CaptureBackfill))
+        >>= requireJust "second backfill"
+    secondLease <- withDb pool (claimCaptureRun "backfill-2" 60) >>= requireJust "second backfill lease"
+    secondSource <- withDb pool $ loadCaptureSource secondRun
+    secondValidated <- requireValid secondRun secondSource (validCapture [1004, 1005] [])
+    _ <- withDb pool $ recordCaptureGenerated secondLease (captureJson (validCapture [1004, 1005] [])) (validCapture [1004, 1005] []) []
+    _ <- withDb pool $ publishCaptureRun scopeA secondLease secondValidated
+
+    active <- withDb pool $ listActiveCompartments scopeA
+    map (.activeGapBefore) active `shouldBe` [False, True]
+    map (.activeStartedAt) active `shouldBe` [testTime, testTime]
+    map (.activeEndedAt) active `shouldBe` [testTime, testTime]
+
 seedConversation :: DbPool -> IO ()
 seedConversation pool = do
   insertRawMessage pool 1001 groupA member botId testTime Nothing "Alice: tea?"
@@ -254,6 +286,13 @@ latestCursor pool = do
   case rows :: [Only (Maybe Int64)] of
     Only (Just cursor) : _ -> pure (MessageCursor cursor)
     _ -> expectationFailure "expected a latest cursor" >> pure (MessageCursor 0)
+
+cursorFor :: DbPool -> Int64 -> IO MessageCursor
+cursorFor pool messageId = do
+  rows <- withDb pool $ query "SELECT ingest_seq FROM messages WHERE message_id = ?" (Only messageId)
+  case rows :: [Only Int64] of
+    Only cursor : _ -> pure (MessageCursor cursor)
+    _ -> expectationFailure "expected message cursor" >> pure (MessageCursor 0)
 
 validCapture :: [Int64] -> [EpisodeMemoryProposal] -> EpisodeCapture
 validCapture ids proposals =

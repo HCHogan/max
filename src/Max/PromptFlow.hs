@@ -49,7 +49,7 @@ import Max.Effects.ToolOutput (InlineMedia (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
-import Max.Prompt (ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
+import Max.Prompt (ContextHistoryMode (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Session (Session (..))
 import Max.Tools.Images (viewImageSpec)
 import Max.Tools.Video (viewVideoSpec)
@@ -294,7 +294,7 @@ initialMessages =
   renderContextPlan $
     planContext
       (ContextLimits 32768 4096 4096 4096)
-      (ContextSnapshot promptFixture 1000 2000)
+      (ContextSnapshot promptFixture 1000 2000 LegacyContextHistory)
 
 promptFixture :: PromptInputs
 promptFixture =
@@ -303,6 +303,7 @@ promptFixture =
       session = fixtureSession,
       triggerMessage = fixtureTrigger,
       transcript = fixtureTranscript,
+      compartments = [],
       historyTurns = False,
       inFlight = Set.empty,
       pinnedItems = [history 7301 777888999 "老张" 19 2 "本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个"],
