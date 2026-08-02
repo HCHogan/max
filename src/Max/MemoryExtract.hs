@@ -16,14 +16,14 @@
 -- not a prompt problem.  Now a dispatch merely arms a per-group idle
 -- timer; group chatter pushes it back; when the group has been quiet
 -- for 'idleSecs' (or 'volumeCap' messages pile up mid-conversation),
--- one extraction reads everything since the last watermark
--- ('Session.memxAnchor') — the whole arc, including how it ended.
+-- one extraction starts at the durable conversation cursor and reads
+-- oldest-first pages — the whole arc, including how it ended.
 --
--- The watermark also buys restart safety: 'memxWorker' starts by
--- arming any group whose chat is newer than its anchor, so an
--- extraction lost to a crash or redeploy is caught up, not dropped.
+-- The cursor also buys restart safety: 'memxWorker' starts by arming
+-- any group with a newer ledger row, so an extraction lost to a crash
+-- or redeploy is caught up, not dropped.
 --
--- A failed extraction keeps the watermark where it was and is re-armed with
+-- A failed extraction keeps the cursor where it was and is re-armed with
 -- a short backoff.  Restart recovery remains the second line of defence.
 module Max.MemoryExtract
   ( MemxScheduler,
@@ -43,7 +43,7 @@ where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM
-import Control.Monad (forever, unless, when)
+import Control.Monad (forever, when)
 import Data.Aeson
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_, traverse_)
@@ -78,7 +78,20 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (conversationScopeFor)
-import Max.DB.History (HistoryItem (..), fetchRecentInGroup)
+import Max.DB.ConversationCursor
+  ( advanceCursor,
+    advanceCursorBefore,
+    loadCursor,
+    memoryExtractCursor,
+  )
+import Max.DB.History
+  ( HistoryItem (..),
+    HistoryPage (..),
+    LedgerItem (..),
+    fetchOldestPageAfter,
+    hasMessagesAfter,
+    pageEndCursor,
+  )
 import Max.DB.Memory
   ( MemoryItem (..),
     MemoryScope (..),
@@ -101,7 +114,7 @@ import Max.DB.Session (listSessions)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
 import Max.Prompt (renderHistoryLine)
-import Max.Session (Session (..), SessionRegistry, loadSession, readSession, updateSession)
+import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
 import Max.Time (fmtDate)
 import Max.Tools.Memory (checkContent, maxMemoriesPerScope)
 import Max.Util (catchSync, trySync)
@@ -142,16 +155,16 @@ idleSecs :: Int
 idleSecs = 600
 
 -- | A conversation that never goes quiet still extracts once this
--- many messages accumulate — the window must not outrun what one
--- extraction can read.
+-- many messages accumulate, bounding episode latency and cost.
 volumeCap :: Int
 volumeCap = 60
 
--- | Most messages one extraction fetches; also the boot-recovery cap.
+-- | Raw-ledger page size for one extraction pass.  A backlog is drained in
+-- oldest-first pages; this is a cost bound, never a history-loss boundary.
 windowFetch :: Int
 windowFetch = 120
 
--- | Windows smaller than this advance the watermark without an LLM
+-- | Windows smaller than this advance the cursor without an LLM
 -- call — a two-line exchange isn't an episode.
 minWindowMsgs :: Int
 minWindowMsgs = 4
@@ -234,9 +247,15 @@ memxWorker profile mEmbed tz sessions defaultModel sched = localDomain "memx" $ 
         trySync $
           extractEpisode profile mEmbed tz sessions defaultModel (GroupId gid)
       case result of
-        Right True -> pure ()
-        Right False -> scheduleRetry gid "extractor rejected the round"
+        Right ExtractCaughtUp -> pure ()
+        Right ExtractMore -> scheduleContinuation gid
+        Right ExtractIncomplete -> scheduleRetry gid "extractor rejected the round"
         Left e -> scheduleRetry gid (T.pack (show e))
+
+    scheduleContinuation gid = do
+      now <- liftIO getCurrentTime
+      liftIO (continueMemxAt sched (GroupId gid) now)
+      logInfo "memx: backlog continuation scheduled" $ object ["group_id" .= gid]
 
     scheduleRetry gid reason = do
       now <- liftIO getCurrentTime
@@ -248,7 +267,7 @@ memxWorker profile mEmbed tz sessions defaultModel sched = localDomain "memx" $ 
             "error" .= reason
           ]
 
-    -- Chat newer than the watermark with no timer running = an
+    -- Ledger rows newer than the cursor with no timer running = an
     -- extraction a restart swallowed.  Arm rather than fire: the
     -- conversation may still be going, and the idle rule applies to
     -- it like any other.
@@ -256,11 +275,26 @@ memxWorker profile mEmbed tz sessions defaultModel sched = localDomain "memx" $ 
       sessions' <- listSessions defaultModel
       for_ sessions' $ \s -> do
         let GroupId gid = s.groupId
-            floor' = max s.memxAnchor s.clearedAt
-        rows <- fetchRecentInGroup gid 0 floor' 1
-        unless (null rows) $ do
+            scope = conversationScopeFor s.groupId
+        cursor0 <- loadCursor scope memoryExtractCursor
+        cursor <- maybe (pure cursor0) (advanceCursorBefore scope memoryExtractCursor) s.clearedAt
+        pending <- hasMessagesAfter scope cursor
+        when pending $ do
           liftIO (armMemx sched s.groupId)
           logInfo "memx: recovered pending window" $ object ["group_id" .= gid]
+
+data ExtractEpisodeResult
+  = ExtractCaughtUp
+  | ExtractMore
+  | ExtractIncomplete
+
+-- | Continue a successfully processed backlog immediately.  The next worker
+-- pass re-reads the durable cursor, so restarts and competing updates remain
+-- safe.
+continueMemxAt :: MemxScheduler -> GroupId -> UTCTime -> IO ()
+continueMemxAt sched (GroupId gid) now = atomically $ do
+  modifyTVar' sched.msPending (Map.insert gid (now, 0))
+  modifyTVar' sched.msVersion (+ 1)
 
 -- | Block until one group's deadline has passed, then claim only that group.
 -- Removing a whole due batch made the unstarted tail disappear if processing
@@ -295,7 +329,9 @@ awaitDue sched = do
 --------------------------------------------------------------------------------
 -- One episode.
 
--- | Extract everything since the group's watermark, then advance it.
+-- | Extract one oldest-first ledger page, then CAS the durable cursor to the
+-- final row actually processed.  A failed LLM call or mutation leaves the
+-- cursor untouched, so the exact same page is replayed.
 extractEpisode ::
   (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Text ->
@@ -304,20 +340,31 @@ extractEpisode ::
   SessionRegistry ->
   Text ->
   GroupId ->
-  Eff es Bool
+  Eff es ExtractEpisodeResult
 extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
   t <- loadSession sessions defaultModel g
   s <- liftIO (readSession t)
   now <- liftIO getCurrentTime
-  let floor' = max s.memxAnchor s.clearedAt
-  rows <- fetchRecentInGroup gid 0 floor' windowFetch
-  let botInvolved = any (\h -> h.userId == h.selfId) rows
-      advance = updateSession t (\sess -> (sess {memxAnchor = Just now}, ()))
-      complete = advance >> pure True
+  let conversation = conversationScopeFor g
+  cursor0 <- loadCursor conversation memoryExtractCursor
+  cursor <- maybe (pure cursor0) (advanceCursorBefore conversation memoryExtractCursor) s.clearedAt
+  page <- fetchOldestPageAfter conversation cursor windowFetch
+  let rows = [entry.history | entry <- page.items, entry.transcriptEligible]
+      botInvolved = any (\h -> h.userId == h.selfId) rows
       incomplete reason = do
         logAttention "memx: extraction incomplete" $
           object ["group_id" .= gid, "error" .= reason]
-        pure False
+        pure ExtractIncomplete
+      complete = case pageEndCursor page of
+        Nothing -> pure ExtractCaughtUp
+        Just endCursor -> do
+          advanced <- advanceCursor conversation memoryExtractCursor cursor endCursor
+          stored <- if advanced then pure endCursor else loadCursor conversation memoryExtractCursor
+          if stored < endCursor
+            then incomplete "cursor compare-and-swap conflict"
+            else do
+              pending <- hasMessagesAfter conversation stored
+              pure $ if pending then ExtractMore else ExtractCaughtUp
   if length rows < minWindowMsgs || not botInvolved
     then do
       logInfo "memx: window skipped" $
@@ -334,7 +381,6 @@ extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
               . Map.toList
               . Map.fromListWith (+)
               $ [(h.userId, 1 :: Int) | h <- rows, h.userId /= h.selfId]
-      let conversation = conversationScopeFor (GroupId gid)
       groupMems <- listMemories (groupMemoryNamespace conversation)
       userMemSets <- for speakers $ \u -> do
         ms <- listMemories (userMemoryNamespace conversation u)
@@ -351,7 +397,7 @@ extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
           Left err -> do
             logAttention "memx: bad ops json" $
               object ["error" .= err, "raw" .= T.take 400 raw]
-            pure False
+            pure ExtractIncomplete
           Right [] -> do
             logInfo "memx: no ops" $ object ["group_id" .= gid, "messages" .= length rows]
             complete

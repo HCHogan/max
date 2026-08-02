@@ -11,6 +11,7 @@
 --   │                          ◄── positive: real QQ message_id        │
 --   │                          ◄── negative: synthetic (forward node)  │
 --   │  group_id, user_id, self_id    bigint                            │
+--   │  ingest_seq             bigint      unique DB ingestion order    │
 --   │  received_at             timestamptz default now()               │
 --   │  segments                jsonb       (raw OneBot segments)       │
 --   │  rendered_text           text        (with [image]/[face] etc.)  │
@@ -45,7 +46,8 @@
 --   schema_migrations(filename, applied_at)  ── set of applied .sql files
 -- @
 --
--- Indexes: @(group_id, received_at DESC)@ for chronological group reads;
+-- Indexes: @(group_id, received_at DESC)@ for prompt history and
+-- @(group_id, ingest_seq)@ for lossless oldest-first ledger reads;
 -- @user_id@, @reply_to_message_id@, @forwarded_in_message_id@,
 -- @original_message_id@ for lookups; @GIN(rendered_text_tsv)@ for FTS;
 -- @sha256@ on @message_images@ for "which messages reference this blob".

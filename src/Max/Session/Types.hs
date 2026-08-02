@@ -55,10 +55,10 @@ data Session = Session
     -- proactive mode is on, the intent classifier may trigger the bot
     -- on messages that neither @-mention nor quote it.
     proactiveOverride :: !(Maybe Bool),
-    -- | Memory-extraction watermark: chat up to this instant has been
-    -- through (or deliberately skipped by) the episode extractor
-    -- ("Max.MemoryExtract").  Bookkeeping like 'contextAnchor', not a
-    -- user decision.  'Nothing' = never extracted.
+    -- | Legacy memory-extraction timestamp retained for schema/API
+    -- compatibility.  Exact progress moved to the independent,
+    -- ingest-sequence-based @conversation_cursors@ store in migration 036;
+    -- new extraction passes no longer update this field.
     memxAnchor :: !(Maybe UTCTime),
     -- | Per-session reasoning-effort override, set by @!effort@.
     -- 'Nothing' = follow the active profile's configured effort.

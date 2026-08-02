@@ -35,8 +35,9 @@ src/Max/Http/      Json: bounded buffered POST + domain retries; Stream: SSE fol
 src/Max/HttpRuntime process-wide http-client managers, bounded response scopes,
                     and typed transport failures
 src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
-                   History, Session, Files, Memory, Permissions, PlatformIds,
-                   Reminder, Stickers, FetchQueue (media work list), Calls, Usage
+                   History, ConversationCursor, Session, Files, Memory, Permissions,
+                   PlatformIds, Reminder, Stickers, FetchQueue (media work list),
+                   Calls, Usage
 src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher, Help (the
                    !help text — a leaf module so the self-knowledge skill can
                    splice it at registry init)
@@ -54,7 +55,7 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    Toolset (the full tool list, assembled from BotEnv), Intent
                    (proactive classifier), Skills (write-through registry:
                    builtins baked from skills/ + docs/, DB rows shadowing them),
-                   MemoryExtract (episode extraction: watermark + idle-timer
+                   MemoryExtract (episode extraction: ingest cursor + idle-timer
                    scheduler, nightly dream consolidation), Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    shared claim loop), MediaCaption + Stickers (caption workers),
@@ -98,9 +99,12 @@ app/Main.hs        wires effects + workers + server
 
 Memory extraction is episode-scoped rather than per-dispatch: the memx worker
 fires when a group has been quiet for ten minutes (or sixty messages pile up),
-reads everything since the `sessions.memx_anchor` watermark in one pass, and
-advances the watermark after applying the ADD/UPDATE/DELETE ops.  A nightly
-dream pass (4am local) consolidates scopes that grew past fifteen entries.
+reads the oldest raw-ledger page after its `conversation_cursors.ingest_seq`,
+and advances that cursor with CAS only after applying the ADD/UPDATE/DELETE
+ops. Backlogs continue page by page; command/synthetic/forward rows participate
+in pagination before transcript filtering, so an invisible row cannot create a
+cursor hole. A nightly dream pass (4am local) consolidates scopes that grew past
+fifteen entries.
 ```
 
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
@@ -121,7 +125,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 |---|---|
 | Messages, sessions, memories, stickers, permissions, skills | written through on every mutation (builtin skills re-seed from the binary) |
 | Pending image / video / forward / file fetches | `fetch_jobs` rows claimed under a lease — a dead process's lease expires and the next claim picks the job back up |
-| Pending memory-extraction windows | `sessions.memx_anchor` watermark; boot re-arms any group whose chat outran its anchor |
+| Pending memory-extraction windows | conversation-scoped `conversation_cursors.ingest_seq`; boot re-arms any group with a newer ledger row |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll for `NULL` columns, so any gap backfills itself |
 

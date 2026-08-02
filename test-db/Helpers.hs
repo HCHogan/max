@@ -61,6 +61,7 @@ truncateAll pool = withConn pool $ \c -> do
     execute_
       c
       "TRUNCATE \
+      \  conversation_cursors, \
       \  messages, \
       \  images, \
       \  message_images, \

@@ -18,6 +18,7 @@ import Control.Exception (bracket)
 import Data.Text qualified as T
 import Helpers (truncateAll)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
+import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
@@ -47,6 +48,7 @@ main = do
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
         SessionSpec.spec pool
+        ConversationCursorSpec.spec pool
         HistorySpec.spec pool
         FilesSpec.spec pool
         MessageSpec.spec pool

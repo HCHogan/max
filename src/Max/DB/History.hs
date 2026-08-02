@@ -1,7 +1,13 @@
 module Max.DB.History
   ( HistoryItem (..),
+    MessageCursor (..),
+    LedgerItem (..),
+    HistoryPage (..),
     bestName,
     fetchRecentInGroup,
+    fetchOldestPageAfter,
+    pageEndCursor,
+    hasMessagesAfter,
     fetchMessageInScope,
     fetchMentionHistory,
     fetchMessagesByIdsInScope,
@@ -21,6 +27,11 @@ import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
+
+-- | A database-owned total order over message ingestion.  Unlike platform
+-- message ids or timestamps, this is unique and monotonic.
+newtype MessageCursor = MessageCursor {ingestSeq :: Int64}
+  deriving stock (Show, Eq, Ord)
 
 -- | The fields needed to render a message as a line of prompt context.
 data HistoryItem = HistoryItem
@@ -52,6 +63,30 @@ instance FromRow HistoryItem where
       <*> field
       <*> field
       <*> field
+
+-- | One raw-ledger row together with whether the old memory extractor should
+-- render it into its transcript.  Pagination includes every row before this
+-- policy flag is considered, so filtered commands/synthetic/forward children
+-- cannot create cursor holes.
+data LedgerItem = LedgerItem
+  { cursor :: !MessageCursor,
+    history :: !HistoryItem,
+    transcriptEligible :: !Bool
+  }
+  deriving stock (Show)
+
+instance FromRow LedgerItem where
+  fromRow =
+    LedgerItem
+      <$> (MessageCursor <$> field)
+      <*> fromRow
+      <*> field
+
+data HistoryPage = HistoryPage
+  { items :: ![LedgerItem],
+    hasMore :: !Bool
+  }
+  deriving stock (Show)
 
 -- | The name group members actually see for this sender: 群名片
 -- first, then nickname; 'Nothing' when both are absent/blank (QQ
@@ -102,6 +137,56 @@ fetchRecentInGroup gid excludeId since n = do
         \  LIMIT ?"
         ((gid, excludeId) :. Only t :. Only n)
   pure (reverse (rows :: [HistoryItem]))
+
+-- | Read the oldest raw ledger rows strictly after a cursor.  Fetching one
+-- extra row makes continuation explicit without advancing beyond data the
+-- caller actually received.
+fetchOldestPageAfter ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  MessageCursor ->
+  Int ->
+  Eff es HistoryPage
+fetchOldestPageAfter scope (MessageCursor after) requestedSize = do
+  let pageSize = max 1 requestedSize
+  rows <-
+    query
+      "SELECT ingest_seq, \
+      \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
+      \       (forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat') \
+      \  FROM messages \
+      \  WHERE group_id = ? AND ingest_seq > ? \
+      \  ORDER BY ingest_seq ASC \
+      \  LIMIT ?"
+      (conversationStorageId scope, after, pageSize + 1)
+  let allRows = rows :: [LedgerItem]
+  pure
+    HistoryPage
+      { items = take pageSize allRows,
+        hasMore = length allRows > pageSize
+      }
+
+pageEndCursor :: HistoryPage -> Maybe MessageCursor
+pageEndCursor page = case reverse page.items of
+  row : _ -> Just row.cursor
+  [] -> Nothing
+
+hasMessagesAfter ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  MessageCursor ->
+  Eff es Bool
+hasMessagesAfter scope (MessageCursor after) = do
+  rows <-
+    query
+      "SELECT EXISTS ( \
+      \  SELECT 1 FROM messages \
+      \  WHERE group_id = ? AND ingest_seq > ? \
+      \)"
+      (conversationStorageId scope, after)
+  pure $ case rows :: [Only Bool] of
+    Only pending : _ -> pending
+    [] -> False
 
 -- | One message by id, confined to the current conversation.
 fetchMessageInScope ::
