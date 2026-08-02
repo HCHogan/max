@@ -17,6 +17,8 @@ module Max.Historian
     -- * Pure policy exposed for tests
     takeEpisodeByToken,
     renderHistorianSourceLine,
+    renderHistorianMessages,
+    generateHistorianCapture,
   )
 where
 
@@ -63,23 +65,23 @@ import Max.EpisodeScheduler
   )
 import Max.EpisodeStore
 import Max.MemoryStore
-  ( MemoryItem (..),
-    MemoryId (..),
+  ( MemoryId (..),
+    MemoryItem (..),
     MemoryVersion (..),
     groupMemoryNamespace,
     listMemories,
     userMemoryNamespace,
   )
 import Max.ModelCatalog
-  ( ModelCatalog,
-    ModelCapabilities (..),
+  ( ModelCapabilities (..),
+    ModelCatalog,
     contextInputBudget,
     defaultContextLimits,
     lookupModelCapabilities,
   )
 import Max.Session.Types (Session (..))
 import Max.Tasks (TaskRegistry, inFlightTriggers)
-import Max.Time (fmtDate, fmtDateHM)
+import Max.Time (fmtDateHM, fmtEnvStamp)
 import Max.Util (catchSync, trySync)
 import OneBot.Types (GroupId (..))
 
@@ -376,25 +378,73 @@ generateCapture inputBudget tz profile scope run source = do
   now <- liftIO getCurrentTime
   memoryCatalog <- loadMemoryCatalog scope source
   let sourceLines = [renderHistorianSourceLine tz entry.history | entry <- source, entry.transcriptEligible]
-      input = renderHistorianInput tz now run memoryCatalog sourceLines inputBudget
-      messages = [MsgSystem historianSystem, MsgUser input]
+      messages = renderHistorianMessages tz now run memoryCatalog sourceLines inputBudget
   if estimateMessagesTokens messages > inputBudget
     then
       pure $
         Left
-          ( input,
+          ( case messages of
+              [_, MsgUser input] -> input
+              _ -> "",
             [CaptureValidationError "input_budget" "historian prompt exceeded the configured profile input budget"]
           )
-    else
-      chat (ChatCtx "historian" (Just run.crConversationId) Nothing) profile messages [] >>= \case
-        Left err ->
-          pure (Left ("", [CaptureValidationError "provider" err]))
-        Right ToolCallsResp {} ->
-          pure (Left ("", [CaptureValidationError "response" "historian returned unexpected tool calls"]))
-        Right (ContentResp raw) -> case parseEpisodeCapture raw of
-          Left err ->
-            pure (Left (raw, [CaptureValidationError "response" (T.pack err)]))
-          Right capture -> pure (Right (raw, capture))
+    else generateHistorianCapture profile run.crConversationId messages
+
+-- | Execute the exact model-facing Historian generation policy.  A malformed
+-- JSON/schema response receives one bounded repair turn containing the raw
+-- answer and a precise wire contract.  Provider failures and semantic
+-- validation failures are not retried here: the durable capture-run retry
+-- policy owns those, and omission must never be hidden by repeated sampling.
+generateHistorianCapture ::
+  (LLM :> es) =>
+  Text ->
+  Int64 ->
+  [ChatMessage] ->
+  Eff es (Either (Text, [CaptureValidationError]) (Text, EpisodeCapture))
+generateHistorianCapture profile conversationId messages = do
+  first <- chat historianCtx profile messages []
+  case decodeResponse first of
+    Right capture -> pure (Right capture)
+    Left (raw, responseError, True) -> do
+      repaired <- chat historianCtx profile (repairMessages raw) []
+      pure $ case decodeResponse repaired of
+        Right capture -> Right capture
+        Left (repairRaw, repairError, _) ->
+          Left
+            ( repairRaw,
+              [ CaptureValidationError
+                  "response"
+                  ("initial response invalid: " <> responseError <> "; repair invalid: " <> repairError)
+              ]
+            )
+    Left (raw, responseError, False) ->
+      pure (Left (raw, [CaptureValidationError "response" responseError]))
+  where
+    historianCtx = ChatCtx "historian" (Just conversationId) Nothing
+    decodeResponse = \case
+      Left err -> Left ("", "provider: " <> err, False)
+      Right ToolCallsResp {} -> Left ("", "historian returned unexpected tool calls", False)
+      Right (ContentResp raw) -> case parseEpisodeCapture raw of
+        Left err -> Left (raw, T.pack err, True)
+        Right capture -> Right (raw, capture)
+    repairMessages raw =
+      messages
+        <> [ MsgAssistant (if T.null (T.strip raw) then "{}" else T.take 16_000 raw),
+             MsgUser historianRepairPrompt
+           ]
+
+historianRepairPrompt :: Text
+historianRepairPrompt =
+  T.unlines
+    [ "The previous answer was not valid EpisodeCapture JSON.",
+      "Return the complete corrected JSON object only; do not explain the repair.",
+      "summary_p1/summary_p2/summary_p3 must each be objects with text and evidence_message_ids.",
+      "Every message id, user_id, memory id, and version must be a JSON number, never a quoted string.",
+      "For add use only action,scope,user_id,content,category,evidence_message_ids.",
+      "For update use only action,id,version,content,evidence_message_ids; category/scope/user_id are forbidden.",
+      "For archive use only action,id,version,evidence_message_ids.",
+      "Use exactly the top-level and nested fields required by the original system instruction."
+    ]
 
 loadMemoryCatalog ::
   (WithConnection :> es, IOE :> es) =>
@@ -437,7 +487,7 @@ loadMemoryCatalog scope source = do
 renderHistorianInput :: TimeZone -> UTCTime -> CaptureRun -> [Text] -> [Text] -> Int -> Text
 renderHistorianInput tz now run memoryCatalog sourceLines inputBudget =
   T.unlines $
-    [ "date=" <> fmtDate tz now,
+    [ "local_now=" <> fmtEnvStamp tz now,
       "conversation_id=" <> tshow run.crConversationId,
       "source_ingest_range=" <> tshow run.crRange.srStart.ingestSeq <> ".." <> tshow run.crRange.srEnd.ingestSeq,
       "source_message_count=" <> tshow run.crRange.srMessageCount,
@@ -448,6 +498,15 @@ renderHistorianInput tz now run memoryCatalog sourceLines inputBudget =
       <> ["", "Source transcript (cite message_id values exactly):"]
       <> sourceLines
       <> ["", "Return the EpisodeCapture JSON object."]
+
+-- | Exact production Historian request construction, exposed so the offline
+-- release-gate executable can replay labelled fixtures against a real profile
+-- without touching PostgreSQL or publishing projections.
+renderHistorianMessages :: TimeZone -> UTCTime -> CaptureRun -> [Text] -> [Text] -> Int -> [ChatMessage]
+renderHistorianMessages tz now run memoryCatalog sourceLines inputBudget =
+  [ MsgSystem historianSystem,
+    MsgUser (renderHistorianInput tz now run memoryCatalog sourceLines inputBudget)
+  ]
 
 takeLinesByToken :: Int -> [Text] -> [Text]
 takeLinesByToken tokenLimit = go 0
@@ -506,18 +565,28 @@ historianSystem =
       "  memory_proposals: array",
       "",
       "Summary policy:",
+      "  Write summaries and memory content in the source transcript's dominant language; preserve names, dates, and technical terms exactly.",
       "  P1 (<=4000 chars): faithful episode account: speakers, goals, decisions, commitments, unresolved points, and outcome.",
       "  P2 (<=2000 chars): compact key facts and outcome.",
       "  P3 (<=500 chars): one anchor saying what happened.",
       "  Every summary must cite one or more message_id values from the supplied transcript.",
       "  Preserve who said what. Do not turn speculation, jokes, or another speaker's claim into a fact about someone.",
       "",
-      "Memory proposals are optional and must be stable enough to help future conversations. Most episodes need none.",
+      "Memory proposals are optional and must be stable enough to help future conversations. Most ambient/social episodes need none.",
+      "Never store one-off meal/social plans, same-day coordination, transient troubleshooting outcomes, or casual acknowledgements as durable memory.",
+      "An explicit group decision or a named speaker's explicit commitment with an absolute date is high-value durable memory; propose it when it is not already listed.",
+      "When a speaker corrects an earlier statement, store only the final state and cite the correcting message (the earlier message may be cited too).",
+      "When new evidence corrects or replaces an existing listed memory about the same subject and topic, update that id/version in place; never archive it and add a duplicate identity.",
+      "Archive an existing memory only when it is clearly obsolete and there is no replacement fact to store.",
       "Allowed add categories: person_fact, preference, group_convention, ongoing_project, commitment, decision, running_joke.",
       "Never infer relationship_context. Never create reminders, tasks, or transient state as memory.",
+      "A named person's fact, preference, project, or commitment must use user scope with that user_id; never encode the subject id only inside group-memory content.",
+      "When several speakers make distinct durable commitments, emit one user-scope commitment proposal for each speaker; do not collapse them into group memory or omit one because another was captured.",
+      "Use group scope for group-wide decisions, conventions, and shared running jokes, not as a container for an individual's memory.",
       "For user scope, user_id must be the subject and at least one cited message must be spoken by that user.",
       "For group scope, omit user_id. Only update/archive ids and versions listed in Existing scoped memories.",
       "Each proposal must cite exact source message ids. Content is self-contained, <=300 chars, with absolute dates.",
+      "Resolve yesterday/tomorrow/weekday and other relative dates from the local_now date and weekday supplied in the input; never guess the calendar.",
       "Maximum 12 proposals.",
       "",
       "Proposal forms:",

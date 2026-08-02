@@ -1,10 +1,14 @@
 module Max.HistorianSpec (spec) where
 
+import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Time (TimeZone, UTCTime, minutesToTimeZone)
+import Effectful (liftIO, runEff)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
-import Max.Historian (renderHistorianSourceLine, takeEpisodeByToken)
+import Max.Effects.LLM (ChatMessage (..), ChatResponse (..), LLMInterpreter (..), runLLMWith)
+import Max.Historian (generateHistorianCapture, renderHistorianSourceLine, takeEpisodeByToken)
 import Test.Hspec
 
 spec :: Spec
@@ -34,6 +38,27 @@ spec = describe "Historian token and identity policy" $ do
       (HistoryItem 101 42 1000 (Just "Alice") Nothing "hello\nworld" testTime (Just 99))
       `shouldBe` "[2026-08-02 20:00 user_id=42 name=Alice message_id=101 reply_to=99]: hello ⏎ world"
 
+  it "repairs one malformed structured response with the same production policy" $ do
+    calls <- newIORef (0 :: Int)
+    result <-
+      runEff
+        . runLLMWith
+          LLMInterpreter
+            { liChat = \_ _ messages _ _ -> liftIO $ do
+                attempt <- atomicModifyIORef' calls (\count -> (count + 1, count))
+                if attempt == 0
+                  then pure (Right (ContentResp "{broken"))
+                  else do
+                    messages `shouldSatisfy` \case
+                      [MsgSystem _, MsgUser _, MsgAssistant raw, MsgUser repair] ->
+                        raw == "{broken" && "JSON number" `T.isInfixOf` repair
+                      _ -> False
+                    pure (Right (ContentResp validRawCapture))
+            }
+        $ generateHistorianCapture "test" 7 [MsgSystem "system", MsgUser "source"]
+    result `shouldSatisfy` \case Right (_, _) -> True; _ -> False
+    readIORef calls `shouldReturn` 2
+
 ledger :: Int64 -> Int64 -> Bool -> Text -> LedgerItem
 ledger seqNo message eligible body =
   LedgerItem
@@ -46,3 +71,7 @@ timezone = minutesToTimeZone 480
 
 testTime :: UTCTime
 testTime = read "2026-08-02 12:00:00 UTC"
+
+validRawCapture :: Text
+validRawCapture =
+  "{\"summary_p1\":{\"text\":\"full\",\"evidence_message_ids\":[11]},\"summary_p2\":{\"text\":\"compact\",\"evidence_message_ids\":[11]},\"summary_p3\":{\"text\":\"anchor\",\"evidence_message_ids\":[11]},\"importance\":0.7,\"confidence\":0.8,\"episode_kind\":\"ambient\",\"memory_proposals\":[]}"

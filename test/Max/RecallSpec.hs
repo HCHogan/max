@@ -37,6 +37,21 @@ spec = describe "Max.Recall" $ do
     length first `shouldBe` 5
     first `shouldBe` selectRecallHits now 5 candidates
 
+  describe "offline direct-turn auto-hint candidate policy" $ do
+    it "requires a strong primary signal and returns at most three hints" $ do
+      let strongLexical = candidate "memory" "memory:lexical" 0.95
+          strongSemantic = (candidate "episode" "episode:semantic" 0.1) {rcSemanticScore = Just 0.9}
+          boostedButWeak = (candidate "pin" "message:weak" 0.4) {rcPinned = True, rcPermanent = True, rcImportance = 1}
+          additional = [candidate "message" ("message:" <> fromString (show n)) 0.99 | n <- [1 .. 4 :: Int]]
+          hits = selectDirectAutoHints now DirectUserTurn (strongLexical : strongSemantic : boostedButWeak : additional)
+      length hits `shouldBe` 3
+      map (.rhDedupKey) hits `shouldNotContain` ["message:weak"]
+
+    it "is inert for group and proactive turns" $ do
+      let strong = [candidate "memory" "memory:1" 1]
+      selectDirectAutoHints now GroupUserTurn strong `shouldBe` []
+      selectDirectAutoHints now ProactiveTurn strong `shouldBe` []
+
 candidate :: Text -> Text -> Double -> RecallCandidate
 candidate source key lexical =
   RecallCandidate

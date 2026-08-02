@@ -41,6 +41,20 @@ spec = describe "EpisodeCapture validation" $ do
         map (.validationPath) (captureValidationWarnings validated)
           `shouldBe` ["memory_proposals[0].user_id", "memory_proposals[1].category"]
 
+  it "enforces category subject semantics independently of model wording" $ do
+    let capture =
+          validCapture
+            { captureMemoryProposals =
+                [ ProposalAdd "group" Nothing "Alice promised a release" (Just "commitment") [11],
+                  ProposalAdd "user" (Just 42) "The group always reviews changes" (Just "group_convention") [11]
+                ]
+            }
+    case validateEpisodeCapture captureRun source capture of
+      Left errors -> expectationFailure (show errors)
+      Right validated ->
+        map (.validationMessage) (captureValidationWarnings validated)
+          `shouldBe` ["commitment requires user scope", "group_convention requires group scope"]
+
 captureRun :: CaptureRun
 captureRun =
   CaptureRun

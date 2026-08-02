@@ -102,6 +102,31 @@ deduplication, and deterministic ordering semantics. `Max.MemoryStoreSpec`
 also checks that maintenance receives current evidence and that evidenced
 supersession appends its lifecycle version, evidence, and audit atomically.
 
+### Unbounded-context release gate
+
+The checked-in Historian fixtures cover attribution, corrections, ambient
+chatter, dated decisions and commitments, relative dates, rejected jokes,
+Reminder separation, media/reply handles, and evidence-backed memory updates.
+Validate all labels and the disabled direct-auto-recall policy without an API
+call:
+
+```sh
+cabal run max-context-eval -- --offline-only
+```
+
+Replay the exact production Historian path against a candidate profile and
+repeat every fixture to expose stochastic schema/quality failures:
+
+```sh
+cabal run max-context-eval -- --eval-profile PROFILE --runs 3 \
+  --min-pass-rate 1 --max-average-prompt-tokens 1500
+```
+
+`--case TEXT` narrows Historian fixtures while tuning one failed expectation.
+The evaluator counts a bounded schema-repair call in both latency and
+per-capture token totals. Passing recall fixtures never enables auto-hints;
+production injection remains disconnected until a separate product decision.
+
 ## Config: finding out where a value came from
 
 Settings are layered CLI > env > YAML > default, and the env layer is the one

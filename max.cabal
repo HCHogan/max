@@ -17,6 +17,8 @@ build-type:         Simple
 -- reporting "Up to date" and the old bytes stay embedded, which is a
 -- silent stale deploy rather than a build error.
 extra-source-files:
+    context-eval/README.md
+    context-eval/fixtures/*.jsonl
     docs/architecture.md
     docs/features.md
     docs/prompt-flow.md
@@ -259,6 +261,24 @@ executable max-intent-eval
         , max
         , opt-env-conf         >= 0.15 && < 0.17
         , text                 >= 2.1  && < 2.2
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+
+-- Offline release gate for Historian quality/cost and the deliberately
+-- disabled direct-turn auto-recall policy.
+executable max-context-eval
+    import:           warnings, lang
+    hs-source-dirs:   context-eval
+    main-is:          Main.hs
+    build-depends:
+        , aeson                >= 2.2  && < 2.4
+        , base                 >= 4.20 && < 5
+        , bytestring           >= 0.12 && < 0.13
+        , effectful            >= 2.5  && < 2.7
+        , log-effectful        >= 1.0  && < 1.1
+        , max
+        , opt-env-conf         >= 0.15 && < 0.17
+        , text                 >= 2.1  && < 2.2
+        , time                 >= 1.12 && < 1.16
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
 
 test-suite max-test

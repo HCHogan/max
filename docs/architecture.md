@@ -121,6 +121,17 @@ facts without a replacement. Every operation is a scoped MemoryStore CAS that
 appends a version, maintenance evidence, and audit record; automatic actors
 cannot mutate permanent memory.
 
+A model response that cannot satisfy the strict `EpisodeCapture` JSON schema
+receives one bounded repair turn with explicit field and numeric-id rules. The
+repair uses the same capture lease and its extra token/latency cost remains
+visible; provider failures and semantic omissions still fall through to the
+durable run retry instead of being resampled until they look acceptable.
+`max-context-eval` replays hand-labelled, synthetic multi-speaker fixtures
+through this exact production request path, requires valid provenance and
+memory precision, and reports calls, repairs, provider tokens, cache hits, and
+latency. Its separate direct-turn auto-hint fixture exercises a candidate
+strong-signal policy which intentionally has no production prompt caller.
+
 During implementation, prompt reads can be exercised per conversation with
 the temporary `unbounded_context_groups` development gate. An enrolled conversation takes the newest active
 compartment suffix that has no uncovered raw rows, then reads every

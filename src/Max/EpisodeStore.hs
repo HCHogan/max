@@ -58,8 +58,8 @@ import Data.List (nub)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
-import Data.String (fromString)
 import Data.Set qualified as Set
+import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -500,6 +500,7 @@ validateProposal source index proposal = case proposal of
           ( ValidatedAdd ScopeGroup Nothing <$> validContent <*> validCategory <*> pure evidence,
             contentErrors
               <> categoryErrors
+              <> categoryScopeErrors ScopeGroup categoryRaw
               <> evidenceErrs
               <> [err "user_id" "group scope must not specify user_id" | userId /= Nothing]
           )
@@ -511,7 +512,7 @@ validateProposal source index proposal = case proposal of
                       [err "user_id" "at least one cited message must be spoken by the subject"]
                 _ -> []
            in ( ValidatedAdd ScopeUser userId <$> validContent <*> validCategory <*> pure evidence,
-                contentErrors <> categoryErrors <> evidenceErrs <> subjectErrors
+                contentErrors <> categoryErrors <> categoryScopeErrors ScopeUser categoryRaw <> evidenceErrs <> subjectErrors
               )
     where
       (validContent, contentErrors) = validateMemoryContent (base <> ".content") content
@@ -538,6 +539,12 @@ validateProposal source index proposal = case proposal of
     finish (candidate, errors) = case (candidate, errors) of
       (Just validated, []) -> Right (IndexedValidatedProposal index proposal validated)
       _ -> Left (RejectedProposal index proposal errors)
+    categoryScopeErrors scope categoryRaw = case categoryRaw >>= parseCategory of
+      Just PersonFact | scope == ScopeGroup -> [err "category" "person_fact requires user scope"]
+      Just Preference | scope == ScopeGroup -> [err "category" "preference requires user scope"]
+      Just Commitment | scope == ScopeGroup -> [err "category" "commitment requires user scope"]
+      Just GroupConvention | scope == ScopeUser -> [err "category" "group_convention requires group scope"]
+      _ -> []
 
 validateMemoryContent :: Text -> Text -> (Maybe Text, [CaptureValidationError])
 validateMemoryContent path raw

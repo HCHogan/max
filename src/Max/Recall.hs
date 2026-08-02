@@ -8,11 +8,13 @@
 -- the raw/pinned/caption forms of one source message.
 module Max.Recall
   ( RecallCorpus (..),
+    AutoRecallEligibility (..),
     RecallCandidate (..),
     RecallHit (..),
     searchRecall,
     searchRecallIn,
     selectRecallHits,
+    selectDirectAutoHints,
   )
 where
 
@@ -41,6 +43,16 @@ data RecallCorpus
   | RecallPins
   | RecallCaptions
   deriving stock (Show, Eq, Ord, Enum, Bounded)
+
+-- | Evaluation-only eligibility for a possible future volatile auto-recall
+-- lane.  No production prompt path calls 'selectDirectAutoHints': the policy
+-- remains disabled until realistic offline fixtures demonstrate that these
+-- deliberately strict thresholds are useful and leak-free.
+data AutoRecallEligibility
+  = DirectUserTurn
+  | GroupUserTurn
+  | ProactiveTurn
+  deriving stock (Show, Eq, Ord)
 
 data RecallCandidate = RecallCandidate
   { rcSource :: !Text,
@@ -160,6 +172,21 @@ selectRecallHits now requestedLimit candidates =
     selectedKeys = Set.fromList (map (.rcDedupKey) quotaSelected)
     overflow = [candidate | candidate <- ranked, candidate.rcDedupKey `Set.notMember` selectedKeys]
     final = take resultLimit (sortCandidates now (quotaSelected <> take (resultLimit - length quotaSelected) overflow))
+
+-- | Candidate policy for offline direct-turn auto-hint evaluation.  It is
+-- intentionally absent from ContextCollector/ContextPolicy.  Only explicit
+-- direct user turns are eligible, at most three snippets survive, and a weak
+-- rank boost can never promote a candidate without a strong lexical or
+-- semantic retrieval signal of its own.
+selectDirectAutoHints :: UTCTime -> AutoRecallEligibility -> [RecallCandidate] -> [RecallHit]
+selectDirectAutoHints now eligibility candidates = case eligibility of
+  DirectUserTurn -> selectRecallHits now 3 (filter strongSignal candidates)
+  GroupUserTurn -> []
+  ProactiveTurn -> []
+  where
+    strongSignal candidate =
+      maybe False (>= 0.92) candidate.rcLexicalScore
+        || maybe False (>= 0.86) candidate.rcSemanticScore
 
 minimumSignal :: Double
 minimumSignal = 0.08
