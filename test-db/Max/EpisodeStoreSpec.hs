@@ -1,0 +1,242 @@
+module Max.EpisodeStoreSpec (spec) where
+
+import Control.Exception (SomeException)
+import Data.Aeson (encode)
+import Data.ByteString.Lazy qualified as LBS
+import Data.Int (Int64)
+import Data.Text (Text)
+import Data.Text.Encoding qualified as TE
+import Data.Time (UTCTime)
+import Database.PostgreSQL.Simple (Only (..), execute)
+import Effectful.PostgreSQL (query)
+import Helpers (insertRawKind, insertRawMessage, truncateAll, withDb)
+import Max.ConversationScope (ConversationScope, conversationScopeFor)
+import Max.DB.Connection (DbPool, withConn)
+import Max.DB.ConversationCursor (historianCursor, loadCursor)
+import Max.DB.History (LedgerItem (..), MessageCursor (..))
+import Max.EpisodeStore
+import Max.MemoryStore (MemoryId, MemoryVersion)
+import OneBot.Types (GroupId (..))
+import Test.Hspec
+
+groupA, member, botId :: Int64
+groupA = 100
+member = 2001
+botId = 1000
+
+scopeA :: ConversationScope
+scopeA = conversationScopeFor (GroupId groupA)
+
+request :: CaptureReason -> CaptureRequest
+request reason =
+  CaptureRequest
+    { requestReason = reason,
+      requestHistorianProfile = "historian-test",
+      requestPromptVersion = "historian/v1",
+      requestSchemaVersion = 1
+    }
+
+spec :: DbPool -> Spec
+spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
+  it "enqueues one idempotent exact range including non-transcript ledger rows" $ do
+    insertRawMessage pool 1001 groupA member botId testTime Nothing "hello"
+    insertRawKind pool "command" 1002 groupA member botId testTime Nothing "!status"
+    insertRawMessage pool 1003 groupA botId botId testTime Nothing "answer"
+    end <- latestCursor pool
+
+    first <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
+    replay <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
+    first `shouldSatisfy` (/= Nothing)
+    fmap (.crId) replay `shouldBe` fmap (.crId) first
+    fmap ((.srMessageCount) . (.crRange)) first `shouldBe` Just 3
+
+    run <- requireJust "capture run" first
+    source <- withDb pool $ loadCaptureSource run
+    map (.transcriptEligible) source `shouldBe` [True, False, True]
+
+  it "leases with attempts and does not reclaim a failed run before its retry deadline" $ do
+    insertRawMessage pool 1001 groupA member botId testTime Nothing "hello"
+    end <- latestCursor pool
+    _ <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
+    first <- withDb pool (claimCaptureRun "worker-a" 60) >>= requireJust "first lease"
+    first.leaseRun.crAttempt `shouldBe` 1
+    withDb pool (failCaptureRun first 60 "provider unavailable" []) `shouldReturn` True
+    withDb pool (claimCaptureRun "worker-b" 60) `shouldReturn` Nothing
+
+    withConn pool $ \conn -> do
+      _ <- execute conn "UPDATE episode_capture_runs SET next_retry_at = now()" ()
+      pure ()
+    second <- withDb pool (claimCaptureRun "worker-b" 60) >>= requireJust "retry lease"
+    second.leaseRun.crAttempt `shouldBe` 2
+    second.leaseOwner `shouldBe` "worker-b"
+
+  it "atomically publishes summaries, citations, memory proposals, and the cursor" $ do
+    seedConversation pool
+    lease <- prepareLease pool
+    source <- withDb pool $ loadCaptureSource lease.leaseRun
+    let capture = validCapture [1001, 1002, 1003] [ProposalAdd "user" (Just member) "Alice prefers tea" (Just "preference") [1001]]
+    validated <- requireValid lease.leaseRun source capture
+    withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
+    compartment <- withDb pool $ publishCaptureRun scopeA lease validated
+
+    active <- withDb pool $ listActiveCompartments scopeA
+    map (.activeCompartmentId) active `shouldBe` [compartment]
+    map ((.srMessageCount) . (.activeRange)) active `shouldBe` [3]
+    withDb pool (loadCursor scopeA historianCursor)
+      `shouldReturn` lease.leaseRun.crRange.srEnd
+
+    citations <-
+      withDb pool $
+        query
+          "SELECT summary_tier, source_message_id, source_principal_id \
+          \ FROM compartment_evidence ORDER BY summary_tier, source_message_id"
+          ()
+    (citations :: [(Text, Int64, Int64)])
+      `shouldBe` [ ("p1", 1001, member),
+                   ("p1", 1002, member),
+                   ("p1", 1003, botId),
+                   ("p2", 1001, member),
+                   ("p2", 1003, botId),
+                   ("p3", 1003, botId)
+                 ]
+
+    outcomes <-
+      withDb pool $
+        query
+          "SELECT outcome, memory_id, memory_version FROM episode_memory_proposals"
+          ()
+    (outcomes :: [(Text, Maybe MemoryId, Maybe MemoryVersion)])
+      `shouldSatisfy` \case [("applied", Just _, Just _)] -> True; _ -> False
+
+    evidence <-
+      withDb pool $
+        query
+          "SELECT evidence_kind, source_conversation_id, source_episode_id FROM memory_evidence"
+          ()
+    (evidence :: [(Text, Maybe Int64, Maybe Int64)])
+      `shouldBe` [("episode", Just groupA, Just compartment.unCompartmentId)]
+
+  it "publishes valid history while recording invalid memory proposals" $ do
+    seedConversation pool
+    lease <- prepareLease pool
+    source <- withDb pool $ loadCaptureSource lease.leaseRun
+    let capture =
+          validCapture
+            [1001, 1002, 1003]
+            [ ProposalAdd "group" Nothing "valid group fact" (Just "group_convention") [1001],
+              ProposalAdd "user" (Just member) "unsafe inferred relationship" (Just "relationship_context") [1001]
+            ]
+    validated <- requireValid lease.leaseRun source capture
+    withDb pool (recordCaptureGenerated lease (captureJson capture) capture (captureValidationWarnings validated))
+      `shouldReturn` True
+    _ <- withDb pool $ publishCaptureRun scopeA lease validated
+
+    outcomes <-
+      withDb pool $
+        query
+          "SELECT proposal_index, outcome, outcome_reason IS NOT NULL \
+          \ FROM episode_memory_proposals ORDER BY proposal_index"
+          ()
+    (outcomes :: [(Int, Text, Bool)])
+      `shouldBe` [(0, "applied", False), (1, "rejected_validation", True)]
+    warnings <- withDb pool $ query "SELECT jsonb_array_length(validation_errors) FROM episode_capture_runs" ()
+    (warnings :: [Only Int]) `shouldBe` [Only 1]
+
+  it "rolls the whole publication back when the source hash changes" $ do
+    seedConversation pool
+    lease <- prepareLease pool
+    source <- withDb pool $ loadCaptureSource lease.leaseRun
+    let capture = validCapture [1001, 1002, 1003] [ProposalAdd "group" Nothing "a fact" Nothing [1001]]
+    validated <- requireValid lease.leaseRun source capture
+    withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
+    withConn pool $ \conn -> do
+      _ <- execute conn "UPDATE messages SET rendered_text = 'corrected' WHERE message_id = 1002" ()
+      pure ()
+
+    withDb pool (publishCaptureRun scopeA lease validated)
+      `shouldThrow` (\(_ :: SomeException) -> True)
+    withDb pool (listActiveCompartments scopeA) `shouldReturn` []
+    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` MessageCursor 0
+    counts <- withDb pool $ query "SELECT count(*) FROM memories" ()
+    (counts :: [Only Int64]) `shouldBe` [Only 0]
+
+  it "keeps the old active compartment live until a rebuild publishes" $ do
+    seedConversation pool
+    firstLease <- prepareLease pool
+    firstSource <- withDb pool $ loadCaptureSource firstLease.leaseRun
+    let firstCapture = validCapture [1001, 1002, 1003] []
+    firstValidated <- requireValid firstLease.leaseRun firstSource firstCapture
+    _ <- withDb pool $ recordCaptureGenerated firstLease (captureJson firstCapture) firstCapture []
+    old <- withDb pool $ publishCaptureRun scopeA firstLease firstValidated
+
+    rebuildRun <-
+      withDb pool (enqueueRebuildRun scopeA old "manual-rebuild-1" (request CaptureRebuild))
+        >>= requireJust "rebuild run"
+    rebuildLease <- withDb pool (claimCaptureRun "rebuild-worker" 60) >>= requireJust "rebuild lease"
+    rebuildLease.leaseRun.crId `shouldBe` rebuildRun.crId
+    map (.activeCompartmentId) <$> withDb pool (listActiveCompartments scopeA)
+      `shouldReturn` [old]
+
+    rebuildSource <- withDb pool $ loadCaptureSource rebuildLease.leaseRun
+    let rebuiltCapture = (validCapture [1001, 1002, 1003] []) {captureSummaryP3 = CitedSummary "rebuilt anchor" [1003]}
+    rebuiltValidated <- requireValid rebuildLease.leaseRun rebuildSource rebuiltCapture
+    _ <- withDb pool $ recordCaptureGenerated rebuildLease (captureJson rebuiltCapture) rebuiltCapture []
+    new <- withDb pool $ publishCaptureRun scopeA rebuildLease rebuiltValidated
+    new `shouldNotBe` old
+    map (.activeCompartmentId) <$> withDb pool (listActiveCompartments scopeA)
+      `shouldReturn` [new]
+
+    oldState <- withDb pool $ query "SELECT state, superseded_by FROM conversation_compartments WHERE id = ?" (Only old)
+    (oldState :: [(Text, Maybe CompartmentId)]) `shouldBe` [("superseded", Just new)]
+
+    -- Even a direct writer cannot reactivate an overlapping owner.  The
+    -- database exclusion constraint is the final coverage guardrail.
+    withConn pool (\conn -> execute conn "UPDATE conversation_compartments SET state = 'active', superseded_by = NULL WHERE id = ?" (Only old))
+      `shouldThrow` (\(_ :: SomeException) -> True)
+
+seedConversation :: DbPool -> IO ()
+seedConversation pool = do
+  insertRawMessage pool 1001 groupA member botId testTime Nothing "Alice: tea?"
+  insertRawMessage pool 1002 groupA member botId testTime Nothing "Alice clarifies green tea"
+  insertRawMessage pool 1003 groupA botId botId testTime Nothing "Max acknowledges"
+
+prepareLease :: DbPool -> IO CaptureLease
+prepareLease pool = do
+  end <- latestCursor pool
+  _ <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
+  withDb pool (claimCaptureRun "worker" 120) >>= requireJust "capture lease"
+
+latestCursor :: DbPool -> IO MessageCursor
+latestCursor pool = do
+  rows <- withDb pool $ query "SELECT max(ingest_seq) FROM messages WHERE group_id = ?" (Only groupA)
+  case rows :: [Only (Maybe Int64)] of
+    Only (Just cursor) : _ -> pure (MessageCursor cursor)
+    _ -> expectationFailure "expected a latest cursor" >> pure (MessageCursor 0)
+
+validCapture :: [Int64] -> [EpisodeMemoryProposal] -> EpisodeCapture
+validCapture ids proposals =
+  EpisodeCapture
+    { captureSummaryP1 = CitedSummary "full summary" ids,
+      captureSummaryP2 = CitedSummary "compact summary" (take 1 ids <> take 1 (reverse ids)),
+      captureSummaryP3 = CitedSummary "anchor" (take 1 (reverse ids)),
+      captureImportance = 0.8,
+      captureConfidence = 0.9,
+      captureEpisodeKind = Mixed,
+      captureMemoryProposals = proposals
+    }
+
+captureJson :: EpisodeCapture -> Text
+captureJson = TE.decodeUtf8 . LBS.toStrict . encode
+
+requireValid :: CaptureRun -> [LedgerItem] -> EpisodeCapture -> IO ValidatedEpisodeCapture
+requireValid run source capture = case validateEpisodeCapture run source capture of
+  Right validated -> pure validated
+  Left errors -> expectationFailure (show errors) >> error "invalid capture"
+
+requireJust :: String -> Maybe a -> IO a
+requireJust label = \case
+  Just value -> pure value
+  Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)
+
+testTime :: UTCTime
+testTime = read "2026-08-02 12:00:00 UTC"

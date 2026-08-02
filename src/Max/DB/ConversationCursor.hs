@@ -9,6 +9,7 @@
 module Max.DB.ConversationCursor
   ( CursorKind,
     memoryExtractCursor,
+    historianCursor,
     loadCursor,
     advanceCursor,
     advanceCursorBefore,
@@ -31,6 +32,9 @@ newtype CursorKind = CursorKind Text
 
 memoryExtractCursor :: CursorKind
 memoryExtractCursor = CursorKind "memory_extract"
+
+historianCursor :: CursorKind
+historianCursor = CursorKind "historian"
 
 -- | Read a cursor, creating it at the beginning of the ledger when this is a
 -- new conversation/consumer pair.

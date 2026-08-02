@@ -27,6 +27,7 @@ module Max.MemoryStore
     parseScope,
     lifecycleText,
     categoryText,
+    parseCategory,
     groupMemoryNamespace,
     userMemoryNamespace,
     memoryNamespace,
@@ -236,6 +237,18 @@ categoryText Commitment = "commitment"
 categoryText Decision = "decision"
 categoryText RunningJoke = "running_joke"
 categoryText RelationshipContext = "relationship_context"
+
+parseCategory :: Text -> Maybe MemoryCategory
+parseCategory = \case
+  "person_fact" -> Just PersonFact
+  "preference" -> Just Preference
+  "group_convention" -> Just GroupConvention
+  "ongoing_project" -> Just OngoingProject
+  "commitment" -> Just Commitment
+  "decision" -> Just Decision
+  "running_joke" -> Just RunningJoke
+  "relationship_context" -> Just RelationshipContext
+  _ -> Nothing
 
 actorText :: MemoryActorKind -> Text
 actorText ActorAgentTool = "agent_tool"
