@@ -99,6 +99,7 @@ toolNamesFor :: BotEnv -> GroupId -> TurnCapabilities -> [Text]
 toolNamesFor env gid caps =
   [ "get_message_by_id",
     "search_messages",
+    "context_search",
     "context_expand",
     "view_forward",
     "poke",

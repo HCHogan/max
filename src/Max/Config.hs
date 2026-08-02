@@ -159,7 +159,7 @@ data AppConfig = AppConfig
     -- fat table is pruned; @llm_usage@'s counters are kept forever.
     adminCallRetentionDays :: !Int,
     -- | Embeddings endpoint; presence enables the embed worker and
-    -- the semantic-search surfaces (search_messages, memory_search).
+    -- the semantic-search surfaces (context_search plus compatibility tools).
     embedding :: !(Maybe EmbeddingConfig),
     -- | Default for debug mode: when effective debug is on, the
     -- agent loop posts each tool call to the group.  Per-group

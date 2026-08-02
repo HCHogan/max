@@ -17,6 +17,8 @@ module Main (main) where
 import Control.Exception (bracket)
 import Data.Text qualified as T
 import Helpers (truncateAll)
+import Max.ContextMaterializationMigrationSpec qualified as ContextMaterializationMigrationSpec
+import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
 import Max.DB.EmbeddingMigrationSpec qualified as EmbeddingMigrationSpec
@@ -28,14 +30,13 @@ import Max.DB.MessageSpec qualified as MessageSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.ReminderSpec qualified as ReminderSpec
 import Max.DB.SessionSpec qualified as SessionSpec
-import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
-import Max.ContextMaterializationMigrationSpec qualified as ContextMaterializationMigrationSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.HistorianMigrationSpec qualified as HistorianMigrationSpec
 import Max.HistorianSpec qualified as HistorianSpec
 import Max.MemoryStoreMigrationSpec qualified as MemoryStoreMigrationSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
+import Max.RecallSpec qualified as RecallSpec
 import System.Environment (lookupEnv)
 import System.Exit (exitSuccess)
 import Test.Hspec (hspec)
@@ -70,6 +71,7 @@ main = do
         MediaSpec.spec pool
         FetchQueueSpec.spec pool
         ReminderSpec.spec pool
+        RecallSpec.spec pool
         PromptIntegrationSpec.spec pool
       -- Final wipe so a developer running tests against the dev DB
       -- doesn't leave random fixture rows behind.

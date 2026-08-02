@@ -1,7 +1,7 @@
 -- |
 -- Background embedding worker: polls for rows whose @embedding@ is
--- still NULL (new group messages, new/edited memories, freshly
--- captioned stickers), embeds them in batches through
+-- still NULL (new group messages, new/edited memories, active episode
+-- summaries, freshly captioned stickers), embeds them in batches through
 -- "Max.Embedding", and writes the vectors back.
 --
 -- Polling instead of write-path hooks on purpose: memories are
@@ -79,6 +79,13 @@ embedWorker client = forever $ do
           \ ORDER BY received_at DESC LIMIT 64"
           [modelId]
       mems <- listPendingMemoryEmbeddings modelId batchSize
+      episodes <-
+        query
+          "SELECT id, summary_p1 FROM conversation_compartments \
+          \ WHERE state = 'active' \
+          \   AND (embedding IS NULL OR embedding_model IS DISTINCT FROM ?) \
+          \ ORDER BY activated_at DESC NULLS LAST, id DESC LIMIT 64"
+          [modelId]
       -- Stickers embed their vision caption (the retrieval key for
       -- send_sticker); rows wait here until the caption worker fills
       -- description in.
@@ -90,6 +97,7 @@ embedWorker client = forever $ do
           [modelId]
       if null (msgs :: [(Int64, Text)])
         && null mems
+        && null (episodes :: [(Int64, Text)])
         && null (stickers :: [(Text, Text)])
         then liftIO (threadDelay idleMicros)
         else do
@@ -100,13 +108,19 @@ embedWorker client = forever $ do
               \ WHERE message_id = ? AND rendered_text = ?"
               msgs
           okR <- embedMemories mems
+          okE <-
+            embedInto
+              "UPDATE conversation_compartments SET embedding = ?::vector, embedding_model = ?, \
+              \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
+              \ WHERE id = ? AND summary_p1 = ? AND state = 'active'"
+              episodes
           okS <-
             embedInto
               "UPDATE stickers SET embedding = ?::vector, embedding_model = ?, \
               \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
               \ WHERE sha256 = ? AND description = ?"
               stickers
-          unless (okM && okR && okS) $ liftIO (threadDelay errorMicros)
+          unless (okM && okR && okE && okS) $ liftIO (threadDelay errorMicros)
           liftIO (threadDelay busyMicros)
 
     -- Embed one batch and write vectors back; False on API failure

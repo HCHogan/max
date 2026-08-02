@@ -92,6 +92,11 @@ handle from another conversation, and verify that a superseded projection's
 handle remains expandable. `Max.ContextMaterializationMigrationSpec` runs 043
 over a pre-existing development revision, checking that current-state naming
 and UUID handles backfill without mutating the append-only revision ledger.
+`Max.RecallSpec` builds memory, episode, raw, pin, and caption candidates in a
+real conversation, checks lexical and compatible-pgvector fusion, exercises
+provenance/message dedup and source quotas, and probes the same queries from a
+foreign conversation. The pure Recall spec separately fixes quota, overflow,
+deduplication, and deterministic ordering semantics.
 
 ## Config: finding out where a value came from
 

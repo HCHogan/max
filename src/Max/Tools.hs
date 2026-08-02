@@ -36,6 +36,7 @@ import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, EmbeddingRecord (..), embedTexts, makeEmbeddingRecord)
 import Max.EpisodeStore (EpisodeExpansion (..), SourceRange (..), episodeHandleText, expandEpisode, parseEpisodeHandle)
 import Max.Prompt (tagMediaMarkers)
+import Max.Recall (RecallHit (..), searchRecall)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolGroupId)
 import OneBot.Action (Action (..), Response (..))
@@ -54,6 +55,7 @@ builtinsFor ::
 builtinsFor tz mEmbed dc =
   [ getMessageByIdTool tz dc,
     searchMessagesTool tz mEmbed (toolGroupId dc),
+    contextSearchTool tz mEmbed dc,
     contextExpandTool tz dc,
     viewForwardTool tz dc,
     pokeTool dc
@@ -231,6 +233,101 @@ data MessageFilter = MessageFilter
     mfBefore :: !(Maybe UTCTime),
     mfLimit :: !Int
   }
+
+--------------------------------------------------------------------------------
+-- context_search
+
+contextSearchTool ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  TimeZone ->
+  Maybe EmbedClient ->
+  ToolContext ->
+  Tool es
+contextSearchTool tz mEmbed dc =
+  Tool
+    { toolName = "context_search",
+      toolDescription =
+        T.unwords
+          [ "统一搜索当前会话的长期记忆、episode 摘要、原始消息、pin 和媒体简介。",
+            "结果已经做 scope 过滤、混合排序、来源配额和同源去重；",
+            "episode 的细节用返回的 handle 调 context_expand。"
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "query"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("要回忆的自然语言主题或关键词" :: Text)
+                      ],
+                  "limit"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "minimum" .= (1 :: Int),
+                        "maximum" .= (30 :: Int),
+                        "default" .= (10 :: Int)
+                      ]
+                ],
+            "required" .= (["query"] :: [Text])
+          ],
+      toolRun = \args -> case parseEither (withObject "args" parseRecallArgs) args of
+        Left err -> pure $ Left ("bad args: " <> T.pack err)
+        Right (rawQuery, limit)
+          | T.null (T.strip rawQuery) -> pure (Left "bad args: query cannot be blank")
+          | otherwise -> do
+              embedding <- recallEmbedding rawQuery
+              let scope = conversationScopeFor (toolGroupId dc)
+              hits <- searchRecall (currentConversationRecall scope) rawQuery embedding limit
+              pure . Right $
+                object
+                  [ "query" .= T.strip rawQuery,
+                    "semantic_used" .= maybe False (const True) embedding,
+                    "results" .= map (recallHitSummary tz) hits
+                  ]
+    }
+  where
+    parseRecallArgs o =
+      (,)
+        <$> o .: "query"
+        <*> (fromMaybe 10 <$> o .:? "limit")
+
+    recallEmbedding _ | Nothing <- mEmbed = pure Nothing
+    recallEmbedding queryText | Just client <- mEmbed = do
+      result <- liftIO (embedTexts client [T.strip queryText])
+      case result of
+        Right [vector] -> case makeEmbeddingRecord client (T.strip queryText) vector of
+          Right record -> pure (Just record)
+          Left err -> do
+            logAttention "context_search: invalid query embedding; using lexical recall" $ object ["error" .= err]
+            pure Nothing
+        Right _ -> do
+          logAttention "context_search: unexpected embedding shape; using lexical recall" (object [])
+          pure Nothing
+        Left err -> do
+          logAttention "context_search: embedding failed; using lexical recall" $ object ["error" .= err]
+          pure Nothing
+
+recallHitSummary :: TimeZone -> RecallHit -> Value
+recallHitSummary tz hit =
+  object $
+    [ "source" .= hit.rhSource,
+      "score" .= hit.rhScore,
+      "time" .= fmtDateHM tz hit.rhOccurredAt,
+      "snippet" .= hit.rhSnippet,
+      "pinned" .= hit.rhPinned,
+      "permanent" .= hit.rhPermanent,
+      "match"
+        .= object
+          [ "lexical" .= hit.rhLexicalScore,
+            "semantic" .= hit.rhSemanticScore
+          ]
+    ]
+      <> ["principal_id" .= principal | Just principal <- [hit.rhPrincipalId]]
+      <> ["message_id" .= message | Just message <- [hit.rhMessageId]]
+      <> ["memory_id" .= memory | Just memory <- [hit.rhMemoryId]]
+      <> ["handle" .= episodeHandleText handle | Just handle <- [hit.rhEpisodeHandle]]
 
 --------------------------------------------------------------------------------
 -- context_expand

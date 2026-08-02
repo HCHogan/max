@@ -152,6 +152,20 @@ matches the captured hash, paginates without leaving the range, and keeps old
 handles expandable after a rebuild supersedes their projection. A handle from
 another group or direct chat is indistinguishable from a nonexistent handle.
 
+`context_search` is the volatile unified-recall surface. It searches visible
+active/permanent memories, active episode summaries, raw messages, current
+session pins, and image/video captions. Lexical candidates use exact substring
+or trigram similarity; compatible message, memory, and episode embeddings add
+semantic candidates. Conversation policy predicates and embedding
+model/dimension checks run in SQL before scoring. The pure selector merges
+lexical and semantic forms, collapses raw/pin/caption identities and
+provenance-linked memory/episode identities, then applies per-source quotas
+before using spare capacity. Recency, episode importance, pins, and permanent
+memory are bounded weak boosts rather than authorization inputs. If query
+embedding fails, the tool logs attention and returns lexical results instead
+of failing the turn. No recall result is injected automatically; the agent
+calls this tool only when the conversation needs older detail.
+
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
 instead of waiting for a whole body. Paragraphs the model has finished with go
 out mid-generation as typed `AgentFinalStreamText` events; tool narration and
@@ -174,7 +188,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Tiered prompt prefix | current `context_materializations` revision plus append-only versions; active compartment ids/versions, tiers, end cursor, policy, fingerprint, and cache-bust reason are durable |
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
-| Embeddings, captions | workers poll for `NULL` columns, so any gap backfills itself |
+| Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
 
 | Lost on restart | Why |
 |---|---|

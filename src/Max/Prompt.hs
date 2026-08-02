@@ -81,15 +81,15 @@ import Max.DB.History
     fetchMentionHistory,
     fetchMessageInScope,
     fetchMessagesByIdsInScope,
-    fetchRecentInGroup,
     fetchPromptLedgerAfter,
+    fetchRecentInGroup,
   )
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
+import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), EpisodeHandle, SourceRange (..), episodeHandleText, listActiveCompartments)
 import Max.Faces (curatedFaceGroups)
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
-import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), EpisodeHandle, SourceRange (..), episodeHandleText, listActiveCompartments)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
 import Max.Session (Session (..))
@@ -364,6 +364,7 @@ systemPrompt multimodal' private persona skills' =
            "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，引用它就写 [↩#那个id]。\
            \你自己以前说的话也在这份记录里，名字是 Max——那是记录格式，不是说话方式：\
            \你的回复正文直接写内容，绝对不要带这个行首前缀。",
+           "  [episode#<uuid> 日期..日期 P1/P2/P3] — 更早聊天的可重建摘要；需要原话时把 uuid 传给 context_expand。",
            "  [↩ quoted ...]               — 用户引用的那条消息（内容已展开；也可用 get_message_by_id 展开任意 id）",
            "  [card: 来源 | 标题 | 链接]     — 分享卡片；B站卡用 view_bilibili、知乎卡用 view_zhihu，传链接看内容",
            "  [file:<name>]                — 群文件；用 import_file_to_sandbox 处理",
@@ -1575,7 +1576,7 @@ renderMemories tz' private senderName groupMems userMems
         [ [ "[memories — 背景备忘]",
             "仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，\
             \与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，\
-            \更早的用 memory_search / memory_list 查。"
+            \更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。"
           ],
           if null groupMems
             then []
