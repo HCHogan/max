@@ -85,6 +85,9 @@
           max = maxPackage pkgs;
           default = maxPackage pkgs;
         }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          camoufox-browser = (import ./nix/camoufox-browser.nix { inherit pkgs; }).archive;
+        }
       );
 
       nixosModules = {

@@ -23,8 +23,10 @@
 # on the install steps placates only-allow while still running install
 # scripts (impit needs its prebuilt-binary fetch).
 #
-# The camoufox browser binary (~780MB) is fetched at build time via the
-# repo's own camoufox-js pin, so container start needs no download.
+# The camoufox browser binary (~663MB compressed) is a fixed-output Nix
+# input supplied as camoufox-browser.zip in the build context.  Keeping
+# that large, immutable download outside an ephemeral Docker RUN makes
+# failed/repeated nixos-rebuilds reuse the verified Nix store object.
 # The source revision is pinned because the small structured-error patch below
 # is part of our protocol contract.  Bump CAMOUFOX_MCP_REF and refresh the
 # patch deliberately when upgrading upstream.
@@ -32,7 +34,7 @@
 FROM node:22-bookworm AS source
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 build-essential ca-certificates curl patch \
+    python3 build-essential ca-certificates curl patch unzip \
     && rm -rf /var/lib/apt/lists/*
 
 ARG CAMOUFOX_MCP_REF=e5057f3bcf5bae9b2bc5d9c43972e89b6519ee9c
@@ -53,8 +55,23 @@ FROM source AS builder
 
 RUN npm_config_user_agent="pnpm/10.0.0 npm/10.9.8 node/v22.0.0 linux x64" npm ci \
  && npm run build \
- && npx camoufox-js fetch \
  && npm prune --omit=dev
+
+# COPY comes after the npm build so a browser-only upgrade keeps that
+# comparatively expensive layer cached.  This matches camoufox-js's cache
+# layout, including the version marker it normally writes after extraction.
+ARG CAMOUFOX_BROWSER_VERSION
+ARG CAMOUFOX_BROWSER_RELEASE
+COPY camoufox-browser.zip /tmp/camoufox-browser.zip
+RUN test -n "${CAMOUFOX_BROWSER_VERSION}" \
+ && test -n "${CAMOUFOX_BROWSER_RELEASE}" \
+ && mkdir -p /root/.cache/camoufox \
+ && unzip -q /tmp/camoufox-browser.zip -d /root/.cache/camoufox \
+ && printf '{"version":"%s","release":"%s"}\n' \
+      "${CAMOUFOX_BROWSER_VERSION}" "${CAMOUFOX_BROWSER_RELEASE}" \
+      > /root/.cache/camoufox/version.json \
+ && chmod -R a+rX /root/.cache/camoufox \
+ && rm /tmp/camoufox-browser.zip
 
 # The SSRF guard resolves every request host through container DNS and
 # fails closed, which breaks behind censored DNS: github's telemetry
@@ -80,7 +97,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libatk-bridge2.0-0 libcups2 libdrm2 libgbm1 libatspi2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g supergateway@latest
+# Part of the transport contract; an upstream "latest" release must not
+# silently change an otherwise content-addressed image build.
+RUN npm install -g supergateway@3.4.3
 
 # Run as non-root (mirrors upstream's image; Firefox is happier not
 # running as root).

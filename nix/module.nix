@@ -55,35 +55,62 @@ let
   sandboxImageSrc = ../sandbox-image;
   browserImageSrc = ../browser-image;
 
-  # One-shot unit that builds a docker image from a store-copied build
-  # context.  The tag is the context's store hash, so edits rebuild
-  # exactly once and unchanged rebuilds are a no-op inspect.
-  mkImageBuild = name: src: {
-    description = "max: build the ${name} container image";
-    after = [
-      "docker.service"
-      "network-online.target"
-    ];
-    requires = [ "docker.service" ];
-    wants = [ "network-online.target" ];
-    wantedBy = [ "multi-user.target" ];
-    path = [ config.virtualisation.docker.package ];
-    serviceConfig = {
-      Type = "oneshot";
-      RemainAfterExit = true;
-      # First build downloads base layers and toolchains — minutes,
-      # not seconds.
-      TimeoutStartSec = "60min";
+  # camoufox-js otherwise discovers "the latest compatible" browser at
+  # docker-build time and downloads a 600+ MiB zip into an ephemeral RUN.
+  # Besides being non-reproducible, an interrupted download cannot be
+  # resumed or reused by the next nixos-rebuild.  Make the browser a Nix
+  # fixed-output input instead: Nix verifies and retains it in the store,
+  # and the docker build below only unpacks local bytes.
+  camoufoxBrowser = import ./camoufox-browser.nix { inherit pkgs; };
+  camoufoxBrowserArchive = camoufoxBrowser.archive;
+  camoufoxBrowserArchiveName = baseNameOf "${camoufoxBrowserArchive}";
+  camoufoxBrowserArchiveDir = dirOf "${camoufoxBrowserArchive}";
+
+  # The ordinary directory store path only changes with browser-image/.
+  # Include the fixed-output browser path in a separate fingerprint so a
+  # browser bump necessarily produces a fresh docker tag as well.
+  browserImageFingerprint = pkgs.writeText "max-browser-image-inputs" ''
+    docker-context=${browserImageSrc}
+    camoufox-browser=${camoufoxBrowserArchive}
+  '';
+
+  # One-shot unit that builds a docker image from store-backed inputs.
+  # The tag is the input fingerprint's store hash, so edits rebuild exactly
+  # once and unchanged rebuilds are a no-op inspect.
+  mkImageBuild =
+    {
+      name,
+      src,
+      tagSource ? src,
+      buildCommand ? ''docker build -t "${name}:$tag" ${src}'',
+    }:
+    {
+      description = "max: build the ${name} container image";
+      after = [
+        "docker.service"
+        "network-online.target"
+      ];
+      requires = [ "docker.service" ];
+      wants = [ "network-online.target" ];
+      wantedBy = [ "multi-user.target" ];
+      path = [ config.virtualisation.docker.package ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        # First build downloads base layers and toolchains — minutes,
+        # not seconds.
+        TimeoutStartSec = "60min";
+      };
+      script = ''
+        set -o pipefail
+        tag=$(basename ${tagSource} | cut -c1-8)
+        if ! docker image inspect "${name}:$tag" >/dev/null 2>&1; then
+          ${buildCommand}
+        fi
+        # The bot's default image name tracks the current content tag.
+        docker tag "${name}:$tag" ${name}:latest
+      '';
     };
-    script = ''
-      tag=$(basename ${src} | cut -c1-8)
-      if ! docker image inspect "${name}:$tag" >/dev/null 2>&1; then
-        docker build -t "${name}:$tag" ${src}
-      fi
-      # The bot's default image name tracks the current content tag.
-      docker tag "${name}:$tag" ${name}:latest
-    '';
-  };
 in
 {
   options.services.max = {
@@ -177,10 +204,11 @@ in
       type = lib.types.bool;
       default = true;
       description = ''
-        Build the camoufox browser image (max-browser:latest) from the
-        repo's browser-image/ at boot, same content-tag scheme as the
-        sandbox image.  The per-group browser containers the bot
-        spawns are instances of this image.
+        Fetch and verify the pinned Camoufox browser with Nix, then build
+        max-browser:latest from the repo's browser-image/ at boot.  The
+        image tag fingerprints both inputs, so an unchanged rebuild is a
+        no-op.  The per-group browser containers the bot spawns are
+        instances of this image.
       '';
     };
 
@@ -313,10 +341,31 @@ in
     '';
 
     systemd.services.max-sandbox-image = lib.mkIf cfg.sandboxImage.enable (
-      mkImageBuild "max-sandbox" sandboxImageSrc
+      mkImageBuild {
+        name = "max-sandbox";
+        src = sandboxImageSrc;
+      }
     );
     systemd.services.max-browser-image = lib.mkIf cfg.browserImage.enable (
-      mkImageBuild "max-browser" browserImageSrc
+      mkImageBuild {
+        name = "max-browser";
+        src = browserImageSrc;
+        tagSource = browserImageFingerprint;
+        # Stream the browser into the context instead of copying another
+        # 663 MiB into a context derivation in the Nix store.  Docker still
+        # receives a normal tar build context, entirely from local paths.
+        buildCommand = ''
+          ${pkgs.gnutar}/bin/tar \
+            --create --file=- \
+            --transform='s|^${camoufoxBrowserArchiveName}$|camoufox-browser.zip|' \
+            --directory=${browserImageSrc} . \
+            --directory=${camoufoxBrowserArchiveDir} ${camoufoxBrowserArchiveName} \
+            | docker build \
+                --build-arg CAMOUFOX_BROWSER_VERSION=${camoufoxBrowser.version} \
+                --build-arg CAMOUFOX_BROWSER_RELEASE=${camoufoxBrowser.release} \
+                -t "max-browser:$tag" -
+        '';
+      }
     );
 
     systemd.services.max = {
