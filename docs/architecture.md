@@ -16,8 +16,9 @@ docker-compose.yml NapCat container; shared ./var/outbox volume
 sandbox-image/     nix-enabled sandbox base image  → max-sandbox:latest
 browser-image/     camoufox-mcp + supergateway + camoufox → max-browser:latest
 nix/module.nix     NixOS module for production deployment
-.github/workflows/ CI: build + max-test through the flake dev shell, plus a pure
-                   `nix build .#max` so the packaged build can't rot
+.github/workflows/ CI: build + pure and PostgreSQL/pgvector tests through the
+                   flake dev shell, plus a pure `nix build .#max` so the
+                   packaged build can't rot
 max.cabal          library + max executable
 migrations/*.sql   schema migrations, applied on boot
 skills/*.md        builtin skill manuals, baked into the binary (file-embed);
@@ -157,13 +158,16 @@ versions, policy version, and exact raw-tail cursor live in a CAS-versioned
 turns reuse that revision. Initial enrollment, an active projection
 replacement, or raw history crossing the model-derived high-token watermark
 publishes one new revision; it folds only enough prepared compartments to aim
-the tail back below the low-token watermark. Store publication locks and
+the tail back below the low-token watermark. Smaller profiles derive these at
+20%/40% of their available prompt window, while 16,384/32,768 token ceilings
+keep larger future windows from turning group noise into an oversized verbatim
+tail. Store publication locks and
 rechecks active source versions, rejects gaps or backward cursor movement, and
 records the cache-bust reason. Under exceptional per-turn pressure active
 memory is removed first, compartments can degrade one tier at a time, and only
 then is the oldest raw tail trimmed. A conversation with no active compartment
-automatically pages over the immutable raw ledger; ContextPolicy then retains
-the newest rows that fit the model token budget. A corrupt/stale
+automatically pages over the immutable raw ledger and retains the newest rows
+up to the same raw-tail token target. A corrupt/stale
 materialization instead renders the newest gap-free active compartments at
 deterministic base tiers plus their exact raw tail for that turn, without
 restoring the retired mention lane or changing source/projection data.
@@ -198,15 +202,11 @@ embedding fails, the tool logs attention and returns lexical results instead
 of failing the turn. No recall result is injected automatically; the agent
 calls this tool only when the conversation needs older detail.
 
-The model-visible `search_messages` and `memory_search` names remain as
-compatibility surfaces over the same store and policy. Ordinary text or
-semantic `search_messages` calls narrow unified recall to raw messages, pins,
-and media captions, then re-resolve each result through the current
-conversation scope. Its regex, sender, date-range, and combined
-exact-text-plus-semantic forms remain a specialised constrained SQL query.
-`memory_search` narrows unified recall to memory candidates and re-resolves
-each id through the visible MemoryStore boundary. Corpus selection is a
-code-owned narrowing operation; it cannot widen `RecallPolicy`.
+`context_search` is the only model-visible recall surface. The retired
+`search_messages` and `memory_search` compatibility tools are not registered:
+one policy now owns corpus selection, visibility, ranking, deduplication, and
+fallback behavior, and model-generated placeholder filters cannot silently
+route a semantic request around it.
 
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
 instead of waiting for a whole body. Paragraphs the model has finished with go
@@ -351,7 +351,7 @@ finished async is a no-op, so "feature off" needs no special case.
 | Phase | What | Status |
 |---|---|---|
 | 1–3 | OneBot 11 transport, supervision, persistence (messages/images/forwards) | ✅ |
-| 4 | Vector retrieval via pgvector (semantic search_messages, memory_search) | ✅ |
+| 4 | Vector retrieval via pgvector (`context_search`) | ✅ |
 | 5 | effectful layering, LLM client, async dispatch | ✅ |
 | 6 | !cmd DSL, sessions, agent loop, sandbox/files/search tools | ✅ |
 | 7 | Multimodal (inline context images) + browser toolset | ✅ |
@@ -360,4 +360,4 @@ finished async is a no-op, so "feature off" needs no special case.
 | 10 | NixOS module + production deployment | ✅ |
 | 11 | Admin JSON API + panel | ✅ |
 | 12 | Skills (progressive disclosure) + episode memory extraction | ✅ |
-| 13 | Token-planned infinite context + unified Historian/memory lifecycle | 🚧 |
+| 13 | Token-planned infinite context + unified Historian/memory lifecycle | ✅ |

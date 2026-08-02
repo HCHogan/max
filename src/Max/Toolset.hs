@@ -67,7 +67,7 @@ allToolsFor runtime env dc =
     <> reminderToolsFor env.beTimeZone env.beReminders dc
     <> groupToolsFor dc
     <> imageToolsFor env.beTimeZone dc
-    <> memoryToolsFor env.beEmbed dc
+    <> memoryToolsFor dc
     <> pinToolsFor env.beSessions env.beDefaultModel dc
     <> skillToolsFor env.beSkills dc
     <> bilibiliToolsFor env.beTimeZone dc
@@ -98,7 +98,6 @@ toolCountFor env gid multimodal stickers skills =
 toolNamesFor :: BotEnv -> GroupId -> TurnCapabilities -> [Text]
 toolNamesFor env gid caps =
   [ "get_message_by_id",
-    "search_messages",
     "context_search",
     "context_expand",
     "view_forward",
@@ -110,7 +109,6 @@ toolNamesFor env gid caps =
     <> ["group_members" | not (isPrivateChat gid)]
     <> [name | caps.tcMultimodal, name <- ["view_avatar", "view_image"]]
     <> ["memory_save", "memory_update", "memory_forget", "memory_list"]
-    <> ["memory_search" | Just _ <- [env.beEmbed]]
     <> ["pin_message", "unpin_message"]
     <> ["use_skill" | caps.tcSkills]
     <> ["view_bilibili"]

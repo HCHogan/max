@@ -7,6 +7,15 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "ModelCatalog" $ do
+  it "ships roomy long-lived group-chat defaults" $
+    defaultContextLimits
+      `shouldBe` ContextLimits
+        { maxInputTokens = 114688,
+          reservedOutputTokens = 16384,
+          attachmentReserve = 16384,
+          toolRoundReserve = 16384
+        }
+
   it "keeps a valid default and lists profile names deterministically" $ do
     defaultModelName validCatalog `shouldBe` "vision"
     modelProfileNames validCatalog `shouldBe` ["text", "vision"]

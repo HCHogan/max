@@ -81,8 +81,10 @@ can affect ranking only; it cannot grant visibility.
 The final context is one chronological stream: decayed compartments followed
 by a protected raw tail. The live tail has no fixed message-count boundary.
 High and low materialization thresholds are token watermarks derived from the
-active model window and reserves for system instructions, tools, output,
-attachments, current/replied/pinned content, memory, and later tool rounds.
+active model input window and attachment/tool-round reserves, with roomy
+16,384/32,768 ceilings for noisy verbatim group history. The completion limit
+is tracked separately. Current/replied/pinned content and final prompt pressure
+remain protected or governed by the pure planner rather than a message count.
 
 Mention, reply, pin, in-flight, and Max-participation information can influence
 protection, episode boundaries, summary emphasis, and recall ranking. It does

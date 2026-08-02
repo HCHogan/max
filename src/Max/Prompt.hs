@@ -273,6 +273,25 @@ data HistoryTokenWatermarks = HistoryTokenWatermarks
     htwHigh :: !Int
   }
 
+-- Group-chat attention gets noisier faster than model windows grow.  These
+-- ceilings keep the protected verbatim tail roomy but stable when a future
+-- profile advertises 256K+ input; older context remains available through
+-- tiered compartments and unified recall.
+rawTailLowCeiling :: Int
+rawTailLowCeiling = 16384
+
+rawTailHighCeiling :: Int
+rawTailHighCeiling = 32768
+
+historyTokenWatermarks :: ContextLimits -> Bool -> HistoryTokenWatermarks
+historyTokenWatermarks limits multimodal' =
+  HistoryTokenWatermarks
+    { htwLow = min rawTailLowCeiling (max 512 (promptLimit `div` 5)),
+      htwHigh = min rawTailHighCeiling (max 1024 (promptLimit * 2 `div` 5))
+    }
+  where
+    promptLimit = (contextBudget limits multimodal').cbPromptTokenLimit
+
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default), a scene block saying whether this is a
 -- group or a one-on-one chat (kept out of the persona so configured
@@ -455,12 +474,7 @@ buildContextWithReadMode ::
   GroupMessage ->
   Eff es [ChatMessage]
 buildContextWithReadMode limits readMode defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
-  let promptLimit = (contextBudget limits multimodal').cbPromptTokenLimit
-      historyWatermarks =
-        HistoryTokenWatermarks
-          { htwLow = max 512 (promptLimit `div` 5),
-            htwHigh = max 1024 (promptLimit * 2 `div` 5)
-          }
+  let historyWatermarks = historyTokenWatermarks limits multimodal'
   snapshot <-
     collectContextWithWatermarks
       readMode
@@ -555,7 +569,8 @@ collectContextWithWatermarks readMode materializationWatermarks defaultPersona m
   -- emergency fallback reads the immutable ledger from the beginning and lets
   -- ContextPolicy retain as much as the selected model's token budget allows.
   -- No mention/participation lane and no fixed message count survive here.
-  let rawCollectionLimit = maybe 12288 (.htwHigh) materializationWatermarks
+  let fallbackWatermarks = historyTokenWatermarks defaultContextLimits multimodal'
+      rawCollectionLimit = maybe fallbackWatermarks.htwHigh (.htwHigh) materializationWatermarks
       collectRawFallback reason = do
         (raw, _) <- fetchBoundedPromptTail scope (MessageCursor 0) mid s.clearedAt rawCollectionLimit
         pure ([], map (.history) raw, Nothing, Just reason)
@@ -578,7 +593,7 @@ collectContextWithWatermarks readMode materializationWatermarks defaultPersona m
             Nothing -> active
             Just cleared -> filter ((> cleared) . (.activeStartedAt)) active
           covered = latestGapFreeSuffix visibleAfterClear
-          watermarks = fromMaybe (HistoryTokenWatermarks 6144 12288) materializationWatermarks
+          watermarks = fromMaybe fallbackWatermarks materializationWatermarks
       case covered of
         [] -> do
           logInfo "context: no active compartment; using token-budgeted raw fallback" $
@@ -614,7 +629,7 @@ collectContextWithWatermarks readMode materializationWatermarks defaultPersona m
   -- is in the volatile tail, re-tokenised at full price every
   -- dispatch, and a scope at the 30-entry cap was costing thousands
   -- of uncached tokens.  The long tail stays reachable through
-  -- memory_list / memory_search.
+  -- memory_list / context_search.
   groupMems <- listRecentMemories (groupMemoryNamespace scope) memoryInjectCap
   userMems <- listRecentMemories (userMemoryNamespace scope senderId) memoryInjectCap
   replyCtx0 <- case extractReply gm.message of

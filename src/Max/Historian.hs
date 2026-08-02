@@ -132,7 +132,11 @@ historianWorker profile catalog tz tasks defaultModel scheduler = localDomain "h
       (liftIO (releaseEpisodeClaim scheduler gid))
   where
     inputBudget = historianInputBudget profile catalog
-    sourceBudget = max 512 (inputBudget * 2 `div` 3)
+    -- A larger model window should improve headroom, not silently turn one
+    -- noisy episode into an unreviewable 100K-message projection.  64K of raw
+    -- source is already ample for a settled group-chat episode; larger gaps
+    -- continue as exact adjacent capture runs.
+    sourceBudget = min 65536 (max 512 (inputBudget * 2 `div` 3))
 
     recoverPendingConversations = do
       sessions <- listSessions defaultModel

@@ -30,9 +30,7 @@ where
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Int (Int64)
-import Data.Maybe (catMaybes, fromMaybe)
-import Data.Ord (clamp)
-import Data.Set qualified as Set
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
@@ -40,7 +38,6 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
 import Max.Effects.Tools (Tool (..))
-import Max.Embedding (EmbedClient, embedTexts, makeEmbeddingRecord)
 import Max.MemoryStore
   ( ExpectedVersion (..),
     MemoryActor (..),
@@ -57,14 +54,12 @@ import Max.MemoryStore
     archiveVisibleMemory,
     countMemories,
     createMemory,
-    fetchVisibleMemory,
     groupMemoryNamespace,
     listMemories,
     parseScope,
     updateVisibleMemory,
     userMemoryNamespace,
   )
-import Max.Recall (RecallCorpus (..), RecallHit (..), searchRecallIn)
 import Max.ToolContext (ToolContext, toolGroupId, toolMessageId, toolUserId)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
@@ -80,16 +75,14 @@ maxMemoryChars = 300
 
 memoryToolsFor ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
-  Maybe EmbedClient ->
   ToolContext ->
   [Tool es]
-memoryToolsFor mEmbed dc =
+memoryToolsFor dc =
   [ saveTool dc,
     updateTool dc,
     forgetTool dc,
     listTool dc
   ]
-    <> [searchTool dc ec | Just ec <- [mEmbed]]
 
 --------------------------------------------------------------------------------
 -- memory_save
@@ -348,82 +341,6 @@ memorySummary m =
       "content" .= m.memContent
     ]
 
---------------------------------------------------------------------------------
--- memory_search (semantic; only registered when embedding is configured)
-
-searchTool ::
-  (WithConnection :> es, IOE :> es) =>
-  ToolContext ->
-  EmbedClient ->
-  Tool es
-searchTool dc ec =
-  Tool
-    { toolName = "memory_search",
-      toolDescription =
-        T.unwords
-          [ "context_search 的长期记忆兼容入口（谁擅长X、之前定过什么）。",
-            "使用相同的本会话 scope、混合排序和 provenance 去重，但只返回 memory；",
-            "新调用优先使用 context_search。"
-          ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "query"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("自然语言描述要找的内容。" :: Text)
-                      ],
-                  "limit"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("最多返回条数（默认 8，上限 20）。" :: Text),
-                        "default" .= (8 :: Int)
-                      ]
-                ],
-            "required" .= (["query"] :: [Text])
-          ],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
-        Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (q, lim) -> do
-          evec <- liftIO (embedTexts ec [q])
-          case evec of
-            Left err -> pure $ Left ("embedding failed: " <> err)
-            Right [vec] -> case makeEmbeddingRecord ec q vec of
-              Left err -> pure $ Left ("embedding failed: " <> err)
-              Right record -> do
-                let policy = currentConversationRecall (conversationScopeFor (toolGroupId dc))
-                hits <-
-                  searchRecallIn
-                    policy
-                    (Set.singleton RecallMemories)
-                    q
-                    (Just record)
-                    (clamp (1, 20) lim)
-                rows <-
-                  catMaybes
-                    <$> traverse
-                      (\hit -> maybe (pure Nothing) (fetchVisibleMemory policy) hit.rhMemoryId)
-                      hits
-                pure $ Right (toJSON (map fullSummary rows))
-            Right _ -> pure $ Left "embedding failed: unexpected result shape"
-    }
-  where
-    parseArgs :: Object -> Parser (Text, Int)
-    parseArgs o = (,) <$> o .: "query" <*> (fromMaybe 8 <$> o .:? "limit")
-
-    fullSummary m =
-      object
-        [ "id" .= m.memId,
-          "version" .= m.memVersion,
-          "lifecycle" .= m.memLifecycle,
-          "scope" .= m.memScope,
-          "scope_id" .= m.memScopeId,
-          "content" .= m.memContent
-        ]
-
---------------------------------------------------------------------------------
 -- Shared guards.
 
 checkContent :: Text -> Either Text Text

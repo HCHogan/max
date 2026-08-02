@@ -78,15 +78,17 @@ data ContextLimits = ContextLimits
   }
   deriving stock (Show, Eq)
 
--- | Conservative compatibility limits for profiles/configurations created by
--- old tests and callers.  Production profiles materialize explicit values.
+-- | Roomy group-chat defaults for profiles that omit explicit limits.  The
+-- input/output pair fits a 128K combined-window deployment, while the reserves
+-- leave enough headroom for a long tool loop and the largest inline-media turn
+-- Max currently admits.
 defaultContextLimits :: ContextLimits
 defaultContextLimits =
   ContextLimits
-    { maxInputTokens = 32768,
-      reservedOutputTokens = 2048,
-      attachmentReserve = 4096,
-      toolRoundReserve = 4096
+    { maxInputTokens = 114688,
+      reservedOutputTokens = 16384,
+      attachmentReserve = 16384,
+      toolRoundReserve = 16384
     }
 
 -- | Text-message budget after reserving space for future tool rounds and,

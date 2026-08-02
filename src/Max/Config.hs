@@ -23,7 +23,7 @@
 -- >     main:
 -- >       api_key: sk-...
 -- >       model: deepseek-chat
--- >       max_input_tokens: 32768
+-- >       max_input_tokens: 114688
 -- >     local:
 -- >       base_url: http://localhost:8080/v1
 -- >       model: qwen2.5:7b
@@ -71,7 +71,7 @@ import Max.DB.Connection (DbConfig (..))
 import Max.Embedding (EmbeddingConfig (..))
 import Max.Intent (IntentConfig (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
-import Max.ModelCatalog (ModelCatalog)
+import Max.ModelCatalog (ContextLimits (..), ModelCatalog, defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
 import Max.Tools.Search (SearchConfig (..))
 import Max.Wechatpad (WechatpadConfig (..))
@@ -149,8 +149,8 @@ data AppConfig = AppConfig
     -- | How long @llm_calls@ keeps request/response bodies.  Only the
     -- fat table is pruned; @llm_usage@'s counters are kept forever.
     adminCallRetentionDays :: !Int,
-    -- | Embeddings endpoint; presence enables the embed worker and
-    -- the semantic-search surfaces (context_search plus compatibility tools).
+    -- | Embeddings endpoint; presence enables the embed worker and semantic
+    -- candidates in @context_search@ (plus embedding-backed sticker lookup).
     embedding :: !(Maybe EmbeddingConfig),
     -- | Default for debug mode: when effective debug is on, the
     -- agent loop posts each tool call to the group.  Per-group
@@ -1151,10 +1151,13 @@ materializeLLM (dn, fileProfiles, overlay) = do
                      else "\n  set via llm.profiles." <> T.unpack profName <> ".api_key"
                  )
       let resolvedMultimodal = fromMaybe False spec.multimodal
-          resolvedMaxInput = fromMaybe 32768 spec.maxInputTokens
-          resolvedMaxOutput = fromMaybe 2048 spec.maxTokens
-          resolvedAttachmentReserve = fromMaybe (if resolvedMultimodal then 4096 else 0) spec.attachmentReserve
-          resolvedToolRoundReserve = fromMaybe 4096 spec.toolRoundReserve
+          resolvedMaxInput = fromMaybe defaultContextLimits.maxInputTokens spec.maxInputTokens
+          resolvedMaxOutput = fromMaybe defaultContextLimits.reservedOutputTokens spec.maxTokens
+          resolvedAttachmentReserve =
+            fromMaybe
+              (if resolvedMultimodal then defaultContextLimits.attachmentReserve else 0)
+              spec.attachmentReserve
+          resolvedToolRoundReserve = fromMaybe defaultContextLimits.toolRoundReserve spec.toolRoundReserve
       when (resolvedMaxInput <= 0) $
         fail $
           "llm profile '" <> T.unpack profName <> "' has non-positive max_input_tokens"

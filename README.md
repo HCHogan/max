@@ -1,8 +1,8 @@
 <div align="center">
 
-# max
+# max 🦈
 
-**A QQ group-chat agent, written in Haskell.**
+**A group-chat agent, done right.**
 
 [![CI](https://github.com/HCHogan/max/actions/workflows/ci.yml/badge.svg)](https://github.com/HCHogan/max/actions/workflows/ci.yml)
 [![GHC](https://img.shields.io/badge/GHC-9.10-5e5086.svg)](https://www.haskell.org/ghc/)
@@ -12,125 +12,64 @@
 
 </div>
 
-It talks to QQ through [NapCatQQ](https://napneko.github.io/) — OneBot 11 over a
-reverse WebSocket — and calls any OpenAI-compatible or Anthropic-native endpoint
-for the replies. Group chats and one-on-one private chats both go through the
-same pipeline.
+Max connects to QQ through [NapCatQQ](https://napneko.github.io/) and supports
+OpenAI-compatible, OpenAI Responses, and Anthropic-native model endpoints.
 
-```
-QQ ──▶ NapCat ──OneBot 11 / reverse-WS──▶ max ──▶ LLM (OpenAI-compatible · Anthropic)
-                                           │
-                                           ├──▶ Postgres · pgvector · blob store
-                                           └──▶ Docker · per-group sandbox · browser
+```text
+QQ ──▶ NapCat ──OneBot 11──▶ Max ──▶ LLM
+                              ├──▶ PostgreSQL + pgvector
+                              └──▶ sandbox, browser, files and media
 ```
 
-## Features
+## Highlights
 
-- **Agent loop** — multi-turn tool calling, with `!kill` to cancel, `!feedback`
-  to steer a running turn, `!btw` to ask something else without disturbing it,
-  and reaction-based status on the trigger message.
-- **Persistence** — every message in Postgres, images and videos
-  content-addressed on disk, forwarded chats expanded inline. Pending media
-  downloads survive a restart, and SIGTERM lets in-flight turns finish first.
-- **Memory** — per-group and per-user facts injected into the prompt, written by
-  an episode extractor when the conversation goes quiet (whole-arc extraction
-  behind a watermark), consolidated by a nightly dream pass.
-- **Skills** — progressive disclosure: a one-line index in the system prompt,
-  full manuals fetched on demand with `use_skill`. Builtin manuals ship inside
-  the binary (self-knowledge, sandbox, web, office — the docs double as the
-  bot's self-image); DB rows add or shadow them at runtime via the admin API.
-- **Multimodal** — inline images, video and avatars on capable profiles;
-  unrelated history images loaded on demand.
-- **Tools** — web search, code sandbox (per-group Docker workspace), files,
-  message search, browser (camoufox over MCP), bilibili, pins, poke.
-- **Multiple LLM profiles** — OpenAI-compatible or Anthropic-native, switched at
-  runtime with `!model`.
-- **Commands** — `!help`, `!model`, `!persona`, `!proactive`, `!memory`,
-  `!clear`, `!pin`, `!btw`, `!feedback`, `!kill`, `!version`, …
-- **Admin panel** — a loopback JSON API + baked-in web panel (sessions, skills,
-  memories, permissions, tasks, usage, logs, full LLM call bodies).
-- *Optional:* **proactive triggering** (a cheap intent classifier can start a
-  turn on unaddressed chatter) and **vector search** (pgvector-backed semantic
-  search over messages and memories).
+- Token-planned long-term context with rebuildable episode summaries and a
+  protected recent transcript.
+- Conversation-scoped memory and unified recall across memories, episodes, raw
+  messages, pins, and media captions.
+- Concurrent agent turns, tool calling, streaming replies, cancellation, and
+  mid-turn feedback.
+- Multimodal input, persistent per-group sandboxes, browser automation, files,
+  skills, reminders, and proactive participation.
+- Durable messages, media jobs, context projections, and maintenance work.
+- Multiple model profiles plus an authenticated local admin panel.
 
-`@bot ping` → `pong`, no LLM call. Full behaviour reference in
-[docs/features.md](docs/features.md).
+See [features.md](docs/features.md) for the full behaviour reference.
 
 ## Quick start
 
 ```sh
-# 1. Enter the dev shell (--impure: devenv as a flake module)
-direnv allow                     # or: nix develop --impure
-
-# 2. Configure secrets
-cp .env.example .env             # NAPCAT_QQ, MAX_ACCESS_TOKEN, MAX_LLM_API_KEY
-cp max.yaml.example max.yaml     # persona, profiles, memory/embedding sections
-
-# 3. Bring up Postgres (127.0.0.1:5433, db `max`, pgvector + pg_trgm)
-devenv up
-
-# 4. Bring up NapCat and log in
+direnv allow                         # or: nix develop --impure
+cp .env.example .env
+cp max.yaml.example max.yaml
+devenv up                            # PostgreSQL on 127.0.0.1:5433
 docker compose up -d napcat
-```
-
-Open <http://localhost:6099> and scan the QR with the bot account's mobile QQ.
-Login state persists to `./.napcat/`, and the reverse-WS target
-`ws://host.docker.internal:8080/onebot` is preconfigured. Private chat only works
-with the bot account's QQ friends — that's QQ's rule, not ours.
-
-```sh
-# 5. Build the tool images (optional, but most tools need them)
-sandbox-image/build.sh           # code-execution sandbox
-browser-image/build.sh           # browser (multimodal profiles only)
-
-# 6. Run — migrations apply on boot, the embed worker backfills on its own
 cabal run max
 ```
 
-Then, in QQ:
+Open <http://localhost:6099> to log the bot account into QQ. Database migrations
+and derived-data backfills run automatically. Build `sandbox-image/` and
+`browser-image/` only when those tools are needed.
 
-```
-@bot ping               → pong       (fast path, no LLM call)
-@bot 你好                → LLM reply
-@bot !help              → list of !cmd verbs
-@bot !model list        → available LLM profiles
-@bot !memory            → what the bot remembers here
-```
+Configuration is layered as CLI flags, environment variables, then YAML. One
+LLM API key is the only required value; optional feature sections stay disabled
+when absent. See [`.env.example`](.env.example) and
+[`max.yaml.example`](max.yaml.example).
 
-Reply to a message and `@bot …` to hand the model the quoted context — including
-an expanded 转发聊天记录, attached-file ids, and (on multimodal profiles) the
-quoted message's images.
-
-## Configuration
-
-Three layered sources, first-Just wins per field:
-
-1. **CLI flags** — `max --help` lists everything.
-2. **Environment** — `MAX_LLM_API_KEY`, `MAX_DB_URL`, `MAX_PERSONA`, … Devenv
-   sources `.env` on shell entry.
-3. **YAML** — `--config-file PATH`, `MAX_CONFIG`, `./max.yaml`, or
-   `$XDG_CONFIG_HOME/max/config.yaml`.
-
-The only required value is one LLM `api_key`. Feature sections (`search`,
-`memory`, `embedding`, `intent`, …) stay off when absent. See
-[`.env.example`](.env.example) and [`max.yaml.example`](max.yaml.example) for the
-full schema.
-
-## Tests
+## Development
 
 ```sh
-cabal test max-test        # in-memory: pure logic
-cabal test max-test-db     # DB integration; needs MAX_TEST_DB_URL
+cabal test max-test
+MAX_TEST_DB_URL=postgresql://127.0.0.1:5433/max_test cabal test max-test-db
+cabal build all
 ```
 
-## Docs
-
-| | |
+| Document | Contents |
 |---|---|
-| [features.md](docs/features.md) | full behaviour reference |
-| [architecture.md](docs/architecture.md) | layout, data flow, durability, effect stack |
-| [development.md](docs/development.md) | tests, versioning, debugging |
-| [prompt-flow.md](docs/prompt-flow.md) | generated wire JSON for a complete dispatch and tool round |
+| [features.md](docs/features.md) | behaviour and configuration semantics |
+| [architecture.md](docs/architecture.md) | runtime, context/memory design, and durability |
+| [development.md](docs/development.md) | tests, evaluation, versioning, and debugging |
+| [prompt-flow.md](docs/prompt-flow.md) | generated prompt and tool-round wire examples |
 
 ## License
 

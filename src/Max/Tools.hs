@@ -4,8 +4,10 @@
 -- since the model shouldn't have to pass @group_id@ explicitly — it's
 -- implicit in the conversation it's serving.
 --
--- Phase 6b ships two read-only history tools.  Write/exec tools come
--- in Phase 6.5 once sandboxing is in place.
+-- Historical recall is deliberately exposed through one unified tool:
+-- @context_search@.  Keeping legacy corpus-specific search names visible made
+-- tool selection ambiguous and let model-supplied placeholder filters bypass
+-- unified recall entirely.
 module Max.Tools
   ( builtinsFor,
     parseTimeArg,
@@ -16,20 +18,13 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Foldable (asum)
 import Data.Int (Int64)
-import Data.Maybe (catMaybes, fromMaybe, isJust)
-import Data.Ord (clamp)
-import Data.Set qualified as Set
-import Data.String (fromString)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Time (LocalTime, TimeZone, defaultTimeLocale, localTimeToUTC, parseTimeM)
-import Database.PostgreSQL.Simple (SqlError (..))
-import Database.PostgreSQL.Simple.ToField qualified as PG
 import Effectful
-import Effectful.Exception (try)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection, query)
+import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..), bestName, fetchForwardChildrenInScope, fetchMessageInScope)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
@@ -37,11 +32,11 @@ import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, EmbeddingRecord (..), embedTexts, makeEmbeddingRecord)
 import Max.EpisodeStore (EpisodeExpansion (..), SourceRange (..), episodeHandleText, expandEpisode, parseEpisodeHandle)
 import Max.Prompt (tagMediaMarkers)
-import Max.Recall (RecallCorpus (..), RecallHit (..), searchRecall, searchRecallIn)
+import Max.Recall (RecallHit (..), searchRecall)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolGroupId)
 import OneBot.Action (Action (..), Response (..))
-import OneBot.Types (GroupId (..), UserId (..))
+import OneBot.Types (UserId (..))
 
 builtinsFor ::
   ( WithConnection :> es,
@@ -55,7 +50,6 @@ builtinsFor ::
   [Tool es]
 builtinsFor tz mEmbed dc =
   [ getMessageByIdTool tz dc,
-    searchMessagesTool tz mEmbed (toolGroupId dc),
     contextSearchTool tz mEmbed dc,
     contextExpandTool tz dc,
     viewForwardTool tz dc,
@@ -99,171 +93,6 @@ getMessageByIdTool tz dc =
     parseArgs :: Object -> Parser Int64
     parseArgs o = o .: "message_id"
 
---------------------------------------------------------------------------------
--- search_messages
-
-searchMessagesTool :: (WithConnection :> es, Log :> es, IOE :> es) => TimeZone -> Maybe EmbedClient -> GroupId -> Tool es
-searchMessagesTool tz mEmbed groupId@(GroupId gid) =
-  Tool
-    { toolName = "search_messages",
-      toolDescription =
-        T.unwords $
-          [ "搜索聊天记录（之前讨论过X吗 / 上次谁说了Y / 张三昨天说了啥）。",
-            "所有过滤条件可选、AND 组合，各参数含义见参数说明；",
-            "没给任何文本条件时就按其余条件列出最近的消息。"
-          ]
-            <> [ "找不到原话怎么说时用 semantic 按语义搜，结果按相似度排序。"
-               | Just _ <- [mEmbed]
-               ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "query"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("Substring match (case-insensitive)." :: Text)
-                      ],
-                  "regex"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("POSIX regex (case-insensitive)." :: Text)
-                      ],
-                  "sender_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("Sender's QQ id." :: Text)
-                      ],
-                  "sender"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("Sender name contains this (nickname or 群名片)." :: Text)
-                      ],
-                  "after"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("At or after 'YYYY-MM-DD [HH:MM]' (result-display clock)." :: Text)
-                      ],
-                  "before"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("At or before 'YYYY-MM-DD [HH:MM]'." :: Text)
-                      ],
-                  "semantic"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("Natural-language meaning search (no exact wording needed)." :: Text)
-                      ],
-                  "limit"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("Default 10, max 30." :: Text),
-                        "default" .= (10 :: Int)
-                      ]
-                ]
-          ],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
-        Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right sa -> case compatibilityRecallQuery sa of
-          Just (queryText, wantsSemantic) -> case (wantsSemantic, mEmbed) of
-            (True, Nothing) -> pure (Left "semantic 搜索未启用（没有配置 embedding）")
-            _ -> do
-              embedding <-
-                if wantsSemantic
-                  then bestEffortRecallEmbedding "search_messages" mEmbed queryText
-                  else pure Nothing
-              let scope = conversationScopeFor groupId
-                  corpora = Set.fromList [RecallMessages, RecallPins, RecallCaptions]
-              hits <- searchRecallIn (currentConversationRecall scope) corpora queryText embedding sa.saLimit
-              items <-
-                catMaybes
-                  <$> traverse
-                    (\hit -> maybe (pure Nothing) (fetchMessageInScope scope) hit.rhMessageId)
-                    hits
-              pure . Right . toJSON $ map (historyItemSummary tz . tagMediaMarkers) items
-          Nothing ->
-            let run f mVec = fmap (toJSON . map (historyItemSummary tz . tagMediaMarkers)) <$> runSearch f mVec
-             in case toFilter sa of
-                  Left e -> pure (Left e)
-                  Right f -> case (sa.saSemantic, mEmbed) of
-                    (Nothing, _) -> run f Nothing
-                    (Just _, Nothing) -> pure (Left "semantic 搜索未启用（没有配置 embedding）")
-                    (Just q, Just ec) -> do
-                      evec <- liftIO (embedTexts ec [q])
-                      case evec of
-                        Left err -> pure (Left ("embedding failed: " <> err))
-                        Right [v] -> case makeEmbeddingRecord ec q v of
-                          Left err -> pure (Left ("embedding failed: " <> err))
-                          Right record -> run f (Just record)
-                        Right _ -> pure (Left "embedding failed: unexpected result shape")
-    }
-  where
-    parseArgs :: Object -> Parser SearchArgs
-    parseArgs o =
-      SearchArgs
-        <$> o .:? "query"
-        <*> o .:? "regex"
-        <*> o .:? "sender_id"
-        <*> o .:? "sender"
-        <*> o .:? "after"
-        <*> o .:? "before"
-        <*> o .:? "semantic"
-        <*> (fromMaybe 10 <$> o .:? "limit")
-
-    toFilter :: SearchArgs -> Either Text MessageFilter
-    toFilter sa = do
-      after <- traverse (parseTimeArg tz) sa.saAfter
-      before <- traverse (parseTimeArg tz) sa.saBefore
-      pure
-        MessageFilter
-          { mfGroupId = gid,
-            mfQuery = sa.saQuery,
-            mfRegex = sa.saRegex,
-            mfSenderId = sa.saSenderId,
-            mfSender = sa.saSender,
-            mfAfter = after,
-            mfBefore = before,
-            mfLimit = clamp (1, 30) sa.saLimit
-          }
-
--- | Raw tool arguments, straight out of the JSON.
-data SearchArgs = SearchArgs
-  { saQuery :: !(Maybe Text),
-    saRegex :: !(Maybe Text),
-    saSenderId :: !(Maybe Int64),
-    saSender :: !(Maybe Text),
-    saAfter :: !(Maybe Text),
-    saBefore :: !(Maybe Text),
-    saSemantic :: !(Maybe Text),
-    saLimit :: !Int
-  }
-
--- | The old tool remains model-visible, but ordinary text/semantic lookups
--- now share context_search's corpus, ranking, scope, and dedup policy.  Regex,
--- sender, time-range, and combined exact+semantic requests retain the
--- specialised SQL path because those are constraints rather than recall.
-compatibilityRecallQuery :: SearchArgs -> Maybe (Text, Bool)
-compatibilityRecallQuery sa
-  | isJust sa.saSenderId || any isJust [sa.saRegex, sa.saSender, sa.saAfter, sa.saBefore] = Nothing
-  | Just queryText <- sa.saQuery, Nothing <- sa.saSemantic = Just (queryText, False)
-  | Nothing <- sa.saQuery, Just semanticText <- sa.saSemantic = Just (semanticText, True)
-  | otherwise = Nothing
-
--- | Validated filter set, times parsed.  Every field except the group
--- and the limit is optional; present ones are AND-combined.
-data MessageFilter = MessageFilter
-  { mfGroupId :: !Int64,
-    mfQuery :: !(Maybe Text),
-    mfRegex :: !(Maybe Text),
-    mfSenderId :: !(Maybe Int64),
-    mfSender :: !(Maybe Text),
-    mfAfter :: !(Maybe UTCTime),
-    mfBefore :: !(Maybe UTCTime),
-    mfLimit :: !Int
-  }
-
---------------------------------------------------------------------------------
 -- context_search
 
 contextSearchTool ::
@@ -473,75 +302,6 @@ parseTimeArg tz t =
         "%Y-%m-%dT%H:%M"
       ]
 
--- | Filtered history search.  Text matching (@ILIKE@ substring and
--- @~*@ regex alike) is backed by the @pg_trgm@ GIN index (migration
--- 005), which accelerates both operator classes — unlike the previous
--- @tsvector @@ plainto_tsquery('simple', ...)@ approach, which broke
--- on mixed CJK+ASCII text because the 'simple' tokeniser doesn't
--- split CJK runs.
---
--- The WHERE clause is assembled from code-controlled fragments only;
--- user input travels exclusively through @?@ parameters.  A bad regex
--- makes Postgres throw 'SqlError', which we surface as a normal tool
--- error so the model can correct the pattern instead of killing the
--- dispatch.
-runSearch ::
-  (WithConnection :> es, IOE :> es) =>
-  MessageFilter ->
-  -- | Validated query vector — 'Just' switches ordering from
-  -- newest-first to most-similar-first and excludes incompatible rows.
-  Maybe EmbeddingRecord ->
-  Eff es (Either Text [HistoryItem])
-runSearch f mVec = do
-  let conds :: [(String, [PG.Action])]
-      conds =
-        concat
-          [ [("rendered_text ILIKE ?", [PG.toField ("%" <> q <> "%")]) | Just q <- [f.mfQuery]],
-            [("rendered_text ~* ?", [PG.toField r]) | Just r <- [f.mfRegex]],
-            [("user_id = ?", [PG.toField u]) | Just u <- [f.mfSenderId]],
-            [ ("(sender_nickname ILIKE ? OR sender_card ILIKE ?)", [PG.toField p, PG.toField p])
-            | Just s <- [f.mfSender],
-              let p = "%" <> s <> "%"
-            ],
-            [("received_at >= ?", [PG.toField t]) | Just t <- [f.mfAfter]],
-            [("received_at <= ?", [PG.toField t]) | Just t <- [f.mfBefore]]
-          ]
-      columns = "message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id"
-      baseSql =
-        " FROM messages \
-        \  WHERE group_id = ? \
-        \    AND NOT is_synthetic \
-        \    AND kind = 'chat' \
-        \    AND forwarded_in_message_id IS NULL"
-          <> concatMap ((" AND " <>) . fst) conds
-      baseParams = PG.toField f.mfGroupId : concatMap snd conds
-      (sql, params) = case mVec of
-        Nothing ->
-          ( "SELECT " <> columns <> baseSql <> " ORDER BY received_at DESC LIMIT ?",
-            baseParams <> [PG.toField f.mfLimit]
-          )
-        Just record ->
-          ( "WITH compatible AS MATERIALIZED (SELECT "
-              <> columns
-              <> ", embedding"
-              <> baseSql
-              <> " AND embedding_model = ? AND embedding_dimensions = ?) "
-              <> "SELECT "
-              <> columns
-              <> " FROM compatible ORDER BY embedding <=> ?::vector LIMIT ?",
-            baseParams
-              <> [ PG.toField record.erModelId,
-                   PG.toField record.erDimensions,
-                   PG.toField record.erVector,
-                   PG.toField f.mfLimit
-                 ]
-          )
-  eres <- try @SqlError (query (fromString sql) params)
-  pure $ case eres of
-    Left e -> Left ("search failed: " <> TE.decodeUtf8Lenient (sqlErrorMsg e))
-    Right rows -> Right rows
-
---------------------------------------------------------------------------------
 -- view_forward — expand a 转发聊天记录 on demand
 
 -- | Cap on child lines returned per call — a mega-bundle shouldn't

@@ -6,7 +6,8 @@ Tests, versioning, and debugging. For layout and internals see
 ## Tests
 
 Two test suites — one in-memory, one against Postgres — plus CI (GitHub Actions)
-running build + `max-test` through the same flake dev shell.
+running the build and both suites through the same flake dev shell. CI provides
+PostgreSQL 17 with pgvector; the database suite is a required release gate.
 
 ```sh
 cabal test max-test                          # in-memory: pure logic
@@ -84,7 +85,8 @@ export MAX_TEST_DB_URL=postgresql://127.0.0.1:5433/max_test
 cabal test max-test-db
 ```
 
-Without `MAX_TEST_DB_URL` the suite exits 0 (CI without a database stays green).
+Without `MAX_TEST_DB_URL` the suite exits 0 for local workflows that do not have
+Postgres available. CI always supplies the variable and requires the suite.
 Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
 The prompt integration cases also publish real active compartments, assert
 gap annotations for partial backfill, and exercise the all-conversation

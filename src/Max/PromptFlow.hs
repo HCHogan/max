@@ -47,7 +47,7 @@ import Max.Effects.LLM
   )
 import Max.Effects.ToolOutput (InlineMedia (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
-import Max.ModelCatalog (ContextLimits (..))
+import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
 import Max.Prompt (ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Session (Session (..))
@@ -173,10 +173,10 @@ profileFor protocol =
     { baseUrl = base,
       apiKey = "<redacted>",
       model = modelName,
-      maxInputTokens = 32768,
-      maxTokens = 4096,
-      attachmentReserve = 4096,
-      toolRoundReserve = 4096,
+      maxInputTokens = defaultContextLimits.maxInputTokens,
+      maxTokens = defaultContextLimits.reservedOutputTokens,
+      attachmentReserve = defaultContextLimits.attachmentReserve,
+      toolRoundReserve = defaultContextLimits.toolRoundReserve,
       temperature = Nothing,
       effort = effortLevel,
       timeoutSeconds = 120,
@@ -296,7 +296,7 @@ initialMessages :: [ChatMessage]
 initialMessages =
   renderContextPlan $
     planContext
-      (ContextLimits 32768 4096 4096 4096)
+      defaultContextLimits
       (ContextSnapshot promptFixture Nothing Nothing)
 
 promptFixture :: PromptInputs
