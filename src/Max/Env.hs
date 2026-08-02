@@ -23,8 +23,8 @@ import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
 import Max.CliProxy (CliProxyConfig)
 import Max.Embedding (EmbedClient)
-import Max.Intent (IntentConfig)
 import Max.EpisodeScheduler (EpisodeScheduler)
+import Max.Intent (IntentConfig)
 import Max.Reminder (ReminderScheduler)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
@@ -36,12 +36,8 @@ import Max.Tools.Search (SearchConfig)
 data BotEnv = BotEnv
   { -- | Persona used when a session hasn't overridden it ('AppConfig.persona').
     bePersona :: !Text,
-    -- | Migration-era transcript low-water mark (see 'Max.Config.historyWindow').
-    beHistoryWindow :: !Int,
-    -- | Migration-era transcript high-water mark (see 'Max.Config.historyMax').
-    beHistoryMax :: !Int,
-    -- | Temporary per-conversation development allowlist for tiered context.
-    beUnboundedContextGroups :: ![Int64],
+    -- | Global emergency reader: raw immutable ledger under ContextBudget.
+    beForceRawContext :: !Bool,
     -- | Config-level debug default; sessions override via @!debug@.
     beDebugDefault :: !Bool,
     -- | Config-level sticker default; sessions override via @!sticker

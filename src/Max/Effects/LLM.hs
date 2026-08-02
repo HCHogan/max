@@ -197,7 +197,7 @@ data ChatResponse
 -- an attribution that rots.
 data ChatCtx = ChatCtx
   { -- | Which subsystem is spending: @turn@ \/ @wrapup@ \/ @intent@ \/
-    -- @supplement@ \/ @memx@ \/ @memx-compact@ \/ @caption@.
+    -- @supplement@ \/ @historian@ \/ @memory-dream@ \/ @caption@.
     ccSource :: !Text,
     -- | The group the call serves; 'Nothing' for groupless work
     -- (caption workers run against a shared library).

@@ -50,6 +50,7 @@ module Max.MemoryStore
     supersedeMemory,
     supersedeMemoryWithEvidence,
     evictOldest,
+    invalidateMemoryEmbeddingsInConversation,
     markMemoryEmbedded,
     listPendingMemoryEmbeddings,
     markPendingMemoryEmbedded,
@@ -823,6 +824,19 @@ markMemoryEmbedded ns mid expected content record = do
       PG.toField gid
     ]
     record
+
+-- | Clear only the derived vector projection owned by one conversation.
+-- Content, semantic version, evidence, and lifecycle stay untouched; the
+-- ordinary embedding worker will repopulate the row under content-hash CAS.
+invalidateMemoryEmbeddingsInConversation ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  Eff es Int64
+invalidateMemoryEmbeddingsInConversation scope =
+  execute
+    "UPDATE memories SET embedding = NULL, embedding_model = NULL, embedding_dimensions = NULL, embedding_content_hash = NULL, embedding_updated_at = NULL \
+    \ WHERE (scope = 'group' AND scope_id = ?) OR (scope = 'user' AND source_group_id = ?)"
+    (conversationStorageId scope, conversationStorageId scope)
 
 listPendingMemoryEmbeddings ::
   (WithConnection :> es, IOE :> es) =>

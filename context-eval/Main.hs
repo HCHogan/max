@@ -41,7 +41,7 @@ import Max.EpisodeStore
     captureValidationWarnings,
     validateEpisodeCapture,
   )
-import Max.Historian (generateHistorianCapture, renderHistorianMessages, renderHistorianSourceLine)
+import Max.Historian (generateHistorianCapture, historianPromptVersion, renderHistorianMessages, renderHistorianSourceLine)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Log (withCompactLogger)
 import Max.MemoryStore (MemoryId (..))
@@ -441,7 +441,12 @@ proposalParts = \case
     ("archive", "", 0, "", mid.unMemoryId, "", evidence)
 
 expectedProposalLabel :: ExpectedProposal -> Text
-expectedProposalLabel expected = expected.epAction <> maybe "" ("/" <>) expected.epScope <> maybe "" (("#" <>) . tshow) expected.epMemoryId
+expectedProposalLabel expected =
+  expected.epAction
+    <> maybe "" ("/" <>) expected.epScope
+    <> maybe "" ((" subject=" <>) . tshow) expected.epUserId
+    <> (case expected.epCategories of category : _ -> " category=" <> category; [] -> "")
+    <> maybe "" ((" id=" <>) . tshow) expected.epMemoryId
 
 actualProposalLabel :: EpisodeMemoryProposal -> Text
 actualProposalLabel proposal =
@@ -500,7 +505,7 @@ fixtureRun fixture source profile =
       crLeaseOwner = Just "offline-eval",
       crLeaseExpiresAt = Nothing,
       crHistorianProfile = profile,
-      crPromptVersion = "historian/v2",
+      crPromptVersion = historianPromptVersion,
       crSchemaVersion = 1,
       crReplacesCompartment = Nothing
     }

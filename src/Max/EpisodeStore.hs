@@ -14,6 +14,7 @@ module Max.EpisodeStore
     CaptureReason (..),
     CaptureRun (..),
     CaptureRequest (..),
+    BackfillGap (..),
     CaptureLease (..),
     SourceRange (..),
     EpisodeKind (..),
@@ -28,6 +29,7 @@ module Max.EpisodeStore
     validateEpisodeCapture,
     captureValidationWarnings,
     enqueueCaptureRun,
+    findOldestBackfillGap,
     enqueueBackfillRun,
     enqueueRebuildRun,
     claimCaptureRun,
@@ -199,6 +201,16 @@ data CaptureRequest = CaptureRequest
     requestHistorianProfile :: !Text,
     requestPromptVersion :: !Text,
     requestSchemaVersion :: !Int
+  }
+  deriving stock (Show, Eq)
+
+-- | The oldest contiguous source island at or before the live Historian
+-- cursor that is not yet owned by an active compartment.  @backfillExpected@
+-- is the preceding message in this conversation; @backfillThrough@ is the
+-- final message before the next active owner (or the live cursor).
+data BackfillGap = BackfillGap
+  { backfillExpected :: !MessageCursor,
+    backfillThrough :: !MessageCursor
   }
   deriving stock (Show, Eq)
 
@@ -660,6 +672,56 @@ enqueueCaptureRun scope expected end request = do
           )
       pure (case rows of run : _ -> Just run; [] -> Nothing)
 
+-- | Find the oldest exact historical hole without crossing the live cursor or
+-- an existing active compartment.  Concurrent publishers may make the answer
+-- stale after this read; source hashing and the active-range exclusion remain
+-- the final transactional fence.
+findOldestBackfillGap ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  Eff es (Maybe BackfillGap)
+findOldestBackfillGap scope = do
+  cursor <- loadCursor scope historianCursor
+  rows <-
+    query
+      "WITH first_uncovered AS ( \
+      \  SELECT min(source.ingest_seq) AS start_seq \
+      \  FROM messages AS source \
+      \  WHERE source.group_id = ? AND source.ingest_seq <= ? \
+      \    AND NOT EXISTS ( \
+      \      SELECT 1 FROM conversation_compartments AS owner \
+      \      WHERE owner.conversation_id = ? AND owner.state = 'active' \
+      \        AND source.ingest_seq BETWEEN owner.start_ingest_seq AND owner.end_ingest_seq \
+      \    ) \
+      \), bounds AS ( \
+      \  SELECT start_seq, ( \
+      \    SELECT min(owner.start_ingest_seq) \
+      \    FROM conversation_compartments AS owner \
+      \    WHERE owner.conversation_id = ? AND owner.state = 'active' \
+      \      AND owner.start_ingest_seq > first_uncovered.start_seq \
+      \  ) AS next_active_start \
+      \  FROM first_uncovered WHERE start_seq IS NOT NULL \
+      \) \
+      \ SELECT \
+      \   COALESCE((SELECT max(previous.ingest_seq) FROM messages AS previous \
+      \             WHERE previous.group_id = ? AND previous.ingest_seq < bounds.start_seq), 0), \
+      \   (SELECT max(source.ingest_seq) FROM messages AS source \
+      \    WHERE source.group_id = ? AND source.ingest_seq >= bounds.start_seq \
+      \      AND source.ingest_seq <= ? \
+      \      AND (bounds.next_active_start IS NULL OR source.ingest_seq < bounds.next_active_start)) \
+      \ FROM bounds"
+      ( conversationStorageId scope,
+        cursor.ingestSeq,
+        conversationStorageId scope,
+        conversationStorageId scope,
+        conversationStorageId scope,
+        conversationStorageId scope,
+        cursor.ingestSeq
+      )
+  pure $ case rows :: [(Int64, Int64)] of
+    (expected, through) : _ -> Just (BackfillGap (MessageCursor expected) (MessageCursor through))
+    [] -> Nothing
+
 -- | Schedule an explicitly selected historical range without moving the live
 -- historian cursor.  Publication still enforces the source hash and active
 -- non-overlap constraint.  This is the controlled path for history predating
@@ -808,7 +870,7 @@ loadCaptureSource run =
   query
     "SELECT ingest_seq, \
     \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
-    \       (forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat') \
+    \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
     \ FROM messages \
     \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? \
     \ ORDER BY ingest_seq"
@@ -1343,7 +1405,7 @@ expandEpisode policy handle requestedAfter requestedSize = do
         query
           "SELECT ingest_seq, \
           \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
-          \       (forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat') \
+          \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
           \ FROM messages \
           \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND ingest_seq > ? \
           \ ORDER BY ingest_seq \

@@ -49,8 +49,6 @@ data Row = Row
     rDebugOverride :: !(Maybe Bool),
     rStickerOverride :: !(Maybe Bool),
     rProactiveOverride :: !(Maybe Bool),
-    rContextAnchor :: !(Maybe UTCTime),
-    rMemxAnchor :: !(Maybe UTCTime),
     rEffortOverride :: !(Maybe Text),
     rRevision :: !Int64
   }
@@ -59,8 +57,6 @@ instance FromRow Row where
   fromRow =
     Row
       <$> field
-      <*> field
-      <*> field
       <*> field
       <*> field
       <*> field
@@ -115,7 +111,7 @@ fetchRecord ::
 fetchRecord (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor, effort_override, revision \
+      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, effort_override, revision \
       \  FROM sessions \
       \  WHERE group_id = ?"
       (Only gid)
@@ -131,7 +127,7 @@ listSessions :: (WithConnection :> es, IOE :> es) => Text -> Eff es [Session]
 listSessions defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor, effort_override, revision \
+      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, effort_override, revision \
       \  FROM sessions ORDER BY group_id"
       ()
   pure (map ((.session) . rowToRecord defaultModel) (rows :: [Row]))
@@ -154,10 +150,10 @@ saveSessionCAS old new
           "UPDATE sessions SET \
           \   model = ?, persona = ?, cleared_at = ?, pinned = ?, \
           \   debug_override = ?, sticker_override = ?, proactive_override = ?, \
-          \   context_anchor = ?, memx_anchor = ?, effort_override = ?, \
+          \   effort_override = ?, \
           \   revision = ?, updated_at = now() \
           \ WHERE group_id = ? AND revision = ?"
-          ((new.model, new.persona, new.clearedAt, pin) :. (new.debugOverride, new.stickerOverride, new.proactiveOverride, new.contextAnchor, new.memxAnchor, new.effortOverride, nextRevision, gid, old.revision))
+          ((new.model, new.persona, new.clearedAt, pin) :. (new.debugOverride, new.stickerOverride, new.proactiveOverride, new.effortOverride, nextRevision, gid, old.revision))
       pure $
         if changed == 1
           then Just (SessionRecord new nextRevision)
@@ -180,8 +176,6 @@ rowToRecord defaultModel r =
             debugOverride = r.rDebugOverride,
             stickerOverride = r.rStickerOverride,
             proactiveOverride = r.rProactiveOverride,
-            contextAnchor = r.rContextAnchor,
-            memxAnchor = r.rMemxAnchor,
             effortOverride = r.rEffortOverride
           },
       revision = r.rRevision

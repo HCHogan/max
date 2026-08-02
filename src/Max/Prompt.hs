@@ -2,9 +2,9 @@ module Max.Prompt
   ( -- * Pipeline
     buildContext,
     buildContextWithLimits,
-    buildContextWithLimitsMode,
+    buildContextWithReadMode,
+    ContextReadMode (..),
     TriggerOrigin (..),
-    ContextHistoryMode (..),
 
     -- * Building blocks (exposed for tests)
     PromptInputs (..),
@@ -18,7 +18,6 @@ module Max.Prompt
     applyBaseCompartmentTiers,
     renderContextPlan,
     renderContext,
-    applyWatermark,
     contextRoster,
     applyStickerCaptions,
     applyVideoCaptions,
@@ -41,7 +40,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Either (partitionEithers)
 import Data.Function (on)
 import Data.Int (Int64)
-import Data.List (find, groupBy, minimumBy, sortOn, unsnoc)
+import Data.List (find, groupBy, minimumBy, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Set (Set)
@@ -76,14 +75,14 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.History
   ( HistoryItem (..),
+    HistoryPage (..),
     LedgerItem (..),
+    MessageCursor (..),
     bestName,
     fetchForwardChildrenInScope,
-    fetchMentionHistory,
     fetchMessageInScope,
     fetchMessagesByIdsInScope,
-    fetchPromptLedgerAfter,
-    fetchRecentInGroup,
+    fetchNewestPromptPageBefore,
   )
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
@@ -210,11 +209,11 @@ data TriggerOrigin
     OriginPoke
   deriving stock (Show, Eq)
 
--- | Reversible history-reader cutover.  The default remains legacy until a
--- conversation id is explicitly enrolled by the temporary development gate.
-data ContextHistoryMode
-  = LegacyContextHistory
-  | TieredContextHistory
+-- | Process-wide release reader choice.  The emergency mode is deliberately
+-- raw-only rather than a resurrection of the retired mention/history lane.
+data ContextReadMode
+  = TieredContext
+  | RawLedgerEmergency
   deriving stock (Show, Eq)
 
 data CompartmentTier = TierP1 | TierP2 | TierP3 | TierP4
@@ -249,13 +248,9 @@ data PromptImage = PromptImage
   deriving stock (Show, Eq)
 
 -- | Complete output of the effectful collection step, before any pure prompt
--- selection.  The legacy count watermarks remain explicit migration inputs;
--- token safety is owned by 'planContext' and does not depend on them.
+-- selection.  Token safety is owned entirely by 'planContext'.
 data ContextSnapshot = ContextSnapshot
   { csInputs :: !PromptInputs,
-    csLegacyLowWater :: !Int,
-    csLegacyHighWater :: !Int,
-    csHistoryMode :: !ContextHistoryMode,
     csMaterializationVersion :: !(Maybe Int64),
     csMaterializationReason :: !(Maybe Text)
   }
@@ -267,7 +262,6 @@ data ContextPlan = ContextPlan
     cpBudget :: !ContextBudget,
     cpEstimatedPromptTokens :: !Int,
     cpWithinBudget :: !Bool,
-    cpMovedAnchor :: !(Maybe UTCTime),
     cpTrace :: ![ContextTrace],
     cpPolicyVersion :: !Text,
     cpMaterializationVersion :: !(Maybe Int64),
@@ -416,8 +410,6 @@ systemPrompt multimodal' private persona skills' =
 buildContext ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Text -> -- default persona (used when session has no override)
-  Int -> -- transcript low-water mark: what an overflow trims back to
-  Int -> -- transcript high-water mark: the count that triggers a trim
   Bool -> -- multimodal: load + attach inline images
   Bool -> -- history as user/assistant turns (see 'PromptInputs.historyTurns')
   TriggerOrigin -> -- what woke the bot (see 'PromptInputs.origin')
@@ -427,23 +419,14 @@ buildContext ::
   Set Int64 -> -- triggers another turn is already answering (see 'PromptInputs.inFlight')
   Session ->
   GroupMessage ->
-  -- | The prompt, and the new 'Session.contextAnchor' when this
-  -- dispatch moved it.  Returned rather than written here so the
-  -- caller commits it through the session registry it already owns —
-  -- and so a dispatch that crashes before replying doesn't leave a
-  -- moved anchor behind.
-  Eff es ([ChatMessage], Maybe UTCTime)
+  Eff es [ChatMessage]
 buildContext = buildContextWithLimits defaultContextLimits
 
 -- | Production entry point with limits taken from the selected model profile.
--- Kept separate from 'buildContext' so older callers and migration tests retain
--- a conservative compatibility default.
 buildContextWithLimits ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   ContextLimits ->
   Text ->
-  Int ->
-  Int ->
   Bool ->
   Bool ->
   TriggerOrigin ->
@@ -453,20 +436,14 @@ buildContextWithLimits ::
   Set Int64 ->
   Session ->
   GroupMessage ->
-  Eff es ([ChatMessage], Maybe UTCTime)
-buildContextWithLimits limits =
-  buildContextWithLimitsMode limits LegacyContextHistory
+  Eff es [ChatMessage]
+buildContextWithLimits limits = buildContextWithReadMode limits TieredContext
 
--- | Feature-gated production entry point for the tiered chronological reader.
--- Keeping the mode explicit makes rollback a configuration change and leaves
--- all legacy callers byte-compatible.
-buildContextWithLimitsMode ::
+buildContextWithReadMode ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   ContextLimits ->
-  ContextHistoryMode ->
+  ContextReadMode ->
   Text ->
-  Int ->
-  Int ->
   Bool ->
   Bool ->
   TriggerOrigin ->
@@ -476,8 +453,8 @@ buildContextWithLimitsMode ::
   Set Int64 ->
   Session ->
   GroupMessage ->
-  Eff es ([ChatMessage], Maybe UTCTime)
-buildContextWithLimitsMode limits historyMode defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+  Eff es [ChatMessage]
+buildContextWithReadMode limits readMode defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let promptLimit = (contextBudget limits multimodal').cbPromptTokenLimit
       historyWatermarks =
         HistoryTokenWatermarks
@@ -485,12 +462,10 @@ buildContextWithLimitsMode limits historyMode defaultPersona lowWater highWater 
             htwHigh = max 1024 (promptLimit * 2 `div` 5)
           }
   snapshot <-
-    collectContextWithMode
-      historyMode
+    collectContextWithWatermarks
+      readMode
       (Just historyWatermarks)
       defaultPersona
-      lowWater
-      highWater
       multimodal'
       historyTurns'
       origin'
@@ -508,7 +483,7 @@ buildContextWithLimitsMode limits historyMode defaultPersona lowWater highWater 
       recordContextPlanTrace
         scope
         triggerMessageId
-        (historyModeText snapshot.csHistoryMode)
+        (contextReadModeText readMode)
         plan.cpPolicyVersion
         plan.cpMaterializationVersion
         plan.cpMaterializationReason
@@ -528,21 +503,18 @@ buildContextWithLimitsMode limits historyMode defaultPersona lowWater highWater 
           "prompt_token_limit" .= plan.cpBudget.cbPromptTokenLimit,
           "policy_version" .= plan.cpPolicyVersion
         ]
-  pure (renderContextPlan plan, plan.cpMovedAnchor)
+  pure (renderContextPlan plan)
 
-historyModeText :: ContextHistoryMode -> Text
-historyModeText = \case
-  LegacyContextHistory -> "legacy"
-  TieredContextHistory -> "tiered"
+contextReadModeText :: ContextReadMode -> Text
+contextReadModeText = \case
+  TieredContext -> "tiered"
+  RawLedgerEmergency -> "raw_emergency"
 
--- | Effectful I/O only: fetch and enrich a complete snapshot.  Selection,
--- token pressure, and legacy watermark compatibility happen later in the pure
--- policy step.
+-- | Effectful I/O only: fetch and enrich a complete snapshot.  Selection and
+-- token pressure happen later in the pure policy step.
 collectContext ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Text ->
-  Int ->
-  Int ->
   Bool ->
   Bool ->
   TriggerOrigin ->
@@ -553,15 +525,13 @@ collectContext ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContext = collectContextWithMode LegacyContextHistory Nothing
+collectContext = collectContextWithWatermarks TieredContext Nothing
 
-collectContextWithMode ::
+collectContextWithWatermarks ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  ContextHistoryMode ->
+  ContextReadMode ->
   Maybe HistoryTokenWatermarks ->
   Text ->
-  Int ->
-  Int ->
   Bool ->
   Bool ->
   TriggerOrigin ->
@@ -572,29 +542,37 @@ collectContextWithMode ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContextWithMode requestedMode materializationWatermarks defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+collectContextWithWatermarks readMode materializationWatermarks defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
       UserId senderId = gm.userId
       scope = conversationScopeFor gm.groupId
   now' <- liftIO getCurrentTime
-  -- Legacy mode keeps the migration-era two-query lane byte-for-byte.  A
-  -- enrolled conversation instead reads the newest gap-free compartment
-  -- suffix followed by every raw row after its exact end cursor.  There is no
-  -- fixed message count in that path; ContextPolicy owns the token boundary.
-  let collectLegacyHistory = do
-        let floor' = max s.clearedAt s.contextAnchor
-            fetchLimit = highWater + 1
-        recent <- fetchRecentInGroup gid mid floor' fetchLimit
-        thread <-
-          if isPrivateChat gm.groupId
-            then pure []
-            else fetchMentionHistory gid selfId' mid floor' fetchLimit
-        pure (LegacyContextHistory, [], mergeHistory recent thread, Nothing, Nothing)
-  (historyMode, compartments', transcript', materializationVersion, materializationReason) <- case requestedMode of
-    LegacyContextHistory -> collectLegacyHistory
-    TieredContextHistory -> do
+  -- Every conversation uses one chronological stream.  The normal path is a
+  -- gap-free active compartment suffix followed by its exact raw tail.  If no
+  -- projection is ready, or its materialization is unavailable, the global
+  -- emergency fallback reads the immutable ledger from the beginning and lets
+  -- ContextPolicy retain as much as the selected model's token budget allows.
+  -- No mention/participation lane and no fixed message count survive here.
+  let rawCollectionLimit = maybe 12288 (.htwHigh) materializationWatermarks
+      collectRawFallback reason = do
+        (raw, _) <- fetchBoundedPromptTail scope (MessageCursor 0) mid s.clearedAt rawCollectionLimit
+        pure ([], map (.history) raw, Nothing, Just reason)
+      collectProjectionFallback reason covered = do
+        (raw, _) <- fetchBoundedPromptTail scope (last covered).activeRange.srEnd mid s.clearedAt rawCollectionLimit
+        pure
+          ( applyBaseCompartmentTiers now' (map contextCompartmentFromActive covered),
+            map (.history) raw,
+            Nothing,
+            Just reason
+          )
+  (compartments', transcript', materializationVersion, materializationReason) <- case readMode of
+    RawLedgerEmergency -> do
+      logAttention "context: global raw-ledger emergency reader enabled" $
+        object ["group_id" .= gid]
+      collectRawFallback "operator_forced_raw_fallback"
+    TieredContext -> do
       active <- listActiveCompartments scope
       let visibleAfterClear = case s.clearedAt of
             Nothing -> active
@@ -603,9 +581,9 @@ collectContextWithMode requestedMode materializationWatermarks defaultPersona lo
           watermarks = fromMaybe (HistoryTokenWatermarks 6144 12288) materializationWatermarks
       case covered of
         [] -> do
-          logInfo "context: tiered reader awaiting its first active compartment" $
+          logInfo "context: no active compartment; using token-budgeted raw fallback" $
             object ["group_id" .= gid]
-          collectLegacyHistory
+          collectRawFallback "raw_fallback_no_compartments"
         _ -> do
           when (any (.activeGapBefore) (drop 1 covered)) $
             logAttention "context: invalid gap inside selected compartment suffix" $
@@ -621,13 +599,12 @@ collectContextWithMode requestedMode materializationWatermarks defaultPersona lo
                 covered
           case materializeResult of
             Left err -> do
-              logAttention "context: tiered materialization failed; using legacy reader" $
+              logAttention "context: tiered materialization failed; using last-known-good projection" $
                 object ["group_id" .= gid, "error" .= T.pack (show err)]
-              collectLegacyHistory
+              collectProjectionFallback "last_known_good_projection_fallback" covered
             Right (materialized, rawTail) ->
               pure
-                ( TieredContextHistory,
-                  materializedCompartments covered materialized,
+                ( materializedCompartments covered materialized,
                   map (.history) rawTail,
                   Just materialized.cmRevision,
                   Just materialized.cmReason
@@ -770,9 +747,6 @@ collectContextWithMode requestedMode materializationWatermarks defaultPersona lo
               now = now',
               tz = tz'
             },
-        csLegacyLowWater = lowWater,
-        csLegacyHighWater = highWater,
-        csHistoryMode = historyMode,
         csMaterializationVersion = materializationVersion,
         csMaterializationReason = materializationReason
       }
@@ -1234,15 +1208,9 @@ loadPromptImages tz' selfId' mid replyIds candidates = do
 -- Structure:
 --
 --   * @system@ message: persona + format guide.
---   * Prior mention history reconstructed from the messages table:
---     each prior @-mention becomes a 'MsgUser', each bot LLM reply
---     becomes a 'MsgAssistant', in chronological order.
---   * One final @user@ message containing the ambient group context
---     (chatter NOT directed at the bot), the reply chain (if any),
---     pinned messages, and the current @-mention.
---
--- Ambient messages already present in the mention list are dropped
--- to avoid showing the same line twice.
+--   * One chronological stream of compartments plus raw messages.
+--   * One final @user@ message containing that stream, the reply chain,
+--     pinned messages, and the current trigger.
 renderContext :: PromptInputs -> [ChatMessage]
 renderContext pi' =
   let UserId selfId' = pi'.triggerMessage.selfId
@@ -1330,23 +1298,14 @@ renderContext pi' =
           <> [userMessage]
    in messages
 
--- | Pure policy: apply the migration-era watermark, then enforce the selected
--- model's token ceiling.  Optional active memories go first under pressure,
+-- | Pure policy: enforce the selected model's token ceiling.  Optional active
+-- memories go first under pressure,
 -- followed by the oldest unpinned raw transcript rows; explicit permanent
 -- memories are the final degradable source.  Reply targets, pins, the current
 -- message, environment, and attached media are protected here.
 planContext :: ContextLimits -> ContextSnapshot -> ContextPlan
 planContext limits snapshot =
-  let (initial, movedAnchor) = case snapshot.csHistoryMode of
-        LegacyContextHistory ->
-          let (watermarked, moved) =
-                applyWatermark
-                  snapshot.csLegacyLowWater
-                  snapshot.csLegacyHighWater
-                  snapshot.csInputs.transcript
-           in (snapshot.csInputs {transcript = watermarked}, moved)
-        TieredContextHistory ->
-          (snapshot.csInputs, Nothing)
+  let initial = snapshot.csInputs
       budget = contextBudget limits (not (null initial.images))
       (selected, drops) = fitContextTo budget.cbPromptTokenLimit initial
       messages = renderContext selected
@@ -1357,7 +1316,6 @@ planContext limits snapshot =
           cpBudget = budget,
           cpEstimatedPromptTokens = estimated,
           cpWithinBudget = withinBudget,
-          cpMovedAnchor = movedAnchor,
           cpTrace = materializationTrace snapshot <> contextTrace budget selected messages drops withinBudget,
           cpPolicyVersion = contextPolicyVersion,
           cpMaterializationVersion = snapshot.csMaterializationVersion,
@@ -1623,47 +1581,6 @@ memoryLine tz' m =
     <> ") "
     <> oneLine m.memContent
 
--- | Trim the transcript when it has grown past @high@, back to @low@,
--- and report the anchor the caller should persist.
---
--- Trimming in one step is the whole point: cutting a row per dispatch
--- would change the transcript's first line every time, which is
--- exactly the sliding window this replaced.  Under the mark nothing
--- moves and 'Nothing' comes back, so the common case writes no anchor
--- at all.
-applyWatermark :: Int -> Int -> [HistoryItem] -> ([HistoryItem], Maybe UTCTime)
-applyWatermark low high rows
-  | length rows <= high = (rows, Nothing)
-  | otherwise = case splitAt (length rows - low) rows of
-      -- The anchor is the kept window's own first row: the floor is
-      -- exclusive downstream (@received_at > floor@ in the queries),
-      -- so anchoring *at* the oldest kept row would drop it next time.
-      -- Stepping back to the row before it keeps the window exactly
-      -- @low@ long.
-      (_, []) -> (rows, Nothing)
-      (dropped, kept@(oldestKept : _)) ->
-        ( kept,
-          Just $ case unsnoc dropped of
-            Just (_, predecessor) -> predecessor.receivedAt
-            Nothing -> oldestKept.receivedAt
-        )
-
--- | Interleave the two history queries into one chronological
--- transcript, keeping one row per message id.
---
--- Both sources are already sorted, but they overlap (every mention row
--- recent enough is also a recent row) and neither is a superset of the
--- other, so this is a merge and not a concatenation.  Ties break on
--- message id: two rows can share a timestamp at second granularity,
--- and a transcript that reorders itself between dispatches costs a
--- prompt-cache prefix for nothing.
-mergeHistory :: [HistoryItem] -> [HistoryItem] -> [HistoryItem]
-mergeHistory as bs =
-  Map.elems . Map.fromList $
-    [(sortKey h, h) | h <- as <> bs]
-  where
-    sortKey h = (h.receivedAt, h.messageId)
-
 -- | Keep the newest coverage island.  Explicit historical backfill may have
 -- produced older active compartments separated from the live historian
 -- cursor by raw rows; those projections remain searchable but cannot be
@@ -1694,7 +1611,7 @@ contextCompartmentFromActive active =
     }
 
 contextPolicyVersion :: Text
-contextPolicyVersion = "context-policy/v2"
+contextPolicyVersion = "context-policy/v3"
 
 materializeTieredHistory ::
   (WithConnection :> es, IOE :> es) =>
@@ -1715,14 +1632,16 @@ materializeTieredHistory scope triggerId cleared now' watermarks active = do
               replacement = if null retained then active else retained
           publishOrReload (Just materialization.cmRevision) "projection_change" replacement
       | otherwise -> pure materialization
-  tailRows <- fetchPromptLedgerAfter scope current.cmEndCursor triggerId cleared
-  if rawTailTokens tailRows <= watermarks.htwHigh
+  (tailRows, tailTruncated) <-
+    fetchBoundedPromptTail scope current.cmEndCursor triggerId cleared watermarks.htwHigh
+  if not tailTruncated && rawTailTokens tailRows <= watermarks.htwHigh
     then pure (current, tailRows)
     else case targetAtLowWater current tailRows active watermarks.htwLow of
       Nothing -> pure (current, tailRows)
       Just target -> do
         folded <- publishOrReload (Just current.cmRevision) "high_water" target
-        foldedTail <- fetchPromptLedgerAfter scope folded.cmEndCursor triggerId cleared
+        (foldedTail, _) <-
+          fetchBoundedPromptTail scope folded.cmEndCursor triggerId cleared watermarks.htwHigh
         pure (folded, foldedTail)
   where
     publishOrReload expected reason target = do
@@ -1825,6 +1744,36 @@ rawTailTokens =
   sum
     . map
       (\entry -> 8 + estimateTextTokens entry.history.renderedText)
+
+-- | Collect only the newest token-sized raw tail.  SQL pages are walked
+-- backward so an arbitrarily old ledger never has to enter memory merely to
+-- be dropped by ContextPolicy.  The final page may overshoot the token target;
+-- the pure policy remains the authoritative exact selection boundary.
+fetchBoundedPromptTail ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  MessageCursor ->
+  Int64 ->
+  Maybe UTCTime ->
+  Int ->
+  Eff es ([LedgerItem], Bool)
+fetchBoundedPromptTail scope after triggerId cleared tokenLimit = go Nothing [] 0
+  where
+    go before accumulated used = do
+      page <- fetchNewestPromptPageBefore scope after before triggerId cleared promptTailPageSize
+      let rows = page.items
+          accumulated' = rows <> accumulated
+          used' = used + rawTailTokens rows
+      case rows of
+        [] -> pure (accumulated, False)
+        oldest : _
+          | page.hasMore && used' < max 1 tokenLimit ->
+              go (Just oldest.cursor) accumulated' used'
+          | otherwise -> pure (accumulated', page.hasMore)
+
+-- Internal database page size only; never a retained-message boundary.
+promptTailPageSize :: Int
+promptTailPageSize = 256
 
 compartmentTierStorageText :: CompartmentTier -> Text
 compartmentTierStorageText = T.toLower . compartmentTierText

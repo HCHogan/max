@@ -156,12 +156,10 @@ extractReply segs =
 
 -- | Persist a bot silence ('[silence]' / '[silence:表情名]') as a
 -- synthetic bot row.  Nothing goes out to QQ — this exists purely so
--- the next dispatch's mention history shows the turn was already
+-- the next chronological context shows the turn was already
 -- declined; without it the unanswered question reads as pending and
 -- the model answers it a dispatch late.  @reply_to_message_id@ points
--- at the declined trigger, which both anchors the silence next to its
--- question and (via the bot-quoted clause in 'fetchMentionHistory')
--- pulls a declined *proactive* trigger into mention history at all.
+-- at the declined trigger and anchors the silence next to its question.
 insertSilence ::
   (WithConnection :> es, IOE :> es) =>
   GroupMessage -> -- the declined trigger
@@ -184,7 +182,7 @@ insertSilence gm rendered = do
   pure ()
 
 -- | Insert an *outbound* message (something the bot itself sent) into
--- the messages table.  Used by the LLM-reply path so mention history
+-- the messages table.  Used by the LLM-reply path so chronological history
 -- can be reconstructed from a single source of truth at dispatch time.
 -- NapCat occasionally sends our own message back as an event too;
 -- whichever insert runs first claims the row, so on conflict we

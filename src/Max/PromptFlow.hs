@@ -49,7 +49,7 @@ import Max.Effects.ToolOutput (InlineMedia (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
-import Max.Prompt (ContextHistoryMode (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
+import Max.Prompt (ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Session (Session (..))
 import Max.Tools.Images (viewImageSpec)
 import Max.Tools.Video (viewVideoSpec)
@@ -297,7 +297,7 @@ initialMessages =
   renderContextPlan $
     planContext
       (ContextLimits 32768 4096 4096 4096)
-      (ContextSnapshot promptFixture 1000 2000 LegacyContextHistory Nothing Nothing)
+      (ContextSnapshot promptFixture Nothing Nothing)
 
 promptFixture :: PromptInputs
 promptFixture =
@@ -340,12 +340,10 @@ fixtureSession =
       model = "kimi-k2.7-code",
       persona = Nothing,
       clearedAt = Nothing,
-      contextAnchor = Nothing,
       pinned = [7301],
       debugOverride = Nothing,
       stickerOverride = Nothing,
       proactiveOverride = Nothing,
-      memxAnchor = Nothing,
       effortOverride = Nothing
     }
 

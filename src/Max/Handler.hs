@@ -41,18 +41,18 @@ import Max.Effects.LLM (LLM)
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded, wasDelivered)
 import Max.Effects.PlatformApi (PlatformApi, sendAction)
 import Max.Env (BotEnv (..))
+import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.Faces (faceIdByName)
 import Max.FetchQueue (FetchSignal)
 import Max.Files (enqueueFiles)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
-import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
-import Max.Prompt (ContextHistoryMode (..), TriggerOrigin (..), buildContextWithLimitsMode, renderCurrentLine, renderHistoryLine)
+import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadMode, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
-import Max.Session (Session (..), loadSession, readSession, updateSession)
+import Max.Session (Session (..), loadSession, readSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
 import Max.Tasks (Note (..), TaskCancelled (..), TaskId (..), TaskInfo (..), absorbedTriggers, beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
@@ -841,11 +841,6 @@ dispatchLLM mIntent origin absorbable companions gm = do
           multimodal = maybe False supportsMultimodal capabilities
           historyTurns = maybe False usesHistoryTurns capabilities
           limits = maybe defaultContextLimits (.contextLimits) capabilities
-          GroupId conversationId = gm.groupId
-          historyMode =
-            if conversationId `elem` env.beUnboundedContextGroups
-              then TieredContextHistory
-              else LegacyContextHistory
       (mentionable, rosterNames, brief) <- fetchGroupContext gm.groupId
       -- Questions another turn is already working on.  Ours is in there
       -- too (claimed just above) — drop it, it isn't history yet.
@@ -856,13 +851,11 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- gate that registers the use_skill tool reading the bodies.
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
-      (ctx, movedAnchor) <-
-        buildContextWithLimitsMode
+      ctx <-
+        buildContextWithReadMode
           limits
-          historyMode
+          (if env.beForceRawContext then RawLedgerEmergency else TieredContext)
           env.bePersona
-          env.beHistoryWindow
-          env.beHistoryMax
           multimodal
           historyTurns
           origin
@@ -872,16 +865,6 @@ dispatchLLM mIntent origin absorbable companions gm = do
           inFlight
           s
           gm
-      -- Commit the transcript anchor before the turn runs, not after:
-      -- a crash mid-dispatch would otherwise rebuild the same
-      -- over-long window next time and re-decide the same move.  It is
-      -- bookkeeping either way — the worst a lost write costs is one
-      -- more cache miss.
-      for_ movedAnchor $ \anchor -> do
-        t <- loadSession env.beSessions env.beDefaultModel gm.groupId
-        updateSession t (\sess -> (sess {contextAnchor = Just anchor}, ()))
-        logInfo "context anchor moved" $
-          object ["group_id" .= (let GroupId g = gm.groupId in g)]
       let debugEff = fromMaybe env.beDebugDefault s.debugOverride
           stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
           toolCtx =
@@ -949,7 +932,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           -- not worth answering is noise).  The silence itself
           -- IS persisted, as a synthetic bot row — without it the
           -- declined question reads as still pending in the next
-          -- dispatch's mention history and gets answered a turn late.
+          -- chronological context and gets answered a turn late.
           --
           -- On a direct trigger the silence still shows: the named
           -- reason face (闭嘴 as the bare-[silence] fallback) is
@@ -970,7 +953,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           -- Outbound gets the platform message_id and persists this
           -- message into the messages table.  That's where
           -- subsequent dispatches will read this turn's assistant reply
-          -- back from when reconstructing mention history.
+          -- back from the chronological ledger.
           -- The same budget the streaming sink spent from: one reply
           -- split across two senders still gets one message ceiling and
           -- one image-dedupe set (see "Max.ReplySend").

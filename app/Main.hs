@@ -122,9 +122,7 @@ main = do
           let env =
                 BotEnv
                   { bePersona = cfg.persona,
-                    beHistoryWindow = cfg.historyWindow,
-                    beHistoryMax = cfg.historyMax,
-                    beUnboundedContextGroups = cfg.unboundedContextGroups,
+                    beForceRawContext = cfg.forceRawContext,
                     beDebugDefault = cfg.debug,
                     beStickerDefault = cfg.stickersEnabled,
                     beDefaultModel = defaultModelName cfg.llm,

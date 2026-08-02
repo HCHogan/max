@@ -64,7 +64,7 @@ function admin() {
 
     calls: [],
     callq: { source: '', group: '', failed: false },
-    callSources: ['turn', 'wrapup', 'intent', 'supplement', 'memx', 'memx-compact', 'caption'],
+    callSources: ['turn', 'wrapup', 'intent', 'supplement', 'historian', 'memory-dream', 'memx', 'memx-compact', 'memx-dream', 'caption'],
     // Bodies, fetched per call on first open and kept for the session.
     detail: {},
 

@@ -6,12 +6,13 @@ module Max.DB.History
     bestName,
     fetchRecentInGroup,
     fetchPromptLedgerAfter,
+    fetchNewestPromptPageBefore,
     fetchTranscriptAfter,
     fetchOldestPageAfter,
+    fetchOldestPageThrough,
     pageEndCursor,
     hasMessagesAfter,
     fetchMessageInScope,
-    fetchMentionHistory,
     fetchMessagesByIdsInScope,
     fetchForwardChildrenInScope,
     messageStatsDaily,
@@ -141,9 +142,10 @@ fetchRecentInGroup gid excludeId since n = do
   pure (reverse (rows :: [HistoryItem]))
 
 -- | Every prompt-eligible chat row after an exact conversation cursor,
--- ordered by the database ingestion sequence.  This is the raw live-tail
--- reader used once active compartments own the settled prefix.  It has no
--- message-count limit: the pure ContextPolicy sizes the tail by tokens.
+-- ordered by the database ingestion sequence.  This complete-range helper is
+-- retained for exact diagnostics/tests; production prompt collection uses
+-- 'fetchNewestPromptPageBefore' so an arbitrarily long ledger is never loaded
+-- merely to be trimmed by the pure token policy.
 --
 -- The current trigger is excluded because it is rendered separately.  A
 -- user's @!clear@ watermark remains a prompt-visibility boundary even though
@@ -175,7 +177,8 @@ fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
         "SELECT ingest_seq, message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
         \  FROM messages \
         \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
-        \    AND forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat' \
+        \    AND forwarded_in_message_id IS NULL \
+        \    AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat' \
         \  ORDER BY ingest_seq ASC"
         (conversationStorageId scope, after, excludeId)
     Just cleared ->
@@ -183,10 +186,57 @@ fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
         "SELECT ingest_seq, message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
         \  FROM messages \
         \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
-        \    AND forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat' \
+        \    AND forwarded_in_message_id IS NULL \
+        \    AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat' \
         \    AND received_at > ? \
         \  ORDER BY ingest_seq ASC"
         ((conversationStorageId scope, after, excludeId) :. Only cleared)
+
+-- | Read one newest-first I/O page inside an exact cursor tail, returning the
+-- page itself in chronological order.  @before@ is an exclusive continuation
+-- cursor for paging backward.  The caller owns the token budget; this internal
+-- row count only bounds each SQL result and therefore cannot become a context
+-- selection policy.
+fetchNewestPromptPageBefore ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  MessageCursor ->
+  Maybe MessageCursor ->
+  Int64 ->
+  Maybe UTCTime ->
+  Int ->
+  Eff es HistoryPage
+fetchNewestPromptPageBefore scope (MessageCursor after) before excludeId since requestedSize = do
+  let pageSize = max 1 requestedSize
+      beforeSeq = (.ingestSeq) <$> before
+  rows <-
+    query
+      "SELECT ingest_seq, message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
+      \  FROM messages \
+      \  WHERE group_id = ? AND ingest_seq > ? \
+      \    AND (?::bigint IS NULL OR ingest_seq < ?) \
+      \    AND message_id <> ? \
+      \    AND forwarded_in_message_id IS NULL \
+      \    AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat' \
+      \    AND (?::timestamptz IS NULL OR received_at > ?) \
+      \  ORDER BY ingest_seq DESC \
+      \  LIMIT ?"
+      ( conversationStorageId scope,
+        after,
+        beforeSeq,
+        beforeSeq,
+        excludeId,
+        since,
+        since,
+        pageSize + 1
+      )
+  let allRows = rows :: [LedgerItem]
+      newestPage = take pageSize allRows
+  pure
+    HistoryPage
+      { items = reverse newestPage,
+        hasMore = length allRows > pageSize
+      }
 
 -- | Read the oldest raw ledger rows strictly after a cursor.  Fetching one
 -- extra row makes continuation explicit without advancing beyond data the
@@ -203,12 +253,41 @@ fetchOldestPageAfter scope (MessageCursor after) requestedSize = do
     query
       "SELECT ingest_seq, \
       \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
-      \       (forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat') \
+      \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
       \  FROM messages \
       \  WHERE group_id = ? AND ingest_seq > ? \
       \  ORDER BY ingest_seq ASC \
       \  LIMIT ?"
       (conversationStorageId scope, after, pageSize + 1)
+  let allRows = rows :: [LedgerItem]
+  pure
+    HistoryPage
+      { items = take pageSize allRows,
+        hasMore = length allRows > pageSize
+      }
+
+-- | Bounded variant used by historical backfill.  The inclusive upper cursor
+-- is the final raw row before the next active compartment, so pagination can
+-- never drift into a range that already has an owner.
+fetchOldestPageThrough ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  MessageCursor ->
+  MessageCursor ->
+  Int ->
+  Eff es HistoryPage
+fetchOldestPageThrough scope (MessageCursor after) (MessageCursor through) requestedSize = do
+  let pageSize = max 1 requestedSize
+  rows <-
+    query
+      "SELECT ingest_seq, \
+      \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
+      \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
+      \  FROM messages \
+      \  WHERE group_id = ? AND ingest_seq > ? AND ingest_seq <= ? \
+      \  ORDER BY ingest_seq ASC \
+      \  LIMIT ?"
+      (conversationStorageId scope, after, through, pageSize + 1)
   let allRows = rows :: [LedgerItem]
   pure
     HistoryPage
@@ -253,85 +332,6 @@ fetchMessageInScope scope mid = do
       \  LIMIT 1"
       (conversationStorageId scope, mid)
   pure (listToMaybe (rows :: [HistoryItem]))
-
--- | Reconstruct the bot's mention-exchange history from the messages
--- table: anything sent BY the bot (@user_id = botSelfId@), anything
--- that mentions the bot (rendered text contains @\@<botSelfId>@),
--- anything that replies to (quotes) a bot message — replying
--- triggers a turn just like a mention — plus anything the bot itself
--- quoted: proactive (intent-triggered) replies quote their target,
--- and without the user's side of those exchanges the bot reads its
--- own answers with no visible question and repeats itself.  Filtered
--- by @clearedAt@ watermark and excluding the current triggering
--- message.  Returned chronological (oldest first), capped at @n@
--- rows.  Synthetic rows are excluded EXCEPT the bot's own — those
--- are persisted @[silence]@ turns ('Max.DB.Message.insertSilence'),
--- which must show so a declined question doesn't read as pending.
---
--- This replaces 'session.history' (the duplicated in-memory cache):
--- single source of truth lives in @messages@.  @!unclear@ can lift
--- the watermark and the bot remembers everything again.
-fetchMentionHistory ::
-  (WithConnection :> es, IOE :> es) =>
-  Int64 -> -- group id
-  Int64 -> -- bot self_id
-  Int64 -> -- message id to exclude (the triggering @bot message)
-  Maybe UTCTime -> -- cleared_at watermark
-  Int -> -- max rows
-  Eff es [HistoryItem]
-fetchMentionHistory gid botId excludeId since n = do
-  -- Rendered mentions of the bot come in two shapes: the canonical
-  -- "[@#<id>]" token (current renderer) and the legacy bare "@<id>"
-  -- (old rows).  "%@<id>%" matches the legacy form only — the token
-  -- has '#' between '@' and the digits — so both patterns go into
-  -- the query.
-  let mentionLike = "%@" <> T.pack (show botId) <> "%"
-      mentionTokLike = "%[@#" <> T.pack (show botId) <> "]%"
-  rows <- case since of
-    Nothing ->
-      query
-        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at, m.reply_to_message_id \
-        \  FROM messages m \
-        \  WHERE m.group_id = ? \
-        \    AND m.message_id <> ? \
-        \    AND (NOT m.is_synthetic OR m.user_id = ?) \
-        \    AND m.kind = 'chat' \
-        \    AND m.forwarded_in_message_id IS NULL \
-        \    AND (m.user_id = ? OR m.rendered_text LIKE ? OR m.rendered_text LIKE ? \
-        \         OR EXISTS (SELECT 1 FROM messages b \
-        \                     WHERE b.group_id = m.group_id \
-        \                       AND b.message_id = m.reply_to_message_id \
-        \                       AND b.user_id = ?) \
-        \         OR EXISTS (SELECT 1 FROM messages r \
-        \                     WHERE r.group_id = m.group_id \
-        \                       AND r.reply_to_message_id = m.message_id \
-        \                       AND r.user_id = ?)) \
-        \  ORDER BY m.received_at DESC \
-        \  LIMIT ?"
-        ((gid, excludeId, botId, botId) :. (mentionLike :: Text, mentionTokLike, botId, botId, n))
-    Just t ->
-      query
-        "SELECT m.message_id, m.user_id, m.self_id, m.sender_nickname, m.sender_card, m.rendered_text, m.received_at, m.reply_to_message_id \
-        \  FROM messages m \
-        \  WHERE m.group_id = ? \
-        \    AND m.message_id <> ? \
-        \    AND (NOT m.is_synthetic OR m.user_id = ?) \
-        \    AND m.kind = 'chat' \
-        \    AND m.forwarded_in_message_id IS NULL \
-        \    AND m.received_at > ? \
-        \    AND (m.user_id = ? OR m.rendered_text LIKE ? OR m.rendered_text LIKE ? \
-        \         OR EXISTS (SELECT 1 FROM messages b \
-        \                     WHERE b.group_id = m.group_id \
-        \                       AND b.message_id = m.reply_to_message_id \
-        \                       AND b.user_id = ?) \
-        \         OR EXISTS (SELECT 1 FROM messages r \
-        \                     WHERE r.group_id = m.group_id \
-        \                       AND r.reply_to_message_id = m.message_id \
-        \                       AND r.user_id = ?)) \
-        \  ORDER BY m.received_at DESC \
-        \  LIMIT ?"
-        ((gid, excludeId, botId) :. (t, botId, mentionLike :: Text, mentionTokLike) :. (botId, botId, n))
-  pure (reverse (rows :: [HistoryItem]))
 
 -- | Bulk fetch by message id.  Preserves the order of input ids
 -- (which is what !pin expects — display the user's chosen order).

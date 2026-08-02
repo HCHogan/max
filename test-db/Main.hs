@@ -39,6 +39,7 @@ import Max.MemoryStoreMigrationSpec qualified as MemoryStoreMigrationSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import Max.RecallSpec qualified as RecallSpec
+import Max.UnboundedContextMigrationSpec qualified as UnboundedContextMigrationSpec
 import System.Environment (lookupEnv)
 import System.Exit (exitSuccess)
 import Test.Hspec (hspec)
@@ -63,6 +64,7 @@ main = do
         SessionSpec.spec pool
         ConversationCursorSpec.spec pool
         ContextMaterializationMigrationSpec.spec pool
+        UnboundedContextMigrationSpec.spec pool
         ContextMaterializationSpec.spec pool
         ContextAdminSpec.spec pool
         EpisodeStoreSpec.spec pool

@@ -99,19 +99,10 @@ data AppConfig = AppConfig
     -- SIGKILLs us mid-drain and the wait bought nothing.
     shutdownDrainSeconds :: !Int,
     llm :: !ModelCatalog,
-    -- | Migration-era transcript low-water mark.  ContextPolicy applies the
-    -- selected model's token budget after this compatibility fold; tiered
-    -- compartments will retire the count boundary.
-    historyWindow :: !Int,
-    -- | Migration-era transcript high-water mark: the count that triggers the
-    -- compatibility fold.  It is not the model-window safety boundary;
-    -- ContextBudget is.
-    historyMax :: !Int,
-    -- | Temporary development allowlist for active compartments plus a
-    -- token-budgeted raw tail.  The completed feature removes this field and
-    -- switches every conversation away from the legacy dual-query reader in
-    -- one release.
-    unboundedContextGroups :: ![Int64],
+    -- | Global release escape hatch: bypass compartments/materialization and
+    -- build every prompt from the immutable ledger under the normal token
+    -- budget.  Projections and background capture remain untouched.
+    forceRawContext :: !Bool,
     -- | Display timezone for all model/user-facing timestamps
     -- (stored times stay UTC).  Default UTC+8.
     timezone :: !TimeZone,
@@ -273,39 +264,15 @@ appConfigParser usedRef =
           value 120
         ]
     llm <- llmParser
-    historyWindow <-
-      setting
-        [ help "How many recent group messages the prompt includes",
-          reader auto,
-          option,
-          long "history-window",
-          env "MAX_HISTORY_WINDOW",
-          conf "history_window",
-          metavar "N",
-          value 40
-        ]
-    historyMax <-
-      setting
-        [ help "Transcript high-water mark: past this many messages the context anchor jumps forward to history_window, so the prompt prefix stays byte-stable in between",
-          reader auto,
-          option,
-          long "history-max",
-          env "MAX_HISTORY_MAX",
-          conf "history_max",
-          metavar "N",
-          value 80
-        ]
-    unboundedContextGroups <-
-      setting
-        [ help "Development conversation/group ids enrolled in tiered unbounded context",
-          reader (commaSeparatedList auto),
-          option,
-          long "unbounded-context-groups",
-          env "MAX_UNBOUNDED_CONTEXT_GROUPS",
-          conf "unbounded_context_groups",
-          metavar "ID[,ID..]",
-          value []
-        ]
+    forceRawContext <-
+      subConfig "context" $
+        yesNoSwitch
+          [ help "Emergency rollback: force all prompts to use the raw ledger while retaining context projections",
+            long "force-raw-context",
+            env "MAX_FORCE_RAW_CONTEXT",
+            conf "force_raw_fallback",
+            value False
+          ]
     timezone <-
       minutesToTimeZone
         <$> setting

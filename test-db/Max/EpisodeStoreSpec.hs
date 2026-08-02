@@ -49,6 +49,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     insertRawMessage pool 1001 groupA member botId testTime Nothing "hello"
     insertRawKind pool "command" 1002 groupA member botId testTime Nothing "!status"
     insertRawMessage pool 1003 groupA botId botId testTime Nothing "answer"
+    withConn pool $ \conn -> do
+      _ <- execute conn "UPDATE messages SET is_synthetic = true WHERE message_id = ?" (Only (1003 :: Int64))
+      pure ()
     end <- latestCursor pool
 
     first <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
@@ -277,6 +280,39 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     withDb pool (loadCursor scopeA historianCursor) `shouldReturn` end
     map (.activeRange) <$> withDb pool (listActiveCompartments scopeA)
       `shouldReturn` [run.crRange]
+
+  it "discovers historical gaps oldest-first without crossing an active owner" $ do
+    mapM_
+      (\mid -> insertRawMessage pool mid groupA member botId testTime Nothing ("message-" <> T.pack (show mid)))
+      [1001 .. 1005]
+    cursor3 <- cursorFor pool 1003
+    end5 <- cursorFor pool 1005
+    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` MessageCursor 0
+    withDb pool (advanceCursor scopeA historianCursor (MessageCursor 0) end5)
+      `shouldReturn` True
+
+    newer <-
+      withDb pool (enqueueBackfillRun scopeA cursor3 end5 (request CaptureBackfill))
+        >>= requireJust "newer backfill"
+    newerLease <- withDb pool (claimCaptureRun "newer-backfill" 60) >>= requireJust "newer lease"
+    newerSource <- withDb pool $ loadCaptureSource newer
+    newerValidated <- requireValid newer newerSource (validCapture [1004, 1005] [])
+    _ <- withDb pool $ recordCaptureGenerated newerLease (captureJson (validCapture [1004, 1005] [])) (validCapture [1004, 1005] []) []
+    _ <- withDb pool $ publishCaptureRun scopeA newerLease newerValidated
+
+    withDb pool (findOldestBackfillGap scopeA)
+      `shouldReturn` Just (BackfillGap (MessageCursor 0) cursor3)
+
+    older <-
+      withDb pool (enqueueBackfillRun scopeA (MessageCursor 0) cursor3 (request CaptureBackfill))
+        >>= requireJust "older backfill"
+    olderLease <- withDb pool (claimCaptureRun "older-backfill" 60) >>= requireJust "older lease"
+    olderSource <- withDb pool $ loadCaptureSource older
+    olderValidated <- requireValid older olderSource (validCapture [1001, 1002, 1003] [])
+    _ <- withDb pool $ recordCaptureGenerated olderLease (captureJson (validCapture [1001, 1002, 1003] [])) (validCapture [1001, 1002, 1003] []) []
+    _ <- withDb pool $ publishCaptureRun scopeA olderLease olderValidated
+
+    withDb pool (findOldestBackfillGap scopeA) `shouldReturn` Nothing
 
   it "marks a raw-message hole between independently backfilled compartments" $ do
     mapM_

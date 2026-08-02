@@ -111,10 +111,10 @@ atomically validates citations and scope, writes the compartment and proposal
 outcomes, applies accepted MemoryStore mutations, and CAS-advances the
 historian cursor. A failure advances nothing; restart reclaims the durable job.
 Commands/synthetic/forward rows remain in range coverage before transcript
-filtering, and active ranges have a database non-overlap constraint. The legacy
-deployment boundary can be backfilled explicitly without rewinding the live
-cursor. A nightly dream pass (4am local) remains a separate semantic-memory
-maintenance lifecycle. It reads the current version together with its source
+filtering, and active ranges have a database non-overlap constraint. The
+pre-cutover deployment boundary is backfilled automatically, oldest gap first
+and without rewinding the live cursor. A nightly dream pass (4am local) remains
+a separate semantic-memory maintenance lifecycle. It reads the current version together with its source
 evidence, requires a concrete evidence/date reason for every change, updates a
 chosen keeper before superseding duplicates, and archives only clearly expired
 facts without a replacement. Every operation is a scoped MemoryStore CAS that
@@ -144,10 +144,10 @@ maintenance lease, then the normal worker backfills them. Integrity checks are
 read-only and recompute source hashes, ownership, materialization references,
 cursor bounds, and the memory current/version projection.
 
-During implementation, prompt reads can be exercised per conversation with
-the temporary `unbounded_context_groups` development gate. An enrolled conversation takes the newest active
-compartment suffix that has no uncovered raw rows, then reads every
-prompt-eligible message after the suffix's exact end cursor. Partial older
+Every conversation takes the newest active compartment suffix that has no
+uncovered raw rows, then pages backward over prompt-eligible messages after the
+suffix's exact end cursor until the model-derived token target is covered.
+Partial older
 backfills stay out of the stable prefix when a raw gap separates them. The pure
 ContextPolicy assigns P1/P2/P3/P4 using coarse age, episode distance,
 importance, confidence, and token pressure; P4 remains stored but is omitted
@@ -162,14 +162,18 @@ rechecks active source versions, rejects gaps or backward cursor movement, and
 records the cache-bust reason. Under exceptional per-turn pressure active
 memory is removed first, compartments can degrade one tier at a time, and only
 then is the oldest raw tail trimmed. A conversation with no active compartment
-automatically uses the legacy reader during development, and removing it from
-the allowlist rolls prompt reads back without changing raw messages, capture
-jobs, or projections. This gate is not a production rollout strategy: once
-replay, recall, observability, and rebuild gates pass, the release switches
-every conversation to the tiered reader together and removes the legacy
-dual-query path.
-A corrupt/stale materialization or store failure also fails soft to that scoped
-legacy reader for the turn instead of dropping the user's reply.
+automatically pages over the immutable raw ledger; ContextPolicy then retains
+the newest rows that fit the model token budget. A corrupt/stale
+materialization instead renders the newest gap-free active compartments at
+deterministic base tiers plus their exact raw tail for that turn, without
+restoring the retired mention lane or changing source/projection data.
+The global `context.force_raw_fallback` release switch bypasses projection reads
+for every conversation and uses the same token-budgeted raw ledger; it neither
+deletes projections nor stops Historian, so disabling it restores tiered reads.
+At Historian startup, exact oldest-first backfill jobs fill any raw gaps at or
+before migration 041's deployment baseline. Each token-sized range stops before
+the next active owner, publishes under the ordinary source-hash/exclusion
+fences, and leaves the live Historian cursor unchanged.
 
 Rendered summaries carry a random, stable `[episode#<uuid>]` handle rather
 than the internal compartment sequence. `context_expand` treats that handle

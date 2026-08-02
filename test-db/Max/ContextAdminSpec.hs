@@ -5,7 +5,7 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (UTCTime)
-import Database.PostgreSQL.Simple (execute)
+import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
 import Helpers (insertRawMessage, truncateAll, withDb)
 import Max.Context (ContextDecision (..), ContextTrace (..), contextBudget)
@@ -28,6 +28,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.ContextAdmin" $ do
 
     initial <- withDb pool (loadContextStatus (Just groupId))
     parseCoverage initial `shouldBe` Right (0, 2, [])
+    parseCutover initial `shouldBe` Right ("all_conversations", False, 0, 0, False)
 
     _ <- withDb pool (loadCursor scope historianCursor)
     withDb pool (advanceCursor scope historianCursor (MessageCursor 0) (MessageCursor 2))
@@ -37,6 +38,17 @@ spec pool = before_ (truncateAll pool) $ describe "Max.ContextAdmin" $ do
       `shouldBe` Right (2, 0, ["settled messages are not owned by an active compartment"])
     integrity <- withDb pool (runContextIntegrityCheck (Just groupId))
     parseIntegrity integrity `shouldBe` Right False
+
+  it "detects a legacy extractor cursor as an old/new worker conflict" $ do
+    withConn pool $ \conn -> do
+      _ <-
+        execute
+          conn
+          "INSERT INTO conversation_cursors (conversation_id, cursor_name, ingest_seq) VALUES (?, 'memory_extract', 0)"
+          (Only groupId)
+      pure ()
+    conflicted <- withDb pool (loadContextStatus (Just groupId))
+    parseCutover conflicted `shouldBe` Right ("all_conversations", True, 0, 1, True)
 
   it "persists body-free prompt decisions and returns their budget" $ do
     let budget = contextBudget defaultContextLimits False
@@ -109,6 +121,21 @@ parseCoverage = parseEither $ withObject "status" $ \root -> do
 
 parseIntegrity :: Value -> Either String Bool
 parseIntegrity = parseEither (withObject "integrity" (.: "ok"))
+
+parseCutover :: Value -> Either String (Text, Bool, Int64, Int64, Bool)
+parseCutover = parseEither $ withObject "status" $ \root -> do
+  cutover <- root .: "cutover"
+  withObject
+    "cutover"
+    ( \objectValue ->
+        (,,,,)
+          <$> objectValue .: "reader_mode"
+          <*> objectValue .: "legacy_extractor_running"
+          <*> objectValue .: "legacy_session_anchor_columns"
+          <*> objectValue .: "legacy_memory_cursor_rows"
+          <*> objectValue .: "old_new_worker_conflict"
+    )
+    cutover
 
 parseMemoryCounts :: Value -> Either String (Int, Int, Int)
 parseMemoryCounts = parseEither $ withObject "memory detail" $ \detail -> do

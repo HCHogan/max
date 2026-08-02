@@ -4,7 +4,8 @@
 -- effect stack, then assert on the rendered ChatMessage list.  The
 -- pure render path is covered separately in 'Max.PromptSpec'; this
 -- module specifically verifies that the DB queries wire up to the
--- renderer correctly (dedup, watermark, pin resolution, reply lookup).
+-- renderer correctly (token-budgeted raw fallback, compartments, pin
+-- resolution, and reply lookup).
 module Max.PromptIntegrationSpec (spec) where
 
 import Data.Int (Int64)
@@ -22,7 +23,7 @@ import Max.DB.Session (fetchOrInit)
 import Max.Effects.LLM (ChatMessage (..))
 import Max.EpisodeStore
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
-import Max.Prompt (ContextHistoryMode (..), TriggerOrigin (..), buildContext, buildContextWithLimitsMode)
+import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContext, buildContextWithLimits, buildContextWithReadMode)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -71,8 +72,8 @@ spec pool = before_ (truncateAll pool) $
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "随便聊"
       insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "另一条"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, _) <-
-        withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <-
+        withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("随便聊" `T.isInfixOf`)
       ub `shouldSatisfy` ("另一条" `T.isInfixOf`)
@@ -83,7 +84,7 @@ spec pool = before_ (truncateAll pool) $
       s <-
         updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
           current {clearedAt = Just (timeAt 10)}
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldNotSatisfy` ("旧" `T.isInfixOf`)
       ub `shouldSatisfy` ("新" `T.isInfixOf`)
@@ -91,8 +92,9 @@ spec pool = before_ (truncateAll pool) $
     it "renders prior @-mention and the bot's reply as transcript lines" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 你好"
       insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "你好 Alice"
+      _ <- withDb pool $ execute "UPDATE messages SET is_synthetic = true WHERE message_id = ?" (Only (1002 :: Int64))
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       -- The whole conversation is [system, user]: the bot's own past
       -- replies are lines in the transcript, not assistant turns.
       length msgs `shouldBe` 2
@@ -102,12 +104,7 @@ spec pool = before_ (truncateAll pool) $
           ub `shouldSatisfy` ("[10:00 Max #1002]: 你好 Alice" `T.isInfixOf`)
         other -> expectationFailure $ "unexpected message shape: " <> show other
 
-    -- The two queries reach back different distances: fetchRecentInGroup
-    -- takes the last n messages, fetchMentionHistory the last n that
-    -- involve the bot.  With a small window and chatty filler, the bot
-    -- exchange falls out of the first and must survive via the second —
-    -- that is the whole reason both are still issued.
-    it "keeps bot conversation that chatter has pushed out of the recent window" $ do
+    it "keeps one chronological raw stream before the first compartment" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 1) (Just "Alice") "@1000 昨天那事呢"
       insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 2) Nothing "已经办好了"
       mapM_
@@ -116,9 +113,7 @@ spec pool = before_ (truncateAll pool) $
         )
         [1 .. 5 :: Int64]
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      -- Window of 3: the bot exchange is well outside the last 3 raw
-      -- messages, but is still among the last 3 bot-related ones.
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 3 80 False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("昨天那事呢" `T.isInfixOf`)
       ub `shouldSatisfy` ("已经办好了" `T.isInfixOf`)
@@ -164,14 +159,11 @@ spec pool = before_ (truncateAll pool) $
       insertRawMessage pool 1003 groupRaw otherMemberRaw botRaw (timeAt 11) (Just "Bob") "ambient raw tail"
 
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, moved) <-
+      msgs <-
         withDbLog pool $
-          buildContextWithLimitsMode
+          buildContextWithLimits
             defaultContextLimits
-            TieredContextHistory
             "default-persona"
-            1
-            1
             False
             False
             OriginDirect
@@ -185,16 +177,12 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("settled compact summary" `T.isInfixOf`)
       ub `shouldSatisfy` ("ambient raw tail" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("settled raw one" `T.isInfixOf`))
-      moved `shouldBe` Nothing
-      _ <- withDb pool $ execute "UPDATE context_materializations SET source_fingerprint = repeat('0', 64)" ()
-      (fallback, _) <-
+      rawEmergency <-
         withDbLog pool $
-          buildContextWithLimitsMode
+          buildContextWithReadMode
             defaultContextLimits
-            TieredContextHistory
+            RawLedgerEmergency
             "default-persona"
-            20
-            80
             False
             False
             OriginDirect
@@ -204,7 +192,29 @@ spec pool = before_ (truncateAll pool) $
             Set.empty
             s
             trigger
-      userBodyOf fallback `shouldSatisfy` ("settled raw one" `T.isInfixOf`)
+      userBodyOf rawEmergency `shouldSatisfy` ("settled raw one" `T.isInfixOf`)
+      userBodyOf rawEmergency `shouldSatisfy` (not . ("settled full summary" `T.isInfixOf`))
+      _ <- withDb pool $ execute "UPDATE context_materializations SET source_fingerprint = repeat('0', 64)" ()
+      fallback <-
+        withDbLog pool $
+          buildContextWithLimits
+            defaultContextLimits
+            "default-persona"
+            False
+            False
+            OriginDirect
+            utc
+            []
+            []
+            Set.empty
+            s
+            trigger
+      -- The last-known-good fallback re-runs deterministic base decay rather
+      -- than trusting the corrupt materialization's stored tier.  This old
+      -- fixture is therefore P2 at the test clock, not forced back to P1.
+      userBodyOf fallback `shouldSatisfy` ("settled compact summary" `T.isInfixOf`)
+      userBodyOf fallback `shouldSatisfy` (not . ("settled raw one" `T.isInfixOf`))
+      userBodyOf fallback `shouldSatisfy` ("ambient raw tail" `T.isInfixOf`)
 
     it "changes the durable prefix once when raw tokens cross the high watermark" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "first settled range"
@@ -213,12 +223,9 @@ spec pool = before_ (truncateAll pool) $
       let tightLimits = ContextLimits 8000 512 0 0
           build =
             withDbLog pool $
-              buildContextWithLimitsMode
+              buildContextWithLimits
                 tightLimits
-                TieredContextHistory
                 "default-persona"
-                1
-                1
                 False
                 False
                 OriginDirect
@@ -235,7 +242,7 @@ spec pool = before_ (truncateAll pool) $
       let hugeRaw = T.replicate 10000 "unmaterialized "
       insertRawMessage pool 1002 groupRaw otherMemberRaw botRaw (timeAt 10) (Just "Bob") hugeRaw
       _ <- publishNextCompartment pool firstEnd [1002] "second materialized summary"
-      (msgs, _) <- build
+      msgs <- build
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("second materialized summary" `T.isInfixOf`)
       ub `shouldSatisfy` (not . (hugeRaw `T.isInfixOf`))
@@ -259,7 +266,7 @@ spec pool = before_ (truncateAll pool) $
       -- The bot's narration is conversation, so it stays.
       insertRawMessage pool 1006 groupRaw botRaw botRaw (timeAt 14) (Just "max") "我查一下日志"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("普通聊天" `T.isInfixOf`)
       ub `shouldSatisfy` ("我查一下日志" `T.isInfixOf`)
@@ -268,45 +275,50 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` (not . ("⚙" `T.isInfixOf`))
       ub `shouldSatisfy` (not . ("↳" `T.isInfixOf`))
 
-    -- The anchor is the whole point of the cache work: the transcript
-    -- has to grow rather than slide, or its first line changes on every
-    -- dispatch and no prefix cache can cover it.
-    it "reports no anchor move while under the high-water mark" $ do
+    it "retains 200 short raw messages when the model token budget permits" $ do
       mapM_
-        (\i -> insertRawMessage pool (3000 + i) groupRaw memberRaw botRaw (timeAt (fromIntegral i)) (Just "Alice") ("行" <> T.pack (show i)))
-        [1 .. 5 :: Int64]
+        (\i -> insertRawMessage pool (3000 + i) groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") ("短消息" <> T.pack (show i)))
+        [1 .. 200 :: Int64]
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (_, moved) <- withDbLog pool $ buildContext "default-persona" 2 10 False False OriginDirect utc [] [] Set.empty s trigger
-      moved `shouldBe` Nothing
-
-    it "moves the anchor once past it, and the anchor then narrows the window" $ do
-      mapM_
-        (\i -> insertRawMessage pool (3000 + i) groupRaw memberRaw botRaw (timeAt (fromIntegral i)) (Just "Alice") ("行" <> T.pack (show i)))
-        [1 .. 6 :: Int64]
-      s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      -- Low 2 / high 4: six rows overflow, so the anchor moves and the
-      -- rendered transcript keeps the newest two.
-      (msgs, moved) <- withDbLog pool $ buildContext "default-persona" 2 4 False False OriginDirect utc [] [] Set.empty s0 trigger
-      moved `shouldSatisfy` (/= Nothing)
+      msgs <- withDbLog pool $ buildContextWithLimits (ContextLimits 100000 1024 0 0) "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
-      ub `shouldSatisfy` ("行6" `T.isInfixOf`)
-      ub `shouldSatisfy` (not . ("行1" `T.isInfixOf`))
-      -- Commit it the way the dispatcher does, then rebuild: the same
-      -- floor now applies at the query, so the window is already short
-      -- and nothing moves again.
-      s1 <-
-        updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
-          current {contextAnchor = moved}
-      (msgs', moved') <- withDbLog pool $ buildContext "default-persona" 2 4 False False OriginDirect utc [] [] Set.empty s1 trigger
-      moved' `shouldBe` Nothing
-      userBodyOf msgs' `shouldSatisfy` (not . ("行1" `T.isInfixOf`))
-      userBodyOf msgs' `shouldSatisfy` ("行6" `T.isInfixOf`)
+      ub `shouldSatisfy` ("短消息1" `T.isInfixOf`)
+      ub `shouldSatisfy` ("短消息200" `T.isInfixOf`)
 
-    -- A message can come back from both queries; it must appear once.
-    it "shows a message that both queries return exactly once" $ do
+    it "keeps only the newest token-bounded tail from an arbitrarily longer raw ledger" $ do
+      _ <-
+        withDb pool $
+          execute
+            "INSERT INTO messages \
+            \  (message_id, group_id, user_id, self_id, received_at, segments, rendered_text, raw_message, sender_nickname) \
+            \ SELECT 4000 + n, ?, ?, ?, '2026-06-05 09:00:00+00', '[]'::jsonb, \
+            \        CASE n WHEN 1 THEN 'oldest-sentinel ' WHEN 1200 THEN 'newest-sentinel ' ELSE '' END \
+            \          || repeat('bounded-history ', 20), '', 'Alice' \
+            \ FROM generate_series(1, 1200) AS n"
+            (groupRaw :: Int64, memberRaw :: Int64, botRaw :: Int64)
+      s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
+      msgs <-
+        withDbLog pool $
+          buildContextWithLimits
+            (ContextLimits 8000 1024 0 0)
+            "default-persona"
+            False
+            False
+            OriginDirect
+            utc
+            []
+            []
+            Set.empty
+            s
+            trigger
+      let ub = userBodyOf msgs
+      ub `shouldSatisfy` ("newest-sentinel" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("oldest-sentinel" `T.isInfixOf`))
+
+    it "shows each raw-ledger message exactly once" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 只此一次"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       T.count "只此一次" (userBodyOf msgs) `shouldBe` 1
 
     it "renders pinned messages in the [pinned] section" $ do
@@ -314,7 +326,7 @@ spec pool = before_ (truncateAll pool) $
       s <-
         updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
           current {pinned = [1001]}
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[pinned" `T.isInfixOf`)
       ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
@@ -326,7 +338,7 @@ spec pool = before_ (truncateAll pool) $
             trigger
               { message = [SegReply (MessageId 1001), SegAt (UserId botRaw), SegText " 看这条"]
               }
-      (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect utc [] [] Set.empty s replyTrigger
+      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s replyTrigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)

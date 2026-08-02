@@ -112,7 +112,7 @@
 
       <p class="empty" x-show="ctx.status.historian_profile">
         historian=<code x-text="ctx.status.historian_profile"></code>
-        · reader=<code x-text="ctx.status.reader_mode"></code>
+        · reader=<code x-text="ctx.status.force_raw_context ? 'raw-emergency' : ctx.status.cutover?.reader_mode"></code>
         · integrity=<code :class="ctx.integrity && ctx.integrity.ok ? 'ok' : 'bad'"
                           x-text="ctx.integrity && ctx.integrity.ok ? 'ok' : 'issues'"></code>
       </p>

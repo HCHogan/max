@@ -41,7 +41,7 @@ import Max.MaintenanceLease
   ( MaintenanceDomain (EmbeddingMaintenance),
     withMaintenanceLease,
   )
-import Max.MemoryStore (MemoryId (..))
+import Max.MemoryStore (MemoryId (..), invalidateMemoryEmbeddingsInConversation)
 import OneBot.Types (GroupId (..))
 
 data CoverageRow = CoverageRow
@@ -185,8 +185,19 @@ loadContextStatus selectedConversation = do
       \ WHERE status IN ('leased', 'generated') AND lease_owner IS NOT NULL \
       \ GROUP BY lease_owner ORDER BY lease_owner"
       ()
+  legacyArtifacts <-
+    query
+      "SELECT \
+      \  (SELECT count(*) FROM information_schema.columns \
+      \   WHERE table_schema = current_schema() AND table_name = 'sessions' \
+      \     AND column_name IN ('context_anchor', 'memx_anchor')), \
+      \  (SELECT count(*) FROM conversation_cursors WHERE cursor_name = 'memory_extract')"
+      ()
   let statuses = map coverageJson (rows :: [CoverageRow])
       unhealthy = length [() | row <- rows, not (null (coverageIssues row))]
+      (legacyColumns, legacyCursors) = case legacyArtifacts :: [(Int64, Int64)] of
+        artifact : _ -> artifact
+        [] -> (0, 0)
   pure $
     object
       [ "summary"
@@ -216,7 +227,16 @@ loadContextStatus selectedConversation = do
                    "last_expiry" .= lastExpiry
                  ]
              | (owner, count, firstExpiry, lastExpiry) <- captureLeases :: [(Text, Int64, Maybe UTCTime, Maybe UTCTime)]
-             ]
+             ],
+        "cutover"
+          .= object
+            [ "context_protocol_version" .= ("unbounded-context/v1" :: Text),
+              "reader_mode" .= ("all_conversations" :: Text),
+              "legacy_extractor_running" .= (legacyCursors > 0),
+              "legacy_session_anchor_columns" .= legacyColumns,
+              "legacy_memory_cursor_rows" .= legacyCursors,
+              "old_new_worker_conflict" .= (legacyColumns > 0 || legacyCursors > 0)
+            ]
       ]
 
 coverageJson :: CoverageRow -> Value
@@ -767,11 +787,7 @@ invalidateEmbeddingsAdmin conversationId requestedCorpora =
               else pure 0
           memories <-
             if "memory" `elem` corpora
-              then
-                execute
-                  "UPDATE memories SET embedding = NULL, embedding_model = NULL, embedding_dimensions = NULL, embedding_content_hash = NULL, embedding_updated_at = NULL \
-                  \ WHERE (scope = 'group' AND scope_id = ?) OR (scope = 'user' AND source_group_id = ?)"
-                  (conversationId, conversationId)
+              then invalidateMemoryEmbeddingsInConversation (conversationScopeFor (GroupId conversationId))
               else pure 0
           episodes <-
             if "episode" `elem` corpora

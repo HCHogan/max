@@ -150,9 +150,8 @@ maxSessionCASRetries = 8
 --------------------------------------------------------------------------------
 -- Pure helpers callable inside updateSession.
 
--- | Stamp a 'clearedAt' watermark so the next prompt skips ambient
--- group messages AND reconstructed mention history older than now.
--- Pinned messages and explicit reply contexts still survive.  No
+-- | Stamp a 'clearedAt' watermark so the next prompt skips chronological
+-- context older than now.  Pinned messages and explicit reply contexts survive.  No
 -- destructive truncation any more — the data lives in the messages
 -- table; @!unclear@ brings it all back.
 clearHistory :: UTCTime -> Session -> Session
@@ -170,7 +169,7 @@ clearAll now s =
     }
 
 -- | Remove the 'clearedAt' watermark.  The next prompt is allowed to
--- pull in everything (ambient + mention history) from before any
+-- pull in the tiered history from before any
 -- earlier @!clear@.
 unclear :: Session -> Session
 unclear s = s {clearedAt = Nothing}

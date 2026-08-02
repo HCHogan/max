@@ -9,9 +9,8 @@ import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.ConversationCursor
   ( advanceCursor,
-    advanceCursorBefore,
+    historianCursor,
     loadCursor,
-    memoryExtractCursor,
   )
 import Max.DB.History
   ( HistoryItem (..),
@@ -69,7 +68,7 @@ spec pool = before_ (truncateAll pool) $ do
 
       page <- withDb pool $ fetchOldestPageAfter (scopeFor groupA) (MessageCursor 0) 10
       map ((.messageId) . (.history)) page.items `shouldBe` [1001, 1002, 1003]
-      map (.transcriptEligible) page.items `shouldBe` [True, False, False]
+      map (.transcriptEligible) page.items `shouldBe` [True, False, True]
 
     it "never returns another conversation even when global sequences interleave" $ do
       insertRawMessage pool 1001 groupA member botId (timeAt 1) Nothing "a1"
@@ -91,48 +90,38 @@ spec pool = before_ (truncateAll pool) $ do
       map ((.messageId) . (.history)) first.items
         `shouldBe` map ((.messageId) . (.history)) replay.items
 
-      withDb pool (loadCursor scope memoryExtractCursor)
+      withDb pool (loadCursor scope historianCursor)
         `shouldReturn` MessageCursor 0
 
     it "uses CAS so stale or backward writers cannot overwrite progress" $ do
       insertRawMessage pool 1001 groupA member botId (timeAt 1) Nothing "a"
       insertRawMessage pool 1002 groupA member botId (timeAt 2) Nothing "b"
       let scope = scopeFor groupA
-      initial <- withDb pool $ loadCursor scope memoryExtractCursor
+      initial <- withDb pool $ loadCursor scope historianCursor
       page <- withDb pool $ fetchOldestPageAfter scope initial 10
       end <- requireEnd page
 
-      withDb pool (advanceCursor scope memoryExtractCursor initial end)
+      withDb pool (advanceCursor scope historianCursor initial end)
         `shouldReturn` True
-      withDb pool (advanceCursor scope memoryExtractCursor initial end)
+      withDb pool (advanceCursor scope historianCursor initial end)
         `shouldReturn` False
-      withDb pool (advanceCursor scope memoryExtractCursor end initial)
+      withDb pool (advanceCursor scope historianCursor end initial)
         `shouldReturn` False
-      withDb pool (loadCursor scope memoryExtractCursor)
+      withDb pool (loadCursor scope historianCursor)
         `shouldReturn` end
 
     it "persists independently per conversation and reports pending rows" $ do
       insertRawMessage pool 1001 groupA member botId (timeAt 1) Nothing "a"
       let scopeA = scopeFor groupA
           scopeB = scopeFor groupB
-      startA <- withDb pool $ loadCursor scopeA memoryExtractCursor
+      startA <- withDb pool $ loadCursor scopeA historianCursor
       endA <- withDb pool (fetchOldestPageAfter scopeA startA 10) >>= requireEnd
-      withDb pool (advanceCursor scopeA memoryExtractCursor startA endA)
+      withDb pool (advanceCursor scopeA historianCursor startA endA)
         `shouldReturn` True
 
       withDb pool (hasMessagesAfter scopeA endA) `shouldReturn` False
-      withDb pool (loadCursor scopeB memoryExtractCursor)
+      withDb pool (loadCursor scopeB historianCursor)
         `shouldReturn` MessageCursor 0
-
-    it "moves a clear watermark conservatively and retains equal-time rows" $ do
-      insertRawMessage pool 1001 groupA member botId (timeAt 9) Nothing "before"
-      insertRawMessage pool 1002 groupA member botId (timeAt 10) Nothing "equal"
-      insertRawMessage pool 1003 groupA member botId (timeAt 11) Nothing "after"
-      let scope = scopeFor groupA
-
-      cursor <- withDb pool $ advanceCursorBefore scope memoryExtractCursor (timeAt 10)
-      page <- withDb pool $ fetchOldestPageAfter scope cursor 10
-      map ((.messageId) . (.history)) page.items `shouldBe` [1002, 1003]
 
 scopeFor :: Int64 -> ConversationScope
 scopeFor = conversationScopeFor . GroupId

@@ -51,7 +51,7 @@ CLIProxyAPI（拿 ChatGPT 订阅当 API 用的那种代理），配 cliproxy.man
 # 配置要点（max.yaml）
 
 llm.profiles 每档：base_url/api_key/model/protocol(openai|anthropic|responses)/stream/
-multimodal/history_as_turns/effort(推理力度，!effort 可按会话覆盖)。顶级：owners、persona、timezone、history_window/max、
+multimodal/history_as_turns/effort(推理力度，!effort 可按会话覆盖)和各模型的 token 限额/预留。顶级：owners、persona、timezone、
 db.url、server(host/port/path/access_token)。可选段开可选功能：intent（主动插话）、
 stickers（表情包+识图 profile）、embedding（语义搜索）、search（tavily）、memory
 （提取 profile）、admin、browser、wechatpad、cliproxy（订阅池健康度）。找配置文件顺序：--config-file >

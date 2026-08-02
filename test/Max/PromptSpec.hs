@@ -15,7 +15,7 @@ import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
-import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextHistoryMode (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, applyVideoCaptions, applyWatermark, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
+import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, applyVideoCaptions, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -110,12 +110,10 @@ emptySession =
       model = "deepseek-flash",
       persona = Nothing,
       clearedAt = Nothing,
-      contextAnchor = Nothing,
       pinned = [],
       debugOverride = Nothing,
       stickerOverride = Nothing,
       proactiveOverride = Nothing,
-      memxAnchor = Nothing,
       effortOverride = Nothing
     }
 
@@ -737,42 +735,6 @@ spec = do
       ub `shouldSatisfy` ("Alice 戳了戳你" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("[#0]" `T.isInfixOf`))
 
-  -- The anchor is what lets a provider's prefix cache cover the
-  -- transcript: it holds still for many dispatches so the rendered
-  -- prefix stays byte-identical, then jumps in one step.  Trimming a
-  -- row per dispatch instead would change the first line every time —
-  -- which is exactly the sliding window this replaced.
-  describe "applyWatermark" $ do
-    let rows n = [historyAt 9 (7000 + i) memberId (Just "Alice") "x" | i <- [1 .. fromIntegral n]]
-
-    it "leaves the transcript alone below the high-water mark" $ do
-      let (kept, moved) = applyWatermark 40 80 (rows (80 :: Int))
-      (length kept, moved) `shouldBe` (80, Nothing)
-
-    it "trims to the low-water mark in one step once over" $ do
-      let (kept, moved) = applyWatermark 40 80 (rows (81 :: Int))
-      length kept `shouldBe` 40
-      moved `shouldSatisfy` (/= Nothing)
-
-    -- The floor is exclusive downstream (received_at > floor), so
-    -- anchoring at the oldest kept row would drop it next dispatch.
-    it "anchors just before the oldest kept row, not at it" $ do
-      let allRows =
-            [ (historyAt 9 (7000 + i) memberId (Just "Alice") "x")
-                { receivedAt = timeAt (fromIntegral i)
-                }
-            | i <- [1 .. 5 :: Int64]
-            ]
-          (kept, moved) = applyWatermark 2 4 allRows
-      map (.messageId) kept `shouldBe` [7004, 7005]
-      -- #7004 is the oldest kept; the anchor is #7003's timestamp, so
-      -- "> anchor" still admits #7004.
-      moved `shouldBe` Just (timeAt 3)
-
-    it "keeps the newest rows, not the oldest" $ do
-      let (kept, _) = applyWatermark 2 3 (rows (5 :: Int))
-      map (.messageId) kept `shouldBe` [7004, 7005]
-
   describe "ContextSnapshot → ContextPlan → renderer" $ do
     it "preserves the existing byte output under a generous budget" $ do
       let plan = planContext generousLimits (snapshot baseInputs)
@@ -837,7 +799,6 @@ spec = do
       body `shouldSatisfy` ("recent P1" `T.isInfixOf`)
       body `shouldSatisfy` (not . ("old P3" `T.isInfixOf`))
       body `shouldSatisfy` ("live tail" `T.isInfixOf`)
-      plan.cpMovedAnchor `shouldBe` Nothing
 
     it "degrades all compartment fidelity before dropping the raw tail" $ do
       let raw = historyAt 11 101 otherMemberId (Just "Bob") "protected live tail"
@@ -873,15 +834,12 @@ episodeHandleAt cid =
     (parseEpisodeHandle ("00000000-0000-0000-0000-" <> T.justifyRight 12 '0' (T.pack (show cid))))
 
 snapshot :: PromptInputs -> ContextSnapshot
-snapshot inputs = ContextSnapshot inputs 1000 2000 LegacyContextHistory Nothing Nothing
+snapshot inputs = ContextSnapshot inputs Nothing Nothing
 
 tieredSnapshot :: PromptInputs -> ContextSnapshot
 tieredSnapshot inputs =
   ContextSnapshot
     inputs {compartments = applyBaseCompartmentTiers inputs.now inputs.compartments}
-    1
-    1
-    TieredContextHistory
     (Just 1)
     (Just "initial_materialization")
 

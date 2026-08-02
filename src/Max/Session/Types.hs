@@ -22,20 +22,11 @@ data Session = Session
     model :: !Text,
     -- | Persona override.  'Nothing' means inherit @AppConfig.persona@.
     persona :: !(Maybe Text),
-    -- | Watermark set by @!clear@.  When 'Just', ambient group context
-    -- AND reconstructed mention history older than this are excluded
-    -- from the prompt.  'Nothing' means no filtering.  Pinned messages
+    -- | Watermark set by @!clear@.  When 'Just', chronological context
+    -- older than this is excluded from the prompt.  'Nothing' means no
+    -- filtering.  Pinned messages
     -- (see 'pinned') bypass this entirely.  Survives across restarts.
     clearedAt :: !(Maybe UTCTime),
-    -- | Where the prompt's transcript starts, so it grows instead of
-    -- sliding: "everything since this" is a prefix that only gets
-    -- longer, which is what lets a provider's prefix cache cover it.
-    -- Moves in one step when the message count passes the high-water
-    -- mark, back down to the low-water mark ('AppConfig.historyWindow'
-    -- \/ 'AppConfig.historyMax').  'Nothing' until the first dispatch
-    -- that overflows.  Distinct from 'clearedAt', which is a user
-    -- decision @!unclear@ can undo; this is bookkeeping.
-    contextAnchor :: !(Maybe UTCTime),
     -- | Explicit message_ids the user pinned via @!pin@.  These get
     -- included in every prompt regardless of 'clearedAt'.  Order
     -- preserved (display reflects user's pin order).
@@ -55,11 +46,6 @@ data Session = Session
     -- proactive mode is on, the intent classifier may trigger the bot
     -- on messages that neither @-mention nor quote it.
     proactiveOverride :: !(Maybe Bool),
-    -- | Legacy memory-extraction timestamp retained for schema/API
-    -- compatibility.  Exact progress moved to the independent,
-    -- ingest-sequence-based @conversation_cursors@ store in migration 036;
-    -- Historian v2 capture no longer updates this field.
-    memxAnchor :: !(Maybe UTCTime),
     -- | Per-session reasoning-effort override, set by @!effort@.
     -- 'Nothing' = follow the active profile's configured effort.
     -- Applies to agent turns only — background workers keep their

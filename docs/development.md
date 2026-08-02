@@ -87,7 +87,7 @@ cabal test max-test-db
 Without `MAX_TEST_DB_URL` the suite exits 0 (CI without a database stays green).
 Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
 The prompt integration cases also publish real active compartments, assert
-gap annotations for partial backfill, and exercise the development-gated
+gap annotations for partial backfill, and exercise the all-conversation
 compartment-to-raw-tail reader end to end. EpisodeStore cases additionally
 page opaque `context_expand` handles over the exact raw range, deny the same
 handle from another conversation, and verify that a superseded projection's
@@ -119,13 +119,22 @@ repeat every fixture to expose stochastic schema/quality failures:
 
 ```sh
 cabal run max-context-eval -- --eval-profile PROFILE --runs 3 \
-  --min-pass-rate 1 --max-average-prompt-tokens 1500
+  --min-pass-rate 1
 ```
 
 `--case TEXT` narrows Historian fixtures while tuning one failed expectation.
 The evaluator counts a bounded schema-repair call in both latency and
 per-capture token totals. Passing recall fixtures never enables auto-hints;
 production injection remains disconnected until a separate product decision.
+
+The final cutover gate replays the manually anonymized, production-derived
+fixture independently from the synthetic wiring baseline:
+
+```sh
+cabal run max-context-eval -- \
+  --historian-fixture context-eval/fixtures/historian-real.jsonl \
+  --eval-profile PROFILE --runs 3 --min-pass-rate 1
+```
 
 ### Context operations console
 
@@ -233,7 +242,7 @@ structured data as `key=value`. Multi-line values collapse to one line with `⏎
 so `grep -A` / `grep -B` count events rather than JSON braces.
 
 Useful domain filters: `conn-N`, `image-worker`, `forward-worker`, `llm`, `cmd`,
-`historian` (episode capture), `memx-dream` (memory maintenance), `intent`
+`historian` (episode capture), `memory-dream` (memory maintenance), `intent`
 (proactive-trigger classification), `shutdown` (graceful drain).
 
 `log-base` has three levels and they map straight across: `TRACE` / `INFO` /

@@ -22,6 +22,7 @@ module Max.Historian
   )
 where
 
+import Control.Concurrent (threadDelay)
 import Control.Monad (forever, unless, when)
 import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LBS
@@ -50,6 +51,7 @@ import Max.DB.History
     MessageCursor (..),
     bestName,
     fetchOldestPageAfter,
+    fetchOldestPageThrough,
     hasMessagesAfter,
   )
 import Max.DB.Session (listSessions)
@@ -86,7 +88,7 @@ import Max.Util (catchSync, trySync)
 import OneBot.Types (GroupId (..))
 
 historianPromptVersion :: Text
-historianPromptVersion = "historian/v2"
+historianPromptVersion = "historian/v3"
 
 historianSchemaVersion :: Int
 historianSchemaVersion = 1
@@ -115,6 +117,8 @@ historianWorker profile catalog tz tasks defaultModel scheduler = localDomain "h
   -- Persistent jobs win at boot.  The scheduler can disappear; leases and
   -- exact source ranges cannot.
   drainAvailableRuns
+  recoverHistoricalConversations
+  drainAvailableRuns
   recoverPendingConversations
   forever $ do
     gid <- liftIO (awaitDueEpisode scheduler)
@@ -140,6 +144,38 @@ historianWorker profile catalog tz tasks defaultModel scheduler = localDomain "h
           liftIO (armEpisode scheduler session.groupId)
           logInfo "historian: recovered pending conversation" $
             object ["group_id" .= unGroupId session.groupId, "cursor" .= cursor.ingestSeq]
+
+    recoverHistoricalConversations = do
+      sessions <- listSessions defaultModel
+      for_ sessions (enqueueNextBackfill . (.groupId))
+
+    enqueueNextBackfill gid@(GroupId rawGroupId) = do
+      let scope = conversationScopeFor gid
+      findOldestBackfillGap scope >>= \case
+        Nothing -> pure ()
+        Just gap ->
+          scanEpisodeWindowThrough tz scope gap.backfillExpected gap.backfillThrough sourceBudget >>= \case
+            Nothing -> pure ()
+            Just window -> do
+              let request =
+                    CaptureRequest
+                      { requestReason = CaptureBackfill,
+                        requestHistorianProfile = profile,
+                        requestPromptVersion = historianPromptVersion,
+                        requestSchemaVersion = historianSchemaVersion
+                      }
+              enqueueBackfillRun scope gap.backfillExpected window.endCursor request >>= \case
+                Nothing -> pure ()
+                Just run ->
+                  logInfo "historian: historical backfill enqueued" $
+                    object
+                      [ "group_id" .= rawGroupId,
+                        "capture_run_id" .= run.crId,
+                        "start_ingest_seq" .= run.crRange.srStart.ingestSeq,
+                        "end_ingest_seq" .= run.crRange.srEnd.ingestSeq,
+                        "gap_end_ingest_seq" .= gap.backfillThrough.ingestSeq,
+                        "source_tokens" .= window.estimatedTokens
+                      ]
 
     enqueueSettledConversation gid@(GroupId rawGroupId) = do
       rescheduled <- liftIO (episodePendingDeadline scheduler gid)
@@ -203,12 +239,19 @@ historianWorker profile catalog tz tasks defaultModel scheduler = localDomain "h
                     "capture_run_id" .= run.crId,
                     "compartment_id" .= compartment
                   ]
-              pending <- hasMessagesAfter scope run.crRange.srEnd
+              liveCursor <- loadCursor scope historianCursor
+              pending <- hasMessagesAfter scope liveCursor
               when pending $ do
                 now <- liftIO getCurrentTime
                 if run.crReason == "token_pressure"
                   then liftIO (continueEpisodeAt scheduler gid now)
                   else liftIO (armEpisode scheduler gid)
+              when (run.crReason == "backfill") $ do
+                -- Controlled continuous catch-up: keep all conversations fair
+                -- (their first gaps were enqueued together at boot) and avoid a
+                -- tight provider loop while still converging without traffic.
+                liftIO (threadDelay 1_000_000)
+                enqueueNextBackfill gid
             Right CaptureRetryScheduled -> retryConversation (GroupId lease.leaseRun.crConversationId)
             Right CaptureAbandoned -> retryConversation (GroupId lease.leaseRun.crConversationId)
             Left err -> recoverLeaseFailure lease (T.pack (show err))
@@ -247,10 +290,34 @@ scanEpisodeWindow ::
   MessageCursor ->
   Int ->
   Eff es (Maybe EpisodeWindow)
-scanEpisodeWindow tz scope initial tokenLimit = go initial 0 Nothing
+scanEpisodeWindow tz scope initial tokenLimit =
+  scanEpisodeWindowBounded tz scope initial Nothing tokenLimit
+
+scanEpisodeWindowThrough ::
+  (WithConnection :> es, IOE :> es) =>
+  TimeZone ->
+  ConversationScope ->
+  MessageCursor ->
+  MessageCursor ->
+  Int ->
+  Eff es (Maybe EpisodeWindow)
+scanEpisodeWindowThrough tz scope initial through tokenLimit =
+  scanEpisodeWindowBounded tz scope initial (Just through) tokenLimit
+
+scanEpisodeWindowBounded ::
+  (WithConnection :> es, IOE :> es) =>
+  TimeZone ->
+  ConversationScope ->
+  MessageCursor ->
+  Maybe MessageCursor ->
+  Int ->
+  Eff es (Maybe EpisodeWindow)
+scanEpisodeWindowBounded tz scope initial through tokenLimit = go initial 0 Nothing
   where
     go cursor used latest = do
-      page <- fetchOldestPageAfter scope cursor ledgerPageSize
+      page <- case through of
+        Nothing -> fetchOldestPageAfter scope cursor ledgerPageSize
+        Just upper -> fetchOldestPageThrough scope cursor upper ledgerPageSize
       let remaining = max 1 (tokenLimit - used)
           selected = case page.items of
             first : _
@@ -574,7 +641,7 @@ historianSystem =
       "",
       "Memory proposals are optional and must be stable enough to help future conversations. Most ambient/social episodes need none.",
       "Never store one-off meal/social plans, same-day coordination, transient troubleshooting outcomes, or casual acknowledgements as durable memory.",
-      "An explicit group decision or a named speaker's explicit commitment with an absolute date is high-value durable memory; propose it when it is not already listed.",
+      "An explicit group decision or a named speaker's explicit commitment tied to an absolute-dated plan is high-value durable memory; the date may be stated on that line or inherited only when the surrounding plan makes it unambiguous.",
       "When a speaker corrects an earlier statement, store only the final state and cite the correcting message (the earlier message may be cited too).",
       "When new evidence corrects or replaces an existing listed memory about the same subject and topic, update that id/version in place; never archive it and add a duplicate identity.",
       "Archive an existing memory only when it is clearly obsolete and there is no replacement fact to store.",
@@ -588,6 +655,7 @@ historianSystem =
       "Each proposal must cite exact source message ids. Content is self-contained, <=300 chars, with absolute dates.",
       "Resolve yesterday/tomorrow/weekday and other relative dates from the local_now date and weekday supplied in the input; never guess the calendar.",
       "Maximum 12 proposals.",
+      "Before returning, silently scan every speaker's lines once more: each explicit group decision and each named speaker's explicit commitment tied to an absolute-dated plan must have its own correctly scoped proposal unless an existing memory already says it. One speaker's proposal never substitutes for another's; never guess an ambiguous inherited date.",
       "",
       "Proposal forms:",
       "  {\"action\":\"add\",\"scope\":\"group\",\"content\":\"...\",\"category\":\"decision\",\"evidence_message_ids\":[1]}",

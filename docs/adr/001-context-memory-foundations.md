@@ -118,7 +118,8 @@ projection.
   always combined with scope predicates before model-visible reads or writes.
 - PostgreSQL integration tests are required in CI because the security and
   coverage invariants are primarily SQL and transaction behavior.
-- The existing two-source history query remains only as a migration fallback.
-  It is removed after replay tests prove compartment plus live-tail rendering.
+- The former two-source history query is removed at the all-conversation
+  cutover. The only release fallback is a process-wide, token-budgeted read of
+  the immutable raw ledger; it does not mutate source or projection state.
 - Rebuilds and policy changes cost additional storage and background work, but
   errors remain recoverable because the raw transcript is authoritative.

@@ -5,16 +5,18 @@ import Data.Maybe (isNothing)
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawMessage, insertRawReply, truncateAll, withDb)
+import Helpers (insertRawMessage, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History
   ( HistoryItem (..),
+    HistoryPage (..),
+    LedgerItem (..),
     MessageCursor (..),
     fetchForwardChildrenInScope,
-    fetchMentionHistory,
     fetchMessageInScope,
     fetchMessagesByIdsInScope,
+    fetchNewestPromptPageBefore,
     fetchRecentInGroup,
     fetchTranscriptAfter,
   )
@@ -92,6 +94,23 @@ spec pool = before_ (truncateAll pool) $
         rows <- withDb pool $ fetchTranscriptAfter scope (MessageCursor 0) 9999 (Just (timeAt 10))
         map (.messageId) rows `shouldBe` [1003]
 
+    describe "fetchNewestPromptPageBefore" $ do
+      it "pages backward from the newest exact-cursor tail without changing chronological output" $ do
+        insertRawMessage pool 1001 groupId memberA botId (timeAt 8) Nothing "oldest"
+        insertRawMessage pool 1002 groupId memberA botId (timeAt 9) Nothing "older"
+        insertRawMessage pool 1003 groupId memberB botId (timeAt 10) Nothing "newer"
+        insertRawMessage pool 1004 groupId memberA botId (timeAt 11) Nothing "newest"
+        insertRawMessage pool 1005 groupId memberA botId (timeAt 12) Nothing "current"
+        newest <- withDb pool $ fetchNewestPromptPageBefore scope (MessageCursor 0) Nothing 1005 Nothing 2
+        map (.history.messageId) newest.items `shouldBe` [1003, 1004]
+        newest.hasMore `shouldBe` True
+        continuation <- case newest.items of
+          oldest : _ -> pure (Just oldest.cursor)
+          [] -> expectationFailure "missing newest prompt page" >> pure Nothing
+        older <- withDb pool $ fetchNewestPromptPageBefore scope (MessageCursor 0) continuation 1005 Nothing 2
+        map (.history.messageId) older.items `shouldBe` [1001, 1002]
+        older.hasMore `shouldBe` False
+
     describe "fetchMessageInScope" $ do
       it "returns Nothing for an absent id" $ do
         m <- withDb pool $ fetchMessageInScope scope 9999
@@ -114,40 +133,6 @@ spec pool = before_ (truncateAll pool) $
         insertRawMessage pool 1001 (groupId + 1) memberA botId (timeAt 9) (Just "Alice") "secret"
         m <- withDb pool $ fetchMessageInScope scope 1001
         m `shouldSatisfy` isNothing
-
-    describe "fetchMentionHistory" $ do
-      it "includes bot-sent messages (user_id = botId)" $ do
-        insertRawMessage pool 1001 groupId memberA botId (timeAt 9) (Just "Alice") "@1000 hi"
-        insertRawMessage pool 1002 groupId botId botId (timeAt 10) Nothing "hi back"
-        rows <- withDb pool $ fetchMentionHistory groupId botId 9999 Nothing 10
-        map (.messageId) rows `shouldBe` [1001, 1002]
-
-      it "includes member messages that mention @<botId> in rendered_text" $ do
-        insertRawMessage pool 1001 groupId memberA botId (timeAt 9) (Just "Alice") "@1000 你好"
-        insertRawMessage pool 1002 groupId memberB botId (timeAt 9) (Just "Bob") "random chat"
-        rows <- withDb pool $ fetchMentionHistory groupId botId 9999 Nothing 10
-        map (.messageId) rows `shouldBe` [1001]
-
-      it "excludes the triggering message id even when it would match" $ do
-        insertRawMessage pool 1001 groupId memberA botId (timeAt 9) (Just "Alice") "@1000 hi"
-        rows <- withDb pool $ fetchMentionHistory groupId botId 1001 Nothing 10
-        map (.messageId) rows `shouldBe` []
-
-      it "respects the watermark" $ do
-        insertRawMessage pool 1001 groupId memberA botId (timeAt 9) (Just "Alice") "@1000 old"
-        insertRawMessage pool 1002 groupId memberA botId (timeAt 11) (Just "Alice") "@1000 new"
-        rows <- withDb pool $ fetchMentionHistory groupId botId 9999 (Just (timeAt 10)) 10
-        map (.messageId) rows `shouldBe` [1002]
-
-      it "includes messages the bot itself quoted (proactive replies)" $ do
-        -- No @, no reply — a proactive turn's target.  The bot's reply
-        -- quotes it, which must pull the user's side into the history:
-        -- otherwise the bot reads its own answers with no question.
-        insertRawMessage pool 1001 groupId memberA botId (timeAt 9) (Just "Alice") "max在吗"
-        insertRawReply pool 1002 groupId botId botId (timeAt 10) Nothing "在。干嘛。" 1001
-        insertRawMessage pool 1003 groupId memberB botId (timeAt 10) (Just "Bob") "无关闲聊"
-        rows <- withDb pool $ fetchMentionHistory groupId botId 9999 Nothing 10
-        map (.messageId) rows `shouldBe` [1001, 1002]
 
     describe "fetchMessagesByIdsInScope" $ do
       it "returns rows in the requested order (not DB order)" $ do

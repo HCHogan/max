@@ -22,12 +22,10 @@ emptySession =
       model = "deepseek-flash",
       persona = Nothing,
       clearedAt = Nothing,
-      contextAnchor = Nothing,
       pinned = [],
       debugOverride = Nothing,
       stickerOverride = Nothing,
       proactiveOverride = Nothing,
-      memxAnchor = Nothing,
       effortOverride = Nothing
     }
 

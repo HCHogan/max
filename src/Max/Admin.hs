@@ -565,13 +565,7 @@ handle env profiles logBuf r params body = case r of
             fields
               <> KM.fromList
                 [ "historian_profile" .= env.beMemoryExtract,
-                  "reader_mode"
-                    .= ( if null env.beUnboundedContextGroups
-                           then ("legacy-only" :: Text)
-                           else "development-allowlist"
-                       ),
-                  "tiered_conversations" .= env.beUnboundedContextGroups,
-                  "legacy_extractor_running" .= False
+                  "force_raw_context" .= env.beForceRawContext
                 ]
         value -> value
   RContextCaptures -> do
@@ -847,9 +841,7 @@ sessionJson s =
       "debug" .= s.debugOverride,
       "sticker" .= s.stickerOverride,
       "proactive" .= s.proactiveOverride,
-      "effort" .= s.effortOverride,
-      "context_anchor" .= s.contextAnchor,
-      "memx_anchor" .= s.memxAnchor
+      "effort" .= s.effortOverride
     ]
 
 memoryJson :: Maybe Int64 -> MemoryItem -> Value

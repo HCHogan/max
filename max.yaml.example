@@ -48,31 +48,19 @@ persona: |
 # images_dir: var/images
 # image_workers: 4
 
-# How much conversation the prompt carries.  The transcript grows
-# rather than slides: it is "everything since an anchor", so its
-# rendered prefix stays byte-identical between dispatches and a
-# provider's prefix cache can cover it.  Past history_max the anchor
-# jumps forward, leaving history_window messages.
-#
-# The gap between them is how many dispatches share a cached prefix.
-# Widening it raises the hit rate but also the average prompt, which
-# you pay for in full on the calls that miss — a quiet group whose
-# dispatches are further apart than the provider's cache TTL
-# (Anthropic: 5 min) misses every time.  Watch cached_prompt_tokens
-# against prompt_tokens in the logs before opening it up.
-# history_window: 40
-# history_max: 80
+# Conversation history has no message-count setting.  Every conversation uses
+# active P1/P2/P3/P4 compartments followed by an exact protected raw tail;
+# ContextPolicy derives token watermarks from the selected profile's
+# max_input_tokens and output/media/tool reserves.  If projections are not yet
+# ready, the immutable raw ledger is the fail-soft source and is still trimmed
+# only by that token budget.
 
-# Temporary development gate for exercising the tiered history reader before
-# the feature-wide release.  A listed group reads a
-# single chronological stream of active P1/P2/P3/P4 compartments followed by
-# every raw message after the last exact compartment cursor; ContextPolicy,
-# not a message count, sizes that live tail.  Tier choices and the cursor are
-# durable and change together only at the high/low token boundary (or when a
-# projection is replaced).  Empty is the safe development default.  The final
-# release removes this allowlist and the legacy dual-query reader, switching all
-# conversations together after offline replay and operational gates pass.
-# unbounded_context_groups: []
+# Global release escape hatch.  This bypasses compartment/materialization reads
+# but keeps every projection and background job intact; prompts use the same
+# immutable raw ledger and model token budget.  Turn it back off to resume the
+# tiered reader.
+# context:
+#   force_raw_fallback: false
 
 # On SIGTERM the bot stops taking new @-triggers and waits this long for
 # the dispatches already running before tearing down.  Keep systemd's

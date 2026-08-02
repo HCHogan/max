@@ -151,7 +151,7 @@ dreamWorker ::
   Text -> -- extractor profile
   TimeZone ->
   Eff es ()
-dreamWorker owner profile tz = localDomain "memx-dream" . forever $ do
+dreamWorker owner profile tz = localDomain "memory-dream" . forever $ do
   liftIO (sleepUntilHour tz dreamHourLocal)
   leasedNight `catchSync` \e ->
     logAttention "dream: night crashed" $ object ["error" .= T.pack (show e)]
@@ -173,7 +173,7 @@ dreamWorker owner profile tz = localDomain "memx-dream" . forever $ do
               logInfo "dream: scope" $
                 object ["scope" .= scopeRaw, "scope_id" .= sid, "entries" .= n]
               shrinkScope
-                "memx-dream"
+                "memory-dream"
                 dreamerSystem
                 ["今天是 " <> fmtDate tz now, ""]
                 profile
@@ -303,7 +303,7 @@ shrinkScope label sys header profile scope sid gid = do
     conversation = conversationScopeFor (GroupId gid)
     actor why =
       MemoryActor
-        (if label == "memx-dream" then ActorDreamer else ActorExtractor)
+        ActorDreamer
         Nothing
         (Just why)
     namespace =
