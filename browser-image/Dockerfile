@@ -57,21 +57,31 @@ RUN npm_config_user_agent="pnpm/10.0.0 npm/10.9.8 node/v22.0.0 linux x64" npm ci
  && npm run build \
  && npm prune --omit=dev
 
-# COPY comes after the npm build so a browser-only upgrade keeps that
-# comparatively expensive layer cached.  This matches camoufox-js's cache
-# layout, including the version marker it normally writes after extraction.
+# camoufox-js considers any existing addon directory complete, even when a
+# failed download left it without manifest.json.  Validate the actual marker
+# before reusing it so a transient failure is recoverable.
+RUN sed -i 's/if (fs.existsSync(addonPath)) {/if (fs.existsSync(join(addonPath, "manifest.json"))) {/' node_modules/camoufox-js/dist/addons.js \
+ && grep -q 'existsSync(join(addonPath, "manifest.json"))' node_modules/camoufox-js/dist/addons.js
+
+# COPY comes after the npm build so an asset-only upgrade keeps that
+# comparatively expensive layer cached.  The browser, default addon, and
+# GeoIP database are fixed-output Nix inputs: a production session must not
+# depend on Mozilla/GitHub being reachable during browser launch.
 ARG CAMOUFOX_BROWSER_VERSION
 ARG CAMOUFOX_BROWSER_RELEASE
-COPY camoufox-browser.zip /tmp/camoufox-browser.zip
+COPY camoufox-browser.zip ublock-origin.xpi GeoLite2-City.mmdb /tmp/
 RUN test -n "${CAMOUFOX_BROWSER_VERSION}" \
  && test -n "${CAMOUFOX_BROWSER_RELEASE}" \
- && mkdir -p /root/.cache/camoufox \
+ && mkdir -p /root/.cache/camoufox/addons/UBO \
  && unzip -q /tmp/camoufox-browser.zip -d /root/.cache/camoufox \
+ && unzip -q /tmp/ublock-origin.xpi -d /root/.cache/camoufox/addons/UBO \
+ && test -s /root/.cache/camoufox/addons/UBO/manifest.json \
+ && install -m 0644 /tmp/GeoLite2-City.mmdb /root/.cache/camoufox/GeoLite2-City.mmdb \
  && printf '{"version":"%s","release":"%s"}\n' \
       "${CAMOUFOX_BROWSER_VERSION}" "${CAMOUFOX_BROWSER_RELEASE}" \
       > /root/.cache/camoufox/version.json \
  && chmod -R a+rX /root/.cache/camoufox \
- && rm /tmp/camoufox-browser.zip
+ && rm /tmp/camoufox-browser.zip /tmp/ublock-origin.xpi /tmp/GeoLite2-City.mmdb
 
 # The SSRF guard resolves every request host through container DNS and
 # fails closed, which breaks behind censored DNS: github's telemetry

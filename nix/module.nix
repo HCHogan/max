@@ -55,16 +55,21 @@ let
   sandboxImageSrc = ../sandbox-image;
   browserImageSrc = ../browser-image;
 
-  # camoufox-js otherwise discovers "the latest compatible" browser at
-  # docker-build time and downloads a 600+ MiB zip into an ephemeral RUN.
-  # Besides being non-reproducible, an interrupted download cannot be
-  # resumed or reused by the next nixos-rebuild.  Make the browser a Nix
-  # fixed-output input instead: Nix verifies and retains it in the store,
-  # and the docker build below only unpacks local bytes.
+  # camoufox-js otherwise discovers and downloads the browser at image-build
+  # time, then downloads uBlock Origin and a 66 MiB GeoIP database on the
+  # first live session.  Besides being non-reproducible, either runtime
+  # download can block launch or leave a corrupt partial cache.  Make all
+  # three fixed-output Nix inputs and let Docker only unpack local bytes.
   camoufoxBrowser = import ./camoufox-browser.nix { inherit pkgs; };
   camoufoxBrowserArchive = camoufoxBrowser.archive;
   camoufoxBrowserArchiveName = baseNameOf "${camoufoxBrowserArchive}";
   camoufoxBrowserArchiveDir = dirOf "${camoufoxBrowserArchive}";
+  camoufoxUblockOrigin = camoufoxBrowser.ublockOrigin;
+  camoufoxUblockOriginName = baseNameOf "${camoufoxUblockOrigin}";
+  camoufoxUblockOriginDir = dirOf "${camoufoxUblockOrigin}";
+  camoufoxGeoLiteCity = camoufoxBrowser.geoLiteCity;
+  camoufoxGeoLiteCityName = baseNameOf "${camoufoxGeoLiteCity}";
+  camoufoxGeoLiteCityDir = dirOf "${camoufoxGeoLiteCity}";
 
   # The ordinary directory store path only changes with browser-image/.
   # Include the fixed-output browser path in a separate fingerprint so a
@@ -72,6 +77,8 @@ let
   browserImageFingerprint = pkgs.writeText "max-browser-image-inputs" ''
     docker-context=${browserImageSrc}
     camoufox-browser=${camoufoxBrowserArchive}
+    ublock-origin=${camoufoxUblockOrigin}
+    geolite-city=${camoufoxGeoLiteCity}
   '';
 
   # One-shot unit that builds a docker image from store-backed inputs.
@@ -351,15 +358,19 @@ in
         name = "max-browser";
         src = browserImageSrc;
         tagSource = browserImageFingerprint;
-        # Stream the browser into the context instead of copying another
-        # 663 MiB into a context derivation in the Nix store.  Docker still
-        # receives a normal tar build context, entirely from local paths.
+        # Stream the runtime assets into the context instead of copying
+        # another ~730 MiB into a context derivation in the Nix store.
+        # Docker still receives a normal tar context, entirely local.
         buildCommand = ''
           ${pkgs.gnutar}/bin/tar \
             --create --file=- \
             --transform='s|^${camoufoxBrowserArchiveName}$|camoufox-browser.zip|' \
+            --transform='s|^${camoufoxUblockOriginName}$|ublock-origin.xpi|' \
+            --transform='s|^${camoufoxGeoLiteCityName}$|GeoLite2-City.mmdb|' \
             --directory=${browserImageSrc} . \
             --directory=${camoufoxBrowserArchiveDir} ${camoufoxBrowserArchiveName} \
+            --directory=${camoufoxUblockOriginDir} ${camoufoxUblockOriginName} \
+            --directory=${camoufoxGeoLiteCityDir} ${camoufoxGeoLiteCityName} \
             | docker build \
                 --build-arg CAMOUFOX_BROWSER_VERSION=${camoufoxBrowser.version} \
                 --build-arg CAMOUFOX_BROWSER_RELEASE=${camoufoxBrowser.release} \
