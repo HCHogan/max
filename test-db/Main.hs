@@ -33,6 +33,7 @@ import Max.DB.SessionSpec qualified as SessionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.HistorianMigrationSpec qualified as HistorianMigrationSpec
 import Max.HistorianSpec qualified as HistorianSpec
+import Max.MaintenanceLeaseSpec qualified as MaintenanceLeaseSpec
 import Max.MemoryStoreMigrationSpec qualified as MemoryStoreMigrationSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
@@ -57,6 +58,7 @@ main = do
       hspec $ do
         EmbeddingMigrationSpec.spec pool
         MemoryStoreMigrationSpec.spec pool
+        MaintenanceLeaseSpec.spec pool
         SessionSpec.spec pool
         ConversationCursorSpec.spec pool
         ContextMaterializationMigrationSpec.spec pool

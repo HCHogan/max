@@ -47,6 +47,8 @@ Pure logic in `test/` mirroring the library layout:
   source-hash/CAS rollback, leases, rebuild/backfill, and proposal isolation
 - `Max.MemoryExtractSpec` — nightly-maintenance op JSON plus quiet-scheduler
   retry/race behavior
+- `Max.MaintenanceLeaseSpec` (DB) — same-domain serialization, independent
+  maintenance domains, expiry takeover, and fencing against stale owners
 - `Max.PlatformSpec` — platform-id mapping
 - `Max.PromptSpec` — `renderContext`: the flat transcript and the
   `history_as_turns` shape (including that neither can produce two consecutive
@@ -96,7 +98,9 @@ and UUID handles backfill without mutating the append-only revision ledger.
 real conversation, checks lexical and compatible-pgvector fusion, exercises
 provenance/message dedup and source quotas, and probes the same queries from a
 foreign conversation. The pure Recall spec separately fixes quota, overflow,
-deduplication, and deterministic ordering semantics.
+deduplication, and deterministic ordering semantics. `Max.MemoryStoreSpec`
+also checks that maintenance receives current evidence and that evidenced
+supersession appends its lifecycle version, evidence, and audit atomically.
 
 ## Config: finding out where a value came from
 

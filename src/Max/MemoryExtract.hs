@@ -17,6 +17,7 @@ import Data.Aeson
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_, traverse_)
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -38,6 +39,10 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (conversationScopeFor)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
+import Max.MaintenanceLease
+  ( MaintenanceDomain (MemoryDreamMaintenance),
+    withMaintenanceLease,
+  )
 import Max.MemoryStore
   ( ExpectedVersion (..),
     MemoryActor (..),
@@ -46,16 +51,18 @@ import Max.MemoryStore
     MemoryId (..),
     MemoryItem (..),
     MemoryMaintenanceCandidate (..),
+    MemoryMaintenanceEntry (..),
     MemoryMutationResult (..),
     MemoryScope (..),
     MemoryUpdate (..),
     MemoryVersion (..),
-    archiveMemory,
-    listMemories,
+    archiveMemoryWithEvidence,
     listMemoryMaintenanceCandidates,
+    listMemoryMaintenanceEntries,
     memoryNamespace,
     parseScope,
     scopeText,
+    supersedeMemoryWithEvidence,
     updateMemory,
   )
 import Max.Time (fmtDate)
@@ -66,8 +73,9 @@ import OneBot.Types (GroupId (..))
 -- | One operation the extractor model may emit.
 data ExtractOp
   = OpAdd !Text !(Maybe Int64) !Text -- scope, user_id (scope=user), content
-  | OpUpdate !MemoryId !MemoryVersion !Text
-  | OpDelete !MemoryId !MemoryVersion
+  | OpUpdate !MemoryId !MemoryVersion !Text !Text
+  | OpArchive !MemoryId !MemoryVersion !Text
+  | OpSupersede !MemoryId !MemoryVersion !MemoryId !Text
   deriving stock (Show, Eq)
 
 instance FromJSON ExtractOp where
@@ -75,9 +83,27 @@ instance FromJSON ExtractOp where
     action <- o .: "action"
     case action :: Text of
       "add" -> OpAdd <$> o .: "scope" <*> o .:? "user_id" <*> o .: "content"
-      "update" -> OpUpdate <$> o .: "id" <*> o .: "version" <*> o .: "content"
-      "delete" -> OpDelete <$> o .: "id" <*> o .: "version"
+      "update" ->
+        OpUpdate
+          <$> o .: "id"
+          <*> o .: "version"
+          <*> o .: "content"
+          <*> (fromMaybe "legacy maintenance update" <$> o .:? "reason")
+      "delete" -> parseArchive "legacy maintenance delete" o
+      "archive" -> parseArchive "maintenance archive" o
+      "supersede" ->
+        OpSupersede
+          <$> o .: "id"
+          <*> o .: "version"
+          <*> o .: "replacement_id"
+          <*> (fromMaybe "maintenance supersede" <$> o .:? "reason")
       other -> fail ("unknown action: " <> T.unpack other)
+    where
+      parseArchive fallback o =
+        OpArchive
+          <$> o .: "id"
+          <*> o .: "version"
+          <*> (fromMaybe fallback <$> o .:? "reason")
 
 -- | Parse the model's output into ops: strip code fences, find the
 -- first @[@ .. last @]@, decode.
@@ -121,14 +147,20 @@ dreamHourLocal = 4
 -- over an already-tidy scope is a cheap "[]".
 dreamWorker ::
   (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  Text -> -- process-unique lease owner
   Text -> -- extractor profile
   TimeZone ->
   Eff es ()
-dreamWorker profile tz = localDomain "memx-dream" . forever $ do
+dreamWorker owner profile tz = localDomain "memx-dream" . forever $ do
   liftIO (sleepUntilHour tz dreamHourLocal)
-  night `catchSync` \e ->
+  leasedNight `catchSync` \e ->
     logAttention "dream: night crashed" $ object ["error" .= T.pack (show e)]
   where
+    leasedNight =
+      withMaintenanceLease MemoryDreamMaintenance owner dreamLeaseSeconds (const night) >>= \case
+        Nothing -> logInfo "dream: another worker owns maintenance lease" (object [])
+        Just () -> pure ()
+
     night = do
       now <- liftIO getCurrentTime
       candidates <- listMemoryMaintenanceCandidates dreamMinEntries
@@ -151,6 +183,9 @@ dreamWorker profile tz = localDomain "memx-dream" . forever $ do
                 `catchSync` \e ->
                   logAttention "dream: scope crashed" $
                     object ["scope_id" .= sid, "error" .= T.pack (show e)]
+
+dreamLeaseSeconds :: Int
+dreamLeaseSeconds = 6 * 60 * 60
 
 -- | Sleep until the next occurrence of @hour:00@ local time.
 sleepUntilHour :: TimeZone -> Int -> IO ()
@@ -179,20 +214,25 @@ shrinkScope ::
   Int64 ->
   Eff es ()
 shrinkScope label sys header profile scope sid gid = do
-  mems <- listMemories namespace
-  let memLine m =
-        T.pack (show m.memId.unMemoryId)
+  entries <- listMemoryMaintenanceEntries namespace
+  let memLine entry =
+        T.pack (show entry.mmeMemory.memId.unMemoryId)
           <> "@v"
-          <> T.pack (show m.memVersion.unMemoryVersion)
+          <> T.pack (show entry.mmeMemory.memVersion.unMemoryVersion)
           <> " ("
-          <> fmtDate utc m.memUpdatedAt
+          <> entry.mmeMemory.memLifecycle
+          <> maybe "" ("/" <>) entry.mmeMemory.memCategory
+          <> ", updated="
+          <> fmtDate utc entry.mmeMemory.memUpdatedAt
+          <> ", evidence="
+          <> renderMaintenanceEvidence entry
           <> "): "
-          <> m.memContent
+          <> entry.mmeMemory.memContent
       input =
         T.unlines $
           header
             <> ( ("[memories — scope=" <> scopeText scope <> " id=" <> T.pack (show sid) <> "]")
-                   : map memLine mems
+                   : map memLine entries
                )
             <> ["", "输出操作 JSON 数组："]
   chat (ChatCtx label (Just gid) Nothing) profile [MsgSystem sys, MsgUser input] [] >>= \case
@@ -217,46 +257,101 @@ shrinkScope label sys header profile scope sid gid = do
   where
     apply = \case
       OpAdd {} -> pure ()
-      OpUpdate mid version content -> case checkContent content of
+      OpUpdate mid version content reason -> case (,) <$> checkContent content <*> checkReason reason of
         Left err -> logAttention (label <> ": bad content") $ object ["error" .= err]
-        Right c -> do
+        Right (c, why) -> do
           result <-
             updateMemory
-              actor
+              (actor why)
               namespace
               mid
               (ExpectedVersion version)
-              (MemoryUpdate c (MaintenanceEvidence conversation label))
-          logInfo (label <> ": merged") $ object ["id" .= mid, "result" .= mutationResultText result, "content" .= c]
-      OpDelete mid version -> do
-        result <- archiveMemory actor namespace mid (ExpectedVersion version)
-        logInfo (label <> ": archived") $ object ["id" .= mid, "result" .= mutationResultText result]
+              (MemoryUpdate c (MaintenanceEvidence conversation why))
+          logInfo (label <> ": updated") $
+            object ["id" .= mid, "result" .= mutationResultText result, "reason" .= why, "content" .= c]
+      OpArchive mid version reason -> case checkReason reason of
+        Left err -> logAttention (label <> ": bad archive reason") $ object ["error" .= err]
+        Right why -> do
+          result <-
+            archiveMemoryWithEvidence
+              (actor why)
+              namespace
+              mid
+              (ExpectedVersion version)
+              (MaintenanceEvidence conversation why)
+          logInfo (label <> ": archived") $
+            object ["id" .= mid, "result" .= mutationResultText result, "reason" .= why]
+      OpSupersede mid version replacement reason -> case checkReason reason of
+        Left err -> logAttention (label <> ": bad supersede reason") $ object ["error" .= err]
+        Right why -> do
+          result <-
+            supersedeMemoryWithEvidence
+              (actor why)
+              namespace
+              mid
+              (ExpectedVersion version)
+              replacement
+              (MaintenanceEvidence conversation why)
+          logInfo (label <> ": superseded") $
+            object
+              [ "id" .= mid,
+                "replacement_id" .= replacement,
+                "result" .= mutationResultText result,
+                "reason" .= why
+              ]
 
     conversation = conversationScopeFor (GroupId gid)
-    actor =
+    actor why =
       MemoryActor
         (if label == "memx-dream" then ActorDreamer else ActorExtractor)
         Nothing
-        (Just label)
+        (Just why)
     namespace =
       memoryNamespace
         conversation
         scope
         sid
 
+checkReason :: Text -> Either Text Text
+checkReason raw
+  | T.null reason = Left "reason 不能为空"
+  | T.length reason > 300 = Left "reason 太长（最多 300 字）"
+  | otherwise = Right reason
+  where
+    reason = T.strip raw
+
+renderMaintenanceEvidence :: MemoryMaintenanceEntry -> Text
+renderMaintenanceEvidence entry =
+  fromMaybe "missing" entry.mmeEvidenceKind
+    <> maybe "" (("@conversation#" <>) . tshow) entry.mmeSourceConversationId
+    <> maybe "" (("/principal#" <>) . tshow) entry.mmeSourcePrincipalId
+    <> maybe "" (("/message#" <>) . tshow) entry.mmeSourceMessageId
+    <> rangePart
+    <> maybe "" (("/episode#" <>) . tshow) entry.mmeSourceEpisodeId
+    <> maybe "" ((" note=" <>) . T.take 120) entry.mmeEvidenceNote
+    <> maybe "" ((" at=" <>) . fmtDate utc) entry.mmeEvidenceAt
+  where
+    rangePart = case (entry.mmeSourceStartIngestSeq, entry.mmeSourceEndIngestSeq) of
+      (Just start, Just end) -> "/range#" <> tshow start <> "-" <> tshow end
+      _ -> ""
+    tshow = T.pack . show
+
 dreamerSystem :: Text
 dreamerSystem =
   T.unlines
-    [ "你在夜间整理一个 QQ bot 的长期记忆库（关于某个群或某个人；每条带 id 和",
-      "最后更新日期，今天的日期在输入头部）。做四类整理，能不动就不动：",
-      "  - 同主题/重叠的条目 → 合并：对其中一条 update 成合并后的表述，其余 delete。",
-      "  - 明显过时、或被更新的条目取代的 → delete。",
+    [ "你在夜间整理一个 QQ bot 的长期记忆库。每条带稳定 id、version、lifecycle、",
+      "最后更新日期和当前版本的来源 evidence；今天的日期在输入头部。证据不足就不动。",
+      "  - 同主题/重叠条目 → 先 update 保留项，再把其余项 supersede 到保留项。",
+      "  - 新事实有更晚、更明确的 message/range/episode evidence，取代旧事实 →",
+      "    supersede 旧项到新项；不能仅凭措辞更像真的来判断。",
+      "  - 明确有期限且已经过期、又没有替代项的事实 → archive。",
       "  - 条目内容里的相对时间（\"最近\"\"上周\"\"昨天\"）→ 按该条的更新日期换算，",
       "    update 成绝对日期。",
-      "  - 互相矛盾的条目 → 保留较新的事实，update 完善它，delete 旧的。",
-      "没什么可整理就输出 []。最多 12 个操作。合并后的 content 用第三人称陈述句，",
-      "≤300 字，自包含。",
-      "只输出 JSON 数组，只允许 update / delete：",
-      "  {\"action\":\"update\",\"id\":5,\"version\":2,\"content\":\"...\"}",
-      "  {\"action\":\"delete\",\"id\":5,\"version\":2}"
+      "lifecycle=permanent 的条目绝不能修改、归档或 supersede。没什么可整理就输出 []。",
+      "最多 12 个操作；按 update 在前、依赖它的 supersede 在后的顺序。content 用第三人称",
+      "陈述句，≤300 字且自包含。每个操作必须给出基于输入 evidence/date 的具体 reason。",
+      "只输出 JSON 数组，只允许：",
+      "  {\"action\":\"update\",\"id\":5,\"version\":2,\"content\":\"...\",\"reason\":\"...\"}",
+      "  {\"action\":\"supersede\",\"id\":6,\"version\":1,\"replacement_id\":5,\"reason\":\"...\"}",
+      "  {\"action\":\"archive\",\"id\":7,\"version\":3,\"reason\":\"...\"}"
     ]

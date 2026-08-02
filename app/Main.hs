@@ -35,8 +35,8 @@ import Max.Effects.Outbound (Outbound, runOutbound)
 import Max.Effects.PlatformApi (PlatformApi, qqBackend, runPlatformApi)
 import Max.Embedder (embedWorker)
 import Max.Embedding (newEmbedClient)
-import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.Env (BotEnv (..))
+import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
@@ -262,6 +262,7 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
       logInfo "migrations applied" $
         object ["files" .= applied]
     env :: BotEnv <- ask
+    let maintenanceOwner = "max/" <> T.pack (show env.beStartedAt) <> "/" <> T.pack (show mainTid)
     -- The skill cache is authoritative once loaded (write-through, same
     -- rule as sessions), so it has to fill before the first dispatch or
     -- the admin server can consult it.
@@ -283,7 +284,7 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
             -- UserInterrupt on main to start graceful unwinding.
             worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
           ]
-            <> [ worker "embeddings" OptionalWorker (embedWorker embed)
+            <> [ worker "embeddings" OptionalWorker (embedWorker maintenanceOwner embed)
                | embed <- maybeToList env.beEmbed
                ]
             <> [ worker
@@ -304,7 +305,7 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
                    (historianWorker profile cfg.llm cfg.timezone env.beTasks (defaultModelName cfg.llm) scheduler)
                | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beEpisodeScheduler)
                ]
-            <> [ worker "memory-dream" OptionalWorker (dreamWorker profile cfg.timezone)
+            <> [ worker "memory-dream" OptionalWorker (dreamWorker maintenanceOwner profile cfg.timezone)
                | profile <- maybeToList cfg.memoryExtractProfile
                ]
             <> [ worker

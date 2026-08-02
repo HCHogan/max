@@ -114,7 +114,12 @@ Commands/synthetic/forward rows remain in range coverage before transcript
 filtering, and active ranges have a database non-overlap constraint. The legacy
 deployment boundary can be backfilled explicitly without rewinding the live
 cursor. A nightly dream pass (4am local) remains a separate semantic-memory
-maintenance lifecycle.
+maintenance lifecycle. It reads the current version together with its source
+evidence, requires a concrete evidence/date reason for every change, updates a
+chosen keeper before superseding duplicates, and archives only clearly expired
+facts without a replacement. Every operation is a scoped MemoryStore CAS that
+appends a version, maintenance evidence, and audit record; automatic actors
+cannot mutate permanent memory.
 
 During implementation, prompt reads can be exercised per conversation with
 the temporary `unbounded_context_groups` development gate. An enrolled conversation takes the newest active
@@ -199,6 +204,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
+| Maintenance ownership | independently fenced PostgreSQL leases serialize embedding, memory-dream, and context-rebuild domains without making unrelated maintenance jobs block one another |
 
 | Lost on restart | Why |
 |---|---|

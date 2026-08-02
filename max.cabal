@@ -122,6 +122,7 @@ library
         Max.Log
         Max.LogBuffer
         Max.MediaCaption
+        Max.MaintenanceLease
         Max.MemoryExtract
         Max.MemoryStore
         Max.ModelCatalog
@@ -358,6 +359,7 @@ test-suite max-test-db
         Max.DB.MediaSpec
         Max.MemoryStoreSpec
         Max.MemoryStoreMigrationSpec
+        Max.MaintenanceLeaseSpec
         Max.DB.MessageSpec
         Max.DB.ReminderSpec
         Max.PromptIntegrationSpec

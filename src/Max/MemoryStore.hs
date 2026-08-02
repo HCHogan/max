@@ -21,6 +21,7 @@ module Max.MemoryStore
     MemoryUpdate (..),
     MemoryMutationResult (..),
     MemoryItem (..),
+    MemoryMaintenanceEntry (..),
     MemoryMaintenanceCandidate (..),
     PendingMemoryEmbedding (..),
     scopeText,
@@ -42,10 +43,12 @@ module Max.MemoryStore
     updateMemory,
     updateVisibleMemory,
     archiveMemory,
+    archiveMemoryWithEvidence,
     archiveVisibleMemory,
     archiveMemoryAdmin,
     makeMemoryPermanent,
     supersedeMemory,
+    supersedeMemoryWithEvidence,
     evictOldest,
     markMemoryEmbedded,
     listPendingMemoryEmbeddings,
@@ -54,6 +57,7 @@ module Max.MemoryStore
     findNearestMemory,
     searchVisibleMemories,
     listMemoryMaintenanceCandidates,
+    listMemoryMaintenanceEntries,
   )
 where
 
@@ -202,6 +206,47 @@ data MemoryMaintenanceCandidate = MemoryMaintenanceCandidate
     maintenanceCount :: !Int
   }
   deriving stock (Show, Eq)
+
+-- | One current memory projection plus the newest evidence attached to that
+-- exact version.  Dreamer decisions are made from this shape rather than from
+-- content/date alone, so provenance is present both before and after a
+-- maintenance mutation.
+data MemoryMaintenanceEntry = MemoryMaintenanceEntry
+  { mmeMemory :: !MemoryItem,
+    mmeEvidenceKind :: !(Maybe Text),
+    mmeSourceConversationId :: !(Maybe Int64),
+    mmeSourcePrincipalId :: !(Maybe Int64),
+    mmeSourceMessageId :: !(Maybe Int64),
+    mmeSourceStartIngestSeq :: !(Maybe Int64),
+    mmeSourceEndIngestSeq :: !(Maybe Int64),
+    mmeSourceEpisodeId :: !(Maybe Int64),
+    mmeEvidenceNote :: !(Maybe Text),
+    mmeEvidenceAt :: !(Maybe UTCTime)
+  }
+  deriving stock (Show, Eq)
+
+instance FromRow MemoryMaintenanceEntry where
+  fromRow =
+    MemoryMaintenanceEntry
+      <$> ( MemoryItem
+              <$> field
+              <*> field
+              <*> field
+              <*> field
+              <*> field
+              <*> field
+              <*> field
+              <*> field
+          )
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
 
 data PendingMemoryEmbedding = PendingMemoryEmbedding
   { pendingMemoryId :: !MemoryId,
@@ -553,6 +598,24 @@ archiveMemory actor ns mid expected = do
   let (scope, sid, gid) = namespaceParts ns
   runLifecycleMutation actor "archive" MemoryArchived Nothing (NamespaceTarget mid expected scope sid gid)
 
+archiveMemoryWithEvidence ::
+  (WithConnection :> es, IOE :> es) =>
+  MemoryActor ->
+  MemoryNamespace ->
+  MemoryId ->
+  ExpectedVersion ->
+  MemoryEvidence ->
+  Eff es MemoryMutationResult
+archiveMemoryWithEvidence actor ns mid expected evidence = do
+  let (scope, sid, gid) = namespaceParts ns
+  runLifecycleMutationWithEvidence
+    actor
+    "archive"
+    MemoryArchived
+    Nothing
+    (NamespaceTarget mid expected scope sid gid)
+    (Just evidence)
+
 archiveVisibleMemory ::
   (WithConnection :> es, IOE :> es) =>
   MemoryActor ->
@@ -607,6 +670,28 @@ supersedeMemory actor ns mid expected replacement = do
         (Just replacement)
         (NamespaceTarget mid expected scope sid gid)
 
+supersedeMemoryWithEvidence ::
+  (WithConnection :> es, IOE :> es) =>
+  MemoryActor ->
+  MemoryNamespace ->
+  MemoryId ->
+  ExpectedVersion ->
+  MemoryId ->
+  MemoryEvidence ->
+  Eff es MemoryMutationResult
+supersedeMemoryWithEvidence actor ns mid expected replacement evidence = do
+  let (scope, sid, gid) = namespaceParts ns
+  if mid == replacement
+    then pure MemoryMutationRejected
+    else
+      runLifecycleMutationWithEvidence
+        actor
+        "supersede"
+        MemorySuperseded
+        (Just replacement)
+        (NamespaceTarget mid expected scope sid gid)
+        (Just evidence)
+
 runLifecycleMutation ::
   (WithConnection :> es, IOE :> es) =>
   MemoryActor ->
@@ -616,8 +701,27 @@ runLifecycleMutation ::
   MutationTarget ->
   Eff es MemoryMutationResult
 runLifecycleMutation actor operation lifecycle replacement target = do
+  runLifecycleMutationWithEvidence actor operation lifecycle replacement target Nothing
+
+runLifecycleMutationWithEvidence ::
+  (WithConnection :> es, IOE :> es) =>
+  MemoryActor ->
+  Text ->
+  MemoryLifecycle ->
+  Maybe MemoryId ->
+  MutationTarget ->
+  Maybe MemoryEvidence ->
+  Eff es MemoryMutationResult
+runLifecycleMutationWithEvidence actor operation lifecycle replacement target mEvidence = do
   let (whereSql, targetActions, conversationId) = targetPredicate target
       (replacementSql, replacementActions) = replacementPredicate target replacement
+      evidenceSql = case mEvidence of
+        Nothing -> ""
+        Just _ ->
+          ", evidenced AS ( INSERT INTO memory_evidence "
+            <> " (memory_id, memory_version, evidence_kind, source_conversation_id, source_principal_id, "
+            <> " source_message_id, source_start_ingest_seq, source_end_ingest_seq, source_episode_id, note) "
+            <> " SELECT id, version, ?, ?, ?, ?, ?, ?, ?, ? FROM updated)"
       sql =
         "WITH updated AS ( UPDATE memories "
           <> " SET lifecycle = ?, superseded_by = ?, version = version + 1, updated_at = now() "
@@ -629,7 +733,9 @@ runLifecycleMutation actor operation lifecycle replacement target = do
           <> "), versioned AS ( INSERT INTO memory_versions "
           <> " (memory_id, version, content, lifecycle, category, superseded_by, created_at) "
           <> " SELECT id, version, content, lifecycle, category, superseded_by, updated_at FROM updated"
-          <> "), audited AS ( INSERT INTO memory_mutations "
+          <> ")"
+          <> evidenceSql
+          <> ", audited AS ( INSERT INTO memory_mutations "
           <> " (memory_id, from_version, to_version, operation, actor_kind, actor_principal_id, conversation_id, reason) "
           <> " SELECT id, version - 1, version, ?, ?, ?, NULLIF(?, 0), ? FROM updated"
           <> ") SELECT id, version, scope, scope_id, content, lifecycle, category, updated_at FROM updated"
@@ -637,14 +743,17 @@ runLifecycleMutation actor operation lifecycle replacement target = do
         [PG.toField (lifecycleText lifecycle), PG.toField replacement]
           <> targetActions
           <> replacementActions
-          <> [ PG.toField (actorMayMutatePermanent actor),
-               PG.toField operation,
+          <> [PG.toField (actorMayMutatePermanent actor)]
+          <> maybe [] (evidenceActions . evidenceParts) mEvidence
+          <> [ PG.toField operation,
                PG.toField (actorText actor.actorKind),
                PG.toField actor.actorPrincipalId,
                PG.toField conversationId,
                PG.toField actor.actorReason
              ]
-  mutationResult <$> query (fromStringQuery sql) params
+  if maybe True (evidenceAllowed actor conversationId) mEvidence
+    then mutationResult <$> query (fromStringQuery sql) params
+    else pure MemoryMutationRejected
 
 replacementPredicate :: MutationTarget -> Maybe MemoryId -> (String, [PG.Action])
 replacementPredicate _ Nothing = ("", [])
@@ -834,6 +943,34 @@ listMemoryMaintenanceCandidates minimumEntries = do
       \ HAVING count(*) >= ? AND max(updated_at) > now() - interval '49 hours'"
       (Only minimumEntries)
   pure [MemoryMaintenanceCandidate scope sid gid count | (scope, sid, gid, count) <- rows]
+
+listMemoryMaintenanceEntries ::
+  (WithConnection :> es, IOE :> es) =>
+  MemoryNamespace ->
+  Eff es [MemoryMaintenanceEntry]
+listMemoryMaintenanceEntries ns = do
+  let (scope, sid, gid) = namespaceParts ns
+  query
+    "SELECT memory.id, memory.version, memory.scope, memory.scope_id, \
+    \       memory.content, memory.lifecycle, memory.category, memory.updated_at, \
+    \       evidence.evidence_kind, evidence.source_conversation_id, \
+    \       evidence.source_principal_id, evidence.source_message_id, \
+    \       evidence.source_start_ingest_seq, evidence.source_end_ingest_seq, \
+    \       evidence.source_episode_id, evidence.note, evidence.created_at \
+    \ FROM memories AS memory \
+    \ LEFT JOIN LATERAL ( \
+    \   SELECT evidence_kind, source_conversation_id, source_principal_id, \
+    \          source_message_id, source_start_ingest_seq, source_end_ingest_seq, \
+    \          source_episode_id, note, created_at \
+    \   FROM memory_evidence \
+    \   WHERE memory_id = memory.id AND memory_version = memory.version \
+    \   ORDER BY id DESC LIMIT 1 \
+    \ ) AS evidence ON true \
+    \ WHERE memory.scope = ? AND memory.scope_id = ? \
+    \   AND (memory.scope = 'group' OR memory.source_group_id = ?) \
+    \   AND memory.lifecycle IN ('active', 'permanent') \
+    \ ORDER BY memory.updated_at, memory.id"
+    (scope, sid, gid)
 
 data EvidenceParts = EvidenceParts
   { evidenceKind :: !Text,

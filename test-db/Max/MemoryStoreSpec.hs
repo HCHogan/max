@@ -156,6 +156,53 @@ spec pool = before_ (truncateAll pool) $
             (Only old.memId)
       (target :: [Only MemoryId]) `shouldBe` [Only replacement.memId]
 
+    it "presents current evidence to maintenance and records lifecycle reasons on the new version" $ do
+      old <- withDb pool $ createMemory extractor nsA (activeDraft evidenceA "old preference")
+      replacement <-
+        withDb pool $
+          createMemory extractor nsA (activeDraft (MessageEvidence scopeA (Just 3001) 9002) "new preference")
+      entries <- withDb pool $ listMemoryMaintenanceEntries nsA
+      let oldEntry = filter ((== old.memId) . (.mmeMemory.memId)) entries
+      oldEntry `shouldSatisfy` \case
+        [entry] ->
+          entry.mmeEvidenceKind == Just "message"
+            && entry.mmeSourceConversationId == Just 100
+            && entry.mmeSourceMessageId == Just 9001
+        _ -> False
+
+      result <-
+        withDb pool $
+          supersedeMemoryWithEvidence
+            dreamer
+            nsA
+            old.memId
+            (ExpectedVersion old.memVersion)
+            replacement.memId
+            (MaintenanceEvidence scopeA "message 9002 explicitly replaces message 9001")
+      superseded <- case result of
+        MemoryMutationApplied value -> pure value
+        MemoryMutationRejected -> expectationFailure "evidenced supersede rejected" >> pure old
+      superseded.memVersion `shouldBe` MemoryVersion 2
+      superseded.memLifecycle `shouldBe` "superseded"
+
+      evidence <-
+        withDb pool $
+          query
+            "SELECT evidence_kind, source_conversation_id, note \
+            \ FROM memory_evidence WHERE memory_id = ? AND memory_version = 2"
+            (Only old.memId)
+      (evidence :: [(Text, Maybe Int64, Maybe Text)])
+        `shouldBe` [("maintenance", Just 100, Just "message 9002 explicitly replaces message 9001")]
+
+      audit <-
+        withDb pool $
+          query
+            "SELECT operation, actor_kind, reason FROM memory_mutations \
+            \ WHERE memory_id = ? AND to_version = 2"
+            (Only old.memId)
+      (audit :: [(Text, Text, Maybe Text)])
+        `shouldBe` [("supersede", "dreamer", Just "integration test")]
+
     it "rejects evidence whose origin does not match the authorized namespace" $ do
       let foreignEvidence = MessageEvidence scopeB (Just 3001) 9002
       withDb pool (createMemory extractor nsA (activeDraft foreignEvidence "bad provenance"))

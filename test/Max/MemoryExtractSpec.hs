@@ -1,10 +1,6 @@
 module Max.MemoryExtractSpec (spec) where
 
 import Data.Time (addUTCTime, getCurrentTime)
-import Max.MemoryExtract
-  ( ExtractOp (..),
-    parseOps,
-  )
 import Max.EpisodeScheduler
   ( awaitDueEpisode,
     bumpEpisode,
@@ -13,6 +9,10 @@ import Max.EpisodeScheduler
     newEpisodeScheduler,
     releaseEpisodeClaim,
     retryEpisodeAt,
+  )
+import Max.MemoryExtract
+  ( ExtractOp (..),
+    parseOps,
   )
 import Max.MemoryStore (MemoryId (..), MemoryVersion (..))
 import OneBot.Types (GroupId (..))
@@ -53,18 +53,29 @@ spec = do
 
     it "parses update and delete" $
       parseOps "[{\"action\":\"update\",\"id\":5,\"version\":2,\"content\":\"新内容\"},{\"action\":\"delete\",\"id\":7,\"version\":4}]"
-        `shouldBe` Right [OpUpdate (MemoryId 5) (MemoryVersion 2) "新内容", OpDelete (MemoryId 7) (MemoryVersion 4)]
+        `shouldBe` Right
+          [ OpUpdate (MemoryId 5) (MemoryVersion 2) "新内容" "legacy maintenance update",
+            OpArchive (MemoryId 7) (MemoryVersion 4) "legacy maintenance delete"
+          ]
+
+    it "parses evidence-reasoned supersede and archive operations" $
+      parseOps
+        "[{\"action\":\"supersede\",\"id\":7,\"version\":4,\"replacement_id\":5,\"reason\":\"newer message evidence\"},{\"action\":\"archive\",\"id\":8,\"version\":1,\"reason\":\"dated commitment expired\"}]"
+        `shouldBe` Right
+          [ OpSupersede (MemoryId 7) (MemoryVersion 4) (MemoryId 5) "newer message evidence",
+            OpArchive (MemoryId 8) (MemoryVersion 1) "dated commitment expired"
+          ]
 
     it "accepts an empty array" $
       parseOps "[]" `shouldBe` Right []
 
     it "strips markdown code fences" $
       parseOps "```json\n[{\"action\":\"delete\",\"id\":3,\"version\":1}]\n```"
-        `shouldBe` Right [OpDelete (MemoryId 3) (MemoryVersion 1)]
+        `shouldBe` Right [OpArchive (MemoryId 3) (MemoryVersion 1) "legacy maintenance delete"]
 
     it "tolerates prose around the array" $
       parseOps "好的，以下是操作：\n[{\"action\":\"delete\",\"id\":3,\"version\":1}] 完毕"
-        `shouldBe` Right [OpDelete (MemoryId 3) (MemoryVersion 1)]
+        `shouldBe` Right [OpArchive (MemoryId 3) (MemoryVersion 1) "legacy maintenance delete"]
 
     it "add without user_id defaults later (parses as Nothing)" $
       parseOps "[{\"action\":\"add\",\"scope\":\"group\",\"content\":\"c\"}]"

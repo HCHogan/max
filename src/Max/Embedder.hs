@@ -32,6 +32,10 @@ import Max.Embedding
     embeddingModelId,
     makeEmbeddingRecord,
   )
+import Max.MaintenanceLease
+  ( MaintenanceDomain (EmbeddingMaintenance),
+    withMaintenanceLease,
+  )
 import Max.MemoryStore
   ( PendingMemoryEmbedding (..),
     listPendingMemoryEmbeddings,
@@ -59,13 +63,19 @@ errorMicros = 60_000_000
 embedWorker ::
   forall es.
   (WithConnection :> es, Log :> es, IOE :> es) =>
+  Text ->
   EmbedClient ->
   Eff es ()
-embedWorker client = forever $ do
-  tick `catchSync` \e -> do
+embedWorker owner client = forever $ do
+  runLeasedTick `catchSync` \e -> do
     logAttention "embed: tick crashed" $ object ["error" .= T.pack (show e)]
     liftIO (threadDelay errorMicros)
   where
+    runLeasedTick =
+      withMaintenanceLease EmbeddingMaintenance owner embeddingLeaseSeconds (const tick) >>= \case
+        Nothing -> liftIO (threadDelay idleMicros)
+        Just () -> pure ()
+
     tick = do
       -- Recent-first so fresh messages become searchable immediately
       -- while the historical backfill trickles along behind.
@@ -179,3 +189,6 @@ embedWorker client = forever $ do
     consistentRecords records@(first : rest)
       | all ((== first.erDimensions) . (.erDimensions)) rest = Right records
       | otherwise = Left "embedding batch contains inconsistent dimensions"
+
+embeddingLeaseSeconds :: Int
+embeddingLeaseSeconds = 300
