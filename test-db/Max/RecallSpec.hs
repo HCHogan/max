@@ -4,6 +4,7 @@ import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.List (nub, sort)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
@@ -62,6 +63,22 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
 
     crossScope <- withDb pool $ searchRecall (currentConversationRecall scopeB) "no lexical overlap" (Just queryEmbedding) 30
     crossScope `shouldBe` []
+
+  it "narrows compatibility searches without widening conversation visibility" $ do
+    seedRecallFixture pool
+    let policyA = currentConversationRecall scopeA
+        policyB = currentConversationRecall scopeB
+        messageCorpora = Set.fromList [RecallMessages, RecallPins, RecallCaptions]
+    messageHits <- withDb pool $ searchRecallIn policyA messageCorpora "tea" Nothing 30
+    sort (map (.rhSource) messageHits) `shouldBe` ["caption", "message", "pin"]
+    messageHits `shouldSatisfy` all ((/= Nothing) . (.rhMessageId))
+
+    memoryHits <- withDb pool $ searchRecallIn policyA (Set.singleton RecallMemories) "tea" Nothing 30
+    memoryHits `shouldSatisfy` (not . null)
+    memoryHits `shouldSatisfy` all (\hit -> hit.rhSource == "memory" && hit.rhMemoryId /= Nothing)
+
+    foreignMemoryHits <- withDb pool $ searchRecallIn policyB (Set.singleton RecallMemories) "tea" Nothing 30
+    foreignMemoryHits `shouldBe` []
 
 seedRecallFixture :: DbPool -> IO ()
 seedRecallFixture pool = do

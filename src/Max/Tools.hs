@@ -16,8 +16,9 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Foldable (asum)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust)
 import Data.Ord (clamp)
+import Data.Set qualified as Set
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -36,7 +37,7 @@ import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, EmbeddingRecord (..), embedTexts, makeEmbeddingRecord)
 import Max.EpisodeStore (EpisodeExpansion (..), SourceRange (..), episodeHandleText, expandEpisode, parseEpisodeHandle)
 import Max.Prompt (tagMediaMarkers)
-import Max.Recall (RecallHit (..), searchRecall)
+import Max.Recall (RecallCorpus (..), RecallHit (..), searchRecall, searchRecallIn)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolGroupId)
 import OneBot.Action (Action (..), Response (..))
@@ -101,8 +102,8 @@ getMessageByIdTool tz dc =
 --------------------------------------------------------------------------------
 -- search_messages
 
-searchMessagesTool :: (WithConnection :> es, IOE :> es) => TimeZone -> Maybe EmbedClient -> GroupId -> Tool es
-searchMessagesTool tz mEmbed (GroupId gid) =
+searchMessagesTool :: (WithConnection :> es, Log :> es, IOE :> es) => TimeZone -> Maybe EmbedClient -> GroupId -> Tool es
+searchMessagesTool tz mEmbed groupId@(GroupId gid) =
   Tool
     { toolName = "search_messages",
       toolDescription =
@@ -164,21 +165,38 @@ searchMessagesTool tz mEmbed (GroupId gid) =
           ],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right sa ->
-          let run f mVec = fmap (toJSON . map (historyItemSummary tz . tagMediaMarkers)) <$> runSearch f mVec
-           in case toFilter sa of
-                Left e -> pure (Left e)
-                Right f -> case (sa.saSemantic, mEmbed) of
-                  (Nothing, _) -> run f Nothing
-                  (Just _, Nothing) -> pure (Left "semantic 搜索未启用（没有配置 embedding）")
-                  (Just q, Just ec) -> do
-                    evec <- liftIO (embedTexts ec [q])
-                    case evec of
-                      Left err -> pure (Left ("embedding failed: " <> err))
-                      Right [v] -> case makeEmbeddingRecord ec q v of
+        Right sa -> case compatibilityRecallQuery sa of
+          Just (queryText, wantsSemantic) -> case (wantsSemantic, mEmbed) of
+            (True, Nothing) -> pure (Left "semantic 搜索未启用（没有配置 embedding）")
+            _ -> do
+              embedding <-
+                if wantsSemantic
+                  then bestEffortRecallEmbedding "search_messages" mEmbed queryText
+                  else pure Nothing
+              let scope = conversationScopeFor groupId
+                  corpora = Set.fromList [RecallMessages, RecallPins, RecallCaptions]
+              hits <- searchRecallIn (currentConversationRecall scope) corpora queryText embedding sa.saLimit
+              items <-
+                catMaybes
+                  <$> traverse
+                    (\hit -> maybe (pure Nothing) (fetchMessageInScope scope) hit.rhMessageId)
+                    hits
+              pure . Right . toJSON $ map (historyItemSummary tz . tagMediaMarkers) items
+          Nothing ->
+            let run f mVec = fmap (toJSON . map (historyItemSummary tz . tagMediaMarkers)) <$> runSearch f mVec
+             in case toFilter sa of
+                  Left e -> pure (Left e)
+                  Right f -> case (sa.saSemantic, mEmbed) of
+                    (Nothing, _) -> run f Nothing
+                    (Just _, Nothing) -> pure (Left "semantic 搜索未启用（没有配置 embedding）")
+                    (Just q, Just ec) -> do
+                      evec <- liftIO (embedTexts ec [q])
+                      case evec of
                         Left err -> pure (Left ("embedding failed: " <> err))
-                        Right record -> run f (Just record)
-                      Right _ -> pure (Left "embedding failed: unexpected result shape")
+                        Right [v] -> case makeEmbeddingRecord ec q v of
+                          Left err -> pure (Left ("embedding failed: " <> err))
+                          Right record -> run f (Just record)
+                        Right _ -> pure (Left "embedding failed: unexpected result shape")
     }
   where
     parseArgs :: Object -> Parser SearchArgs
@@ -220,6 +238,17 @@ data SearchArgs = SearchArgs
     saSemantic :: !(Maybe Text),
     saLimit :: !Int
   }
+
+-- | The old tool remains model-visible, but ordinary text/semantic lookups
+-- now share context_search's corpus, ranking, scope, and dedup policy.  Regex,
+-- sender, time-range, and combined exact+semantic requests retain the
+-- specialised SQL path because those are constraints rather than recall.
+compatibilityRecallQuery :: SearchArgs -> Maybe (Text, Bool)
+compatibilityRecallQuery sa
+  | isJust sa.saSenderId || any isJust [sa.saRegex, sa.saSender, sa.saAfter, sa.saBefore] = Nothing
+  | Just queryText <- sa.saQuery, Nothing <- sa.saSemantic = Just (queryText, False)
+  | Nothing <- sa.saQuery, Just semanticText <- sa.saSemantic = Just (semanticText, True)
+  | otherwise = Nothing
 
 -- | Validated filter set, times parsed.  Every field except the group
 -- and the limit is optional; present ones are AND-combined.
@@ -277,7 +306,7 @@ contextSearchTool tz mEmbed dc =
         Right (rawQuery, limit)
           | T.null (T.strip rawQuery) -> pure (Left "bad args: query cannot be blank")
           | otherwise -> do
-              embedding <- recallEmbedding rawQuery
+              embedding <- bestEffortRecallEmbedding "context_search" mEmbed rawQuery
               let scope = conversationScopeFor (toolGroupId dc)
               hits <- searchRecall (currentConversationRecall scope) rawQuery embedding limit
               pure . Right $
@@ -293,21 +322,22 @@ contextSearchTool tz mEmbed dc =
         <$> o .: "query"
         <*> (fromMaybe 10 <$> o .:? "limit")
 
-    recallEmbedding _ | Nothing <- mEmbed = pure Nothing
-    recallEmbedding queryText | Just client <- mEmbed = do
-      result <- liftIO (embedTexts client [T.strip queryText])
-      case result of
-        Right [vector] -> case makeEmbeddingRecord client (T.strip queryText) vector of
-          Right record -> pure (Just record)
-          Left err -> do
-            logAttention "context_search: invalid query embedding; using lexical recall" $ object ["error" .= err]
-            pure Nothing
-        Right _ -> do
-          logAttention "context_search: unexpected embedding shape; using lexical recall" (object [])
-          pure Nothing
-        Left err -> do
-          logAttention "context_search: embedding failed; using lexical recall" $ object ["error" .= err]
-          pure Nothing
+bestEffortRecallEmbedding :: (Log :> es, IOE :> es) => Text -> Maybe EmbedClient -> Text -> Eff es (Maybe EmbeddingRecord)
+bestEffortRecallEmbedding _ Nothing _ = pure Nothing
+bestEffortRecallEmbedding caller (Just client) queryText = do
+  result <- liftIO (embedTexts client [T.strip queryText])
+  case result of
+    Right [vector] -> case makeEmbeddingRecord client (T.strip queryText) vector of
+      Right record -> pure (Just record)
+      Left err -> do
+        logAttention (caller <> ": invalid query embedding; using lexical recall") $ object ["error" .= err]
+        pure Nothing
+    Right _ -> do
+      logAttention (caller <> ": unexpected embedding shape; using lexical recall") (object [])
+      pure Nothing
+    Left err -> do
+      logAttention (caller <> ": embedding failed; using lexical recall") $ object ["error" .= err]
+      pure Nothing
 
 recallHitSummary :: TimeZone -> RecallHit -> Value
 recallHitSummary tz hit =

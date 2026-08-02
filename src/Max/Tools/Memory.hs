@@ -30,8 +30,9 @@ where
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Ord (clamp)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
@@ -56,13 +57,14 @@ import Max.MemoryStore
     archiveVisibleMemory,
     countMemories,
     createMemory,
+    fetchVisibleMemory,
     groupMemoryNamespace,
     listMemories,
     parseScope,
-    searchVisibleMemories,
     updateVisibleMemory,
     userMemoryNamespace,
   )
+import Max.Recall (RecallCorpus (..), RecallHit (..), searchRecallIn)
 import Max.ToolContext (ToolContext, toolGroupId, toolMessageId, toolUserId)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
@@ -359,9 +361,9 @@ searchTool dc ec =
     { toolName = "memory_search",
       toolDescription =
         T.unwords
-          [ "在本群的长期记忆里做语义搜索（谁擅长X、之前定过什么）。",
-            "只覆盖本群的群记忆和成员在本群留下的个人记忆；系统提示里",
-            "只注入了最近的条目，翻旧账用这个。"
+          [ "context_search 的长期记忆兼容入口（谁擅长X、之前定过什么）。",
+            "使用相同的本会话 scope、混合排序和 provenance 去重，但只返回 memory；",
+            "新调用优先使用 context_search。"
           ],
       toolSchema =
         object
@@ -391,14 +393,19 @@ searchTool dc ec =
             Right [vec] -> case makeEmbeddingRecord ec q vec of
               Left err -> pure $ Left ("embedding failed: " <> err)
               Right record -> do
-                -- Confined to this conversation.  Unscoped, this ranked
-                -- every memory in the database — every other group's
-                -- facts, every other person's — and handed the model
-                -- whatever scored highest, which is how a fact learned in
-                -- one group surfaced in another.  Group rows partition on
-                -- scope_id; user rows on where they were learned.
                 let policy = currentConversationRecall (conversationScopeFor (toolGroupId dc))
-                rows <- searchVisibleMemories policy record (clamp (1, 20) lim)
+                hits <-
+                  searchRecallIn
+                    policy
+                    (Set.singleton RecallMemories)
+                    q
+                    (Just record)
+                    (clamp (1, 20) lim)
+                rows <-
+                  catMaybes
+                    <$> traverse
+                      (\hit -> maybe (pure Nothing) (fetchVisibleMemory policy) hit.rhMemoryId)
+                      hits
                 pure $ Right (toJSON (map fullSummary rows))
             Right _ -> pure $ Left "embedding failed: unexpected result shape"
     }

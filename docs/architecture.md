@@ -166,6 +166,16 @@ embedding fails, the tool logs attention and returns lexical results instead
 of failing the turn. No recall result is injected automatically; the agent
 calls this tool only when the conversation needs older detail.
 
+The model-visible `search_messages` and `memory_search` names remain as
+compatibility surfaces over the same store and policy. Ordinary text or
+semantic `search_messages` calls narrow unified recall to raw messages, pins,
+and media captions, then re-resolve each result through the current
+conversation scope. Its regex, sender, date-range, and combined
+exact-text-plus-semantic forms remain a specialised constrained SQL query.
+`memory_search` narrows unified recall to memory candidates and re-resolves
+each id through the visible MemoryStore boundary. Corpus selection is a
+code-owned narrowing operation; it cannot widen `RecallPolicy`.
+
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
 instead of waiting for a whole body. Paragraphs the model has finished with go
 out mid-generation as typed `AgentFinalStreamText` events; tool narration and

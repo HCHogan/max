@@ -7,9 +7,11 @@
 -- selector prevents one corpus from monopolising the result set and collapses
 -- the raw/pinned/caption forms of one source message.
 module Max.Recall
-  ( RecallCandidate (..),
+  ( RecallCorpus (..),
+    RecallCandidate (..),
     RecallHit (..),
     searchRecall,
+    searchRecallIn,
     selectRecallHits,
   )
 where
@@ -31,6 +33,14 @@ import Max.ConversationScope (RecallPolicy, conversationStorageId, recallConvers
 import Max.Embedding (EmbeddingRecord (..))
 import Max.EpisodeStore (EpisodeHandle)
 import Max.MemoryStore (MemoryId)
+
+data RecallCorpus
+  = RecallMemories
+  | RecallEpisodes
+  | RecallMessages
+  | RecallPins
+  | RecallCaptions
+  deriving stock (Show, Eq, Ord, Enum, Bounded)
 
 data RecallCandidate = RecallCandidate
   { rcSource :: !Text,
@@ -93,7 +103,22 @@ searchRecall ::
   Maybe EmbeddingRecord ->
   Int ->
   Eff es [RecallHit]
-searchRecall policy rawQuery embedding requestedLimit
+searchRecall policy rawQuery embedding requestedLimit =
+  searchRecallIn policy (Set.fromList [minBound .. maxBound]) rawQuery embedding requestedLimit
+
+-- | Search a code-selected subset of the unified recall corpus.  This is the
+-- compatibility boundary for the older specialised tools: callers may narrow
+-- what they present, but cannot widen the SQL visibility policy.
+searchRecallIn ::
+  (WithConnection :> es, IOE :> es) =>
+  RecallPolicy ->
+  Set.Set RecallCorpus ->
+  Text ->
+  Maybe EmbeddingRecord ->
+  Int ->
+  Eff es [RecallHit]
+searchRecallIn policy corpora rawQuery embedding requestedLimit
+  | Set.null corpora = pure []
   | T.null queryText = pure []
   | otherwise = do
       let conversationId = conversationStorageId (recallConversationScope policy)
@@ -107,9 +132,18 @@ searchRecall policy rawQuery embedding requestedLimit
             semanticCandidatesSql
             (conversationId, record.erModelId, record.erDimensions, record.erVector, candidateLimit)
       now <- liftIO getCurrentTime
-      pure (selectRecallHits now resultLimit (lexical <> semantic))
+      let allowedSources = Set.map corpusText corpora
+      pure (selectRecallHits now resultLimit (filter ((`Set.member` allowedSources) . (.rcSource)) (lexical <> semantic)))
   where
     queryText = T.strip rawQuery
+
+corpusText :: RecallCorpus -> Text
+corpusText = \case
+  RecallMemories -> "memory"
+  RecallEpisodes -> "episode"
+  RecallMessages -> "message"
+  RecallPins -> "pin"
+  RecallCaptions -> "caption"
 
 -- | Merge duplicate representations, rank with bounded weak boosts, and apply
 -- per-source quotas.  The second pass fills unused capacity only after every
