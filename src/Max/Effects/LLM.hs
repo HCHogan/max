@@ -27,7 +27,7 @@
 module Max.Effects.LLM
   ( LLM,
     LLMProfile (..),
-    LLMRegistry (..),
+    ModelCatalog,
     Protocol (..),
     parseProtocol,
 
@@ -84,7 +84,6 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.List (find)
-import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
@@ -100,121 +99,21 @@ import Effectful.Wreq qualified as W
 import GHC.Clock (getMonotonicTimeNSec)
 import Max.Http.Stream (StreamOutcome (..), streamPost)
 import Max.LLM.Stream (PartialCall (..), StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, stepResponses)
+import Max.ModelCatalog
+  ( LLMProfile (..),
+    ModelCapabilities (..),
+    ModelCatalog,
+    Protocol (..),
+    defaultModelName,
+    lookupCompletionProfile,
+    lookupModelCapabilities,
+    modelProfileNames,
+    parseProtocol,
+  )
 import Max.Util (trySync)
 import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying, replyRetryDelaysSecs)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Lens qualified as WL
-
--- | Which wire format the endpoint speaks.  Picks URL suffix, auth
--- header shape, request body structure, and response parser.
-data Protocol
-  = -- | OpenAI / OpenAI-compatible: POST @{baseUrl}/chat/completions@
-    -- with @Authorization: Bearer@.  Default — most LLM-as-a-service
-    -- ships this.
-    ProtocolOpenAI
-  | -- | Native Anthropic Messages API: POST @{baseUrl}/v1/messages@
-    -- with @x-api-key@ + @anthropic-version: 2023-06-01@.  Use this
-    -- when the endpoint only exposes Anthropic format, OR when an
-    -- OpenAI-compat proxy mangles tool-call shapes during translation
-    -- (e.g. drops @function.name@) — going native skips the lossy
-    -- translation layer.  Set 'baseUrl' to the API root (no @/v1@
-    -- suffix); we append @/v1/messages@.
-    ProtocolAnthropic
-  | -- | OpenAI Responses API: POST @{baseUrl}\/responses@ with
-    -- @Authorization: Bearer@.  Required for GPT-5.x reasoning models,
-    -- whose reasoning items must round-trip between tool calls —
-    -- chat-completions has nowhere to put them.  Run stateless:
-    -- @store: false@ + @include: reasoning.encrypted_content@, with
-    -- the response's whole @output@ array (reasoning + function
-    -- calls) replayed verbatim on the next request.
-    ProtocolResponses
-  deriving stock (Show, Eq, Enum, Bounded)
-
--- | Parse a protocol name from config (TOML / env / CLI).
--- Case-insensitive.  Returns 'Nothing' for anything other than
--- @openai@ / @anthropic@ / @responses@.
-parseProtocol :: Text -> Maybe Protocol
-parseProtocol t = case T.toLower (T.strip t) of
-  "openai" -> Just ProtocolOpenAI
-  "anthropic" -> Just ProtocolAnthropic
-  "responses" -> Just ProtocolResponses
-  "openai-responses" -> Just ProtocolResponses
-  _ -> Nothing
-
--- | A single named LLM endpoint.  Materialized from one entry of the
--- @[[llm.profiles]]@ array in TOML.
-data LLMProfile = LLMProfile
-  { -- | OpenAI: e.g. @https://api.deepseek.com/v1@; we append @/chat/completions@.
-    -- Anthropic: e.g. @https://api.anthropic.com@; we append @/v1/messages@.
-    baseUrl :: !Text,
-    apiKey :: !Text,
-    -- | Model id; @deepseek-v4-flash@, @deepseek-v4-pro@, @gpt-4o-mini@,
-    -- @claude-opus-4-6@, etc.
-    model :: !Text,
-    maxTokens :: !Int,
-    -- | 'Nothing' = omit the field entirely (server default).  Some
-    -- providers (kimi via opencode zen) reject any explicit value
-    -- other than 1.0 with a generic 400, so only send when the user
-    -- configured one.
-    temperature :: !(Maybe Double),
-    -- | Reasoning effort.  OpenAI protocol: top-level
-    -- @reasoning_effort@; Anthropic: @output_config.effort@
-    -- (low\/medium\/high\/xhigh\/max on Opus 4.5+\/Sonnet 4.6\/Fable).
-    -- 'Nothing' = omit the field — older models and many
-    -- OpenAI-compatible providers reject it outright.
-    effort :: !(Maybe Text),
-    -- | HTTP timeout for one chat completion.  LLMs are slow, default 120.
-    timeoutSeconds :: !Int,
-    -- | Wire format spoken by the endpoint.  Default 'ProtocolOpenAI'.
-    protocol :: !Protocol,
-    -- | Whether the endpoint can handle multimodal (image) content
-    -- blocks.  When 'True', 'Max.Prompt' embeds images from the
-    -- trigger and recent context as inline image blocks (OpenAI
-    -- @image_url@ / Anthropic @source:base64@); when 'False'
-    -- (default), only text is sent and images stay as @[image]@
-    -- markers.  Turn this on for Gemma 4 / GPT-4o / Claude vision
-    -- endpoints; leave off for DeepSeek (text-only).
-    multimodal :: !Bool,
-    -- | Which prompt shape to build for this profile.  'False'
-    -- (default) is the flat transcript: system + one user message, the
-    -- whole conversation as @[HH:MM \<name\> #\<id\>]:@ lines.  'True'
-    -- puts history back into real @user@\/@assistant@ turns.
-    --
-    -- The two shapes trade one hazard for the other and there is no
-    -- way to reason your way to a winner, so it is a per-profile
-    -- switch you can A\/B with @!model@.  Turns anchor style on the
-    -- bot's own past output and make it structurally impossible to
-    -- imitate the line prefix; flat removes the assistant slot a weak
-    -- model treats as a pattern to continue (a real production
-    -- incident), can't produce consecutive same-role messages, and is
-    -- the only shape where the bot's own messages carry a quotable id.
-    historyAsTurns :: !Bool,
-    -- | Read the completion incrementally over SSE, so finished
-    -- paragraphs can go out while the model is still writing.  Default
-    -- 'True'.
-    --
-    -- Per-profile purely as an escape hatch: every provider ships its
-    -- own SSE dialect (usage in a terminal frame or not at all,
-    -- @[DONE]@ or a bare @finish_reason@, keep-alive comment lines),
-    -- and when one misbehaves the fix should be a config edit rather
-    -- than a deploy.  With it off the profile takes the ordinary
-    -- request-response path and nothing about it changes.
-    --
-    -- Replaying the assistant turn is /not/ a reason to turn it off:
-    -- both protocols are designed so a stream reconstructs the message
-    -- (see 'rebuildOpenAI', 'rebuildAnthropic'), reasoning and thinking
-    -- blocks included.
-    stream :: !Bool
-  }
-  deriving stock (Show)
-
--- | The full profile registry.  'runLLM' takes one of these; downstream
--- code picks profiles by name.
-data LLMRegistry = LLMRegistry
-  { defaultName :: !Text,
-    profiles :: !(Map Text LLMProfile)
-  }
-  deriving stock (Show)
 
 -- | One block in a multimodal user message.  Maps directly to the
 -- OpenAI multimodal content-block format that ollama / vLLM /
@@ -529,7 +428,7 @@ runLLM ::
   (W.Wreq :> es, Log :> es, IOE :> es) =>
   UsageWriter ->
   CallWriter ->
-  LLMRegistry ->
+  ModelCatalog ->
   Eff (LLM : es) a ->
   Eff es a
 runLLM usageWriter callWriter reg = interpret $ \localEnv -> \case
@@ -541,17 +440,11 @@ runLLM usageWriter callWriter reg = interpret $ \localEnv -> \case
     -- single-threaded and calls the sink one frame at a time.
     localSeqUnlift localEnv $ \unlift ->
       runOneChat usageWriter callWriter reg ctx name msgs tools (Just (unlift . sink))
-  ListProfiles -> pure (Map.keys reg.profiles)
-  DefaultProfile -> pure reg.defaultName
-  ProfileEffort name -> pure $ case Map.lookup name reg.profiles of
-    Just cfg -> cfg.effort
-    Nothing -> Nothing
-  IsProfileMultimodal name -> pure $ case Map.lookup name reg.profiles of
-    Just cfg -> cfg.multimodal
-    Nothing -> False
-  IsProfileHistoryTurns name -> pure $ case Map.lookup name reg.profiles of
-    Just cfg -> cfg.historyAsTurns
-    Nothing -> False
+  ListProfiles -> pure (modelProfileNames reg)
+  DefaultProfile -> pure (defaultModelName reg)
+  ProfileEffort name -> pure (configuredEffort =<< lookupModelCapabilities name reg)
+  IsProfileMultimodal name -> pure (maybe False supportsMultimodal (lookupModelCapabilities name reg))
+  IsProfileHistoryTurns name -> pure (maybe False usesHistoryTurns (lookupModelCapabilities name reg))
 
 -- | One chat call, shared by the streaming and non-streaming
 -- operations.  A 'Just' sink means \"stream if the profile allows it\";
@@ -561,14 +454,14 @@ runOneChat ::
   (W.Wreq :> es, Log :> es, IOE :> es) =>
   UsageWriter ->
   CallWriter ->
-  LLMRegistry ->
+  ModelCatalog ->
   ChatCtx ->
   Text ->
   [ChatMessage] ->
   [ToolSpec] ->
   Maybe (Text -> Eff es ()) ->
   Eff es (Either Text ChatResponse)
-runOneChat usageWriter callWriter reg ctx name msgs tools mSink = case Map.lookup name reg.profiles of
+runOneChat usageWriter callWriter reg ctx name msgs tools mSink = case lookupCompletionProfile name reg of
   Nothing -> do
     logAttention "llm: unknown profile" $ object ["profile" .= name]
     pure $ Left ("unknown llm profile: " <> name)

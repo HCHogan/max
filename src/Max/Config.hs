@@ -53,6 +53,7 @@ import Autodocodec
     scientificCodec,
     (.=),
   )
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -61,22 +62,21 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone, minutesToTimeZone)
 import Data.Version (makeVersion)
+import Log (LogLevel (..))
 import Max.Admin (AdminConfig (..))
+import Max.CliProxy (CliProxyConfig (..))
 import Max.DB.Connection (DbConfig (..))
-import Max.Effects.LLM (LLMProfile (..), LLMRegistry (..), Protocol (..), parseProtocol)
 import Max.Embedding (EmbeddingConfig (..))
 import Max.Intent (IntentConfig (..))
-import Log (LogLevel (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
-import Max.Wechatpad (WechatpadConfig (..))
-import Max.CliProxy (CliProxyConfig (..))
+import Max.ModelCatalog (LLMProfile (..), ModelCatalog, Protocol (..), mkModelCatalog, parseProtocol)
 import Max.Tools.Search (SearchConfig (..))
+import Max.Wechatpad (WechatpadConfig (..))
 import OneBot.Server (ServerConfig (..))
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import OptEnvConf
 import Path (Abs, File, Path, toFilePath)
-import System.Directory (doesFileExist)
 import Path.IO (resolveFile')
+import System.Directory (doesFileExist)
 
 -- | Final, fully-resolved application config.
 data AppConfig = AppConfig
@@ -95,7 +95,7 @@ data AppConfig = AppConfig
     -- sit comfortably under systemd's @TimeoutStopSec@, or systemd
     -- SIGKILLs us mid-drain and the wait bought nothing.
     shutdownDrainSeconds :: !Int,
-    llm :: !LLMRegistry,
+    llm :: !ModelCatalog,
     -- | Transcript low-water mark: the message count an overflow
     -- trims back to.  Named for the knob it used to be (a fixed
     -- sliding window) and still the floor.
@@ -949,7 +949,7 @@ protocolCodec = bimapCodec parse render codec
     render ProtocolAnthropic = "anthropic"
     render ProtocolResponses = "responses"
 
-llmParser :: Parser LLMRegistry
+llmParser :: Parser ModelCatalog
 llmParser =
   mapIO materializeLLM $ subConfig "llm" $ do
     defaultName <-
@@ -1095,7 +1095,7 @@ overlayProfileParser = do
 -- | Same resolution rules as the old hand-rolled config: pick the
 -- default profile name, overlay env/CLI values onto it, apply
 -- per-field defaults, insist on api_key.
-materializeLLM :: (Maybe Text, Map Text ProfileSpec, ProfileSpec) -> IO LLMRegistry
+materializeLLM :: (Maybe Text, Map Text ProfileSpec, ProfileSpec) -> IO ModelCatalog
 materializeLLM (dn, fileProfiles, overlay) = do
   let resolvedDefault = case dn of
         Just n -> n
@@ -1111,7 +1111,7 @@ materializeLLM (dn, fileProfiles, overlay) = do
       -- it (so the error below names it).
       withDefaultProfile = Map.insertWith (\_ old -> old) resolvedDefault emptySpec withOverlay
   resolved <- Map.traverseWithKey (resolveProfile resolvedDefault) withDefaultProfile
-  pure LLMRegistry {defaultName = resolvedDefault, profiles = resolved}
+  either (fail . show) pure (mkModelCatalog resolvedDefault resolved)
   where
     resolveProfile def profName spec = do
       key <- case spec.apiKey of

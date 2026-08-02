@@ -114,6 +114,7 @@ library
         Max.LogBuffer
         Max.MediaCaption
         Max.MemoryExtract
+        Max.ModelCatalog
         Max.Platform
         Max.Prompt
         Max.PromptFlow
@@ -291,6 +292,7 @@ test-suite max-test
         Max.PlatformSpec
         Max.PromptFlowSpec
         Max.MemoryExtractSpec
+        Max.ModelCatalogSpec
         Max.PromptSpec
         Max.Sandbox.DockerSpec
         Max.Tools.FilesSpec

@@ -31,7 +31,7 @@ import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits, runAgent)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Http (Http, runHttp)
-import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, LLMRegistry (..), TokenUsage (..), runLLM)
+import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, TokenUsage (..), runLLM)
 import Max.Effects.Outbound (Outbound, runOutbound)
 import Max.Effects.PlatformApi (PlatformApi, qqBackend, runPlatformApi)
 import Max.Embedder (embedWorker)
@@ -47,6 +47,7 @@ import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.MemoryExtract (dreamWorker, memxWorker, newMemxScheduler)
+import Max.ModelCatalog (defaultModelName, modelProfileNames)
 import Max.Reminder (newReminderScheduler, reminderWorker)
 import Max.Sandbox.Registry
   ( destroyAllSandboxes,
@@ -122,7 +123,7 @@ main = do
                     beHistoryMax = cfg.historyMax,
                     beDebugDefault = cfg.debug,
                     beStickerDefault = cfg.stickersEnabled,
-                    beDefaultModel = cfg.llm.defaultName,
+                    beDefaultModel = defaultModelName cfg.llm,
                     beTimeZone = cfg.timezone,
                     beStartedAt = startedAt,
                     beSessions = sessions,
@@ -294,7 +295,7 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
             <> [ worker
                    "memory-extract"
                    OptionalWorker
-                   (memxWorker profile env.beEmbed cfg.timezone env.beSessions cfg.llm.defaultName scheduler)
+                   (memxWorker profile env.beEmbed cfg.timezone env.beSessions (defaultModelName cfg.llm) scheduler)
                | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beMemx)
                ]
             <> [ worker "memory-dream" OptionalWorker (dreamWorker profile cfg.timezone)
@@ -303,10 +304,10 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
             <> [ worker
                    "intent"
                    OptionalWorker
-                   (intentWorker intentCfg cfg.persona cfg.llm.defaultName cfg.timezone env.beSessions (dispatchProactive (Just intentState)) intentState)
+                   (intentWorker intentCfg cfg.persona (defaultModelName cfg.llm) cfg.timezone env.beSessions (dispatchProactive (Just intentState)) intentState)
                | (intentCfg, intentState) <- maybeToList ((,) <$> cfg.intent <*> mIntentSt)
                ]
-            <> [ worker "admin-server" OptionalWorker (adminServer adminCfg env (Map.keys cfg.llm.profiles) buffer)
+            <> [ worker "admin-server" OptionalWorker (adminServer adminCfg env (modelProfileNames cfg.llm) buffer)
                | (adminCfg, buffer) <- maybeToList ((,) <$> cfg.admin <*> logBuf)
                ]
             <> [ worker "call-pruner" OptionalWorker (callPruner cfg.adminCallRetentionDays)
