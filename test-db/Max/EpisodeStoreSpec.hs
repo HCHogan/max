@@ -4,6 +4,7 @@ import Control.Exception (SomeException)
 import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
+import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -11,23 +12,27 @@ import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
 import Helpers (insertRawKind, insertRawMessage, truncateAll, withDb)
-import Max.ConversationScope (ConversationScope, conversationScopeFor)
+import Max.ConversationScope (ConversationScope, conversationScopeFor, currentConversationRecall)
 import Max.ContextMaterialization
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
-import Max.DB.History (LedgerItem (..), MessageCursor (..))
+import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
 import Max.EpisodeStore
 import Max.MemoryStore (MemoryId, MemoryVersion)
 import OneBot.Types (GroupId (..))
 import Test.Hspec
 
-groupA, member, botId :: Int64
+groupA, groupB, member, botId :: Int64
 groupA = 100
+groupB = 101
 member = 2001
 botId = 1000
 
 scopeA :: ConversationScope
 scopeA = conversationScopeFor (GroupId groupA)
+
+scopeB :: ConversationScope
+scopeB = conversationScopeFor (GroupId groupB)
 
 request :: CaptureReason -> CaptureRequest
 request reason =
@@ -123,6 +128,29 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
                    ("p3", 1003, botId)
                  ]
 
+    handle <- case active of
+      compartment' : _ -> pure compartment'.activeExpandHandle
+      [] -> expectationFailure "expected active compartment" >> error "missing compartment"
+    firstPage <-
+      withDb pool (expandEpisode (currentConversationRecall scopeA) handle Nothing 2)
+        >>= requireJust "first expansion page"
+    map (\(entry :: LedgerItem) -> entry.history.messageId) firstPage.expansionMessages
+      `shouldBe` ([1001, 1002] :: [Int64])
+    firstPage.expansionHasMore `shouldBe` True
+    firstPage.expansionSourceHashMatches `shouldBe` True
+    firstPage.expansionState `shouldBe` "active"
+
+    secondPage <-
+      withDb pool (expandEpisode (currentConversationRecall scopeA) handle firstPage.expansionNextCursor 2)
+        >>= requireJust "second expansion page"
+    map (\(entry :: LedgerItem) -> entry.history.messageId) secondPage.expansionMessages
+      `shouldBe` ([1003] :: [Int64])
+    secondPage.expansionHasMore `shouldBe` False
+    secondPage.expansionNextCursor `shouldBe` Nothing
+
+    crossScope <- withDb pool (expandEpisode (currentConversationRecall scopeB) handle Nothing 100)
+    crossScope `shouldSatisfy` isNothing
+
     outcomes <-
       withDb pool $
         query
@@ -191,6 +219,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     firstValidated <- requireValid firstLease.leaseRun firstSource firstCapture
     _ <- withDb pool $ recordCaptureGenerated firstLease (captureJson firstCapture) firstCapture []
     old <- withDb pool $ publishCaptureRun scopeA firstLease firstValidated
+    oldHandle <-
+      withDb pool (listActiveCompartments scopeA) >>= \case
+        compartment' : _ -> pure compartment'.activeExpandHandle
+        [] -> expectationFailure "expected old active compartment" >> error "missing compartment"
 
     rebuildRun <-
       withDb pool (enqueueRebuildRun scopeA old "manual-rebuild-1" (request CaptureRebuild))
@@ -211,6 +243,12 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
 
     oldState <- withDb pool $ query "SELECT state, superseded_by FROM conversation_compartments WHERE id = ?" (Only old)
     (oldState :: [(Text, Maybe CompartmentId)]) `shouldBe` [("superseded", Just new)]
+    oldExpansion <-
+      withDb pool (expandEpisode (currentConversationRecall scopeA) oldHandle Nothing 100)
+        >>= requireJust "superseded episode expansion"
+    oldExpansion.expansionState `shouldBe` "superseded"
+    map (\(entry :: LedgerItem) -> entry.history.messageId) oldExpansion.expansionMessages
+      `shouldBe` ([1001, 1002, 1003] :: [Int64])
 
     -- Even a direct writer cannot reactivate an overlapping owner.  The
     -- database exclusion constraint is the final coverage guardrail.
@@ -279,7 +317,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
                     "p2"
                 | compartment <- active
                 ],
-              mdReason = "initial_canary"
+              mdReason = "initial_materialization"
             }
     withDb pool (publishContextMaterialization scopeA Nothing materialization)
       `shouldThrow` (\(_ :: SomeException) -> True)

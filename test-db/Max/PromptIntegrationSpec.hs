@@ -124,7 +124,7 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("已经办好了" `T.isInfixOf`)
       ub `shouldSatisfy` ("闲聊5" `T.isInfixOf`)
 
-    it "canaries one chronological compartment stream plus its complete raw tail" $ do
+    it "renders one chronological compartment stream plus its complete raw tail" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "settled raw one"
       insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "settled raw two"
       let scope = conversationScopeFor (GroupId groupRaw)
@@ -230,7 +230,7 @@ spec pool = before_ (truncateAll pool) $
                 trigger
       _ <- build
       initial <- withDb pool $ query "SELECT revision, reason, jsonb_array_length(items) FROM context_materializations" ()
-      (initial :: [(Int64, Text, Int)]) `shouldBe` [(1, "initial_canary", 1)]
+      (initial :: [(Int64, Text, Int)]) `shouldBe` [(1, "initial_materialization", 1)]
 
       let hugeRaw = T.replicate 10000 "unmaterialized "
       insertRawMessage pool 1002 groupRaw otherMemberRaw botRaw (timeAt 10) (Just "Bob") hugeRaw

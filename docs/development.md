@@ -85,8 +85,13 @@ cabal test max-test-db
 Without `MAX_TEST_DB_URL` the suite exits 0 (CI without a database stays green).
 Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
 The prompt integration cases also publish real active compartments, assert
-gap annotations for partial backfill, and exercise the feature-gated
-compartment-to-raw-tail cutover end to end.
+gap annotations for partial backfill, and exercise the development-gated
+compartment-to-raw-tail reader end to end. EpisodeStore cases additionally
+page opaque `context_expand` handles over the exact raw range, deny the same
+handle from another conversation, and verify that a superseded projection's
+handle remains expandable. `Max.ContextMaterializationMigrationSpec` runs 043
+over a pre-existing development revision, checking that current-state naming
+and UUID handles backfill without mutating the append-only revision ledger.
 
 ## Config: finding out where a value came from
 

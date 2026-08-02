@@ -20,7 +20,7 @@ spec pool = before_ (truncateAll pool) $ describe "ContextMaterialization" $ do
   it "CAS-publishes an exact active projection and appends every revision" $ do
     compartment <- publishFixtureCompartment pool
     let item = MaterializedCompartment compartment 1 "p1"
-        initial = MaterializationDraft fixtureEnd "context-policy/v2" [item] "initial_canary"
+        initial = MaterializationDraft fixtureEnd "context-policy/v2" [item] "initial_materialization"
     first <- withDb pool (publishContextMaterialization scope Nothing initial) >>= requireJust "first materialization"
     first.cmRevision `shouldBe` 1
     first.cmEndCursor `shouldBe` fixtureEnd
@@ -34,7 +34,7 @@ spec pool = before_ (truncateAll pool) $ describe "ContextMaterialization" $ do
     map (.mcTier) second.cmItems `shouldBe` ["p2"]
 
     versions <- withDb pool $ query "SELECT revision, reason FROM context_materialization_versions ORDER BY revision" ()
-    (versions :: [(Int64, Text)]) `shouldBe` [(1, "initial_canary"), (2, "high_water")]
+    (versions :: [(Int64, Text)]) `shouldBe` [(1, "initial_materialization"), (2, "high_water")]
     withConn pool (\conn -> execute conn "UPDATE context_materialization_versions SET reason = 'manual_rebuild' WHERE revision = 1" ())
       `shouldThrow` (\(_ :: SomeException) -> True)
 
@@ -45,7 +45,7 @@ spec pool = before_ (truncateAll pool) $ describe "ContextMaterialization" $ do
             fixtureEnd
             "context-policy/v2"
             [MaterializedCompartment compartment 999 "p1"]
-            "initial_canary"
+            "initial_materialization"
     withDb pool (publishContextMaterialization scope Nothing stale)
       `shouldThrow` (\(_ :: SomeException) -> True)
     withDb pool (loadContextMaterialization scope) `shouldReturn` Nothing

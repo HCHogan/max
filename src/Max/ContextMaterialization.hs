@@ -214,7 +214,7 @@ validateDraft scope draft = do
     Only False : _ -> pure ()
     _ -> storeFailure "materialization compartments contain an uncovered raw gap"
   where
-    allowedReasons = ["initial_canary", "high_water", "projection_change", "manual_rebuild"]
+    allowedReasons = ["initial_materialization", "high_water", "projection_change", "manual_rebuild"]
 
 allowedTierTexts :: [Text]
 allowedTierTexts = ["p1", "p2", "p3", "p4"]

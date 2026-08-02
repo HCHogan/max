@@ -116,8 +116,8 @@ deployment boundary can be backfilled explicitly without rewinding the live
 cursor. A nightly dream pass (4am local) remains a separate semantic-memory
 maintenance lifecycle.
 
-Prompt reads are cut over per conversation with
-`unbounded_context_groups`. A canaried conversation takes the newest active
+During implementation, prompt reads can be exercised per conversation with
+the temporary `unbounded_context_groups` development gate. An enrolled conversation takes the newest active
 compartment suffix that has no uncovered raw rows, then reads every
 prompt-eligible message after the suffix's exact end cursor. Partial older
 backfills stay out of the stable prefix when a raw gap separates them. The pure
@@ -126,7 +126,7 @@ importance, confidence, and token pressure; P4 remains stored but is omitted
 from the default prompt. The selected tiers, source compartment ids/projection
 versions, policy version, and exact raw-tail cursor live in a CAS-versioned
 `context_materializations` row plus an append-only revision ledger. Normal
-turns reuse that revision. Initial canary enablement, an active projection
+turns reuse that revision. Initial enrollment, an active projection
 replacement, or raw history crossing the model-derived high-token watermark
 publishes one new revision; it folds only enough prepared compartments to aim
 the tail back below the low-token watermark. Store publication locks and
@@ -134,10 +134,23 @@ rechecks active source versions, rejects gaps or backward cursor movement, and
 records the cache-bust reason. Under exceptional per-turn pressure active
 memory is removed first, compartments can degrade one tier at a time, and only
 then is the oldest raw tail trimmed. A conversation with no active compartment
-automatically uses the legacy reader, and removing it from the allowlist rolls
-prompt reads back without changing raw messages, capture jobs, or projections.
+automatically uses the legacy reader during development, and removing it from
+the allowlist rolls prompt reads back without changing raw messages, capture
+jobs, or projections. This gate is not a production rollout strategy: once
+replay, recall, observability, and rebuild gates pass, the release switches
+every conversation to the tiered reader together and removes the legacy
+dual-query path.
 A corrupt/stale materialization or store failure also fails soft to that scoped
 legacy reader for the turn instead of dropping the user's reply.
+
+Rendered summaries carry a random, stable `[episode#<uuid>]` handle rather
+than the internal compartment sequence. `context_expand` treats that handle
+only as a locator: every page re-applies the current conversation's
+`RecallPolicy` in SQL before reading the exact ingest range. Expansion returns
+raw ledger rows in ingest order, reports whether the current source hash still
+matches the captured hash, paginates without leaving the range, and keeps old
+handles expandable after a rebuild supersedes their projection. A handle from
+another group or direct chat is indistinguishable from a nonexistent handle.
 
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
 instead of waiting for a whole body. Paragraphs the model has finished with go
@@ -159,6 +172,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Pending image / video / forward / file fetches | `fetch_jobs` rows claimed under a lease — a dead process's lease expires and the next claim picks the job back up |
 | Pending historian capture | leased `episode_capture_runs` rows plus the conversation-scoped historian cursor; boot drains jobs, then re-arms any conversation with newer raw rows |
 | Tiered prompt prefix | current `context_materializations` revision plus append-only versions; active compartment ids/versions, tiers, end cursor, policy, fingerprint, and cache-bust reason are durable |
+| Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll for `NULL` columns, so any gap backfills itself |
 

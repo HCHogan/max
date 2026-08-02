@@ -107,9 +107,10 @@ data AppConfig = AppConfig
     -- compatibility fold.  It is not the model-window safety boundary;
     -- ContextBudget is.
     historyMax :: !Int,
-    -- | Conversation storage ids explicitly canaried onto active
-    -- compartments plus a token-budgeted raw tail.  Empty keeps the legacy
-    -- reader everywhere; removing an id is the rollback switch.
+    -- | Temporary development allowlist for active compartments plus a
+    -- token-budgeted raw tail.  The completed feature removes this field and
+    -- switches every conversation away from the legacy dual-query reader in
+    -- one release.
     unboundedContextGroups :: ![Int64],
     -- | Display timezone for all model/user-facing timestamps
     -- (stored times stay UTC).  Default UTC+8.
@@ -296,7 +297,7 @@ appConfigParser usedRef =
         ]
     unboundedContextGroups <-
       setting
-        [ help "Conversation/group ids canaried onto tiered unbounded context",
+        [ help "Development conversation/group ids enrolled in tiered unbounded context",
           reader (commaSeparatedList auto),
           option,
           long "unbounded-context-groups",

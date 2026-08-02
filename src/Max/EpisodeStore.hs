@@ -8,6 +8,9 @@
 module Max.EpisodeStore
   ( CaptureRunId (..),
     CompartmentId (..),
+    EpisodeHandle (..),
+    episodeHandleText,
+    parseEpisodeHandle,
     CaptureReason (..),
     CaptureRun (..),
     CaptureRequest (..),
@@ -20,6 +23,7 @@ module Max.EpisodeStore
     CaptureValidationError (..),
     ValidatedEpisodeCapture,
     ActiveCompartment (..),
+    EpisodeExpansion (..),
     parseEpisodeCapture,
     validateEpisodeCapture,
     captureValidationWarnings,
@@ -35,6 +39,7 @@ module Max.EpisodeStore
     captureRunSourceMatches,
     publishCaptureRun,
     listActiveCompartments,
+    expandEpisode,
   )
 where
 
@@ -59,6 +64,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
+import Data.UUID (UUID)
+import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple (FromRow, In (..), Only (..), Query)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
@@ -68,8 +75,10 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query, withTransaction)
 import Max.ConversationScope
   ( ConversationScope,
+    RecallPolicy,
     conversationStorageId,
     currentConversationRecall,
+    recallConversationScope,
   )
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
@@ -104,6 +113,20 @@ newtype CaptureRunId = CaptureRunId {unCaptureRunId :: Int64}
 newtype CompartmentId = CompartmentId {unCompartmentId :: Int64}
   deriving stock (Show, Eq, Ord)
   deriving newtype (FromField, ToField, FromJSON, ToJSON)
+
+-- | An unguessable model-facing reference to one immutable compartment.
+-- Internal sequence ids never cross the prompt/tool boundary, and possession
+-- of a handle is not authority: 'expandEpisode' always applies the current
+-- 'RecallPolicy' again.
+newtype EpisodeHandle = EpisodeHandle {unEpisodeHandle :: UUID}
+  deriving stock (Show, Eq, Ord)
+  deriving newtype (FromField, ToField)
+
+episodeHandleText :: EpisodeHandle -> Text
+episodeHandleText = UUID.toText . (.unEpisodeHandle)
+
+parseEpisodeHandle :: Text -> Maybe EpisodeHandle
+parseEpisodeHandle = fmap EpisodeHandle . UUID.fromText
 
 data CaptureReason
   = CaptureIdle
@@ -1202,6 +1225,7 @@ activateCompartment run compartment = do
 
 data ActiveCompartment = ActiveCompartment
   { activeCompartmentId :: !CompartmentId,
+    activeExpandHandle :: !EpisodeHandle,
     activeRange :: !SourceRange,
     activeStartedAt :: !UTCTime,
     activeEndedAt :: !UTCTime,
@@ -1220,10 +1244,25 @@ data ActiveCompartment = ActiveCompartment
   }
   deriving stock (Show, Eq)
 
+-- | One policy-checked page of the immutable source range behind a summary.
+-- Pages contain ledger rows, not re-summarized text, including rows that were
+-- deliberately excluded from the normal prompt transcript.
+data EpisodeExpansion = EpisodeExpansion
+  { expansionHandle :: !EpisodeHandle,
+    expansionRange :: !SourceRange,
+    expansionState :: !Text,
+    expansionSourceHashMatches :: !Bool,
+    expansionMessages :: ![LedgerItem],
+    expansionHasMore :: !Bool,
+    expansionNextCursor :: !(Maybe MessageCursor)
+  }
+  deriving stock (Show)
+
 instance FromRow ActiveCompartment where
   fromRow =
     ActiveCompartment
       <$> field
+      <*> field
       <*> (SourceRange <$> (MessageCursor <$> field) <*> (MessageCursor <$> field) <*> field <*> field)
       <*> field
       <*> field
@@ -1247,7 +1286,7 @@ listActiveCompartments scope =
     \  FROM conversation_compartments AS c \
     \  WHERE c.conversation_id = ? AND c.state = 'active' \
     \) \
-    \ SELECT a.id, a.start_ingest_seq, a.end_ingest_seq, a.source_hash, a.source_message_count, \
+    \ SELECT a.id, a.expand_handle, a.start_ingest_seq, a.end_ingest_seq, a.source_hash, a.source_message_count, \
     \        first_message.received_at, last_message.received_at, \
     \        (a.previous_end IS NOT NULL AND EXISTS ( \
     \          SELECT 1 FROM messages AS gap_message \
@@ -1264,6 +1303,64 @@ listActiveCompartments scope =
     \   ON last_message.group_id = a.conversation_id AND last_message.ingest_seq = a.end_ingest_seq \
     \ ORDER BY a.start_ingest_seq, a.end_ingest_seq"
     (Only (conversationStorageId scope))
+
+-- | Expand an opaque episode handle inside the conversations authorized by
+-- the supplied read policy.  The handle is only a locator: the SQL predicate
+-- independently requires the current policy's conversation on every page.
+-- Superseded compartments remain expandable because their immutable source
+-- range is still valid evidence for a previously returned handle.
+expandEpisode ::
+  (WithConnection :> es, IOE :> es) =>
+  RecallPolicy ->
+  EpisodeHandle ->
+  Maybe MessageCursor ->
+  Int ->
+  Eff es (Maybe EpisodeExpansion)
+expandEpisode policy handle requestedAfter requestedSize = do
+  let scope = recallConversationScope policy
+      conversationId = conversationStorageId scope
+      pageSize = max 1 (min 100 requestedSize)
+  metadata <-
+    query
+      "SELECT expand_handle, start_ingest_seq, end_ingest_seq, source_hash, source_message_count, state, \
+      \       source_hash = conversation_source_hash(conversation_id, start_ingest_seq, end_ingest_seq) \
+      \ FROM conversation_compartments \
+      \ WHERE conversation_id = ? AND expand_handle = ? \
+      \ LIMIT 1"
+      (conversationId, handle)
+  case metadata :: [(EpisodeHandle, Int64, Int64, Text, Int, Text, Bool)] of
+    [] -> pure Nothing
+    (storedHandle, start, end, sourceHash, messageCount, state, sourceMatches) : _ -> do
+      let after = max (start - 1) (maybe (start - 1) (.ingestSeq) requestedAfter)
+      rows <-
+        query
+          "SELECT ingest_seq, \
+          \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
+          \       (forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat') \
+          \ FROM messages \
+          \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND ingest_seq > ? \
+          \ ORDER BY ingest_seq \
+          \ LIMIT ?"
+          (conversationId, start, end, after, pageSize + 1)
+      let allRows = rows :: [LedgerItem]
+          page = take pageSize allRows
+          hasMore = length allRows > pageSize
+          nextCursor =
+            if hasMore
+              then case reverse page of
+                item : _ -> Just item.cursor
+                [] -> Nothing
+              else Nothing
+      pure . Just $
+        EpisodeExpansion
+          { expansionHandle = storedHandle,
+            expansionRange = SourceRange (MessageCursor start) (MessageCursor end) sourceHash messageCount,
+            expansionState = state,
+            expansionSourceHashMatches = sourceMatches,
+            expansionMessages = page,
+            expansionHasMore = hasMore,
+            expansionNextCursor = nextCursor
+          }
 
 publicationFailure :: (IOE :> es) => String -> Eff es a
 publicationFailure = liftIO . throwIO . userError

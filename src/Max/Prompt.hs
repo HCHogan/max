@@ -89,7 +89,7 @@ import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Faces (curatedFaceGroups)
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
-import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), SourceRange (..), listActiveCompartments)
+import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), EpisodeHandle, SourceRange (..), episodeHandleText, listActiveCompartments)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
 import Max.Session (Session (..))
@@ -210,7 +210,7 @@ data TriggerOrigin
   deriving stock (Show, Eq)
 
 -- | Reversible history-reader cutover.  The default remains legacy until a
--- conversation id is explicitly canaried in configuration.
+-- conversation id is explicitly enrolled by the temporary development gate.
 data ContextHistoryMode
   = LegacyContextHistory
   | TieredContextHistory
@@ -224,6 +224,7 @@ data CompartmentTier = TierP1 | TierP2 | TierP3 | TierP4
 -- rebuild-free inside ContextPolicy.
 data ContextCompartment = ContextCompartment
   { contextCompartmentId :: !Int64,
+    contextExpandHandle :: !EpisodeHandle,
     contextStartedAt :: !UTCTime,
     contextEndedAt :: !UTCTime,
     contextImportance :: !Double,
@@ -552,7 +553,7 @@ collectContextWithMode requestedMode materializationWatermarks defaultPersona lo
       scope = conversationScopeFor gm.groupId
   now' <- liftIO getCurrentTime
   -- Legacy mode keeps the migration-era two-query lane byte-for-byte.  A
-  -- canaried conversation instead reads the newest gap-free compartment
+  -- enrolled conversation instead reads the newest gap-free compartment
   -- suffix followed by every raw row after its exact end cursor.  There is no
   -- fixed message count in that path; ContextPolicy owns the token boundary.
   let collectLegacyHistory = do
@@ -1653,6 +1654,7 @@ contextCompartmentFromActive :: ActiveCompartment -> ContextCompartment
 contextCompartmentFromActive active =
   ContextCompartment
     { contextCompartmentId = active.activeCompartmentId.unCompartmentId,
+      contextExpandHandle = active.activeExpandHandle,
       contextStartedAt = active.activeStartedAt,
       contextEndedAt = active.activeEndedAt,
       contextImportance = active.activeImportance,
@@ -1679,7 +1681,7 @@ materializeTieredHistory ::
 materializeTieredHistory scope triggerId cleared now' watermarks active = do
   stored <- loadContextMaterialization scope
   current <- case stored of
-    Nothing -> publishOrReload Nothing "initial_canary" active
+    Nothing -> publishOrReload Nothing "initial_materialization" active
     Just materialization
       | not (materializationMatches active materialization) -> do
           let retained = filter ((<= materialization.cmEndCursor) . (.srEnd) . (.activeRange)) active
@@ -1958,7 +1960,7 @@ renderCompartments tz' compartments' = case mapMaybe renderOne compartments' of
       summary <- selectedCompartmentSummary compartment
       pure $
         "[episode#"
-          <> T.pack (show compartment.contextCompartmentId)
+          <> episodeHandleText compartment.contextExpandHandle
           <> " "
           <> fmtDate tz' compartment.contextStartedAt
           <> ".."

@@ -347,6 +347,7 @@ test-suite max-test-db
         Max.DB.FilesSpec
         Max.DB.FetchQueueSpec
         Max.DB.SessionSpec
+        Max.ContextMaterializationMigrationSpec
         Max.ContextMaterializationSpec
         Max.EpisodeStoreSpec
         Max.HistorianMigrationSpec

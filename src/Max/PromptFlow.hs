@@ -87,7 +87,7 @@ renderPromptFlow =
       "DB / PlatformApi / EpisodeStore effects",
       "        │",
       "        ▼",
-      "ContextCollector ──▶ ContextMaterialization CAS (tiered canary)",
+      "ContextCollector ──▶ ContextMaterialization CAS (tiered history)",
       "        │                        │ revision + exact raw cursor",
       "        └────────────────────────▼",
       "                         ContextSnapshot",

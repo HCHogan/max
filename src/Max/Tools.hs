@@ -29,11 +29,12 @@ import Effectful
 import Effectful.Exception (try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
-import Max.ConversationScope (conversationScopeFor)
-import Max.DB.History (HistoryItem (..), bestName, fetchForwardChildrenInScope, fetchMessageInScope)
+import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
+import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..), bestName, fetchForwardChildrenInScope, fetchMessageInScope)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, EmbeddingRecord (..), embedTexts, makeEmbeddingRecord)
+import Max.EpisodeStore (EpisodeExpansion (..), SourceRange (..), episodeHandleText, expandEpisode, parseEpisodeHandle)
 import Max.Prompt (tagMediaMarkers)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolGroupId)
@@ -53,6 +54,7 @@ builtinsFor ::
 builtinsFor tz mEmbed dc =
   [ getMessageByIdTool tz dc,
     searchMessagesTool tz mEmbed (toolGroupId dc),
+    contextExpandTool tz dc,
     viewForwardTool tz dc,
     pokeTool dc
   ]
@@ -229,6 +231,100 @@ data MessageFilter = MessageFilter
     mfBefore :: !(Maybe UTCTime),
     mfLimit :: !Int
   }
+
+--------------------------------------------------------------------------------
+-- context_expand
+
+contextExpandTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
+contextExpandTool tz dc =
+  Tool
+    { toolName = "context_expand",
+      toolDescription =
+        T.unwords
+          [ "展开上下文中的 [episode#<handle>]，读取该摘要对应的原始聊天记录。",
+            "handle 只用于定位；每次调用都会按当前会话重新检查权限。",
+            "长 episode 会分页，按返回的 next_after_cursor 继续读取。"
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "handle"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "format" .= ("uuid" :: Text),
+                        "description" .= ("[episode#<handle>] 标记中的 opaque handle" :: Text)
+                      ],
+                  "after_cursor"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("继续读取时使用上页返回的 next_after_cursor" :: Text)
+                      ],
+                  "limit"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "minimum" .= (1 :: Int),
+                        "maximum" .= (100 :: Int),
+                        "default" .= (40 :: Int)
+                      ]
+                ],
+            "required" .= (["handle"] :: [Text])
+          ],
+      toolRun = \args -> case parseEither (withObject "args" parseExpandArgs) args of
+        Left err -> pure $ Left ("bad args: " <> T.pack err)
+        Right (rawHandle, after, limit) -> case parseEpisodeHandle rawHandle of
+          Nothing -> pure (Left "bad args: handle must be the UUID from an [episode#...] marker")
+          Just handle -> do
+            let scope = conversationScopeFor (toolGroupId dc)
+            expanded <-
+              expandEpisode
+                (currentConversationRecall scope)
+                handle
+                (MessageCursor <$> after)
+                limit
+            pure $ case expanded of
+              Nothing -> Left "episode not found or not visible in this conversation"
+              Just episode -> Right (episodeExpansionSummary tz episode)
+    }
+  where
+    parseExpandArgs o =
+      (,,)
+        <$> o .: "handle"
+        <*> o .:? "after_cursor"
+        <*> (fromMaybe 40 <$> o .:? "limit")
+
+episodeExpansionSummary :: TimeZone -> EpisodeExpansion -> Value
+episodeExpansionSummary tz episode =
+  object
+    [ "handle" .= episodeHandleText episode.expansionHandle,
+      "source_range"
+        .= object
+          [ "start_cursor" .= episode.expansionRange.srStart.ingestSeq,
+            "end_cursor" .= episode.expansionRange.srEnd.ingestSeq,
+            "message_count" .= episode.expansionRange.srMessageCount
+          ],
+      "projection_state" .= episode.expansionState,
+      "source_hash_matches" .= episode.expansionSourceHashMatches,
+      "messages" .= map (expandedHistoryItem tz) episode.expansionMessages,
+      "has_more" .= episode.expansionHasMore,
+      "next_after_cursor" .= fmap (.ingestSeq) episode.expansionNextCursor
+    ]
+
+expandedHistoryItem :: TimeZone -> LedgerItem -> Value
+expandedHistoryItem tz entry =
+  object $
+    [ "ingest_cursor" .= entry.cursor.ingestSeq,
+      "message_id" .= h.messageId,
+      "sender_user_id" .= h.userId,
+      "sender" .= fromMaybe (T.pack (show h.userId)) (bestName h),
+      "time" .= fmtDateHM tz h.receivedAt,
+      "text" .= h.renderedText,
+      "prompt_eligible" .= entry.transcriptEligible
+    ]
+      <> ["reply_to" .= reply | Just reply <- [h.replyTo]]
+  where
+    h = tagMediaMarkers entry.history
 
 -- | Accept the timestamp shapes a model plausibly emits.  Naive times
 -- are read in the display timezone — the same clock the tool's results

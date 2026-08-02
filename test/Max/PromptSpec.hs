@@ -2,6 +2,7 @@ module Max.PromptSpec (spec) where
 
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -11,6 +12,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
+import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
 import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextHistoryMode (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, applyVideoCaptions, applyWatermark, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
@@ -831,7 +833,7 @@ spec = do
           plan = planContext generousLimits (tieredSnapshot baseInputs {compartments = [old, recent], transcript = [raw]})
           (_, body) = splitMessages (renderContextPlan plan)
       map (.contextTier) plan.cpInputs.compartments `shouldBe` [TierP4, TierP1]
-      body `shouldSatisfy` ("[episode#2" `T.isInfixOf`)
+      body `shouldSatisfy` ("[episode#00000000-0000-0000-0000-000000000002" `T.isInfixOf`)
       body `shouldSatisfy` ("recent P1" `T.isInfixOf`)
       body `shouldSatisfy` (not . ("old P3" `T.isInfixOf`))
       body `shouldSatisfy` ("live tail" `T.isInfixOf`)
@@ -852,6 +854,7 @@ compartmentAt :: Int64 -> UTCTime -> Double -> Text -> Text -> Text -> ContextCo
 compartmentAt cid ended importance p1 p2 p3 =
   ContextCompartment
     { contextCompartmentId = cid,
+      contextExpandHandle = episodeHandleAt cid,
       contextStartedAt = ended,
       contextEndedAt = ended,
       contextImportance = importance,
@@ -862,6 +865,12 @@ compartmentAt cid ended importance p1 p2 p3 =
       contextSummaryP3 = p3,
       contextTier = TierP1
     }
+
+episodeHandleAt :: Int64 -> EpisodeHandle
+episodeHandleAt cid =
+  fromMaybe
+    (error "invalid episode handle fixture")
+    (parseEpisodeHandle ("00000000-0000-0000-0000-" <> T.justifyRight 12 '0' (T.pack (show cid))))
 
 snapshot :: PromptInputs -> ContextSnapshot
 snapshot inputs = ContextSnapshot inputs 1000 2000 LegacyContextHistory Nothing Nothing
@@ -874,7 +883,7 @@ tieredSnapshot inputs =
     1
     TieredContextHistory
     (Just 1)
-    (Just "initial_canary")
+    (Just "initial_materialization")
 
 generousLimits :: ContextLimits
 generousLimits = ContextLimits 200000 4096 0 0
