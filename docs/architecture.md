@@ -27,7 +27,8 @@ src/Max/Effects/   effectful 2.5 effects: Http, Blob, PlatformApi, Outbound (vis
                    Tools, ToolOutput (turn-scoped tool media), Agent
                    (DB effect from upstream effectful-postgresql)
 src/Max/LLM/       Stream: SSE framing + the two protocols' delta reducers, pure
-src/Max/Http/      Stream: the incremental POST wreq can't do (http-client withResponse)
+src/Max/Http/      Json: bounded buffered POST + domain retries; Stream: SSE folding;
+                   both execute through the process-wide HttpRuntime pools
 src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
                    History, Session, Files, Memory, Permissions, PlatformIds,
                    Reminder, Stickers, FetchQueue (media work list), Calls, Usage
@@ -128,7 +129,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Sandbox / browser containers | destroyed on exit, reaped on boot |
 
 Effect stack at the top of `runApp`:
-`IOE → Concurrent → Log → Http → Blob → WithConnection → PlatformApi → Outbound → Wreq → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.
+`IOE → Concurrent → Log → Http → Blob → WithConnection → PlatformApi → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.
 
 `ModelCatalog` owns profile discovery and prompt-facing capabilities such as
 multimodal input, reasoning effort and history shape. `LLM` owns completion

@@ -59,7 +59,9 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.TasksSpec` — the task registry: feeding a running turn, aiming a
   `!feedback` by trigger, in-flight bookkeeping, `attachTask` adoption,
   unserved-note return at `endDispatch` (killed turns keep nothing)
-- `Max.WreqSpec` — HTTP wrapper behaviour
+- `Max.Http.JsonSpec` — buffered HTTP retry policy
+- `Max.HttpRuntimeSpec` — shared-pool identity, bounded bodies, status previews,
+  timeout classification, and response cleanup under cancellation
 - `OneBot.EventSpec` — group + private event parsing
 - `OneBot.SegmentSpec` — segment codec, mention conversion, card parsing
 

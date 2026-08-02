@@ -105,6 +105,7 @@ library
         Max.Files
         Max.Forward
         Max.Handler
+        Max.Http.Json
         Max.HttpRuntime
         Max.Http.Stream
         Max.ImagePrep
@@ -154,7 +155,6 @@ library
         Max.Util
         Max.Wechatpad
         Max.Worker
-        Max.Wreq
     other-modules:
         Max.ModelCatalog.Internal
         Paths_max
@@ -180,7 +180,6 @@ library
         , http-client         >= 0.7  && < 0.8
         , http-client-tls     >= 0.3  && < 0.5
         , http-types          >= 0.12 && < 0.13
-        , lens                >= 5.2  && < 5.4
         , log-base            >= 0.12 && < 0.13
         , log-effectful       >= 1.0  && < 1.1
         , megaparsec          >= 9.5  && < 9.9
@@ -204,8 +203,6 @@ library
         , wai                 >= 3.2  && < 3.3
         , warp                >= 3.3  && < 3.5
         , websockets          >= 0.13 && < 0.14
-        , wreq                >= 0.5  && < 0.6
-        , wreq-effectful      >= 0.1  && < 0.2
 
 executable max
     import:           warnings, lang
@@ -222,7 +219,6 @@ executable max
         , text                 >= 2.1  && < 2.2
         , time                 >= 1.12 && < 1.17
         , unix                 >= 2.8  && < 2.9
-        , wreq-effectful       >= 0.1  && < 0.2
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
 
 -- Deterministic renderer for docs/prompt-flow.md.  It exercises the pure
@@ -253,7 +249,6 @@ executable max-intent-eval
         , max
         , opt-env-conf         >= 0.15 && < 0.17
         , text                 >= 2.1  && < 2.2
-        , wreq-effectful       >= 0.1  && < 0.2
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
 
 test-suite max-test
@@ -302,7 +297,7 @@ test-suite max-test
         Max.Tools.FilesSpec
         Max.UtilSpec
         Max.WorkerSpec
-        Max.WreqSpec
+        Max.Http.JsonSpec
     build-depends:
         , aeson           >= 2.2  && < 2.4
         , async           >= 2.2  && < 2.3

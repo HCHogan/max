@@ -61,9 +61,9 @@ spec = do
       request <- expectRight =<< parseRequestEither "http://example.test/"
       let runtime = httpRuntimeFromManagers manager manager
       result <- runBuffered runtime StandardPool 100 4 request
-      result
-        `shouldBe` Left
-          (HttpStatusFailure 503 "0123" True)
+      case result of
+        Left (HttpStatusFailure 503 _ "0123" True) -> pure ()
+        _ -> expectationFailure ("unexpected result: " <> show result)
 
   describe "streaming response lifetime" $ do
     it "closes an unread body when the callback returns" $ do

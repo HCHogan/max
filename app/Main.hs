@@ -16,7 +16,6 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Effectful.Reader.Dynamic (Reader, ask, runReader)
-import Effectful.Wreq (runWreq)
 import Max.Admin (adminServer)
 import Max.Browser.Registry
   ( destroyAllBrowsers,
@@ -41,6 +40,7 @@ import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
 import Max.Handler (dispatchProactive, handleEvents)
+import Max.HttpRuntime (newHttpRuntime)
 import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Log (withCompactLogger)
@@ -83,6 +83,7 @@ main = do
   _ <- installHandler sigTERM (Catch (drainOrInterrupt mainTid shutdown)) Nothing
 
   cfg <- loadConfig
+  httpRuntime <- newHttpRuntime
   bracket (newDbPool cfg.db) closeDbPool $ \pool -> do
     applied <- runMigrations pool cfg.migrationsDir
     -- Container lifecycle, both ends.  Reaping first kills any
@@ -145,7 +146,7 @@ main = do
           runEff
             . runConcurrent
             . runLog "max" logger cfg.logLevel
-            . runHttp
+            . runHttp httpRuntime
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
             . runPlatformApi
@@ -154,13 +155,13 @@ main = do
               | Just wc <- [cfg.wechatpad]
               ]
             . runOutbound
-            . runWreq
             -- Token accounting goes through its own pooled connection
             -- (a plain IO writer): the LLM interpreter sits outside
             -- the WithConnection effect and the eval harness has no
             -- database at all, so the dependency stays out of the
             -- effect stack.
             . runLLM
+              httpRuntime
               ( \ctx profile u ->
                   runEff . runWithConnectionPool pool $
                     insertUsage ctx.ccGroup ctx.ccSource profile u.usagePrompt u.usageCompletion u.usageCachedPrompt
@@ -187,7 +188,7 @@ main = do
               cfg.llm
             . runReader cfg.llm
             . runReader env
-            . runAgent defaultLimits (allToolsFor env) tasks
+            . runAgent defaultLimits (allToolsFor httpRuntime env) tasks
             $ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid
       )
       `finally` (destroyAllSandboxes sandboxes `finally` destroyAllBrowsers browsers)

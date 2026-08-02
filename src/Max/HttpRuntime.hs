@@ -70,7 +70,7 @@ data TransportFailure
   | TlsFailed Text
   | ProxyFailure Text
   | ProtocolFailure Text
-  | HttpStatusFailure Int ByteString Bool
+  | HttpStatusFailure Int ResponseHeaders ByteString Bool
   | ResponseBodyLimitExceeded Int
   deriving stock (Eq, Show)
 
@@ -132,7 +132,7 @@ runBuffered runtime pool bodyLimit previewLimit request = do
       then
         fmap (BufferedResponse responseMetadata)
           <$> readBodyBounded bodyLimit (responseBody response)
-      else Left <$> statusFailure previewLimit responseMetadata.status (responseBody response)
+      else Left <$> statusFailure previewLimit responseMetadata.status responseMetadata.headers (responseBody response)
   pure $ either (Left . classifyTransportException) id result
   where
     uncheckedRequest = request {checkResponse = \_ _ -> pure ()}
@@ -156,7 +156,7 @@ withStreamingResponse runtime pool previewLimit request use = do
             }
     if statusIsSuccessful responseMetadata.status
       then Right <$> use responseMetadata (responseBody response)
-      else Left <$> statusFailure previewLimit responseMetadata.status (responseBody response)
+      else Left <$> statusFailure previewLimit responseMetadata.status responseMetadata.headers (responseBody response)
   pure $ either (Left . classifyTransportException) id result
   where
     uncheckedRequest = request {checkResponse = \_ _ -> pure ()}
@@ -200,7 +200,7 @@ renderTransportFailure = \case
   TlsFailed message -> "TLS failed: " <> message
   ProxyFailure message -> "HTTP proxy failed: " <> message
   ProtocolFailure message -> "HTTP protocol failed: " <> message
-  HttpStatusFailure code bodyPreview truncated ->
+  HttpStatusFailure code _ bodyPreview truncated ->
     "HTTP "
       <> T.pack (show code)
       <> if BS.null bodyPreview
@@ -261,6 +261,7 @@ classifyHttpExceptionContent = \case
   StatusCodeException response bodyPreview ->
     HttpStatusFailure
       (statusCode (responseStatus response))
+      (responseHeaders response)
       (BS.take defaultExceptionPreviewLimit bodyPreview)
       (BS.length bodyPreview > defaultExceptionPreviewLimit)
   content -> ProtocolFailure (T.pack (show content))
@@ -271,10 +272,10 @@ classifyNestedConnectionFailure exception =
     Just tlsException -> TlsFailed (T.pack (show (tlsException :: TLS.TLSException)))
     Nothing -> ConnectionFailed (T.pack (displayException exception))
 
-statusFailure :: Int -> Status -> BodyReader -> IO TransportFailure
-statusFailure previewLimit responseStatus' bodyReader = do
+statusFailure :: Int -> Status -> ResponseHeaders -> BodyReader -> IO TransportFailure
+statusFailure previewLimit responseStatus' responseHeaders' bodyReader = do
   (bodyPreview, truncated) <- readPreview previewLimit bodyReader
-  pure (HttpStatusFailure (statusCode responseStatus') bodyPreview truncated)
+  pure (HttpStatusFailure (statusCode responseStatus') responseHeaders' bodyPreview truncated)
 
 readPreview :: Int -> BodyReader -> IO (ByteString, Bool)
 readPreview requestedLimit bodyReader = go (max 0 requestedLimit) []

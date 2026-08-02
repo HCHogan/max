@@ -57,9 +57,6 @@
                   } { }
                 )
               );
-              # Marked broken in nixpkgs (stale bounds); it builds fine
-              # against the current set once the bounds are relaxed.
-              wreq-effectful = hlib.markUnbroken (hlib.doJailbreak hsuper.wreq-effectful);
               # dontCheck: max-test-db wants a live PostgreSQL.
               # MAX_GIT_REV: the cleaned source has no .git, so
               # Max.BuildInfo's compile-time splice reads the rev from

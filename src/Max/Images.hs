@@ -34,7 +34,7 @@ import Effectful.PostgreSQL (WithConnection, execute)
 import Max.DB.FetchQueue (JobKind (JobImage), enqueueJob)
 import Max.DB.Stickers (StickerMeta, recordSticker, stickerMeta)
 import Max.Effects.Blob (Blob, blobRefSha256, blobRefStoredPath, putBlob)
-import Max.Effects.Http (Http, getBytes)
+import Max.Effects.Http (Http, getBytesQqCompatible)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.Util (withTempDirectory)
 import OneBot.Event (GroupMessage (..))
@@ -197,7 +197,7 @@ processOne job = do
         "message_id" .= job.messageId,
         "seg_index" .= job.segIndex
       ]
-  r <- getBytes job.url maxBytes
+  r <- getBytesQqCompatible job.url maxBytes
   case r of
     -- Carries the URL because the queue's own failure log is generic;
     -- this is what someone reads when a picture never showed up.

@@ -28,11 +28,11 @@ import Data.Text qualified as T
 import Data.Version (makeVersion)
 import Effectful
 import Effectful.Log (LogLevel (LogAttention), runLog)
-import Effectful.Wreq (runWreq)
 import Max.Log (withCompactLogger)
 import Max.Config (AppConfig (..), appConfigParser)
 import Max.Effects.LLM (runLLM)
 import Max.Intent (IntentConfig (..), IntentVerdict (..), classifyOnce, kindText)
+import Max.HttpRuntime (newHttpRuntime)
 import OptEnvConf
 import System.Exit (die, exitFailure)
 import Text.Printf (printf)
@@ -107,6 +107,7 @@ main = do
   profile <- case opts.eoProfile <|> ((.icProfile) <$> cfg.intent) of
     Just p -> pure p
     Nothing -> die "no profile: pass --eval-profile or configure intent.profile"
+  httpRuntime <- newHttpRuntime
 
   raw <- BS8.readFile opts.eoFixture
   let numbered =
@@ -128,7 +129,7 @@ main = do
   results <- withCompactLogger cfg.logColor Nothing $ \logger ->
     -- No database in this stack, so token usage from replayed rounds
     -- is deliberately unaccounted.
-    runEff . runLog "max-intent-eval" logger LogAttention . runWreq . runLLM (\_ _ _ -> pure ()) (\_ -> pure ()) cfg.llm $
+    runEff . runLog "max-intent-eval" logger LogAttention . runLLM httpRuntime (\_ _ _ -> pure ()) (\_ -> pure ()) cfg.llm $
       traverse
         (\(i, c) -> (,) (i, c) <$> classifyOnce Nothing profile cfg.persona c.cContext c.cNew)
         cases

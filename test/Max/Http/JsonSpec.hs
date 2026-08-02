@@ -1,6 +1,6 @@
-module Max.WreqSpec (spec) where
+module Max.Http.JsonSpec (spec) where
 
-import Max.Wreq (defaultRetryDelaysSecs, replyRetryDelaysSecs, retryableStatus, retryableStatusBody)
+import Max.Http.Json (defaultRetryDelaysSecs, replyRetryDelaysSecs, retryableStatus, retryableStatusBody)
 import Test.Hspec
 
 spec :: Spec
@@ -27,8 +27,6 @@ spec = do
       retryableStatus 200 `shouldBe` False
 
   describe "retryableStatusBody" $ do
-    -- The exact bodies production saw during the 2026-07 relay
-    -- outages: upstream failures wrapped in a 4xx by the gateway.
     it "retries a relay-wrapped 4xx that blames an upstream" $ do
       retryableStatusBody
         400
@@ -52,8 +50,5 @@ spec = do
 
   describe "replyRetryDelaysSecs" $
     it "waits out a relay outage but stays bounded under drain" $ do
-      -- Long enough to cover minutes-scale relay windows, short
-      -- enough that a doomed turn resolves well inside the systemd
-      -- stop timeout once the drain gives up on it.
       sum replyRetryDelaysSecs `shouldSatisfy` (>= 120)
       sum replyRetryDelaysSecs `shouldSatisfy` (<= 300)

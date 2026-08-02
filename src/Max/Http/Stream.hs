@@ -3,15 +3,12 @@
 -- the response body as it arrives, folding SSE frames into a
 -- 'StreamAcc' and calling back whenever the assistant text grows.
 --
--- Separate from "Max.Wreq" because wreq has no incremental read — it
--- hands you the whole body, which is exactly what streaming exists to
--- avoid.  So this drops to @http-client@'s 'withResponse' \/ 'brRead'
--- and re-implements the pieces "Max.Wreq" gave us for free: manager
--- settings, timeout, non-2xx handling, retries.
+-- Request execution and response lifetime come from "Max.HttpRuntime";
+-- this module owns only SSE folding and the domain-specific retry boundary.
 --
 -- == Retries are not free here
 --
--- 'Max.Wreq.postAndParseRetrying' can replay any failed POST because
+-- 'Max.Http.Json.postAndParseRetrying' can replay any failed POST because
 -- nothing was observable until it succeeded.  A streamed call has
 -- already sent messages to the group by the time it fails, and
 -- replaying would say them twice.  So 'streamPost' retries only while
@@ -21,7 +18,7 @@
 --
 -- And only when the failure looks transient: transport errors,
 -- timeouts, empty streams, and the statuses
--- 'Max.Wreq.retryableStatusBody' accepts (408\/429\/5xx, plus
+-- 'Max.Http.Json.retryableStatusBody' accepts (408\/429\/5xx, plus
 -- relay-wrapped 4xx that blame an upstream).  A genuine bad request
 -- fails once and fails identically forever — with the reply path's
 -- schedule now stretching into minutes, replaying one would turn a
@@ -35,7 +32,6 @@ where
 import Control.Concurrent (threadDelay)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as LBS
 import Control.Monad (when)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text (Text)
@@ -43,13 +39,18 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
+import Max.Http.Json (retryableStatusBody)
+import Max.HttpRuntime
+  ( HttpPool (StandardPool),
+    HttpRuntime,
+    TransportFailure (..),
+    parseRequestEither,
+    renderTransportFailure,
+    withStreamingResponse,
+  )
 import Max.LLM.Stream (StreamAcc (..), emptyAcc, sseFrames)
-import Max.Util (trySyncIO)
-import Max.Wreq (retryableStatusBody)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Header (Header)
-import Network.HTTP.Types.Status (statusCode)
 import System.Timeout (timeout)
 
 -- | How a streamed call ended.
@@ -75,6 +76,7 @@ data StreamOutcome
 -- a QQ message must not race ahead of the socket.
 streamPost ::
   (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   -- | Seconds to wait before each retry; length = max retries.  Only
   -- consulted while nothing has arrived yet.
   [Int] ->
@@ -89,7 +91,7 @@ streamPost ::
   -- | Called when the assistant text grew.
   (StreamAcc -> Eff es ()) ->
   Eff es StreamOutcome
-streamPost delays secs hdrs url body step onGrow = go delays
+streamPost runtime delays secs hdrs url body step onGrow = go delays
   where
     go remaining = do
       (out, retryOk) <- attempt
@@ -111,39 +113,39 @@ streamPost delays secs hdrs url body step onGrow = go delays
       -- and it is also how we tell a retryable failure from one that
       -- has already said something.
       progress <- liftIO (newIORef emptyAcc)
-      res <- withRunInIO $ \run ->
+      result <- withRunInIO $ \run ->
         -- The wall clock covers the callbacks too, not just the socket:
         -- @onGrow@ sends QQ messages, so a long answer spends real time
         -- in here.  That is the intended shape — better one bound on
         -- "how long this call may take" than a separate one per read
         -- that a slow group could never trip.
-        timeout (secs * 1_000_000) . trySyncIO $ do
-          mgr <- HTTP.newManager settings
-          req0 <- HTTP.parseRequest url
-          let req =
-                req0
+        timeout (secs * 1_000_000) $ do
+          parseRequestEither url >>= \case
+            Left failure -> pure (Left failure)
+            Right request0 ->
+              withStreamingResponse
+                runtime
+                StandardPool
+                statusPreviewBytes
+                request0
                   { HTTP.method = "POST",
                     HTTP.requestHeaders = hdrs,
                     HTTP.requestBody = HTTP.RequestBodyBS body,
                     HTTP.responseTimeout =
                       HTTP.responseTimeoutMicro (secs * 1_000_000)
                   }
-          HTTP.withResponse req mgr $ \resp -> do
-            let code = statusCode (HTTP.responseStatus resp)
-            if code >= 400
-              then do
-                preview <- HTTP.brReadSome (HTTP.responseBody resp) 2000
-                pure (Left (code, T.take 500 (TE.decodeUtf8Lenient (LBS.toStrict preview))))
-              else Right <$> readLoop run progress (HTTP.responseBody resp)
+                (\_ -> readLoop run progress)
       soFar <- liftIO (readIORef progress)
-      pure $ case res of
-        Nothing -> stalled soFar "stream timed out"
-        Just (Left e) -> stalled soFar ("http: " <> T.pack (show e))
-        Just (Right (Left (code, rbody))) ->
-          ( StreamFailed ("HTTP " <> T.pack (show code) <> ": " <> rbody),
-            retryableStatusBody code rbody
-          )
-        Just (Right (Right acc))
+      pure $ case result of
+        Nothing -> stalled soFar "stream timed out" True
+        Just (Left (HttpStatusFailure code _ responsePreview _)) ->
+          let responseText = T.take 500 (TE.decodeUtf8Lenient responsePreview)
+           in ( StreamFailed ("HTTP " <> T.pack (show code) <> ": " <> responseText),
+                retryableStatusBody code responseText
+              )
+        Just (Left failure) ->
+          stalled soFar (renderTransportFailure failure) (retryableTransportFailure failure)
+        Just (Right acc)
           | acc.saDone -> (StreamComplete acc, False)
           | T.null acc.saText && null acc.saCalls ->
               (StreamFailed "stream ended with no content", True)
@@ -152,8 +154,8 @@ streamPost delays secs hdrs url body step onGrow = go delays
     -- A connection that died before producing anything is
     -- indistinguishable from an ordinary failed POST, so it stays
     -- retryable.  Once there is text, replaying would say it twice.
-    stalled acc err
-      | T.null acc.saText && null acc.saCalls = (StreamFailed err, True)
+    stalled acc err retryOk
+      | T.null acc.saText && null acc.saCalls = (StreamFailed err, retryOk)
       | otherwise = (StreamTruncated acc err, False)
 
     readLoop run progress bodyReader = loop "" emptyAcc
@@ -169,8 +171,13 @@ streamPost delays secs hdrs url body step onGrow = go delays
               when (acc'.saText /= acc.saText) (run (onGrow acc'))
               loop rest acc'
 
-    settings =
-      tlsManagerSettings
-        { HTTP.managerResponseTimeout =
-            HTTP.responseTimeoutMicro (secs * 1_000_000)
-        }
+
+retryableTransportFailure :: TransportFailure -> Bool
+retryableTransportFailure = \case
+  RequestConstructionFailure _ -> False
+  ResponseBodyLimitExceeded _ -> False
+  HttpStatusFailure {} -> False
+  _ -> True
+
+statusPreviewBytes :: Int
+statusPreviewBytes = 2000

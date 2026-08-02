@@ -26,7 +26,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobFile), enqueueJob)
 import Max.DB.Files qualified as DB
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
-import Max.Effects.Http (Http, getBytes)
+import Max.Effects.Http (Http, getBytesQqCompatible)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import OneBot.Action (Action (GetGroupFileUrl), Response (..))
@@ -159,7 +159,7 @@ processOne job = do
   resolveUrl job >>= \case
     Left err -> pure (Left err)
     Right u -> do
-      r <- getBytes u maxBytes
+      r <- getBytesQqCompatible u maxBytes
       case r of
         Left err ->
           pure (Left ("download failed (" <> job.fjFileId <> "): " <> err))

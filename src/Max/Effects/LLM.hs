@@ -68,7 +68,6 @@ module Max.Effects.LLM
 where
 
 import Control.Applicative ((<|>))
-import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Pair, Parser, parseMaybe)
@@ -87,9 +86,10 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Exception (SomeException)
 import Effectful.Log
-import Effectful.Wreq qualified as W
 import GHC.Clock (getMonotonicTimeNSec)
+import Max.Http.Json (defaultRetryDelaysSecs, postAndParseRetrying, replyRetryDelaysSecs)
 import Max.Http.Stream (StreamOutcome (..), streamPost)
+import Max.HttpRuntime (HttpRuntime)
 import Max.LLM.Stream (PartialCall (..), StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, stepResponses)
 import Max.ModelCatalog (ModelCatalog)
 import Max.ModelCatalog.Internal
@@ -98,9 +98,6 @@ import Max.ModelCatalog.Internal
     lookupCompletionProfile,
   )
 import Max.Util (trySync)
-import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying, replyRetryDelaysSecs)
-import Network.Wreq qualified as Wreq
-import Network.Wreq.Lens qualified as WL
 
 -- | One block in a multimodal user message.  Maps directly to the
 -- OpenAI multimodal content-block format that ollama / vLLM /
@@ -383,35 +380,37 @@ runLLMWith backend = interpret $ \localEnv -> \case
     localSeqUnlift localEnv $ \unlift ->
       backend.liChat ctx profile msgs tools (Just (unlift . sink))
 
--- | Per-profile timeout is enforced twice: the http-client
--- 'HTTP.managerResponseTimeout' is set to @timeoutSeconds@ inside
--- 'postAndParse' (otherwise the manager's built-in 30s default kills
+-- | Per-profile timeout is enforced twice: the request's http-client
+-- 'HTTP.responseTimeout' is set to @timeoutSeconds@ inside
+-- 'postAndParse' (otherwise the built-in 30s default kills
 -- any generation slower than that — non-streaming endpoints send
 -- nothing until the completion is done), and a 'System.Timeout.timeout'
 -- wraps the whole call as the wallclock belt-and-braces.
 runLLM ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   UsageWriter ->
   CallWriter ->
   ModelCatalog ->
   Eff (LLM : es) a ->
   Eff es a
-runLLM usageWriter callWriter reg = interpret $ \localEnv -> \case
-  Chat ctx name msgs tools -> runOneChat usageWriter callWriter reg ctx name msgs tools Nothing
+runLLM runtime usageWriter callWriter reg = interpret $ \localEnv -> \case
+  Chat ctx name msgs tools -> runOneChat runtime usageWriter callWriter reg ctx name msgs tools Nothing
   ChatStreaming ctx name msgs tools sink ->
     -- The sink sends messages, so it is 'Eff', not IO; unlifting it
     -- here is what lets the transport call back into the caller's
     -- effect stack.  Sequential unlift is right: the read loop is
     -- single-threaded and calls the sink one frame at a time.
     localSeqUnlift localEnv $ \unlift ->
-      runOneChat usageWriter callWriter reg ctx name msgs tools (Just (unlift . sink))
+      runOneChat runtime usageWriter callWriter reg ctx name msgs tools (Just (unlift . sink))
 
 -- | One chat call, shared by the streaming and non-streaming
 -- operations.  A 'Just' sink means \"stream if the profile allows it\";
 -- 'Nothing', or a profile with @stream = false@, takes the ordinary
 -- request-response path.
 runOneChat ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   UsageWriter ->
   CallWriter ->
   ModelCatalog ->
@@ -421,7 +420,7 @@ runOneChat ::
   [ToolSpec] ->
   Maybe (Text -> Eff es ()) ->
   Eff es (Either Text ChatResponse)
-runOneChat usageWriter callWriter reg ctx name msgs tools mSink = case lookupCompletionProfile name reg of
+runOneChat runtime usageWriter callWriter reg ctx name msgs tools mSink = case lookupCompletionProfile name reg of
   Nothing -> do
     logAttention "llm: unknown profile" $ object ["profile" .= name]
     pure $ Left ("unknown llm profile: " <> name)
@@ -441,8 +440,8 @@ runOneChat usageWriter callWriter reg ctx name msgs tools mSink = case lookupCom
         ]
     t0 <- liftIO getMonotonicTimeNSec
     r <- case mSink of
-      Just sink | cfg.stream -> callChatStream cfg msgs tools sink
-      _ -> callChat cfg msgs tools
+      Just sink | cfg.stream -> callChatStream runtime cfg msgs tools sink
+      _ -> callChat runtime cfg msgs tools
     t1 <- liftIO getMonotonicTimeNSec
     case r of
       Left err ->
@@ -567,15 +566,16 @@ usageFields (Just u) =
 -- handles its own wire format end-to-end (URL, headers, request
 -- body, response parsing); only the timeout wrapping is shared.
 callChat ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChat cfg msgs tools = case cfg.protocol of
-  ProtocolOpenAI -> callChatOpenAI cfg msgs tools
-  ProtocolAnthropic -> callChatAnthropic cfg msgs tools
-  ProtocolResponses -> callChatResponses cfg msgs tools
+callChat runtime cfg msgs tools = case cfg.protocol of
+  ProtocolOpenAI -> callChatOpenAI runtime cfg msgs tools
+  ProtocolAnthropic -> callChatAnthropic runtime cfg msgs tools
+  ProtocolResponses -> callChatResponses runtime cfg msgs tools
 
 --------------------------------------------------------------------------------
 -- Streaming.
@@ -592,12 +592,13 @@ interruptionMarker = "\n\n⚠ 断了，上面这条没写完"
 -- frames by "Max.LLM.Stream" instead of parsed from one JSON body.
 callChatStream ::
   (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
   (Text -> Eff es ()) ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChatStream cfg msgs tools sink = case cfg.protocol of
+callChatStream runtime cfg msgs tools sink = case cfg.protocol of
   ProtocolOpenAI ->
     run
       (T.unpack (cfg.baseUrl <> "/chat/completions"))
@@ -636,7 +637,7 @@ callChatStream cfg msgs tools sink = case cfg.protocol of
         -- group is waiting on, so it rides out a relay outage where
         -- the background 'chat' calls (classifiers, captions) fail
         -- fast on 'defaultRetryDelaysSecs' instead.
-        streamPost replyRetryDelaysSecs cfg.timeoutSeconds hdrs url body step $ \acc ->
+        streamPost runtime replyRetryDelaysSecs cfg.timeoutSeconds hdrs url body step $ \acc ->
           -- Strip before the sink, never after: models that inline
           -- their reasoning (MiniMax, GLM) open with a
           -- @\<think\>…\</think\>@ block, and streaming it straight
@@ -789,21 +790,22 @@ parsedCalls acc =
 -- OpenAI / OpenAI-compatible: POST {baseUrl}/chat/completions.
 
 callChatOpenAI ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChatOpenAI cfg msgs tools = do
+callChatOpenAI runtime cfg msgs tools = do
   let body =
         LBS.toStrict
           (encode (object (openAIFields cfg msgs tools <> ["stream" .= False])))
       url = T.unpack (cfg.baseUrl <> "/chat/completions")
-      opts =
-        Wreq.defaults
-          & WL.header "Authorization" .~ ["Bearer " <> TE.encodeUtf8 cfg.apiKey]
-          & WL.header "Content-Type" .~ ["application/json"]
-  postAndParseRetrying defaultRetryDelaysSecs cfg.timeoutSeconds opts url body parseResponseOpenAI
+      headers =
+        [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.apiKey),
+          ("Content-Type", "application/json")
+        ]
+  postAndParseRetrying runtime defaultRetryDelaysSecs cfg.timeoutSeconds headers url body parseResponseOpenAI
 
 -- | Everything an OpenAI chat-completions request carries except the
 -- stream switches, so the streaming and non-streaming paths can't drift
@@ -861,21 +863,22 @@ encodeToolSpecOpenAI t =
 -- OpenAI Responses API: POST {baseUrl}/responses.
 
 callChatResponses ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChatResponses cfg msgs tools = do
+callChatResponses runtime cfg msgs tools = do
   let body =
         LBS.toStrict
           (encode (object (responsesFields cfg msgs tools <> ["stream" .= False])))
       url = T.unpack (cfg.baseUrl <> "/responses")
-      opts =
-        Wreq.defaults
-          & WL.header "Authorization" .~ ["Bearer " <> TE.encodeUtf8 cfg.apiKey]
-          & WL.header "Content-Type" .~ ["application/json"]
-  postAndParseRetrying defaultRetryDelaysSecs cfg.timeoutSeconds opts url body parseResponseResponses
+      headers =
+        [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.apiKey),
+          ("Content-Type", "application/json")
+        ]
+  postAndParseRetrying runtime defaultRetryDelaysSecs cfg.timeoutSeconds headers url body parseResponseResponses
 
 -- | The Responses request, minus the stream switch.  Stateless on
 -- purpose (@store: false@): nothing accumulates server-side, and the
@@ -1078,20 +1081,21 @@ parseUsageOpenAI = withObject "usage" $ \u -> do
 -- Anthropic Messages API: POST {baseUrl}/v1/messages.
 
 callChatAnthropic ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChatAnthropic cfg msgs tools = do
+callChatAnthropic runtime cfg msgs tools = do
   let body = LBS.toStrict (encode (object (anthropicFields cfg msgs tools)))
       url = T.unpack (cfg.baseUrl <> "/v1/messages")
-      opts =
-        Wreq.defaults
-          & WL.header "x-api-key" .~ [TE.encodeUtf8 cfg.apiKey]
-          & WL.header "anthropic-version" .~ ["2023-06-01"]
-          & WL.header "Content-Type" .~ ["application/json"]
-  postAndParseRetrying defaultRetryDelaysSecs cfg.timeoutSeconds opts url body parseResponseAnthropic
+      headers =
+        [ ("x-api-key", TE.encodeUtf8 cfg.apiKey),
+          ("anthropic-version", "2023-06-01"),
+          ("Content-Type", "application/json")
+        ]
+  postAndParseRetrying runtime defaultRetryDelaysSecs cfg.timeoutSeconds headers url body parseResponseAnthropic
 
 -- | The Anthropic counterpart of 'openAIFields', minus @stream@.
 --

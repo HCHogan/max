@@ -16,7 +16,6 @@ import Data.Text (Text)
 import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
-import Effectful.Wreq qualified as W
 import Max.Effects.Blob (Blob)
 import Max.Effects.Http (Http)
 import Max.Effects.Outbound (Outbound)
@@ -24,6 +23,7 @@ import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (Tool)
 import Max.Env (BotEnv (..))
+import Max.HttpRuntime (HttpRuntime)
 import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
@@ -55,14 +55,14 @@ allToolsFor ::
     PlatformApi :> es,
     Outbound :> es,
     ToolOutput :> es,
-    W.Wreq :> es,
     WithConnection :> es,
     IOE :> es
   ) =>
+  HttpRuntime ->
   BotEnv ->
   ToolContext ->
   [Tool es]
-allToolsFor env dc =
+allToolsFor runtime env dc =
   builtinsFor env.beTimeZone env.beEmbed dc
     <> reminderToolsFor env.beTimeZone env.beReminders dc
     <> groupToolsFor dc
@@ -74,7 +74,7 @@ allToolsFor env dc =
     <> sandboxToolsFor env.beTimeZone (toolGroupId dc) env.beSandboxes
     <> fileToolsFor env.beTimeZone (toolGroupId dc) (toolSelfId dc) env.beSandboxes
     <> [t | toolStickers dc, t <- stickerToolsFor env.beEmbed]
-    <> maybe [] searchToolsFor env.beSearch
+    <> maybe [] (searchToolsFor runtime) env.beSearch
     <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]
     <> [t | toolMultimodal dc, t <- videoToolsFor]
 

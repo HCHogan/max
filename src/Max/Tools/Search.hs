@@ -1,6 +1,5 @@
 -- |
--- @web_search@ tool, backed by Tavily.  Self-contained: owns its own
--- HTTP 'Manager' and POSTs to @https://api.tavily.com/search@.
+-- @web_search@ tool, backed by Tavily and the shared outbound HTTP runtime.
 --
 -- The tool is registered into the agent's tool factory only when an
 -- API key is configured ('Max.Config.AppConfig.search' is @Just@) —
@@ -17,7 +16,6 @@ module Max.Tools.Search
   )
 where
 
-import Control.Lens ((&), (.~))
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Lazy qualified as LBS
@@ -28,11 +26,9 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
-import Effectful.Wreq qualified as W
 import Max.Effects.Tools (Tool (..))
-import Max.Wreq (postAndParse)
-import Network.Wreq qualified as Wreq
-import Network.Wreq.Lens qualified as WL
+import Max.Http.Json (postAndParse)
+import Max.HttpRuntime (HttpRuntime)
 
 -- | Knobs for the Tavily-backed search.  Everything except the key is
 -- defaulted in 'Max.Config.materialize'.
@@ -47,19 +43,21 @@ data SearchConfig = SearchConfig
   deriving stock (Show)
 
 searchToolsFor ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   SearchConfig ->
   [Tool es]
-searchToolsFor cfg = [webSearchTool cfg]
+searchToolsFor runtime cfg = [webSearchTool runtime cfg]
 
 --------------------------------------------------------------------------------
 -- web_search
 
 webSearchTool ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   SearchConfig ->
   Tool es
-webSearchTool cfg =
+webSearchTool runtime cfg =
   Tool
     { toolName = "web_search",
       toolDescription =
@@ -101,7 +99,7 @@ webSearchTool cfg =
           let maxR = clamp (1, 10) (fromMaybe cfg.scDefaultMaxResults mMax)
           logInfo "search: tavily request" $
             object ["query" .= q, "max_results" .= maxR]
-          eres <- callTavily cfg q maxR
+          eres <- callTavily runtime cfg q maxR
           case eres of
             Left err -> do
               logAttention "search: tavily failed" $ object ["error" .= err]
@@ -130,12 +128,13 @@ webSearchTool cfg =
 -- HTTP.
 
 callTavily ::
-  (W.Wreq :> es, Log :> es, IOE :> es) =>
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
   SearchConfig ->
   Text ->
   Int ->
   Eff es (Either Text Value)
-callTavily cfg query maxResults = do
+callTavily runtime cfg query maxResults = do
   let body =
         LBS.toStrict $
           encode $
@@ -147,11 +146,11 @@ callTavily cfg query maxResults = do
                 "include_raw_content" .= False,
                 "include_images" .= False
               ]
-      opts =
-        Wreq.defaults
-          & WL.header "Authorization" .~ ["Bearer " <> TE.encodeUtf8 cfg.scTavilyApiKey]
-          & WL.header "Content-Type" .~ ["application/json"]
-  postAndParse cfg.scTimeoutSeconds opts "https://api.tavily.com/search" body compactResponse
+      headers =
+        [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.scTavilyApiKey),
+          ("Content-Type", "application/json")
+        ]
+  postAndParse runtime cfg.scTimeoutSeconds headers "https://api.tavily.com/search" body compactResponse
 
 -- | Strip everything we don't want surfaced to the model: scores
 -- (it'll just second-guess them), raw_content (already capped at

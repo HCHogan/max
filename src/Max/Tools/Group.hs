@@ -22,7 +22,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
-import Max.Effects.Http (Http, getBytes)
+import Max.Effects.Http (Http, getBytesQqCompatible)
 import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
@@ -211,7 +211,7 @@ fetchAndQueue ::
   Text -> -- label for the injected image block
   Eff es (Either Text Value)
 fetchAndQueue url label =
-  getBytes url maxAvatarBytes >>= \case
+  getBytesQqCompatible url maxAvatarBytes >>= \case
     Left err -> do
       logAttention "view_avatar: fetch failed" $
         object ["url" .= url, "error" .= err]
