@@ -1,11 +1,17 @@
 module Max.Prompt
   ( -- * Pipeline
     buildContext,
+    buildContextWithLimits,
     TriggerOrigin (..),
 
     -- * Building blocks (exposed for tests)
     PromptInputs (..),
     PromptImage (..),
+    ContextSnapshot (..),
+    ContextPlan (..),
+    collectContext,
+    planContext,
+    renderContextPlan,
     renderContext,
     applyWatermark,
     contextRoster,
@@ -30,7 +36,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Either (partitionEithers)
 import Data.Function (on)
 import Data.Int (Int64)
-import Data.List (groupBy, sortOn, unsnoc)
+import Data.List (groupBy, minimumBy, sortOn, unsnoc)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Set (Set)
@@ -44,6 +50,14 @@ import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.Log (Log, logAttention, object, (.=))
 import Effectful.PostgreSQL (WithConnection, query)
+import Max.Context
+  ( ContextBudget (..),
+    ContextDecision (..),
+    ContextTrace (..),
+    contextBudget,
+    estimateMessagesTokens,
+    estimateTextTokens,
+  )
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
@@ -62,6 +76,7 @@ import Max.Faces (curatedFaceGroups)
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
+import Max.ModelCatalog (ContextLimits, defaultContextLimits)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
 import OneBot.Event (GroupMessage (..), Sender (..))
@@ -183,6 +198,27 @@ data PromptImage = PromptImage
     piDataUrl :: !Text
   }
   deriving stock (Show, Eq)
+
+-- | Complete output of the effectful collection step, before any pure prompt
+-- selection.  The legacy count watermarks remain explicit migration inputs;
+-- token safety is owned by 'planContext' and does not depend on them.
+data ContextSnapshot = ContextSnapshot
+  { csInputs :: !PromptInputs,
+    csLegacyLowWater :: !Int,
+    csLegacyHighWater :: !Int
+  }
+
+-- | Deterministic, fully selected context with its budget and decision trace.
+-- Rendering this value performs no I/O and no further selection.
+data ContextPlan = ContextPlan
+  { cpInputs :: !PromptInputs,
+    cpBudget :: !ContextBudget,
+    cpEstimatedPromptTokens :: !Int,
+    cpWithinBudget :: !Bool,
+    cpMovedAnchor :: !(Maybe UTCTime),
+    cpTrace :: ![ContextTrace],
+    cpPolicyVersion :: !Text
+  }
 
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default), a scene block saying whether this is a
@@ -337,7 +373,71 @@ buildContext ::
   -- and so a dispatch that crashes before replying doesn't leave a
   -- moved anchor behind.
   Eff es ([ChatMessage], Maybe UTCTime)
-buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+buildContext = buildContextWithLimits defaultContextLimits
+
+-- | Production entry point with limits taken from the selected model profile.
+-- Kept separate from 'buildContext' so older callers and migration tests retain
+-- a conservative compatibility default.
+buildContextWithLimits ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  ContextLimits ->
+  Text ->
+  Int ->
+  Int ->
+  Bool ->
+  Bool ->
+  TriggerOrigin ->
+  TimeZone ->
+  [Text] ->
+  [(Text, Text)] ->
+  Set Int64 ->
+  Session ->
+  GroupMessage ->
+  Eff es ([ChatMessage], Maybe UTCTime)
+buildContextWithLimits limits defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+  snapshot <-
+    collectContext
+      defaultPersona
+      lowWater
+      highWater
+      multimodal'
+      historyTurns'
+      origin'
+      tz'
+      brief
+      skills'
+      inFlight'
+      s
+      gm
+  let plan = planContext limits snapshot
+  when (not plan.cpWithinBudget) $
+    logAttention "context plan exceeds model input budget" $
+      object
+        [ "estimated_prompt_tokens" .= plan.cpEstimatedPromptTokens,
+          "prompt_token_limit" .= plan.cpBudget.cbPromptTokenLimit,
+          "policy_version" .= plan.cpPolicyVersion
+        ]
+  pure (renderContextPlan plan, plan.cpMovedAnchor)
+
+-- | Effectful I/O only: fetch and enrich a complete snapshot.  Selection,
+-- token pressure, and legacy watermark compatibility happen later in the pure
+-- policy step.
+collectContext ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  Text ->
+  Int ->
+  Int ->
+  Bool ->
+  Bool ->
+  TriggerOrigin ->
+  TimeZone ->
+  [Text] ->
+  [(Text, Text)] ->
+  Set Int64 ->
+  Session ->
+  GroupMessage ->
+  Eff es ContextSnapshot
+collectContext defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -364,12 +464,7 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
     if isPrivateChat gm.groupId
       then pure []
       else fetchMentionHistory gid selfId' mid floor' fetchLimit
-  let merged = mergeHistory recent thread
-      -- Growing, not sliding: the anchor holds still for many
-      -- dispatches so the rendered prefix stays byte-identical and a
-      -- provider cache can cover it, then jumps in one step.  One miss
-      -- every (high - low) dispatches beats one every dispatch.
-      (transcript', movedAnchor) = applyWatermark lowWater highWater merged
+  let transcript' = mergeHistory recent thread
   pinnedItems' <- fetchMessagesByIdsInScope scope s.pinned
   -- Injection is capped to the freshest entries per scope: the block
   -- is in the volatile tail, re-tokenised at full price every
@@ -485,28 +580,32 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
         take maxPromptVideos . concat <$> traverse loadMessageVideos cands
       else pure []
   now' <- liftIO getCurrentTime
-  pure . (,movedAnchor) $
-    renderContext
-      PromptInputs
-        { defaultPersona = defaultPersona,
-          session = s,
-          triggerMessage = gm,
-          transcript = transcriptCtx,
-          historyTurns = historyTurns',
-          inFlight = inFlight',
-          pinnedItems = pinnedItems'',
-          replyCtx = replyCtx',
-          triggerForward = triggerKids,
-          multimodal = multimodal',
-          origin = origin',
-          groupBrief = brief,
-          groupMemories = groupMems,
-          userMemories = userMems,
-          images = images' <> videos',
-          skills = skills',
-          now = now',
-          tz = tz'
-        }
+  pure $
+    ContextSnapshot
+      { csInputs =
+          PromptInputs
+            { defaultPersona = defaultPersona,
+              session = s,
+              triggerMessage = gm,
+              transcript = transcriptCtx,
+              historyTurns = historyTurns',
+              inFlight = inFlight',
+              pinnedItems = pinnedItems'',
+              replyCtx = replyCtx',
+              triggerForward = triggerKids,
+              multimodal = multimodal',
+              origin = origin',
+              groupBrief = brief,
+              groupMemories = groupMems,
+              userMemories = userMems,
+              images = images' <> videos',
+              skills = skills',
+              now = now',
+              tz = tz'
+            },
+        csLegacyLowWater = lowWater,
+        csLegacyHighWater = highWater
+      }
 
 -- | Poll until the image worker has recorded all of the trigger's
 -- downloadable images ('message_images' rows are inserted only after
@@ -1059,6 +1158,167 @@ renderContext pi' =
           <> historyTurnMessages pi'.tz selfId' turnRows
           <> [userMessage]
    in messages
+
+-- | Pure policy: apply the migration-era watermark, then enforce the selected
+-- model's token ceiling.  Optional active memories go first under pressure,
+-- followed by the oldest unpinned raw transcript rows; explicit permanent
+-- memories are the final degradable source.  Reply targets, pins, the current
+-- message, environment, and attached media are protected here.
+planContext :: ContextLimits -> ContextSnapshot -> ContextPlan
+planContext limits snapshot =
+  let (watermarked, movedAnchor) =
+        applyWatermark
+          snapshot.csLegacyLowWater
+          snapshot.csLegacyHighWater
+          snapshot.csInputs.transcript
+      initial = snapshot.csInputs {transcript = watermarked}
+      budget = contextBudget limits (not (null initial.images))
+      (selected, drops) = fitContextTo budget.cbPromptTokenLimit initial
+      messages = renderContext selected
+      estimated = estimateMessagesTokens messages
+      withinBudget = estimated <= budget.cbPromptTokenLimit
+   in ContextPlan
+        { cpInputs = selected,
+          cpBudget = budget,
+          cpEstimatedPromptTokens = estimated,
+          cpWithinBudget = withinBudget,
+          cpMovedAnchor = movedAnchor,
+          cpTrace = contextTrace budget selected messages drops withinBudget,
+          cpPolicyVersion = "context-policy/v1"
+        }
+
+renderContextPlan :: ContextPlan -> [ChatMessage]
+renderContextPlan = renderContext . (.cpInputs)
+
+data PolicyDrop = PolicyDrop
+  { pdSource :: !Text,
+    pdTokens :: !Int
+  }
+
+fitContextTo :: Int -> PromptInputs -> (PromptInputs, [PolicyDrop])
+fitContextTo tokenLimit = go []
+  where
+    go dropped inputs
+      | estimateMessagesTokens (renderContext inputs) <= tokenLimit = (inputs, reverse dropped)
+      | Just (memory, withoutMemory) <- dropOldestMemory (== "active") inputs =
+          go (memoryDrop "memory.active" memory : dropped) withoutMemory
+      | oldest : rest <- inputs.transcript =
+          let tokens = max 1 (estimateTextTokens oldest.renderedText)
+           in go (PolicyDrop "history.raw" tokens : dropped) (inputs {transcript = rest})
+      | Just (memory, withoutMemory) <- dropOldestMemory (== "permanent") inputs =
+          go (memoryDrop "memory.permanent" memory : dropped) withoutMemory
+      | otherwise = (inputs, reverse dropped)
+
+memoryDrop :: Text -> MemoryItem -> PolicyDrop
+memoryDrop source memory =
+  PolicyDrop source (max 1 (estimateTextTokens memory.memContent))
+
+dropOldestMemory :: (Text -> Bool) -> PromptInputs -> Maybe (MemoryItem, PromptInputs)
+dropOldestMemory lifecycleMatches inputs = case candidates of
+  [] -> Nothing
+  _ ->
+    let (lane, oldest) = minimumBy (compare `on` candidateKey) candidates
+        without = case lane of
+          GroupMemory -> inputs {groupMemories = removeMemory oldest.memId inputs.groupMemories}
+          UserMemory -> inputs {userMemories = removeMemory oldest.memId inputs.userMemories}
+     in Just (oldest, without)
+  where
+    candidates =
+      [(GroupMemory, memory) | memory <- inputs.groupMemories, lifecycleMatches memory.memLifecycle]
+        <> [(UserMemory, memory) | memory <- inputs.userMemories, lifecycleMatches memory.memLifecycle]
+    candidateKey (lane, memory) = (memory.memUpdatedAt, memory.memId, lane)
+
+data MemoryLane = GroupMemory | UserMemory
+  deriving stock (Show, Eq, Ord)
+
+removeMemory :: MemoryId -> [MemoryItem] -> [MemoryItem]
+removeMemory target = filter ((/= target) . (.memId))
+
+contextTrace :: ContextBudget -> PromptInputs -> [ChatMessage] -> [PolicyDrop] -> Bool -> [ContextTrace]
+contextTrace budget inputs messages drops withinBudget =
+  [ ContextTrace
+      "prompt.total"
+      (estimateMessagesTokens messages)
+      (if withinBudget then ContextIncluded else ContextOverBudget)
+      (if withinBudget then "within model input budget" else "protected prompt sources exceed model input budget"),
+    ContextTrace
+      "prompt.system"
+      (systemTokens messages)
+      ContextIncluded
+      "stable persona, scene, format, and tool-use guidance",
+    ContextTrace
+      "history.raw"
+      (sum [estimateTextTokens row.renderedText | row <- inputs.transcript])
+      ContextIncluded
+      "selected chronological raw transcript",
+    ContextTrace
+      "reply"
+      (replyContextTokens inputs.replyCtx)
+      ContextIncluded
+      "explicit reply target, attached file metadata, and quoted forward children",
+    ContextTrace
+      "pin"
+      (historyContentTokens inputs.pinnedItems)
+      ContextIncluded
+      "explicitly pinned source messages",
+    ContextTrace
+      "trigger_forward"
+      (historyContentTokens inputs.triggerForward)
+      ContextIncluded
+      "forward children attached to the current trigger",
+    ContextTrace
+      "memory"
+      (sum [estimateTextTokens memory.memContent | memory <- inputs.groupMemories <> inputs.userMemories])
+      ContextIncluded
+      "scoped active and permanent semantic memory",
+    ContextTrace
+      "environment"
+      ( estimateTextTokens inputs.session.model
+          + sum (map estimateTextTokens inputs.groupBrief)
+          + sum [estimateTextTokens name | (_, name) <- contextRoster inputs]
+      )
+      ContextIncluded
+      "current time, conversation, model, and roster",
+    ContextTrace
+      "current_message"
+      (estimateTextTokens (renderPlainText inputs.triggerMessage.message))
+      ContextIncluded
+      "protected current trigger",
+    ContextTrace
+      "attachment"
+      budget.cbAttachmentReserve
+      ContextReserved
+      "conservative reserve applied only when media blocks are attached",
+    ContextTrace
+      "tool_round"
+      budget.cbToolRoundReserve
+      ContextReserved
+      "reserved for tool schemas and later agent rounds",
+    ContextTrace
+      "output"
+      budget.cbReservedOutputTokens
+      ContextReserved
+      "profile completion limit tracked separately from the input ceiling"
+  ]
+    <> [ ContextTrace source tokens ContextDropped "removed deterministically under token pressure"
+       | (source, tokens) <- Map.toAscList (Map.fromListWith (+) [(drop'.pdSource, drop'.pdTokens) | drop' <- drops])
+       ]
+
+systemTokens :: [ChatMessage] -> Int
+systemTokens = \case
+  MsgSystem content : _ -> estimateTextTokens content + 8
+  _ -> 0
+
+historyContentTokens :: [HistoryItem] -> Int
+historyContentTokens = sum . map (estimateTextTokens . (.renderedText))
+
+replyContextTokens :: Maybe (HistoryItem, [FileRecord], [HistoryItem]) -> Int
+replyContextTokens = \case
+  Nothing -> 0
+  Just (reply, files, children) ->
+    estimateTextTokens reply.renderedText
+      + historyContentTokens children
+      + sum [estimateTextTokens file.frFileName | file <- files]
 
 -- | How many entries per scope the prompt carries.  Injection policy,
 -- not a storage cap — 'Max.Tools.Memory.maxMemoriesPerScope' still

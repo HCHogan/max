@@ -7,6 +7,9 @@
 module Max.ModelCatalog.Internal
   ( ModelCatalog,
     ModelCatalogError (..),
+    ContextLimits (..),
+    defaultContextLimits,
+    contextInputBudget,
     ModelCapabilities (..),
     LLMProfile (..),
     Protocol (..),
@@ -50,7 +53,10 @@ data LLMProfile = LLMProfile
   { baseUrl :: !Text,
     apiKey :: !Text,
     model :: !Text,
+    maxInputTokens :: !Int,
     maxTokens :: !Int,
+    attachmentReserve :: !Int,
+    toolRoundReserve :: !Int,
     temperature :: !(Maybe Double),
     effort :: !(Maybe Text),
     timeoutSeconds :: !Int,
@@ -60,11 +66,44 @@ data LLMProfile = LLMProfile
     stream :: !Bool
   }
 
+-- | Prompt-side limits for one model profile.  @maxInputTokens@ is the
+-- provider's hard input ceiling.  Output is tracked separately because it is
+-- sent as the completion limit, while attachment and future tool-round
+-- reserves consume space inside the input ceiling before history is planned.
+data ContextLimits = ContextLimits
+  { maxInputTokens :: !Int,
+    reservedOutputTokens :: !Int,
+    attachmentReserve :: !Int,
+    toolRoundReserve :: !Int
+  }
+  deriving stock (Show, Eq)
+
+-- | Conservative compatibility limits for profiles/configurations created by
+-- old tests and callers.  Production profiles materialize explicit values.
+defaultContextLimits :: ContextLimits
+defaultContextLimits =
+  ContextLimits
+    { maxInputTokens = 32768,
+      reservedOutputTokens = 2048,
+      attachmentReserve = 4096,
+      toolRoundReserve = 4096
+    }
+
+-- | Text-message budget after reserving space for future tool rounds and,
+-- only when present, multimodal attachments.
+contextInputBudget :: ContextLimits -> Bool -> Int
+contextInputBudget limits hasAttachments =
+  max 0 $
+    limits.maxInputTokens
+      - limits.toolRoundReserve
+      - if hasAttachments then limits.attachmentReserve else 0
+
 -- | Safe projection used by prompt construction and command/status paths.
 data ModelCapabilities = ModelCapabilities
   { supportsMultimodal :: !Bool,
     usesHistoryTurns :: !Bool,
-    configuredEffort :: !(Maybe Text)
+    configuredEffort :: !(Maybe Text),
+    contextLimits :: !ContextLimits
   }
   deriving stock (Show, Eq)
 
@@ -126,7 +165,14 @@ lookupModelCapabilities name catalog =
         ModelCapabilities
           { supportsMultimodal = profile.multimodal,
             usesHistoryTurns = profile.historyAsTurns,
-            configuredEffort = profile.effort
+            configuredEffort = profile.effort,
+            contextLimits =
+              ContextLimits
+                { maxInputTokens = profile.maxInputTokens,
+                  reservedOutputTokens = profile.maxTokens,
+                  attachmentReserve = profile.attachmentReserve,
+                  toolRoundReserve = profile.toolRoundReserve
+                }
           }
 
 -- | Private completion settings for the LLM interpreter. Production catalogs

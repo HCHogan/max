@@ -23,6 +23,7 @@
 -- >     main:
 -- >       api_key: sk-...
 -- >       model: deepseek-chat
+-- >       max_input_tokens: 32768
 -- >     local:
 -- >       base_url: http://localhost:8080/v1
 -- >       model: qwen2.5:7b
@@ -53,6 +54,7 @@ import Autodocodec
     scientificCodec,
     (.=),
   )
+import Control.Monad (when)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
@@ -97,14 +99,13 @@ data AppConfig = AppConfig
     -- SIGKILLs us mid-drain and the wait bought nothing.
     shutdownDrainSeconds :: !Int,
     llm :: !ModelCatalog,
-    -- | Transcript low-water mark: the message count an overflow
-    -- trims back to.  Named for the knob it used to be (a fixed
-    -- sliding window) and still the floor.
+    -- | Migration-era transcript low-water mark.  ContextPolicy applies the
+    -- selected model's token budget after this compatibility fold; tiered
+    -- compartments will retire the count boundary.
     historyWindow :: !Int,
-    -- | Transcript high-water mark: the count that triggers the trim.
-    -- The gap between the two is how many dispatches share a stable
-    -- prompt prefix — bigger gap, better cache hit rate, but a larger
-    -- average prompt to pay for on the calls that miss.
+    -- | Migration-era transcript high-water mark: the count that triggers the
+    -- compatibility fold.  It is not the model-window safety boundary;
+    -- ContextBudget is.
     historyMax :: !Int,
     -- | Display timezone for all model/user-facing timestamps
     -- (stored times stay UTC).  Default UTC+8.
@@ -887,7 +888,10 @@ data ProfileSpec = ProfileSpec
   { apiKey :: !(Maybe Text),
     baseUrl :: !(Maybe Text),
     model :: !(Maybe Text),
+    maxInputTokens :: !(Maybe Int),
     maxTokens :: !(Maybe Int),
+    attachmentReserve :: !(Maybe Int),
+    toolRoundReserve :: !(Maybe Int),
     temperature :: !(Maybe Double),
     effort :: !(Maybe Text),
     timeoutSeconds :: !(Maybe Int),
@@ -900,7 +904,7 @@ data ProfileSpec = ProfileSpec
 
 emptySpec :: ProfileSpec
 emptySpec =
-  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+  ProfileSpec Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
 
 -- | Per-field first-Just-wins overlay (left = higher priority).
 mergeSpec :: ProfileSpec -> ProfileSpec -> ProfileSpec
@@ -909,7 +913,10 @@ mergeSpec a b =
     { apiKey = a.apiKey <|> b.apiKey,
       baseUrl = a.baseUrl <|> b.baseUrl,
       model = a.model <|> b.model,
+      maxInputTokens = a.maxInputTokens <|> b.maxInputTokens,
       maxTokens = a.maxTokens <|> b.maxTokens,
+      attachmentReserve = a.attachmentReserve <|> b.attachmentReserve,
+      toolRoundReserve = a.toolRoundReserve <|> b.toolRoundReserve,
       temperature = a.temperature <|> b.temperature,
       effort = a.effort <|> b.effort,
       timeoutSeconds = a.timeoutSeconds <|> b.timeoutSeconds,
@@ -926,7 +933,10 @@ instance HasCodec ProfileSpec where
         <$> optionalField "api_key" "API key" .= (.apiKey)
         <*> optionalField "base_url" "OpenAI: …/v1 base URL; Anthropic: bare host" .= (.baseUrl)
         <*> optionalField "model" "Model id" .= (.model)
+        <*> optionalField "max_input_tokens" "Hard input-token ceiling for prompt planning" .= (.maxInputTokens)
         <*> optionalField "max_tokens" "Max tokens per completion" .= (.maxTokens)
+        <*> optionalField "attachment_reserve" "Input tokens reserved when media is attached" .= (.attachmentReserve)
+        <*> optionalField "tool_round_reserve" "Input tokens reserved for later agent tool rounds" .= (.toolRoundReserve)
         <*> optionalFieldWith "temperature" temperatureCodec "Sampling temperature; omit to not send the field (some providers reject explicit values)" .= (.temperature)
         <*> optionalField "effort" "Reasoning effort (low/medium/high/xhigh/max on Anthropic; reasoning_effort on OpenAI protocol); omit to not send the field" .= (.effort)
         <*> optionalField "timeout_seconds" "HTTP timeout for one completion" .= (.timeoutSeconds)
@@ -1007,6 +1017,16 @@ overlayProfileParser = do
           env "MAX_LLM_MODEL",
           metavar "NAME"
         ]
+  maxInputTokens <-
+    optional $
+      setting
+        [ help "Hard input-token ceiling for prompt planning",
+          reader auto,
+          option,
+          long "llm-max-input-tokens",
+          env "MAX_LLM_MAX_INPUT_TOKENS",
+          metavar "N"
+        ]
   maxTokens <-
     optional $
       setting
@@ -1015,6 +1035,26 @@ overlayProfileParser = do
           option,
           long "llm-max-tokens",
           env "MAX_LLM_MAX_TOKENS",
+          metavar "N"
+        ]
+  attachmentReserve <-
+    optional $
+      setting
+        [ help "Input tokens reserved when media is attached",
+          reader auto,
+          option,
+          long "llm-attachment-reserve",
+          env "MAX_LLM_ATTACHMENT_RESERVE",
+          metavar "N"
+        ]
+  toolRoundReserve <-
+    optional $
+      setting
+        [ help "Input tokens reserved for later agent tool rounds",
+          reader auto,
+          option,
+          long "llm-tool-round-reserve",
+          env "MAX_LLM_TOOL_ROUND_RESERVE",
           metavar "N"
         ]
   temperature <-
@@ -1126,12 +1166,32 @@ materializeLLM (dn, fileProfiles, overlay) = do
                      then "\n  set via --llm-api-key, MAX_LLM_API_KEY, or llm.profiles." <> T.unpack profName <> ".api_key"
                      else "\n  set via llm.profiles." <> T.unpack profName <> ".api_key"
                  )
+      let resolvedMultimodal = fromMaybe False spec.multimodal
+          resolvedMaxInput = fromMaybe 32768 spec.maxInputTokens
+          resolvedMaxOutput = fromMaybe 2048 spec.maxTokens
+          resolvedAttachmentReserve = fromMaybe (if resolvedMultimodal then 4096 else 0) spec.attachmentReserve
+          resolvedToolRoundReserve = fromMaybe 4096 spec.toolRoundReserve
+      when (resolvedMaxInput <= 0) $
+        fail $
+          "llm profile '" <> T.unpack profName <> "' has non-positive max_input_tokens"
+      when (resolvedMaxOutput <= 0) $
+        fail $
+          "llm profile '" <> T.unpack profName <> "' has non-positive max_tokens"
+      when (resolvedAttachmentReserve < 0 || resolvedToolRoundReserve < 0) $
+        fail $
+          "llm profile '" <> T.unpack profName <> "' has a negative context reserve"
+      when (resolvedAttachmentReserve + resolvedToolRoundReserve >= resolvedMaxInput) $
+        fail $
+          "llm profile '" <> T.unpack profName <> "' reserves its entire input window"
       pure
         LLMProfile
           { apiKey = key,
             baseUrl = fromMaybe "https://api.deepseek.com/v1" spec.baseUrl,
             model = fromMaybe "deepseek-v4-flash" spec.model,
-            maxTokens = fromMaybe 2048 spec.maxTokens,
+            maxInputTokens = resolvedMaxInput,
+            maxTokens = resolvedMaxOutput,
+            attachmentReserve = resolvedAttachmentReserve,
+            toolRoundReserve = resolvedToolRoundReserve,
             -- No default: omitted temperature means "don't send the
             -- field" — some providers (kimi via opencode zen) 400 on
             -- any explicit value other than 1.0.
@@ -1139,7 +1199,7 @@ materializeLLM (dn, fileProfiles, overlay) = do
             effort = spec.effort,
             timeoutSeconds = fromMaybe 120 spec.timeoutSeconds,
             protocol = fromMaybe ProtocolOpenAI spec.protocol,
-            multimodal = fromMaybe False spec.multimodal,
+            multimodal = resolvedMultimodal,
             historyAsTurns = fromMaybe False spec.historyAsTurns,
             stream = fromMaybe True spec.stream
           }

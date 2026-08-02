@@ -6,12 +6,14 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, minutesToTimeZone, secondsToDiffTime, utc)
+import Max.Context (ContextDecision (..), ContextTrace (..))
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
-import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyVideoCaptions, applyWatermark, renderContext, tagImageMarkers, tagMediaMarkers)
+import Max.ModelCatalog (ContextLimits (..))
+import Max.Prompt (ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyVideoCaptions, applyWatermark, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -767,3 +769,62 @@ spec = do
     it "keeps the newest rows, not the oldest" $ do
       let (kept, _) = applyWatermark 2 3 (rows (5 :: Int))
       map (.messageId) kept `shouldBe` [7004, 7005]
+
+  describe "ContextSnapshot → ContextPlan → renderer" $ do
+    it "preserves the existing byte output under a generous budget" $ do
+      let plan = planContext generousLimits (snapshot baseInputs)
+      map show (renderContextPlan plan) `shouldBe` map show (renderContext baseInputs)
+      plan.cpWithinBudget `shouldBe` True
+
+    it "is deterministic for the same snapshot and policy version" $ do
+      let inputs =
+            baseInputs
+              { transcript =
+                  [ historyAt 9 100 memberId (Just "Alice") "first",
+                    historyAt 10 101 otherMemberId (Just "Bob") "second"
+                  ],
+                groupMemories = [memAt 10 "remember this"]
+              }
+          first = planContext generousLimits (snapshot inputs)
+          second = planContext generousLimits (snapshot inputs)
+      map show (renderContextPlan first) `shouldBe` map show (renderContextPlan second)
+      first.cpEstimatedPromptTokens `shouldBe` second.cpEstimatedPromptTokens
+      first.cpTrace `shouldBe` second.cpTrace
+      first.cpPolicyVersion `shouldBe` second.cpPolicyVersion
+
+    it "sizes the raw tail by estimated tokens rather than a message count" $ do
+      let short = historyAt 10 102 otherMemberId (Just "Bob") "short"
+          veryLong = historyAt 9 101 memberId (Just "Alice") (T.replicate 6000 "汉")
+          shortOnly = baseInputs {transcript = [short]}
+          shortPlan = planContext generousLimits (snapshot shortOnly)
+          tightLimits = ContextLimits shortPlan.cpEstimatedPromptTokens 512 0 0
+          pressured = planContext tightLimits (snapshot baseInputs {transcript = [veryLong, short]})
+      map (.messageId) pressured.cpInputs.transcript `shouldBe` [short.messageId]
+      pressured.cpWithinBudget `shouldBe` True
+      pressured.cpTrace
+        `shouldSatisfy` any (\trace -> trace.ctSource == "history.raw" && trace.ctDecision == ContextDropped)
+
+    it "drops active semantic memory before protected recent raw context" $ do
+      let recent = historyAt 10 102 otherMemberId (Just "Bob") "keep the live line"
+          rawOnly = baseInputs {transcript = [recent]}
+          rawPlan = planContext generousLimits (snapshot rawOnly)
+          tightLimits = ContextLimits rawPlan.cpEstimatedPromptTokens 512 0 0
+          pressured =
+            planContext
+              tightLimits
+              (snapshot rawOnly {groupMemories = [memAt 20 (T.replicate 1000 "old memory ")]})
+      map (.messageId) pressured.cpInputs.transcript `shouldBe` [recent.messageId]
+      pressured.cpInputs.groupMemories `shouldSatisfy` null
+      pressured.cpWithinBudget `shouldBe` True
+
+    it "reports an over-budget plan when only protected sources remain" $ do
+      let plan = planContext (ContextLimits 1 512 0 0) (snapshot baseInputs)
+      plan.cpWithinBudget `shouldBe` False
+      plan.cpTrace
+        `shouldSatisfy` any (\trace -> trace.ctSource == "prompt.total" && trace.ctDecision == ContextOverBudget)
+
+snapshot :: PromptInputs -> ContextSnapshot
+snapshot inputs = ContextSnapshot inputs 1000 2000
+
+generousLimits :: ContextLimits
+generousLimits = ContextLimits 200000 4096 0 0

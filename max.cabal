@@ -73,6 +73,7 @@ library
         Max.Command.Types
         Max.CliProxy
         Max.Config
+        Max.Context
         Max.ConversationScope
         Max.MCP.Client
         Max.DB.Calls

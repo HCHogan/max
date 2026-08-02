@@ -7,6 +7,9 @@
 module Max.ModelCatalog
   ( ModelCatalog,
     ModelCatalogError (..),
+    ContextLimits (..),
+    defaultContextLimits,
+    contextInputBudget,
     ModelCapabilities (..),
     mkModelCatalog,
     defaultModelName,
@@ -18,9 +21,12 @@ where
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Max.ModelCatalog.Internal
-  ( ModelCapabilities (..),
+  ( ContextLimits (..),
+    ModelCapabilities (..),
     ModelCatalog,
     ModelCatalogError (..),
+    contextInputBudget,
+    defaultContextLimits,
     defaultModelName,
     lookupModelCapabilities,
     mkModelCatalogFromCapabilities,

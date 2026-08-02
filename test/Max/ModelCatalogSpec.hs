@@ -18,10 +18,14 @@ spec = describe "ModelCatalog" $ do
 
   it "exposes prompt capabilities through the safe public API" $ do
     lookupModelCapabilities "vision" validCatalog
-      `shouldBe` Just (ModelCapabilities True True (Just "high"))
+      `shouldBe` Just (ModelCapabilities True True (Just "high") limits)
 
   it "distinguishes an unknown profile explicitly" $ do
     lookupModelCapabilities "missing" validCatalog `shouldBe` Nothing
+
+  it "resolves an attachment-aware input budget without spending output reserve twice" $ do
+    contextInputBudget limits False `shouldBe` 28672
+    contextInputBudget limits True `shouldBe` 24576
 
 validCatalog :: ModelCatalog
 validCatalog = case mkModelCatalog "vision" capabilities of
@@ -31,6 +35,9 @@ validCatalog = case mkModelCatalog "vision" capabilities of
 capabilities :: Map.Map Text ModelCapabilities
 capabilities =
   Map.fromList
-    [ ("text", ModelCapabilities False False Nothing),
-      ("vision", ModelCapabilities True True (Just "high"))
+    [ ("text", ModelCapabilities False False Nothing limits),
+      ("vision", ModelCapabilities True True (Just "high") limits)
     ]
+
+limits :: ContextLimits
+limits = ContextLimits 32768 4096 4096 4096

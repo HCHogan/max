@@ -2,7 +2,7 @@
 -- Deterministic source for @docs/prompt-flow.md@.
 --
 -- The fixture stops at the system boundaries the runtime already exposes:
--- 'Max.Prompt.renderContext' owns prompt construction,
+-- 'Max.Prompt.planContext' and 'Max.Prompt.renderContextPlan' own prompt planning/rendering,
 -- 'Max.Effects.Agent.assembleToolRound' owns the agent-loop transition, and
 -- 'Max.Effects.LLM.requestBodyFor' owns protocol encoding.  No documentation
 -- copy of any of those rules exists here; this module only supplies stable
@@ -47,8 +47,9 @@ import Max.Effects.LLM
   )
 import Max.Effects.ToolOutput (InlineMedia (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
+import Max.ModelCatalog (ContextLimits (..))
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
-import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), renderContext)
+import Max.Prompt (ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Session (Session (..))
 import Max.Tools.Images (viewImageSpec)
 import Max.Tools.Video (viewVideoSpec)
@@ -64,7 +65,7 @@ renderPromptFlow =
       "# Prompt 全流程：从 effect 边界生成的真实 wire JSON",
       "",
       "> 本文由 `max-prompt-flow` 确定性生成。它直接复用生产代码中的",
-      "> `Max.Prompt.renderContext`、`Max.Effects.Agent.assembleToolRound` 和",
+      "> `Max.Prompt.planContext` / `renderContextPlan`、`Max.Effects.Agent.assembleToolRound` 和",
       "> `Max.Effects.LLM.requestBodyFor`；因此 prompt、工具轮或协议编码变化后，",
       "> 重新生成会把变化原样带进本文。base64 已由运行时同一个 redactor 截断。",
       "",
@@ -86,7 +87,16 @@ renderPromptFlow =
       "DB / PlatformApi effects",
       "        │",
       "        ▼",
-      "PromptInputs ── renderContext ──▶ [ChatMessage]",
+      "ContextCollector ──▶ ContextSnapshot",
+      "                           │",
+      "                           ▼",
+      "                 ContextPolicy + ContextBudget",
+      "                           │",
+      "                           ▼",
+      "                    ContextPlan + trace",
+      "                           │ PromptRenderer",
+      "                           ▼",
+      "                     [ChatMessage]",
       "                                      │",
       "                        Agent tool loop│ assembleToolRound",
       "                                      ▼",
@@ -160,7 +170,10 @@ profileFor protocol =
     { baseUrl = base,
       apiKey = "<redacted>",
       model = modelName,
+      maxInputTokens = 32768,
       maxTokens = 4096,
+      attachmentReserve = 4096,
+      toolRoundReserve = 4096,
       temperature = Nothing,
       effort = effortLevel,
       timeoutSeconds = 120,
@@ -277,7 +290,11 @@ toolImage =
     }
 
 initialMessages :: [ChatMessage]
-initialMessages = renderContext promptFixture
+initialMessages =
+  renderContextPlan $
+    planContext
+      (ContextLimits 32768 4096 4096 4096)
+      (ContextSnapshot promptFixture 1000 2000)
 
 promptFixture :: PromptInputs
 promptFixture =

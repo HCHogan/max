@@ -48,8 +48,8 @@ import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.MemoryExtract (armMemx, bumpMemx)
-import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, lookupModelCapabilities)
-import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
+import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
+import Max.Prompt (TriggerOrigin (..), buildContextWithLimits, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession, updateSession)
@@ -841,6 +841,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       let capabilities = lookupModelCapabilities s.model catalog
           multimodal = maybe False supportsMultimodal capabilities
           historyTurns = maybe False usesHistoryTurns capabilities
+          limits = maybe defaultContextLimits (.contextLimits) capabilities
       (mentionable, rosterNames, brief) <- fetchGroupContext gm.groupId
       -- Questions another turn is already working on.  Ours is in there
       -- too (claimed just above) — drop it, it isn't history yet.
@@ -852,7 +853,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
       (ctx, movedAnchor) <-
-        buildContext
+        buildContextWithLimits
+          limits
           env.bePersona
           env.beHistoryWindow
           env.beHistoryMax

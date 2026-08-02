@@ -3,7 +3,7 @@
 # Prompt 全流程：从 effect 边界生成的真实 wire JSON
 
 > 本文由 `max-prompt-flow` 确定性生成。它直接复用生产代码中的
-> `Max.Prompt.renderContext`、`Max.Effects.Agent.assembleToolRound` 和
+> `Max.Prompt.planContext` / `renderContextPlan`、`Max.Effects.Agent.assembleToolRound` 和
 > `Max.Effects.LLM.requestBodyFor`；因此 prompt、工具轮或协议编码变化后，
 > 重新生成会把变化原样带进本文。base64 已由运行时同一个 redactor 截断。
 
@@ -25,7 +25,16 @@ cabal run max-prompt-flow -- --check
 DB / PlatformApi effects
         │
         ▼
-PromptInputs ── renderContext ──▶ [ChatMessage]
+ContextCollector ──▶ ContextSnapshot
+                           │
+                           ▼
+                 ContextPolicy + ContextBudget
+                           │
+                           ▼
+                    ContextPlan + trace
+                           │ PromptRenderer
+                           ▼
+                     [ChatMessage]
                                       │
                         Agent tool loop│ assembleToolRound
                                       ▼

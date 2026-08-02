@@ -21,24 +21,24 @@ import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
+import Max.CliProxy (CliProxyConfig)
 import Max.Embedding (EmbedClient)
 import Max.Intent (IntentConfig)
 import Max.MemoryExtract (MemxScheduler)
 import Max.Reminder (ReminderScheduler)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
-import Max.Skills (SkillRegistry)
-import Max.CliProxy (CliProxyConfig)
-import Max.Tools.Search (SearchConfig)
 import Max.Shutdown (ShutdownState)
+import Max.Skills (SkillRegistry)
 import Max.Tasks (TaskRegistry)
+import Max.Tools.Search (SearchConfig)
 
 data BotEnv = BotEnv
   { -- | Persona used when a session hasn't overridden it ('AppConfig.persona').
     bePersona :: !Text,
-    -- | Transcript low-water mark (see 'Max.Config.historyWindow').
+    -- | Migration-era transcript low-water mark (see 'Max.Config.historyWindow').
     beHistoryWindow :: !Int,
-    -- | Transcript high-water mark (see 'Max.Config.historyMax').
+    -- | Migration-era transcript high-water mark (see 'Max.Config.historyMax').
     beHistoryMax :: !Int,
     -- | Config-level debug default; sessions override via @!debug@.
     beDebugDefault :: !Bool,
