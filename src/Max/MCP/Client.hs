@@ -4,9 +4,8 @@
 -- @initialize@ → @notifications/initialized@ → @tools/call@.
 --
 -- We talk plain HTTP to @127.0.0.1:<port>/mcp@ (a container on the
--- loopback, no TLS) via @http-client@ directly — same spirit as
--- "Max.Sandbox.Docker" shelling out to the @docker@ CLI: keep the
--- side-effecting transport in 'IO', let callers 'liftIO' into it.
+-- loopback, no TLS) through the shared "Max.HttpRuntime".  The client
+-- remains a plain-IO handle; callers 'liftIO' into it.
 --
 -- == Response shape
 --
@@ -37,7 +36,6 @@ module Max.MCP.Client
 where
 
 import Control.Concurrent.STM
-import Control.Exception (SomeException)
 import Control.Monad (join)
 import Data.Aeson
 import Data.Aeson.Types (parseMaybe)
@@ -49,18 +47,21 @@ import Data.Maybe (isJust, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Max.Util (trySyncIO)
-import Network.HTTP.Client
-  ( Manager,
-    Request (..),
-    RequestBody (..),
-    httpLbs,
-    parseRequest,
-    responseBody,
-    responseHeaders,
-    responseStatus,
+import Max.HttpRuntime
+  ( BufferedResponse (..),
+    HttpPool (StandardPool),
+    HttpRuntime,
+    ResponseMetadata (headers),
+    TransportFailure (..),
+    parseRequestEither,
+    renderTransportFailure,
+    runBuffered,
   )
-import Network.HTTP.Types.Status (statusCode)
+import Network.HTTP.Client
+  ( Request (..),
+    RequestBody (..),
+  )
+import Network.HTTP.Types.Header (ResponseHeaders)
 
 -- | One MCP session against a single server endpoint.  The session id
 -- (handed back by the server on @initialize@) and the JSON-RPC request
@@ -75,7 +76,7 @@ data McpClient = McpClient
     -- so we send the container-internal host explicitly rather than
     -- the connect host.
     mcHost :: !ByteString,
-    mcManager :: !Manager,
+    mcHttp :: !HttpRuntime,
     mcSession :: !(TVar (Maybe ByteString)),
     mcNextId :: !(TVar Int)
   }
@@ -110,9 +111,9 @@ renderMcpError = (.mcpErrorMessage)
 -- value to send as @Host@ (see 'mcHost').  Does no I/O beyond
 -- allocating the mutable cells; call 'mcpInitialize' before any tool
 -- call.
-newMcpClient :: Manager -> String -> String -> IO McpClient
-newMcpClient mgr endpoint hostHeader =
-  McpClient endpoint (BS8.pack hostHeader) mgr <$> newTVarIO Nothing <*> newTVarIO 0
+newMcpClient :: HttpRuntime -> String -> String -> IO McpClient
+newMcpClient runtime endpoint hostHeader =
+  McpClient endpoint (BS8.pack hostHeader) runtime <$> newTVarIO Nothing <*> newTVarIO 0
 
 protocolVersion :: Text
 protocolVersion = "2025-06-18"
@@ -204,41 +205,56 @@ postRpc c mId method params expectResult = do
           <> T.pack c.mcEndpoint
           <> " sid="
           <> maybe "none" (T.take 8 . TE.decodeUtf8) sess
-  ereq <- trySyncIO (parseRequest ("POST " <> c.mcEndpoint))
+  ereq <- parseRequestEither c.mcEndpoint
   case ereq of
-    Left (e :: SomeException) ->
-      pure . Left $ McpError McpEndpointError ("bad MCP endpoint: " <> T.pack (show e)) Nothing
+    Left failure ->
+      pure . Left $ McpError McpEndpointError ("bad MCP endpoint: " <> renderTransportFailure failure) Nothing
     Right req0 -> do
       let req =
             req0
-              { requestHeaders = hdrs,
+              { method = "POST",
+                requestHeaders = hdrs,
                 requestBody = RequestBodyLBS (encode body)
               }
-      eresp <- trySyncIO (httpLbs req c.mcManager)
-      case eresp of
-        Left (e :: SomeException) ->
-          pure . Left $ McpError McpTransportError ("MCP request failed [" <> ctx <> "]: " <> T.pack (show e)) Nothing
-        Right resp -> do
-          -- Capture / refresh the session id whenever the server sends one.
-          case lookup (CI.mk "Mcp-Session-Id") (responseHeaders resp) of
-            Just s -> atomically $ writeTVar c.mcSession (Just s)
-            Nothing -> pure ()
-          let code = statusCode (responseStatus resp)
-          if code >= 300
-            then
-              pure . Left $
-                classifyHttpError
-                  (isJust sess)
-                  code
-                  ("MCP HTTP " <> T.pack (show code) <> " [" <> ctx <> "]: " <> shortBody resp)
-            else
-              if not expectResult
-                then pure (Right Null)
-                else case decodeRpcBody (responseBody resp) of
-                  Left e -> pure (Left (McpError McpProtocolError e Nothing))
-                  Right v -> pure (extractResult v)
-  where
-    shortBody r = T.take 200 (TE.decodeUtf8Lenient (LBS.toStrict (responseBody r)))
+      runBuffered c.mcHttp StandardPool maxMcpResponseBytes statusPreviewBytes req >>= \case
+        Left (HttpStatusFailure code responseHeaders responsePreview _) -> do
+          captureSession c responseHeaders
+          pure . Left $
+            classifyHttpError
+              (isJust sess)
+              code
+              ( "MCP HTTP "
+                  <> T.pack (show code)
+                  <> " ["
+                  <> ctx
+                  <> "]: "
+                  <> T.take 200 (TE.decodeUtf8Lenient responsePreview)
+              )
+        Left failure ->
+          pure . Left $
+            McpError
+              McpTransportError
+              ("MCP request failed [" <> ctx <> "]: " <> renderTransportFailure failure)
+              Nothing
+        Right response -> do
+          captureSession c response.metadata.headers
+          if not expectResult
+            then pure (Right Null)
+            else case decodeRpcBody (LBS.fromStrict response.body) of
+              Left err -> pure (Left (McpError McpProtocolError err Nothing))
+              Right value -> pure (extractResult value)
+
+captureSession :: McpClient -> ResponseHeaders -> IO ()
+captureSession client responseHeaders =
+  case lookup (CI.mk "Mcp-Session-Id") responseHeaders of
+    Just sessionId -> atomically $ writeTVar client.mcSession (Just sessionId)
+    Nothing -> pure ()
+
+maxMcpResponseBytes :: Int
+maxMcpResponseBytes = 32 * 1024 * 1024
+
+statusPreviewBytes :: Int
+statusPreviewBytes = 2048
 
 -- | Classify an HTTP failure using transport state, not a gateway's
 -- human-readable response body.  Streamable HTTP uses 400/404 for an

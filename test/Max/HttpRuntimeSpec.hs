@@ -17,19 +17,22 @@ import Network.HTTP.Client
     makeConnection,
     newManager,
   )
-import System.Mem.StableName (eqStableName, makeStableName)
+import Network.TLS qualified as TLS
 import Test.Hspec
 
 spec :: Spec
 spec = do
   describe "HttpRuntime" $ do
-    it "returns the same shared manager for repeated pool lookups" $ do
-      standard <- newManager defaultManagerSettings
-      qq <- newManager defaultManagerSettings
-      let runtime = httpRuntimeFromManagers standard qq
-      first <- makeStableName (managerFor StandardPool runtime)
-      second <- makeStableName (managerFor StandardPool runtime)
-      first `eqStableName` second `shouldBe` True
+    it "reuses a pool connection across requests" $ do
+      opens <- newIORef 0
+      manager <- reusableManager [rawKeepAliveResponse "one", rawKeepAliveResponse "two"] opens
+      request <- expectRight =<< parseRequestEither "http://example.test/"
+      let runtime = httpRuntimeFromManagers manager manager
+      first <- runBuffered runtime StandardPool 16 16 request
+      second <- runBuffered runtime StandardPool 16 16 request
+      fmap (.body) first `shouldBe` Right "one"
+      fmap (.body) second `shouldBe` Right "two"
+      readIORef opens `shouldReturn` 1
 
     it "classifies response and connection timeouts separately" $ do
       classifyTransportException
@@ -38,6 +41,12 @@ spec = do
       classifyTransportException
         (toException (HttpExceptionRequest defaultRequest ConnectionTimeout))
         `shouldBe` ConnectionTimeoutFailure
+
+    it "keeps TLS failures distinct from ordinary connection failures" $ do
+      classifyTransportException (toException TLS.ConnectionNotEstablished)
+        `shouldSatisfy` \case
+          TlsFailed _ -> True
+          _ -> False
 
     it "classifies malformed URLs as request-construction failures" $ do
       result <- parseRequestEither "http://[not-an-ipv6-address"
@@ -114,6 +123,20 @@ fakeManager responseBytes closes =
         managerRetryableException = const False
       }
 
+reusableManager :: [ByteString] -> IORef Int -> IO Manager
+reusableManager responses opens =
+  newManager
+    defaultManagerSettings
+      { managerRawConnection = pure $ \_ _ _ -> do
+          modifyIORef' opens (+ 1)
+          responseChunks <- newIORef responses
+          makeConnection
+            (atomicModifyIORef' responseChunks $ \case [] -> ([], BS.empty); chunk : rest -> (rest, chunk))
+            (const (pure ()))
+            (pure ()),
+        managerRetryableException = const False
+      }
+
 rawResponse :: Int -> ByteString -> ByteString
 rawResponse code responseBody =
   "HTTP/1.1 "
@@ -121,6 +144,13 @@ rawResponse code responseBody =
     <> "\r\nContent-Length: "
     <> BS.pack (map (fromIntegral . fromEnum) (show (BS.length responseBody)))
     <> "\r\nConnection: close\r\n\r\n"
+    <> responseBody
+
+rawKeepAliveResponse :: ByteString -> ByteString
+rawKeepAliveResponse responseBody =
+  "HTTP/1.1 200 OK\r\nContent-Length: "
+    <> BS.pack (map (fromIntegral . fromEnum) (show (BS.length responseBody)))
+    <> "\r\n\r\n"
     <> responseBody
 
 expectRight :: (Show e) => Either e a -> IO a

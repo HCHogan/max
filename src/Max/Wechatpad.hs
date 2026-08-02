@@ -40,15 +40,24 @@ import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Text.Read qualified as TR
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.PlatformIds (mappedId, nativeId)
+import Max.HttpRuntime
+  ( BufferedResponse (body),
+    HttpPool (StandardPool),
+    HttpRuntime,
+    TransportFailure (..),
+    parseRequestEither,
+    renderTransportFailure,
+    runBuffered,
+  )
 import Max.Platform (PlatformBackend (..), isForeignId)
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Client.TLS (newTlsManager)
 import Network.WebSockets qualified as WS
 import OneBot.Action (Action (..), Response (..))
 import OneBot.Event (Event (..), GroupMessage (..), Sender (..))
@@ -80,10 +89,11 @@ data WechatpadConfig = WechatpadConfig
 -- | Build the outbound backend.  Runs its two DB lookups through the
 -- effect runner the caller provides (Main closes it over the pool).
 wechatpadBackend ::
+  HttpRuntime ->
   (forall a. Eff '[WithConnection, IOE] a -> IO a) ->
   WechatpadConfig ->
   PlatformBackend
-wechatpadBackend runDb cfg =
+wechatpadBackend runtime runDb cfg =
   PlatformBackend
     { pbName = platformName,
       pbOwnsId = isForeignId,
@@ -120,7 +130,7 @@ wechatpadBackend runDb cfg =
           if T.null (T.strip body)
             then pure (Right 0)
             else
-              postText cfg to body >>= \case
+              postText runtime cfg to body >>= \case
                 Left err -> pure (Left err)
                 Right () -> do
                   -- Allocate a synthetic id for the sent message so
@@ -140,10 +150,10 @@ renderOutbound = T.concat . map go
       SegImage _ -> "[图片]"
       other -> renderPlainText [other]
 
-postText :: WechatpadConfig -> Text -> Text -> IO (Either Text ())
-postText cfg to content = do
-  mgr <- newTlsManager
-  req0 <- HTTP.parseRequest (T.unpack (cfg.wpApiUrl <> "/message/SendTextMessage?key=" <> cfg.wpAuthKey))
+postText :: HttpRuntime -> WechatpadConfig -> Text -> Text -> IO (Either Text ())
+postText runtime cfg to content = do
+  requestResult <-
+    parseRequestEither (T.unpack (cfg.wpApiUrl <> "/message/SendTextMessage?key=" <> cfg.wpAuthKey))
   let payload =
         object
           [ "MsgItem"
@@ -154,19 +164,36 @@ postText cfg to content = do
                      ]
                  ]
           ]
-      req =
-        req0
-          { HTTP.method = "POST",
-            HTTP.requestBody = HTTP.RequestBodyLBS (encode payload),
-            HTTP.requestHeaders = [("Content-Type", "application/json")]
-          }
-  resp <- HTTP.httpLbs req mgr
-  pure $ case decode (HTTP.responseBody resp) >>= parseMaybe envelopeCode of
-    Just 200 -> Right ()
-    Just c -> Left ("wechatpad: API code " <> T.pack (show c))
-    Nothing -> Left "wechatpad: unparseable API response"
+  case requestResult of
+    Left failure -> pure (Left ("wechatpad: " <> renderTransportFailure failure))
+    Right request0 -> do
+      let request =
+            request0
+              { HTTP.method = "POST",
+                HTTP.requestBody = HTTP.RequestBodyLBS (encode payload),
+                HTTP.requestHeaders = [("Content-Type", "application/json")]
+              }
+      runBuffered runtime StandardPool maxWechatpadResponseBytes statusPreviewBytes request >>= \case
+        Left (HttpStatusFailure code _ responsePreview _) ->
+          pure . Left $
+            "wechatpad: HTTP "
+              <> T.pack (show code)
+              <> ": "
+              <> T.take 300 (TE.decodeUtf8Lenient responsePreview)
+        Left failure -> pure (Left ("wechatpad: " <> renderTransportFailure failure))
+        Right response ->
+          pure $ case decodeStrict' response.body >>= parseMaybe envelopeCode of
+            Just 200 -> Right ()
+            Just code -> Left ("wechatpad: API code " <> T.pack (show code))
+            Nothing -> Left "wechatpad: unparseable API response"
   where
     envelopeCode = withObject "envelope" (.: "Code") :: Value -> Parser Int
+
+maxWechatpadResponseBytes :: Int
+maxWechatpadResponseBytes = 1024 * 1024
+
+statusPreviewBytes :: Int
+statusPreviewBytes = 1024
 
 --------------------------------------------------------------------------------
 -- Inbound worker.

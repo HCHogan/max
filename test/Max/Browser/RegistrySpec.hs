@@ -11,7 +11,8 @@ import Control.Concurrent.MVar
 import Control.Exception (finally)
 import Control.Monad (forM, forM_)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
-import Max.Browser.Registry (newBrowserRegistry, withBrowserSession)
+import Max.Browser.Registry (BrowserRegistry, newBrowserRegistry, withBrowserSession)
+import Max.HttpRuntime (newHttpRuntime)
 import OneBot.Types (GroupId (..))
 import System.Timeout (timeout)
 import Test.Hspec
@@ -19,7 +20,7 @@ import Test.Hspec
 spec :: Spec
 spec = describe "withBrowserSession" $ do
   it "serializes complete operations for the same group" $ do
-    reg <- newBrowserRegistry Nothing
+    reg <- testRegistry
     counters <- newMVar (0 :: Int, 0 :: Int)
     done <- forM [1 .. 4 :: Int] $ \_ -> do
       finished <- newEmptyMVar
@@ -31,7 +32,7 @@ spec = describe "withBrowserSession" $ do
     peak `shouldBe` 1
 
   it "allows different groups to operate concurrently" $ do
-    reg <- newBrowserRegistry Nothing
+    reg <- testRegistry
     entered <- newIORef (0 :: Int)
     bothEntered <- newEmptyMVar
     release <- newEmptyMVar
@@ -57,7 +58,7 @@ spec = describe "withBrowserSession" $ do
     readIORef entered `shouldReturn` 2
 
   it "releases a group lock when its owner is cancelled" $ do
-    reg <- newBrowserRegistry Nothing
+    reg <- testRegistry
     entered <- newEmptyMVar
     blocked <- newEmptyMVar
     finished <- newEmptyMVar
@@ -79,3 +80,8 @@ spec = describe "withBrowserSession" $ do
            in pure (next, max peak next)
         threadDelay 20_000
         modifyMVar_ counters $ \(active, peak) -> pure (active - 1, peak)
+
+testRegistry :: IO BrowserRegistry
+testRegistry = do
+  runtime <- newHttpRuntime
+  newBrowserRegistry runtime Nothing

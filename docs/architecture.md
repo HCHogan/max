@@ -29,6 +29,8 @@ src/Max/Effects/   effectful 2.5 effects: Http, Blob, PlatformApi, Outbound (vis
 src/Max/LLM/       Stream: SSE framing + the two protocols' delta reducers, pure
 src/Max/Http/      Json: bounded buffered POST + domain retries; Stream: SSE folding;
                    both execute through the process-wide HttpRuntime pools
+src/Max/HttpRuntime process-wide http-client managers, bounded response scopes,
+                    and typed transport failures
 src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
                    History, Session, Files, Memory, Permissions, PlatformIds,
                    Reminder, Stickers, FetchQueue (media work list), Calls, Usage
@@ -130,6 +132,41 @@ the in-memory handles are read caches and wakeup bells, never the record.
 
 Effect stack at the top of `runApp`:
 `IOE → Concurrent → Log → Http → Blob → WithConnection → PlatformApi → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.
+
+### Outbound HTTP ownership
+
+`HttpRuntime` is a process resource created once in `Main`, not another domain
+effect. It owns the only production `http-client` managers and is injected into
+the interpreters and plain-IO clients that need it:
+
+```
+app/Main
+  └─ newHttpRuntime
+       ├─ StandardPool
+       │    strict TLS validation; http-client implicit retry disabled
+       └─ QqCdnPool
+            same validation + explicit AllowEMS concession for QQ CDN only
+              │
+              ├─ Http effect ───── bounded downloads / redirect lookup
+              ├─ Http.Json ─────── buffered LLM + Tavily JSON POST
+              ├─ Http.Stream ───── LLM SSE POST
+              ├─ Embedding ─────── bounded OpenAI-compatible JSON POST
+              ├─ MCP.Client ────── bounded browser MCP JSON/SSE response
+              └─ Wechatpad ─────── bounded outbound relay POST
+```
+
+The runtime boundary owns request execution, connection reuse, response-body
+lifetime, body/diagnostic limits, and transport classification. Protocol
+decoding and retry decisions stay with callers. In particular, the primitive
+never silently replays a request; buffered LLM calls retry from
+`Max.Http.Json`, while `Max.Http.Stream` retries only before text or tool-call
+output becomes observable.
+
+The OneBot reverse WebSocket, WeChatPad inbound WebSocket, and browser page
+traffic inside the camoufox container are not outbound HTTP clients and remain
+outside this runtime. Future Matrix/Telegram HTTP adapters should use
+`StandardPool`; any long-lived WebSocket transport remains a platform-edge
+resource.
 
 `ModelCatalog` owns profile discovery and prompt-facing capabilities such as
 multimodal input, reasoning effort and history shape. `LLM` owns completion

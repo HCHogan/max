@@ -6,7 +6,6 @@ module Max.HttpRuntime
     BufferedResponse (..),
     newHttpRuntime,
     httpRuntimeFromManagers,
-    managerFor,
     parseRequestEither,
     runBuffered,
     withStreamingResponse,

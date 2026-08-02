@@ -51,6 +51,7 @@ import Max.Browser.Error
     browserCallFailed,
     browserErrorFromMcp,
   )
+import Max.HttpRuntime (HttpRuntime)
 import Max.MCP.Client
   ( McpClient,
     McpErrorKind (McpSessionError),
@@ -62,7 +63,6 @@ import Max.MCP.Client
   )
 import Max.Resource (acquireRegistered, releaseRegistered)
 import Max.Sandbox.Docker (listContainersByPrefix, runRm)
-import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
 import OneBot.Types (GroupId (..))
 
 browserNamePrefix :: Text
@@ -76,7 +76,7 @@ data BrowserEntry = BrowserEntry
   }
 
 data BrowserRegistry = BrowserRegistry
-  { brManager :: !Manager,
+  { brHttp :: !HttpRuntime,
     -- | Global create lock: only one container is brought up (and
     -- waited on) at a time.
     brStartLock :: !(TMVar ()),
@@ -97,10 +97,9 @@ data BrowserRegistry = BrowserRegistry
     brProxy :: !(Maybe Text)
   }
 
-newBrowserRegistry :: Maybe Text -> IO BrowserRegistry
-newBrowserRegistry proxy = do
-  mgr <- newManager defaultManagerSettings
-  BrowserRegistry mgr
+newBrowserRegistry :: HttpRuntime -> Maybe Text -> IO BrowserRegistry
+newBrowserRegistry runtime proxy =
+  BrowserRegistry runtime
     <$> newTMVarIO ()
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
@@ -180,7 +179,7 @@ createEntry reg gid = do
                     -- container-internal bind anyway so a future server
                     -- with a rebinding guard works.
                     hostHeader = "localhost:" <> show containerPort
-                client <- newMcpClient reg.brManager endpoint hostHeader
+                client <- newMcpClient reg.brHttp endpoint hostHeader
                 ready <- waitReady client
                 pure $ case ready of
                   Left err -> Left err

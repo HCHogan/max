@@ -95,7 +95,7 @@ main = do
     reapStaleSandboxes
     reapStaleBrowsers
     sandboxes <- newSandboxRegistry
-    browsers <- newBrowserRegistry cfg.browserProxy
+    browsers <- newBrowserRegistry httpRuntime cfg.browserProxy
     ( do
         -- The panel's log view reads this ring; it fills only when
         -- the admin API is configured, so a bot without a panel pays
@@ -113,7 +113,7 @@ main = do
           reminders <- newReminderScheduler
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
-          mEmbed <- traverse newEmbedClient cfg.embedding
+          let mEmbed = newEmbedClient httpRuntime <$> cfg.embedding
           memxSched <- traverse (const newMemxScheduler) cfg.memoryExtractProfile
           mIntentSt <- traverse (const newIntentState) cfg.intent
           startedAt <- getCurrentTime
@@ -151,7 +151,7 @@ main = do
             . runWithConnectionPool pool
             . runPlatformApi
               (qqBackend clientRef)
-              [ wechatpadBackend (runEff . runWithConnectionPool pool) wc
+              [ wechatpadBackend httpRuntime (runEff . runWithConnectionPool pool) wc
               | Just wc <- [cfg.wechatpad]
               ]
             . runOutbound

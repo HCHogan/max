@@ -1,8 +1,8 @@
 -- |
 -- Minimal OpenAI-compatible embeddings client (@POST {base}/embeddings@).
 -- Plain-IO handle in the style of "Max.MCP.Client": the worker and the
--- search tools call it via 'liftIO'; no effect wrapper needed for a
--- pure request/response client.
+-- search tools call it via 'liftIO'; request execution is injected from
+-- "Max.HttpRuntime", with no extra effect wrapper or private manager.
 --
 -- Works against any endpoint speaking the OpenAI embeddings shape —
 -- cloud (OpenAI, siliconflow, jina) or local (Ollama's @/v1@ compat
@@ -17,28 +17,26 @@ module Max.Embedding
   )
 where
 
-import Control.Exception (SomeException)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
-import Data.ByteString.Lazy qualified as LBS
 import Data.List (sortOn)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Max.Util (trySyncIO)
+import Max.HttpRuntime
+  ( BufferedResponse (body),
+    HttpPool (StandardPool),
+    HttpRuntime,
+    TransportFailure (..),
+    parseRequestEither,
+    renderTransportFailure,
+    runBuffered,
+  )
 import Network.HTTP.Client
-  ( Manager,
-    Request (..),
+  ( Request (..),
     RequestBody (..),
-    httpLbs,
-    newManager,
-    parseRequest,
-    responseBody,
-    responseStatus,
     responseTimeoutMicro,
   )
-import Network.HTTP.Client.TLS (tlsManagerSettings)
-import Network.HTTP.Types.Status (statusCode)
 
 -- | From the optional @embedding@ config section; presence enables
 -- the embed worker and the semantic search surfaces.
@@ -54,11 +52,11 @@ data EmbeddingConfig = EmbeddingConfig
 
 data EmbedClient = EmbedClient
   { emCfg :: !EmbeddingConfig,
-    emManager :: !Manager
+    emHttp :: !HttpRuntime
   }
 
-newEmbedClient :: EmbeddingConfig -> IO EmbedClient
-newEmbedClient cfg = EmbedClient cfg <$> newManager tlsManagerSettings
+newEmbedClient :: HttpRuntime -> EmbeddingConfig -> EmbedClient
+newEmbedClient runtime cfg = EmbedClient cfg runtime
 
 -- | Embed a batch of texts; the result list lines up with the input
 -- (the API's @index@ field is respected, not assumed).
@@ -68,9 +66,9 @@ embedTexts c texts = do
   let cfg = c.emCfg
       url = T.unpack (T.dropWhileEnd (== '/') cfg.ecBaseUrl) <> "/embeddings"
       body = encode (object ["model" .= cfg.ecModel, "input" .= texts])
-  ereq <- trySyncIO (parseRequest ("POST " <> url))
+  ereq <- parseRequestEither url
   case ereq of
-    Left (e :: SomeException) -> pure (Left ("bad embedding url: " <> T.pack (show e)))
+    Left failure -> pure (Left ("bad embedding url: " <> renderTransportFailure failure))
     Right req0 -> do
       let req =
             req0
@@ -82,25 +80,22 @@ embedTexts c texts = do
                 requestBody = RequestBodyLBS body,
                 responseTimeout = responseTimeoutMicro (cfg.ecTimeoutSeconds * 1_000_000)
               }
-      eresp <- trySyncIO (httpLbs req c.emManager)
-      pure $ case eresp of
-        Left (e :: SomeException) -> Left ("embedding request failed: " <> T.pack (show e))
-        Right resp ->
-          let code = statusCode (responseStatus resp)
-              rbody = responseBody resp
-           in if code >= 400
-                then
-                  Left $
-                    "embedding HTTP "
-                      <> T.pack (show code)
-                      <> ": "
-                      <> T.take 300 (TE.decodeUtf8Lenient (LBS.toStrict rbody))
-                else case eitherDecode rbody >>= parseEither embeddingsP of
-                  Left e -> Left ("embedding parse: " <> T.pack e)
-                  Right vs
-                    | length vs /= length texts ->
-                        Left "embedding count mismatch"
-                    | otherwise -> Right vs
+      runBuffered c.emHttp StandardPool maxEmbeddingResponseBytes statusPreviewBytes req >>= \case
+        Left (HttpStatusFailure code _ responsePreview _) ->
+          pure . Left $
+            "embedding HTTP "
+              <> T.pack (show code)
+              <> ": "
+              <> T.take 300 (TE.decodeUtf8Lenient responsePreview)
+        Left failure ->
+          pure (Left ("embedding request failed: " <> renderTransportFailure failure))
+        Right response ->
+          pure $ case eitherDecodeStrict' response.body >>= parseEither embeddingsP of
+            Left err -> Left ("embedding parse: " <> T.pack err)
+            Right vectors
+              | length vectors /= length texts ->
+                  Left "embedding count mismatch"
+              | otherwise -> Right vectors
 
 embeddingsP :: Value -> Parser [[Float]]
 embeddingsP = withObject "resp" $ \o -> do
@@ -116,3 +111,9 @@ embeddingsP = withObject "resp" $ \o -> do
 -- | pgvector text literal — bind as a parameter and cast @?::vector@.
 renderVector :: [Float] -> Text
 renderVector xs = "[" <> T.intercalate "," (map (T.pack . show) xs) <> "]"
+
+maxEmbeddingResponseBytes :: Int
+maxEmbeddingResponseBytes = 64 * 1024 * 1024
+
+statusPreviewBytes :: Int
+statusPreviewBytes = 1024
