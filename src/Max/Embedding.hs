@@ -11,16 +11,22 @@
 module Max.Embedding
   ( EmbeddingConfig (..),
     EmbedClient,
+    EmbeddingRecord (..),
     newEmbedClient,
     embedTexts,
+    embeddingModelId,
+    makeEmbeddingRecord,
     renderVector,
+
     -- * Exposed for tests
     embeddingRequest,
   )
 where
 
+import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
+import Data.ByteString.Base16 qualified as B16
 import Data.List (sortOn)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -59,6 +65,37 @@ data EmbedClient = EmbedClient
 
 newEmbedClient :: HttpRuntime -> EmbeddingConfig -> EmbedClient
 newEmbedClient runtime cfg = EmbedClient cfg runtime
+
+-- | Provenance stored atomically with a vector.  Search paths compare both
+-- model id and dimensions before invoking a pgvector distance operator.
+data EmbeddingRecord = EmbeddingRecord
+  { erModelId :: !Text,
+    erDimensions :: !Int,
+    erContentHash :: !Text,
+    erVector :: !Text
+  }
+  deriving stock (Show, Eq)
+
+embeddingModelId :: EmbedClient -> Text
+embeddingModelId = (.emCfg.ecModel)
+
+-- | Validate a provider response and bind it to the exact source content.
+-- Empty and non-finite vectors are rejected before they can poison storage.
+makeEmbeddingRecord :: EmbedClient -> Text -> [Float] -> Either Text EmbeddingRecord
+makeEmbeddingRecord client content vector
+  | null vector = Left "embedding vector is empty"
+  | any (\x -> isNaN x || isInfinite x) vector = Left "embedding vector contains a non-finite value"
+  | otherwise =
+      Right
+        EmbeddingRecord
+          { erModelId = embeddingModelId client,
+            erDimensions = length vector,
+            erContentHash = contentHash content,
+            erVector = renderVector vector
+          }
+
+contentHash :: Text -> Text
+contentHash = TE.decodeUtf8 . B16.encode . SHA256.hash . TE.encodeUtf8
 
 -- | Embed a batch of texts; the result list lines up with the input
 -- (the API's @index@ field is respected, not assumed).

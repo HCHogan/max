@@ -336,6 +336,7 @@ test-suite max-test-db
     other-modules:
         Helpers
         Max.DB.ConversationCursorSpec
+        Max.DB.EmbeddingMigrationSpec
         Max.DB.FilesSpec
         Max.DB.FetchQueueSpec
         Max.DB.SessionSpec

@@ -33,7 +33,7 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.Effects.Tools (Tool (..))
-import Max.Embedding (EmbedClient, embedTexts, renderVector)
+import Max.Embedding (EmbedClient, EmbeddingRecord (..), embedTexts, makeEmbeddingRecord)
 
 stickerToolsFor ::
   ( WithConnection :> es,
@@ -99,26 +99,31 @@ findStickersTool ec =
       evec <- liftIO (embedTexts ec [q])
       case evec of
         Left err -> pure $ Left ("embedding failed: " <> err)
-        Right [vec] -> do
-          rows <-
-            query
-              "SELECT s.id, s.description \
-              \  FROM stickers s \
-              \  WHERE s.embedding IS NOT NULL AND NOT s.banned \
-              \    AND (s.embedding <=> ?::vector) <= ? \
-              \  ORDER BY (s.embedding <=> ?::vector) ASC LIMIT ?"
-              (renderVector vec, maxDist, renderVector vec, topK)
-          let cands = [Candidate i d | (i, d) <- rows :: [(Int64, Text)]]
-          logInfo "find_stickers" $ object ["query" .= q, "n" .= length cands]
-          pure . Right $
-            object
-              [ "candidates"
-                  .= [ object ["id" .= c.cId, "desc" .= c.cDescription]
-                     | c <- cands
-                     ],
-                "hint"
-                  .= if null cands
-                    then ("库里没有贴切的，就用文字吧" :: Text)
-                    else "把其中一个 id 写成 [sticker#<id>] 放进回复即可发出"
-              ]
+        Right [vec] -> case makeEmbeddingRecord ec q vec of
+          Left err -> pure $ Left ("embedding failed: " <> err)
+          Right record -> do
+            rows <-
+              query
+                "WITH compatible AS MATERIALIZED ( \
+                \  SELECT id, description, embedding FROM stickers \
+                \  WHERE NOT banned AND embedding_model = ? AND embedding_dimensions = ? \
+                \), ranked AS ( \
+                \  SELECT id, description, embedding <=> ?::vector AS distance FROM compatible \
+                \) \
+                \ SELECT id, description FROM ranked WHERE distance <= ? \
+                \ ORDER BY distance ASC LIMIT ?"
+                (record.erModelId, record.erDimensions, record.erVector, maxDist, topK)
+            let cands = [Candidate i d | (i, d) <- rows :: [(Int64, Text)]]
+            logInfo "find_stickers" $ object ["query" .= q, "n" .= length cands]
+            pure . Right $
+              object
+                [ "candidates"
+                    .= [ object ["id" .= c.cId, "desc" .= c.cDescription]
+                       | c <- cands
+                       ],
+                  "hint"
+                    .= if null cands
+                      then ("库里没有贴切的，就用文字吧" :: Text)
+                      else "把其中一个 id 写成 [sticker#<id>] 放进回复即可发出"
+                ]
         Right _ -> pure $ Left "embedding failed: bad vector count"

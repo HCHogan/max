@@ -51,7 +51,7 @@ import Max.DB.Memory
     userMemoryNamespace,
   )
 import Max.Effects.Tools (Tool (..))
-import Max.Embedding (EmbedClient, embedTexts, renderVector)
+import Max.Embedding (EmbedClient, EmbeddingRecord (..), embedTexts, makeEmbeddingRecord)
 import Max.ToolContext (ToolContext, toolGroupId, toolUserId)
 import OneBot.Types (GroupId (..), UserId (..))
 
@@ -339,23 +339,34 @@ searchTool dc ec =
               evec <- liftIO (embedTexts ec [q])
               case evec of
                 Left err -> pure $ Left ("embedding failed: " <> err)
-                Right [vec] -> do
-                  -- Confined to this conversation.  Unscoped, this ranked
-                  -- every memory in the database — every other group's
-                  -- facts, every other person's — and handed the model
-                  -- whatever scored highest, which is how a fact learned in
-                  -- one group surfaced in another.  Group rows partition on
-                  -- scope_id; user rows on where they were learned.
-                  rows <-
-                    query
-                      "SELECT id, scope, scope_id, content, updated_at \
-                      \  FROM memories \
-                      \  WHERE embedding IS NOT NULL \
-                      \    AND ( (scope = 'group' AND scope_id = ?) \
-                      \       OR (scope = 'user' AND source_group_id = ?) ) \
-                      \  ORDER BY embedding <=> ?::vector LIMIT ?"
-                      (gid, gid, renderVector vec, clamp (1, 20) lim)
-                  pure $ Right (toJSON (map fullSummary (rows :: [MemoryItem])))
+                Right [vec] -> case makeEmbeddingRecord ec q vec of
+                  Left err -> pure $ Left ("embedding failed: " <> err)
+                  Right record -> do
+                    -- Confined to this conversation.  Unscoped, this ranked
+                    -- every memory in the database — every other group's
+                    -- facts, every other person's — and handed the model
+                    -- whatever scored highest, which is how a fact learned in
+                    -- one group surfaced in another.  Group rows partition on
+                    -- scope_id; user rows on where they were learned.
+                    rows <-
+                      query
+                        "WITH compatible AS MATERIALIZED ( \
+                        \  SELECT id, scope, scope_id, content, updated_at, embedding \
+                        \  FROM memories \
+                        \  WHERE ( (scope = 'group' AND scope_id = ?) \
+                        \       OR (scope = 'user' AND source_group_id = ?) ) \
+                        \    AND embedding_model = ? AND embedding_dimensions = ? \
+                        \) \
+                        \ SELECT id, scope, scope_id, content, updated_at FROM compatible \
+                        \ ORDER BY embedding <=> ?::vector LIMIT ?"
+                        ( gid,
+                          gid,
+                          record.erModelId,
+                          record.erDimensions,
+                          record.erVector,
+                          clamp (1, 20) lim
+                        )
+                    pure $ Right (toJSON (map fullSummary (rows :: [MemoryItem])))
                 Right _ -> pure $ Left "embedding failed: unexpected result shape"
         }
   where

@@ -19,6 +19,7 @@ import Data.Text qualified as T
 import Helpers (truncateAll)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
+import Max.DB.EmbeddingMigrationSpec qualified as EmbeddingMigrationSpec
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
@@ -47,6 +48,7 @@ main = do
         [] -> putStrLn "migrations: nothing to apply (test DB already up to date)"
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
+        EmbeddingMigrationSpec.spec pool
         SessionSpec.spec pool
         ConversationCursorSpec.spec pool
         HistorySpec.spec pool

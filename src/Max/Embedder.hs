@@ -17,16 +17,21 @@ where
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (forever, unless)
-import Data.Foldable (traverse_)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Effectful
-import Effectful.Log
 import Database.PostgreSQL.Simple (Query)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Effectful.PostgreSQL (WithConnection, execute, query_)
-import Max.Embedding (EmbedClient, embedTexts, renderVector)
+import Effectful
+import Effectful.Log
+import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.Embedding
+  ( EmbedClient,
+    EmbeddingRecord (..),
+    embedTexts,
+    embeddingModelId,
+    makeEmbeddingRecord,
+  )
 import Max.Util (catchSync)
 
 -- | Batch size per tick; embedding APIs are happy with this, and it
@@ -59,39 +64,59 @@ embedWorker client = forever $ do
     tick = do
       -- Recent-first so fresh messages become searchable immediately
       -- while the historical backfill trickles along behind.
+      let modelId = embeddingModelId client
       msgs <-
-        query_
+        query
           "SELECT message_id, rendered_text FROM messages \
-          \ WHERE embedding IS NULL \
+          \ WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM ?) \
           \   AND NOT is_synthetic \
           \   AND char_length(rendered_text) >= 4 \
           \ ORDER BY received_at DESC LIMIT 64"
+          [modelId]
       mems <-
-        query_
-          "SELECT id, content FROM memories WHERE embedding IS NULL LIMIT 64"
+        query
+          "SELECT id, content FROM memories \
+          \ WHERE embedding IS NULL OR embedding_model IS DISTINCT FROM ? LIMIT 64"
+          [modelId]
       -- Stickers embed their vision caption (the retrieval key for
       -- send_sticker); rows wait here until the caption worker fills
       -- description in.
       stickers <-
-        query_
+        query
           "SELECT sha256, description FROM stickers \
-          \ WHERE embedding IS NULL AND description IS NOT NULL AND NOT banned \
-          \ LIMIT 64"
+          \ WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM ?) \
+          \   AND description IS NOT NULL AND NOT banned LIMIT 64"
+          [modelId]
       if null (msgs :: [(Int64, Text)])
         && null (mems :: [(Int64, Text)])
         && null (stickers :: [(Text, Text)])
         then liftIO (threadDelay idleMicros)
         else do
-          okM <- embedInto "UPDATE messages SET embedding = ?::vector WHERE message_id = ?" msgs
-          okR <- embedInto "UPDATE memories SET embedding = ?::vector WHERE id = ?" mems
-          okS <- embedInto "UPDATE stickers SET embedding = ?::vector WHERE sha256 = ?" stickers
+          okM <-
+            embedInto
+              "UPDATE messages SET embedding = ?::vector, embedding_model = ?, \
+              \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
+              \ WHERE message_id = ? AND rendered_text = ?"
+              msgs
+          okR <-
+            embedInto
+              "UPDATE memories SET embedding = ?::vector, embedding_model = ?, \
+              \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
+              \ WHERE id = ? AND content = ?"
+              mems
+          okS <-
+            embedInto
+              "UPDATE stickers SET embedding = ?::vector, embedding_model = ?, \
+              \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
+              \ WHERE sha256 = ? AND description = ?"
+              stickers
           unless (okM && okR && okS) $ liftIO (threadDelay errorMicros)
           liftIO (threadDelay busyMicros)
 
     -- Embed one batch and write vectors back; False on API failure
     -- (rows stay NULL for retry).  Polymorphic in the key column
     -- (messages/memories use bigint ids, stickers their sha256 text).
-    embedInto :: ToField i => Query -> [(i, Text)] -> Eff es Bool
+    embedInto :: (ToField i) => Query -> [(i, Text)] -> Eff es Bool
     embedInto _ [] = pure True
     embedInto sql rows = do
       let (ids, texts) = unzip (take batchSize rows)
@@ -101,9 +126,24 @@ embedWorker client = forever $ do
           logAttention "embed: batch failed" $
             object ["error" .= err, "rows" .= length ids]
           pure False
-        Right vecs -> do
-          traverse_
-            (\(i, v) -> execute sql (renderVector v, i))
-            (zip ids vecs)
-          logInfo "embed: batch done" $ object ["rows" .= length ids]
-          pure True
+        Right vecs -> case consistentRecords =<< traverse (uncurry (makeEmbeddingRecord client)) (zip texts vecs) of
+          Left err -> do
+            logAttention "embed: invalid provider response" $ object ["error" .= err]
+            pure False
+          Right records -> do
+            written <-
+              traverse
+                (\(i, source, record) -> execute sql (record.erVector, record.erModelId, record.erDimensions, record.erContentHash, i, source))
+                (zip3 ids texts records)
+            let stored = sum written
+            logInfo "embed: batch done" $
+              object ["rows" .= length ids, "stored" .= stored, "stale" .= (fromIntegral (length ids) - stored)]
+            pure True
+
+    -- A model response must have one stable dimension for the whole batch.
+    -- If a broken gateway mixes shapes, keep every row pending rather than
+    -- publishing a partially usable corpus under one model id.
+    consistentRecords [] = Right []
+    consistentRecords records@(first : rest)
+      | all ((== first.erDimensions) . (.erDimensions)) rest = Right records
+      | otherwise = Left "embedding batch contains inconsistent dimensions"

@@ -52,6 +52,7 @@ import Database.PostgreSQL.Simple.FromRow (FromRow, field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
+import Max.Embedding (EmbeddingRecord (..))
 
 data MemoryScope = ScopeGroup | ScopeUser
   deriving stock (Show, Eq)
@@ -196,24 +197,36 @@ insertMemory ns content = do
     [Only n] -> n
     _ -> 0 -- unreachable: RETURNING on a successful insert yields one row
 
--- | Attach an embedding to the exact content row just inserted or embedded.
--- Embedding model/hash metadata is added in the later embedding-lifecycle
--- migration; the namespace predicate already prevents a stale worker or
--- hallucinated id from touching another conversation.
+-- | Attach an embedding only if both authority and source content still
+-- match.  The content predicate is the worker/extractor race guard; all
+-- provenance lands in the same statement as the vector.
 markMemoryEmbedded ::
   (WithConnection :> es, IOE :> es) =>
   MemoryNamespace ->
   Int64 ->
-  Text ->
+  Text -> -- expected content
+  EmbeddingRecord ->
   Eff es Bool
-markMemoryEmbedded ns mid vector = do
+markMemoryEmbedded ns mid expectedContent record = do
   let (scope, sid, gid) = namespaceParts ns
   n <-
     execute
-      "UPDATE memories SET embedding = ?::vector \
-      \  WHERE id = ? AND scope = ? AND scope_id = ? \
+      "UPDATE memories \
+      \  SET embedding = ?::vector, embedding_model = ?, \
+      \      embedding_dimensions = ?, embedding_content_hash = ?, \
+      \      embedding_updated_at = now() \
+      \  WHERE id = ? AND content = ? AND scope = ? AND scope_id = ? \
       \    AND (scope = 'group' OR source_group_id = ?)"
-      (vector, mid, scope, sid, gid)
+      ( record.erVector,
+        record.erModelId,
+        record.erDimensions,
+        record.erContentHash,
+        mid,
+        expectedContent,
+        scope,
+        sid,
+        gid
+      )
   pure (n > 0)
 
 -- | Returns 'False' when the id doesn't exist.
@@ -228,7 +241,9 @@ updateMemory ns mid content = do
   n <-
     execute
       "UPDATE memories \
-      \  SET content = ?, embedding = NULL, updated_at = now() \
+      \  SET content = ?, embedding = NULL, embedding_model = NULL, \
+      \      embedding_dimensions = NULL, embedding_content_hash = NULL, \
+      \      embedding_updated_at = NULL, updated_at = now() \
       \  WHERE id = ? AND scope = ? AND scope_id = ? \
       \    AND (scope = 'group' OR source_group_id = ?)"
       (content, mid, scope, sid, gid)
@@ -248,7 +263,9 @@ updateVisibleMemory scope mid content = do
   n <-
     execute
       "UPDATE memories \
-      \  SET content = ?, embedding = NULL, updated_at = now() \
+      \  SET content = ?, embedding = NULL, embedding_model = NULL, \
+      \      embedding_dimensions = NULL, embedding_content_hash = NULL, \
+      \      embedding_updated_at = NULL, updated_at = now() \
       \  WHERE id = ? \
       \    AND ((scope = 'group' AND scope_id = ?) \
       \      OR (scope = 'user' AND source_group_id = ?))"

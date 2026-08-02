@@ -33,7 +33,7 @@ import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), bestName, fetchForwardChildrenInScope, fetchMessageInScope)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
-import Max.Embedding (EmbedClient, embedTexts, renderVector)
+import Max.Embedding (EmbedClient, EmbeddingRecord (..), embedTexts, makeEmbeddingRecord)
 import Max.Prompt (tagMediaMarkers)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolGroupId)
@@ -171,7 +171,9 @@ searchMessagesTool tz mEmbed (GroupId gid) =
                     evec <- liftIO (embedTexts ec [q])
                     case evec of
                       Left err -> pure (Left ("embedding failed: " <> err))
-                      Right [v] -> run f (Just (renderVector v))
+                      Right [v] -> case makeEmbeddingRecord ec q v of
+                        Left err -> pure (Left ("embedding failed: " <> err))
+                        Right record -> run f (Just record)
                       Right _ -> pure (Left "embedding failed: unexpected result shape")
     }
   where
@@ -263,9 +265,9 @@ parseTimeArg tz t =
 runSearch ::
   (WithConnection :> es, IOE :> es) =>
   MessageFilter ->
-  -- | Rendered query vector — 'Just' switches ordering from
-  -- newest-first to most-similar-first.
-  Maybe Text ->
+  -- | Validated query vector — 'Just' switches ordering from
+  -- newest-first to most-similar-first and excludes incompatible rows.
+  Maybe EmbeddingRecord ->
   Eff es (Either Text [HistoryItem])
 runSearch f mVec = do
   let conds :: [(String, [PG.Action])]
@@ -281,22 +283,36 @@ runSearch f mVec = do
             [("received_at >= ?", [PG.toField t]) | Just t <- [f.mfAfter]],
             [("received_at <= ?", [PG.toField t]) | Just t <- [f.mfBefore]]
           ]
-      (orderSql, orderParams) = case mVec of
-        Just v ->
-          ( " AND embedding IS NOT NULL ORDER BY embedding <=> ?::vector LIMIT ?",
-            [PG.toField v, PG.toField f.mfLimit]
-          )
-        Nothing -> (" ORDER BY received_at DESC LIMIT ?", [PG.toField f.mfLimit])
-      sql =
-        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
-        \  FROM messages \
+      columns = "message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id"
+      baseSql =
+        " FROM messages \
         \  WHERE group_id = ? \
         \    AND NOT is_synthetic \
         \    AND kind = 'chat' \
         \    AND forwarded_in_message_id IS NULL"
           <> concatMap ((" AND " <>) . fst) conds
-          <> orderSql
-      params = PG.toField f.mfGroupId : concatMap snd conds <> orderParams
+      baseParams = PG.toField f.mfGroupId : concatMap snd conds
+      (sql, params) = case mVec of
+        Nothing ->
+          ( "SELECT " <> columns <> baseSql <> " ORDER BY received_at DESC LIMIT ?",
+            baseParams <> [PG.toField f.mfLimit]
+          )
+        Just record ->
+          ( "WITH compatible AS MATERIALIZED (SELECT "
+              <> columns
+              <> ", embedding"
+              <> baseSql
+              <> " AND embedding_model = ? AND embedding_dimensions = ?) "
+              <> "SELECT "
+              <> columns
+              <> " FROM compatible ORDER BY embedding <=> ?::vector LIMIT ?",
+            baseParams
+              <> [ PG.toField record.erModelId,
+                   PG.toField record.erDimensions,
+                   PG.toField record.erVector,
+                   PG.toField f.mfLimit
+                 ]
+          )
   eres <- try @SqlError (query (fromString sql) params)
   pure $ case eres of
     Left e -> Left ("search failed: " <> TE.decodeUtf8Lenient (sqlErrorMsg e))

@@ -2,6 +2,7 @@ module Max.DB.MemorySpec (spec) where
 
 import Data.Int (Int64)
 import Data.Text (Text)
+import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (query)
 import Helpers (truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
@@ -16,6 +17,7 @@ import Max.DB.Memory
     updateVisibleMemory,
     userMemoryNamespace,
   )
+import Max.Embedding (EmbeddingRecord (..))
 import OneBot.Types (GroupId (..), UserId (..), privateChatGroupId)
 import Test.Hspec
 
@@ -76,13 +78,86 @@ spec pool = before_ (truncateAll pool) $
 
     it "atomically invalidates the embedding when visible content changes" $ do
       mid <- withDb pool $ insertMemory userNsA "old content"
-      embedded <- withDb pool $ markMemoryEmbedded userNsA mid "[1,2,3]"
+      embedded <- withDb pool $ markMemoryEmbedded userNsA mid "old content" testEmbedding
       embedded `shouldBe` True
       updated <- withDb pool $ updateVisibleMemory scopeA mid "new content"
       updated `shouldBe` True
       rows <-
         withDb pool $
           query
-            "SELECT content, embedding IS NULL FROM memories WHERE id = ?"
+            "SELECT content, embedding IS NULL, embedding_model IS NULL, \
+            \       embedding_dimensions IS NULL, embedding_content_hash IS NULL, \
+            \       embedding_updated_at IS NULL \
+            \ FROM memories WHERE id = ?"
             [mid]
-      (rows :: [(Text, Bool)]) `shouldBe` [("new content", True)]
+      (rows :: [(Text, Bool, Bool, Bool, Bool, Bool)])
+        `shouldBe` [("new content", True, True, True, True, True)]
+
+    it "stores embedding provenance only when expected content still matches" $ do
+      mid <- withDb pool $ insertMemory userNsA "current content"
+      stale <- withDb pool $ markMemoryEmbedded userNsA mid "old content" testEmbedding
+      stale `shouldBe` False
+      stored <- withDb pool $ markMemoryEmbedded userNsA mid "current content" testEmbedding
+      stored `shouldBe` True
+      rows <-
+        withDb pool $
+          query
+            "SELECT embedding_model, embedding_dimensions, embedding_content_hash, \
+            \       vector_dims(embedding) \
+            \ FROM memories WHERE id = ?"
+            [mid]
+      (rows :: [(Text, Int, Text, Int)])
+        `shouldBe` [("embedding-v1", 3, replicateText 64 "a", 3)]
+
+    it "queues model changes and never compares incompatible dimensions" $ do
+      first <- withDb pool $ insertMemory userNsA "three dimensions"
+      second <- withDb pool $ insertMemory userNsA "two dimensions"
+      _ <- withDb pool $ markMemoryEmbedded userNsA first "three dimensions" testEmbedding
+      _ <- withDb pool $ markMemoryEmbedded userNsA second "two dimensions" twoDimensionalEmbedding
+
+      pendingCurrent <-
+        withDb pool $
+          query
+            "SELECT id FROM memories \
+            \ WHERE embedding IS NULL OR embedding_model IS DISTINCT FROM ? ORDER BY id"
+            ["embedding-v1" :: Text]
+      pendingNext <-
+        withDb pool $
+          query
+            "SELECT id FROM memories \
+            \ WHERE embedding IS NULL OR embedding_model IS DISTINCT FROM ? ORDER BY id"
+            ["embedding-v2" :: Text]
+      (pendingCurrent :: [Only Int64]) `shouldBe` []
+      pendingNext `shouldBe` [Only first, Only second]
+
+      compatible <-
+        withDb pool $
+          query
+            "WITH candidates AS MATERIALIZED ( \
+            \  SELECT id, embedding FROM memories \
+            \  WHERE embedding_model = ? AND embedding_dimensions = ? \
+            \) \
+            \ SELECT id FROM candidates ORDER BY embedding <=> ?::vector"
+            ("embedding-v1" :: Text, 2 :: Int, "[1,2]" :: Text)
+      (compatible :: [Only Int64]) `shouldBe` [Only second]
+
+testEmbedding :: EmbeddingRecord
+testEmbedding =
+  EmbeddingRecord
+    { erModelId = "embedding-v1",
+      erDimensions = 3,
+      erContentHash = replicateText 64 "a",
+      erVector = "[1,2,3]"
+    }
+
+twoDimensionalEmbedding :: EmbeddingRecord
+twoDimensionalEmbedding =
+  EmbeddingRecord
+    { erModelId = "embedding-v1",
+      erDimensions = 2,
+      erContentHash = replicateText 64 "b",
+      erVector = "[1,2]"
+    }
+
+replicateText :: Int -> Text -> Text
+replicateText n = mconcat . replicate n

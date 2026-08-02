@@ -112,7 +112,12 @@ import Max.DB.Memory
   )
 import Max.DB.Session (listSessions)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
-import Max.Embedding (EmbedClient, embedTexts, renderVector)
+import Max.Embedding
+  ( EmbedClient,
+    EmbeddingRecord (..),
+    embedTexts,
+    makeEmbeddingRecord,
+  )
 import Max.Prompt (renderHistoryLine)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
 import Max.Time (fmtDate)
@@ -481,8 +486,8 @@ applyOp profile mEmbed gid = \case
             -- Reuse the dedup vector so the new row is instantly
             -- searchable / dedupable (no worker lag window).
             case mVec of
-              Just v -> do
-                _ <- markMemoryEmbedded namespace mid v
+              Just record -> do
+                _ <- markMemoryEmbedded namespace mid c record
                 pure ()
               Nothing -> pure ()
             logInfo "memx: added" $
@@ -523,18 +528,32 @@ applyOp profile mEmbed gid = \case
             logAttention "memx: dedup embed failed (fail-open)" $ object ["error" .= err]
             pure (Nothing, Nothing)
           Right [v] -> do
-            let vt = renderVector v
-            rows <-
-              query
-                "SELECT id, embedding <=> ?::vector AS dist FROM memories \
-                \ WHERE scope = ? AND scope_id = ? AND embedding IS NOT NULL \
-                \   AND (scope = 'group' OR source_group_id = ?) \
-                \ ORDER BY dist LIMIT 1"
-                (vt, scopeText scope, sid, gid)
-            let hit = case rows :: [(Int64, Double)] of
-                  ((did, dist) : _) | dist < dupDistance -> Just (did, dist)
-                  _ -> Nothing
-            pure (Just vt, hit)
+            case makeEmbeddingRecord ec c v of
+              Left err -> do
+                logAttention "memx: invalid dedup embedding (fail-open)" $ object ["error" .= err]
+                pure (Nothing, Nothing)
+              Right record -> do
+                rows <-
+                  query
+                    "WITH compatible AS MATERIALIZED ( \
+                    \  SELECT id, embedding FROM memories \
+                    \  WHERE scope = ? AND scope_id = ? \
+                    \    AND (scope = 'group' OR source_group_id = ?) \
+                    \    AND embedding_model = ? AND embedding_dimensions = ? \
+                    \) \
+                    \ SELECT id, embedding <=> ?::vector AS dist FROM compatible \
+                    \ ORDER BY dist LIMIT 1"
+                    ( scopeText scope,
+                      sid,
+                      gid,
+                      record.erModelId,
+                      record.erDimensions,
+                      record.erVector
+                    )
+                let hit = case rows :: [(Int64, Double)] of
+                      ((did, dist) : _) | dist < dupDistance -> Just (did, dist)
+                      _ -> Nothing
+                pure (Just record, hit)
           Right _ -> pure (Nothing, Nothing)
 
 -- | Cosine distance below which a candidate counts as "already
