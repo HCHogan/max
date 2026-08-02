@@ -47,7 +47,7 @@ import Max.Effects.LLM
     requestBodyFor,
   )
 import Max.Effects.ToolOutput (InlineMedia (..))
-import Max.ModelCatalog (LLMProfile (..), Protocol (..))
+import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
 import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), renderContext)
 import Max.Session (Session (..))
 import Max.Tools.Images (viewImageSpec)

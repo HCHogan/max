@@ -128,7 +128,14 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Sandbox / browser containers | destroyed on exit, reaped on boot |
 
 Effect stack at the top of `runApp`:
-`IOE → Concurrent → Log → Http → Blob → WithConnection → PlatformApi → Outbound → Wreq → LLM → Reader BotEnv → Agent`.
+`IOE → Concurrent → Log → Http → Blob → WithConnection → PlatformApi → Outbound → Wreq → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.
+
+`ModelCatalog` owns profile discovery and prompt-facing capabilities such as
+multimodal input, reasoning effort and history shape. `LLM` owns completion
+calls only; its production interpreter uses the catalog internally to resolve
+the selected profile's endpoint and credentials. This keeps command and prompt
+code from depending on transport secrets or growing catalog operations into the
+completion effect.
 
 `PlatformApi` is the low-level capability for raw platform actions and
 request/response calls. Its interpreter routes each action to a

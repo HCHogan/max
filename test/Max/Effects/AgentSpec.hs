@@ -68,12 +68,7 @@ fakeLLM calls =
               sink "第一段"
               sink "第一段\n\n第二段"
             pure (Right (ContentResp "第一段\n\n第二段"))
-          _ -> pure (Left "unexpected extra LLM call"),
-      liListProfiles = pure ["fake"],
-      liDefaultProfile = pure "fake",
-      liIsProfileMultimodal = const (pure False),
-      liProfileEffort = const (pure Nothing),
-      liIsProfileHistoryTurns = const (pure False)
+          _ -> pure (Left "unexpected extra LLM call")
     }
 
 echoTool :: (ToolOutput :> es) => Tool es

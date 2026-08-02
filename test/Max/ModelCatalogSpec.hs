@@ -12,41 +12,25 @@ spec = describe "ModelCatalog" $ do
     modelProfileNames validCatalog `shouldBe` ["text", "vision"]
 
   it "rejects a default that is absent from the single source of truth" $
-    mkModelCatalog "missing" profiles
-      `shouldBe` Left (DefaultModelMissing "missing")
+    case mkModelCatalog "missing" capabilities of
+      Left err -> err `shouldBe` DefaultModelMissing "missing"
+      Right _ -> expectationFailure "accepted an absent default model"
 
-  it "projects prompt capabilities without endpoint credentials" $ do
+  it "exposes prompt capabilities through the safe public API" $ do
     lookupModelCapabilities "vision" validCatalog
       `shouldBe` Just (ModelCapabilities True True (Just "high"))
 
   it "distinguishes an unknown profile explicitly" $ do
     lookupModelCapabilities "missing" validCatalog `shouldBe` Nothing
-    lookupCompletionProfile "missing" validCatalog `shouldBe` Nothing
 
 validCatalog :: ModelCatalog
-validCatalog = case mkModelCatalog "vision" profiles of
+validCatalog = case mkModelCatalog "vision" capabilities of
   Left err -> error (show err)
   Right catalog -> catalog
 
-profiles :: Map.Map Text LLMProfile
-profiles =
+capabilities :: Map.Map Text ModelCapabilities
+capabilities =
   Map.fromList
-    [ ("text", profile False False Nothing),
-      ("vision", profile True True (Just "high"))
+    [ ("text", ModelCapabilities False False Nothing),
+      ("vision", ModelCapabilities True True (Just "high"))
     ]
-
-profile :: Bool -> Bool -> Maybe Text -> LLMProfile
-profile multimodal historyAsTurns effort =
-  LLMProfile
-    { baseUrl = "https://llm.invalid/v1",
-      apiKey = "secret-that-must-not-enter-capabilities",
-      model = "fixture",
-      maxTokens = 1024,
-      temperature = Nothing,
-      effort,
-      timeoutSeconds = 30,
-      protocol = ProtocolOpenAI,
-      multimodal,
-      historyAsTurns,
-      stream = True
-    }

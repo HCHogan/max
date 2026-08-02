@@ -95,7 +95,7 @@ data PromptInputs = PromptInputs
     transcript :: ![HistoryItem],
     -- | Put history back into real @user@\/@assistant@ turns instead of
     -- the flat transcript.  Per-profile
-    -- ('Max.Effects.LLM.historyAsTurns') so the two shapes can be
+    -- ('Max.ModelCatalog.usesHistoryTurns') so the two shapes can be
     -- compared on the live bot rather than argued about; see that
     -- field for the trade.
     historyTurns :: !Bool,

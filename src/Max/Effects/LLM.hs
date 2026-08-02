@@ -1,9 +1,10 @@
 {-# LANGUAGE TypeFamilies #-}
 
 -- |
--- Multi-profile OpenAI-compatible chat client.  The interpreter holds
--- a map of named 'LLMProfile's (each one has its own api_key,
--- base_url, model, etc.); callers pick which profile to use per call.
+-- Multi-profile OpenAI-compatible chat client.  Callers pick a profile name
+-- per completion; the production interpreter resolves its private transport
+-- configuration through 'ModelCatalog'.  Public profile discovery and
+-- capability queries live in "Max.ModelCatalog", outside this effect.
 --
 -- The 'LLM' effect is intentionally raw: one HTTP request in, one
 -- response out, no looping.  The agent loop lives in
@@ -26,10 +27,6 @@
 -- ('ContentResp') or function calls ('ToolCallsResp').
 module Max.Effects.LLM
   ( LLM,
-    LLMProfile (..),
-    ModelCatalog,
-    Protocol (..),
-    parseProtocol,
 
     -- * Messages
     ChatMessage (..),
@@ -55,11 +52,6 @@ module Max.Effects.LLM
     LLMInterpreter (..),
     runLLMWith,
     chat,
-    listProfiles,
-    defaultProfile,
-    isProfileMultimodal,
-    profileEffort,
-    isProfileHistoryTurns,
     chatStreaming,
 
     -- * Exposed for tests
@@ -99,16 +91,11 @@ import Effectful.Wreq qualified as W
 import GHC.Clock (getMonotonicTimeNSec)
 import Max.Http.Stream (StreamOutcome (..), streamPost)
 import Max.LLM.Stream (PartialCall (..), StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, stepResponses)
-import Max.ModelCatalog
+import Max.ModelCatalog (ModelCatalog)
+import Max.ModelCatalog.Internal
   ( LLMProfile (..),
-    ModelCapabilities (..),
-    ModelCatalog,
     Protocol (..),
-    defaultModelName,
     lookupCompletionProfile,
-    lookupModelCapabilities,
-    modelProfileNames,
-    parseProtocol,
   )
 import Max.Util (trySync)
 import Max.Wreq (defaultRetryDelaysSecs, postAndParseRetrying, replyRetryDelaysSecs)
@@ -366,18 +353,6 @@ data LLM :: Effect where
     [ToolSpec] ->
     (Text -> m ()) ->
     LLM m (Either Text ChatResponse)
-  ListProfiles :: LLM m [Text]
-  DefaultProfile :: LLM m Text
-  -- | Look up @profile.multimodal@ by profile name.  Returns 'False'
-  -- if the profile doesn't exist (caller will already fail on the
-  -- subsequent 'Chat' call with a clearer error).
-  IsProfileMultimodal :: Text -> LLM m Bool
-  -- | The profile's configured reasoning effort; 'Nothing' when unset
-  -- or the profile doesn't exist.  For @!effort@'s status display.
-  ProfileEffort :: Text -> LLM m (Maybe Text)
-  -- | Look up @profile.history_as_turns@ by name.  'False' when the
-  -- profile doesn't exist — same fallback as 'IsProfileMultimodal'.
-  IsProfileHistoryTurns :: Text -> LLM m Bool
 
 type instance DispatchOf LLM = Dynamic
 
@@ -391,12 +366,7 @@ data LLMInterpreter es = LLMInterpreter
       [ChatMessage] ->
       [ToolSpec] ->
       Maybe (Text -> Eff es ()) ->
-      Eff es (Either Text ChatResponse),
-    liListProfiles :: Eff es [Text],
-    liDefaultProfile :: Eff es Text,
-    liIsProfileMultimodal :: Text -> Eff es Bool,
-    liProfileEffort :: Text -> Eff es (Maybe Text),
-    liIsProfileHistoryTurns :: Text -> Eff es Bool
+      Eff es (Either Text ChatResponse)
   }
 
 -- | Install a supplied interpreter without HTTP, credentials, or a model
@@ -412,11 +382,6 @@ runLLMWith backend = interpret $ \localEnv -> \case
   ChatStreaming ctx profile msgs tools sink ->
     localSeqUnlift localEnv $ \unlift ->
       backend.liChat ctx profile msgs tools (Just (unlift . sink))
-  ListProfiles -> backend.liListProfiles
-  DefaultProfile -> backend.liDefaultProfile
-  IsProfileMultimodal profile -> backend.liIsProfileMultimodal profile
-  ProfileEffort profile -> backend.liProfileEffort profile
-  IsProfileHistoryTurns profile -> backend.liIsProfileHistoryTurns profile
 
 -- | Per-profile timeout is enforced twice: the http-client
 -- 'HTTP.managerResponseTimeout' is set to @timeoutSeconds@ inside
@@ -440,11 +405,6 @@ runLLM usageWriter callWriter reg = interpret $ \localEnv -> \case
     -- single-threaded and calls the sink one frame at a time.
     localSeqUnlift localEnv $ \unlift ->
       runOneChat usageWriter callWriter reg ctx name msgs tools (Just (unlift . sink))
-  ListProfiles -> pure (modelProfileNames reg)
-  DefaultProfile -> pure (defaultModelName reg)
-  ProfileEffort name -> pure (configuredEffort =<< lookupModelCapabilities name reg)
-  IsProfileMultimodal name -> pure (maybe False supportsMultimodal (lookupModelCapabilities name reg))
-  IsProfileHistoryTurns name -> pure (maybe False usesHistoryTurns (lookupModelCapabilities name reg))
 
 -- | One chat call, shared by the streaming and non-streaming
 -- operations.  A 'Just' sink means \"stream if the profile allows it\";
@@ -555,21 +515,6 @@ chatStreaming ::
   Eff es (Either Text ChatResponse)
 chatStreaming ctx name msgs tools sink =
   send (ChatStreaming ctx name msgs tools sink)
-
-listProfiles :: (LLM :> es) => Eff es [Text]
-listProfiles = send ListProfiles
-
-defaultProfile :: (LLM :> es) => Eff es Text
-defaultProfile = send DefaultProfile
-
-isProfileMultimodal :: (LLM :> es) => Text -> Eff es Bool
-isProfileMultimodal name = send (IsProfileMultimodal name)
-
-profileEffort :: (LLM :> es) => Text -> Eff es (Maybe Text)
-profileEffort name = send (ProfileEffort name)
-
-isProfileHistoryTurns :: (LLM :> es) => Text -> Eff es Bool
-isProfileHistoryTurns name = send (IsProfileHistoryTurns name)
 
 -- | The JSON body a call sends, rebuilt from the same pure field
 -- builders the transport uses — so what the call log shows is what

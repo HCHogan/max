@@ -154,7 +154,9 @@ library
         Max.Wechatpad
         Max.Worker
         Max.Wreq
-    other-modules:    Paths_max
+    other-modules:
+        Max.ModelCatalog.Internal
+        Paths_max
     autogen-modules:  Paths_max
     build-depends:
         , aeson               >= 2.2  && < 2.4
