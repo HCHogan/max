@@ -56,12 +56,12 @@ import Max.DB.History
     fetchMessagesByIdsInScope,
     fetchRecentInGroup,
   )
-import Max.DB.Memory (MemoryItem (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Faces (curatedFaceGroups)
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
+import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
 import OneBot.Event (GroupMessage (..), Sender (..))
@@ -1092,7 +1092,9 @@ renderMemories tz' private senderName groupMems userMems
 memoryLine :: TimeZone -> MemoryItem -> Text
 memoryLine tz' m =
   "  (#"
-    <> T.pack (show m.memId)
+    <> T.pack (show m.memId.unMemoryId)
+    <> "@v"
+    <> T.pack (show m.memVersion.unMemoryVersion)
     <> " "
     <> fmtDate tz' m.memUpdatedAt
     <> ") "

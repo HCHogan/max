@@ -36,24 +36,35 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection, query)
-import Max.ConversationScope (conversationScopeFor)
-import Max.DB.Memory
-  ( MemoryItem (..),
+import Effectful.PostgreSQL (WithConnection)
+import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
+import Max.Effects.Tools (Tool (..))
+import Max.Embedding (EmbedClient, embedTexts, makeEmbeddingRecord)
+import Max.MemoryStore
+  ( ExpectedVersion (..),
+    MemoryActor (..),
+    MemoryActorKind (..),
+    MemoryDraft (..),
+    MemoryEvidence (..),
+    MemoryId,
+    MemoryItem (..),
+    MemoryLifecycle (..),
+    MemoryMutationResult (..),
     MemoryScope (..),
+    MemoryUpdate (..),
+    MemoryVersion,
+    archiveVisibleMemory,
     countMemories,
-    deleteVisibleMemory,
+    createMemory,
     groupMemoryNamespace,
-    insertMemory,
     listMemories,
     parseScope,
+    searchVisibleMemories,
     updateVisibleMemory,
     userMemoryNamespace,
   )
-import Max.Effects.Tools (Tool (..))
-import Max.Embedding (EmbedClient, EmbeddingRecord (..), embedTexts, makeEmbeddingRecord)
-import Max.ToolContext (ToolContext, toolGroupId, toolUserId)
-import OneBot.Types (GroupId (..), UserId (..))
+import Max.ToolContext (ToolContext, toolGroupId, toolMessageId, toolUserId)
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
 -- | Per (scope, scope_id) ceiling.  Hitting it turns 'memory_save'
 -- into an error that demands consolidation first — the pressure that
@@ -148,10 +159,19 @@ saveTool dc =
                           <> T.pack (show maxMemoriesPerScope)
                           <> " 条）。先用 memory_forget 删掉过时的，或用 memory_update 合并相近条目，再保存。"
                   else do
-                    mid <- insertMemory namespace c
+                    let MessageId sourceMessage = toolMessageId dc
+                        actor = MemoryActor ActorAgentTool (Just triggerUid) (Just "memory_save tool")
+                        draft =
+                          MemoryDraft
+                            { draftContent = c,
+                              draftLifecycle = MemoryPermanent,
+                              draftCategory = Nothing,
+                              draftEvidence = MessageEvidence conversation (Just triggerUid) sourceMessage
+                            }
+                    saved <- createMemory actor namespace draft
                     logInfo "memory: saved" $
-                      object ["id" .= mid, "scope" .= scopeRaw, "scope_id" .= sid]
-                    pure $ Right (object ["id" .= mid])
+                      object ["id" .= saved.memId, "version" .= saved.memVersion, "scope" .= scopeRaw, "scope_id" .= sid]
+                    pure $ Right (object ["id" .= saved.memId, "version" .= saved.memVersion])
     }
   where
     parseArgs :: Object -> Parser (Text, Text, Maybe Int64)
@@ -178,34 +198,45 @@ updateTool dc =
             "properties"
               .= object
                 [ "id" .= object ["type" .= ("integer" :: Text), "description" .= ("记忆 id。" :: Text)],
+                  "version"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("当前版本号（和 id 一起显示）。" :: Text)
+                      ],
                   "content"
                     .= object
                       [ "type" .= ("string" :: Text),
                         "description" .= ("替换后的完整内容（≤" <> T.pack (show maxMemoryChars) <> " 字）。" :: Text)
                       ]
                 ],
-            "required" .= (["id", "content"] :: [Text])
+            "required" .= (["id", "version", "content"] :: [Text])
           ],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (mid, content) ->
+        Right (mid, version, content) ->
           case checkContent content of
             Left err -> pure (Left err)
             Right c -> do
-              ok <-
+              let UserId triggerUid = toolUserId dc
+                  MessageId sourceMessage = toolMessageId dc
+                  conversation = conversationScopeFor (toolGroupId dc)
+                  actor = MemoryActor ActorAgentTool (Just triggerUid) (Just "memory_update tool")
+              result <-
                 updateVisibleMemory
-                  (conversationScopeFor (toolGroupId dc))
+                  actor
+                  (currentConversationRecall conversation)
                   mid
-                  c
-              if ok
-                then do
-                  logInfo "memory: updated" $ object ["id" .= mid]
-                  pure $ Right (object ["id" .= mid])
-                else pure $ Left ("没有 id=" <> T.pack (show mid) <> " 的记忆")
+                  (ExpectedVersion version)
+                  (MemoryUpdate c (MessageEvidence conversation (Just triggerUid) sourceMessage))
+              case result of
+                MemoryMutationApplied updated -> do
+                  logInfo "memory: updated" $ object ["id" .= updated.memId, "version" .= updated.memVersion]
+                  pure $ Right (object ["id" .= updated.memId, "version" .= updated.memVersion])
+                MemoryMutationRejected -> pure $ Left "记忆不存在、不可见，或版本已变化；请重新 memory_list 后再试"
     }
   where
-    parseArgs :: Object -> Parser (Int64, Text)
-    parseArgs o = (,) <$> o .: "id" <*> o .: "content"
+    parseArgs :: Object -> Parser (MemoryId, MemoryVersion, Text)
+    parseArgs o = (,,) <$> o .: "id" <*> o .: "version" <*> o .: "content"
 
 --------------------------------------------------------------------------------
 -- memory_forget
@@ -227,19 +258,32 @@ forgetTool dc =
           [ "type" .= ("object" :: Text),
             "properties"
               .= object
-                ["id" .= object ["type" .= ("integer" :: Text), "description" .= ("记忆 id。" :: Text)]],
-            "required" .= (["id"] :: [Text])
+                [ "id" .= object ["type" .= ("integer" :: Text), "description" .= ("记忆 id。" :: Text)],
+                  "version" .= object ["type" .= ("integer" :: Text), "description" .= ("当前版本号。" :: Text)]
+                ],
+            "required" .= (["id", "version"] :: [Text])
           ],
-      toolRun = \args -> case parseEither (withObject "args" (.: "id")) args of
+      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (mid :: Int64) -> do
-          ok <- deleteVisibleMemory (conversationScopeFor (toolGroupId dc)) mid
-          if ok
-            then do
-              logInfo "memory: forgotten" $ object ["id" .= mid]
-              pure $ Right (object ["ok" .= True])
-            else pure $ Left ("没有 id=" <> T.pack (show mid) <> " 的记忆")
+        Right (mid, version) -> do
+          let UserId triggerUid = toolUserId dc
+              conversation = conversationScopeFor (toolGroupId dc)
+              actor = MemoryActor ActorAgentTool (Just triggerUid) (Just "memory_forget tool")
+          result <-
+            archiveVisibleMemory
+              actor
+              (currentConversationRecall conversation)
+              mid
+              (ExpectedVersion version)
+          case result of
+            MemoryMutationApplied archived -> do
+              logInfo "memory: forgotten" $ object ["id" .= archived.memId, "version" .= archived.memVersion]
+              pure $ Right (object ["ok" .= True, "version" .= archived.memVersion])
+            MemoryMutationRejected -> pure $ Left "记忆不存在、不可见，或版本已变化；请重新 memory_list 后再试"
     }
+  where
+    parseArgs :: Object -> Parser (MemoryId, MemoryVersion)
+    parseArgs o = (,) <$> o .: "id" <*> o .: "version"
 
 --------------------------------------------------------------------------------
 -- memory_list
@@ -294,7 +338,13 @@ listTool dc =
     parseArgs o = (,) <$> o .: "scope" <*> o .:? "user_id"
 
 memorySummary :: MemoryItem -> Value
-memorySummary m = object ["id" .= m.memId, "content" .= m.memContent]
+memorySummary m =
+  object
+    [ "id" .= m.memId,
+      "version" .= m.memVersion,
+      "lifecycle" .= m.memLifecycle,
+      "content" .= m.memContent
+    ]
 
 --------------------------------------------------------------------------------
 -- memory_search (semantic; only registered when embedding is configured)
@@ -305,70 +355,53 @@ searchTool ::
   EmbedClient ->
   Tool es
 searchTool dc ec =
-  let GroupId gid = toolGroupId dc
-   in Tool
-        { toolName = "memory_search",
-          toolDescription =
-            T.unwords
-              [ "在本群的长期记忆里做语义搜索（谁擅长X、之前定过什么）。",
-                "只覆盖本群的群记忆和成员在本群留下的个人记忆；系统提示里",
-                "只注入了最近的条目，翻旧账用这个。"
-              ],
-          toolSchema =
-            object
-              [ "type" .= ("object" :: Text),
-                "properties"
-                  .= object
-                    [ "query"
-                        .= object
-                          [ "type" .= ("string" :: Text),
-                            "description" .= ("自然语言描述要找的内容。" :: Text)
-                          ],
-                      "limit"
-                        .= object
-                          [ "type" .= ("integer" :: Text),
-                            "description" .= ("最多返回条数（默认 8，上限 20）。" :: Text),
-                            "default" .= (8 :: Int)
-                          ]
-                    ],
-                "required" .= (["query"] :: [Text])
-              ],
-          toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
-            Left e -> pure $ Left ("bad args: " <> T.pack e)
-            Right (q, lim) -> do
-              evec <- liftIO (embedTexts ec [q])
-              case evec of
-                Left err -> pure $ Left ("embedding failed: " <> err)
-                Right [vec] -> case makeEmbeddingRecord ec q vec of
-                  Left err -> pure $ Left ("embedding failed: " <> err)
-                  Right record -> do
-                    -- Confined to this conversation.  Unscoped, this ranked
-                    -- every memory in the database — every other group's
-                    -- facts, every other person's — and handed the model
-                    -- whatever scored highest, which is how a fact learned in
-                    -- one group surfaced in another.  Group rows partition on
-                    -- scope_id; user rows on where they were learned.
-                    rows <-
-                      query
-                        "WITH compatible AS MATERIALIZED ( \
-                        \  SELECT id, scope, scope_id, content, updated_at, embedding \
-                        \  FROM memories \
-                        \  WHERE ( (scope = 'group' AND scope_id = ?) \
-                        \       OR (scope = 'user' AND source_group_id = ?) ) \
-                        \    AND embedding_model = ? AND embedding_dimensions = ? \
-                        \) \
-                        \ SELECT id, scope, scope_id, content, updated_at FROM compatible \
-                        \ ORDER BY embedding <=> ?::vector LIMIT ?"
-                        ( gid,
-                          gid,
-                          record.erModelId,
-                          record.erDimensions,
-                          record.erVector,
-                          clamp (1, 20) lim
-                        )
-                    pure $ Right (toJSON (map fullSummary (rows :: [MemoryItem])))
-                Right _ -> pure $ Left "embedding failed: unexpected result shape"
-        }
+  Tool
+    { toolName = "memory_search",
+      toolDescription =
+        T.unwords
+          [ "在本群的长期记忆里做语义搜索（谁擅长X、之前定过什么）。",
+            "只覆盖本群的群记忆和成员在本群留下的个人记忆；系统提示里",
+            "只注入了最近的条目，翻旧账用这个。"
+          ],
+      toolSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties"
+              .= object
+                [ "query"
+                    .= object
+                      [ "type" .= ("string" :: Text),
+                        "description" .= ("自然语言描述要找的内容。" :: Text)
+                      ],
+                  "limit"
+                    .= object
+                      [ "type" .= ("integer" :: Text),
+                        "description" .= ("最多返回条数（默认 8，上限 20）。" :: Text),
+                        "default" .= (8 :: Int)
+                      ]
+                ],
+            "required" .= (["query"] :: [Text])
+          ],
+      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+        Left e -> pure $ Left ("bad args: " <> T.pack e)
+        Right (q, lim) -> do
+          evec <- liftIO (embedTexts ec [q])
+          case evec of
+            Left err -> pure $ Left ("embedding failed: " <> err)
+            Right [vec] -> case makeEmbeddingRecord ec q vec of
+              Left err -> pure $ Left ("embedding failed: " <> err)
+              Right record -> do
+                -- Confined to this conversation.  Unscoped, this ranked
+                -- every memory in the database — every other group's
+                -- facts, every other person's — and handed the model
+                -- whatever scored highest, which is how a fact learned in
+                -- one group surfaced in another.  Group rows partition on
+                -- scope_id; user rows on where they were learned.
+                let policy = currentConversationRecall (conversationScopeFor (toolGroupId dc))
+                rows <- searchVisibleMemories policy record (clamp (1, 20) lim)
+                pure $ Right (toJSON (map fullSummary rows))
+            Right _ -> pure $ Left "embedding failed: unexpected result shape"
+    }
   where
     parseArgs :: Object -> Parser (Text, Int)
     parseArgs o = (,) <$> o .: "query" <*> (fromMaybe 8 <$> o .:? "limit")
@@ -376,6 +409,8 @@ searchTool dc ec =
     fullSummary m =
       object
         [ "id" .= m.memId,
+          "version" .= m.memVersion,
+          "lifecycle" .= m.memLifecycle,
           "scope" .= m.memScope,
           "scope_id" .= m.memScopeId,
           "content" .= m.memContent

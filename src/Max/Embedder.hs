@@ -32,6 +32,11 @@ import Max.Embedding
     embeddingModelId,
     makeEmbeddingRecord,
   )
+import Max.MemoryStore
+  ( PendingMemoryEmbedding (..),
+    listPendingMemoryEmbeddings,
+    markPendingMemoryEmbedded,
+  )
 import Max.Util (catchSync)
 
 -- | Batch size per tick; embedding APIs are happy with this, and it
@@ -73,11 +78,7 @@ embedWorker client = forever $ do
           \   AND char_length(rendered_text) >= 4 \
           \ ORDER BY received_at DESC LIMIT 64"
           [modelId]
-      mems <-
-        query
-          "SELECT id, content FROM memories \
-          \ WHERE embedding IS NULL OR embedding_model IS DISTINCT FROM ? LIMIT 64"
-          [modelId]
+      mems <- listPendingMemoryEmbeddings modelId batchSize
       -- Stickers embed their vision caption (the retrieval key for
       -- send_sticker); rows wait here until the caption worker fills
       -- description in.
@@ -88,7 +89,7 @@ embedWorker client = forever $ do
           \   AND description IS NOT NULL AND NOT banned LIMIT 64"
           [modelId]
       if null (msgs :: [(Int64, Text)])
-        && null (mems :: [(Int64, Text)])
+        && null mems
         && null (stickers :: [(Text, Text)])
         then liftIO (threadDelay idleMicros)
         else do
@@ -98,12 +99,7 @@ embedWorker client = forever $ do
               \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
               \ WHERE message_id = ? AND rendered_text = ?"
               msgs
-          okR <-
-            embedInto
-              "UPDATE memories SET embedding = ?::vector, embedding_model = ?, \
-              \ embedding_dimensions = ?, embedding_content_hash = ?, embedding_updated_at = now() \
-              \ WHERE id = ? AND content = ?"
-              mems
+          okR <- embedMemories mems
           okS <-
             embedInto
               "UPDATE stickers SET embedding = ?::vector, embedding_model = ?, \
@@ -138,6 +134,28 @@ embedWorker client = forever $ do
             let stored = sum written
             logInfo "embed: batch done" $
               object ["rows" .= length ids, "stored" .= stored, "stale" .= (fromIntegral (length ids) - stored)]
+            pure True
+
+    embedMemories :: [PendingMemoryEmbedding] -> Eff es Bool
+    embedMemories [] = pure True
+    embedMemories pending = do
+      let rows = take batchSize pending
+          texts = map (.pendingMemoryContent) rows
+      eres <- liftIO (embedTexts client (map (T.take 2000) texts))
+      case eres of
+        Left err -> do
+          logAttention "embed: memory batch failed" $
+            object ["error" .= err, "rows" .= length rows]
+          pure False
+        Right vecs -> case consistentRecords =<< traverse (uncurry (makeEmbeddingRecord client)) (zip texts vecs) of
+          Left err -> do
+            logAttention "embed: invalid memory provider response" $ object ["error" .= err]
+            pure False
+          Right records -> do
+            written <- traverse (uncurry markPendingMemoryEmbedded) (zip rows records)
+            let stored = length (filter id written)
+            logInfo "embed: memory batch done" $
+              object ["rows" .= length rows, "stored" .= stored, "stale" .= (length rows - stored)]
             pure True
 
     -- A model response must have one stable dimension for the whole batch.

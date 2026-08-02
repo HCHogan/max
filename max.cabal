@@ -83,7 +83,6 @@ library
         Max.DB.Forward
         Max.DB.History
         Max.DB.Media
-        Max.DB.Memory
         Max.DB.Message
         Max.DB.Permissions
         Max.DB.PlatformIds
@@ -119,6 +118,7 @@ library
         Max.LogBuffer
         Max.MediaCaption
         Max.MemoryExtract
+        Max.MemoryStore
         Max.ModelCatalog
         Max.Platform
         Max.Prompt
@@ -342,7 +342,8 @@ test-suite max-test-db
         Max.DB.SessionSpec
         Max.DB.HistorySpec
         Max.DB.MediaSpec
-        Max.DB.MemorySpec
+        Max.MemoryStoreSpec
+        Max.MemoryStoreMigrationSpec
         Max.DB.MessageSpec
         Max.DB.ReminderSpec
         Max.PromptIntegrationSpec

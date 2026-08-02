@@ -37,7 +37,6 @@ import Max.Config qualified as Config
 import Max.DB.Calls (redactDataUrls)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
-import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.Agent (assembleToolRound, toolResultMessage)
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM
@@ -47,6 +46,7 @@ import Max.Effects.LLM
     requestBodyFor,
   )
 import Max.Effects.ToolOutput (InlineMedia (..))
+import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
 import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), renderContext)
 import Max.Session (Session (..))
@@ -394,10 +394,13 @@ history mid uid name hour minute body =
 memory :: Int64 -> Text -> Int64 -> Text -> MemoryItem
 memory mid scope sid body =
   MemoryItem
-    { memId = mid,
+    { memId = MemoryId mid,
+      memVersion = MemoryVersion 1,
       memScope = scope,
       memScopeId = sid,
       memContent = body,
+      memLifecycle = "active",
+      memCategory = Nothing,
       memUpdatedAt = hkAt 12 0
     }
 

@@ -34,11 +34,25 @@ import Max.Command.Permission (PermTier (..), adminGrantable, knownCapabilities)
 import Max.Command.Types
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchMessagesByIdsInScope)
-import Max.DB.Memory (MemoryItem (..), countMemories, deleteMemory, groupMemoryNamespace, listMemories, userMemoryNamespace)
 import Max.DB.Permissions (deleteGrant, insertGrant, listGrantsFor)
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
 import Max.Intent (IntentConfig (..))
+import Max.MemoryStore
+  ( ExpectedVersion (..),
+    MemoryActor (..),
+    MemoryActorKind (..),
+    MemoryId (..),
+    MemoryItem (..),
+    MemoryMutationResult (..),
+    MemoryVersion (..),
+    archiveMemory,
+    countMemories,
+    fetchMemory,
+    groupMemoryNamespace,
+    listMemories,
+    userMemoryNamespace,
+  )
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, lookupModelCapabilities, modelProfileNames)
 import Max.Sandbox.Docker (ExecResult (..), wrapPackages)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
@@ -290,11 +304,20 @@ execute t gid uid granterTier replyTarget cmd = do
       reply (formatMemories private gms ums)
     MemoryRm mid -> do
       let UserId uidRaw = uid
-      removedGroup <- deleteMemory (groupMemoryNamespace conversation) mid
+          memoryId = MemoryId mid
+          actor = MemoryActor ActorCommand (Just uidRaw) (Just "!memory rm")
+          archiveCurrent namespace =
+            fetchMemory namespace memoryId >>= \case
+              Nothing -> pure False
+              Just item ->
+                archiveMemory actor namespace memoryId (ExpectedVersion item.memVersion) >>= \case
+                  MemoryMutationApplied _ -> pure True
+                  MemoryMutationRejected -> pure False
+      removedGroup <- archiveCurrent (groupMemoryNamespace conversation)
       removedUser <-
         if removedGroup
           then pure False
-          else deleteMemory (userMemoryNamespace conversation uidRaw) mid
+          else archiveCurrent (userMemoryNamespace conversation uidRaw)
       if removedGroup || removedUser
         then do
           logInfo "memory: removed via !memory" $ object ["id" .= mid]
@@ -592,7 +615,13 @@ formatMemories private gms ums =
       ["用 !memory rm <id> 删除"]
     ]
   where
-    memLine m = "  #" <> T.pack (show m.memId) <> "  " <> m.memContent
+    memLine m =
+      "  #"
+        <> T.pack (show m.memId.unMemoryId)
+        <> "@v"
+        <> T.pack (show m.memVersion.unMemoryVersion)
+        <> "  "
+        <> m.memContent
 
 --------------------------------------------------------------------------------
 -- !sticker formatting.

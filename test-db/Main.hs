@@ -24,11 +24,12 @@ import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.MediaSpec qualified as MediaSpec
-import Max.DB.MemorySpec qualified as MemorySpec
 import Max.DB.MessageSpec qualified as MessageSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.ReminderSpec qualified as ReminderSpec
 import Max.DB.SessionSpec qualified as SessionSpec
+import Max.MemoryStoreMigrationSpec qualified as MemoryStoreMigrationSpec
+import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import System.Environment (lookupEnv)
 import System.Exit (exitSuccess)
@@ -49,12 +50,13 @@ main = do
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
         EmbeddingMigrationSpec.spec pool
+        MemoryStoreMigrationSpec.spec pool
         SessionSpec.spec pool
         ConversationCursorSpec.spec pool
         HistorySpec.spec pool
         FilesSpec.spec pool
         MessageSpec.spec pool
-        MemorySpec.spec pool
+        MemoryStoreSpec.spec pool
         MediaSpec.spec pool
         FetchQueueSpec.spec pool
         ReminderSpec.spec pool

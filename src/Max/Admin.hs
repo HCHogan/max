@@ -59,7 +59,6 @@ import Max.Command.Parser (effortLevels)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
 import Max.DB.History (messageStatsDaily)
-import Max.DB.Memory (MemoryItem (..), deleteMemoryAdmin, groupMemoryNamespace, listMemories, listUserMemoriesEverywhereAdmin)
 import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGrants)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
@@ -68,6 +67,19 @@ import Max.Env (BotEnv (..))
 import Max.Log (parseLogLevel, renderLogLevel)
 import Max.LogBuffer (LogBuffer, LogEntry (..), LogQuery (..), queryLogs)
 import Max.LogBuffer qualified as LogBuffer
+import Max.MemoryStore
+  ( ExpectedVersion (..),
+    MemoryActor (..),
+    MemoryActorKind (..),
+    MemoryId (..),
+    MemoryItem (..),
+    MemoryMutationResult (..),
+    archiveMemoryAdmin,
+    fetchMemoryAdmin,
+    groupMemoryNamespace,
+    listMemories,
+    listUserMemoriesEverywhereAdmin,
+  )
 import Max.Session (Session (..), loadSession, updateSession)
 import Max.Skills (NewSkill (..), Skill (..), createSkill, deleteSkill, listAllSkills, updateSkill)
 import Max.Tasks (TaskId (..), TaskInfo (..), cancelTask, listTasks)
@@ -336,8 +348,14 @@ handle env profiles logBuf r params body = case r of
       pure (ok (map (\(m, src) -> memoryJson src m) mems))
     _ -> pure (bad "expected ?scope=group|user&id=<qq/群号>")
   RMemoryDelete mid -> do
-    gone <- deleteMemoryAdmin mid
-    pure (if gone then deleted else notFound)
+    let memoryId = MemoryId mid
+        actor = MemoryActor ActorAdmin Nothing (Just "admin API archive")
+    fetchMemoryAdmin memoryId >>= \case
+      Nothing -> pure notFound
+      Just item ->
+        archiveMemoryAdmin actor memoryId (ExpectedVersion item.memVersion) >>= \case
+          MemoryMutationApplied _ -> pure deleted
+          MemoryMutationRejected -> pure notFound
   -- ?group=<gid> narrows to what that group's dispatches can see
   -- (global + own, before enabled-filtering/shadowing); without it,
   -- every row.
@@ -629,9 +647,12 @@ memoryJson :: Maybe Int64 -> MemoryItem -> Value
 memoryJson sourceGroup m =
   object
     [ "id" .= m.memId,
+      "version" .= m.memVersion,
       "scope" .= m.memScope,
       "scope_id" .= m.memScopeId,
       "content" .= m.memContent,
+      "lifecycle" .= m.memLifecycle,
+      "category" .= m.memCategory,
       "updated_at" .= m.memUpdatedAt,
       "source_group_id" .= sourceGroup
     ]

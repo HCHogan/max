@@ -8,10 +8,10 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, minutesToTimeZone, secondsToDiffTime, utc)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
-import Max.DB.Memory (MemoryItem (..))
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
-import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyWatermark, applyVideoCaptions, renderContext, tagImageMarkers, tagMediaMarkers)
+import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
+import Max.Prompt (PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyVideoCaptions, applyWatermark, renderContext, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -64,10 +64,13 @@ historyAt h mid uid nick body =
 memAt :: Int64 -> Text -> MemoryItem
 memAt mid content =
   MemoryItem
-    { memId = mid,
+    { memId = MemoryId mid,
+      memVersion = MemoryVersion 1,
       memScope = "group", -- rendering doesn't read scope fields
       memScopeId = 0,
       memContent = content,
+      memLifecycle = "active",
+      memCategory = Nothing,
       memUpdatedAt = timeAt 12
     }
 
@@ -298,8 +301,8 @@ spec = do
               }
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[memories — 背景备忘]" `T.isInfixOf`)
-      ub `shouldSatisfy` ("(#5 2026-06-05) 群里在开发 max bot" `T.isInfixOf`)
-      ub `shouldSatisfy` ("(#9 2026-06-05) 偏好 Haskell" `T.isInfixOf`)
+      ub `shouldSatisfy` ("(#5@v1 2026-06-05) 群里在开发 max bot" `T.isInfixOf`)
+      ub `shouldSatisfy` ("(#9@v1 2026-06-05) 偏好 Haskell" `T.isInfixOf`)
       ub `shouldSatisfy` ("关于当前发言者 <Alice>" `T.isInfixOf`)
       -- Order within the user body: transcript, then the volatile
       -- blocks, then the message being answered.
@@ -751,7 +754,8 @@ spec = do
     it "anchors just before the oldest kept row, not at it" $ do
       let allRows =
             [ (historyAt 9 (7000 + i) memberId (Just "Alice") "x")
-                {receivedAt = timeAt (fromIntegral i)}
+                { receivedAt = timeAt (fromIntegral i)
+                }
             | i <- [1 .. 5 :: Int64]
             ]
           (kept, moved) = applyWatermark 2 4 allRows

@@ -52,7 +52,7 @@ import Data.List (sortOn)
 import Data.List.NonEmpty (nonEmpty)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -73,11 +73,10 @@ import Data.Time
     utcToLocalTime,
   )
 import Data.Traversable (for)
-import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection, query)
-import Max.ConversationScope (conversationScopeFor)
+import Effectful.PostgreSQL (WithConnection)
+import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
 import Max.DB.ConversationCursor
   ( advanceCursor,
     advanceCursorBefore,
@@ -88,20 +87,42 @@ import Max.DB.History
   ( HistoryItem (..),
     HistoryPage (..),
     LedgerItem (..),
+    MessageCursor (..),
     fetchOldestPageAfter,
     hasMessagesAfter,
     pageEndCursor,
   )
-import Max.DB.Memory
-  ( MemoryItem (..),
+import Max.DB.Session (listSessions)
+import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
+import Max.Embedding
+  ( EmbedClient,
+    embedTexts,
+    makeEmbeddingRecord,
+  )
+import Max.MemoryStore
+  ( ExpectedVersion (..),
+    MemoryActor (..),
+    MemoryActorKind (..),
+    MemoryDraft (..),
+    MemoryEvidence (..),
+    MemoryId (..),
+    MemoryItem (..),
+    MemoryLifecycle (..),
+    MemoryMaintenanceCandidate (..),
+    MemoryMutationResult (..),
     MemoryScope (..),
+    MemoryUpdate (..),
+    MemoryVersion (..),
+    archiveMemory,
+    archiveVisibleMemory,
     countMemories,
-    deleteMemory,
-    deleteVisibleMemory,
+    createMemory,
     evictOldest,
+    findExactMemory,
+    findNearestMemory,
     groupMemoryNamespace,
-    insertMemory,
     listMemories,
+    listMemoryMaintenanceCandidates,
     markMemoryEmbedded,
     memoryNamespace,
     parseScope,
@@ -109,14 +130,6 @@ import Max.DB.Memory
     updateMemory,
     updateVisibleMemory,
     userMemoryNamespace,
-  )
-import Max.DB.Session (listSessions)
-import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
-import Max.Embedding
-  ( EmbedClient,
-    EmbeddingRecord (..),
-    embedTexts,
-    makeEmbeddingRecord,
   )
 import Max.Prompt (renderHistoryLine)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
@@ -128,8 +141,8 @@ import OneBot.Types (GroupId (..))
 -- | One operation the extractor model may emit.
 data ExtractOp
   = OpAdd !Text !(Maybe Int64) !Text -- scope, user_id (scope=user), content
-  | OpUpdate !Int64 !Text
-  | OpDelete !Int64
+  | OpUpdate !MemoryId !MemoryVersion !Text
+  | OpDelete !MemoryId !MemoryVersion
   deriving stock (Show, Eq)
 
 instance FromJSON ExtractOp where
@@ -137,8 +150,8 @@ instance FromJSON ExtractOp where
     action <- o .: "action"
     case action :: Text of
       "add" -> OpAdd <$> o .: "scope" <*> o .:? "user_id" <*> o .: "content"
-      "update" -> OpUpdate <$> o .: "id" <*> o .: "content"
-      "delete" -> OpDelete <$> o .: "id"
+      "update" -> OpUpdate <$> o .: "id" <*> o .: "version" <*> o .: "content"
+      "delete" -> OpDelete <$> o .: "id" <*> o .: "version"
       other -> fail ("unknown action: " <> T.unpack other)
 
 --------------------------------------------------------------------------------
@@ -407,7 +420,14 @@ extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
             logInfo "memx: no ops" $ object ["group_id" .= gid, "messages" .= length rows]
             complete
           Right ops -> do
-            traverse_ (applyOp profile mEmbed gid) (take 6 ops)
+            let evidence = case page.items of
+                  first : rest ->
+                    let final = case reverse rest of
+                          lastItem : _ -> lastItem
+                          [] -> first
+                     in RangeEvidence conversation first.cursor.ingestSeq final.cursor.ingestSeq
+                  [] -> RangeEvidence conversation cursor.ingestSeq cursor.ingestSeq
+            traverse_ (applyOp profile mEmbed gid evidence) (take 6 ops)
             -- Advance only after a complete pass: a crash or rejected
             -- response leaves the window unextracted and the worker
             -- re-arms it. Op-level dedup absorbs the rare replay.
@@ -436,9 +456,10 @@ applyOp ::
   Text -> -- extractor profile (reused for full-scope compaction)
   Maybe EmbedClient ->
   Int64 -> -- group id
+  MemoryEvidence ->
   ExtractOp ->
   Eff es ()
-applyOp profile mEmbed gid = \case
+applyOp profile mEmbed gid evidence = \case
   -- A user-scope add with no user_id has no defensible target in a
   -- multi-speaker window (the old code fell back to "whoever
   -- triggered the dispatch"; an episode has no such person).
@@ -477,31 +498,58 @@ applyOp profile mEmbed gid = \case
               compactScope profile scope sid gid
               n' <- countMemories namespace
               when (n' >= maxMemoriesPerScope) $
-                evictOldest namespace >>= \case
-                  Just (eid, econtent) ->
+                evictOldest actor namespace >>= \case
+                  Just evicted ->
                     logInfo "memx: evicted oldest" $
-                      object ["id" .= eid, "content" .= econtent]
+                      object ["id" .= evicted.memId, "version" .= evicted.memVersion, "content" .= evicted.memContent]
                   Nothing -> pure ()
-            mid <- insertMemory namespace c
+            saved <-
+              createMemory
+                actor
+                namespace
+                MemoryDraft
+                  { draftContent = c,
+                    draftLifecycle = MemoryActive,
+                    draftCategory = Nothing,
+                    draftEvidence = evidence
+                  }
             -- Reuse the dedup vector so the new row is instantly
             -- searchable / dedupable (no worker lag window).
             case mVec of
               Just record -> do
-                _ <- markMemoryEmbedded namespace mid c record
+                _ <-
+                  markMemoryEmbedded
+                    namespace
+                    saved.memId
+                    (ExpectedVersion saved.memVersion)
+                    c
+                    record
                 pure ()
               Nothing -> pure ()
             logInfo "memx: added" $
-              object ["id" .= mid, "scope" .= scopeRaw, "scope_id" .= sid, "content" .= c]
-  OpUpdate mid content -> case checkContent content of
+              object ["id" .= saved.memId, "version" .= saved.memVersion, "scope" .= scopeRaw, "scope_id" .= sid, "content" .= c]
+  OpUpdate mid version content -> case checkContent content of
     Left err -> logAttention "memx: bad content" $ object ["error" .= err]
     Right c -> do
-      ok <- updateVisibleMemory conversation mid c
-      logInfo "memx: updated" $ object ["id" .= mid, "ok" .= ok, "content" .= c]
-  OpDelete mid -> do
-    ok <- deleteVisibleMemory conversation mid
-    logInfo "memx: deleted" $ object ["id" .= mid, "ok" .= ok]
+      result <-
+        updateVisibleMemory
+          actor
+          (currentConversationRecall conversation)
+          mid
+          (ExpectedVersion version)
+          (MemoryUpdate c evidence)
+      logInfo "memx: updated" $ object ["id" .= mid, "result" .= mutationResultText result, "content" .= c]
+  OpDelete mid version -> do
+    result <-
+      archiveVisibleMemory
+        actor
+        (currentConversationRecall conversation)
+        mid
+        (ExpectedVersion version)
+    logInfo "memx: archived" $ object ["id" .= mid, "result" .= mutationResultText result]
   where
     conversation = conversationScopeFor (GroupId gid)
+    actor = MemoryActor ActorExtractor Nothing (Just "episode memory extraction")
 
     -- \| Returns (embedding of the candidate — reusable for the insert,
     -- nearest same-scope duplicate within 'dupDistance' if any).
@@ -511,56 +559,41 @@ applyOp profile mEmbed gid = \case
     -- another group's memory of this person is not a duplicate of one
     -- we're about to learn here, and treating it as one would silently
     -- drop the write.
-    findNearDup scope sid c = case mEmbed of
-      Nothing -> do
-        rows <-
-          query
-            "SELECT id FROM memories \
-            \ WHERE scope = ? AND scope_id = ? AND content = ? \
-            \   AND (scope = 'group' OR source_group_id = ?) LIMIT 1"
-            (scopeText scope, sid, c, gid)
-        let hit = (\(Only did) -> (did, 0 :: Double)) <$> listToMaybe rows
-        pure (Nothing, hit)
-      Just ec -> do
-        evec <- liftIO (embedTexts ec [c])
-        case evec of
-          Left err -> do
-            logAttention "memx: dedup embed failed (fail-open)" $ object ["error" .= err]
-            pure (Nothing, Nothing)
-          Right [v] -> do
-            case makeEmbeddingRecord ec c v of
-              Left err -> do
-                logAttention "memx: invalid dedup embedding (fail-open)" $ object ["error" .= err]
-                pure (Nothing, Nothing)
-              Right record -> do
-                rows <-
-                  query
-                    "WITH compatible AS MATERIALIZED ( \
-                    \  SELECT id, embedding FROM memories \
-                    \  WHERE scope = ? AND scope_id = ? \
-                    \    AND (scope = 'group' OR source_group_id = ?) \
-                    \    AND embedding_model = ? AND embedding_dimensions = ? \
-                    \) \
-                    \ SELECT id, embedding <=> ?::vector AS dist FROM compatible \
-                    \ ORDER BY dist LIMIT 1"
-                    ( scopeText scope,
-                      sid,
-                      gid,
-                      record.erModelId,
-                      record.erDimensions,
-                      record.erVector
-                    )
-                let hit = case rows :: [(Int64, Double)] of
-                      ((did, dist) : _) | dist < dupDistance -> Just (did, dist)
-                      _ -> Nothing
-                pure (Just record, hit)
-          Right _ -> pure (Nothing, Nothing)
+    findNearDup scope sid c =
+      let namespace = memoryNamespace conversation scope sid
+       in case mEmbed of
+            Nothing -> do
+              duplicate <- findExactMemory namespace c
+              let hit = (,0 :: Double) <$> duplicate
+              pure (Nothing, hit)
+            Just ec -> do
+              evec <- liftIO (embedTexts ec [c])
+              case evec of
+                Left err -> do
+                  logAttention "memx: dedup embed failed (fail-open)" $ object ["error" .= err]
+                  pure (Nothing, Nothing)
+                Right [v] -> do
+                  case makeEmbeddingRecord ec c v of
+                    Left err -> do
+                      logAttention "memx: invalid dedup embedding (fail-open)" $ object ["error" .= err]
+                      pure (Nothing, Nothing)
+                    Right record -> do
+                      nearest <- findNearestMemory namespace record
+                      let hit = case nearest of
+                            Just (did, dist) | dist < dupDistance -> Just (did, dist)
+                            _ -> Nothing
+                      pure (Just record, hit)
+                Right _ -> pure (Nothing, Nothing)
 
 -- | Cosine distance below which a candidate counts as "already
 -- remembered".  Same-fact rewordings land well under this; genuinely
 -- distinct facts about the same entity sit clearly above.
 dupDistance :: Double
 dupDistance = 0.15
+
+mutationResultText :: MemoryMutationResult -> Text
+mutationResultText MemoryMutationApplied {} = "applied"
+mutationResultText MemoryMutationRejected = "rejected"
 
 --------------------------------------------------------------------------------
 -- Shrink passes: compaction (cap pressure) and dreaming (nightly).
@@ -606,28 +639,26 @@ dreamWorker profile tz = localDomain "memx-dream" . forever $ do
   where
     night = do
       now <- liftIO getCurrentTime
-      candidates <-
-        query
-          "SELECT scope, scope_id, COALESCE(source_group_id, scope_id), count(*) \
-          \  FROM memories \
-          \  GROUP BY scope, scope_id, COALESCE(source_group_id, scope_id) \
-          \  HAVING count(*) >= ? AND max(updated_at) > now() - interval '49 hours'"
-          (Only dreamMinEntries)
-      for_ (candidates :: [(Text, Int64, Int64, Int)]) $ \(scopeRaw, sid, gid, n) ->
-        for_ (parseScope scopeRaw) $ \scope -> do
-          logInfo "dream: scope" $
-            object ["scope" .= scopeRaw, "scope_id" .= sid, "entries" .= n]
-          shrinkScope
-            "memx-dream"
-            dreamerSystem
-            ["今天是 " <> fmtDate tz now, ""]
-            profile
-            scope
-            sid
-            gid
-            `catchSync` \e ->
-              logAttention "dream: scope crashed" $
-                object ["scope_id" .= sid, "error" .= T.pack (show e)]
+      candidates <- listMemoryMaintenanceCandidates dreamMinEntries
+      for_ candidates $ \candidate ->
+        let scopeRaw = candidate.maintenanceScope
+            sid = candidate.maintenanceSubjectId
+            gid = candidate.maintenanceConversationId
+            n = candidate.maintenanceCount
+         in for_ (parseScope scopeRaw) $ \scope -> do
+              logInfo "dream: scope" $
+                object ["scope" .= scopeRaw, "scope_id" .= sid, "entries" .= n]
+              shrinkScope
+                "memx-dream"
+                dreamerSystem
+                ["今天是 " <> fmtDate tz now, ""]
+                profile
+                scope
+                sid
+                gid
+                `catchSync` \e ->
+                  logAttention "dream: scope crashed" $
+                    object ["scope_id" .= sid, "error" .= T.pack (show e)]
 
 -- | Sleep until the next occurrence of @hour:00@ local time.
 sleepUntilHour :: TimeZone -> Int -> IO ()
@@ -658,7 +689,9 @@ shrinkScope ::
 shrinkScope label sys header profile scope sid gid = do
   mems <- listMemories namespace
   let memLine m =
-        T.pack (show m.memId)
+        T.pack (show m.memId.unMemoryId)
+          <> "@v"
+          <> T.pack (show m.memVersion.unMemoryVersion)
           <> " ("
           <> fmtDate utc m.memUpdatedAt
           <> "): "
@@ -692,18 +725,30 @@ shrinkScope label sys header profile scope sid gid = do
   where
     apply = \case
       OpAdd {} -> pure ()
-      OpUpdate mid content -> case checkContent content of
+      OpUpdate mid version content -> case checkContent content of
         Left err -> logAttention (label <> ": bad content") $ object ["error" .= err]
         Right c -> do
-          ok <- updateMemory namespace mid c
-          logInfo (label <> ": merged") $ object ["id" .= mid, "ok" .= ok, "content" .= c]
-      OpDelete mid -> do
-        ok <- deleteMemory namespace mid
-        logInfo (label <> ": dropped") $ object ["id" .= mid, "ok" .= ok]
+          result <-
+            updateMemory
+              actor
+              namespace
+              mid
+              (ExpectedVersion version)
+              (MemoryUpdate c (MaintenanceEvidence conversation label))
+          logInfo (label <> ": merged") $ object ["id" .= mid, "result" .= mutationResultText result, "content" .= c]
+      OpDelete mid version -> do
+        result <- archiveMemory actor namespace mid (ExpectedVersion version)
+        logInfo (label <> ": archived") $ object ["id" .= mid, "result" .= mutationResultText result]
 
+    conversation = conversationScopeFor (GroupId gid)
+    actor =
+      MemoryActor
+        (if label == "memx-dream" then ActorDreamer else ActorExtractor)
+        Nothing
+        (Just label)
     namespace =
       memoryNamespace
-        (conversationScopeFor (GroupId gid))
+        conversation
         scope
         sid
 
@@ -720,8 +765,8 @@ dreamerSystem =
       "没什么可整理就输出 []。最多 12 个操作。合并后的 content 用第三人称陈述句，",
       "≤300 字，自包含。",
       "只输出 JSON 数组，只允许 update / delete：",
-      "  {\"action\":\"update\",\"id\":5,\"content\":\"...\"}",
-      "  {\"action\":\"delete\",\"id\":5}"
+      "  {\"action\":\"update\",\"id\":5,\"version\":2,\"content\":\"...\"}",
+      "  {\"action\":\"delete\",\"id\":5,\"version\":2}"
     ]
 
 compactorSystem :: Text
@@ -734,8 +779,8 @@ compactorSystem =
       "  - 拿不准的保留。至少腾出 3 个位置，最多操作 12 条。",
       "  - 合并后的 content 用第三人称陈述句，≤300 字，自包含。",
       "只输出 JSON 数组，只允许 update / delete：",
-      "  {\"action\":\"update\",\"id\":5,\"content\":\"...\"}",
-      "  {\"action\":\"delete\",\"id\":5}"
+      "  {\"action\":\"update\",\"id\":5,\"version\":2,\"content\":\"...\"}",
+      "  {\"action\":\"delete\",\"id\":5,\"version\":2}"
     ]
 
 --------------------------------------------------------------------------------
@@ -763,8 +808,8 @@ extractorSystem =
       "",
       "操作格式：",
       "  {\"action\":\"add\",\"scope\":\"group\"|\"user\",\"user_id\":123,\"content\":\"...\"}",
-      "  {\"action\":\"update\",\"id\":5,\"content\":\"...\"}",
-      "  {\"action\":\"delete\",\"id\":5}"
+      "  {\"action\":\"update\",\"id\":5,\"version\":2,\"content\":\"...\"}",
+      "  {\"action\":\"delete\",\"id\":5,\"version\":2}"
     ]
 
 renderInput :: TimeZone -> UTCTime -> Int64 -> [MemoryItem] -> [(Int64, [MemoryItem])] -> Text -> Text
@@ -782,4 +827,11 @@ renderInput tz now gid groupMems userMemSets transcript =
       ]
   where
     memLines [] = ["(无)"]
-    memLines ms = [T.pack (show m.memId) <> ": " <> m.memContent | m <- ms]
+    memLines ms =
+      [ T.pack (show m.memId.unMemoryId)
+          <> "@v"
+          <> T.pack (show m.memVersion.unMemoryVersion)
+          <> ": "
+          <> m.memContent
+      | m <- ms
+      ]

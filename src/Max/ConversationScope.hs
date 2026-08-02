@@ -15,6 +15,9 @@ module Max.ConversationScope
   ( ConversationScope,
     conversationScopeFor,
     conversationStorageId,
+    RecallPolicy,
+    currentConversationRecall,
+    recallConversationScope,
   )
 where
 
@@ -23,6 +26,13 @@ import OneBot.Types (GroupId (..))
 
 -- | The one conversation whose resources the current operation may access.
 newtype ConversationScope = ConversationScope Int64
+  deriving stock (Show, Eq, Ord)
+
+-- | The conversations a read may project into the current turn.  V1 is
+-- intentionally current-conversation-only.  The constructor stays private so
+-- the future group-to-member-DM direction can be added here without letting a
+-- model-provided id become authority.
+newtype RecallPolicy = RecallPolicy ConversationScope
   deriving stock (Show, Eq, Ord)
 
 -- | Construct a scope from an already-authorized conversation identity.
@@ -35,3 +45,11 @@ conversationScopeFor (GroupId gid) = ConversationScope gid
 -- allowed to choose the value used to construct a 'ConversationScope'.
 conversationStorageId :: ConversationScope -> Int64
 conversationStorageId (ConversationScope gid) = gid
+
+currentConversationRecall :: ConversationScope -> RecallPolicy
+currentConversationRecall = RecallPolicy
+
+-- | Store-internal access to the current conversation predicate.  Callers
+-- construct policies only through 'currentConversationRecall'.
+recallConversationScope :: RecallPolicy -> ConversationScope
+recallConversationScope (RecallPolicy scope) = scope
