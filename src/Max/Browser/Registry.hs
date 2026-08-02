@@ -18,6 +18,7 @@ module Max.Browser.Registry
   ( BrowserRegistry,
     brProxy,
     newBrowserRegistry,
+    withBrowserSession,
     reapStaleBrowsers,
     callBrowserTool,
     getCamoSession,
@@ -44,6 +45,11 @@ import Max.Browser.Docker
     containerPort,
     defaultBrowserImage,
     runRunBrowser,
+  )
+import Max.Browser.Error
+  ( BrowserError,
+    browserCallFailed,
+    browserErrorFromMcp,
   )
 import Max.MCP.Client
   ( McpClient,
@@ -79,6 +85,12 @@ data BrowserRegistry = BrowserRegistry
     -- open.  Kept outside 'BrowserEntry' so the tool layer can read /
     -- update it without racing entry creation.
     brCamoSessions :: !(TVar (Map GroupId Text)),
+    -- | One operation lock per conversation.  It covers the whole
+    -- read/start/use/update sequence in the tool layer, including the period
+    -- before a camoufox session id exists.  Locks are kept for the registry's
+    -- lifetime so deleting and recreating one can never split waiters across
+    -- two independent locks.
+    brSessionLocks :: !(TVar (Map GroupId (TMVar ()))),
     -- | Proxy URL every browse session routes through (config
     -- @browser.proxy@); 'Nothing' = direct.  "Max.Tools.Browser"
     -- passes it to @browse_session_start@.
@@ -88,7 +100,29 @@ data BrowserRegistry = BrowserRegistry
 newBrowserRegistry :: Maybe Text -> IO BrowserRegistry
 newBrowserRegistry proxy = do
   mgr <- newManager defaultManagerSettings
-  BrowserRegistry mgr <$> newTMVarIO () <*> newTVarIO Map.empty <*> newTVarIO Map.empty <*> pure proxy
+  BrowserRegistry mgr
+    <$> newTMVarIO ()
+    <*> newTVarIO Map.empty
+    <*> newTVarIO Map.empty
+    <*> newTVarIO Map.empty
+    <*> pure proxy
+
+-- | Serialize stateful camoufox operations for one conversation.  Different
+-- groups receive different locks and continue to run concurrently.
+withBrowserSession :: BrowserRegistry -> GroupId -> IO a -> IO a
+withBrowserSession reg gid action = do
+  lock <- atomically $ do
+    locks <- readTVar reg.brSessionLocks
+    case Map.lookup gid locks of
+      Just existing -> pure existing
+      Nothing -> do
+        created <- newTMVar ()
+        writeTVar reg.brSessionLocks (Map.insert gid created locks)
+        pure created
+  bracket_
+    (atomically $ takeTMVar lock)
+    (atomically $ putTMVar lock ())
+    action
 
 -- | The group's current camoufox browse-session id, if any.
 getCamoSession :: BrowserRegistry -> GroupId -> IO (Maybe Text)
@@ -189,11 +223,11 @@ waitReady client = go 0
 -- call rebuilds a fresh one.  Re-initializing makes supergateway spawn
 -- a *fresh* camoufox-mcp child, so any camoufox browse session died
 -- with the old one — forget it, the tool layer will start a new one.
-callBrowserTool :: BrowserRegistry -> GroupId -> Text -> Value -> IO (Either Text Value)
+callBrowserTool :: BrowserRegistry -> GroupId -> Text -> Value -> IO (Either BrowserError Value)
 callBrowserTool reg gid toolName args = do
   eEntry <- ensureBrowserForGroup reg gid
   case eEntry of
-    Left err -> pure (Left ("browser unavailable: " <> err))
+    Left err -> pure (Left (browserCallFailed ("browser unavailable: " <> err)))
     Right e -> do
       r <- mcpCallTool e.beClient toolName args
       case r of
@@ -201,11 +235,14 @@ callBrowserTool reg gid toolName args = do
           setCamoSession reg gid Nothing
           reinit <- mcpInitialize e.beClient
           case reinit of
-            Right () -> first renderMcpError <$> mcpCallTool e.beClient toolName args
+            Right () -> first browserErrorFromMcp <$> mcpCallTool e.beClient toolName args
             Left _ -> do
               _ <- destroyBrowsersForGroup reg gid
-              pure (Left ("browser session lost; rebuilt for next call (was: " <> renderMcpError err <> ")"))
-        _ -> pure (first renderMcpError r)
+              pure . Left . browserCallFailed $
+                "browser session lost; rebuilt for next call (was: "
+                  <> renderMcpError err
+                  <> ")"
+        _ -> pure (first browserErrorFromMcp r)
 
 --------------------------------------------------------------------------------
 -- Teardown.

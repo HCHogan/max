@@ -63,6 +63,7 @@ library
         Max.Admin
         Max.Bilibili
         Max.Browser.Docker
+        Max.Browser.Error
         Max.Browser.Registry
         Max.BuildInfo
         Max.Command.Dispatcher
@@ -260,6 +261,8 @@ test-suite max-test
         Max.AdminSpec
         Max.CliProxySpec
         Max.BilibiliSpec
+        Max.Browser.ErrorSpec
+        Max.Browser.RegistrySpec
         Max.Command.ParserSpec
         Max.Command.PermissionSpec
         Max.DB.CallsSpec

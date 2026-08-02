@@ -1,0 +1,105 @@
+diff --git a/src/responses.ts b/src/responses.ts
+index 5a178d7..50c1798 100644
+--- a/src/responses.ts
++++ b/src/responses.ts
+@@ -34,12 +34,17 @@ export function buildToolFailure(label: string, safeUrl: string, error: unknown,
+   return buildToolError(`Failed to ${label} URL ${safeUrl}. Error: ${errorMessage}`);
+ }
+ 
+-export function buildToolError(message: string) {
++export type ToolErrorKind = "session_gone" | "session_blocked" | "tool_failed";
++
++export function buildToolError(message: string, errorKind: ToolErrorKind = "tool_failed") {
+   return {
+     content: [{
+       type: "text" as const,
+       text: message,
+     }],
+     isError: true,
++    _meta: {
++      "camoufox/errorKind": errorKind,
++    },
+   };
+ }
+diff --git a/src/sessions.ts b/src/sessions.ts
+index 3c9f848..3b1854e 100644
+--- a/src/sessions.ts
++++ b/src/sessions.ts
+@@ -9,7 +9,7 @@ import { acquireBrowserSlot, browserContextOptions, buildCamoufoxOptions, closeB
+ import { createDiagnosticsCollector } from "./diagnostics.js";
+ import { buildBrowsePayload, buildSnapshotPayload } from "./extractors.js";
+ import { maybeDetectCaptcha } from "./captcha.js";
+-import { buildSuccessContent, buildToolError } from "./responses.js";
++import { buildSuccessContent, buildToolError, type ToolErrorKind } from "./responses.js";
+ import { isLocalOperationTimeout, runSequenceAction } from "./sequence.js";
+ import { applyStealthProfile, defaultHeadlessMode, describeError, getProxySecrets, getProxyServer, redactUrl, sanitizeErrorMessage, selectOperatingSystem } from "./utils.js";
+ 
+@@ -252,6 +252,20 @@ export function sessionSanitizedError(error: unknown, session?: SessionRecord, e
+   return sanitizeErrorMessage(describeError(error), rawUrls, secrets);
+ }
+ 
++function sessionToolErrorKind(session?: SessionRecord): ToolErrorKind {
++  if (!session || session.closing || session.closed) {
++    return "session_gone";
++  }
++
++  try {
++    session.requestGuard.assertAllowed();
++  } catch {
++    return "session_blocked";
++  }
++
++  return "tool_failed";
++}
++
+ export async function buildSessionSnapshotResult(
+   session: SessionRecord,
+   input: SessionSnapshotToolInput,
+@@ -303,7 +317,10 @@ export async function handleSessionNavigate(input: SessionNavigateToolInput) {
+       return buildSuccessContent(basePayload);
+     });
+   } catch (error) {
+-    return buildToolError(`Failed to navigate session. Error: ${sessionSanitizedError(error, session, [input.url])}`);
++    return buildToolError(
++      `Failed to navigate session. Error: ${sessionSanitizedError(error, session, [input.url])}`,
++      sessionToolErrorKind(session),
++    );
+   }
+ }
+ 
+@@ -334,7 +351,10 @@ export async function handleSessionAction(input: SessionActionToolInput) {
+       return buildSuccessContent(basePayload);
+     });
+   } catch (error) {
+-    return buildToolError(`Failed to run session action. Error: ${sessionSanitizedError(error, session)}`);
++    return buildToolError(
++      `Failed to run session action. Error: ${sessionSanitizedError(error, session)}`,
++      sessionToolErrorKind(session),
++    );
+   }
+ }
+ 
+@@ -345,7 +365,10 @@ export async function handleSessionSnapshot(input: SessionSnapshotToolInput) {
+     session = currentSession;
+     return await runSessionExclusive(currentSession, async () => buildSessionSnapshotResult(currentSession, input));
+   } catch (error) {
+-    return buildToolError(`Failed to snapshot session. Error: ${sessionSanitizedError(error, session)}`);
++    return buildToolError(
++      `Failed to snapshot session. Error: ${sessionSanitizedError(error, session)}`,
++      sessionToolErrorKind(session),
++    );
+   }
+ }
+ 
+@@ -362,7 +385,10 @@ export async function handleSessionResume(input: SessionResumeToolInput) {
+       return buildSessionSnapshotResult(currentSession, input);
+     });
+   } catch (error) {
+-    return buildToolError(`Failed to resume session. Error: ${sessionSanitizedError(error, session)}`);
++    return buildToolError(
++      `Failed to resume session. Error: ${sessionSanitizedError(error, session)}`,
++      sessionToolErrorKind(session),
++    );
+   }
+ }
+ 

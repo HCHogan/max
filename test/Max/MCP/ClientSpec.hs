@@ -7,7 +7,9 @@ import Max.MCP.Client
     classifyHttpError,
     decodeRpcBody,
     mcpErrorKind,
+    mcpErrorMetadata,
     mcpTextContent,
+    toolResultError,
   )
 import Test.Hspec
 
@@ -53,6 +55,22 @@ spec = do
 
     it "returns empty when there is no content" $
       mcpTextContent (object []) `shouldBe` ""
+
+  describe "toolResultError" $ do
+    it "preserves structured tool metadata separately from display text" $ do
+      let metadata = object ["camoufox/errorKind" .= s "session_gone"]
+          result =
+            object
+              [ "isError" .= True,
+                "content" .= [object ["type" .= s "text", "text" .= s "wording may change"]],
+                "_meta" .= metadata
+              ]
+      mcpErrorMetadata <$> toolResultError result
+        `shouldBe` Just (Just metadata)
+
+    it "ignores metadata on successful tool results" $
+      toolResultError (object ["isError" .= False, "_meta" .= object ["x" .= True]])
+        `shouldBe` Nothing
 
   describe "classifyHttpError" $ do
     it "classifies a 400 with an attached session as session loss" $

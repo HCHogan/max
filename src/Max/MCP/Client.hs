@@ -32,11 +32,13 @@ module Max.MCP.Client
     -- * Exposed for tests
     classifyHttpError,
     decodeRpcBody,
+    toolResultError,
   )
 where
 
 import Control.Concurrent.STM
 import Control.Exception (SomeException)
+import Control.Monad (join)
 import Data.Aeson
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteString (ByteString)
@@ -92,7 +94,12 @@ data McpErrorKind
 
 data McpError = McpError
   { mcpErrorKind :: !McpErrorKind,
-    mcpErrorMessage :: !Text
+    mcpErrorMessage :: !Text,
+    -- | Provider-owned structured metadata from an MCP tool result.
+    -- Transport and protocol failures have no metadata.  Keeping this
+    -- separate from the display message lets integrations make recovery
+    -- decisions from stable tags instead of provider prose.
+    mcpErrorMetadata :: !(Maybe Value)
   }
   deriving stock (Show, Eq)
 
@@ -140,12 +147,20 @@ mcpCallTool c name args = do
   eres <- request c "tools/call" params
   pure $ case eres of
     Left e -> Left e
-    Right result
-      | isToolError result ->
-          Left (McpError McpToolError (mcpTextContent result))
-      | otherwise -> Right result
-  where
-    isToolError v = parseMaybe (withObject "r" (.: "isError")) v == Just True
+    Right result -> maybe (Right result) Left (toolResultError result)
+
+-- | Decode the error half of a tool result while preserving provider-owned
+-- metadata.  Success results return 'Nothing'.
+toolResultError :: Value -> Maybe McpError
+toolResultError result
+  | parseMaybe (withObject "r" (.: "isError")) result == Just True =
+      Just
+        ( McpError
+            McpToolError
+            (mcpTextContent result)
+            (join (parseMaybe (withObject "r" (.:? "_meta")) result))
+        )
+  | otherwise = Nothing
 
 --------------------------------------------------------------------------------
 -- JSON-RPC plumbing.
@@ -192,7 +207,7 @@ postRpc c mId method params expectResult = do
   ereq <- trySyncIO (parseRequest ("POST " <> c.mcEndpoint))
   case ereq of
     Left (e :: SomeException) ->
-      pure . Left $ McpError McpEndpointError ("bad MCP endpoint: " <> T.pack (show e))
+      pure . Left $ McpError McpEndpointError ("bad MCP endpoint: " <> T.pack (show e)) Nothing
     Right req0 -> do
       let req =
             req0
@@ -202,7 +217,7 @@ postRpc c mId method params expectResult = do
       eresp <- trySyncIO (httpLbs req c.mcManager)
       case eresp of
         Left (e :: SomeException) ->
-          pure . Left $ McpError McpTransportError ("MCP request failed [" <> ctx <> "]: " <> T.pack (show e))
+          pure . Left $ McpError McpTransportError ("MCP request failed [" <> ctx <> "]: " <> T.pack (show e)) Nothing
         Right resp -> do
           -- Capture / refresh the session id whenever the server sends one.
           case lookup (CI.mk "Mcp-Session-Id") (responseHeaders resp) of
@@ -220,7 +235,7 @@ postRpc c mId method params expectResult = do
               if not expectResult
                 then pure (Right Null)
                 else case decodeRpcBody (responseBody resp) of
-                  Left e -> pure (Left (McpError McpProtocolError e))
+                  Left e -> pure (Left (McpError McpProtocolError e Nothing))
                   Right v -> pure (extractResult v)
   where
     shortBody r = T.take 200 (TE.decodeUtf8Lenient (LBS.toStrict (responseBody r)))
@@ -231,16 +246,16 @@ postRpc c mId method params expectResult = do
 -- ordinary request failures.
 classifyHttpError :: Bool -> Int -> Text -> McpError
 classifyHttpError hadSession code message
-  | hadSession && code `elem` [400, 404] = McpError McpSessionError message
-  | otherwise = McpError (McpHttpError code) message
+  | hadSession && code `elem` [400, 404] = McpError McpSessionError message Nothing
+  | otherwise = McpError (McpHttpError code) message Nothing
 
 -- | Pull the @result@ out of a JSON-RPC envelope, or surface @error@.
 extractResult :: Value -> Either McpError Value
 extractResult v =
   case parseMaybe (withObject "rpc" (\o -> (,) <$> o .:? "result" <*> o .:? "error")) v of
     Just (Just result, _) -> Right result
-    Just (_, Just err) -> Left (McpError McpRemoteError ("MCP error: " <> renderErr err))
-    _ -> Left (McpError McpProtocolError "MCP response had neither result nor error")
+    Just (_, Just err) -> Left (McpError McpRemoteError ("MCP error: " <> renderErr err) Nothing)
+    _ -> Left (McpError McpProtocolError "MCP response had neither result nor error" Nothing)
   where
     renderErr e =
       case parseMaybe (withObject "e" (.: "message")) e of

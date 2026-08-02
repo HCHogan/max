@@ -33,22 +33,29 @@ import Control.Monad (void, when)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser, parseMaybe)
+import Data.Bifunctor (first)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
+import Max.Browser.Error
+  ( BrowserErrorKind (..),
+    browserErrorKind,
+    renderBrowserError,
+  )
 import Max.Browser.Registry
   ( BrowserRegistry,
     brProxy,
     callBrowserTool,
     getCamoSession,
     setCamoSession,
+    withBrowserSession,
   )
 import Max.Effects.Tools (Tool (..))
 import Max.MCP.Client (mcpTextContent)
 import OneBot.Types (GroupId)
 
-browserToolsFor :: IOE :> es => GroupId -> BrowserRegistry -> [Tool es]
+browserToolsFor :: (IOE :> es) => GroupId -> BrowserRegistry -> [Tool es]
 browserToolsFor gid reg =
   [ navigateTool gid reg,
     viewZhihuTool gid reg,
@@ -62,26 +69,6 @@ browserToolsFor gid reg =
 
 --------------------------------------------------------------------------------
 -- Session plumbing.
-
--- | Errors from camoufox that mean the browse session is gone (idle
--- TTL hit, server closed it) — the stored id is useless now.
-camoSessionDead :: Text -> Bool
-camoSessionDead err =
-  any
-    (`T.isInfixOf` err)
-    [ "Unknown or closed session",
-      "Session expired",
-      "Session is closing or closed"
-    ]
-
--- | Errors from camoufox's request guard, which /latches/: after one
--- blocked request (SSRF-suspect URL, or the session's 1024-request
--- budget running out) every further operation on the session rethrows
--- the same error forever.  Unlike 'camoSessionDead' the session is
--- still alive and still occupies a server slot, so recovery must
--- @browse_session_close@ it before starting a fresh one.
-camoSessionWedged :: Text -> Bool
-camoSessionWedged = ("Blocked unsafe browser request" `T.isInfixOf`)
 
 -- | Forget the group's session; when it is wedged-but-alive, also
 -- close it server-side to free the slot (best-effort).
@@ -97,7 +84,7 @@ startSession reg gid = do
   setCamoSession reg gid Nothing
   let startArgs = object (("humanize" .= True) : foldMap (\p -> ["proxy" .= p]) reg.brProxy)
   callBrowserTool reg gid "browse_session_start" startArgs >>= \case
-    Left e -> pure (Left e)
+    Left e -> pure (Left (renderBrowserError e))
     Right v -> case sessionIdOf v of
       Nothing ->
         pure (Left ("browse_session_start returned no sessionId: " <> T.take 200 (mcpTextContent v)))
@@ -125,18 +112,23 @@ withSession ::
   [(Key, Value)] ->
   IO (Either Text Value)
 withSession reg gid mcpTool fields =
-  getCamoSession reg gid >>= \case
-    Nothing -> pure (Left "no page is open — call browser_navigate first")
-    Just sid ->
-      callBrowserTool reg gid mcpTool (withSid sid fields) >>= \case
-        Left err
-          | camoSessionWedged err -> do
+  withBrowserSession reg gid $
+    getCamoSession reg gid >>= \case
+      Nothing -> pure (Left "no page is open — call browser_navigate first")
+      Just sid ->
+        callBrowserTool reg gid mcpTool (withSid sid fields) >>= \case
+          Left err -> case browserErrorKind err of
+            BrowserSessionBlocked -> do
               dropSession reg gid sid True
-              pure (Left ("the browser blocked a request and the session was reset — call browser_navigate to reopen (" <> err <> ")"))
-          | camoSessionDead err -> do
+              pure . Left $
+                "the browser blocked a request and the session was reset — call browser_navigate to reopen ("
+                  <> renderBrowserError err
+                  <> ")"
+            BrowserSessionGone -> do
               dropSession reg gid sid False
               pure (Left "the browser session expired — call browser_navigate to reopen the page")
-        r -> pure r
+            BrowserCallFailed -> pure (Left (renderBrowserError err))
+          Right value -> pure (Right value)
 
 withSid :: Text -> [(Key, Value)] -> Value
 withSid sid fields = object (("sessionId" .= sid) : fields)
@@ -187,7 +179,7 @@ enumP vals desc =
 --------------------------------------------------------------------------------
 -- Tools.
 
-navigateTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
+navigateTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
 navigateTool gid reg =
   Tool
     { toolName = "browser_navigate",
@@ -207,18 +199,22 @@ navigateTool gid reg =
 -- @browser_navigate@, shared with @view_zhihu@.
 navigateUrl :: BrowserRegistry -> GroupId -> Text -> IO (Either Text Value)
 navigateUrl reg gid url =
-  getCamoSession reg gid >>= \case
-    Nothing -> freshNavigate
-    Just sid ->
-      callBrowserTool reg gid "browse_session_navigate" (navArgs sid) >>= \case
-        Left err
-          | camoSessionWedged err -> dropSession reg gid sid True >> freshNavigate
-          | camoSessionDead err -> dropSession reg gid sid False >> freshNavigate
-        r -> pure r
+  withBrowserSession reg gid $
+    getCamoSession reg gid >>= \case
+      Nothing -> freshNavigate
+      Just sid ->
+        callBrowserTool reg gid "browse_session_navigate" (navArgs sid) >>= \case
+          Left err -> case browserErrorKind err of
+            BrowserSessionBlocked -> dropSession reg gid sid True >> freshNavigate
+            BrowserSessionGone -> dropSession reg gid sid False >> freshNavigate
+            BrowserCallFailed -> pure (Left (renderBrowserError err))
+          Right value -> pure (Right value)
   where
     freshNavigate =
       startSession reg gid
-        >>= either (pure . Left) (\sid -> callBrowserTool reg gid "browse_session_navigate" (navArgs sid))
+        >>= either
+          (pure . Left)
+          (\sid -> first renderBrowserError <$> callBrowserTool reg gid "browse_session_navigate" (navArgs sid))
     navArgs sid = withSid sid ["url" .= url]
 
 --------------------------------------------------------------------------------
@@ -232,7 +228,7 @@ navigateUrl reg gid url =
 -- navigate, and when the response smells like the challenge
 -- (non-200, or the slogan-only interstitial), wait and renavigate,
 -- up to 'zhihuRetries' times.
-viewZhihuTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
+viewZhihuTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
 viewZhihuTool gid reg =
   Tool
     { toolName = "view_zhihu",
@@ -295,7 +291,7 @@ navPayload v =
     fromPayload :: Value -> Parser (Int, Text)
     fromPayload = withObject "payload" $ \o -> (,) <$> o .: "status" <*> o .: "text"
 
-snapshotTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
+snapshotTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
 snapshotTool gid reg =
   Tool
     { toolName = "browser_snapshot",
@@ -321,7 +317,7 @@ runAction :: BrowserRegistry -> GroupId -> [(Key, Value)] -> IO (Either Text Val
 runAction reg gid actionFields =
   withSession reg gid "browse_session_action" ["action" .= object actionFields]
 
-clickTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
+clickTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
 clickTool gid reg =
   Tool
     { toolName = "browser_click",
@@ -337,7 +333,7 @@ clickTool gid reg =
             <$> runAction reg gid ["type" .= ("click" :: Text), "selector" .= sel, "clickMode" .= ("auto" :: Text)]
     }
 
-typeTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
+typeTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
 typeTool gid reg =
   Tool
     { toolName = "browser_type",
@@ -361,7 +357,7 @@ typeTool gid reg =
         _ -> pure (Left "missing required arguments: selector, text")
     }
 
-pressKeyTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
+pressKeyTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
 pressKeyTool gid reg =
   Tool
     { toolName = "browser_press_key",
@@ -386,7 +382,7 @@ pressKeyTool gid reg =
               )
     }
 
-waitForTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
+waitForTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
 waitForTool gid reg =
   Tool
     { toolName = "browser_wait_for",
@@ -411,7 +407,7 @@ waitForTool gid reg =
               (("type" .= ("waitFor" :: Text)) : passThrough args ["selector", "state", "loadState", "timeout"])
     }
 
-scrollTool :: IOE :> es => GroupId -> BrowserRegistry -> Tool es
+scrollTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
 scrollTool gid reg =
   Tool
     { toolName = "browser_scroll",

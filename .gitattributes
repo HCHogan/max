@@ -1,0 +1,2 @@
+# Unified diff context lines intentionally carry their one-character prefix.
+browser-image/*.patch -whitespace

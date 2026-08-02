@@ -25,7 +25,9 @@
 #
 # The camoufox browser binary (~780MB) is fetched at build time via the
 # repo's own camoufox-js pin, so container start needs no download.
-# Rebuild to pick up new camoufox-mcp releases.
+# The source revision is pinned because the small structured-error patch below
+# is part of our protocol contract.  Bump CAMOUFOX_MCP_REF and refresh the
+# patch deliberately when upgrading upstream.
 
 FROM node:22-bookworm AS builder
 
@@ -33,8 +35,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 build-essential git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 https://github.com/whit3rabbit/camoufox-mcp /app
+ARG CAMOUFOX_MCP_REF=e5057f3bcf5bae9b2bc5d9c43972e89b6519ee9c
+RUN git init /app \
+ && cd /app \
+ && git remote add origin https://github.com/whit3rabbit/camoufox-mcp \
+ && git fetch --depth 1 origin "${CAMOUFOX_MCP_REF}" \
+ && git checkout --detach FETCH_HEAD \
+ && test "$(git rev-parse HEAD)" = "${CAMOUFOX_MCP_REF}"
 WORKDIR /app
+
+COPY camoufox-structured-errors.patch /tmp/camoufox-structured-errors.patch
+RUN git apply --check /tmp/camoufox-structured-errors.patch \
+ && git apply /tmp/camoufox-structured-errors.patch
 
 RUN npm_config_user_agent="pnpm/10.0.0 npm/10.9.8 node/v22.0.0 linux x64" npm ci \
  && npm run build \
