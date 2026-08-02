@@ -29,24 +29,27 @@
 # is part of our protocol contract.  Bump CAMOUFOX_MCP_REF and refresh the
 # patch deliberately when upgrading upstream.
 
-FROM node:22-bookworm AS builder
+FROM node:22-bookworm AS source
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 build-essential git \
+    python3 build-essential ca-certificates curl patch \
     && rm -rf /var/lib/apt/lists/*
 
 ARG CAMOUFOX_MCP_REF=e5057f3bcf5bae9b2bc5d9c43972e89b6519ee9c
-RUN git init /app \
- && cd /app \
- && git remote add origin https://github.com/whit3rabbit/camoufox-mcp \
- && git fetch --depth 1 origin "${CAMOUFOX_MCP_REF}" \
- && git checkout --detach FETCH_HEAD \
- && test "$(git rev-parse HEAD)" = "${CAMOUFOX_MCP_REF}"
+RUN mkdir -p /app \
+ && curl --fail --location --http1.1 \
+      --retry 5 --retry-all-errors --retry-delay 3 --retry-max-time 600 \
+      --connect-timeout 15 --max-time 180 \
+      --output /tmp/camoufox-mcp.tar.gz \
+      "https://codeload.github.com/whit3rabbit/camoufox-mcp/tar.gz/${CAMOUFOX_MCP_REF}" \
+ && tar -xzf /tmp/camoufox-mcp.tar.gz --strip-components=1 -C /app \
+ && rm /tmp/camoufox-mcp.tar.gz
 WORKDIR /app
 
 COPY camoufox-structured-errors.patch /tmp/camoufox-structured-errors.patch
-RUN git apply --check /tmp/camoufox-structured-errors.patch \
- && git apply /tmp/camoufox-structured-errors.patch
+RUN patch --batch --forward -p1 --input=/tmp/camoufox-structured-errors.patch
+
+FROM source AS builder
 
 RUN npm_config_user_agent="pnpm/10.0.0 npm/10.9.8 node/v22.0.0 linux x64" npm ci \
  && npm run build \
