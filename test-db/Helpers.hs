@@ -9,6 +9,7 @@ module Helpers
     insertRawMessage,
     insertRawKind,
     insertRawReply,
+    updateDbSession,
   )
 where
 
@@ -23,7 +24,10 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Log.Logger (Logger, mkLogger)
 import Max.DB.Connection (DbPool, withConn)
+import Max.DB.Session qualified as SessionDB
 import Max.Effects.Blob (Blob, runBlob)
+import Max.Session.Types (Session)
+import OneBot.Types (GroupId)
 import System.IO.Unsafe (unsafePerformIO)
 
 -- | Run an effectful, DB-touching action in plain 'IO'.  The set of
@@ -148,3 +152,19 @@ insertRawReply pool mid gid uid sid receivedAt nick body replyTo = withConn pool
       \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?, ?)"
       ((mid, gid, uid, sid, receivedAt, body, nick) :. (Null, replyTo))
   pure ()
+
+-- | Test-only versioned Session mutation.  Production callers go through
+-- 'Max.Session.updateSession'; integration fixtures use this helper when they
+-- need a persisted Session value without constructing a runtime registry.
+updateDbSession ::
+  DbPool ->
+  GroupId ->
+  Text ->
+  (Session -> Session) ->
+  IO Session
+updateDbSession pool gid defaultModel f = withDb pool $ do
+  current <- SessionDB.fetchRecordOrInit gid defaultModel
+  let next = f current.session
+  SessionDB.saveSessionCAS current next >>= \case
+    Just _ -> pure next
+    Nothing -> error "test Session CAS unexpectedly conflicted"

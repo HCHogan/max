@@ -5,21 +5,25 @@
 --
 -- == Mutability
 --
--- The in-memory shape is @TVar (Map GroupId (TVar Session))@: the
--- outer map is locked only while we add a new group; per-group state
--- is its own TVar so concurrent groups don't contend.
+-- The in-memory shape is @TVar (Map GroupId SessionHandle)@: the outer map is
+-- locked only while we add a new group.  Each handle owns a TVar plus a
+-- mutation lock, so concurrent groups never contend and one group's DB writes
+-- cannot finish out of order.
 --
--- Every mutation goes through 'updateSession', which writes through
--- to Postgres before returning.  Reads come from the TVar without
--- touching the DB (the cache is authoritative once loaded).
+-- Every mutation goes through 'updateSession'.  It persists with revision CAS
+-- before publishing the committed value to the TVar; a DB failure therefore
+-- leaves the visible cache unchanged.  Reads remain cache-only once loaded.
 module Max.Session
   ( -- * Re-exported record
     Session (..),
+    SessionHandle,
+    SessionPersistenceError (..),
     SessionRegistry,
     newSessionRegistry,
     loadSession,
     readSession,
     updateSession,
+
     -- * Convenience updates (pass to 'updateSession')
     clearHistory,
     clearAll,
@@ -38,20 +42,37 @@ module Max.Session
   )
 where
 
+import Control.Concurrent.MVar (MVar, newMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
+import Control.Exception (Exception)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Effectful
+import Effectful.Exception (bracket, mask, throwIO)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Session qualified as DB
 import Max.Session.Types (Session (..))
 import OneBot.Types (GroupId)
 
--- | Outer registry: map from group id to that group's session.
-newtype SessionRegistry = SessionRegistry (TVar (Map GroupId (TVar Session)))
+-- | An opaque per-conversation cache and mutation domain.
+data SessionHandle = SessionHandle
+  { state :: !(TVar DB.SessionRecord),
+    mutationLock :: !(MVar ()),
+    defaultModel :: !Text
+  }
+
+-- | Outer registry: map from group id to that group's session handle.
+newtype SessionRegistry = SessionRegistry (TVar (Map GroupId SessionHandle))
+
+data SessionPersistenceError
+  = SessionMissing !GroupId
+  | SessionConflictExhausted !GroupId
+  deriving stock (Show)
+
+instance Exception SessionPersistenceError
 
 newSessionRegistry :: IO SessionRegistry
 newSessionRegistry = SessionRegistry <$> newTVarIO Map.empty
@@ -63,7 +84,7 @@ loadSession ::
   SessionRegistry ->
   Text -> -- default model (registry.defaultName) used when DB has no row
   GroupId ->
-  Eff es (TVar Session)
+  Eff es SessionHandle
 loadSession (SessionRegistry outer) defaultModel gid = do
   cached <- liftIO . atomically $ do
     m <- readTVar outer
@@ -71,34 +92,60 @@ loadSession (SessionRegistry outer) defaultModel gid = do
   case cached of
     Just t -> pure t
     Nothing -> do
-      s <- DB.fetchOrInit gid defaultModel
-      tvar <- liftIO (newTVarIO s)
-      liftIO . atomically $ modifyTVar' outer (Map.insertWith (\_ old -> old) gid tvar)
+      record <- DB.fetchRecordOrInit gid defaultModel
+      handle <-
+        liftIO $
+          SessionHandle
+            <$> newTVarIO record
+            <*> newMVar ()
+            <*> pure defaultModel
+      liftIO . atomically $ modifyTVar' outer (Map.insertWith (\_ old -> old) gid handle)
       -- If someone else won the race, the insertWith above keeps the
-      -- existing TVar; re-read so we return the winner.
+      -- existing handle; re-read so we return the winner.
       finalMap <- liftIO (readTVarIO outer)
-      pure (Map.findWithDefault tvar gid finalMap)
+      pure (Map.findWithDefault handle gid finalMap)
 
 -- | Read the current state.  Pure read against the in-memory TVar.
-readSession :: TVar Session -> IO Session
-readSession = readTVarIO
+readSession :: SessionHandle -> IO Session
+readSession handle = (.session) <$> readTVarIO handle.state
 
 -- | Apply a pure update and persist to DB.  The update sees the
 -- previous 'Session' and returns the new one; the function may also
 -- yield a value for the caller.
 updateSession ::
   (WithConnection :> es, IOE :> es) =>
-  TVar Session ->
+  SessionHandle ->
   (Session -> (Session, a)) ->
   Eff es a
-updateSession t f = do
-  (new, a) <- liftIO . atomically $ do
-    old <- readTVar t
-    let (new, a) = f old
-    writeTVar t new
-    pure (new, a)
-  DB.upsertSession new
-  pure a
+updateSession handle f =
+  bracket
+    (liftIO (takeMVar handle.mutationLock))
+    (const (liftIO (putMVar handle.mutationLock ())))
+    ( const $
+        mask $
+          \restore -> retryCAS restore maxSessionCASRetries
+    )
+  where
+    retryCAS restore retriesLeft = do
+      oldRecord <- liftIO (readTVarIO handle.state)
+      let (newSession, result) = f oldRecord.session
+      committed <- restore (DB.saveSessionCAS oldRecord newSession)
+      case committed of
+        Just newRecord -> do
+          liftIO . atomically $ writeTVar handle.state newRecord
+          pure result
+        Nothing -> do
+          latest <- restore (DB.fetchRecord oldRecord.session.groupId handle.defaultModel)
+          case latest of
+            Nothing -> throwIO (SessionMissing oldRecord.session.groupId)
+            Just latestRecord -> do
+              liftIO . atomically $ writeTVar handle.state latestRecord
+              if retriesLeft <= 0
+                then throwIO (SessionConflictExhausted oldRecord.session.groupId)
+                else retryCAS restore (retriesLeft - 1)
+
+maxSessionCASRetries :: Int
+maxSessionCASRetries = 8
 
 --------------------------------------------------------------------------------
 -- Pure helpers callable inside updateSession.

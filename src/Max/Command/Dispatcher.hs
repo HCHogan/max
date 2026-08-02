@@ -10,7 +10,7 @@ module Max.Command.Dispatcher
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent.STM (TVar, atomically, modifyTVar', readTVarIO)
+import Control.Concurrent.STM (atomically, modifyTVar', readTVarIO)
 import Data.Int (Int64)
 import Data.List (sort)
 import Data.Map.Strict qualified as Map
@@ -42,7 +42,7 @@ import Max.Intent (IntentConfig (..))
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, lookupModelCapabilities, modelProfileNames)
 import Max.Sandbox.Docker (ExecResult (..), wrapPackages)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
-import Max.Session (Session (..), updateSession)
+import Max.Session (Session (..), SessionHandle, updateSession)
 import Max.Session qualified as Session
 import Max.Skills (skillsForGroup)
 import Max.Tasks
@@ -98,7 +98,7 @@ execute ::
     Reader ModelCatalog :> es,
     IOE :> es
   ) =>
-  TVar Session ->
+  SessionHandle ->
   GroupId ->
   UserId -> -- the command's sender (permission scope for !memory rm)
   PermTier -> -- the sender's effective tier (Handler resolves it)

@@ -41,7 +41,7 @@ src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, F
 src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher, Help (the
                    !help text — a leaf module so the self-knowledge skill can
                    splice it at registry init)
-src/Max/Session/   Per-conversation session: in-memory TVar + DB persistence
+src/Max/Session/   Per-conversation session: versioned TVar handle + serialized CAS persistence
 src/Max/Sandbox/   Per-group Docker workspace lifecycle + registry
 src/Max/Browser/   Per-group camoufox-MCP container lifecycle + registry
 src/Max/MCP/       Minimal MCP client (Streamable HTTP)
@@ -123,7 +123,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 
 | Survives a restart | How |
 |---|---|
-| Messages, sessions, memories, stickers, permissions, skills | written through on every mutation (builtin skills re-seed from the binary) |
+| Messages, sessions, memories, stickers, permissions, skills | written through on every mutation; Session persists revision CAS before publishing its TVar (builtin skills re-seed from the binary) |
 | Pending image / video / forward / file fetches | `fetch_jobs` rows claimed under a lease — a dead process's lease expires and the next claim picks the job back up |
 | Pending memory-extraction windows | conversation-scoped `conversation_cursors.ingest_seq`; boot re-arms any group with a newer ledger row |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |

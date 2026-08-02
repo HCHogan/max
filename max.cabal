@@ -346,6 +346,7 @@ test-suite max-test-db
         Max.DB.ReminderSpec
         Max.PromptIntegrationSpec
     build-depends:
+        , async                >= 2.2  && < 2.3
         , base                 >= 4.20 && < 5
         , containers           >= 0.7  && < 0.9
         , hspec                >= 2.11 && < 2.12

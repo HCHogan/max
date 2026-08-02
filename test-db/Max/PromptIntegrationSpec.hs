@@ -12,9 +12,9 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime, utc)
-import Helpers (insertRawKind, insertRawMessage, truncateAll, withDb, withDbLog)
+import Helpers (insertRawKind, insertRawMessage, truncateAll, updateDbSession, withDb, withDbLog)
 import Max.DB.Connection (DbPool)
-import Max.DB.Session (fetchOrInit, upsertSession)
+import Max.DB.Session (fetchOrInit)
 import Max.Effects.LLM (ChatMessage (..))
 import Max.Prompt (TriggerOrigin (..), buildContext)
 import Max.Session (Session (..))
@@ -74,9 +74,9 @@ spec pool = before_ (truncateAll pool) $
     it "honours cleared_at watermark — older rows are dropped" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "旧"
       insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "新"
-      s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      let s = s0 {clearedAt = Just (timeAt 10)}
-      withDb pool $ upsertSession s
+      s <-
+        updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
+          current {clearedAt = Just (timeAt 10)}
       (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldNotSatisfy` ("旧" `T.isInfixOf`)
@@ -166,8 +166,9 @@ spec pool = before_ (truncateAll pool) $
       -- Commit it the way the dispatcher does, then rebuild: the same
       -- floor now applies at the query, so the window is already short
       -- and nothing moves again.
-      let s1 = s0 {contextAnchor = moved}
-      withDb pool $ upsertSession s1
+      s1 <-
+        updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
+          current {contextAnchor = moved}
       (msgs', moved') <- withDbLog pool $ buildContext "default-persona" 2 4 False False OriginDirect utc [] [] Set.empty s1 trigger
       moved' `shouldBe` Nothing
       userBodyOf msgs' `shouldSatisfy` (not . ("行1" `T.isInfixOf`))
@@ -182,9 +183,9 @@ spec pool = before_ (truncateAll pool) $
 
     it "renders pinned messages in the [pinned] section" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "重要信息"
-      s0 <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      let s = s0 {pinned = [1001]}
-      withDb pool $ upsertSession s
+      s <-
+        updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
+          current {pinned = [1001]}
       (msgs, _) <- withDbLog pool $ buildContext "default-persona" 20 80 False False OriginDirect utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[pinned" `T.isInfixOf`)

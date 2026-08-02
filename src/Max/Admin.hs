@@ -3,8 +3,9 @@
 -- |
 -- The admin JSON API: a warp server inside the bot process, because
 -- half of what it manages only exists inside the process.  Sessions
--- are a write-through cache ('Max.Session.updateSession' — a row
--- edited behind the registry's back is a row the bot never sees),
+-- are a revisioned write-through cache ('Max.Session.updateSession' persists
+-- CAS before publishing the TVar; a row edited behind the registry's back is
+-- refreshed on the next conflicting mutation),
 -- running turns live in the task registry, and the LLM usage table is
 -- written by this process.  A frontend reads and mutates through
 -- here; what shape that frontend takes is deliberately not this

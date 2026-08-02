@@ -1,12 +1,14 @@
 -- |
 -- Postgres CRUD for the @sessions@ table, one row per group.
 --
--- 'fetchOrInit' is the boot-time path: read the group's row if it
--- exists, otherwise create a fresh one with the given default model.
--- 'upsertSession' writes through on every mutation.
+-- 'fetchRecordOrInit' is the boot-time path: atomically ensure the group's row
+-- exists, then return both its value and optimistic revision.
 module Max.DB.Session
-  ( fetchOrInit,
-    upsertSession,
+  ( SessionRecord (..),
+    fetchOrInit,
+    fetchRecordOrInit,
+    fetchRecord,
+    saveSessionCAS,
     listSessions,
   )
 where
@@ -49,7 +51,8 @@ data Row = Row
     rProactiveOverride :: !(Maybe Bool),
     rContextAnchor :: !(Maybe UTCTime),
     rMemxAnchor :: !(Maybe UTCTime),
-    rEffortOverride :: !(Maybe Text)
+    rEffortOverride :: !(Maybe Text),
+    rRevision :: !Int64
   }
 
 instance FromRow Row where
@@ -66,6 +69,15 @@ instance FromRow Row where
       <*> field
       <*> field
       <*> field
+      <*> field
+
+-- | A Session value paired with the database revision it was read from.
+-- Callers must present the complete record to 'saveSessionCAS'.
+data SessionRecord = SessionRecord
+  { session :: !Session,
+    revision :: !Int64
+  }
+  deriving stock (Show)
 
 -- | Load a group's session, creating a fresh row (with the given
 -- default model) if nothing exists yet.
@@ -74,32 +86,42 @@ fetchOrInit ::
   GroupId ->
   Text -> -- default model name (used when creating)
   Eff es Session
-fetchOrInit (GroupId gid) defaultModel = do
+fetchOrInit gid defaultModel = (.session) <$> fetchRecordOrInit gid defaultModel
+
+-- | Atomically create a default row when absent, then return the exact stored
+-- revision.  Concurrent initializers converge on the same row.
+fetchRecordOrInit ::
+  (WithConnection :> es, IOE :> es) =>
+  GroupId ->
+  Text ->
+  Eff es SessionRecord
+fetchRecordOrInit gid@(GroupId gidRaw) defaultModel = do
+  void $
+    execute
+      "INSERT INTO sessions (group_id, model) VALUES (?, ?) \
+      \ ON CONFLICT (group_id) DO NOTHING"
+      (gidRaw, defaultModel)
+  fetchRecord gid defaultModel >>= \case
+    Just record -> pure record
+    Nothing -> error "session disappeared after initialization"
+
+-- | Read an existing row without creating it.  Used after a failed CAS so the
+-- registry can refresh and retry; a missing row remains an explicit failure.
+fetchRecord ::
+  (WithConnection :> es, IOE :> es) =>
+  GroupId ->
+  Text ->
+  Eff es (Maybe SessionRecord)
+fetchRecord (GroupId gid) defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor, effort_override \
+      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor, effort_override, revision \
       \  FROM sessions \
       \  WHERE group_id = ?"
       (Only gid)
   case rows :: [Row] of
-    (r : _) -> pure (rowToSession defaultModel r)
-    [] -> do
-      let initial =
-            Session
-              { groupId = GroupId gid,
-                model = defaultModel,
-                persona = Nothing,
-                clearedAt = Nothing,
-                pinned = [],
-                debugOverride = Nothing,
-                stickerOverride = Nothing,
-                proactiveOverride = Nothing,
-                contextAnchor = Nothing,
-                memxAnchor = Nothing,
-                effortOverride = Nothing
-              }
-      upsertSession initial
-      pure initial
+    r : _ -> pure (Just (rowToRecord defaultModel r))
+    [] -> pure Nothing
 
 -- | Every session row, resolved the same way 'fetchOrInit' resolves
 -- one (NULL model → the default).  The admin surface's group list —
@@ -109,52 +131,60 @@ listSessions :: (WithConnection :> es, IOE :> es) => Text -> Eff es [Session]
 listSessions defaultModel = do
   rows <-
     query
-      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor, effort_override \
+      "SELECT group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor, effort_override, revision \
       \  FROM sessions ORDER BY group_id"
       ()
-  pure (map (rowToSession defaultModel) (rows :: [Row]))
+  pure (map ((.session) . rowToRecord defaultModel) (rows :: [Row]))
 
--- | Idempotent write of one session row.  Updates 'updated_at'.
-upsertSession :: (WithConnection :> es, IOE :> es) => Session -> Eff es ()
-upsertSession s = do
-  let GroupId gid = s.groupId
-      pin = Jsonb (toJSON s.pinned)
-  void $
-    execute
-      "INSERT INTO sessions (group_id, model, persona, cleared_at, pinned, debug_override, sticker_override, proactive_override, context_anchor, memx_anchor, effort_override) \
-      \ VALUES (?,?,?,?,?,?,?,?,?,?,?) \
-      \ ON CONFLICT (group_id) DO UPDATE SET \
-      \   model              = EXCLUDED.model, \
-      \   persona            = EXCLUDED.persona, \
-      \   cleared_at         = EXCLUDED.cleared_at, \
-      \   pinned             = EXCLUDED.pinned, \
-      \   debug_override     = EXCLUDED.debug_override, \
-      \   sticker_override   = EXCLUDED.sticker_override, \
-      \   proactive_override = EXCLUDED.proactive_override, \
-      \   context_anchor     = EXCLUDED.context_anchor, \
-      \   memx_anchor        = EXCLUDED.memx_anchor, \
-      \   effort_override    = EXCLUDED.effort_override, \
-      \   updated_at         = now()"
-      ((gid, s.model, s.persona, s.clearedAt, pin) :. (s.debugOverride, s.stickerOverride, s.proactiveOverride, s.contextAnchor, s.memxAnchor, s.effortOverride))
+-- | Replace a complete row only when its revision still matches.  Returns the
+-- committed record on success and 'Nothing' for a stale or missing row.
+saveSessionCAS ::
+  (WithConnection :> es, IOE :> es) =>
+  SessionRecord ->
+  Session ->
+  Eff es (Maybe SessionRecord)
+saveSessionCAS old new
+  | old.session.groupId /= new.groupId = pure Nothing
+  | otherwise = do
+      let GroupId gid = new.groupId
+          pin = Jsonb (toJSON new.pinned)
+          nextRevision = old.revision + 1
+      changed <-
+        execute
+          "UPDATE sessions SET \
+          \   model = ?, persona = ?, cleared_at = ?, pinned = ?, \
+          \   debug_override = ?, sticker_override = ?, proactive_override = ?, \
+          \   context_anchor = ?, memx_anchor = ?, effort_override = ?, \
+          \   revision = ?, updated_at = now() \
+          \ WHERE group_id = ? AND revision = ?"
+          ((new.model, new.persona, new.clearedAt, pin) :. (new.debugOverride, new.stickerOverride, new.proactiveOverride, new.contextAnchor, new.memxAnchor, new.effortOverride, nextRevision, gid, old.revision))
+      pure $
+        if changed == 1
+          then Just (SessionRecord new nextRevision)
+          else Nothing
 
 --------------------------------------------------------------------------------
 
-rowToSession :: Text -> Row -> Session
-rowToSession defaultModel r =
-  Session
-    { groupId = GroupId r.rGroupId,
-      model = case r.rModel of
-        Just m | not (T.null m) -> m
-        _ -> defaultModel,
-      persona = r.rPersona,
-      clearedAt = r.rClearedAt,
-      pinned = decodeOrEmpty r.rPinned,
-      debugOverride = r.rDebugOverride,
-      stickerOverride = r.rStickerOverride,
-      proactiveOverride = r.rProactiveOverride,
-      contextAnchor = r.rContextAnchor,
-      memxAnchor = r.rMemxAnchor,
-      effortOverride = r.rEffortOverride
+rowToRecord :: Text -> Row -> SessionRecord
+rowToRecord defaultModel r =
+  SessionRecord
+    { session =
+        Session
+          { groupId = GroupId r.rGroupId,
+            model = case r.rModel of
+              Just m | not (T.null m) -> m
+              _ -> defaultModel,
+            persona = r.rPersona,
+            clearedAt = r.rClearedAt,
+            pinned = decodeOrEmpty r.rPinned,
+            debugOverride = r.rDebugOverride,
+            stickerOverride = r.rStickerOverride,
+            proactiveOverride = r.rProactiveOverride,
+            contextAnchor = r.rContextAnchor,
+            memxAnchor = r.rMemxAnchor,
+            effortOverride = r.rEffortOverride
+          },
+      revision = r.rRevision
     }
   where
     -- Tolerate junk in jsonb columns (e.g. older shape we don't know
