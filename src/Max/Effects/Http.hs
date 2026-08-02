@@ -6,6 +6,7 @@ module Max.Effects.Http
     getBytes,
     getBytesQqCompatible,
     getBytesWith,
+    getBytesWithLegacyTls,
     getFinalUrl,
   )
 where
@@ -58,12 +59,18 @@ getBytes url = getBytesWith url []
 -- compatibility pool.  Callers must opt in; ordinary downloads use the
 -- standards-compliant pool through 'getBytes'.
 getBytesQqCompatible :: Http :> es => Text -> Int -> Eff es (Either Text (ByteString, Text))
-getBytesQqCompatible url limit = send (GetBytes QqCdnPool url [] limit)
+getBytesQqCompatible url limit = send (GetBytes LegacyEmsPool url [] limit)
 
--- | 'getBytes' with extra request headers — some origins (bilibili's
--- API and CDN) refuse requests without @User-Agent@ / @Referer@.
+-- | 'getBytes' with extra request headers — some origins such as Bilibili's
+-- API refuse requests without @User-Agent@ / @Referer@.
 getBytesWith :: Http :> es => Text -> [(Text, Text)] -> Int -> Eff es (Either Text (ByteString, Text))
 getBytesWith url headers limit = send (GetBytes StandardPool url headers limit)
+
+-- | Download from an origin that is known not to implement RFC 7627 EMS.
+-- This is an explicit capability escape hatch for legacy CDNs; certificate
+-- and hostname validation remain enabled.
+getBytesWithLegacyTls :: Http :> es => Text -> [(Text, Text)] -> Int -> Eff es (Either Text (ByteString, Text))
+getBytesWithLegacyTls url headers limit = send (GetBytes LegacyEmsPool url headers limit)
 
 -- | Where does @url@ redirect to (single hop, @Location@ header)?
 getFinalUrl :: Http :> es => Text -> Eff es (Either Text Text)

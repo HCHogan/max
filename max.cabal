@@ -287,6 +287,7 @@ test-suite max-test
         Max.Effects.PlatformApiSpec
         Max.Effects.OutboundSpec
         Max.Effects.ToolOutputSpec
+        Max.EmbeddingSpec
         Max.MCP.ClientSpec
         Max.PlatformSpec
         Max.PromptFlowSpec

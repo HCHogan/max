@@ -23,7 +23,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.Log
 import Max.Bilibili
-import Max.Effects.Http (Http, getBytesWith)
+import Max.Effects.Http (Http, getBytesWithLegacyTls)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.Time (fmtDateHM)
@@ -157,7 +157,7 @@ viewBilibiliTool tz dc =
                            )
                     ]
               | otherwise ->
-                  getBytesWith streamUrl biliHeaders maxStreamBytes >>= \case
+                  getBytesWithLegacyTls streamUrl biliHeaders maxStreamBytes >>= \case
                     Left err -> pure ["video_attached" .= False, "video_note" .= ("视频下载失败: " <> err)]
                     Right (bytes, _) -> do
                       let label = "[B站 " <> info.bvBvid <> " " <> info.bvTitle <> "]:"

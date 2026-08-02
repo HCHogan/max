@@ -144,8 +144,8 @@ app/Main
   └─ newHttpRuntime
        ├─ StandardPool
        │    strict TLS validation; http-client implicit retry disabled
-       └─ QqCdnPool
-            same validation + explicit AllowEMS concession for QQ CDN only
+       └─ LegacyEmsPool
+            same validation + explicit AllowEMS for known legacy CDNs
               │
               ├─ Http effect ───── bounded downloads / redirect lookup
               ├─ Http.Json ─────── buffered LLM + Tavily JSON POST

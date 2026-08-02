@@ -43,12 +43,12 @@ import Network.HTTP.Types.Status (Status, statusCode, statusIsSuccessful)
 import Network.TLS qualified as TLS
 import System.X509 (getSystemCertificateStore)
 
--- | The deliberately small set of connection pools used by Max.  The QQ
--- compatibility concession is opt-in at each call site; ordinary HTTPS never
--- inherits it by accident.
+-- | The deliberately small set of connection pools used by Max.  Relaxing
+-- Extended Master Secret support is opt-in at each call site; ordinary HTTPS
+-- never inherits the legacy-CDN concession by accident.
 data HttpPool
   = StandardPool
-  | QqCdnPool
+  | LegacyEmsPool
   deriving stock (Eq, Show)
 
 -- | Process-wide outbound HTTP resources.  A 'Manager' owns its connection
@@ -56,7 +56,7 @@ data HttpPool
 -- keep-alive reuse possible across otherwise unrelated features.
 data HttpRuntime = HttpRuntime
   { standardManager :: Manager,
-    qqCdnManager :: Manager
+    legacyEmsManager :: Manager
   }
 
 -- | Failures shared by all outbound HTTP users.  Response decoding remains a
@@ -91,9 +91,9 @@ data BufferedResponse = BufferedResponse
 newHttpRuntime :: IO HttpRuntime
 newHttpRuntime = do
   standard <- newManager noImplicitRetryTlsSettings
-  qqSettings <- qqCdnManagerSettings
-  qq <- newManager qqSettings
-  pure (HttpRuntime standard qq)
+  legacyEmsSettings <- legacyEmsManagerSettings
+  legacyEms <- newManager legacyEmsSettings
+  pure (HttpRuntime standard legacyEms)
 
 -- | Injection seam for tests and application components that already own
 -- managers.  Production startup should normally use 'newHttpRuntime'.
@@ -102,7 +102,7 @@ httpRuntimeFromManagers = HttpRuntime
 
 managerFor :: HttpPool -> HttpRuntime -> Manager
 managerFor StandardPool = (.standardManager)
-managerFor QqCdnPool = (.qqCdnManager)
+managerFor LegacyEmsPool = (.legacyEmsManager)
 
 parseRequestEither :: String -> IO (Either TransportFailure Request)
 parseRequestEither raw = do
@@ -215,11 +215,11 @@ noImplicitRetryTlsSettings :: ManagerSettings
 noImplicitRetryTlsSettings =
   tlsManagerSettings {managerRetryableException = const False}
 
--- | Standard certificate validation with only QQ's missing RFC 7627 Extended
--- Master Secret support relaxed.  The system trust store and hostname checks
--- remain enabled.
-qqCdnManagerSettings :: IO ManagerSettings
-qqCdnManagerSettings = do
+-- | Standard certificate validation with only missing RFC 7627 Extended
+-- Master Secret support relaxed.  QQ media and some Bilibili video CDNs need
+-- this; the system trust store and hostname checks remain enabled.
+legacyEmsManagerSettings :: IO ManagerSettings
+legacyEmsManagerSettings = do
   caStore <- getSystemCertificateStore
   let base = TLS.defaultParamsClient "" ""
       clientParams =

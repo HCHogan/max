@@ -14,6 +14,8 @@ module Max.Embedding
     newEmbedClient,
     embedTexts,
     renderVector,
+    -- * Exposed for tests
+    embeddingRequest,
   )
 where
 
@@ -64,23 +66,11 @@ embedTexts :: EmbedClient -> [Text] -> IO (Either Text [[Float]])
 embedTexts _ [] = pure (Right [])
 embedTexts c texts = do
   let cfg = c.emCfg
-      url = T.unpack (T.dropWhileEnd (== '/') cfg.ecBaseUrl) <> "/embeddings"
-      body = encode (object ["model" .= cfg.ecModel, "input" .= texts])
-  ereq <- parseRequestEither url
+  ereq <- embeddingRequest cfg texts
   case ereq of
     Left failure -> pure (Left ("bad embedding url: " <> renderTransportFailure failure))
-    Right req0 -> do
-      let req =
-            req0
-              { requestHeaders =
-                  [("Content-Type", "application/json")]
-                    <> [ ("Authorization", "Bearer " <> TE.encodeUtf8 k)
-                       | Just k <- [cfg.ecApiKey]
-                       ],
-                requestBody = RequestBodyLBS body,
-                responseTimeout = responseTimeoutMicro (cfg.ecTimeoutSeconds * 1_000_000)
-              }
-      runBuffered c.emHttp StandardPool maxEmbeddingResponseBytes statusPreviewBytes req >>= \case
+    Right request ->
+      runBuffered c.emHttp StandardPool maxEmbeddingResponseBytes statusPreviewBytes request >>= \case
         Left (HttpStatusFailure code _ responsePreview _) ->
           pure . Left $
             "embedding HTTP "
@@ -96,6 +86,25 @@ embedTexts c texts = do
               | length vectors /= length texts ->
                   Left "embedding count mismatch"
               | otherwise -> Right vectors
+
+embeddingRequest :: EmbeddingConfig -> [Text] -> IO (Either TransportFailure Request)
+embeddingRequest cfg texts = do
+  let url = T.unpack (T.dropWhileEnd (== '/') cfg.ecBaseUrl) <> "/embeddings"
+      body = encode (object ["model" .= cfg.ecModel, "input" .= texts])
+  fmap
+    ( fmap $ \request0 ->
+        request0
+          { method = "POST",
+            requestHeaders =
+              [("Content-Type", "application/json")]
+                <> [ ("Authorization", "Bearer " <> TE.encodeUtf8 key)
+                   | Just key <- [cfg.ecApiKey]
+                   ],
+            requestBody = RequestBodyLBS body,
+            responseTimeout = responseTimeoutMicro (cfg.ecTimeoutSeconds * 1_000_000)
+          }
+    )
+    (parseRequestEither url)
 
 embeddingsP :: Value -> Parser [[Float]]
 embeddingsP = withObject "resp" $ \o -> do
