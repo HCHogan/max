@@ -6,8 +6,8 @@ module Max.DB.Files
   ( FileRecord (..),
     insertSeen,
     markStored,
-    fetchByFileId,
-    fetchFilesForMessage,
+    fetchByFileIdInScope,
+    fetchFilesForMessageInScope,
     listRecentInGroup,
   )
 where
@@ -16,10 +16,11 @@ import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Time (UTCTime)
-import Database.PostgreSQL.Simple (FromRow, Only (..))
+import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.Effects.Blob (BlobRef, blobRefFromSha256, blobRefSha256, blobRefStoredPath)
 
 -- | One row in 'group_files'.  Fields after 'fileName' may be
@@ -106,36 +107,38 @@ markStored fid ref mime size = do
       (blobRefSha256 ref, blobRefStoredPath ref, mime, size, fid)
   pure ()
 
-fetchByFileId ::
+fetchByFileIdInScope ::
   (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
   Text ->
   Eff es (Maybe FileRecord)
-fetchByFileId fid = do
+fetchByFileIdInScope scope fid = do
   rows <-
     query
       "SELECT file_id, group_id, message_id, sender_user_id, file_name, \
       \       mime_type, bytes_size, sha256, received_at, fetched_at \
       \  FROM group_files \
-      \  WHERE file_id = ? \
+      \  WHERE group_id = ? AND file_id = ? \
       \  LIMIT 1"
-      (Only fid)
+      (conversationStorageId scope, fid)
   pure (listToMaybe rows)
 
 -- | All files attached to one message — used by the prompt builder
 -- to enrich reply context (\"the user is asking about the file in
 -- the message they quoted; here are its file_ids\").
-fetchFilesForMessage ::
+fetchFilesForMessageInScope ::
   (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
   Int64 ->
   Eff es [FileRecord]
-fetchFilesForMessage mid =
+fetchFilesForMessageInScope scope mid =
   query
     "SELECT file_id, group_id, message_id, sender_user_id, file_name, \
     \       mime_type, bytes_size, sha256, received_at, fetched_at \
     \  FROM group_files \
-    \  WHERE message_id = ? \
+    \  WHERE group_id = ? AND message_id = ? \
     \  ORDER BY received_at ASC"
-    (Only mid)
+    (conversationStorageId scope, mid)
 
 -- | Newest @n@ files in @gid@, ordered by receipt time descending.
 listRecentInGroup ::

@@ -21,19 +21,20 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (TimeZone)
-import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection, query)
-import Max.DB.History (HistoryItem (..), bestName, fetchMessage)
+import Effectful.PostgreSQL (WithConnection)
+import Max.ConversationScope (conversationScopeFor)
+import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope)
+import Max.DB.Media (StoredImage (..), fetchMessageImagesInScope)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Time (fmtHM)
-import Max.ToolContext (ToolContext, toolMultimodal)
+import Max.ToolContext (ToolContext, toolGroupId, toolMultimodal)
 
 -- | Same per-image cap as the prompt builder's inline path.
 maxImageBytes :: Int
@@ -45,14 +46,15 @@ imageToolsFor ::
   ToolContext ->
   [Tool es]
 imageToolsFor tz dc
-  | toolMultimodal dc = [viewImageTool tz]
+  | toolMultimodal dc = [viewImageTool tz dc]
   | otherwise = []
 
 viewImageTool ::
   (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
   TimeZone ->
+  ToolContext ->
   Tool es
-viewImageTool tz =
+viewImageTool tz dc =
   Tool
     { toolName = viewImageSpec.specName,
       toolDescription = viewImageSpec.specDescription,
@@ -60,19 +62,13 @@ viewImageTool tz =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
-          rows <-
-            query
-              "SELECT i.mime_type, i.sha256 \
-              \  FROM message_images mi \
-              \  JOIN images i ON i.sha256 = mi.sha256 \
-              \  WHERE mi.message_id = ? \
-              \  ORDER BY mi.seg_index"
-              (Only mid)
-          case rows :: [(Text, Text)] of
+          rows <- fetchMessageImagesInScope scope mid
+          case rows of
             [] -> pure $ Left "这条消息没有已存的图片（id 写错了？或图片没下载成功）"
             imgs -> do
               label <- imageLabel mid
-              attached <- attachAll label (zip [1 :: Int ..] imgs) (length imgs)
+              let refs = [(i.storedImageMime, i.storedImageSha256) | i <- imgs]
+              attached <- attachAll label (zip [1 :: Int ..] refs) (length refs)
               pure $
                 if attached == 0
                   then Left "图片没能附上（配额用完或文件缺失，看日志）"
@@ -88,10 +84,12 @@ viewImageTool tz =
     parseArgs :: Object -> Parser Int64
     parseArgs o = o .: "message_id"
 
+    scope = conversationScopeFor (toolGroupId dc)
+
     -- "[10:32 Alice] 消息里的图片" — mirrors the label the prompt
     -- builder puts on inline images, so both kinds read the same.
     imageLabel mid =
-      fetchMessage mid >>= \case
+      fetchMessageInScope scope mid >>= \case
         Nothing -> pure ("[message " <> T.pack (show mid) <> "] 里的图片")
         Just h ->
           pure $

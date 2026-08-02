@@ -64,11 +64,13 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Exception (SomeException)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection, query)
+import Effectful.PostgreSQL (WithConnection)
+import Max.ConversationScope (ConversationScope, conversationScopeFor)
+import Max.DB.History (fetchMessageInScope)
+import Max.DB.Media (StoredImage (..), fetchMessageImagesInScope)
 import Max.DB.Message (MessageKind (..))
 import Max.DB.Stickers (findStickerByCaption)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
@@ -241,12 +243,21 @@ sendAndPersistReply rt budget rawBody
       let (mReplyId, pieces0) = parseReplyTokens t
           (seen', pieces) = dedupeImagePieces b.sbSentImages pieces0
           b' = b {sbSentImages = seen'}
+      mReplyId' <- case mReplyId of
+        Nothing -> pure Nothing
+        Just rid ->
+          fetchMessageInScope conversation rid >>= \case
+            Just _ -> pure (Just rid)
+            Nothing -> do
+              logAttention "reply placeholder outside conversation" $
+                object ["message_id" .= rid]
+              pure Nothing
       (content, rendered) <- resolvePieces pieces
       pure . (b',) $
         if null content
           then Nothing
           else
-            let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId]]
+            let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId']]
              in Just (prefix <> trimEdgeSegs content, T.strip rendered)
 
     -- Resolve parsed pieces into (segments, normalised rendered text).
@@ -281,7 +292,7 @@ sendAndPersistReply rt budget rawBody
                 object ["id" .= sid, "error" .= err]
               pure ([], "")
         resolve (PieceImage mid) = do
-          segs <- messageImageSegs mid
+          segs <- messageImageSegs conversation mid
           if null segs
             then do
               logAttention "image placeholder unresolved" $ object ["message_id" .= mid]
@@ -300,6 +311,8 @@ sendAndPersistReply rt budget rawBody
     mentionSegs t
       | isPrivateChat rt.rtGroupId = [SegText t]
       | otherwise = segmentMentions (\u -> maybe True (Set.member u) rt.rtMentionable) t
+
+    conversation = conversationScopeFor rt.rtGroupId
 
 -- | Everything model text must lose before it can become visible.  Kept in
 -- the same module as sending so streamed final text, progress narration, and
@@ -403,20 +416,14 @@ chunkDelayMicros nChars = do
 -- pictures beats failing the reply.
 messageImageSegs ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  ConversationScope ->
   Int64 ->
   Eff es [Segment]
-messageImageSegs mid = do
-  rows <-
-    query
-      "SELECT i.sha256 \
-      \  FROM message_images mi \
-      \  JOIN images i ON i.sha256 = mi.sha256 \
-      \  WHERE mi.message_id = ? \
-      \  ORDER BY mi.seg_index"
-      (Only mid)
-  fmap concat . traverse loadOne $ (rows :: [Only T.Text])
+messageImageSegs scope mid = do
+  rows <- fetchMessageImagesInScope scope mid
+  fmap concat . traverse (loadOne . (.storedImageSha256)) $ rows
   where
-    loadOne (Only sha) = case blobRefFromSha256 sha of
+    loadOne sha = case blobRefFromSha256 sha of
       Nothing -> do
         logAttention "image resend: invalid blob ref" $ object ["sha256" .= sha]
         pure []

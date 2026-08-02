@@ -1,10 +1,10 @@
 -- |
 -- CRUD over the @memories@ table (migration 011).  Two scopes,
 -- per-group and per-user, and __neither leaves the conversation it was
--- learned in__.  The interesting policy (caps, permission checks,
--- ephemeral gating) lives in the callers — "Max.Tools.Memory" for the
--- agent side, "Max.Command.Dispatcher" for the human @!memory@ side;
--- this module is just typed SQL.
+-- learned in__. This module owns the namespace predicates so tools,
+-- extractors, commands, and prompt assembly cannot accidentally turn a bare
+-- memory id into cross-conversation authority. Higher-level policy such as
+-- caps and extraction thresholds remains in the callers.
 --
 -- __Why user memories are group-scoped.__  They used to be one row per
 -- person, injected wherever that person turned up.  But the extractor
@@ -20,16 +20,24 @@
 -- rows.
 module Max.DB.Memory
   ( MemoryScope (..),
+    MemoryNamespace,
     MemoryItem (..),
     scopeText,
     parseScope,
+    groupMemoryNamespace,
+    userMemoryNamespace,
+    memoryNamespace,
     listMemories,
     listRecentMemories,
-    listUserMemoriesEverywhere,
+    listUserMemoriesEverywhereAdmin,
     countMemories,
     insertMemory,
+    markMemoryEmbedded,
     updateMemory,
+    updateVisibleMemory,
     deleteMemory,
+    deleteVisibleMemory,
+    deleteMemoryAdmin,
     evictOldest,
     fetchMemory,
   )
@@ -43,9 +51,42 @@ import Database.PostgreSQL.Simple (Only (..), (:.) (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow, field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.ConversationScope (ConversationScope, conversationStorageId)
 
 data MemoryScope = ScopeGroup | ScopeUser
   deriving stock (Show, Eq)
+
+-- | A semantic-memory partition inside one conversation authorization
+-- scope. Group memory is forced to the current conversation id; user memory
+-- additionally carries the person it is about, but remains confined to the
+-- conversation where it was learned.
+data MemoryNamespace = MemoryNamespace
+  { namespaceScope :: !MemoryScope,
+    namespaceSubjectId :: !Int64,
+    namespaceConversation :: !ConversationScope
+  }
+  deriving stock (Show, Eq)
+
+groupMemoryNamespace :: ConversationScope -> MemoryNamespace
+groupMemoryNamespace scope =
+  MemoryNamespace ScopeGroup (conversationStorageId scope) scope
+
+userMemoryNamespace :: ConversationScope -> Int64 -> MemoryNamespace
+userMemoryNamespace scope uid = MemoryNamespace ScopeUser uid scope
+
+-- | Transitional constructor for code which already has the two legacy
+-- scope fields. The group subject argument is intentionally ignored: a
+-- caller cannot turn a model-provided group id into authority.
+memoryNamespace :: ConversationScope -> MemoryScope -> Int64 -> MemoryNamespace
+memoryNamespace scope ScopeGroup _ = groupMemoryNamespace scope
+memoryNamespace scope ScopeUser uid = userMemoryNamespace scope uid
+
+namespaceParts :: MemoryNamespace -> (Text, Int64, Int64)
+namespaceParts ns =
+  ( scopeText ns.namespaceScope,
+    ns.namespaceSubjectId,
+    conversationStorageId ns.namespaceConversation
+  )
 
 scopeText :: MemoryScope -> Text
 scopeText ScopeGroup = "group"
@@ -74,20 +115,16 @@ instance FromRow MemoryItem where
 -- knowledge, and ids stay stable across renders.
 listMemories ::
   (WithConnection :> es, IOE :> es) =>
-  MemoryScope ->
-  Int64 ->
-  -- | Current group.  Confines user-scope rows to where they were
-  -- learned; ignored for group scope.
-  Int64 ->
+  MemoryNamespace ->
   Eff es [MemoryItem]
-listMemories scope sid gid =
+listMemories ns =
   query
     "SELECT id, scope, scope_id, content, updated_at \
     \  FROM memories \
     \  WHERE scope = ? AND scope_id = ? \
     \    AND (scope = 'group' OR source_group_id = ?) \
     \  ORDER BY id"
-    (scopeText scope, sid, gid)
+    (namespaceParts ns)
 
 -- | The @limit@ most recently touched entries of one scope, returned
 -- oldest-first like 'listMemories'.  The prompt's @[memories]@ block
@@ -95,13 +132,11 @@ listMemories scope sid gid =
 -- keep reading whole scopes.
 listRecentMemories ::
   (WithConnection :> es, IOE :> es) =>
-  MemoryScope ->
-  Int64 ->
-  -- | Current group (same scoping rule as 'listMemories').
-  Int64 ->
+  MemoryNamespace ->
   Int ->
   Eff es [MemoryItem]
-listRecentMemories scope sid gid limit = do
+listRecentMemories ns limit = do
+  let (scope, sid, gid) = namespaceParts ns
   rows <-
     query
       "SELECT id, scope, scope_id, content, updated_at \
@@ -109,26 +144,16 @@ listRecentMemories scope sid gid limit = do
       \  WHERE scope = ? AND scope_id = ? \
       \    AND (scope = 'group' OR source_group_id = ?) \
       \  ORDER BY updated_at DESC, id DESC LIMIT ?"
-      (scopeText scope, sid, gid, limit)
+      (scope, sid, gid, limit)
   pure (reverse rows)
 
--- | Every memory of one person, whatever conversation taught it, each
--- paired with that conversation.
---
--- The one deliberate exception to the scoping above, and it exists
--- because of it: once user memories are partitioned per group, there is
--- no longer any single place to see what the bot knows about you.  This
--- backs @!memory@ in a DM, where the audience /is/ the subject and the
--- output goes to them privately — showing someone their own record
--- leaks nothing to anybody else.
---
--- Not for any path that feeds the model.  That is what 'listMemories'
--- is for.
-listUserMemoriesEverywhere ::
+-- | Privileged admin view of every memory about one person, paired with its
+-- source conversation. Not for commands, prompts, tools, or extractors.
+listUserMemoriesEverywhereAdmin ::
   (WithConnection :> es, IOE :> es) =>
   Int64 ->
   Eff es [(MemoryItem, Maybe Int64)]
-listUserMemoriesEverywhere uid = do
+listUserMemoriesEverywhereAdmin uid = do
   rows <-
     query
       "SELECT id, scope, scope_id, content, updated_at, source_group_id \
@@ -141,17 +166,15 @@ listUserMemoriesEverywhere uid = do
 -- measured over the same rows the prompt actually sees.
 countMemories ::
   (WithConnection :> es, IOE :> es) =>
-  MemoryScope ->
-  Int64 ->
-  Int64 ->
+  MemoryNamespace ->
   Eff es Int
-countMemories scope sid gid = do
+countMemories ns = do
   rows <-
     query
       "SELECT count(*) FROM memories \
       \ WHERE scope = ? AND scope_id = ? \
       \   AND (scope = 'group' OR source_group_id = ?)"
-      (scopeText scope, sid, gid)
+      (namespaceParts ns)
   pure $ case rows of
     [Only (n :: Int64)] -> fromIntegral n
     _ -> 0
@@ -159,37 +182,115 @@ countMemories scope sid gid = do
 -- | Insert and return the new id.
 insertMemory ::
   (WithConnection :> es, IOE :> es) =>
-  MemoryScope ->
-  Int64 ->
+  MemoryNamespace ->
   Text ->
-  Maybe Int64 -> -- source group (where it was learned), for user scope
   Eff es Int64
-insertMemory scope sid content srcGid = do
+insertMemory ns content = do
+  let (scope, sid, gid) = namespaceParts ns
   rows <-
     query
       "INSERT INTO memories (scope, scope_id, content, source_group_id) \
       \  VALUES (?, ?, ?, ?) RETURNING id"
-      (scopeText scope, sid, content, srcGid)
+      (scope, sid, content, gid)
   pure $ case rows of
     [Only n] -> n
     _ -> 0 -- unreachable: RETURNING on a successful insert yields one row
 
--- | Returns 'False' when the id doesn't exist.
-updateMemory ::
+-- | Attach an embedding to the exact content row just inserted or embedded.
+-- Embedding model/hash metadata is added in the later embedding-lifecycle
+-- migration; the namespace predicate already prevents a stale worker or
+-- hallucinated id from touching another conversation.
+markMemoryEmbedded ::
   (WithConnection :> es, IOE :> es) =>
+  MemoryNamespace ->
   Int64 ->
   Text ->
   Eff es Bool
-updateMemory mid content = do
+markMemoryEmbedded ns mid vector = do
+  let (scope, sid, gid) = namespaceParts ns
   n <-
     execute
-      "UPDATE memories SET content = ?, updated_at = now() WHERE id = ?"
-      (content, mid)
+      "UPDATE memories SET embedding = ?::vector \
+      \  WHERE id = ? AND scope = ? AND scope_id = ? \
+      \    AND (scope = 'group' OR source_group_id = ?)"
+      (vector, mid, scope, sid, gid)
   pure (n > 0)
 
 -- | Returns 'False' when the id doesn't exist.
-deleteMemory :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es Bool
-deleteMemory mid = do
+updateMemory ::
+  (WithConnection :> es, IOE :> es) =>
+  MemoryNamespace ->
+  Int64 ->
+  Text ->
+  Eff es Bool
+updateMemory ns mid content = do
+  let (scope, sid, gid) = namespaceParts ns
+  n <-
+    execute
+      "UPDATE memories \
+      \  SET content = ?, embedding = NULL, updated_at = now() \
+      \  WHERE id = ? AND scope = ? AND scope_id = ? \
+      \    AND (scope = 'group' OR source_group_id = ?)"
+      (content, mid, scope, sid, gid)
+  pure (n > 0)
+
+-- | Update a memory visible in the current conversation, regardless of
+-- which person inside that conversation it is about. This is the safe
+-- boundary for model/extractor operations that return only a memory id.
+updateVisibleMemory ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  Int64 ->
+  Text ->
+  Eff es Bool
+updateVisibleMemory scope mid content = do
+  let gid = conversationStorageId scope
+  n <-
+    execute
+      "UPDATE memories \
+      \  SET content = ?, embedding = NULL, updated_at = now() \
+      \  WHERE id = ? \
+      \    AND ((scope = 'group' AND scope_id = ?) \
+      \      OR (scope = 'user' AND source_group_id = ?))"
+      (content, mid, gid, gid)
+  pure (n > 0)
+
+-- | Delete only when @id@ belongs to the authorized namespace.
+deleteMemory ::
+  (WithConnection :> es, IOE :> es) =>
+  MemoryNamespace ->
+  Int64 ->
+  Eff es Bool
+deleteMemory ns mid = do
+  let (scope, sid, gid) = namespaceParts ns
+  n <-
+    execute
+      "DELETE FROM memories \
+      \  WHERE id = ? AND scope = ? AND scope_id = ? \
+      \    AND (scope = 'group' OR source_group_id = ?)"
+      (mid, scope, sid, gid)
+  pure (n > 0)
+
+-- | Delete a memory only when the current conversation can see it.
+deleteVisibleMemory ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  Int64 ->
+  Eff es Bool
+deleteVisibleMemory scope mid = do
+  let gid = conversationStorageId scope
+  n <-
+    execute
+      "DELETE FROM memories \
+      \  WHERE id = ? \
+      \    AND ((scope = 'group' AND scope_id = ?) \
+      \      OR (scope = 'user' AND source_group_id = ?))"
+      (mid, gid, gid)
+  pure (n > 0)
+
+-- | Privileged deletion for the authenticated admin API.
+deleteMemoryAdmin :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es Bool
+deleteMemoryAdmin mid = do
   n <- execute "DELETE FROM memories WHERE id = ?" (Only mid)
   pure (n > 0)
 
@@ -201,11 +302,9 @@ deleteMemory mid = do
 -- about the same person.
 evictOldest ::
   (WithConnection :> es, IOE :> es) =>
-  MemoryScope ->
-  Int64 ->
-  Int64 ->
+  MemoryNamespace ->
   Eff es (Maybe (Int64, Text))
-evictOldest scope sid gid = do
+evictOldest ns = do
   rows <-
     query
       "DELETE FROM memories WHERE id = \
@@ -214,14 +313,21 @@ evictOldest scope sid gid = do
       \       AND (scope = 'group' OR source_group_id = ?) \
       \     ORDER BY updated_at ASC, id ASC LIMIT 1) \
       \ RETURNING id, content"
-      (scopeText scope, sid, gid)
+      (namespaceParts ns)
   pure (listToMaybe rows)
 
-fetchMemory :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es (Maybe MemoryItem)
-fetchMemory mid = do
+fetchMemory ::
+  (WithConnection :> es, IOE :> es) =>
+  MemoryNamespace ->
+  Int64 ->
+  Eff es (Maybe MemoryItem)
+fetchMemory ns mid = do
+  let (scope, sid, gid) = namespaceParts ns
   rows <-
     query
       "SELECT id, scope, scope_id, content, updated_at \
-      \  FROM memories WHERE id = ?"
-      (Only mid)
+      \  FROM memories \
+      \  WHERE id = ? AND scope = ? AND scope_id = ? \
+      \    AND (scope = 'group' OR source_group_id = ?)"
+      (mid, scope, sid, gid)
   pure (listToMaybe rows)

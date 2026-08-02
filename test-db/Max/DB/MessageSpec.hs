@@ -1,8 +1,9 @@
 module Max.DB.MessageSpec (spec) where
 
 import Helpers (truncateAll, withDb)
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
-import Max.DB.History (HistoryItem (..), fetchMessage)
+import Max.DB.History (HistoryItem (..), fetchMessageInScope)
 import Max.DB.Message (MessageKind (..), insertGroupMessage, insertOutbound)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -38,11 +39,12 @@ mkInbound mid uid segs =
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $
   describe "Max.DB.Message" $ do
+    let scope = conversationScopeFor testGroup
     describe "insertGroupMessage" $ do
-      it "round-trips a basic message (looked up via fetchMessage)" $ do
+      it "round-trips a basic message through its conversation scope" $ do
         let gm = mkInbound (MessageId 5001) memberA [SegText "hello"]
         withDb pool $ insertGroupMessage KindChat Nothing gm
-        m <- withDb pool $ fetchMessage 5001
+        m <- withDb pool $ fetchMessageInScope scope 5001
         case m of
           Nothing -> expectationFailure "expected message to be readable"
           Just h -> do
@@ -56,7 +58,7 @@ spec pool = before_ (truncateAll pool) $
             gm2 = mkInbound (MessageId 5001) memberA [SegText "second-call-different-body"]
         withDb pool $ insertGroupMessage KindChat Nothing gm1
         withDb pool $ insertGroupMessage KindChat Nothing gm2
-        m <- withDb pool $ fetchMessage 5001
+        m <- withDb pool $ fetchMessageInScope scope 5001
         case m of
           Just h -> h.renderedText `shouldBe` "first" -- first write wins
           Nothing -> expectationFailure "expected message"
@@ -72,7 +74,7 @@ spec pool = before_ (truncateAll pool) $
             (MessageId 5050)
             Nothing
             [SegText "你好"]
-        m <- withDb pool $ fetchMessage 5050
+        m <- withDb pool $ fetchMessageInScope scope 5050
         case m of
           Just h -> do
             h.userId `shouldBe` 1000
@@ -86,7 +88,7 @@ spec pool = before_ (truncateAll pool) $
           insertOutbound KindChat testGroup botId "max" (MessageId 5050) Nothing [SegText "one"]
         withDb pool $
           insertOutbound KindChat testGroup botId "max" (MessageId 5050) Nothing [SegText "two"]
-        m <- withDb pool $ fetchMessage 5050
+        m <- withDb pool $ fetchMessageInScope scope 5050
         (m >>= Just . (.renderedText)) `shouldBe` Just "two"
 
       it "wins the race against an echoed inbound insert" $ do
@@ -98,5 +100,5 @@ spec pool = before_ (truncateAll pool) $
         withDb pool $ insertGroupMessage KindChat Nothing echo
         withDb pool $
           insertOutbound KindChat testGroup botId "max" (MessageId 5051) (Just "| a |\n|---|") [SegText "[image]"]
-        m <- withDb pool $ fetchMessage 5051
+        m <- withDb pool $ fetchMessageInScope scope 5051
         (m >>= Just . (.renderedText)) `shouldBe` Just "| a |\n|---|"

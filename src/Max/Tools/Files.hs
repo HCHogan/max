@@ -40,6 +40,7 @@ import Data.UUID.V4 (nextRandom)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.Message (MessageKind (KindChat))
@@ -178,7 +179,7 @@ importFileToSandboxTool gid sandboxes =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (fid, sid, mDest) -> do
-          mFile <- DBFiles.fetchByFileId fid
+          mFile <- DBFiles.fetchByFileIdInScope (conversationScopeFor gid) fid
           case mFile of
             Nothing -> pure (Left "unknown file_id (try list_recent_files first)")
             Just r -> case r.frBlobRef of

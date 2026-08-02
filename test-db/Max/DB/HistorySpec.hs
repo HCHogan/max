@@ -1,15 +1,20 @@
 module Max.DB.HistorySpec (spec) where
 
+import Data.Maybe (isNothing)
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+import Database.PostgreSQL.Simple (execute)
 import Helpers (insertRawMessage, insertRawReply, truncateAll, withDb)
-import Max.DB.Connection (DbPool)
+import Max.ConversationScope (conversationScopeFor)
+import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History
   ( HistoryItem (..),
+    fetchForwardChildrenInScope,
     fetchMentionHistory,
-    fetchMessage,
-    fetchMessagesByIds,
+    fetchMessageInScope,
+    fetchMessagesByIdsInScope,
     fetchRecentInGroup,
   )
+import OneBot.Types (GroupId (..))
 import Test.Hspec
 
 gid :: Integer
@@ -36,6 +41,7 @@ timeAt h =
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $
   describe "Max.DB.History" $ do
+    let scope = conversationScopeFor (GroupId groupId)
     describe "fetchRecentInGroup" $ do
       it "returns rows chronological (oldest first), respecting LIMIT and excludeId" $ do
         insertRawMessage pool 1001 groupId memberA botId (timeAt 9) (Just "Alice") "msg-a"
@@ -62,16 +68,16 @@ spec pool = before_ (truncateAll pool) $
         -- Strictly newer than the watermark — equal-to is excluded too
         map (.messageId) rows `shouldBe` [1003]
 
-    describe "fetchMessage" $ do
+    describe "fetchMessageInScope" $ do
       it "returns Nothing for an absent id" $ do
-        m <- withDb pool $ fetchMessage 9999
+        m <- withDb pool $ fetchMessageInScope scope 9999
         case m of
           Nothing -> pure ()
           Just h -> expectationFailure $ "expected Nothing, got: " <> show h
 
       it "returns Just with the requested row" $ do
         insertRawMessage pool 1001 groupId memberA botId (timeAt 9) (Just "Alice") "hello"
-        m <- withDb pool $ fetchMessage 1001
+        m <- withDb pool $ fetchMessageInScope scope 1001
         case m of
           Just h -> do
             h.messageId `shouldBe` 1001
@@ -79,6 +85,11 @@ spec pool = before_ (truncateAll pool) $
             h.renderedText `shouldBe` "hello"
             h.senderNickname `shouldBe` Just "Alice"
           Nothing -> expectationFailure "expected Just"
+
+      it "does not resolve an id owned by another conversation" $ do
+        insertRawMessage pool 1001 (groupId + 1) memberA botId (timeAt 9) (Just "Alice") "secret"
+        m <- withDb pool $ fetchMessageInScope scope 1001
+        m `shouldSatisfy` isNothing
 
     describe "fetchMentionHistory" $ do
       it "includes bot-sent messages (user_id = botId)" $ do
@@ -114,19 +125,39 @@ spec pool = before_ (truncateAll pool) $
         rows <- withDb pool $ fetchMentionHistory groupId botId 9999 Nothing 10
         map (.messageId) rows `shouldBe` [1001, 1002]
 
-    describe "fetchMessagesByIds" $ do
+    describe "fetchMessagesByIdsInScope" $ do
       it "returns rows in the requested order (not DB order)" $ do
         insertRawMessage pool 1001 groupId memberA botId (timeAt 9) Nothing "a"
         insertRawMessage pool 1002 groupId memberA botId (timeAt 10) Nothing "b"
         insertRawMessage pool 1003 groupId memberA botId (timeAt 11) Nothing "c"
-        rows <- withDb pool $ fetchMessagesByIds [1003, 1001, 1002]
+        rows <- withDb pool $ fetchMessagesByIdsInScope scope [1003, 1001, 1002]
         map (.messageId) rows `shouldBe` [1003, 1001, 1002]
 
       it "silently drops unknown ids without failing" $ do
         insertRawMessage pool 1001 groupId memberA botId (timeAt 9) Nothing "a"
-        rows <- withDb pool $ fetchMessagesByIds [9999, 1001, 8888]
+        rows <- withDb pool $ fetchMessagesByIdsInScope scope [9999, 1001, 8888]
         map (.messageId) rows `shouldBe` [1001]
 
       it "returns [] for empty input without hitting the DB" $ do
-        rows <- withDb pool $ fetchMessagesByIds []
+        rows <- withDb pool $ fetchMessagesByIdsInScope scope []
         map (.messageId) rows `shouldBe` []
+
+      it "drops ids owned by another conversation" $ do
+        insertRawMessage pool 1001 groupId memberA botId (timeAt 9) Nothing "visible"
+        insertRawMessage pool 1002 (groupId + 1) memberB botId (timeAt 10) Nothing "secret"
+        rows <- withDb pool $ fetchMessagesByIdsInScope scope [1001, 1002]
+        map (.messageId) rows `shouldBe` [1001]
+
+    describe "fetchForwardChildrenInScope" $ do
+      it "does not expand a forward container owned by another conversation" $ do
+        insertRawMessage pool 2001 (groupId + 1) memberA botId (timeAt 9) Nothing "[forward]"
+        insertRawMessage pool (-1) (groupId + 1) memberB botId (timeAt 10) Nothing "secret child"
+        withConn pool $ \conn -> do
+          _ <-
+            execute
+              conn
+              "UPDATE messages SET forwarded_in_message_id = ?, forward_position = 0, is_synthetic = true WHERE message_id = ?"
+              (2001 :: Int, -1 :: Int)
+          pure ()
+        rows <- withDb pool $ fetchForwardChildrenInScope scope 2001 10
+        rows `shouldSatisfy` null

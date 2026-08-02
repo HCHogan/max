@@ -29,7 +29,8 @@ import Effectful
 import Effectful.Exception (try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
-import Max.DB.History (HistoryItem (..), bestName, fetchForwardChildren, fetchMessage)
+import Max.ConversationScope (conversationScopeFor)
+import Max.DB.History (HistoryItem (..), bestName, fetchForwardChildrenInScope, fetchMessageInScope)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
@@ -50,17 +51,17 @@ builtinsFor ::
   ToolContext ->
   [Tool es]
 builtinsFor tz mEmbed dc =
-  [ getMessageByIdTool tz,
+  [ getMessageByIdTool tz dc,
     searchMessagesTool tz mEmbed (toolGroupId dc),
-    viewForwardTool tz,
+    viewForwardTool tz dc,
     pokeTool dc
   ]
 
 --------------------------------------------------------------------------------
 -- get_message_by_id
 
-getMessageByIdTool :: (WithConnection :> es, IOE :> es) => TimeZone -> Tool es
-getMessageByIdTool tz =
+getMessageByIdTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
+getMessageByIdTool tz dc =
   Tool
     { toolName = "get_message_by_id",
       toolDescription =
@@ -86,7 +87,7 @@ getMessageByIdTool tz =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
-          m <- fetchMessage mid
+          m <- fetchMessageInScope (conversationScopeFor (toolGroupId dc)) mid
           pure $ Right (toJSON (fmap (historyItemSummary tz . tagMediaMarkers) m))
     }
   where
@@ -149,11 +150,6 @@ searchMessagesTool tz mEmbed (GroupId gid) =
                       [ "type" .= ("string" :: Text),
                         "description" .= ("Natural-language meaning search (no exact wording needed)." :: Text)
                       ],
-                  "group_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("Defaults to the current group." :: Text)
-                      ],
                   "limit"
                     .= object
                       [ "type" .= ("integer" :: Text),
@@ -189,7 +185,6 @@ searchMessagesTool tz mEmbed (GroupId gid) =
         <*> o .:? "after"
         <*> o .:? "before"
         <*> o .:? "semantic"
-        <*> o .:? "group_id"
         <*> (fromMaybe 10 <$> o .:? "limit")
 
     toFilter :: SearchArgs -> Either Text MessageFilter
@@ -198,7 +193,7 @@ searchMessagesTool tz mEmbed (GroupId gid) =
       before <- traverse (parseTimeArg tz) sa.saBefore
       pure
         MessageFilter
-          { mfGroupId = fromMaybe gid sa.saGroupId,
+          { mfGroupId = gid,
             mfQuery = sa.saQuery,
             mfRegex = sa.saRegex,
             mfSenderId = sa.saSenderId,
@@ -217,7 +212,6 @@ data SearchArgs = SearchArgs
     saAfter :: !(Maybe Text),
     saBefore :: !(Maybe Text),
     saSemantic :: !(Maybe Text),
-    saGroupId :: !(Maybe Int64),
     saLimit :: !Int
   }
 
@@ -316,8 +310,8 @@ runSearch f mVec = do
 maxForwardChildren :: Int
 maxForwardChildren = 100
 
-viewForwardTool :: (WithConnection :> es, IOE :> es) => TimeZone -> Tool es
-viewForwardTool tz =
+viewForwardTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
+viewForwardTool tz dc =
   Tool
     { toolName = "view_forward",
       toolDescription =
@@ -341,7 +335,11 @@ viewForwardTool tz =
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid :: Int64) -> do
-          kids <- fetchForwardChildren mid maxForwardChildren
+          kids <-
+            fetchForwardChildrenInScope
+              (conversationScopeFor (toolGroupId dc))
+              mid
+              maxForwardChildren
           if null kids
             then pure $ Left "这条消息没有已展开的转发内容（不是转发聊天记录，或还没抓取完）"
             else

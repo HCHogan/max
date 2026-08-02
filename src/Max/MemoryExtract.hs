@@ -45,6 +45,7 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM
 import Control.Monad (forever, unless, when)
 import Data.Aeson
+import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_, traverse_)
 import Data.Int (Int64)
 import Data.List (sortOn)
@@ -56,29 +57,6 @@ import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.ByteString.Lazy qualified as LBS
-import Data.Traversable (for)
-import Database.PostgreSQL.Simple (Only (..))
-import Effectful
-import Effectful.Log
-import Effectful.PostgreSQL (WithConnection, execute, query)
-import Max.DB.History (HistoryItem (..), fetchRecentInGroup)
-import Max.DB.Memory
-  ( MemoryItem (..),
-    MemoryScope (..),
-    countMemories,
-    deleteMemory,
-    evictOldest,
-    insertMemory,
-    listMemories,
-    parseScope,
-    scopeText,
-    updateMemory,
-  )
-import Max.DB.Session (listSessions)
-import Max.Prompt (renderHistoryLine)
-import Max.Session (Session (..), SessionRegistry, loadSession, readSession, updateSession)
-import Max.Time (fmtDate)
 import Data.Time
   ( LocalTime (..),
     NominalDiffTime,
@@ -94,8 +72,37 @@ import Data.Time
     utc,
     utcToLocalTime,
   )
+import Data.Traversable (for)
+import Database.PostgreSQL.Simple (Only (..))
+import Effectful
+import Effectful.Log
+import Effectful.PostgreSQL (WithConnection, query)
+import Max.ConversationScope (conversationScopeFor)
+import Max.DB.History (HistoryItem (..), fetchRecentInGroup)
+import Max.DB.Memory
+  ( MemoryItem (..),
+    MemoryScope (..),
+    countMemories,
+    deleteMemory,
+    deleteVisibleMemory,
+    evictOldest,
+    groupMemoryNamespace,
+    insertMemory,
+    listMemories,
+    markMemoryEmbedded,
+    memoryNamespace,
+    parseScope,
+    scopeText,
+    updateMemory,
+    updateVisibleMemory,
+    userMemoryNamespace,
+  )
+import Max.DB.Session (listSessions)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
+import Max.Prompt (renderHistoryLine)
+import Max.Session (Session (..), SessionRegistry, loadSession, readSession, updateSession)
+import Max.Time (fmtDate)
 import Max.Tools.Memory (checkContent, maxMemoriesPerScope)
 import Max.Util (catchSync, trySync)
 import OneBot.Types (GroupId (..))
@@ -284,6 +291,7 @@ awaitDue sched = do
             (readTVar delay >>= check)
               `orElse` (readTVar sched.msVersion >>= \v -> check (v /= ver))
       awaitDue sched
+
 --------------------------------------------------------------------------------
 -- One episode.
 
@@ -326,9 +334,10 @@ extractEpisode profile mEmbed tz sessions defaultModel g@(GroupId gid) = do
               . Map.toList
               . Map.fromListWith (+)
               $ [(h.userId, 1 :: Int) | h <- rows, h.userId /= h.selfId]
-      groupMems <- listMemories ScopeGroup gid gid
+      let conversation = conversationScopeFor (GroupId gid)
+      groupMems <- listMemories (groupMemoryNamespace conversation)
       userMemSets <- for speakers $ \u -> do
-        ms <- listMemories ScopeUser u gid
+        ms <- listMemories (userMemoryNamespace conversation u)
         pure (u, ms)
       let msgs =
             [ MsgSystem extractorSystem,
@@ -392,6 +401,7 @@ applyOp profile mEmbed gid = \case
         let sid = case scope of
               ScopeGroup -> gid
               ScopeUser -> fromMaybe gid mUid -- unreachable Nothing: guarded above
+            namespace = memoryNamespace conversation scope sid
         -- The prompt says "don't re-add near-duplicates", but small
         -- extractor models re-add anyway (observed on day one).
         -- Enforce in code: embed the candidate and skip when an
@@ -404,7 +414,7 @@ applyOp profile mEmbed gid = \case
             logInfo "memx: near-duplicate skipped" $
               object ["existing_id" .= did, "distance" .= dist, "content" .= c]
           Nothing -> do
-            n <- countMemories scope sid gid
+            n <- countMemories namespace
             -- A full scope must not freeze learning (observed in
             -- prod: an active user pinned at the cap stops
             -- accumulating anything new).  Compact first — an LLM
@@ -414,22 +424,19 @@ applyOp profile mEmbed gid = \case
             -- proceeds.
             when (n >= maxMemoriesPerScope) $ do
               compactScope profile scope sid gid
-              n' <- countMemories scope sid gid
+              n' <- countMemories namespace
               when (n' >= maxMemoriesPerScope) $
-                evictOldest scope sid gid >>= \case
+                evictOldest namespace >>= \case
                   Just (eid, econtent) ->
                     logInfo "memx: evicted oldest" $
                       object ["id" .= eid, "content" .= econtent]
                   Nothing -> pure ()
-            mid <- insertMemory scope sid c (Just gid)
+            mid <- insertMemory namespace c
             -- Reuse the dedup vector so the new row is instantly
             -- searchable / dedupable (no worker lag window).
             case mVec of
               Just v -> do
-                _ <-
-                  execute
-                    "UPDATE memories SET embedding = ?::vector WHERE id = ?"
-                    (v, mid)
+                _ <- markMemoryEmbedded namespace mid v
                 pure ()
               Nothing -> pure ()
             logInfo "memx: added" $
@@ -437,16 +444,15 @@ applyOp profile mEmbed gid = \case
   OpUpdate mid content -> case checkContent content of
     Left err -> logAttention "memx: bad content" $ object ["error" .= err]
     Right c -> do
-      ok <- updateMemory mid c
-      -- Content changed → stale vector; NULL it so the embed worker
-      -- refreshes on its next pass.
-      _ <- execute "UPDATE memories SET embedding = NULL WHERE id = ?" (Only mid)
+      ok <- updateVisibleMemory conversation mid c
       logInfo "memx: updated" $ object ["id" .= mid, "ok" .= ok, "content" .= c]
   OpDelete mid -> do
-    ok <- deleteMemory mid
+    ok <- deleteVisibleMemory conversation mid
     logInfo "memx: deleted" $ object ["id" .= mid, "ok" .= ok]
   where
-    -- | Returns (embedding of the candidate — reusable for the insert,
+    conversation = conversationScopeFor (GroupId gid)
+
+    -- \| Returns (embedding of the candidate — reusable for the insert,
     -- nearest same-scope duplicate within 'dupDistance' if any).
     -- Fail-open: an embedding hiccup must not block memory writes; the
     -- fallback is exact-content match.
@@ -585,7 +591,7 @@ shrinkScope ::
   Int64 ->
   Eff es ()
 shrinkScope label sys header profile scope sid gid = do
-  mems <- listMemories scope sid gid
+  mems <- listMemories namespace
   let memLine m =
         T.pack (show m.memId)
           <> " ("
@@ -624,12 +630,17 @@ shrinkScope label sys header profile scope sid gid = do
       OpUpdate mid content -> case checkContent content of
         Left err -> logAttention (label <> ": bad content") $ object ["error" .= err]
         Right c -> do
-          ok <- updateMemory mid c
-          _ <- execute "UPDATE memories SET embedding = NULL WHERE id = ?" (Only mid)
+          ok <- updateMemory namespace mid c
           logInfo (label <> ": merged") $ object ["id" .= mid, "ok" .= ok, "content" .= c]
       OpDelete mid -> do
-        ok <- deleteMemory mid
+        ok <- deleteMemory namespace mid
         logInfo (label <> ": dropped") $ object ["id" .= mid, "ok" .= ok]
+
+    namespace =
+      memoryNamespace
+        (conversationScopeFor (GroupId gid))
+        scope
+        sid
 
 dreamerSystem :: Text
 dreamerSystem =

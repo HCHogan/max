@@ -32,8 +32,9 @@ import Max.BuildInfo (gitRev)
 import Max.Command.Help (helpText)
 import Max.Command.Permission (PermTier (..), adminGrantable, knownCapabilities)
 import Max.Command.Types
-import Max.DB.History (HistoryItem (..), fetchMessage, fetchMessagesByIds)
-import Max.DB.Memory (MemoryItem (..), MemoryScope (..), countMemories, deleteMemory, fetchMemory, listMemories, listUserMemoriesEverywhere)
+import Max.ConversationScope (conversationScopeFor)
+import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchMessagesByIdsInScope)
+import Max.DB.Memory (MemoryItem (..), countMemories, deleteMemory, groupMemoryNamespace, listMemories, userMemoryNamespace)
 import Max.DB.Permissions (deleteGrant, insertGrant, listGrantsFor)
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
@@ -107,6 +108,7 @@ execute ::
 execute t gid uid granterTier replyTarget cmd = do
   env :: BotEnv <- ask
   catalog :: ModelCatalog <- ask
+  let conversation = conversationScopeFor gid
   case cmd of
     -- Claude Code's btw: a quick side question that deliberately leaves
     -- the current work alone.  Always its own turn, never an injection —
@@ -215,7 +217,7 @@ execute t gid uid granterTier replyTarget cmd = do
         Nothing ->
           reply "用法：引用要 pin 的那条消息发 !pin，或者 !pin <message_id>"
         Just mid -> do
-          mMsg <- fetchMessage mid
+          mMsg <- fetchMessageInScope conversation mid
           case mMsg of
             Nothing -> reply $ "找不到 message_id=" <> T.pack (show mid)
             Just _ -> do
@@ -238,7 +240,7 @@ execute t gid uid granterTier replyTarget cmd = do
       case s.pinned of
         [] -> reply "没有 pin 任何消息"
         ids -> do
-          items <- fetchMessagesByIds ids
+          items <- fetchMessagesByIdsInScope conversation ids
           reply (formatPins items)
     --
     PsLocal -> do
@@ -277,37 +279,27 @@ execute t gid uid granterTier replyTarget cmd = do
             Left err -> "执行失败: " <> err
             Right er -> formatExecResult er
     --
-    -- In a group, group scope only: the reply is public, and a member's
-    -- user-scope memories may have been learned in *other* groups —
-    -- printing them would leak across groups.  In a private chat the
-    -- audience IS the subject, so their own cross-group memories are
-    -- safe to show — that's the self-audit channel.
+    -- Both group and person memories remain inside the current
+    -- conversation. Cross-conversation self-audit can be added later as an
+    -- explicit projection; it must not be an exception hidden in this path.
     MemoryList -> do
-      let GroupId gidRaw = gid
-          UserId uidRaw = uid
+      let UserId uidRaw = uid
           private = isPrivateChat gid
-      gms <- listMemories ScopeGroup gidRaw gidRaw
-      -- Deliberately unscoped: this is the self-audit channel, and with
-      -- memories partitioned per group it is the only place someone can
-      -- see the whole record the bot keeps on them.  Private chats only,
-      -- and the subject is the audience.
-      ums <- if private then listUserMemoriesEverywhere uidRaw else pure []
+      gms <- listMemories (groupMemoryNamespace conversation)
+      ums <- listMemories (userMemoryNamespace conversation uidRaw)
       reply (formatMemories private gms ums)
     MemoryRm mid -> do
-      let GroupId gidRaw = gid
-          UserId uidRaw = uid
-      mMem <- fetchMemory mid
-      case mMem of
-        Nothing -> reply $ "没有 id=" <> T.pack (show mid) <> " 的记忆"
-        Just m
-          -- A member may delete this group's memories and their own
-          -- user memories — not other people's, and not other groups'.
-          | (m.memScope == "group" && m.memScopeId == gidRaw)
-              || (m.memScope == "user" && m.memScopeId == uidRaw) -> do
-              _ <- deleteMemory mid
-              logInfo "memory: removed via !memory" $ object ["id" .= mid]
-              ack
-          | otherwise -> reply "只能删本群的记忆或你自己的记忆"
+      let UserId uidRaw = uid
+      removedGroup <- deleteMemory (groupMemoryNamespace conversation) mid
+      removedUser <-
+        if removedGroup
+          then pure False
+          else deleteMemory (userMemoryNamespace conversation uidRaw) mid
+      if removedGroup || removedUser
+        then do
+          logInfo "memory: removed via !memory" $ object ["id" .= mid]
+          ack
+        else reply $ "没有 id=" <> T.pack (show mid) <> " 的本会话记忆"
     --
     StickerStats -> do
       st <- Stickers.stickerStats
@@ -487,7 +479,7 @@ execute t gid uid granterTier replyTarget cmd = do
     Status -> do
       s <- liftIO (Session.readSession t)
       let GroupId gidRaw = gid
-      memCount <- countMemories ScopeGroup gidRaw gidRaw
+      memCount <- countMemories (groupMemoryNamespace conversation)
       tasks <- liftIO (listTasks env.beTasks (Just gid))
       reply . T.intercalate "\n" $
         [ (if isPrivateChat gid then "本私聊" else "群 " <> T.pack (show gidRaw)) <> " 状态：",
@@ -587,7 +579,7 @@ renderStickerState defB = \case
 --------------------------------------------------------------------------------
 -- !memory formatting.
 
-formatMemories :: Bool -> [MemoryItem] -> [(MemoryItem, Maybe Int64)] -> Text
+formatMemories :: Bool -> [MemoryItem] -> [MemoryItem] -> Text
 formatMemories _ [] [] = "没有长期记忆（bot 觉得值得记的东西会存在这里）"
 formatMemories private gms ums =
   T.unlines . concat $
@@ -596,20 +588,11 @@ formatMemories private gms ums =
         else (if private then "本会话记忆:" else "本群记忆:") : map memLine gms,
       if null ums
         then []
-        else "你的记忆（全部会话，只在私聊显示）:" : map userLine ums,
+        else "当前会话中关于你的记忆:" : map memLine ums,
       ["用 !memory rm <id> 删除"]
     ]
   where
     memLine m = "  #" <> T.pack (show m.memId) <> "  " <> m.memContent
-    -- Each carries where it was learned: they only apply in that
-    -- conversation now, so a bare list would say nothing about where
-    -- the bot will actually use them.
-    userLine (m, mSrc) =
-      "  #" <> T.pack (show m.memId) <> "  " <> srcTag mSrc <> " " <> m.memContent
-    srcTag Nothing = "[来源未知]"
-    srcTag (Just g)
-      | isPrivateChat (GroupId g) = "[私聊]"
-      | otherwise = "[群" <> T.pack (show g) <> "]"
 
 --------------------------------------------------------------------------------
 -- !sticker formatting.

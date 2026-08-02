@@ -66,6 +66,7 @@ truncateAll pool = withConn pool $ \c -> do
       \  message_images, \
       \  videos, \
       \  message_videos, \
+      \  memories, \
       \  sessions, \
       \  group_files, \
       \  fetch_jobs, \

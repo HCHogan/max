@@ -55,9 +55,10 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.BuildInfo (gitRev)
 import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
 import Max.Command.Parser (effortLevels)
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
 import Max.DB.History (messageStatsDaily)
-import Max.DB.Memory (MemoryItem (..), MemoryScope (..), deleteMemory, listMemories, listUserMemoriesEverywhere)
+import Max.DB.Memory (MemoryItem (..), deleteMemoryAdmin, groupMemoryNamespace, listMemories, listUserMemoriesEverywhereAdmin)
 import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGrants)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
@@ -327,14 +328,14 @@ handle env profiles logBuf r params body = case r of
       Right _ -> pure (bad "body must be a json object")
   RMemoriesList -> case (lookup "scope" params, intParam "id") of
     (Just "group", Just gid) -> do
-      mems <- listMemories ScopeGroup gid gid
+      mems <- listMemories (groupMemoryNamespace (conversationScopeFor (GroupId gid)))
       pure (ok (map (memoryJson Nothing) mems))
     (Just "user", Just uid) -> do
-      mems <- listUserMemoriesEverywhere uid
+      mems <- listUserMemoriesEverywhereAdmin uid
       pure (ok (map (\(m, src) -> memoryJson src m) mems))
     _ -> pure (bad "expected ?scope=group|user&id=<qq/群号>")
   RMemoryDelete mid -> do
-    gone <- deleteMemory mid
+    gone <- deleteMemoryAdmin mid
     pure (if gone then deleted else notFound)
   -- ?group=<gid> narrows to what that group's dispatches can see
   -- (global + own, before enabled-filtering/shadowing); without it,

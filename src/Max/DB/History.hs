@@ -2,10 +2,10 @@ module Max.DB.History
   ( HistoryItem (..),
     bestName,
     fetchRecentInGroup,
-    fetchMessage,
+    fetchMessageInScope,
     fetchMentionHistory,
-    fetchMessagesByIds,
-    fetchForwardChildren,
+    fetchMessagesByIdsInScope,
+    fetchForwardChildrenInScope,
     messageStatsDaily,
   )
 where
@@ -20,6 +20,7 @@ import Database.PostgreSQL.Simple (FromRow, In (..), Only (..), (:.) (..))
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
+import Max.ConversationScope (ConversationScope, conversationStorageId)
 
 -- | The fields needed to render a message as a line of prompt context.
 data HistoryItem = HistoryItem
@@ -102,16 +103,20 @@ fetchRecentInGroup gid excludeId since n = do
         ((gid, excludeId) :. Only t :. Only n)
   pure (reverse (rows :: [HistoryItem]))
 
--- | One message by id, real or synthetic.
-fetchMessage :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es (Maybe HistoryItem)
-fetchMessage mid = do
+-- | One message by id, confined to the current conversation.
+fetchMessageInScope ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  Int64 ->
+  Eff es (Maybe HistoryItem)
+fetchMessageInScope scope mid = do
   rows <-
     query
       "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
       \  FROM messages \
-      \  WHERE message_id = ? \
+      \  WHERE group_id = ? AND message_id = ? \
       \  LIMIT 1"
-      [mid]
+      (conversationStorageId scope, mid)
   pure (listToMaybe (rows :: [HistoryItem]))
 
 -- | Reconstruct the bot's mention-exchange history from the messages
@@ -159,10 +164,12 @@ fetchMentionHistory gid botId excludeId since n = do
         \    AND m.forwarded_in_message_id IS NULL \
         \    AND (m.user_id = ? OR m.rendered_text LIKE ? OR m.rendered_text LIKE ? \
         \         OR EXISTS (SELECT 1 FROM messages b \
-        \                     WHERE b.message_id = m.reply_to_message_id \
+        \                     WHERE b.group_id = m.group_id \
+        \                       AND b.message_id = m.reply_to_message_id \
         \                       AND b.user_id = ?) \
         \         OR EXISTS (SELECT 1 FROM messages r \
-        \                     WHERE r.reply_to_message_id = m.message_id \
+        \                     WHERE r.group_id = m.group_id \
+        \                       AND r.reply_to_message_id = m.message_id \
         \                       AND r.user_id = ?)) \
         \  ORDER BY m.received_at DESC \
         \  LIMIT ?"
@@ -179,10 +186,12 @@ fetchMentionHistory gid botId excludeId since n = do
         \    AND m.received_at > ? \
         \    AND (m.user_id = ? OR m.rendered_text LIKE ? OR m.rendered_text LIKE ? \
         \         OR EXISTS (SELECT 1 FROM messages b \
-        \                     WHERE b.message_id = m.reply_to_message_id \
+        \                     WHERE b.group_id = m.group_id \
+        \                       AND b.message_id = m.reply_to_message_id \
         \                       AND b.user_id = ?) \
         \         OR EXISTS (SELECT 1 FROM messages r \
-        \                     WHERE r.reply_to_message_id = m.message_id \
+        \                     WHERE r.group_id = m.group_id \
+        \                       AND r.reply_to_message_id = m.message_id \
         \                       AND r.user_id = ?)) \
         \  ORDER BY m.received_at DESC \
         \  LIMIT ?"
@@ -191,18 +200,19 @@ fetchMentionHistory gid botId excludeId since n = do
 
 -- | Bulk fetch by message id.  Preserves the order of input ids
 -- (which is what !pin expects — display the user's chosen order).
-fetchMessagesByIds ::
+fetchMessagesByIdsInScope ::
   (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
   [Int64] ->
   Eff es [HistoryItem]
-fetchMessagesByIds [] = pure []
-fetchMessagesByIds ids = do
+fetchMessagesByIdsInScope _ [] = pure []
+fetchMessagesByIdsInScope scope ids = do
   rows <-
     query
       "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
       \  FROM messages \
-      \  WHERE message_id IN ?"
-      (Only (In ids))
+      \  WHERE group_id = ? AND message_id IN ?"
+      (conversationStorageId scope, In ids)
   -- Re-order to match input.
   let byId = [(r.messageId, r) | r <- rows :: [HistoryItem]]
   pure [r | i <- ids, Just r <- [lookup i byId]]
@@ -211,20 +221,24 @@ fetchMessagesByIds ids = do
 -- child rows the forward worker filed under @container@, in original
 -- order.  Timestamps prefer the *original* send time (the synthetic
 -- row's received_at is merely when we fetched the bundle).
-fetchForwardChildren ::
+fetchForwardChildrenInScope ::
   (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
   Int64 -> -- container message id
   Int -> -- cap
   Eff es [HistoryItem]
-fetchForwardChildren containerId cap =
+fetchForwardChildrenInScope scope containerId cap =
   query
-    "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, \
-    \       COALESCE(original_sent_at, received_at), reply_to_message_id \
-    \  FROM messages \
-    \  WHERE forwarded_in_message_id = ? \
-    \  ORDER BY forward_position \
+    "SELECT child.message_id, child.user_id, child.self_id, child.sender_nickname, child.sender_card, child.rendered_text, \
+    \       COALESCE(child.original_sent_at, child.received_at), child.reply_to_message_id \
+    \  FROM messages child \
+    \  WHERE child.group_id = ? \
+    \    AND child.forwarded_in_message_id = ? \
+    \    AND EXISTS (SELECT 1 FROM messages container \
+    \                 WHERE container.group_id = ? AND container.message_id = ?) \
+    \  ORDER BY child.forward_position \
     \  LIMIT ?"
-    (containerId, cap)
+    (conversationStorageId scope, containerId, conversationStorageId scope, containerId, cap)
 
 -- | Message volume per (day, group, kind) over the last @days@ days,
 -- for the admin stats endpoint.  Day boundaries in the configured

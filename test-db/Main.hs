@@ -1,7 +1,7 @@
 -- |
 -- Entry point for the DB-integration test suite.
 --
--- This suite needs a real Postgres database — see test-db/README.md
+-- This suite needs a real Postgres database — see docs/development.md
 -- or:
 --
 -- @
@@ -18,10 +18,13 @@ import Control.Exception (bracket)
 import Data.Text qualified as T
 import Helpers (truncateAll)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
-import Max.DB.Migrations (runMigrations)
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
+import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
+import Max.DB.MediaSpec qualified as MediaSpec
+import Max.DB.MemorySpec qualified as MemorySpec
 import Max.DB.MessageSpec qualified as MessageSpec
+import Max.DB.Migrations (runMigrations)
 import Max.DB.ReminderSpec qualified as ReminderSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
@@ -45,7 +48,10 @@ main = do
       hspec $ do
         SessionSpec.spec pool
         HistorySpec.spec pool
+        FilesSpec.spec pool
         MessageSpec.spec pool
+        MemorySpec.spec pool
+        MediaSpec.spec pool
         FetchQueueSpec.spec pool
         ReminderSpec.spec pool
         PromptIntegrationSpec.spec pool

@@ -24,6 +24,7 @@ import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (Tool)
 import Max.Env (BotEnv (..))
 import Max.HttpRuntime (HttpRuntime)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolGroupId, toolMultimodal, toolSelfId, toolStickers)
 import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
@@ -38,7 +39,6 @@ import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Skills (skillToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
 import Max.Tools.Video (videoToolsFor)
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolGroupId, toolMultimodal, toolSelfId, toolStickers)
 import OneBot.Types (GroupId, isPrivateChat)
 
 -- | The tool list for one dispatch.
@@ -76,7 +76,7 @@ allToolsFor runtime env dc =
     <> [t | toolStickers dc, t <- stickerToolsFor env.beEmbed]
     <> maybe [] (searchToolsFor runtime) env.beSearch
     <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]
-    <> [t | toolMultimodal dc, t <- videoToolsFor]
+    <> [t | toolMultimodal dc, t <- videoToolsFor dc]
 
 -- | How many tools a dispatch with these gates would get — the
 -- @!version@ card's number.  This is intentionally a pure projection

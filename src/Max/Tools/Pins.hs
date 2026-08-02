@@ -18,7 +18,8 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.History (fetchMessage)
+import Max.ConversationScope (conversationScopeFor)
+import Max.DB.History (fetchMessageInScope)
 import Max.Effects.Tools (Tool (..))
 import Max.Session (Session (..), SessionRegistry, loadSession, updateSession)
 import Max.Session qualified as Session
@@ -73,7 +74,7 @@ pinTool sessions defaultModel dc =
       toolRun = \args -> case parseEither (withObject "args" parseMessageId) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid ->
-          fetchMessage mid >>= \case
+          fetchMessageInScope (conversationScopeFor (toolGroupId dc)) mid >>= \case
             Nothing -> pure $ Left ("找不到 message_id=" <> tshow mid)
             Just _ -> do
               t <- loadSession sessions defaultModel (toolGroupId dc)
@@ -140,5 +141,5 @@ unpinTool sessions defaultModel dc =
 parseMessageId :: Object -> Parser Int64
 parseMessageId o = o .: "message_id"
 
-tshow :: Show a => a -> Text
+tshow :: (Show a) => a -> Text
 tshow = T.pack . show

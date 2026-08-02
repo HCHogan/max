@@ -22,23 +22,27 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection, query)
-import Database.PostgreSQL.Simple (Only (..))
+import Effectful.PostgreSQL (WithConnection)
+import Max.ConversationScope (conversationScopeFor)
+import Max.DB.Media (StoredVideo (..), fetchMessageVideoInScope)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.Time (fmtDurationSec)
+import Max.ToolContext (ToolContext, toolGroupId)
 
 videoToolsFor ::
   (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
+  ToolContext ->
   [Tool es]
-videoToolsFor = [viewVideoTool]
+videoToolsFor dc = [viewVideoTool dc]
 
 viewVideoTool ::
   (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
+  ToolContext ->
   Tool es
-viewVideoTool =
+viewVideoTool dc =
   Tool
     { toolName = viewVideoSpec.specName,
       toolDescription = viewVideoSpec.specDescription,
@@ -46,29 +50,28 @@ viewVideoTool =
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid :: Int64) -> do
-          rows <-
-            query
-              "SELECT v.mime_type, v.sha256, v.duration_seconds \
-              \  FROM message_videos mv \
-              \  JOIN videos v USING (sha256) \
-              \  WHERE mv.message_id = ? \
-              \  ORDER BY mv.seg_index \
-              \  LIMIT 1"
-              (Only mid)
-          case rows :: [(Text, Text, Maybe Double)] of
-            [] ->
+          mVideo <- fetchMessageVideoInScope scope mid
+          case mVideo of
+            Nothing ->
               pure $
                 Left
                   "这条消息没有已下载的视频（不是视频消息、还在下载中、或超过大小上限没有保存）"
-            ((mime, sha, mDur) : _) -> case blobRefFromSha256 sha of
+            Just video -> case blobRefFromSha256 video.storedVideoSha256 of
               Nothing -> pure $ Left "视频存储引用无效"
               Just ref -> do
                 ebytes <- try @IOException (readBlob ref)
                 case ebytes of
                   Left e -> pure $ Left ("视频读取失败: " <> T.pack (show e))
-                  Right bytes -> attach mid mDur mime bytes
+                  Right bytes ->
+                    attach
+                      mid
+                      video.storedVideoDurationSeconds
+                      video.storedVideoMime
+                      bytes
     }
   where
+    scope = conversationScopeFor (toolGroupId dc)
+
     -- Stated duration beats the model's own sampled-frame guess.
     attach mid mDur mime bytes = do
       let label =

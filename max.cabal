@@ -73,6 +73,7 @@ library
         Max.Command.Types
         Max.CliProxy
         Max.Config
+        Max.ConversationScope
         Max.MCP.Client
         Max.DB.Calls
         Max.DB.Connection
@@ -80,6 +81,7 @@ library
         Max.DB.Files
         Max.DB.Forward
         Max.DB.History
+        Max.DB.Media
         Max.DB.Memory
         Max.DB.Message
         Max.DB.Permissions
@@ -332,9 +334,12 @@ test-suite max-test-db
     main-is:            Main.hs
     other-modules:
         Helpers
+        Max.DB.FilesSpec
         Max.DB.FetchQueueSpec
         Max.DB.SessionSpec
         Max.DB.HistorySpec
+        Max.DB.MediaSpec
+        Max.DB.MemorySpec
         Max.DB.MessageSpec
         Max.DB.ReminderSpec
         Max.PromptIntegrationSpec

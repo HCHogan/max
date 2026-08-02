@@ -19,7 +19,6 @@
 --     (ChatGPT's "Memory Full" mechanism);
 --   * the injection block in "Max.Prompt" is framed as 背景参考
 --     with explicit 不要复述 guidance.
---
 module Max.Tools.Memory
   ( memoryToolsFor,
     maxMemoriesPerScope,
@@ -38,15 +37,18 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Memory
   ( MemoryItem (..),
     MemoryScope (..),
     countMemories,
-    deleteMemory,
+    deleteVisibleMemory,
+    groupMemoryNamespace,
     insertMemory,
     listMemories,
     parseScope,
-    updateMemory,
+    updateVisibleMemory,
+    userMemoryNamespace,
   )
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbedClient, embedTexts, renderVector)
@@ -70,8 +72,8 @@ memoryToolsFor ::
   [Tool es]
 memoryToolsFor mEmbed dc =
   [ saveTool dc,
-    updateTool,
-    forgetTool,
+    updateTool dc,
+    forgetTool dc,
     listTool dc
   ]
     <> [searchTool dc ec | Just ec <- [mEmbed]]
@@ -101,7 +103,7 @@ saveTool dc =
                     .= object
                       [ "type" .= ("string" :: Text),
                         "enum" .= (["group", "user"] :: [Text]),
-                        "description" .= ("group=关于本群；user=关于某个人（跨群）。" :: Text)
+                        "description" .= ("group=关于本会话；user=关于某个人（仅限本会话）。" :: Text)
                       ],
                   "content"
                     .= object
@@ -125,6 +127,7 @@ saveTool dc =
         Right (scopeRaw, content, mUid) -> do
           let GroupId gid = toolGroupId dc
               UserId triggerUid = toolUserId dc
+              conversation = conversationScopeFor (toolGroupId dc)
           case parseScope scopeRaw of
             Nothing -> pure $ Left "scope 必须是 group 或 user"
             Just scope -> case checkContent content of
@@ -133,7 +136,10 @@ saveTool dc =
                 let sid = case scope of
                       ScopeGroup -> gid
                       ScopeUser -> fromMaybe triggerUid mUid
-                n <- countMemories scope sid gid
+                    namespace = case scope of
+                      ScopeGroup -> groupMemoryNamespace conversation
+                      ScopeUser -> userMemoryNamespace conversation sid
+                n <- countMemories namespace
                 if n >= maxMemoriesPerScope
                   then
                     pure $
@@ -142,7 +148,7 @@ saveTool dc =
                           <> T.pack (show maxMemoriesPerScope)
                           <> " 条）。先用 memory_forget 删掉过时的，或用 memory_update 合并相近条目，再保存。"
                   else do
-                    mid <- insertMemory scope sid c (Just gid)
+                    mid <- insertMemory namespace c
                     logInfo "memory: saved" $
                       object ["id" .= mid, "scope" .= scopeRaw, "scope_id" .= sid]
                     pure $ Right (object ["id" .= mid])
@@ -156,8 +162,9 @@ saveTool dc =
 
 updateTool ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
+  ToolContext ->
   Tool es
-updateTool =
+updateTool dc =
   Tool
     { toolName = "memory_update",
       toolDescription =
@@ -185,7 +192,11 @@ updateTool =
           case checkContent content of
             Left err -> pure (Left err)
             Right c -> do
-              ok <- updateMemory mid c
+              ok <-
+                updateVisibleMemory
+                  (conversationScopeFor (toolGroupId dc))
+                  mid
+                  c
               if ok
                 then do
                   logInfo "memory: updated" $ object ["id" .= mid]
@@ -201,8 +212,9 @@ updateTool =
 
 forgetTool ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
+  ToolContext ->
   Tool es
-forgetTool =
+forgetTool dc =
   Tool
     { toolName = "memory_forget",
       toolDescription =
@@ -221,7 +233,7 @@ forgetTool =
       toolRun = \args -> case parseEither (withObject "args" (.: "id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid :: Int64) -> do
-          ok <- deleteMemory mid
+          ok <- deleteVisibleMemory (conversationScopeFor (toolGroupId dc)) mid
           if ok
             then do
               logInfo "memory: forgotten" $ object ["id" .= mid]
@@ -255,10 +267,10 @@ listTool dc =
                         "enum" .= (["group", "user"] :: [Text]),
                         "description" .= ("group 或 user。" :: Text)
                       ],
-                  "scope_id"
+                  "user_id"
                     .= object
                       [ "type" .= ("integer" :: Text),
-                        "description" .= ("群号或 QQ 号；缺省为本群 / 当前发言者。" :: Text)
+                        "description" .= ("scope=user 时的 QQ 号；缺省为当前发言者。group 始终是本会话。" :: Text)
                       ]
                 ],
             "required" .= (["scope"] :: [Text])
@@ -266,21 +278,20 @@ listTool dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, mSid) -> do
-          let GroupId gid = toolGroupId dc
-              UserId triggerUid = toolUserId dc
+          let UserId triggerUid = toolUserId dc
+              conversation = conversationScopeFor (toolGroupId dc)
           case parseScope scopeRaw of
             Nothing -> pure $ Left "scope 必须是 group 或 user"
             Just scope -> do
-              let sid = case (scope, mSid) of
-                    (_, Just s) -> s
-                    (ScopeGroup, Nothing) -> gid
-                    (ScopeUser, Nothing) -> triggerUid
-              items <- listMemories scope sid gid
+              let namespace = case scope of
+                    ScopeGroup -> groupMemoryNamespace conversation
+                    ScopeUser -> userMemoryNamespace conversation (fromMaybe triggerUid mSid)
+              items <- listMemories namespace
               pure $ Right (toJSON (map memorySummary items))
     }
   where
     parseArgs :: Object -> Parser (Text, Maybe Int64)
-    parseArgs o = (,) <$> o .: "scope" <*> o .:? "scope_id"
+    parseArgs o = (,) <$> o .: "scope" <*> o .:? "user_id"
 
 memorySummary :: MemoryItem -> Value
 memorySummary m = object ["id" .= m.memId, "content" .= m.memContent]
@@ -296,57 +307,57 @@ searchTool ::
 searchTool dc ec =
   let GroupId gid = toolGroupId dc
    in Tool
-    { toolName = "memory_search",
-      toolDescription =
-        T.unwords
-          [ "在本群的长期记忆里做语义搜索（谁擅长X、之前定过什么）。",
-            "只覆盖本群的群记忆和成员在本群留下的个人记忆；系统提示里",
-            "只注入了最近的条目，翻旧账用这个。"
-          ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "query"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("自然语言描述要找的内容。" :: Text)
-                      ],
-                  "limit"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("最多返回条数（默认 8，上限 20）。" :: Text),
-                        "default" .= (8 :: Int)
-                      ]
-                ],
-            "required" .= (["query"] :: [Text])
-          ],
-      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
-        Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (q, lim) -> do
-          evec <- liftIO (embedTexts ec [q])
-          case evec of
-            Left err -> pure $ Left ("embedding failed: " <> err)
-            Right [vec] -> do
-              -- Confined to this conversation.  Unscoped, this ranked
-              -- every memory in the database — every other group's
-              -- facts, every other person's — and handed the model
-              -- whatever scored highest, which is how a fact learned in
-              -- one group surfaced in another.  Group rows partition on
-              -- scope_id; user rows on where they were learned.
-              rows <-
-                query
-                  "SELECT id, scope, scope_id, content, updated_at \
-                  \  FROM memories \
-                  \  WHERE embedding IS NOT NULL \
-                  \    AND ( (scope = 'group' AND scope_id = ?) \
-                  \       OR (scope = 'user' AND source_group_id = ?) ) \
-                  \  ORDER BY embedding <=> ?::vector LIMIT ?"
-                  (gid, gid, renderVector vec, clamp (1, 20) lim)
-              pure $ Right (toJSON (map fullSummary (rows :: [MemoryItem])))
-            Right _ -> pure $ Left "embedding failed: unexpected result shape"
-    }
+        { toolName = "memory_search",
+          toolDescription =
+            T.unwords
+              [ "在本群的长期记忆里做语义搜索（谁擅长X、之前定过什么）。",
+                "只覆盖本群的群记忆和成员在本群留下的个人记忆；系统提示里",
+                "只注入了最近的条目，翻旧账用这个。"
+              ],
+          toolSchema =
+            object
+              [ "type" .= ("object" :: Text),
+                "properties"
+                  .= object
+                    [ "query"
+                        .= object
+                          [ "type" .= ("string" :: Text),
+                            "description" .= ("自然语言描述要找的内容。" :: Text)
+                          ],
+                      "limit"
+                        .= object
+                          [ "type" .= ("integer" :: Text),
+                            "description" .= ("最多返回条数（默认 8，上限 20）。" :: Text),
+                            "default" .= (8 :: Int)
+                          ]
+                    ],
+                "required" .= (["query"] :: [Text])
+              ],
+          toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+            Left e -> pure $ Left ("bad args: " <> T.pack e)
+            Right (q, lim) -> do
+              evec <- liftIO (embedTexts ec [q])
+              case evec of
+                Left err -> pure $ Left ("embedding failed: " <> err)
+                Right [vec] -> do
+                  -- Confined to this conversation.  Unscoped, this ranked
+                  -- every memory in the database — every other group's
+                  -- facts, every other person's — and handed the model
+                  -- whatever scored highest, which is how a fact learned in
+                  -- one group surfaced in another.  Group rows partition on
+                  -- scope_id; user rows on where they were learned.
+                  rows <-
+                    query
+                      "SELECT id, scope, scope_id, content, updated_at \
+                      \  FROM memories \
+                      \  WHERE embedding IS NOT NULL \
+                      \    AND ( (scope = 'group' AND scope_id = ?) \
+                      \       OR (scope = 'user' AND source_group_id = ?) ) \
+                      \  ORDER BY embedding <=> ?::vector LIMIT ?"
+                      (gid, gid, renderVector vec, clamp (1, 20) lim)
+                  pure $ Right (toJSON (map fullSummary (rows :: [MemoryItem])))
+                Right _ -> pure $ Left "embedding failed: unexpected result shape"
+        }
   where
     parseArgs :: Object -> Parser (Text, Int)
     parseArgs o = (,) <$> o .: "query" <*> (fromMaybe 8 <$> o .:? "limit")

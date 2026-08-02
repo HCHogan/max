@@ -1,5 +1,8 @@
 # Architecture
 
+Cross-cutting decisions for the context/memory redesign are recorded in
+[`ADR 001: Context and Memory Foundations`](adr/001-context-memory-foundations.md).
+
 Layout, runtime data flow, effect stack, and phase status. For behaviour see
 [features.md](features.md); for tests and debugging see
 [development.md](development.md).

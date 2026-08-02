@@ -12,8 +12,9 @@
 #   nix-build   — the flake package, which is what nix/module.nix
 #                 actually installs in production.
 #
-# Only the pure suite (max-test) runs here; max-test-db needs a live
-# Postgres and exits 0 when MAX_TEST_DB_URL is unset.
+# The build-test job also starts PostgreSQL with pgvector and requires the
+# integration suite. Context/memory correctness lives in SQL boundaries,
+# transactions, migrations, and cursors; skipping that suite is not safe.
 name: CI
 
 on:
@@ -29,6 +30,20 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: max_test
+          POSTGRES_PASSWORD: max_test
+          POSTGRES_DB: max_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U max_test -d max_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
 
@@ -63,6 +78,11 @@ jobs:
 
       - name: Test
         run: nix develop --impure -c cabal test max-test --test-show-details=direct
+
+      - name: Test PostgreSQL integration
+        run: nix develop --impure -c cabal test max-test-db --test-show-details=direct
+        env:
+          MAX_TEST_DB_URL: postgresql://max_test:max_test@127.0.0.1:5432/max_test
 
   # The deployment path nothing else covered.  build-test compiles with
   # cabal against the devenv toolchain; nix/module.nix installs

@@ -31,7 +31,8 @@ import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Parser (parseCommand)
 import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
 import Max.Command.Types (Command (..))
-import Max.DB.History (HistoryItem (..), fetchMessage, fetchRecentInGroup)
+import Max.ConversationScope (conversationScopeFor)
+import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
 import Max.DB.Message (MessageKind (..), insertGroupMessage, insertSilence)
 import Max.DB.Permissions (lookupGrant)
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
@@ -271,7 +272,7 @@ onGroupMessage mIntent gm = do
   trig <- case classify False gm of
     TriggerNone
       | Just rid <- listToMaybe [m | SegReply (MessageId m) <- gm.message] -> do
-          mQuoted <- fetchMessage rid
+          mQuoted <- fetchMessageInScope (conversationScopeFor gm.groupId) rid
           let UserId selfRaw = gm.selfId
           pure $ case mQuoted of
             Just quoted | quoted.userId == selfRaw -> classify True gm

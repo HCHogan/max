@@ -44,18 +44,19 @@ import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.Log (Log, logAttention, object, (.=))
 import Effectful.PostgreSQL (WithConnection, query)
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.History
   ( HistoryItem (..),
     bestName,
-    fetchForwardChildren,
+    fetchForwardChildrenInScope,
     fetchMentionHistory,
-    fetchMessage,
-    fetchMessagesByIds,
+    fetchMessageInScope,
+    fetchMessagesByIdsInScope,
     fetchRecentInGroup,
   )
-import Max.DB.Memory (MemoryItem (..), MemoryScope (..), listRecentMemories)
+import Max.DB.Memory (MemoryItem (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.Faces (curatedFaceGroups)
@@ -341,6 +342,7 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
       UserId senderId = gm.userId
+      scope = conversationScopeFor gm.groupId
   -- Two queries, one transcript.  They filter differently, so they
   -- reach back different distances: the recent-messages query is the
   -- last N messages full stop, the mention query the last N that
@@ -368,26 +370,26 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
       -- provider cache can cover it, then jumps in one step.  One miss
       -- every (high - low) dispatches beats one every dispatch.
       (transcript', movedAnchor) = applyWatermark lowWater highWater merged
-  pinnedItems' <- fetchMessagesByIds s.pinned
+  pinnedItems' <- fetchMessagesByIdsInScope scope s.pinned
   -- Injection is capped to the freshest entries per scope: the block
   -- is in the volatile tail, re-tokenised at full price every
   -- dispatch, and a scope at the 30-entry cap was costing thousands
   -- of uncached tokens.  The long tail stays reachable through
   -- memory_list / memory_search.
-  groupMems <- listRecentMemories ScopeGroup gid gid memoryInjectCap
-  userMems <- listRecentMemories ScopeUser senderId gid memoryInjectCap
+  groupMems <- listRecentMemories (groupMemoryNamespace scope) memoryInjectCap
+  userMems <- listRecentMemories (userMemoryNamespace scope senderId) memoryInjectCap
   replyCtx0 <- case extractReply gm.message of
     Nothing -> pure Nothing
     Just rid -> do
-      mHist <- fetchMessage rid
+      mHist <- fetchMessageInScope scope rid
       case mHist of
         Nothing -> pure Nothing
         Just h -> do
-          files <- DBFiles.fetchFilesForMessage h.messageId
+          files <- DBFiles.fetchFilesForMessageInScope scope h.messageId
           -- Expand a quoted 转发聊天记录: its contents were filed by
           -- the forward worker as child rows.  Empty for ordinary
           -- messages — one cheap indexed lookup either way.
-          kids <- fetchForwardChildren h.messageId maxForwardLines
+          kids <- fetchForwardChildrenInScope scope h.messageId maxForwardLines
           pure (Just (h, files, kids))
   -- Context stickers the caption worker has already described read
   -- as [sticker#<id>: <caption>] instead of an opaque [sticker]
@@ -440,7 +442,7 @@ buildContext defaultPersona lowWater highWater multimodal' historyTurns' origin'
         -- Same enrichment as every other rendered line — in
         -- particular nested forwards must carry their [forward#<id>]
         -- handle so the model can view_forward one level deeper.
-        map enrich <$> fetchForwardChildren mid maxForwardLines
+        map enrich <$> fetchForwardChildrenInScope scope mid maxForwardLines
       else pure []
   images' <-
     if multimodal'
@@ -1084,7 +1086,7 @@ renderMemories tz' private senderName groupMems userMems
             else (if private then "本会话:" else "本群:") : map (memoryLine tz') groupMems,
           if null userMems
             then []
-            else ("关于当前发言者 <" <> senderName <> ">（跨群）:") : map (memoryLine tz') userMems
+            else ("关于当前发言者 <" <> senderName <> ">（本会话）:") : map (memoryLine tz') userMems
         ]
 
 memoryLine :: TimeZone -> MemoryItem -> Text
