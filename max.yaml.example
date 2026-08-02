@@ -260,10 +260,11 @@ llm:
 #   proxy: "http://host.docker.internal:7890"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Long-term memory extraction.  When extract_profile names an LLM profile,
-# every persisted dispatch is followed by one cheap extraction call that
-# distills stable facts into the memories table (ADD/UPDATE/DELETE).
-# Without it, only the agent's own memory_* tool calls write memories.
+# Historian v2.  When extract_profile names an LLM profile, a conversation that
+# has been quiet for ten minutes is captured once: rebuildable P1/P2/P3 history
+# summaries and scoped memory proposals come from the same exact source range.
+# Episode size follows the profile's token budget, not a message count.  The
+# legacy key name is retained for configuration compatibility.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # memory:

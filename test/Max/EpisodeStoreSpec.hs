@@ -2,6 +2,7 @@ module Max.EpisodeStoreSpec (spec) where
 
 import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
 import Max.EpisodeStore
@@ -11,6 +12,10 @@ spec :: Spec
 spec = describe "EpisodeCapture validation" $ do
   it "extracts a strict capture object from a fenced response" $ do
     parseEpisodeCapture fencedCapture `shouldBe` Right validCapture
+
+  it "rejects unknown schema fields instead of silently accepting drift" $ do
+    parseEpisodeCapture (T.replace "\"importance\":0.7" "\"importance\":0.7,\"surprise\":true" fencedCapture)
+      `shouldSatisfy` either (const True) (const False)
 
   it "rejects summaries that cite filtered or out-of-range messages" $ do
     let bad =

@@ -47,7 +47,7 @@ import Max.Files (enqueueFiles)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
-import Max.MemoryExtract (armMemx, bumpMemx)
+import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
 import Max.Prompt (TriggerOrigin (..), buildContextWithLimits, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
@@ -206,6 +206,11 @@ handleEvents q fetchSig mIntent = loop
         EvRaw v ->
           logTrace "unhandled event" v
         EvGroupMessage gm -> do
+          -- Move the quiet boundary before the row becomes visible to the
+          -- historian's DB scan.  Otherwise a due scan could race persistence
+          -- and fold the just-arrived live-tail message.
+          env :: BotEnv <- ask
+          for_ env.beEpisodeScheduler $ \scheduler -> liftIO (bumpEpisode scheduler gm.groupId)
           persist gm
           enqueueImages fetchSig gm
           enqueueForwards fetchSig gm
@@ -260,12 +265,6 @@ onGroupMessage mIntent gm = do
         "user_id" .= fromRaw,
         "text" .= renderPlainText gm.message
       ]
-  -- Group traffic pushes the episode-extraction idle timer back: the
-  -- conversation is still going, so the episode isn't over.  A no-op
-  -- for unarmed groups (cheap STM read).
-  do
-    env :: BotEnv <- ask
-    for_ env.beMemx $ \ms -> liftIO (bumpMemx ms gm.groupId)
   -- Cheap pure pass first; only when it says "not addressed" AND the
   -- message quotes something do we pay a PK lookup to see whether
   -- the quoted message was ours (reply-to-bot counts as addressing).
@@ -586,9 +585,9 @@ dispatchProactive mIntent batch = case unsnoc batch of
 -- The 'TriggerOrigin' says what woke the bot — see
 -- 'Max.Prompt.PromptInputs.origin'.
 --
--- This is the process's only asynchronous dispatch path (commands run
--- inline on the event loop, and memory extraction runs inside this
--- async), so it is also where graceful shutdown gates: once draining,
+-- This is the process's only asynchronous agent-turn path (commands run
+-- inline on the event loop; Historian is a supervised background worker), so
+-- it is also where graceful shutdown gates: once draining,
 -- new triggers are logged and dropped rather than started.  See
 -- "Max.Shutdown".
 dispatchLLM ::
@@ -940,8 +939,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
           -- importantly another bot @-ing us: answering would
           -- re-trigger it and ping-pong forever.  Nothing is sent;
           -- btw notes are NOT drained (they wait for a turn that
-          -- actually delivers them); no memory extraction (a turn
-          -- judged not worth answering is noise).  The silence itself
+          -- actually delivers them); no episode timer is armed (a turn judged
+          -- not worth answering is noise).  The silence itself
           -- IS persisted, as a synthetic bot row — without it the
           -- declined question reads as still pending in the next
           -- dispatch's mention history and gets answered a turn late.
@@ -984,12 +983,10 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "appended" .= length result.appended,
                 "aborted" .= result.aborted
               ]
-          -- Post-reply: arm the group's episode-extraction idle timer
-          -- ("Max.MemoryExtract").  Extraction itself runs once the
-          -- conversation goes quiet, reading the whole arc at once —
-          -- per-dispatch extraction fragmented one conversation into
-          -- overlapping half-memories.
-          for_ env.beMemx $ \ms -> liftIO (armMemx ms gm.groupId)
+          -- Post-reply: arm Historian v2's protected quiet-tail timer.  One
+          -- settled capture later produces both chronological summaries and
+          -- scoped memory proposals from the same exact source range.
+          for_ env.beEpisodeScheduler $ \scheduler -> liftIO (armEpisode scheduler gm.groupId)
 
 --------------------------------------------------------------------------------
 -- Reply helper.

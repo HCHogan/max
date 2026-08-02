@@ -38,7 +38,12 @@ Pure logic in `test/` mirroring the library layout:
   and ReplySend marker-cleanup regressions
 - `Max.IntentSpec` — proactive verdict parsing and the heuristic gate
 - `Max.MCP.ClientSpec` — Streamable-HTTP body decoding (JSON + SSE)
-- `Max.MemoryExtractSpec` — extractor op-JSON parsing (fences, prose, bad actions)
+- `Max.HistorianSpec` / DB counterpart — token-sized episode prefixes, explicit
+  identity provenance, structured-call publication, and raw-output retention
+- `Max.EpisodeStoreSpec` — strict capture schema, evidence validation,
+  source-hash/CAS rollback, leases, rebuild/backfill, and proposal isolation
+- `Max.MemoryExtractSpec` — nightly-maintenance op JSON plus quiet-scheduler
+  retry/race behavior
 - `Max.PlatformSpec` — platform-id mapping
 - `Max.PromptSpec` — `renderContext`: the flat transcript and the
   `history_as_turns` shape (including that neither can produce two consecutive
@@ -157,8 +162,8 @@ structured data as `key=value`. Multi-line values collapse to one line with `⏎
 so `grep -A` / `grep -B` count events rather than JSON braces.
 
 Useful domain filters: `conn-N`, `image-worker`, `forward-worker`, `llm`, `cmd`,
-`memx` (memory extraction), `intent` (proactive-trigger classification),
-`shutdown` (graceful drain).
+`historian` (episode capture), `memx-dream` (memory maintenance), `intent`
+(proactive-trigger classification), `shutdown` (graceful drain).
 
 `log-base` has three levels and they map straight across: `TRACE` / `INFO` /
 `WARN`. There is no separate error tier — `logAttention` carries both recoverable

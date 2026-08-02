@@ -123,8 +123,9 @@ data AppConfig = AppConfig
     -- through, e.g. @http://host.docker.internal:7890@ for a proxy on
     -- the docker host.  'Nothing' = direct connections.
     browserProxy :: !(Maybe Text),
-    -- | LLM profile for post-dispatch memory extraction; 'Nothing'
-    -- disables the extractor (agent-side memory tools still work).
+    -- | LLM profile for Historian v2 episode capture; 'Nothing' disables
+    -- chronological capture and automatic memory proposals.  The external
+    -- config name remains @memory.extract_profile@ for compatibility.
     memoryExtractProfile :: !(Maybe Text),
     -- | Vision-capable LLM profile for sticker AND chat-media
     -- captioning; 'Nothing' disables both caption workers (stickers
@@ -330,7 +331,7 @@ appConfigParser usedRef =
       subConfig "memory" $
         optional $
           setting
-            [ help "LLM profile for post-dispatch memory extraction (presence enables it)",
+            [ help "LLM profile for Historian v2 episode capture (presence enables it)",
               reader str,
               option,
               long "memory-extract-profile",

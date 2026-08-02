@@ -55,8 +55,10 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    Toolset (the full tool list, assembled from BotEnv), Intent
                    (proactive classifier), Skills (write-through registry:
                    builtins baked from skills/ + docs/, DB rows shadowing them),
-                   MemoryExtract (episode extraction: ingest cursor + idle-timer
-                   scheduler, nightly dream consolidation), Embedding + Embedder
+                   EpisodeScheduler (protected quiet-tail timing), Historian +
+                   EpisodeStore (durable exact-range P1/P2/P3 capture and scoped
+                   memory proposals), MemoryExtract (nightly memory maintenance),
+                   Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    shared claim loop), MediaCaption + Stickers (caption workers),
                    Reminder, Reply (planning), ReplySend (planning made real:
@@ -78,7 +80,7 @@ app/Main.hs        wires effects + workers + server
                                                          ▼
        ┌──────────────────────── handleEvents ───────────────────────────┐
        │ EvGroupMessage gm (group, or private as pseudo-group)  →        │
-       │   1. insertGroupMessage   (Postgres, idempotent on message_id)  │
+       │   1. bump episode quiet boundary; insertGroupMessage (Postgres) │
        │   2. enqueueImages / enqueueForwards / enqueueFiles → fetch_jobs│
        │   3. classify (@bot / reply-to-bot / private / !cmd) →          │
        │        none / ping / !cmd / agent-turn                          │
@@ -94,17 +96,22 @@ app/Main.hs        wires effects + workers + server
                                             │  → AgentEvent           │
                                             │      → ReplySend        │
                                             │          → Outbound     │
-                                            │  → arm memx idle timer  │
+                                            │  → arm episode idle timer│
                                             └─────────────────────────┘
 
-Memory extraction is episode-scoped rather than per-dispatch: the memx worker
-fires when a group has been quiet for ten minutes (or sixty messages pile up),
-reads the oldest raw-ledger page after its `conversation_cursors.ingest_seq`,
-and advances that cursor with CAS only after applying the ADD/UPDATE/DELETE
-ops. Backlogs continue page by page; command/synthetic/forward rows participate
-in pagination before transcript filtering, so an invisible row cannot create a
-cursor hole. A nightly dream pass (4am local) consolidates scopes that grew past
-fifteen entries.
+Historian v2 is episode-scoped rather than per-dispatch. After ten quiet
+minutes it selects an oldest-first raw-ledger prefix by the configured model's
+token budget (SQL pages are only an implementation detail), then persists an
+exact source range/hash as a leased capture job. One structured LLM call emits
+P1/P2/P3 chronological summaries plus scoped memory proposals. Publication
+atomically validates citations and scope, writes the compartment and proposal
+outcomes, applies accepted MemoryStore mutations, and CAS-advances the
+historian cursor. A failure advances nothing; restart reclaims the durable job.
+Commands/synthetic/forward rows remain in range coverage before transcript
+filtering, and active ranges have a database non-overlap constraint. The legacy
+deployment boundary can be backfilled explicitly without rewinding the live
+cursor. A nightly dream pass (4am local) remains a separate semantic-memory
+maintenance lifecycle.
 ```
 
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
@@ -125,7 +132,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 |---|---|
 | Messages, sessions, memories, stickers, permissions, skills | written through on every mutation; Session persists revision CAS before publishing its TVar (builtin skills re-seed from the binary) |
 | Pending image / video / forward / file fetches | `fetch_jobs` rows claimed under a lease — a dead process's lease expires and the next claim picks the job back up |
-| Pending memory-extraction windows | conversation-scoped `conversation_cursors.ingest_seq`; boot re-arms any group with a newer ledger row |
+| Pending historian capture | leased `episode_capture_runs` rows plus the conversation-scoped historian cursor; boot drains jobs, then re-arms any conversation with newer raw rows |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll for `NULL` columns, so any gap backfills itself |
 
@@ -256,3 +263,4 @@ finished async is a no-op, so "feature off" needs no special case.
 | 10 | NixOS module + production deployment | ✅ |
 | 11 | Admin JSON API + panel | ✅ |
 | 12 | Skills (progressive disclosure) + episode memory extraction | ✅ |
+| 13 | Token-planned infinite context + unified Historian/memory lifecycle | 🚧 |

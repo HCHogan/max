@@ -24,7 +24,7 @@ import Max.Browser.Registry (BrowserRegistry)
 import Max.CliProxy (CliProxyConfig)
 import Max.Embedding (EmbedClient)
 import Max.Intent (IntentConfig)
-import Max.MemoryExtract (MemxScheduler)
+import Max.EpisodeScheduler (EpisodeScheduler)
 import Max.Reminder (ReminderScheduler)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
@@ -80,12 +80,13 @@ data BotEnv = BotEnv
     -- | Management access to the credential pool serving our LLM base
     -- URL ('Nothing' = @\/api\/quota@ reports itself unconfigured).
     beCliProxy :: !(Maybe CliProxyConfig),
-    -- | Profile for episode memory extraction ('Nothing' = off).
+    -- | Profile for Historian v2 episode capture ('Nothing' = off).  The
+    -- configuration key retains its legacy memory-extract name.
     beMemoryExtract :: !(Maybe Text),
-    -- | The extraction scheduler, present iff 'beMemoryExtract' is:
+    -- | Quiet-period episode scheduler, present iff 'beMemoryExtract' is:
     -- dispatches arm its idle timer, incoming messages push it back
-    -- ("Max.MemoryExtract").
-    beMemx :: !(Maybe MemxScheduler),
+    -- ("Max.EpisodeScheduler").
+    beEpisodeScheduler :: !(Maybe EpisodeScheduler),
     -- | Proactive-trigger intent config ('Nothing' = feature off).
     -- Dispatch itself lives in the intent worker; this handle is for
     -- the @!proactive@ command's status display.

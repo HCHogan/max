@@ -24,11 +24,15 @@ module Max.EpisodeStore
     validateEpisodeCapture,
     captureValidationWarnings,
     enqueueCaptureRun,
+    enqueueBackfillRun,
     enqueueRebuildRun,
     claimCaptureRun,
     loadCaptureSource,
     recordCaptureGenerated,
+    recordCaptureRejected,
     failCaptureRun,
+    abandonCaptureRun,
+    captureRunSourceMatches,
     publishCaptureRun,
     listActiveCompartments,
   )
@@ -38,6 +42,9 @@ import Control.Exception (throwIO)
 import Control.Monad (forM, unless, when)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson.Types (Parser)
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Either (partitionEithers)
@@ -47,6 +54,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.String (fromString)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -215,7 +223,8 @@ data CitedSummary = CitedSummary
   deriving stock (Show, Eq)
 
 instance FromJSON CitedSummary where
-  parseJSON = withObject "cited_summary" $ \o ->
+  parseJSON = withObject "cited_summary" $ \o -> do
+    rejectUnknownKeys "cited_summary" ["text", "evidence_message_ids"] o
     CitedSummary <$> o .: "text" <*> o .: "evidence_message_ids"
 
 instance ToJSON CitedSummary where
@@ -235,20 +244,23 @@ instance FromJSON EpisodeMemoryProposal where
   parseJSON = withObject "memory_proposal" $ \o -> do
     action <- o .: "action"
     case action :: Text of
-      "add" ->
+      "add" -> do
+        rejectUnknownKeys "memory_proposal.add" ["action", "scope", "user_id", "content", "category", "evidence_message_ids"] o
         ProposalAdd
           <$> o .: "scope"
           <*> o .:? "user_id"
           <*> o .: "content"
           <*> o .:? "category"
           <*> o .: "evidence_message_ids"
-      "update" ->
+      "update" -> do
+        rejectUnknownKeys "memory_proposal.update" ["action", "id", "version", "content", "evidence_message_ids"] o
         ProposalUpdate
           <$> o .: "id"
           <*> o .: "version"
           <*> o .: "content"
           <*> o .: "evidence_message_ids"
-      "archive" ->
+      "archive" -> do
+        rejectUnknownKeys "memory_proposal.archive" ["action", "id", "version", "evidence_message_ids"] o
         ProposalArchive
           <$> o .: "id"
           <*> o .: "version"
@@ -295,6 +307,17 @@ data EpisodeCapture = EpisodeCapture
 
 instance FromJSON EpisodeCapture where
   parseJSON = withObject "episode_capture" $ \o -> do
+    rejectUnknownKeys
+      "episode_capture"
+      [ "summary_p1",
+        "summary_p2",
+        "summary_p3",
+        "importance",
+        "confidence",
+        "episode_kind",
+        "memory_proposals"
+      ]
+      o
     capture <-
       EpisodeCapture
         <$> o .: "summary_p1"
@@ -309,6 +332,14 @@ instance FromJSON EpisodeCapture where
     unless (capture.captureConfidence >= 0 && capture.captureConfidence <= 1) $
       fail "confidence must be between 0 and 1"
     pure capture
+
+rejectUnknownKeys :: String -> [Text] -> Object -> Parser ()
+rejectUnknownKeys label allowed objectValue =
+  unless (null unknown) $
+    fail (label <> " contains unknown fields: " <> show (map Key.toText unknown))
+  where
+    allowedKeys = Set.fromList (map Key.fromText allowed)
+    unknown = filter (`Set.notMember` allowedKeys) (KeyMap.keys objectValue)
 
 instance ToJSON EpisodeCapture where
   toJSON capture =
@@ -426,12 +457,15 @@ sourceMatchesRun run source = case source of
 
 validateSummary :: Map Int64 Int64 -> Text -> Int -> CitedSummary -> [CaptureValidationError]
 validateSummary source path maxChars summary =
-  contentErrors <> evidenceErrors source (path <> ".evidence_message_ids") summary.evidenceMessageIds
+  contentErrors <> summaryEvidenceErrors
   where
     content = T.strip summary.summaryText
     contentErrors =
       [CaptureValidationError (path <> ".text") "summary must not be blank" | T.null content]
         <> [CaptureValidationError (path <> ".text") ("summary exceeds " <> tshow maxChars <> " characters") | T.length content > maxChars]
+    summaryEvidenceErrors
+      | Map.null source && null summary.evidenceMessageIds = []
+      | otherwise = evidenceErrors source (path <> ".evidence_message_ids") summary.evidenceMessageIds
 
 validateProposal :: Map Int64 Int64 -> Int -> EpisodeMemoryProposal -> Either RejectedProposal IndexedValidatedProposal
 validateProposal source index proposal = case proposal of
@@ -462,12 +496,18 @@ validateProposal source index proposal = case proposal of
       evidenceErrs = evidenceErrors source (base <> ".evidence_message_ids") evidence
   ProposalUpdate memoryId version content evidence ->
     let (validContent, contentErrors) = validateMemoryContent (base <> ".content") content
-        errors = contentErrors <> evidenceErrors source (base <> ".evidence_message_ids") evidence
+        errors =
+          contentErrors
+            <> evidenceErrors source (base <> ".evidence_message_ids") evidence
+            <> [err "id" "memory id must be positive" | memoryId.unMemoryId <= 0]
+            <> [err "version" "memory version must be positive" | version.unMemoryVersion <= 0]
      in finish (ValidatedUpdate memoryId version <$> validContent <*> pure evidence, errors)
   ProposalArchive memoryId version evidence ->
     finish
       ( Just (ValidatedArchive memoryId version evidence),
         evidenceErrors source (base <> ".evidence_message_ids") evidence
+          <> [err "id" "memory id must be positive" | memoryId.unMemoryId <= 0]
+          <> [err "version" "memory version must be positive" | version.unMemoryVersion <= 0]
       )
   where
     base = "memory_proposals[" <> tshow index <> "]"
@@ -589,6 +629,24 @@ enqueueCaptureRun scope expected end request = do
             key
           )
       pure (case rows of run : _ -> Just run; [] -> Nothing)
+
+-- | Schedule an explicitly selected historical range without moving the live
+-- historian cursor.  Publication still enforces the source hash and active
+-- non-overlap constraint.  This is the controlled path for history predating
+-- migration 041's deployment baseline.
+enqueueBackfillRun ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  MessageCursor ->
+  MessageCursor ->
+  CaptureRequest ->
+  Eff es (Maybe CaptureRun)
+enqueueBackfillRun scope expected end request =
+  enqueueCaptureRun
+    scope
+    expected
+    end
+    request {requestReason = CaptureBackfill}
 
 -- | Schedule a replacement for one exact active range.  The old compartment
 -- remains active while this run is pending/generated; publication stages the
@@ -750,6 +808,35 @@ recordCaptureGenerated lease raw capture validationErrors = do
       )
   pure (changed == 1)
 
+-- | Persist an unusable model response and make the exact run retryable.  Raw
+-- output belongs in the durable run even when it could not be parsed.
+recordCaptureRejected ::
+  (WithConnection :> es, IOE :> es) =>
+  CaptureLease ->
+  Int ->
+  Text ->
+  Text ->
+  [CaptureValidationError] ->
+  Eff es Bool
+recordCaptureRejected lease retrySeconds err raw validationErrors = do
+  changed <-
+    execute
+      "UPDATE episode_capture_runs \
+      \ SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL, \
+      \     next_retry_at = now() + make_interval(secs => ?), last_error = ?, \
+      \     raw_output = ?, parsed_output = NULL, validation_errors = ?::jsonb, \
+      \     updated_at = now() \
+      \ WHERE id = ? AND status = 'leased' AND lease_owner = ? AND attempt = ?"
+      ( max 1 retrySeconds,
+        err,
+        raw,
+        encodeText validationErrors,
+        lease.leaseRun.crId,
+        lease.leaseOwner,
+        lease.leaseRun.crAttempt
+      )
+  pure (changed == 1)
+
 failCaptureRun ::
   (WithConnection :> es, IOE :> es) =>
   CaptureLease ->
@@ -775,6 +862,47 @@ failCaptureRun lease retrySeconds err validationErrors = do
       )
   pure (changed == 1)
 
+-- | Permanently retire a run whose immutable source/cursor precondition can
+-- never become true again.  A newly hashed run may then proceed instead of an
+-- old retry starving the claim queue forever.
+abandonCaptureRun ::
+  (WithConnection :> es, IOE :> es) =>
+  CaptureLease ->
+  Text ->
+  [CaptureValidationError] ->
+  Eff es Bool
+abandonCaptureRun lease reason validationErrors = do
+  changed <-
+    execute
+      "UPDATE episode_capture_runs \
+      \ SET status = 'abandoned', lease_owner = NULL, lease_expires_at = NULL, \
+      \     next_retry_at = NULL, last_error = ?, validation_errors = ?::jsonb, \
+      \     updated_at = now() \
+      \ WHERE id = ? AND status IN ('leased', 'generated') \
+      \   AND lease_owner = ? AND attempt = ?"
+      ( reason,
+        encodeText validationErrors,
+        lease.leaseRun.crId,
+        lease.leaseOwner,
+        lease.leaseRun.crAttempt
+      )
+  pure (changed == 1)
+
+-- | Read-only preflight used before paying for a historian call and after a
+-- failed publication to distinguish a retryable provider error from a stale
+-- source/cursor run.
+captureRunSourceMatches ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  CaptureRun ->
+  Eff es Bool
+captureRunSourceMatches scope run = do
+  current <- loadCursor scope historianCursor
+  source <- captureSourceRange scope run.crExpectedCursor run.crRange.srEnd
+  pure $
+    (not (runRequiresLiveCursor run) || current == run.crExpectedCursor)
+      && source == Just run.crRange
+
 publishCaptureRun ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
@@ -789,11 +917,11 @@ publishCaptureRun scope lease validated = withTransaction $ do
   insertRejectedProposals run validated.rejectedProposals
   forM validated.validatedProposals (applyMemoryProposal scope run compartment) >>= mapM_ (insertProposalOutcome run)
   activateCompartment run compartment
-  case run.crReplacesCompartment of
-    Nothing -> do
+  if runRequiresLiveCursor run
+    then do
       advanced <- advanceCursor scope historianCursor run.crExpectedCursor run.crRange.srEnd
       unless advanced (publicationFailure "historian cursor compare-and-swap conflict")
-    Just _ -> pure ()
+    else pure ()
   changed <-
     execute
       "UPDATE episode_capture_runs \
@@ -832,7 +960,7 @@ verifyRunSource ::
   Eff es ()
 verifyRunSource scope run = do
   current <- loadCursor scope historianCursor
-  when (run.crReplacesCompartment == Nothing && current /= run.crExpectedCursor) $
+  when (runRequiresLiveCursor run && current /= run.crExpectedCursor) $
     publicationFailure "historian cursor no longer matches the run's expected cursor"
   source <- captureSourceRange scope run.crExpectedCursor run.crRange.srEnd
   case source of
@@ -840,6 +968,10 @@ verifyRunSource scope run = do
       | range == run.crRange -> pure ()
       | otherwise -> publicationFailure "source range/hash changed after generation"
     Nothing -> publicationFailure "source range is no longer complete"
+
+runRequiresLiveCursor :: CaptureRun -> Bool
+runRequiresLiveCursor run =
+  run.crReplacesCompartment == Nothing && run.crReason /= "backfill"
 
 insertStagedCompartment ::
   (WithConnection :> es, IOE :> es) =>

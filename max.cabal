@@ -102,6 +102,7 @@ library
         Max.Effects.Tools
         Max.Embedder
         Max.Embedding
+        Max.EpisodeScheduler
         Max.EpisodeStore
         Max.Env
         Max.Faces
@@ -109,6 +110,7 @@ library
         Max.Files
         Max.Forward
         Max.Handler
+        Max.Historian
         Max.Http.Json
         Max.HttpRuntime
         Max.Http.Stream
@@ -271,6 +273,7 @@ test-suite max-test
         Max.Command.PermissionSpec
         Max.DB.CallsSpec
         Max.HandlerSpec
+        Max.HistorianSpec
         Max.HttpRuntimeSpec
         Max.IntentSpec
         Max.LLM.StreamSpec
@@ -344,6 +347,8 @@ test-suite max-test-db
         Max.DB.FetchQueueSpec
         Max.DB.SessionSpec
         Max.EpisodeStoreSpec
+        Max.HistorianMigrationSpec
+        Max.HistorianSpec
         Max.DB.HistorySpec
         Max.DB.MediaSpec
         Max.MemoryStoreSpec

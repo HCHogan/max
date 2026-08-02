@@ -35,18 +35,20 @@ import Max.Effects.Outbound (Outbound, runOutbound)
 import Max.Effects.PlatformApi (PlatformApi, qqBackend, runPlatformApi)
 import Max.Embedder (embedWorker)
 import Max.Embedding (newEmbedClient)
+import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.Env (BotEnv (..))
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
 import Max.Handler (dispatchProactive, handleEvents)
+import Max.Historian (historianWorker)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.MediaCaption (mediaCaptionWorker)
-import Max.MemoryExtract (dreamWorker, memxWorker, newMemxScheduler)
+import Max.MemoryExtract (dreamWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
 import Max.Reminder (newReminderScheduler, reminderWorker)
 import Max.Sandbox.Registry
@@ -114,7 +116,7 @@ main = do
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
           let mEmbed = newEmbedClient httpRuntime <$> cfg.embedding
-          memxSched <- traverse (const newMemxScheduler) cfg.memoryExtractProfile
+          episodeScheduler <- traverse (const newEpisodeScheduler) cfg.memoryExtractProfile
           mIntentSt <- traverse (const newIntentState) cfg.intent
           startedAt <- getCurrentTime
           let env =
@@ -139,7 +141,7 @@ main = do
                     beSearch = cfg.search,
                     beCliProxy = cfg.cliproxy,
                     beMemoryExtract = cfg.memoryExtractProfile,
-                    beMemx = memxSched,
+                    beEpisodeScheduler = episodeScheduler,
                     beIntent = cfg.intent,
                     beEmbed = mEmbed
                   }
@@ -296,10 +298,10 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
                | profile <- maybeToList cfg.stickerCaptionProfile
                ]
             <> [ worker
-                   "memory-extract"
+                   "historian"
                    OptionalWorker
-                   (memxWorker profile env.beEmbed cfg.timezone env.beSessions (defaultModelName cfg.llm) scheduler)
-               | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beMemx)
+                   (historianWorker profile cfg.llm cfg.timezone env.beTasks (defaultModelName cfg.llm) scheduler)
+               | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beEpisodeScheduler)
                ]
             <> [ worker "memory-dream" OptionalWorker (dreamWorker profile cfg.timezone)
                | profile <- maybeToList cfg.memoryExtractProfile

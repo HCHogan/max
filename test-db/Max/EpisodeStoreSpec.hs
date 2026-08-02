@@ -12,7 +12,7 @@ import Effectful.PostgreSQL (query)
 import Helpers (insertRawKind, insertRawMessage, truncateAll, withDb)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
-import Max.DB.ConversationCursor (historianCursor, loadCursor)
+import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
 import Max.DB.History (LedgerItem (..), MessageCursor (..))
 import Max.EpisodeStore
 import Max.MemoryStore (MemoryId, MemoryVersion)
@@ -69,6 +69,27 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     second <- withDb pool (claimCaptureRun "worker-b" 60) >>= requireJust "retry lease"
     second.leaseRun.crAttempt `shouldBe` 2
     second.leaseOwner `shouldBe` "worker-b"
+    withDb pool (abandonCaptureRun second "source changed" []) `shouldReturn` True
+    withDb pool (claimCaptureRun "worker-c" 60) `shouldReturn` Nothing
+    statuses <- withDb pool $ query "SELECT status, last_error FROM episode_capture_runs" ()
+    (statuses :: [(Text, Maybe Text)]) `shouldBe` [("abandoned", Just "source changed")]
+
+  it "persists an invalid raw model response for delayed retry" $ do
+    insertRawMessage pool 1001 groupA member botId testTime Nothing "hello"
+    end <- latestCursor pool
+    _ <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) end (request CaptureIdle)
+    lease <- withDb pool (claimCaptureRun "worker" 60) >>= requireJust "capture lease"
+    let errors = [CaptureValidationError "response" "invalid JSON"]
+    withDb pool (recordCaptureRejected lease 60 "parse failed" "not json" errors)
+      `shouldReturn` True
+    rows <-
+      withDb pool $
+        query
+          "SELECT status, raw_output, parsed_output IS NULL, jsonb_array_length(validation_errors) \
+          \ FROM episode_capture_runs"
+          ()
+    (rows :: [(Text, Maybe Text, Bool, Int)])
+      `shouldBe` [("failed", Just "not json", True, 1)]
 
   it "atomically publishes summaries, citations, memory proposals, and the cursor" $ do
     seedConversation pool
@@ -193,6 +214,27 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     -- database exclusion constraint is the final coverage guardrail.
     withConn pool (\conn -> execute conn "UPDATE conversation_compartments SET state = 'active', superseded_by = NULL WHERE id = ?" (Only old))
       `shouldThrow` (\(_ :: SomeException) -> True)
+
+  it "publishes controlled legacy backfill without rewinding the live cursor" $ do
+    seedConversation pool
+    end <- latestCursor pool
+    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` MessageCursor 0
+    withDb pool (advanceCursor scopeA historianCursor (MessageCursor 0) end)
+      `shouldReturn` True
+    run <-
+      withDb pool (enqueueBackfillRun scopeA (MessageCursor 0) end (request CaptureBackfill))
+        >>= requireJust "backfill run"
+    lease <- withDb pool (claimCaptureRun "backfill-worker" 60) >>= requireJust "backfill lease"
+    lease.leaseRun.crId `shouldBe` run.crId
+    source <- withDb pool $ loadCaptureSource run
+    let capture = validCapture [1001, 1002, 1003] []
+    validated <- requireValid run source capture
+    _ <- withDb pool $ recordCaptureGenerated lease (captureJson capture) capture []
+    _ <- withDb pool $ publishCaptureRun scopeA lease validated
+
+    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` end
+    map (.activeRange) <$> withDb pool (listActiveCompartments scopeA)
+      `shouldReturn` [run.crRange]
 
 seedConversation :: DbPool -> IO ()
 seedConversation pool = do

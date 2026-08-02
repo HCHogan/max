@@ -58,7 +58,7 @@ data Session = Session
     -- | Legacy memory-extraction timestamp retained for schema/API
     -- compatibility.  Exact progress moved to the independent,
     -- ingest-sequence-based @conversation_cursors@ store in migration 036;
-    -- new extraction passes no longer update this field.
+    -- Historian v2 capture no longer updates this field.
     memxAnchor :: !(Maybe UTCTime),
     -- | Per-session reasoning-effort override, set by @!effort@.
     -- 'Nothing' = follow the active profile's configured effort.
