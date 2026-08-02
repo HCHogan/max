@@ -47,7 +47,7 @@ import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.MemoryExtract (dreamWorker, memxWorker, newMemxScheduler)
-import Max.ModelCatalog (defaultModelName, modelProfileNames)
+import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
 import Max.Reminder (newReminderScheduler, reminderWorker)
 import Max.Sandbox.Registry
   ( destroyAllSandboxes,
@@ -185,6 +185,7 @@ main = do
                       )
               )
               cfg.llm
+            . runReader cfg.llm
             . runReader env
             . runAgent defaultLimits (allToolsFor env) tasks
             $ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid
@@ -213,7 +214,8 @@ runApp ::
     LLM :> es,
     Agent :> es,
     Concurrent :> es,
-    Reader BotEnv :> es
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es
   ) =>
   AppConfig ->
   [String] ->

@@ -36,7 +36,7 @@ import Max.DB.Message (MessageKind (..), insertGroupMessage, insertSilence)
 import Max.DB.Permissions (lookupGrant)
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.Blob (Blob)
-import Max.Effects.LLM (LLM, isProfileHistoryTurns, isProfileMultimodal)
+import Max.Effects.LLM (LLM)
 import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded, wasDelivered)
 import Max.Effects.PlatformApi (PlatformApi, sendAction)
 import Max.Env (BotEnv (..))
@@ -47,6 +47,7 @@ import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.MemoryExtract (armMemx, bumpMemx)
+import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, lookupModelCapabilities)
 import Max.Prompt (TriggerOrigin (..), buildContext, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -184,6 +185,7 @@ handleEvents ::
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
     IOE :> es
   ) =>
   TQueue Event ->
@@ -242,6 +244,7 @@ onGroupMessage ::
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
     IOE :> es
   ) =>
   Maybe IntentState ->
@@ -308,6 +311,7 @@ onPoke ::
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
     IOE :> es
   ) =>
   Maybe IntentState ->
@@ -376,6 +380,7 @@ dispatchCommand ::
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
     IOE :> es
   ) =>
   Maybe IntentState ->
@@ -564,6 +569,7 @@ dispatchProactive ::
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
     IOE :> es
   ) =>
   Maybe IntentState ->
@@ -594,6 +600,7 @@ dispatchLLM ::
     Agent :> es,
     Concurrent :> es,
     Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
     IOE :> es
   ) =>
   Maybe IntentState ->
@@ -829,8 +836,10 @@ dispatchLLM mIntent origin absorbable companions gm = do
         _ -> pure False
 
     dispatch env s = do
-      multimodal <- isProfileMultimodal s.model
-      historyTurns <- isProfileHistoryTurns s.model
+      catalog :: ModelCatalog <- ask
+      let capabilities = lookupModelCapabilities s.model catalog
+          multimodal = maybe False supportsMultimodal capabilities
+          historyTurns = maybe False usesHistoryTurns capabilities
       (mentionable, rosterNames, brief) <- fetchGroupContext gm.groupId
       -- Questions another turn is already working on.  Ours is in there
       -- too (claimed just above) — drop it, it isn't history yet.
