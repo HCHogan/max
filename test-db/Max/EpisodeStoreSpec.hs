@@ -12,6 +12,7 @@ import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
 import Helpers (insertRawKind, insertRawMessage, truncateAll, withDb)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
+import Max.ContextMaterialization
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
 import Max.DB.History (LedgerItem (..), MessageCursor (..))
@@ -267,6 +268,21 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     map (.activeGapBefore) active `shouldBe` [False, True]
     map (.activeStartedAt) active `shouldBe` [testTime, testTime]
     map (.activeEndedAt) active `shouldBe` [testTime, testTime]
+    let materialization =
+          MaterializationDraft
+            { mdEndCursor = (last active).activeRange.srEnd,
+              mdPolicyVersion = "context-policy/v2",
+              mdItems =
+                [ MaterializedCompartment
+                    compartment.activeCompartmentId
+                    compartment.activeMaterializationVersion
+                    "p2"
+                | compartment <- active
+                ],
+              mdReason = "initial_canary"
+            }
+    withDb pool (publishContextMaterialization scopeA Nothing materialization)
+      `shouldThrow` (\(_ :: SomeException) -> True)
 
 seedConversation :: DbPool -> IO ()
 seedConversation pool = do

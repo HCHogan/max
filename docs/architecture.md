@@ -100,6 +100,7 @@ app/Main.hs        wires effects + workers + server
                                             │          → Outbound     │
                                             │  → arm episode idle timer│
                                             └─────────────────────────┘
+```
 
 Historian v2 is episode-scoped rather than per-dispatch. After ten quiet
 minutes it selects an oldest-first raw-ledger prefix by the configured model's
@@ -122,12 +123,21 @@ prompt-eligible message after the suffix's exact end cursor. Partial older
 backfills stay out of the stable prefix when a raw gap separates them. The pure
 ContextPolicy assigns P1/P2/P3/P4 using coarse age, episode distance,
 importance, confidence, and token pressure; P4 remains stored but is omitted
-from the default prompt. Under pressure active memory is removed first,
-compartments degrade one tier at a time, and only then is the oldest raw tail
-trimmed. A conversation with no active compartment automatically uses the
-legacy reader, and removing it from the allowlist rolls back prompt reads
-without changing raw messages, capture jobs, or projections.
-```
+from the default prompt. The selected tiers, source compartment ids/projection
+versions, policy version, and exact raw-tail cursor live in a CAS-versioned
+`context_materializations` row plus an append-only revision ledger. Normal
+turns reuse that revision. Initial canary enablement, an active projection
+replacement, or raw history crossing the model-derived high-token watermark
+publishes one new revision; it folds only enough prepared compartments to aim
+the tail back below the low-token watermark. Store publication locks and
+rechecks active source versions, rejects gaps or backward cursor movement, and
+records the cache-bust reason. Under exceptional per-turn pressure active
+memory is removed first, compartments can degrade one tier at a time, and only
+then is the oldest raw tail trimmed. A conversation with no active compartment
+automatically uses the legacy reader, and removing it from the allowlist rolls
+prompt reads back without changing raw messages, capture jobs, or projections.
+A corrupt/stale materialization or store failure also fails soft to that scoped
+legacy reader for the turn instead of dropping the user's reply.
 
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
 instead of waiting for a whole body. Paragraphs the model has finished with go
@@ -148,6 +158,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Messages, sessions, memories, stickers, permissions, skills | written through on every mutation; Session persists revision CAS before publishing its TVar (builtin skills re-seed from the binary) |
 | Pending image / video / forward / file fetches | `fetch_jobs` rows claimed under a lease — a dead process's lease expires and the next claim picks the job back up |
 | Pending historian capture | leased `episode_capture_runs` rows plus the conversation-scoped historian cursor; boot drains jobs, then re-arms any conversation with newer raw rows |
+| Tiered prompt prefix | current `context_materializations` revision plus append-only versions; active compartment ids/versions, tiers, end cursor, policy, fingerprint, and cache-bust reason are durable |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll for `NULL` columns, so any gap backfills itself |
 

@@ -84,10 +84,13 @@ renderPromptFlow =
       "## 生成路径",
       "",
       "```text",
-      "DB / PlatformApi effects",
+      "DB / PlatformApi / EpisodeStore effects",
       "        │",
       "        ▼",
-      "ContextCollector ──▶ ContextSnapshot",
+      "ContextCollector ──▶ ContextMaterialization CAS (tiered canary)",
+      "        │                        │ revision + exact raw cursor",
+      "        └────────────────────────▼",
+      "                         ContextSnapshot",
       "                           │",
       "                           ▼",
       "                 ContextPolicy + ContextBudget",
@@ -294,7 +297,7 @@ initialMessages =
   renderContextPlan $
     planContext
       (ContextLimits 32768 4096 4096 4096)
-      (ContextSnapshot promptFixture 1000 2000 LegacyContextHistory)
+      (ContextSnapshot promptFixture 1000 2000 LegacyContextHistory Nothing Nothing)
 
 promptFixture :: PromptInputs
 promptFixture =

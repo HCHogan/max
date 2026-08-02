@@ -22,10 +22,13 @@ cabal run max-prompt-flow -- --check
 ## 生成路径
 
 ```text
-DB / PlatformApi effects
+DB / PlatformApi / EpisodeStore effects
         │
         ▼
-ContextCollector ──▶ ContextSnapshot
+ContextCollector ──▶ ContextMaterialization CAS (tiered canary)
+        │                        │ revision + exact raw cursor
+        └────────────────────────▼
+                         ContextSnapshot
                            │
                            ▼
                  ContextPolicy + ContextBudget

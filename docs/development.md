@@ -40,6 +40,9 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.MCP.ClientSpec` — Streamable-HTTP body decoding (JSON + SSE)
 - `Max.HistorianSpec` / DB counterpart — token-sized episode prefixes, explicit
   identity provenance, structured-call publication, and raw-output retention
+- `Max.ContextMaterializationSpec` (DB) — active-projection validation,
+  optimistic revision publication, append-only versions, and stale-source
+  rejection at the prompt cache-bust boundary
 - `Max.EpisodeStoreSpec` — strict capture schema, evidence validation,
   source-hash/CAS rollback, leases, rebuild/backfill, and proposal isolation
 - `Max.MemoryExtractSpec` — nightly-maintenance op JSON plus quiet-scheduler

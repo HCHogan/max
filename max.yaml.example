@@ -66,9 +66,11 @@ persona: |
 # Canary the tiered history reader per conversation.  A listed group reads a
 # single chronological stream of active P1/P2/P3/P4 compartments followed by
 # every raw message after the last exact compartment cursor; ContextPolicy,
-# not a message count, sizes that live tail.  Empty is the safe default.  Remove
-# an id to roll that conversation back to the legacy reader without deleting
-# raw messages or projections.
+# not a message count, sizes that live tail.  Tier choices and the cursor are
+# durable and change together only at the high/low token boundary (or when a
+# projection is replaced).  Empty is the safe default.  Remove an id to roll
+# that conversation back to the legacy reader without deleting raw messages or
+# projections.
 # unbounded_context_groups: []
 
 # On SIGTERM the bot stops taking new @-triggers and waits this long for

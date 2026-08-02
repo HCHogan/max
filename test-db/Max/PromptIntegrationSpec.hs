@@ -13,7 +13,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime, utc)
 import Database.PostgreSQL.Simple (Only (..))
-import Effectful.PostgreSQL (query)
+import Effectful.PostgreSQL (execute, query)
 import Helpers (insertRawKind, insertRawMessage, truncateAll, updateDbSession, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
@@ -21,7 +21,7 @@ import Max.DB.History (MessageCursor (..))
 import Max.DB.Session (fetchOrInit)
 import Max.Effects.LLM (ChatMessage (..))
 import Max.EpisodeStore
-import Max.ModelCatalog (defaultContextLimits)
+import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.Prompt (ContextHistoryMode (..), TriggerOrigin (..), buildContext, buildContextWithLimitsMode)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
@@ -186,6 +186,65 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("ambient raw tail" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("settled raw one" `T.isInfixOf`))
       moved `shouldBe` Nothing
+      _ <- withDb pool $ execute "UPDATE context_materializations SET source_fingerprint = repeat('0', 64)" ()
+      (fallback, _) <-
+        withDbLog pool $
+          buildContextWithLimitsMode
+            defaultContextLimits
+            TieredContextHistory
+            "default-persona"
+            20
+            80
+            False
+            False
+            OriginDirect
+            utc
+            []
+            []
+            Set.empty
+            s
+            trigger
+      userBodyOf fallback `shouldSatisfy` ("settled raw one" `T.isInfixOf`)
+
+    it "changes the durable prefix once when raw tokens cross the high watermark" $ do
+      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "first settled range"
+      (_firstCompartment, firstEnd) <- publishNextCompartment pool (MessageCursor 0) [1001] "first materialized summary"
+      s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
+      let tightLimits = ContextLimits 8000 512 0 0
+          build =
+            withDbLog pool $
+              buildContextWithLimitsMode
+                tightLimits
+                TieredContextHistory
+                "default-persona"
+                1
+                1
+                False
+                False
+                OriginDirect
+                utc
+                []
+                []
+                Set.empty
+                s
+                trigger
+      _ <- build
+      initial <- withDb pool $ query "SELECT revision, reason, jsonb_array_length(items) FROM context_materializations" ()
+      (initial :: [(Int64, Text, Int)]) `shouldBe` [(1, "initial_canary", 1)]
+
+      let hugeRaw = T.replicate 10000 "unmaterialized "
+      insertRawMessage pool 1002 groupRaw otherMemberRaw botRaw (timeAt 10) (Just "Bob") hugeRaw
+      _ <- publishNextCompartment pool firstEnd [1002] "second materialized summary"
+      (msgs, _) <- build
+      let ub = userBodyOf msgs
+      ub `shouldSatisfy` ("second materialized summary" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . (hugeRaw `T.isInfixOf`))
+      folded <- withDb pool $ query "SELECT revision, reason, jsonb_array_length(items) FROM context_materializations" ()
+      (folded :: [(Int64, Text, Int)]) `shouldBe` [(2, "high_water", 2)]
+
+      _ <- build
+      stable <- withDb pool $ query "SELECT revision, count(*) OVER () FROM context_materialization_versions ORDER BY revision" ()
+      (stable :: [(Int64, Int64)]) `shouldBe` [(1, 2), (2, 2)]
 
     -- Everything the chat saw is in the table; only `kind = 'chat'`
     -- reaches the model.  Load-bearing for !btw in particular: its
@@ -283,3 +342,41 @@ requireJust :: String -> Maybe a -> IO a
 requireJust label = \case
   Just value -> pure value
   Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)
+
+publishNextCompartment :: DbPool -> MessageCursor -> [Int64] -> Text -> IO (CompartmentId, MessageCursor)
+publishNextCompartment pool expected evidence summary = do
+  end <- cursorFor pool (last evidence)
+  let scope = conversationScopeFor (GroupId groupRaw)
+  run <-
+    withDb
+      pool
+      ( enqueueCaptureRun
+          scope
+          expected
+          end
+          CaptureRequest
+            { requestReason = CaptureIdle,
+              requestHistorianProfile = "test",
+              requestPromptVersion = "historian/test",
+              requestSchemaVersion = 1
+            }
+      )
+      >>= requireJust "capture run"
+  lease <- withDb pool (claimCaptureRun "prompt-materialization-test" 60) >>= requireJust "capture lease"
+  source <- withDb pool $ loadCaptureSource run
+  let capture =
+        EpisodeCapture
+          { captureSummaryP1 = CitedSummary summary evidence,
+            captureSummaryP2 = CitedSummary summary evidence,
+            captureSummaryP3 = CitedSummary summary evidence,
+            captureImportance = 0.8,
+            captureConfidence = 1,
+            captureEpisodeKind = Mixed,
+            captureMemoryProposals = []
+          }
+  validated <- case validateEpisodeCapture run source capture of
+    Right value -> pure value
+    Left errors -> expectationFailure (show errors) >> error "invalid capture"
+  _ <- withDb pool $ recordCaptureGenerated lease "raw" capture []
+  compartment <- withDb pool $ publishCaptureRun scope lease validated
+  pure (compartment, end)

@@ -13,7 +13,7 @@ import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
-import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextHistoryMode (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyStickerCaptions, applyVideoCaptions, applyWatermark, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
+import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextHistoryMode (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, applyVideoCaptions, applyWatermark, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -864,10 +864,17 @@ compartmentAt cid ended importance p1 p2 p3 =
     }
 
 snapshot :: PromptInputs -> ContextSnapshot
-snapshot inputs = ContextSnapshot inputs 1000 2000 LegacyContextHistory
+snapshot inputs = ContextSnapshot inputs 1000 2000 LegacyContextHistory Nothing Nothing
 
 tieredSnapshot :: PromptInputs -> ContextSnapshot
-tieredSnapshot inputs = ContextSnapshot inputs 1 1 TieredContextHistory
+tieredSnapshot inputs =
+  ContextSnapshot
+    inputs {compartments = applyBaseCompartmentTiers inputs.now inputs.compartments}
+    1
+    1
+    TieredContextHistory
+    (Just 1)
+    (Just "initial_canary")
 
 generousLimits :: ContextLimits
 generousLimits = ContextLimits 200000 4096 0 0

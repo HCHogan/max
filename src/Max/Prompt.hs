@@ -15,6 +15,7 @@ module Max.Prompt
     ContextPlan (..),
     collectContext,
     planContext,
+    applyBaseCompartmentTiers,
     renderContextPlan,
     renderContext,
     applyWatermark,
@@ -40,7 +41,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Either (partitionEithers)
 import Data.Function (on)
 import Data.Int (Int64)
-import Data.List (groupBy, minimumBy, sortOn, unsnoc)
+import Data.List (find, groupBy, minimumBy, sortOn, unsnoc)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Set (Set)
@@ -62,18 +63,26 @@ import Max.Context
     estimateMessagesTokens,
     estimateTextTokens,
   )
-import Max.ConversationScope (conversationScopeFor)
+import Max.ContextMaterialization
+  ( ContextMaterialization (..),
+    MaterializationDraft (..),
+    MaterializedCompartment (..),
+    loadContextMaterialization,
+    publishContextMaterialization,
+  )
+import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.History
   ( HistoryItem (..),
+    LedgerItem (..),
     bestName,
     fetchForwardChildrenInScope,
     fetchMentionHistory,
     fetchMessageInScope,
     fetchMessagesByIdsInScope,
     fetchRecentInGroup,
-    fetchTranscriptAfter,
+    fetchPromptLedgerAfter,
   )
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
@@ -85,6 +94,7 @@ import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), grou
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
+import Max.Util (trySync)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
@@ -243,7 +253,9 @@ data ContextSnapshot = ContextSnapshot
   { csInputs :: !PromptInputs,
     csLegacyLowWater :: !Int,
     csLegacyHighWater :: !Int,
-    csHistoryMode :: !ContextHistoryMode
+    csHistoryMode :: !ContextHistoryMode,
+    csMaterializationVersion :: !(Maybe Int64),
+    csMaterializationReason :: !(Maybe Text)
   }
 
 -- | Deterministic, fully selected context with its budget and decision trace.
@@ -255,7 +267,14 @@ data ContextPlan = ContextPlan
     cpWithinBudget :: !Bool,
     cpMovedAnchor :: !(Maybe UTCTime),
     cpTrace :: ![ContextTrace],
-    cpPolicyVersion :: !Text
+    cpPolicyVersion :: !Text,
+    cpMaterializationVersion :: !(Maybe Int64),
+    cpMaterializationReason :: !(Maybe Text)
+  }
+
+data HistoryTokenWatermarks = HistoryTokenWatermarks
+  { htwLow :: !Int,
+    htwHigh :: !Int
   }
 
 -- | Assemble the system prompt: the @persona@ (from session override
@@ -456,9 +475,16 @@ buildContextWithLimitsMode ::
   GroupMessage ->
   Eff es ([ChatMessage], Maybe UTCTime)
 buildContextWithLimitsMode limits historyMode defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+  let promptLimit = (contextBudget limits multimodal').cbPromptTokenLimit
+      historyWatermarks =
+        HistoryTokenWatermarks
+          { htwLow = max 512 (promptLimit `div` 5),
+            htwHigh = max 1024 (promptLimit * 2 `div` 5)
+          }
   snapshot <-
     collectContextWithMode
       historyMode
+      (Just historyWatermarks)
       defaultPersona
       lowWater
       highWater
@@ -499,11 +525,12 @@ collectContext ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContext = collectContextWithMode LegacyContextHistory
+collectContext = collectContextWithMode LegacyContextHistory Nothing
 
 collectContextWithMode ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   ContextHistoryMode ->
+  Maybe HistoryTokenWatermarks ->
   Text ->
   Int ->
   Int ->
@@ -517,12 +544,13 @@ collectContextWithMode ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContextWithMode requestedMode defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+collectContextWithMode requestedMode materializationWatermarks defaultPersona lowWater highWater multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
       UserId senderId = gm.userId
       scope = conversationScopeFor gm.groupId
+  now' <- liftIO getCurrentTime
   -- Legacy mode keeps the migration-era two-query lane byte-for-byte.  A
   -- canaried conversation instead reads the newest gap-free compartment
   -- suffix followed by every raw row after its exact end cursor.  There is no
@@ -535,8 +563,8 @@ collectContextWithMode requestedMode defaultPersona lowWater highWater multimoda
           if isPrivateChat gm.groupId
             then pure []
             else fetchMentionHistory gid selfId' mid floor' fetchLimit
-        pure (LegacyContextHistory, [], mergeHistory recent thread)
-  (historyMode, compartments', transcript') <- case requestedMode of
+        pure (LegacyContextHistory, [], mergeHistory recent thread, Nothing, Nothing)
+  (historyMode, compartments', transcript', materializationVersion, materializationReason) <- case requestedMode of
     LegacyContextHistory -> collectLegacyHistory
     TieredContextHistory -> do
       active <- listActiveCompartments scope
@@ -544,21 +572,38 @@ collectContextWithMode requestedMode defaultPersona lowWater highWater multimoda
             Nothing -> active
             Just cleared -> filter ((> cleared) . (.activeStartedAt)) active
           covered = latestGapFreeSuffix visibleAfterClear
-      case reverse covered of
+          watermarks = fromMaybe (HistoryTokenWatermarks 6144 12288) materializationWatermarks
+      case covered of
         [] -> do
           logInfo "context: tiered reader awaiting its first active compartment" $
             object ["group_id" .= gid]
           collectLegacyHistory
-        newest : _ -> do
-          rawTail <- fetchTranscriptAfter scope newest.activeRange.srEnd mid s.clearedAt
+        _ -> do
           when (any (.activeGapBefore) (drop 1 covered)) $
             logAttention "context: invalid gap inside selected compartment suffix" $
               object ["group_id" .= gid]
-          pure
-            ( TieredContextHistory,
-              map contextCompartmentFromActive covered,
-              rawTail
-            )
+          materializeResult <-
+            trySync $
+              materializeTieredHistory
+                scope
+                mid
+                s.clearedAt
+                now'
+                watermarks
+                covered
+          case materializeResult of
+            Left err -> do
+              logAttention "context: tiered materialization failed; using legacy reader" $
+                object ["group_id" .= gid, "error" .= T.pack (show err)]
+              collectLegacyHistory
+            Right (materialized, rawTail) ->
+              pure
+                ( TieredContextHistory,
+                  materializedCompartments covered materialized,
+                  map (.history) rawTail,
+                  Just materialized.cmRevision,
+                  Just materialized.cmReason
+                )
   pinnedItems' <- fetchMessagesByIdsInScope scope s.pinned
   -- Injection is capped to the freshest entries per scope: the block
   -- is in the volatile tail, re-tokenised at full price every
@@ -673,7 +718,6 @@ collectContextWithMode requestedMode defaultPersona lowWater highWater multimoda
                 <> [(mid, "[current message] 里的视频") | expectedVids > 0]
         take maxPromptVideos . concat <$> traverse loadMessageVideos cands
       else pure []
-  now' <- liftIO getCurrentTime
   pure $
     ContextSnapshot
       { csInputs =
@@ -700,7 +744,9 @@ collectContextWithMode requestedMode defaultPersona lowWater highWater multimoda
             },
         csLegacyLowWater = lowWater,
         csLegacyHighWater = highWater,
-        csHistoryMode = historyMode
+        csHistoryMode = historyMode,
+        csMaterializationVersion = materializationVersion,
+        csMaterializationReason = materializationReason
       }
 
 -- | Poll until the image worker has recorded all of the trigger's
@@ -1272,14 +1318,7 @@ planContext limits snapshot =
                   snapshot.csInputs.transcript
            in (snapshot.csInputs {transcript = watermarked}, moved)
         TieredContextHistory ->
-          ( snapshot.csInputs
-              { compartments =
-                  applyBaseCompartmentTiers
-                    snapshot.csInputs.now
-                    snapshot.csInputs.compartments
-              },
-            Nothing
-          )
+          (snapshot.csInputs, Nothing)
       budget = contextBudget limits (not (null initial.images))
       (selected, drops) = fitContextTo budget.cbPromptTokenLimit initial
       messages = renderContext selected
@@ -1291,9 +1330,25 @@ planContext limits snapshot =
           cpEstimatedPromptTokens = estimated,
           cpWithinBudget = withinBudget,
           cpMovedAnchor = movedAnchor,
-          cpTrace = contextTrace budget selected messages drops withinBudget,
-          cpPolicyVersion = "context-policy/v2"
+          cpTrace = materializationTrace snapshot <> contextTrace budget selected messages drops withinBudget,
+          cpPolicyVersion = contextPolicyVersion,
+          cpMaterializationVersion = snapshot.csMaterializationVersion,
+          cpMaterializationReason = snapshot.csMaterializationReason
         }
+
+materializationTrace :: ContextSnapshot -> [ContextTrace]
+materializationTrace snapshot = case snapshot.csMaterializationVersion of
+  Nothing -> []
+  Just revision ->
+    [ ContextTrace
+        "history.materialization"
+        0
+        ContextIncluded
+        ( "revision="
+            <> T.pack (show revision)
+            <> maybe "" (" reason=" <>) snapshot.csMaterializationReason
+        )
+    ]
 
 -- | Stable, LLM-free generational decay.  Wall-clock age is rounded into
 -- coarse thresholds, while episode distance and importance keep recent or
@@ -1608,6 +1663,150 @@ contextCompartmentFromActive active =
       contextSummaryP3 = active.activeSummaryP3,
       contextTier = TierP1
     }
+
+contextPolicyVersion :: Text
+contextPolicyVersion = "context-policy/v2"
+
+materializeTieredHistory ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  Int64 ->
+  Maybe UTCTime ->
+  UTCTime ->
+  HistoryTokenWatermarks ->
+  [ActiveCompartment] ->
+  Eff es (ContextMaterialization, [LedgerItem])
+materializeTieredHistory scope triggerId cleared now' watermarks active = do
+  stored <- loadContextMaterialization scope
+  current <- case stored of
+    Nothing -> publishOrReload Nothing "initial_canary" active
+    Just materialization
+      | not (materializationMatches active materialization) -> do
+          let retained = filter ((<= materialization.cmEndCursor) . (.srEnd) . (.activeRange)) active
+              replacement = if null retained then active else retained
+          publishOrReload (Just materialization.cmRevision) "projection_change" replacement
+      | otherwise -> pure materialization
+  tailRows <- fetchPromptLedgerAfter scope current.cmEndCursor triggerId cleared
+  if rawTailTokens tailRows <= watermarks.htwHigh
+    then pure (current, tailRows)
+    else case targetAtLowWater current tailRows active watermarks.htwLow of
+      Nothing -> pure (current, tailRows)
+      Just target -> do
+        folded <- publishOrReload (Just current.cmRevision) "high_water" target
+        foldedTail <- fetchPromptLedgerAfter scope folded.cmEndCursor triggerId cleared
+        pure (folded, foldedTail)
+  where
+    publishOrReload expected reason target = do
+      let draft = materializationDraft now' watermarks.htwHigh reason target
+      publishContextMaterialization scope expected draft >>= \case
+        Just materialization -> pure materialization
+        Nothing ->
+          loadContextMaterialization scope >>= \case
+            Just winner -> pure winner
+            Nothing -> error "context materialization CAS lost without a stored winner"
+
+materializationMatches :: [ActiveCompartment] -> ContextMaterialization -> Bool
+materializationMatches active materialization =
+  materialization.cmPolicyVersion == contextPolicyVersion
+    && not (null owned)
+    && length owned == length materialization.cmItems
+    && (last owned).activeRange.srEnd == materialization.cmEndCursor
+    && expectedItems == materialization.cmItems
+  where
+    owned = filter ((<= materialization.cmEndCursor) . (.srEnd) . (.activeRange)) active
+    expectedItems =
+      [ MaterializedCompartment
+          compartment.activeCompartmentId
+          compartment.activeMaterializationVersion
+          stored.mcTier
+      | (compartment, stored) <- zip owned materialization.cmItems
+      ]
+
+targetAtLowWater ::
+  ContextMaterialization ->
+  [LedgerItem] ->
+  [ActiveCompartment] ->
+  Int ->
+  Maybe [ActiveCompartment]
+targetAtLowWater current tailRows active lowWater = do
+  let newer = filter ((> current.cmEndCursor) . (.srEnd) . (.activeRange)) active
+  _ <- listToMaybe newer
+  let chosen =
+        fromMaybe
+          (last newer)
+          ( find
+              (\compartment -> rawTailTokens (rowsAfter compartment.activeRange.srEnd) <= lowWater)
+              newer
+          )
+  pure (filter ((<= chosen.activeRange.srEnd) . (.srEnd) . (.activeRange)) active)
+  where
+    rowsAfter cursor = filter ((> cursor) . (.cursor)) tailRows
+
+materializationDraft :: UTCTime -> Int -> Text -> [ActiveCompartment] -> MaterializationDraft
+materializationDraft now' compartmentBudget reason active =
+  MaterializationDraft
+    { mdEndCursor = (last active).activeRange.srEnd,
+      mdPolicyVersion = contextPolicyVersion,
+      mdItems = zipWith toStored active tiered,
+      mdReason = reason
+    }
+  where
+    tiered = fitCompartmentTiers compartmentBudget (applyBaseCompartmentTiers now' (map contextCompartmentFromActive active))
+    toStored source planned =
+      MaterializedCompartment
+        { mcCompartmentId = source.activeCompartmentId,
+          mcProjectionVersion = source.activeMaterializationVersion,
+          mcTier = compartmentTierStorageText planned.contextTier
+        }
+
+fitCompartmentTiers :: Int -> [ContextCompartment] -> [ContextCompartment]
+fitCompartmentTiers tokenLimit = go
+  where
+    go compartments'
+      | sum (map compartmentSelectedTokens compartments') <= tokenLimit = compartments'
+      | otherwise = case filter ((/= TierP4) . (.contextTier)) compartments' of
+          [] -> compartments'
+          candidates ->
+            let selected = minimumBy (compare `on` degradationKey) candidates
+                degraded = selected {contextTier = succ selected.contextTier}
+             in go
+                  [ if compartment.contextCompartmentId == selected.contextCompartmentId
+                      then degraded
+                      else compartment
+                  | compartment <- compartments'
+                  ]
+    degradationKey compartment =
+      ( compartment.contextImportance,
+        compartment.contextEndedAt,
+        compartment.contextMaterializationVersion,
+        compartment.contextCompartmentId
+      )
+
+materializedCompartments :: [ActiveCompartment] -> ContextMaterialization -> [ContextCompartment]
+materializedCompartments active materialization = mapMaybe materialize materialization.cmItems
+  where
+    byId = Map.fromList [(compartment.activeCompartmentId, compartment) | compartment <- active]
+    materialize stored = do
+      source <- Map.lookup stored.mcCompartmentId byId
+      tier <- compartmentTierFromStorageText stored.mcTier
+      pure (contextCompartmentFromActive source) {contextTier = tier}
+
+rawTailTokens :: [LedgerItem] -> Int
+rawTailTokens =
+  sum
+    . map
+      (\entry -> 8 + estimateTextTokens entry.history.renderedText)
+
+compartmentTierStorageText :: CompartmentTier -> Text
+compartmentTierStorageText = T.toLower . compartmentTierText
+
+compartmentTierFromStorageText :: Text -> Maybe CompartmentTier
+compartmentTierFromStorageText = \case
+  "p1" -> Just TierP1
+  "p2" -> Just TierP2
+  "p3" -> Just TierP3
+  "p4" -> Just TierP4
+  _ -> Nothing
 
 -- | Drop the messages another turn is already answering.
 --

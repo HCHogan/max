@@ -28,6 +28,7 @@ import Max.DB.MessageSpec qualified as MessageSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.ReminderSpec qualified as ReminderSpec
 import Max.DB.SessionSpec qualified as SessionSpec
+import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.HistorianMigrationSpec qualified as HistorianMigrationSpec
 import Max.HistorianSpec qualified as HistorianSpec
@@ -56,6 +57,7 @@ main = do
         MemoryStoreMigrationSpec.spec pool
         SessionSpec.spec pool
         ConversationCursorSpec.spec pool
+        ContextMaterializationSpec.spec pool
         EpisodeStoreSpec.spec pool
         HistorianMigrationSpec.spec pool
         HistorianSpec.spec pool

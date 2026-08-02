@@ -5,6 +5,7 @@ module Max.DB.History
     HistoryPage (..),
     bestName,
     fetchRecentInGroup,
+    fetchPromptLedgerAfter,
     fetchTranscriptAfter,
     fetchOldestPageAfter,
     pageEndCursor,
@@ -155,10 +156,23 @@ fetchTranscriptAfter ::
   Maybe UTCTime ->
   Eff es [HistoryItem]
 fetchTranscriptAfter scope (MessageCursor after) excludeId since =
+  map (.history) <$> fetchPromptLedgerAfter scope (MessageCursor after) excludeId since
+
+-- | Cursor-bearing form of 'fetchTranscriptAfter', used to decide exactly
+-- which precomputed compartments can replace enough raw tokens at a high-water
+-- materialization boundary.
+fetchPromptLedgerAfter ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  MessageCursor ->
+  Int64 ->
+  Maybe UTCTime ->
+  Eff es [LedgerItem]
+fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
   case since of
     Nothing ->
       query
-        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
+        "SELECT ingest_seq, message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
         \  FROM messages \
         \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
         \    AND forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat' \
@@ -166,7 +180,7 @@ fetchTranscriptAfter scope (MessageCursor after) excludeId since =
         (conversationStorageId scope, after, excludeId)
     Just cleared ->
       query
-        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
+        "SELECT ingest_seq, message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
         \  FROM messages \
         \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
         \    AND forwarded_in_message_id IS NULL AND NOT is_synthetic AND kind = 'chat' \
