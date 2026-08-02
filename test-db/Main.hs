@@ -17,6 +17,7 @@ module Main (main) where
 import Control.Exception (bracket)
 import Data.Text qualified as T
 import Helpers (truncateAll)
+import Max.ContextAdminSpec qualified as ContextAdminSpec
 import Max.ContextMaterializationMigrationSpec qualified as ContextMaterializationMigrationSpec
 import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
@@ -63,6 +64,7 @@ main = do
         ConversationCursorSpec.spec pool
         ContextMaterializationMigrationSpec.spec pool
         ContextMaterializationSpec.spec pool
+        ContextAdminSpec.spec pool
         EpisodeStoreSpec.spec pool
         HistorianMigrationSpec.spec pool
         HistorianSpec.spec pool

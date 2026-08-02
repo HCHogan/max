@@ -12,6 +12,7 @@ function admin() {
     tabs: [
       { id: 'overview', name: '概览' },
       { id: 'groups', name: '群设置' },
+      { id: 'context', name: '上下文' },
       { id: 'memories', name: '记忆' },
       { id: 'perms', name: '权限' },
       { id: 'tasks', name: '任务' },
@@ -30,6 +31,20 @@ function admin() {
     memories: [],
     perms: [],
     tasks: [],
+    ctx: {
+      group: '',
+      loaded: false,
+      status: { summary: {}, conversations: [], maintenance_leases: [], capture_workers: [] },
+      captures: [],
+      compartments: [],
+      plans: [],
+      embeddings: { corpora: [] },
+      integrity: null,
+      recallQuery: '',
+      recall: null,
+      memoryId: '',
+      memory: null,
+    },
     // Column headings double as the per-field labels the mobile card
     // layout puts in front of each value.
     fieldLabel: { debug: 'debug', sticker: '表情', proactive: '主动说话' },
@@ -125,6 +140,7 @@ function admin() {
       const fn = {
         overview: () => this.loadCharts(),
         groups: () => this.loadGroups(),
+        context: () => this.loadContext(),
         memories: () => (this.mem.id ? this.loadMemories() : null),
         perms: () => this.loadPerms(),
         tasks: () => this.loadTasks(),
@@ -158,6 +174,64 @@ function admin() {
 
     async loadTasks() {
       this.tasks = await this.api('/tasks');
+    },
+
+    // ── unbounded context / memory operations ───────────────────
+
+    contextQuery(extra = {}) {
+      const p = new URLSearchParams(extra);
+      if (this.ctx.group) p.set('group', this.ctx.group);
+      const query = p.toString();
+      return query ? '?' + query : '';
+    },
+
+    async loadContext() {
+      const suffix = this.contextQuery();
+      const [status, captures, compartments, plans, embeddings, integrity] = await Promise.all([
+        this.api('/context/status' + suffix),
+        this.api('/context/captures' + this.contextQuery({ limit: '100' })),
+        this.api('/context/compartments' + this.contextQuery({ limit: '100' })),
+        this.api('/context/plans' + this.contextQuery({ limit: '50' })),
+        this.api('/context/embeddings' + suffix),
+        this.api('/context/integrity' + suffix),
+      ]);
+      Object.assign(this.ctx, { status, captures, compartments, plans, embeddings, integrity, loaded: true });
+    },
+
+    async contextRecall() {
+      if (!this.ctx.group || !this.ctx.recallQuery.trim()) return;
+      this.ctx.recall = await this.api(
+        '/context/recall' + this.contextQuery({ q: this.ctx.recallQuery.trim(), limit: '10' })
+      );
+    },
+
+    async contextMemory() {
+      if (!this.ctx.memoryId) return;
+      this.ctx.memory = await this.api('/context/memories/' + encodeURIComponent(this.ctx.memoryId));
+    },
+
+    async contextRebuild(compartmentId = null) {
+      if (!this.ctx.group) return;
+      const what = compartmentId == null ? '这个会话的全部 active compartments' : 'compartment #' + compartmentId;
+      if (!confirm('重新构建 ' + what + '?\n\n旧版本会继续服务，直到新版本完整发布。')) return;
+      await this.api('/context/rebuild', {
+        method: 'POST',
+        body: JSON.stringify({
+          conversation_id: Number(this.ctx.group),
+          compartment_id: compartmentId,
+        }),
+      });
+      await this.loadContext();
+    },
+
+    async contextReindex(corpora) {
+      if (!this.ctx.group) return;
+      if (!confirm('清空这个会话的 ' + corpora.join(', ') + ' vectors 并交给 embedding worker 重建?')) return;
+      await this.api('/context/reindex', {
+        method: 'POST',
+        body: JSON.stringify({ conversation_id: Number(this.ctx.group), corpora }),
+      });
+      await this.loadContext();
     },
 
     // ── llm calls ─────────────────────────────────────────────────

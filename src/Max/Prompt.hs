@@ -70,6 +70,7 @@ import Max.ContextMaterialization
     loadContextMaterialization,
     publishContextMaterialization,
   )
+import Max.ContextTraceStore (recordContextPlanTrace)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
@@ -500,6 +501,26 @@ buildContextWithLimitsMode limits historyMode defaultPersona lowWater highWater 
       s
       gm
   let plan = planContext limits snapshot
+      MessageId triggerMessageId = gm.messageId
+      scope = conversationScopeFor gm.groupId
+  traceStored <-
+    trySync $
+      recordContextPlanTrace
+        scope
+        triggerMessageId
+        (historyModeText snapshot.csHistoryMode)
+        plan.cpPolicyVersion
+        plan.cpMaterializationVersion
+        plan.cpMaterializationReason
+        plan.cpBudget
+        plan.cpEstimatedPromptTokens
+        plan.cpWithinBudget
+        plan.cpTrace
+  case traceStored of
+    Left err ->
+      logAttention "context: failed to persist planning trace" $
+        object ["group_id" .= (let GroupId groupId = gm.groupId in groupId), "error" .= T.pack (show err)]
+    Right () -> pure ()
   when (not plan.cpWithinBudget) $
     logAttention "context plan exceeds model input budget" $
       object
@@ -508,6 +529,11 @@ buildContextWithLimitsMode limits historyMode defaultPersona lowWater highWater 
           "policy_version" .= plan.cpPolicyVersion
         ]
   pure (renderContextPlan plan, plan.cpMovedAnchor)
+
+historyModeText :: ContextHistoryMode -> Text
+historyModeText = \case
+  LegacyContextHistory -> "legacy"
+  TieredContextHistory -> "tiered"
 
 -- | Effectful I/O only: fetch and enrich a complete snapshot.  Selection,
 -- token pressure, and legacy watermark compatibility happen later in the pure

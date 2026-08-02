@@ -127,6 +127,31 @@ The evaluator counts a bounded schema-repair call in both latency and
 per-capture token totals. Passing recall fixtures never enables auto-hints;
 production injection remains disconnected until a separate product decision.
 
+### Context operations console
+
+The authenticated admin panel's `上下文` tab exposes the release and incident
+diagnostics for the new lifecycle. All endpoints accept an optional `group`
+query filter where relevant:
+
+```text
+GET  /api/context/status
+GET  /api/context/captures
+GET  /api/context/compartments
+GET  /api/context/plans
+GET  /api/context/embeddings
+GET  /api/context/recall?group=...&q=...
+GET  /api/context/memories/:id
+GET  /api/context/integrity
+POST /api/context/rebuild
+POST /api/context/reindex
+```
+
+Prompt traces retain only budget decisions and source names, never a second
+copy of the prompt body, and are capped at 200 per conversation. Rebuild is
+staged and CAS-published; repeated clicks cannot enqueue two open replacements
+for the same compartment. Reindex is a recoverable derived-data operation and
+returns `409` while the embedding worker owns its maintenance lease.
+
 ## Config: finding out where a value came from
 
 Settings are layered CLI > env > YAML > default, and the env layer is the one

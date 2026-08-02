@@ -12,8 +12,8 @@ import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
 import Helpers (insertRawKind, insertRawMessage, truncateAll, withDb)
-import Max.ConversationScope (ConversationScope, conversationScopeFor, currentConversationRecall)
 import Max.ContextMaterialization
+import Max.ConversationScope (ConversationScope, conversationScopeFor, currentConversationRecall)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
@@ -227,6 +227,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     rebuildRun <-
       withDb pool (enqueueRebuildRun scopeA old "manual-rebuild-1" (request CaptureRebuild))
         >>= requireJust "rebuild run"
+    withDb pool (enqueueRebuildRun scopeA old "manual-rebuild-duplicate" (request CaptureRebuild))
+      `shouldReturn` Nothing
     rebuildLease <- withDb pool (claimCaptureRun "rebuild-worker" 60) >>= requireJust "rebuild lease"
     rebuildLease.leaseRun.crId `shouldBe` rebuildRun.crId
     map (.activeCompartmentId) <$> withDb pool (listActiveCompartments scopeA)

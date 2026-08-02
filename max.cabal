@@ -75,8 +75,10 @@ library
         Max.Command.Types
         Max.CliProxy
         Max.Config
+        Max.ContextAdmin
         Max.ContextMaterialization
         Max.Context
+        Max.ContextTraceStore
         Max.ConversationScope
         Max.MCP.Client
         Max.DB.Calls
@@ -372,6 +374,7 @@ test-suite max-test-db
         Max.DB.SessionSpec
         Max.ContextMaterializationMigrationSpec
         Max.ContextMaterializationSpec
+        Max.ContextAdminSpec
         Max.EpisodeStoreSpec
         Max.HistorianMigrationSpec
         Max.HistorianSpec

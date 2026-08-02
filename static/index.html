@@ -100,6 +100,167 @@
       <p class="empty" x-show="!groups.length">还没有群。bot 在群里说过话之后才会有记录。</p>
     </section>
 
+    <!-- ── unbounded context operations ────────────────────────── -->
+    <section x-show="tab === 'context'">
+      <form class="row" @submit.prevent="loadContext()">
+        <input x-model="ctx.group" placeholder="群号 / 私聊 pseudo-group（留空=全部）" inputmode="numeric">
+        <button type="submit">刷新</button>
+        <button type="button" :disabled="!ctx.group" @click="contextRebuild()">完整 rebuild</button>
+        <button type="button" :disabled="!ctx.group" @click="contextReindex(['memory'])">memory reindex</button>
+        <button type="button" :disabled="!ctx.group" @click="contextReindex(['message','memory','episode'])">全部 reindex</button>
+      </form>
+
+      <p class="empty" x-show="ctx.status.historian_profile">
+        historian=<code x-text="ctx.status.historian_profile"></code>
+        · reader=<code x-text="ctx.status.reader_mode"></code>
+        · integrity=<code :class="ctx.integrity && ctx.integrity.ok ? 'ok' : 'bad'"
+                          x-text="ctx.integrity && ctx.integrity.ok ? 'ok' : 'issues'"></code>
+      </p>
+
+      <h2>coverage / doctor</h2>
+      <table x-show="ctx.status.conversations.length">
+        <thead><tr>
+          <th>会话</th><th>消息</th><th>cursor</th><th>compartments</th><th>raw tail</th><th>未覆盖 settled</th><th>materialization</th><th>状态</th>
+        </tr></thead>
+        <tbody>
+          <template x-for="c in ctx.status.conversations" :key="c.conversation_id">
+            <tr>
+              <td class="rowkey" data-label="会话"><span class="id" x-text="gname(c.conversation_id)"></span></td>
+              <td data-label="消息" x-text="c.message_count"></td>
+              <td data-label="cursor"><span class="id" x-text="c.historian_cursor == null ? '—' : c.historian_cursor"></span></td>
+              <td data-label="compartments" x-text="c.active_compartments"></td>
+              <td data-label="raw tail" x-text="c.live_tail_messages"></td>
+              <td data-label="未覆盖 settled" x-text="c.uncovered_settled_messages"></td>
+              <td data-label="materialization">
+                <span class="id" x-text="c.materialization.revision == null ? '—' : 'r' + c.materialization.revision"></span>
+                <span class="muted" x-text="c.materialization.reason || ''"></span>
+              </td>
+              <td data-label="状态">
+                <span class="verdict" :class="{ deny: c.issues.length }"
+                      x-text="c.issues.length ? c.issues.join('；') : 'ok'"></span>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+      <p class="empty" x-show="ctx.loaded && !ctx.status.conversations.length">没有 context 数据。</p>
+
+      <h2>embedding backlog</h2>
+      <table x-show="ctx.embeddings.corpora && ctx.embeddings.corpora.length">
+        <thead><tr><th>corpus</th><th>total</th><th>ready</th><th>pending</th><th>stale hash</th><th>spaces</th></tr></thead>
+        <tbody>
+          <template x-for="e in ctx.embeddings.corpora" :key="e.corpus">
+            <tr>
+              <td class="rowkey" data-label="corpus" x-text="e.corpus"></td>
+              <td data-label="total" x-text="e.total"></td>
+              <td data-label="ready" x-text="e.ready"></td>
+              <td data-label="pending" x-text="e.pending"></td>
+              <td data-label="stale hash" x-text="e.stale_content_hash"></td>
+              <td class="wide" data-label="spaces" x-text="e.stored_spaces || ''"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+
+      <h2>capture runs / leases / validation</h2>
+      <table x-show="ctx.captures.length">
+        <thead><tr><th>run</th><th>会话</th><th>range</th><th>状态</th><th>attempt</th><th>worker / retry</th><th>错误</th></tr></thead>
+        <tbody>
+          <template x-for="r in ctx.captures" :key="r.id">
+            <tr>
+              <td class="rowkey" data-label="run"><span class="id" x-text="r.id"></span></td>
+              <td data-label="会话"><span class="id" x-text="gname(r.conversation_id)"></span></td>
+              <td data-label="range"><span class="id" x-text="r.start_ingest_seq + '..' + r.end_ingest_seq"></span></td>
+              <td data-label="状态"><span class="verdict" :class="{ deny: r.status === 'failed' || r.status === 'abandoned' }" x-text="r.status + ' / ' + r.reason"></span></td>
+              <td data-label="attempt" x-text="r.attempt"></td>
+              <td class="stamp" data-label="worker / retry" x-text="r.lease_owner || fmtDate(r.next_retry_at)"></td>
+              <td class="wide" data-label="错误" x-text="r.last_error || (r.validation_errors.length ? pretty(r.validation_errors) : '')"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+
+      <h2>compartments</h2>
+      <table x-show="ctx.compartments.length">
+        <thead><tr><th>id</th><th>range</th><th>state</th><th>kind</th><th>importance</th><th>projection</th><th>evidence</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="c in ctx.compartments" :key="c.id">
+            <tr>
+              <td class="rowkey" data-label="id"><span class="id" x-text="c.id"></span></td>
+              <td data-label="range"><span class="id" x-text="c.start_ingest_seq + '..' + c.end_ingest_seq"></span></td>
+              <td data-label="state" x-text="c.state"></td>
+              <td data-label="kind" x-text="c.episode_kind"></td>
+              <td data-label="importance" x-text="c.importance.toFixed(2)"></td>
+              <td data-label="projection" x-text="'v' + c.materialization_version"></td>
+              <td data-label="evidence" x-text="c.evidence_links"></td>
+              <td class="act"><button x-show="c.state === 'active'" @click="contextRebuild(c.id)">rebuild</button></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+
+      <h2>prompt token / tier decisions</h2>
+      <div class="logs" x-show="ctx.plans.length">
+        <template x-for="p in ctx.plans" :key="p.id">
+          <details class="trace">
+            <summary>
+              <span class="id" x-text="gname(p.conversation_id) + ' #' + p.trigger_message_id"></span>
+              <span x-text="p.estimated_prompt_tokens + '/' + p.prompt_token_limit + ' tokens'"></span>
+              <span x-text="p.history_mode + (p.materialization_reason ? ' · ' + p.materialization_reason : '')"></span>
+              <span class="stamp" x-text="fmtDate(p.created_at)"></span>
+            </summary>
+            <table>
+              <thead><tr><th>source</th><th>tokens</th><th>decision</th><th>reason</th></tr></thead>
+              <tbody>
+                <template x-for="(d, i) in p.decisions" :key="i">
+                  <tr><td x-text="d.source"></td><td x-text="d.estimated_tokens"></td><td x-text="d.decision"></td><td class="wide" x-text="d.reason"></td></tr>
+                </template>
+              </tbody>
+            </table>
+          </details>
+        </template>
+      </div>
+
+      <h2>retrieval trace</h2>
+      <form class="row" @submit.prevent="contextRecall()">
+        <input class="search" x-model="ctx.recallQuery" placeholder="诊断 query（必须先填会话）">
+        <button type="submit" :disabled="!ctx.group">搜索</button>
+      </form>
+      <template x-if="ctx.recall">
+        <div>
+          <p class="empty">
+            lexical=<code x-text="ctx.recall.lexical_candidates"></code>
+            semantic=<code x-text="ctx.recall.semantic_candidates"></code>
+            merged=<code x-text="ctx.recall.merged_candidates"></code>
+            <span x-show="ctx.recall.embedding_error" x-text="' · embedding: ' + ctx.recall.embedding_error"></span>
+          </p>
+          <table>
+            <thead><tr><th>source</th><th>score</th><th>lexical</th><th>semantic</th><th>decision</th><th>snippet</th></tr></thead>
+            <tbody>
+              <template x-for="(c, i) in ctx.recall.candidates" :key="i">
+                <tr>
+                  <td x-text="c.source"></td><td x-text="c.final_score.toFixed(3)"></td>
+                  <td x-text="c.lexical_score == null ? '—' : c.lexical_score.toFixed(3)"></td>
+                  <td x-text="c.semantic_score == null ? '—' : c.semantic_score.toFixed(3)"></td>
+                  <td x-text="c.decision"></td><td class="wide" x-text="c.snippet"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </template>
+
+      <h2>memory provenance / lifecycle</h2>
+      <form class="row" @submit.prevent="contextMemory()">
+        <input x-model="ctx.memoryId" placeholder="memory id" inputmode="numeric">
+        <button type="submit">读取</button>
+      </form>
+      <details class="trace" x-show="ctx.memory" open>
+        <summary x-text="ctx.memory ? 'memory #' + ctx.memory.current.id + ' @v' + ctx.memory.current.version : ''"></summary>
+        <pre x-text="ctx.memory ? pretty(ctx.memory) : ''"></pre>
+      </details>
+    </section>
+
     <!-- ── memories ─────────────────────────────────────────────── -->
     <section x-show="tab === 'memories'">
       <form class="row" @submit.prevent="loadMemories()">

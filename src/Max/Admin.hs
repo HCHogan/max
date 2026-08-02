@@ -37,12 +37,14 @@ import Data.Aeson (Value (..))
 import Data.Aeson qualified as A
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Types (Pair)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.FileEmbed (embedDir)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Ord (clamp)
+import Data.Set qualified as Set
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -56,14 +58,27 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.BuildInfo (gitRev)
 import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
 import Max.Command.Parser (effortLevels)
-import Max.ConversationScope (conversationScopeFor)
+import Max.ContextAdmin
+  ( enqueueContextRebuildAdmin,
+    fetchMemoryHistoryAdmin,
+    invalidateEmbeddingsAdmin,
+    listCaptureRunsAdmin,
+    listCompartmentsAdmin,
+    listPlanTracesAdmin,
+    loadContextStatus,
+    loadEmbeddingStatus,
+    runContextIntegrityCheck,
+  )
+import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
 import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
-import Max.DB.History (messageStatsDaily)
+import Max.DB.History (MessageCursor (..), messageStatsDaily)
 import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGrants)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
 import Max.Effects.Http (Http)
+import Max.Embedding (EmbeddingRecord, embedTexts, embeddingModelId, makeEmbeddingRecord)
 import Max.Env (BotEnv (..))
+import Max.EpisodeStore (CaptureRun (..), CompartmentId (..), SourceRange (..), episodeHandleText)
 import Max.Log (parseLogLevel, renderLogLevel)
 import Max.LogBuffer (LogBuffer, LogEntry (..), LogQuery (..), queryLogs)
 import Max.LogBuffer qualified as LogBuffer
@@ -80,11 +95,18 @@ import Max.MemoryStore
     listMemories,
     listUserMemoriesEverywhereAdmin,
   )
+import Max.Recall
+  ( RecallCandidate (..),
+    RecallHit (..),
+    RecallTrace (..),
+    RecallTraceCandidate (..),
+    searchRecallTrace,
+  )
 import Max.Session (Session (..), loadSession, updateSession)
 import Max.Skills (NewSkill (..), Skill (..), createSkill, deleteSkill, listAllSkills, updateSkill)
 import Max.Tasks (TaskId (..), TaskInfo (..), cancelTask, listTasks)
 import Max.Util (trySync)
-import Network.HTTP.Types (Method, Status, hAuthorization, hCacheControl, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status500, status502)
+import Network.HTTP.Types (Method, Status, hAuthorization, hCacheControl, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status409, status500, status502)
 import Network.Wai (Response, pathInfo, queryString, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp qualified as Warp
 import OneBot.Types (GroupId (..), UserId (..))
@@ -131,6 +153,16 @@ data Route
   | RLogs
   | RCalls
   | RCallDetail !Int64
+  | RContextStatus
+  | RContextCaptures
+  | RContextCompartments
+  | RContextPlans
+  | RContextMemory !Int64
+  | RContextEmbeddings
+  | RContextRecall
+  | RContextIntegrity
+  | RContextRebuild
+  | RContextReindex
   | -- | A baked-in static asset (the panel itself).  Carries the
     -- asset's own path so the handler can look it up; @\/@ is the
     -- index.  Unauthenticated — see 'needsAuth'.
@@ -153,6 +185,14 @@ route m path
       ["api", "logs"] -> Just RLogs
       ["api", "calls"] -> Just RCalls
       ["api", "calls", i] -> RCallDetail <$> int i
+      ["api", "context", "status"] -> Just RContextStatus
+      ["api", "context", "captures"] -> Just RContextCaptures
+      ["api", "context", "compartments"] -> Just RContextCompartments
+      ["api", "context", "plans"] -> Just RContextPlans
+      ["api", "context", "memories", i] -> RContextMemory <$> int i
+      ["api", "context", "embeddings"] -> Just RContextEmbeddings
+      ["api", "context", "recall"] -> Just RContextRecall
+      ["api", "context", "integrity"] -> Just RContextIntegrity
       [] -> Just (RStatic ["index.html"])
       [""] -> Just (RStatic ["index.html"])
       ("static" : rest)
@@ -177,6 +217,8 @@ route m path
   | m == methodPost = case path of
       ["api", "permissions"] -> Just RGrantCreate
       ["api", "skills"] -> Just RSkillCreate
+      ["api", "context", "rebuild"] -> Just RContextRebuild
+      ["api", "context", "reindex"] -> Just RContextReindex
       _ -> Nothing
   | otherwise = Nothing
   where
@@ -514,6 +556,96 @@ handle env profiles logBuf r params body = case r of
             Object o ->
               Object (o <> KM.fromList ["request" .= d.cdRequest, "response" .= d.cdResponse])
             v -> v
+  RContextStatus -> do
+    status <- loadContextStatus (intParam "group")
+    pure . ok $
+      case status of
+        Object fields ->
+          Object $
+            fields
+              <> KM.fromList
+                [ "historian_profile" .= env.beMemoryExtract,
+                  "reader_mode"
+                    .= ( if null env.beUnboundedContextGroups
+                           then ("legacy-only" :: Text)
+                           else "development-allowlist"
+                       ),
+                  "tiered_conversations" .= env.beUnboundedContextGroups,
+                  "legacy_extractor_running" .= False
+                ]
+        value -> value
+  RContextCaptures -> do
+    rows <- listCaptureRunsAdmin (intParam "group") (clamp (1, 500) (fromMaybe 100 (intParam "limit")))
+    pure (ok rows)
+  RContextCompartments -> do
+    rows <- listCompartmentsAdmin (intParam "group") (clamp (1, 500) (fromMaybe 100 (intParam "limit")))
+    pure (ok rows)
+  RContextPlans -> do
+    rows <- listPlanTracesAdmin (intParam "group") (clamp (1, 200) (fromMaybe 50 (intParam "limit")))
+    pure (ok rows)
+  RContextMemory mid ->
+    fetchMemoryHistoryAdmin (MemoryId mid) >>= \case
+      Nothing -> pure notFound
+      Just detail -> pure (ok detail)
+  RContextEmbeddings -> case env.beEmbed of
+    Nothing -> do
+      status <- loadEmbeddingStatus "(disabled)" (intParam "group")
+      pure . ok $ addObjectFields ["configured" .= False] status
+    Just client -> do
+      status <- loadEmbeddingStatus (embeddingModelId client) (intParam "group")
+      pure . ok $ addObjectFields ["configured" .= True] status
+  RContextRecall -> case (intParam "group", nonBlank =<< lookup "q" params) of
+    (Just groupId, Just recallQuery) -> do
+      (embedding, embeddingError) <- recallEmbedding env recallQuery
+      trace <-
+        searchRecallTrace
+          (currentConversationRecall (conversationScopeFor (GroupId groupId)))
+          (Set.fromList [minBound .. maxBound])
+          recallQuery
+          embedding
+          (clamp (1, 30) (fromMaybe 10 (intParam "limit")))
+      pure . ok $ addObjectFields ["embedding_error" .= embeddingError] (recallTraceJson trace)
+    _ -> pure (bad "expected ?group=<conversation>&q=<query>")
+  RContextIntegrity -> ok <$> runContextIntegrityCheck (intParam "group")
+  RContextRebuild ->
+    case A.eitherDecode body :: Either String PostContextRebuild of
+      Left err -> pure (bad ("invalid json: " <> T.pack err))
+      Right request -> case env.beMemoryExtract of
+        Nothing -> pure (bad "Historian is disabled; configure memory.extract_profile first")
+        Just profile -> do
+          now <- liftIO getCurrentTime
+          runs <-
+            enqueueContextRebuildAdmin
+              request.pcrConversationId
+              (CompartmentId <$> request.pcrCompartmentId)
+              profile
+              ("admin:" <> T.pack (show now))
+          if null runs
+            then pure notFound
+            else
+              pure . ok $
+                object
+                  [ "enqueued"
+                      .= [ object
+                             [ "capture_run_id" .= run.crId,
+                               "conversation_id" .= run.crConversationId,
+                               "start_ingest_seq" .= run.crRange.srStart.ingestSeq,
+                               "end_ingest_seq" .= run.crRange.srEnd.ingestSeq,
+                               "replaces_compartment_id" .= run.crReplacesCompartment
+                             ]
+                         | run <- runs
+                         ]
+                  ]
+  RContextReindex ->
+    case A.eitherDecode body :: Either String PostContextReindex of
+      Left err -> pure (bad ("invalid json: " <> T.pack err))
+      Right request
+        | any (`notElem` ["message", "memory", "episode"]) request.pciCorpora ->
+            pure (bad "corpora must contain only message, memory, or episode")
+        | otherwise ->
+            invalidateEmbeddingsAdmin request.pciConversationId request.pciCorpora >>= \case
+              Left err -> pure (jsonResponse status409 (object ["error" .= err]))
+              Right result -> pure (ok result)
   -- Answered by 'staticResponse' before the effectful handler is
   -- entered (it needs no database and no unlift); listed so the match
   -- stays total if that ever changes.
@@ -531,6 +663,83 @@ handle env profiles logBuf r params body = case r of
       case TR.signed TR.decimal v of
         Right (n, "") -> Just n
         _ -> Nothing
+
+addObjectFields :: [Pair] -> Value -> Value
+addObjectFields fields = \case
+  Object objectValue -> Object (objectValue <> KM.fromList fields)
+  value -> value
+
+recallEmbedding :: (IOE :> es) => BotEnv -> Text -> Eff es (Maybe EmbeddingRecord, Maybe Text)
+recallEmbedding env recallQuery = case env.beEmbed of
+  Nothing -> pure (Nothing, Just "embedding is not configured; trace is lexical-only")
+  Just client ->
+    liftIO (embedTexts client [recallQuery]) >>= \case
+      Left err -> pure (Nothing, Just err)
+      Right [vector] -> case makeEmbeddingRecord client recallQuery vector of
+        Left err -> pure (Nothing, Just err)
+        Right record -> pure (Just record, Nothing)
+      Right _ -> pure (Nothing, Just "embedding provider returned an unexpected result count")
+
+recallTraceJson :: RecallTrace -> Value
+recallTraceJson trace =
+  object
+    [ "conversation_id" .= trace.rtConversationId,
+      "query" .= trace.rtQuery,
+      "requested_corpora" .= trace.rtRequestedCorpora,
+      "policy_filter" .= ("current conversation visibility applied in SQL before candidate ranking" :: Text),
+      "result_limit" .= trace.rtResultLimit,
+      "lexical_candidates" .= trace.rtLexicalCandidates,
+      "semantic_candidates" .= trace.rtSemanticCandidates,
+      "corpus_filtered_candidates" .= trace.rtCorpusFilteredCandidates,
+      "merged_candidates" .= trace.rtMergedCandidates,
+      "source_quotas" .= object [Key.fromText source .= quota | (source, quota) <- trace.rtSourceQuotas],
+      "candidates" .= map recallTraceCandidateJson trace.rtCandidates,
+      "selected" .= map recallHitJson trace.rtSelected
+    ]
+
+recallTraceCandidateJson :: RecallTraceCandidate -> Value
+recallTraceCandidateJson traced =
+  addObjectFields
+    [ "final_score" .= traced.rtcScore,
+      "decision" .= traced.rtcDecision
+    ]
+    (recallCandidateJson traced.rtcCandidate)
+
+recallCandidateJson :: RecallCandidate -> Value
+recallCandidateJson candidate =
+  object
+    [ "source" .= candidate.rcSource,
+      "dedup_key" .= candidate.rcDedupKey,
+      "snippet" .= candidate.rcSnippet,
+      "occurred_at" .= candidate.rcOccurredAt,
+      "principal_id" .= candidate.rcPrincipalId,
+      "message_id" .= candidate.rcMessageId,
+      "episode_handle" .= fmap episodeHandleText candidate.rcEpisodeHandle,
+      "memory_id" .= candidate.rcMemoryId,
+      "importance" .= candidate.rcImportance,
+      "lexical_score" .= candidate.rcLexicalScore,
+      "semantic_score" .= candidate.rcSemanticScore,
+      "pinned" .= candidate.rcPinned,
+      "permanent" .= candidate.rcPermanent
+    ]
+
+recallHitJson :: RecallHit -> Value
+recallHitJson hit =
+  object
+    [ "source" .= hit.rhSource,
+      "dedup_key" .= hit.rhDedupKey,
+      "snippet" .= hit.rhSnippet,
+      "occurred_at" .= hit.rhOccurredAt,
+      "principal_id" .= hit.rhPrincipalId,
+      "message_id" .= hit.rhMessageId,
+      "episode_handle" .= fmap episodeHandleText hit.rhEpisodeHandle,
+      "memory_id" .= hit.rhMemoryId,
+      "score" .= hit.rhScore,
+      "lexical_score" .= hit.rhLexicalScore,
+      "semantic_score" .= hit.rhSemanticScore,
+      "pinned" .= hit.rhPinned,
+      "permanent" .= hit.rhPermanent
+    ]
 
 -- | Apply a session PATCH through the registry, never the DB alone —
 -- the running process trusts its in-memory copy.  Field semantics:
@@ -750,3 +959,25 @@ instance A.FromJSON PostGrant where
       <*> o A..: "capability"
       <*> o A..:? "scope_group_id"
       <*> (fromMaybe False <$> o A..:? "deny")
+
+data PostContextRebuild = PostContextRebuild
+  { pcrConversationId :: !Int64,
+    pcrCompartmentId :: !(Maybe Int64)
+  }
+
+instance A.FromJSON PostContextRebuild where
+  parseJSON = A.withObject "context rebuild" $ \o ->
+    PostContextRebuild
+      <$> o A..: "conversation_id"
+      <*> o A..:? "compartment_id"
+
+data PostContextReindex = PostContextReindex
+  { pciConversationId :: !Int64,
+    pciCorpora :: ![Text]
+  }
+
+instance A.FromJSON PostContextReindex where
+  parseJSON = A.withObject "context reindex" $ \o ->
+    PostContextReindex
+      <$> o A..: "conversation_id"
+      <*> (fromMaybe ["memory"] <$> o A..:? "corpora")

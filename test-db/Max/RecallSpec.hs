@@ -80,6 +80,34 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
     foreignMemoryHits <- withDb pool $ searchRecallIn policyB (Set.singleton RecallMemories) "tea" Nothing 30
     foreignMemoryHits `shouldBe` []
 
+  it "explains candidates, scores, quotas, and final selection without tracing foreign rows" $ do
+    seedRecallFixture pool
+    trace <-
+      withDb pool $
+        searchRecallTrace
+          (currentConversationRecall scopeA)
+          (Set.fromList [minBound .. maxBound])
+          "tea"
+          Nothing
+          5
+    trace.rtConversationId `shouldBe` groupA
+    trace.rtLexicalCandidates `shouldSatisfy` (> 0)
+    trace.rtSemanticCandidates `shouldBe` 0
+    trace.rtSourceQuotas `shouldSatisfy` (not . null)
+    trace.rtCandidates `shouldSatisfy` any ((== "selected") . (.rtcDecision))
+    length trace.rtSelected `shouldBe` 5
+
+    foreignTrace <-
+      withDb pool $
+        searchRecallTrace
+          (currentConversationRecall scopeB)
+          (Set.fromList [minBound .. maxBound])
+          "tea"
+          Nothing
+          5
+    foreignTrace.rtLexicalCandidates `shouldBe` 0
+    foreignTrace.rtCandidates `shouldBe` []
+
 seedRecallFixture :: DbPool -> IO ()
 seedRecallFixture pool = do
   insertRawMessage pool 1001 groupA member botId testTime Nothing "tea raw message"

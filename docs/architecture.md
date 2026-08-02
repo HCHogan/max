@@ -132,6 +132,18 @@ memory precision, and reports calls, repairs, provider tokens, cache hits, and
 latency. Its separate direct-turn auto-hint fixture exercises a candidate
 strong-signal policy which intentionally has no production prompt caller.
 
+The authenticated admin context console is the operational boundary for this
+projection lifecycle. It reports exact cursor/coverage lag, range gaps and
+overlaps, capture leases/retries/validation, materialization revisions,
+body-free prompt budget/tier decisions, memory versions/evidence/audit,
+embedding spaces and backlog, and a policy-scoped retrieval trace. Full or
+single-compartment rebuilds enqueue ordinary durable Historian runs: the old
+active compartment remains live until replacement publication succeeds.
+Reindex clears only selected derived vectors while holding the embedding
+maintenance lease, then the normal worker backfills them. Integrity checks are
+read-only and recompute source hashes, ownership, materialization references,
+cursor bounds, and the memory current/version projection.
+
 During implementation, prompt reads can be exercised per conversation with
 the temporary `unbounded_context_groups` development gate. An enrolled conversation takes the newest active
 compartment suffix that has no uncovered raw rows, then reads every

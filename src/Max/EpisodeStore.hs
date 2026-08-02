@@ -724,7 +724,7 @@ enqueueRebuildRun scope replaced rebuildKey request = do
             \    source_hash, source_message_count, scheduling_reason, historian_profile, \
             \    prompt_version, schema_version, idempotency_key, replaces_compartment_id) \
             \ VALUES (?, ?, ?, ?, ?, ?, 'rebuild', ?, ?, ?, ?, ?) \
-            \ ON CONFLICT (idempotency_key) DO NOTHING \
+            \ ON CONFLICT DO NOTHING \
             \ RETURNING "
               <> captureRunColumns
               <> ") SELECT * FROM inserted \

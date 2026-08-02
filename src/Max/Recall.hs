@@ -11,8 +11,11 @@ module Max.Recall
     AutoRecallEligibility (..),
     RecallCandidate (..),
     RecallHit (..),
+    RecallTrace (..),
+    RecallTraceCandidate (..),
     searchRecall,
     searchRecallIn,
+    searchRecallTrace,
     selectRecallHits,
     selectDirectAutoHints,
   )
@@ -105,6 +108,32 @@ data RecallHit = RecallHit
   }
   deriving stock (Show, Eq)
 
+data RecallTraceCandidate = RecallTraceCandidate
+  { rtcCandidate :: !RecallCandidate,
+    rtcScore :: !Double,
+    rtcDecision :: !Text
+  }
+  deriving stock (Show, Eq)
+
+-- | Diagnostic form of one search.  Visibility is deliberately represented
+-- as a policy statement and a conversation id, never as rejected foreign
+-- rows: unauthorized candidates are removed in SQL before they can enter a
+-- trace.
+data RecallTrace = RecallTrace
+  { rtConversationId :: !Int64,
+    rtQuery :: !Text,
+    rtRequestedCorpora :: ![Text],
+    rtResultLimit :: !Int,
+    rtLexicalCandidates :: !Int,
+    rtSemanticCandidates :: !Int,
+    rtCorpusFilteredCandidates :: !Int,
+    rtMergedCandidates :: !Int,
+    rtSourceQuotas :: ![(Text, Int)],
+    rtCandidates :: ![RecallTraceCandidate],
+    rtSelected :: ![RecallHit]
+  }
+  deriving stock (Show, Eq)
+
 -- | Search all current-conversation corpora.  An embedding record is optional:
 -- lexical recall remains fully functional while the embedding service or a
 -- compatible backfill is unavailable.
@@ -133,21 +162,98 @@ searchRecallIn policy corpora rawQuery embedding requestedLimit
   | Set.null corpora = pure []
   | T.null queryText = pure []
   | otherwise = do
-      let conversationId = conversationStorageId (recallConversationScope policy)
-          resultLimit = max 1 (min 30 requestedLimit)
-          candidateLimit = max 8 (min 200 (resultLimit * 4))
-      lexical <- query lexicalCandidatesSql (conversationId, queryText, candidateLimit)
-      semantic <- case embedding of
-        Nothing -> pure []
-        Just record ->
-          query
-            semanticCandidatesSql
-            (conversationId, record.erModelId, record.erDimensions, record.erVector, candidateLimit)
-      now <- liftIO getCurrentTime
-      let allowedSources = Set.map corpusText corpora
-      pure (selectRecallHits now resultLimit (filter ((`Set.member` allowedSources) . (.rcSource)) (lexical <> semantic)))
+      (now, _lexicalCount, _semanticCount, allowed) <- loadRecallCandidates policy corpora queryText embedding requestedLimit
+      pure (selectRecallHits now (max 1 (min 30 requestedLimit)) allowed)
   where
     queryText = T.strip rawQuery
+
+searchRecallTrace ::
+  (WithConnection :> es, IOE :> es) =>
+  RecallPolicy ->
+  Set.Set RecallCorpus ->
+  Text ->
+  Maybe EmbeddingRecord ->
+  Int ->
+  Eff es RecallTrace
+searchRecallTrace policy corpora rawQuery embedding requestedLimit
+  | Set.null corpora || T.null queryText = pure (emptyRecallTrace conversationId queryText corpora resultLimit)
+  | otherwise = do
+      (now, lexicalCount, semanticCount, allowed) <- loadRecallCandidates policy corpora queryText embedding resultLimit
+      let selected = selectRecallHits now resultLimit allowed
+          selectedKeys = Set.fromList (map (.rhDedupKey) selected)
+          merged = Map.elems (Map.fromListWith mergeCandidate [(candidate.rcDedupKey, candidate) | candidate <- allowed])
+          ranked = sortCandidates now merged
+          traced =
+            [ RecallTraceCandidate
+                candidate
+                (scoreCandidate now candidate)
+                ( if candidateSignal candidate < minimumSignal
+                    then "below_minimum_signal"
+                    else
+                      if candidate.rcDedupKey `Set.member` selectedKeys
+                        then "selected"
+                        else "source_quota_or_result_limit"
+                )
+            | candidate <- ranked
+            ]
+      pure
+        RecallTrace
+          { rtConversationId = conversationId,
+            rtQuery = queryText,
+            rtRequestedCorpora = map corpusText (Set.toAscList corpora),
+            rtResultLimit = resultLimit,
+            rtLexicalCandidates = lexicalCount,
+            rtSemanticCandidates = semanticCount,
+            rtCorpusFilteredCandidates = lexicalCount + semanticCount - length allowed,
+            rtMergedCandidates = length merged,
+            rtSourceQuotas = [(source, sourceQuota resultLimit source) | source <- map corpusText [minBound .. maxBound]],
+            rtCandidates = traced,
+            rtSelected = selected
+          }
+  where
+    conversationId = conversationStorageId (recallConversationScope policy)
+    queryText = T.strip rawQuery
+    resultLimit = max 1 (min 30 requestedLimit)
+
+loadRecallCandidates ::
+  (WithConnection :> es, IOE :> es) =>
+  RecallPolicy ->
+  Set.Set RecallCorpus ->
+  Text ->
+  Maybe EmbeddingRecord ->
+  Int ->
+  Eff es (UTCTime, Int, Int, [RecallCandidate])
+loadRecallCandidates policy corpora queryText embedding requestedLimit = do
+  let conversationId = conversationStorageId (recallConversationScope policy)
+      resultLimit = max 1 (min 30 requestedLimit)
+      candidateLimit = max 8 (min 200 (resultLimit * 4))
+  lexical <- query lexicalCandidatesSql (conversationId, queryText, candidateLimit)
+  semantic <- case embedding of
+    Nothing -> pure []
+    Just record ->
+      query
+        semanticCandidatesSql
+        (conversationId, record.erModelId, record.erDimensions, record.erVector, candidateLimit)
+  now <- liftIO getCurrentTime
+  let allowedSources = Set.map corpusText corpora
+      allowed = filter ((`Set.member` allowedSources) . (.rcSource)) (lexical <> semantic)
+  pure (now, length lexical, length semantic, allowed)
+
+emptyRecallTrace :: Int64 -> Text -> Set.Set RecallCorpus -> Int -> RecallTrace
+emptyRecallTrace conversationId queryText corpora resultLimit =
+  RecallTrace
+    { rtConversationId = conversationId,
+      rtQuery = queryText,
+      rtRequestedCorpora = map corpusText (Set.toAscList corpora),
+      rtResultLimit = resultLimit,
+      rtLexicalCandidates = 0,
+      rtSemanticCandidates = 0,
+      rtCorpusFilteredCandidates = 0,
+      rtMergedCandidates = 0,
+      rtSourceQuotas = [(source, sourceQuota resultLimit source) | source <- map corpusText [minBound .. maxBound]],
+      rtCandidates = [],
+      rtSelected = []
+    }
 
 corpusText :: RecallCorpus -> Text
 corpusText = \case
