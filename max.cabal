@@ -105,6 +105,7 @@ library
         Max.Files
         Max.Forward
         Max.Handler
+        Max.HttpRuntime
         Max.Http.Stream
         Max.ImagePrep
         Max.Images
@@ -270,6 +271,7 @@ test-suite max-test
         Max.Command.PermissionSpec
         Max.DB.CallsSpec
         Max.HandlerSpec
+        Max.HttpRuntimeSpec
         Max.IntentSpec
         Max.LLM.StreamSpec
         Max.LogSpec
@@ -303,6 +305,7 @@ test-suite max-test
         Max.WreqSpec
     build-depends:
         , aeson           >= 2.2  && < 2.4
+        , async           >= 2.2  && < 2.3
         , base            >= 4.20 && < 5
         , bytestring      >= 0.12 && < 0.13
         , containers      >= 0.7  && < 0.9
@@ -311,6 +314,7 @@ test-suite max-test
         , file-embed      >= 0.0.15 && < 0.1
         , filepath        >= 1.5  && < 1.6
         , hspec           >= 2.11 && < 2.12
+        , http-client     >= 0.7  && < 0.8
         , log-effectful   >= 1.0  && < 1.1
         , stm             >= 2.5  && < 2.6
         , log-base        >= 0.12 && < 0.13
