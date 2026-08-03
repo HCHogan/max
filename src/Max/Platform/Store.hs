@@ -15,6 +15,7 @@ module Max.Platform.Store
     findConversationByLegacyId,
     platformForLegacyConversation,
     platformForLegacyMessage,
+    conversationOutputCapabilities,
     compatibilityPlatformId,
     isBotAuthoredCompatibilityMessage,
     registerEndpoint,
@@ -110,6 +111,44 @@ data RegisteredEndpoint = RegisteredEndpoint
     compatibilityConversationId :: !Int64
   }
   deriving stock (Eq, Show, Generic)
+
+-- | Intersect the enabled endpoints' semantic output surface.  One canonical
+-- reply can fan out to all of them, so advertising a feature supported by only
+-- one endpoint would make the prompt promise a delivery the ledger cannot
+-- preserve.  QQ mentions/faces are protocol-native and therefore require an
+-- all-QQ conversation in addition to the ordinary capability flags.
+conversationOutputCapabilities ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Eff es ConversationOutputCapabilities
+conversationOutputCapabilities legacyConversation = do
+  rows <-
+    query
+      "WITH enabled AS ( \
+      \ SELECT a.platform, CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END AS caps \
+      \ FROM conversations c \
+      \ JOIN conversation_endpoints e USING (conversation_id) \
+      \ JOIN platform_accounts a USING (platform_account_id) \
+      \ WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
+      \) \
+      \SELECT count(*)::bigint, \
+      \       COALESCE(bool_and(COALESCE((caps->>'reply')::boolean, false)), false), \
+      \       COALESCE(bool_and(COALESCE((caps->>'reaction')::boolean, false)), false), \
+      \       COALESCE(bool_and(COALESCE((caps->>'send_media')::boolean, false)), false), \
+      \       COALESCE(bool_and(platform = 'qq'), false) \
+      \FROM enabled"
+      (Only legacyConversation)
+  pure $ case rows :: [(Int64, Bool, Bool, Bool, Bool)] of
+    [(count, reply, reaction, media, qqOnly)]
+      | count > 0 ->
+          ConversationOutputCapabilities
+            { canOutputReply = reply,
+              canOutputReaction = reaction,
+              canOutputMedia = media,
+              canOutputQQMention = qqOnly,
+              canOutputQQFace = qqOnly
+            }
+    _ -> noConversationOutputCapabilities
 
 data IngestOptions = IngestOptions
   { maxRawPayloadBytes :: !Int,
@@ -992,6 +1031,19 @@ enqueueOutbound draft = withTransaction $ do
         platformName
       )
   if inserted /= 1 then error "enqueueOutbound: canonical insert did not affect one row" else pure ()
+  -- Delivery adapters resolve replies through the canonical relation table,
+  -- not through the legacy compatibility column.  Keeping both projections
+  -- in the same publish transaction lets Matrix preserve native replies and
+  -- lets capability-limited endpoints deliberately degrade them without ever
+  -- exposing the model's @[↩#...]@ token.
+  forM_ replyCanonical $ \target -> do
+    _ <-
+      execute
+        "INSERT INTO message_relations \
+        \ (canonical_message_id, relation_kind, target_canonical_message_id) \
+        \ VALUES (?, 'reply', ?) ON CONFLICT DO NOTHING"
+        (canonical, target)
+    pure ()
   _ <-
     execute
       "INSERT INTO message_dispatches (canonical_message_id, status, completed_at) \

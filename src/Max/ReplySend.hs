@@ -59,6 +59,7 @@ import Control.Monad (foldM, when)
 import Data.ByteString.Base64 qualified as B64
 import Data.Char (isDigit)
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Ord (clamp)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -75,6 +76,7 @@ import Max.DB.Message (MessageKind (..))
 import Max.DB.Stickers (findStickerByCaption)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
+import Max.Platform.Types (ConversationOutputCapabilities (..))
 import Max.Render (renderTableImage)
 import Max.Reply
   ( Chunk (..),
@@ -107,7 +109,13 @@ data ReplyTarget = ReplyTarget
     -- canonical @[\@#id]@ form small models keep forgetting to write.
     rtRosterNames :: ![(T.Text, UserId)],
     -- | Whether sticker sending is enabled for this group.
-    rtStickers :: !Bool
+    rtStickers :: !Bool,
+    -- | Portable endpoint gates.  The prompt is the friendly policy; these
+    -- are the fail-closed execution boundary for hallucinated/old tokens.
+    rtCanReply :: !Bool,
+    rtCanMention :: !Bool,
+    rtCanFace :: !Bool,
+    rtCanImage :: !Bool
   }
 
 -- | What one logical reply has spent so far.  Threaded across calls so
@@ -245,6 +253,7 @@ sendAndPersistReply rt budget rawBody
           (seen', pieces) = dedupeImagePieces b.sbSentImages pieces0
           b' = b {sbSentImages = seen'}
       mReplyId' <- case mReplyId of
+        _ | not rt.rtCanReply -> pure Nothing
         Nothing -> pure Nothing
         Just rid ->
           fetchMessageInScope conversation rid >>= \case
@@ -259,7 +268,7 @@ sendAndPersistReply rt budget rawBody
           then Nothing
           else
             let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId']]
-             in Just (prefix <> trimEdgeSegs content, T.strip rendered)
+             in Just (prefix <> trimEdgeSegs (coalesceTextSegments content), T.strip rendered)
 
     -- Resolve parsed pieces into (segments, normalised rendered text).
     resolvePieces pieces = do
@@ -292,6 +301,7 @@ sendAndPersistReply rt budget rawBody
               logAttention "sticker placeholder unresolved" $
                 object ["id" .= sid, "error" .= err]
               pure ([], "")
+        resolve (PieceImage _) | not rt.rtCanImage = pure ([], "")
         resolve (PieceImage mid) = do
           segs <- messageImageSegs conversation mid
           if null segs
@@ -304,16 +314,41 @@ sendAndPersistReply rt budget rawBody
               -- resend from it again), instead of a bare [image] it
               -- was told is a hallucination.
               pure (segs, "[image#" <> T.pack (show mid) <> "]")
+        resolve (PieceFace _) | not rt.rtCanFace = pure ([], "")
         resolve (PieceFace fid) =
           pure ([SegFace fid Nothing], "[face#" <> T.pack (show fid) <> "]")
 
     -- Private chats keep raw text: NapCat renders private
     -- at-segments poorly.
     mentionSegs t
+      | not rt.rtCanMention = [SegText (stripMentionTokens t)]
       | isPrivateChat rt.rtGroupId = [SegText t]
       | otherwise = segmentMentions (\u -> maybe True (Set.member u) rt.rtMentionable) t
 
     conversation = conversationScopeFor rt.rtGroupId
+
+-- | Remove executable QQ mention tokens while preserving an optional display
+-- caption. Used by both ordinary replies and tool captions so no model-text
+-- sender can bypass endpoint capability checks.
+stripMentionTokens :: T.Text -> T.Text
+stripMentionTokens = go
+  where
+    go input = case T.breakOn "[@#" input of
+      (before, rest)
+        | T.null rest -> input
+        | otherwise ->
+            let afterOpen = T.drop 3 rest
+                (inside, close) = T.breakOn "]" afterOpen
+             in if T.null close || not (validMentionId (T.takeWhile (/= ':') inside))
+                  then before <> "[@#" <> go afterOpen
+                  else
+                    let caption = case T.breakOn ":" inside of
+                          (_, desc) | not (T.null desc) -> T.strip (T.drop 1 desc)
+                          _ -> ""
+                     in before <> caption <> go (T.drop 1 close)
+    validMentionId raw =
+      let unsigned = fromMaybe raw (T.stripPrefix "-" raw)
+       in not (T.null unsigned) && T.all isDigit unsigned
 
 -- | Everything model text must lose before it can become visible.  Kept in
 -- the same module as sending so streamed final text, progress narration, and
@@ -364,13 +399,15 @@ stripStickerText t0 = foldl' stripOpener t0 ["[sticker:", "[sticker：", "[表�
 --
 -- Sticker and image placeholders are dropped rather than resolved —
 -- either needs a DB round-trip apiece and neither sender is worth one.
--- Dropping loses something invisible; leaking the raw token is the bug
--- this exists to prevent.  Faces are pure, so they survive.
+-- Dropping loses something invisible; leaking the raw token is the bug this
+-- exists to prevent. Reply, face, and mention actions survive only when the
+-- conversation's complete endpoint set can preserve them.
 --
 -- Note this handles /tokens/, not /chunking/: @[split]@ is
 -- 'planReply''s job, and a caller that can only send one message has to
 -- decide what to do with it before calling here.
 modelTextSegs ::
+  ConversationOutputCapabilities ->
   -- | Private chat?  NapCat renders private at-segments poorly, so
   -- mentions stay as plain text there.
   Bool ->
@@ -379,18 +416,29 @@ modelTextSegs ::
   Maybe (Set UserId) ->
   T.Text ->
   (Maybe MessageId, [Segment])
-modelTextSegs private mentionable raw =
-  (MessageId <$> mQuoted, trimEdgeSegs (concatMap piece pieces))
+modelTextSegs outputCaps private mentionable raw =
+  ( MessageId <$> if outputCaps.canOutputReply then mQuoted else Nothing,
+    trimEdgeSegs (coalesceTextSegments (concatMap piece pieces))
+  )
   where
     (mQuoted, pieces) = parseReplyTokens (T.strip raw)
     piece = \case
       PieceText t
+        | not outputCaps.canOutputQQMention -> [SegText (stripMentionTokens t)]
         | private -> [SegText t]
         | otherwise -> segmentMentions (\u -> maybe True (Set.member u) mentionable) t
-      PieceFace fid -> [SegFace fid Nothing]
+      PieceFace fid
+        | outputCaps.canOutputQQFace -> [SegFace fid Nothing]
+        | otherwise -> []
       PieceSticker _ -> []
       PieceStickerDesc _ -> []
       PieceImage _ -> []
+
+coalesceTextSegments :: [Segment] -> [Segment]
+coalesceTextSegments = foldr step []
+  where
+    step (SegText left) (SegText right : rest) = SegText (left <> right) : rest
+    step segment rest = segment : rest
 
 -- | Fold everything past the remaining allowance into one last message,
 -- the same way 'Max.Reply.capChunks' does within a single call — loud

@@ -18,6 +18,14 @@ group. The configured iMessage chat is always a separate conversation.
 - QQ and iMessage park ambiguous sends. They resume only after an echo or
   authoritative status proves the prior attempt's outcome.
 - Platform roles and native IDs are provenance, never Max authorization.
+- The live prompt advertises only the intersection of every enabled endpoint's
+  output capabilities. QQ mentions, native faces, and reaction controls are
+  available only to QQ-only conversations; numeric compatibility IDs never
+  imply a protocol.
+- Outbound replies publish a canonical `message_relations` edge in the same
+  transaction as the message. Each delivery resolves that edge to its own
+  native event ID or deliberately degrades when its endpoint cannot preserve
+  the relation; model action markers are never transport fallbacks.
 - At the temporary OneBot compatibility boundary, QQ direct-chat pseudo ids
   occupy `(-10^12, 0)` while foreign opaque ids occupy `<= -10^12`; the latter
   remain groups. Canonical `conversation_kind` is still the stored authority.
@@ -60,9 +68,11 @@ endpoint. Max receives only a random one-shot handle; the bridge substitutes
 the Mac path for the allowlisted `send` call, removes the file afterwards, and
 cleans bridge-owned orphan files on restart. Arbitrary caller paths are
 rejected. The adapter uses public `imsg send`, so SIP remains enabled. Native
-reply/edit/unsend are not claimed as capabilities; replies use a bounded
-textual fallback. Like Matrix, one outbound delivery currently sends only its
-first attachment.
+reply/edit/unsend are not claimed as capabilities; replies therefore become
+ordinary text without a fake quote prefix or leaked internal marker. A native
+threaded reply would require the optional IMCore helper, SIP-disabled injection,
+and a matching capability/RPC implementation. Like Matrix, one outbound
+delivery currently sends only its first attachment.
 
 Group wakeups use the confirmed mention handle embedded in Messages'
 `attributedBody`, matched against `imessage.mention_handles`. Contact names are

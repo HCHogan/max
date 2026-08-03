@@ -40,6 +40,7 @@ import Max.Effects.Tools
     buildToolCatalog,
   )
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
+import Max.Platform.Types (qqConversationOutputCapabilities)
 import Max.Tasks
   ( Note (..),
     TaskCancelled,
@@ -139,7 +140,7 @@ dispatchContext =
   AgentContext
     ( mkToolContext
         (TurnIdentity (GroupId 7777) (MessageId 7413) (UserId 2001) (UserId 1000))
-        (TurnCapabilities False True False)
+        (TurnCapabilities False True False qqConversationOutputCapabilities)
     )
     Nothing
 

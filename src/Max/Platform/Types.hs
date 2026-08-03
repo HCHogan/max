@@ -32,6 +32,9 @@ module Max.Platform.Types
     ContentPart (..),
     PlatformCapabilities (..),
     noCapabilities,
+    ConversationOutputCapabilities (..),
+    noConversationOutputCapabilities,
+    qqConversationOutputCapabilities,
     InboundEnvelope (..),
     DeliveryStatus (..),
   )
@@ -174,6 +177,41 @@ noCapabilities =
       canReact = False,
       canRedact = False,
       maxTextBytes = Nothing
+    }
+
+-- | The portable output surface of one canonical conversation.  A bot reply
+-- may fan out to every enabled endpoint, so semantic actions are advertised
+-- only when every recipient can preserve them.  QQ-only actions are kept
+-- explicit instead of being inferred from legacy numeric identifiers.
+data ConversationOutputCapabilities = ConversationOutputCapabilities
+  { canOutputReply :: !Bool,
+    canOutputReaction :: !Bool,
+    canOutputMedia :: !Bool,
+    canOutputQQMention :: !Bool,
+    canOutputQQFace :: !Bool
+  }
+  deriving stock (Eq, Show, Generic)
+
+noConversationOutputCapabilities :: ConversationOutputCapabilities
+noConversationOutputCapabilities =
+  ConversationOutputCapabilities
+    { canOutputReply = False,
+      canOutputReaction = False,
+      canOutputMedia = False,
+      canOutputQQMention = False,
+      canOutputQQFace = False
+    }
+
+-- | Compatibility default for pure prompt fixtures and legacy callers.  Live
+-- dispatches always read the endpoint-owned value from 'Max.Platform.Store'.
+qqConversationOutputCapabilities :: ConversationOutputCapabilities
+qqConversationOutputCapabilities =
+  ConversationOutputCapabilities
+    { canOutputReply = True,
+      canOutputReaction = True,
+      canOutputMedia = True,
+      canOutputQQMention = True,
+      canOutputQQFace = True
     }
 
 -- | Fully normalized input presented to the shared ingest kernel.

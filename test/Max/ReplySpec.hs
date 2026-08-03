@@ -10,8 +10,8 @@ import Max.Reply
     dedupeImagePieces,
     latexToUnicode,
     parseReplyTokens,
-    readyPrefix,
     planReply,
+    readyPrefix,
     stripHallucinatedTokens,
   )
 import Test.Hspec
@@ -151,6 +151,16 @@ spec = do
     it "hoists a leading [↩#id] and strips it from the text" $
       parseReplyTokens "[↩#8472] 说得对"
         `shouldBe` (Just 8472, [PieceText " 说得对"])
+
+    it "accepts foreign-platform negative message handles" $ do
+      parseReplyTokens "[↩#-1000000000790] 说得对"
+        `shouldBe` (Just (-1000000000790), [PieceText " 说得对"])
+      parseReplyTokens "看这张 [image#-1000000000790]"
+        `shouldBe` (Nothing, [PieceText "看这张 ", PieceImage (-1000000000790)])
+
+    it "keeps QQ-native ids positive-only" $ do
+      parseReplyTokens "[face#-66]" `shouldBe` (Nothing, [PieceText "[face#-66]"])
+      parseReplyTokens "[sticker#-42]" `shouldBe` (Nothing, [PieceText "[sticker#-42]"])
 
     it "returns no reply and one text piece for plain text" $
       parseReplyTokens "就一句话" `shouldBe` (Nothing, [PieceText "就一句话"])

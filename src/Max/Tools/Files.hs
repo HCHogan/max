@@ -48,12 +48,13 @@ import Max.Effects.Blob (Blob, resolveBlobHostPath)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
+import Max.Platform.Types (ConversationOutputCapabilities)
 import Max.Reply (chunkSource, planReply)
 import Max.ReplySend (modelTextSegs)
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
-import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolSelfId)
+import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities, toolSelfId)
 import Max.Util (withTempDirectory)
 import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..))
 import OneBot.Segment (Segment (..), imageSeg)
@@ -83,7 +84,7 @@ fileToolsFor ::
 fileToolsFor tz dc sandboxes =
   [ listRecentFilesTool tz gid,
     importFileToSandboxTool (toolConversationScope dc) gid sandboxes,
-    sendImageFromSandboxTool gid selfId sandboxes,
+    sendImageFromSandboxTool (toolOutputCapabilities dc) gid selfId sandboxes,
     sendFileFromSandboxTool gid sandboxes
   ]
   where
@@ -227,11 +228,12 @@ sendImageFromSandboxTool ::
     Log :> es,
     IOE :> es
   ) =>
+  ConversationOutputCapabilities ->
   GroupId ->
   UserId ->
   SandboxRegistry ->
   Tool es
-sendImageFromSandboxTool gid selfId sandboxes =
+sendImageFromSandboxTool outputCaps gid selfId sandboxes =
   Tool
     { toolName = "send_image_from_sandbox",
       toolDescription =
@@ -265,7 +267,7 @@ sendImageFromSandboxTool gid selfId sandboxes =
                 Left err -> pure (Left err)
                 Right bytes -> do
                   let b64 = "base64://" <> TE.decodeUtf8 (B64.encode bytes)
-                      segs = captionSegs gid mCaption <> [imageSeg b64]
+                      segs = captionSegs outputCaps gid mCaption <> [imageSeg b64]
                   outcome <-
                     sendRecorded
                       OutboundRequest
@@ -318,14 +320,15 @@ sendImageFromSandboxTool gid selfId sandboxes =
 -- no roster to check membership against.  A caption that is nothing but
 -- a quote still quotes: unlike a narration line, the message it rides
 -- on is going out regardless.
-captionSegs :: GroupId -> Maybe Text -> [Segment]
-captionSegs _ Nothing = []
-captionSegs gid (Just c)
+captionSegs :: ConversationOutputCapabilities -> GroupId -> Maybe Text -> [Segment]
+captionSegs _ _ Nothing = []
+captionSegs outputCaps gid (Just c)
   | null body = quote
   | otherwise = quote <> body <> [SegText "\n"]
   where
     (mQuoted, body) =
       modelTextSegs
+        outputCaps
         (isPrivateChat gid)
         Nothing
         (T.intercalate "\n" (map chunkSource (planReply c)))

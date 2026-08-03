@@ -64,13 +64,14 @@ import Max.Platform.Store
     claimDispatch,
     claimDispatches,
     completeDispatch,
+    conversationOutputCapabilities,
     defaultIngestOptions,
     ingestEnvelope,
     isBotAuthoredCompatibilityMessage,
     platformForLegacyMessage,
   )
-import Max.Platform.Types (CanonicalMessageId)
-import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadMode, renderCurrentLine, renderHistoryLine)
+import Max.Platform.Types (CanonicalMessageId, ConversationOutputCapabilities (..))
+import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutput, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession)
@@ -877,6 +878,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
             "message_id" .= midRaw,
             "origin" .= T.pack (show origin)
           ]
+  outputCaps <- conversationOutputCapabilities gidRaw
   -- Claim the shutdown slot out here rather than inside the async:
   -- 'Max.Effects.Agent.agentTurn' doesn't reach its 'registerTask'
   -- until after 'Max.Prompt.buildContext', which on its own can spend
@@ -903,7 +905,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- as the crash and denied-command paths.  Direct triggers only:
       -- proactive turns stay traceless and a poke has no message to
       -- react to.
-      when (origin == OriginDirect) $
+      when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
         sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
     Just turn ->
       void . async $
@@ -912,7 +914,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
             -- (and every trySyncIO on the way up) — the outer 'catch' is the
             -- one place a user-initiated @!kill@ comes to rest.
-            ( work turn `catchSync` \e -> do
+            ( work outputCaps turn `catchSync` \e -> do
                 logAttention "llm dispatch crashed" $
                   object ["error" .= T.pack (show (e :: SomeException))]
                 -- The processing reaction is already gone (its 'finally' ran
@@ -921,7 +923,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 -- face.  Swap in the failure face so a crash is visibly a
                 -- crash — direct triggers only; proactive turns stay
                 -- traceless, and a poke has no message to react to.
-                when (origin == OriginDirect) $
+                when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
                   sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
               )
               `catch` \TaskCancelled ->
@@ -942,8 +944,9 @@ dispatchLLM mIntent origin absorbable companions gm = do
               finishTurnRuntime env.beTasks turn
             let absorbed = completion.tcAbsorbedTriggers
                 unserved = completion.tcUnservedNotes
-            for_ absorbed $ \m ->
-              sendAction (SetMsgEmojiLike (MessageId m) processingFaceId False)
+            when (outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
+              for_ absorbed $ \m ->
+                sendAction (SetMsgEmojiLike (MessageId m) processingFaceId False)
             -- Notes this turn accepted but never answered ('endDispatch'
             -- returns none for a killed turn — !kill drops them by
             -- contract).  Ones that ARE a message get a turn of their
@@ -966,12 +969,12 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 object ["message_id" .= srcMid]
               dispatchLLM mIntent orig NeverAbsorb [] src
   where
-    work turn = do
+    work outputCaps turn = do
       env :: BotEnv <- ask
       let tid = turnRuntimeTaskId turn
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
-      injected <- tryInjectSupplement env s tid
+      injected <- tryInjectSupplement outputCaps env s tid
       unless injected $ do
         -- Commit point: this turn is going to build context, and the
         -- group's pending intent buffer reaches the model as ambient
@@ -980,7 +983,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
         -- trigger builds nothing, and the buffer must survive it) and
         -- not later (buildContext is about to read history).
         for_ mIntent $ \st -> liftIO (clearPendingIntent st gm.groupId)
-        withProcessingReaction (dispatch turn env s)
+        withProcessingReaction outputCaps (dispatch outputCaps turn env s)
 
     -- React [托腮] on the trigger while the dispatch runs — a quiet
     -- "seen, working on it" — and clear it once the reply (or
@@ -990,8 +993,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
     -- tell reads as ignoring the group) — but their [silence] leaves
     -- no other trace: the 托腮 just vanishes, no reason face.  Pokes
     -- have no message to react to.
-    withProcessingReaction act
-      | origin == OriginPoke = act
+    withProcessingReaction outputCaps act
+      | origin == OriginPoke || not (outputCaps.canOutputReaction && outputCaps.canOutputQQFace) = act
       | otherwise =
           (sendAction (SetMsgEmojiLike gm.messageId processingFaceId True) >> act)
             `finally` sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
@@ -1017,7 +1020,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
     -- running turn whether or not it carried an @.  Any doubt
     -- (classifier says no, errors out, or the turn finished while we
     -- were classifying) falls back to a normal dispatch.
-    tryInjectSupplement env s tid =
+    tryInjectSupplement outputCaps env s tid =
       case env.beIntent of
         Just icfg | absorbable == MayAbsorb -> do
           -- Our own entry has been in the registry since dispatch
@@ -1084,18 +1087,18 @@ dispatchLLM mIntent origin absorbable companions gm = do
                     -- only: an absorbed proactive candidate was never
                     -- addressed to the bot, and reacting would break
                     -- the "traceless until it speaks" rule.
-                    when (origin == OriginDirect) $
+                    when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
                       sendAction (SetMsgEmojiLike gm.messageId processingFaceId True)
                   pure (isJust landed)
         _ -> pure False
 
-    dispatch turn env s = do
+    dispatch outputCaps turn env s = do
       catalog :: ModelCatalog <- ask
       let capabilities = lookupModelCapabilities s.model catalog
           multimodal = maybe False supportsMultimodal capabilities
           historyTurns = maybe False usesHistoryTurns capabilities
           limits = maybe defaultContextLimits (.contextLimits) capabilities
-      (mentionable, rosterNames, brief) <- fetchGroupContext gm.groupId
+      (mentionable, rosterNames, brief) <- fetchGroupContext outputCaps gm.groupId
       -- Questions another turn is already working on.  Ours is in there
       -- too (claimed just above) — drop it, it isn't history yet.
       let MessageId ownMid = gm.messageId
@@ -1107,9 +1110,10 @@ dispatchLLM mIntent origin absorbable companions gm = do
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
       liftIO (setTurnPhase turn "context")
       ctx <-
-        buildContextWithReadMode
+        buildContextWithReadModeForOutput
           limits
           (if env.beForceRawContext then RawLedgerEmergency else TieredContext)
+          outputCaps
           env.bePersona
           multimodal
           historyTurns
@@ -1122,12 +1126,13 @@ dispatchLLM mIntent origin absorbable companions gm = do
           gm
       let debugEff = fromMaybe env.beDebugDefault s.debugOverride
           stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
+          platformStickers = stickersEff && outputCaps.canOutputMedia
           toolCtx =
             mkToolContext
               (TurnIdentity gm.groupId gm.messageId gm.userId gm.selfId)
-              (TurnCapabilities multimodal stickersEff (not (null skills)))
+              (TurnCapabilities multimodal platformStickers (not (null skills)) outputCaps)
           agentCtx = AgentContext toolCtx s.effortOverride
-          target = sendTarget gm mentionable rosterNames stickersEff
+          target = sendTarget outputCaps gm mentionable rosterNames platformStickers
       -- The streaming sink.  It sends whole paragraphs the model has
       -- finished with, down the same path the final reply takes — the
       -- budget TVar is what keeps the two halves of one split reply
@@ -1148,12 +1153,12 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "turns" .= result.turnsUsed,
                 "aborted" .= result.aborted
               ]
-          when (origin == OriginDirect) $ do
+          when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $ do
             sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
             sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
-        Just replyRaw -> handleReply env s mentionable rosterNames streamBudget result replyRaw
+        Just replyRaw -> handleReply outputCaps env s mentionable rosterNames streamBudget result replyRaw
 
-    handleReply env s mentionable rosterNames streamBudget result replyRaw = do
+    handleReply outputCaps env s mentionable rosterNames streamBudget result replyRaw = do
       -- Real stickers/images are the [sticker#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
       -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
@@ -1167,7 +1172,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- a paragraph — the remainder plans into chunks exactly as it
       -- would have on its own.
       let remaining = T.drop (T.length result.sentPrefix) replyRaw
-          stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
+          stickersEff = fromMaybe env.beStickerDefault s.stickerOverride && outputCaps.canOutputMedia
           stripped = cleanModelText remaining
       when (stripped /= T.strip remaining) $
         logAttention "reply: hallucinated model markers stripped" $
@@ -1201,7 +1206,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "aborted" .= result.aborted
               ]
           insertSilence gm (if T.null stripped then "[silence]" else stripped)
-          when (origin == OriginDirect) $
+          when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
             sendAction
               (SetMsgEmojiLike gm.messageId (fromMaybe defaultSilenceFace mFace) True)
         Nothing -> do
@@ -1215,7 +1220,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           budget <- liftIO (readTVarIO streamBudget)
           _ <-
             sendAndPersistReply
-              (sendTarget gm mentionable rosterNames stickersEff)
+              (sendTarget outputCaps gm mentionable rosterNames stickersEff)
               budget
               stripped
           logInfo "llm replied" $
@@ -1240,18 +1245,23 @@ dispatchLLM mIntent origin absorbable companions gm = do
 -- because every field is derived from something the caller holds
 -- anyway.
 sendTarget ::
+  ConversationOutputCapabilities ->
   GroupMessage ->
   Maybe (Set UserId) ->
   [(T.Text, UserId)] ->
   Bool ->
   ReplyTarget
-sendTarget gm mentionable rosterNames stickersOn =
+sendTarget outputCaps gm mentionable rosterNames stickersOn =
   ReplyTarget
     { rtGroupId = gm.groupId,
       rtSelfId = gm.selfId,
       rtMentionable = mentionable,
       rtRosterNames = rosterNames,
-      rtStickers = stickersOn
+      rtStickers = stickersOn,
+      rtCanReply = outputCaps.canOutputReply,
+      rtCanMention = outputCaps.canOutputQQMention,
+      rtCanFace = outputCaps.canOutputQQFace,
+      rtCanImage = outputCaps.canOutputMedia
     }
 
 -- | Send a message and write it down, so the messages table mirrors
@@ -1307,10 +1317,11 @@ replyText gm body =
 -- just doesn't get the block).
 fetchGroupContext ::
   (PlatformApi :> es, Log :> es) =>
+  ConversationOutputCapabilities ->
   GroupId ->
   Eff es (Maybe (Set UserId), [(T.Text, UserId)], [T.Text])
-fetchGroupContext gid
-  | isPrivateChat gid = pure (Nothing, [], [])
+fetchGroupContext outputCaps gid
+  | isPrivateChat gid || not outputCaps.canOutputQQMention = pure (Nothing, [], [])
   | otherwise = do
       members <- fetchGroupMembers gid
       meta <- fetchGroupMeta gid

@@ -271,6 +271,60 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         (Only queued.canonicalMessageId.unCanonicalMessageId)
     (ledger :: [(Text, Text, Int64, Int64)]) `shouldBe` [("outbound", "ignored", 0, 2)]
 
+  it "publishes outbound reply relations and resolves the target native id" $ do
+    conversation <- withDb pool (createConversation ConversationGroup (Just "Matrix only"))
+    matrix <-
+      withDb pool $
+        registerEndpoint
+          EndpointRegistration
+            { conversationId = conversation,
+              platform = PlatformMatrix,
+              nativeAccountId = NativeAccountId "@max:example.test",
+              accountDisplayName = Just "max",
+              nativeConversationId = NativeConversationId "!reply:example.test",
+              endpointDisplayName = Just "Reply test",
+              conversationKind = ConversationGroup,
+              endpointMode = EndpointStandalone,
+              capabilities = textCapabilities
+            }
+    now <- getCurrentTime
+    target <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "matrix-target" "target"))
+    [(legacyGroup, targetMessage)] <-
+      withConn pool $ \conn ->
+        query
+          conn
+          "SELECT group_id, message_id FROM messages WHERE canonical_message_id = ?"
+          (Only (resultId target).unCanonicalMessageId)
+    queued <-
+      withDb pool $
+        enqueueOutbound
+          OutboundDraft
+            { legacyConversationId = legacyGroup,
+              transcriptKind = "chat",
+              sourceCompatibilityMessageId = Nothing,
+              canonicalContent = canonicalContentValue [ContentText "reply"],
+              renderedText = "reply",
+              compatibilitySegments = Array mempty,
+              replyToCompatibilityMessageId = Just targetMessage
+            }
+    relations <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT target_canonical_message_id FROM message_relations WHERE canonical_message_id = ? AND relation_kind = 'reply'"
+        (Only queued.canonicalMessageId.unCanonicalMessageId)
+    (relations :: [Only Int64]) `shouldBe` [Only (resultId target).unCanonicalMessageId]
+    claims <- withDb pool (claimDeliveries "native-reply" 10 30)
+    fmap (.replyNativeEventId) claims `shouldBe` [Just (NativeEventId "matrix-target")]
+
+  it "intersects output capabilities and never infers QQ actions from ids" $ do
+    (qq, matrix) <- mirrorPair pool
+    mirrorCaps <- withDb pool (conversationOutputCapabilities 42)
+    mirrorCaps.canOutputReply `shouldBe` True
+    mirrorCaps.canOutputQQMention `shouldBe` False
+    mirrorCaps.canOutputQQFace `shouldBe` False
+    -- Endpoint identities, not the positive legacy group id, decide this.
+    qq.endpointId `shouldNotBe` matrix.endpointId
+
   it "keeps command output on the endpoint that supplied the source message" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime

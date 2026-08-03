@@ -15,6 +15,7 @@ import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
+import Max.Platform.Types (ConversationOutputCapabilities (..), noConversationOutputCapabilities, qqConversationOutputCapabilities)
 import Max.Prompt (CompartmentTier (..), ContextCandidates (..), ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, applyVideoCaptions, cpInputs, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
@@ -132,6 +133,7 @@ baseInputs =
       replyCtx = Nothing,
       triggerForward = [],
       multimodal = False,
+      outputCapabilities = qqConversationOutputCapabilities,
       origin = OriginDirect,
       groupBrief = [],
       groupMemories = [],
@@ -162,6 +164,17 @@ splitMessages msgs = case msgs of
 
 spec :: Spec
 spec = do
+  describe "endpoint-aware action grammar" $ do
+    it "does not advertise QQ actions or reply placeholders to iMessage" $ do
+      let imessageCaps = noConversationOutputCapabilities {canOutputMedia = True}
+          (system, user) = splitMessages (renderContext baseInputs {outputCapabilities = imessageCaps})
+      system `shouldSatisfy` T.isInfixOf "当前端点没有原生引用、QQ 小黄脸或按 QQ 号 @ 的输出动作"
+      system `shouldSatisfy` (not . T.isInfixOf "[face#id]  发 QQ 原生小黄脸")
+      system `shouldSatisfy` (not . T.isInfixOf "[↩#id]  段首引用")
+      system `shouldSatisfy` (not . T.isInfixOf "[@#QQ号]  @某人")
+      user `shouldSatisfy` T.isInfixOf "会话 ID：7777"
+      user `shouldSatisfy` (not . T.isInfixOf "成员对照（[@#QQ号]")
+
   describe "renderContext system prompt" $ do
     it "uses default persona when session has no override" $ do
       let (sys, _) = splitMessages (renderContext baseInputs)

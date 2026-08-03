@@ -28,6 +28,7 @@ import Max.DB.Files (FileRecord)
 import Max.DB.History (HistoryItem)
 import Max.EpisodeStore (EpisodeHandle)
 import Max.MemoryStore (MemoryItem)
+import Max.Platform.Types (ConversationOutputCapabilities)
 import Max.Session (Session)
 import OneBot.Event (GroupMessage)
 
@@ -91,6 +92,10 @@ data PromptInputs = PromptInputs
     -- | Whether the active profile accepts image content blocks.
     -- Toggles the format-guide wording for the @[image]@ marker.
     multimodal :: !Bool,
+    -- | Portable semantic output surface shared by every enabled endpoint in
+    -- this conversation.  Prompt actions must be a subset of this record;
+    -- delivery adapters are not allowed to guess from compatibility ids.
+    outputCapabilities :: !ConversationOutputCapabilities,
     -- | What woke the bot — see 'TriggerOrigin'.  The trigger block
     -- is labelled honestly per origin: proactive turns get the "no
     -- one @-ed you" framing with @[silence]@ explicitly offered; poke
@@ -217,4 +222,3 @@ data HistoryTokenWatermarks = HistoryTokenWatermarks
   { htwLow :: !Int,
     htwHigh :: !Int
   }
-

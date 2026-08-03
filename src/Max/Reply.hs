@@ -36,6 +36,7 @@ import Data.Char (isAlpha, isAscii, isDigit, isSpace)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -187,8 +188,8 @@ data Token = TokReply !Int64 | TokSticker !Int64 | TokStickerDesc !Text | TokIma
 
 matchToken :: Text -> Maybe (Token, Text)
 matchToken t =
-  (do rest <- T.stripPrefix "[↩#" t; (n, r) <- tokenClose rest; pure (TokReply n, r))
-    <|> (do rest <- T.stripPrefix "[image#" t; (n, r) <- tokenClose rest; pure (TokImage n, r))
+  (do rest <- T.stripPrefix "[↩#" t; (n, r) <- signedTokenClose rest; pure (TokReply n, r))
+    <|> (do rest <- T.stripPrefix "[image#" t; (n, r) <- signedTokenClose rest; pure (TokImage n, r))
     <|> (do rest <- T.stripPrefix "[face#" t; (n, r) <- tokenClose rest; pure (TokFace (fromIntegral n), r))
     <|> (do rest <- T.stripPrefix "[sticker#" t; (n, r) <- tokenClose rest; pure (TokSticker n, r))
     -- Pre-rename sticker opener: old rows (and models echoing them)
@@ -221,6 +222,25 @@ matchToken t =
                   _ -> Nothing
                 _ -> Nothing
               pure (n, dropAttrGroup after)
+    -- Foreign-platform compatibility message ids come from a dedicated
+    -- negative namespace.  They are still valid conversation-scoped handles,
+    -- unlike sticker/face ids, which remain positive-only.
+    signedTokenClose s =
+      let (sign, unsigned) = case T.uncons s of
+            Just ('-', unsignedRest) -> ("-", unsignedRest)
+            _ -> ("", s)
+          (digits, rest) = T.span isDigit unsigned
+       in if T.null digits
+            then Nothing
+            else do
+              n <- readInt64 (sign <> digits)
+              after <- case T.uncons rest of
+                Just (']', r) -> Just r
+                Just (':', r') -> case T.breakOn "]" r' of
+                  (_, close) | not (T.null close) -> Just (T.drop 1 close)
+                  _ -> Nothing
+                _ -> Nothing
+              pure (n, dropAttrGroup after)
     -- Caption text in the id slot: short, single-line, no nested
     -- bracket.  Deliberately narrow — anything wider risks eating a
     -- legitimate "[...]" prose span that happens to follow the word
@@ -231,9 +251,13 @@ matchToken t =
           d <- T.strip d0,
           not (T.null d),
           T.length d <= 60,
+          not (signedDigits d),
           not (T.any (\c -> c == '\n' || c == '[') d) ->
             Just (d, dropAttrGroup (T.drop 1 close))
       _ -> Nothing
+    signedDigits d =
+      let unsigned = fromMaybe d (T.stripPrefix "-" d)
+       in not (T.null unsigned) && T.all isDigit unsigned
     -- "](29秒)" → the paren group is display metadata, never content;
     -- swallow it so an echoed token doesn't leak "(29秒)" as text.
     dropAttrGroup r = case T.stripPrefix "(" r of
@@ -243,7 +267,7 @@ matchToken t =
       Nothing -> r
 
 readInt64 :: Text -> Maybe Int64
-readInt64 s = case TR.decimal s of
+readInt64 s = case TR.signed TR.decimal s of
   Right (n, "") -> Just n
   _ -> Nothing
 

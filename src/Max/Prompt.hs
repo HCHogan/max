@@ -3,6 +3,7 @@ module Max.Prompt
     buildContext,
     buildContextWithLimits,
     buildContextWithReadMode,
+    buildContextWithReadModeForOutput,
     ContextReadMode (..),
     TriggerOrigin (..),
 
@@ -121,6 +122,7 @@ import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
+import Max.Platform.Types (ConversationOutputCapabilities (..), qqConversationOutputCapabilities)
 import Max.Prompt.System (systemPrompt)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
@@ -213,12 +215,49 @@ buildContextWithReadMode ::
   GroupMessage ->
   Eff es [ChatMessage]
 buildContextWithReadMode limits readMode defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+  buildContextWithReadModeForOutput
+    limits
+    readMode
+    qqConversationOutputCapabilities
+    defaultPersona
+    multimodal'
+    historyTurns'
+    origin'
+    tz'
+    brief
+    skills'
+    inFlight'
+    s
+    gm
+
+-- | Production variant whose action grammar is constrained by the enabled
+-- conversation endpoints.  The compatibility wrapper above keeps pure/legacy
+-- fixtures stable, but live dispatches must call this function with the
+-- endpoint-owned intersection from 'Max.Platform.Store'.
+buildContextWithReadModeForOutput ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  ContextLimits ->
+  ContextReadMode ->
+  ConversationOutputCapabilities ->
+  Text ->
+  Bool ->
+  Bool ->
+  TriggerOrigin ->
+  TimeZone ->
+  [Text] ->
+  [(Text, Text)] ->
+  Set Int64 ->
+  Session ->
+  GroupMessage ->
+  Eff es [ChatMessage]
+buildContextWithReadModeForOutput limits readMode outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let historyWatermarks = historyTokenWatermarks limits multimodal'
   snapshot <-
     collectContextWithWatermarks
       PublishMaterialization
       readMode
       (Just historyWatermarks)
+      outputCaps
       defaultPersona
       multimodal'
       historyTurns'
@@ -279,7 +318,7 @@ collectContext ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing
+collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing qqConversationOutputCapabilities
 
 -- | Read-only collection for admin previews and replay evaluation. It never
 -- publishes a materialization revision or a diagnostic row; callers may pass
@@ -297,7 +336,7 @@ collectContextPreview ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing
+collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing qqConversationOutputCapabilities
 
 data ContextMutationMode
   = PublishMaterialization
@@ -309,6 +348,7 @@ collectContextWithWatermarks ::
   ContextMutationMode ->
   ContextReadMode ->
   Maybe HistoryTokenWatermarks ->
+  ConversationOutputCapabilities ->
   Text ->
   Bool ->
   Bool ->
@@ -320,7 +360,7 @@ collectContextWithWatermarks ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContextWithWatermarks mutationMode readMode materializationWatermarks defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+collectContextWithWatermarks mutationMode readMode materializationWatermarks outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -533,6 +573,7 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks def
               replyCtx = replyCtx',
               triggerForward = triggerKids,
               multimodal = multimodal',
+              outputCapabilities = outputCaps,
               origin = origin',
               groupBrief = brief,
               groupMemories = groupMems,
@@ -1010,7 +1051,6 @@ renderContext :: PromptInputs -> [ChatMessage]
 renderContext pi' =
   let UserId selfId' = pi'.triggerMessage.selfId
       GroupId gidRaw = pi'.triggerMessage.groupId
-      UserId senderId = pi'.triggerMessage.userId
       senderName = senderDisplayName pi'.triggerMessage
       memBlock =
         renderMemories
@@ -1026,13 +1066,16 @@ renderContext pi' =
           [ "[environment]",
             "  现在：" <> fmtEnvStamp pi'.tz pi'.now,
             if isPrivateChat pi'.triggerMessage.groupId
-              then "  场景：与 " <> senderName <> "（QQ " <> T.pack (show senderId) <> "）私聊"
-              else "  群号：" <> T.pack (show gidRaw)
+              then "  场景：与 " <> senderName <> " 一对一私聊"
+              else
+                (if pi'.outputCapabilities.canOutputQQMention then "  群号：" else "  会话 ID：")
+                  <> T.pack (show gidRaw)
           ]
             <> map ("  " <>) pi'.groupBrief
-            <> [ "  当前模型：" <> pi'.session.model,
-                 "  成员对照（[@#QQ号] 即 @某人）："
+            <> ["  当前模型：" <> pi'.session.model]
+            <> [ "  成员对照（[@#QQ号] 即 @某人）："
                    <> T.intercalate "、" ["[@#" <> T.pack (show u) <> "]=" <> n | (u, n) <- roster]
+               | pi'.outputCapabilities.canOutputQQMention
                ]
       -- Questions somebody else's turn is already handling never reach
       -- the model, whichever shape we build.
@@ -1088,7 +1131,7 @@ renderContext pi' =
       -- also removes the last way two consecutive same-role messages
       -- could reach a strict provider: there is exactly one of each.
       messages =
-        [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) effectivePersona pi'.skills)]
+        [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) pi'.outputCapabilities effectivePersona pi'.skills)]
           <> historyTurnMessages pi'.tz selfId' turnRows
           <> [userMessage]
    in messages

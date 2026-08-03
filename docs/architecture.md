@@ -379,8 +379,13 @@ runBlob(root)
 `BlobRef` from the digest and do not treat the persisted path as authority.
 
 `Outbound` owns canonical publication, not transport IO. It commits one bot
-message plus per-endpoint delivery jobs first; leased workers then render and
-send each native copy. Matrix retries with a deterministic transaction key.
+message, its reply relation, and per-endpoint delivery jobs first; leased
+workers then render and send each native copy. Before the turn, `Handler` reads
+the intersection of enabled endpoint output capabilities and uses it both to
+constrain the prompt grammar and to gate action-token execution. QQ mentions,
+faces, and reaction actions additionally require an all-QQ conversation; a
+legacy numeric ID is only a locator and never implies the protocol. Matrix
+retries with a deterministic transaction key.
 Non-idempotent QQ/iMessage timeout is recorded as outcome-unknown and can move
 again only after echo or authoritative status reconciliation. A transport can
 therefore be down without producing an externally visible message that the

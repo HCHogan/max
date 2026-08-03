@@ -35,6 +35,7 @@ import Data.Time
   )
 import Data.Vector qualified as V
 import Max.Config qualified as Config
+import Max.Context.Types (ContextCandidates (..))
 import Max.DB.Calls (redactDataUrls)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..), LedgerItem (LedgerItem), MessageCursor (..))
@@ -52,7 +53,7 @@ import Max.EpisodeStore (EpisodeExpansion (..), EpisodeHandle, SourceRange (..),
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
-import Max.Context.Types (ContextCandidates (..))
+import Max.Platform.Types (qqConversationOutputCapabilities)
 import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
 import Max.Session (Session (..))
@@ -362,6 +363,7 @@ promptFixture =
       replyCtx = Just (quotedMessage, [quotedFile], []),
       triggerForward = [],
       multimodal = True,
+      outputCapabilities = qqConversationOutputCapabilities,
       origin = OriginDirect,
       groupBrief =
         [ "群名：单片机与嵌入式交流（47人）",

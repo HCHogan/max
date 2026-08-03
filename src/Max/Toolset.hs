@@ -42,6 +42,7 @@ import Max.Effects.Tools
   )
 import Max.Env (BotEnv (..))
 import Max.HttpRuntime (HttpRuntime)
+import Max.Platform.Types (noConversationOutputCapabilities)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolStickers)
 import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
@@ -112,7 +113,7 @@ toolCountFor ::
   Bool -> -- skills visible
   Int
 toolCountFor env gid multimodal stickers skills =
-  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills))
+  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noConversationOutputCapabilities))
 
 -- | Product-level visibility and effect metadata live in one inventory.  The
 -- actual runners assembled above must match this filtered set exactly or

@@ -372,9 +372,13 @@ iMessageDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformIMessage,
       deliver = \claim media -> do
-        let body = case claim.replyNativeEventId of
-              Nothing -> claim.renderedText
-              Just _ -> "[reply] " <> claim.renderedText
+        -- This deployment uses imsg's public AppleScript transport.  It cannot
+        -- create native Threader replies (the endpoint advertises reply=false),
+        -- so degrade to ordinary text without exposing an internal marker.
+        -- Native replies can be enabled only with imsg's advanced IMCore
+        -- helper, at which point the capability and RPC params must move
+        -- together.
+        let body = claim.renderedText
         upload <- case media of
           [] -> pure Nothing
           firstMedia : _ ->
