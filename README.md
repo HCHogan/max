@@ -71,6 +71,7 @@ cabal build all
 | [features.md](docs/features.md) | behaviour and configuration semantics |
 | [architecture.md](docs/architecture.md) | runtime, context/memory design, and durability |
 | [ADR 001](docs/adr/001-context-memory-foundations.md) | context/memory invariants and privacy boundaries |
+| [ADR 002](docs/adr/002-partial-plans-adaptive-elaboration.md) | partial plans, adaptive elaboration, and safe deoptimization |
 | [development.md](docs/development.md) | tests, evaluation, versioning, and debugging |
 | [prompt-flow.md](docs/prompt-flow.md) | generated prompt and tool-round wire examples |
 

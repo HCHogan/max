@@ -13,6 +13,7 @@ spec = describe "deployed self-source snapshot" $ do
     paths `shouldContain` ["test/Max/HistorianSpec.hs"]
     paths `shouldContain` ["migrations/048_context_emergency_reader.sql"]
     paths `shouldContain` ["docs/adr/001-context-memory-foundations.md"]
+    paths `shouldContain` ["docs/adr/002-partial-plans-adaptive-elaboration.md"]
     paths `shouldContain` [".env.example"]
 
   it "searches literal source with path and line provenance" $ do
