@@ -2,7 +2,7 @@ module Max.IMessageSpec (spec) where
 
 import Data.Aeson (object, (.=))
 import Max.IMessage
-import Max.Platform.Types (PlatformCapabilities (..))
+import Max.Platform.Types (EventKind (..), NativeUserId (..), PlatformCapabilities (..))
 import Test.Hspec
 
 spec :: Spec
@@ -71,6 +71,32 @@ spec = describe "iMessage adapter" $ do
         message.reactionKey `shouldBe` Just "like"
         message.reactedToGuid `shouldBe` Just "GUID-41"
       _ -> expectationFailure "expected one reaction"
+
+  it "keeps senderless Messages rows as non-dispatching system provenance" $ do
+    let value =
+          object
+            [ "messages"
+                .= [ object
+                       [ "id" .= (43 :: Int),
+                         "chat_id" .= (7 :: Int),
+                         "guid" .= ("GUID-SYSTEM" :: String),
+                         "sender" .= ("" :: String),
+                         "is_from_me" .= False,
+                         "text" .= ("" :: String),
+                         "created_at" .= ("2026-08-03T12:00:02Z" :: String)
+                       ]
+                   ],
+              "next_rowid" .= (43 :: Int),
+              "has_more" .= False
+            ]
+        cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" "Max" 1000
+    page <- parseIMessagePage value `shouldSatisfyRight` const True
+    case page.messages of
+      [message] -> do
+        iMessageEventKind message `shouldBe` EventMembership
+        iMessageIngressIdentity cfg message
+          `shouldBe` (NativeUserId "system", Just "iMessage system")
+      _ -> expectationFailure "expected one system event"
 
   it "parses the authoritative send status used to release uncertain sends" $ do
     parseIMessageSendState

@@ -11,6 +11,8 @@ module Max.IMessage
     IMessageSendState (..),
     parseIMessageSendState,
     parseIMessagePage,
+    iMessageEventKind,
+    iMessageIngressIdentity,
     iMessageCapabilities,
     iMessageWorker,
     iMessageDeliveryTransport,
@@ -237,7 +239,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
       parts <- messageContent runtime cfg message
       forM_ episodeScheduler $ \scheduler ->
         liftIO (bumpEpisode scheduler (GroupId registered.compatibilityConversationId))
-      let kind = if message.isReaction then EventReaction else EventMessage
+      let kind = iMessageEventKind message
           relations =
             catMaybes
               [ ReplyTo . NativeEventId <$> message.replyToGuid,
@@ -252,15 +254,13 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
                 compatibilitySegments = toJSON segments,
                 compatibilityRawMessage = message.text
               }
-          senderNative
-            | message.isFromMe = NativeUserId cfg.accountKey
-            | otherwise = NativeUserId message.sender
+          (senderNative, senderDisplayName) = iMessageIngressIdentity cfg message
           envelope =
             InboundEnvelope
               { endpointId = registered.endpointId,
                 nativeEventId = NativeEventId message.guid,
                 senderNativeId = senderNative,
-                senderDisplayName = message.senderName,
+                senderDisplayName,
                 occurredAt = message.createdAt,
                 receivedAt = received,
                 eventKind = kind,
@@ -318,6 +318,25 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
         confirm delivery = do
           _ <- confirmUnconfirmedDelivery delivery.deliveryId delivery.nativeEventId
           pure ()
+
+-- Some Messages database rows (for example group-photo changes) have no
+-- sender handle.  They remain durable provenance but are system events,
+-- never chat turns or proactive triggers.
+iMessageEventKind :: IMessageMessage -> EventKind
+iMessageEventKind message
+  | isUnattributedSystemEvent message = EventMembership
+  | message.isReaction = EventReaction
+  | otherwise = EventMessage
+
+iMessageIngressIdentity :: IMessageConfig -> IMessageMessage -> (NativeUserId, Maybe Text)
+iMessageIngressIdentity cfg message
+  | message.isFromMe = (NativeUserId cfg.accountKey, message.senderName)
+  | isUnattributedSystemEvent message = (NativeUserId "system", Just "iMessage system")
+  | otherwise = (NativeUserId message.sender, message.senderName)
+
+isUnattributedSystemEvent :: IMessageMessage -> Bool
+isUnattributedSystemEvent message =
+  not message.isFromMe && T.null (T.strip message.sender)
 
 iMessageDeliveryTransport :: HttpRuntime -> IMessageConfig -> DeliveryTransport
 iMessageDeliveryTransport runtime cfg =
