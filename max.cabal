@@ -152,6 +152,8 @@ library
         Max.MemoryStore
         Max.ModelCatalog
         Max.Platform
+        Max.Platform.Types
+        Max.Platform.Store
         Max.Prompt
         Max.Prompt.System
         Max.PromptFlow
@@ -397,6 +399,7 @@ test-suite max-test-db
     main-is:            Main.hs
     other-modules:
         Helpers
+        Max.CanonicalPlatformMigrationSpec
         Max.DB.ConversationCursorSpec
         Max.DB.EmbeddingMigrationSpec
         Max.DB.FilesSpec
@@ -417,6 +420,7 @@ test-suite max-test-db
         Max.DB.MessageSpec
         Max.DB.ReminderSpec
         Max.PromptIntegrationSpec
+        Max.PlatformStoreSpec
         Max.RecallSpec
     build-depends:
         , aeson                >= 2.2  && < 2.4

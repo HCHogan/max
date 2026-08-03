@@ -67,6 +67,16 @@ truncateAll pool = withConn pool $ \c -> do
       c
       "TRUNCATE \
       \  maintenance_leases, \
+      \  platform_ingest_cursors, \
+      \  message_relations, \
+      \  message_deliveries, \
+      \  message_dispatches, \
+      \  platform_events, \
+      \  principal_identities, \
+      \  principals, \
+      \  conversation_endpoints, \
+      \  conversations, \
+      \  platform_accounts, \
       \  context_plan_traces, \
       \  context_materialization_versions, \
       \  context_materializations, \

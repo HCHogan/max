@@ -17,6 +17,7 @@ module Main (main) where
 import Control.Exception (bracket)
 import Data.Text qualified as T
 import Helpers (truncateAll)
+import Max.CanonicalPlatformMigrationSpec qualified as CanonicalPlatformMigrationSpec
 import Max.ContextAdminSpec qualified as ContextAdminSpec
 import Max.ContextMaterializationMigrationSpec qualified as ContextMaterializationMigrationSpec
 import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
@@ -38,6 +39,7 @@ import Max.MaintenanceLeaseSpec qualified as MaintenanceLeaseSpec
 import Max.MemoryStoreMigrationSpec qualified as MemoryStoreMigrationSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
+import Max.PlatformStoreSpec qualified as PlatformStoreSpec
 import Max.RecallSpec qualified as RecallSpec
 import Max.UnboundedContextMigrationSpec qualified as UnboundedContextMigrationSpec
 import System.Environment (lookupEnv)
@@ -58,6 +60,7 @@ main = do
         [] -> putStrLn "migrations: nothing to apply (test DB already up to date)"
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
+        CanonicalPlatformMigrationSpec.spec pool
         EmbeddingMigrationSpec.spec pool
         MemoryStoreMigrationSpec.spec pool
         MaintenanceLeaseSpec.spec pool
@@ -79,6 +82,7 @@ main = do
         ReminderSpec.spec pool
         RecallSpec.spec pool
         PromptIntegrationSpec.spec pool
+        PlatformStoreSpec.spec pool
       -- Final wipe so a developer running tests against the dev DB
       -- doesn't leave random fixture rows behind.
       truncateAll pool
