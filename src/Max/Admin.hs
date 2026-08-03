@@ -75,8 +75,9 @@ import Max.DB.History (MessageCursor (..), messageStatsDaily)
 import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGrants)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
+import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
 import Max.Effects.Http (Http)
-import Max.Embedding (EmbeddingRecord, embedTexts, embeddingModelId, makeEmbeddingRecord)
+import Max.Embedding (EmbeddingRecord)
 import Max.Env (BotEnv (..))
 import Max.EpisodeStore (CaptureRun (..), CompartmentId (..), SourceRange (..), episodeHandleText)
 import Max.Log (parseLogLevel, renderLogLevel)
@@ -250,7 +251,7 @@ needsAuth = \case
 
 -- | App-lived worker: serve the admin API until the process dies.
 adminServer ::
-  (Http :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Embedding :> es, Http :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   AdminConfig ->
   BotEnv ->
   -- | Configured LLM profile names, for validating a model PATCH.
@@ -348,7 +349,7 @@ staticResponse segs = case lookup key staticAssets of
 -- Handlers.
 
 handle ::
-  (Http :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Embedding :> es, Http :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   BotEnv ->
   [Text] ->
   LogBuffer ->
@@ -581,16 +582,16 @@ handle env profiles logBuf r params body = case r of
     fetchMemoryHistoryAdmin (MemoryId mid) >>= \case
       Nothing -> pure notFound
       Just detail -> pure (ok detail)
-  RContextEmbeddings -> case env.beEmbed of
+  RContextEmbeddings -> embeddingSpace >>= \case
     Nothing -> do
       status <- loadEmbeddingStatus "(disabled)" (intParam "group")
       pure . ok $ addObjectFields ["configured" .= False] status
-    Just client -> do
-      status <- loadEmbeddingStatus (embeddingModelId client) (intParam "group")
+    Just space -> do
+      status <- loadEmbeddingStatus space.esModelId (intParam "group")
       pure . ok $ addObjectFields ["configured" .= True] status
   RContextRecall -> case (intParam "group", nonBlank =<< lookup "q" params) of
     (Just groupId, Just recallQuery) -> do
-      (embedding, embeddingError) <- recallEmbedding env recallQuery
+      (embedding, embeddingError) <- recallEmbedding recallQuery
       trace <-
         searchRecallTrace
           (currentConversationRecall (conversationScopeFor (GroupId groupId)))
@@ -663,16 +664,12 @@ addObjectFields fields = \case
   Object objectValue -> Object (objectValue <> KM.fromList fields)
   value -> value
 
-recallEmbedding :: (IOE :> es) => BotEnv -> Text -> Eff es (Maybe EmbeddingRecord, Maybe Text)
-recallEmbedding env recallQuery = case env.beEmbed of
-  Nothing -> pure (Nothing, Just "embedding is not configured; trace is lexical-only")
-  Just client ->
-    liftIO (embedTexts client [recallQuery]) >>= \case
-      Left err -> pure (Nothing, Just err)
-      Right [vector] -> case makeEmbeddingRecord client recallQuery vector of
-        Left err -> pure (Nothing, Just err)
-        Right record -> pure (Just record, Nothing)
-      Right _ -> pure (Nothing, Just "embedding provider returned an unexpected result count")
+recallEmbedding :: Embedding :> es => Text -> Eff es (Maybe EmbeddingRecord, Maybe Text)
+recallEmbedding recallQuery =
+  embedBatch [recallQuery] >>= \case
+    Left fault -> pure (Nothing, Just (renderEmbeddingFault fault))
+    Right [record] -> pure (Just record, Nothing)
+    Right _ -> pure (Nothing, Just "embedding provider returned an unexpected result count")
 
 recallTraceJson :: RecallTrace -> Value
 recallTraceJson trace =

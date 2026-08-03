@@ -2,6 +2,8 @@ module Max.Handler
   ( handleEvents,
     dispatchProactive,
     recordAs,
+    IngestOutcome (..),
+    ingestAllowsDownstream,
     isSilentReply,
     parseSilence,
   )
@@ -55,13 +57,36 @@ import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberNa
 import Max.Session (Session (..), loadSession, readSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
-import Max.Tasks (Note (..), TaskCancelled (..), TaskId (..), TaskInfo (..), absorbedTriggers, beginDispatch, endDispatch, inFlightTriggers, listTasks, pushToLatest, pushToTrigger)
+import Max.Tasks
+  ( Note (..),
+    TaskCancelled (..),
+    TaskId (..),
+    TaskInfo (..),
+    TurnCompletion (..),
+    beginTurnRuntime,
+    finishTurnRuntime,
+    inFlightTriggers,
+    listTasks,
+    pushToLatest,
+    pushToTrigger,
+    setTurnPhase,
+    turnRuntimeTaskId,
+  )
 import Max.ToolContext (ToolContext (..), TurnCapabilities (..), TurnIdentity (..))
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..))
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
 import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
+
+data IngestOutcome
+  = IngestDurable
+  | IngestFailed !T.Text
+  deriving stock (Show, Eq)
+
+ingestAllowsDownstream :: IngestOutcome -> Bool
+ingestAllowsDownstream IngestDurable = True
+ingestAllowsDownstream IngestFailed {} = False
 
 -- | May this turn be swallowed by one already running?
 --
@@ -211,11 +236,22 @@ handleEvents q fetchSig mIntent = loop
           -- and fold the just-arrived live-tail message.
           env :: BotEnv <- ask
           for_ env.beEpisodeScheduler $ \scheduler -> liftIO (bumpEpisode scheduler gm.groupId)
-          persist gm
-          enqueueImages fetchSig gm
-          enqueueForwards fetchSig gm
-          enqueueFiles fetchSig gm
-          onGroupMessage mIntent gm
+          persisted <- persist gm
+          if ingestAllowsDownstream persisted
+            then do
+              enqueueImages fetchSig gm
+              enqueueForwards fetchSig gm
+              enqueueFiles fetchSig gm
+              onGroupMessage mIntent gm
+            else do
+              let GroupId groupId = gm.groupId
+                  MessageId messageId = gm.messageId
+              logAttention "ingest: downstream work suppressed because ledger insert failed" $
+                object
+                  [ "group_id" .= groupId,
+                    "message_id" .= messageId,
+                    "state" .= ("not-durable" :: T.Text)
+                  ]
         EvPoke pk -> onPoke mIntent pk
         -- Auto-approve friend requests: being friends is what makes
         -- private query delivery (silent commands) reliable on QQ —
@@ -232,13 +268,15 @@ handleEvents q fetchSig mIntent = loop
 -- reply-to-bot has nothing to do with it.  A malformed command counts:
 -- it still looks like one to the reader, and it gets an error reply
 -- rather than an answer.
-persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es ()
+persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es IngestOutcome
 persist gm =
   trySync (uncurry insertGroupMessage (recordAs gm) gm) >>= \case
-    Right () -> pure ()
-    Left e ->
+    Right () -> pure IngestDurable
+    Left e -> do
+      let message = T.pack (show e)
       logAttention "db insert failed" $
-        object ["error" .= T.pack (show e)]
+        object ["error" .= message]
+      pure (IngestFailed message)
 
 onGroupMessage ::
   ( Blob :> es,
@@ -637,11 +675,11 @@ dispatchLLM mIntent origin absorbable companions gm = do
   -- tens of seconds away, and until it attaches, a concurrent trigger
   -- has to be able to see this question is already taken — as do !ps
   -- and !kill.  The registry entry opens now and the loop adopts it.
-  mTask <-
+  mTurn <-
     if started
-      then Just <$> liftIO (beginDispatch env.beTasks gm.groupId gm.userId (Just gm.messageId))
+      then Just <$> liftIO (beginTurnRuntime env.beTasks gm.groupId gm.userId (Just gm.messageId))
       else pure Nothing
-  case mTask of
+  case mTurn of
     Nothing -> do
       logInfo "llm dispatch declined: draining" ident
       -- The drain can run for a couple of minutes behind a long turn,
@@ -653,14 +691,14 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- react to.
       when (origin == OriginDirect) $
         sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
-    Just tid ->
+    Just turn ->
       void . async $
         ( localDomain "llm" $ do
             logInfo "llm dispatch" ident
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
             -- (and every trySyncIO on the way up) — the outer 'catch' is the
             -- one place a user-initiated @!kill@ comes to rest.
-            ( work tid `catchSync` \e -> do
+            ( work turn `catchSync` \e -> do
                 logAttention "llm dispatch crashed" $
                   object ["error" .= T.pack (show (e :: SomeException))]
                 -- The processing reaction is already gone (its 'finally' ran
@@ -685,10 +723,11 @@ dispatchLLM mIntent origin absorbable companions gm = do
             -- bookkeeping: a throwing send must not leak the shutdown
             -- slot.  A mid that never had the reaction un-reacts as a
             -- no-op.
-            absorbed <- liftIO (absorbedTriggers env.beTasks tid)
-            unserved <- liftIO $ do
+            completion <- liftIO $ do
               leaveDispatch env.beShutdown
-              endDispatch env.beTasks tid
+              finishTurnRuntime env.beTasks turn
+            let absorbed = completion.tcAbsorbedTriggers
+                unserved = completion.tcUnservedNotes
             for_ absorbed $ \m ->
               sendAction (SetMsgEmojiLike (MessageId m) processingFaceId False)
             -- Notes this turn accepted but never answered ('endDispatch'
@@ -713,8 +752,9 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 object ["message_id" .= srcMid]
               dispatchLLM mIntent orig NeverAbsorb [] src
   where
-    work tid = do
+    work turn = do
       env :: BotEnv <- ask
+      let tid = turnRuntimeTaskId turn
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
       injected <- tryInjectSupplement env s tid
@@ -726,7 +766,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
         -- trigger builds nothing, and the buffer must survive it) and
         -- not later (buildContext is about to read history).
         for_ mIntent $ \st -> liftIO (clearPendingIntent st gm.groupId)
-        withProcessingReaction (dispatch env s)
+        withProcessingReaction (dispatch turn env s)
 
     -- React [托腮] on the trigger while the dispatch runs — a quiet
     -- "seen, working on it" — and clear it once the reply (or
@@ -835,7 +875,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                   pure (isJust landed)
         _ -> pure False
 
-    dispatch env s = do
+    dispatch turn env s = do
       catalog :: ModelCatalog <- ask
       let capabilities = lookupModelCapabilities s.model catalog
           multimodal = maybe False supportsMultimodal capabilities
@@ -851,6 +891,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- gate that registers the use_skill tool reading the bodies.
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
+      liftIO (setTurnPhase turn "context")
       ctx <-
         buildContextWithReadMode
           limits
@@ -879,7 +920,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- bounded together (see "Max.ReplySend").
       streamBudget <- liftIO (newTVarIO freshBudget)
       let output = AgentOutputContext target debugEff streamBudget
-      result <- agentTurn agentCtx s.model ctx (handleAgentEvent output)
+      result <- agentTurn turn agentCtx s.model ctx (handleAgentEvent output)
       case result.reply of
         -- The loop produced no model-authored reply — upstream API
         -- down, or the turn-cap fallback call failed too.  Error text

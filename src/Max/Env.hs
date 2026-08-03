@@ -22,7 +22,6 @@ import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
 import Max.CliProxy (CliProxyConfig)
-import Max.Embedding (EmbedClient)
 import Max.EpisodeScheduler (EpisodeScheduler)
 import Max.Intent (IntentConfig)
 import Max.Reminder (ReminderScheduler)
@@ -89,7 +88,7 @@ data BotEnv = BotEnv
     -- Dispatch itself lives in the intent worker; this handle is for
     -- the @!proactive@ command's status display.
     beIntent :: !(Maybe IntentConfig),
-    -- | Embeddings client when configured — the extractor uses it for
-    -- semantic dedup of new memories.
-    beEmbed :: !(Maybe EmbedClient)
+    -- | Capability flag used only for product gating/status.  Embedding calls
+    -- themselves go through 'Max.Effects.Embedding'.
+    beEmbeddingEnabled :: !Bool
   }

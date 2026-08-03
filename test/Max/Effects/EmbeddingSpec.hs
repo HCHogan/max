@@ -1,0 +1,24 @@
+module Max.Effects.EmbeddingSpec (spec) where
+
+import Effectful (runEff)
+import Max.Effects.Embedding
+import Max.Embedding (EmbeddingRecord (..))
+import Test.Hspec
+
+spec :: Spec
+spec = describe "Embedding effect" $ do
+  it "injects model space and validated records without exposing a client" $ do
+    let space = EmbeddingSpace "fake-v2"
+        record = EmbeddingRecord "fake-v2" 3 "hash" "[1,2,3]"
+    result <-
+      runEff . runEmbeddingWith (Just space) (\texts -> pure (Right [record | _ <- texts])) $
+        (,) <$> embeddingSpace <*> embedBatch ["hello"]
+    result `shouldBe` (Just space, Right [record])
+
+  it "lets tests classify transport and shape failures" $ do
+    let fault = EmbeddingFault EmbeddingInvalidShape "mixed dimensions"
+    result <-
+      runEff . runEmbeddingWith (Just (EmbeddingSpace "fake")) (\_ -> pure (Left fault)) $
+        embedBatch ["hello"]
+    result `shouldBe` Left fault
+    renderEmbeddingFault fault `shouldBe` "invalid-shape: mixed dimensions"

@@ -1,51 +1,367 @@
 {-# LANGUAGE TypeFamilies #-}
 
 -- |
--- A tool registry as an 'Effect'.
+-- Validated tool catalog and execution boundary.
 --
--- 'Tools' exposes two operations: list the tool specs (for advertising
--- to the LLM), and invoke a named tool with JSON arguments.  The
--- interpreter 'runTools' takes the concrete tool list at install time.
+-- A tool runner is still an in-process closure, but it can only be reached
+-- through a 'ToolCatalog'.  Catalog construction binds the closure to stable
+-- metadata, validates its JSON schema, rejects duplicate or drifting names,
+-- and computes the schema hash used by plans and diagnostics.
 --
--- The split between 'Tool' (in-process value) and 'ToolSpec' (wire
--- description) lets the 'Agent' loop hand specs to the LLM and
--- dispatch invocations through the effect without having tool values
--- escape.
+-- The interpreter also normalises execution into 'ToolOutcome'.  This keeps
+-- model-facing error text compatible with the old @Either Text Value@ runners
+-- while making retry/deoptimisation safety explicit to orchestration code.
 module Max.Effects.Tools
   ( Tools,
     Tool (..),
+    ToolRef (..),
+    SchemaVersion (..),
+    SchemaHash (..),
+    ToolEffect (..),
+    ToolParallelism (..),
+    ToolRetryClass (..),
+    ToolAuthority (..),
+    ToolDefinition (..),
+    CatalogTool (..),
+    ToolCatalog,
+    ToolCatalogError (..),
+    ToolFault (..),
+    ToolOutcome (..),
+    buildToolCatalog,
+    catalogTools,
     runTools,
     listToolSpecs,
+    listCatalogTools,
     invokeTool,
+    outcomeResult,
   )
 where
 
-import Data.Aeson (Value)
+import Crypto.Hash.SHA256 qualified as SHA256
+import Control.Exception (Exception)
+import Data.Aeson (Object, Value (..), encode)
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Lazy qualified as LBS
+import Data.Foldable (foldlM, toList, traverse_)
+import Data.List (find)
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Scientific (floatingOrInteger)
+import Data.Set (Set)
 import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Max.Effects.LLM (ToolSpec (..))
+import Max.Util (trySync)
 
--- | One tool the agent can call.  The runner is polymorphic in the
--- agent's effect stack, so tools naturally pull in DB / HTTP / etc.
--- as needed.
+-- | Existing tool implementation surface.  Runners retain their historical
+-- result type so individual tools can be migrated without changing the wire
+-- errors the model has learned to recover from.  They are never registered
+-- directly: 'buildToolCatalog' first binds them to a 'ToolDefinition'.
 data Tool es = Tool
   { toolName :: !Text,
     toolDescription :: !Text,
-    -- | JSON Schema describing the @arguments@ object the model must
-    -- supply.  Pass-through to the @parameters@ field of the wire
-    -- tool spec.
     toolSchema :: !Value,
     toolRun :: Value -> Eff es (Either Text Value)
   }
 
-toToolSpec :: Tool es -> ToolSpec
-toToolSpec t =
+newtype ToolRef = ToolRef {unToolRef :: Text}
+  deriving stock (Show, Eq, Ord)
+
+newtype SchemaVersion = SchemaVersion {unSchemaVersion :: Int}
+  deriving stock (Show, Eq, Ord)
+
+newtype SchemaHash = SchemaHash {unSchemaHash :: Text}
+  deriving stock (Show, Eq, Ord)
+
+-- | Effects relevant to scheduling, approvals and recovery.  Domains are
+-- stable machine-readable identifiers such as @conversation.db@ or
+-- @sandbox.fs@; they are deliberately not user-facing prose.
+data ToolEffect
+  = EffectRead !Text
+  | EffectWrite !Text
+  | EffectSend !Text
+  | EffectLLM
+  | EffectReflect
+  deriving stock (Show, Eq, Ord)
+
+data ToolParallelism
+  = ParallelSafe
+  | SequentialOnly
+  deriving stock (Show, Eq, Ord)
+
+data ToolRetryClass
+  = RetrySafe
+  | RetryIdempotent
+  | RetryUnsafe
+  deriving stock (Show, Eq, Ord)
+
+-- | Authority the tool runner may consume.  Conversation authority is minted
+-- from the current turn; it is never reconstructed from model arguments.
+data ToolAuthority
+  = CurrentConversation
+  | CurrentEndpoint
+  | ProcessResource !Text
+  deriving stock (Show, Eq, Ord)
+
+-- | Static declaration.  This is the source of truth for capability counts,
+-- scheduling and future Plan validation.
+data ToolDefinition = ToolDefinition
+  { tdRef :: !ToolRef,
+    tdSchemaVersion :: !SchemaVersion,
+    tdEffects :: !(Set ToolEffect),
+    tdParallelism :: !ToolParallelism,
+    tdRetryClass :: !ToolRetryClass,
+    tdAuthorities :: !(Set ToolAuthority)
+  }
+  deriving stock (Show, Eq)
+
+-- | Safe catalog view: all planning/diagnostic metadata, no executable
+-- closure.  Description and schema come from the same registered tool that is
+-- advertised to the model.
+data CatalogTool = CatalogTool
+  { ctDefinition :: !ToolDefinition,
+    ctDescription :: !Text,
+    ctSchema :: !Value,
+    ctSchemaHash :: !SchemaHash
+  }
+  deriving stock (Show, Eq)
+
+data RegisteredTool es = RegisteredTool
+  { rtView :: !CatalogTool,
+    rtRun :: Value -> Eff es (Either Text Value)
+  }
+
+newtype ToolCatalog es = ToolCatalog (Map ToolRef (RegisteredTool es))
+
+instance Show (ToolCatalog es) where
+  show = show . catalogTools
+
+data ToolCatalogError
+  = DuplicateToolDefinition !ToolRef
+  | DuplicateToolRunner !ToolRef
+  | MissingToolDefinition !ToolRef
+  | MissingToolRunner !ToolRef
+  | EmptyToolDescription !ToolRef
+  | InvalidToolSchema !ToolRef !Text
+  | InvalidToolMetadata !ToolRef !Text
+  deriving stock (Show, Eq)
+
+instance Exception ToolCatalogError
+
+data ToolFault = ToolFault
+  { tfCode :: !Text,
+    tfMessage :: !Text,
+    tfRetryClass :: !ToolRetryClass
+  }
+  deriving stock (Show, Eq)
+
+-- | Normalised effect outcome.  Async cancellation never appears here:
+-- 'trySync' rethrows it.  Legacy mutating runners that return an error or
+-- throw are conservatively classified as outcome-unknown because the kernel
+-- cannot prove whether they crossed their external effect boundary.
+data ToolOutcome
+  = ToolRejected !ToolFault
+  | ToolFailedBeforeEffect !ToolFault
+  | ToolSucceeded !Value
+  | ToolCommitted !Value
+  | ToolOutcomeUnknown !ToolFault
+  deriving stock (Show, Eq)
+
+catalogTools :: ToolCatalog es -> [CatalogTool]
+catalogTools (ToolCatalog byRef) = map (.rtView) (Map.elems byRef)
+
+buildToolCatalog :: [ToolDefinition] -> [Tool es] -> Either ToolCatalogError (ToolCatalog es)
+buildToolCatalog definitions runners = do
+  definitionsByRef <- uniqueDefinitions definitions
+  runnersByRef <- uniqueRunners runners
+  traverse_ (requireRunner runnersByRef) (Map.keys definitionsByRef)
+  traverse_ (requireDefinition definitionsByRef) (Map.keys runnersByRef)
+  registered <- traverseWithKeyEither (register runnersByRef) definitionsByRef
+  pure (ToolCatalog registered)
+  where
+    register runnersByRef ref definition = do
+      validateDefinition definition
+      runner <- maybe (Left (MissingToolRunner ref)) Right (Map.lookup ref runnersByRef)
+      if T.null (T.strip runner.toolDescription)
+        then Left (EmptyToolDescription ref)
+        else do
+          validateSchema ref runner.toolSchema
+          pure
+            RegisteredTool
+              { rtView =
+                  CatalogTool
+                    { ctDefinition = definition,
+                      ctDescription = runner.toolDescription,
+                      ctSchema = runner.toolSchema,
+                      ctSchemaHash = schemaHash runner.toolSchema
+                    },
+                rtRun = runner.toolRun
+              }
+
+    requireRunner runnersByRef ref =
+      if Map.member ref runnersByRef then Right () else Left (MissingToolRunner ref)
+    requireDefinition definitionsByRef ref =
+      if Map.member ref definitionsByRef then Right () else Left (MissingToolDefinition ref)
+
+uniqueDefinitions :: [ToolDefinition] -> Either ToolCatalogError (Map ToolRef ToolDefinition)
+uniqueDefinitions = foldlM insertOne Map.empty
+  where
+    insertOne acc definition
+      | Map.member definition.tdRef acc = Left (DuplicateToolDefinition definition.tdRef)
+      | otherwise = Right (Map.insert definition.tdRef definition acc)
+
+uniqueRunners :: [Tool es] -> Either ToolCatalogError (Map ToolRef (Tool es))
+uniqueRunners = foldlM insertOne Map.empty
+  where
+    insertOne acc runner =
+      let ref = ToolRef runner.toolName
+       in if Map.member ref acc
+            then Left (DuplicateToolRunner ref)
+            else Right (Map.insert ref runner acc)
+
+validateDefinition :: ToolDefinition -> Either ToolCatalogError ()
+validateDefinition definition
+  | T.null (T.strip definition.tdRef.unToolRef) = bad "tool ref is blank"
+  | definition.tdSchemaVersion.unSchemaVersion <= 0 = bad "schema version must be positive"
+  | definition.tdParallelism == ParallelSafe && any isMutating definition.tdEffects =
+      bad "mutating, sending, LLM, or reflective tools cannot declare ParallelSafe"
+  | definition.tdRetryClass == RetrySafe && any isMutating definition.tdEffects =
+      bad "mutating, sending, LLM, or reflective tools cannot declare RetrySafe"
+  | otherwise = Right ()
+  where
+    bad = Left . InvalidToolMetadata definition.tdRef
+
+isMutating :: ToolEffect -> Bool
+isMutating EffectRead {} = False
+isMutating _ = True
+
+schemaHash :: Value -> SchemaHash
+schemaHash =
+  SchemaHash
+    . TE.decodeUtf8
+    . B16.encode
+    . SHA256.hash
+    . LBS.toStrict
+    . encode
+
+validateSchema :: ToolRef -> Value -> Either ToolCatalogError ()
+validateSchema ref = \case
+  Object schema -> do
+    case KeyMap.lookup "type" schema of
+      Just (String "object") -> Right ()
+      _ -> invalid "root type must be object"
+    properties <- case KeyMap.lookup "properties" schema of
+      Nothing -> Right KeyMap.empty
+      Just (Object p) -> Right p
+      Just _ -> invalid "properties must be an object"
+    required <- case KeyMap.lookup "required" schema of
+      Nothing -> Right []
+      Just (Array xs) -> traverse requiredName (toList xs)
+      Just _ -> invalid "required must be an array of strings"
+    traverse_ (validatePropertySchema ref) (KeyMap.toList properties)
+    case find (not . (`KeyMap.member` properties) . Key.fromText) required of
+      Nothing -> Right ()
+      Just name -> invalid ("required property has no schema: " <> name)
+  _ -> invalid "schema must be a JSON object"
+  where
+    invalid :: Text -> Either ToolCatalogError a
+    invalid = Left . InvalidToolSchema ref
+    requiredName (String name) = Right name
+    requiredName _ = invalid "required must contain only strings"
+
+validatePropertySchema :: ToolRef -> (Key.Key, Value) -> Either ToolCatalogError ()
+validatePropertySchema ref (name, Object propertySchema) =
+  case KeyMap.lookup "type" propertySchema of
+    Nothing -> Right ()
+    Just (String kind)
+      | kind `elem` ["string", "integer", "number", "boolean", "object", "array"] -> Right ()
+      | otherwise -> invalid ("unsupported type for " <> key <> ": " <> kind)
+    Just _ -> invalid ("type for " <> key <> " must be a string")
+  where
+    key = Key.toText name
+    invalid = Left . InvalidToolSchema ref
+validatePropertySchema ref (name, _) =
+  Left (InvalidToolSchema ref ("property schema must be an object: " <> Key.toText name))
+
+validateArguments :: CatalogTool -> Value -> Either ToolFault ()
+validateArguments view = \case
+  Object args -> do
+    let schema = case view.ctSchema of
+          Object o -> o
+          _ -> KeyMap.empty -- impossible after catalog validation
+        properties = case KeyMap.lookup "properties" schema of
+          Just (Object p) -> p
+          _ -> KeyMap.empty
+        required = case KeyMap.lookup "required" schema of
+          Just (Array xs) -> [name | String name <- toList xs]
+          _ -> []
+    case find (not . (`KeyMap.member` args) . Key.fromText) required of
+      Just name -> Left (rejectedFault view ("missing required property: " <> name))
+      Nothing -> traverse_ (validatePresent args view) (KeyMap.toList properties)
+  _ -> Left (rejectedFault view "arguments must be a JSON object")
+
+validatePresent :: Object -> CatalogTool -> (Key.Key, Value) -> Either ToolFault ()
+validatePresent args view (name, Object propertySchema) = case KeyMap.lookup name args of
+  Nothing -> Right ()
+  Just value -> do
+    case KeyMap.lookup "type" propertySchema of
+      Nothing -> Right ()
+      Just (String kind)
+        | valueHasType kind value -> Right ()
+        | otherwise -> Left (rejectedFault view (Key.toText name <> " must be " <> kind))
+      _ -> Right ()
+    validateEnum value
+    validateBounds value
+  where
+    validateEnum value = case KeyMap.lookup "enum" propertySchema of
+      Just (Array allowed)
+        | value `notElem` toList allowed ->
+            Left (rejectedFault view (Key.toText name <> " is not an allowed value"))
+      _ -> Right ()
+
+    validateBounds (Number n) = do
+      case KeyMap.lookup "minimum" propertySchema of
+        Just (Number minimumValue)
+          | n < minimumValue -> Left (rejectedFault view (Key.toText name <> " is below minimum"))
+        _ -> Right ()
+      case KeyMap.lookup "maximum" propertySchema of
+        Just (Number maximumValue)
+          | n > maximumValue -> Left (rejectedFault view (Key.toText name <> " is above maximum"))
+        _ -> Right ()
+    validateBounds _ = Right ()
+validatePresent _ view (name, _) =
+  Left (rejectedFault view ("invalid registered schema for " <> Key.toText name))
+
+valueHasType :: Text -> Value -> Bool
+valueHasType "string" String {} = True
+valueHasType "integer" (Number n) = case floatingOrInteger @Double @Integer n of
+  Right _ -> True
+  Left _ -> False
+valueHasType "number" Number {} = True
+valueHasType "boolean" Bool {} = True
+valueHasType "object" Object {} = True
+valueHasType "array" Array {} = True
+valueHasType _ _ = False
+
+rejectedFault :: CatalogTool -> Text -> ToolFault
+rejectedFault view message =
+  ToolFault
+    { tfCode = "invalid_arguments",
+      tfMessage = message,
+      tfRetryClass = view.ctDefinition.tdRetryClass
+    }
+
+toToolSpec :: RegisteredTool es -> ToolSpec
+toToolSpec registered =
   ToolSpec
-    { specName = t.toolName,
-      specDescription = t.toolDescription,
-      specSchema = t.toolSchema
+    { specName = registered.rtView.ctDefinition.tdRef.unToolRef,
+      specDescription = registered.rtView.ctDescription,
+      specSchema = registered.rtView.ctSchema
     }
 
 --------------------------------------------------------------------------------
@@ -53,31 +369,64 @@ toToolSpec t =
 
 data Tools :: Effect where
   ListToolSpecs :: Tools m [ToolSpec]
-  -- | @InvokeTool name args@.  Returns @Left@ for "tool not found" or
-  -- whatever error the tool itself surfaces; @Right@ for a normal
-  -- result.  Exceptions from the tool runner propagate.
-  InvokeTool :: Text -> Value -> Tools m (Either Text Value)
+  ListCatalogTools :: Tools m [CatalogTool]
+  InvokeTool :: Text -> Value -> Tools m ToolOutcome
 
 type instance DispatchOf Tools = Dynamic
 
--- | Install a tool registry on top of an effect stack.  The tools'
--- runners run in the post-install stack @es@, so they have access to
--- everything below.
 runTools ::
   forall es a.
-  [Tool es] ->
+  ToolCatalog es ->
   Eff (Tools : es) a ->
   Eff es a
-runTools tools = interpret $ \_ -> \case
-  ListToolSpecs -> pure (map toToolSpec tools)
-  InvokeTool name args -> case Map.lookup name byName of
-    Nothing -> pure (Left ("unknown tool: " <> name))
-    Just t -> t.toolRun args
+runTools (ToolCatalog byRef) = interpret $ \_ -> \case
+  ListToolSpecs -> pure (map toToolSpec (Map.elems byRef))
+  ListCatalogTools -> pure (map (.rtView) (Map.elems byRef))
+  InvokeTool name args -> case Map.lookup (ToolRef name) byRef of
+    Nothing -> pure . ToolRejected $ ToolFault "unknown_tool" ("unknown tool: " <> name) RetrySafe
+    Just registered -> case validateArguments registered.rtView args of
+      Left fault -> pure (ToolRejected fault)
+      Right () -> execute args registered
   where
-    byName = Map.fromList [(t.toolName, t) | t <- tools]
+    execute args registered = do
+      attempted <- trySync (registered.rtRun args)
+      pure $ case attempted of
+        Left exception -> failure "exception" (T.pack (show exception))
+        Right (Left message) -> failure "tool_error" message
+        Right (Right value)
+          | hasCommitEffects definition -> ToolCommitted value
+          | otherwise -> ToolSucceeded value
+      where
+        definition = registered.rtView.ctDefinition
+        failure code message =
+          let fault = ToolFault code message definition.tdRetryClass
+           in if hasCommitEffects definition
+                then ToolOutcomeUnknown fault
+                else ToolFailedBeforeEffect fault
+
+hasCommitEffects :: ToolDefinition -> Bool
+hasCommitEffects = any isCommitEffect . (.tdEffects)
+  where
+    isCommitEffect EffectWrite {} = True
+    isCommitEffect EffectSend {} = True
+    isCommitEffect _ = False
 
 listToolSpecs :: Tools :> es => Eff es [ToolSpec]
 listToolSpecs = send ListToolSpecs
 
-invokeTool :: Tools :> es => Text -> Value -> Eff es (Either Text Value)
+listCatalogTools :: Tools :> es => Eff es [CatalogTool]
+listCatalogTools = send ListCatalogTools
+
+invokeTool :: Tools :> es => Text -> Value -> Eff es ToolOutcome
 invokeTool name args = send (InvokeTool name args)
+
+outcomeResult :: ToolOutcome -> Either Text Value
+outcomeResult = \case
+  ToolRejected fault -> Left fault.tfMessage
+  ToolFailedBeforeEffect fault -> Left fault.tfMessage
+  ToolSucceeded value -> Right value
+  ToolCommitted value -> Right value
+  ToolOutcomeUnknown fault -> Left (fault.tfMessage <> " (outcome unknown; not retried)")
+
+traverseWithKeyEither :: (k -> a -> Either e b) -> Map k a -> Either e (Map k b)
+traverseWithKeyEither f = Map.traverseWithKey f

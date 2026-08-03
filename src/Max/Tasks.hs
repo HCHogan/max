@@ -7,28 +7,27 @@
 -- Each entry carries an inbox the agent loop drains between tool rounds;
 -- @!feedback@, an implicit supplement and a poke all push into it.
 -- @!ps@ enumerates entries; @!kill@ runs the entry's cancel action,
--- typically a @throwTo@ at the worker thread (the agent's @bracket@
--- releases cleanly on the way out).
+-- typically a @throwTo@ at the worker thread.  The dispatch root finalizes the
+-- runtime on every exit path.
 --
--- __One index, created early.__  'beginDispatch' creates the entry at
+-- __One runtime, created early.__  'beginTurnRuntime' creates the entry at
 -- dispatch entry, not the agent loop: session load, the supplement
 -- classifier's own LLM round-trip and 'Max.Prompt.buildContext' waiting
 -- up to 30s for the trigger's images all run before a loop exists.  A
 -- registry that only heard about a dispatch once its loop started would
 -- spend that window telling @!ps@ the group was idle, telling @!kill@
 -- there was nothing to kill, and telling a concurrent trigger that this
--- question was still unanswered.  The loop therefore 'attachTask's to
--- the entry already there, filling in what only it can supply (the
--- cancel action) and honouring a @!kill@ that arrived while it booted.
+-- question was still unanswered.  That exact 'TurnRuntime' is passed to the
+-- loop, which fills in what only it can supply (the cancel action) and honours
+-- a @!kill@ that arrived while it booted.  No trigger-id adoption is involved
+-- on the production path.
 --
 -- __Steering is not owner-scoped.__  Anybody may feed a running turn.
 -- Notes are rendered the way history lines are — @[#id] \<name\>: text@ —
 -- so the model sees who contributed what and can address them.
 --
--- Not an effect (yet): the registry is a plain handle threaded through
--- @main@.  If we ever need to mock for tests, we can swap to a @Tasks@
--- effect that wraps these operations — the call sites are already
--- constrained enough that it'd be a mechanical change.
+-- The registry remains a small STM runtime rather than an Effectful effect:
+-- tests construct it in memory, while Agent receives only its per-turn object.
 module Max.Tasks
   ( -- * Registry
     TaskRegistry,
@@ -37,6 +36,16 @@ module Max.Tasks
     -- * Lifecycle
     TaskId (..),
     TaskHandle (..),
+    TurnRuntime,
+    TurnCompletion (..),
+    beginTurnRuntime,
+    activateTurnRuntime,
+    finishTurnRuntime,
+    turnRuntimeTaskId,
+    setTurnPhase,
+    checkTurnCancellation,
+    drainTurnInbox,
+    requeueTurnInbox,
     beginDispatch,
     endDispatch,
     attachTask,
@@ -61,7 +70,7 @@ module Max.Tasks
 where
 
 import Control.Concurrent.STM
-import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException)
+import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException, throwIO)
 import Control.Monad (filterM, void)
 import Data.Foldable (for_)
 import Data.Int (Int64)
@@ -107,6 +116,16 @@ data TaskHandle = TaskHandle
     -- for this dispatch.  Then and only then does 'releaseTask' delete
     -- it; normally the dispatch's own @finally@ owns that.
     thOwned :: !Bool
+  }
+
+-- | The explicit lifecycle object for one dispatch.  It is created before the
+-- worker is spawned, passed directly to the Agent, and finalized by the
+-- dispatch root.  No trigger-id lookup is needed on the production path.
+newtype TurnRuntime = TurnRuntime TaskEntry
+
+data TurnCompletion = TurnCompletion
+  { tcAbsorbedTriggers :: !(Set Int64),
+    tcUnservedNotes :: ![Note]
   }
 
 -- | The one registry entry.  Fields the agent loop supplies are 'TVar's
@@ -178,15 +197,11 @@ instance Exception TaskCancelled where
 --------------------------------------------------------------------------------
 -- Lifecycle
 
--- | Open an entry for a dispatch that is starting.  Call at dispatch
--- entry, ahead of the slow prologue — see the module header.
---
--- @trigger@ is the message that caused it; pass 'Nothing' when there
--- isn't one.  A poke's synthetic 'MessageId' 0 counts as no trigger:
--- it is a sentinel every poke shares, so treating it as a real id would
--- make two concurrent pokes indistinguishable.
-beginDispatch :: TaskRegistry -> GroupId -> UserId -> Maybe MessageId -> IO TaskId
-beginDispatch reg gid uid mTrigger = do
+-- | Create the one runtime object that owns a dispatch's task lifecycle.
+-- Visibility begins in the same STM transaction that allocates its task id,
+-- before context/media collection or any LLM call.
+beginTurnRuntime :: TaskRegistry -> GroupId -> UserId -> Maybe MessageId -> IO TurnRuntime
+beginTurnRuntime reg gid uid mTrigger = do
   now <- getCurrentTime
   inbox <- newTVarIO []
   absorbed <- newTVarIO Set.empty
@@ -201,7 +216,7 @@ beginDispatch reg gid uid mTrigger = do
             { teId = tid,
               teGroup = gid,
               teUser = uid,
-              teTrigger = realTrigger,
+              teTrigger = realTrigger mTrigger,
               teStartedAt = now,
               teInbox = inbox,
               teAbsorbed = absorbed,
@@ -210,11 +225,68 @@ beginDispatch reg gid uid mTrigger = do
               teKilled = killed
             }
     writeTVar reg.trState (n + 1, Map.insert tid entry m)
-    pure tid
+    pure (TurnRuntime entry)
   where
-    realTrigger = case mTrigger of
-      Just (MessageId m) | m /= 0 -> Just m
+    realTrigger = \case
+      Just (MessageId message) | message /= 0 -> Just message
       _ -> Nothing
+
+turnRuntimeTaskId :: TurnRuntime -> TaskId
+turnRuntimeTaskId (TurnRuntime entry) = entry.teId
+
+-- | Attach the worker's cancellation action and enter its first executable
+-- phase.  A kill accepted during context collection is returned explicitly so
+-- the caller can stop before spending an LLM turn.
+activateTurnRuntime :: TurnRuntime -> Text -> IO () -> IO Bool
+activateTurnRuntime (TurnRuntime entry) phase cancel = atomically $ do
+  writeTVar entry.teKind phase
+  writeTVar entry.teCancel (Just cancel)
+  readTVar entry.teKilled
+
+setTurnPhase :: TurnRuntime -> Text -> IO ()
+setTurnPhase (TurnRuntime entry) phase = atomically (writeTVar entry.teKind phase)
+
+checkTurnCancellation :: TurnRuntime -> IO ()
+checkTurnCancellation (TurnRuntime entry) = do
+  killed <- readTVarIO entry.teKilled
+  if killed then throwIO TaskCancelled else pure ()
+
+drainTurnInbox :: TurnRuntime -> IO [Note]
+drainTurnInbox (TurnRuntime entry) = atomically $ do
+  notes <- readTVar entry.teInbox
+  writeTVar entry.teInbox []
+  pure notes
+
+requeueTurnInbox :: TurnRuntime -> [Note] -> IO ()
+requeueTurnInbox (TurnRuntime entry) notes =
+  atomically (modifyTVar' entry.teInbox (notes <>))
+
+-- | The dispatch root is the sole finalizer.  It atomically removes the task
+-- and returns everything its epilogue needs, so cleanup cannot observe a
+-- half-removed entry.  Killed turns deliberately drop pending notes.
+finishTurnRuntime :: TaskRegistry -> TurnRuntime -> IO TurnCompletion
+finishTurnRuntime reg (TurnRuntime entry) = atomically $ do
+  (n, entries) <- readTVar reg.trState
+  absorbed <- readTVar entry.teAbsorbed
+  killed <- readTVar entry.teKilled
+  notes <- if killed then pure [] else readTVar entry.teInbox
+  writeTVar reg.trState (n, Map.delete entry.teId entries)
+  pure
+    TurnCompletion
+      { tcAbsorbedTriggers = absorbed,
+        tcUnservedNotes = notes
+      }
+
+-- | Open an entry for a dispatch that is starting.  Call at dispatch
+-- entry, ahead of the slow prologue — see the module header.
+--
+-- @trigger@ is the message that caused it; pass 'Nothing' when there
+-- isn't one.  A poke's synthetic 'MessageId' 0 counts as no trigger:
+-- it is a sentinel every poke shares, so treating it as a real id would
+-- make two concurrent pokes indistinguishable.
+beginDispatch :: TaskRegistry -> GroupId -> UserId -> Maybe MessageId -> IO TaskId
+beginDispatch reg gid uid mTrigger =
+  turnRuntimeTaskId <$> beginTurnRuntime reg gid uid mTrigger
 
 -- | Close it.  Belongs in the same @finally@ that releases the shutdown
 -- slot: a leak here would make a finished question look permanently

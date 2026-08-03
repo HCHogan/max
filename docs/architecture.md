@@ -28,9 +28,10 @@ skills/*.md        builtin skill manuals, baked into the binary (file-embed);
 
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),
                    segments, events, actions, server
-src/Max/Effects/   effectful 2.5 effects: Http, Blob, PlatformApi, Outbound (visible send
+src/Max/Effects/   effectful 2.5 effects: Http, Blob, Embedding (injectable validated
+                   vectors), PlatformApi, Outbound (visible send
                    + persistence), LLM (OpenAI + Anthropic, buffered or streamed),
-                   Tools, ToolOutput (turn-scoped tool media), Agent
+                   validated Tools catalog, ToolOutput (turn-scoped tool media), Agent
                    (DB effect from upstream effectful-postgresql)
 src/Max/LLM/       Stream: SSE framing + the two protocols' delta reducers, pure
 src/Max/Http/      Json: bounded buffered POST + domain retries; Stream: SSE folding;
@@ -272,7 +273,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Sandbox / browser containers | destroyed on exit, reaped on boot |
 
 Effect stack at the top of `runApp`:
-`IOE → Concurrent → Log → Http → Blob → WithConnection → PlatformApi → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.
+`IOE → Concurrent → Log → Http → Embedding → Blob → WithConnection → PlatformApi → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.
 
 ### Outbound HTTP ownership
 
@@ -291,7 +292,8 @@ app/Main
               ├─ Http effect ───── bounded downloads / redirect lookup
               ├─ Http.Json ─────── buffered LLM + Tavily JSON POST
               ├─ Http.Stream ───── LLM SSE POST
-              ├─ Embedding ─────── bounded OpenAI-compatible JSON POST
+              ├─ Embedding effect ─ validated records over a bounded
+              │                     OpenAI-compatible JSON POST
               ├─ MCP.Client ────── bounded browser MCP JSON/SSE response
               └─ Wechatpad ─────── bounded outbound relay POST
 ```
@@ -347,7 +349,7 @@ exact surface segments are recorded.  A result distinguishes rejection from
 delivery without a durable row, so callers never retry something the user may
 already have seen.
 
-`Agent` depends on `LLM`, scoped `Tools`, task/concurrency primitives, logging,
+`Agent` depends on `LLM`, scoped `Tools`, an explicit `TurnRuntime`, logging,
 and its typed `AgentEventSink`; it has no OneBot segment, `Outbound`, or message
 persistence dependency.  The production sink is assembled per dispatch in
 `Handler`, where reply target, debug policy, and the shared stream budget are
@@ -357,19 +359,36 @@ Each `AgentTurn` adds two narrower scopes inside the process stack:
 
 ```
 Handler
-  └─ AgentContext (ToolContext + LLM effort)
+  └─ TurnRuntime + AgentContext (ToolContext + LLM effort)
        └─ Agent
+            ├─ validated catalog (schema hash + effects + authority + retry class)
             ├─ runTools (allToolsFor ToolContext)
             │    └─ concrete tool ──queueInlineMedia──▶ ToolOutput
             └─ drainInlineMedia ──▶ next LLM tool round
 ```
 
+Catalog construction rejects duplicate names, malformed schemas, and
+definition/runner drift before the LLM sees the tool list. Calls in one model
+round run concurrently only when every definition declares `ParallelSafe`;
+write/send/LLM/reflective calls serialize. Results are normalized as rejected,
+failed-before-effect, succeeded, committed, or outcome-unknown, while keeping
+the existing model-facing error strings. `!version` counts the same gated
+inventory used to build the live catalog.
+
 `ToolContext` contains only turn identity and capability gates, so concrete
 tools do not import `Agent`. `ToolOutput` owns a fresh media queue per turn;
 draining a round clears queued media but preserves the turn-wide attachment
 counter. This prevents concurrent turns from sharing output state and keeps
-mutable queue mechanics out of context records. Capability reporting uses a
-pure gate projection rather than constructing tools with dummy ids.
+mutable queue mechanics out of context records. Embedding consumers use the
+injectable `Embedding` effect; only its production interpreter holds the HTTP
+client/model configuration.
+
+`Handler` creates a `TurnRuntime` at dispatch admission and is its sole
+finalizer. The same object carries phase, cancellation, feedback, absorbed
+messages, and task identity through context collection and every Agent node;
+there is no trigger-id lookup/adoption on the production path. Failed message
+persistence is an explicit non-durable ingest state: media jobs, agent dispatch,
+and proactive work are suppressed while the event loop remains alive.
 
 Workers are started as one flat list (`withLinkedWorkers` in `app/Main.hs`),
 each `link`ed so a worker dying silently takes the process down rather than

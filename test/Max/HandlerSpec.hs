@@ -3,7 +3,7 @@
 module Max.HandlerSpec (spec) where
 
 import Max.DB.Message (MessageKind (..))
-import Max.Handler (isSilentReply, parseSilence, recordAs)
+import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs)
 import Max.ReplySend (stripBareMarkers, stripStickerText)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -12,6 +12,11 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
+  describe "durable ingest policy" $ do
+    it "allows media/dispatch work only after the immutable ledger is durable" $ do
+      ingestAllowsDownstream IngestDurable `shouldBe` True
+      ingestAllowsDownstream (IngestFailed "postgres unavailable") `shouldBe` False
+
   describe "parseSilence / isSilentReply" $ do
     it "matches a lone [silence] and the empty reply" $ do
       parseSilence "[silence]" `shouldBe` Just Nothing

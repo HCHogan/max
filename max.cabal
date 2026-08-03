@@ -117,6 +117,7 @@ library
         Max.DB.Usage
         Max.Effects.Agent
         Max.Effects.Blob
+        Max.Effects.Embedding
         Max.Effects.Http
         Max.Effects.LLM
         Max.Effects.PlatformApi
@@ -337,10 +338,12 @@ test-suite max-test
         Max.TasksSpec
         Max.Effects.AgentSpec
         Max.Effects.BlobSpec
+        Max.Effects.EmbeddingSpec
         Max.Effects.LLMSpec
         Max.Effects.PlatformApiSpec
         Max.Effects.OutboundSpec
         Max.Effects.ToolOutputSpec
+        Max.Effects.ToolsSpec
         Max.EmbeddingSpec
         Max.EpisodeStoreSpec
         Max.MCP.ClientSpec

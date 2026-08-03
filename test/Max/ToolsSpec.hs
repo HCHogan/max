@@ -4,6 +4,7 @@ import Data.Time (utc)
 import Effectful (IOE)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
+import Max.Effects.Embedding (Embedding)
 import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.Tools (Tool (..))
 import Max.ToolContext (ToolContext (..), TurnCapabilities (..), TurnIdentity (..))
@@ -12,7 +13,7 @@ import Max.Tools.Memory (memoryToolsFor)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
 
-type BuiltinEffects = '[WithConnection, PlatformApi, Log, IOE]
+type BuiltinEffects = '[WithConnection, PlatformApi, Embedding, Log, IOE]
 
 type MemoryEffects = '[WithConnection, Log, IOE]
 
@@ -25,7 +26,7 @@ toolContext =
 spec :: Spec
 spec = describe "model-visible builtins" $ do
   it "registers source inspection and unified recall without legacy search" $ do
-    let tools = builtinsFor utc Nothing toolContext :: [Tool BuiltinEffects]
+    let tools = builtinsFor utc toolContext :: [Tool BuiltinEffects]
     map (.toolName) tools
       `shouldBe` [ "inspect_source",
                    "get_message_by_id",

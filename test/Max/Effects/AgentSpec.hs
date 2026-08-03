@@ -3,9 +3,11 @@
 
 module Max.Effects.AgentSpec (spec) where
 
+import Control.Concurrent (threadDelay)
 import Data.Aeson (object, (.=))
 import Data.Foldable (for_)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, runEff, (:>))
@@ -23,9 +25,19 @@ import Max.Effects.LLM
     runLLMWith,
   )
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
-import Max.Effects.Tools (Tool (..))
+import Max.Effects.Tools
+  ( SchemaVersion (..),
+    Tool (..),
+    ToolAuthority (..),
+    ToolDefinition (..),
+    ToolEffect (..),
+    ToolParallelism (..),
+    ToolRef (..),
+    ToolRetryClass (..),
+    buildToolCatalog,
+  )
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
-import Max.Tasks (newTaskRegistry)
+import Max.Tasks (beginTurnRuntime, finishTurnRuntime, newTaskRegistry)
 import Max.ToolContext (ToolContext (..), TurnCapabilities (..), TurnIdentity (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
@@ -82,6 +94,17 @@ echoTool =
         pure (Right (object ["echo" .= args]))
     }
 
+echoDefinition :: ToolDefinition
+echoDefinition =
+  ToolDefinition
+    { tdRef = ToolRef "echo",
+      tdSchemaVersion = SchemaVersion 1,
+      tdEffects = Set.singleton (EffectRead "test.echo"),
+      tdParallelism = ParallelSafe,
+      tdRetryClass = RetrySafe,
+      tdAuthorities = Set.singleton CurrentConversation
+    }
+
 dispatchContext :: AgentContext
 dispatchContext =
   AgentContext
@@ -95,16 +118,18 @@ spec :: Spec
 spec = describe "Agent full loop" $ do
   it "runs fake LLM + tool rounds and emits typed output events in memory" $ do
     events <- newIORef []
-    calls <- newIORef 0
+    calls <- newIORef (0 :: Int)
     tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
     result <-
       withCompactLogger ColorNever Nothing $ \logger ->
         runEff
           . runConcurrent
           . runLog "agent-test" logger LogAttention
           . runLLMWith (fakeLLM calls)
-          . runAgent (AgentLimits {maxTurns = 4}) (const [echoTool]) tasks
-          $ agentTurn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+          . runAgent (AgentLimits {maxTurns = 4}) (const (buildToolCatalog [echoDefinition] [echoTool]))
+          $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
 
     result.reply `shouldBe` Just "第一段\n\n第二段"
     result.sentPrefix `shouldBe` "第一段\n\n"
@@ -130,3 +155,59 @@ spec = describe "Agent full loop" $ do
                        SeenToolFinished "echo" True,
                        SeenFinalStream "第一段\n\n"
                      ]
+
+  it "serializes a tool-call round when any declared effect is unsafe to parallelize" $ do
+    order <- newIORef ([] :: [Text])
+    calls <- newIORef (0 :: Int)
+    events <- newIORef []
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
+    let recordedTool name =
+          Tool
+            { toolName = name,
+              toolDescription = "record execution order",
+              toolSchema = object ["type" .= ("object" :: Text)],
+              toolRun = \_ -> do
+                liftIO (appendRef order ("start:" <> name))
+                liftIO (threadDelay 20000)
+                liftIO (appendRef order ("end:" <> name))
+                pure (Right (object ["name" .= name]))
+            }
+        readDef = echoDefinition {tdRef = ToolRef "read"}
+        writeDef =
+          ToolDefinition
+            { tdRef = ToolRef "write",
+              tdSchemaVersion = SchemaVersion 1,
+              tdEffects = Set.singleton (EffectWrite "test.db"),
+              tdParallelism = SequentialOnly,
+              tdRetryClass = RetryUnsafe,
+              tdAuthorities = Set.singleton CurrentConversation
+            }
+        twoCallLLM =
+          LLMInterpreter
+            { liChat = \_ _ _ _ _ -> do
+                callNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
+                pure $ case callNo of
+                  0 ->
+                    Right $
+                      ToolCallsResp
+                        (object ["role" .= ("assistant" :: Text)])
+                        ""
+                        [ ToolCall "read-1" "read" (object []),
+                          ToolCall "write-1" "write" (object [])
+                        ]
+                  _ -> Right (ContentResp "done")
+            }
+    _ <-
+      withCompactLogger ColorNever Nothing $ \logger ->
+        runEff
+          . runConcurrent
+          . runLog "agent-test" logger LogAttention
+          . runLLMWith twoCallLLM
+          . runAgent
+            (AgentLimits {maxTurns = 4})
+            (const (buildToolCatalog [readDef, writeDef] [recordedTool "read", recordedTool "write"]))
+          $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    readIORef order
+      `shouldReturn` ["start:read", "end:read", "start:write", "end:write"]

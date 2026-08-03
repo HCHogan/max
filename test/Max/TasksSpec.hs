@@ -14,20 +14,29 @@ import Control.Concurrent (threadDelay)
 import Data.Set qualified as Set
 import Max.Tasks
   ( Note (..),
+    TaskCancelled (..),
     TaskHandle (..),
     TaskInfo (..),
+    TurnCompletion (..),
+    activateTurnRuntime,
     absorbedTriggers,
     attachTask,
     beginDispatch,
+    beginTurnRuntime,
+    checkTurnCancellation,
+    drainTurnInbox,
     drainInbox,
     endDispatch,
     cancelTask,
+    finishTurnRuntime,
     inFlightTriggers,
     listTasks,
     newTaskRegistry,
     pushToLatest,
     pushToTrigger,
     requeueInbox,
+    setTurnPhase,
+    turnRuntimeTaskId,
   )
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
@@ -41,6 +50,35 @@ bob = UserId 2
 
 spec :: Spec
 spec = describe "Max.Tasks" $ do
+  describe "explicit TurnRuntime" $ do
+    it "owns visibility, phase, feedback and finalization without trigger lookup" $ do
+      reg <- newTaskRegistry
+      turn <- beginTurnRuntime reg gid alice (Just (MessageId 7001))
+      starting <- listTasks reg (Just gid)
+      map tiKind starting `shouldBe` ["starting"]
+      preKilled <- activateTurnRuntime turn "llm" (pure ())
+      preKilled `shouldBe` False
+      setTurnPhase turn "tools"
+      running <- listTasks reg (Just gid)
+      map tiKind running `shouldBe` ["tools"]
+      _ <- pushToLatest reg gid Nothing (Just 7002) (Note "改成 B" Nothing)
+      notes <- drainTurnInbox turn
+      map (.noteLine) notes `shouldBe` ["改成 B"]
+      completion <- finishTurnRuntime reg turn
+      completion.tcAbsorbedTriggers `shouldBe` Set.singleton 7002
+      map (.noteLine) completion.tcUnservedNotes `shouldBe` []
+      (null <$> listTasks reg (Just gid)) `shouldReturn` True
+
+    it "carries a pre-activation kill and exposes a cancellation checkpoint" $ do
+      reg <- newTaskRegistry
+      turn <- beginTurnRuntime reg gid alice (Just (MessageId 7001))
+      accepted <- cancelTask reg (turnRuntimeTaskId turn)
+      preKilled <- activateTurnRuntime turn "llm" (pure ())
+      (accepted, preKilled) `shouldBe` (True, True)
+      checkTurnCancellation turn `shouldThrow` (\TaskCancelled -> True)
+      completion <- finishTurnRuntime reg turn
+      map (.noteLine) completion.tcUnservedNotes `shouldBe` []
+
   describe "pushToLatest" $ do
     it "lets anyone feed a running turn, not just whoever started it" $ do
       reg <- newTaskRegistry
@@ -137,7 +175,7 @@ spec = describe "Max.Tasks" $ do
       atStart <- inFlightTriggers reg gid
       tid <- beginDispatch reg gid alice (Just (MessageId 7001))
       during <- inFlightTriggers reg gid
-      endDispatch reg tid
+      _ <- endDispatch reg tid
       atEnd <- inFlightTriggers reg gid
       (atStart, during, atEnd)
         `shouldBe` (Set.empty, Set.fromList [7001], Set.empty)
@@ -156,7 +194,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       t1 <- beginDispatch reg gid alice (Just (MessageId 7001))
       _ <- beginDispatch reg gid bob (Just (MessageId 7002))
-      endDispatch reg t1
+      _ <- endDispatch reg t1
       inflight <- inFlightTriggers reg gid
       inflight `shouldBe` Set.fromList [7002]
 
@@ -186,10 +224,10 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       tid <- beginDispatch reg gid alice (Just (MessageId 7001))
       _ <- pushToLatest reg gid Nothing (Just 7002) (Note "[#7002] bob: 顺便" Nothing)
-      before <- absorbedTriggers reg tid
-      endDispatch reg tid
-      after <- absorbedTriggers reg tid
-      (before, after) `shouldBe` ([7002], [])
+      beforeMids <- absorbedTriggers reg tid
+      _ <- endDispatch reg tid
+      afterMids <- absorbedTriggers reg tid
+      (beforeMids, afterMids) `shouldBe` ([7002], [])
 
     it "keeps an absorbed message in flight after its own entry ends" $ do
       reg <- newTaskRegistry
@@ -197,7 +235,7 @@ spec = describe "Max.Tasks" $ do
       _ <- attachTask reg gid alice (Just (MessageId 7001)) "llm" (pure ())
       absorbed <- beginDispatch reg gid bob (Just (MessageId 7002))
       _ <- pushToLatest reg gid (Just absorbed) (Just 7002) (Note "[#7002] bob: 顺便" Nothing)
-      endDispatch reg absorbed
+      _ <- endDispatch reg absorbed
       inflight <- inFlightTriggers reg gid
       inflight `shouldBe` Set.fromList [7001, 7002]
 

@@ -10,21 +10,39 @@
 --
 -- Not in "Max.Tools": that module is imported by "Max.Tools.Reminder",
 -- so assembling the full set there would close a cycle.
-module Max.Toolset (allToolsFor, toolCountFor) where
+module Max.Toolset
+  ( allToolsFor,
+    toolCountFor,
+    toolDefinitionsFor,
+  )
+where
 
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Blob (Blob)
+import Max.Effects.Embedding (Embedding)
 import Max.Effects.Http (Http)
 import Max.Effects.Outbound (Outbound)
 import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.ToolOutput (ToolOutput)
-import Max.Effects.Tools (Tool)
+import Max.Effects.Tools
+  ( SchemaVersion (..),
+    ToolAuthority (..),
+    ToolCatalog,
+    ToolCatalogError,
+    ToolDefinition (..),
+    ToolEffect (..),
+    ToolParallelism (..),
+    ToolRef (..),
+    ToolRetryClass (..),
+    buildToolCatalog,
+  )
 import Max.Env (BotEnv (..))
 import Max.HttpRuntime (HttpRuntime)
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolGroupId, toolMultimodal, toolSelfId, toolStickers)
+import Max.ToolContext (ToolContext (..), TurnCapabilities (..), toolGroupId, toolMultimodal, toolSelfId, toolStickers)
 import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
@@ -51,6 +69,7 @@ import OneBot.Types (GroupId, isPrivateChat)
 allToolsFor ::
   ( Blob :> es,
     Http :> es,
+    Embedding :> es,
     Log :> es,
     PlatformApi :> es,
     Outbound :> es,
@@ -61,22 +80,25 @@ allToolsFor ::
   HttpRuntime ->
   BotEnv ->
   ToolContext ->
-  [Tool es]
+  Either ToolCatalogError (ToolCatalog es)
 allToolsFor runtime env dc =
-  builtinsFor env.beTimeZone env.beEmbed dc
-    <> reminderToolsFor env.beTimeZone env.beReminders dc
-    <> groupToolsFor dc
-    <> imageToolsFor env.beTimeZone dc
-    <> memoryToolsFor dc
-    <> pinToolsFor env.beSessions env.beDefaultModel dc
-    <> skillToolsFor env.beSkills dc
-    <> bilibiliToolsFor env.beTimeZone dc
-    <> sandboxToolsFor env.beTimeZone (toolGroupId dc) env.beSandboxes
-    <> fileToolsFor env.beTimeZone (toolGroupId dc) (toolSelfId dc) env.beSandboxes
-    <> [t | toolStickers dc, t <- stickerToolsFor env.beEmbed]
-    <> maybe [] (searchToolsFor runtime) env.beSearch
-    <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]
-    <> [t | toolMultimodal dc, t <- videoToolsFor dc]
+  buildToolCatalog (toolDefinitionsFor env (toolGroupId dc) dc.toolCapabilities) runners
+  where
+    runners =
+      builtinsFor env.beTimeZone dc
+        <> reminderToolsFor env.beTimeZone env.beReminders dc
+        <> groupToolsFor dc
+        <> imageToolsFor env.beTimeZone dc
+        <> memoryToolsFor dc
+        <> pinToolsFor env.beSessions env.beDefaultModel dc
+        <> skillToolsFor env.beSkills dc
+        <> bilibiliToolsFor env.beTimeZone dc
+        <> sandboxToolsFor env.beTimeZone (toolGroupId dc) env.beSandboxes
+        <> fileToolsFor env.beTimeZone (toolGroupId dc) (toolSelfId dc) env.beSandboxes
+        <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsFor]
+        <> maybe [] (searchToolsFor runtime) env.beSearch
+        <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]
+        <> [t | toolMultimodal dc, t <- videoToolsFor dc]
 
 -- | How many tools a dispatch with these gates would get — the
 -- @!version@ card's number.  This is intentionally a pure projection
@@ -90,55 +112,140 @@ toolCountFor ::
   Bool -> -- skills visible
   Int
 toolCountFor env gid multimodal stickers skills =
-  length (toolNamesFor env gid (TurnCapabilities multimodal stickers skills))
+  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills))
 
--- Keep the live registration order visible here.  Adding or removing a tool
--- requires updating this projection; unlike constructing live 'Tool' values,
--- it cannot accidentally acquire effects or demand fabricated ids.
-toolNamesFor :: BotEnv -> GroupId -> TurnCapabilities -> [Text]
-toolNamesFor env gid caps =
-  [ "inspect_source",
-    "get_message_by_id",
-    "context_search",
-    "context_expand",
-    "view_forward",
-    "poke",
-    "set_reminder",
-    "list_reminders",
-    "cancel_reminder"
+-- | Product-level visibility and effect metadata live in one inventory.  The
+-- actual runners assembled above must match this filtered set exactly or
+-- 'buildToolCatalog' rejects the dispatch before the model sees a schema.
+toolDefinitionsFor :: BotEnv -> GroupId -> TurnCapabilities -> [ToolDefinition]
+toolDefinitionsFor env gid caps =
+  [ item.tiDefinition
+  | item <- toolInventory,
+    gateOpen item.tiGate
   ]
-    <> ["group_members" | not (isPrivateChat gid)]
-    <> [name | caps.tcMultimodal, name <- ["view_avatar", "view_image"]]
-    <> ["memory_save", "memory_update", "memory_forget", "memory_list"]
-    <> ["pin_message", "unpin_message"]
-    <> ["use_skill" | caps.tcSkills]
-    <> ["view_bilibili"]
-    <> [ "sandbox_create",
-         "sandbox_exec",
-         "nix_search",
-         "sandbox_list",
-         "sandbox_destroy",
-         "sandbox_read_file",
-         "sandbox_write_file"
-       ]
-    <> [ "list_recent_files",
-         "import_file_to_sandbox",
-         "send_image_from_sandbox",
-         "send_file_from_sandbox"
-       ]
-    <> ["find_stickers" | caps.tcStickers, Just _ <- [env.beEmbed]]
-    <> ["web_search" | Just _ <- [env.beSearch]]
-    <> [ name
-       | caps.tcMultimodal,
-         name <-
-           [ "browser_navigate",
-             "view_zhihu",
-             "browser_snapshot",
-             "browser_click",
-             "browser_type",
-             "browser_press_key",
-             "browser_wait_for",
-             "browser_scroll",
-             "view_video"
-           ]
-       ]
+  where
+    gateOpen = \case
+      Always -> True
+      GroupOnly -> not (isPrivateChat gid)
+      MultimodalOnly -> caps.tcMultimodal
+      StickersOnly -> caps.tcStickers && env.beEmbeddingEnabled
+      SkillsOnly -> caps.tcSkills
+      SearchOnly -> maybe False (const True) env.beSearch
+
+data ToolGate
+  = Always
+  | GroupOnly
+  | MultimodalOnly
+  | StickersOnly
+  | SkillsOnly
+  | SearchOnly
+
+data ToolInventoryItem = ToolInventoryItem
+  { tiGate :: !ToolGate,
+    tiDefinition :: !ToolDefinition
+  }
+
+toolInventory :: [ToolInventoryItem]
+toolInventory =
+  [ always (readTool "inspect_source" ["self.source"] [ProcessResource "self-source"]),
+    always (readTool "get_message_by_id" ["conversation.db"] [CurrentConversation]),
+    always (llmReadTool "context_search" ["conversation.db"] [CurrentConversation]),
+    always (readTool "context_expand" ["conversation.db"] [CurrentConversation]),
+    always (readTool "view_forward" ["conversation.db"] [CurrentConversation]),
+    always (sendTool "poke" "chat.endpoint"),
+    always (writeTool "set_reminder" ["reminder.db"] [CurrentConversation]),
+    always (readTool "list_reminders" ["reminder.db"] [CurrentConversation]),
+    always (writeTool "cancel_reminder" ["reminder.db"] [CurrentConversation]),
+    gated GroupOnly (readTool "group_members" ["chat.roster"] [CurrentConversation, CurrentEndpoint]),
+    gated MultimodalOnly (statefulReadTool "view_avatar" ["chat.avatar", "tool.media"] [CurrentConversation, CurrentEndpoint]),
+    gated MultimodalOnly (statefulReadTool "view_image" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation]),
+    always (writeTool "memory_save" ["memory.db"] [CurrentConversation]),
+    always (writeTool "memory_update" ["memory.db"] [CurrentConversation]),
+    always (writeTool "memory_forget" ["memory.db"] [CurrentConversation]),
+    always (readTool "memory_list" ["memory.db"] [CurrentConversation]),
+    always (writeTool "pin_message" ["session.db"] [CurrentConversation]),
+    always (writeTool "unpin_message" ["session.db"] [CurrentConversation]),
+    gated SkillsOnly (reflectTool "use_skill"),
+    always (readTool "view_bilibili" ["network.bilibili"] [CurrentConversation]),
+    always (writeTool "sandbox_create" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (writeTool "sandbox_exec" ["sandbox.process", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (statefulReadTool "nix_search" ["sandbox.process", "network.nix"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (statefulReadTool "sandbox_list" ["sandbox.registry"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (writeTool "sandbox_destroy" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (statefulReadTool "sandbox_read_file" ["sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (writeTool "sandbox_write_file" ["sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (readTool "list_recent_files" ["conversation.db", "blob.store"] [CurrentConversation]),
+    always (writeTool "import_file_to_sandbox" ["blob.store", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
+    always (sendReadTool "send_image_from_sandbox" ["sandbox.fs"]),
+    always (sendReadTool "send_file_from_sandbox" ["sandbox.fs"]),
+    gated StickersOnly (llmReadTool "find_stickers" ["sticker.db"] [CurrentConversation]),
+    gated SearchOnly (readTool "web_search" ["network.search"] [CurrentConversation]),
+    gated MultimodalOnly (browserTool "browser_navigate"),
+    gated MultimodalOnly (browserTool "view_zhihu"),
+    gated MultimodalOnly (browserTool "browser_snapshot"),
+    gated MultimodalOnly (browserTool "browser_click"),
+    gated MultimodalOnly (browserTool "browser_type"),
+    gated MultimodalOnly (browserTool "browser_press_key"),
+    gated MultimodalOnly (browserTool "browser_wait_for"),
+    gated MultimodalOnly (browserTool "browser_scroll"),
+    gated MultimodalOnly (statefulReadTool "view_video" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation])
+  ]
+
+always :: ToolDefinition -> ToolInventoryItem
+always = gated Always
+
+gated :: ToolGate -> ToolDefinition -> ToolInventoryItem
+gated = ToolInventoryItem
+
+definition :: Text -> [ToolEffect] -> ToolParallelism -> ToolRetryClass -> [ToolAuthority] -> ToolDefinition
+definition name effects parallelism retry authorities =
+  ToolDefinition
+    { tdRef = ToolRef name,
+      tdSchemaVersion = SchemaVersion 1,
+      tdEffects = Set.fromList effects,
+      tdParallelism = parallelism,
+      tdRetryClass = retry,
+      tdAuthorities = Set.fromList authorities
+    }
+
+readTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
+readTool name domains =
+  definition name (map EffectRead domains) ParallelSafe RetrySafe
+
+statefulReadTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
+statefulReadTool name domains =
+  definition name (map EffectRead domains) SequentialOnly RetrySafe
+
+writeTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
+writeTool name domains =
+  definition name (map EffectWrite domains) SequentialOnly RetryUnsafe
+
+llmReadTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
+llmReadTool name domains =
+  definition name (EffectLLM : map EffectRead domains) SequentialOnly RetryUnsafe
+
+sendTool :: Text -> Text -> ToolDefinition
+sendTool name domain =
+  definition name [EffectSend domain] SequentialOnly RetryUnsafe [CurrentConversation, CurrentEndpoint]
+
+sendReadTool :: Text -> [Text] -> ToolDefinition
+sendReadTool name domains =
+  definition
+    name
+    (EffectSend "chat.endpoint" : map EffectRead domains)
+    SequentialOnly
+    RetryUnsafe
+    [CurrentConversation, CurrentEndpoint, ProcessResource "sandbox"]
+
+reflectTool :: Text -> ToolDefinition
+reflectTool name =
+  definition name [EffectReflect] SequentialOnly RetryUnsafe [CurrentConversation]
+
+browserTool :: Text -> ToolDefinition
+browserTool name =
+  definition
+    name
+    [EffectWrite "browser.session", EffectRead "network.web"]
+    SequentialOnly
+    RetryUnsafe
+    [CurrentConversation, ProcessResource "browser"]

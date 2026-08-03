@@ -25,13 +25,8 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query)
-import Max.Embedding
-  ( EmbedClient,
-    EmbeddingRecord (..),
-    embedTexts,
-    embeddingModelId,
-    makeEmbeddingRecord,
-  )
+import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
+import Max.Embedding (EmbeddingRecord (..))
 import Max.MaintenanceLease
   ( MaintenanceDomain (EmbeddingMaintenance),
     withMaintenanceLease,
@@ -62,24 +57,27 @@ errorMicros = 60_000_000
 
 embedWorker ::
   forall es.
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (Embedding :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Text ->
-  EmbedClient ->
   Eff es ()
-embedWorker owner client = forever $ do
+embedWorker owner = forever $ do
   runLeasedTick `catchSync` \e -> do
     logAttention "embed: tick crashed" $ object ["error" .= T.pack (show e)]
     liftIO (threadDelay errorMicros)
   where
-    runLeasedTick =
-      withMaintenanceLease EmbeddingMaintenance owner embeddingLeaseSeconds (const tick) >>= \case
-        Nothing -> liftIO (threadDelay idleMicros)
-        Just () -> pure ()
+    runLeasedTick = embeddingSpace >>= \case
+      Nothing -> do
+        logAttention "embed: effect has no configured space" (object [])
+        liftIO (threadDelay errorMicros)
+      Just space ->
+        withMaintenanceLease EmbeddingMaintenance owner embeddingLeaseSeconds (const (tick space)) >>= \case
+          Nothing -> liftIO (threadDelay idleMicros)
+          Just () -> pure ()
 
-    tick = do
+    tick space = do
       -- Recent-first so fresh messages become searchable immediately
       -- while the historical backfill trickles along behind.
-      let modelId = embeddingModelId client
+      let modelId = space.esModelId
       msgs <-
         query
           "SELECT message_id, rendered_text FROM messages \
@@ -140,55 +138,39 @@ embedWorker owner client = forever $ do
     embedInto _ [] = pure True
     embedInto sql rows = do
       let (ids, texts) = unzip (take batchSize rows)
-      eres <- liftIO (embedTexts client (map (T.take 2000) texts))
+      eres <- embedBatch (map (T.take 2000) texts)
       case eres of
-        Left err -> do
+        Left fault -> do
           logAttention "embed: batch failed" $
-            object ["error" .= err, "rows" .= length ids]
+            object ["error" .= renderEmbeddingFault fault, "rows" .= length ids]
           pure False
-        Right vecs -> case consistentRecords =<< traverse (uncurry (makeEmbeddingRecord client)) (zip texts vecs) of
-          Left err -> do
-            logAttention "embed: invalid provider response" $ object ["error" .= err]
-            pure False
-          Right records -> do
-            written <-
-              traverse
-                (\(i, source, record) -> execute sql (record.erVector, record.erModelId, record.erDimensions, record.erContentHash, i, source))
-                (zip3 ids texts records)
-            let stored = sum written
-            logInfo "embed: batch done" $
-              object ["rows" .= length ids, "stored" .= stored, "stale" .= (fromIntegral (length ids) - stored)]
-            pure True
+        Right records -> do
+          written <-
+            traverse
+              (\(i, source, record) -> execute sql (record.erVector, record.erModelId, record.erDimensions, record.erContentHash, i, source))
+              (zip3 ids texts records)
+          let stored = sum written
+          logInfo "embed: batch done" $
+            object ["rows" .= length ids, "stored" .= stored, "stale" .= (fromIntegral (length ids) - stored)]
+          pure True
 
     embedMemories :: [PendingMemoryEmbedding] -> Eff es Bool
     embedMemories [] = pure True
     embedMemories pending = do
       let rows = take batchSize pending
           texts = map (.pendingMemoryContent) rows
-      eres <- liftIO (embedTexts client (map (T.take 2000) texts))
+      eres <- embedBatch (map (T.take 2000) texts)
       case eres of
-        Left err -> do
+        Left fault -> do
           logAttention "embed: memory batch failed" $
-            object ["error" .= err, "rows" .= length rows]
+            object ["error" .= renderEmbeddingFault fault, "rows" .= length rows]
           pure False
-        Right vecs -> case consistentRecords =<< traverse (uncurry (makeEmbeddingRecord client)) (zip texts vecs) of
-          Left err -> do
-            logAttention "embed: invalid memory provider response" $ object ["error" .= err]
-            pure False
-          Right records -> do
-            written <- traverse (uncurry markPendingMemoryEmbedded) (zip rows records)
-            let stored = length (filter id written)
-            logInfo "embed: memory batch done" $
-              object ["rows" .= length rows, "stored" .= stored, "stale" .= (length rows - stored)]
-            pure True
-
-    -- A model response must have one stable dimension for the whole batch.
-    -- If a broken gateway mixes shapes, keep every row pending rather than
-    -- publishing a partially usable corpus under one model id.
-    consistentRecords [] = Right []
-    consistentRecords records@(first : rest)
-      | all ((== first.erDimensions) . (.erDimensions)) rest = Right records
-      | otherwise = Left "embedding batch contains inconsistent dimensions"
+        Right records -> do
+          written <- traverse (uncurry markPendingMemoryEmbedded) (zip rows records)
+          let stored = length (filter id written)
+          logInfo "embed: memory batch done" $
+            object ["rows" .= length rows, "stored" .= stored, "stale" .= (length rows - stored)]
+          pure True
 
 embeddingLeaseSeconds :: Int
 embeddingLeaseSeconds = 300

@@ -23,20 +23,25 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.Command.ParserSpec` — every `!cmd` verb + edge cases
 - `Max.Command.PermissionSpec` — tier resolution and capability gating
 - `Max.Effects.AgentSpec` — full in-memory Agent loop using a fake LLM, fake
-  tool, and typed AgentEvent sink (tool round, progress, and streamed final)
+  validated tool catalog, explicit TurnRuntime, and typed AgentEvent sink;
+  mutating multi-call rounds are proven sequential
 - `Max.Effects.BlobSpec` — opaque digest references, byte round-trips, the
   explicit host-path escape hatch, and rejection of path-shaped references
+- `Max.Effects.EmbeddingSpec` — injectable embedding space, validated records,
+  and typed provider/shape failures
 - `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip, `parseToolCall`
   tolerance, and the streamed assistant message rebuilt from deltas
 - `Max.Effects.OutboundSpec` — in-memory interpreter seam and the distinction
   between failed, delivered-unrecorded, and durably recorded sends
 - `Max.Effects.ToolOutputSpec` — turn-scoped media draining, fresh interpreter
   state, and attachment budgets that survive per-round drains
+- `Max.Effects.ToolsSpec` — catalog uniqueness/schema/metadata validation,
+  argument rejection before execution, and typed recovery outcomes
 - `Max.LLM.StreamSpec` — SSE framing and the OpenAI/Anthropic delta reducers,
   replayed from recorded wire bytes
 - `Max.LogSpec` — compact log line formatting
-- `Max.HandlerSpec` — `[silence]` parsing, message recording classification,
-  and ReplySend marker-cleanup regressions
+- `Max.HandlerSpec` — durable-ingest gating, `[silence]` parsing, message
+  recording classification, and ReplySend marker-cleanup regressions
 - `Max.IntentSpec` — proactive verdict parsing and the heuristic gate
 - `Max.MCP.ClientSpec` — Streamable-HTTP body decoding (JSON + SSE)
 - `Max.HistorianSpec` / DB counterpart — token-sized episode prefixes, explicit
@@ -71,9 +76,8 @@ Pure logic in `test/` mirroring the library layout:
   literal search, bounded numbered reads, and host-path rejection
 - `Max.SkillsSpec` — builtin skills parsed from `skills/`, including the
   `docs/features.md` and live `!help` splices into `self-knowledge`
-- `Max.TasksSpec` — the task registry: feeding a running turn, aiming a
-  `!feedback` by trigger, in-flight bookkeeping, `attachTask` adoption,
-  unserved-note return at `endDispatch` (killed turns keep nothing)
+- `Max.TasksSpec` — explicit TurnRuntime lifecycle/phase/cancellation plus task
+  feeding, aimed `!feedback`, in-flight bookkeeping, and unserved-note recovery
 - `Max.Http.JsonSpec` — buffered HTTP retry policy
 - `Max.HttpRuntimeSpec` — connection reuse, bounded bodies, status previews,
   timeout classification, and response cleanup under cancellation

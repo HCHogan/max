@@ -37,13 +37,12 @@
 --
 -- == Task lifecycle
 --
--- 'runAgent' takes a 'TaskRegistry'.  The registry entry already exists
--- — 'Max.Tasks.beginDispatch' opened it when the dispatch started, well
--- before this loop — so each 'AgentTurn' brackets an
--- 'Max.Tasks.attachTask' that adopts it, supplying the cancel action
--- @!kill@ needs and picking up a kill that arrived while the context
--- was still being built.  The same entry's inbox is what @!feedback@
--- and the supplement classifier push into.
+-- 'Max.Handler' creates one 'Max.Tasks.TurnRuntime' when the dispatch is
+-- admitted, before context collection.  'AgentTurn' receives that exact
+-- object, installs the worker cancellation action, checks cancellation between
+-- executable nodes, and drains its feedback inbox.  Handler remains the sole
+-- lifecycle finalizer; no trigger-id lookup/adoption protocol sits between the
+-- two layers.
 --
 -- == Per-group tools
 --
@@ -76,15 +75,38 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
-import Effectful.Exception (bracket, throwIO)
+import Effectful.Exception (throwIO)
 import Effectful.Log
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, defaultInlineMediaLimit, drainInlineMedia, runToolOutput)
-import Max.Effects.Tools (Tool, Tools, invokeTool, listToolSpecs, runTools)
+import Max.Effects.Tools
+  ( CatalogTool (..),
+    ToolCatalog,
+    ToolCatalogError,
+    ToolDefinition (..),
+    ToolOutcome (..),
+    ToolParallelism (..),
+    ToolRef (..),
+    Tools,
+    invokeTool,
+    listCatalogTools,
+    listToolSpecs,
+    outcomeResult,
+    runTools,
+  )
 import Max.Reply (readyPrefix)
-import Max.Tasks (Note (..), TaskCancelled (..), TaskHandle (..), TaskRegistry, attachTask, drainInbox, releaseTask, requeueInbox)
-import Max.ToolContext (ToolContext, toolGroupId, toolMessageId, toolUserId)
+import Max.Tasks
+  ( Note (..),
+    TaskCancelled (..),
+    TurnRuntime,
+    activateTurnRuntime,
+    checkTurnCancellation,
+    drainTurnInbox,
+    requeueTurnInbox,
+    setTurnPhase,
+  )
+import Max.ToolContext (ToolContext, toolGroupId)
 import OneBot.Types (GroupId (..))
 
 -- | Agent-only data around the neutral context handed to tools.
@@ -164,6 +186,7 @@ data Agent :: Effect where
   -- rendering, and persistence policy without the loop importing any of
   -- those mechanisms.
   AgentTurn ::
+    TurnRuntime ->
     AgentContext ->
     Text ->
     [ChatMessage] ->
@@ -177,41 +200,35 @@ type instance DispatchOf Agent = Dynamic
 -- this interpreter has no platform, segment, or persistence dependency.
 -- On each 'AgentTurn' it:
 --
---   * Registers a task in the 'TaskRegistry' (and unregisters via
---     'bracket' on exit, including 'TaskCancelled' from @!kill@).
+--   * Activates the explicit 'TurnRuntime' created by Handler.
 --   * Spins up a 'Tools' scope built from the per-group factory.
 --   * Drives the loop, draining the task's inbox between turns.
 runAgent ::
   forall es a.
   (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
   AgentLimits ->
-  (ToolContext -> [Tool (ToolOutput : es)]) ->
-  TaskRegistry ->
+  (ToolContext -> Either ToolCatalogError (ToolCatalog (ToolOutput : es))) ->
   Eff (Agent : es) a ->
   Eff es a
-runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
-  AgentTurn ctx profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
+runAgent lims toolFactory = interpret $ \localEnv -> \case
+  AgentTurn turn ctx profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
+    catalog <- either throwIO pure (toolFactory ctx.acTools)
     let cancel = throwTo selfTid TaskCancelled
-        toolCtx = ctx.acTools
         emit :: AgentEventSink (Eff (Tools : ToolOutput : es))
         emit event = raise (raise (unlift (sink event)))
-    bracket
-      (liftIO (attachTask taskReg (toolGroupId toolCtx) (toolUserId toolCtx) (Just (toolMessageId toolCtx)) "llm" cancel))
-      (liftIO . releaseTask taskReg)
-      ( \handle -> do
-          -- A !kill that landed while the dispatch was still building
-          -- its context has no thread to interrupt yet; the registry
-          -- held it for us.  Honour it before spending a turn.
-          when handle.thPreKilled $ throwIO TaskCancelled
-          runToolOutput defaultInlineMediaLimit $
-            runTools (toolFactory toolCtx) (loop emit ctx handle profile msgs)
-      )
+    -- Handler created this runtime before context collection and remains its
+    -- sole finalizer.  Agent only activates the worker cancellation hook and
+    -- consumes feedback through the explicit object.
+    preKilled <- liftIO (activateTurnRuntime turn "llm" cancel)
+    when preKilled $ throwIO TaskCancelled
+    runToolOutput defaultInlineMediaLimit $
+      runTools catalog (loop emit ctx turn profile msgs)
   where
     loop ::
       AgentEventSink (Eff (Tools : ToolOutput : es)) ->
       AgentContext ->
-      TaskHandle ->
+      TurnRuntime ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolOutput : es) AgentResult
@@ -220,7 +237,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     go ::
       AgentEventSink (Eff (Tools : ToolOutput : es)) ->
       AgentContext ->
-      TaskHandle ->
+      TurnRuntime ->
       Int ->
       [ChatMessage] ->
       Text ->
@@ -228,13 +245,15 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
       Eff (Tools : ToolOutput : es) AgentResult
     go emit ctx h n appended profile msgs = do
       -- Drain any feedback notes that arrived since the previous turn.
-      notes <- liftIO (drainInbox h)
+      liftIO (checkTurnCancellation h)
+      notes <- liftIO (drainTurnInbox h)
       let (msgs', appended') = case notes of
             [] -> (msgs, appended)
             xs -> (msgs <> [feedbackMsg xs], appended <> [feedbackMsg xs])
       if n >= lims.maxTurns
         then finalAnswer ctx n appended' profile msgs'
         else do
+          liftIO (setTurnPhase h "llm")
           specs <- listToolSpecs
           -- Trim before the call AND carry the trimmed list forward
           -- (every recursion below builds on msgs''): stubs are
@@ -264,7 +283,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
               -- written.  If any arrived, loop instead: the unsent draft
               -- stays in the conversation and the model re-answers with
               -- the note in view.
-              lateNotes <- liftIO (drainInbox h)
+              lateNotes <- liftIO (drainTurnInbox h)
               let done =
                     pure
                       AgentResult
@@ -286,7 +305,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
                   -- surfaces at 'Max.Tasks.endDispatch' for the dispatch
                   -- epilogue to re-dispatch or formally drop.
                   | not (T.null sent) -> do
-                      liftIO (requeueInbox h xs)
+                      liftIO (requeueTurnInbox h xs)
                       logInfo "agent: feedback raced a streamed answer, returned to inbox" $
                         object ["count" .= length xs, "sent_chars" .= T.length sent]
                       done
@@ -310,6 +329,7 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
               emit $
                 AgentToolDebug $
                   ToolCallsStarted [(tc.callName, tc.callArguments) | tc <- tcs]
+              liftIO (setTurnPhase h "tools")
               -- Carry the provider's message verbatim so its thinking
               -- output round-trips back to the API on the next
               -- request — DeepSeek returns 400 otherwise.
@@ -317,9 +337,19 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
               -- goes through the pool, image attachment through STM);
               -- results keep call order so each tool_call id is
               -- answered in sequence.
+              registered <- listCatalogTools
+              let canParallel tc =
+                    any
+                      (\view ->
+                         view.ctDefinition.tdRef == ToolRef tc.callName
+                           && view.ctDefinition.tdParallelism == ParallelSafe
+                      )
+                      registered
               executed <- case tcs of
-                [tc] -> (: []) <$> executeOne tc
-                _ -> mapConcurrently executeOne tcs
+                [tc] -> (: []) <$> executeOne h tc
+                _
+                  | all canParallel tcs -> mapConcurrently (executeOne h) tcs
+                  | otherwise -> traverse (executeOne h) tcs
               -- Emit result facts after the concurrent round rejoins.  This
               -- keeps the higher-rank callback on its sequential unlift and
               -- gives debug output a deterministic call order.
@@ -410,15 +440,18 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
     drainToolMedia :: Eff (Tools : ToolOutput : es) [InlineMedia]
     drainToolMedia = drainInlineMedia
 
-    executeOne :: ToolCall -> Eff (Tools : ToolOutput : es) (ChatMessage, ToolDebugEvent)
-    executeOne tc = do
+    executeOne :: TurnRuntime -> ToolCall -> Eff (Tools : ToolOutput : es) (ChatMessage, ToolDebugEvent)
+    executeOne turn tc = do
+      liftIO (checkTurnCancellation turn)
       logInfo "agent: tool call" $
         object
           [ "id" .= tc.callId,
             "name" .= tc.callName,
             "args" .= previewJson 200 tc.callArguments
           ]
-      result <- invokeTool tc.callName tc.callArguments
+      outcome <- invokeTool tc.callName tc.callArguments
+      liftIO (checkTurnCancellation turn)
+      let result = outcomeResult outcome
       case result of
         Right v -> do
           let full = TE.decodeUtf8 (LBS.toStrict (encode v))
@@ -426,14 +459,23 @@ runAgent lims toolFactory taskReg = interpret $ \localEnv -> \case
             object
               [ "id" .= tc.callId,
                 "name" .= tc.callName,
+                "outcome" .= outcomeName outcome,
                 "result" .= previewJson 400 v,
                 "full_len" .= T.length full
               ]
           pure (toolResultMessage tc (Right v), ToolCallFinished tc.callName (Right v))
         Left err -> do
           logAttention "agent: tool failed" $
-            object ["id" .= tc.callId, "name" .= tc.callName, "error" .= err]
+            object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName outcome, "error" .= err]
           pure (toolResultMessage tc (Left err), ToolCallFinished tc.callName (Left err))
+
+    outcomeName :: ToolOutcome -> Text
+    outcomeName = \case
+      ToolRejected {} -> "rejected"
+      ToolFailedBeforeEffect {} -> "failed-before-effect"
+      ToolSucceeded {} -> "succeeded"
+      ToolCommitted {} -> "committed"
+      ToolOutcomeUnknown {} -> "outcome-unknown"
 
 -- | Build the messages appended after one tool-call response.  This is
 -- deliberately a pure seam between the effectful pieces of the loop:
@@ -523,9 +565,10 @@ capToolResults budget msgs
 
 agentTurn ::
   (Agent :> es) =>
+  TurnRuntime ->
   AgentContext ->
   Text ->
   [ChatMessage] ->
   AgentEventSink (Eff es) ->
   Eff es AgentResult
-agentTurn ctx profile msgs sink = send (AgentTurn ctx profile msgs sink)
+agentTurn turn ctx profile msgs sink = send (AgentTurn turn ctx profile msgs sink)

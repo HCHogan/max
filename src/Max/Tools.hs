@@ -29,9 +29,10 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..), bestName, fetchForwardChildrenInScope, fetchMessageInScope)
+import Max.Effects.Embedding (Embedding, embedBatch, renderEmbeddingFault)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
-import Max.Embedding (EmbedClient, EmbeddingRecord (..), embedTexts, makeEmbeddingRecord)
+import Max.Embedding (EmbeddingRecord)
 import Max.EpisodeStore (EpisodeExpansion (..), SourceRange (..), episodeHandleText, expandEpisode, parseEpisodeHandle)
 import Max.Prompt (tagMediaMarkers)
 import Max.Recall (RecallHit (..), searchRecall)
@@ -44,17 +45,17 @@ import OneBot.Types (UserId (..))
 builtinsFor ::
   ( WithConnection :> es,
     PlatformApi :> es,
+    Embedding :> es,
     Log :> es,
     IOE :> es
   ) =>
   TimeZone ->
-  Maybe EmbedClient ->
   ToolContext ->
   [Tool es]
-builtinsFor tz mEmbed dc =
+builtinsFor tz dc =
   selfSourceTools
     <> [ getMessageByIdTool tz dc,
-         contextSearchTool tz mEmbed dc,
+         contextSearchTool tz dc,
          contextExpandTool tz dc,
          viewForwardTool tz dc,
          pokeTool dc
@@ -100,12 +101,11 @@ getMessageByIdTool tz dc =
 -- context_search
 
 contextSearchTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (WithConnection :> es, Embedding :> es, Log :> es, IOE :> es) =>
   TimeZone ->
-  Maybe EmbedClient ->
   ToolContext ->
   Tool es
-contextSearchTool tz mEmbed dc =
+contextSearchTool tz dc =
   Tool
     { toolName = "context_search",
       toolDescription =
@@ -139,7 +139,7 @@ contextSearchTool tz mEmbed dc =
         Right (rawQuery, limit)
           | T.null (T.strip rawQuery) -> pure (Left "bad args: query cannot be blank")
           | otherwise -> do
-              embedding <- bestEffortRecallEmbedding "context_search" mEmbed rawQuery
+              embedding <- bestEffortRecallEmbedding "context_search" rawQuery
               let scope = conversationScopeFor (toolGroupId dc)
               hits <- searchRecall (currentConversationRecall scope) rawQuery embedding limit
               pure . Right $
@@ -166,21 +166,16 @@ contextSearchSummary tz rawQuery semanticUsed hits =
       "results" .= map (recallHitSummary tz) hits
     ]
 
-bestEffortRecallEmbedding :: (Log :> es, IOE :> es) => Text -> Maybe EmbedClient -> Text -> Eff es (Maybe EmbeddingRecord)
-bestEffortRecallEmbedding _ Nothing _ = pure Nothing
-bestEffortRecallEmbedding caller (Just client) queryText = do
-  result <- liftIO (embedTexts client [T.strip queryText])
+bestEffortRecallEmbedding :: (Embedding :> es, Log :> es) => Text -> Text -> Eff es (Maybe EmbeddingRecord)
+bestEffortRecallEmbedding caller queryText = do
+  result <- embedBatch [T.strip queryText]
   case result of
-    Right [vector] -> case makeEmbeddingRecord client (T.strip queryText) vector of
-      Right record -> pure (Just record)
-      Left err -> do
-        logAttention (caller <> ": invalid query embedding; using lexical recall") $ object ["error" .= err]
-        pure Nothing
+    Right [record] -> pure (Just record)
     Right _ -> do
       logAttention (caller <> ": unexpected embedding shape; using lexical recall") (object [])
       pure Nothing
-    Left err -> do
-      logAttention (caller <> ": embedding failed; using lexical recall") $ object ["error" .= err]
+    Left fault -> do
+      logAttention (caller <> ": embedding failed; using lexical recall") $ object ["error" .= renderEmbeddingFault fault]
       pure Nothing
 
 recallHitSummary :: TimeZone -> RecallHit -> Value

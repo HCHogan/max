@@ -29,6 +29,7 @@ import Max.DB.Migrations (runMigrations)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits, runAgent)
 import Max.Effects.Blob (Blob, runBlob)
+import Max.Effects.Embedding (Embedding, runEmbedding)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, TokenUsage (..), runLLM)
 import Max.Effects.Outbound (Outbound, runOutbound)
@@ -142,12 +143,13 @@ main = do
                     beMemoryExtract = cfg.memoryExtractProfile,
                     beEpisodeScheduler = episodeScheduler,
                     beIntent = cfg.intent,
-                    beEmbed = mEmbed
+                    beEmbeddingEnabled = isJust mEmbed
                   }
           runEff
             . runConcurrent
             . runLog "max" logger cfg.logLevel
             . runHttp httpRuntime
+            . runEmbedding mEmbed
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
             . runPlatformApi
@@ -189,7 +191,7 @@ main = do
               cfg.llm
             . runReader cfg.llm
             . runReader env
-            . runAgent defaultLimits (allToolsFor httpRuntime env) tasks
+            . runAgent defaultLimits (allToolsFor httpRuntime env)
             $ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid
       )
       `finally` (destroyAllSandboxes sandboxes `finally` destroyAllBrowsers browsers)
@@ -209,6 +211,7 @@ runApp ::
   ( IOE :> es,
     Log :> es,
     Http :> es,
+    Embedding :> es,
     Blob :> es,
     WithConnection :> es,
     PlatformApi :> es,
@@ -282,8 +285,8 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
             -- UserInterrupt on main to start graceful unwinding.
             worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
           ]
-            <> [ worker "embeddings" OptionalWorker (embedWorker maintenanceOwner embed)
-               | embed <- maybeToList env.beEmbed
+            <> [ worker "embeddings" OptionalWorker (embedWorker maintenanceOwner)
+               | env.beEmbeddingEnabled
                ]
             <> [ worker
                    "media-captions"
