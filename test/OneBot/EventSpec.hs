@@ -26,14 +26,14 @@ spec = describe "parseEvent" $ do
 
   it "parses a group message with its real group id" $
     case parseEvent (msgEvent "group" ["group_id" .= (7777 :: Int)]) of
-      Right (EvGroupMessage gm) -> do
+      Right (EvGroupMessage "qq" _ gm) -> do
         gm.groupId `shouldBe` GroupId 7777
         gm.userId `shouldBe` UserId 2001
       other -> expectationFailure ("expected EvGroupMessage, got: " <> show other)
 
   it "parses a private message onto the pseudo group id -user_id" $
     case parseEvent (msgEvent "private" []) of
-      Right (EvGroupMessage gm) -> do
+      Right (EvGroupMessage "qq" _ gm) -> do
         gm.groupId `shouldBe` GroupId (-2001)
         gm.userId `shouldBe` UserId 2001
       other -> expectationFailure ("expected EvGroupMessage, got: " <> show other)

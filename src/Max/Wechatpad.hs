@@ -55,7 +55,7 @@ import Max.HttpRuntime
     renderTransportFailure,
     runBuffered,
   )
-import Max.Platform (PlatformBackend (..), isForeignId)
+import Max.Platform (PlatformBackend (..))
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
 import Network.WebSockets qualified as WS
@@ -95,8 +95,8 @@ wechatpadBackend ::
   PlatformBackend
 wechatpadBackend runtime runDb cfg =
   PlatformBackend
-    { pbName = platformName,
-      pbOwnsId = isForeignId,
+    { pbPlatform = platformName,
+      pbName = platformName,
       pbSend = \a -> sendOut a >>= either (pure . Left) (const (pure (Right ()))),
       pbCall = \a _timeoutMs ->
         sendOut a >>= \case
@@ -227,9 +227,9 @@ wechatpadWorker cfg q = localDomain "wechatpad" $ do
     handleFrame selfMapped raw =
       case decodeStrictText raw of
         Nothing -> pure ()
-        Just frame -> for_ (parseMaybe frameParser frame) (translate selfMapped)
+        Just frame -> for_ (parseMaybe frameParser frame) (translate selfMapped frame)
 
-    translate selfMapped wm
+    translate selfMapped frame wm
       -- Demo scope: whitelisted chatroom text messages only.
       | wm.wmMsgType /= 1 = pure ()
       | not ("@chatroom" `T.isSuffixOf` wm.wmFrom) = pure ()
@@ -263,7 +263,7 @@ wechatpadWorker cfg q = localDomain "wechatpad" $ do
                   "len" .= T.length body,
                   "create_time" .= wm.wmCreateTime
                 ]
-            liftIO (atomically (writeTQueue q (EvGroupMessage gm)))
+            liftIO (atomically (writeTQueue q (EvGroupMessage platformName frame gm)))
 
 -- | Chatroom frames carry the sender folded into the content as
 -- @wxid:\\ntext@; a frame without that shape belongs to the room

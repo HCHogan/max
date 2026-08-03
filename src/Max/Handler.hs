@@ -12,6 +12,7 @@ where
 import Control.Applicative ((<|>))
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (unless, void, when)
+import Data.Aeson (Value, toJSON)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
 import Data.List (find, partition, unsnoc)
@@ -51,6 +52,8 @@ import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
+import Max.Platform.QQ (ensureQQEndpoint, qqEnvelope)
+import Max.Platform.Store (IngestOptions (..), IngestResult (..), defaultIngestOptions, ingestEnvelope)
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadMode, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -81,11 +84,13 @@ import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 data IngestOutcome
   = IngestDurable
+  | IngestDuplicate
   | IngestFailed !T.Text
   deriving stock (Show, Eq)
 
 ingestAllowsDownstream :: IngestOutcome -> Bool
 ingestAllowsDownstream IngestDurable = True
+ingestAllowsDownstream IngestDuplicate = False
 ingestAllowsDownstream IngestFailed {} = False
 
 -- | May this turn be swallowed by one already running?
@@ -230,20 +235,24 @@ handleEvents q fetchSig mIntent = loop
           logInfo "lifecycle" $ object ["sub_type" .= sub]
         EvRaw v ->
           logTrace "unhandled event" v
-        EvGroupMessage gm -> do
+        EvGroupMessage source raw gm -> do
           -- Move the quiet boundary before the row becomes visible to the
           -- historian's DB scan.  Otherwise a due scan could race persistence
           -- and fold the just-arrived live-tail message.
           env :: BotEnv <- ask
           for_ env.beEpisodeScheduler $ \scheduler -> liftIO (bumpEpisode scheduler gm.groupId)
-          persisted <- persist gm
-          if ingestAllowsDownstream persisted
-            then do
+          persisted <- persist source raw gm
+          case persisted of
+            IngestDurable -> do
               enqueueImages fetchSig gm
               enqueueForwards fetchSig gm
               enqueueFiles fetchSig gm
               onGroupMessage mIntent gm
-            else do
+            IngestDuplicate -> do
+              let MessageId messageId = gm.messageId
+              logTrace "ingest: duplicate source event ignored" $
+                object ["source" .= source, "message_id" .= messageId]
+            IngestFailed {} -> do
               let GroupId groupId = gm.groupId
                   MessageId messageId = gm.messageId
               logAttention "ingest: downstream work suppressed because ledger insert failed" $
@@ -268,15 +277,39 @@ handleEvents q fetchSig mIntent = loop
 -- reply-to-bot has nothing to do with it.  A malformed command counts:
 -- it still looks like one to the reader, and it gets an error reply
 -- rather than an answer.
-persist :: (Log :> es, WithConnection :> es, IOE :> es) => GroupMessage -> Eff es IngestOutcome
-persist gm =
-  trySync (uncurry insertGroupMessage (recordAs gm) gm) >>= \case
-    Right () -> pure IngestDurable
+persist :: (Log :> es, WithConnection :> es, IOE :> es) => T.Text -> Value -> GroupMessage -> Eff es IngestOutcome
+persist source raw gm =
+  trySync persistOne >>= \case
+    Right outcome -> pure outcome
     Left e -> do
       let message = T.pack (show e)
       logAttention "db insert failed" $
         object ["error" .= message]
       pure (IngestFailed message)
+  where
+    persistOne
+      | source == "qq" = do
+          endpoint <- ensureQQEndpoint gm
+          received <- liftIO getCurrentTime
+          let (kind, renderedOverride) = recordAs gm
+              options =
+                defaultIngestOptions
+                  { transcriptKind = renderMessageKind kind,
+                    renderedTextOverride = renderedOverride,
+                    compatibilitySegments = toJSON gm.message,
+                    compatibilityRawMessage = gm.rawMessage
+                  }
+          ingestEnvelope options (qqEnvelope endpoint received raw gm) >>= \case
+            Ingested _ -> pure IngestDurable
+            AlreadyIngested _ -> pure IngestDuplicate
+      | otherwise = do
+          uncurry insertGroupMessage (recordAs gm) gm
+          pure IngestDurable
+
+    renderMessageKind = \case
+      KindChat -> "chat"
+      KindCommand -> "command"
+      KindDebug -> "debug"
 
 onGroupMessage ::
   ( Blob :> es,

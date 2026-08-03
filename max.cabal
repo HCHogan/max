@@ -154,6 +154,7 @@ library
         Max.Platform
         Max.Platform.Types
         Max.Platform.Store
+        Max.Platform.QQ
         Max.Prompt
         Max.Prompt.System
         Max.PromptFlow

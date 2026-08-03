@@ -20,8 +20,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     let envelope = inbound matrix.endpointId now "mx-event-1" "hello from Matrix"
     (left, right) <-
       concurrently
-        (withDb pool (ingestEnvelope 65536 envelope))
-        (withDb pool (ingestEnvelope 65536 envelope))
+        (withDb pool (ingestEnvelope defaultIngestOptions envelope))
+        (withDb pool (ingestEnvelope defaultIngestOptions envelope))
 
     let ids = resultId <$> [left, right]
     ids `shouldSatisfy` \case
@@ -70,7 +70,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
   it "leases each delivery once and rejects completion by a non-owner" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
-    _ <- withDb pool (ingestEnvelope 65536 (inbound matrix.endpointId now "mx-event-2" "deliver me"))
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-event-2" "deliver me"))
     claims <- withDb pool (claimDeliveries "worker-a" 10 30)
     claims `shouldSatisfy` \case
       [claim] -> claim.endpointId == qq.endpointId && claim.attemptCount == 1

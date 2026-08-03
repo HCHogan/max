@@ -27,6 +27,7 @@ import Control.Concurrent.STM
   )
 import Control.Exception (bracket_, try)
 import Data.Aeson (encode)
+import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -35,7 +36,9 @@ import Data.UUID.V4 qualified as UUID
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log (Log, logAttention_)
-import Max.Platform (PlatformBackend (..), routeAction)
+import Effectful.PostgreSQL (WithConnection)
+import Max.Platform (ActionAddress (..), PlatformBackend (..), actionAddress, backendForPlatform)
+import Max.Platform.Store (platformForLegacyConversation, platformForLegacyMessage)
 import Network.WebSockets qualified as WS
 import OneBot.Action (Action, Envelope (..), Response, encodeAction)
 import OneBot.Server (Client (..))
@@ -49,36 +52,34 @@ data PlatformApi :: Effect where
 
 type instance DispatchOf PlatformApi = Dynamic
 
--- | Interpret the action effect as a router over platform backends:
--- each op goes to the first extra backend claiming its target id
--- ('Max.Platform.routeAction'), falling back to the default (QQ).
--- The capability name is backend-neutral; every call site speaks
--- 'sendAction'/'callAction' regardless of where the message lands.
+-- | Interpret compatibility actions through explicit canonical endpoint
+-- ownership.  Targetless account operations remain QQ-only.
 runPlatformApi ::
-  (IOE :> es, Log :> es) =>
+  (IOE :> es, Log :> es, WithConnection :> es) =>
   PlatformBackend -> -- default backend (QQ / NapCat)
   [PlatformBackend] -> -- foreign backends (WeChat, …)
   Eff (PlatformApi : es) a ->
   Eff es a
 runPlatformApi dflt extras = interpret $ \_ -> \case
   SendOp a -> do
-    let b = routeAction extras dflt a
-    liftIO (b.pbSend a) >>= \case
-      Left err -> logAttention_ (b.pbName <> " send failed: " <> err)
-      Right () -> pure ()
+    resolveBackend dflt extras a >>= \case
+      Left err -> logAttention_ err
+      Right b ->
+        liftIO (b.pbSend a) >>= \case
+          Left err -> logAttention_ (b.pbName <> " send failed: " <> err)
+          Right () -> pure ()
   CallOp a t -> do
-    let b = routeAction extras dflt a
-    liftIO (b.pbCall a t)
+    resolveBackend dflt extras a >>= \case
+      Left err -> pure (Left err)
+      Right b -> liftIO (b.pbCall a t)
 
 -- | The NapCat (QQ) backend over the reverse-WS client that
 -- 'OneBot.Server' publishes per connection.
 qqBackend :: TVar (Maybe Client) -> PlatformBackend
 qqBackend ref =
   PlatformBackend
-    { pbName = "napcat",
-      -- Default backend: routing falls through to it, so it never
-      -- needs to claim ids.
-      pbOwnsId = const False,
+    { pbPlatform = "qq",
+      pbName = "napcat",
       pbSend = \a ->
         readTVarIO ref >>= \case
           Nothing -> pure (Left "no client connected")
@@ -88,6 +89,32 @@ qqBackend ref =
           Nothing -> pure (Left "no client connected")
           Just c -> callIO c a t
     }
+
+resolveBackend ::
+  (WithConnection :> es, IOE :> es) =>
+  PlatformBackend ->
+  [PlatformBackend] ->
+  Action ->
+  Eff es (Either Text PlatformBackend)
+resolveBackend dflt extras action = do
+  let backends = dflt : extras
+      configured = nub ((.pbPlatform) <$> backends)
+  platform <- case actionAddress action of
+    AccountAddress -> pure (Just "qq")
+    ConversationAddress group -> platformForLegacyConversation group
+    DirectAddress user -> platformForLegacyConversation (negate user)
+    MessageAddress message -> platformForLegacyMessage message
+  pure $ case platform of
+    Nothing -> Left "platform route unresolved: target has no canonical endpoint"
+    Just name -> case backendForPlatform name backends of
+      Just backend -> Right backend
+      Nothing ->
+        Left
+          ( "platform route unavailable: endpoint requires "
+              <> name
+              <> ", configured="
+              <> T.intercalate "," configured
+          )
 
 sendAction :: (PlatformApi :> es) => Action -> Eff es ()
 sendAction a = send (SendOp a)

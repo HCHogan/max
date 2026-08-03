@@ -12,7 +12,14 @@ module Max.Platform.Store
     RegisteredEndpoint (..),
     createConversation,
     findConversationByLegacyId,
+    platformForLegacyConversation,
+    platformForLegacyMessage,
     registerEndpoint,
+    ensureLegacyEndpoint,
+    ensureConfiguredEndpoint,
+    latestNativeEventId,
+    IngestOptions (..),
+    defaultIngestOptions,
     IngestResult (..),
     NewIngest (..),
     ingestEnvelope,
@@ -82,6 +89,25 @@ data RegisteredEndpoint = RegisteredEndpoint
     conversationId :: !ConversationId
   }
   deriving stock (Eq, Show, Generic)
+
+data IngestOptions = IngestOptions
+  { maxRawPayloadBytes :: !Int,
+    transcriptKind :: !Text,
+    renderedTextOverride :: !(Maybe Text),
+    compatibilitySegments :: !Value,
+    compatibilityRawMessage :: !Text
+  }
+  deriving stock (Eq, Show, Generic)
+
+defaultIngestOptions :: IngestOptions
+defaultIngestOptions =
+  IngestOptions
+    { maxRawPayloadBytes = 65536,
+      transcriptKind = "chat",
+      renderedTextOverride = Nothing,
+      compatibilitySegments = toJSON ([] :: [Value]),
+      compatibilityRawMessage = ""
+    }
 
 data IngestResult
   = Ingested !NewIngest
@@ -175,6 +201,39 @@ findConversationByLegacyId legacyId = do
   rows <- query "SELECT conversation_id FROM conversations WHERE legacy_group_id = ?" (Only legacyId)
   pure (ConversationId . fromOnly <$> listToMaybe rows)
 
+-- | Resolve the endpoint used by legacy OneBot-shaped operations.  QQ is the
+-- preferred operational endpoint of a mirror conversation; a standalone
+-- foreign conversation resolves to its sole endpoint.
+platformForLegacyConversation ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Eff es (Maybe Text)
+platformForLegacyConversation legacyId = do
+  rows <-
+    query
+      "SELECT a.platform FROM conversations c \
+      \JOIN conversation_endpoints e USING (conversation_id) \
+      \JOIN platform_accounts a USING (platform_account_id) \
+      \WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
+      \ORDER BY CASE a.platform WHEN 'qq' THEN 0 ELSE 1 END, e.endpoint_id \
+      \LIMIT 1"
+      (Only legacyId)
+  pure (fromOnly <$> listToMaybe rows)
+
+platformForLegacyMessage ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Eff es (Maybe Text)
+platformForLegacyMessage legacyMessageId = do
+  rows <-
+    query
+      "SELECT a.platform FROM messages m \
+      \JOIN conversation_endpoints e ON e.endpoint_id = m.origin_endpoint_id \
+      \JOIN platform_accounts a USING (platform_account_id) \
+      \WHERE m.message_id = ? AND e.enabled AND a.enabled"
+      (Only legacyMessageId)
+  pure (fromOnly <$> listToMaybe rows)
+
 registerEndpoint ::
   (WithConnection :> es, IOE :> es) =>
   EndpointRegistration ->
@@ -242,19 +301,172 @@ registerEndpoint registration = withTransaction $ do
         conversationId = registration.conversationId
       }
 
+-- | Resolve or create the canonical endpoint corresponding to a legacy
+-- bigint conversation.  Only edge adapters call this compatibility bridge;
+-- the returned endpoint is the authority used by ingest and delivery.
+ensureLegacyEndpoint ::
+  (WithConnection :> es, IOE :> es) =>
+  Platform ->
+  NativeAccountId ->
+  NativeConversationId ->
+  ConversationKind ->
+  Int64 ->
+  PlatformCapabilities ->
+  Eff es RegisteredEndpoint
+ensureLegacyEndpoint platform nativeAccount nativeConversation kind legacyGroup capabilities =
+  withTransaction $ do
+    conversationRows <-
+      query
+        "INSERT INTO conversations (conversation_kind, legacy_group_id) \
+        \ VALUES (?, ?) \
+        \ ON CONFLICT (legacy_group_id) DO UPDATE \
+        \ SET conversation_kind = EXCLUDED.conversation_kind \
+        \ RETURNING conversation_id"
+        (renderConversationKind kind, legacyGroup)
+    let conversation = ConversationId (exactlyOne "ensureLegacyEndpoint conversation" conversationRows)
+        platformName = renderPlatform platform
+        NativeAccountId accountNative = nativeAccount
+        NativeConversationId conversationNative = nativeConversation
+        capabilitiesJson = Jsonb (capabilitiesValue capabilities)
+    accountRows <-
+      query
+        "INSERT INTO platform_accounts (platform, native_account_id, capabilities) \
+        \ VALUES (?, ?, ?) \
+        \ ON CONFLICT (platform, native_account_id) DO UPDATE \
+        \ SET capabilities = EXCLUDED.capabilities, updated_at = now() \
+        \ RETURNING platform_account_id"
+        (platformName, accountNative, capabilitiesJson)
+    let account = exactlyOne "ensureLegacyEndpoint account" accountRows
+    endpointRows <-
+      query
+        "INSERT INTO conversation_endpoints \
+        \ (conversation_id, platform_account_id, native_conversation_id, endpoint_kind, capabilities) \
+        \ VALUES (?, ?, ?, ?, ?) \
+        \ ON CONFLICT (platform_account_id, native_conversation_id) DO UPDATE \
+        \ SET conversation_id = EXCLUDED.conversation_id, endpoint_kind = EXCLUDED.endpoint_kind, \
+        \     capabilities = EXCLUDED.capabilities, updated_at = now() \
+        \ RETURNING endpoint_id"
+        (conversation.unConversationId, account, conversationNative, renderConversationKind kind, capabilitiesJson)
+    pure
+      RegisteredEndpoint
+        { endpointId = EndpointId (exactlyOne "ensureLegacyEndpoint endpoint" endpointRows),
+          platformAccountId = PlatformAccountId account,
+          conversationId = conversation
+        }
+
+-- | Idempotently install one configured endpoint.  A mirror binds to the
+-- explicitly named legacy conversation; a standalone endpoint reuses its own
+-- prior conversation across restarts and creates one only on first boot.
+ensureConfiguredEndpoint ::
+  (WithConnection :> es, IOE :> es) =>
+  Platform ->
+  NativeAccountId ->
+  NativeConversationId ->
+  ConversationKind ->
+  EndpointMode ->
+  Maybe Int64 ->
+  PlatformCapabilities ->
+  Eff es RegisteredEndpoint
+ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLegacy capabilities =
+  withTransaction $ do
+    let platformName = renderPlatform platform
+        NativeAccountId accountNative = nativeAccount
+        NativeConversationId conversationNative = nativeConversation
+        capabilitiesJson = Jsonb (capabilitiesValue capabilities)
+    accountRows <-
+      query
+        "INSERT INTO platform_accounts (platform, native_account_id, capabilities) \
+        \ VALUES (?, ?, ?) \
+        \ ON CONFLICT (platform, native_account_id) DO UPDATE \
+        \ SET capabilities = EXCLUDED.capabilities, updated_at = now() \
+        \ RETURNING platform_account_id"
+        (platformName, accountNative, capabilitiesJson)
+    let account = exactlyOne "ensureConfiguredEndpoint account" accountRows
+    existing <-
+      query
+        "SELECT endpoint_id, conversation_id FROM conversation_endpoints \
+        \ WHERE platform_account_id = ? AND native_conversation_id = ? FOR UPDATE"
+        (account, conversationNative)
+    (endpoint, conversation) <- case existing :: [(Int64, Int64)] of
+      [(endpointId', conversationId')] -> pure (endpointId', conversationId')
+      [] -> do
+        conversationRows <- case mLegacy of
+          Just legacy ->
+            query
+              "INSERT INTO conversations (conversation_kind, legacy_group_id) VALUES (?, ?) \
+              \ ON CONFLICT (legacy_group_id) DO UPDATE \
+              \ SET conversation_kind = EXCLUDED.conversation_kind \
+              \ RETURNING conversation_id"
+              (renderConversationKind kind, legacy)
+          Nothing ->
+            query
+              "INSERT INTO conversations (conversation_kind) VALUES (?) RETURNING conversation_id"
+              (Only (renderConversationKind kind))
+        let conversationId' = exactlyOne "ensureConfiguredEndpoint conversation" conversationRows
+        -- Standalone conversations still need an opaque compatibility key for
+        -- unchanged context/session readers.  It is not routing authority.
+        case mLegacy of
+          Just _ -> pure ()
+          Nothing -> do
+            projected <- compatibilityId platformName "channel" conversationNative
+            _ <-
+              execute
+                "UPDATE conversations SET legacy_group_id = ? WHERE conversation_id = ?"
+                (projected, conversationId')
+            pure ()
+        endpointRows <-
+          query
+            "INSERT INTO conversation_endpoints \
+            \ (conversation_id, platform_account_id, native_conversation_id, endpoint_kind, endpoint_mode, capabilities) \
+            \ VALUES (?, ?, ?, ?, ?, ?) RETURNING endpoint_id"
+            ( conversationId',
+              account,
+              conversationNative,
+              renderConversationKind kind,
+              renderEndpointMode mode,
+              capabilitiesJson
+            )
+        pure (exactlyOne "ensureConfiguredEndpoint endpoint" endpointRows, conversationId')
+      _ -> error "ensureConfiguredEndpoint: duplicate endpoint invariant violated"
+    _ <-
+      execute
+        "UPDATE conversation_endpoints \
+        \ SET endpoint_mode = ?, endpoint_kind = ?, capabilities = ?, enabled = true, updated_at = now() \
+        \ WHERE endpoint_id = ?"
+        (renderEndpointMode mode, renderConversationKind kind, capabilitiesJson, endpoint)
+    pure
+      RegisteredEndpoint
+        { endpointId = EndpointId endpoint,
+          platformAccountId = PlatformAccountId account,
+          conversationId = ConversationId conversation
+        }
+
+latestNativeEventId ::
+  (WithConnection :> es, IOE :> es) =>
+  EndpointId ->
+  Eff es (Maybe NativeEventId)
+latestNativeEventId (EndpointId endpoint) = do
+  rows <-
+    query
+      "SELECT native_event_id FROM platform_events \
+      \ WHERE endpoint_id = ? AND canonical_message_id IS NOT NULL \
+      \ ORDER BY platform_event_id DESC LIMIT 1"
+      (Only endpoint)
+  pure (NativeEventId . fromOnly <$> listToMaybe rows)
+
 -- | Persist one normalized event exactly once.  The unique native event key is
 -- reserved before any canonical row is inserted, and all derived work is
 -- published in the same transaction.
 ingestEnvelope ::
   (WithConnection :> es, IOE :> es) =>
-  Int -> -- ^ maximum persisted diagnostic raw-payload bytes
+  IngestOptions ->
   InboundEnvelope ->
   Eff es IngestResult
-ingestEnvelope maxRawBytes envelope = withTransaction $ do
+ingestEnvelope options envelope = withTransaction $ do
   endpoint <- fetchEndpoint envelope.endpointId
   identityId <- ensurePrincipalIdentity endpoint envelope.senderNativeId envelope.senderDisplayName
   let NativeEventId nativeEvent = envelope.nativeEventId
-      (safeRaw, rawTruncated) = sanitizeRawPayload maxRawBytes envelope.rawPayload
+      (safeRaw, rawTruncated) = sanitizeRawPayload options.maxRawPayloadBytes envelope.rawPayload
   reserved <-
     query
       "INSERT INTO platform_events \
@@ -291,7 +503,7 @@ ingestEnvelope maxRawBytes envelope = withTransaction $ do
           NativeEventId nativeEvent = envelope.nativeEventId
           NativeUserId nativeUser = envelope.senderNativeId
           contentValue = canonicalContentValue envelope.content
-          rendered = renderCanonicalText envelope.content
+          rendered = fromMaybe (renderCanonicalText envelope.content) options.renderedTextOverride
       legacySelf <- compatibilityId platformName "user" endpoint.erNativeAccountId
       legacyUser <- compatibilityId platformName "user" nativeUser
       legacyMessage <- compatibilityId platformName "message" nativeEvent
@@ -308,7 +520,7 @@ ingestEnvelope maxRawBytes envelope = withTransaction $ do
           \  segments, canonical_content, rendered_text, raw_message, sender_nickname, \
           \  reply_to_message_id, reply_to_canonical_message_id, kind, conversation_id, \
           \  author_principal_id, origin_endpoint_id, source_native_event_id) \
-          \ SELECT ?, ?, ?, ?, ?, ?, '[]'::jsonb, ?, ?, '', ?, ?, ?, 'chat', ?, \
+          \ SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
           \        pi.principal_id, ?, ? \
           \ FROM principal_identities pi WHERE pi.principal_identity_id = ? \
           \ RETURNING canonical_message_id"
@@ -318,11 +530,14 @@ ingestEnvelope maxRawBytes envelope = withTransaction $ do
             legacySelf,
             envelope.receivedAt,
             envelope.occurredAt,
+            Jsonb options.compatibilitySegments,
             Jsonb contentValue,
             rendered,
+            options.compatibilityRawMessage,
             envelope.senderDisplayName,
             replyLegacy,
             replyCanonical,
+            options.transcriptKind,
             endpoint.erConversationId,
             envelope.endpointId.unEndpointId,
             nativeEvent,

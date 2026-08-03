@@ -54,7 +54,7 @@ data PokeEvent = PokeEvent
 -- | High-level event we care about. Anything we don't decode lands in 'EvRaw'
 -- with the original 'Value' so it can be logged or revisited later.
 data Event
-  = EvGroupMessage !GroupMessage
+  = EvGroupMessage !Text !Value !GroupMessage
   | EvPoke !PokeEvent
   | EvHeartbeat
   | EvLifecycle !Text
@@ -74,8 +74,8 @@ eventParser v@(Object o) = do
     Just "message" -> do
       msgType <- o .:? "message_type" :: Parser (Maybe Text)
       case msgType of
-        Just "group" -> EvGroupMessage <$> parseGroupMessage o
-        Just "private" -> EvGroupMessage <$> parsePrivateMessage o
+        Just "group" -> EvGroupMessage "qq" v <$> parseGroupMessage o
+        Just "private" -> EvGroupMessage "qq" v <$> parsePrivateMessage o
         _ -> pure (EvRaw v)
     Just "meta_event" -> do
       metaType <- o .:? "meta_event_type" :: Parser (Maybe Text)
