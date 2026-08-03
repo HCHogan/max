@@ -8,11 +8,11 @@ import Database.PostgreSQL.Simple (Only (..))
 import Effectful (IOE, liftIO, runEff)
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
-import Helpers (insertRawMessage, truncateAll, withDb)
-import Max.ConversationScope (conversationScopeFor)
+import Helpers (insertRawMessage, insertRawMessageAtSeq, truncateAll, withDb, withDbLog)
+import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool)
 import Max.DB.ConversationCursor (historianCursor, loadCursor)
-import Max.DB.History (MessageCursor (..))
+import Max.DB.History (LedgerItem (..), MessageCursor (..))
 import Max.Effects.LLM
   ( ChatCtx (..),
     ChatMessage (..),
@@ -23,6 +23,7 @@ import Max.Effects.LLM
 import Max.EpisodeStore
 import Max.Historian
   ( CaptureProcessResult (..),
+    healOldestCoverageGap,
     historianPromptVersion,
     historianSchemaVersion,
     processCaptureLease,
@@ -67,6 +68,89 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
     compartments <- withDb pool $ query "SELECT summary_p1, summary_p3 FROM conversation_compartments WHERE state = 'active'" ()
     (compartments :: [(Text, Text)])
       `shouldBe` [("Alice said she likes green tea; Max acknowledged it.", "Alice's green-tea preference was acknowledged.")]
+
+  it "heals a commit-order skip below the live cursor without rewinding it" $ do
+    let scope = conversationScopeFor (GroupId groupId)
+    -- Episode one: seqs 1-2 are captured and the cursor advances to 2.
+    insertRawMessage pool 1001 groupId member botId testTime (Just "Alice") "seq one"
+    insertRawMessage pool 1002 groupId member botId testTime (Just "Alice") "seq two"
+    end2 <- latestCursor pool
+    publishRange pool scope (MessageCursor 0) end2 [1001, 1002]
+    -- A concurrent handler allocated seq 3 but has not committed when the
+    -- next window is scanned: the scan sees only seq 4 and publishes it.
+    insertRawMessageAtSeq pool 4 1004 groupId member botId testTime (Just "Bob") "seq four"
+    publishRange pool scope end2 (MessageCursor 4) [1004]
+    withDb pool (loadCursor scope historianCursor) `shouldReturn` MessageCursor 4
+    -- The skipped insert commits only now: at/below the cursor, owned by no
+    -- active compartment.  Restart used to be the first chance to see it.
+    insertRawMessageAtSeq pool 3 1003 groupId member botId testTime (Just "Bob") "late seq three"
+    withDb pool (findOldestBackfillGap scope)
+      `shouldReturn` Just (BackfillGap end2 (MessageCursor 3))
+
+    healed <-
+      withDbLog pool (healOldestCoverageGap (minutesToTimeZone 480) "historian-test" 16_000 scope)
+        >>= requireJust "coverage heal run"
+    healed.crReason `shouldBe` "backfill"
+    healed.crExpectedCursor `shouldBe` end2
+    healed.crRange.srStart `shouldBe` MessageCursor 3
+    healed.crRange.srEnd `shouldBe` MessageCursor 3
+    -- Idempotent: a second heal round returns the same durable run.
+    again <-
+      withDbLog pool (healOldestCoverageGap (minutesToTimeZone 480) "historian-test" 16_000 scope)
+        >>= requireJust "repeat heal run"
+    again.crId `shouldBe` healed.crId
+
+    -- Publishing the healed island completes coverage; the live cursor and
+    -- the neighbouring compartments stay untouched.
+    lease <- withDb pool (claimCaptureRun "heal-worker" 600) >>= requireJust "heal lease"
+    lease.leaseRun.crId `shouldBe` healed.crId
+    source <- withDb pool $ loadCaptureSource healed
+    validated <- requireValid healed source (rangeCapture [1003])
+    _ <- withDb pool $ recordCaptureGenerated lease "raw heal capture" (rangeCapture [1003]) []
+    _ <- withDb pool $ publishCaptureRun scope lease validated
+    withDb pool (loadCursor scope historianCursor) `shouldReturn` MessageCursor 4
+    withDb pool (findOldestBackfillGap scope) `shouldReturn` Nothing
+    withDbLog pool (healOldestCoverageGap (minutesToTimeZone 480) "historian-test" 16_000 scope)
+      `shouldReturn` Nothing
+    ranges <- withDb pool $ query "SELECT start_ingest_seq, end_ingest_seq FROM conversation_compartments WHERE state = 'active' ORDER BY start_ingest_seq" ()
+    (ranges :: [(Int64, Int64)]) `shouldBe` [(1, 2), (3, 3), (4, 4)]
+
+-- | Direct capture publication without a model call: enqueue, claim,
+-- validate a canned capture over @evidence@, publish.
+publishRange :: DbPool -> ConversationScope -> MessageCursor -> MessageCursor -> [Int64] -> IO ()
+publishRange pool scope expected end evidence = do
+  let request =
+        CaptureRequest
+          { requestReason = CaptureIdle,
+            requestHistorianProfile = "historian-test",
+            requestPromptVersion = historianPromptVersion,
+            requestSchemaVersion = historianSchemaVersion
+          }
+  run <- withDb pool (enqueueCaptureRun scope expected end request) >>= requireJust "capture run"
+  lease <- withDb pool (claimCaptureRun "range-worker" 600) >>= requireJust "range lease"
+  lease.leaseRun.crId `shouldBe` run.crId
+  source <- withDb pool $ loadCaptureSource run
+  validated <- requireValid run source (rangeCapture evidence)
+  _ <- withDb pool $ recordCaptureGenerated lease "raw range capture" (rangeCapture evidence) []
+  _ <- withDb pool $ publishCaptureRun scope lease validated
+  pure ()
+
+rangeCapture :: [Int64] -> EpisodeCapture
+rangeCapture ids =
+  EpisodeCapture
+    { captureSummaryP1 = CitedSummary "full summary" ids,
+      captureSummaryP2 = CitedSummary "compact summary" (take 1 ids),
+      captureSummaryP3 = CitedSummary "anchor" (take 1 (reverse ids)),
+      captureImportance = 0.5,
+      captureConfidence = 0.9,
+      captureEpisodeKind = Ambient,
+      captureMemoryProposals = []
+    }
+
+requireValid :: CaptureRun -> [LedgerItem] -> EpisodeCapture -> IO ValidatedEpisodeCapture
+requireValid run source capture = case validateEpisodeCapture run source capture of
+  Right validated -> pure validated
+  Left errors -> expectationFailure (show errors) >> error "invalid capture"
 
 fakeHistorian :: Text -> LLMInterpreter '[WithConnection, IOE]
 fakeHistorian raw =

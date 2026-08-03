@@ -6,13 +6,18 @@
 -- hashes, leases, retries, model output, validation, publication, and cursor
 -- advancement are durable in 'Max.EpisodeStore'.  A restart therefore replays
 -- the same range or recovers it from the historian cursor without skipping raw
--- messages.
+-- messages.  Coverage below the cursor is self-healing while the process
+-- runs: every publication and every quiet round enqueue the oldest uncovered
+-- island ('healOldestCoverageGap'), so a message whose insert committed after
+-- the cursor passed its ingest_seq waits for the next conversation event, not
+-- the next restart.
 module Max.Historian
   ( historianWorker,
     historianPromptVersion,
     historianSchemaVersion,
     CaptureProcessResult (..),
     processCaptureLease,
+    healOldestCoverageGap,
 
     -- * Pure policy exposed for tests
     historianRetryDelaySeconds,
@@ -24,7 +29,7 @@ module Max.Historian
 where
 
 import Control.Concurrent (threadDelay)
-import Control.Monad (forever, unless, when)
+import Control.Monad (forever, unless, void, when)
 import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
@@ -43,7 +48,7 @@ import Effectful.Exception (finally)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.Context (estimateMessagesTokens, estimateTextTokens)
-import Max.ConversationScope (ConversationScope, conversationScopeFor)
+import Max.ConversationScope (ConversationScope, conversationScopeFor, conversationStorageId)
 import Max.DB.ConversationCursor (historianCursor, loadCursor)
 import Max.DB.History
   ( HistoryItem (..),
@@ -166,35 +171,10 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
 
     recoverHistoricalConversations = do
       sessions <- listSessions defaultModel
-      for_ sessions (enqueueNextBackfill . (.groupId))
+      for_ sessions (healCoverage . (.groupId))
 
-    enqueueNextBackfill gid@(GroupId rawGroupId) = do
-      let scope = conversationScopeFor gid
-      findOldestBackfillGap scope >>= \case
-        Nothing -> pure ()
-        Just gap ->
-          scanEpisodeWindowThrough tz scope gap.backfillExpected gap.backfillThrough sourceBudget >>= \case
-            Nothing -> pure ()
-            Just window -> do
-              let request =
-                    CaptureRequest
-                      { requestReason = CaptureBackfill,
-                        requestHistorianProfile = profile,
-                        requestPromptVersion = historianPromptVersion,
-                        requestSchemaVersion = historianSchemaVersion
-                      }
-              enqueueBackfillRun scope gap.backfillExpected window.endCursor request >>= \case
-                Nothing -> pure ()
-                Just run ->
-                  logInfo "historian: historical backfill enqueued" $
-                    object
-                      [ "group_id" .= rawGroupId,
-                        "capture_run_id" .= run.crId,
-                        "start_ingest_seq" .= run.crRange.srStart.ingestSeq,
-                        "end_ingest_seq" .= run.crRange.srEnd.ingestSeq,
-                        "gap_end_ingest_seq" .= gap.backfillThrough.ingestSeq,
-                        "source_tokens" .= window.estimatedTokens
-                      ]
+    healCoverage gid =
+      void (healOldestCoverageGap tz profile sourceBudget (conversationScopeFor gid))
 
     enqueueSettledConversation gid@(GroupId rawGroupId) = do
       rescheduled <- liftIO (episodePendingDeadline scheduler gid)
@@ -211,7 +191,12 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
           let scope = conversationScopeFor gid
           cursor <- loadCursor scope historianCursor
           scanEpisodeWindow tz scope cursor sourceBudget >>= \case
-            Nothing -> pure ()
+            Nothing ->
+              -- A quiet round with nothing pending above the cursor is exactly
+              -- the wake-up a commit-order skip gets: the late row's handler
+              -- armed this round, but its ingest_seq already sits at or below
+              -- the cursor, so only the coverage query can see it.
+              healCoverage gid
             Just window -> do
               movedDuringScan <- liftIO (episodePendingDeadline scheduler gid)
               case movedDuringScan of
@@ -265,12 +250,13 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
                 if run.crReason == "token_pressure"
                   then liftIO (continueEpisodeAt scheduler gid now)
                   else liftIO (armEpisode scheduler gid)
-              when (run.crReason == "backfill") $ do
-                -- Controlled continuous catch-up: keep all conversations fair
-                -- (their first gaps were enqueued together at boot) and avoid a
-                -- tight provider loop while still converging without traffic.
-                liftIO (threadDelay 1_000_000)
-                enqueueNextBackfill gid
+              -- Backfill chains pace themselves so bulk catch-up cannot
+              -- tight-loop the provider (all conversations enqueued their
+              -- first gaps together at boot).  A settled publication heals
+              -- immediately: the cursor advance it just performed is the only
+              -- step that can strand a late-committed row below coverage.
+              when (run.crReason == "backfill") $ liftIO (threadDelay 1_000_000)
+              healCoverage gid
             Right CaptureRetryScheduled -> retryConversation (GroupId lease.leaseRun.crConversationId)
             Right CaptureAbandoned -> retryConversation (GroupId lease.leaseRun.crConversationId)
             Left err -> recoverLeaseFailure lease (T.pack (show err))
@@ -362,6 +348,48 @@ scanEpisodeWindowBounded tz scope initial through tokenLimit = go initial 0 Noth
                 go end (used + selectedTokens) latest'
             | otherwise ->
                 pure (Just (EpisodeWindow end (used + selectedTokens) page.hasMore))
+
+-- | One event-driven coverage-heal step: enqueue the oldest raw island at or
+-- below the live historian cursor as a durable backfill run.  Boot uses it
+-- for history predating enrollment; every publication and every quiet round
+-- reuse it so a commit-order skip (an insert whose ingest_seq committed after
+-- the cursor passed it) or an interrupted backfill chain is repaired on the
+-- next conversation event instead of the next restart.  Publication of the
+-- enqueued run still validates source hash and active non-overlap, and never
+-- moves the live cursor.
+healOldestCoverageGap ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  TimeZone ->
+  Text ->
+  Int ->
+  ConversationScope ->
+  Eff es (Maybe CaptureRun)
+healOldestCoverageGap tz profile sourceBudget scope = do
+  findOldestBackfillGap scope >>= \case
+    Nothing -> pure Nothing
+    Just gap ->
+      scanEpisodeWindowThrough tz scope gap.backfillExpected gap.backfillThrough sourceBudget >>= \case
+        Nothing -> pure Nothing
+        Just window -> do
+          let request =
+                CaptureRequest
+                  { requestReason = CaptureBackfill,
+                    requestHistorianProfile = profile,
+                    requestPromptVersion = historianPromptVersion,
+                    requestSchemaVersion = historianSchemaVersion
+                  }
+          enqueued <- enqueueBackfillRun scope gap.backfillExpected window.endCursor request
+          for_ enqueued $ \run ->
+            logInfo "historian: coverage backfill enqueued" $
+              object
+                [ "group_id" .= conversationStorageId scope,
+                  "capture_run_id" .= run.crId,
+                  "start_ingest_seq" .= run.crRange.srStart.ingestSeq,
+                  "end_ingest_seq" .= run.crRange.srEnd.ingestSeq,
+                  "gap_end_ingest_seq" .= gap.backfillThrough.ingestSeq,
+                  "source_tokens" .= window.estimatedTokens
+                ]
+          pure enqueued
 
 -- | Select a non-empty prefix by conservative token cost.  Message count is
 -- deliberately absent from the policy: a 200-line emoji exchange and a

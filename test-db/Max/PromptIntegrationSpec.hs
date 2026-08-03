@@ -18,12 +18,13 @@ import Effectful.PostgreSQL (execute, query)
 import Helpers (insertRawKind, insertRawMessage, truncateAll, updateDbSession, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
-import Max.DB.History (MessageCursor (..))
+import Max.ContextMaterialization (ContextMaterialization (..))
+import Max.DB.History (LedgerItem (..), MessageCursor (..))
 import Max.DB.Session (fetchOrInit)
 import Max.Effects.LLM (ChatMessage (..))
 import Max.EpisodeStore
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
-import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContext, buildContextWithLimits, buildContextWithReadMode)
+import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), TriggerOrigin (..), buildContext, buildContextWithLimits, buildContextWithReadMode, materializeTieredHistory)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -342,6 +343,29 @@ spec pool = before_ (truncateAll pool) $
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)
+
+    it "reports the dropped tail region when the historian is behind and no fold target exists" $ do
+      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 1) (Just "Alice") "folded one"
+      insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 2) (Just "Alice") "folded two"
+      (_, end) <- publishNextCompartment pool (MessageCursor 0) [1001, 1002] "folded summary"
+      -- More raw rows after the last compartment than one fetch page (256),
+      -- and far more tokens than the tiny high watermark below.  With no
+      -- newer compartment to fold into, the tail must truncate — and say so.
+      mapM_
+        (\i -> insertRawMessage pool (2000 + i) groupRaw otherMemberRaw botRaw (timeAt 3) (Just "Bob") ("burst " <> T.pack (show i)))
+        [1 .. 260 :: Int64]
+      let scope = conversationScopeFor (GroupId groupRaw)
+          watermarks = HistoryTokenWatermarks {htwLow = 64, htwHigh = 128}
+      active <- withDb pool $ listActiveCompartments scope
+      (materialized, tailRows, tailDropped) <-
+        withDb pool $ materializeTieredHistory scope 9000 Nothing (timeAt 4) watermarks active
+      tailDropped `shouldBe` True
+      -- Last-known-good projection preserved: coverage still ends at the
+      -- published compartment; the returned tail is only the newest slice.
+      materialized.cmEndCursor `shouldBe` end
+      case tailRows of
+        oldest : _ -> oldest.cursor.ingestSeq `shouldSatisfy` (> end.ingestSeq)
+        [] -> expectationFailure "expected a bounded raw tail"
 
 cursorFor :: DbPool -> Int64 -> IO MessageCursor
 cursorFor pool messageId = do

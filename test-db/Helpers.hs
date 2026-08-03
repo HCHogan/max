@@ -7,6 +7,7 @@ module Helpers
     withDbLog,
     truncateAll,
     insertRawMessage,
+    insertRawMessageAtSeq,
     insertRawKind,
     insertRawReply,
     updateDbSession,
@@ -16,7 +17,7 @@ where
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Time (UTCTime)
-import Database.PostgreSQL.Simple (Only (..), execute, execute_, (:.) (..))
+import Database.PostgreSQL.Simple (Only (..), execute, execute_, query, (:.) (..))
 import Database.PostgreSQL.Simple.Types (Null (..))
 import Effectful (Eff, IOE, runEff)
 import Effectful.Log (Log, LogLevel (LogTrace), runLog)
@@ -111,6 +112,39 @@ insertRawMessage pool mid gid uid sid receivedAt nick body = withConn pool $ \c 
       \   segments, rendered_text, raw_message, sender_nickname, sender_card) \
       \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?)"
       ((mid, gid, uid, sid, receivedAt, body, nick) :. Only Null)
+  pure ()
+
+-- | Like 'insertRawMessage' but with an explicit @ingest_seq@.  Simulates a
+-- commit-order skip: the row's sequence value was allocated before rows that
+-- are already visible, but its transaction committed later.  Bumps the
+-- sequence past the explicit value so later default inserts cannot collide.
+insertRawMessageAtSeq ::
+  DbPool ->
+  Int64 -> -- ingest_seq
+  Int64 -> -- message_id
+  Int64 -> -- group_id
+  Int64 -> -- user_id
+  Int64 -> -- self_id
+  UTCTime -> -- received_at
+  Maybe Text -> -- sender_nickname
+  Text -> -- rendered_text
+  IO ()
+insertRawMessageAtSeq pool seq' mid gid uid sid receivedAt nick body = withConn pool $ \c -> do
+  _ <-
+    execute
+      c
+      "INSERT INTO messages \
+      \  (message_id, group_id, user_id, self_id, received_at, \
+      \   segments, rendered_text, raw_message, sender_nickname, sender_card, ingest_seq) \
+      \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?, ?)"
+      ((mid, gid, uid, sid, receivedAt, body, nick) :. (Null, seq'))
+  _ <-
+    query
+      c
+      "SELECT setval('messages_ingest_seq_seq', greatest(?::bigint, last_value), true) \
+      \ FROM messages_ingest_seq_seq"
+      (Only seq') ::
+      IO [Only Int64]
   pure ()
 
 -- | Like 'insertRawMessage' but with an explicit @kind@ — @'command'@

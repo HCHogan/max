@@ -15,6 +15,8 @@ module Max.Prompt
     ContextPlan (..),
     collectContext,
     planContext,
+    materializeTieredHistory,
+    HistoryTokenWatermarks (..),
     applyBaseCompartmentTiers,
     renderContextPlan,
     renderContext,
@@ -617,7 +619,20 @@ collectContextWithWatermarks readMode materializationWatermarks defaultPersona m
               logAttention "context: tiered materialization failed; using last-known-good projection" $
                 object ["group_id" .= gid, "error" .= T.pack (show err)]
               collectProjectionFallback "last_known_good_projection_fallback" covered
-            Right (materialized, rawTail) ->
+            Right (materialized, rawTail, tailDropped) -> do
+              -- ADR 001 fail-soft contract: answering from a truncated tail is
+              -- allowed, but never silently.  These rows are in the immutable
+              -- ledger and stay recoverable; the historian's token-pressure
+              -- capture is what shrinks this window again.
+              when tailDropped $
+                logAttention "context: bounded tail dropped rows not yet owned by a compartment" $
+                  object
+                    [ "group_id" .= gid,
+                      "materialization_end_seq" .= materialized.cmEndCursor.ingestSeq,
+                      "tail_start_seq" .= fmap (.cursor.ingestSeq) (listToMaybe rawTail),
+                      "tail_tokens" .= rawTailTokens rawTail,
+                      "high_watermark" .= watermarks.htwHigh
+                    ]
               pure
                 ( materializedCompartments covered materialized,
                   map (.history) rawTail,
@@ -1628,6 +1643,11 @@ contextCompartmentFromActive active =
 contextPolicyVersion :: Text
 contextPolicyVersion = "context-policy/v3"
 
+-- | The returned 'Bool' is the coverage-loss signal: 'True' means the bounded
+-- tail fetch stopped before reaching the materialization end cursor, so raw
+-- rows exist between the last compartment and the oldest returned tail row
+-- that this turn cannot see (the historian has not folded them yet).  Callers
+-- on that fail-soft path must record an observable attention state.
 materializeTieredHistory ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
@@ -1636,7 +1656,7 @@ materializeTieredHistory ::
   UTCTime ->
   HistoryTokenWatermarks ->
   [ActiveCompartment] ->
-  Eff es (ContextMaterialization, [LedgerItem])
+  Eff es (ContextMaterialization, [LedgerItem], Bool)
 materializeTieredHistory scope triggerId cleared now' watermarks active = do
   stored <- loadContextMaterialization scope
   current <- case stored of
@@ -1650,14 +1670,14 @@ materializeTieredHistory scope triggerId cleared now' watermarks active = do
   (tailRows, tailTruncated) <-
     fetchBoundedPromptTail scope current.cmEndCursor triggerId cleared watermarks.htwHigh
   if not tailTruncated && rawTailTokens tailRows <= watermarks.htwHigh
-    then pure (current, tailRows)
+    then pure (current, tailRows, False)
     else case targetAtLowWater current tailRows active watermarks.htwLow of
-      Nothing -> pure (current, tailRows)
+      Nothing -> pure (current, tailRows, tailTruncated)
       Just target -> do
         folded <- publishOrReload (Just current.cmRevision) "high_water" target
-        (foldedTail, _) <-
+        (foldedTail, foldedTruncated) <-
           fetchBoundedPromptTail scope folded.cmEndCursor triggerId cleared watermarks.htwHigh
-        pure (folded, foldedTail)
+        pure (folded, foldedTail, foldedTruncated)
   where
     publishOrReload expected reason target = do
       let draft = materializationDraft now' watermarks.htwHigh reason target
