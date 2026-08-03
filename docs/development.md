@@ -210,8 +210,8 @@ MAX_TEST_DB_URL=postgresql://127.0.0.1:5433/max_test \
 With the admin server enabled, `GET /api/platforms/status` exposes cursor
 revision/fingerprint, last inbound time, endpoint capabilities, pending depth,
 and ambiguous/suppressed delivery counts. Deployment, Matrix room setup,
-iMessage Full Disk Access/Automation, incident SQL, and rollback are documented
-in [platforms.md](platforms.md).
+iMessage Full Disk Access/Automation, optional IMCore/SIP setup, incident SQL,
+and rollback are documented in [platforms.md](platforms.md).
 
 ## Config: finding out where a value came from
 

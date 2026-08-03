@@ -391,6 +391,13 @@ again only after echo or authoritative status reconciliation. A transport can
 therefore be down without producing an externally visible message that the
 canonical ledger forgot.
 
+The Mac-side iMessage bridge derives native-reply capability from a live
+`imsg status` probe instead of configuration. Max records capability changes on
+the endpoint, so the prompt grammar and relation resolver move together. A
+resolved relation is sent as `reply_to`; both the bridge policy boundary and
+`imsg` reject it when the injected IMCore helper is unavailable. There is no
+silent downgrade after native-reply execution has been selected.
+
 `Agent` depends on `LLM`, scoped `Tools`, an explicit `TurnRuntime`, logging,
 and its typed `AgentEventSink`; it has no OneBot segment, `Outbound`, or message
 persistence dependency.  The production sink is assembled per dispatch in

@@ -15,17 +15,32 @@ Max over Tailscale; it is not a general `imsg` RPC proxy.
    ```
 
    Grant Full Disk Access to the process that will launch the bridge and
-   Automation access to Messages.app. Max uses the public `send` RPC method;
-   `imsg launch`, dylib injection, and disabling SIP are not required.
+   Automation access to Messages.app. This path can send text and attachments,
+   but cannot create native inline replies.
 
-2. Build the bridge:
+2. Optional: enable native inline replies with `imsg`'s IMCore helper:
+
+   - Reboot into macOS Recovery, open Terminal, run `csrutil disable`, and
+     reboot. This weakens a host-wide macOS protection; use a dedicated Mac.
+   - In the logged-in desktop session, run `imsg launch` and leave
+     Messages.app signed in.
+   - Run `imsg status --json`. `advanced_features` must be `true` and
+     `bridge_version` must be greater than zero.
+   - Restart `imsg-bridge` after launching the helper.
+
+   The Homebrew package contains the helper dylib. To remove it, stop the
+   bridge/helper and run `csrutil enable` from Recovery. Max detects helper
+   availability through `/health`: it advertises native replies only while the
+   probe succeeds, and a `reply_to` send probes again and fails closed.
+
+3. Build the bridge:
 
    ```sh
    cd bridge/imsg
    go build -o imsg-bridge .
    ```
 
-3. Start it on the Mac's Tailscale address, never `0.0.0.0`:
+4. Start it on the Mac's Tailscale address, never `0.0.0.0`:
 
    ```sh
    export IMSG_BRIDGE_LISTEN='100.64.0.25:8787'
@@ -39,7 +54,7 @@ Max over Tailscale; it is not a general `imsg` RPC proxy.
    `~/Library/Caches/max-imsg-bridge/outbound`), and
    `IMSG_MAX_ATTACHMENT_BYTES` (default 64 MiB).
 
-4. Probe from the Max host:
+5. Probe from the Max host:
 
    ```sh
    curl --fail --show-error \
@@ -85,5 +100,8 @@ Because the token is stored in the plist, keep that file user-readable only.
   one allowlisted chat and deduplicates by message GUID.
 - Accepted sends are not blindly retried. Echoes or `message.send_status`
   confirm them; only an explicit `failed` status returns a send to the queue.
+- `/health` and every allowlisted `reply_to` send probe `imsg status`. A dead or
+  missing IMCore helper removes the reply capability and rejects the native
+  reply before the send RPC; Max retains it in the durable retry queue.
 
 Run `go test ./...` after bridge changes.

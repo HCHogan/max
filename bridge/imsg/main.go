@@ -146,6 +146,8 @@ func (r *runner) call(ctx context.Context, method string, params json.RawMessage
 
 type server struct {
 	runner              *runner
+	imsgPath            string
+	nativeReplyProbe    func() bool
 	token               string
 	dbPath              string
 	sqlitePath          string
@@ -235,9 +237,18 @@ func (s *server) authorizeRPC(method string, raw json.RawMessage) error {
 		var params struct {
 			ChatGUID string `json:"chat_guid"`
 			File     string `json:"file"`
+			ReplyTo  string `json:"reply_to"`
 		}
 		if json.Unmarshal(raw, &params) != nil || params.ChatGUID != s.allowedChatGUID {
 			return errors.New("send chat is not allowlisted")
+		}
+		if params.ReplyTo != "" {
+			if len(params.ReplyTo) > 256 {
+				return errors.New("send reply_to must be bounded")
+			}
+			if !s.supportsNativeReplies() {
+				return errors.New("send reply_to requires the active IMCore helper")
+			}
 		}
 		if params.File != "" {
 			id := strings.TrimPrefix(params.File, "upload:")
@@ -656,7 +667,37 @@ func (s *server) health(w http.ResponseWriter, request *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok": true, "source_fingerprint": fingerprint, "allowed_chat_guid": s.allowedChatGUID,
+		"capabilities": map[string]bool{"reply": s.supportsNativeReplies()},
 	})
+}
+
+func (s *server) supportsNativeReplies() bool {
+	if s.nativeReplyProbe != nil {
+		return s.nativeReplyProbe()
+	}
+	ready, err := imsgNativeReplies(s.imsgPath)
+	return err == nil && ready
+}
+
+func imsgNativeReplies(path string) (bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, path, "status", "--json").Output()
+	if err != nil {
+		return false, fmt.Errorf("imsg status: %w", err)
+	}
+	return parseIMessageStatus(output)
+}
+
+func parseIMessageStatus(raw []byte) (bool, error) {
+	var status struct {
+		AdvancedFeatures bool `json:"advanced_features"`
+		BridgeVersion    int  `json:"bridge_version"`
+	}
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return false, fmt.Errorf("decode imsg status: %w", err)
+	}
+	return status.AdvancedFeatures && status.BridgeVersion > 0, nil
 }
 
 func (s *server) attachment(w http.ResponseWriter, request *http.Request) {
@@ -847,8 +888,12 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	nativeReplies, statusErr := imsgNativeReplies(imsgPath)
+	if statusErr != nil {
+		log.Printf("native reply capability unavailable: %v", statusErr)
+	}
 	s := &server{
-		runner: rpcRunner, token: token, dbPath: dbPath, sqlitePath: sqlitePath, attachmentRoot: attachmentRoot, outboundRoot: outboundRoot,
+		runner: rpcRunner, imsgPath: imsgPath, token: token, dbPath: dbPath, sqlitePath: sqlitePath, attachmentRoot: attachmentRoot, outboundRoot: outboundRoot,
 		allowedChatGUID: allowedChatGUID, maxAttachmentBytes: maxAttachmentBytes,
 	}
 	mux := http.NewServeMux()
@@ -868,7 +913,7 @@ func main() {
 		_ = rpcRunner.stdin.Close()
 		_ = rpcRunner.cmd.Wait()
 	}()
-	log.Printf("imsg bridge listening on %s", listen)
+	log.Printf("imsg bridge listening on %s (native_replies=%t)", listen, nativeReplies)
 	if err := httpServer.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)
 	}

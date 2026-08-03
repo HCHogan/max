@@ -176,6 +176,18 @@ spec = describe "iMessage adapter" $ do
     iMessageCapabilities.canSendMedia `shouldBe` True
     iMessageCapabilities.canReply `shouldBe` False
 
+  it "parses a live IMCore reply capability and defaults old bridges safely" $ do
+    parseIMessageBridgeHealth
+      ( object
+          [ "source_fingerprint" .= ("device:inode:birth" :: String),
+            "capabilities" .= object ["reply" .= True]
+          ]
+      )
+      `shouldBe` Right (IMessageBridgeHealth "device:inode:birth" True)
+    parseIMessageBridgeHealth
+      (object ["source_fingerprint" .= ("old-bridge" :: String)])
+      `shouldBe` Right (IMessageBridgeHealth "old-bridge" False)
+
 shouldSatisfyRight :: (Show e, Show a) => Either e a -> (a -> Bool) -> IO a
 shouldSatisfyRight value predicate = case value of
   Left err -> expectationFailure (show err) >> fail "unreachable"

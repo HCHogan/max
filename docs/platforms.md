@@ -67,12 +67,16 @@ Outbound attachments first enter a bounded, authenticated bridge staging
 endpoint. Max receives only a random one-shot handle; the bridge substitutes
 the Mac path for the allowlisted `send` call, removes the file afterwards, and
 cleans bridge-owned orphan files on restart. Arbitrary caller paths are
-rejected. The adapter uses public `imsg send`, so SIP remains enabled. Native
-reply/edit/unsend are not claimed as capabilities; replies therefore become
-ordinary text without a fake quote prefix or leaked internal marker. A native
-threaded reply would require the optional IMCore helper, SIP-disabled injection,
-and a matching capability/RPC implementation. Like Matrix, one outbound
-delivery currently sends only its first attachment.
+rejected. The baseline public `imsg send` path keeps SIP enabled and does not
+claim native reply/edit/unsend capabilities; replies then become ordinary text
+without a fake quote prefix or leaked internal marker. A dedicated Mac may run
+the optional SIP-disabled IMCore helper. The bridge probes `imsg status` on
+every health check and native reply, and Max writes a changed reply capability
+back to the endpoint. With the helper live, canonical reply relations are sent
+as `reply_to`; if it disappears, the bridge fails closed and the delivery stays
+on Max's durable retry path. Like Matrix, one outbound delivery currently sends
+only its first attachment. Installation and SIP recovery steps are in the
+bridge README.
 
 Group wakeups use the confirmed mention handle embedded in Messages'
 `attributedBody`, matched against `imessage.mention_handles`. Contact names are

@@ -8,7 +8,9 @@ module Max.IMessage
     IMessagePage (..),
     IMessageMessage (..),
     IMessageAttachment (..),
+    IMessageBridgeHealth (..),
     IMessageSendState (..),
+    parseIMessageBridgeHealth,
     parseIMessageSendState,
     parseIMessagePage,
     iMessageEventKind,
@@ -158,13 +160,20 @@ data IMessageSendState
   | IMessageSendFailed
   deriving stock (Eq, Show)
 
+data IMessageBridgeHealth = IMessageBridgeHealth
+  { sourceFingerprint :: !Text,
+    nativeReplies :: !Bool
+  }
+  deriving stock (Eq, Show, Generic)
+
 iMessageCapabilities :: PlatformCapabilities
 iMessageCapabilities =
     noCapabilities
     { canSendText = True,
       canSendMedia = True,
-      -- Public AppleScript sending cannot express reply/edit/redact.  Max
-      -- retains canonical relations and renders a bounded textual fallback.
+      -- The conservative baseline is the public AppleScript transport. The
+      -- worker advertises reply=true only while the bridge reports a live
+      -- injected IMCore helper.
       canReply = False,
       canEdit = False,
       canReact = False,
@@ -179,6 +188,9 @@ iMessageWorker ::
   Maybe EpisodeScheduler ->
   Eff es ()
 iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
+  health <-
+    liftIO (fetchBridgeHealth runtime cfg)
+      >>= either (error . T.unpack . bridgeFailureText) pure
   registered <-
     ensureConfiguredEndpoint
       PlatformIMessage
@@ -187,22 +199,43 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
       ConversationGroup
       EndpointStandalone
       Nothing
-      iMessageCapabilities
+      (iMessageCapabilitiesFor health.nativeReplies)
   selfCompatibility <- compatibilityPlatformId PlatformIMessage "user" cfg.accountKey
   logInfo "iMessage worker started" $
-    object ["chat_guid" .= cfg.chatGuid, "endpoint_id" .= registered.endpointId]
-  loop registered selfCompatibility
+    object
+      [ "chat_guid" .= cfg.chatGuid,
+        "endpoint_id" .= registered.endpointId,
+        "native_replies" .= health.nativeReplies
+      ]
+  loop registered selfCompatibility health.nativeReplies
   where
-    loop registered selfCompatibility = do
-      runCycle registered selfCompatibility `catchSync` \e -> do
-        logAttention "iMessage cycle failed; cursor retained" $
-          object ["error" .= T.pack (show e)]
-        liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
-      loop registered selfCompatibility
+    loop registered selfCompatibility advertisedNativeReplies = do
+      nextNativeReplies <-
+        runCycle registered selfCompatibility advertisedNativeReplies `catchSync` \e -> do
+          logAttention "iMessage cycle failed; cursor retained" $
+            object ["error" .= T.pack (show e)]
+          liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
+          pure advertisedNativeReplies
+      loop registered selfCompatibility nextNativeReplies
 
-    runCycle registered selfCompatibility = do
+    runCycle registered selfCompatibility advertisedNativeReplies = do
+      health <-
+        liftIO (fetchBridgeHealth runtime cfg)
+          >>= either (error . T.unpack . bridgeFailureText) pure
+      when (health.nativeReplies /= advertisedNativeReplies) $ do
+        _ <-
+          ensureConfiguredEndpoint
+            PlatformIMessage
+            (NativeAccountId cfg.accountKey)
+            (NativeConversationId cfg.chatGuid)
+            ConversationGroup
+            EndpointStandalone
+            Nothing
+            (iMessageCapabilitiesFor health.nativeReplies)
+        logAttention "iMessage native reply capability changed" $
+          object ["native_replies" .= health.nativeReplies]
       reconcileSends
-      (chatId, cursor) <- catchUp registered selfCompatibility
+      (chatId, cursor) <- catchUp registered selfCompatibility health.sourceFingerprint
       -- Watch is a wake-up hint.  The bridge closes a quiet stream after 30s;
       -- either a notification or EOF returns here and the next cycle pages the
       -- authoritative physical ROWID cursor again.
@@ -211,9 +244,9 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
           logInfo "iMessage watch ended" $ object ["reason" .= err]
           liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
         Right () -> pure ()
+      pure health.nativeReplies
 
-    catchUp registered selfCompatibility = do
-      fingerprint <- liftIO (fetchFingerprint runtime cfg) >>= either (error . T.unpack . bridgeFailureText) pure
+    catchUp registered selfCompatibility fingerprint = do
       chatId <- liftIO (resolveChat runtime cfg) >>= either (error . T.unpack . bridgeFailureText) pure
       current <- readIngestCursor registered.platformAccountId iMessageStreamKey
       let sourceReset = maybe False ((/= Just fingerprint) . (.fingerprint)) current
@@ -372,12 +405,9 @@ iMessageDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformIMessage,
       deliver = \claim media -> do
-        -- This deployment uses imsg's public AppleScript transport.  It cannot
-        -- create native Threader replies (the endpoint advertises reply=false),
-        -- so degrade to ordinary text without exposing an internal marker.
-        -- Native replies can be enabled only with imsg's advanced IMCore
-        -- helper, at which point the capability and RPC params must move
-        -- together.
+        -- A native relation is present only when the endpoint advertised the
+        -- live IMCore helper. The bridge probes the helper again and imsg fails
+        -- closed rather than silently degrading a requested reply to text.
         let body = claim.renderedText
         upload <- case media of
           [] -> pure Nothing
@@ -395,6 +425,7 @@ iMessageDeliveryTransport runtime cfg =
                     "service" .= ("auto" :: Text)
                   ]
                     <> ["file" .= file | Just file <- [upload]]
+                    <> ["reply_to" .= target | Just (NativeEventId target) <- [claim.replyNativeEventId]]
                 )
         bridgeRpc runtime cfg "send" params >>= \case
           Left (BridgeBeforeEffect err) -> pure (AttemptRetryable err)
@@ -470,13 +501,24 @@ parseIMessageSendState = first T.pack . parseEither parser
         "failed" -> pure IMessageSendFailed
         other -> fail ("unknown send_state: " <> T.unpack other)
 
-fetchFingerprint :: HttpRuntime -> IMessageConfig -> IO (Either BridgeFailure Text)
-fetchFingerprint runtime cfg =
+fetchBridgeHealth :: HttpRuntime -> IMessageConfig -> IO (Either BridgeFailure IMessageBridgeHealth)
+fetchBridgeHealth runtime cfg =
   bridgeGet runtime cfg "/health" [] >>= \case
     Left err -> pure (Left err)
-    Right value -> pure $ case parseEither (withObject "health" (.: "source_fingerprint")) value of
-      Left err -> Left (BridgeRejected (T.pack err))
-      Right fingerprint -> Right fingerprint
+    Right value -> pure (either (Left . BridgeRejected) Right (parseIMessageBridgeHealth value))
+
+parseIMessageBridgeHealth :: Value -> Either Text IMessageBridgeHealth
+parseIMessageBridgeHealth = first T.pack . parseEither parser
+  where
+    parser = withObject "health" $ \o -> do
+      fingerprint <- o .: "source_fingerprint"
+      capabilities <- o .:? "capabilities" .!= Object mempty
+      replies <- withObject "health capabilities" (\caps -> caps .:? "reply" .!= False) capabilities
+      pure (IMessageBridgeHealth fingerprint replies)
+
+iMessageCapabilitiesFor :: Bool -> PlatformCapabilities
+iMessageCapabilitiesFor nativeReplies =
+  iMessageCapabilities {canReply = nativeReplies}
 
 resolveChat :: HttpRuntime -> IMessageConfig -> IO (Either BridgeFailure Int64)
 resolveChat runtime cfg =

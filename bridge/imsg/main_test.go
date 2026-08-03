@@ -31,7 +31,8 @@ func TestFilterChatsRegistersOnlyAllowlistedChat(t *testing.T) {
 }
 
 func TestAuthorizeRPCConfinesMethodsAndTargets(t *testing.T) {
-	s := &server{allowedChatGUID: "iMessage;+;allowed"}
+	nativeReplies := true
+	s := &server{allowedChatGUID: "iMessage;+;allowed", nativeReplyProbe: func() bool { return nativeReplies }}
 	s.allowedChatIDs.Store("7", struct{}{})
 
 	if err := s.authorizeRPC("messages.after", json.RawMessage(`{"chat_id":7}`)); err != nil {
@@ -46,8 +47,26 @@ func TestAuthorizeRPCConfinesMethodsAndTargets(t *testing.T) {
 	if err := s.authorizeRPC("send", json.RawMessage(`{"chat_guid":"iMessage;+;allowed","file":"/etc/passwd"}`)); err == nil {
 		t.Fatal("arbitrary outbound file was accepted")
 	}
+	if err := s.authorizeRPC("send", json.RawMessage(`{"chat_guid":"iMessage;+;allowed","reply_to":"parent-guid"}`)); err != nil {
+		t.Fatalf("allowlisted native reply rejected: %v", err)
+	}
+	nativeReplies = false
+	if err := s.authorizeRPC("send", json.RawMessage(`{"chat_guid":"iMessage;+;allowed","reply_to":"parent-guid"}`)); err == nil {
+		t.Fatal("native reply was accepted without an active helper")
+	}
 	if err := s.authorizeRPC("chats.get", json.RawMessage(`{}`)); err == nil {
 		t.Fatal("unexposed imsg method was accepted")
+	}
+}
+
+func TestParseIMessageStatusRequiresLiveBridge(t *testing.T) {
+	ready, err := parseIMessageStatus([]byte(`{"advanced_features":true,"bridge_version":2}`))
+	if err != nil || !ready {
+		t.Fatalf("live v2 bridge was not accepted: ready=%t err=%v", ready, err)
+	}
+	ready, err = parseIMessageStatus([]byte(`{"advanced_features":true,"bridge_version":0}`))
+	if err != nil || ready {
+		t.Fatalf("unprobed bridge was accepted: ready=%t err=%v", ready, err)
 	}
 }
 
