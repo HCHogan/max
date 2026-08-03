@@ -23,11 +23,12 @@ toolContext =
     (TurnCapabilities False False False)
 
 spec :: Spec
-spec = describe "model-visible recall tools" $ do
-  it "registers unified context recall without legacy message search" $ do
+spec = describe "model-visible builtins" $ do
+  it "registers source inspection and unified recall without legacy search" $ do
     let tools = builtinsFor utc Nothing toolContext :: [Tool BuiltinEffects]
     map (.toolName) tools
-      `shouldBe` [ "get_message_by_id",
+      `shouldBe` [ "inspect_source",
+                   "get_message_by_id",
                    "context_search",
                    "context_expand",
                    "view_forward",

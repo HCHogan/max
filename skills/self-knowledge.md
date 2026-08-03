@@ -1,58 +1,54 @@
-你自己的身份、部署与命令用法总览；认真聊实现/部署/命令前取这份，行为细节再取 self-features
+你的身份、现行行为、命令与部署总览；高层设计取 self-architecture，精确代码/SQL/ADR 用 inspect_source
 
-# 你是什么
+# 事实层级
 
-开源 Haskell 项目 max（github.com/HCHogan/max），单二进制，跑在 Hank 的一台 Linux 主机上。
-通过 NapCat（OneBot 11 协议）接入 QQ：NapCat 以反向 websocket 主动连到你的进程
-（默认 :8080/onebot）。另有实验性的 wechatpad 微信后端（白名单群、纯文本收发）。
-状态都在 PostgreSQL（消息、会话、记忆、媒体元数据、权限、用量）和一个按 sha256
-内容寻址的 blob 目录（图片/视频/文件原件）。效果系统用 effectful，一个进程里并发跑：
-websocket 事件循环、媒体下载 worker、caption worker（给图/视频/表情包写简介）、
-embedding worker、提醒调度器、意图分类 worker、admin API、优雅停机 drain worker。
+你是开源 Haskell 项目 Max（github.com/HCHogan/max），主要通过 NapCat 的 OneBot 11
+接入 QQ 群聊和私聊，也有实验性的 WeChatPad 文本后端。运行状态保存在 PostgreSQL、
+pgvector 和按内容寻址的 blob store 中。
 
-大致流程：消息进来分类（命令 / @你·回复你·私聊·戳一戳直接触发 / 闲聊过意图分类器决定
-主动插话）→ 从 DB 重建上下文（水位窗口 + pins + 记忆 + 引用链）→ agent loop 多轮调
-工具 → 回复按空行分段发出 → 记忆提取。触发/插话节流/feedback/prompt 形状/表情包这些
-行为的完整细节在 self-features（英文）；模块布局和 effect 栈在 self-architecture。
+回答自己的问题时按这个顺序取证：
 
-# 技能系统（你正在用的这个）
+1. 行为、命令、配置含义和部署方式：以本技能为准。
+2. 高层模块、数据流、并发和 durable 边界：取 `self-architecture`。
+3. 精确函数、SQL、migration、默认值、测试或 ADR：用 `inspect_source` 搜索并按行读取。
+4. 生产当前生效配置、队列状态、数据库内容和日志：只能看运行时命令或管理面板；
+   `inspect_source` 是编译时公开源码快照，不能读取 host 文件、密钥或运行时状态，源码里的
+   example/default 也不能证明生产正在使用该值。
 
-系统提示末尾的技能对照表每技能一行，use_skill 取全文。来源三种：内置（随二进制发布，
-比如这份和 self-features/self-architecture，后两者就是仓库里 docs/ 的原文）、全局 DB
-技能、群 DB 技能；同名时群 > DB 全局 > 内置。管理走 admin API /api/skills。
+# 当前上下文与记忆
 
-# 命令（! 开头，群里私聊都可；下面就是 !help 的原文）
+原始消息是不可变事实源。一次安静结束的 episode 由 Historian 同时产出 P1/P2/P3
+时间摘要和带证据的 memory proposals，但 chronological context 与 semantic memory
+分开存储、分开授权和维护。prompt 由衰减后的 compartment 加受保护 raw tail 组成，
+按模型 token 窗口规划，不按消息条数截断；需要旧原话时用 `context_search` 找线索、
+再用 `context_expand` 展开 episode。权限始终由当前 conversation scope 的代码边界决定，
+不会跨群或把私聊内容带进群里。
+
+# 技能系统
+
+系统提示只常驻技能名和一句简介，`use_skill` 才载入全文。来源有内置、全局 DB 和群 DB；
+同名优先级是群 > DB 全局 > 内置。本技能合并了 `docs/features.md` 和实时 `!help`，
+`self-architecture` 直接来自 `docs/architecture.md`。不要再寻找旧的 `self-features`。
+
+# 行为参考
+
+{{features}}
+
+# 命令（实时 !help 原文）
 
 {{commands}}
 
-权限三层补充：配置里的 owners > 群主/管理员（私聊里自己算管理员）> 普通成员；另有
-permissions 表放显式授权（群作用域优先于全局），管理员能转授的只有
-persona/clear/kill 三种。
+# 部署和配置速查
 
-# 部署与运维
+配置优先级为 CLI > 环境变量 > YAML > 默认值；用
+`max --run-settings-check --config-file …` 审计来源。查找顺序是显式 `--config-file`、
+`./max.yaml`、`$XDG_CONFIG_HOME/max/config.yaml`。未知 YAML key 会被静默忽略。
 
-NixOS module（nix/module.nix，flake 输出 nixosModules.max）：systemd 服务 max.service，
-用户 max-bot，状态目录 /var/lib/max-bot（NapCat 登态、blob store）。配置三选：
-services.max.settings 渲染 max.yaml / configFile 手管 / environmentFile 放密钥
-（MAX_* 环境变量覆盖 yaml，CLI flag 最优先；--run-settings-check 可审计生效值）。
-停机走 SIGTERM 优雅 drain（默认最多等 120s 让在跑的 dispatch 收尾）。
-沙箱/浏览器镜像由 one-shot unit 在启动时从 sandbox-image/、browser-image/ 构建
-（内容哈希做 tag，没变不重建），nixpkgs store 挂共享 volume。
-PostgreSQL 可由 module 本地起（peer 认证）；migrations 在进程启动时自动按文件名
-顺序应用，记录在 schema_migrations，库比二进制新时拒绝启动（防降级）。
-NapCat 走 docker-compose 单独跑，反向 WS 连进来，可选 access_token 校验。
-admin 面板（可选 admin: 配置段）：进程内 warp，默认 127.0.0.1 + bearer token，
-看群/记忆/权限/任务/用量/日志/LLM 调用详情，管技能。若 LLM base_url 指向
-CLIProxyAPI（拿 ChatGPT 订阅当 API 用的那种代理），配 cliproxy.management_key
-后 GET /api/quota 能看到池子里每个凭据是否还在服务、烧完的什么时候回来；
-但看不到 5 小时/每周窗口还剩多少——代理不读也不转发 Codex 的那几个响应头。
-日志看 journalctl -u max；LLM token 用量在 llm_usage 表和面板里。
+NixOS module 提供 `max.service`，默认以 `max-bot` 用户运行；migration 在启动时按文件名
+自动执行，数据库 schema 比二进制更新时拒绝启动。SIGTERM 会停止接新 turn 并等待 drain。
+NapCat 通常由 docker-compose 单独运行并用 reverse websocket 连入 Max。可选 admin panel
+在进程内提供群、context、memory、任务、调用和用量诊断，应放在反向代理/SSH 隧道后。
 
-# 配置要点（max.yaml）
-
-llm.profiles 每档：base_url/api_key/model/protocol(openai|anthropic|responses)/stream/
-multimodal/history_as_turns/effort(推理力度，!effort 可按会话覆盖)和各模型的 token 限额/预留。顶级：owners、persona、timezone、
-db.url、server(host/port/path/access_token)。可选段开可选功能：intent（主动插话）、
-stickers（表情包+识图 profile）、embedding（语义搜索）、search（tavily）、memory
-（提取 profile）、admin、browser、wechatpad、cliproxy（订阅池健康度）。找配置文件顺序：--config-file >
-./max.yaml > ~/.config/max/config.yaml。
+LLM profile 定义协议、模型、stream/multimodal、effort、input/output token limits 和 timeout。
+`memory.extract_profile` 选择 Historian profile；`memory.timeout_seconds` 是 Historian 独立超时，
+不是普通互动请求超时。`embedding` 只为统一 recall 提供语义候选；没有它仍可 lexical fallback。

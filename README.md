@@ -32,6 +32,8 @@ QQ ──▶ NapCat ──OneBot 11──▶ Max ──▶ LLM
 - Multimodal input, persistent per-group sandboxes, browser automation, files,
   skills, reminders, and proactive participation.
 - Durable messages, media jobs, context projections, and maintenance work.
+- Exact self-inspection against an allowlisted source snapshot embedded in the
+  running binary.
 - Multiple model profiles plus an authenticated local admin panel.
 
 See [features.md](docs/features.md) for the full behaviour reference.
@@ -68,6 +70,7 @@ cabal build all
 |---|---|
 | [features.md](docs/features.md) | behaviour and configuration semantics |
 | [architecture.md](docs/architecture.md) | runtime, context/memory design, and durability |
+| [ADR 001](docs/adr/001-context-memory-foundations.md) | context/memory invariants and privacy boundaries |
 | [development.md](docs/development.md) | tests, evaluation, versioning, and debugging |
 | [prompt-flow.md](docs/prompt-flow.md) | generated prompt and tool-round wire examples |
 

@@ -17,11 +17,29 @@ build-type:         Simple
 -- reporting "Up to date" and the old bytes stay embedded, which is a
 -- silent stale deploy rather than a build error.
 extra-source-files:
+    .env.example
+    .github/workflows/*.yml
+    LICENSE
+    README.md
+    browser-image/*
+    cabal.project
     context-eval/README.md
     context-eval/fixtures/*.jsonl
+    devenv.nix
     docs/architecture.md
+    docs/adr/*.md
     docs/features.md
     docs/prompt-flow.md
+    docker-compose.yml
+    eval/README.md
+    eval/fixtures/*.jsonl
+    flake.lock
+    flake.nix
+    max.yaml.example
+    migrations/*.sql
+    nix/*.nix
+    sandbox-image/*
+    scripts/*
     skills/*.md
     static/*.html
     static/*.js
@@ -144,6 +162,7 @@ library
         Max.Sandbox.Registry
         Max.Session
         Max.Session.Types
+        Max.SelfSource
         Max.Shutdown
         Max.Skills
         Max.Sticker
@@ -163,6 +182,7 @@ library
         Max.Tools.Reminder
         Max.Tools.Sandbox
         Max.Tools.Search
+        Max.Tools.SelfSource
         Max.Tools.Skills
         Max.Tools.Stickers
         Max.Tools.Video
@@ -310,6 +330,7 @@ test-suite max-test
         Max.ReplySpec
         Max.ReplySendSpec
         Max.ResourceSpec
+        Max.SelfSourceSpec
         Max.SessionSpec
         Max.ShutdownSpec
         Max.SkillsSpec

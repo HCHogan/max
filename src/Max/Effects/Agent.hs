@@ -102,7 +102,7 @@ data AgentContext = AgentContext
 turnCtx :: AgentContext -> Text -> ChatCtx
 turnCtx ctx source =
   let GroupId gid = toolGroupId ctx.acTools
-   in ChatCtx source (Just gid) ctx.acEffort
+   in ChatCtx source (Just gid) ctx.acEffort Nothing Nothing
 
 -- | Caps on a single agent invocation.  Per-tool and per-call HTTP
 -- timeouts are configured at the 'LLM' layer; these are loop-level.

@@ -123,6 +123,10 @@ data AppConfig = AppConfig
     -- chronological capture and automatic memory proposals.  The external
     -- config name remains @memory.extract_profile@ for compatibility.
     memoryExtractProfile :: !(Maybe Text),
+    -- | Wall-clock limit for one Historian completion.  Historian requests
+    -- are much larger than interactive turns and therefore need an
+    -- independent timeout even when both use the same LLM profile.
+    historianTimeoutSeconds :: !Int,
     -- | Vision-capable LLM profile for sticker AND chat-media
     -- captioning; 'Nothing' disables both caption workers (stickers
     -- are still recorded, just never described — and thus never
@@ -322,6 +326,18 @@ appConfigParser usedRef =
               conf "extract_profile",
               metavar "PROFILE"
             ]
+    historianTimeoutSeconds <-
+      subConfig "memory" $
+        setting
+          [ help "Wall-clock timeout seconds for one Historian completion",
+            reader auto,
+            option,
+            long "historian-timeout-seconds",
+            env "MAX_HISTORIAN_TIMEOUT_SECONDS",
+            conf "timeout_seconds",
+            metavar "SECONDS",
+            value 600
+          ]
     stickerCaptionProfile <-
       subConfig "stickers" $
         optional $

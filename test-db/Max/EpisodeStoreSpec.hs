@@ -84,6 +84,24 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     statuses <- withDb pool $ query "SELECT status, last_error FROM episode_capture_runs" ()
     (statuses :: [(Text, Maybe Text)]) `shouldBe` [("abandoned", Just "source changed")]
 
+  it "claims new pending work before an overdue poison retry" $ do
+    insertRawMessage pool 1001 groupA member botId testTime Nothing "poison"
+    endA <- latestCursor pool
+    _ <- withDb pool $ enqueueCaptureRun scopeA (MessageCursor 0) endA (request CaptureIdle)
+    poison <- withDb pool (claimCaptureRun "worker-a" 60) >>= requireJust "poison lease"
+    withDb pool (failCaptureRun poison 1 "provider unavailable" []) `shouldReturn` True
+    withConn pool $ \conn -> do
+      _ <- execute conn "UPDATE episode_capture_runs SET next_retry_at = now() WHERE conversation_id = ?" (Only groupA)
+      pure ()
+
+    insertRawMessage pool 2001 groupB member botId testTime Nothing "fresh"
+    endB <- cursorFor pool 2001
+    _ <- withDb pool $ enqueueCaptureRun scopeB (MessageCursor 0) endB (request CaptureIdle)
+
+    fresh <- withDb pool (claimCaptureRun "worker-b" 60) >>= requireJust "fresh pending lease"
+    fresh.leaseRun.crConversationId `shouldBe` groupB
+    fresh.leaseRun.crAttempt `shouldBe` 1
+
   it "persists an invalid raw model response for delayed retry" $ do
     insertRawMessage pool 1001 groupA member botId testTime Nothing "hello"
     end <- latestCursor pool

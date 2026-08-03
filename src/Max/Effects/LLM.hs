@@ -207,7 +207,16 @@ data ChatCtx = ChatCtx
     -- profile's configured 'LLMProfile.effort'.  On 'ChatCtx' rather
     -- than a new @chat@ parameter so background workers keep their
     -- profiles' own settings without every call site changing shape.
-    ccEffort :: !(Maybe Text)
+    ccEffort :: !(Maybe Text),
+    -- | Per-call wall-clock timeout override.  Background jobs whose
+    -- completion latency differs materially from interactive turns can share
+    -- a model profile without inheriting its interactive timeout.
+    ccTimeoutSeconds :: !(Maybe Int),
+    -- | Per-call retry schedule for buffered HTTP requests.  'Nothing' uses
+    -- the normal shallow transport retries; @Just []@ makes exactly one HTTP
+    -- attempt.  Durable workers use the latter because their persisted queue,
+    -- not an invisible transport loop, owns retry timing and fairness.
+    ccBufferedRetryDelaysSeconds :: !(Maybe [Int])
   }
   deriving stock (Show, Eq)
 
@@ -428,7 +437,14 @@ runOneChat runtime usageWriter callWriter reg ctx name msgs tools mSink = case l
     -- The session's !effort override rewrites the profile before any
     -- request is built — one place covers both protocols, streaming
     -- and buffered paths, and the call log alike.
-    let cfg = maybe cfg0 (\e -> cfg0 {effort = Just e}) ctx.ccEffort
+    let cfgWithEffort = maybe cfg0 (\e -> cfg0 {effort = Just e}) ctx.ccEffort
+        cfg =
+          cfgWithEffort
+            { timeoutSeconds =
+                max 1 (fromMaybe cfgWithEffort.timeoutSeconds ctx.ccTimeoutSeconds)
+            }
+        bufferedRetryDelays =
+          fromMaybe defaultRetryDelaysSecs ctx.ccBufferedRetryDelaysSeconds
         streaming = cfg.stream && isJust mSink
     logInfo "llm: chat request" $
       object
@@ -436,12 +452,14 @@ runOneChat runtime usageWriter callWriter reg ctx name msgs tools mSink = case l
           "tool_count" .= length tools,
           "profile" .= name,
           "model" .= cfg.model,
-          "stream" .= streaming
+          "stream" .= streaming,
+          "timeout_seconds" .= cfg.timeoutSeconds,
+          "transport_retries" .= length (if streaming then replyRetryDelaysSecs else bufferedRetryDelays)
         ]
     t0 <- liftIO getMonotonicTimeNSec
     r <- case mSink of
       Just sink | cfg.stream -> callChatStream runtime cfg msgs tools sink
-      _ -> callChat runtime cfg msgs tools
+      _ -> callChat runtime bufferedRetryDelays cfg msgs tools
     t1 <- liftIO getMonotonicTimeNSec
     case r of
       Left err ->
@@ -568,14 +586,15 @@ usageFields (Just u) =
 callChat ::
   (Log :> es, IOE :> es) =>
   HttpRuntime ->
+  [Int] ->
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChat runtime cfg msgs tools = case cfg.protocol of
-  ProtocolOpenAI -> callChatOpenAI runtime cfg msgs tools
-  ProtocolAnthropic -> callChatAnthropic runtime cfg msgs tools
-  ProtocolResponses -> callChatResponses runtime cfg msgs tools
+callChat runtime retryDelays cfg msgs tools = case cfg.protocol of
+  ProtocolOpenAI -> callChatOpenAI runtime retryDelays cfg msgs tools
+  ProtocolAnthropic -> callChatAnthropic runtime retryDelays cfg msgs tools
+  ProtocolResponses -> callChatResponses runtime retryDelays cfg msgs tools
 
 --------------------------------------------------------------------------------
 -- Streaming.
@@ -792,11 +811,12 @@ parsedCalls acc =
 callChatOpenAI ::
   (Log :> es, IOE :> es) =>
   HttpRuntime ->
+  [Int] ->
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChatOpenAI runtime cfg msgs tools = do
+callChatOpenAI runtime retryDelays cfg msgs tools = do
   let body =
         LBS.toStrict
           (encode (object (openAIFields cfg msgs tools <> ["stream" .= False])))
@@ -805,7 +825,7 @@ callChatOpenAI runtime cfg msgs tools = do
         [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.apiKey),
           ("Content-Type", "application/json")
         ]
-  postAndParseRetrying runtime defaultRetryDelaysSecs cfg.timeoutSeconds headers url body parseResponseOpenAI
+  postAndParseRetrying runtime retryDelays cfg.timeoutSeconds headers url body parseResponseOpenAI
 
 -- | Everything an OpenAI chat-completions request carries except the
 -- stream switches, so the streaming and non-streaming paths can't drift
@@ -865,11 +885,12 @@ encodeToolSpecOpenAI t =
 callChatResponses ::
   (Log :> es, IOE :> es) =>
   HttpRuntime ->
+  [Int] ->
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChatResponses runtime cfg msgs tools = do
+callChatResponses runtime retryDelays cfg msgs tools = do
   let body =
         LBS.toStrict
           (encode (object (responsesFields cfg msgs tools <> ["stream" .= False])))
@@ -878,7 +899,7 @@ callChatResponses runtime cfg msgs tools = do
         [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.apiKey),
           ("Content-Type", "application/json")
         ]
-  postAndParseRetrying runtime defaultRetryDelaysSecs cfg.timeoutSeconds headers url body parseResponseResponses
+  postAndParseRetrying runtime retryDelays cfg.timeoutSeconds headers url body parseResponseResponses
 
 -- | The Responses request, minus the stream switch.  Stateless on
 -- purpose (@store: false@): nothing accumulates server-side, and the
@@ -1083,11 +1104,12 @@ parseUsageOpenAI = withObject "usage" $ \u -> do
 callChatAnthropic ::
   (Log :> es, IOE :> es) =>
   HttpRuntime ->
+  [Int] ->
   LLMProfile ->
   [ChatMessage] ->
   [ToolSpec] ->
   Eff es (Either Text (ChatResponse, Maybe TokenUsage))
-callChatAnthropic runtime cfg msgs tools = do
+callChatAnthropic runtime retryDelays cfg msgs tools = do
   let body = LBS.toStrict (encode (object (anthropicFields cfg msgs tools)))
       url = T.unpack (cfg.baseUrl <> "/v1/messages")
       headers =
@@ -1095,7 +1117,7 @@ callChatAnthropic runtime cfg msgs tools = do
           ("anthropic-version", "2023-06-01"),
           ("Content-Type", "application/json")
         ]
-  postAndParseRetrying runtime defaultRetryDelaysSecs cfg.timeoutSeconds headers url body parseResponseAnthropic
+  postAndParseRetrying runtime retryDelays cfg.timeoutSeconds headers url body parseResponseAnthropic
 
 -- | The Anthropic counterpart of 'openAIFields', minus @stream@.
 --

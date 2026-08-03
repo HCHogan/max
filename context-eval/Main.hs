@@ -318,7 +318,7 @@ main = do
           . runLLM runtime (collectUsage usageRef) (collectCall callsRef) cfg.llm
           $ traverse
             ( \(index, fixture) -> do
-                result <- evaluateHistorianFixture profile inputBudget cfg.timezone fixture
+                result <- evaluateHistorianFixture profile cfg.historianTimeoutSeconds inputBudget cfg.timezone fixture
                 liftIO $ do
                   printf
                     "Historian replay %d/%d: %s %s\n"
@@ -370,15 +370,15 @@ validateHistorianFixture fixture =
     <> ["message ids must be unique" | hasDuplicates (map (.fmId) fixture.hfMessages)]
     <> ["at least one message must be transcript eligible" | not (any (.fmEligible) fixture.hfMessages)]
 
-evaluateHistorianFixture :: (LLM :> es) => Text -> Int -> TimeZone -> HistorianFixture -> Eff es HistorianResult
-evaluateHistorianFixture profile inputBudget tz fixture = do
+evaluateHistorianFixture :: (LLM :> es) => Text -> Int -> Int -> TimeZone -> HistorianFixture -> Eff es HistorianResult
+evaluateHistorianFixture profile timeoutSeconds inputBudget tz fixture = do
   let source = historianSource fixture
       run = fixtureRun fixture source profile
       sourceLines = [renderHistorianSourceLine tz entry.history | entry <- source, entry.transcriptEligible]
       messages = renderHistorianMessages tz fixture.hfNow run fixture.hfExistingMemories sourceLines inputBudget
       estimatedTokens = estimateMessagesTokens messages
       structuralErrors = validateHistorianFixture fixture
-  generation <- generateHistorianCapture profile fixture.hfConversationId messages
+  generation <- generateHistorianCapture timeoutSeconds profile fixture.hfConversationId messages
   let errors = case generation of
         Left (_, failures) -> map renderValidation failures
         Right (_, capture) -> evaluateCapture fixture run source capture

@@ -53,7 +53,7 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
       runEff
         . runWithConnectionPool pool
         . runLLMWith (fakeHistorian rawCapture)
-        $ processCaptureLease 16_000 (minutesToTimeZone 480) tasks lease
+        $ processCaptureLease 16_000 600 (minutesToTimeZone 480) tasks lease
     result `shouldSatisfy` \case CapturePublished _ -> True; _ -> False
 
     rows <-
@@ -75,6 +75,8 @@ fakeHistorian raw =
         liftIO $ do
           ctx.ccSource `shouldBe` "historian"
           ctx.ccGroup `shouldBe` Just groupId
+          ctx.ccTimeoutSeconds `shouldBe` Just 600
+          ctx.ccBufferedRetryDelaysSeconds `shouldBe` Just []
           profile `shouldBe` "historian-test"
           tools `shouldSatisfy` null
           case sink of

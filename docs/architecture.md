@@ -22,7 +22,7 @@ nix/module.nix     NixOS module for production deployment
 max.cabal          library + max executable
 migrations/*.sql   schema migrations, applied on boot
 skills/*.md        builtin skill manuals, baked into the binary (file-embed);
-                   first line = index description, body behind use_skill
+                   self-knowledge also splices docs/features.md + live !help
 
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),
                    segments, events, actions, server
@@ -48,7 +48,8 @@ src/Max/Browser/   Per-group camoufox-MCP container lifecycle + registry
 src/Max/MCP/       Minimal MCP client (Streamable HTTP)
 src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory,
                    Images, Video, Bilibili, Stickers, Pins, Group, Reminder,
-                   Skills — use_skill, the progressive-disclosure reader)
+                   Skills — progressive disclosure, SelfSource — bounded reads
+                   of the allowlisted compile-time source snapshot)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    AgentEvent (typed progress/debug/final-stream port and its
                    ReplySend/Outbound interpreter),
@@ -56,10 +57,11 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    Toolset (the full tool list, assembled from BotEnv), Intent
                    (proactive classifier), Skills (write-through registry:
                    builtins baked from skills/ + docs/, DB rows shadowing them),
+                   SelfSource (public text snapshot + deterministic bundle hash),
                    EpisodeScheduler (protected quiet-tail timing), Historian +
                    EpisodeStore (durable exact-range P1/P2/P3 capture and scoped
-                   memory proposals), Prompt context pipeline (feature-gated
-                   compartment generations + token-sized raw tail),
+                   memory proposals), Prompt context pipeline (materialized
+                   compartment generations + token-sized protected raw tail),
                    MemoryExtract (nightly memory maintenance),
                    Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
@@ -111,13 +113,19 @@ P1/P2/P3 chronological summaries plus scoped memory proposals. Publication
 atomically validates citations and scope, writes the compartment and proposal
 outcomes, applies accepted MemoryStore mutations, and CAS-advances the
 historian cursor. A failure advances nothing; restart reclaims the durable job.
+Historian completions use the independent `memory.timeout_seconds` (600 seconds
+by default) and make one transport attempt per generation/repair call; the
+durable queue retries after 1m/5m/15m/1h/6h. New pending ranges
+are claimed before overdue retries, so one poison range cannot starve first
+attempts while its immutable source remains available for later retry.
 Commands/synthetic/forward rows remain in range coverage before transcript
 filtering, and active ranges have a database non-overlap constraint. The
 pre-cutover deployment boundary is backfilled automatically, oldest gap first
 and without rewinding the live cursor. A nightly dream pass (4am local) remains
-a separate semantic-memory maintenance lifecycle. It reads the current version together with its source
-evidence, requires a concrete evidence/date reason for every change, updates a
-chosen keeper before superseding duplicates, and archives only clearly expired
+a separate semantic-memory maintenance lifecycle. It reads the current version
+together with its source evidence, requires a concrete evidence/date reason for
+every change, updates a chosen keeper before superseding duplicates, and
+archives only clearly expired
 facts without a replacement. Every operation is a scoped MemoryStore CAS that
 appends a version, maintenance evidence, and audit record; automatic actors
 cannot mutate permanent memory.
@@ -208,6 +216,26 @@ one policy now owns corpus selection, visibility, ranking, deduplication, and
 fallback behavior, and model-generated placeholder filters cannot silently
 route a semantic request around it.
 
+## Self-knowledge and source inspection
+
+Self-knowledge uses progressive disclosure rather than keeping implementation
+documentation in every prompt. `self-knowledge` merges its short routing and
+deployment guide with the exact embedded `docs/features.md` bytes and live
+`!help`; `self-architecture` is the embedded `docs/architecture.md`. A DB skill
+can shadow either built-in under the ordinary group > DB-global > builtin rule.
+
+Exact implementation questions bypass prose summaries. The globally visible
+`inspect_source` tool can list, case-insensitively search, and read numbered
+lines from an allowlisted public text bundle embedded by `Max.SelfSource` at
+compile time. It covers implementation, tests, migrations, ADRs, docs, skills,
+evaluation fixtures, build files, and public config examples. Responses carry
+both the compile-time git revision and a SHA-256 over sorted path/content pairs.
+The tool has no filesystem capability at runtime: local `max.yaml`, `.env`,
+`AGENTS.md`, VCS/build state, secrets, and paths outside its fixed source
+allowlist are outside the bundle. Consequently source defaults are evidence
+about the shipped binary, not the deployment's effective configuration or
+database state.
+
 Unless a profile sets `stream: false` the LLM box reads the completion over SSE
 instead of waiting for a whole body. Paragraphs the model has finished with go
 out mid-generation as typed `AgentFinalStreamText` events; tool narration and
@@ -269,9 +297,10 @@ app/Main
 The runtime boundary owns request execution, connection reuse, response-body
 lifetime, body/diagnostic limits, and transport classification. Protocol
 decoding and retry decisions stay with callers. In particular, the primitive
-never silently replays a request; buffered LLM calls retry from
-`Max.Http.Json`, while `Max.Http.Stream` retries only before text or tool-call
-output becomes observable.
+never silently replays a request. Buffered LLM calls use a caller-selected
+schedule (normally 2/8 seconds; Historian selects none), while streamed reply
+calls retry only before text or tool-call output becomes observable, using the
+longer 2/8/20/45/90-second schedule.
 
 The OneBot reverse WebSocket, WeChatPad inbound WebSocket, and browser page
 traffic inside the camoufox container are not outbound HTTP clients and remain
@@ -361,3 +390,4 @@ finished async is a no-op, so "feature off" needs no special case.
 | 11 | Admin JSON API + panel | ✅ |
 | 12 | Skills (progressive disclosure) + episode memory extraction | ✅ |
 | 13 | Token-planned infinite context + unified Historian/memory lifecycle | ✅ |
+| 14 | Merged self-knowledge + exact deployed-source inspection | ✅ |

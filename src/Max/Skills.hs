@@ -28,7 +28,7 @@
 -- story as the admin panel's assets) and seeded into the registry
 -- with negative ids.  They exist for content that is coupled
 -- to the code it ships with — @self-knowledge@ describes THIS
--- binary's architecture and commands, and a DB copy would go stale a
+-- binary's behaviour and commands, and a DB copy would go stale a
 -- little more every release.  Builtins are immutable through the API;
 -- to hot-fix one without a release, create a DB skill with the same
 -- name — shadowing prefers group over DB-global over builtin.
@@ -107,18 +107,19 @@ newtype SkillRegistry = SkillRegistry (TVar (Map Int64 Skill))
 builtinSkillFiles :: [(FilePath, ByteString)]
 builtinSkillFiles = $(embedDir "skills")
 
--- | Repo docs doubling as skills, verbatim — the file IS the skill
--- body, so behaviour and architecture stay single-sourced in @docs\/@
--- instead of being paraphrased into @skills\/@ and drifting.  The
+-- | The detailed behaviour reference is spliced into @self-knowledge@;
+-- the same bytes render docs/features.md and answer behaviour questions.
+featuresDocument :: ByteString
+featuresDocument = $(embedFile "docs/features.md")
+
+-- | Repo architecture doubling as a skill, verbatim — the file IS the skill
+-- body, so architecture stays single-sourced in @docs\/@ instead of being
+-- paraphrased into @skills\/@ and drifting.  The
 -- description (the index line the model picks by) lives here because
 -- a doc's first line is a heading for GitHub, not an index entry.
 docSkills :: [(Text, Text, ByteString)]
 docSkills =
-  [ ( "self-features",
-      "你全部行为的完整参考（英文）：触发/主动插话/agent loop/feedback/记忆/prompt 形状的细节",
-      $(embedFile "docs/features.md")
-    ),
-    ( "self-architecture",
+  [ ( "self-architecture",
       "你的代码结构与运行时数据流（英文）：模块布局、effect 栈、worker 清单",
       $(embedFile "docs/architecture.md")
     )
@@ -129,10 +130,9 @@ docSkills =
 -- programming error in the repo, but a broken one shipping should
 -- degrade to "skill missing", not "bot won't boot" — hence Maybe.
 --
--- @{{commands}}@ in a body splices the live @!help@ text
--- ('Max.Command.Help.helpText'): the command list users see and the
--- one the bot reads about itself are the same value, so they can't
--- drift.
+-- @{{features}}@ and @{{commands}}@ in a body splice the embedded behaviour
+-- reference and live @!help@ text respectively.  User-facing docs, command
+-- help, and the bot's own behavioural knowledge therefore cannot drift.
 parseBuiltin :: UTCTime -> Int64 -> (FilePath, ByteString) -> Maybe Skill
 parseBuiltin bootTime sid (path, bytes)
   | takeExtension path /= ".md" = Nothing
@@ -153,7 +153,10 @@ parseBuiltin bootTime sid (path, bytes)
     name = T.pack (dropExtension path)
     (descLine, rest) = T.breakOn "\n" (TE.decodeUtf8Lenient bytes)
     desc = T.strip descLine
-    body = T.replace "{{commands}}" (T.strip (helpText Nothing)) (T.strip rest)
+    body =
+      T.replace "{{features}}" (T.strip (TE.decodeUtf8Lenient featuresDocument))
+        . T.replace "{{commands}}" (T.strip (helpText Nothing))
+        $ T.strip rest
 
 newSkillRegistry :: IO SkillRegistry
 newSkillRegistry = do
@@ -257,7 +260,7 @@ data NewSkill = NewSkill
 maxNameLen, maxDescriptionLen, maxBodyLen :: Int
 maxNameLen = 64
 maxDescriptionLen = 120
-maxBodyLen = 16384
+maxBodyLen = 49152
 
 -- | Shared shape check for create and patch.  'Left' is a
 -- user-showable reason.

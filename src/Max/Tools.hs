@@ -37,6 +37,7 @@ import Max.Prompt (tagMediaMarkers)
 import Max.Recall (RecallHit (..), searchRecall)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolGroupId)
+import Max.Tools.SelfSource (selfSourceTools)
 import OneBot.Action (Action (..), Response (..))
 import OneBot.Types (UserId (..))
 
@@ -51,12 +52,13 @@ builtinsFor ::
   ToolContext ->
   [Tool es]
 builtinsFor tz mEmbed dc =
-  [ getMessageByIdTool tz dc,
-    contextSearchTool tz mEmbed dc,
-    contextExpandTool tz dc,
-    viewForwardTool tz dc,
-    pokeTool dc
-  ]
+  selfSourceTools
+    <> [ getMessageByIdTool tz dc,
+         contextSearchTool tz mEmbed dc,
+         contextExpandTool tz dc,
+         viewForwardTool tz dc,
+         pokeTool dc
+       ]
 
 --------------------------------------------------------------------------------
 -- get_message_by_id

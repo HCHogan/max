@@ -15,6 +15,7 @@ module Max.Historian
     processCaptureLease,
 
     -- * Pure policy exposed for tests
+    historianRetryDelaySeconds,
     takeEpisodeByToken,
     renderHistorianSourceLine,
     renderHistorianMessages,
@@ -93,11 +94,24 @@ historianPromptVersion = "historian/v3"
 historianSchemaVersion :: Int
 historianSchemaVersion = 1
 
-historianLeaseSeconds :: Int
-historianLeaseSeconds = 600
+-- | A lease must cover the initial generation, the one allowed structured
+-- response repair, and publication.  Provider/transport failures do not run a
+-- synchronous retry inside either call, so this is the actual worst case.
+historianLeaseSeconds :: Int -> Int
+historianLeaseSeconds timeoutSeconds = max 600 (2 * max 1 timeoutSeconds + 120)
 
-historianRetrySeconds :: Int
-historianRetrySeconds = 60
+historianProtectedRetrySeconds :: Int
+historianProtectedRetrySeconds = 60
+
+-- | Durable retry backoff.  The source range stays exact and retryable, but a
+-- poison model response cannot consume every worker turn forever.
+historianRetryDelaySeconds :: Int -> Int
+historianRetryDelaySeconds attempt
+  | attempt <= 1 = 60
+  | attempt == 2 = 300
+  | attempt == 3 = 900
+  | attempt == 4 = 3600
+  | otherwise = 21600
 
 -- | Internal SQL pagination is not an episode-size policy.  Pages are joined
 -- until the deterministic token boundary is reached.
@@ -107,13 +121,14 @@ ledgerPageSize = 500
 historianWorker ::
   (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Text ->
+  Int ->
   ModelCatalog ->
   TimeZone ->
   TaskRegistry ->
   Text ->
   EpisodeScheduler ->
   Eff es ()
-historianWorker profile catalog tz tasks defaultModel scheduler = localDomain "historian" $ do
+historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler = localDomain "historian" $ do
   -- Persistent jobs win at boot.  The scheduler can disappear; leases and
   -- exact source ranges cannot.
   drainAvailableRuns
@@ -227,11 +242,11 @@ historianWorker profile catalog tz tasks defaultModel scheduler = localDomain "h
                           ]
 
     drainAvailableRuns =
-      claimCaptureRun "historian-v2" historianLeaseSeconds >>= \case
+      claimCaptureRun "historian-v2" (historianLeaseSeconds timeoutSeconds) >>= \case
         Nothing -> pure ()
         Just lease -> do
           let runInputBudget = historianInputBudget lease.leaseRun.crHistorianProfile catalog
-          result <- trySync (processCaptureLease runInputBudget tz tasks lease)
+          result <- trySync (processCaptureLease runInputBudget timeoutSeconds tz tasks lease)
           case result of
             Right (CapturePublished compartment) -> do
               let run = lease.leaseRun
@@ -267,10 +282,16 @@ historianWorker profile catalog tz tasks defaultModel scheduler = localDomain "h
       sourceCurrent <- captureRunSourceMatches scope lease.leaseRun `catchSync` \_ -> pure True
       if sourceCurrent
         then do
-          _ <- failCaptureRun lease historianRetrySeconds err []
+          let retrySeconds = historianRetryDelaySeconds lease.leaseRun.crAttempt
+          _ <- failCaptureRun lease retrySeconds err []
           retryConversation gid
           logAttention "historian: capture retry scheduled" $
-            object ["capture_run_id" .= lease.leaseRun.crId, "error" .= err]
+            object
+              [ "capture_run_id" .= lease.leaseRun.crId,
+                "attempt" .= lease.leaseRun.crAttempt,
+                "retry_seconds" .= retrySeconds,
+                "error" .= err
+              ]
         else do
           _ <- abandonCaptureRun lease ("stale source or cursor: " <> err) []
           retryConversation gid
@@ -370,11 +391,12 @@ data CaptureProcessResult
 processCaptureLease ::
   (LLM :> es, WithConnection :> es, IOE :> es) =>
   Int ->
+  Int ->
   TimeZone ->
   TaskRegistry ->
   CaptureLease ->
   Eff es CaptureProcessResult
-processCaptureLease inputBudget tz tasks lease = do
+processCaptureLease inputBudget timeoutSeconds tz tasks lease = do
   let run = lease.leaseRun
       gid = GroupId run.crConversationId
       scope = conversationScopeFor gid
@@ -395,7 +417,7 @@ processCaptureLease inputBudget tz tasks lease = do
               protectedInRange = Set.intersection protected sourceMessageIds
           if not (Set.null protectedInRange)
             then do
-              _ <- failCaptureRun lease historianRetrySeconds "source range contains an in-flight turn" []
+              _ <- failCaptureRun lease historianProtectedRetrySeconds "source range contains an in-flight turn" []
               pure CaptureRetryScheduled
             else do
               captureResult <-
@@ -403,13 +425,13 @@ processCaptureLease inputBudget tz tasks lease = do
                   then
                     let capture = deterministicFilteredCapture source
                      in pure (Right (captureJsonText capture, capture))
-                  else generateCapture inputBudget tz run.crHistorianProfile scope run source
+                  else generateCapture inputBudget timeoutSeconds tz run.crHistorianProfile scope run source
               case captureResult of
                 Left (raw, errors) -> do
                   stored <-
                     recordCaptureRejected
                       lease
-                      historianRetrySeconds
+                      (historianRetryDelaySeconds run.crAttempt)
                       (T.intercalate "; " (map (.validationMessage) errors))
                       raw
                       errors
@@ -420,7 +442,7 @@ processCaptureLease inputBudget tz tasks lease = do
                     stored <-
                       recordCaptureRejected
                         lease
-                        historianRetrySeconds
+                        (historianRetryDelaySeconds run.crAttempt)
                         "episode capture failed semantic validation"
                         raw
                         errors
@@ -439,13 +461,14 @@ processCaptureLease inputBudget tz tasks lease = do
 generateCapture ::
   (LLM :> es, WithConnection :> es, IOE :> es) =>
   Int ->
+  Int ->
   TimeZone ->
   Text ->
   ConversationScope ->
   CaptureRun ->
   [LedgerItem] ->
   Eff es (Either (Text, [CaptureValidationError]) (Text, EpisodeCapture))
-generateCapture inputBudget tz profile scope run source = do
+generateCapture inputBudget timeoutSeconds tz profile scope run source = do
   now <- liftIO getCurrentTime
   memoryCatalog <- loadMemoryCatalog scope source
   let sourceLines = [renderHistorianSourceLine tz entry.history | entry <- source, entry.transcriptEligible]
@@ -459,7 +482,7 @@ generateCapture inputBudget tz profile scope run source = do
               _ -> "",
             [CaptureValidationError "input_budget" "historian prompt exceeded the configured profile input budget"]
           )
-    else generateHistorianCapture profile run.crConversationId messages
+    else generateHistorianCapture timeoutSeconds profile run.crConversationId messages
 
 -- | Execute the exact model-facing Historian generation policy.  A malformed
 -- JSON/schema response receives one bounded repair turn containing the raw
@@ -468,11 +491,12 @@ generateCapture inputBudget tz profile scope run source = do
 -- policy owns those, and omission must never be hidden by repeated sampling.
 generateHistorianCapture ::
   (LLM :> es) =>
+  Int ->
   Text ->
   Int64 ->
   [ChatMessage] ->
   Eff es (Either (Text, [CaptureValidationError]) (Text, EpisodeCapture))
-generateHistorianCapture profile conversationId messages = do
+generateHistorianCapture timeoutSeconds profile conversationId messages = do
   first <- chat historianCtx profile messages []
   case decodeResponse first of
     Right capture -> pure (Right capture)
@@ -491,7 +515,16 @@ generateHistorianCapture profile conversationId messages = do
     Left (raw, responseError, False) ->
       pure (Left (raw, [CaptureValidationError "response" responseError]))
   where
-    historianCtx = ChatCtx "historian" (Just conversationId) Nothing
+    -- This durable job gets one long transport attempt.  The capture-run
+    -- queue owns retries across attempts, which keeps their timing visible and
+    -- lets pending work pass a failed range.
+    historianCtx =
+      ChatCtx
+        "historian"
+        (Just conversationId)
+        Nothing
+        (Just (max 1 timeoutSeconds))
+        (Just [])
     decodeResponse = \case
       Left err -> Left ("", "provider: " <> err, False)
       Right ToolCallsResp {} -> Left ("", "historian returned unexpected tool calls", False)

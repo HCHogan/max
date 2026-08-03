@@ -235,7 +235,7 @@ shrinkScope label sys header profile scope sid gid = do
                    : map memLine entries
                )
             <> ["", "输出操作 JSON 数组："]
-  chat (ChatCtx label (Just gid) Nothing) profile [MsgSystem sys, MsgUser input] [] >>= \case
+  chat (ChatCtx label (Just gid) Nothing Nothing Nothing) profile [MsgSystem sys, MsgUser input] [] >>= \case
     Left err -> logAttention (label <> ": chat failed") $ object ["error" .= err]
     Right (ToolCallsResp _ _ _) ->
       logAttention (label <> ": unexpected tool calls") $ object []

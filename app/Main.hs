@@ -300,7 +300,7 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
             <> [ worker
                    "historian"
                    OptionalWorker
-                   (historianWorker profile cfg.llm cfg.timezone env.beTasks (defaultModelName cfg.llm) scheduler)
+                   (historianWorker profile cfg.historianTimeoutSeconds cfg.llm cfg.timezone env.beTasks (defaultModelName cfg.llm) scheduler)
                | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beEpisodeScheduler)
                ]
             <> [ worker "memory-dream" OptionalWorker (dreamWorker maintenanceOwner profile cfg.timezone)

@@ -124,7 +124,7 @@ captionOne profile (sha, mime, mSummary) =
                     _ -> ""
               eres <-
                 chat
-                  (ChatCtx "caption" Nothing Nothing)
+                  (ChatCtx "caption" Nothing Nothing Nothing Nothing)
                   profile
                   [ MsgSystem captionSystem,
                     MsgUserBlocks [TextBlock ("这个表情包" <> hint <> "："), ImageDataUrl dataUrl]

@@ -846,7 +846,8 @@ claimCaptureRun owner leaseSeconds = do
         \ WHERE (status = 'pending') \
         \    OR (status = 'failed' AND COALESCE(next_retry_at, '-infinity') <= now()) \
         \    OR (status IN ('leased', 'generated') AND lease_expires_at <= now()) \
-        \ ORDER BY COALESCE(next_retry_at, created_at), id \
+        \ ORDER BY CASE WHEN status = 'pending' THEN 0 ELSE 1 END, \
+        \          attempt, COALESCE(next_retry_at, created_at), id \
         \ FOR UPDATE SKIP LOCKED LIMIT 1 \
         \), claimed AS ( \
         \ UPDATE episode_capture_runs AS run \

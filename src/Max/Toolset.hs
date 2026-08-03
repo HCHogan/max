@@ -97,7 +97,8 @@ toolCountFor env gid multimodal stickers skills =
 -- it cannot accidentally acquire effects or demand fabricated ids.
 toolNamesFor :: BotEnv -> GroupId -> TurnCapabilities -> [Text]
 toolNamesFor env gid caps =
-  [ "get_message_by_id",
+  [ "inspect_source",
+    "get_message_by_id",
     "context_search",
     "context_expand",
     "view_forward",

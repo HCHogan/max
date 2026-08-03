@@ -275,6 +275,11 @@ llm:
 
 # memory:
 #   extract_profile: deepseek-flash
+#   # Historian calls carry much larger prompts than interactive turns.  This
+#   # independent per-attempt timeout defaults to 600 seconds; transport-level
+#   # retries are disabled because the durable capture queue owns retry and
+#   # exponential backoff.
+#   timeout_seconds: 600
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Proactive triggering (intent classification).  When profile names an LLM

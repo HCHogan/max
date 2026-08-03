@@ -67,8 +67,10 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.Sandbox.DockerSpec` — package wrapping and exec argv
 - `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
 - `Max.ShutdownSpec` — drain flag / in-flight counter transitions
-- `Max.SkillsSpec` — builtin skills parsed from `skills/` (and the
-  `{{commands}}` splice really happened)
+- `Max.SelfSourceSpec` — the allowlisted compile-time bundle, stable identity,
+  literal search, bounded numbered reads, and host-path rejection
+- `Max.SkillsSpec` — builtin skills parsed from `skills/`, including the
+  `docs/features.md` and live `!help` splices into `self-knowledge`
 - `Max.TasksSpec` — the task registry: feeding a running turn, aiming a
   `!feedback` by trigger, in-flight bookkeeping, `attachTask` adoption,
   unserved-note return at `endDispatch` (killed turns keep nothing)
@@ -247,6 +249,12 @@ so `grep -A` / `grep -B` count events rather than JSON braces.
 Useful domain filters: `conn-N`, `image-worker`, `forward-worker`, `llm`, `cmd`,
 `historian` (episode capture), `memory-dream` (memory maintenance), `intent`
 (proactive-trigger classification), `shutdown` (graceful drain).
+
+Historian dispatch logs include `timeout_seconds` and `transport_retries=0`.
+Capture rows retain attempt, lease, `next_retry_at`, validation output, and the
+exact source range; use the admin context console to distinguish a long call
+from durable backoff. The worker claims fresh pending ranges before overdue
+retries, so a repeatedly bad range should not stop newer first attempts.
 
 `log-base` has three levels and they map straight across: `TRACE` / `INFO` /
 `WARN`. There is no separate error tier — `logAttention` carries both recoverable

@@ -1,19 +1,19 @@
 # ADR 001: Context and Memory Foundations
 
-- Status: Accepted
+- Status: Accepted / Implemented
 - Date: 2026-08-02
 - Tracking issue: [#10](https://github.com/HCHogan/max/issues/10)
 
 ## Context
 
-Max is moving from a bounded prompt assembled from recent rows and extracted
-memories to an effectively unbounded, rebuildable conversation lifecycle. Max
+Max replaced its bounded prompt assembled from recent rows and extracted
+memories with an effectively unbounded, rebuildable conversation lifecycle. Max
 serves multi-user groups and direct chats concurrently, so a coding-agent
 context design cannot be copied without explicit conversation authorization,
 lossless source coverage, and deterministic prompt planning.
 
-This ADR fixes the invariants and failure boundaries before new episode,
-compartment, and recall stores are introduced.
+This ADR records the invariants and failure boundaries implemented by the
+episode, compartment, memory, materialization, and recall stores.
 
 ## Decision
 
@@ -121,7 +121,7 @@ projection.
 - PostgreSQL integration tests are required in CI because the security and
   coverage invariants are primarily SQL and transaction behavior.
 - The former two-source history query is removed at the all-conversation
-  cutover. The only release fallback is a process-wide, token-budgeted read of
+  cutover. The release fallback is a process-wide, token-budgeted read of
   the immutable raw ledger; it does not mutate source or projection state.
 - Rebuilds and policy changes cost additional storage and background work, but
   errors remain recoverable because the raw transcript is authoritative.
