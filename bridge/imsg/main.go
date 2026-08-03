@@ -5,6 +5,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -26,6 +27,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 type rpcResponse struct {
@@ -146,6 +148,7 @@ type server struct {
 	runner              *runner
 	token               string
 	dbPath              string
+	sqlitePath          string
 	attachmentRoot      string
 	outboundRoot        string
 	allowedChatGUID     string
@@ -341,6 +344,7 @@ func (s *server) sanitizeMessages(raw json.RawMessage) (json.RawMessage, error) 
 		return nil, fmt.Errorf("decode messages.after result: %w", err)
 	}
 	messages, _ := result["messages"].([]any)
+	messageByRowID := make(map[int64]map[string]any, len(messages))
 	for _, value := range messages {
 		message, ok := value.(map[string]any)
 		if !ok {
@@ -349,6 +353,9 @@ func (s *server) sanitizeMessages(raw json.RawMessage) (json.RawMessage, error) 
 		chatID, ok := jsonInt64(message["chat_id"])
 		if !ok || !s.chatIDAllowed(chatID) {
 			return nil, errors.New("messages.after returned a non-allowlisted chat")
+		}
+		if rowID, ok := jsonInt64(message["id"]); ok && rowID > 0 {
+			messageByRowID[rowID] = message
 		}
 		attachments, _ := message["attachments"].([]any)
 		for _, attachmentValue := range attachments {
@@ -370,7 +377,151 @@ func (s *server) sanitizeMessages(raw json.RawMessage) (json.RawMessage, error) 
 			attachment["byte_size"] = record.size
 		}
 	}
+	mentions, err := s.confirmedMentionsForRows(messageByRowID)
+	if err != nil {
+		return nil, err
+	}
+	for rowID, handles := range mentions {
+		if len(handles) > 0 {
+			messageByRowID[rowID]["mentioned_handles"] = handles
+		}
+	}
 	return json.Marshal(result)
+}
+
+// imsg returns only the rendered attributed text. The stable identity behind
+// an iMessage mention remains in attributedBody, so enrich only allowlisted
+// rows before the payload leaves the Mac. The blob itself never crosses the
+// bridge and display names are never treated as identities.
+func (s *server) confirmedMentionsForRows(messages map[int64]map[string]any) (map[int64][]string, error) {
+	result := make(map[int64][]string)
+	if len(messages) == 0 || s.dbPath == "" {
+		return result, nil
+	}
+	rowIDs := make([]string, 0, len(messages))
+	for rowID := range messages {
+		rowIDs = append(rowIDs, strconv.FormatInt(rowID, 10))
+	}
+	query := fmt.Sprintf(
+		"SELECT ROWID AS row_id, hex(attributedBody) AS attributed_body_hex FROM message WHERE ROWID IN (%s) AND attributedBody IS NOT NULL AND instr(CAST(attributedBody AS BLOB), CAST('%s' AS BLOB)) > 0",
+		strings.Join(rowIDs, ","), confirmedMentionAttribute,
+	)
+	sqlitePath := s.sqlitePath
+	if sqlitePath == "" {
+		sqlitePath = "/usr/bin/sqlite3"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, sqlitePath, "-readonly", "-json", s.dbPath, query).Output()
+	if err != nil {
+		return nil, fmt.Errorf("read iMessage mention metadata: %w", err)
+	}
+	var rows []struct {
+		RowID             int64  `json:"row_id"`
+		AttributedBodyHex string `json:"attributed_body_hex"`
+	}
+	if len(bytes.TrimSpace(output)) == 0 {
+		return result, nil
+	}
+	if err := json.Unmarshal(output, &rows); err != nil {
+		return nil, fmt.Errorf("decode iMessage mention metadata: %w", err)
+	}
+	for _, row := range rows {
+		if _, allowed := messages[row.RowID]; !allowed {
+			continue
+		}
+		body, err := hex.DecodeString(row.AttributedBodyHex)
+		if err != nil {
+			return nil, fmt.Errorf("decode attributedBody for row %d: %w", row.RowID, err)
+		}
+		result[row.RowID] = confirmedMentionHandles(body)
+	}
+	return result, nil
+}
+
+const confirmedMentionAttribute = "__kIMMentionConfirmedMention"
+
+func confirmedMentionHandles(body []byte) []string {
+	marker := []byte(confirmedMentionAttribute)
+	var handles []string
+	for offset := 0; offset < len(body); {
+		position := bytes.Index(body[offset:], marker)
+		if position < 0 {
+			break
+		}
+		start := offset + position + len(marker)
+		limit := start + 96
+		if limit > len(body) {
+			limit = len(body)
+		}
+		for index := start; index < limit; index++ {
+			candidate, ok := typedStreamStringAt(body, index)
+			if !ok || !isIMessageHandle(candidate) {
+				continue
+			}
+			if !containsString(handles, candidate) {
+				handles = append(handles, candidate)
+			}
+			break
+		}
+		offset = start
+	}
+	return handles
+}
+
+func typedStreamStringAt(body []byte, index int) (string, bool) {
+	if index >= len(body) {
+		return "", false
+	}
+	prefixLength := 1
+	length := int(body[index])
+	switch body[index] {
+	case 0x81:
+		if index+1 >= len(body) {
+			return "", false
+		}
+		prefixLength, length = 2, int(body[index+1])
+	case 0x82:
+		if index+2 >= len(body) {
+			return "", false
+		}
+		prefixLength, length = 3, int(body[index+1])<<8|int(body[index+2])
+	default:
+		if body[index] >= 0x80 {
+			return "", false
+		}
+	}
+	start := index + prefixLength
+	end := start + length
+	if length == 0 || length > 320 || end > len(body) || !utf8.Valid(body[start:end]) {
+		return "", false
+	}
+	return string(body[start:end]), true
+}
+
+func isIMessageHandle(value string) bool {
+	if value == "" || strings.IndexFunc(value, func(r rune) bool { return r <= ' ' }) >= 0 {
+		return false
+	}
+	if strings.HasPrefix(value, "+") && len(value) >= 7 {
+		for _, char := range value[1:] {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	at := strings.IndexByte(value, '@')
+	return at > 0 && at < len(value)-1
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if strings.EqualFold(value, target) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *server) registerAttachment(path string, metadata map[string]any) (string, attachmentRecord, error) {
@@ -658,6 +809,10 @@ func main() {
 		}
 		dbPath = filepath.Join(home, "Library", "Messages", "chat.db")
 	}
+	sqlitePath := os.Getenv("IMSG_SQLITE_PATH")
+	if sqlitePath == "" {
+		sqlitePath = "/usr/bin/sqlite3"
+	}
 	attachmentRoot := os.Getenv("IMSG_ATTACHMENT_ROOT")
 	if attachmentRoot == "" {
 		attachmentRoot = filepath.Join(filepath.Dir(dbPath), "Attachments")
@@ -686,7 +841,7 @@ func main() {
 		log.Fatal(err)
 	}
 	s := &server{
-		runner: rpcRunner, token: token, dbPath: dbPath, attachmentRoot: attachmentRoot, outboundRoot: outboundRoot,
+		runner: rpcRunner, token: token, dbPath: dbPath, sqlitePath: sqlitePath, attachmentRoot: attachmentRoot, outboundRoot: outboundRoot,
 		allowedChatGUID: allowedChatGUID, maxAttachmentBytes: maxAttachmentBytes,
 	}
 	mux := http.NewServeMux()

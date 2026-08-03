@@ -58,6 +58,13 @@ rejected. The adapter uses public `imsg send`, so SIP remains enabled. Native
 reply/edit/unsend are not claimed as capabilities; replies use a bounded
 textual fallback.
 
+Group wakeups use the confirmed mention handle embedded in Messages'
+`attributedBody`, matched against `imessage.mention_handles`. Contact names are
+local presentation and never establish identity, so a member may see the bot
+as `Maxwell` (or any other alias) without changing trigger semantics.
+`imessage.bot_name` is only a compatibility fallback for a manually typed
+literal such as `@Maxwell`.
+
 ## Diagnostics
 
 With the admin server enabled:

@@ -34,7 +34,7 @@ Max over Tailscale; it is not a general `imsg` RPC proxy.
    exec ./imsg-bridge
    ```
 
-   Optional settings are `IMSG_PATH`, `IMSG_DB_PATH`,
+   Optional settings are `IMSG_PATH`, `IMSG_DB_PATH`, `IMSG_SQLITE_PATH`,
    `IMSG_ATTACHMENT_ROOT`, `IMSG_OUTBOUND_ROOT` (default
    `~/Library/Caches/max-imsg-bridge/outbound`), and
    `IMSG_MAX_ATTACHMENT_BYTES` (default 64 MiB).
@@ -78,6 +78,9 @@ Because the token is stored in the plist, keep that file user-readable only.
   files or directories. Caller-supplied paths are rejected.
 - `messages.after` is authoritative. Watch only wakes Max early; the durable
   ROWID cursor is still reconciled periodically and after reconnects.
+- Confirmed mention identities are read from each allowlisted row's native
+  `attributedBody` metadata. Only the extracted handles cross the bridge;
+  contact/display names never decide whether Max was mentioned.
 - A `chat.db` replacement changes the source fingerprint. Max then rescans the
   one allowlisted chat and deduplicates by message GUID.
 - Accepted sends are not blindly retried. Echoes or `message.send_status`

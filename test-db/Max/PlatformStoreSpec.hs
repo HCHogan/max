@@ -1,15 +1,17 @@
 module Max.PlatformStoreSpec (spec) where
 
 import Control.Concurrent.Async (concurrently)
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Int (Int64)
+import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
-import Database.PostgreSQL.Simple (Only (..), query)
+import Database.PostgreSQL.Simple (Only (..), execute_, query, withTransaction)
 import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool, withConn)
 import Max.Platform.Store
+import Max.Platform.Store qualified as PlatformStore
 import Max.Platform.Types
 import Test.Hspec
 
@@ -341,6 +343,91 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         persisted `shouldSatisfy` T.isInfixOf "\xfffd"
         persisted `shouldNotSatisfy` T.any (== '\NUL')
       _ -> expectationFailure "missing sanitized canonical event"
+
+  it "repairs iMessage predecessor chains without losing real inline replies" $ do
+    endpoint <-
+      withDb pool $
+        ensureConfiguredEndpoint
+          PlatformIMessage
+          (NativeAccountId "mac-account")
+          (NativeConversationId "iMessage;+;chat-test")
+          ConversationGroup
+          EndpointStandalone
+          Nothing
+          textCapabilities
+    now <- getCurrentTime
+    parent <- withDb pool (ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "parent" "parent"))
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "previous" "previous"))
+    let staleReplySegments =
+          toJSON
+            [ object
+                [ "type" .= ("reply" :: Text),
+                  "data" .= object ["id" .= ("-999" :: Text)]
+                ]
+            ]
+        staleOptions :: IngestOptions
+        staleOptions = defaultIngestOptions {PlatformStore.compatibilitySegments = staleReplySegments}
+        falseEnvelope =
+          (inbound endpoint.endpointId now "ambient-child" "ambient")
+            { relations = [ReplyTo (NativeEventId "previous")],
+              rawPayload = Just (object ["reply_to_guid" .= ("previous" :: Text)])
+            }
+        trueEnvelope =
+          (inbound endpoint.endpointId now "inline-child" "inline")
+            { relations = [ReplyTo (NativeEventId "previous")],
+              rawPayload =
+                Just
+                  ( object
+                      [ "reply_to_guid" .= ("previous" :: Text),
+                        "thread_originator_guid" .= ("parent" :: Text)
+                      ]
+                  )
+            }
+    falseChild <- withDb pool (ingestEnvelope staleOptions falseEnvelope)
+    trueChild <- withDb pool (ingestEnvelope staleOptions trueEnvelope)
+    withConn pool $ \conn -> withTransaction conn $ do
+      migration <- readFile "migrations/051_imessage_reply_semantics.sql"
+      _ <- execute_ conn (fromString migration)
+      [Only parentMessageId] <-
+        query
+          conn
+          "SELECT message_id FROM messages WHERE canonical_message_id = ?"
+          (Only (resultId parent).unCanonicalMessageId)
+      repaired <-
+        query
+          conn
+          "SELECT child.canonical_message_id, child.reply_to_message_id, \
+          \       child.reply_to_canonical_message_id, child.segments->0->>'type', \
+          \       child.segments->0->'data'->>'id', relation.target_canonical_message_id, \
+          \       relation.target_native_event_id \
+          \ FROM messages child \
+          \ LEFT JOIN message_relations relation \
+          \   ON relation.canonical_message_id = child.canonical_message_id \
+          \  AND relation.relation_kind = 'reply' \
+          \ WHERE child.canonical_message_id IN (?, ?) \
+          \ ORDER BY child.canonical_message_id"
+          ( (resultId falseChild).unCanonicalMessageId,
+            (resultId trueChild).unCanonicalMessageId
+          )
+      (repaired :: [(Int64, Maybe Int64, Maybe Int64, Maybe Text, Maybe Text, Maybe Int64, Maybe Text)])
+        `shouldBe`
+          [ ( (resultId falseChild).unCanonicalMessageId,
+              Nothing,
+              Nothing,
+              Nothing,
+              Nothing,
+              Nothing,
+              Nothing
+            ),
+            ( (resultId trueChild).unCanonicalMessageId,
+              Just parentMessageId,
+              Just (resultId parent).unCanonicalMessageId,
+              Just "reply",
+              Just (T.pack (show parentMessageId)),
+              Just (resultId parent).unCanonicalMessageId,
+              Just "parent"
+            )
+          ]
 
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do

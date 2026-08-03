@@ -1,6 +1,6 @@
 module Max.IMessageSpec (spec) where
 
-import Data.Aeson (object, (.=))
+import Data.Aeson (Value, object, (.=))
 import Max.IMessage
 import Max.Platform.Types (EventKind (..), NativeUserId (..), PlatformCapabilities (..))
 import Test.Hspec
@@ -20,7 +20,9 @@ spec = describe "iMessage adapter" $ do
                          "is_from_me" .= False,
                          "text" .= ("@Max hello" :: String),
                          "created_at" .= ("2026-08-03T12:00:00Z" :: String),
-                         "reply_to_guid" .= ("GUID-1" :: String),
+                         "reply_to_guid" .= ("PREVIOUS-GUID" :: String),
+                         "thread_originator_guid" .= ("GUID-1" :: String),
+                         "mentioned_handles" .= (["hnkhgn@icloud.com"] :: [String]),
                           "attachments"
                            .= [ object
                                   [ "attachment_id" .= ("abc123" :: String),
@@ -40,7 +42,10 @@ spec = describe "iMessage adapter" $ do
     case page.messages of
       [message] -> do
         message.guid `shouldBe` "GUID-41"
-        message.replyToGuid `shouldBe` Just "GUID-1"
+        message.replyToGuid `shouldBe` Just "PREVIOUS-GUID"
+        message.threadOriginatorGuid `shouldBe` Just "GUID-1"
+        message.mentionedHandles `shouldBe` ["hnkhgn@icloud.com"]
+        iMessageReplyTarget message `shouldBe` Just "GUID-1"
         fmap (.attachmentId) message.attachments `shouldBe` ["abc123"]
       _ -> expectationFailure "expected one message"
 
@@ -72,6 +77,32 @@ spec = describe "iMessage adapter" $ do
         message.reactedToGuid `shouldBe` Just "GUID-41"
       _ -> expectationFailure "expected one reaction"
 
+  it "does not promote the macOS predecessor chain into an inline reply" $ do
+    let value =
+          object
+            [ "messages"
+                .= [ object
+                       [ "id" .= (44 :: Int),
+                         "chat_id" .= (7 :: Int),
+                         "guid" .= ("GUID-TOP-LEVEL" :: String),
+                         "sender" .= ("+85212345678" :: String),
+                         "is_from_me" .= False,
+                         "text" .= ("ordinary ambient message" :: String),
+                         "created_at" .= ("2026-08-03T12:00:03Z" :: String),
+                         "reply_to_guid" .= ("PREVIOUS-MESSAGE" :: String)
+                       ]
+                   ],
+              "next_rowid" .= (44 :: Int),
+              "has_more" .= False
+            ]
+    page <- parseIMessagePage value `shouldSatisfyRight` const True
+    case page.messages of
+      [message] -> do
+        message.replyToGuid `shouldBe` Just "PREVIOUS-MESSAGE"
+        message.threadOriginatorGuid `shouldBe` Nothing
+        iMessageReplyTarget message `shouldBe` Nothing
+      _ -> expectationFailure "expected one top-level message"
+
   it "keeps senderless Messages rows as non-dispatching system provenance" $ do
     let value =
           object
@@ -89,7 +120,7 @@ spec = describe "iMessage adapter" $ do
               "next_rowid" .= (43 :: Int),
               "has_more" .= False
             ]
-        cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" "Max" 1000
+        cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" 1000
     page <- parseIMessagePage value `shouldSatisfyRight` const True
     case page.messages of
       [message] -> do
@@ -107,8 +138,38 @@ spec = describe "iMessage adapter" $ do
       `shouldBe` Right IMessageSendFailed
 
   it "redacts the bridge token from Show" $ do
-    let cfg = IMessageConfig "http://100.64.0.25:8787" "secret-token" "m1pro" "iMessage;+;chat" "Max" 1000
+    let cfg = IMessageConfig "http://100.64.0.25:8787" "secret-token" "m1pro" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" 1000
     show cfg `shouldNotContain` "secret-token"
+
+  it "binds a confirmed mention to the Apple handle, not the local display name" $ do
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" 1000
+        confirmed = mentionPage 45 "GUID-MENTION" (["hnkhgn@icloud.com"] :: [String])
+        plain = mentionPage 46 "GUID-PLAIN" ([] :: [String])
+        mentionPage :: Int -> String -> [String] -> Value
+        mentionPage row guid handles =
+          object
+            [ "messages"
+                .= [ object
+                       [ "id" .= row,
+                         "chat_id" .= (7 :: Int),
+                         "guid" .= guid,
+                         "sender" .= ("person@example.com" :: String),
+                         "is_from_me" .= False,
+                         "text" .= ("Maxwell hey" :: String),
+                         "mentioned_handles" .= handles,
+                         "created_at" .= ("2026-08-03T12:00:04Z" :: String)
+                       ]
+                   ],
+              "next_rowid" .= row,
+              "has_more" .= False
+            ]
+    confirmedPage <- parseIMessagePage confirmed `shouldSatisfyRight` const True
+    plainPage <- parseIMessagePage plain `shouldSatisfyRight` const True
+    case (confirmedPage.messages, plainPage.messages) of
+      ([confirmedMessage], [plainMessage]) -> do
+        iMessageIsAddressed cfg confirmedMessage `shouldBe` True
+        iMessageIsAddressed cfg plainMessage `shouldBe` False
+      _ -> expectationFailure "expected one confirmed and one plain message"
 
   it "advertises bounded outbound attachment delivery" $ do
     iMessageCapabilities.canSendText `shouldBe` True

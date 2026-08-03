@@ -13,6 +13,8 @@ module Max.IMessage
     parseIMessagePage,
     iMessageEventKind,
     iMessageIngressIdentity,
+    iMessageReplyTarget,
+    iMessageIsAddressed,
     iMessageCapabilities,
     iMessageWorker,
     iMessageDeliveryTransport,
@@ -79,6 +81,10 @@ data IMessageConfig = IMessageConfig
     bridgeToken :: !Text,
     accountKey :: !Text,
     chatGuid :: !Text,
+    -- Stable Apple handles carried by confirmed mention metadata. These, not
+    -- per-device contact display names, are authoritative identities.
+    mentionHandles :: ![Text],
+    -- Backwards-compatible literal @alias fallback for manually typed text.
     botName :: !Text,
     pollIntervalMs :: !Int
   }
@@ -92,6 +98,9 @@ instance Show IMessageConfig where
       <> show cfg.accountKey
       <> ", chatGuid = "
       <> show cfg.chatGuid
+      <> ", mentionHandles = <"
+      <> show (length cfg.mentionHandles)
+      <> " configured>"
       <> ", botName = "
       <> show cfg.botName
       <> ", pollIntervalMs = "
@@ -107,7 +116,12 @@ data IMessageMessage = IMessageMessage
     isFromMe :: !Bool,
     text :: !Text,
     createdAt :: !UTCTime,
+    -- On the observed macOS 15 Messages schema this is a predecessor-chain
+    -- pointer, not proof that the user explicitly replied. Provenance only.
     replyToGuid :: !(Maybe Text),
+    -- The actual inline-reply root exposed by Messages.app.
+    threadOriginatorGuid :: !(Maybe Text),
+    mentionedHandles :: ![Text],
     isReaction :: !Bool,
     reactionKey :: !(Maybe Text),
     reactedToGuid :: !(Maybe Text),
@@ -242,7 +256,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
       let kind = iMessageEventKind message
           relations =
             catMaybes
-              [ ReplyTo . NativeEventId <$> message.replyToGuid,
+              [ ReplyTo . NativeEventId <$> iMessageReplyTarget message,
                 if message.isReaction
                   then ReactsTo . NativeEventId <$> message.reactedToGuid <*> pure (fromMaybe "reaction" message.reactionKey)
                   else Nothing
@@ -276,12 +290,12 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
         DeliveryEcho {} -> pure ()
 
     compatibilitySegments selfCompatibility message = do
-      reply <- case message.replyToGuid of
+      reply <- case iMessageReplyTarget message of
         Nothing -> pure []
         Just target -> do
           mapped <- compatibilityPlatformId PlatformIMessage "message" target
           pure [SegReply (MessageId mapped)]
-      let addressed = ("@" <> T.toCaseFold cfg.botName) `T.isInfixOf` T.toCaseFold message.text
+      let addressed = iMessageIsAddressed cfg message
           mention = [SegAt (UserId selfCompatibility) | addressed]
           attachmentLabels =
             [ fromMaybe "[media]" (("[media: " <>) . (<> "]") <$> attachment.transferName)
@@ -333,6 +347,21 @@ iMessageIngressIdentity cfg message
   | message.isFromMe = (NativeUserId cfg.accountKey, message.senderName)
   | isUnattributedSystemEvent message = (NativeUserId "system", Just "iMessage system")
   | otherwise = (NativeUserId message.sender, message.senderName)
+
+-- On the observed macOS 15 Messages schema, @reply_to_guid@ is a rolling
+-- predecessor pointer set on ordinary top-level messages. Only
+-- @thread_originator_guid@ proves use of Messages' inline-reply UI.
+iMessageReplyTarget :: IMessageMessage -> Maybe Text
+iMessageReplyTarget = (.threadOriginatorGuid)
+
+iMessageIsAddressed :: IMessageConfig -> IMessageMessage -> Bool
+iMessageIsAddressed cfg message =
+  any
+    (\mentioned -> any (sameHandle mentioned) cfg.mentionHandles)
+    message.mentionedHandles
+    || ("@" <> T.toCaseFold (T.strip cfg.botName)) `T.isInfixOf` T.toCaseFold message.text
+  where
+    sameHandle left right = T.toCaseFold (T.strip left) == T.toCaseFold (T.strip right)
 
 isUnattributedSystemEvent :: IMessageMessage -> Bool
 isUnattributedSystemEvent message =
@@ -498,13 +527,15 @@ messageParser raw@(Object o) = do
   createdText <- o .: "created_at"
   createdAt <- maybe (fail "invalid created_at") pure (iso8601ParseM (T.unpack createdText))
   replyToGuid <- o .:? "reply_to_guid"
+  threadOriginatorGuid <- o .:? "thread_originator_guid"
+  mentionedHandles <- o .:? "mentioned_handles" .!= []
   isReaction <- o .:? "is_reaction" .!= False
   reactionType <- o .:? "reaction_type"
   reactionEmoji <- o .:? "reaction_emoji"
   reactedToGuid <- o .:? "reacted_to_guid"
   attachments <- o .:? "attachments" .!= [] >>= traverse attachmentParser
   let reactionKey = reactionEmoji <|> reactionType
-  pure IMessageMessage {rowId, chatId, guid, sender, senderName, isFromMe, text, createdAt, replyToGuid, isReaction, reactionKey, reactedToGuid, attachments, raw}
+  pure IMessageMessage {rowId, chatId, guid, sender, senderName, isFromMe, text, createdAt, replyToGuid, threadOriginatorGuid, mentionedHandles, isReaction, reactionKey, reactedToGuid, attachments, raw}
 messageParser _ = fail "message must be an object"
 
 attachmentParser :: Value -> Parser IMessageAttachment

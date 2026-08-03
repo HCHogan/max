@@ -120,7 +120,8 @@ persona: |
 #   bridge_token: "replace-with-a-long-random-token"
 #   account_key: "m1pro-messages"
 #   chat_guid: "iMessage;+;chat000000000000000000"
-#   bot_name: "Max"
+#   mention_handles: ["max-bot@example.com"] # stable IDs in confirmed mentions
+#   bot_name: "Maxwell"                     # literal @Maxwell fallback only
 #   poll_interval_ms: 1000
 
 # ─────────────────────────────────────────────────────────────────────────────

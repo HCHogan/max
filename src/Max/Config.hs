@@ -776,14 +776,25 @@ iMessageParser = do
       ]
   botName <-
     setting
-      [ help "Name used for @Max trigger detection in iMessage",
+      [ help "Literal @alias fallback for manually typed iMessage text",
         reader str,
         option,
         long "imessage-bot-name",
         env "MAX_IMESSAGE_BOT_NAME",
         conf "bot_name",
         metavar "NAME",
-        value "Max"
+        value "Maxwell"
+      ]
+  mentionHandles <-
+    setting
+      [ help "Apple handles that identify confirmed mentions of Max",
+        reader (commaSeparatedList str),
+        option,
+        long "imessage-mention-handles",
+        env "MAX_IMESSAGE_MENTION_HANDLES",
+        conf "mention_handles",
+        metavar "HANDLE[,HANDLE..]",
+        value []
       ]
   pollIntervalMs <-
     setting
@@ -801,6 +812,8 @@ iMessageParser = do
     Just bridgeUrl
       | any (T.null . T.strip) [bridgeUrl, bridgeToken, accountKey, chatGuid, botName] ->
           error "imessage: bridge_url, bridge_token, account_key, chat_guid and bot_name must all be non-empty"
+      | null mentionHandles || any (T.null . T.strip) mentionHandles ->
+          error "imessage: mention_handles must contain at least one non-empty Apple handle"
       | pollIntervalMs < 100 -> error "imessage: poll_interval_ms must be at least 100"
       | otherwise -> Just IMessageConfig {..}
 

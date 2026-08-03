@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 )
+
+const confirmedMentionBodyHex = "040B73747265616D747970656481E803840140848484124E5341747472696275746564537472696E67008484084E534F626A656374008592848484084E53537472696E67019484012B0B4D617877656C6C2068657986840269490107928484840C4E5344696374696F6E61727900948401690392849696265F5F6B494D4261736557726974696E67446972656374696F6E4174747269627574654E616D658692848484084E534E756D626572008484074E5356616C7565009484012A848401719DFF86928496961D5F5F6B494D4D657373616765506172744174747269627574654E616D658692849B9C9D9D0086928496961C5F5F6B494D4D656E74696F6E436F6E6669726D65644D656E74696F6E869284969611686E6B68676E4069636C6F75642E636F6D868697020492849899029299929A929E929F8686"
 
 func TestFilterChatsRegistersOnlyAllowlistedChat(t *testing.T) {
 	s := &server{allowedChatGUID: "iMessage;+;allowed"}
@@ -164,6 +167,51 @@ func TestSanitizeMessagesReplacesHostPathWithOpaqueHandle(t *testing.T) {
 	}
 	if _, ok := s.attachments.Load(id); !ok {
 		t.Fatal("opaque attachment was not registered")
+	}
+}
+
+func TestConfirmedMentionHandlesUsesIdentityNotDisplayText(t *testing.T) {
+	// Real macOS typedstream shape for the rendered text "Maxwell hey".
+	body, err := hex.DecodeString(confirmedMentionBodyHex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handles := confirmedMentionHandles(body)
+	if len(handles) != 1 || handles[0] != "hnkhgn@icloud.com" {
+		t.Fatalf("unexpected confirmed mentions: %#v", handles)
+	}
+	if got := confirmedMentionHandles([]byte("Maxwell hey hnkhgn@icloud.com")); len(got) != 0 {
+		t.Fatalf("plain text was promoted to a mention: %#v", got)
+	}
+}
+
+func TestSanitizeMessagesAddsOnlyConfirmedMentionHandles(t *testing.T) {
+	root := t.TempDir()
+	sqlite := filepath.Join(root, "sqlite3")
+	script := "#!/bin/sh\nprintf '%s\\n' '[{\"row_id\":1123,\"attributed_body_hex\":\"" + confirmedMentionBodyHex + "\"}]'\n"
+	if err := os.WriteFile(sqlite, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s := &server{dbPath: filepath.Join(root, "chat.db"), sqlitePath: sqlite}
+	s.allowedChatIDs.Store("7", struct{}{})
+	raw := json.RawMessage(`{"messages":[{"id":1123,"chat_id":7,"text":"Maxwell hey"},{"id":1124,"chat_id":7,"text":"Maxwell plain"}]}`)
+	sanitized, err := s.sanitizeMessages(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Messages []struct {
+			MentionedHandles []string `json:"mentioned_handles"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(sanitized, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Messages) != 2 || len(result.Messages[0].MentionedHandles) != 1 || result.Messages[0].MentionedHandles[0] != "hnkhgn@icloud.com" {
+		t.Fatalf("confirmed mention was not enriched: %s", sanitized)
+	}
+	if len(result.Messages[1].MentionedHandles) != 0 {
+		t.Fatalf("plain display text became a mention: %s", sanitized)
 	}
 }
 
