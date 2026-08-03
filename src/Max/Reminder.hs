@@ -68,7 +68,7 @@ import Max.DB.Reminder
     reminderDueAt,
     rescheduleReminder,
   )
-import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
+import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Util (catchSync)
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
@@ -237,6 +237,7 @@ reminderWorker tz sched = loop
               orSelfId = UserId r.rmSelfId,
               orRenderedText = Nothing,
               orSegments = segs,
+              orDeliveryScope = DeliverConversation,
               orTimeoutMs = 30000
             }
       case outcome of

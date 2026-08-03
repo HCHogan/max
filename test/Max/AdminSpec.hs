@@ -14,6 +14,7 @@ spec = describe "Max.Admin" $ do
       route "GET" ["api", "tasks"] `shouldBe` Just RTasksList
       route "GET" ["api", "usage"] `shouldBe` Just RUsage
       route "GET" ["api", "stats", "messages"] `shouldBe` Just RMessageStats
+      route "GET" ["api", "platforms", "status"] `shouldBe` Just RPlatformStatus
       route "GET" ["api", "context", "status"] `shouldBe` Just RContextStatus
       route "GET" ["api", "context", "captures"] `shouldBe` Just RContextCaptures
       route "GET" ["api", "context", "compartments"] `shouldBe` Just RContextCompartments
@@ -80,6 +81,7 @@ spec = describe "Max.Admin" $ do
       needsAuth (RTaskKill "t1") `shouldBe` True
       needsAuth RUsage `shouldBe` True
       needsAuth RMessageStats `shouldBe` True
+      needsAuth RPlatformStatus `shouldBe` True
       needsAuth RSkillsList `shouldBe` True
       needsAuth RSkillCreate `shouldBe` True
       needsAuth (RSkillPatch 1) `shouldBe` True

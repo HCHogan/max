@@ -7,12 +7,12 @@ import Database.PostgreSQL.Simple (Only (..), execute, execute_, query, withTran
 import Max.DB.Connection (DbPool, withConn)
 import Test.Hspec
 
--- | Rehearse 049 over populated legacy tables.  This is intentionally not a
+-- | Rehearse 049/050 over populated legacy tables.  This is intentionally not a
 -- fresh-schema smoke test: it proves that old QQ rows acquire lossless
 -- canonical identities and that writes made by the old binary-shaped API keep
 -- populating both ledgers after cutover.
 spec :: DbPool -> Spec
-spec pool = describe "049 canonical platform foundation migration" $ do
+spec pool = describe "049/050 canonical platform foundation migrations" $ do
   it "backfills old rows and canonicalizes subsequent legacy inserts" $
     withConn pool $ \conn -> withTransaction conn $ do
       _ <- execute_ conn "CREATE SCHEMA canonical_platform_migration_test"
@@ -44,11 +44,13 @@ spec pool = describe "049 canonical platform foundation migration" $ do
 
       migration <- readFile "migrations/049_canonical_platform_foundation.sql"
       _ <- execute_ conn (fromString migration)
+      runtimeMigration <- readFile "migrations/050_platform_runtime_hardening.sql"
+      _ <- execute_ conn (fromString runtimeMigration)
 
       backfilled <-
         query
           conn
-          "SELECT m.canonical_message_id, c.legacy_group_id, a.platform, \
+          "SELECT m.canonical_message_id, c.legacy_group_id, a.platform, m.source_platform, m.message_origin, \
           \       e.native_conversation_id, pi.native_user_id, pe.native_event_id, d.status \
           \FROM messages m \
           \JOIN conversations c USING (conversation_id) \
@@ -58,8 +60,8 @@ spec pool = describe "049 canonical platform foundation migration" $ do
           \JOIN platform_events pe USING (canonical_message_id) \
           \JOIN message_deliveries d USING (canonical_message_id)"
           ()
-      (backfilled :: [(Int64, Int64, Text, Text, Text, Text, Text)])
-        `shouldBe` [(1, 42, "qq", "42", "7", "101", "confirmed")]
+      (backfilled :: [(Int64, Int64, Text, Text, Text, Text, Text, Text, Text)])
+        `shouldBe` [(1, 42, "qq", "qq", "legacy", "42", "7", "101", "confirmed")]
 
       _ <-
         execute
@@ -87,6 +89,13 @@ spec pool = describe "049 canonical platform foundation migration" $ do
           \ GROUP BY endpoint_id, native_event_id HAVING count(*) > 1) d"
           ()
       (duplicates :: [Only Int64]) `shouldBe` [Only 0]
+
+      hardened <-
+        query
+          conn
+          "SELECT source_platform, message_origin FROM messages WHERE message_id = 102"
+          ()
+      (hardened :: [(Text, Text)]) `shouldBe` [("qq", "legacy")]
 
       _ <- execute_ conn "DROP SCHEMA canonical_platform_migration_test CASCADE"
       pure ()

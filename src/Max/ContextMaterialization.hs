@@ -29,9 +29,10 @@ import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (In (..), Only (..))
 import Effectful
-import Effectful.PostgreSQL (WithConnection, execute, query, withTransaction)
+import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.DB.History (MessageCursor (..))
+import Max.DB.Transaction (withTransaction)
 import Max.EpisodeStore (CompartmentId (..))
 
 data MaterializedCompartment = MaterializedCompartment

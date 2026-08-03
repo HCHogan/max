@@ -39,7 +39,7 @@ spec = describe "Historian token and identity policy" $ do
   it "renders explicit principal, message, time, and reply provenance" $ do
     renderHistorianSourceLine
       timezone
-      (HistoryItem 101 42 1000 (Just "Alice") Nothing "hello\nworld" testTime (Just 99))
+      (HistoryItem 101 42 1000 "qq" (Just "Alice") Nothing "hello\nworld" testTime (Just 99))
       `shouldBe` "[2026-08-02 20:00 user_id=42 name=Alice message_id=101 reply_to=99]: hello ⏎ world"
 
   it "repairs one malformed structured response with the same production policy" $ do
@@ -67,7 +67,7 @@ ledger :: Int64 -> Int64 -> Bool -> Text -> LedgerItem
 ledger seqNo message eligible body =
   LedgerItem
     (MessageCursor seqNo)
-    (HistoryItem message 42 1000 (Just "Alice") Nothing body testTime Nothing)
+    (HistoryItem message 42 1000 "qq" (Just "Alice") Nothing body testTime Nothing)
     eligible
 
 timezone :: TimeZone

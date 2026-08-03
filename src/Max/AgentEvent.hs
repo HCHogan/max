@@ -34,9 +34,10 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Message (MessageKind (KindDebug))
 import Max.Effects.Blob (Blob)
-import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded)
+import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded)
 import Max.ReplySend (ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
 import OneBot.Segment (Segment (SegText))
+import OneBot.Types (MessageId)
 
 -- | Debug facts emitted by the loop without deciding whether debug output is
 -- enabled or how the values should be formatted for chat.
@@ -57,6 +58,10 @@ type AgentEventSink m = forall a. AgentEvent a -> m a
 -- | Everything fixed while one dispatch's events are interpreted.
 data AgentOutputContext = AgentOutputContext
   { aocReplyTarget :: !ReplyTarget,
+    -- | Durable compatibility id of the inbound event that started this
+    -- dispatch. Debug UI is operational output, so it must return only to
+    -- that event's endpoint instead of being mirrored as conversation text.
+    aocSourceMessageId :: !MessageId,
     aocDebug :: !Bool,
     -- | Shared only by final-stream events and the final remainder.  Progress
     -- narration is a separate utterance and receives its own bounded budget.
@@ -95,6 +100,7 @@ handleAgentEvent ctx = \case
               orSelfId = ctx.aocReplyTarget.rtSelfId,
               orRenderedText = Nothing,
               orSegments = [SegText body],
+              orDeliveryScope = DeliverSourceEndpoint ctx.aocSourceMessageId,
               orTimeoutMs = 15000
             }
 

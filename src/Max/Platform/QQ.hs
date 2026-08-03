@@ -4,6 +4,7 @@
 module Max.Platform.QQ
   ( ensureQQEndpoint,
     qqEnvelope,
+    qqContentParts,
     qqCapabilities,
   )
 where
@@ -64,7 +65,7 @@ qqEnvelope endpoint received raw message =
       occurredAt = fromMaybe received (eventTime raw),
       receivedAt = received,
       eventKind = EventMessage,
-      content = concatMap contentPart message.message,
+      content = concatMap qqContentParts message.message,
       relations = concatMap relation message.message,
       sourceCursor = Nothing,
       rawPayload = Just raw
@@ -83,8 +84,8 @@ qqCapabilities =
       maxTextBytes = Just 12000
     }
 
-contentPart :: Segment -> [ContentPart]
-contentPart = \case
+qqContentParts :: Segment -> [ContentPart]
+qqContentParts = \case
   SegText body -> [ContentText body | not (T.null body)]
   SegAt (UserId user) -> [ContentMention (NativeUserId (decimal user)) Nothing]
   SegReply _ -> []

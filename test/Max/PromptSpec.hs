@@ -58,6 +58,7 @@ historyAt h mid uid nick body =
     { messageId = mid,
       userId = uid,
       selfId = botId,
+      sourcePlatform = "qq",
       senderNickname = nick,
       senderCard = Nothing,
       renderedText = body,
@@ -252,6 +253,12 @@ spec = do
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[09:00 SkyRain #8001]" `T.isInfixOf`)
 
+    it "retains the native platform label for mirrored speakers" $ do
+      let item = (historyAt 9 8001 otherMemberId (Just "Alice") "from Matrix") {sourcePlatform = "matrix"}
+          inp = baseInputs {transcript = [item]}
+          (_, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` ("[09:00 Matrix · Alice #8001]" `T.isInfixOf`)
+
   describe "renderContext private chat" $ do
     it "labels the environment as 私聊 instead of 群号" $ do
       let inp = baseInputs {triggerMessage = privateTriggerMsg [SegText "hi"]}
@@ -263,8 +270,8 @@ spec = do
       let (sysG, _) = splitMessages (renderContext baseInputs)
           inpP = baseInputs {triggerMessage = privateTriggerMsg [SegText "hi"]}
           (sysP, _) = splitMessages (renderContext inpP)
-      sysG `shouldSatisfy` ("对话场景：QQ 群聊" `T.isInfixOf`)
-      sysP `shouldSatisfy` ("对话场景：QQ 一对一私聊" `T.isInfixOf`)
+      sysG `shouldSatisfy` ("对话场景：多人群聊" `T.isInfixOf`)
+      sysP `shouldSatisfy` ("对话场景：一对一私聊" `T.isInfixOf`)
       sysP `shouldSatisfy` (not . ("群成员" `T.isInfixOf`))
 
   describe "renderContext quoted forward" $ do

@@ -46,6 +46,8 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.HandlerSpec` — durable-ingest gating, `[silence]` parsing, message
   recording classification, and ReplySend marker-cleanup regressions
 - `Max.IntentSpec` — proactive verdict parsing and the heuristic gate
+- `Max.MatrixSpec` / `Max.IMessageSpec` — native event/relation normalization,
+  secret-redacted configuration, and iMessage send-status classification
 - `Max.MCP.ClientSpec` — Streamable-HTTP body decoding (JSON + SSE)
 - `Max.HistorianSpec` / DB counterpart — token-sized episode prefixes, explicit
   identity provenance, structured-call publication, and raw-output retention
@@ -59,6 +61,11 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.MaintenanceLeaseSpec` (DB) — same-domain serialization, independent
   maintenance domains, expiry takeover, and fencing against stale owners
 - `Max.PlatformSpec` — platform-id mapping
+- `Max.Platform.DeliverySpec` — canonical inline/blob/base64 media resolution
+  and bounded delivery projection
+- `Max.PlatformStoreSpec` (DB) — native-event dedupe, cursor CAS, dispatch and
+  delivery leases, mirror fan-out, outcome-unknown parking, echo/status
+  reconciliation, and endpoint diagnostics
 - `Max.PromptSpec` — `renderContext`: the flat transcript and the
   `history_as_turns` shape (including that neither can produce two consecutive
   same-role messages), section ordering, roster/名片 identity, 私聊 scene,
@@ -100,6 +107,11 @@ cabal test max-test-db
 Without `MAX_TEST_DB_URL` the suite exits 0 for local workflows that do not have
 Postgres available. CI always supplies the variable and requires the suite.
 Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
+`Max.DB.TransactionSpec` additionally proves that every statement in the
+application transaction runs on one physical pooled connection by throwing
+after an insert and checking that rollback removed it. This guards row locks,
+advisory transaction locks, and atomic cursor/publication boundaries against
+connection-pool drift.
 The prompt integration cases also publish real active compartments, assert
 gap annotations for partial backfill, and exercise the all-conversation
 compartment-to-raw-tail reader end to end. EpisodeStore cases additionally
@@ -174,6 +186,32 @@ copy of the prompt body, and are capped at 200 per conversation. Rebuild is
 staged and CAS-published; repeated clicks cannot enqueue two open replacements
 for the same compartment. Reindex is a recoverable derived-data operation and
 returns `409` while the embedding worker owns its maintenance lease.
+
+### Platform release gate
+
+The canonical platform migration and adapters are covered by the ordinary
+pure/DB suites. The Mac-side bridge has its own Go gate:
+
+```sh
+cd bridge/imsg && go test ./...
+```
+
+For a release, recreate the test database before the DB suite so migration
+`001` through the current tip is exercised instead of only testing an already
+upgraded schema:
+
+```sh
+dropdb --if-exists -h 127.0.0.1 -p 5433 max_test
+createdb -h 127.0.0.1 -p 5433 max_test
+MAX_TEST_DB_URL=postgresql://127.0.0.1:5433/max_test \
+  cabal test max-test-db --test-show-details=direct
+```
+
+With the admin server enabled, `GET /api/platforms/status` exposes cursor
+revision/fingerprint, last inbound time, endpoint capabilities, pending depth,
+and ambiguous/suppressed delivery counts. Deployment, Matrix room setup,
+iMessage Full Disk Access/Automation, incident SQL, and rollback are documented
+in [platforms.md](platforms.md).
 
 ## Config: finding out where a value came from
 

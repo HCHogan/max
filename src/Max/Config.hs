@@ -69,8 +69,10 @@ import Max.Admin (AdminConfig (..))
 import Max.CliProxy (CliProxyConfig (..))
 import Max.DB.Connection (DbConfig (..))
 import Max.Embedding (EmbeddingConfig (..))
+import Max.IMessage (IMessageConfig (..))
 import Max.Intent (IntentConfig (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
+import Max.Matrix (MatrixConfig (..))
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
 import Max.Tools.Search (SearchConfig (..))
@@ -141,6 +143,10 @@ data AppConfig = AppConfig
     -- capability everywhere, plus the exclusive ones (!model, !grant…).
     -- Empty means no owner-tier commands work at all (safe default).
     owners :: ![Int64],
+    -- | One Matrix room, optionally mirrored onto an explicit QQ group.
+    matrix :: !(Maybe MatrixConfig),
+    -- | Standalone iMessage group through an authenticated Tailscale bridge.
+    imessage :: !(Maybe IMessageConfig),
     -- | WeChat backend over a WeChatPadPro relay; 'Nothing' = QQ
     -- only.  Demo scope: whitelisted chatrooms, text in/out.
     wechatpad :: !(Maybe WechatpadConfig),
@@ -173,7 +179,7 @@ data AppConfig = AppConfig
 
 -- | Default persona used when neither config nor session supplies one.
 -- Deliberately scene-neutral: whether this is a group chat or a
--- private chat is injected by "Max.Prompt" as a 对话场景 block, so
+-- private chat is injected by "Max.Prompt" as a platform-neutral 对话场景 block, so
 -- personas (including user-configured ones) don't have to care.
 defaultPersona :: Text
 defaultPersona =
@@ -370,6 +376,8 @@ appConfigParser usedRef =
           metavar "QQ[,QQ..]",
           value []
         ]
+    matrix <- subConfig "matrix" matrixParser
+    imessage <- subConfig "imessage" iMessageParser
     wechatpad <- subConfig "wechatpad" wechatpadParser
     intent <- subConfig "intent" intentParser
     admin <- subConfig "admin" adminParser
@@ -457,8 +465,8 @@ resolveConfigFile usedRef =
 
     pick (Just p, _) = do
       let fp = toFilePath p
-      exists <- doesFileExist fp
-      if exists
+      fileExists <- doesFileExist fp
+      if fileExists
         then Right (Just p) <$ note fp
         else
           pure . Left $
@@ -470,8 +478,8 @@ resolveConfigFile usedRef =
 
     firstExisting [] = Nothing <$ writeIORef usedRef Nothing
     firstExisting (p : ps) = do
-      exists <- doesFileExist (toFilePath p)
-      if exists then Just p <$ note (toFilePath p) else firstExisting ps
+      fileExists <- doesFileExist (toFilePath p)
+      if fileExists then Just p <$ note (toFilePath p) else firstExisting ps
 
     note fp = writeIORef usedRef (Just fp)
 
@@ -640,6 +648,161 @@ cliproxyParser = do
 
 --------------------------------------------------------------------------------
 -- Proactive-trigger intent classification.
+
+-- | Presence of @homeserver@ enables the single-room Matrix adapter.  The
+-- remaining identity/credential fields are then mandatory; partial config is
+-- a startup error rather than a silently disabled mirror.
+matrixParser :: Parser (Maybe MatrixConfig)
+matrixParser = do
+  mHomeserver <-
+    optional $
+      setting
+        [ help "Matrix homeserver base URL (presence enables Matrix)",
+          reader str,
+          option,
+          long "matrix-homeserver",
+          env "MAX_MATRIX_HOMESERVER",
+          conf "homeserver",
+          metavar "URL"
+        ]
+  accessToken <-
+    setting
+      [ help "Matrix access token",
+        reader str,
+        option,
+        long "matrix-access-token",
+        env "MAX_MATRIX_ACCESS_TOKEN",
+        conf "access_token",
+        metavar "TOKEN",
+        value ""
+      ]
+  userId <-
+    setting
+      [ help "Matrix user id for Max, e.g. @max:example.org",
+        reader str,
+        option,
+        long "matrix-user-id",
+        env "MAX_MATRIX_USER_ID",
+        conf "user_id",
+        metavar "MXID",
+        value ""
+      ]
+  roomId <-
+    setting
+      [ help "Allowlisted Matrix room id",
+        reader str,
+        option,
+        long "matrix-room-id",
+        env "MAX_MATRIX_ROOM_ID",
+        conf "room_id",
+        metavar "ROOM",
+        value ""
+      ]
+  mirrorQQGroup <-
+    optional $
+      setting
+        [ help "Explicit QQ group to mirror; omit for standalone Matrix",
+          reader auto,
+          option,
+          long "matrix-mirror-qq-group",
+          env "MAX_MATRIX_MIRROR_QQ_GROUP",
+          conf "mirror_qq_group",
+          metavar "QQ_GROUP"
+        ]
+  syncTimeoutMs <-
+    setting
+      [ help "Matrix /sync long-poll timeout in milliseconds",
+        reader auto,
+        option,
+        long "matrix-sync-timeout-ms",
+        env "MAX_MATRIX_SYNC_TIMEOUT_MS",
+        conf "sync_timeout_ms",
+        metavar "MS",
+        value 30000
+      ]
+  pure $ case mHomeserver of
+    Nothing -> Nothing
+    Just homeserver
+      | any (T.null . T.strip) [homeserver, accessToken, userId, roomId] ->
+          error "matrix: homeserver, access_token, user_id and room_id must all be non-empty"
+      | syncTimeoutMs < 1000 -> error "matrix: sync_timeout_ms must be at least 1000"
+      | otherwise -> Just MatrixConfig {..}
+
+iMessageParser :: Parser (Maybe IMessageConfig)
+iMessageParser = do
+  mBridgeUrl <-
+    optional $
+      setting
+        [ help "iMessage bridge URL on Tailscale (presence enables iMessage)",
+          reader str,
+          option,
+          long "imessage-bridge-url",
+          env "MAX_IMESSAGE_BRIDGE_URL",
+          conf "bridge_url",
+          metavar "URL"
+        ]
+  bridgeToken <-
+    setting
+      [ help "Bearer token shared with imsg-bridge",
+        reader str,
+        option,
+        long "imessage-bridge-token",
+        env "MAX_IMESSAGE_BRIDGE_TOKEN",
+        conf "bridge_token",
+        metavar "TOKEN",
+        value ""
+      ]
+  accountKey <-
+    setting
+      [ help "Stable name for the Mac/Messages account",
+        reader str,
+        option,
+        long "imessage-account-key",
+        env "MAX_IMESSAGE_ACCOUNT_KEY",
+        conf "account_key",
+        metavar "NAME",
+        value ""
+      ]
+  chatGuid <-
+    setting
+      [ help "Allowlisted portable iMessage chat GUID",
+        reader str,
+        option,
+        long "imessage-chat-guid",
+        env "MAX_IMESSAGE_CHAT_GUID",
+        conf "chat_guid",
+        metavar "GUID",
+        value ""
+      ]
+  botName <-
+    setting
+      [ help "Name used for @Max trigger detection in iMessage",
+        reader str,
+        option,
+        long "imessage-bot-name",
+        env "MAX_IMESSAGE_BOT_NAME",
+        conf "bot_name",
+        metavar "NAME",
+        value "Max"
+      ]
+  pollIntervalMs <-
+    setting
+      [ help "Backoff between iMessage bridge reconnect attempts",
+        reader auto,
+        option,
+        long "imessage-poll-interval-ms",
+        env "MAX_IMESSAGE_POLL_INTERVAL_MS",
+        conf "poll_interval_ms",
+        metavar "MS",
+        value 1000
+      ]
+  pure $ case mBridgeUrl of
+    Nothing -> Nothing
+    Just bridgeUrl
+      | any (T.null . T.strip) [bridgeUrl, bridgeToken, accountKey, chatGuid, botName] ->
+          error "imessage: bridge_url, bridge_token, account_key, chat_guid and bot_name must all be non-empty"
+      | pollIntervalMs < 100 -> error "imessage: poll_interval_ms must be at least 100"
+      | otherwise -> Just IMessageConfig {..}
 
 -- | Enabled iff @intent.profile@ names an LLM profile; the numeric
 -- knobs have defaults so a one-line config turns the feature on.

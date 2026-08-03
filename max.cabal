@@ -1,7 +1,7 @@
 cabal-version:      3.0
 name:               max
 version:            0.13.0
-synopsis:           QQ group chat agent over OneBot 11 (NapCatQQ)
+synopsis:           Multi-platform group agent with durable context and memory
 license:            MIT
 license-file:       LICENSE
 author:             Hank Hogan
@@ -22,6 +22,10 @@ extra-source-files:
     LICENSE
     README.md
     browser-image/*
+    bridge/imsg/*.go
+    bridge/imsg/go.mod
+    bridge/imsg/README.md
+    bridge/imsg/*.example
     cabal.project
     context-eval/README.md
     context-eval/fixtures/*.jsonl
@@ -29,6 +33,8 @@ extra-source-files:
     docs/architecture.md
     docs/adr/*.md
     docs/features.md
+    docs/development.md
+    docs/platforms.md
     docs/prompt-flow.md
     docker-compose.yml
     eval/README.md
@@ -116,6 +122,7 @@ library
         Max.DB.Reminder
         Max.DB.Session
         Max.DB.Stickers
+        Max.DB.Transaction
         Max.DB.Usage
         Max.Effects.Agent
         Max.Effects.Blob
@@ -142,16 +149,19 @@ library
         Max.Http.Stream
         Max.ImagePrep
         Max.Images
+        Max.IMessage
         Max.Intent
         Max.LLM.Stream
         Max.Log
         Max.LogBuffer
         Max.MediaCaption
         Max.MaintenanceLease
+        Max.Matrix
         Max.MemoryExtract
         Max.MemoryStore
         Max.ModelCatalog
         Max.Platform
+        Max.Platform.Delivery
         Max.Platform.Types
         Max.Platform.Store
         Max.Platform.QQ
@@ -328,6 +338,7 @@ test-suite max-test
         Max.HandlerSpec
         Max.HistorianSpec
         Max.HttpRuntimeSpec
+        Max.IMessageSpec
         Max.IntentSpec
         Max.LLM.StreamSpec
         Max.LogSpec
@@ -355,8 +366,10 @@ test-suite max-test
         Max.EpisodeStoreSpec
         Max.MCP.ClientSpec
         Max.PlatformSpec
+        Max.Platform.DeliverySpec
         Max.PromptFlowSpec
         Max.MemoryExtractSpec
+        Max.MatrixSpec
         Max.ModelCatalogSpec
         Max.PromptSpec
         Max.RecallSpec
@@ -406,6 +419,7 @@ test-suite max-test-db
         Max.DB.FilesSpec
         Max.DB.FetchQueueSpec
         Max.DB.SessionSpec
+        Max.DB.TransactionSpec
         Max.ContextMaterializationMigrationSpec
         Max.UnboundedContextMigrationSpec
         Max.ContextMaterializationSpec

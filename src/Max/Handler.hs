@@ -1,5 +1,6 @@
 module Max.Handler
   ( handleEvents,
+    dispatchPendingWorker,
     dispatchProactive,
     recordAs,
     IngestOutcome (..),
@@ -10,9 +11,10 @@ module Max.Handler
 where
 
 import Control.Applicative ((<|>))
+import Control.Concurrent qualified as ConcurrentIO
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
-import Control.Monad (unless, void, when)
-import Data.Aeson (Value, toJSON)
+import Control.Monad (forM_, unless, void, when)
+import Data.Aeson (Result (..), Value, fromJSON, toJSON)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
 import Data.List (find, partition, unsnoc)
@@ -21,7 +23,7 @@ import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Time (getCurrentTime)
+import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
 import Effectful.Exception (SomeException, catch, finally)
@@ -41,7 +43,7 @@ import Max.DB.Permissions (lookupGrant)
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (LLM)
-import Max.Effects.Outbound (Outbound, OutboundRequest (..), sendRecorded, wasDelivered)
+import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded, wasDelivered)
 import Max.Effects.PlatformApi (PlatformApi, sendAction)
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (armEpisode, bumpEpisode)
@@ -53,7 +55,21 @@ import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
 import Max.Platform.QQ (ensureQQEndpoint, qqEnvelope)
-import Max.Platform.Store (IngestOptions (..), IngestResult (..), defaultIngestOptions, ingestEnvelope)
+import Max.Platform.Store
+  ( DispatchClaim (..),
+    DispatchCompletion (..),
+    IngestOptions (..),
+    IngestResult (..),
+    NewIngest (..),
+    claimDispatch,
+    claimDispatches,
+    completeDispatch,
+    defaultIngestOptions,
+    ingestEnvelope,
+    isBotAuthoredCompatibilityMessage,
+    platformForLegacyMessage,
+  )
+import Max.Platform.Types (CanonicalMessageId)
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadMode, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -83,13 +99,13 @@ import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 data IngestOutcome
-  = IngestDurable
+  = IngestDurable !(Maybe CanonicalMessageId)
   | IngestDuplicate
   | IngestFailed !T.Text
   deriving stock (Show, Eq)
 
 ingestAllowsDownstream :: IngestOutcome -> Bool
-ingestAllowsDownstream IngestDurable = True
+ingestAllowsDownstream IngestDurable {} = True
 ingestAllowsDownstream IngestDuplicate = False
 ingestAllowsDownstream IngestFailed {} = False
 
@@ -243,7 +259,11 @@ handleEvents q fetchSig mIntent = loop
           for_ env.beEpisodeScheduler $ \scheduler -> liftIO (bumpEpisode scheduler gm.groupId)
           persisted <- persist source raw gm
           case persisted of
-            IngestDurable -> do
+            IngestDurable (Just canonical) ->
+              processCanonicalDispatch "event-handler" fetchSig mIntent canonical
+            IngestDurable Nothing -> do
+              -- Transitional WeChat path.  QQ, Matrix and iMessage all use
+              -- the durable canonical dispatch queue.
               enqueueImages fetchSig gm
               enqueueForwards fetchSig gm
               enqueueFiles fetchSig gm
@@ -300,16 +320,166 @@ persist source raw gm =
                     compatibilityRawMessage = gm.rawMessage
                   }
           ingestEnvelope options (qqEnvelope endpoint received raw gm) >>= \case
-            Ingested _ -> pure IngestDurable
+            Ingested fresh -> pure (IngestDurable (Just fresh.canonicalMessageId))
             AlreadyIngested _ -> pure IngestDuplicate
+            DeliveryEcho _ -> pure IngestDuplicate
       | otherwise = do
           uncurry insertGroupMessage (recordAs gm) gm
-          pure IngestDurable
+          pure (IngestDurable Nothing)
 
     renderMessageKind = \case
       KindChat -> "chat"
       KindCommand -> "command"
       KindDebug -> "debug"
+
+-- | Recover the commit-to-runtime crash window.  The source adapter may call
+-- 'processCanonicalDispatch' immediately, but this worker is the authority:
+-- every pending row remains discoverable after process death and one lease
+-- winner evaluates its trigger eligibility.
+dispatchPendingWorker ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  T.Text ->
+  FetchSignal ->
+  Maybe IntentState ->
+  Eff es ()
+dispatchPendingWorker workerId fetchSig mIntent = localDomain "dispatch" loop
+  where
+    loop = do
+      claims <- claimDispatches workerId dispatchBatchSize dispatchLeaseSeconds
+      if null claims
+        then liftIO (ConcurrentIO.threadDelay dispatchPollMicros)
+        else forM_ claims (runDispatchClaim workerId fetchSig mIntent)
+      loop
+
+processCanonicalDispatch ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  T.Text ->
+  FetchSignal ->
+  Maybe IntentState ->
+  CanonicalMessageId ->
+  Eff es ()
+processCanonicalDispatch workerId fetchSig mIntent canonical =
+  claimDispatch workerId canonical dispatchLeaseSeconds >>= mapM_ (runDispatchClaim workerId fetchSig mIntent)
+
+runDispatchClaim ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  T.Text ->
+  FetchSignal ->
+  Maybe IntentState ->
+  DispatchClaim ->
+  Eff es ()
+runDispatchClaim workerId fetchSig mIntent claim =
+  case dispatchMessage claim of
+    Left err -> failClaim err
+    Right gm ->
+      trySync
+        ( do
+            enqueueImages fetchSig gm
+            enqueueForwards fetchSig gm
+            enqueueFiles fetchSig gm
+            onGroupMessage mIntent gm
+        )
+        >>= \case
+          Right () -> void (completeDispatch workerId claim.canonicalMessageId DispatchCompleted)
+          Left e -> failClaim (T.pack (show (e :: SomeException)))
+  where
+    failClaim err = do
+      now <- liftIO getCurrentTime
+      let retryAt = addUTCTime (dispatchRetrySeconds claim.attemptCount) now
+      logAttention "canonical dispatch failed" $
+        object
+          [ "canonical_message_id" .= claim.canonicalMessageId,
+            "attempt" .= claim.attemptCount,
+            "error" .= err
+          ]
+      void (completeDispatch workerId claim.canonicalMessageId (DispatchRetry err retryAt))
+
+dispatchMessage :: DispatchClaim -> Either T.Text GroupMessage
+dispatchMessage claim = case fromJSON claim.compatibilitySegments of
+  Error err -> Left ("invalid compatibility segments: " <> T.pack err)
+  Success segments ->
+    let normalizedSegments = case claim.replyToCompatibilityMessageId of
+          Nothing -> segments
+          Just target -> SegReply (MessageId target) : filter (\case SegReply _ -> False; _ -> True) segments
+        (nickname, card)
+          | claim.sourcePlatform == "qq" = (claim.senderNickname, claim.senderCard)
+          | otherwise =
+              ( Just
+                  ( sourcePlatformLabel claim.sourcePlatform
+                      <> " · "
+                      <> fromMaybe
+                        (T.pack (show claim.compatibilityUserId))
+                        (claim.senderCard <|> claim.senderNickname)
+                  ),
+                Nothing
+              )
+     in
+    Right
+      GroupMessage
+        { selfId = UserId claim.compatibilitySelfId,
+          groupId = GroupId claim.compatibilityConversationId,
+          userId = UserId claim.compatibilityUserId,
+          messageId = MessageId claim.compatibilityMessageId,
+          message = normalizedSegments,
+          rawMessage = claim.compatibilityRawMessage,
+          sender =
+            Sender
+              (UserId claim.compatibilityUserId)
+              nickname
+              card
+        }
+
+sourcePlatformLabel :: T.Text -> T.Text
+sourcePlatformLabel = \case
+  "matrix" -> "Matrix"
+  "imessage" -> "iMessage"
+  "wechatpad" -> "WeChat"
+  other -> other
+
+dispatchBatchSize :: Int
+dispatchBatchSize = 32
+
+dispatchLeaseSeconds :: NominalDiffTime
+dispatchLeaseSeconds = 120
+
+dispatchPollMicros :: Int
+dispatchPollMicros = 500000
+
+dispatchRetrySeconds :: Int -> NominalDiffTime
+dispatchRetrySeconds attempts = fromIntegral (min (300 :: Int) (2 ^ min 8 (max 0 attempts)))
 
 onGroupMessage ::
   ( Blob :> es,
@@ -343,9 +513,11 @@ onGroupMessage mIntent gm = do
     TriggerNone
       | Just rid <- listToMaybe [m | SegReply (MessageId m) <- gm.message] -> do
           mQuoted <- fetchMessageInScope (conversationScopeFor gm.groupId) rid
+          let GroupId groupRaw = gm.groupId
+          canonicalBot <- isBotAuthoredCompatibilityMessage groupRaw rid
           let UserId selfRaw = gm.selfId
           pure $ case mQuoted of
-            Just quoted | quoted.userId == selfRaw -> classify True gm
+            Just quoted | quoted.userId == selfRaw || canonicalBot -> classify True gm
             _ -> TriggerNone
     t -> pure t
   -- Any addressed trigger stamps the gate's followup hot window.  The
@@ -464,6 +636,8 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
     Right (Just cmd) -> do
       env :: BotEnv <- ask
+      let MessageId sourceMessageId = gm.messageId
+      sourcePlatform <- platformForLegacyMessage sourceMessageId
       targetGid <- resolveAdminTarget env gm cmd
       effTier <- effectiveTier env targetGid gm
       allowed <- checkCmdPermission targetGid gm.userId effTier cmd
@@ -472,11 +646,16 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
           let UserId uidRaw = gm.userId
           logInfo "command denied" $
             object ["cmd" .= T.pack (show cmd), "user_id" .= uidRaw]
-          -- Same NO face as [silence:NO]: visibly refused, zero noise.
-          sendAction (SetMsgEmojiLike gm.messageId deniedFaceId True)
-        else dispatchAllowed env targetGid effTier cmd
+          if isForeignSource sourcePlatform
+            then replyText gm "没有权限"
+            else
+              -- Same NO face as [silence:NO]: visibly refused, zero noise.
+              sendAction (SetMsgEmojiLike gm.messageId deniedFaceId True)
+        else dispatchAllowed env targetGid effTier sourcePlatform cmd
   where
-    dispatchAllowed env targetGid effTier cmd = do
+    isForeignSource = maybe False (/= "qq")
+
+    dispatchAllowed env targetGid effTier sourcePlatform cmd = do
       t <- loadSession env.beSessions env.beDefaultModel targetGid
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
@@ -488,14 +667,15 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
         -- DM can't be delivered (not friends; QQ throttles temp
         -- sessions), fall back to the group with a befriend hint.
         ReplyText reply
-          | isPrivateChat gm.groupId -> replyText gm reply
+          | isPrivateChat gm.groupId || isForeignSource sourcePlatform -> replyText gm reply
           | otherwise -> deliverPrivate reply
         -- Deliberately group-audience output (e.g. !version).
         ReplyPublicText reply -> replyText gm reply
         -- Pure acknowledgement: an OK reaction on the command message
         -- beats another line of chat noise.
-        ReplyAck ->
-          sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
+        ReplyAck
+          | isForeignSource sourcePlatform -> replyText gm "OK"
+          | otherwise -> sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
         SideQuestion askBody -> do
           logInfo "btw: side question" $
             object ["len" .= T.length askBody]
@@ -587,6 +767,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               orSelfId = gm.selfId,
               orRenderedText = Nothing,
               orSegments = segs,
+              orDeliveryScope = DeliverConversation,
               orTimeoutMs = 15000
             }
       if wasDelivered outcome
@@ -609,7 +790,7 @@ sendPong ::
 sendPong gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
-  sendAndRecord KindChat gm.groupId gm.selfId (replySegs gm " pong")
+  sendAndRecord KindChat DeliverConversation gm.groupId gm.selfId (replySegs gm " pong")
   logInfo "replied pong" $ object ["to" .= fromRaw, "group_id" .= gidRaw]
 
 -- | Reply segments for a trigger: quote it, @-the sender (groups
@@ -952,7 +1133,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- budget TVar is what keeps the two halves of one split reply
       -- bounded together (see "Max.ReplySend").
       streamBudget <- liftIO (newTVarIO freshBudget)
-      let output = AgentOutputContext target debugEff streamBudget
+      let output = AgentOutputContext target gm.messageId debugEff streamBudget
       result <- agentTurn turn agentCtx s.model ctx (handleAgentEvent output)
       case result.reply of
         -- The loop produced no model-authored reply — upstream API
@@ -1087,11 +1268,12 @@ sendTarget gm mentionable rosterNames stickersOn =
 sendAndRecord ::
   (Outbound :> es) =>
   MessageKind ->
+  OutboundDeliveryScope ->
   GroupId ->
   UserId -> -- bot self id
   [Segment] ->
   Eff es ()
-sendAndRecord kind gid selfId segs =
+sendAndRecord kind deliveryScope gid selfId segs =
   void $
     sendRecorded
       OutboundRequest
@@ -1100,6 +1282,7 @@ sendAndRecord kind gid selfId segs =
           orSelfId = selfId,
           orRenderedText = Nothing,
           orSegments = segs,
+          orDeliveryScope = deliveryScope,
           orTimeoutMs = 15000
         }
 
@@ -1113,7 +1296,7 @@ replyText ::
   T.Text ->
   Eff es ()
 replyText gm body =
-  sendAndRecord KindCommand gm.groupId gm.selfId [SegText body]
+  sendAndRecord KindCommand (DeliverSourceEndpoint gm.messageId) gm.groupId gm.selfId [SegText body]
 
 -- | One roster fetch serving two prompt-side consumers: the member id
 -- set for outbound @-mention validation ('Nothing' when there is no

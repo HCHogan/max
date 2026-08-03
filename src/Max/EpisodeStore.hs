@@ -74,7 +74,7 @@ import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful
-import Effectful.PostgreSQL (WithConnection, execute, query, withTransaction)
+import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope
   ( ConversationScope,
     RecallPolicy,
@@ -84,6 +84,7 @@ import Max.ConversationScope
   )
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
+import Max.DB.Transaction (withTransaction)
 import Max.MemoryStore
   ( ExpectedVersion (..),
     MemoryActor (..),
@@ -870,7 +871,7 @@ loadCaptureSource ::
 loadCaptureSource run =
   query
     "SELECT ingest_seq, \
-    \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
+    \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
     \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
     \ FROM messages \
     \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? \
@@ -1405,7 +1406,7 @@ expandEpisode policy handle requestedAfter requestedSize = do
       rows <-
         query
           "SELECT ingest_seq, \
-          \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
+          \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
           \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
           \ FROM messages \
           \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND ingest_seq > ? \

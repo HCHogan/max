@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hchogan.max-imsg-bridge</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/.local/bin/imsg-bridge</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>IMSG_BRIDGE_LISTEN</key>
+    <string>100.64.0.25:8787</string>
+    <key>IMSG_BRIDGE_TOKEN</key>
+    <string>REPLACE_WITH_LONG_RANDOM_TOKEN</string>
+    <key>IMSG_ALLOWED_CHAT_GUID</key>
+    <string>iMessage;+;chat000000000000000000</string>
+    <key>IMSG_PATH</key>
+    <string>/opt/homebrew/bin/imsg</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/YOU/Library/Logs/max-imsg-bridge.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOU/Library/Logs/max-imsg-bridge.log</string>
+</dict>
+</plist>

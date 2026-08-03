@@ -21,7 +21,7 @@ where
 
 import Control.Applicative ((<|>))
 import Data.Int (Int64)
-import Data.Maybe (listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (Day, UTCTime)
@@ -41,6 +41,9 @@ data HistoryItem = HistoryItem
   { messageId :: !Int64,
     userId :: !Int64,
     selfId :: !Int64,
+    -- | Transport provenance retained independently from the compatibility
+    -- bigint ids.  Foreign sources are labelled in every prompt/recall view.
+    sourcePlatform :: !Text,
     senderNickname :: !(Maybe Text),
     -- | 群名片 — the sender's per-group display name.  This is what
     -- other members actually see and call them by, so rendering
@@ -59,6 +62,7 @@ instance FromRow HistoryItem where
   fromRow =
     HistoryItem
       <$> field
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -95,7 +99,18 @@ data HistoryPage = HistoryPage
 -- first, then nickname; 'Nothing' when both are absent/blank (QQ
 -- sends @\"\"@ for an unset card, so blanks count as absent).
 bestName :: HistoryItem -> Maybe Text
-bestName h = nonBlank h.senderCard <|> nonBlank h.senderNickname
+bestName h
+  | h.sourcePlatform == "qq" = nativeName
+  | otherwise = Just (platformLabel h.sourcePlatform <> " · " <> fromMaybe (T.pack (show h.userId)) nativeName)
+  where
+    nativeName = nonBlank h.senderCard <|> nonBlank h.senderNickname
+
+platformLabel :: Text -> Text
+platformLabel = \case
+  "matrix" -> "Matrix"
+  "imessage" -> "iMessage"
+  "wechatpad" -> "WeChat"
+  other -> other
 
 nonBlank :: Maybe Text -> Maybe Text
 nonBlank (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
@@ -116,7 +131,7 @@ fetchRecentInGroup gid excludeId since n = do
   rows <- case since of
     Nothing ->
       query
-        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
+        "SELECT message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND message_id <> ? \
@@ -128,7 +143,7 @@ fetchRecentInGroup gid excludeId since n = do
         (gid, excludeId, n)
     Just t ->
       query
-        "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
+        "SELECT message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND message_id <> ? \
@@ -174,7 +189,7 @@ fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
   case since of
     Nothing ->
       query
-        "SELECT ingest_seq, message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
+        "SELECT ingest_seq, message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
         \  FROM messages \
         \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
         \    AND forwarded_in_message_id IS NULL \
@@ -183,7 +198,7 @@ fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
         (conversationStorageId scope, after, excludeId)
     Just cleared ->
       query
-        "SELECT ingest_seq, message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
+        "SELECT ingest_seq, message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
         \  FROM messages \
         \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
         \    AND forwarded_in_message_id IS NULL \
@@ -211,7 +226,7 @@ fetchNewestPromptPageBefore scope (MessageCursor after) before excludeId since r
       beforeSeq = (.ingestSeq) <$> before
   rows <-
     query
-      "SELECT ingest_seq, message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
+      "SELECT ingest_seq, message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
       \  FROM messages \
       \  WHERE group_id = ? AND ingest_seq > ? \
       \    AND (?::bigint IS NULL OR ingest_seq < ?) \
@@ -252,7 +267,7 @@ fetchOldestPageAfter scope (MessageCursor after) requestedSize = do
   rows <-
     query
       "SELECT ingest_seq, \
-      \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
+      \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
       \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
       \  FROM messages \
       \  WHERE group_id = ? AND ingest_seq > ? \
@@ -281,7 +296,7 @@ fetchOldestPageThrough scope (MessageCursor after) (MessageCursor through) reque
   rows <-
     query
       "SELECT ingest_seq, \
-      \       message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
+      \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
       \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
       \  FROM messages \
       \  WHERE group_id = ? AND ingest_seq > ? AND ingest_seq <= ? \
@@ -326,7 +341,7 @@ fetchMessageInScope ::
 fetchMessageInScope scope mid = do
   rows <-
     query
-      "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
+      "SELECT message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
       \  FROM messages \
       \  WHERE group_id = ? AND message_id = ? \
       \  LIMIT 1"
@@ -344,7 +359,7 @@ fetchMessagesByIdsInScope _ [] = pure []
 fetchMessagesByIdsInScope scope ids = do
   rows <-
     query
-      "SELECT message_id, user_id, self_id, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
+      "SELECT message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id \
       \  FROM messages \
       \  WHERE group_id = ? AND message_id IN ?"
       (conversationStorageId scope, In ids)
@@ -364,7 +379,7 @@ fetchForwardChildrenInScope ::
   Eff es [HistoryItem]
 fetchForwardChildrenInScope scope containerId cap =
   query
-    "SELECT child.message_id, child.user_id, child.self_id, child.sender_nickname, child.sender_card, child.rendered_text, \
+    "SELECT child.message_id, child.user_id, child.self_id, child.source_platform, child.sender_nickname, child.sender_card, child.rendered_text, \
     \       COALESCE(child.original_sent_at, child.received_at), child.reply_to_message_id \
     \  FROM messages child \
     \  WHERE child.group_id = ? \

@@ -73,6 +73,7 @@ embeddedFiles =
     <> prefixDirectory "scripts" $(embedDir "scripts")
     <> prefixDirectory "sandbox-image" $(embedDir "sandbox-image")
     <> prefixDirectory "browser-image" $(embedDir "browser-image")
+    <> prefixDirectory "bridge" $(embedDir "bridge")
     <> prefixDirectory ".github/workflows" $(embedDir ".github/workflows")
     <> [ (".env.example", $(embedFile ".env.example")),
          ("LICENSE", $(embedFile "LICENSE")),
@@ -105,12 +106,14 @@ allowedTextPath path =
              ".css",
              ".example",
              ".hs",
+             ".go",
              ".html",
              ".js",
              ".json",
              ".jsonl",
              ".lock",
              ".md",
+             ".mod",
              ".nix",
              ".patch",
              ".project",
@@ -143,7 +146,11 @@ sourcePaths :: Text -> Int -> Either Text ([Text], Bool)
 sourcePaths rawPrefix requestedLimit = do
   prefix <- normalizePrefix rawPrefix
   let matches = filter (underPrefix prefix) (Map.keys sourceFiles)
-      limit = max 1 (min 300 requestedLimit)
+      -- A complete inventory is useful for architecture inspection and still
+      -- contains paths only. Keep the cap bounded, but above the repository's
+      -- current source-file count so adding a companion bridge does not make
+      -- the advertised self snapshot silently partial.
+      limit = max 1 (min 1000 requestedLimit)
   pure (take limit matches, length matches > limit)
 
 -- | Case-insensitive literal search.  Results are diversified to at most

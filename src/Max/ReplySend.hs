@@ -74,7 +74,7 @@ import Max.DB.Media (StoredImage (..), fetchMessageImagesInScope)
 import Max.DB.Message (MessageKind (..))
 import Max.DB.Stickers (findStickerByCaption)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
-import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
+import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Render (renderTableImage)
 import Max.Reply
   ( Chunk (..),
@@ -219,6 +219,7 @@ sendAndPersistReply rt budget rawBody
                 orSelfId = rt.rtSelfId,
                 orRenderedText = Just (T.strip rendered),
                 orSegments = segs,
+                orDeliveryScope = DeliverConversation,
                 orTimeoutMs = 30000
               }
             >>= \case

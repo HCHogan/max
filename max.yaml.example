@@ -98,6 +98,31 @@ persona: |
 #   url: "postgresql://127.0.0.1:5433/max"
 #   max_conns: 8
 
+# Optional Matrix room.  Setting `mirror_qq_group` explicitly makes the room
+# and that QQ group endpoints of one canonical conversation: context, memory,
+# ordering and Max replies are shared, while transport echoes are deduplicated.
+# Omit it to keep Matrix standalone.  Generate a dedicated bot access token;
+# never place an interactive user's token here.
+# matrix:
+#   homeserver: "https://matrix.example.org"
+#   access_token: "syt_..."
+#   user_id: "@max:example.org"
+#   room_id: "!opaque-room-id:example.org"
+#   mirror_qq_group: 123456789
+#   sync_timeout_ms: 30000
+
+# Optional standalone iMessage group.  `bridge_url` must be the authenticated
+# bridge in bridge/imsg on the Mac's Tailscale address.  The same chat GUID is
+# allowlisted on both sides; no other Messages chat is reachable through the
+# bridge.  This conversation is never linked to QQ/Matrix implicitly.
+# imessage:
+#   bridge_url: "http://100.64.0.25:8787"
+#   bridge_token: "replace-with-a-long-random-token"
+#   account_key: "m1pro-messages"
+#   chat_guid: "iMessage;+;chat000000000000000000"
+#   bot_name: "Max"
+#   poll_interval_ms: 1000
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Bot owners: the top permission tier — every command capability in every
 # group, plus the owner-only ones (!model, !grant, !kill --all, !use).

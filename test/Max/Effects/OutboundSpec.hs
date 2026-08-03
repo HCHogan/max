@@ -5,6 +5,7 @@ import Effectful (liftIO, runEff)
 import Max.DB.Message (MessageKind (KindChat))
 import Max.Effects.Outbound
   ( OutboundRequest (..),
+    OutboundDeliveryScope (..),
     SendOutcome (..),
     runOutboundWith,
     sendRecorded,
@@ -22,6 +23,7 @@ request =
       orSelfId = UserId 1000,
       orRenderedText = Just "normalised",
       orSegments = [SegText "surface"],
+      orDeliveryScope = DeliverConversation,
       orTimeoutMs = 30000
     }
 

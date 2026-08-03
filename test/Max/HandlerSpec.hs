@@ -14,7 +14,7 @@ spec :: Spec
 spec = do
   describe "durable ingest policy" $ do
     it "allows media/dispatch work only after the immutable ledger is durable" $ do
-      ingestAllowsDownstream IngestDurable `shouldBe` True
+      ingestAllowsDownstream (IngestDurable Nothing) `shouldBe` True
       ingestAllowsDownstream IngestDuplicate `shouldBe` False
       ingestAllowsDownstream (IngestFailed "postgres unavailable") `shouldBe` False
 

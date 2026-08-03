@@ -41,16 +41,20 @@ import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
-import Max.Handler (dispatchProactive, handleEvents)
+import Max.Handler (dispatchPendingWorker, dispatchProactive, handleEvents)
 import Max.Historian (historianWorker)
-import Max.HttpRuntime (newHttpRuntime)
+import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.Images (imageWorker)
+import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
+import Max.Matrix (matrixDeliveryTransport, matrixWorker)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.MemoryExtract (dreamWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
+import Max.Platform.Delivery (DeliveryTransport, deliveryWorker, oneBotDeliveryTransport)
+import Max.Platform.Types (Platform (..))
 import Max.Reminder (newReminderScheduler, reminderWorker)
 import Max.Sandbox.Registry
   ( destroyAllSandboxes,
@@ -145,6 +149,18 @@ main = do
                     beIntent = cfg.intent,
                     beEmbeddingEnabled = isJust mEmbed
                   }
+              qqEdge = qqBackend clientRef
+              wechatEdges =
+                [ wechatpadBackend httpRuntime (runEff . runWithConnectionPool pool) wc
+                | Just wc <- [cfg.wechatpad]
+                ]
+              deliveryTransports =
+                [oneBotDeliveryTransport PlatformQQ False qqEdge]
+                  <> [matrixDeliveryTransport httpRuntime matrixCfg | matrixCfg <- maybeToList cfg.matrix]
+                  <> [iMessageDeliveryTransport httpRuntime iMessageCfg | iMessageCfg <- maybeToList cfg.imessage]
+                  <> [ oneBotDeliveryTransport PlatformWeChatPad False backend
+                     | backend <- wechatEdges
+                     ]
           runEff
             . runConcurrent
             . runLog "max" logger cfg.logLevel
@@ -152,11 +168,7 @@ main = do
             . runEmbedding mEmbed
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
-            . runPlatformApi
-              (qqBackend clientRef)
-              [ wechatpadBackend httpRuntime (runEff . runWithConnectionPool pool) wc
-              | Just wc <- [cfg.wechatpad]
-              ]
+            . runPlatformApi qqEdge wechatEdges
             . runOutbound
             -- Token accounting goes through its own pooled connection
             -- (a plain IO writer): the LLM interpreter sits outside
@@ -192,7 +204,7 @@ main = do
             . runReader cfg.llm
             . runReader env
             . runAgent defaultLimits (allToolsFor httpRuntime env)
-            $ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid
+            $ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef deliveryTransports mainTid
       )
       `finally` (destroyAllSandboxes sandboxes `finally` destroyAllBrowsers browsers)
 
@@ -222,6 +234,7 @@ runApp ::
     Reader BotEnv :> es,
     Reader ModelCatalog :> es
   ) =>
+  HttpRuntime ->
   AppConfig ->
   [String] ->
   TQueue Event ->
@@ -231,10 +244,11 @@ runApp ::
   -- is not configured, in which case nothing was captured either.
   Maybe LogBuffer ->
   TVar (Maybe Client) ->
+  [DeliveryTransport] ->
   -- | Main thread, for 'drainWorker' to interrupt once drained.
   ThreadId ->
   Eff es ()
-runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
+runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef deliveryTransports mainTid =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -277,7 +291,9 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
             worker "forward-fetch" RequiredWorker (forwardWorker fetchSig),
             worker "file-fetch" RequiredWorker (fileWorker fetchSig),
             worker "reminders" RequiredWorker (reminderWorker cfg.timezone env.beReminders),
-            worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig mIntentSt)
+            worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig mIntentSt),
+            worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (maintenanceOwner <> "/dispatch") fetchSig mIntentSt),
+            worker "platform-delivery" RequiredWorker (deliveryWorker (maintenanceOwner <> "/delivery") deliveryTransports)
           ]
         optionalWorkers =
           [ -- This one is always enabled, but unlike a permanent worker its
@@ -323,6 +339,12 @@ runApp cfg applied eventQ fetchSig mIntentSt logBuf clientRef mainTid =
                ]
             <> [ worker "wechatpad" OptionalWorker (wechatpadWorker wc eventQ)
                | wc <- maybeToList cfg.wechatpad
+               ]
+            <> [ worker "matrix" OptionalWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler)
+               | matrixCfg <- maybeToList cfg.matrix
+               ]
+            <> [ worker "imessage" OptionalWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler)
+               | iMessageCfg <- maybeToList cfg.imessage
                ]
     withWorkers
       (requiredWorkers <> optionalWorkers)

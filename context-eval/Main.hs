@@ -476,6 +476,7 @@ historianSource fixture =
         { messageId = message.fmId,
           userId = message.fmUserId,
           selfId = 999999,
+          sourcePlatform = "qq",
           senderNickname = Just message.fmName,
           senderCard = Nothing,
           renderedText = message.fmText,

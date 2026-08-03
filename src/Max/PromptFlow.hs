@@ -633,6 +633,7 @@ historyOn day mid uid name hour minute body =
     { messageId = mid,
       userId = uid,
       selfId = 10086,
+      sourcePlatform = "qq",
       senderNickname = Just name,
       senderCard = Nothing,
       renderedText = body,

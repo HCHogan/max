@@ -7,7 +7,8 @@ Cross-cutting decisions are recorded in:
 
 Layout, runtime data flow, effect stack, and phase status. For behaviour see
 [features.md](features.md); for tests and debugging see
-[development.md](development.md).
+[development.md](development.md), and for transport cutover/repair see
+[platforms.md](platforms.md).
 
 ## Layout
 
@@ -38,7 +39,8 @@ src/Max/Http/      Json: bounded buffered POST + domain retries; Stream: SSE fol
                    both execute through the process-wide HttpRuntime pools
 src/Max/HttpRuntime process-wide http-client managers, bounded response scopes,
                     and typed transport failures
-src/Max/DB/        postgresql-simple queries: Connection, Migrations, Message, Forward,
+src/Max/DB/        postgresql-simple queries: Connection, pinned Transaction,
+                   Migrations, Message, Forward,
                    History, ConversationCursor, Session, Files, Memory, Permissions,
                    PlatformIds, Reminder, Stickers, FetchQueue (media work list),
                    Calls, Usage
@@ -54,6 +56,9 @@ src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory
                    Skills — progressive disclosure, SelfSource — bounded reads
                    of the allowlisted compile-time source snapshot)
 src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
+                   Platform.Types/Store/Delivery (canonical conversations,
+                   identities, native provenance, cursor/dispatch/delivery
+                   leases), QQ normalization, Matrix and iMessage adapters,
                    AgentEvent (typed progress/debug/final-stream port and its
                    ReplySend/Outbound interpreter),
                    ToolContext (neutral per-turn identity/capabilities),
@@ -80,17 +85,16 @@ app/Main.hs        wires effects + workers + server
 ## Data flow
 
 ```
-                                                ┌──────────────────┐
-                  NapCat ────reverse-WS────────▶│ OneBot.Server    │
-                         ◀─send_{group,private}─│ event queue      │
-                                                └────────┬─────────┘
-                                                         │
-                                                         ▼
+ QQ/NapCat ─┐
+ Matrix ────┼─ normalize ─▶ canonical event/message transaction
+ iMessage ──┘                 ├─ source provenance + source delivery
+                              ├─ mirror endpoint delivery jobs
+                              └─ durable dispatch eligibility
+                                           │
        ┌──────────────────────── handleEvents ───────────────────────────┐
-       │ EvGroupMessage gm (group, or private as pseudo-group)  →        │
-       │   1. bump episode quiet boundary; insertGroupMessage (Postgres) │
-       │   2. enqueueImages / enqueueForwards / enqueueFiles → fetch_jobs│
-       │   3. classify (@bot / reply-to-bot / private / !cmd) →          │
+       │ claim one canonical dispatch after durable ingest              │
+       │   1. enqueueImages / enqueueForwards / enqueueFiles → fetch_jobs│
+       │   2. classify (@bot / reply-to-bot / private / !cmd) →          │
        │        none / ping / !cmd / agent-turn                          │
        └──────┬──────────┬──────────┬──────────────┬─────────────────────┘
               │          │          │              │
@@ -104,9 +108,18 @@ app/Main.hs        wires effects + workers + server
                                             │  → AgentEvent           │
                                             │      → ReplySend        │
                                             │          → Outbound     │
+                                            │             canonical 1×│
+                                            │             deliveries N×│
                                             │  → arm episode idle timer│
                                             └─────────────────────────┘
 ```
+
+QQ and Matrix may be endpoints of the same canonical conversation; iMessage is
+standalone. Required dispatch and delivery workers close both post-commit crash
+windows. Matrix retries reuse deterministic transaction IDs. Non-idempotent
+QQ/iMessage ambiguity is parked until echo/status reconciliation, never placed
+back on the retry queue by a timeout. Context, Historian, and memory therefore
+see one semantic row regardless of how many transport copies exist.
 
 Historian v2 is episode-scoped rather than per-dispatch. After ten quiet
 minutes it selects an oldest-first raw-ledger prefix by the configured model's
@@ -284,6 +297,17 @@ the in-memory handles are read caches and wakeup bells, never the record.
 Effect stack at the top of `runApp`:
 `IOE → Concurrent → Log → Http → Embedding → Blob → WithConnection → PlatformApi → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.
 
+### PostgreSQL transaction ownership
+
+Every multi-statement publication uses `Max.DB.Transaction.withTransaction`.
+This wrapper acquires one physical pooled connection and interposes the
+`WithConnection` effect for the whole body, so every nested `query`/`execute`
+uses that same connection. This is required because effectful-postgresql
+0.1.0.1's pooled transaction wrapper starts `BEGIN` on one connection while
+body operations may otherwise reacquire another. The local wrapper makes
+rollback, row locks, advisory transaction locks, and commit visibility real;
+the DB suite deliberately throws after an insert and proves no row survives.
+
 ### Outbound HTTP ownership
 
 `HttpRuntime` is a process resource created once in `Main`, not another domain
@@ -304,6 +328,8 @@ app/Main
               ├─ Embedding effect ─ validated records over a bounded
               │                     OpenAI-compatible JSON POST
               ├─ MCP.Client ────── bounded browser MCP JSON/SSE response
+              ├─ Matrix ────────── sync/backfill + idempotent send/media upload
+              ├─ iMessage ──────── authenticated bridge catch-up/send/media
               └─ Wechatpad ─────── bounded outbound relay POST
 ```
 
@@ -317,9 +343,9 @@ longer 2/8/20/45/90-second schedule.
 
 The OneBot reverse WebSocket, WeChatPad inbound WebSocket, and browser page
 traffic inside the camoufox container are not outbound HTTP clients and remain
-outside this runtime. Future Matrix/Telegram HTTP adapters should use
-`StandardPool`; any long-lived WebSocket transport remains a platform-edge
-resource.
+outside this runtime. Matrix and iMessage use `StandardPool`; future HTTP
+adapters must do the same. Any long-lived WebSocket transport remains a
+platform-edge resource.
 
 `ModelCatalog` owns profile discovery and prompt-facing capabilities such as
 multimodal input, reasoning effort and history shape. `LLM` owns completion
@@ -352,11 +378,13 @@ runBlob(root)
 `sha256` and `local_path` values for schema compatibility, but readers recover a
 `BlobRef` from the digest and do not treat the persisted path as authority.
 
-`Outbound` owns the send-response-persist invariant: a visible message is sent
-through the platform router, its assigned `message_id` is extracted, and the
-exact surface segments are recorded.  A result distinguishes rejection from
-delivery without a durable row, so callers never retry something the user may
-already have seen.
+`Outbound` owns canonical publication, not transport IO. It commits one bot
+message plus per-endpoint delivery jobs first; leased workers then render and
+send each native copy. Matrix retries with a deterministic transaction key.
+Non-idempotent QQ/iMessage timeout is recorded as outcome-unknown and can move
+again only after echo or authoritative status reconciliation. A transport can
+therefore be down without producing an externally visible message that the
+canonical ledger forgot.
 
 `Agent` depends on `LLM`, scoped `Tools`, an explicit `TurnRuntime`, logging,
 and its typed `AgentEventSink`; it has no OneBot segment, `Outbound`, or message

@@ -83,7 +83,7 @@ ledger :: Int64 -> Int64 -> Int64 -> Bool -> Text -> LedgerItem
 ledger seqNo message speaker eligible body =
   LedgerItem
     (MessageCursor seqNo)
-    (HistoryItem message speaker 1000 Nothing Nothing body testTime Nothing)
+    (HistoryItem message speaker 1000 "qq" Nothing Nothing body testTime Nothing)
     eligible
 
 validCapture :: EpisodeCapture

@@ -45,7 +45,7 @@ import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.Message (MessageKind (KindChat))
 import Max.Effects.Blob (Blob, resolveBlobHostPath)
-import Max.Effects.Outbound (Outbound, OutboundRequest (..), SendOutcome (..), sendRecorded)
+import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Reply (chunkSource, planReply)
@@ -274,6 +274,7 @@ sendImageFromSandboxTool gid selfId sandboxes =
                           orSelfId = selfId,
                           orRenderedText = Nothing,
                           orSegments = segs,
+                          orDeliveryScope = DeliverConversation,
                           orTimeoutMs = 30000
                         }
                   case outcome of

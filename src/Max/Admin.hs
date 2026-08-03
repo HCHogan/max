@@ -96,6 +96,7 @@ import Max.MemoryStore
     listMemories,
     listUserMemoriesEverywhereAdmin,
   )
+import Max.Platform.Store (listPlatformStatus)
 import Max.Recall
   ( RecallCandidate (..),
     RecallHit (..),
@@ -154,6 +155,7 @@ data Route
   | RLogs
   | RCalls
   | RCallDetail !Int64
+  | RPlatformStatus
   | RContextStatus
   | RContextCaptures
   | RContextCompartments
@@ -186,6 +188,7 @@ route m path
       ["api", "logs"] -> Just RLogs
       ["api", "calls"] -> Just RCalls
       ["api", "calls", i] -> RCallDetail <$> int i
+      ["api", "platforms", "status"] -> Just RPlatformStatus
       ["api", "context", "status"] -> Just RContextStatus
       ["api", "context", "captures"] -> Just RContextCaptures
       ["api", "context", "compartments"] -> Just RContextCompartments
@@ -557,6 +560,7 @@ handle env profiles logBuf r params body = case r of
             Object o ->
               Object (o <> KM.fromList ["request" .= d.cdRequest, "response" .= d.cdResponse])
             v -> v
+  RPlatformStatus -> ok <$> listPlatformStatus
   RContextStatus -> do
     status <- loadContextStatus (intParam "group")
     pure . ok $

@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveGeneric #-}
 
 -- | Transactional canonical ingest, cursor and delivery kernel shared by all
@@ -14,6 +15,8 @@ module Max.Platform.Store
     findConversationByLegacyId,
     platformForLegacyConversation,
     platformForLegacyMessage,
+    compatibilityPlatformId,
+    isBotAuthoredCompatibilityMessage,
     registerEndpoint,
     ensureLegacyEndpoint,
     ensureConfiguredEndpoint,
@@ -23,23 +26,39 @@ module Max.Platform.Store
     IngestResult (..),
     NewIngest (..),
     ingestEnvelope,
+    DispatchClaim (..),
+    DispatchCompletion (..),
+    claimDispatches,
+    claimDispatch,
+    completeDispatch,
+    OutboundDraft (..),
+    EnqueuedOutbound (..),
+    enqueueOutbound,
     CursorRecord (..),
     readIngestCursor,
     advanceIngestCursorCAS,
     DeliveryClaim (..),
     claimDeliveries,
+    claimDelivery,
     DeliveryCompletion (..),
     completeDelivery,
+    UnconfirmedDelivery (..),
+    listUnconfirmedDeliveries,
+    confirmUnconfirmedDelivery,
+    retryUnconfirmedDelivery,
+    PlatformEndpointStatus (..),
+    listPlatformStatus,
     sanitizeRawPayload,
     canonicalContentValue,
     renderCanonicalText,
   )
 where
 
-import Control.Monad (forM_)
+import Control.Monad (forM, forM_)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
   ( KeyValue ((.=)),
+    ToJSON,
     Value (..),
     encode,
     object,
@@ -60,8 +79,9 @@ import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
-import Effectful.PostgreSQL (WithConnection, execute, query, withTransaction)
+import Effectful.PostgreSQL (WithConnection, execute, query)
 import GHC.Generics (Generic)
+import Max.DB.Transaction (withTransaction)
 import Max.Platform.Types
 import Text.Read (readMaybe)
 
@@ -86,12 +106,15 @@ data EndpointRegistration = EndpointRegistration
 data RegisteredEndpoint = RegisteredEndpoint
   { endpointId :: !EndpointId,
     platformAccountId :: !PlatformAccountId,
-    conversationId :: !ConversationId
+    conversationId :: !ConversationId,
+    compatibilityConversationId :: !Int64
   }
   deriving stock (Eq, Show, Generic)
 
 data IngestOptions = IngestOptions
   { maxRawPayloadBytes :: !Int,
+    createDispatch :: !Bool,
+    createMirrorDeliveries :: !Bool,
     transcriptKind :: !Text,
     renderedTextOverride :: !(Maybe Text),
     compatibilitySegments :: !Value,
@@ -103,6 +126,8 @@ defaultIngestOptions :: IngestOptions
 defaultIngestOptions =
   IngestOptions
     { maxRawPayloadBytes = 65536,
+      createDispatch = True,
+      createMirrorDeliveries = True,
       transcriptKind = "chat",
       renderedTextOverride = Nothing,
       compatibilitySegments = toJSON ([] :: [Value]),
@@ -112,12 +137,58 @@ defaultIngestOptions =
 data IngestResult
   = Ingested !NewIngest
   | AlreadyIngested !CanonicalMessageId
+  | DeliveryEcho !CanonicalMessageId
   deriving stock (Eq, Show, Generic)
 
 data NewIngest = NewIngest
   { canonicalMessageId :: !CanonicalMessageId,
     dispatchCreated :: !Bool,
     mirrorDeliveriesCreated :: !Int64
+  }
+  deriving stock (Eq, Show, Generic)
+
+-- | One durable eligibility decision waiting to cross into the live runtime.
+-- The compatibility projection is kept at this boundary while Handler still
+-- consumes OneBot-shaped messages; adapters and storage remain platform
+-- neutral.
+data DispatchClaim = DispatchClaim
+  { canonicalMessageId :: !CanonicalMessageId,
+    compatibilityMessageId :: !Int64,
+    compatibilityConversationId :: !Int64,
+    compatibilityUserId :: !Int64,
+    compatibilitySelfId :: !Int64,
+    compatibilitySegments :: !Value,
+    replyToCompatibilityMessageId :: !(Maybe Int64),
+    compatibilityRawMessage :: !Text,
+    sourcePlatform :: !Text,
+    senderNickname :: !(Maybe Text),
+    senderCard :: !(Maybe Text),
+    attemptCount :: !Int
+  }
+  deriving stock (Eq, Show, Generic)
+
+data DispatchCompletion
+  = DispatchCompleted
+  | DispatchIgnored
+  | DispatchRetry !Text !UTCTime
+  deriving stock (Eq, Show, Generic)
+
+data OutboundDraft = OutboundDraft
+  { legacyConversationId :: !Int64,
+    transcriptKind :: !Text,
+    sourceCompatibilityMessageId :: !(Maybe Int64),
+    canonicalContent :: !Value,
+    renderedText :: !Text,
+    compatibilitySegments :: !Value,
+    replyToCompatibilityMessageId :: !(Maybe Int64)
+  }
+  deriving stock (Eq, Show, Generic)
+
+data EnqueuedOutbound = EnqueuedOutbound
+  { canonicalMessageId :: !CanonicalMessageId,
+    compatibilityMessageId :: !Int64,
+    primaryDeliveryId :: !DeliveryId,
+    deliveriesCreated :: !Int64
   }
   deriving stock (Eq, Show, Generic)
 
@@ -136,6 +207,13 @@ data DeliveryClaim = DeliveryClaim
     nativeAccountId :: !NativeAccountId,
     nativeConversationId :: !NativeConversationId,
     content :: !Value,
+    renderedText :: !Text,
+    compatibilityConversationId :: !Int64,
+    compatibilitySegments :: !Value,
+    replyNativeEventId :: !(Maybe NativeEventId),
+    originPlatform :: !Platform,
+    senderDisplayName :: !(Maybe Text),
+    messageOrigin :: !Text,
     idempotencyKey :: !Text,
     attemptCount :: !Int,
     capabilities :: !Value
@@ -150,6 +228,61 @@ data DeliveryCompletion
   | DeliveryPermanentlyFailed !Text
   | DeliverySuppressedAs !Text
   deriving stock (Eq, Show, Generic)
+
+-- | A non-idempotent send accepted by the edge but not yet proven by an echo
+-- or provider status.  These rows are intentionally absent from the delivery
+-- claim queue: only reconciliation may move them again.
+data UnconfirmedDelivery = UnconfirmedDelivery
+  { deliveryId :: !DeliveryId,
+    nativeEventId :: !NativeEventId,
+    updatedAt :: !UTCTime
+  }
+  deriving stock (Eq, Show, Generic)
+
+data PlatformEndpointStatus = PlatformEndpointStatus
+  { endpointId :: !EndpointId,
+    conversationId :: !ConversationId,
+    legacyConversationId :: !(Maybe Int64),
+    platform :: !Text,
+    nativeAccountId :: !Text,
+    nativeConversationId :: !Text,
+    endpointMode :: !Text,
+    enabled :: !Bool,
+    capabilities :: !Value,
+    cursors :: !Value,
+    lastInboundAt :: !(Maybe UTCTime),
+    pendingDeliveries :: !Int64,
+    failedDeliveries :: !Int64,
+    acceptedUnconfirmedDeliveries :: !Int64,
+    outcomeUnknownDeliveries :: !Int64,
+    suppressedDeliveries :: !Int64,
+    oldestPendingAt :: !(Maybe UTCTime),
+    lastDeliveryAt :: !(Maybe UTCTime)
+  }
+  deriving stock (Eq, Show, Generic)
+  deriving anyclass (ToJSON)
+
+instance FromRow PlatformEndpointStatus where
+  fromRow =
+    PlatformEndpointStatus
+      <$> (EndpointId <$> field)
+      <*> (ConversationId <$> field)
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
 
 data EndpointRow = EndpointRow
   { erConversationId :: !Int64,
@@ -170,6 +303,13 @@ data DeliveryClaimRow = DeliveryClaimRow
     dcNativeAccountId :: !Text,
     dcNativeConversationId :: !Text,
     dcContent :: !Value,
+    dcRenderedText :: !Text,
+    dcCompatibilityConversationId :: !Int64,
+    dcCompatibilitySegments :: !Value,
+    dcReplyNativeEventId :: !(Maybe Text),
+    dcOriginPlatform :: !Text,
+    dcSenderDisplayName :: !(Maybe Text),
+    dcMessageOrigin :: !Text,
     dcIdempotencyKey :: !Text,
     dcAttemptCount :: !Int,
     dcCapabilities :: !Value
@@ -177,7 +317,26 @@ data DeliveryClaimRow = DeliveryClaimRow
 
 instance FromRow DeliveryClaimRow where
   fromRow =
-    DeliveryClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
+    DeliveryClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
+
+data DispatchClaimRow = DispatchClaimRow
+  { dcrCanonicalMessageId :: !Int64,
+    dcrMessageId :: !Int64,
+    dcrGroupId :: !Int64,
+    dcrUserId :: !Int64,
+    dcrSelfId :: !Int64,
+    dcrSegments :: !Value,
+    dcrReplyToMessageId :: !(Maybe Int64),
+    dcrRawMessage :: !Text,
+    dcrSourcePlatform :: !Text,
+    dcrSenderNickname :: !(Maybe Text),
+    dcrSenderCard :: !(Maybe Text),
+    dcrAttemptCount :: !Int
+  }
+
+instance FromRow DispatchClaimRow where
+  fromRow =
+    DispatchClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
 
 createConversation ::
   (WithConnection :> es, IOE :> es) =>
@@ -233,6 +392,34 @@ platformForLegacyMessage legacyMessageId = do
       \WHERE m.message_id = ? AND e.enabled AND a.enabled"
       (Only legacyMessageId)
   pure (fromOnly <$> listToMaybe rows)
+
+-- | Compatibility projection for the still-OneBot-shaped Handler boundary.
+-- It is never routing or authorization authority.
+compatibilityPlatformId ::
+  (WithConnection :> es, IOE :> es) =>
+  Platform ->
+  Text ->
+  Text ->
+  Eff es Int64
+compatibilityPlatformId platform kind = compatibilityId (renderPlatform platform) kind
+
+isBotAuthoredCompatibilityMessage ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Int64 ->
+  Eff es Bool
+isBotAuthoredCompatibilityMessage legacyConversation legacyMessage = do
+  rows <-
+    query
+      "SELECT EXISTS ( \
+      \ SELECT 1 FROM messages m \
+      \ JOIN conversations c USING (conversation_id) \
+      \ WHERE c.legacy_group_id = ? AND m.message_id = ? \
+      \   AND m.message_origin IN ('outbound', 'internal'))"
+      (legacyConversation, legacyMessage)
+  pure $ case rows :: [Only Bool] of
+    [Only authored] -> authored
+    _ -> False
 
 registerEndpoint ::
   (WithConnection :> es, IOE :> es) =>
@@ -298,7 +485,8 @@ registerEndpoint registration = withTransaction $ do
     RegisteredEndpoint
       { endpointId = EndpointId endpoint,
         platformAccountId = PlatformAccountId accountId,
-        conversationId = registration.conversationId
+        conversationId = registration.conversationId,
+        compatibilityConversationId = legacyGroup
       }
 
 -- | Resolve or create the canonical endpoint corresponding to a legacy
@@ -351,7 +539,8 @@ ensureLegacyEndpoint platform nativeAccount nativeConversation kind legacyGroup 
       RegisteredEndpoint
         { endpointId = EndpointId (exactlyOne "ensureLegacyEndpoint endpoint" endpointRows),
           platformAccountId = PlatformAccountId account,
-          conversationId = conversation
+          conversationId = conversation,
+          compatibilityConversationId = legacyGroup
         }
 
 -- | Idempotently install one configured endpoint.  A mirror binds to the
@@ -434,11 +623,19 @@ ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLe
         \ SET endpoint_mode = ?, endpoint_kind = ?, capabilities = ?, enabled = true, updated_at = now() \
         \ WHERE endpoint_id = ?"
         (renderEndpointMode mode, renderConversationKind kind, capabilitiesJson, endpoint)
+    legacyRows <-
+      query
+        "SELECT legacy_group_id FROM conversations WHERE conversation_id = ?"
+        (Only conversation)
+    legacyConversation <- case legacyRows :: [Only (Maybe Int64)] of
+      [Only (Just legacy)] -> pure legacy
+      _ -> error "ensureConfiguredEndpoint: conversation lacks compatibility projection"
     pure
       RegisteredEndpoint
         { endpointId = EndpointId endpoint,
           platformAccountId = PlatformAccountId account,
-          conversationId = ConversationId conversation
+          conversationId = ConversationId conversation,
+          compatibilityConversationId = legacyConversation
         }
 
 latestNativeEventId ::
@@ -467,37 +664,120 @@ ingestEnvelope options envelope = withTransaction $ do
   identityId <- ensurePrincipalIdentity endpoint envelope.senderNativeId envelope.senderDisplayName
   let NativeEventId nativeEvent = envelope.nativeEventId
       (safeRaw, rawTruncated) = sanitizeRawPayload options.maxRawPayloadBytes envelope.rawPayload
-  reserved <-
+      ingestLockKey = T.pack (show envelope.endpointId.unEndpointId) <> ":" <> nativeEvent
+  -- The platform-event row is initially a reservation and receives its
+  -- canonical_message_id later in this transaction. Serialize only identical
+  -- native events so a duplicate delivery cannot observe or try to repair
+  -- that deliberately intermediate state. Different events remain fully
+  -- concurrent, including events on the same endpoint.
+  lockRows <-
     query
-      "INSERT INTO platform_events \
-      \ (endpoint_id, native_event_id, sender_identity_id, event_kind, occurred_at, \
-      \  received_at, source_cursor, raw_payload, raw_payload_truncated) \
-      \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
-      \ ON CONFLICT (endpoint_id, native_event_id) DO NOTHING \
-      \ RETURNING platform_event_id"
-      ( envelope.endpointId.unEndpointId,
-        nativeEvent,
-        identityId,
-        renderEventKind envelope.eventKind,
-        envelope.occurredAt,
-        envelope.receivedAt,
-        Jsonb . unPlatformCursor <$> envelope.sourceCursor,
-        Jsonb <$> safeRaw,
-        rawTruncated
-      )
-  case reserved :: [Only Int64] of
-    [] -> do
-      existing <-
+      "SELECT pg_advisory_xact_lock(hashtextextended(?::text, 0)) IS NULL"
+      (Only ingestLockKey)
+  case lockRows :: [Only Bool] of
+    [_] -> pure ()
+    _ -> error "ingestEnvelope: advisory lock did not return one row"
+  reconciled <- reconcileDeliveryEcho endpoint identityId safeRaw rawTruncated
+  case reconciled of
+    Just cid -> pure (DeliveryEcho (CanonicalMessageId cid))
+    Nothing -> do
+      reserved <-
         query
-          "SELECT canonical_message_id FROM platform_events \
-          \ WHERE endpoint_id = ? AND native_event_id = ? FOR UPDATE"
-          (envelope.endpointId.unEndpointId, nativeEvent)
-      case existing :: [Only (Maybe Int64)] of
-        [Only (Just cid)] -> pure (AlreadyIngested (CanonicalMessageId cid))
-        _ -> error "ingestEnvelope: committed platform event has no canonical message"
-    [_] -> insertCanonical endpoint identityId safeRaw
-    _ -> error "ingestEnvelope: event reservation returned multiple rows"
+          "INSERT INTO platform_events \
+          \ (endpoint_id, native_event_id, sender_identity_id, event_kind, occurred_at, \
+          \  received_at, source_cursor, raw_payload, raw_payload_truncated) \
+          \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+          \ ON CONFLICT (endpoint_id, native_event_id) DO NOTHING \
+          \ RETURNING platform_event_id"
+          ( envelope.endpointId.unEndpointId,
+            nativeEvent,
+            identityId,
+            renderEventKind envelope.eventKind,
+            envelope.occurredAt,
+            envelope.receivedAt,
+            Jsonb . unPlatformCursor <$> envelope.sourceCursor,
+            Jsonb <$> safeRaw,
+            rawTruncated
+          )
+      case reserved :: [Only Int64] of
+        [] -> do
+          existing <-
+            query
+              "SELECT canonical_message_id FROM platform_events \
+              \ WHERE endpoint_id = ? AND native_event_id = ? FOR UPDATE"
+              (envelope.endpointId.unEndpointId, nativeEvent)
+          case existing :: [Only (Maybe Int64)] of
+            [Only (Just cid)] -> pure (AlreadyIngested (CanonicalMessageId cid))
+            -- A pre-hardening writer may have committed an incomplete
+            -- reservation. The per-native-event transaction lock makes this
+            -- caller its sole repair owner.
+            [Only Nothing] -> insertCanonical endpoint identityId safeRaw
+            _ -> error "ingestEnvelope: event reservation disappeared"
+        [_] -> insertCanonical endpoint identityId safeRaw
+        _ -> error "ingestEnvelope: event reservation returned multiple rows"
   where
+    reconcileDeliveryEcho endpoint identityId safeRaw rawTruncated = do
+      let NativeEventId nativeEvent = envelope.nativeEventId
+          NativeUserId sender = envelope.senderNativeId
+          contentValue = canonicalContentValue envelope.content
+      exact <-
+        query
+          "SELECT canonical_message_id FROM message_deliveries \
+          \ WHERE endpoint_id = ? AND native_event_id = ? \
+          \   AND idempotency_key NOT LIKE 'source:%' \
+          \ FOR UPDATE"
+          (envelope.endpointId.unEndpointId, nativeEvent)
+      candidate <- case exact :: [Only Int64] of
+        [Only cid] -> pure (Just cid)
+        []
+          | sender == endpoint.erNativeAccountId -> do
+              -- A transport can time out after accepting a non-idempotent
+              -- send and then echo it without returning an id.  Reconcile
+              -- only one recent exact-content candidate; ambiguity is safer
+              -- left for admin/status repair than guessed.
+              rows <-
+                query
+                  "SELECT d.canonical_message_id FROM message_deliveries d \
+                  \ JOIN messages m USING (canonical_message_id) \
+                  \ WHERE d.endpoint_id = ? \
+                  \   AND d.status IN ('sending', 'accepted_unconfirmed', 'outcome_unknown') \
+                  \   AND d.created_at >= now() - interval '10 minutes' \
+                  \   AND m.canonical_content = ? \
+                  \ ORDER BY d.delivery_id DESC LIMIT 2 FOR UPDATE OF d"
+                  (envelope.endpointId.unEndpointId, Jsonb contentValue)
+              pure $ case rows :: [Only Int64] of
+                [Only cid] -> Just cid
+                _ -> Nothing
+          | otherwise -> pure Nothing
+        _ -> error "ingestEnvelope: duplicate native delivery id invariant violated"
+      forM candidate $ \cid -> do
+        _ <-
+          execute
+            "UPDATE message_deliveries \
+            \ SET status = 'confirmed', native_event_id = ?, confirmed_at = ?, \
+            \     lease_owner = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = now() \
+            \ WHERE canonical_message_id = ? AND endpoint_id = ?"
+            (nativeEvent, envelope.receivedAt, cid, envelope.endpointId.unEndpointId)
+        _ <-
+          execute
+            "INSERT INTO platform_events \
+            \ (endpoint_id, native_event_id, sender_identity_id, event_kind, occurred_at, received_at, \
+            \  source_cursor, raw_payload, raw_payload_truncated, canonical_message_id) \
+            \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+            \ ON CONFLICT (endpoint_id, native_event_id) DO NOTHING"
+            ( envelope.endpointId.unEndpointId,
+              nativeEvent,
+              identityId,
+              renderEventKind envelope.eventKind,
+              envelope.occurredAt,
+              envelope.receivedAt,
+              Jsonb . unPlatformCursor <$> envelope.sourceCursor,
+              Jsonb <$> safeRaw,
+              rawTruncated,
+              cid
+            )
+        pure cid
+
     insertCanonical endpoint identityId _safeRaw = do
       let platformName = endpoint.erPlatform
           NativeEventId nativeEvent = envelope.nativeEventId
@@ -519,9 +799,9 @@ ingestEnvelope options envelope = withTransaction $ do
           \ (message_id, group_id, user_id, self_id, received_at, occurred_at, \
           \  segments, canonical_content, rendered_text, raw_message, sender_nickname, \
           \  reply_to_message_id, reply_to_canonical_message_id, kind, conversation_id, \
-          \  author_principal_id, origin_endpoint_id, source_native_event_id) \
+          \  author_principal_id, origin_endpoint_id, source_native_event_id, message_origin, source_platform) \
           \ SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-          \        pi.principal_id, ?, ? \
+          \        pi.principal_id, ?, ?, 'inbound', ? \
           \ FROM principal_identities pi WHERE pi.principal_identity_id = ? \
           \ RETURNING canonical_message_id"
           ( legacyMessage,
@@ -541,6 +821,7 @@ ingestEnvelope options envelope = withTransaction $ do
             endpoint.erConversationId,
             envelope.endpointId.unEndpointId,
             nativeEvent,
+            platformName,
             identityId
           )
       let cid = exactlyOne "ingestEnvelope message" inserted
@@ -551,27 +832,31 @@ ingestEnvelope options envelope = withTransaction $ do
           (cid, envelope.endpointId.unEndpointId, nativeEvent)
       -- The compatibility AFTER trigger records completed; normalized ingest
       -- is durable work and intentionally turns it into pending.
-      dispatchCount <-
-        execute
-          "UPDATE message_dispatches SET status = 'pending', updated_at = now() \
-          \ WHERE canonical_message_id = ?"
-          (Only cid)
-      mirrorCount <-
-        execute
-          "INSERT INTO message_deliveries \
-          \ (canonical_message_id, endpoint_id, status, idempotency_key) \
-          \ SELECT ?, target.endpoint_id, 'pending', \
-          \        'relay:' || ?::text || ':' || target.endpoint_id::text \
-          \ FROM conversation_endpoints origin \
-          \ JOIN conversation_endpoints target \
-          \   ON target.conversation_id = origin.conversation_id \
-          \  AND target.endpoint_id <> origin.endpoint_id \
-          \ WHERE origin.endpoint_id = ? \
-          \   AND origin.endpoint_mode = 'mirror' \
-          \   AND target.endpoint_mode = 'mirror' \
-          \   AND target.enabled \
-          \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
-          (cid, cid, envelope.endpointId.unEndpointId)
+      dispatchCount <- case envelope.eventKind of
+        EventMessage | options.createDispatch ->
+          execute
+            "UPDATE message_dispatches SET status = 'pending', updated_at = now() \
+            \ WHERE canonical_message_id = ?"
+            (Only cid)
+        _ -> pure 0
+      mirrorCount <- case envelope.eventKind of
+        EventMessage | options.createMirrorDeliveries ->
+          execute
+            "INSERT INTO message_deliveries \
+            \ (canonical_message_id, endpoint_id, status, idempotency_key) \
+            \ SELECT ?, target.endpoint_id, 'pending', \
+            \        'relay:' || ?::text || ':' || target.endpoint_id::text \
+            \ FROM conversation_endpoints origin \
+            \ JOIN conversation_endpoints target \
+            \   ON target.conversation_id = origin.conversation_id \
+            \  AND target.endpoint_id <> origin.endpoint_id \
+            \ WHERE origin.endpoint_id = ? \
+            \   AND origin.endpoint_mode = 'mirror' \
+            \   AND target.endpoint_mode = 'mirror' \
+            \   AND target.enabled \
+            \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
+            (cid, cid, envelope.endpointId.unEndpointId)
+        _ -> pure 0
       forM_ envelope.relations (insertRelation cid envelope.endpointId)
       pure
         ( Ingested
@@ -581,6 +866,122 @@ ingestEnvelope options envelope = withTransaction $ do
               mirrorDeliveriesCreated = mirrorCount
             }
         )
+
+-- | Publish one bot-authored semantic message and every endpoint copy in one
+-- transaction.  No network operation precedes this commit, so a crash can
+-- delay delivery but cannot create an externally visible message with no
+-- canonical ledger row.
+enqueueOutbound ::
+  (WithConnection :> es, IOE :> es) =>
+  OutboundDraft ->
+  Eff es EnqueuedOutbound
+enqueueOutbound draft = withTransaction $ do
+  primaryRows <-
+    query
+      "SELECT e.endpoint_id, e.conversation_id, e.platform_account_id, a.platform, \
+      \       a.native_account_id, c.legacy_group_id \
+      \ FROM conversations c \
+      \ JOIN conversation_endpoints e USING (conversation_id) \
+      \ JOIN platform_accounts a USING (platform_account_id) \
+      \ WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
+      \   AND (?::bigint IS NULL OR e.endpoint_id = ( \
+      \     SELECT source.origin_endpoint_id FROM messages source \
+      \     WHERE source.group_id = ? AND source.message_id = ?)) \
+      \ ORDER BY CASE a.platform WHEN 'qq' THEN 0 ELSE 1 END, e.endpoint_id \
+      \ LIMIT 1 FOR UPDATE OF c"
+      ( draft.legacyConversationId,
+        draft.sourceCompatibilityMessageId,
+        draft.legacyConversationId,
+        draft.sourceCompatibilityMessageId
+      )
+  (primaryEndpoint, conversation, account, platformName, accountNative, legacyGroup) <-
+    case primaryRows :: [(Int64, Int64, Int64, Text, Text, Maybe Int64)] of
+      [row] -> pure row
+      _ -> error "enqueueOutbound: conversation has no enabled endpoint"
+  identityId <-
+    ensurePrincipalIdentity
+      EndpointRow
+        { erConversationId = conversation,
+          erPlatformAccountId = account,
+          erPlatform = platformName,
+          erNativeAccountId = accountNative,
+          erLegacyGroupId = legacyGroup
+        }
+      (NativeUserId accountNative)
+      (Just "max")
+  principalRows <-
+    query
+      "SELECT principal_id FROM principal_identities WHERE principal_identity_id = ?"
+      (Only identityId)
+  let principal = exactlyOne "enqueueOutbound principal" (principalRows :: [Only Int64])
+  canonicalRows <- query "SELECT nextval('canonical_message_id_seq')" ()
+  let canonical = exactlyOne "enqueueOutbound canonical id" (canonicalRows :: [Only Int64])
+  compatibilityRows <- query "SELECT -nextval('synthetic_message_id_seq')" ()
+  let compatibilityMessage = exactlyOne "enqueueOutbound compatibility id" (compatibilityRows :: [Only Int64])
+  compatibilitySelf <- compatibilityId platformName "user" accountNative
+  replyCanonical <- case draft.replyToCompatibilityMessageId of
+    Nothing -> pure Nothing
+    Just replyLegacy -> do
+      rows <-
+        query
+          "SELECT canonical_message_id FROM messages \
+          \ WHERE conversation_id = ? AND message_id = ?"
+          (conversation, replyLegacy)
+      pure (fromOnly <$> listToMaybe (rows :: [Only Int64]))
+  inserted <-
+    execute
+      "INSERT INTO messages \
+      \ (canonical_message_id, message_id, group_id, user_id, self_id, segments, canonical_content, \
+      \  rendered_text, raw_message, sender_nickname, reply_to_message_id, reply_to_canonical_message_id, \
+      \  kind, conversation_id, author_principal_id, origin_endpoint_id, source_native_event_id, \
+      \  occurred_at, message_origin, source_platform) \
+      \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'max', ?, ?, ?, ?, ?, ?, ?, now(), 'outbound', ?)"
+      ( canonical,
+        compatibilityMessage,
+        draft.legacyConversationId,
+        compatibilitySelf,
+        compatibilitySelf,
+        Jsonb draft.compatibilitySegments,
+        Jsonb draft.canonicalContent,
+        draft.renderedText,
+        draft.replyToCompatibilityMessageId,
+        replyCanonical,
+        draft.transcriptKind,
+        conversation,
+        principal,
+        primaryEndpoint,
+        "max:" <> T.pack (show canonical),
+        platformName
+      )
+  if inserted /= 1 then error "enqueueOutbound: canonical insert did not affect one row" else pure ()
+  _ <-
+    execute
+      "INSERT INTO message_dispatches (canonical_message_id, status, completed_at) \
+      \ VALUES (?, 'ignored', now())"
+      (Only canonical)
+  deliveryCount <-
+    execute
+      "INSERT INTO message_deliveries \
+      \ (canonical_message_id, endpoint_id, status, idempotency_key) \
+      \ SELECT ?, e.endpoint_id, 'pending', 'out:' || ?::text || ':' || e.endpoint_id::text \
+      \ FROM conversation_endpoints e \
+      \ JOIN platform_accounts a USING (platform_account_id) \
+      \ WHERE e.conversation_id = ? AND e.enabled AND a.enabled \
+      \   AND (?::boolean OR e.endpoint_id = ?) \
+      \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
+      (canonical, canonical, conversation, draft.sourceCompatibilityMessageId == Nothing, primaryEndpoint)
+  primaryDeliveryRows <-
+    query
+      "SELECT delivery_id FROM message_deliveries \
+      \ WHERE canonical_message_id = ? AND endpoint_id = ?"
+      (canonical, primaryEndpoint)
+  pure
+    EnqueuedOutbound
+      { canonicalMessageId = CanonicalMessageId canonical,
+        compatibilityMessageId = compatibilityMessage,
+        primaryDeliveryId = DeliveryId (exactlyOne "enqueueOutbound primary delivery" primaryDeliveryRows),
+        deliveriesCreated = deliveryCount
+      }
 
 readIngestCursor ::
   (WithConnection :> es, IOE :> es) =>
@@ -629,6 +1030,88 @@ advanceIngestCursorCAS (PlatformAccountId accountId) streamKey expected (Platfor
     [(value, fingerprint', revision')] -> Just (CursorRecord (PlatformCursor value) fingerprint' revision')
     _ -> Nothing
 
+claimDispatches ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  Int ->
+  NominalDiffTime ->
+  Eff es [DispatchClaim]
+claimDispatches workerId limit leaseDuration =
+  claimDispatchWhere workerId Nothing limit leaseDuration
+
+-- | Claim one known message immediately after ingest.  If another runtime won
+-- the lease, or this event was already evaluated, return 'Nothing'.
+claimDispatch ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  CanonicalMessageId ->
+  NominalDiffTime ->
+  Eff es (Maybe DispatchClaim)
+claimDispatch workerId (CanonicalMessageId canonical) leaseDuration = do
+  claims <-
+    claimDispatchWhere workerId (Just canonical) 1 leaseDuration
+  pure (listToMaybe claims)
+
+claimDispatchWhere ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  Maybe Int64 ->
+  Int ->
+  NominalDiffTime ->
+  Eff es [DispatchClaim]
+claimDispatchWhere workerId mCanonical limit leaseDuration = do
+  rows <-
+    query
+      "WITH candidates AS ( \
+        \ SELECT md.canonical_message_id FROM message_dispatches md \
+        \ WHERE md.status IN ('pending', 'failed') \
+        \   AND md.next_attempt_at <= now() \
+        \   AND (md.lease_expires_at IS NULL OR md.lease_expires_at < now()) \
+        \   AND (?::bigint IS NULL OR md.canonical_message_id = ?) \
+        \ ORDER BY md.next_attempt_at, md.canonical_message_id \
+        \ FOR UPDATE OF md SKIP LOCKED LIMIT ? \
+        \), claimed AS ( \
+        \ UPDATE message_dispatches md \
+        \ SET status = 'claimed', lease_owner = ?, \
+        \     lease_expires_at = now() + (?::double precision * interval '1 second'), \
+        \     attempt_count = attempt_count + 1, last_attempt_at = now(), updated_at = now() \
+        \ FROM candidates c WHERE md.canonical_message_id = c.canonical_message_id \
+        \ RETURNING md.canonical_message_id, md.attempt_count \
+        \) \
+        \SELECT c.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
+        \       m.segments, m.reply_to_message_id, m.raw_message, m.source_platform, m.sender_nickname, m.sender_card, c.attempt_count \
+        \FROM claimed c JOIN messages m USING (canonical_message_id) \
+        \ORDER BY c.canonical_message_id"
+      ( mCanonical,
+        mCanonical,
+        limit,
+        workerId,
+        realToFrac leaseDuration :: Double
+      )
+  pure (toDispatchClaim <$> (rows :: [DispatchClaimRow]))
+
+completeDispatch ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  CanonicalMessageId ->
+  DispatchCompletion ->
+  Eff es Bool
+completeDispatch workerId (CanonicalMessageId canonical) completion = do
+  changed <- case completion of
+    DispatchCompleted -> finish "completed" Nothing Nothing True
+    DispatchIgnored -> finish "ignored" Nothing Nothing True
+    DispatchRetry err next -> finish "failed" (Just err) (Just next) False
+  pure (changed == 1)
+  where
+    finish status lastError next completed =
+      execute
+        "UPDATE message_dispatches \
+        \ SET status = ?, last_error = ?, next_attempt_at = COALESCE(?, next_attempt_at), \
+        \     completed_at = CASE WHEN ? THEN now() ELSE completed_at END, \
+        \     lease_owner = NULL, lease_expires_at = NULL, updated_at = now() \
+        \ WHERE canonical_message_id = ? AND status = 'claimed' AND lease_owner = ?"
+        (status :: Text, lastError, next, completed, canonical, workerId)
+
 claimDeliveries ::
   (WithConnection :> es, IOE :> es) =>
   Text -> -- ^ stable worker id
@@ -636,15 +1119,36 @@ claimDeliveries ::
   NominalDiffTime ->
   Eff es [DeliveryClaim]
 claimDeliveries workerId limit leaseDuration = do
+  claimDeliveriesWhere workerId Nothing limit leaseDuration
+
+claimDelivery ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  DeliveryId ->
+  NominalDiffTime ->
+  Eff es (Maybe DeliveryClaim)
+claimDelivery workerId (DeliveryId delivery) leaseDuration = do
+  claims <- claimDeliveriesWhere workerId (Just delivery) 1 leaseDuration
+  pure (listToMaybe claims)
+
+claimDeliveriesWhere ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  Maybe Int64 ->
+  Int ->
+  NominalDiffTime ->
+  Eff es [DeliveryClaim]
+claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
   rows <-
     query
       "WITH candidates AS ( \
       \ SELECT d.delivery_id FROM message_deliveries d \
       \ JOIN conversation_endpoints e ON e.endpoint_id = d.endpoint_id AND e.enabled \
       \ JOIN platform_accounts a ON a.platform_account_id = e.platform_account_id AND a.enabled \
-      \ WHERE d.status IN ('pending', 'failed', 'outcome_unknown') \
+      \ WHERE d.status IN ('pending', 'failed') \
       \   AND d.next_attempt_at <= now() \
       \   AND (d.lease_expires_at IS NULL OR d.lease_expires_at < now()) \
+      \   AND (?::bigint IS NULL OR d.delivery_id = ?) \
       \ ORDER BY d.next_attempt_at, d.delivery_id \
       \ FOR UPDATE OF d SKIP LOCKED LIMIT ? \
       \), claimed AS ( \
@@ -657,14 +1161,28 @@ claimDeliveries workerId limit leaseDuration = do
       \) \
       \ SELECT c.delivery_id, c.canonical_message_id, c.endpoint_id, a.platform, \
       \        a.native_account_id, e.native_conversation_id, m.canonical_content, \
+      \        m.rendered_text, m.group_id, m.segments, \
+      \        (SELECT COALESCE(target_delivery.native_event_id, target_event.native_event_id) \
+      \           FROM message_relations relation \
+      \           LEFT JOIN message_deliveries target_delivery \
+      \             ON target_delivery.canonical_message_id = relation.target_canonical_message_id \
+      \            AND target_delivery.endpoint_id = c.endpoint_id \
+      \           LEFT JOIN platform_events target_event \
+      \             ON target_event.canonical_message_id = relation.target_canonical_message_id \
+      \            AND target_event.endpoint_id = c.endpoint_id \
+      \          WHERE relation.canonical_message_id = c.canonical_message_id \
+      \            AND relation.relation_kind = 'reply' LIMIT 1), \
+      \        origin_account.platform, COALESCE(m.sender_card, m.sender_nickname), m.message_origin, \
       \        c.idempotency_key, c.attempt_count, \
       \        CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END \
       \ FROM claimed c \
       \ JOIN conversation_endpoints e ON e.endpoint_id = c.endpoint_id \
       \ JOIN platform_accounts a ON a.platform_account_id = e.platform_account_id \
       \ JOIN messages m ON m.canonical_message_id = c.canonical_message_id \
+      \ JOIN conversation_endpoints origin_endpoint ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
+      \ JOIN platform_accounts origin_account ON origin_account.platform_account_id = origin_endpoint.platform_account_id \
       \ ORDER BY c.delivery_id"
-      (limit, workerId, realToFrac leaseDuration :: Double)
+      (mDelivery, mDelivery, limit, workerId, realToFrac leaseDuration :: Double)
   pure (toClaim <$> (rows :: [DeliveryClaimRow]))
 
 completeDelivery ::
@@ -705,6 +1223,93 @@ completeDelivery workerId (DeliveryId delivery) completion = do
           delivery,
           workerId
         )
+
+listUnconfirmedDeliveries ::
+  (WithConnection :> es, IOE :> es) =>
+  Platform ->
+  Int ->
+  Eff es [UnconfirmedDelivery]
+listUnconfirmedDeliveries platform limit = do
+  rows <-
+    query
+      "SELECT d.delivery_id, d.native_event_id, d.updated_at \
+      \ FROM message_deliveries d \
+      \ JOIN conversation_endpoints e USING (endpoint_id) \
+      \ JOIN platform_accounts a USING (platform_account_id) \
+      \ WHERE a.platform = ? AND d.status = 'accepted_unconfirmed' \
+      \   AND d.native_event_id IS NOT NULL \
+      \ ORDER BY d.updated_at, d.delivery_id LIMIT ?"
+      (renderPlatform platform, limit)
+  pure
+    [ UnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) updated
+    | (delivery, native, updated) <- rows
+    ]
+
+-- | Reconciliation CAS independent of a delivery lease.  A late status query
+-- cannot overwrite an echo that already confirmed the same row.
+confirmUnconfirmedDelivery ::
+  (WithConnection :> es, IOE :> es) =>
+  DeliveryId ->
+  NativeEventId ->
+  Eff es Bool
+confirmUnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) = do
+  changed <-
+    execute
+      "UPDATE message_deliveries \
+      \ SET status = 'confirmed', confirmed_at = now(), last_error = NULL, updated_at = now() \
+      \ WHERE delivery_id = ? AND native_event_id = ? AND status = 'accepted_unconfirmed'"
+      (delivery, native)
+  pure (changed == 1)
+
+-- | A provider's explicit @failed@ send status proves the earlier accepted
+-- attempt did not complete.  Only that evidence may put a non-idempotent send
+-- back on the ordinary retry queue.
+retryUnconfirmedDelivery ::
+  (WithConnection :> es, IOE :> es) =>
+  DeliveryId ->
+  NativeEventId ->
+  Text ->
+  Eff es Bool
+retryUnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) reason = do
+  changed <-
+    execute
+      "UPDATE message_deliveries \
+      \ SET status = 'failed', next_attempt_at = now(), last_error = ?, updated_at = now() \
+      \ WHERE delivery_id = ? AND native_event_id = ? AND status = 'accepted_unconfirmed'"
+      (reason, delivery, native)
+  pure (changed == 1)
+
+listPlatformStatus ::
+  (WithConnection :> es, IOE :> es) =>
+  Eff es [PlatformEndpointStatus]
+listPlatformStatus =
+  query
+    "SELECT e.endpoint_id, e.conversation_id, c.legacy_group_id, a.platform, \
+    \       a.native_account_id, e.native_conversation_id, e.endpoint_mode, \
+    \       (e.enabled AND a.enabled), \
+    \       CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END, \
+    \       COALESCE(( \
+    \         SELECT jsonb_agg(jsonb_build_object( \
+    \           'stream_key', pc.stream_key, 'cursor', pc.cursor, \
+    \           'source_fingerprint', pc.source_fingerprint, \
+    \           'revision', pc.revision, 'updated_at', pc.updated_at) \
+    \           ORDER BY pc.stream_key) \
+    \         FROM platform_ingest_cursors pc \
+    \         WHERE pc.platform_account_id = a.platform_account_id \
+    \       ), '[]'::jsonb), \
+    \       (SELECT max(pe.received_at) FROM platform_events pe WHERE pe.endpoint_id = e.endpoint_id), \
+    \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status IN ('pending', 'sending')), \
+    \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'failed'), \
+    \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'accepted_unconfirmed'), \
+    \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'outcome_unknown'), \
+    \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'suppressed'), \
+    \       (SELECT min(d.created_at) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status IN ('pending', 'sending', 'failed')), \
+    \       (SELECT max(d.updated_at) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id) \
+    \ FROM conversation_endpoints e \
+    \ JOIN platform_accounts a USING (platform_account_id) \
+    \ JOIN conversations c USING (conversation_id) \
+    \ ORDER BY e.conversation_id, e.endpoint_id"
+    ()
 
 sanitizeRawPayload :: Int -> Maybe Value -> (Maybe Value, Bool)
 sanitizeRawPayload _ Nothing = (Nothing, False)
@@ -929,9 +1534,33 @@ toClaim row =
       nativeAccountId = NativeAccountId row.dcNativeAccountId,
       nativeConversationId = NativeConversationId row.dcNativeConversationId,
       content = row.dcContent,
+      renderedText = row.dcRenderedText,
+      compatibilityConversationId = row.dcCompatibilityConversationId,
+      compatibilitySegments = row.dcCompatibilitySegments,
+      replyNativeEventId = NativeEventId <$> row.dcReplyNativeEventId,
+      originPlatform = parsePlatform row.dcOriginPlatform,
+      senderDisplayName = row.dcSenderDisplayName,
+      messageOrigin = row.dcMessageOrigin,
       idempotencyKey = row.dcIdempotencyKey,
       attemptCount = row.dcAttemptCount,
       capabilities = row.dcCapabilities
+    }
+
+toDispatchClaim :: DispatchClaimRow -> DispatchClaim
+toDispatchClaim row =
+  DispatchClaim
+    { canonicalMessageId = CanonicalMessageId row.dcrCanonicalMessageId,
+      compatibilityMessageId = row.dcrMessageId,
+      compatibilityConversationId = row.dcrGroupId,
+      compatibilityUserId = row.dcrUserId,
+      compatibilitySelfId = row.dcrSelfId,
+      compatibilitySegments = row.dcrSegments,
+      replyToCompatibilityMessageId = row.dcrReplyToMessageId,
+      compatibilityRawMessage = row.dcrRawMessage,
+      sourcePlatform = row.dcrSourcePlatform,
+      senderNickname = row.dcrSenderNickname,
+      senderCard = row.dcrSenderCard,
+      attemptCount = row.dcrAttemptCount
     }
 
 renderConversationKind :: ConversationKind -> Text

@@ -24,9 +24,10 @@ import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
-import Effectful.PostgreSQL (WithConnection, execute, query, withTransaction)
+import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ContextTraceStore (ContextPlanTraceRow (..), listContextPlanTraces)
 import Max.ConversationScope (conversationScopeFor)
+import Max.DB.Transaction (withTransaction)
 import Max.EpisodeStore
   ( ActiveCompartment (..),
     CaptureReason (CaptureRebuild),

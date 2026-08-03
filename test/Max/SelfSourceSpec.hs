@@ -7,7 +7,7 @@ import Test.Hspec
 spec :: Spec
 spec = describe "deployed self-source snapshot" $ do
   it "contains implementation, tests, migrations, docs, and ADRs" $ do
-    (paths, truncated) <- requireRight (sourcePaths "" 300)
+    (paths, truncated) <- requireRight (sourcePaths "" 1000)
     truncated `shouldBe` False
     paths `shouldContain` ["src/Max/Historian.hs"]
     paths `shouldContain` ["test/Max/HistorianSpec.hs"]
