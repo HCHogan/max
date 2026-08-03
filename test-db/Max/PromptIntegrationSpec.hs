@@ -24,7 +24,7 @@ import Max.DB.Session (fetchOrInit)
 import Max.Effects.LLM (ChatMessage (..))
 import Max.EpisodeStore
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
-import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), TriggerOrigin (..), buildContext, buildContextWithLimits, buildContextWithReadMode, materializeTieredHistory)
+import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), TriggerOrigin (..), buildContext, buildContextWithLimits, buildContextWithReadMode, collectContextPreview, materializeTieredHistory, planContext, renderContextPlan)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -331,6 +331,20 @@ spec pool = before_ (truncateAll pool) $
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[pinned" `T.isInfixOf`)
       ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
+
+    it "collects and plans a read-only preview without publishing materialization or trace rows" $ do
+      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "preview source"
+      _ <- publishNextCompartment pool (MessageCursor 0) [1001] "preview summary"
+      s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
+      snapshot <-
+        withDbLog pool $
+          collectContextPreview "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+      let rendered = renderContextPlan (planContext defaultContextLimits snapshot)
+      userBodyOf rendered `shouldSatisfy` ("preview summary" `T.isInfixOf`)
+      [Only materializations] <- withDb pool $ query "SELECT count(*) FROM context_materializations" ()
+      [Only traces] <- withDb pool $ query "SELECT count(*) FROM context_plan_traces" ()
+      (materializations :: Int64) `shouldBe` 0
+      (traces :: Int64) `shouldBe` 0
 
     it "renders reply context when trigger has SegReply" $ do
       insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "被引用的话"

@@ -8,12 +8,17 @@ module Max.Prompt
 
     -- * Building blocks (exposed for tests)
     PromptInputs (..),
+    ContextCandidates (..),
+    SelectedContext (..),
     PromptImage (..),
     ContextCompartment (..),
     CompartmentTier (..),
     ContextSnapshot (..),
+    csInputs,
     ContextPlan (..),
+    cpInputs,
     collectContext,
+    collectContextPreview,
     planContext,
     materializeTieredHistory,
     HistoryTokenWatermarks (..),
@@ -50,7 +55,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (TimeZone, UTCTime, diffUTCTime, getCurrentTime)
+import Data.Time (TimeZone, UTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (In (..), Only (..))
 import Effectful
 import Effectful.Exception (IOException, try)
@@ -63,6 +68,29 @@ import Max.Context
     contextBudget,
     estimateMessagesTokens,
     estimateTextTokens,
+  )
+import Max.Context.Policy
+  ( ContextCostModel (..),
+    PolicyDrop (..),
+    applyBaseCompartmentTiers,
+    compartmentTierText,
+    selectContextTo,
+    selectedCompartmentSummary,
+  )
+import Max.Context.Types
+  ( CompartmentTier (..),
+    ContextCandidates (..),
+    ContextCompartment (..),
+    ContextPlan (..),
+    ContextReadMode (..),
+    ContextSnapshot (..),
+    HistoryTokenWatermarks (..),
+    PromptImage (..),
+    PromptInputs (..),
+    SelectedContext (..),
+    TriggerOrigin (..),
+    cpInputs,
+    csInputs,
   )
 import Max.ContextMaterialization
   ( ContextMaterialization (..),
@@ -88,192 +116,18 @@ import Max.DB.History
   )
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
-import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), EpisodeHandle, SourceRange (..), episodeHandleText, listActiveCompartments)
-import Max.Faces (curatedFaceGroups)
+import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), SourceRange (..), episodeHandleText, listActiveCompartments)
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
+import Max.Prompt.System (systemPrompt)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
 import Max.Util (trySync)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
-
--- | Everything 'renderContext' needs in one record.  Splitting the
--- pipeline into 'PromptInputs' + 'renderContext' lets us unit-test the
--- (large) rendering logic against handwritten fixtures without
--- needing Postgres in the loop.
-data PromptInputs = PromptInputs
-  { -- | Persona from 'AppConfig' — used when 'session.persona' is 'Nothing'.
-    defaultPersona :: !Text,
-    -- | The active session record (carries persona override + pin list).
-    session :: !Session,
-    -- | The @\@-bot@ message that triggered this turn.
-    triggerMessage :: !GroupMessage,
-    -- | One chronological transcript of the conversation: ambient
-    -- group chatter and the bot's own thread with people, interleaved
-    -- and deduped by message id.
-    --
-    -- One list rather than two, and plain text rather than
-    -- @user@\/@assistant@ turns, because a group has N speakers and
-    -- neither wire format can say so — @user@ conflates everybody, and
-    -- @assistant@ drops who the bot was talking to.  A line that names
-    -- its speaker, its time and its id carries strictly more than the
-    -- roles did, and every model reads it, because it is just text.
-    -- (The Chat Completions @name@ field exists for exactly this and is
-    -- the wrong bet: the Responses API dropped it outright, Anthropic
-    -- never had it, and it has no documented validation, so what an
-    -- OpenAI-compatible provider does with it is anyone's guess.)
-    transcript :: ![HistoryItem],
-    -- | Settled chronological history preceding 'transcript'.  Each item
-    -- carries all precomputed fidelity levels; ContextPolicy chooses one
-    -- without invoking an LLM.  Empty in legacy mode.
-    compartments :: ![ContextCompartment],
-    -- | Put history back into real @user@\/@assistant@ turns instead of
-    -- the flat transcript.  Per-profile
-    -- ('Max.ModelCatalog.usesHistoryTurns') so the two shapes can be
-    -- compared on the live bot rather than argued about; see that
-    -- field for the trade.
-    historyTurns :: !Bool,
-    -- | Message ids in 'transcript' that another dispatch is answering
-    -- right now.  Their replies aren't in the messages table yet, so
-    -- they would render as questions the bot still owes an answer to
-    -- and the model helpfully answers them alongside ours — the group
-    -- then gets the same question answered twice.  Dropped from the
-    -- prompt outright: the model can't double-answer what it can't
-    -- see, and unlike an explanatory annotation, an absent line is
-    -- nothing for the model to mistake for something it should say.
-    -- (That is not hypothetical — the annotation this replaced got
-    -- emitted verbatim as a reply.)
-    inFlight :: !(Set Int64),
-    -- | Resolved pin list (preserves the user's pin order).
-    pinnedItems :: ![HistoryItem],
-    -- | If the trigger replied to a message: that message, the files
-    -- attached to it (so the model can address them by file_id), and
-    -- — when the quoted message is a 转发聊天记录 — its stored
-    -- contents, so quoting a forward makes it readable.
-    replyCtx :: !(Maybe (HistoryItem, [FileRecord], [HistoryItem])),
-    -- | When the trigger message itself is a 转发聊天记录: its
-    -- expanded child rows, rendered under the current-message block.
-    triggerForward :: ![HistoryItem],
-    -- | Whether the active profile accepts image content blocks.
-    -- Toggles the format-guide wording for the @[image]@ marker.
-    multimodal :: !Bool,
-    -- | What woke the bot — see 'TriggerOrigin'.  The trigger block
-    -- is labelled honestly per origin: proactive turns get the "no
-    -- one @-ed you" framing with @[silence]@ explicitly offered; poke
-    -- turns say who poked and skip the (empty) message line.
-    origin :: !TriggerOrigin,
-    -- | Pre-rendered 群信息 lines for the [environment] block (group
-    -- name, 群主/管理员 — see 'Max.Roster.renderGroupBrief').  Empty
-    -- for private chats or when the NapCat lookups failed.
-    groupBrief :: ![Text],
-    -- | Long-term memories of this group, oldest first.
-    groupMemories :: ![MemoryItem],
-    -- | Long-term memories of the *triggering* user, confined to the
-    -- ones learned in this group, oldest first.  Other members'
-    -- memories are not injected — the model can @memory_list@ them
-    -- when actually relevant.
-    userMemories :: ![MemoryItem],
-    -- | Already-loaded images to attach to the final user message,
-    -- in display order (context images chronological, trigger's
-    -- last).  Populated only when 'multimodal' AND the image worker
-    -- has finished fetching; otherwise empty and images remain as
-    -- @[image]@ markers in the rendered text.
-    images :: ![PromptImage],
-    -- | Skill index for this group: (name, one-line description)
-    -- pairs, global + group-scoped merged, name-sorted (see
-    -- 'Max.Skills.skillsForGroup').  Rendered into the system prompt's
-    -- 技能对照表; empty = no section, and no @use_skill@ tool either.
-    -- Pairs rather than the full skill record so rendering stays a
-    -- pure function of small fixture-friendly inputs.
-    skills :: ![(Text, Text)],
-    -- | Wall-clock time this turn is being built.  Feeds the system
-    -- prompt's environment block so the model knows the current
-    -- date/time — context lines only carry HH:MM, no date.
-    now :: !UTCTime,
-    -- | Display timezone for every rendered timestamp ('now' and the
-    -- context lines' 'receivedAt' are stored UTC; this localizes them).
-    tz :: !TimeZone
-  }
-
--- | What woke the bot for this turn.
-data TriggerOrigin
-  = -- | A direct @-mention, reply-to-bot, private message, or command.
-    OriginDirect
-  | -- | The intent classifier decided the bot might want to join in
-    -- (no one addressed it).
-    OriginProactive
-  | -- | Someone poked (戳一戳) the bot — a contentless nudge; the
-    -- synthesized trigger 'GroupMessage' has no message id or text.
-    OriginPoke
-  deriving stock (Show, Eq)
-
--- | Process-wide release reader choice.  The emergency mode is deliberately
--- raw-only rather than a resurrection of the retired mention/history lane.
-data ContextReadMode
-  = TieredContext
-  | RawLedgerEmergency
-  deriving stock (Show, Eq)
-
-data CompartmentTier = TierP1 | TierP2 | TierP3 | TierP4
-  deriving stock (Show, Eq, Ord, Enum, Bounded)
-
--- | Pure prompt-facing form of an immutable active compartment.  Keeping all
--- three summaries in the snapshot makes fidelity selection deterministic and
--- rebuild-free inside ContextPolicy.
-data ContextCompartment = ContextCompartment
-  { contextCompartmentId :: !Int64,
-    contextExpandHandle :: !EpisodeHandle,
-    contextStartedAt :: !UTCTime,
-    contextEndedAt :: !UTCTime,
-    contextImportance :: !Double,
-    contextConfidence :: !Double,
-    contextMaterializationVersion :: !Int64,
-    contextSummaryP1 :: !Text,
-    contextSummaryP2 :: !Text,
-    contextSummaryP3 :: !Text,
-    contextTier :: !CompartmentTier
-  }
-  deriving stock (Show, Eq)
-
--- | One inline image for the final user message: a data URL plus a
--- text label naming the source message (\"[HH:MM \<name\>] 消息里的
--- 图片:\") so the model can tie it back to a rendered context line.
-data PromptImage = PromptImage
-  { piLabel :: !Text,
-    -- | @data:\<mime\>;base64,...@
-    piDataUrl :: !Text
-  }
-  deriving stock (Show, Eq)
-
--- | Complete output of the effectful collection step, before any pure prompt
--- selection.  Token safety is owned entirely by 'planContext'.
-data ContextSnapshot = ContextSnapshot
-  { csInputs :: !PromptInputs,
-    csMaterializationVersion :: !(Maybe Int64),
-    csMaterializationReason :: !(Maybe Text)
-  }
-
--- | Deterministic, fully selected context with its budget and decision trace.
--- Rendering this value performs no I/O and no further selection.
-data ContextPlan = ContextPlan
-  { cpInputs :: !PromptInputs,
-    cpBudget :: !ContextBudget,
-    cpEstimatedPromptTokens :: !Int,
-    cpWithinBudget :: !Bool,
-    cpTrace :: ![ContextTrace],
-    cpPolicyVersion :: !Text,
-    cpMaterializationVersion :: !(Maybe Int64),
-    cpMaterializationReason :: !(Maybe Text)
-  }
-
-data HistoryTokenWatermarks = HistoryTokenWatermarks
-  { htwLow :: !Int,
-    htwHigh :: !Int
-  }
 
 -- Group-chat attention gets noisier faster than model windows grow.  These
 -- ceilings keep the protected verbatim tail roomy but stable when a future
@@ -293,123 +147,6 @@ historyTokenWatermarks limits multimodal' =
     }
   where
     promptLimit = (contextBudget limits multimodal').cbPromptTokenLimit
-
--- | Assemble the system prompt: the @persona@ (from session override
--- or AppConfig default), a scene block saying whether this is a
--- group or a one-on-one chat (kept out of the persona so configured
--- personas stay scene-agnostic), a fixed format guide, then the
--- volatile tail — the environment block (current time, roster) and
--- the long-term memory block (if any).  Ordering is deliberate
--- twice over: everything before the environment is byte-identical
--- across dispatches, so provider prefix caches survive between
--- turns of a busy group; and end-of-prompt placement keeps memories
--- low-salience relative to the persona and the live conversation —
--- background, not agenda.
-systemPrompt ::
-  Bool -> -- multimodal
-  Bool -> -- private chat
-  Text -> -- persona
-  [(Text, Text)] -> -- skill index: (name, description), name-sorted
-  Text
-systemPrompt multimodal' private persona skills' =
-  T.unlines $
-    [ persona,
-      "",
-      if private
-        then
-          "对话场景：QQ 一对一私聊。对方的每条消息都是直接对你说的，\
-          \正常对话即可；没有其他人在看。"
-        else
-          "对话场景：QQ 群聊。你同时面对多名群成员，上下文里 [HH:MM <name>] \
-          \前缀标明谁在说话；大部分消息是成员之间的闲聊，只有 @你 或引用你的\
-          \消息才是在叫你。",
-      "",
-      "台下设定（背景知识，永远不要主动提）：你的实现是开源 Haskell 项目 \
-      \github.com/HCHogan/max，走 NapCat (OneBot 11) 接入 QQ。平时完全以你的人设自居，\
-      \不自称 bot/AI/模型，不说\"作为AI\"这类话；群友起哄问\"你是不是机器人\"，\
-      \按人设接梗就行，不承认也不用急着否认。只有对方认真问你的实现/源码/技术细节时，\
-      \才如实聊并给仓库地址——语气照旧，把它当成聊自己的身体构造，不破功。\
-      \认真聊你的行为、部署或命令用法，先用 use_skill 取 self-knowledge；聊高层架构取 self-architecture；需要精确实现、SQL、默认值或 ADR 时用 inspect_source 查随本二进制发布的源码。源码默认值不等于生产环境当前生效配置。",
-      "",
-      "回复风格（重要）：",
-      "  - 你在 QQ 上跟人聊天，不是在写文档；语气像真人，不像 ChatGPT 窗口里答题。",
-      "  - 想说多句话时空一行分段，每段一两句话；空行隔开的段会作为独立消息逐条发出（``` 代码块不拆）；行内要切可用 [split]。",
-      "  - 禁用 markdown 排版：不要标题/粗体/斜体/列表；只有长代码或长引用才用 ``` 块。",
-      "  - 表格是例外：需要对比/罗列数据时可以写 markdown 表格，它会被渲染成图片发出。",
-      "  - 数学式直接写 unicode（如 3×10⁸、α ≤ π/2），不要写 LaTeX——QQ 渲染不了。",
-      "  - 不寒暄、不总结收尾、不复读问题，直接说事。",
-      "  - 要调工具时，把「你打算干嘛」和工具调用写在同一条回复里——正文一句短话，工具调用照发，两者可以同时输出。用户看不见你调了什么，只看得见你卡在那儿不说话。开工、关键步骤成败、改主意时各一句；连着好几轮工具没吭声也该报一下。最终答案等工具跑完再正常写，别在播报里提前答。",
-      "  - 表情用得克制：默认不发，文字说清就够了，不必再配表情包/小黄脸；只有它确实比一句话更到位时才发，一条回复最多一个。（贴在别人消息上的 [silence:表情名] 不算，该用还是用。）",
-      "  - 真要发表情包就把 [sticker#<id>] 单独写成一段（id 取自历史里出现过的表情，或先用 find_stickers 工具搜一个）；别把表情的文字描述打出来当话说。",
-      "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍。",
-      "  - 被 @/引用直接触发时沉默不会完全无声：[silence] 会自动在触发消息上贴一个闭嘴表情（不发消息）。想表达具体情绪可换 [silence:表情名]，名字从小黄脸对照表（见下）挑，如 [silence:吃瓜]。",
-      "  - 政治敏感话题（时政、领导人、体制、意识形态争议这类）一律不聊：不管怎么被 @ 或追问，整条回复 [silence:NO]，不解释、不评价、不劝导。"
-    ]
-      <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行首 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。要 @ 某人写 [@#<QQ号>]（对照表见 [environment]），发出时会转成真正的 @。"
-         | not private
-         ]
-      <> [ "",
-           "占位符语法（整个体系只有一条构词律）：",
-           "  [类型#id: 描述](属性)   —— 描述、(属性) 都是可选的补充，只给你看；id 是数字",
-           "  想发同款/执行动作，只写 [类型#id]，描述和 (属性) 都不要抄（抄了也只认 id）。",
-           "",
-           "你能读到的实体：",
-           "  [sticker#42: 柴犬瘫地]       — 表情包（简介还没生成的显示为 [sticker]，老消息里写作 [动画表情]，暂时没法转发）",
-           "  [face#14: 惊讶]             — QQ 原生小黄脸表情",
-           if multimodal'
-             then "  [image#7405: 简介]          — 群历史里的图片，默认不加载；多数时候看简介就够，要看原图用 view_image 传 id。当前消息/引用/pin 的图直接附在消息末尾（正文里显示 [image]）"
-             else "  [image#7405: 简介] / [image] — 图片（你看不到原图，看简介或请用户描述）",
-           if multimodal'
-             then "  [video#7407: 首帧简介](29秒) — 群里的视频；(29秒) 是实测时长，以它为准（抽帧看视频容易把时长感知错）。被引用或就是当前消息时整段附给你，其余用 view_video 传 id 看"
-             else "  [video#7407: 首帧简介](29秒) — 视频（你看不到画面；时长是实测的）",
-           "  [forward#7519]              — 转发聊天记录；被引用或就是当前消息时自动展开，其余用 view_forward 传 id 看",
-           "  [@#223344556: 名字]          — @某人；对照表见 [environment]",
-           "",
-           "你能写的动作（只有这 8 个，全部在此）：",
-           "  [split]  行内强制分条（一般用空行分段就行）     [↩#id]  段首引用     [@#QQ号]  @某人（直接写 @名字 只是普通文字，对方收不到提醒——必须用 [@#QQ号]，号码查 [environment] 对照表）",
-           "  [sticker#id]  发表情包     [face#id]  发小黄脸     [image#id]  把群里的图转发出来",
-           "  [silence]  沉默（直接触发自动贴闭嘴表情）     [silence:表情名]  沉默并贴指定表情",
-           "",
-           "小黄脸对照表（条目格式 名字#id：[face#id] 发消息用 id，[silence:表情名] 贴表情用名字，都只认这张表）："
-         ]
-      <> [ "  " <> label <> "：" <> T.unwords [name <> "#" <> T.pack (show fid) | (name, fid) <- faces]
-         | (label, faces) <- curatedFaceGroups
-         ]
-      <> [ "",
-           "纯展示（只读，写了也不会发生任何事）：",
-           "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，引用它就写 [↩#那个id]。\
-           \你自己以前说的话也在这份记录里，名字是 Max——那是记录格式，不是说话方式：\
-           \你的回复正文直接写内容，绝对不要带这个行首前缀。",
-           "  [episode#<uuid> 日期..日期 P1/P2/P3] — 更早聊天的可重建摘要；需要原话时把 uuid 传给 context_expand。",
-           "  [↩ quoted ...]               — 用户引用的那条消息（内容已展开；也可用 get_message_by_id 展开任意 id）",
-           "  [card: 来源 | 标题 | 链接]     — 分享卡片；B站卡用 view_bilibili、知乎卡用 view_zhihu，传链接看内容",
-           "  [file:<name>]                — 群文件；用 import_file_to_sandbox 处理",
-           "",
-           "铁律：动作只有上面那 8 个。工具调用永远走工具通道，把工具名写进方括号",
-           "（如 [find_stickers query=...]）不会执行任何东西，也不会发出去。",
-           "",
-           "示范——一条带引用、@、分段、表情包的回复该长这样（id 都要取自上下文，",
-           "别照抄示范里的数字；表情包只写数字 id、单独成段）：",
-           "  [↩#7413] 这是 HardFault，PC 指到 0x08003a2c，查一下链接脚本。",
-           "  [split]",
-           "  [↩#7405] [@#223344556] 你那个是探头打了 1X，切 10X 再看。",
-           "  [split]",
-           "  [sticker#3407]"
-         ]
-      -- The skill index: one line per skill, name-sorted upstream, so
-      -- the section is byte-identical across dispatches until someone
-      -- edits a skill.  The body lives behind the use_skill tool —
-      -- progressive disclosure keeps a 20-skill group from paying 20
-      -- bodies per dispatch.
-      <> ( if null skills'
-             then []
-             else
-               [ "",
-                 "技能对照表（预先写好的做事流程；条目只有一句简介，用 use_skill 传名字\
-                 \取完整说明再照着做。只在简介和手头的事明确对上时取用，日常聊天用不到）："
-               ]
-                 <> ["  " <> n <> "：" <> d | (n, d) <- skills']
-         )
 
 -- Nothing volatile below this point.  The environment block
 -- (current time, per-turn roster) and the memory block used to
@@ -479,6 +216,7 @@ buildContextWithReadMode limits readMode defaultPersona multimodal' historyTurns
   let historyWatermarks = historyTokenWatermarks limits multimodal'
   snapshot <-
     collectContextWithWatermarks
+      PublishMaterialization
       readMode
       (Just historyWatermarks)
       defaultPersona
@@ -541,10 +279,34 @@ collectContext ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContext = collectContextWithWatermarks TieredContext Nothing
+collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing
+
+-- | Read-only collection for admin previews and replay evaluation. It never
+-- publishes a materialization revision or a diagnostic row; callers may pass
+-- the returned snapshot to 'planContext' and render it independently.
+collectContextPreview ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  Text ->
+  Bool ->
+  Bool ->
+  TriggerOrigin ->
+  TimeZone ->
+  [Text] ->
+  [(Text, Text)] ->
+  Set Int64 ->
+  Session ->
+  GroupMessage ->
+  Eff es ContextSnapshot
+collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing
+
+data ContextMutationMode
+  = PublishMaterialization
+  | ReadOnlyPreview
+  deriving stock (Show, Eq)
 
 collectContextWithWatermarks ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  ContextMutationMode ->
   ContextReadMode ->
   Maybe HistoryTokenWatermarks ->
   Text ->
@@ -558,7 +320,7 @@ collectContextWithWatermarks ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContextWithWatermarks readMode materializationWatermarks defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+collectContextWithWatermarks mutationMode readMode materializationWatermarks defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       MessageId mid = gm.messageId
       UserId selfId' = gm.selfId
@@ -601,6 +363,8 @@ collectContextWithWatermarks readMode materializationWatermarks defaultPersona m
           logInfo "context: no active compartment; using token-budgeted raw fallback" $
             object ["group_id" .= gid]
           collectRawFallback "raw_fallback_no_compartments"
+        _ | mutationMode == ReadOnlyPreview ->
+          collectProjectionFallback "read_only_preview" covered
         _ -> do
           when (any (.activeGapBefore) (drop 1 covered)) $
             logAttention "context: invalid gap inside selected compartment suffix" $
@@ -755,8 +519,9 @@ collectContextWithWatermarks readMode materializationWatermarks defaultPersona m
       else pure []
   pure $
     ContextSnapshot
-      { csInputs =
-          PromptInputs
+      { csCandidates =
+          ContextCandidates $
+            PromptInputs
             { defaultPersona = defaultPersona,
               session = s,
               triggerMessage = gm,
@@ -1335,16 +1100,17 @@ renderContext pi' =
 -- message, environment, and attached media are protected here.
 planContext :: ContextLimits -> ContextSnapshot -> ContextPlan
 planContext limits snapshot =
-  let initial = snapshot.csInputs
+  let initial = csInputs snapshot
       budget = contextBudget limits (not (null initial.images))
       initialMessages = renderContext initial
       initialTokens = estimateMessagesTokens initialMessages
-      (selected, drops) = fitContextTo budget.cbPromptTokenLimit initialTokens initial
+      (selectedContext, drops) = selectContextTo contextCostModel budget.cbPromptTokenLimit initialTokens snapshot.csCandidates
+      selected = selectedContext.selectedInputs
       messages = renderContext selected
       estimated = estimateMessagesTokens messages
       withinBudget = estimated <= budget.cbPromptTokenLimit
    in ContextPlan
-        { cpInputs = selected,
+        { cpSelected = selectedContext,
           cpBudget = budget,
           cpEstimatedPromptTokens = estimated,
           cpWithinBudget = withinBudget,
@@ -1368,141 +1134,28 @@ materializationTrace snapshot = case snapshot.csMaterializationVersion of
         )
     ]
 
--- | Stable, LLM-free generational decay.  Wall-clock age is rounded into
--- coarse thresholds, while episode distance and importance keep recent or
--- consequential episodes at higher fidelity.  Topic relevance belongs in the
--- volatile recall lane and deliberately does not rewrite this prefix.
-applyBaseCompartmentTiers :: UTCTime -> [ContextCompartment] -> [ContextCompartment]
-applyBaseCompartmentTiers now' compartments' =
-  [ compartment {contextTier = baseTier distance compartment}
-  | (distance, compartment) <- zip [count - 1, count - 2 .. 0] compartments'
-  ]
-  where
-    count = length compartments'
-    ageDays compartment =
-      max 0 (realToFrac (diffUTCTime now' compartment.contextEndedAt) / 86400 :: Double)
-    baseTier distance compartment
-      | compartment.contextImportance >= 0.9 = TierP1
-      | ageDays compartment <= 7 && compartment.contextConfidence >= 0.5 = TierP1
-      | distance <= 3 && ageDays compartment <= 30 && compartment.contextConfidence >= 0.5 = TierP1
-      | compartment.contextImportance >= 0.7 = TierP2
-      | ageDays compartment <= 30 = TierP2
-      | distance <= 15 && ageDays compartment <= 90 = TierP2
-      | compartment.contextImportance >= 0.4 = TierP3
-      | ageDays compartment <= 180 = TierP3
-      | distance <= 63 && ageDays compartment <= 365 = TierP3
-      | otherwise = TierP4
-
 renderContextPlan :: ContextPlan -> [ChatMessage]
-renderContextPlan = renderContext . (.cpInputs)
+renderContextPlan = renderContext . cpInputs
 
-data PolicyDrop = PolicyDrop
-  { pdSource :: !Text,
-    pdTokens :: !Int
-  }
-
-fitContextTo :: Int -> Int -> PromptInputs -> (PromptInputs, [PolicyDrop])
-fitContextTo tokenLimit initialTokens = go initialTokens []
-  where
-    go estimated dropped inputs
-      | estimated <= tokenLimit = (inputs, reverse dropped)
-      | Just (memory, withoutMemory) <- dropOldestMemory (== "active") inputs =
-          continue estimated (memoryDrop "memory.active" inputs withoutMemory memory) dropped withoutMemory
-      | Just (source, savedTokens, degraded) <- degradeOneCompartment inputs =
-          continue estimated (PolicyDrop source savedTokens) dropped degraded
-      | oldest : rest <- inputs.transcript =
-          let drop' = PolicyDrop "history.raw" (max 1 (estimateTextTokens oldest.renderedText))
-           in continue estimated drop' dropped (inputs {transcript = rest})
-      | Just (memory, withoutMemory) <- dropOldestMemory (== "permanent") inputs =
-          continue estimated (memoryDrop "memory.permanent" inputs withoutMemory memory) dropped withoutMemory
-      | otherwise = (inputs, reverse dropped)
-
-    -- The full prompt is measured once.  The loop subtracts only semantic
-    -- payload cost; removed renderer framing makes the real saving at least as
-    -- large in normal cases, so this stays conservative without coupling the
-    -- policy back to the renderer.
-    continue estimated drop' dropped inputs =
-      go (max 0 (estimated - drop'.pdTokens)) (drop' : dropped) inputs
-
-degradeOneCompartment :: PromptInputs -> Maybe (Text, Int, PromptInputs)
-degradeOneCompartment inputs = case filter ((/= TierP4) . (.contextTier)) inputs.compartments of
-  [] -> Nothing
-  candidates ->
-    let selected = minimumBy (compare `on` degradationKey) candidates
-        nextTier = succ selected.contextTier
-        degraded = selected {contextTier = nextTier}
-        compartments' =
-          map
-            (\compartment -> if compartment.contextCompartmentId == selected.contextCompartmentId then degraded else compartment)
-            inputs.compartments
-        oldTokens = renderedLinesTokens (renderCompartments inputs.tz inputs.compartments)
-        newTokens = renderedLinesTokens (renderCompartments inputs.tz compartments')
-        source =
-          "history.compartment."
-            <> T.toLower (compartmentTierText selected.contextTier)
-            <> "->"
-            <> T.toLower (compartmentTierText nextTier)
-     in Just
-          ( source,
-            blockRemovalCost oldTokens newTokens,
-            inputs {compartments = compartments'}
-          )
-  where
-    degradationKey compartment =
-      ( compartment.contextImportance,
-        compartment.contextEndedAt,
-        compartment.contextMaterializationVersion,
-        compartment.contextCompartmentId
-      )
-
-memoryDrop :: Text -> PromptInputs -> PromptInputs -> MemoryItem -> PolicyDrop
-memoryDrop source before after memory =
-  PolicyDrop source (max contentTokens (blockRemovalCost beforeTokens afterTokens))
-  where
-    contentTokens = max 1 (estimateTextTokens memory.memContent)
-    memoryTokens inputs =
-      maybe
-        0
+contextCostModel :: ContextCostModel
+contextCostModel =
+  ContextCostModel
+    { ccmMemoryBlockTokens = \inputs ->
+        maybe
+          0
+          estimateTextTokens
+          ( renderMemories
+              inputs.tz
+              (isPrivateChat inputs.triggerMessage.groupId)
+              (senderDisplayName inputs.triggerMessage)
+              inputs.groupMemories
+              inputs.userMemories
+          ),
+      ccmCompartmentBlockTokens =
         estimateTextTokens
-        ( renderMemories
-            inputs.tz
-            (isPrivateChat inputs.triggerMessage.groupId)
-            (senderDisplayName inputs.triggerMessage)
-            inputs.groupMemories
-            inputs.userMemories
-        )
-    beforeTokens = memoryTokens before
-    afterTokens = memoryTokens after
-
-renderedLinesTokens :: [Text] -> Int
-renderedLinesTokens = estimateTextTokens . T.intercalate "\n"
-
--- Removing an optional block also removes the surrounding blank-line and
--- section framing in 'renderUser'.  Those separators are intentionally not
--- part of the block renderer, so carry a small conservative allowance here.
-blockRemovalCost :: Int -> Int -> Int
-blockRemovalCost before after = max 1 (before - after + 8)
-
-dropOldestMemory :: (Text -> Bool) -> PromptInputs -> Maybe (MemoryItem, PromptInputs)
-dropOldestMemory lifecycleMatches inputs = case candidates of
-  [] -> Nothing
-  _ ->
-    let (lane, oldest) = minimumBy (compare `on` candidateKey) candidates
-        without = case lane of
-          GroupMemory -> inputs {groupMemories = removeMemory oldest.memId inputs.groupMemories}
-          UserMemory -> inputs {userMemories = removeMemory oldest.memId inputs.userMemories}
-     in Just (oldest, without)
-  where
-    candidates =
-      [(GroupMemory, memory) | memory <- inputs.groupMemories, lifecycleMatches memory.memLifecycle]
-        <> [(UserMemory, memory) | memory <- inputs.userMemories, lifecycleMatches memory.memLifecycle]
-    candidateKey (lane, memory) = (memory.memUpdatedAt, memory.memId, lane)
-
-data MemoryLane = GroupMemory | UserMemory
-  deriving stock (Show, Eq, Ord)
-
-removeMemory :: MemoryId -> [MemoryItem] -> [MemoryItem]
-removeMemory target = filter ((/= target) . (.memId))
+          . T.intercalate "\n"
+          . (\inputs -> renderCompartments inputs.tz inputs.compartments)
+    }
 
 contextTrace :: ContextBudget -> PromptInputs -> [ChatMessage] -> [PolicyDrop] -> Bool -> [ContextTrace]
 contextTrace budget inputs messages drops withinBudget =
@@ -2012,20 +1665,6 @@ renderCompartments tz' compartments' = case mapMaybe renderOne compartments' of
           <> compartmentTierText compartment.contextTier
           <> "]: "
           <> oneLine summary
-
-selectedCompartmentSummary :: ContextCompartment -> Maybe Text
-selectedCompartmentSummary compartment = case compartment.contextTier of
-  TierP1 -> Just compartment.contextSummaryP1
-  TierP2 -> Just compartment.contextSummaryP2
-  TierP3 -> Just compartment.contextSummaryP3
-  TierP4 -> Nothing
-
-compartmentTierText :: CompartmentTier -> Text
-compartmentTierText = \case
-  TierP1 -> "P1"
-  TierP2 -> "P2"
-  TierP3 -> "P3"
-  TierP4 -> "P4"
 
 renderHistoryLine :: TimeZone -> Int64 -> HistoryItem -> Text
 renderHistoryLine tz' selfId' h =

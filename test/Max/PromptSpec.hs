@@ -15,7 +15,7 @@ import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
-import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, applyVideoCaptions, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
+import Max.Prompt (CompartmentTier (..), ContextCandidates (..), ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, applyVideoCaptions, cpInputs, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -764,7 +764,7 @@ spec = do
           shortPlan = planContext generousLimits (snapshot shortOnly)
           tightLimits = ContextLimits shortPlan.cpEstimatedPromptTokens 512 0 0
           pressured = planContext tightLimits (snapshot baseInputs {transcript = [veryLong, short]})
-      map (.messageId) pressured.cpInputs.transcript `shouldBe` [short.messageId]
+      map (.messageId) (cpInputs pressured).transcript `shouldBe` [short.messageId]
       pressured.cpWithinBudget `shouldBe` True
       pressured.cpTrace
         `shouldSatisfy` any (\trace -> trace.ctSource == "history.raw" && trace.ctDecision == ContextDropped)
@@ -778,8 +778,8 @@ spec = do
             planContext
               tightLimits
               (snapshot rawOnly {groupMemories = [memAt 20 (T.replicate 1000 "old memory ")]})
-      map (.messageId) pressured.cpInputs.transcript `shouldBe` [recent.messageId]
-      pressured.cpInputs.groupMemories `shouldSatisfy` null
+      map (.messageId) (cpInputs pressured).transcript `shouldBe` [recent.messageId]
+      (cpInputs pressured).groupMemories `shouldSatisfy` null
       pressured.cpWithinBudget `shouldBe` True
 
     it "reports an over-budget plan when only protected sources remain" $ do
@@ -794,7 +794,7 @@ spec = do
           recent = compartmentAt 2 (timeAt 10) 0.5 "recent P1" "recent P2" "recent P3"
           plan = planContext generousLimits (tieredSnapshot baseInputs {compartments = [old, recent], transcript = [raw]})
           (_, body) = splitMessages (renderContextPlan plan)
-      map (.contextTier) plan.cpInputs.compartments `shouldBe` [TierP4, TierP1]
+      map (.contextTier) (cpInputs plan).compartments `shouldBe` [TierP4, TierP1]
       body `shouldSatisfy` ("[episode#00000000-0000-0000-0000-000000000002" `T.isInfixOf`)
       body `shouldSatisfy` ("recent P1" `T.isInfixOf`)
       body `shouldSatisfy` (not . ("old P3" `T.isInfixOf`))
@@ -806,8 +806,8 @@ spec = do
           tightLimits = ContextLimits rawPlan.cpEstimatedPromptTokens 512 0 0
           large = compartmentAt 1 (timeAt 10) 0.5 (T.replicate 4000 "P1 ") (T.replicate 2000 "P2 ") (T.replicate 500 "P3 ")
           pressured = planContext tightLimits (tieredSnapshot baseInputs {compartments = [large], transcript = [raw]})
-      map (.messageId) pressured.cpInputs.transcript `shouldBe` [raw.messageId]
-      map (.contextTier) pressured.cpInputs.compartments `shouldBe` [TierP4]
+      map (.messageId) (cpInputs pressured).transcript `shouldBe` [raw.messageId]
+      map (.contextTier) (cpInputs pressured).compartments `shouldBe` [TierP4]
       pressured.cpTrace
         `shouldSatisfy` any (\trace -> trace.ctSource == "history.compartment.p3->p4" && trace.ctDecision == ContextDropped)
 
@@ -834,12 +834,12 @@ episodeHandleAt cid =
     (parseEpisodeHandle ("00000000-0000-0000-0000-" <> T.justifyRight 12 '0' (T.pack (show cid))))
 
 snapshot :: PromptInputs -> ContextSnapshot
-snapshot inputs = ContextSnapshot inputs Nothing Nothing
+snapshot inputs = ContextSnapshot (ContextCandidates inputs) Nothing Nothing
 
 tieredSnapshot :: PromptInputs -> ContextSnapshot
 tieredSnapshot inputs =
   ContextSnapshot
-    inputs {compartments = applyBaseCompartmentTiers inputs.now inputs.compartments}
+    (ContextCandidates (inputs {compartments = applyBaseCompartmentTiers inputs.now inputs.compartments}))
     (Just 1)
     (Just "initial_materialization")
 

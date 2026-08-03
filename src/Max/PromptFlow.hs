@@ -52,6 +52,7 @@ import Max.EpisodeStore (EpisodeExpansion (..), EpisodeHandle, SourceRange (..),
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
+import Max.Context.Types (ContextCandidates (..))
 import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
 import Max.Session (Session (..))
@@ -345,7 +346,7 @@ initialMessages =
   renderContextPlan $
     planContext
       defaultContextLimits
-      (ContextSnapshot promptFixture Nothing Nothing)
+      (ContextSnapshot (ContextCandidates promptFixture) Nothing Nothing)
 
 promptFixture :: PromptInputs
 promptFixture =

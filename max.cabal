@@ -96,6 +96,8 @@ library
         Max.ContextAdmin
         Max.ContextMaterialization
         Max.Context
+        Max.Context.Policy
+        Max.Context.Types
         Max.ContextTraceStore
         Max.ConversationScope
         Max.MCP.Client
@@ -151,6 +153,7 @@ library
         Max.ModelCatalog
         Max.Platform
         Max.Prompt
+        Max.Prompt.System
         Max.PromptFlow
         Max.Recall
         Max.Reminder

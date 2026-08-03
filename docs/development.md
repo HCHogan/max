@@ -40,8 +40,6 @@ Pure logic in `test/` mirroring the library layout:
   state, and attachment budgets that survive per-round drains
 - `Max.Effects.ToolsSpec` — catalog uniqueness/schema/metadata validation,
   argument rejection before execution, and typed recovery outcomes
-- `Max.PromptSpec` — one-measurement incremental context selection, stable
-  generational degradation, protected context, and deterministic rendering
 - `Max.LLM.StreamSpec` — SSE framing and the OpenAI/Anthropic delta reducers,
   replayed from recorded wire bytes
 - `Max.LogSpec` — compact log line formatting
@@ -65,7 +63,9 @@ Pure logic in `test/` mirroring the library layout:
   `history_as_turns` shape (including that neither can produce two consecutive
   same-role messages), section ordering, roster/名片 identity, 私聊 scene,
   memory block placement, quoted-forward expansion, in-flight hiding, and
-  deterministic P1/P2/P3/P4 decay before a token-sized raw tail
+  deterministic P1/P2/P3/P4 decay before a token-sized raw tail; context
+  candidates and selected plans are distinct types, and selection uses one
+  full-prompt measurement plus block-local cost deltas
 - `Max.PromptFlowSpec` — generated `docs/prompt-flow.md` matches the live
   Prompt → Agent → LLM rendering path, including P1/P2/P3/P4 omission,
   unified recall result rendering, and one-turn episode expansion (regenerate

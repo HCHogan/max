@@ -161,7 +161,7 @@ uncovered raw rows, then pages backward over prompt-eligible messages after the
 suffix's exact end cursor until the model-derived token target is covered.
 Partial older
 backfills stay out of the stable prefix when a raw gap separates them. The pure
-ContextPolicy assigns P1/P2/P3/P4 using coarse age, episode distance,
+`Max.Context.Policy` assigns P1/P2/P3/P4 using coarse age, episode distance,
 importance, confidence, and token pressure; P4 remains stored but is omitted
 from the default prompt. The selected tiers, source compartment ids/projection
 versions, policy version, and exact raw-tail cursor live in a CAS-versioned
@@ -189,6 +189,11 @@ Planning measures the complete candidate prompt once, then applies
 deterministic block-local cost deltas while degrading it; the selection loop no
 longer invokes the full renderer for every discarded item. The selected result
 is rendered once for the final exact budget and trace observation.
+`Max.Context.Types` makes unselected `ContextCandidates` and selected
+`SelectedContext` different pipeline values, while `Max.Prompt.System` owns the
+stable system prefix. `collectContextPreview` is the read-only collection path
+for admin/evaluation: it can be planned and rendered without publishing a
+materialization revision or context-plan trace.
 At Historian startup, exact oldest-first backfill jobs fill any raw gaps at or
 before migration 041's deployment baseline. Each token-sized range stops before
 the next active owner, publishes under the ordinary source-hash/exclusion
