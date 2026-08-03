@@ -23,14 +23,13 @@ import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Media (StoredVideo (..), fetchMessageVideoInScope)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.Time (fmtDurationSec)
-import Max.ToolContext (ToolContext, toolGroupId)
+import Max.ToolContext (ToolContext, toolConversationScope)
 
 videoToolsFor ::
   (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
@@ -70,7 +69,7 @@ viewVideoTool dc =
                       bytes
     }
   where
-    scope = conversationScopeFor (toolGroupId dc)
+    scope = toolConversationScope dc
 
     -- Stated duration beats the model's own sampled-frame guess.
     attach mid mDur mime bytes = do

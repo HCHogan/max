@@ -37,6 +37,8 @@ Pure logic in `test/` mirroring the library layout:
   state, and attachment budgets that survive per-round drains
 - `Max.Effects.ToolsSpec` — catalog uniqueness/schema/metadata validation,
   argument rejection before execution, and typed recovery outcomes
+- `Max.PromptSpec` — one-measurement incremental context selection, stable
+  generational degradation, protected context, and deterministic rendering
 - `Max.LLM.StreamSpec` — SSE framing and the OpenAI/Anthropic delta reducers,
   replayed from recorded wire bytes
 - `Max.LogSpec` — compact log line formatting

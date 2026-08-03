@@ -7,7 +7,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Embedding (Embedding)
 import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.Tools (Tool (..))
-import Max.ToolContext (ToolContext (..), TurnCapabilities (..), TurnIdentity (..))
+import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import Max.Tools (builtinsFor)
 import Max.Tools.Memory (memoryToolsFor)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -19,7 +19,7 @@ type MemoryEffects = '[WithConnection, Log, IOE]
 
 toolContext :: ToolContext
 toolContext =
-  ToolContext
+  mkToolContext
     (TurnIdentity (GroupId 123) (MessageId 456) (UserId 789) (UserId 999))
     (TurnCapabilities False False False)
 

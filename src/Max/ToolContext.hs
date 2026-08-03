@@ -5,7 +5,10 @@
 module Max.ToolContext
   ( TurnIdentity (..),
     TurnCapabilities (..),
-    ToolContext (..),
+    ToolContext,
+    mkToolContext,
+    toolCapabilities,
+    toolConversationScope,
     toolGroupId,
     toolMessageId,
     toolUserId,
@@ -16,6 +19,7 @@ module Max.ToolContext
   )
 where
 
+import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import OneBot.Types (GroupId, MessageId, UserId)
 
 data TurnIdentity = TurnIdentity
@@ -35,9 +39,20 @@ data TurnCapabilities = TurnCapabilities
 
 data ToolContext = ToolContext
   { toolIdentity :: !TurnIdentity,
-    toolCapabilities :: !TurnCapabilities
+    toolCapabilities :: !TurnCapabilities,
+    toolConversationScope :: !ConversationScope
   }
   deriving stock (Show, Eq)
+
+-- | Mint current-turn authority from the already-authorized inbound identity.
+-- Model arguments never participate in this construction.
+mkToolContext :: TurnIdentity -> TurnCapabilities -> ToolContext
+mkToolContext identity capabilities =
+  ToolContext
+    { toolIdentity = identity,
+      toolCapabilities = capabilities,
+      toolConversationScope = conversationScopeFor identity.tiGroupId
+    }
 
 toolGroupId :: ToolContext -> GroupId
 toolGroupId = (.toolIdentity.tiGroupId)

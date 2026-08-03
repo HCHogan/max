@@ -1337,7 +1337,9 @@ planContext :: ContextLimits -> ContextSnapshot -> ContextPlan
 planContext limits snapshot =
   let initial = snapshot.csInputs
       budget = contextBudget limits (not (null initial.images))
-      (selected, drops) = fitContextTo budget.cbPromptTokenLimit initial
+      initialMessages = renderContext initial
+      initialTokens = estimateMessagesTokens initialMessages
+      (selected, drops) = fitContextTo budget.cbPromptTokenLimit initialTokens initial
       messages = renderContext selected
       estimated = estimateMessagesTokens messages
       withinBudget = estimated <= budget.cbPromptTokenLimit
@@ -1399,21 +1401,28 @@ data PolicyDrop = PolicyDrop
     pdTokens :: !Int
   }
 
-fitContextTo :: Int -> PromptInputs -> (PromptInputs, [PolicyDrop])
-fitContextTo tokenLimit = go []
+fitContextTo :: Int -> Int -> PromptInputs -> (PromptInputs, [PolicyDrop])
+fitContextTo tokenLimit initialTokens = go initialTokens []
   where
-    go dropped inputs
-      | estimateMessagesTokens (renderContext inputs) <= tokenLimit = (inputs, reverse dropped)
+    go estimated dropped inputs
+      | estimated <= tokenLimit = (inputs, reverse dropped)
       | Just (memory, withoutMemory) <- dropOldestMemory (== "active") inputs =
-          go (memoryDrop "memory.active" memory : dropped) withoutMemory
+          continue estimated (memoryDrop "memory.active" inputs withoutMemory memory) dropped withoutMemory
       | Just (source, savedTokens, degraded) <- degradeOneCompartment inputs =
-          go (PolicyDrop source savedTokens : dropped) degraded
+          continue estimated (PolicyDrop source savedTokens) dropped degraded
       | oldest : rest <- inputs.transcript =
-          let tokens = max 1 (estimateTextTokens oldest.renderedText)
-           in go (PolicyDrop "history.raw" tokens : dropped) (inputs {transcript = rest})
+          let drop' = PolicyDrop "history.raw" (max 1 (estimateTextTokens oldest.renderedText))
+           in continue estimated drop' dropped (inputs {transcript = rest})
       | Just (memory, withoutMemory) <- dropOldestMemory (== "permanent") inputs =
-          go (memoryDrop "memory.permanent" memory : dropped) withoutMemory
+          continue estimated (memoryDrop "memory.permanent" inputs withoutMemory memory) dropped withoutMemory
       | otherwise = (inputs, reverse dropped)
+
+    -- The full prompt is measured once.  The loop subtracts only semantic
+    -- payload cost; removed renderer framing makes the real saving at least as
+    -- large in normal cases, so this stays conservative without coupling the
+    -- policy back to the renderer.
+    continue estimated drop' dropped inputs =
+      go (max 0 (estimated - drop'.pdTokens)) (drop' : dropped) inputs
 
 degradeOneCompartment :: PromptInputs -> Maybe (Text, Int, PromptInputs)
 degradeOneCompartment inputs = case filter ((/= TierP4) . (.contextTier)) inputs.compartments of
@@ -1422,8 +1431,12 @@ degradeOneCompartment inputs = case filter ((/= TierP4) . (.contextTier)) inputs
     let selected = minimumBy (compare `on` degradationKey) candidates
         nextTier = succ selected.contextTier
         degraded = selected {contextTier = nextTier}
-        oldTokens = maybe 0 estimateTextTokens (selectedCompartmentSummary selected)
-        newTokens = maybe 0 estimateTextTokens (selectedCompartmentSummary degraded)
+        compartments' =
+          map
+            (\compartment -> if compartment.contextCompartmentId == selected.contextCompartmentId then degraded else compartment)
+            inputs.compartments
+        oldTokens = renderedLinesTokens (renderCompartments inputs.tz inputs.compartments)
+        newTokens = renderedLinesTokens (renderCompartments inputs.tz compartments')
         source =
           "history.compartment."
             <> T.toLower (compartmentTierText selected.contextTier)
@@ -1431,13 +1444,8 @@ degradeOneCompartment inputs = case filter ((/= TierP4) . (.contextTier)) inputs
             <> T.toLower (compartmentTierText nextTier)
      in Just
           ( source,
-            max 1 (oldTokens - newTokens),
-            inputs
-              { compartments =
-                  map
-                    (\compartment -> if compartment.contextCompartmentId == selected.contextCompartmentId then degraded else compartment)
-                    inputs.compartments
-              }
+            blockRemovalCost oldTokens newTokens,
+            inputs {compartments = compartments'}
           )
   where
     degradationKey compartment =
@@ -1447,9 +1455,33 @@ degradeOneCompartment inputs = case filter ((/= TierP4) . (.contextTier)) inputs
         compartment.contextCompartmentId
       )
 
-memoryDrop :: Text -> MemoryItem -> PolicyDrop
-memoryDrop source memory =
-  PolicyDrop source (max 1 (estimateTextTokens memory.memContent))
+memoryDrop :: Text -> PromptInputs -> PromptInputs -> MemoryItem -> PolicyDrop
+memoryDrop source before after memory =
+  PolicyDrop source (max contentTokens (blockRemovalCost beforeTokens afterTokens))
+  where
+    contentTokens = max 1 (estimateTextTokens memory.memContent)
+    memoryTokens inputs =
+      maybe
+        0
+        estimateTextTokens
+        ( renderMemories
+            inputs.tz
+            (isPrivateChat inputs.triggerMessage.groupId)
+            (senderDisplayName inputs.triggerMessage)
+            inputs.groupMemories
+            inputs.userMemories
+        )
+    beforeTokens = memoryTokens before
+    afterTokens = memoryTokens after
+
+renderedLinesTokens :: [Text] -> Int
+renderedLinesTokens = estimateTextTokens . T.intercalate "\n"
+
+-- Removing an optional block also removes the surrounding blank-line and
+-- section framing in 'renderUser'.  Those separators are intentionally not
+-- part of the block renderer, so carry a small conservative allowance here.
+blockRemovalCost :: Int -> Int -> Int
+blockRemovalCost before after = max 1 (before - after + 8)
 
 dropOldestMemory :: (Text -> Bool) -> PromptInputs -> Maybe (MemoryItem, PromptInputs)
 dropOldestMemory lifecycleMatches inputs = case candidates of

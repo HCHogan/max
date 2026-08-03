@@ -25,7 +25,6 @@ import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope)
 import Max.DB.Media (StoredImage (..), fetchMessageImagesInScope)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
@@ -34,7 +33,7 @@ import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Time (fmtHM)
-import Max.ToolContext (ToolContext, toolGroupId, toolMultimodal)
+import Max.ToolContext (ToolContext, toolConversationScope, toolMultimodal)
 
 -- | Same per-image cap as the prompt builder's inline path.
 maxImageBytes :: Int
@@ -84,7 +83,7 @@ viewImageTool tz dc =
     parseArgs :: Object -> Parser Int64
     parseArgs o = o .: "message_id"
 
-    scope = conversationScopeFor (toolGroupId dc)
+    scope = toolConversationScope dc
 
     -- "[10:32 Alice] 消息里的图片" — mirrors the label the prompt
     -- builder puts on inline images, so both kinds read the same.

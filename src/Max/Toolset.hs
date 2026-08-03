@@ -42,7 +42,7 @@ import Max.Effects.Tools
   )
 import Max.Env (BotEnv (..))
 import Max.HttpRuntime (HttpRuntime)
-import Max.ToolContext (ToolContext (..), TurnCapabilities (..), toolGroupId, toolMultimodal, toolSelfId, toolStickers)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolStickers)
 import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
@@ -82,7 +82,7 @@ allToolsFor ::
   ToolContext ->
   Either ToolCatalogError (ToolCatalog es)
 allToolsFor runtime env dc =
-  buildToolCatalog (toolDefinitionsFor env (toolGroupId dc) dc.toolCapabilities) runners
+  buildToolCatalog (toolDefinitionsFor env (toolGroupId dc) (toolCapabilities dc)) runners
   where
     runners =
       builtinsFor env.beTimeZone dc
@@ -94,7 +94,7 @@ allToolsFor runtime env dc =
         <> skillToolsFor env.beSkills dc
         <> bilibiliToolsFor env.beTimeZone dc
         <> sandboxToolsFor env.beTimeZone (toolGroupId dc) env.beSandboxes
-        <> fileToolsFor env.beTimeZone (toolGroupId dc) (toolSelfId dc) env.beSandboxes
+        <> fileToolsFor env.beTimeZone dc env.beSandboxes
         <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsFor]
         <> maybe [] (searchToolsFor runtime) env.beSearch
         <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]

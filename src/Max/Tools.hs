@@ -27,7 +27,7 @@ import Data.Time (LocalTime, TimeZone, defaultTimeLocale, localTimeToUTC, parseT
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
+import Max.ConversationScope (currentConversationRecall)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..), bestName, fetchForwardChildrenInScope, fetchMessageInScope)
 import Max.Effects.Embedding (Embedding, embedBatch, renderEmbeddingFault)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
@@ -37,7 +37,7 @@ import Max.EpisodeStore (EpisodeExpansion (..), SourceRange (..), episodeHandleT
 import Max.Prompt (tagMediaMarkers)
 import Max.Recall (RecallHit (..), searchRecall)
 import Max.Time (fmtDateHM)
-import Max.ToolContext (ToolContext, toolGroupId)
+import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId)
 import Max.Tools.SelfSource (selfSourceTools)
 import OneBot.Action (Action (..), Response (..))
 import OneBot.Types (UserId (..))
@@ -91,7 +91,7 @@ getMessageByIdTool tz dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
-          m <- fetchMessageInScope (conversationScopeFor (toolGroupId dc)) mid
+          m <- fetchMessageInScope (toolConversationScope dc) mid
           pure $ Right (toJSON (fmap (historyItemSummary tz . tagMediaMarkers) m))
     }
   where
@@ -140,7 +140,7 @@ contextSearchTool tz dc =
           | T.null (T.strip rawQuery) -> pure (Left "bad args: query cannot be blank")
           | otherwise -> do
               embedding <- bestEffortRecallEmbedding "context_search" rawQuery
-              let scope = conversationScopeFor (toolGroupId dc)
+              let scope = toolConversationScope dc
               hits <- searchRecall (currentConversationRecall scope) rawQuery embedding limit
               pure . Right $
                 contextSearchSummary
@@ -242,7 +242,7 @@ contextExpandTool tz dc =
         Right (rawHandle, after, limit) -> case parseEpisodeHandle rawHandle of
           Nothing -> pure (Left "bad args: handle must be the UUID from an [episode#...] marker")
           Just handle -> do
-            let scope = conversationScopeFor (toolGroupId dc)
+            let scope = toolConversationScope dc
             expanded <-
               expandEpisode
                 (currentConversationRecall scope)
@@ -346,7 +346,7 @@ viewForwardTool tz dc =
         Right (mid :: Int64) -> do
           kids <-
             fetchForwardChildrenInScope
-              (conversationScopeFor (toolGroupId dc))
+              (toolConversationScope dc)
               mid
               maxForwardChildren
           if null kids

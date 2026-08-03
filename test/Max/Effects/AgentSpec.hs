@@ -38,7 +38,7 @@ import Max.Effects.Tools
   )
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Tasks (beginTurnRuntime, finishTurnRuntime, newTaskRegistry)
-import Max.ToolContext (ToolContext (..), TurnCapabilities (..), TurnIdentity (..))
+import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
 
@@ -108,7 +108,7 @@ echoDefinition =
 dispatchContext :: AgentContext
 dispatchContext =
   AgentContext
-    ( ToolContext
+    ( mkToolContext
         (TurnIdentity (GroupId 7777) (MessageId 7413) (UserId 2001) (UserId 1000))
         (TurnCapabilities False True False)
     )

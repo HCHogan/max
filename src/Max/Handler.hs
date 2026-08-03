@@ -72,7 +72,7 @@ import Max.Tasks
     setTurnPhase,
     turnRuntimeTaskId,
   )
-import Max.ToolContext (ToolContext (..), TurnCapabilities (..), TurnIdentity (..))
+import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..))
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
@@ -909,7 +909,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       let debugEff = fromMaybe env.beDebugDefault s.debugOverride
           stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
           toolCtx =
-            ToolContext
+            mkToolContext
               (TurnIdentity gm.groupId gm.messageId gm.userId gm.selfId)
               (TurnCapabilities multimodal stickersEff (not (null skills)))
           agentCtx = AgentContext toolCtx s.effortOverride

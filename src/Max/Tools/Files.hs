@@ -40,7 +40,7 @@ import Data.UUID.V4 (nextRandom)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.ConversationScope (conversationScopeFor)
+import Max.ConversationScope (ConversationScope)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.Message (MessageKind (KindChat))
@@ -53,6 +53,7 @@ import Max.ReplySend (modelTextSegs)
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
+import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolSelfId)
 import Max.Util (withTempDirectory)
 import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..))
 import OneBot.Segment (Segment (..), imageSeg)
@@ -76,16 +77,18 @@ fileToolsFor ::
     IOE :> es
   ) =>
   TimeZone ->
-  GroupId ->
-  UserId -> -- bot self id, for persisted visible tool output
+  ToolContext ->
   SandboxRegistry ->
   [Tool es]
-fileToolsFor tz gid selfId sandboxes =
+fileToolsFor tz dc sandboxes =
   [ listRecentFilesTool tz gid,
-    importFileToSandboxTool gid sandboxes,
+    importFileToSandboxTool (toolConversationScope dc) gid sandboxes,
     sendImageFromSandboxTool gid selfId sandboxes,
     sendFileFromSandboxTool gid sandboxes
   ]
+  where
+    gid = toolGroupId dc
+    selfId = toolSelfId dc
 
 --------------------------------------------------------------------------------
 -- list_recent_files
@@ -152,10 +155,11 @@ importFileToSandboxTool ::
     Log :> es,
     IOE :> es
   ) =>
+  ConversationScope ->
   GroupId ->
   SandboxRegistry ->
   Tool es
-importFileToSandboxTool gid sandboxes =
+importFileToSandboxTool scope gid sandboxes =
   Tool
     { toolName = "import_file_to_sandbox",
       toolDescription =
@@ -179,7 +183,7 @@ importFileToSandboxTool gid sandboxes =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (fid, sid, mDest) -> do
-          mFile <- DBFiles.fetchByFileIdInScope (conversationScopeFor gid) fid
+          mFile <- DBFiles.fetchByFileIdInScope scope fid
           case mFile of
             Nothing -> pure (Left "unknown file_id (try list_recent_files first)")
             Just r -> case r.frBlobRef of

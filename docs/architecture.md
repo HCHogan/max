@@ -185,6 +185,10 @@ restoring the retired mention lane or changing source/projection data.
 The global `context.force_raw_fallback` release switch bypasses projection reads
 for every conversation and uses the same token-budgeted raw ledger; it neither
 deletes projections nor stops Historian, so disabling it restores tiered reads.
+Planning measures the complete candidate prompt once, then applies
+deterministic block-local cost deltas while degrading it; the selection loop no
+longer invokes the full renderer for every discarded item. The selected result
+is rendered once for the final exact budget and trace observation.
 At Historian startup, exact oldest-first backfill jobs fill any raw gaps at or
 before migration 041's deployment baseline. Each token-sized range stops before
 the next active owner, publishes under the ordinary source-hash/exclusion
@@ -375,8 +379,11 @@ failed-before-effect, succeeded, committed, or outcome-unknown, while keeping
 the existing model-facing error strings. `!version` counts the same gated
 inventory used to build the live catalog.
 
-`ToolContext` contains only turn identity and capability gates, so concrete
-tools do not import `Agent`. `ToolOutput` owns a fresh media queue per turn;
+`ToolContext` is opaque and is minted once from the already-authorized inbound
+turn identity. It carries current-conversation authority alongside capability
+gates; model-provided ids can select resources only inside that scope and
+cannot construct another conversation authority. Concrete tools do not import
+`Agent`. `ToolOutput` owns a fresh media queue per turn;
 draining a round clears queued media but preserves the turn-wide attachment
 counter. This prevents concurrent turns from sharing output state and keeps
 mutable queue mechanics out of context records. Embedding consumers use the

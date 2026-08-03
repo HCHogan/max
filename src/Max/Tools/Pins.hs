@@ -18,12 +18,11 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (fetchMessageInScope)
 import Max.Effects.Tools (Tool (..))
 import Max.Session (Session (..), SessionRegistry, loadSession, updateSession)
 import Max.Session qualified as Session
-import Max.ToolContext (ToolContext, toolGroupId)
+import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId)
 
 pinToolsFor ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
@@ -74,7 +73,7 @@ pinTool sessions defaultModel dc =
       toolRun = \args -> case parseEither (withObject "args" parseMessageId) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid ->
-          fetchMessageInScope (conversationScopeFor (toolGroupId dc)) mid >>= \case
+          fetchMessageInScope (toolConversationScope dc) mid >>= \case
             Nothing -> pure $ Left ("找不到 message_id=" <> tshow mid)
             Just _ -> do
               t <- loadSession sessions defaultModel (toolGroupId dc)

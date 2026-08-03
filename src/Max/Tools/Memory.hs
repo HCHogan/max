@@ -36,7 +36,7 @@ import Data.Text qualified as T
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
+import Max.ConversationScope (currentConversationRecall)
 import Max.Effects.Tools (Tool (..))
 import Max.MemoryStore
   ( ExpectedVersion (..),
@@ -60,7 +60,7 @@ import Max.MemoryStore
     updateVisibleMemory,
     userMemoryNamespace,
   )
-import Max.ToolContext (ToolContext, toolGroupId, toolMessageId, toolUserId)
+import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolMessageId, toolUserId)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
 -- | Per (scope, scope_id) ceiling.  Hitting it turns 'memory_save'
@@ -133,7 +133,7 @@ saveTool dc =
         Right (scopeRaw, content, mUid) -> do
           let GroupId gid = toolGroupId dc
               UserId triggerUid = toolUserId dc
-              conversation = conversationScopeFor (toolGroupId dc)
+              conversation = toolConversationScope dc
           case parseScope scopeRaw of
             Nothing -> pure $ Left "scope 必须是 group 或 user"
             Just scope -> case checkContent content of
@@ -214,7 +214,7 @@ updateTool dc =
             Right c -> do
               let UserId triggerUid = toolUserId dc
                   MessageId sourceMessage = toolMessageId dc
-                  conversation = conversationScopeFor (toolGroupId dc)
+                  conversation = toolConversationScope dc
                   actor = MemoryActor ActorAgentTool (Just triggerUid) (Just "memory_update tool")
               result <-
                 updateVisibleMemory
@@ -262,7 +262,7 @@ forgetTool dc =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, version) -> do
           let UserId triggerUid = toolUserId dc
-              conversation = conversationScopeFor (toolGroupId dc)
+              conversation = toolConversationScope dc
               actor = MemoryActor ActorAgentTool (Just triggerUid) (Just "memory_forget tool")
           result <-
             archiveVisibleMemory
@@ -318,7 +318,7 @@ listTool dc =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, mSid) -> do
           let UserId triggerUid = toolUserId dc
-              conversation = conversationScopeFor (toolGroupId dc)
+              conversation = toolConversationScope dc
           case parseScope scopeRaw of
             Nothing -> pure $ Left "scope 必须是 group 或 user"
             Just scope -> do
