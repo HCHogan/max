@@ -14,6 +14,56 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
+  it "promotes an existing QQ endpoint when a configured Matrix mirror attaches" $ do
+    qq <-
+      withDb pool $
+        ensureLegacyEndpoint
+          PlatformQQ
+          (NativeAccountId "9")
+          (NativeConversationId "42")
+          ConversationGroup
+          42
+          textCapabilities
+    matrix <-
+      withDb pool $
+        ensureConfiguredEndpoint
+          PlatformMatrix
+          (NativeAccountId "@max:example.test")
+          (NativeConversationId "!room:example.test")
+          ConversationGroup
+          EndpointMirror
+          (Just 42)
+          textCapabilities
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-existing-qq" "relay me"))
+    claims <- withDb pool (claimDeliveries "mirror-cutover" 10 30)
+    fmap (.endpointId) claims `shouldBe` [qq.endpointId]
+
+  it "promotes a QQ endpoint first observed after its Matrix mirror" $ do
+    matrix <-
+      withDb pool $
+        ensureConfiguredEndpoint
+          PlatformMatrix
+          (NativeAccountId "@max:example.test")
+          (NativeConversationId "!room:example.test")
+          ConversationGroup
+          EndpointMirror
+          (Just 42)
+          textCapabilities
+    qq <-
+      withDb pool $
+        ensureLegacyEndpoint
+          PlatformQQ
+          (NativeAccountId "9")
+          (NativeConversationId "42")
+          ConversationGroup
+          42
+          textCapabilities
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-after-matrix" "relay me"))
+    claims <- withDb pool (claimDeliveries "mirror-cutover" 10 30)
+    fmap (.endpointId) claims `shouldBe` [matrix.endpointId]
+
   it "deduplicates concurrent native events and atomically creates mirror delivery" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime

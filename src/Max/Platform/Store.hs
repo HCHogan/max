@@ -535,9 +535,27 @@ ensureLegacyEndpoint platform nativeAccount nativeConversation kind legacyGroup 
         \     capabilities = EXCLUDED.capabilities, updated_at = now() \
         \ RETURNING endpoint_id"
         (conversation.unConversationId, account, conversationNative, renderConversationKind kind, capabilitiesJson)
+    let endpoint = exactlyOne "ensureLegacyEndpoint endpoint" endpointRows
+    -- A configured Matrix mirror may have claimed this legacy conversation
+    -- before its QQ endpoint was first observed.  In that ordering the QQ
+    -- endpoint must inherit mirror mode; otherwise both endpoints share the
+    -- conversation but the relay query deliberately creates no deliveries.
+    _ <-
+      execute
+        "UPDATE conversation_endpoints current_endpoint \
+        \ SET endpoint_mode = 'mirror', updated_at = now() \
+        \ WHERE current_endpoint.endpoint_id = ? \
+        \   AND EXISTS ( \
+        \     SELECT 1 FROM conversation_endpoints peer \
+        \     JOIN platform_accounts peer_account USING (platform_account_id) \
+        \     WHERE peer.conversation_id = current_endpoint.conversation_id \
+        \       AND peer.endpoint_id <> current_endpoint.endpoint_id \
+        \       AND peer.endpoint_mode = 'mirror' \
+        \       AND peer_account.platform = 'matrix')"
+        (Only endpoint)
     pure
       RegisteredEndpoint
-        { endpointId = EndpointId (exactlyOne "ensureLegacyEndpoint endpoint" endpointRows),
+        { endpointId = EndpointId endpoint,
           platformAccountId = PlatformAccountId account,
           conversationId = conversation,
           compatibilityConversationId = legacyGroup
@@ -623,6 +641,23 @@ ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLe
         \ SET endpoint_mode = ?, endpoint_kind = ?, capabilities = ?, enabled = true, updated_at = now() \
         \ WHERE endpoint_id = ?"
         (renderEndpointMode mode, renderConversationKind kind, capabilitiesJson, endpoint)
+    -- Attaching a configured Matrix mirror to an already active QQ
+    -- conversation is one linking operation.  Promote the existing QQ side
+    -- in the same transaction so there is never a half-mirror that silently
+    -- drops relay deliveries.
+    case (mode, mLegacy) of
+      (EndpointMirror, Just _) -> do
+        _ <-
+          execute
+            "UPDATE conversation_endpoints peer \
+            \ SET endpoint_mode = 'mirror', updated_at = now() \
+            \ FROM platform_accounts peer_account \
+            \ WHERE peer.platform_account_id = peer_account.platform_account_id \
+            \   AND peer.conversation_id = ? \
+            \   AND peer_account.platform = 'qq'"
+            (Only conversation)
+        pure ()
+      _ -> pure ()
     legacyRows <-
       query
         "SELECT legacy_group_id FROM conversations WHERE conversation_id = ?"
