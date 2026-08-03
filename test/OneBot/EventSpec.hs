@@ -4,7 +4,7 @@ import Data.Aeson (Value, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.Text (Text)
 import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), parseEvent)
-import OneBot.Types (GroupId (..), UserId (..))
+import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 import Test.Hspec
 
 spec :: Spec
@@ -37,6 +37,10 @@ spec = describe "parseEvent" $ do
         gm.groupId `shouldBe` GroupId (-2001)
         gm.userId `shouldBe` UserId 2001
       other -> expectationFailure ("expected EvGroupMessage, got: " <> show other)
+
+  it "does not confuse a foreign synthetic group with a QQ private chat" $ do
+    isPrivateChat (GroupId (-2001)) `shouldBe` True
+    isPrivateChat (GroupId (-1000000000015)) `shouldBe` False
 
   it "parses a group poke notice" $
     case parseEvent (pokeEvent ["group_id" .= (7777 :: Int)]) of

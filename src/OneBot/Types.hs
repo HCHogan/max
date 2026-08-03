@@ -51,16 +51,15 @@ instance FromJSON MessageId where
   parseJSON = fmap MessageId . parseIntId "MessageId"
 
 --------------------------------------------------------------------------------
--- Private chats as pseudo-groups.
+-- Private chats and foreign compatibility groups.
 --
 -- The whole pipeline (sessions, history, memories, sandboxes,
 -- commands) is keyed by 'GroupId'.  Rather than thread a second
--- conversation kind through all of it, a private chat with user @u@
--- is identified by the pseudo group id @-u@: real QQ ids are always
--- positive, so the sign carries the chat kind losslessly and every
--- group-keyed subsystem works unchanged.  Only the edges look at the
--- sign: event ingest mints the pseudo id, senders route to
--- @send_private_msg@, and the prompt says 私聊 instead of 群号.
+-- conversation kind through all of it, a private chat with user @u@ is
+-- identified by the pseudo group id @-u@. Foreign platforms later reserved
+-- ids at and below -10^12 for their own users, messages, and group channels.
+-- The numeric range therefore carries the legacy chat kind: QQ DMs are in
+-- @(-10^12, 0)@; foreign synthetic groups are @<= -10^12@.
 
 privateChatGroupId :: UserId -> GroupId
 privateChatGroupId (UserId u) = GroupId (negate u)
@@ -71,4 +70,7 @@ privateChatUserId :: GroupId -> UserId
 privateChatUserId (GroupId g) = UserId (negate g)
 
 isPrivateChat :: GroupId -> Bool
-isPrivateChat (GroupId g) = g < 0
+isPrivateChat (GroupId g) = g < 0 && g > negate foreignCompatibilityBase
+
+foreignCompatibilityBase :: Int64
+foreignCompatibilityBase = 1000000000000

@@ -365,10 +365,17 @@ func (s *server) sanitizeMessages(raw json.RawMessage) (json.RawMessage, error) 
 			}
 			path, _ := attachment["path"].(string)
 			if path == "" {
+				path, _ = attachment["original_path"].(string)
+			}
+			// Current imsg calls the absolute source original_path and may
+			// duplicate a tilde path in filename. Neither is public metadata.
+			delete(attachment, "path")
+			delete(attachment, "original_path")
+			delete(attachment, "filename")
+			if path == "" {
 				continue
 			}
 			id, record, err := s.registerAttachment(path, attachment)
-			delete(attachment, "path")
 			if err != nil {
 				attachment["unavailable"] = err.Error()
 				continue

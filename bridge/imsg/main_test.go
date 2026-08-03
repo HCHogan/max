@@ -133,9 +133,11 @@ func TestSanitizeMessagesReplacesHostPathWithOpaqueHandle(t *testing.T) {
 	s.allowedChatIDs.Store("7", struct{}{})
 	raw, err := json.Marshal(map[string]any{
 		"messages": []any{map[string]any{
+			"id":      9,
 			"chat_id": 7,
 			"attachments": []any{map[string]any{
-				"path": attachmentPath, "mime_type": "image/jpeg", "transfer_name": "photo.jpg",
+				"original_path": attachmentPath, "filename": "~/Library/Messages/Attachments/photo.jpg",
+				"mime_type": "image/jpeg", "transfer_name": "photo.jpg",
 			}},
 		}},
 		"next_rowid": 9,
@@ -148,7 +150,7 @@ func TestSanitizeMessagesReplacesHostPathWithOpaqueHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(sanitized), root) || strings.Contains(string(sanitized), `"path"`) {
+	if strings.Contains(string(sanitized), root) || strings.Contains(string(sanitized), "original_path") || strings.Contains(string(sanitized), `"filename"`) {
 		t.Fatalf("host path leaked: %s", sanitized)
 	}
 	var result struct {

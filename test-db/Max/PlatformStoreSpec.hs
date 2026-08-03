@@ -429,6 +429,58 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             )
           ]
 
+  it "removes Mac attachment paths from existing iMessage raw provenance" $ do
+    endpoint <-
+      withDb pool $
+        ensureConfiguredEndpoint
+          PlatformIMessage
+          (NativeAccountId "mac-account")
+          (NativeConversationId "iMessage;+;chat-test")
+          ConversationGroup
+          EndpointStandalone
+          Nothing
+          textCapabilities
+    now <- getCurrentTime
+    let envelope =
+          (inbound endpoint.endpointId now "attachment-path" "photo")
+            { rawPayload =
+                Just
+                  ( object
+                      [ "attachments"
+                          .= [ object
+                                 [ "path" .= ("/Users/max/Library/Messages/old.jpg" :: Text),
+                                   "original_path" .= ("/Users/max/Library/Messages/photo.jpg" :: Text),
+                                   "filename" .= ("~/Library/Messages/photo.jpg" :: Text),
+                                   "transfer_name" .= ("photo.jpg" :: Text),
+                                   "mime_type" .= ("image/jpeg" :: Text)
+                                 ]
+                             ]
+                      ]
+                  )
+            }
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions envelope)
+    withConn pool $ \conn -> withTransaction conn $ do
+      migration <- readFile "migrations/052_imessage_raw_attachment_paths.sql"
+      _ <- execute_ conn (fromString migration)
+      payloads <-
+        query
+          conn
+          "SELECT raw_payload FROM platform_events WHERE endpoint_id = ? AND native_event_id = 'attachment-path'"
+          (Only endpoint.endpointId.unEndpointId)
+      (payloads :: [Only Value])
+        `shouldBe`
+          [ Only
+              ( object
+                  [ "attachments"
+                      .= [ object
+                             [ "transfer_name" .= ("photo.jpg" :: Text),
+                               "mime_type" .= ("image/jpeg" :: Text)
+                             ]
+                         ]
+                  ]
+              )
+          ]
+
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do
   conversation <- createConversation ConversationGroup (Just "mirror test")
