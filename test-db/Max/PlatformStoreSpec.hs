@@ -4,6 +4,7 @@ import Control.Concurrent.Async (concurrently)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), query)
 import Helpers (truncateAll, withDb)
@@ -307,6 +308,40 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     boundedTruncated `shouldBe` True
     show bounded `shouldNotContain` "secret-value"
 
+  it "normalizes PostgreSQL-forbidden NULs across the complete ingest envelope" $ do
+    (_, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    let envelope =
+          (inbound matrix.endpointId now "imsg-\0-event" "hello\0world")
+            { senderNativeId = NativeUserId "alice\0id",
+              senderDisplayName = Just "Ali\0ce",
+              sourceCursor = Just (PlatformCursor (object ["cursor\0key" .= ("next\0page" :: Text)])),
+              rawPayload = Just (object ["nested" .= object ["body" .= ("raw\0body" :: Text)]])
+            }
+        options =
+          defaultIngestOptions
+            { renderedTextOverride = Just "rendered\0text",
+              compatibilitySegments = object ["text" .= ("segment\0text" :: Text)],
+              compatibilityRawMessage = "raw\0message"
+            }
+    result <- withDb pool (ingestEnvelope options envelope)
+    rows <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT pe.native_event_id, pe.source_cursor::text, pe.raw_payload::text, \
+        \       m.rendered_text, m.raw_message, coalesce(m.sender_nickname, ''), \
+        \       m.canonical_content::text, m.segments::text \
+        \ FROM platform_events pe \
+        \ JOIN messages m USING (canonical_message_id) \
+        \ WHERE m.canonical_message_id = ?"
+        (Only (resultId result).unCanonicalMessageId)
+    case rows :: [(Text, Text, Text, Text, Text, Text, Text, Text)] of
+      [fields] -> do
+        let persisted = T.intercalate "|" (tuple8ToList fields)
+        persisted `shouldSatisfy` T.isInfixOf "\xfffd"
+        persisted `shouldNotSatisfy` T.any (== '\NUL')
+      _ -> expectationFailure "missing sanitized canonical event"
+
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do
   conversation <- createConversation ConversationGroup (Just "mirror test")
@@ -375,6 +410,9 @@ isNew _ = False
 isDuplicate :: IngestResult -> Bool
 isDuplicate (AlreadyIngested _) = True
 isDuplicate _ = False
+
+tuple8ToList :: (a, a, a, a, a, a, a, a) -> [a]
+tuple8ToList (a, b, c, d, e, f, g, h) = [a, b, c, d, e, f, g, h]
 
 ledgerCounts :: DbPool -> EndpointId -> EndpointId -> IO (Int64, Int64, Int64, Int64, Int64)
 ledgerCounts pool (EndpointId source) (EndpointId target) = withConn pool $ \conn -> do

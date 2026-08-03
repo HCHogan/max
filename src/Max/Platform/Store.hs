@@ -694,7 +694,7 @@ ingestEnvelope ::
   IngestOptions ->
   InboundEnvelope ->
   Eff es IngestResult
-ingestEnvelope options envelope = withTransaction $ do
+ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
   endpoint <- fetchEndpoint envelope.endpointId
   identityId <- ensurePrincipalIdentity endpoint envelope.senderNativeId envelope.senderDisplayName
   let NativeEventId nativeEvent = envelope.nativeEventId
@@ -751,6 +751,9 @@ ingestEnvelope options envelope = withTransaction $ do
         [_] -> insertCanonical endpoint identityId safeRaw
         _ -> error "ingestEnvelope: event reservation returned multiple rows"
   where
+    options = sanitizeIngestOptions unsafeOptions
+    envelope = sanitizeInboundEnvelope unsafeEnvelope
+
     reconcileDeliveryEcho endpoint identityId safeRaw rawTruncated = do
       let NativeEventId nativeEvent = envelope.nativeEventId
           NativeUserId sender = envelope.senderNativeId
@@ -1349,7 +1352,7 @@ listPlatformStatus =
 sanitizeRawPayload :: Int -> Maybe Value -> (Maybe Value, Bool)
 sanitizeRawPayload _ Nothing = (Nothing, False)
 sanitizeRawPayload maxBytes (Just raw) =
-  let sanitized = redact raw
+  let sanitized = redact (sanitizePostgresValue raw)
       bytes = encode sanitized
       size = LBS.length bytes
    in if size <= fromIntegral (max 0 maxBytes)
@@ -1375,6 +1378,83 @@ sanitizeRawPayload maxBytes (Just raw) =
     isSecretKey =
       (`elem` ["token", "access_token", "password", "authorization", "secret", "cookie", "admin_key"])
         . T.toLower
+
+-- PostgreSQL text and jsonb reject U+0000 even though upstream JSON decoders
+-- can represent it.  Normalize that single forbidden code point at the shared
+-- ingest boundary so one malformed platform event cannot wedge a durable
+-- cursor.  U+FFFD keeps the lossy position explicit instead of silently
+-- deleting content.
+sanitizePostgresText :: Text -> Text
+sanitizePostgresText = T.map (\c -> if c == '\NUL' then '\xfffd' else c)
+
+sanitizePostgresValue :: Value -> Value
+sanitizePostgresValue = \case
+  Object values ->
+    Object . KeyMap.fromList $
+      [ ( Key.fromText (sanitizePostgresText (Key.toText key)),
+          sanitizePostgresValue value
+        )
+      | (key, value) <- KeyMap.toList values
+      ]
+  Array values -> Array (fmap sanitizePostgresValue values)
+  String body -> String (sanitizePostgresText body)
+  other -> other
+
+sanitizeInboundEnvelope :: InboundEnvelope -> InboundEnvelope
+sanitizeInboundEnvelope envelope =
+  envelope
+    { nativeEventId = sanitizeNativeEventId envelope.nativeEventId,
+      senderNativeId = sanitizeNativeUserId envelope.senderNativeId,
+      senderDisplayName = sanitizePostgresText <$> envelope.senderDisplayName,
+      content = sanitizeContentPart <$> envelope.content,
+      relations = sanitizeRelation <$> envelope.relations,
+      sourceCursor = sanitizeCursor <$> envelope.sourceCursor,
+      rawPayload = sanitizePostgresValue <$> envelope.rawPayload
+    }
+  where
+    sanitizeCursor (PlatformCursor value) = PlatformCursor (sanitizePostgresValue value)
+
+sanitizeIngestOptions :: IngestOptions -> IngestOptions
+sanitizeIngestOptions options =
+  options
+    { transcriptKind = sanitizePostgresText options.transcriptKind,
+      renderedTextOverride = sanitizePostgresText <$> options.renderedTextOverride,
+      compatibilitySegments = sanitizePostgresValue options.compatibilitySegments,
+      compatibilityRawMessage = sanitizePostgresText options.compatibilityRawMessage
+    }
+
+sanitizeNativeUserId :: NativeUserId -> NativeUserId
+sanitizeNativeUserId (NativeUserId native) = NativeUserId (sanitizePostgresText native)
+
+sanitizeNativeEventId :: NativeEventId -> NativeEventId
+sanitizeNativeEventId (NativeEventId native) = NativeEventId (sanitizePostgresText native)
+
+sanitizeRelation :: MessageRelation -> MessageRelation
+sanitizeRelation = \case
+  ReplyTo native -> ReplyTo (sanitizeNativeEventId native)
+  Replaces native -> Replaces (sanitizeNativeEventId native)
+  ReactsTo native reaction ->
+    ReactsTo (sanitizeNativeEventId native) (sanitizePostgresText reaction)
+
+sanitizeContentPart :: ContentPart -> ContentPart
+sanitizeContentPart = \case
+  ContentText body -> ContentText (sanitizePostgresText body)
+  ContentMention native display ->
+    ContentMention (sanitizeNativeUserId native) (sanitizePostgresText <$> display)
+  ContentMedia source display ->
+    ContentMedia (sanitizeMediaSource source) (sanitizePostgresText <$> display)
+  ContentUnsupported label -> ContentUnsupported (sanitizePostgresText label)
+
+sanitizeMediaSource :: MediaSource -> MediaSource
+sanitizeMediaSource = \case
+  RemoteMedia uri mime bytes digest ->
+    RemoteMedia
+      (sanitizePostgresText uri)
+      (sanitizePostgresText <$> mime)
+      bytes
+      (sanitizePostgresText <$> digest)
+  InlineMedia bytes mime name ->
+    InlineMedia bytes (sanitizePostgresText <$> mime) (sanitizePostgresText <$> name)
 
 canonicalContentValue :: [ContentPart] -> Value
 canonicalContentValue parts =
