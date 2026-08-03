@@ -396,6 +396,14 @@ messages, and task identity through context collection and every Agent node;
 there is no trigger-id lookup/adoption on the production path. Failed message
 persistence is an explicit non-durable ingest state: media jobs, agent dispatch,
 and proactive work are suppressed while the event loop remains alive.
+Agent regression tests exercise feedback before an LLM node, asynchronous
+`!kill`, late feedback racing streamed output, and root-owned cleanup through
+this same runtime seam.
+
+Recall authority records both the current turn and its readable source. The
+ordinary constructor makes them identical. A separate opaque proof can express
+only an explicitly host-authorized group source projected into a direct-message
+turn; reversed DM-to-group and same-kind projections cannot be constructed.
 
 Workers are started as one flat list (`withLinkedWorkers` in `app/Main.hs`),
 each `link`ed so a worker dying silently takes the process down rather than

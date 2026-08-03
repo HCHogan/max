@@ -3,7 +3,10 @@
 
 module Max.Effects.AgentSpec (spec) where
 
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
+import Control.Concurrent.Async qualified as Async
+import Control.Exception (fromException)
+import Control.Monad (when)
 import Data.Aeson (object, (.=))
 import Data.Foldable (for_)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
@@ -37,7 +40,19 @@ import Max.Effects.Tools
     buildToolCatalog,
   )
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
-import Max.Tasks (beginTurnRuntime, finishTurnRuntime, newTaskRegistry)
+import Max.Tasks
+  ( Note (..),
+    TaskCancelled,
+    TaskRegistry,
+    TurnCompletion (..),
+    beginTurnRuntime,
+    cancelTask,
+    finishTurnRuntime,
+    listTasks,
+    newTaskRegistry,
+    pushToLatest,
+    turnRuntimeTaskId,
+  )
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
@@ -61,6 +76,20 @@ eventSink ref = \case
     liftIO (appendRef ref (SeenToolFinished name (either (const False) (const True) result)))
   AgentFinalStreamText body ->
     True <$ liftIO (appendRef ref (SeenFinalStream body))
+
+lateFeedbackSink ::
+  (IOE :> es) =>
+  TaskRegistry ->
+  IORef Bool ->
+  IORef [SeenEvent] ->
+  AgentEventSink (Eff es)
+lateFeedbackSink tasks injected events event = do
+  when (case event of AgentFinalStreamText _ -> True; _ -> False) $ do
+    first <- liftIO $ atomicModifyIORef' injected (\seen -> (True, not seen))
+    when first $ do
+      _ <- liftIO $ pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "流式期间补充" Nothing)
+      pure ()
+  eventSink events event
 
 fakeLLM :: (IOE :> es) => IORef Int -> LLMInterpreter es
 fakeLLM calls =
@@ -211,3 +240,88 @@ spec = describe "Agent full loop" $ do
     _ <- finishTurnRuntime tasks turn
     readIORef order
       `shouldReturn` ["start:read", "end:read", "start:write", "end:write"]
+
+  it "drains feedback through the explicit runtime before the next LLM node" $ do
+    seenMessages <- newIORef ([] :: [[ChatMessage]])
+    events <- newIORef []
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
+    _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "改成方案 B" Nothing)
+    let llm =
+          LLMInterpreter
+            { liChat = \_ _ messages _ _ -> do
+                liftIO (appendRef seenMessages messages)
+                pure (Right (ContentResp "done"))
+            }
+    result <-
+      withCompactLogger ColorNever Nothing $ \logger ->
+        runEff
+          . runConcurrent
+          . runLog "agent-test" logger LogAttention
+          . runLLMWith llm
+          . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolCatalog [] []))
+          $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    completion <- finishTurnRuntime tasks turn
+
+    map show result.appended `shouldBe` map show [MsgUser "[feedback]: 改成方案 B", MsgAssistant "done"]
+    map (map show) <$> readIORef seenMessages
+      `shouldReturn` [map show [MsgUser "question", MsgUser "[feedback]: 改成方案 B"]]
+    length completion.tcUnservedNotes `shouldBe` 0
+    (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True
+
+  it "propagates !kill as asynchronous cancellation and still permits root cleanup" $ do
+    entered <- newEmptyMVar
+    events <- newIORef []
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
+    let blockingLLM =
+          LLMInterpreter
+            { liChat = \_ _ _ _ _ -> do
+                liftIO (putMVar entered ())
+                liftIO (threadDelay 5000000)
+                pure (Right (ContentResp "too late"))
+            }
+        runTurn =
+          withCompactLogger ColorNever Nothing $ \logger ->
+            runEff
+              . runConcurrent
+              . runLog "agent-test" logger LogAttention
+              . runLLMWith blockingLLM
+              . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolCatalog [] []))
+              $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    worker <- Async.async runTurn
+    takeMVar entered
+    cancelTask tasks (turnRuntimeTaskId turn) `shouldReturn` True
+    outcome <- Async.waitCatch worker
+    case outcome of
+      Left err -> case fromException err :: Maybe TaskCancelled of
+        Just _ -> pure ()
+        Nothing -> expectationFailure ("unexpected exception: " <> show err)
+      Right _ -> expectationFailure "killed Agent turn completed normally"
+    _ <- finishTurnRuntime tasks turn
+    (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True
+
+  it "requeues feedback that races a streamed final paragraph for root redispatch" $ do
+    events <- newIORef []
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
+    injected <- newIORef False
+    let streamingLLM =
+          LLMInterpreter
+            { liChat = \_ _ _ _ mSink -> do
+                for_ mSink (\sink -> sink "第一段\n\n还在生成")
+                pure (Right (ContentResp "第一段\n\n还在生成"))
+            }
+    result <-
+      withCompactLogger ColorNever Nothing $ \logger ->
+        runEff
+          . runConcurrent
+          . runLog "agent-test" logger LogAttention
+          . runLLMWith streamingLLM
+          . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolCatalog [] []))
+          $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (lateFeedbackSink tasks injected events)
+    completion <- finishTurnRuntime tasks turn
+
+    result.sentPrefix `shouldBe` "第一段\n\n"
+    map (.noteLine) completion.tcUnservedNotes `shouldBe` ["流式期间补充"]
+    (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True

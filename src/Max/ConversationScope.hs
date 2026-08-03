@@ -16,8 +16,12 @@ module Max.ConversationScope
     conversationScopeFor,
     conversationStorageId,
     RecallPolicy,
+    GroupToDirectRecall,
     currentConversationRecall,
+    authorizeGroupToDirectRecall,
+    groupToDirectRecall,
     recallConversationScope,
+    recallTurnScope,
   )
 where
 
@@ -28,11 +32,22 @@ import OneBot.Types (GroupId (..))
 newtype ConversationScope = ConversationScope Int64
   deriving stock (Show, Eq, Ord)
 
--- | The conversations a read may project into the current turn.  V1 is
--- intentionally current-conversation-only.  The constructor stays private so
--- the future group-to-member-DM direction can be added here without letting a
--- model-provided id become authority.
-newtype RecallPolicy = RecallPolicy ConversationScope
+-- | The source conversation a read may project into a turn, together with the
+-- turn conversation used for privacy and audit. Constructors stay private so
+-- a model-provided id can never become authority.
+data RecallPolicy = RecallPolicy
+  { recallTurnScope :: !ConversationScope,
+    recallConversationScope :: !ConversationScope
+  }
+  deriving stock (Show, Eq, Ord)
+
+-- | Proof of the only supported cross-conversation read direction. The source
+-- is a group and the current turn is a direct conversation. Its constructor is
+-- private, so there is no corresponding DM-to-group policy.
+data GroupToDirectRecall = GroupToDirectRecall
+  { gdrDirectTarget :: !ConversationScope,
+    gdrGroupSource :: !ConversationScope
+  }
   deriving stock (Show, Eq, Ord)
 
 -- | Construct a scope from an already-authorized conversation identity.
@@ -47,9 +62,23 @@ conversationStorageId :: ConversationScope -> Int64
 conversationStorageId (ConversationScope gid) = gid
 
 currentConversationRecall :: ConversationScope -> RecallPolicy
-currentConversationRecall = RecallPolicy
+currentConversationRecall scope = RecallPolicy scope scope
 
--- | Store-internal access to the current conversation predicate.  Callers
--- construct policies only through 'currentConversationRecall'.
-recallConversationScope :: RecallPolicy -> ConversationScope
-recallConversationScope (RecallPolicy scope) = scope
+-- | Validate an explicit host-selected group-to-DM projection. Both scopes
+-- must already have been authorized by non-model code. Reversed or same-kind
+-- pairs are rejected by construction.
+authorizeGroupToDirectRecall :: ConversationScope -> ConversationScope -> Maybe GroupToDirectRecall
+authorizeGroupToDirectRecall groupSource directTarget
+  | isGroup groupSource && isDirect directTarget =
+      Just (GroupToDirectRecall directTarget groupSource)
+  | otherwise = Nothing
+  where
+    isGroup (ConversationScope raw) = raw > 0
+    isDirect (ConversationScope raw) = raw < 0
+
+-- | Read from the authorized group while retaining the direct conversation as
+-- the turn/privacy target. Existing single-source stores use the source field;
+-- future projections can inspect both without reversing the direction.
+groupToDirectRecall :: GroupToDirectRecall -> RecallPolicy
+groupToDirectRecall grant =
+  RecallPolicy grant.gdrDirectTarget grant.gdrGroupSource

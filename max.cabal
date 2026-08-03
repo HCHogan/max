@@ -317,6 +317,7 @@ test-suite max-test
         Max.Browser.RegistrySpec
         Max.Command.ParserSpec
         Max.Command.PermissionSpec
+        Max.ConversationScopeSpec
         Max.DB.CallsSpec
         Max.HandlerSpec
         Max.HistorianSpec

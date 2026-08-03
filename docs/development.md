@@ -22,13 +22,16 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.BilibiliSpec` — BV / b23.tv / URL extraction from cards and plain text
 - `Max.Command.ParserSpec` — every `!cmd` verb + edge cases
 - `Max.Command.PermissionSpec` — tier resolution and capability gating
+- `Max.ConversationScopeSpec` — opaque current-scope authority and the only
+  permitted directional group-to-DM recall proof
 - `Max.Effects.AgentSpec` — full in-memory Agent loop using a fake LLM, fake
   validated tool catalog, explicit TurnRuntime, and typed AgentEvent sink;
-  mutating multi-call rounds are proven sequential
+  mutating multi-call rounds are proven sequential, and feedback/kill/late
+  streaming cleanup all cross the runtime seam
 - `Max.Effects.BlobSpec` — opaque digest references, byte round-trips, the
   explicit host-path escape hatch, and rejection of path-shaped references
 - `Max.Effects.EmbeddingSpec` — injectable embedding space, validated records,
-  and typed provider/shape failures
+  typed provider/shape failures, timeout injection, and model/dimension cutover
 - `Max.Effects.LLMSpec` — `ChatMessage` JSON round-trip, `parseToolCall`
   tolerance, and the streamed assistant message rebuilt from deltas
 - `Max.Effects.OutboundSpec` — in-memory interpreter seam and the distinction
