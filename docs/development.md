@@ -57,8 +57,9 @@ Pure logic in `test/` mirroring the library layout:
   memory block placement, quoted-forward expansion, in-flight hiding, and
   deterministic P1/P2/P3/P4 decay before a token-sized raw tail
 - `Max.PromptFlowSpec` — generated `docs/prompt-flow.md` matches the live
-  Prompt → Agent → LLM rendering path (regenerate with
-  `cabal run max-prompt-flow`)
+  Prompt → Agent → LLM rendering path, including P1/P2/P3/P4 omission,
+  unified recall result rendering, and one-turn episode expansion (regenerate
+  with `cabal run max-prompt-flow`)
 - `Max.RenderSpec` — markdown table → typst
 - `Max.ReplySpec` — reply paragraph splitting (fences, `[split]`, chunk ceiling)
 - `Max.ReplySendSpec` — that splitting a reply at a `readyPrefix` boundary sends

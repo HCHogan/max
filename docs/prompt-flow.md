@@ -52,10 +52,175 @@ ContextCollector ──▶ ContextMaterialization CAS (tiered history)
 ```
 
 这里用固定的多模态群聊 fixture：群历史、pin、引用文件、两类 memory、
-技能索引、当前图片/视频都存在。工具表刻意只保留 `view_image` 和
+P1/P2/P3/P4 episode、技能索引、当前图片/视频都存在。工具表刻意只保留 `view_image` 和
 `view_video`，让 JSON 仍可阅读；这两个 schema 直接取自工具实现，不是文档副本。
 第一轮模型调用 `view_image(message_id=7405)`，第二轮展示 agent 追加
 assistant 原文、tool result 和真实图片块后的完整请求。
+
+## Episode 分代、搜索与展开
+
+这一段展示同一个 episode 如何从稳定 prompt 中的摘要，变成一次性的原文工具结果。
+fixture 中最老的低功耗调试 episode 已衰减到 P4，因此首轮 prompt 不显示它；
+`context_search` 仍能返回其 opaque handle，`context_expand` 再按当前会话权限恢复原始 ledger。
+搜索和展开的固定 typed fixture 都经过生产 `Max.Tools` 的结果 renderer。
+
+### 首轮 prompt：P1/P2/P3 + raw tail
+
+```text
+[earlier conversation — rebuildable chronological summaries]
+[episode#bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb 2026-03-02..2026-03-02 P3]: 群里确定 LoRa 气象站的主控和验证顺序。
+[episode#cccccccc-cccc-4ccc-8ccc-cccccccccccc 2026-06-05..2026-06-05 P2]: LoRa 气象站确定五分钟上报、sequence 去重和重连不重放旧采样。
+[episode#dddddddd-dddd-4ddd-8ddd-dddddddddddd 2026-07-20..2026-07-20 P1]: 阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。
+
+[recent messages]
+[22:48 小美 #7402]: 今晚有人打游戏吗
+[22:50 老张 #7404]: [↩#7402] 不打，在调板子
+[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]
+[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]
+[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)
+[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档
+[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]
+[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了
+[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买
+
+
+… environment / memories / quoted context …
+
+[current message]
+[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]
+
+请回复当前消息。
+```
+
+P4 的 `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa` 没有出现在上面；它只是不渲染，
+不是被删除，也没有失去检索和展开能力。
+
+### 模型调用 `context_search`
+
+```json
+{
+  "limit": 5,
+  "query": "气象站 STOP2 唤醒后复位 NRST 电容 当时怎么解决"
+}
+```
+
+工具返回：
+
+```json
+{
+  "query": "气象站 STOP2 唤醒后复位 NRST 电容 当时怎么解决",
+  "results": [
+    {
+      "handle": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "match": {
+        "lexical": 0.71,
+        "semantic": 0.91
+      },
+      "permanent": false,
+      "pinned": false,
+      "score": 0.94,
+      "snippet": "气象站 STOP2 唤醒复位由 NRST 100nF 电容和长 ST-Link 排线导致；改为 10nF 后恢复稳定。",
+      "source": "episode",
+      "time": "2025-01-11 20:18"
+    },
+    {
+      "match": {
+        "lexical": 0.62,
+        "semantic": 0.84
+      },
+      "message_id": 7213,
+      "permanent": false,
+      "pinned": false,
+      "principal_id": 777888999,
+      "score": 0.86,
+      "snippet": "换 10nF 再把 ST-Link 排线拔掉试试，100nF 这个沿太慢了。",
+      "source": "message",
+      "time": "2025-01-11 20:12"
+    }
+  ],
+  "semantic_used": true
+}
+```
+
+### 模型调用 `context_expand`
+
+```json
+{
+  "handle": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "limit": 40
+}
+```
+
+工具返回原始消息及身份、reply、cursor 和 hash 状态：
+
+```json
+{
+  "handle": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  "has_more": false,
+  "messages": [
+    {
+      "ingest_cursor": 4100,
+      "message_id": 7210,
+      "prompt_eligible": true,
+      "sender": "阿飞",
+      "sender_user_id": 223344556,
+      "text": "一进 STOP2，RTC 唤醒后板子就像重新上电，boot count 也清了。",
+      "time": "2025-01-11 20:04"
+    },
+    {
+      "ingest_cursor": 4101,
+      "message_id": 7211,
+      "prompt_eligible": true,
+      "reply_to": 7210,
+      "sender": "老张",
+      "sender_user_id": 777888999,
+      "text": "先看 NRST 波形。你板上是不是还挂着 100nF 和那根很长的 ST-Link 排线？",
+      "time": "2025-01-11 20:07"
+    },
+    {
+      "ingest_cursor": 4102,
+      "message_id": 7212,
+      "prompt_eligible": true,
+      "reply_to": 7211,
+      "sender": "阿飞",
+      "sender_user_id": 223344556,
+      "text": "对，NRST 是 100nF，调试器也一直插着。",
+      "time": "2025-01-11 20:09"
+    },
+    {
+      "ingest_cursor": 4103,
+      "message_id": 7213,
+      "prompt_eligible": true,
+      "reply_to": 7212,
+      "sender": "老张",
+      "sender_user_id": 777888999,
+      "text": "换 10nF 再把 ST-Link 排线拔掉试试，100nF 这个沿太慢了。",
+      "time": "2025-01-11 20:12"
+    },
+    {
+      "ingest_cursor": 4104,
+      "message_id": 7214,
+      "prompt_eligible": true,
+      "reply_to": 7213,
+      "sender": "阿飞",
+      "sender_user_id": 223344556,
+      "text": "好了，连续唤醒 200 次都没再复位。",
+      "time": "2025-01-11 20:18"
+    }
+  ],
+  "next_after_cursor": null,
+  "projection_state": "active",
+  "source_hash_matches": true,
+  "source_range": {
+    "end_cursor": 4104,
+    "message_count": 5,
+    "start_cursor": 4100
+  }
+}
+```
+
+这个 JSON 只作为当前 agent turn 的 tool result 进入下一轮请求。turn 结束后它不会写回
+稳定 prompt；下一个独立 dispatch 仍从上面的 P1/P2/P3 + raw tail 开始，P4 继续按需搜索。
 
 ## OpenAI Chat Completions
 
@@ -74,7 +239,7 @@ assistant 原文、tool result 和真实图片块后的完整请求。
     {
       "content": [
         {
-          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
+          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[earlier conversation — rebuildable chronological summaries]\n[episode#bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb 2026-03-02..2026-03-02 P3]: 群里确定 LoRa 气象站的主控和验证顺序。\n[episode#cccccccc-cccc-4ccc-8ccc-cccccccccccc 2026-06-05..2026-06-05 P2]: LoRa 气象站确定五分钟上报、sequence 去重和重连不重放旧采样。\n[episode#dddddddd-dddd-4ddd-8ddd-dddddddddddd 2026-07-20..2026-07-20 P1]: 阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
           "type": "text"
         },
         {
@@ -188,7 +353,7 @@ assistant 原文、tool result 和真实图片块后的完整请求。
     {
       "content": [
         {
-          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
+          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[earlier conversation — rebuildable chronological summaries]\n[episode#bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb 2026-03-02..2026-03-02 P3]: 群里确定 LoRa 气象站的主控和验证顺序。\n[episode#cccccccc-cccc-4ccc-8ccc-cccccccccccc 2026-06-05..2026-06-05 P2]: LoRa 气象站确定五分钟上报、sequence 去重和重连不重放旧采样。\n[episode#dddddddd-dddd-4ddd-8ddd-dddddddddddd 2026-07-20..2026-07-20 P1]: 阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
           "type": "text"
         },
         {
@@ -315,7 +480,7 @@ assistant 原文、tool result 和真实图片块后的完整请求。
     {
       "content": [
         {
-          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
+          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[earlier conversation — rebuildable chronological summaries]\n[episode#bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb 2026-03-02..2026-03-02 P3]: 群里确定 LoRa 气象站的主控和验证顺序。\n[episode#cccccccc-cccc-4ccc-8ccc-cccccccccccc 2026-06-05..2026-06-05 P2]: LoRa 气象站确定五分钟上报、sequence 去重和重连不重放旧采样。\n[episode#dddddddd-dddd-4ddd-8ddd-dddddddddddd 2026-07-20..2026-07-20 P1]: 阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
           "type": "text"
         },
         {
@@ -445,7 +610,7 @@ assistant 原文、tool result 和真实图片块后的完整请求。
     {
       "content": [
         {
-          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
+          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[earlier conversation — rebuildable chronological summaries]\n[episode#bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb 2026-03-02..2026-03-02 P3]: 群里确定 LoRa 气象站的主控和验证顺序。\n[episode#cccccccc-cccc-4ccc-8ccc-cccccccccccc 2026-06-05..2026-06-05 P2]: LoRa 气象站确定五分钟上报、sequence 去重和重连不重放旧采样。\n[episode#dddddddd-dddd-4ddd-8ddd-dddddddddddd 2026-07-20..2026-07-20 P1]: 阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
           "type": "text"
         },
         {
@@ -601,7 +766,7 @@ assistant 原文、tool result 和真实图片块后的完整请求。
     {
       "content": [
         {
-          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
+          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[earlier conversation — rebuildable chronological summaries]\n[episode#bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb 2026-03-02..2026-03-02 P3]: 群里确定 LoRa 气象站的主控和验证顺序。\n[episode#cccccccc-cccc-4ccc-8ccc-cccccccccccc 2026-06-05..2026-06-05 P2]: LoRa 气象站确定五分钟上报、sequence 去重和重连不重放旧采样。\n[episode#dddddddd-dddd-4ddd-8ddd-dddddddddddd 2026-07-20..2026-07-20 P1]: 阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
           "type": "input_text"
         },
         {
@@ -710,7 +875,7 @@ assistant 原文、tool result 和真实图片块后的完整请求。
     {
       "content": [
         {
-          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
+          "text": "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]\n[19:02 老张 #7301]: 本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个\n\n[earlier conversation — rebuildable chronological summaries]\n[episode#bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb 2026-03-02..2026-03-02 P3]: 群里确定 LoRa 气象站的主控和验证顺序。\n[episode#cccccccc-cccc-4ccc-8ccc-cccccccccccc 2026-06-05..2026-06-05 P2]: LoRa 气象站确定五分钟上报、sequence 去重和重连不重放旧采样。\n[episode#dddddddd-dddd-4ddd-8ddd-dddddddddddd 2026-07-20..2026-07-20 P1]: 阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。\n\n[recent messages]\n[22:48 小美 #7402]: 今晚有人打游戏吗\n[22:50 老张 #7404]: [↩#7402] 不打，在调板子\n[22:52 老张 #7405]: 我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]\n[22:53 小美 #7406]: [sticker#212: 猫猫瞪大眼睛凑近屏幕]\n[22:54 老张 #7407]: 拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)\n[22:55 Max #7408]: [↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档\n[22:56 阿飞 #7409]: [card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]\n[22:57 阿飞 #7410]: [face#187: 幽灵] 我的板子也出鬼畜问题了\n[22:58 小美 #7411]: 楼上俩难兄难弟 ⏎ 建议直接烧了重买\n\n[environment]\n  现在：2026-07-22（周三） 23:10\n  群号：114514191\n  群名：单片机与嵌入式交流（47人）\n  群主：老张（777888999）；管理员：阿飞（223344556）\n  当前模型：kimi-k2.7-code\n  成员对照（[@#QQ号] 即 @某人）：[@#10086]=Max（你自己）、[@#223344556]=阿飞、[@#445566778]=小美、[@#777888999]=老张\n\n[memories — 背景备忘]\n仅在与当前话题相关时参考，不要主动提及；记的是写下时的状态，可能已过期，与对话矛盾时以对话为准（可 memory_update）。只列最近更新的条目，更早或跨来源的用 context_search 查；只看记忆清单用 memory_list。\n本群:\n  (#12@v1 2026-07-22) 群里主要玩 STM32 和 ESP32，老张是硬件老师傅\n关于当前发言者 <阿飞>（本会话）:\n  (#31@v1 2026-07-22) 阿飞在做一个 LoRa 气象站毕设\n\n[quoted context]\n[↩ quoted 22:45 阿飞 #7398]: 烧录完就这样了，串口一直打这个 [image]\n  附带文件（file_id 可直接传给 import_file_to_sandbox）:\n    - file_id=\"c8a3f2d1e0\", name=\"firmware.bin\", bytes=2188038, ready=true\n\n[current message]\n[23:10 阿飞 #7413]: 看看这个报错是啥问题，视频里是复位后的现象 [image] [video]\n\n请回复当前消息。\n\n[↩ quoted message（22:45 阿飞）] 里的图片:",
           "type": "input_text"
         },
         {

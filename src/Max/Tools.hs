@@ -10,6 +10,8 @@
 -- unified recall entirely.
 module Max.Tools
   ( builtinsFor,
+    contextSearchSummary,
+    episodeExpansionSummary,
     parseTimeArg,
   )
 where
@@ -139,17 +141,28 @@ contextSearchTool tz mEmbed dc =
               let scope = conversationScopeFor (toolGroupId dc)
               hits <- searchRecall (currentConversationRecall scope) rawQuery embedding limit
               pure . Right $
-                object
-                  [ "query" .= T.strip rawQuery,
-                    "semantic_used" .= maybe False (const True) embedding,
-                    "results" .= map (recallHitSummary tz) hits
-                  ]
+                contextSearchSummary
+                  tz
+                  rawQuery
+                  (maybe False (const True) embedding)
+                  hits
     }
   where
     parseRecallArgs o =
       (,)
         <$> o .: "query"
         <*> (fromMaybe 10 <$> o .:? "limit")
+
+-- | Stable model-facing shape of unified recall results.  Kept pure so the
+-- generated prompt-flow document can exercise the same renderer as the live
+-- tool after its database/embedding effects have produced candidates.
+contextSearchSummary :: TimeZone -> Text -> Bool -> [RecallHit] -> Value
+contextSearchSummary tz rawQuery semanticUsed hits =
+  object
+    [ "query" .= T.strip rawQuery,
+      "semantic_used" .= semanticUsed,
+      "results" .= map (recallHitSummary tz) hits
+    ]
 
 bestEffortRecallEmbedding :: (Log :> es, IOE :> es) => Text -> Maybe EmbedClient -> Text -> Eff es (Maybe EmbeddingRecord)
 bestEffortRecallEmbedding _ Nothing _ = pure Nothing

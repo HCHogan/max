@@ -18,6 +18,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.List (sortOn)
+import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -36,21 +37,25 @@ import Data.Vector qualified as V
 import Max.Config qualified as Config
 import Max.DB.Calls (redactDataUrls)
 import Max.DB.Files (FileRecord (..))
-import Max.DB.History (HistoryItem (..))
+import Max.DB.History (HistoryItem (..), LedgerItem (LedgerItem), MessageCursor (..))
 import Max.Effects.Agent (assembleToolRound, toolResultMessage)
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM
-  ( ChatMessage,
+  ( ChatMessage (..),
+    ContentBlock (..),
     ToolCall (..),
     ToolSpec,
     requestBodyFor,
   )
 import Max.Effects.ToolOutput (InlineMedia (..))
+import Max.EpisodeStore (EpisodeExpansion (..), EpisodeHandle, SourceRange (..), parseEpisodeHandle)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
-import Max.Prompt (ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
+import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
+import Max.Recall (RecallHit (..))
 import Max.Session (Session (..))
+import Max.Tools (contextSearchSummary, episodeExpansionSummary)
 import Max.Tools.Images (viewImageSpec)
 import Max.Tools.Video (viewVideoSpec)
 import OneBot.Event (GroupMessage (..), Sender (..))
@@ -114,12 +119,13 @@ renderPromptFlow =
       "```",
       "",
       "这里用固定的多模态群聊 fixture：群历史、pin、引用文件、两类 memory、",
-      "技能索引、当前图片/视频都存在。工具表刻意只保留 `view_image` 和",
+      "P1/P2/P3/P4 episode、技能索引、当前图片/视频都存在。工具表刻意只保留 `view_image` 和",
       "`view_video`，让 JSON 仍可阅读；这两个 schema 直接取自工具实现，不是文档副本。",
       "第一轮模型调用 `view_image(message_id=7405)`，第二轮展示 agent 追加",
       "assistant 原文、tool result 和真实图片块后的完整请求。",
       ""
     ]
+      <> renderEpisodeLifecycle
       <> concatMap renderProtocol ([minBound .. maxBound] :: [Protocol])
       <> [ "## 不随协议改变的 loop 语义",
            "",
@@ -128,6 +134,48 @@ renderPromptFlow =
            "- 后续请求重发完整消息前缀。OpenAI/Anthropic/Responses 只在最外层 wire 编码不同。",
            "- 文档中的请求使用 `stream: false`，便于展示缓冲形状；流式路径复用同一批字段 builder，只额外切换 stream 字段。"
          ]
+
+-- | Protocol-neutral context lifecycle around the same production prompt
+-- renderer.  Search/expand database effects are represented by fixed typed
+-- results, then passed through the live model-facing result renderers.
+renderEpisodeLifecycle :: [Text]
+renderEpisodeLifecycle =
+  [ "## Episode 分代、搜索与展开",
+    "",
+    "这一段展示同一个 episode 如何从稳定 prompt 中的摘要，变成一次性的原文工具结果。",
+    "fixture 中最老的低功耗调试 episode 已衰减到 P4，因此首轮 prompt 不显示它；",
+    "`context_search` 仍能返回其 opaque handle，`context_expand` 再按当前会话权限恢复原始 ledger。",
+    "搜索和展开的固定 typed fixture 都经过生产 `Max.Tools` 的结果 renderer。",
+    "",
+    "### 首轮 prompt：P1/P2/P3 + raw tail",
+    "",
+    "```text",
+    episodePromptExcerpt,
+    "```",
+    "",
+    "P4 的 `aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa` 没有出现在上面；它只是不渲染，",
+    "不是被删除，也没有失去检索和展开能力。",
+    "",
+    "### 模型调用 `context_search`",
+    "",
+    jsonFence (object ["query" .= contextQuery, "limit" .= (5 :: Int)]),
+    "",
+    "工具返回：",
+    "",
+    jsonFence contextSearchFixture,
+    "",
+    "### 模型调用 `context_expand`",
+    "",
+    jsonFence (object ["handle" .= contextHandleText, "limit" .= (40 :: Int)]),
+    "",
+    "工具返回原始消息及身份、reply、cursor 和 hash 状态：",
+    "",
+    jsonFence contextExpandFixture,
+    "",
+    "这个 JSON 只作为当前 agent turn 的 tool result 进入下一轮请求。turn 结束后它不会写回",
+    "稳定 prompt；下一个独立 dispatch 仍从上面的 P1/P2/P3 + raw tail 开始，P4 继续按需搜索。",
+    ""
+  ]
 
 renderProtocol :: Protocol -> [Text]
 renderProtocol protocol =
@@ -306,7 +354,7 @@ promptFixture =
       session = fixtureSession,
       triggerMessage = fixtureTrigger,
       transcript = fixtureTranscript,
-      compartments = [],
+      compartments = fixtureCompartments,
       historyTurns = False,
       inFlight = Set.empty,
       pinnedItems = [history 7301 777888999 "老张" 19 2 "本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个"],
@@ -332,6 +380,184 @@ promptFixture =
       now = hkAt 23 10,
       tz = hkTimeZone
     }
+
+fixtureCompartments :: [ContextCompartment]
+fixtureCompartments =
+  [ compartment
+      101
+      contextEpisodeHandle
+      (dayAt 2025 1 11 20 4)
+      (dayAt 2025 1 11 20 18)
+      0.35
+      hiddenP4SummaryP1
+      hiddenP4SummaryP2
+      "LoRa 气象站曾解决 STOP2 唤醒后复位问题。"
+      TierP4,
+    compartment
+      102
+      (fixtureHandle "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+      (dayAt 2026 3 2 19 20)
+      (dayAt 2026 3 2 20 6)
+      0.48
+      "群里比较 STM32L4 和 ESP32-S3 后，决定气象站主控继续使用 STM32L4；老张负责原理图复核，阿飞先验证低功耗和 LoRa 唤醒链路。"
+      "气象站主控确定为 STM32L4，先验证低功耗与 LoRa 唤醒。"
+      "群里确定 LoRa 气象站的主控和验证顺序。"
+      TierP3,
+    compartment
+      103
+      (fixtureHandle "cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+      (dayAt 2026 6 5 21 10)
+      (dayAt 2026 6 5 22 3)
+      0.66
+      "阿飞完成 LoRa 气象站首版通信协议；节点每五分钟上报温湿度和电池电压，网关按 sequence 去重。老张要求掉线重连不得重放旧采样，Max 给出状态机测试清单。"
+      "LoRa 气象站确定五分钟上报、sequence 去重和重连不重放旧采样。"
+      "群里敲定气象站 LoRa 上报协议。"
+      TierP2,
+    compartment
+      104
+      (fixtureHandle "dddddddd-dddd-4ddd-8ddd-dddddddddddd")
+      (dayAt 2026 7 20 22 14)
+      (dayAt 2026 7 20 22 42)
+      0.82
+      "阿飞的新固件在复位后持续进入 HardFault，串口 PC 指向 DMA 完成回调。老张怀疑 buffer 生命周期，Max 建议先保留 fault frame、反汇编 PC 并检查链接脚本；阿飞承诺补 map 文件和最小复现。"
+      "气象站新固件复位后进入 HardFault，当前在核对 DMA buffer、fault frame、map 文件和链接脚本。"
+      "气象站固件出现 HardFault，等待 map 文件定位。"
+      TierP1
+  ]
+  where
+    compartment cid handle started ended importance p1 p2 p3 tier =
+      ContextCompartment
+        { contextCompartmentId = cid,
+          contextExpandHandle = handle,
+          contextStartedAt = started,
+          contextEndedAt = ended,
+          contextImportance = importance,
+          contextConfidence = 0.92,
+          contextMaterializationVersion = cid - 100,
+          contextSummaryP1 = p1,
+          contextSummaryP2 = p2,
+          contextSummaryP3 = p3,
+          contextTier = tier
+        }
+
+hiddenP4SummaryP1 :: Text
+hiddenP4SummaryP1 =
+  "阿飞测试 STOP2 时发现节点唤醒后立即复位。老张指出 NRST 上的 100nF 电容与长 ST-Link 排线让复位沿过慢，建议先换成 10nF 并缩短排线；修改后连续唤醒 200 次稳定。"
+
+hiddenP4SummaryP2 :: Text
+hiddenP4SummaryP2 =
+  "气象站 STOP2 唤醒复位由 NRST 100nF 电容和长 ST-Link 排线导致；改为 10nF 后恢复稳定。"
+
+contextQuery :: Text
+contextQuery = "气象站 STOP2 唤醒后复位 NRST 电容 当时怎么解决"
+
+contextHandleText :: Text
+contextHandleText = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+contextEpisodeHandle :: EpisodeHandle
+contextEpisodeHandle = fixtureHandle contextHandleText
+
+fixtureHandle :: Text -> EpisodeHandle
+fixtureHandle raw =
+  fromMaybe (error "invalid prompt-flow episode handle fixture") (parseEpisodeHandle raw)
+
+contextSearchFixture :: Value
+contextSearchFixture =
+  contextSearchSummary
+    hkTimeZone
+    contextQuery
+    True
+    [ RecallHit
+        { rhSource = "episode",
+          rhDedupKey = "episode:101",
+          rhSnippet = hiddenP4SummaryP2,
+          rhOccurredAt = dayAt 2025 1 11 20 18,
+          rhPrincipalId = Nothing,
+          rhMessageId = Nothing,
+          rhEpisodeHandle = Just contextEpisodeHandle,
+          rhMemoryId = Nothing,
+          rhScore = 0.94,
+          rhLexicalScore = Just 0.71,
+          rhSemanticScore = Just 0.91,
+          rhPinned = False,
+          rhPermanent = False
+        },
+      RecallHit
+        { rhSource = "message",
+          rhDedupKey = "message:7213",
+          rhSnippet = "换 10nF 再把 ST-Link 排线拔掉试试，100nF 这个沿太慢了。",
+          rhOccurredAt = dayAt 2025 1 11 20 12,
+          rhPrincipalId = Just 777888999,
+          rhMessageId = Just 7213,
+          rhEpisodeHandle = Nothing,
+          rhMemoryId = Nothing,
+          rhScore = 0.86,
+          rhLexicalScore = Just 0.62,
+          rhSemanticScore = Just 0.84,
+          rhPinned = False,
+          rhPermanent = False
+        }
+    ]
+
+contextExpandFixture :: Value
+contextExpandFixture =
+  episodeExpansionSummary
+    hkTimeZone
+    EpisodeExpansion
+      { expansionHandle = contextEpisodeHandle,
+        expansionRange =
+          SourceRange
+            (MessageCursor 4100)
+            (MessageCursor 4104)
+            (T.replicate 64 "b")
+            5,
+        expansionState = "active",
+        expansionSourceHashMatches = True,
+        expansionMessages =
+          [ episodeLedger 4100 7210 223344556 "阿飞" 20 4 "一进 STOP2，RTC 唤醒后板子就像重新上电，boot count 也清了。" Nothing,
+            episodeLedger 4101 7211 777888999 "老张" 20 7 "先看 NRST 波形。你板上是不是还挂着 100nF 和那根很长的 ST-Link 排线？" (Just 7210),
+            episodeLedger 4102 7212 223344556 "阿飞" 20 9 "对，NRST 是 100nF，调试器也一直插着。" (Just 7211),
+            episodeLedger 4103 7213 777888999 "老张" 20 12 "换 10nF 再把 ST-Link 排线拔掉试试，100nF 这个沿太慢了。" (Just 7212),
+            episodeLedger 4104 7214 223344556 "阿飞" 20 18 "好了，连续唤醒 200 次都没再复位。" (Just 7213)
+          ],
+        expansionHasMore = False,
+        expansionNextCursor = Nothing
+      }
+
+episodeLedger :: Int64 -> Int64 -> Int64 -> Text -> Int -> Int -> Text -> Maybe Int64 -> LedgerItem
+episodeLedger cursor' mid uid name hour minute body reply =
+  LedgerItem
+    (MessageCursor cursor')
+    ((historyOn (fromGregorian 2025 1 11) mid uid name hour minute body) {replyTo = reply})
+    True
+
+episodePromptExcerpt :: Text
+episodePromptExcerpt =
+  let body = initialUserText
+      stableHistory = takeBefore "\n[environment]" (dropBefore "[earlier conversation" body)
+      current = takeBefore "\n\n请回复当前消息。" (dropBefore "[current message]" body)
+   in stableHistory
+        <> "\n\n… environment / memories / quoted context …\n\n"
+        <> current
+        <> "\n\n请回复当前消息。"
+
+initialUserText :: Text
+initialUserText =
+  fromMaybe "(missing fixture user message)" $ foldr pick Nothing initialMessages
+  where
+    pick (MsgUser body) _ = Just body
+    pick (MsgUserBlocks (TextBlock body : _)) _ = Just body
+    pick _ found = found
+
+dropBefore :: Text -> Text -> Text
+dropBefore marker body = case T.breakOn marker body of
+  (_, suffix) | not (T.null suffix) -> suffix
+  _ -> body
+
+takeBefore :: Text -> Text -> Text
+takeBefore marker body = case T.breakOn marker body of
+  (prefix, suffix) | not (T.null suffix) -> prefix
+  _ -> body
 
 fixtureSession :: Session
 fixtureSession =
@@ -398,7 +624,10 @@ quotedFile =
     }
 
 history :: Int64 -> Int64 -> Text -> Int -> Int -> Text -> HistoryItem
-history mid uid name hour minute body =
+history = historyOn fixtureDay
+
+historyOn :: Day -> Int64 -> Int64 -> Text -> Int -> Int -> Text -> HistoryItem
+historyOn day mid uid name hour minute body =
   HistoryItem
     { messageId = mid,
       userId = uid,
@@ -406,7 +635,7 @@ history mid uid name hour minute body =
       senderNickname = Just name,
       senderCard = Nothing,
       renderedText = body,
-      receivedAt = hkAt hour minute,
+      receivedAt = localTimeToUTC hkTimeZone (LocalTime day (TimeOfDay hour minute 0)),
       replyTo = Nothing
     }
 
@@ -430,8 +659,11 @@ hkTimeZone :: TimeZone
 hkTimeZone = minutesToTimeZone 480
 
 hkAt :: Int -> Int -> UTCTime
-hkAt hour minute =
-  localTimeToUTC hkTimeZone (LocalTime fixtureDay (TimeOfDay hour minute 0))
+hkAt = dayAt 2026 7 22
+
+dayAt :: Integer -> Int -> Int -> Int -> Int -> UTCTime
+dayAt year month day hour minute =
+  localTimeToUTC hkTimeZone (LocalTime (fromGregorian year month day) (TimeOfDay hour minute 0))
 
 jsonFence :: Value -> Text
 jsonFence value = "```json\n" <> prettyJson value <> "\n```"
