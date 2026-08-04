@@ -1,0 +1,425 @@
+-- | Capability-tiered lowering (ADR 003): the single place degradation
+-- happens.
+--
+-- @'lower'@ folds every node the destination endpoint cannot carry
+-- natively into the shared text vocabulary ('Max.IR.fallbackText'), so an
+-- adapter's transport is emit-only: if a node reaches it, the endpoint
+-- declared it native.  Attribution prefixes, reply quoting, media budgets
+-- and 'maxTextBytes' chunking are all decided here, once — never in an
+-- adapter, and chunking replaces the old permanent-failure on oversized
+-- text.
+--
+-- Capabilities are data with three explicit tiers per content feature.
+-- 'TierDrop' is a deliberate, declared choice; a missing or malformed
+-- declaration falls back to 'TierText', which is always achievable because
+-- every node carries its own fallback.  The decoder also honours the
+-- legacy boolean manifest keys (@send_text@/@send_media@/@reply@/…)
+-- written by 'Max.Platform.Store', so existing endpoint rows keep working
+-- until they are rewritten with tier keys.
+module Max.IR.Lower
+  ( Tier (..),
+    OutboundCaps (..),
+    noOutboundCaps,
+    textOnlyCaps,
+    outboundCapsFromValue,
+    outboundCapsToValue,
+    Attribution (..),
+    ReplyContext (..),
+    LowerEnv (..),
+    NoteOutcome (..),
+    LowerNote (..),
+    LoweredMessage (..),
+    lower,
+    platformDisplayLabel,
+  )
+where
+
+import Data.Aeson (ToJSON (..), Value, object, withObject, (.!=), (.:?), (.=))
+import Data.Aeson.Types (parseMaybe)
+import Data.List (mapAccumL)
+import Data.Maybe (fromMaybe)
+import Data.Text (Text)
+import Data.Text qualified as T
+import Max.IR
+import Max.Platform.Types
+  ( NativeEventId,
+    NativeUserId,
+    Platform (..),
+    PrincipalIdentityId,
+  )
+
+-- | How an endpoint carries one content feature.  Text is always
+-- achievable (total fallbacks), so it is the safe default; drop must be
+-- declared, never inferred from a missing case branch.
+data Tier = TierNative | TierText | TierDrop
+  deriving stock (Eq, Ord, Show, Bounded, Enum)
+
+data OutboundCaps = OutboundCaps
+  { text :: !Bool,
+    mention :: !Tier,
+    reply :: !Tier,
+    emote :: !Tier,
+    image :: !Tier,
+    sticker :: !Tier,
+    video :: !Tier,
+    audio :: !Tier,
+    file :: !Tier,
+    card :: !Tier,
+    reaction :: !Bool,
+    edit :: !Bool,
+    redact :: !Bool,
+    maxTextBytes :: !(Maybe Int),
+    maxNativeMedia :: !Int
+  }
+  deriving stock (Eq, Show)
+
+-- | Fail-closed: cannot deliver anything.  The decode fallback for a
+-- malformed manifest, matching the old "manifest is malformed" refusal.
+noOutboundCaps :: OutboundCaps
+noOutboundCaps = textOnlyCaps {text = False}
+
+-- | An honest minimal endpoint: text out, everything else degraded to
+-- text, no meta-actions.
+textOnlyCaps :: OutboundCaps
+textOnlyCaps =
+  OutboundCaps
+    { text = True,
+      mention = TierText,
+      reply = TierText,
+      emote = TierText,
+      image = TierText,
+      sticker = TierText,
+      video = TierText,
+      audio = TierText,
+      file = TierText,
+      card = TierText,
+      reaction = False,
+      edit = False,
+      redact = False,
+      maxTextBytes = Nothing,
+      maxNativeMedia = 1
+    }
+
+-- | Total decoder over the endpoint's capability jsonb.  Tier keys
+-- (@mention_tier@, @image_tier@, …) win; absent ones fall back to the
+-- legacy boolean vocabulary, then to 'TierText'.
+outboundCapsFromValue :: Value -> OutboundCaps
+outboundCapsFromValue = fromMaybe noOutboundCaps . parseMaybe parser
+  where
+    parser = withObject "outbound capabilities" $ \o -> do
+      text <- o .:? "send_text" .!= False
+      legacyMedia <- o .:? "send_media" .!= False
+      let mediaDefault = if legacyMedia then TierNative else TierText
+      mention <- tierField o "mention_tier" (pure TierText)
+      reply <- tierField o "reply_tier" (legacyBool o "reply")
+      emote <- tierField o "emote_tier" (pure TierText)
+      image <- tierField o "image_tier" (pure mediaDefault)
+      sticker <- tierField o "sticker_tier" (pure mediaDefault)
+      video <- tierField o "video_tier" (pure mediaDefault)
+      audio <- tierField o "audio_tier" (pure mediaDefault)
+      file <- tierField o "file_tier" (pure mediaDefault)
+      card <- tierField o "card_tier" (pure TierText)
+      reaction <- o .:? "reaction" .!= False
+      edit <- o .:? "edit" .!= False
+      redact <- o .:? "redact" .!= False
+      maxTextBytes <- o .:? "max_text_bytes"
+      maxNativeMedia <- o .:? "max_native_media" .!= 1
+      pure
+        OutboundCaps
+          { text,
+            mention,
+            reply,
+            emote,
+            image,
+            sticker,
+            video,
+            audio,
+            file,
+            card,
+            reaction,
+            edit,
+            redact,
+            maxTextBytes,
+            maxNativeMedia
+          }
+    tierField o key fallback =
+      o .:? key >>= \case
+        Just (t :: Text) -> pure (tierFromText t)
+        Nothing -> fallback
+    legacyBool o key =
+      o .:? key >>= \case
+        Just True -> pure TierNative
+        Just False -> pure TierText
+        Nothing -> pure TierText
+
+tierFromText :: Text -> Tier
+tierFromText = \case
+  "native" -> TierNative
+  "drop" -> TierDrop
+  _ -> TierText
+
+tierText :: Tier -> Text
+tierText = \case
+  TierNative -> "native"
+  TierText -> "text"
+  TierDrop -> "drop"
+
+-- | Encode both vocabularies: tier keys for the new decoder, legacy
+-- booleans for SQL readers that still aggregate them during the cutover.
+outboundCapsToValue :: OutboundCaps -> Value
+outboundCapsToValue caps =
+  object $
+    [ "send_text" .= caps.text,
+      "send_media" .= any (== TierNative) [caps.image, caps.sticker, caps.video, caps.audio, caps.file],
+      "reply" .= (caps.reply == TierNative),
+      "reaction" .= caps.reaction,
+      "edit" .= caps.edit,
+      "redact" .= caps.redact,
+      "mention_tier" .= tierText caps.mention,
+      "reply_tier" .= tierText caps.reply,
+      "emote_tier" .= tierText caps.emote,
+      "image_tier" .= tierText caps.image,
+      "sticker_tier" .= tierText caps.sticker,
+      "video_tier" .= tierText caps.video,
+      "audio_tier" .= tierText caps.audio,
+      "file_tier" .= tierText caps.file,
+      "card_tier" .= tierText caps.card,
+      "max_native_media" .= caps.maxNativeMedia
+    ]
+      <> maybe [] (\n -> ["max_text_bytes" .= n]) caps.maxTextBytes
+
+-- | Mirror attribution, applied here and nowhere else.
+data Attribution = Attribution
+  { platformLabel :: !Text,
+    sender :: !(Maybe Text)
+  }
+  deriving stock (Eq, Show)
+
+-- | Reply context resolved by the caller (claim SQL): the target's native
+-- event id on THIS endpoint when a native copy exists, plus quotable
+-- fallback facts.
+data ReplyContext = ReplyContext
+  { nativeId :: !(Maybe NativeEventId),
+    author :: !(Maybe Text),
+    excerpt :: !(Maybe Text)
+  }
+  deriving stock (Eq, Show)
+
+data LowerEnv = LowerEnv
+  { -- | Destination platform; a native emote additionally requires its
+    -- origin to match (a QQ face has no Matrix identity).
+    platform :: !Platform,
+    caps :: !OutboundCaps,
+    attribution :: !(Maybe Attribution),
+    -- | Pre-resolved against the destination endpoint; pure by design so
+    -- 'lower' stays a function.
+    mentionNative :: !(PrincipalIdentityId -> Maybe NativeUserId),
+    mediaResolve :: !(MediaRef -> Maybe ResolvedMedia),
+    replyTarget :: !(Maybe ReplyContext)
+  }
+
+data NoteOutcome = NoteFolded | NoteDropped
+  deriving stock (Eq, Show)
+
+-- | One degradation/drop record.  Persisted per delivery
+-- (@message_deliveries.lower_notes@) and logged; the audit answer to
+-- "what did this endpoint's copy lose".
+data LowerNote = LowerNote
+  { subject :: !Text,
+    outcome :: !NoteOutcome,
+    detail :: !(Maybe Text)
+  }
+  deriving stock (Eq, Show)
+
+instance ToJSON LowerNote where
+  toJSON n =
+    object $
+      [ "subject" .= n.subject,
+        "outcome"
+          .= ( case n.outcome of
+                 NoteFolded -> "folded" :: Text
+                 NoteDropped -> "dropped"
+             )
+      ]
+        <> maybe [] (\d -> ["detail" .= d]) n.detail
+
+-- | Lowering output.  Empty 'chunks' means nothing survived for this
+-- endpoint (the delivery should suppress, not send a bare attribution
+-- prefix).  'replyNative' applies to the first chunk.
+data LoweredMessage = LoweredMessage
+  { replyNative :: !(Maybe NativeEventId),
+    chunks :: ![[Node 'Lowered]],
+    notes :: ![LowerNote]
+  }
+  deriving stock (Eq, Show)
+
+lower :: LowerEnv -> Body 'Canonical -> LoweredMessage
+lower env body =
+  let (_, results) = mapAccumL (lowerNode env) 0 body.nodes
+      contentNodes = concatMap fst results
+      contentNotes = concatMap snd results
+      (replyNative, replyNodes, replyNotes) = lowerReply env
+      substance = trimEdges (mergeText (replyNodes <> contentNodes))
+      assembled = case (env.attribution, substance) of
+        (_, []) -> []
+        (Nothing, _) -> substance
+        (Just a, _) -> mergeText (attributionNode a : substance)
+      chunks = chunkNodes env.caps.maxTextBytes assembled
+   in LoweredMessage
+        { replyNative = if null chunks then Nothing else replyNative,
+          chunks,
+          notes = replyNotes <> contentNotes
+        }
+
+lowerNode :: LowerEnv -> Int -> Node 'Canonical -> (Int, ([Node 'Lowered], [LowerNote]))
+lowerNode env mediaUsed = \case
+  NText t -> keep (NText t)
+  n@(NMention target display) -> case env.caps.mention of
+    TierDrop -> dropWith (LowerNote "mention" NoteDropped (Just display))
+    TierText -> fold n (LowerNote "mention" NoteFolded Nothing)
+    TierNative -> case target of
+      MentionAll -> fold n (LowerNote "mention" NoteFolded (Just "mention-all not native"))
+      MentionIdentity pid -> case env.mentionNative pid of
+        Just nid -> keep (NMention nid display)
+        Nothing -> fold n (LowerNote "mention" NoteFolded (Just "no identity on endpoint"))
+  n@(NEmote e) -> case env.caps.emote of
+    TierDrop -> dropWith (LowerNote "emote" NoteDropped Nothing)
+    TierNative
+      | e.origin == env.platform -> keep (NEmote e)
+      | otherwise -> fold n (LowerNote "emote" NoteFolded (Just "origin mismatch"))
+    TierText -> fold n (LowerNote "emote" NoteFolded Nothing)
+  n@(NMedia src meta) ->
+    let subject = mediaKindText meta.kind
+        foldMedia detail =
+          ( mediaUsed,
+            ([NText (mediaFoldText src meta)], [LowerNote subject NoteFolded detail])
+          )
+     in case mediaTier env.caps meta.kind of
+          TierDrop -> dropWith (LowerNote subject NoteDropped (Just (fallbackText n)))
+          TierText -> foldMedia Nothing
+          TierNative -> case src of
+            Nothing -> foldMedia (Just "no source")
+            Just ref -> case env.mediaResolve ref of
+              Nothing -> foldMedia (Just "unresolvable source")
+              Just payload
+                | mediaUsed >= env.caps.maxNativeMedia -> foldMedia (Just "media budget")
+                | otherwise -> (mediaUsed + 1, ([NMedia payload meta], []))
+  n@(NCard c) -> case env.caps.card of
+    TierDrop -> dropWith (LowerNote "card" NoteDropped (Just (fallbackText n)))
+    TierText -> fold n (LowerNote "card" NoteFolded Nothing)
+    TierNative -> keep (NCard c)
+  n@(NForward _) -> fold n (LowerNote "forward" NoteFolded Nothing)
+  n@(NUnsupported _) -> fold n (LowerNote "unsupported" NoteFolded Nothing)
+  where
+    keep node = (mediaUsed, ([node], []))
+    fold n note = (mediaUsed, ([NText (fallbackText n)], [note]))
+    dropWith note = (mediaUsed, ([], [note]))
+
+mediaTier :: OutboundCaps -> MediaKind -> Tier
+mediaTier caps = \case
+  MImage -> caps.image
+  MSticker -> caps.sticker
+  MVideo -> caps.video
+  MAudio -> caps.audio
+  MFile -> caps.file
+
+-- | A folded remote attachment keeps its URL — readable AND clickable;
+-- blob references are internal and never leak.
+mediaFoldText :: Maybe MediaRef -> MediaMeta -> Text
+mediaFoldText src meta =
+  fallbackText (NMedia src meta) <> case src of
+    Just (MediaRemote url) -> " " <> url
+    _ -> ""
+
+lowerReply :: LowerEnv -> (Maybe NativeEventId, [Node 'Lowered], [LowerNote])
+lowerReply env = case env.replyTarget of
+  Nothing -> (Nothing, [], [])
+  Just rc -> case env.caps.reply of
+    TierDrop -> (Nothing, [], [LowerNote "reply" NoteDropped Nothing])
+    TierNative
+      | Just nid <- rc.nativeId -> (Just nid, [], [])
+      | otherwise -> quoted rc (Just "no native copy on endpoint")
+    TierText -> quoted rc Nothing
+  where
+    quoted rc why = case quoteText rc of
+      Just q -> (Nothing, [NText q], [LowerNote "reply" NoteFolded why])
+      Nothing -> (Nothing, [], [LowerNote "reply" NoteDropped (Just "no quotable context")])
+
+quoteText :: ReplyContext -> Maybe Text
+quoteText rc = case (blank rc.author, truncateText 60 <$> blank rc.excerpt) of
+  (Nothing, Nothing) -> Nothing
+  (author, excerpt) ->
+    Just ("「" <> T.intercalate ": " (maybe [] pure author <> maybe [] pure excerpt) <> "」\n")
+  where
+    blank m = do
+      t <- m
+      let t' = T.strip t
+      if T.null t' then Nothing else Just t'
+
+attributionNode :: Attribution -> Node 'Lowered
+attributionNode a =
+  NText ("[" <> a.platformLabel <> maybe "" (" · " <>) a.sender <> "] ")
+
+-- | Single implementation of the human platform label (previously copied
+-- in Delivery, Handler and History).
+platformDisplayLabel :: Platform -> Text
+platformDisplayLabel = \case
+  PlatformQQ -> "QQ"
+  PlatformMatrix -> "Matrix"
+  PlatformIMessage -> "iMessage"
+  PlatformWeChatPad -> "WeChat"
+  PlatformCustom name -> name
+
+--------------------------------------------------------------------------------
+-- Chunking.
+
+-- | Split lowered nodes into chunks whose text cost fits the byte budget.
+-- Oversized text nodes split at character boundaries; non-text nodes are
+-- never split.  Replaces the old behaviour of permanently failing the
+-- delivery on @max_text_bytes@.
+chunkNodes :: Maybe Int -> [Node 'Lowered] -> [[Node 'Lowered]]
+chunkNodes Nothing ns = [ns | not (null ns)]
+chunkNodes (Just rawLimit) ns0 = go [] 0 ns0
+  where
+    -- A floor keeps a nonsense-small declared limit from degenerating
+    -- into per-character messages.
+    limit = max 64 rawLimit
+    go acc _ [] = [reverse acc | not (null acc)]
+    go acc used (n : rest)
+      | used + cost n <= limit = go (n : acc) (used + cost n) rest
+      | NText t <- n =
+          let (pre, post) = splitAtBytes (limit - used) t
+           in if T.null pre
+                then flush acc (n : rest)
+                else reverse (NText pre : acc) : go [] 0 (NText post : rest)
+      | otherwise = flush acc (n : rest)
+    -- Flush a non-empty accumulator; an oversized indivisible node gets a
+    -- chunk of its own so the walk always progresses.
+    flush [] (n : rest) = [n] : go [] 0 rest
+    flush acc rest = reverse acc : go [] 0 rest
+
+    cost = \case
+      NText t -> utf8Bytes t
+      NMention _ display -> utf8Bytes ("@" <> display)
+      _ -> 0
+
+splitAtBytes :: Int -> Text -> (Text, Text)
+splitAtBytes budget t0 = T.splitAt (fitting 0 0 t0) t0
+  where
+    fitting !k !b t = case T.uncons t of
+      Nothing -> k
+      Just (c, rest) ->
+        let b' = b + charUtf8Bytes c
+         in if b' > budget then k else fitting (k + 1) b' rest
+
+utf8Bytes :: Text -> Int
+utf8Bytes = T.foldl' (\acc c -> acc + charUtf8Bytes c) 0
+
+charUtf8Bytes :: Char -> Int
+charUtf8Bytes c
+  | n < 0x80 = 1
+  | n < 0x800 = 2
+  | n < 0x10000 = 3
+  | otherwise = 4
+  where
+    n = fromEnum c

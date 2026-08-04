@@ -151,6 +151,10 @@ library
         Max.Images
         Max.IMessage
         Max.Intent
+        Max.IR
+        Max.IR.Digest
+        Max.IR.Lower
+        Max.IR.Prompt
         Max.LLM.Stream
         Max.Log
         Max.LogBuffer
@@ -340,6 +344,10 @@ test-suite max-test
         Max.HttpRuntimeSpec
         Max.IMessageSpec
         Max.IntentSpec
+        Max.IRSpec
+        Max.IR.DigestSpec
+        Max.IR.LowerSpec
+        Max.IR.PromptSpec
         Max.LLM.StreamSpec
         Max.LogSpec
         OneBot.EventSpec
