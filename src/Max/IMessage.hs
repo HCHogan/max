@@ -17,6 +17,8 @@ module Max.IMessage
     iMessageIngressIdentity,
     iMessageReplyTarget,
     iMessageIsAddressed,
+    iMessageSendTransport,
+    iMessageAuthoritativeSendGuid,
     iMessageCapabilities,
     iMessageWorker,
     iMessageDeliveryTransport,
@@ -41,6 +43,8 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import GHC.Generics (Generic)
+import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
+import Max.EpisodeScheduler (EpisodeScheduler, bumpEpisode)
 import Max.HttpRuntime
   ( BufferedResponse (body),
     HttpPool (StandardPool),
@@ -51,8 +55,6 @@ import Max.HttpRuntime
     runBuffered,
     withStreamingResponse,
   )
-import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
-import Max.EpisodeScheduler (EpisodeScheduler, bumpEpisode)
 import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryMedia (..), DeliveryTransport (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -168,7 +170,7 @@ data IMessageBridgeHealth = IMessageBridgeHealth
 
 iMessageCapabilities :: PlatformCapabilities
 iMessageCapabilities =
-    noCapabilities
+  noCapabilities
     { canSendText = True,
       canSendMedia = True,
       -- The conservative baseline is the public AppleScript transport. The
@@ -418,14 +420,16 @@ iMessageDeliveryTransport runtime cfg =
                 uploadBridgeAttachment runtime cfg firstMedia bytes >>= \case
                   Left _ -> pure Nothing
                   Right uploadId -> pure (Just ("upload:" <> uploadId))
-        let params =
+        let replyTarget = claim.replyNativeEventId
+            params =
               object
                 ( [ "chat_guid" .= cfg.chatGuid,
                     "text" .= body,
-                    "service" .= ("auto" :: Text)
+                    "service" .= ("auto" :: Text),
+                    "transport" .= iMessageSendTransport replyTarget
                   ]
                     <> ["file" .= file | Just file <- [upload]]
-                    <> ["reply_to" .= target | Just (NativeEventId target) <- [claim.replyNativeEventId]]
+                    <> ["reply_to" .= target | Just (NativeEventId target) <- [replyTarget]]
                 )
         bridgeRpc runtime cfg "send" params >>= \case
           Left (BridgeBeforeEffect err) -> pure (AttemptRetryable err)
@@ -433,8 +437,23 @@ iMessageDeliveryTransport runtime cfg =
           Left (BridgeOutcomeUnknown err) -> pure (AttemptOutcomeUnknown err)
           Right value -> case parseEither sendResultParser value of
             Left err -> pure (AttemptOutcomeUnknown ("imsg send response: " <> T.pack err))
-            Right guid -> pure (AttemptAccepted (NativeEventId <$> guid))
+            Right guid -> pure (AttemptAccepted (iMessageAuthoritativeSendGuid replyTarget guid))
     }
+
+-- | The injected IMCore helper is necessary only for native inline replies.
+-- Keeping ordinary sends on AppleScript also gives them an authoritative GUID
+-- resolved from Messages' database by imsg.
+iMessageSendTransport :: Maybe NativeEventId -> Text
+iMessageSendTransport = maybe "applescript" (const "bridge")
+
+-- | The helper's immediate lastSentMessage GUID is best-effort and can be
+-- stale. Native replies are therefore accepted without an id and confirmed by
+-- the authoritative messages.after echo. AppleScript receipts remain usable.
+iMessageAuthoritativeSendGuid :: Maybe NativeEventId -> Maybe Text -> Maybe NativeEventId
+iMessageAuthoritativeSendGuid replyTarget guid =
+  case replyTarget of
+    Nothing -> NativeEventId <$> guid
+    Just _ -> Nothing
 
 resolveDeliveryMedia :: HttpRuntime -> DeliveryMedia -> IO (Either Text BS.ByteString)
 resolveDeliveryMedia runtime media = case media.bytes of

@@ -2,11 +2,19 @@ module Max.IMessageSpec (spec) where
 
 import Data.Aeson (Value, object, (.=))
 import Max.IMessage
-import Max.Platform.Types (EventKind (..), NativeUserId (..), PlatformCapabilities (..))
+import Max.Platform.Types (EventKind (..), NativeEventId (..), NativeUserId (..), PlatformCapabilities (..))
 import Test.Hspec
 
 spec :: Spec
 spec = describe "iMessage adapter" $ do
+  it "uses IMCore only for replies and waits for their authoritative echo GUID" $ do
+    let replyTarget = Just (NativeEventId "parent-guid")
+    iMessageSendTransport Nothing `shouldBe` "applescript"
+    iMessageSendTransport replyTarget `shouldBe` "bridge"
+    iMessageAuthoritativeSendGuid Nothing (Just "sent-guid")
+      `shouldBe` Just (NativeEventId "sent-guid")
+    iMessageAuthoritativeSendGuid replyTarget (Just "stale-guid") `shouldBe` Nothing
+
   it "parses authoritative messages.after cursor and stable GUID provenance" $ do
     let value =
           object
@@ -23,7 +31,7 @@ spec = describe "iMessage adapter" $ do
                          "reply_to_guid" .= ("PREVIOUS-GUID" :: String),
                          "thread_originator_guid" .= ("GUID-1" :: String),
                          "mentioned_handles" .= (["hnkhgn@icloud.com"] :: [String]),
-                          "attachments"
+                         "attachments"
                            .= [ object
                                   [ "attachment_id" .= ("abc123" :: String),
                                     "mime_type" .= ("image/jpeg" :: String),

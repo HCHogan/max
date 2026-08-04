@@ -213,7 +213,7 @@ func (s *server) rpc(w http.ResponseWriter, request *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": response.Error})
 		return
 	}
-	result, err := s.sanitizeRPCResult(input.Method, response.Result)
+	result, err := s.sanitizeRPCResult(input.Method, input.Params, response.Result)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -285,44 +285,69 @@ func (s *server) prepareRPC(method string, raw json.RawMessage) (json.RawMessage
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, noop, errors.New("invalid send params")
 	}
+	// Once the optional helper is active, imsg otherwise routes every send
+	// through IMCore. Keep ordinary sends on the public AppleScript transport;
+	// IMCore is needed only to create a native inline-reply relation.
+	replyTo, _ := params["reply_to"].(string)
+	if replyTo == "" {
+		params["transport"] = "applescript"
+	} else {
+		params["transport"] = "bridge"
+	}
 	fileValue, _ := params["file"].(string)
-	if fileValue == "" {
-		return raw, noop, nil
+	cleanup := noop
+	if fileValue != "" {
+		id := strings.TrimPrefix(fileValue, "upload:")
+		value, ok := s.outboundAttachments.Load(id)
+		if !ok || id == fileValue {
+			return nil, noop, errors.New("send file upload is missing or expired")
+		}
+		record := value.(attachmentRecord)
+		params["file"] = record.path
+		cleanup = func() {
+			s.outboundAttachments.Delete(id)
+			if err := os.Remove(record.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				log.Printf("remove staged outbound attachment: %v", err)
+			}
+		}
 	}
-	id := strings.TrimPrefix(fileValue, "upload:")
-	value, ok := s.outboundAttachments.Load(id)
-	if !ok || id == fileValue {
-		return nil, noop, errors.New("send file upload is missing or expired")
-	}
-	record := value.(attachmentRecord)
-	params["file"] = record.path
 	prepared, err := json.Marshal(params)
 	if err != nil {
+		cleanup()
 		return nil, noop, err
-	}
-	cleanup := func() {
-		s.outboundAttachments.Delete(id)
-		if err := os.Remove(record.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			log.Printf("remove staged outbound attachment: %v", err)
-		}
 	}
 	return prepared, cleanup, nil
 }
 
-func (s *server) sanitizeRPCResult(method string, raw json.RawMessage) (json.RawMessage, error) {
+func (s *server) sanitizeRPCResult(method string, paramsRaw, resultRaw json.RawMessage) (json.RawMessage, error) {
 	switch method {
 	case "chats.list":
-		return s.filterChats(raw)
+		return s.filterChats(resultRaw)
 	case "messages.after":
-		return s.sanitizeMessages(raw)
+		return s.sanitizeMessages(resultRaw)
 	case "send":
+		var params struct {
+			ReplyTo string `json:"reply_to"`
+		}
+		if err := json.Unmarshal(paramsRaw, &params); err != nil {
+			return nil, fmt.Errorf("decode send params: %w", err)
+		}
 		var result map[string]any
-		if err := json.Unmarshal(raw, &result); err != nil {
+		if err := json.Unmarshal(resultRaw, &result); err != nil {
 			return nil, fmt.Errorf("decode send result: %w", err)
 		}
-		return raw, nil
+		if params.ReplyTo == "" {
+			return resultRaw, nil
+		}
+		// IMCore reports chat.lastSentMessage immediately after sending. That is
+		// explicitly best-effort and can still identify the preceding message.
+		// The later messages.after echo is the authoritative native GUID.
+		delete(result, "guid")
+		delete(result, "message_id")
+		delete(result, "id")
+		return json.Marshal(result)
 	default:
-		return raw, nil
+		return resultRaw, nil
 	}
 }
 

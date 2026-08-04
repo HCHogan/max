@@ -910,38 +910,40 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
       -- The compatibility AFTER trigger records completed; normalized ingest
       -- is durable work and intentionally turns it into pending.
       dispatchCount <- case envelope.eventKind of
-        EventMessage | options.createDispatch ->
-          execute
-            "UPDATE message_dispatches SET status = 'pending', updated_at = now() \
-            \ WHERE canonical_message_id = ?"
-            (Only cid)
+        EventMessage
+          | options.createDispatch ->
+              execute
+                "UPDATE message_dispatches SET status = 'pending', updated_at = now() \
+                \ WHERE canonical_message_id = ?"
+                (Only cid)
         _ -> pure 0
       mirrorCount <- case envelope.eventKind of
-        EventMessage | options.createMirrorDeliveries ->
-          execute
-            "INSERT INTO message_deliveries \
-            \ (canonical_message_id, endpoint_id, status, idempotency_key) \
-            \ SELECT ?, target.endpoint_id, 'pending', \
-            \        'relay:' || ?::text || ':' || target.endpoint_id::text \
-            \ FROM conversation_endpoints origin \
-            \ JOIN conversation_endpoints target \
-            \   ON target.conversation_id = origin.conversation_id \
-            \  AND target.endpoint_id <> origin.endpoint_id \
-            \ WHERE origin.endpoint_id = ? \
-            \   AND origin.endpoint_mode = 'mirror' \
-            \   AND target.endpoint_mode = 'mirror' \
-            \   AND target.enabled \
-            \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
-            (cid, cid, envelope.endpointId.unEndpointId)
+        EventMessage
+          | options.createMirrorDeliveries ->
+              execute
+                "INSERT INTO message_deliveries \
+                \ (canonical_message_id, endpoint_id, status, idempotency_key) \
+                \ SELECT ?, target.endpoint_id, 'pending', \
+                \        'relay:' || ?::text || ':' || target.endpoint_id::text \
+                \ FROM conversation_endpoints origin \
+                \ JOIN conversation_endpoints target \
+                \   ON target.conversation_id = origin.conversation_id \
+                \  AND target.endpoint_id <> origin.endpoint_id \
+                \ WHERE origin.endpoint_id = ? \
+                \   AND origin.endpoint_mode = 'mirror' \
+                \   AND target.endpoint_mode = 'mirror' \
+                \   AND target.enabled \
+                \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
+                (cid, cid, envelope.endpointId.unEndpointId)
         _ -> pure 0
       forM_ envelope.relations (insertRelation cid envelope.endpointId)
       pure
         ( Ingested
             NewIngest
-            { canonicalMessageId = CanonicalMessageId cid,
-              dispatchCreated = dispatchCount == 1,
-              mirrorDeliveriesCreated = mirrorCount
-            }
+              { canonicalMessageId = CanonicalMessageId cid,
+                dispatchCreated = dispatchCount == 1,
+                mirrorDeliveriesCreated = mirrorCount
+              }
         )
 
 -- | Publish one bot-authored semantic message and every endpoint copy in one
@@ -1153,25 +1155,25 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
   rows <-
     query
       "WITH candidates AS ( \
-        \ SELECT md.canonical_message_id FROM message_dispatches md \
-        \ WHERE md.status IN ('pending', 'failed') \
-        \   AND md.next_attempt_at <= now() \
-        \   AND (md.lease_expires_at IS NULL OR md.lease_expires_at < now()) \
-        \   AND (?::bigint IS NULL OR md.canonical_message_id = ?) \
-        \ ORDER BY md.next_attempt_at, md.canonical_message_id \
-        \ FOR UPDATE OF md SKIP LOCKED LIMIT ? \
-        \), claimed AS ( \
-        \ UPDATE message_dispatches md \
-        \ SET status = 'claimed', lease_owner = ?, \
-        \     lease_expires_at = now() + (?::double precision * interval '1 second'), \
-        \     attempt_count = attempt_count + 1, last_attempt_at = now(), updated_at = now() \
-        \ FROM candidates c WHERE md.canonical_message_id = c.canonical_message_id \
-        \ RETURNING md.canonical_message_id, md.attempt_count \
-        \) \
-        \SELECT c.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
-        \       m.segments, m.reply_to_message_id, m.raw_message, m.source_platform, m.sender_nickname, m.sender_card, c.attempt_count \
-        \FROM claimed c JOIN messages m USING (canonical_message_id) \
-        \ORDER BY c.canonical_message_id"
+      \ SELECT md.canonical_message_id FROM message_dispatches md \
+      \ WHERE md.status IN ('pending', 'failed') \
+      \   AND md.next_attempt_at <= now() \
+      \   AND (md.lease_expires_at IS NULL OR md.lease_expires_at < now()) \
+      \   AND (?::bigint IS NULL OR md.canonical_message_id = ?) \
+      \ ORDER BY md.next_attempt_at, md.canonical_message_id \
+      \ FOR UPDATE OF md SKIP LOCKED LIMIT ? \
+      \), claimed AS ( \
+      \ UPDATE message_dispatches md \
+      \ SET status = 'claimed', lease_owner = ?, \
+      \     lease_expires_at = now() + (?::double precision * interval '1 second'), \
+      \     attempt_count = attempt_count + 1, last_attempt_at = now(), updated_at = now() \
+      \ FROM candidates c WHERE md.canonical_message_id = c.canonical_message_id \
+      \ RETURNING md.canonical_message_id, md.attempt_count \
+      \) \
+      \SELECT c.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
+      \       m.segments, m.reply_to_message_id, m.raw_message, m.source_platform, m.sender_nickname, m.sender_card, c.attempt_count \
+      \FROM claimed c JOIN messages m USING (canonical_message_id) \
+      \ORDER BY c.canonical_message_id"
       ( mCanonical,
         mCanonical,
         limit,
@@ -1204,7 +1206,8 @@ completeDispatch workerId (CanonicalMessageId canonical) completion = do
 
 claimDeliveries ::
   (WithConnection :> es, IOE :> es) =>
-  Text -> -- ^ stable worker id
+  -- | stable worker id
+  Text ->
   Int ->
   NominalDiffTime ->
   Eff es [DeliveryClaim]
@@ -1282,21 +1285,45 @@ completeDelivery ::
   DeliveryCompletion ->
   Eff es Bool
 completeDelivery workerId (DeliveryId delivery) completion = do
-  changed <- case completion of
-    DeliveryConfirmedAs native ->
-      finish ("confirmed" :: Text) native Nothing Nothing True
-    DeliveryAccepted native ->
-      finish "accepted_unconfirmed" native Nothing Nothing False
-    DeliveryRetry err next ->
-      finish "failed" Nothing (Just err) (Just next) False
-    DeliveryUnknown err next ->
-      finish "outcome_unknown" Nothing (Just err) (Just next) False
-    DeliveryPermanentlyFailed err ->
-      finish "suppressed" Nothing (Just err) Nothing False
-    DeliverySuppressedAs reason ->
-      finish "suppressed" Nothing (Just reason) Nothing False
-  pure (changed == 1)
+  withTransaction $ do
+    safeCompletion <- discardOwnedNativeEvent completion
+    changed <- case safeCompletion of
+      DeliveryConfirmedAs native ->
+        finish ("confirmed" :: Text) native Nothing Nothing True
+      DeliveryAccepted native ->
+        finish "accepted_unconfirmed" native Nothing Nothing False
+      DeliveryRetry err next ->
+        finish "failed" Nothing (Just err) (Just next) False
+      DeliveryUnknown err next ->
+        finish "outcome_unknown" Nothing (Just err) (Just next) False
+      DeliveryPermanentlyFailed err ->
+        finish "suppressed" Nothing (Just err) Nothing False
+      DeliverySuppressedAs reason ->
+        finish "suppressed" Nothing (Just reason) Nothing False
+    pure (changed == 1)
   where
+    discardOwnedNativeEvent value = case value of
+      DeliveryConfirmedAs (Just native) ->
+        nativeEventAlreadyOwned native >>= \owned ->
+          pure (DeliveryConfirmedAs (if owned then Nothing else Just native))
+      DeliveryAccepted (Just native) ->
+        nativeEventAlreadyOwned native >>= \owned ->
+          pure (DeliveryAccepted (if owned then Nothing else Just native))
+      _ -> pure value
+
+    nativeEventAlreadyOwned (NativeEventId native) = do
+      rows <-
+        query
+          "SELECT EXISTS (\
+          \ SELECT 1 FROM message_deliveries target\
+          \ JOIN message_deliveries owner ON owner.endpoint_id = target.endpoint_id\
+          \ WHERE target.delivery_id = ? AND owner.delivery_id <> target.delivery_id\
+          \   AND owner.native_event_id = ?)"
+          (delivery, native)
+      pure $ case rows of
+        [Only owned] -> owned
+        _ -> False
+
     finish status native lastError next confirmed =
       execute
         "UPDATE message_deliveries \

@@ -127,6 +127,11 @@ spec = describe "Matrix adapter" $ do
     matrixCapabilities.canSendMedia `shouldBe` True
     matrixCapabilities.canReply `shouldBe` True
 
+  it "treats homeserver media size metadata as advisory" $ do
+    matrixMediaSizeDrift (Just 145874) 145964 `shouldBe` True
+    matrixMediaSizeDrift (Just 145964) 145964 `shouldBe` False
+    matrixMediaSizeDrift Nothing 145964 `shouldBe` False
+
 shouldSatisfyRight :: (Show e, Show a) => Either e a -> (a -> Bool) -> IO a
 shouldSatisfyRight value predicate = case value of
   Left err -> expectationFailure (show err) >> fail "unreachable"

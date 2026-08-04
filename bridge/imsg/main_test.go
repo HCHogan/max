@@ -99,6 +99,9 @@ func TestOutboundAttachmentIsOpaqueOneShotStaging(t *testing.T) {
 	if strings.Contains(string(prepared), "upload:") || !strings.Contains(string(prepared), root) {
 		t.Fatalf("upload was not resolved only inside the bridge: %s", prepared)
 	}
+	if !strings.Contains(string(prepared), `"transport":"applescript"`) {
+		t.Fatalf("ordinary attachment send did not force AppleScript: %s", prepared)
+	}
 	value, ok := s.outboundAttachments.Load(uploaded.ID)
 	if !ok {
 		t.Fatal("staged upload disappeared before send")
@@ -110,6 +113,53 @@ func TestOutboundAttachmentIsOpaqueOneShotStaging(t *testing.T) {
 	}
 	if _, ok := s.outboundAttachments.Load(uploaded.ID); ok {
 		t.Fatal("one-shot upload handle survived cleanup")
+	}
+}
+
+func TestPrepareRPCSelectsTransportAtNativeReplyBoundary(t *testing.T) {
+	s := &server{}
+	tests := []struct {
+		name      string
+		raw       json.RawMessage
+		transport string
+	}{
+		{"ordinary", json.RawMessage(`{"text":"hello"}`), "applescript"},
+		{"native reply", json.RawMessage(`{"text":"hello","reply_to":"parent-guid"}`), "bridge"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, cleanup, err := s.prepareRPC("send", test.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cleanup()
+			var params map[string]any
+			if err := json.Unmarshal(prepared, &params); err != nil {
+				t.Fatal(err)
+			}
+			if params["transport"] != test.transport {
+				t.Fatalf("got transport %#v, want %q", params["transport"], test.transport)
+			}
+		})
+	}
+}
+
+func TestSanitizeSendResultTreatsIMCoreGUIDAsNonAuthoritative(t *testing.T) {
+	s := &server{}
+	result := json.RawMessage(`{"ok":true,"guid":"stale-guid","message_id":"stale-id","id":17}`)
+	sanitized, err := s.sanitizeRPCResult("send", json.RawMessage(`{"reply_to":"parent-guid"}`), result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sanitized), "stale") || strings.Contains(string(sanitized), `"id"`) {
+		t.Fatalf("native reply leaked a best-effort identifier: %s", sanitized)
+	}
+	ordinary, err := s.sanitizeRPCResult("send", json.RawMessage(`{}`), result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ordinary), "stale-guid") {
+		t.Fatalf("ordinary authoritative receipt was stripped: %s", ordinary)
 	}
 }
 

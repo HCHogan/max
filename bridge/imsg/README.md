@@ -103,5 +103,9 @@ Because the token is stored in the plist, keep that file user-readable only.
 - `/health` and every allowlisted `reply_to` send probe `imsg status`. A dead or
   missing IMCore helper removes the reply capability and rejects the native
   reply before the send RPC; Max retains it in the durable retry queue.
+- Ordinary sends explicitly use AppleScript even while the helper is active.
+  Native replies use IMCore, but its immediate `lastSentMessage` GUID is
+  best-effort and may be stale; the bridge strips it and Max waits for the
+  authoritative `messages.after` echo before assigning native provenance.
 
 Run `go test ./...` after bridge changes.

@@ -11,6 +11,7 @@ module Max.Matrix
     MatrixSyncPage (..),
     MatrixEvent (..),
     parseMatrixSyncPage,
+    matrixMediaSizeDrift,
     matrixCapabilities,
     matrixWorker,
     matrixDeliveryTransport,
@@ -392,15 +393,28 @@ parseMatrixSyncPage room value =
 roomTimeline :: Text -> Value -> Parser ([MatrixEvent], Bool, Maybe Text)
 roomTimeline room = withObject "rooms" $ \rooms -> do
   joins <- rooms .:? "join" .!= Object mempty
-  withObject "joined rooms" (\joined -> case KeyMap.lookup (Key.fromText room) joined of
-    Nothing -> pure ([], False, Nothing)
-    Just roomValue -> withObject "joined room" (\roomObject -> do
-      timeline <- roomObject .:? "timeline" .!= Object mempty
-      withObject "timeline" (\timelineObject -> do
-        rawEvents <- timelineObject .:? "events" .!= []
-        limited <- timelineObject .:? "limited" .!= False
-        prev <- timelineObject .:? "prev_batch"
-        pure (mapMaybe (parseMaybe matrixEventParser) rawEvents, limited, prev)) timeline) roomValue) joins
+  withObject
+    "joined rooms"
+    ( \joined -> case KeyMap.lookup (Key.fromText room) joined of
+        Nothing -> pure ([], False, Nothing)
+        Just roomValue ->
+          withObject
+            "joined room"
+            ( \roomObject -> do
+                timeline <- roomObject .:? "timeline" .!= Object mempty
+                withObject
+                  "timeline"
+                  ( \timelineObject -> do
+                      rawEvents <- timelineObject .:? "events" .!= []
+                      limited <- timelineObject .:? "limited" .!= False
+                      prev <- timelineObject .:? "prev_batch"
+                      pure (mapMaybe (parseMaybe matrixEventParser) rawEvents, limited, prev)
+                  )
+                  timeline
+            )
+            roomValue
+    )
+    joins
 
 messagesPageParser :: Value -> Parser ([MatrixEvent], Text)
 messagesPageParser = withObject "messages page" $ \o -> do
@@ -449,8 +463,9 @@ messageParts value = fromMaybe [ContentUnsupported "matrix:malformed-message"] (
       info <- o .:? "info" .!= Object mempty
       (mime, size) <- withObject "media info" (\i -> (,) <$> i .:? "mimetype" <*> i .:? "size") info
       pure $ case (msgtype, url) of
-        (kind, Just mxc) | kind `elem` ["m.image", "m.video", "m.audio", "m.file"] ->
-          [ContentMedia (RemoteMedia mxc mime size Nothing) (nonEmpty body)]
+        (kind, Just mxc)
+          | kind `elem` ["m.image", "m.video", "m.audio", "m.file"] ->
+              [ContentMedia (RemoteMedia mxc mime size Nothing) (nonEmpty body)]
         _ -> [ContentText body | not (T.null body)]
 
 relationFrom :: Value -> [MessageRelation]
@@ -458,19 +473,24 @@ relationFrom value = fromMaybe [] (parseMaybe parser value)
   where
     parser = withObject "relations" $ \o -> do
       relates <- o .:? "m.relates_to" .!= Object mempty
-      withObject "m.relates_to" (\r -> do
-        relType <- r .:? "rel_type" :: Parser (Maybe Text)
-        event <- r .:? "event_id"
-        key <- r .:? "key"
-        reply <- r .:? "m.in_reply_to" .!= Object mempty
-        replyEvent <- withObject "m.in_reply_to" (.:? "event_id") reply
-        pure $ catMaybes
-          [ ReplyTo . NativeEventId <$> replyEvent,
-            case (relType, event) of
-              (Just "m.replace", Just target) -> Just (Replaces (NativeEventId target))
-              (Just "m.annotation", Just target) -> Just (ReactsTo (NativeEventId target) (fromMaybe "" key))
-              _ -> Nothing
-          ]) relates
+      withObject
+        "m.relates_to"
+        ( \r -> do
+            relType <- r .:? "rel_type" :: Parser (Maybe Text)
+            event <- r .:? "event_id"
+            key <- r .:? "key"
+            reply <- r .:? "m.in_reply_to" .!= Object mempty
+            replyEvent <- withObject "m.in_reply_to" (.:? "event_id") reply
+            pure $
+              catMaybes
+                [ ReplyTo . NativeEventId <$> replyEvent,
+                  case (relType, event) of
+                    (Just "m.replace", Just target) -> Just (Replaces (NativeEventId target))
+                    (Just "m.annotation", Just target) -> Just (ReactsTo (NativeEventId target) (fromMaybe "" key))
+                    _ -> Nothing
+                ]
+        )
+        relates
 
 mentionsFrom :: Value -> [NativeUserId]
 mentionsFrom value = fromMaybe [] (parseMaybe parser value)
@@ -498,13 +518,21 @@ hydrateMatrixContent runtime cfg event = traverse hydrate event.content
   where
     hydrate part@(ContentMedia (RemoteMedia mxc mime expectedSize _) caption)
       | "mxc://" `T.isPrefixOf` mxc = do
-          downloaded <- liftIO (fetchMatrixMedia runtime cfg mxc expectedSize)
+          downloaded <- liftIO (fetchMatrixMedia runtime cfg mxc)
           case downloaded of
             Left err -> do
               logAttention "Matrix media import failed; text remains durable" $
                 object ["event_id" .= event.eventId, "mxc" .= mxc, "error" .= err]
               pure part
             Right bytes -> do
+              when (matrixMediaSizeDrift expectedSize (BS.length bytes)) $
+                logAttention "Matrix media size metadata drift; imported bounded response" $
+                  object
+                    [ "event_id" .= event.eventId,
+                      "mxc" .= mxc,
+                      "declared_size" .= expectedSize,
+                      "actual_size" .= BS.length bytes
+                    ]
               ref <- putBlob bytes
               let sha = blobRefSha256 ref
               pure $
@@ -517,9 +545,8 @@ fetchMatrixMedia ::
   HttpRuntime ->
   MatrixConfig ->
   Text ->
-  Maybe Int64 ->
   IO (Either Text BS.ByteString)
-fetchMatrixMedia runtime cfg mxc expectedSize = case parseMxc mxc of
+fetchMatrixMedia runtime cfg mxc = case parseMxc mxc of
   Nothing -> pure (Left "invalid mxc URI")
   Just (serverName, mediaId) -> do
     let path =
@@ -540,10 +567,13 @@ fetchMatrixMedia runtime cfg mxc expectedSize = case parseMxc mxc of
           Left (HttpStatusFailure status _ preview _) ->
             pure (Left ("Matrix media HTTP " <> T.pack (show status) <> ": " <> T.take 500 (TE.decodeUtf8Lenient preview)))
           Left failure -> pure (Left (renderTransportFailure failure))
-          Right response
-            | maybe False (/= fromIntegral (BS.length response.body)) expectedSize ->
-                pure (Left "Matrix media byte size differs from event metadata")
-            | otherwise -> pure (Right response.body)
+          Right response -> pure (Right response.body)
+
+-- | Matrix event size is advisory metadata. Homeservers can return the same
+-- valid media with container/metadata differences, while runBuffered remains
+-- the actual security boundary for response size.
+matrixMediaSizeDrift :: Maybe Int64 -> Int -> Bool
+matrixMediaSizeDrift expected actual = maybe False (/= fromIntegral actual) expected
 
 parseMxc :: Text -> Maybe (Text, Text)
 parseMxc value = case T.breakOn "/" (T.drop (T.length ("mxc://" :: Text)) value) of

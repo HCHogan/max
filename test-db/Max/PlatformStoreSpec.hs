@@ -168,6 +168,28 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
           (DeliveryConfirmedAs (Just (NativeEventId "qq-echo")))
     completed `shouldBe` True
 
+  it "discards a provider receipt already owned by another delivery" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-reused-1" "first"))
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-reused-2" "second"))
+    claims <- withDb pool (claimDeliveries "worker-a" 10 30)
+    claims `shouldSatisfy` \xs -> length xs == 2 && all (\claim -> claim.endpointId == qq.endpointId) xs
+    case claims of
+      [firstClaim, secondClaim] -> do
+        withDb pool (completeDelivery "worker-a" firstClaim.deliveryId (DeliveryAccepted (Just (NativeEventId "reused-native"))))
+          `shouldReturn` True
+        withDb pool (completeDelivery "worker-a" secondClaim.deliveryId (DeliveryAccepted (Just (NativeEventId "reused-native"))))
+          `shouldReturn` True
+        deliveries <- withConn pool $ \conn ->
+          query
+            conn
+            "SELECT status, native_event_id FROM message_deliveries WHERE endpoint_id = ? ORDER BY delivery_id"
+            (Only qq.endpointId.unEndpointId)
+        (deliveries :: [(Text, Maybe Text)])
+          `shouldBe` [("accepted_unconfirmed", Just "reused-native"), ("accepted_unconfirmed", Nothing)]
+      _ -> expectationFailure "expected two leased deliveries"
+
   it "never automatically retries an outcome-unknown non-idempotent delivery" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
@@ -464,24 +486,23 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             (resultId trueChild).unCanonicalMessageId
           )
       (repaired :: [(Int64, Maybe Int64, Maybe Int64, Maybe Text, Maybe Text, Maybe Int64, Maybe Text)])
-        `shouldBe`
-          [ ( (resultId falseChild).unCanonicalMessageId,
-              Nothing,
-              Nothing,
-              Nothing,
-              Nothing,
-              Nothing,
-              Nothing
-            ),
-            ( (resultId trueChild).unCanonicalMessageId,
-              Just parentMessageId,
-              Just (resultId parent).unCanonicalMessageId,
-              Just "reply",
-              Just (T.pack (show parentMessageId)),
-              Just (resultId parent).unCanonicalMessageId,
-              Just "parent"
-            )
-          ]
+        `shouldBe` [ ( (resultId falseChild).unCanonicalMessageId,
+                       Nothing,
+                       Nothing,
+                       Nothing,
+                       Nothing,
+                       Nothing,
+                       Nothing
+                     ),
+                     ( (resultId trueChild).unCanonicalMessageId,
+                       Just parentMessageId,
+                       Just (resultId parent).unCanonicalMessageId,
+                       Just "reply",
+                       Just (T.pack (show parentMessageId)),
+                       Just (resultId parent).unCanonicalMessageId,
+                       Just "parent"
+                     )
+                   ]
 
   it "removes Mac attachment paths from existing iMessage raw provenance" $ do
     endpoint <-
@@ -522,18 +543,17 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
           "SELECT raw_payload FROM platform_events WHERE endpoint_id = ? AND native_event_id = 'attachment-path'"
           (Only endpoint.endpointId.unEndpointId)
       (payloads :: [Only Value])
-        `shouldBe`
-          [ Only
-              ( object
-                  [ "attachments"
-                      .= [ object
-                             [ "transfer_name" .= ("photo.jpg" :: Text),
-                               "mime_type" .= ("image/jpeg" :: Text)
-                             ]
-                         ]
-                  ]
-              )
-          ]
+        `shouldBe` [ Only
+                       ( object
+                           [ "attachments"
+                               .= [ object
+                                      [ "transfer_name" .= ("photo.jpg" :: Text),
+                                        "mime_type" .= ("image/jpeg" :: Text)
+                                      ]
+                                  ]
+                           ]
+                       )
+                   ]
 
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do

@@ -396,7 +396,11 @@ The Mac-side iMessage bridge derives native-reply capability from a live
 the endpoint, so the prompt grammar and relation resolver move together. A
 resolved relation is sent as `reply_to`; both the bridge policy boundary and
 `imsg` reject it when the injected IMCore helper is unavailable. There is no
-silent downgrade after native-reply execution has been selected.
+silent downgrade after native-reply execution has been selected. Ordinary
+sends stay on AppleScript. IMCore's immediate best-effort GUID is never allowed
+to identify a native reply; the authoritative catch-up echo confirms it, and
+the delivery store discards any provider receipt already owned by another row
+instead of violating endpoint provenance uniqueness.
 
 `Agent` depends on `LLM`, scoped `Tools`, an explicit `TurnRuntime`, logging,
 and its typed `AgentEventSink`; it has no OneBot segment, `Outbound`, or message

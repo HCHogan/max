@@ -41,7 +41,10 @@ On first start Max records the current `/sync` page without dispatching or
 mirroring historical traffic. Later limited timelines are repaired through
 `/messages` until the last durable event boundary is found, then `next_batch`
 is published with revision CAS. Inbound authenticated MXC media is bounded at
-64 MiB and imported into BlobStore. Outbound canonical media is resolved from
+64 MiB and imported into BlobStore. Matrix event `info.size` is advisory: a
+homeserver may return a valid file with different container metadata, so Max
+records the bounded response's actual size instead of abandoning it as an
+opaque `mxc://` URI. Outbound canonical media is resolved from
 BlobStore, inline bytes, or a bounded HTTP source, uploaded through Matrix's
 authenticated media API, and sent as the matching `m.image`, `m.video`,
 `m.audio`, or `m.file` event. Resolution or upload failure degrades to the
@@ -74,9 +77,12 @@ the optional SIP-disabled IMCore helper. The bridge probes `imsg status` on
 every health check and native reply, and Max writes a changed reply capability
 back to the endpoint. With the helper live, canonical reply relations are sent
 as `reply_to`; if it disappears, the bridge fails closed and the delivery stays
-on Max's durable retry path. Like Matrix, one outbound delivery currently sends
-only its first attachment. Installation and SIP recovery steps are in the
-bridge README.
+on Max's durable retry path. Ordinary sends explicitly remain on AppleScript.
+For a native reply, IMCore's immediate `lastSentMessage` GUID is non-authoritative
+and discarded; the later `messages.after` echo supplies the real GUID and
+confirms the delivery. Like Matrix, one outbound delivery currently sends only
+its first attachment. Installation and SIP recovery steps are in the bridge
+README.
 
 Group wakeups use the confirmed mention handle embedded in Messages'
 `attributedBody`, matched against `imessage.mention_handles`. Contact names are
