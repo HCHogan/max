@@ -461,7 +461,10 @@ lexicalCandidatesSql =
   \         NULL::double precision AS semantic_score, (pins.message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
   \  FROM messages AS message CROSS JOIN input LEFT JOIN pins ON pins.message_id = message.message_id \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
-  \    AND message.kind = 'chat' AND message.forwarded_in_message_id IS NULL \
+  \    AND message.kind = 'chat' \
+  \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
+  \                    WHERE containment.canonical_message_id = message.canonical_message_id \
+  \                      AND containment.relation_kind = 'contained_in') \
   \    AND (position(lower(input.query_text) in lower(message.rendered_text)) > 0 \
   \      OR similarity(message.rendered_text, input.query_text) >= 0.08) \
   \  ORDER BY lexical_score DESC, message.received_at DESC, message.message_id \
@@ -556,7 +559,10 @@ semanticCandidatesSql =
   \  SELECT message.*, input.query_vector, input.candidate_limit \
   \  FROM messages AS message CROSS JOIN input \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
-  \    AND message.kind = 'chat' AND message.forwarded_in_message_id IS NULL \
+  \    AND message.kind = 'chat' \
+  \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
+  \                    WHERE containment.canonical_message_id = message.canonical_message_id \
+  \                      AND containment.relation_kind = 'contained_in') \
   \    AND message.embedding_model = input.model_id AND message.embedding_dimensions = input.dimensions \
   \), message_candidates AS ( \
   \  SELECT CASE WHEN pins.message_id IS NULL THEN 'message' ELSE 'pin' END::text AS source, \

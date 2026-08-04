@@ -176,6 +176,32 @@ spec = describe "Matrix adapter" $ do
     matrixCapabilities.text `shouldBe` True
     matrixCapabilities.image `shouldBe` TierNative
     matrixCapabilities.reply `shouldBe` TierNative
+    matrixCapabilities.reaction `shouldBe` True
+    matrixCapabilities.edit `shouldBe` True
+    matrixCapabilities.redact `shouldBe` True
+
+  it "emits native Matrix edit and reaction contracts from lowered content" $ do
+    let content = object ["msgtype" .= ("m.text" :: String), "body" .= ("fixed" :: String)]
+    matrixEditPayload (NativeEventId "$old") content
+      `shouldBe` object
+        [ "msgtype" .= ("m.text" :: String),
+          "body" .= ("* fixed" :: String),
+          "m.new_content" .= content,
+          "m.relates_to"
+            .= object
+              [ "rel_type" .= ("m.replace" :: String),
+                "event_id" .= ("$old" :: String)
+              ]
+        ]
+    matrixReactionPayload (NativeEventId "$old") "👍"
+      `shouldBe` object
+        [ "m.relates_to"
+            .= object
+              [ "rel_type" .= ("m.annotation" :: String),
+                "event_id" .= ("$old" :: String),
+                "key" .= ("👍" :: String)
+              ]
+        ]
 
   it "treats homeserver media size metadata as advisory" $ do
     matrixMediaSizeDrift (Just 145874) 145964 `shouldBe` True

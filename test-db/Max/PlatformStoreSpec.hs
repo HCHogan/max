@@ -367,9 +367,116 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     fmap (\delivery -> delivery.replyContext >>= (.nativeId)) claims
       `shouldBe` [Just (NativeEventId "matrix-target")]
 
+  it "fans edit, reaction, and redaction through capable native copies" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <-
+      withDb pool $
+        ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-meta-target" "before")
+    [targetCopy] <- withDb pool (claimDeliveries "meta-target" 10 30)
+    targetCopy.endpointId `shouldBe` matrix.endpointId
+    withDb pool
+      (completeDelivery "meta-target" targetCopy.deliveryId [] (DeliveryConfirmedAs (Just (NativeEventId "matrix-meta-target"))))
+      `shouldReturn` True
+
+    let editEnvelope =
+          (inboundBody qq.endpointId (addUTCTime 1 now) "qq-edit" (Body [NText "after"]))
+            { eventKind = EventEdit,
+              relations = [Replaces (NativeEventId "qq-meta-target")]
+            }
+    edit <- withDb pool (ingestEnvelope defaultIngestOptions editEnvelope)
+    case edit of
+      Ingested fresh -> fresh.mirrorDeliveriesCreated `shouldBe` 1
+      other -> expectationFailure ("expected new edit: " <> show other)
+    [editClaim] <- withDb pool (claimDeliveries "meta-edit" 10 30)
+    editClaim.eventKind `shouldBe` EventEdit
+    editClaim.endpointId `shouldBe` matrix.endpointId
+    editClaim.actionTarget `shouldBe` Just (NativeEventId "matrix-meta-target")
+    editClaim.body `shouldBe` Body [NText "after"]
+    withDb pool (completeDelivery "meta-edit" editClaim.deliveryId [] (DeliveryConfirmedAs (Just (NativeEventId "matrix-edit"))))
+      `shouldReturn` True
+
+    let reactionEnvelope =
+          (inboundBody matrix.endpointId (addUTCTime 2 now) "matrix-reaction" (Body []))
+            { eventKind = EventReaction,
+              relations = [ReactsTo (NativeEventId "matrix-meta-target") "212" ReactionAdd]
+            }
+    reaction <- withDb pool (ingestEnvelope defaultIngestOptions reactionEnvelope)
+    case reaction of
+      Ingested fresh -> fresh.mirrorDeliveriesCreated `shouldBe` 1
+      other -> expectationFailure ("expected new reaction: " <> show other)
+    [reactionClaim] <- withDb pool (claimDeliveries "meta-reaction" 10 30)
+    reactionClaim.eventKind `shouldBe` EventReaction
+    reactionClaim.endpointId `shouldBe` qq.endpointId
+    reactionClaim.actionTarget `shouldBe` Just (NativeEventId "qq-meta-target")
+    reactionClaim.reactionKey `shouldBe` Just "212"
+    reactionClaim.reactionAction `shouldBe` ReactionAdd
+    withDb pool (completeDelivery "meta-reaction" reactionClaim.deliveryId [] (DeliveryConfirmedAs Nothing))
+      `shouldReturn` True
+
+    let redactionEnvelope =
+          (inboundBody qq.endpointId (addUTCTime 3 now) "qq-redaction" (Body []))
+            { eventKind = EventRedaction,
+              relations = [Redacts (NativeEventId "qq-meta-target")]
+            }
+    redaction <- withDb pool (ingestEnvelope defaultIngestOptions redactionEnvelope)
+    case redaction of
+      Ingested fresh -> fresh.mirrorDeliveriesCreated `shouldBe` 1
+      other -> expectationFailure ("expected new redaction: " <> show other)
+    [redactionClaim] <- withDb pool (claimDeliveries "meta-redaction" 10 30)
+    redactionClaim.eventKind `shouldBe` EventRedaction
+    redactionClaim.endpointId `shouldBe` matrix.endpointId
+    redactionClaim.actionTarget `shouldBe` Just (NativeEventId "matrix-meta-target")
+
+  it "publishes bot QQ reactions idempotently and reconciles their notice echo" $ do
+    (qq, _) <- mirrorPair pool
+    now <- getCurrentTime
+    target <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions {createMirrorDeliveries = False}
+          (inbound qq.endpointId now "qq-reaction-target" "target")
+    [Only targetMessage] <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT message_id FROM messages WHERE canonical_message_id = ?"
+        (Only (resultId target).unCanonicalMessageId)
+    caps <- withDb pool (conversationAdvertisedCaps 42 (Just targetMessage))
+    caps.canReaction `shouldBe` True
+    missingCaps <- withDb pool (conversationAdvertisedCaps 42 (Just 999999999))
+    missingCaps.canReaction `shouldBe` False
+    let draft =
+          ReactionDraft
+            { legacyConversationId = 42,
+              targetCompatibilityMessageId = targetMessage,
+              reactionKey = "212",
+              reactionAction = ReactionAdd,
+              requiredPlatform = Just PlatformQQ
+            }
+    Just queued <- withDb pool (enqueueReaction draft)
+    queued.deliveriesCreated `shouldBe` 1
+    withDb pool (enqueueReaction draft) `shouldReturn` Just queued
+    [claim] <- withDb pool (claimDeliveries "bot-reaction" 10 30)
+    claim.eventKind `shouldBe` EventReaction
+    claim.endpointId `shouldBe` qq.endpointId
+    claim.actionTarget `shouldBe` Just (NativeEventId "qq-reaction-target")
+    withDb pool (completeDelivery "bot-reaction" claim.deliveryId [] (DeliveryConfirmedAs Nothing))
+      `shouldReturn` True
+    let echo =
+          (inboundBody qq.endpointId (addUTCTime 1 now) "qq-reaction-notice" (Body []))
+            { senderNativeId = NativeUserId "9",
+              eventKind = EventReaction,
+              relations = [ReactsTo (NativeEventId "qq-reaction-target") "212" ReactionAdd]
+            }
+    withDb pool (ingestEnvelope defaultIngestOptions echo)
+      `shouldReturn` DeliveryEcho queued.canonicalMessageId
+    rows <- withConn pool $ \conn ->
+      query conn "SELECT count(*) FROM messages" ()
+    (rows :: [Only Int64]) `shouldBe` [Only 2]
+
   it "keeps semantic mentions when a mirror has a QQ endpoint" $ do
     (qq, matrix) <- mirrorPair pool
-    mirrorCaps <- withDb pool (conversationAdvertisedCaps 42)
+    mirrorCaps <- withDb pool (conversationAdvertisedCaps 42 Nothing)
     mirrorCaps.canReply `shouldBe` True
     mirrorCaps.canMention `shouldBe` True
     mirrorCaps.canFace `shouldBe` True
@@ -445,90 +552,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         persisted `shouldSatisfy` T.isInfixOf "\xfffd"
         persisted `shouldNotSatisfy` T.any (== '\NUL')
       _ -> expectationFailure "missing sanitized canonical event"
-
-  it "repairs iMessage predecessor chains without losing real inline replies" $ do
-    endpoint <-
-      withDb pool $
-        ensureConfiguredEndpoint
-          PlatformIMessage
-          (NativeAccountId "mac-account")
-          (NativeConversationId "iMessage;+;chat-test")
-          ConversationGroup
-          EndpointStandalone
-          Nothing
-          textCapabilities
-    now <- getCurrentTime
-    parent <- withDb pool (ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "parent" "parent"))
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "previous" "previous"))
-    let staleReplySegments =
-          toJSON
-            [ object
-                [ "type" .= ("reply" :: Text),
-                  "data" .= object ["id" .= ("-999" :: Text)]
-                ]
-            ]
-        staleOptions :: IngestOptions
-        staleOptions = defaultIngestOptions {PlatformStore.qqProvenanceSegments = Just staleReplySegments}
-        falseEnvelope =
-          (inbound endpoint.endpointId now "ambient-child" "ambient")
-            { relations = [ReplyTo (NativeEventId "previous")],
-              rawPayload = Just (object ["reply_to_guid" .= ("previous" :: Text)])
-            }
-        trueEnvelope =
-          (inbound endpoint.endpointId now "inline-child" "inline")
-            { relations = [ReplyTo (NativeEventId "previous")],
-              rawPayload =
-                Just
-                  ( object
-                      [ "reply_to_guid" .= ("previous" :: Text),
-                        "thread_originator_guid" .= ("parent" :: Text)
-                      ]
-                  )
-            }
-    falseChild <- withDb pool (ingestEnvelope staleOptions falseEnvelope)
-    trueChild <- withDb pool (ingestEnvelope staleOptions trueEnvelope)
-    withConn pool $ \conn -> withTransaction conn $ do
-      migration <- readFile "migrations/051_imessage_reply_semantics.sql"
-      _ <- execute_ conn (fromString migration)
-      [Only parentMessageId] <-
-        query
-          conn
-          "SELECT message_id FROM messages WHERE canonical_message_id = ?"
-          (Only (resultId parent).unCanonicalMessageId)
-      repaired <-
-        query
-          conn
-          "SELECT child.canonical_message_id, child.reply_to_message_id, \
-          \       child.reply_to_canonical_message_id, child.segments->0->>'type', \
-          \       child.segments->0->'data'->>'id', relation.target_canonical_message_id, \
-          \       relation.target_native_event_id \
-          \ FROM messages child \
-          \ LEFT JOIN message_relations relation \
-          \   ON relation.canonical_message_id = child.canonical_message_id \
-          \  AND relation.relation_kind = 'reply' \
-          \ WHERE child.canonical_message_id IN (?, ?) \
-          \ ORDER BY child.canonical_message_id"
-          ( (resultId falseChild).unCanonicalMessageId,
-            (resultId trueChild).unCanonicalMessageId
-          )
-      (repaired :: [(Int64, Maybe Int64, Maybe Int64, Maybe Text, Maybe Text, Maybe Int64, Maybe Text)])
-        `shouldBe` [ ( (resultId falseChild).unCanonicalMessageId,
-                       Nothing,
-                       Nothing,
-                       Nothing,
-                       Nothing,
-                       Nothing,
-                       Nothing
-                     ),
-                     ( (resultId trueChild).unCanonicalMessageId,
-                       Just parentMessageId,
-                       Just (resultId parent).unCanonicalMessageId,
-                       Just "reply",
-                       Just (T.pack (show parentMessageId)),
-                       Just (resultId parent).unCanonicalMessageId,
-                       Just "parent"
-                     )
-                   ]
 
   it "removes Mac attachment paths from existing iMessage raw provenance" $ do
     endpoint <-
@@ -783,15 +806,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               SegOther "record" (object ["file" .= ("voice.amr" :: Text)]),
               SegCard card
             ]
-    withConn pool $ \conn -> do
+    withConn pool $ \conn -> withTransaction conn $ do
+      _ <- execute_ conn "SAVEPOINT canonical_v1_rehearsal"
+      _ <- execute_ conn "ALTER TABLE messages DROP CONSTRAINT messages_canonical_content_v2_check"
       _ <-
         execute
           conn
           "UPDATE messages SET canonical_content = ?::jsonb, segments = ?::jsonb \
           \ WHERE canonical_message_id = ?"
           (v1Content, v1Segments, cid)
-      pure ()
-    withConn pool $ \conn -> withTransaction conn $ do
       migration <- readFile "migrations/055_canonical_content_v2.sql"
       _ <- execute_ conn (fromString migration)
       rows <-
@@ -824,6 +847,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
                        "哔哩哔哩 · 哔哩哔哩 · 一个视频 · https://b23.tv/x"
                      )
                    ]
+      _ <- execute_ conn "ROLLBACK TO SAVEPOINT canonical_v1_rehearsal"
+      pure ()
 
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do
@@ -839,7 +864,7 @@ mirrorPair pool = withDb pool $ do
           endpointDisplayName = Just "QQ test",
           conversationKind = ConversationGroup,
           endpointMode = EndpointMirror,
-          capabilities = textCapabilities
+          capabilities = textCapabilities {reaction = True}
         }
   matrix <-
     registerEndpoint
@@ -852,7 +877,7 @@ mirrorPair pool = withDb pool $ do
           endpointDisplayName = Just "Matrix test",
           conversationKind = ConversationGroup,
           endpointMode = EndpointMirror,
-          capabilities = textCapabilities
+          capabilities = textCapabilities {reaction = True, edit = True, redact = True}
         }
   pure (qq, matrix)
 

@@ -56,6 +56,7 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.BuildInfo (gitRev)
+import Max.AdminTimeline (loadAdminTimeline)
 import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
 import Max.Command.Parser (effortLevels)
 import Max.ContextAdmin
@@ -76,6 +77,7 @@ import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGran
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
 import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.Http (Http)
 import Max.Embedding (EmbeddingRecord)
 import Max.Env (BotEnv (..))
@@ -156,6 +158,8 @@ data Route
   | RCalls
   | RCallDetail !Int64
   | RPlatformStatus
+  | RPlatformTimeline !Int64
+  | RBlob !Text
   | RContextStatus
   | RContextCaptures
   | RContextCompartments
@@ -189,6 +193,8 @@ route m path
       ["api", "calls"] -> Just RCalls
       ["api", "calls", i] -> RCallDetail <$> int i
       ["api", "platforms", "status"] -> Just RPlatformStatus
+      ["api", "platforms", "timeline", g] -> RPlatformTimeline <$> int g
+      ["api", "blobs", sha] | not (T.null sha) -> Just (RBlob sha)
       ["api", "context", "status"] -> Just RContextStatus
       ["api", "context", "captures"] -> Just RContextCaptures
       ["api", "context", "compartments"] -> Just RContextCompartments
@@ -254,7 +260,7 @@ needsAuth = \case
 
 -- | App-lived worker: serve the admin API until the process dies.
 adminServer ::
-  (Embedding :> es, Http :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Embedding :> es, Http :> es, Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   AdminConfig ->
   BotEnv ->
   -- | Configured LLM profile names, for validating a model PATCH.
@@ -352,7 +358,7 @@ staticResponse segs = case lookup key staticAssets of
 -- Handlers.
 
 handle ::
-  (Embedding :> es, Http :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Embedding :> es, Http :> es, Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   BotEnv ->
   [Text] ->
   LogBuffer ->
@@ -561,6 +567,26 @@ handle env profiles logBuf r params body = case r of
               Object (o <> KM.fromList ["request" .= d.cdRequest, "response" .= d.cdResponse])
             v -> v
   RPlatformStatus -> ok <$> listPlatformStatus
+  RPlatformTimeline legacyConversation -> do
+    timeline <-
+      loadAdminTimeline
+        legacyConversation
+        (intParam "after")
+        (clamp (1, 200) (fromMaybe 100 (intParam "limit")))
+    pure (maybe notFound ok timeline)
+  RBlob sha -> case blobRefFromSha256 sha of
+    Nothing -> pure notFound
+    Just ref ->
+      trySync (readBlob ref) >>= \case
+        Left _ -> pure notFound
+        Right bytes ->
+          pure $
+            responseLBS
+              status200
+              [ (hContentType, "application/octet-stream"),
+                (hCacheControl, "private, max-age=31536000, immutable")
+              ]
+              (LBS.fromStrict bytes)
   RContextStatus -> do
     status <- loadContextStatus (intParam "group")
     pure . ok $

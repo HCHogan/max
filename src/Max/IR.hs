@@ -241,8 +241,10 @@ data OutboundMediaRef
   deriving stock (Eq, Show)
 
 data HydratedMention = HydratedMention
-  { principal :: !PrincipalId,
-    identities :: ![(Platform, NativeUserId)]
+  { principal :: !(Maybe PrincipalId),
+    displayName :: !(Maybe Text),
+    identities :: ![(Platform, NativeUserId)],
+    allMembers :: !Bool
   }
   deriving stock (Eq, Show)
 

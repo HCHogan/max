@@ -23,6 +23,7 @@ module Max.Wechatpad
   ( WechatpadConfig (..),
     wechatpadBackend,
     wechatpadWorker,
+    parseFrameIds,
     platformName,
   )
 where
@@ -36,6 +37,7 @@ import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
+import Data.Scientific (floatingOrInteger, toBoundedInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -358,8 +360,8 @@ frameParser = withObject "frame" $ \o -> do
   from <- strField o "from_user_name"
   content <- strField o "content"
   pc <- o .:? "push_content" .!= ""
-  mi <- strField o "msg_id"
-  nmi <- o .:? "new_msg_id" .!= 0
+  mi <- textField o "msg_id"
+  nmi <- int64Field o "new_msg_id"
   ct <- o .:? "create_time" .!= 0
   pure (WMsg ty from content pc mi nmi ct)
   where
@@ -368,6 +370,25 @@ frameParser = withObject "frame" $ \o -> do
         Just (Object inner) -> inner .:? "str" .!= ""
         Just (String s) -> pure s
         _ -> pure ""
+    textField o k =
+      (o .:? k) >>= \case
+        Just (Object inner) -> textField inner "str"
+        Just (String s) -> pure s
+        Just (Number n) -> case (floatingOrInteger n :: Either Double Integer) of
+          Right i -> pure (T.pack (show i))
+          Left _ -> fail "message id must be an integer"
+        _ -> pure ""
+    int64Field o k =
+      (o .:? k) >>= \case
+        Just (Number n) -> pure (fromMaybe 0 (toBoundedInteger n))
+        Just (String s) -> pure (either (const 0) fst (TR.signed TR.decimal s))
+        Just (Object inner) -> int64Field inner "str"
+        _ -> pure 0
+
+parseFrameIds :: Value -> Maybe (Text, Int64)
+parseFrameIds value = do
+  frame <- parseMaybe frameParser value
+  pure (frame.wmMsgId, frame.wmNewMsgId)
 
 -- | "http://127.0.0.1:8080" → ("127.0.0.1", 8080).  Port defaults
 -- to 8080 (WeChatPadPro's default) when absent or unparseable.

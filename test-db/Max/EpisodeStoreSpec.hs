@@ -222,7 +222,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     validated <- requireValid lease.leaseRun source capture
     withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
     withConn pool $ \conn -> do
-      _ <- execute conn "UPDATE messages SET rendered_text = 'corrected' WHERE message_id = 1002" ()
+      _ <-
+        execute
+          conn
+          "UPDATE messages \
+          \ SET canonical_content = jsonb_build_object( \
+          \   'v', 2, 'nodes', jsonb_build_array(jsonb_build_object('type', 'text', 'text', 'corrected'))) \
+          \ WHERE message_id = 1002"
+          ()
       pure ()
 
     withDb pool (publishCaptureRun scopeA lease validated)

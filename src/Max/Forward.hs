@@ -17,14 +17,33 @@ import Data.Int (Int64)
 import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (getCurrentTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobForward), enqueueJob)
-import Max.DB.Forward (ForwardNodeInsert (..), insertForwardNode)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.Images (enqueueImagesFromNode)
+import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.QQ (ensureQQEndpointFor, qqIngestBody)
+import Max.Platform.Store
+  ( IngestOptions (..),
+    IngestResult (..),
+    NewIngest (..),
+    RegisteredEndpoint (..),
+    compatibilityMessageIdForCanonical,
+    defaultIngestOptions,
+    ingestEnvelope,
+  )
+import Max.Platform.Types
+  ( CanonicalMessageId,
+    EventKind (EventMessage),
+    MessageRelation (ContainedIn),
+    NativeEventId (..),
+    NativeUserId (..),
+  )
 import OneBot.Action (Action (GetForwardMsg), Response (..))
 import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (Segment (..))
@@ -134,50 +153,86 @@ processJob sig job = do
       case parseEither nodesParser payload of
         Left perr ->
           pure (Left ("forward response parse error (" <> job.forwardId <> "): " <> T.pack perr))
-        Right nodes -> Right <$> ingestNodes sig job nodes
+        Right nodes -> do
+          endpoint <- ensureQQEndpointFor (UserId job.selfId) (GroupId job.groupId)
+          received <- liftIO getCurrentTime
+          Right <$> ingestNodes sig endpoint received job nodes
   where
     timeoutMs = 30000
 
 ingestNodes ::
   (Log :> es, WithConnection :> es, IOE :> es) =>
   FetchSignal ->
+  RegisteredEndpoint ->
+  UTCTime ->
   ForwardJob ->
   [ForwardNode] ->
   Eff es ()
-ingestNodes sig job nodes =
+ingestNodes sig endpoint received job nodes =
   for_ (zip [0 ..] nodes) $ \(i, node) ->
-    ingestNode sig job.containerMessageId job.groupId job.selfId 1 i node
+    ingestNode sig endpoint received job (decimal job.containerMessageId) 1 [i] i node
 
 ingestNode ::
   (Log :> es, WithConnection :> es, IOE :> es) =>
   FetchSignal ->
-  Int64 -> -- containerSid
-  Int64 -> -- groupId
-  Int64 -> -- selfId
+  RegisteredEndpoint ->
+  UTCTime ->
+  ForwardJob ->
+  Text -> -- parent native event id
   Int -> -- depth (1-based)
+  [Int] -> -- stable path from the top-level forward marker
   Int -> -- position
   ForwardNode ->
   Eff es ()
-ingestNode sig containerSid gid sid depth pos node = do
-  let ins =
-        ForwardNodeInsert
-          { containerMessageId = containerSid,
-            groupId = gid,
-            selfId = sid,
-            position = pos,
-            senderUserId = node.userId,
-            senderNickname = node.nickname,
-            originalMessageId = node.originalId,
-            originalSentAt = node.time,
-            segments = node.segments
+ingestNode sig endpoint received job parentNative depth path pos node = do
+  let childNative =
+        "forward:"
+          <> decimal job.containerMessageId
+          <> ":"
+          <> job.forwardId
+          <> ":"
+          <> T.intercalate "." (decimal <$> path)
+      occurred = maybe received (posixSecondsToUTCTime . fromIntegral) node.time
+      raw =
+        object
+          [ "forward_id" .= job.forwardId,
+            "path" .= path,
+            "user_id" .= node.userId,
+            "nickname" .= node.nickname,
+            "time" .= node.time,
+            "message_id" .= node.originalId,
+            "message" .= node.segments
+          ]
+      envelope =
+        InboundEnvelope
+          { endpointId = endpoint.endpointId,
+            nativeEventId = NativeEventId childNative,
+            senderNativeId = NativeUserId (decimal node.userId),
+            senderDisplayName = if T.null node.nickname then Nothing else Just node.nickname,
+            occurredAt = occurred,
+            receivedAt = received,
+            eventKind = EventMessage,
+            content = qqIngestBody node.segments,
+            relations = [ContainedIn (NativeEventId parentNative) pos],
+            sourceCursor = Nothing,
+            rawPayload = Just raw
           }
-  insSid <- insertForwardNode ins
-  enqueueImagesFromNode sig insSid (Just gid) node.segments
+      options =
+        defaultIngestOptions
+          { createDispatch = False,
+            createMirrorDeliveries = False,
+            transcriptKind = "chat",
+            qqProvenanceSegments = Just (toJSON node.segments)
+          }
+  canonical <- canonicalFromResult <$> ingestEnvelope options envelope
+  compatibilityId <- compatibilityMessageIdForCanonical canonical
+  enqueueImagesFromNode sig compatibilityId (Just job.groupId) node.segments
   let inlineChildren = concatMap extractInlineNodes node.segments
   logInfo "forward node ingested" $
     object
-      [ "container_message_id" .= containerSid,
-        "synthetic_message_id" .= insSid,
+      [ "container_message_id" .= job.containerMessageId,
+        "canonical_message_id" .= canonical,
+        "compatibility_message_id" .= compatibilityId,
         "position" .= pos,
         "depth" .= depth,
         "sender_user_id" .= node.userId,
@@ -190,10 +245,16 @@ ingestNode sig containerSid gid sid depth pos node = do
           object
             [ "depth" .= depth,
               "skipped" .= length inlineChildren,
-              "synthetic_message_id" .= insSid
+              "canonical_message_id" .= canonical
             ]
     else for_ (zip [0 ..] inlineChildren) $ \(i, child) ->
-      ingestNode sig insSid gid sid (depth + 1) i child
+      ingestNode sig endpoint received job childNative (depth + 1) (path <> [i]) i child
+
+canonicalFromResult :: IngestResult -> CanonicalMessageId
+canonicalFromResult = \case
+  Ingested fresh -> fresh.canonicalMessageId
+  AlreadyIngested canonical -> canonical
+  DeliveryEcho canonical -> canonical
 
 -- | Pull nested-forward children inlined in a @forward@ segment's
 -- @data.content@ (NapCat-style; whole tree comes in one @get_forward_msg@
@@ -244,3 +305,6 @@ lookupStringIn :: Text -> Object -> Maybe Text
 lookupStringIn k o = case KM.lookup (K.fromText k) o of
   Just (String s) -> Just s
   _ -> Nothing
+
+decimal :: Show a => a -> Text
+decimal = T.pack . show

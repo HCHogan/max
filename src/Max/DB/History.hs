@@ -135,7 +135,9 @@ fetchRecentInGroup gid excludeId since n = do
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND message_id <> ? \
-        \    AND forwarded_in_message_id IS NULL \
+        \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
+        \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
+        \                      AND containment.relation_kind = 'contained_in') \
         \    AND NOT is_synthetic \
         \    AND kind = 'chat' \
         \  ORDER BY received_at DESC \
@@ -147,7 +149,9 @@ fetchRecentInGroup gid excludeId since n = do
         \  FROM messages \
         \  WHERE group_id = ? \
         \    AND message_id <> ? \
-        \    AND forwarded_in_message_id IS NULL \
+        \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
+        \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
+        \                      AND containment.relation_kind = 'contained_in') \
         \    AND NOT is_synthetic \
         \    AND kind = 'chat' \
         \    AND received_at > ? \
@@ -192,7 +196,9 @@ fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
         "SELECT ingest_seq, message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
         \  FROM messages \
         \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
-        \    AND forwarded_in_message_id IS NULL \
+        \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
+        \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
+        \                      AND containment.relation_kind = 'contained_in') \
         \    AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat' \
         \  ORDER BY ingest_seq ASC"
         (conversationStorageId scope, after, excludeId)
@@ -201,7 +207,9 @@ fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
         "SELECT ingest_seq, message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, true \
         \  FROM messages \
         \  WHERE group_id = ? AND ingest_seq > ? AND message_id <> ? \
-        \    AND forwarded_in_message_id IS NULL \
+        \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
+        \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
+        \                      AND containment.relation_kind = 'contained_in') \
         \    AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat' \
         \    AND received_at > ? \
         \  ORDER BY ingest_seq ASC"
@@ -231,7 +239,9 @@ fetchNewestPromptPageBefore scope (MessageCursor after) before excludeId since r
       \  WHERE group_id = ? AND ingest_seq > ? \
       \    AND (?::bigint IS NULL OR ingest_seq < ?) \
       \    AND message_id <> ? \
-      \    AND forwarded_in_message_id IS NULL \
+      \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
+      \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
+      \                      AND containment.relation_kind = 'contained_in') \
       \    AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat' \
       \    AND (?::timestamptz IS NULL OR received_at > ?) \
       \  ORDER BY ingest_seq DESC \
@@ -268,7 +278,10 @@ fetchOldestPageAfter scope (MessageCursor after) requestedSize = do
     query
       "SELECT ingest_seq, \
       \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
-      \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
+      \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
+      \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
+      \                      AND containment.relation_kind = 'contained_in') \
+      \        AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
       \  FROM messages \
       \  WHERE group_id = ? AND ingest_seq > ? \
       \  ORDER BY ingest_seq ASC \
@@ -297,7 +310,10 @@ fetchOldestPageThrough scope (MessageCursor after) (MessageCursor through) reque
     query
       "SELECT ingest_seq, \
       \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
-      \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
+      \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
+      \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
+      \                      AND containment.relation_kind = 'contained_in') \
+      \        AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
       \  FROM messages \
       \  WHERE group_id = ? AND ingest_seq > ? AND ingest_seq <= ? \
       \  ORDER BY ingest_seq ASC \
@@ -367,10 +383,9 @@ fetchMessagesByIdsInScope scope ids = do
   let byId = [(r.messageId, r) | r <- rows :: [HistoryItem]]
   pure [r | i <- ids, Just r <- [lookup i byId]]
 
--- | The stored contents of a forwarded chat record: the synthetic
--- child rows the forward worker filed under @container@, in original
--- order.  Timestamps prefer the *original* send time (the synthetic
--- row's received_at is merely when we fetched the bundle).
+-- | Canonical children linked to a forwarded chat record, in wire order.
+-- Their @occurred_at@ is the original send time captured by the adapter;
+-- @received_at@ only says when the chain was fetched.
 fetchForwardChildrenInScope ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
@@ -380,15 +395,18 @@ fetchForwardChildrenInScope ::
 fetchForwardChildrenInScope scope containerId cap =
   query
     "SELECT child.message_id, child.user_id, child.self_id, child.source_platform, child.sender_nickname, child.sender_card, child.rendered_text, \
-    \       COALESCE(child.original_sent_at, child.received_at), child.reply_to_message_id \
+    \       child.occurred_at, child.reply_to_message_id \
     \  FROM messages child \
+    \  JOIN message_relations containment \
+    \    ON containment.canonical_message_id = child.canonical_message_id \
+    \   AND containment.relation_kind = 'contained_in' \
+    \  JOIN messages container \
+    \    ON container.canonical_message_id = containment.target_canonical_message_id \
     \  WHERE child.group_id = ? \
-    \    AND child.forwarded_in_message_id = ? \
-    \    AND EXISTS (SELECT 1 FROM messages container \
-    \                 WHERE container.group_id = ? AND container.message_id = ?) \
-    \  ORDER BY child.forward_position \
+    \    AND container.group_id = ? AND container.message_id = ? \
+    \  ORDER BY containment.relation_position, containment.relation_id \
     \  LIMIT ?"
-    (conversationStorageId scope, containerId, conversationStorageId scope, containerId, cap)
+    (conversationStorageId scope, conversationStorageId scope, containerId, cap)
 
 -- | Message volume per (day, group, kind) over the last @days@ days,
 -- for the admin stats endpoint.  Day boundaries in the configured

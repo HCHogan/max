@@ -165,8 +165,12 @@ spec pool = before_ (truncateAll pool) $
           _ <-
             execute
               conn
-              "UPDATE messages SET forwarded_in_message_id = ?, forward_position = 0, is_synthetic = true WHERE message_id = ?"
-              (2001 :: Int, -1 :: Int)
+              "INSERT INTO message_relations \
+              \ (canonical_message_id, relation_kind, target_canonical_message_id, relation_position) \
+              \ SELECT child.canonical_message_id, 'contained_in', parent.canonical_message_id, 0 \
+              \ FROM messages child, messages parent \
+              \ WHERE child.message_id = ? AND parent.message_id = ?"
+              (-1 :: Int, 2001 :: Int)
           pure ()
         rows <- withDb pool $ fetchForwardChildrenInScope scope 2001 10
         rows `shouldSatisfy` null

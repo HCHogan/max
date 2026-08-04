@@ -32,7 +32,7 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Message (MessageKind (KindDebug))
+import Max.MessageKind (MessageKind (KindDebug))
 import Max.Effects.Blob (Blob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded)
 import Max.IR (Body (..), Node (NText))

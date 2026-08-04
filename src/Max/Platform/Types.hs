@@ -27,6 +27,7 @@ module Max.Platform.Types
     ConversationKind (..),
     EndpointMode (..),
     EventKind (..),
+    ReactionAction (..),
     MessageRelation (..),
     AdvertisedCaps (..),
     noAdvertisedCaps,
@@ -130,13 +131,19 @@ data EventKind
   | EventMembership
   deriving stock (Eq, Ord, Show, Generic)
 
+data ReactionAction = ReactionAdd | ReactionRemove
+  deriving stock (Eq, Ord, Show, Generic)
+
 data MessageRelation
   = ReplyTo !NativeEventId
   | Replaces !NativeEventId
   | -- | A redaction/recall of the target.  Distinct from 'Replaces': an
     -- edit supersedes content, a redaction removes it.
     Redacts !NativeEventId
-  | ReactsTo !NativeEventId !Text
+  | ReactsTo !NativeEventId !Text !ReactionAction
+  | -- | A fetched forward node contained by another canonical message.
+    -- The position is local to the container and preserves wire order.
+    ContainedIn !NativeEventId !Int
   deriving stock (Eq, Show, Generic)
 
 -- | Semantic actions advertised to the model.  Content actions are not an

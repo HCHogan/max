@@ -55,9 +55,10 @@ instance LogDecor OutboundMediaRef where
     RefImage n -> "image#" <> T.pack (show n)
 
 instance LogDecor HydratedMention where
-  decorDigest hm =
-    let PrincipalId pid = hm.principal
-     in "principal:" <> T.pack (show pid)
+  decorDigest hm = case hm.principal of
+    Just (PrincipalId pid) -> "principal:" <> T.pack (show pid)
+    Nothing | hm.allMembers -> "all"
+    Nothing -> "principal:missing"
 
 instance LogDecor MediaView where
   decorDigest mv = bounded 24 mv.url

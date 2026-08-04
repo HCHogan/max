@@ -3,8 +3,8 @@ module OneBot.EventSpec (spec) where
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.Text (Text)
-import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), parseEvent)
-import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
+import OneBot.Event (EmojiLike (..), Event (..), GroupMessage (..), MessageNotice (..), PokeEvent (..), parseEvent)
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 import Test.Hspec
 
 spec :: Spec
@@ -68,6 +68,42 @@ spec = describe "parseEvent" $ do
       ) of
       Right (EvRaw _) -> pure ()
       other -> expectationFailure ("expected EvRaw, got: " <> show other)
+
+  it "parses group recalls as message meta-events" $
+    case parseEvent
+      ( object
+          [ "post_type" .= ("notice" :: Text),
+            "notice_type" .= ("group_recall" :: Text),
+            "self_id" .= (1000 :: Int),
+            "group_id" .= (7777 :: Int),
+            "user_id" .= (2001 :: Int),
+            "operator_id" .= (3001 :: Int),
+            "message_id" .= (9000 :: Int)
+          ]
+      ) of
+      Right (EvMessageNotice _ MessageRecalled {mnGroupId, mnActorId, mnTargetMessageId}) -> do
+        mnGroupId `shouldBe` GroupId 7777
+        mnActorId `shouldBe` UserId 3001
+        mnTargetMessageId `shouldBe` MessageId 9000
+      other -> expectationFailure ("expected MessageRecalled, got: " <> show other)
+
+  it "parses reaction polarity and emoji ids" $
+    case parseEvent
+      ( object
+          [ "post_type" .= ("notice" :: Text),
+            "notice_type" .= ("group_msg_emoji_like" :: Text),
+            "self_id" .= (1000 :: Int),
+            "group_id" .= (7777 :: Int),
+            "user_id" .= (2001 :: Int),
+            "message_id" .= (9000 :: Int),
+            "likes" .= [object ["emoji_id" .= ("212" :: Text), "count" .= (0 :: Int)]],
+            "is_add" .= False
+          ]
+      ) of
+      Right (EvMessageNotice _ MessageReacted {mnLikes, mnReactionAdded}) -> do
+        mnLikes `shouldBe` [EmojiLike "212" 0]
+        mnReactionAdded `shouldBe` False
+      other -> expectationFailure ("expected MessageReacted, got: " <> show other)
 
 pokeEvent :: [Pair] -> Value
 pokeEvent extra =

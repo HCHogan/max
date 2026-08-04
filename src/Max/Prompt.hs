@@ -714,7 +714,11 @@ waitForTriggerForward mid = go 0
       | otherwise = do
           rows <-
             query
-              "SELECT count(*) FROM messages WHERE forwarded_in_message_id = ?"
+              "SELECT count(*) FROM message_relations containment \
+              \ JOIN messages container \
+              \   ON container.canonical_message_id = containment.target_canonical_message_id \
+              \ WHERE containment.relation_kind = 'contained_in' \
+              \   AND container.message_id = ?"
               (Only mid)
           case rows of
             [Only (n :: Int64)] | n > 0 -> pure ()

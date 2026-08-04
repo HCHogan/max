@@ -16,9 +16,9 @@ where
 
 import Data.Int (Int64)
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Time (UTCTime)
-import Database.PostgreSQL.Simple (Only (..), execute, execute_, query, (:.) (..))
-import Database.PostgreSQL.Simple.Types (Null (..))
+import Database.PostgreSQL.Simple (Only (..), execute, execute_, query)
 import Effectful (Eff, IOE, runEff)
 import Effectful.Log (Log, LogLevel (LogTrace), runLog)
 import Effectful.PostgreSQL (WithConnection)
@@ -27,8 +27,23 @@ import Log.Logger (Logger, mkLogger)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.Session qualified as SessionDB
 import Max.Effects.Blob (Blob, runBlob)
+import Max.IR (Body (..), Node (NText))
+import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.QQ (ensureQQEndpointFor)
+import Max.Platform.Store
+  ( IngestOptions (..),
+    RegisteredEndpoint (..),
+    defaultIngestOptions,
+    ingestEnvelope,
+  )
+import Max.Platform.Types
+  ( EventKind (EventMessage),
+    MessageRelation (ReplyTo),
+    NativeEventId (..),
+    NativeUserId (..),
+  )
 import Max.Session.Types (Session)
-import OneBot.Types (GroupId)
+import OneBot.Types (GroupId (..), UserId (..))
 import System.IO.Unsafe (unsafePerformIO)
 
 -- | Run an effectful, DB-touching action in plain 'IO'.  The set of
@@ -111,18 +126,8 @@ insertRawMessage ::
   Maybe Text -> -- sender_nickname
   Text -> -- rendered_text
   IO ()
-insertRawMessage pool mid gid uid sid receivedAt nick body = withConn pool $ \c -> do
-  -- segments stored as the literal JSON empty array; sender_card stays NULL.
-  -- raw_message is the empty string (DEFAULT, but explicit is clearer).
-  _ <-
-    execute
-      c
-      "INSERT INTO messages \
-      \  (message_id, group_id, user_id, self_id, received_at, \
-      \   segments, rendered_text, raw_message, sender_nickname, sender_card) \
-      \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?)"
-      ((mid, gid, uid, sid, receivedAt, body, nick) :. Only Null)
-  pure ()
+insertRawMessage pool mid gid uid sid receivedAt nick body =
+  insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body Nothing
 
 -- | Like 'insertRawMessage' but with an explicit @ingest_seq@.  Simulates a
 -- commit-order skip: the row's sequence value was allocated before rows that
@@ -139,23 +144,22 @@ insertRawMessageAtSeq ::
   Maybe Text -> -- sender_nickname
   Text -> -- rendered_text
   IO ()
-insertRawMessageAtSeq pool seq' mid gid uid sid receivedAt nick body = withConn pool $ \c -> do
-  _ <-
-    execute
-      c
-      "INSERT INTO messages \
-      \  (message_id, group_id, user_id, self_id, received_at, \
-      \   segments, rendered_text, raw_message, sender_nickname, sender_card, ingest_seq) \
-      \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?, ?)"
-      ((mid, gid, uid, sid, receivedAt, body, nick) :. (Null, seq'))
-  _ <-
-    query
-      c
-      "SELECT setval('messages_ingest_seq_seq', greatest(?::bigint, last_value), true) \
-      \ FROM messages_ingest_seq_seq"
-      (Only seq') ::
-      IO [Only Int64]
-  pure ()
+insertRawMessageAtSeq pool seq' mid gid uid sid receivedAt nick body = do
+  insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body Nothing
+  withConn pool $ \c -> do
+    _ <-
+      execute
+        c
+        "UPDATE messages SET ingest_seq = ?, conversation_seq = ? WHERE message_id = ?"
+        (seq', seq', mid)
+    _ <-
+      query
+        c
+        "SELECT setval('messages_ingest_seq_seq', greatest(?::bigint, last_value), true) \
+        \ FROM messages_ingest_seq_seq"
+        (Only seq') ::
+        IO [Only Int64]
+    pure ()
 
 -- | Like 'insertRawMessage' but with an explicit @kind@ — @'command'@
 -- or @'debug'@ for rows the chat saw but the transcript must skip.
@@ -170,16 +174,8 @@ insertRawKind ::
   Maybe Text -> -- sender_nickname
   Text -> -- rendered_text
   IO ()
-insertRawKind pool kind mid gid uid sid receivedAt nick body = withConn pool $ \c -> do
-  _ <-
-    execute
-      c
-      "INSERT INTO messages \
-      \  (message_id, group_id, user_id, self_id, received_at, \
-      \   segments, rendered_text, raw_message, sender_nickname, sender_card, kind) \
-      \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?, ?)"
-      ((mid, gid, uid, sid, receivedAt, body, nick) :. (Null, kind))
-  pure ()
+insertRawKind pool kind mid gid uid sid receivedAt nick body =
+  insertCanonicalFixture pool kind mid gid uid sid receivedAt nick body Nothing
 
 -- | Like 'insertRawMessage' but with a @reply_to_message_id@ link.
 insertRawReply ::
@@ -193,17 +189,50 @@ insertRawReply ::
   Text -> -- rendered_text
   Int64 -> -- reply_to_message_id
   IO ()
-insertRawReply pool mid gid uid sid receivedAt nick body replyTo = withConn pool $ \c -> do
-  _ <-
-    execute
-      c
-      "INSERT INTO messages \
-      \  (message_id, group_id, user_id, self_id, received_at, \
-      \   segments, rendered_text, raw_message, sender_nickname, sender_card, \
-      \   reply_to_message_id) \
-      \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, '', ?, ?, ?)"
-      ((mid, gid, uid, sid, receivedAt, body, nick) :. (Null, replyTo))
-  pure ()
+insertRawReply pool mid gid uid sid receivedAt nick body replyTo =
+  insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body (Just replyTo)
+
+-- Test fixtures enter through the same final ingest kernel as production.
+-- Numeric QQ native ids preserve the exact compatibility ids expected by the
+-- older history/session assertions without reviving a legacy table writer.
+insertCanonicalFixture ::
+  DbPool ->
+  Text ->
+  Int64 ->
+  Int64 ->
+  Int64 ->
+  Int64 ->
+  UTCTime ->
+  Maybe Text ->
+  Text ->
+  Maybe Int64 ->
+  IO ()
+insertCanonicalFixture pool kind mid gid uid sid receivedAt nick body replyTo =
+  withDb pool $ do
+    endpoint <- ensureQQEndpointFor (UserId sid) (GroupId gid)
+    let nativeMessage = NativeEventId (T.pack (show mid))
+        envelope =
+          InboundEnvelope
+            { endpointId = endpoint.endpointId,
+              nativeEventId = nativeMessage,
+              senderNativeId = NativeUserId (T.pack (show uid)),
+              senderDisplayName = nick,
+              occurredAt = receivedAt,
+              receivedAt = receivedAt,
+              eventKind = EventMessage,
+              content = Body [NText body],
+              relations = maybe [] (\target -> [ReplyTo (NativeEventId (T.pack (show target)))]) replyTo,
+              sourceCursor = Nothing,
+              rawPayload = Nothing
+            }
+        options =
+          defaultIngestOptions
+            { createDispatch = False,
+              createMirrorDeliveries = False,
+              transcriptKind = kind
+            }
+    _ <- ingestEnvelope options envelope
+    pure ()
 
 -- | Test-only versioned Session mutation.  Production callers go through
 -- 'Max.Session.updateSession'; integration fixtures use this helper when they

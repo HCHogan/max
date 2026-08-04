@@ -18,6 +18,7 @@ import Control.Exception (bracket)
 import Data.Text qualified as T
 import Helpers (truncateAll)
 import Max.CanonicalPlatformMigrationSpec qualified as CanonicalPlatformMigrationSpec
+import Max.AdminTimelineSpec qualified as AdminTimelineSpec
 import Max.ContextAdminSpec qualified as ContextAdminSpec
 import Max.ContextMaterializationMigrationSpec qualified as ContextMaterializationMigrationSpec
 import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
@@ -28,7 +29,6 @@ import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.MediaSpec qualified as MediaSpec
-import Max.DB.MessageSpec qualified as MessageSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.ReminderSpec qualified as ReminderSpec
 import Max.DB.SessionSpec qualified as SessionSpec
@@ -61,6 +61,7 @@ main = do
         [] -> putStrLn "migrations: nothing to apply (test DB already up to date)"
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
+        AdminTimelineSpec.spec pool
         CanonicalPlatformMigrationSpec.spec pool
         EmbeddingMigrationSpec.spec pool
         MemoryStoreMigrationSpec.spec pool
@@ -77,7 +78,6 @@ main = do
         HistorianSpec.spec pool
         HistorySpec.spec pool
         FilesSpec.spec pool
-        MessageSpec.spec pool
         MemoryStoreSpec.spec pool
         MediaSpec.spec pool
         FetchQueueSpec.spec pool

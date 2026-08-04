@@ -83,6 +83,9 @@ embedWorker owner = forever $ do
           "SELECT message_id, rendered_text FROM messages \
           \ WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM ?) \
           \   AND NOT is_synthetic \
+          \   AND NOT EXISTS (SELECT 1 FROM message_relations containment \
+          \                   WHERE containment.canonical_message_id = messages.canonical_message_id \
+          \                     AND containment.relation_kind = 'contained_in') \
           \   AND char_length(rendered_text) >= 4 \
           \ ORDER BY received_at DESC LIMIT 64"
           [modelId]

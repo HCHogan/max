@@ -41,7 +41,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (ConversationScope)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
-import Max.DB.Message (MessageKind (KindChat))
+import Max.MessageKind (MessageKind (KindChat))
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob, resolveBlobHostPath)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Effects.PlatformApi (PlatformApi, callAction)

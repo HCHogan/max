@@ -59,7 +59,7 @@ import Max.HttpRuntime
   )
 import Max.IR
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
-import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryTransport (..), loweredText)
+import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryOperation (..), DeliveryTransport (..), loweredText)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -302,7 +302,9 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
             catMaybes
               [ ReplyTo . NativeEventId <$> iMessageReplyTarget message,
                 if message.isReaction
-                  then ReactsTo . NativeEventId <$> message.reactedToGuid <*> pure (fromMaybe "reaction" message.reactionKey)
+                  then
+                    (\target -> ReactsTo (NativeEventId target) (fromMaybe "reaction" message.reactionKey) ReactionAdd)
+                      <$> message.reactedToGuid
                   else Nothing
               ]
           options =
@@ -398,7 +400,11 @@ iMessageDeliveryTransport :: HttpRuntime -> IMessageConfig -> DeliveryTransport
 iMessageDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformIMessage,
-      deliver = sendChunks
+      deliver = \claim -> \case
+        DeliverMessage lowered -> sendChunks claim lowered
+        DeliverEdit {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised edit without an emitter")
+        DeliverReaction {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised reaction without an emitter")
+        DeliverRedaction {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised redaction without an emitter")
     }
   where
     sendChunks _claim lowered = go (0 :: Int) False Nothing lowered.chunks

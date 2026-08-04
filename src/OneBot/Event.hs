@@ -1,6 +1,8 @@
 module OneBot.Event
   ( Event (..),
     GroupMessage (..),
+    MessageNotice (..),
+    EmojiLike (..),
     PokeEvent (..),
     Sender (..),
     parseEvent,
@@ -51,10 +53,40 @@ data PokeEvent = PokeEvent
   }
   deriving stock (Show)
 
+data EmojiLike = EmojiLike
+  { emojiId :: !Text,
+    count :: !Int
+  }
+  deriving stock (Eq, Show)
+
+instance FromJSON EmojiLike where
+  parseJSON = withObject "EmojiLike" $ \o ->
+    EmojiLike
+      <$> o .: "emoji_id"
+      <*> o .:? "count" .!= 0
+
+data MessageNotice
+  = MessageRecalled
+      { mnSelfId :: !UserId,
+        mnGroupId :: !GroupId,
+        mnActorId :: !UserId,
+        mnTargetMessageId :: !MessageId
+      }
+  | MessageReacted
+      { mnSelfId :: !UserId,
+        mnGroupId :: !GroupId,
+        mnActorId :: !UserId,
+        mnTargetMessageId :: !MessageId,
+        mnLikes :: ![EmojiLike],
+        mnReactionAdded :: !Bool
+      }
+  deriving stock (Eq, Show)
+
 -- | High-level event we care about. Anything we don't decode lands in 'EvRaw'
 -- with the original 'Value' so it can be logged or revisited later.
 data Event
   = EvGroupMessage !Text !Value !GroupMessage
+  | EvMessageNotice !Value !MessageNotice
   | EvPoke !PokeEvent
   | EvHeartbeat
   | EvLifecycle !Text
@@ -90,6 +122,9 @@ eventParser v@(Object o) = do
       subType <- o .:? "sub_type" :: Parser (Maybe Text)
       case (noticeType, subType) of
         (Just "notify", Just "poke") -> EvPoke <$> parsePoke o
+        (Just "group_recall", _) -> EvMessageNotice v <$> parseGroupRecall o
+        (Just "friend_recall", _) -> EvMessageNotice v <$> parseFriendRecall o
+        (Just "group_msg_emoji_like", _) -> EvMessageNotice v <$> parseMessageReaction o
         _ -> pure (EvRaw v)
     Just "request" -> do
       reqType <- o .:? "request_type" :: Parser (Maybe Text)
@@ -111,6 +146,35 @@ parsePoke o = do
     <*> pure (fromMaybe (privateChatGroupId uid) mGid)
     <*> pure uid
     <*> o .: "target_id"
+
+parseGroupRecall :: Object -> Parser MessageNotice
+parseGroupRecall o =
+  MessageRecalled
+    <$> o .: "self_id"
+    <*> o .: "group_id"
+    <*> (o .:? "operator_id" >>= maybe (o .: "user_id") pure)
+    <*> o .: "message_id"
+
+parseFriendRecall :: Object -> Parser MessageNotice
+parseFriendRecall o = do
+  user <- o .: "user_id"
+  MessageRecalled
+    <$> o .: "self_id"
+    <*> pure (privateChatGroupId user)
+    <*> pure user
+    <*> o .: "message_id"
+
+parseMessageReaction :: Object -> Parser MessageNotice
+parseMessageReaction o = do
+  likes <- o .:? "likes" .!= []
+  added <- o .:? "is_add" .!= any ((> 0) . (.count)) likes
+  MessageReacted
+    <$> o .: "self_id"
+    <*> o .: "group_id"
+    <*> (o .:? "user_id" >>= maybe (o .: "operator_id") pure)
+    <*> o .: "message_id"
+    <*> pure likes
+    <*> pure added
 
 parseGroupMessage :: Object -> Parser GroupMessage
 parseGroupMessage o =

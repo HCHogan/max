@@ -610,7 +610,11 @@ loadEmbeddingStatus targetModel conversationId = do
       "WITH corpus AS ( \
       \  SELECT 'message'::text AS corpus, message.group_id AS conversation_id, message.rendered_text AS content, \
       \         message.embedding IS NOT NULL AS has_embedding, message.embedding_model, message.embedding_dimensions, message.embedding_content_hash \
-      \  FROM messages AS message WHERE NOT message.is_synthetic AND char_length(message.rendered_text) >= 4 \
+      \  FROM messages AS message WHERE NOT message.is_synthetic \
+      \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
+      \                    WHERE containment.canonical_message_id = message.canonical_message_id \
+      \                      AND containment.relation_kind = 'contained_in') \
+      \    AND char_length(message.rendered_text) >= 4 \
       \  UNION ALL \
       \  SELECT 'memory', COALESCE(memory.source_group_id, memory.scope_id), memory.content, \
       \         memory.embedding IS NOT NULL, memory.embedding_model, memory.embedding_dimensions, memory.embedding_content_hash \

@@ -37,7 +37,6 @@ import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
 import Max.Command.Types (Command (..))
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
-import Max.DB.Message (MessageKind (..), insertSilence)
 import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
 import Max.DB.Permissions (lookupGrant)
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
@@ -54,8 +53,9 @@ import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.IR
+import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
-import Max.Platform.QQ (ensureQQEndpoint, qqEnvelope, qqIngestBody)
+import Max.Platform.QQ (ensureQQEndpoint, ensureQQEndpointFor, qqEnvelope, qqIngestBody, qqNoticeEnvelopes)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( DispatchClaim (..),
@@ -63,6 +63,8 @@ import Max.Platform.Store
     IngestOptions (..),
     IngestResult (..),
     NewIngest (..),
+    OutboundDraft (..),
+    ReactionDraft (..),
     claimDispatch,
     claimDispatches,
     completeDispatch,
@@ -70,10 +72,12 @@ import Max.Platform.Store
     defaultIngestOptions,
     deliveryMentionNatives,
     ingestEnvelope,
+    enqueueReaction,
     isBotAuthoredCompatibilityMessage,
     platformForLegacyMessage,
+    recordInternalMessage,
   )
-import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId, NativeUserId (..), PrincipalIdentityId)
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId, NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId, ReactionAction (..))
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutput, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -98,7 +102,7 @@ import Max.Tasks
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..))
-import OneBot.Event (Event (..), GroupMessage (..), PokeEvent (..), Sender (..))
+import OneBot.Event (Event (..), GroupMessage (..), MessageNotice (..), PokeEvent (..), Sender (..))
 import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
@@ -171,9 +175,8 @@ data Trigger
 -- puts the same words.  An empty body isn't conversation, it's a
 -- mistyped command, and stays 'KindCommand'.
 --
--- @segments@ is stored verbatim either way; only the rendered text is
--- rewritten — the same split 'Max.DB.Message.insertOutbound' already
--- makes for a table sent as an image.
+-- QQ segments remain raw provenance either way; only the IR body used for
+-- the prompt projection is rewritten.
 recordAs :: GroupMessage -> (MessageKind, Maybe T.Text)
 recordAs gm =
   case parseCommand stripped of
@@ -278,6 +281,26 @@ handleEvents q fetchSig mIntent = loop
                     "message_id" .= messageId,
                     "state" .= ("not-durable" :: T.Text)
                   ]
+        EvMessageNotice raw notice -> do
+          let (self, group) = case notice of
+                MessageRecalled {mnSelfId, mnGroupId} -> (mnSelfId, mnGroupId)
+                MessageReacted {mnSelfId, mnGroupId} -> (mnSelfId, mnGroupId)
+          endpoint <- ensureQQEndpointFor self group
+          received <- liftIO getCurrentTime
+          forM_ (qqNoticeEnvelopes endpoint received raw notice) $ \envelope -> do
+            ingestEnvelope
+              defaultIngestOptions
+                { createDispatch = False,
+                  createMirrorDeliveries = True,
+                  transcriptKind = "debug"
+                }
+              envelope
+              >>= \case
+                Ingested fresh ->
+                  logInfo "QQ meta-event ingested" $
+                    object ["canonical_message_id" .= fresh.canonicalMessageId]
+                AlreadyIngested {} -> pure ()
+                DeliveryEcho {} -> pure ()
         EvPoke pk -> onPoke mIntent pk
         -- Auto-approve friend requests: being friends is what makes
         -- private query delivery (silent commands) reliable on QQ —
@@ -323,11 +346,6 @@ persist source raw gm =
             AlreadyIngested _ -> pure IngestDuplicate
             DeliveryEcho _ -> pure IngestDuplicate
       | otherwise = error ("non-QQ event entered the OneBot ingress queue: " <> T.unpack source)
-
-    renderMessageKind = \case
-      KindChat -> "chat"
-      KindCommand -> "command"
-      KindDebug -> "debug"
 
 -- | Recover the commit-to-runtime crash window.  The source adapter may call
 -- 'processCanonicalDispatch' immediately, but this worker is the authority:
@@ -643,7 +661,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
             then replyText gm "没有权限"
             else
               -- Same NO face as [silence:NO]: visibly refused, zero noise.
-              sendAction (SetMsgEmojiLike gm.messageId deniedFaceId True)
+              queueQQReaction gm.groupId gm.messageId deniedFaceId True
         else dispatchAllowed env targetGid effTier sourcePlatform cmd
   where
     isForeignSource = maybe False (/= "qq")
@@ -668,7 +686,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
         -- beats another line of chat noise.
         ReplyAck
           | isForeignSource sourcePlatform -> replyText gm "OK"
-          | otherwise -> sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
+          | otherwise -> queueQQReaction gm.groupId gm.messageId ackFaceId True
         SideQuestion askBody -> do
           logInfo "btw: side question" $
             object ["len" .= T.length askBody]
@@ -732,13 +750,13 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               -- trigger wears.  The absorbing turn takes it back off
               -- when it ends (see the 'absorbedTriggers' sweep in
               -- 'dispatchLLM').
-              sendAction (SetMsgEmojiLike gm.messageId processingFaceId True)
+              queueQQReaction gm.groupId gm.messageId processingFaceId True
             Nothing
               | redirected -> do
                   let GroupId targetRaw = targetGid
                   logInfo "feedback: nothing running in redirect target" $
                     object ["group_id" .= targetRaw]
-                  sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
+                  queueQQReaction gm.groupId gm.messageId failureFaceId True
               | otherwise -> do
                   logInfo "feedback: nothing running, answering as a turn" $
                     object ["len" .= T.length noteBody]
@@ -761,7 +779,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               orDeliveryScope = DeliverConversation
             }
       if wasDelivered outcome
-        then sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
+        then queueQQReaction gm.groupId gm.messageId ackFaceId True
         else do
           logInfo "cmd: private delivery failed, group fallback" $
             object ["user_id" .= uidRaw, "group_id" .= gidRaw]
@@ -860,7 +878,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
             "message_id" .= midRaw,
             "origin" .= T.pack (show origin)
           ]
-  outputCaps <- conversationAdvertisedCaps gidRaw
+  outputCaps <- conversationAdvertisedCaps gidRaw (Just midRaw)
   -- Claim the shutdown slot out here rather than inside the async:
   -- 'Max.Effects.Agent.agentTurn' doesn't reach its 'registerTask'
   -- until after 'Max.Prompt.buildContext', which on its own can spend
@@ -888,7 +906,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- proactive turns stay traceless and a poke has no message to
       -- react to.
       when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-        sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
+        queueQQReaction gm.groupId gm.messageId failureFaceId True
     Just turn ->
       void . async $
         ( localDomain "llm" $ do
@@ -906,7 +924,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 -- crash — direct triggers only; proactive turns stay
                 -- traceless, and a poke has no message to react to.
                 when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-                  sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
+                  queueQQReaction gm.groupId gm.messageId failureFaceId True
               )
               `catch` \TaskCancelled ->
                 -- User-initiated !kill — quieter log, not an error.
@@ -928,7 +946,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 unserved = completion.tcUnservedNotes
             when (outputCaps.canReaction && outputCaps.canFace) $
               for_ absorbed $ \m ->
-                sendAction (SetMsgEmojiLike (MessageId m) processingFaceId False)
+                queueQQReaction gm.groupId (MessageId m) processingFaceId False
             -- Notes this turn accepted but never answered ('endDispatch'
             -- returns none for a killed turn — !kill drops them by
             -- contract).  Ones that ARE a message get a turn of their
@@ -978,8 +996,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
     withProcessingReaction outputCaps act
       | origin == OriginPoke || not (outputCaps.canReaction && outputCaps.canFace) = act
       | otherwise =
-          (sendAction (SetMsgEmojiLike gm.messageId processingFaceId True) >> act)
-            `finally` sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
+          (queueQQReaction gm.groupId gm.messageId processingFaceId True >> act)
+            `finally` queueQQReaction gm.groupId gm.messageId processingFaceId False
 
     -- The implicit half of the feedback split: when the group already
     -- has another turn running, a fresh trigger is often steering
@@ -1070,7 +1088,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                     -- addressed to the bot, and reacting would break
                     -- the "traceless until it speaks" rule.
                     when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-                      sendAction (SetMsgEmojiLike gm.messageId processingFaceId True)
+                      queueQQReaction gm.groupId gm.messageId processingFaceId True
                   pure (isJust landed)
         _ -> pure False
 
@@ -1136,8 +1154,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "aborted" .= result.aborted
               ]
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $ do
-            sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
-            sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
+            queueQQReaction gm.groupId gm.messageId processingFaceId False
+            queueQQReaction gm.groupId gm.messageId failureFaceId True
         Just replyRaw -> handleReply outputCaps env s mentionable rosterNames streamBudget result replyRaw
 
     handleReply outputCaps env s mentionable rosterNames streamBudget result replyRaw = do
@@ -1172,7 +1190,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           -- btw notes are NOT drained (they wait for a turn that
           -- actually delivers them); no episode timer is armed (a turn judged
           -- not worth answering is noise).  The silence itself
-          -- IS persisted, as a synthetic bot row — without it the
+          -- IS persisted, as an internal canonical IR row — without it the
           -- declined question reads as still pending in the next
           -- chronological context and gets answered a turn late.
           --
@@ -1187,10 +1205,21 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "face" .= mFace,
                 "aborted" .= result.aborted
               ]
-          insertSilence gm (if T.null stripped then "[silence]" else stripped)
+          let GroupId group = gm.groupId
+              MessageId triggerMessage = gm.messageId
+              silenceText = if T.null stripped then "[silence]" else stripped
+              sourceMessage = if triggerMessage == 0 then Nothing else Just triggerMessage
+          void $
+            recordInternalMessage
+              OutboundDraft
+                { legacyConversationId = group,
+                  transcriptKind = renderMessageKind KindChat,
+                  sourceCompatibilityMessageId = sourceMessage,
+                  canonicalBody = Body [NText silenceText],
+                  replyToCompatibilityMessageId = sourceMessage
+                }
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-            sendAction
-              (SetMsgEmojiLike gm.messageId (fromMaybe defaultSilenceFace mFace) True)
+            queueQQReaction gm.groupId gm.messageId (fromMaybe defaultSilenceFace mFace) True
         Nothing -> do
           -- Outbound gets the platform message_id and persists this
           -- message into the messages table.  That's where
@@ -1409,6 +1438,40 @@ actorTier gid uid
       pure $ case role of
         (r : _) | r `elem` ["owner", "admin"] -> TierGroupAdmin
         _ -> TierMember
+
+-- | Reactions are lightweight canonical meta-events.  Publishing them is the
+-- only side effect on the dispatch path; the capability-aware delivery worker
+-- resolves the target's QQ copy and performs the native action durably.
+-- Missing/unsupported targets are quiet by design.
+queueQQReaction ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
+  GroupId ->
+  MessageId ->
+  Int ->
+  Bool ->
+  Eff es ()
+queueQQReaction (GroupId group) (MessageId message) faceId added =
+  trySync
+    ( enqueueReaction
+        ReactionDraft
+          { legacyConversationId = group,
+            targetCompatibilityMessageId = message,
+            reactionKey = T.pack (show faceId),
+            reactionAction = if added then ReactionAdd else ReactionRemove,
+            requiredPlatform = Just PlatformQQ
+          }
+    )
+    >>= \case
+      Right _ -> pure ()
+      Left e ->
+        logAttention "reaction outbox publish failed" $
+          object
+            [ "group_id" .= group,
+              "message_id" .= message,
+              "face_id" .= faceId,
+              "added" .= added,
+              "error" .= T.pack (show (e :: SomeException))
+            ]
 
 -- | Reaction for a permission-denied command: the NO face — same one
 -- @[silence:NO]@ uses, visibly refused with zero chat noise.

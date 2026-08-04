@@ -13,6 +13,8 @@ module Max.Matrix
     parseMatrixSyncPage,
     matrixSelfMentionIsDirect,
     matrixMediaSizeDrift,
+    matrixEditPayload,
+    matrixReactionPayload,
     matrixCapabilities,
     matrixWorker,
     matrixDeliveryTransport,
@@ -53,7 +55,7 @@ import Max.HttpRuntime
   )
 import Max.IR
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
-import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryTransport (..), loweredText)
+import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryOperation (..), DeliveryTransport (..), loweredText)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -129,9 +131,7 @@ matrixCapabilities =
       video = TierNative,
       audio = TierNative,
       file = TierNative,
-      -- No outbound reaction emitter exists yet; advertising this would route
-      -- a non-degradable action to no backend and fail by construction.
-      reaction = False,
+      reaction = True,
       edit = True,
       redact = True,
       maxTextBytes = Just 65536
@@ -279,7 +279,11 @@ matrixDeliveryTransport :: HttpRuntime -> MatrixConfig -> DeliveryTransport
 matrixDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformMatrix,
-      deliver = sendChunks
+      deliver = \claim -> \case
+        DeliverMessage lowered -> sendChunks claim lowered
+        DeliverEdit target lowered -> sendEdit claim target lowered
+        DeliverReaction target key action previous -> sendReaction claim target key action previous
+        DeliverRedaction target -> sendRedaction claim "redact" target
     }
   where
     sendChunks claim lowered =
@@ -294,6 +298,31 @@ matrixDeliveryTransport runtime cfg =
               sendMatrixDelivery runtime cfg claim chunkIndex payload >>= \case
                 Left err -> pure (AttemptRetryable err)
                 Right eventId -> go (chunkIndex + 1) (native <|> Just eventId) rest
+
+    sendEdit claim target lowered = case lowered.chunks of
+      [chunk] ->
+        matrixChunkPayload runtime cfg Nothing chunk >>= \case
+          Left (MatrixContractFailure err) -> pure (AttemptPermanentlyFailed err)
+          Left (MatrixMediaFailure err) -> pure (AttemptMediaFallback err)
+          Right content ->
+            sendMatrixEvent runtime cfg claim "edit" "m.room.message" (matrixEditPayload target content) >>= \case
+              Left err -> pure (AttemptRetryable err)
+              Right eventId -> pure (AttemptConfirmed (Just eventId))
+      _ -> pure (AttemptPermanentlyFailed "Matrix edits must lower to exactly one chunk")
+
+    sendReaction claim target key action previous = case action of
+      ReactionAdd ->
+        sendMatrixEvent runtime cfg claim "reaction" "m.reaction" (matrixReactionPayload target key) >>= \case
+          Left err -> pure (AttemptRetryable err)
+          Right eventId -> pure (AttemptConfirmed (Just eventId))
+      ReactionRemove -> case previous of
+        Nothing -> pure (AttemptSuppressed "Matrix reaction removal has no prior native reaction")
+        Just reactionEvent -> sendRedaction claim "unreact" reactionEvent
+
+    sendRedaction claim suffix target =
+      sendMatrixRedaction runtime cfg claim suffix target >>= \case
+        Left err -> pure (AttemptRetryable err)
+        Right eventId -> pure (AttemptConfirmed (Just eventId))
 
 matrixChunkPayload ::
   HttpRuntime ->
@@ -364,6 +393,37 @@ matrixMentionRelation chunk = case [native | NMention (NativeUserId native) _ <-
   [] -> []
   users -> ["m.mentions" .= object ["user_ids" .= users]]
 
+-- | Matrix edits retain a readable fallback event while the authoritative new
+-- content lives in @m.new_content@.  This function only wraps an already
+-- lowered native Matrix payload; it performs no degradation.
+matrixEditPayload :: NativeEventId -> Value -> Value
+matrixEditPayload (NativeEventId target) = \case
+  Object newContent ->
+    let fallbackBody = case KeyMap.lookup "body" newContent of
+          Just (String body) -> "* " <> body
+          _ -> "* edited message"
+        relation =
+          object
+            [ "rel_type" .= ("m.replace" :: Text),
+              "event_id" .= target
+            ]
+     in Object . KeyMap.insert "m.new_content" (Object newContent)
+          . KeyMap.insert "m.relates_to" relation
+          . KeyMap.insert "body" (String fallbackBody)
+          $ newContent
+  _ -> error "matrixEditPayload: lowered Matrix content must be an object"
+
+matrixReactionPayload :: NativeEventId -> Text -> Value
+matrixReactionPayload (NativeEventId target) key =
+  object
+    [ "m.relates_to"
+        .= object
+          [ "rel_type" .= ("m.annotation" :: Text),
+            "event_id" .= target,
+            "key" .= key
+          ]
+    ]
+
 matrixMsgType :: Maybe Text -> Text
 matrixMsgType = \case
   Just mime
@@ -374,15 +434,36 @@ matrixMsgType = \case
 
 sendMatrixDelivery :: HttpRuntime -> MatrixConfig -> DeliveryClaim -> Int -> Value -> IO (Either Text NativeEventId)
 sendMatrixDelivery runtime cfg claim chunkIndex payload = do
+  sendMatrixEvent runtime cfg claim (T.pack (show chunkIndex)) "m.room.message" payload
+
+sendMatrixEvent :: HttpRuntime -> MatrixConfig -> DeliveryClaim -> Text -> Text -> Value -> IO (Either Text NativeEventId)
+sendMatrixEvent runtime cfg claim suffix eventType payload = do
   let path =
         "/_matrix/client/v3/rooms/"
           <> pathPiece cfg.roomId
-          <> "/send/m.room.message/"
-          <> pathPiece (claim.idempotencyKey <> "-" <> T.pack (show chunkIndex))
+          <> "/send/"
+          <> pathPiece eventType
+          <> "/"
+          <> pathPiece (claim.idempotencyKey <> "-" <> suffix)
   matrixRequest runtime cfg "PUT" path [] (Just payload) >>= \case
     Left err -> pure (Left err)
     Right response -> case parseEither (withObject "matrix send" (.: "event_id")) response of
       Left err -> pure (Left ("matrix send response: " <> T.pack err))
+      Right event -> pure (Right (NativeEventId event))
+
+sendMatrixRedaction :: HttpRuntime -> MatrixConfig -> DeliveryClaim -> Text -> NativeEventId -> IO (Either Text NativeEventId)
+sendMatrixRedaction runtime cfg claim suffix (NativeEventId target) = do
+  let path =
+        "/_matrix/client/v3/rooms/"
+          <> pathPiece cfg.roomId
+          <> "/redact/"
+          <> pathPiece target
+          <> "/"
+          <> pathPiece (claim.idempotencyKey <> "-" <> suffix)
+  matrixRequest runtime cfg "PUT" path [] (Just (object [])) >>= \case
+    Left err -> pure (Left err)
+    Right response -> case parseEither (withObject "matrix redaction" (.: "event_id")) response of
+      Left err -> pure (Left ("matrix redaction response: " <> T.pack err))
       Right event -> pure (Right (NativeEventId event))
 
 resolveDeliveryMedia :: HttpRuntime -> ResolvedMedia -> Maybe Int64 -> IO (Either Text BS.ByteString)
@@ -659,7 +740,7 @@ relationFrom value = fromMaybe [] (parseMaybe parser value)
                 [ ReplyTo . NativeEventId <$> replyEvent,
                   case (relType, event) of
                     (Just "m.replace", Just target) -> Just (Replaces (NativeEventId target))
-                    (Just "m.annotation", Just target) -> Just (ReactsTo (NativeEventId target) (fromMaybe "" key))
+                    (Just "m.annotation", Just target) -> Just (ReactsTo (NativeEventId target) (fromMaybe "" key) ReactionAdd)
                     _ -> Nothing
                 ]
         )

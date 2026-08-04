@@ -8,6 +8,7 @@ import Max.IR.Prompt (promptText)
 import Max.Platform
 import Max.Platform.QQ (qqIngestBody)
 import Max.Platform.Types (Platform (..))
+import Max.Wechatpad (parseFrameIds)
 import OneBot.Action (Action (..))
 import OneBot.Segment
   ( FileSegInfo (..),
@@ -22,6 +23,18 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
+  describe "wechatpad frame ids" $ do
+    it "accepts numeric and wrapped ids without silently erasing them" $ do
+      parseFrameIds
+        ( object
+            [ "from_user_name" .= object ["str" .= ("room@chatroom" :: Text)],
+              "content" .= object ["str" .= ("wxid:\nhello" :: Text)],
+              "msg_id" .= (12345 :: Int),
+              "new_msg_id" .= object ["str" .= ("67890" :: Text)]
+            ]
+        )
+        `shouldBe` Just ("12345", 67890)
+
   describe "explicit platform backend registry" $ do
     it "selects only an exact declared platform" $ do
       (.pbPlatform) <$> backendForPlatform "matrix" [fake "qq", fake "matrix"]

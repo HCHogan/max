@@ -2,7 +2,7 @@ module Max.Effects.OutboundSpec (spec) where
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Effectful (liftIO, runEff)
-import Max.DB.Message (MessageKind (KindChat))
+import Max.MessageKind (MessageKind (KindChat))
 import Max.Effects.Outbound
   ( OutboundDeliveryScope (..),
     OutboundRequest (..),

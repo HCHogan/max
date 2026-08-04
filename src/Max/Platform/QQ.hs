@@ -5,7 +5,9 @@
 -- retains the raw segment payload for a same-platform native round trip.
 module Max.Platform.QQ
   ( ensureQQEndpoint,
+    ensureQQEndpointFor,
     qqEnvelope,
+    qqNoticeEnvelopes,
     qqIngestBody,
     qqSegmentNodes,
     qqCapabilities,
@@ -13,14 +15,18 @@ module Max.Platform.QQ
 where
 
 import Control.Applicative ((<|>))
-import Data.Aeson (Value (..), toJSON)
+import Crypto.Hash.SHA256 qualified as SHA256
+import Data.Aeson (Value (..), encode, toJSON)
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString.Base16 qualified as Base16
+import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.Scientific (toBoundedInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
@@ -30,7 +36,7 @@ import Max.IR.Lower (OutboundCaps (..), Tier (..), textOnlyCaps)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store (RegisteredEndpoint (..), ensureLegacyEndpoint)
 import Max.Platform.Types
-import OneBot.Event (GroupMessage (..), Sender (..))
+import OneBot.Event (EmojiLike (..), GroupMessage (..), MessageNotice (..), Sender (..))
 import OneBot.Segment
   ( CardInfo (..),
     FileSegInfo (..),
@@ -46,6 +52,14 @@ ensureQQEndpoint ::
   GroupMessage ->
   Eff es RegisteredEndpoint
 ensureQQEndpoint message =
+  ensureQQEndpointFor message.selfId message.groupId
+
+ensureQQEndpointFor ::
+  (WithConnection :> es, IOE :> es) =>
+  UserId ->
+  GroupId ->
+  Eff es RegisteredEndpoint
+ensureQQEndpointFor selfId groupId =
   ensureLegacyEndpoint
     PlatformQQ
     (NativeAccountId (decimal self))
@@ -54,13 +68,13 @@ ensureQQEndpoint message =
     group
     qqCapabilities
   where
-    UserId self = message.selfId
-    GroupId group = message.groupId
+    UserId self = selfId
+    GroupId group = groupId
     nativeConversation
-      | isPrivateChat message.groupId = "user:" <> decimal (abs group)
+      | isPrivateChat groupId = "user:" <> decimal (abs group)
       | otherwise = decimal group
     conversationKind
-      | isPrivateChat message.groupId = ConversationDirect
+      | isPrivateChat groupId = ConversationDirect
       | otherwise = ConversationGroup
 
 qqEnvelope :: RegisteredEndpoint -> UTCTime -> Value -> GroupMessage -> InboundEnvelope
@@ -81,6 +95,53 @@ qqEnvelope endpoint received raw message =
   where
     MessageId messageId = message.messageId
     UserId userId = message.userId
+
+qqNoticeEnvelopes :: RegisteredEndpoint -> UTCTime -> Value -> MessageNotice -> [InboundEnvelope]
+qqNoticeEnvelopes endpoint received raw notice = case notice of
+  MessageRecalled _ _ actor target ->
+    [ envelope
+        (noticeId "recall")
+        actor
+        EventRedaction
+        [Redacts (nativeMessage target)]
+    ]
+  MessageReacted _ _ actor target likes added ->
+    [ envelope
+        (noticeId ("reaction:" <> like.emojiId <> ":" <> actionText))
+        actor
+        EventReaction
+        [ ReactsTo
+            (nativeMessage target)
+            like.emojiId
+            (if added then ReactionAdd else ReactionRemove)
+        ]
+    | like <- likes
+    ]
+  where
+    envelope native actor kind relations =
+      InboundEnvelope
+        { endpointId = endpoint.endpointId,
+          nativeEventId = NativeEventId native,
+          senderNativeId = NativeUserId (userText actor),
+          senderDisplayName = Nothing,
+          occurredAt = fromMaybe received (eventTime raw),
+          receivedAt = received,
+          eventKind = kind,
+          content = Body [],
+          relations,
+          sourceCursor = Nothing,
+          rawPayload = Just raw
+        }
+    actionText = case notice of
+      MessageReacted {mnReactionAdded = True} -> "add"
+      _ -> "remove"
+    noticeId suffix =
+      "notice:"
+        <> TE.decodeUtf8 (Base16.encode (SHA256.hash (LBS.toStrict (encode raw))))
+        <> ":"
+        <> suffix
+    nativeMessage (MessageId target) = NativeEventId (decimal target)
+    userText (UserId actor) = decimal actor
 
 qqCapabilities :: OutboundCaps
 qqCapabilities =

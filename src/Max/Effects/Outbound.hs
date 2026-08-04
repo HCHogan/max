@@ -36,8 +36,8 @@ import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Exception (SomeException)
 import Effectful.Log (Log, logAttention)
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Message (MessageKind (..))
 import Max.IR
+import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Util (trySync)
 import OneBot.Types (GroupId (..), MessageId (..))
@@ -118,11 +118,6 @@ runOutbound = runOutboundWith deliver
             "error" .= reason
           ]
       pure (SendFailed reason)
-
-    renderMessageKind = \case
-      KindChat -> "chat"
-      KindCommand -> "command"
-      KindDebug -> "debug"
 
 -- | Install any request handler as the interpreter.  Besides keeping
 -- 'runOutbound' small, this is the in-memory seam for Handler/Agent tests: a

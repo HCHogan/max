@@ -287,16 +287,21 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("短消息200" `T.isInfixOf`)
 
     it "keeps only the newest token-bounded tail from an arbitrarily longer raw ledger" $ do
-      _ <-
-        withDb pool $
-          execute
-            "INSERT INTO messages \
-            \  (message_id, group_id, user_id, self_id, received_at, segments, rendered_text, raw_message, sender_nickname) \
-            \ SELECT 4000 + n, ?, ?, ?, '2026-06-05 09:00:00+00', '[]'::jsonb, \
-            \        CASE n WHEN 1 THEN 'oldest-sentinel ' WHEN 1200 THEN 'newest-sentinel ' ELSE '' END \
-            \          || repeat('bounded-history ', 20), '', 'Alice' \
-            \ FROM generate_series(1, 1200) AS n"
-            (groupRaw :: Int64, memberRaw :: Int64, botRaw :: Int64)
+      mapM_
+        ( \n ->
+            insertRawMessage
+              pool
+              (4000 + n)
+              groupRaw
+              memberRaw
+              botRaw
+              (timeAt 9)
+              (Just "Alice")
+              ( (if n == 1 then "oldest-sentinel " else if n == 1200 then "newest-sentinel " else "")
+                  <> T.replicate 20 "bounded-history "
+              )
+        )
+        [1 .. 1200 :: Int64]
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <-
         withDbLog pool $

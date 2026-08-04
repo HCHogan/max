@@ -2,7 +2,7 @@
 
 module Max.HandlerSpec (spec) where
 
-import Max.DB.Message (MessageKind (..))
+import Max.MessageKind (MessageKind (..))
 import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs)
 import Max.IR.Prompt (promptText)
 import Max.Platform.QQ (qqIngestBody)

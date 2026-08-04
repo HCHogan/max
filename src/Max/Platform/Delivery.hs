@@ -7,12 +7,14 @@
 -- nodes; they never read prompt projections or choose degradation policy.
 module Max.Platform.Delivery
   ( DeliveryAttempt (..),
+    DeliveryOperation (..),
     DeliveryTransport (..),
     deliveryWorker,
     oneBotDeliveryTransport,
     loadDeliveryMedia,
     loweredText,
     oneBotNodes,
+    oneBotReactionAction,
   )
 where
 
@@ -46,14 +48,16 @@ import Max.Platform.Store
     deliveryMentionNatives,
   )
 import Max.Platform.Types
-  ( NativeEventId (..),
+  ( EventKind (..),
+    NativeEventId (..),
     NativeUserId (..),
     Platform,
     PrincipalIdentityId,
+    ReactionAction (..),
     renderPlatform,
   )
 import Max.Util (trySync, trySyncIO)
-import OneBot.Action (Response (..), extractOutMid, sendChatMsg)
+import OneBot.Action (Action (SetMsgEmojiLike), Response (..), extractOutMid, sendChatMsg)
 import OneBot.Segment (Segment (..), imageSeg, stickerSeg)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
@@ -63,15 +67,23 @@ data DeliveryAttempt
   | AttemptRetryable !Text
   | AttemptOutcomeUnknown !Text
   | AttemptPermanentlyFailed !Text
+  | AttemptSuppressed !Text
   | -- | A native media transfer failed before a non-idempotent message send.
     -- The worker re-runs the shared lowerer with media forced to text; the
     -- adapter itself never invents a fallback.
     AttemptMediaFallback !Text
   deriving stock (Eq, Show)
 
+data DeliveryOperation
+  = DeliverMessage !LoweredMessage
+  | DeliverEdit !NativeEventId !LoweredMessage
+  | DeliverReaction !NativeEventId !Text !ReactionAction !(Maybe NativeEventId)
+  | DeliverRedaction !NativeEventId
+  deriving stock (Eq, Show)
+
 data DeliveryTransport = DeliveryTransport
   { platform :: !Platform,
-    deliver :: !(DeliveryClaim -> LoweredMessage -> IO DeliveryAttempt)
+    deliver :: !(DeliveryClaim -> DeliveryOperation -> IO DeliveryAttempt)
   }
 
 -- | Resolve only media that can survive lowering's native tier and budget.
@@ -136,49 +148,7 @@ deliveryWorker workerId transports = localDomain "delivery" loop
 
     deliverClaim claim = do
       now <- liftIO getCurrentTime
-      nativeMentions <-
-        deliveryMentionNatives claim.endpointId (mentionIdentities claim.body)
-      mediaResult <- trySync (loadDeliveryMedia claim.capabilities claim.body)
-      let media = either (const []) id mediaResult
-          lowerWith caps resolved =
-            lower
-              LowerEnv
-                { platform = claim.platform,
-                  caps,
-                  attribution = claim.attribution,
-                  mentionNative = (`Map.lookup` nativeMentions),
-                  mediaResolve = (`lookup` resolved),
-                  replyTarget = claim.replyContext
-                }
-              claim.body
-          lowered = lowerWith claim.capabilities media
-      (completion, lowerNotes) <- case mediaResult of
-        Left e ->
-          pure
-            ( DeliveryPermanentlyFailed
-                ("media load failed: " <> T.pack (show (e :: SomeException))),
-              lowered.notes
-            )
-        Right _
-          | null lowered.chunks -> pure (DeliverySuppressedAs "lowering produced no output", lowered.notes)
-          | otherwise -> case find ((== claim.platform) . (.platform)) transports of
-              Nothing ->
-                pure
-                  ( DeliveryPermanentlyFailed ("no transport registered for " <> renderPlatform claim.platform),
-                    lowered.notes
-                  )
-              Just transport -> do
-                firstAttempt <- runTransport transport claim lowered
-                case firstAttempt of
-                  AttemptMediaFallback err -> do
-                    let relowered = lowerWith (mediaTextCaps claim.capabilities) []
-                        fallbackNote = LowerNote "media_emit" NoteFolded (Just err)
-                    secondAttempt <- runTransport transport claim relowered
-                    let completion' = case secondAttempt of
-                          AttemptMediaFallback err' -> DeliveryPermanentlyFailed ("media fallback loop: " <> err')
-                          other -> toCompletion claim.attemptCount now other
-                    pure (completion', relowered.notes <> [fallbackNote])
-                  other -> pure (toCompletion claim.attemptCount now other, lowered.notes)
+      (completion, lowerNotes) <- routeClaim now claim
       completed <- completeDelivery workerId claim.deliveryId lowerNotes completion
       if completed
         then
@@ -194,8 +164,84 @@ deliveryWorker workerId transports = localDomain "delivery" loop
           logAttention "delivery lease lost before completion" $
             object ["delivery_id" .= claim.deliveryId, "worker" .= workerId]
 
-    runTransport transport claim lowered =
-      liftIO (trySyncIO (transport.deliver claim lowered)) >>= \case
+    routeClaim now claim = case claim.eventKind of
+      EventMessage -> withTransport claim $ \transport -> deliverContent now claim transport DeliverMessage
+      EventEdit
+        | not claim.capabilities.edit -> pure (DeliverySuppressedAs "edit unsupported", [])
+        | Just target <- claim.actionTarget ->
+            withTransport claim $ \transport ->
+              deliverContent now claim transport (DeliverEdit target)
+        | otherwise -> pure (DeliveryPermanentlyFailed "edit target has no native copy", [])
+      EventReaction
+        | not claim.capabilities.reaction -> pure (DeliverySuppressedAs "reaction unsupported", [])
+        | Just target <- claim.actionTarget,
+          Just key <- claim.reactionKey ->
+            withTransport claim $ \transport -> do
+              attempt <-
+                runTransport
+                  transport
+                  claim
+                  (DeliverReaction target key claim.reactionAction claim.previousReactionNative)
+              pure (toCompletion claim.attemptCount now attempt, [])
+        | otherwise -> pure (DeliveryPermanentlyFailed "reaction target or key is missing", [])
+      EventRedaction
+        | not claim.capabilities.redact -> pure (DeliverySuppressedAs "redaction unsupported", [])
+        | Just target <- claim.actionTarget ->
+            withTransport claim $ \transport -> do
+              attempt <- runTransport transport claim (DeliverRedaction target)
+              pure (toCompletion claim.attemptCount now attempt, [])
+        | otherwise -> pure (DeliveryPermanentlyFailed "redaction target has no native copy", [])
+      EventMembership -> pure (DeliverySuppressedAs "membership events are not delivered", [])
+
+    withTransport claim act = case find ((== claim.platform) . (.platform)) transports of
+      Nothing ->
+        pure
+          ( DeliveryPermanentlyFailed ("no transport registered for " <> renderPlatform claim.platform),
+            []
+          )
+      Just transport -> act transport
+
+    deliverContent now claim transport operation = do
+      nativeMentions <-
+        deliveryMentionNatives claim.endpointId (mentionIdentities claim.body)
+      mediaResult <- trySync (loadDeliveryMedia claim.capabilities claim.body)
+      let media = either (const []) id mediaResult
+          lowerWith caps resolved =
+            lower
+              LowerEnv
+                { platform = claim.platform,
+                  caps,
+                  attribution = claim.attribution,
+                  mentionNative = (`Map.lookup` nativeMentions),
+                  mediaResolve = (`lookup` resolved),
+                  replyTarget = if claim.eventKind == EventMessage then claim.replyContext else Nothing
+                }
+              claim.body
+          lowered = lowerWith claim.capabilities media
+      case mediaResult of
+        Left e ->
+          pure
+            ( DeliveryPermanentlyFailed
+                ("media load failed: " <> T.pack (show (e :: SomeException))),
+              lowered.notes
+            )
+        Right _
+          | null lowered.chunks -> pure (DeliverySuppressedAs "lowering produced no output", lowered.notes)
+          | otherwise -> do
+              firstAttempt <- runTransport transport claim (operation lowered)
+              case firstAttempt of
+                AttemptMediaFallback err -> do
+                  let relowered = lowerWith (mediaTextCaps claim.capabilities) []
+                      fallbackNote = LowerNote "media_emit" NoteFolded (Just err)
+                  secondAttempt <- runTransport transport claim (operation relowered)
+                  let completion' = case secondAttempt of
+                        AttemptMediaFallback err' -> DeliveryPermanentlyFailed ("media fallback loop: " <> err')
+                        other -> toCompletion claim.attemptCount now other
+                  pure (completion', relowered.notes <> [fallbackNote])
+                other -> pure (toCompletion claim.attemptCount now other, lowered.notes)
+
+    runTransport transport claim operation =
+      liftIO (trySyncIO (transport.deliver claim operation)) >>= \case
         Left e ->
           pure
             ( AttemptOutcomeUnknown
@@ -216,6 +262,7 @@ toCompletion attempts now = \case
   AttemptRetryable err -> DeliveryRetry err (addUTCTime (retryDelay attempts) now)
   AttemptOutcomeUnknown err -> DeliveryUnknown err now
   AttemptPermanentlyFailed err -> DeliveryPermanentlyFailed err
+  AttemptSuppressed reason -> DeliverySuppressedAs reason
   AttemptMediaFallback err -> DeliveryPermanentlyFailed ("unhandled media fallback: " <> err)
 
 mediaTextCaps :: OutboundCaps -> OutboundCaps
@@ -291,7 +338,11 @@ oneBotDeliveryTransport :: Platform -> Bool -> PlatformBackend -> DeliveryTransp
 oneBotDeliveryTransport platform idempotent backend =
   DeliveryTransport
     { platform,
-      deliver = \claim lowered -> sendChunks claim lowered 0 False Nothing lowered.chunks
+      deliver = \claim -> \case
+        DeliverMessage lowered -> sendChunks claim lowered 0 False Nothing lowered.chunks
+        DeliverReaction target key action _ -> sendReaction target key action
+        DeliverEdit {} -> pure (AttemptPermanentlyFailed "OneBot endpoint advertised edit without an emitter")
+        DeliverRedaction {} -> pure (AttemptPermanentlyFailed "OneBot endpoint advertised redaction without an emitter")
     }
   where
     sendChunks _ _ _ _ firstNative [] =
@@ -314,6 +365,23 @@ oneBotDeliveryTransport platform idempotent backend =
                 | otherwise -> do
                     let native = NativeEventId . T.pack . show <$> extractOutMid payload
                     sendChunks claim lowered (index + 1) True (firstNative <|> native) rest
+
+    sendReaction (NativeEventId target) key action =
+      case oneBotReactionAction (NativeEventId target) key action of
+        Just reaction ->
+          backend.pbCall reaction oneBotTimeoutMs >>= \case
+            Left err -> pure (AttemptRetryable err)
+            Right (Response _ retcode _ _)
+              | retcode == 0 -> pure (AttemptConfirmed Nothing)
+              | otherwise -> pure (AttemptRetryable ("retcode " <> T.pack (show retcode)))
+        Nothing -> pure (AttemptSuppressed "reaction is not a QQ face id or target")
+
+oneBotReactionAction :: NativeEventId -> Text -> ReactionAction -> Maybe Action
+oneBotReactionAction (NativeEventId target) key action =
+  SetMsgEmojiLike
+    <$> (MessageId <$> readInt64 target)
+    <*> readInt key
+    <*> pure (action == ReactionAdd)
 
 replySegment :: Int -> Maybe NativeEventId -> Either Text [Segment]
 replySegment index native

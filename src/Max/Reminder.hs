@@ -58,7 +58,7 @@ import Data.Time
 import Effectful
 import Effectful.Log (Log, logAttention, logInfo)
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Message (MessageKind (KindChat))
+import Max.MessageKind (MessageKind (KindChat))
 import Max.DB.Reminder
   ( Reminder (..),
     dueReminders,

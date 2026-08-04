@@ -872,7 +872,10 @@ loadCaptureSource run =
   query
     "SELECT ingest_seq, \
     \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
-    \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
+    \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
+    \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
+    \                      AND containment.relation_kind = 'contained_in') \
+    \        AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
     \ FROM messages \
     \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? \
     \ ORDER BY ingest_seq"
@@ -1407,7 +1410,10 @@ expandEpisode policy handle requestedAfter requestedSize = do
         query
           "SELECT ingest_seq, \
           \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
-          \       (forwarded_in_message_id IS NULL AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
+          \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
+          \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
+          \                      AND containment.relation_kind = 'contained_in') \
+          \        AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
           \ FROM messages \
           \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND ingest_seq > ? \
           \ ORDER BY ingest_seq \
