@@ -16,6 +16,7 @@ spec = describe "Max.Admin" $ do
       route "GET" ["api", "stats", "messages"] `shouldBe` Just RMessageStats
       route "GET" ["api", "platforms", "status"] `shouldBe` Just RPlatformStatus
       route "GET" ["api", "platforms", "timeline", "42"] `shouldBe` Just (RPlatformTimeline 42)
+      route "GET" ["api", "platforms", "timeline", "42", "wait"] `shouldBe` Just (RPlatformTimelineWait 42)
       route "GET" ["api", "blobs", "abc"] `shouldBe` Just (RBlob "abc")
       route "GET" ["api", "context", "status"] `shouldBe` Just RContextStatus
       route "GET" ["api", "context", "captures"] `shouldBe` Just RContextCaptures
@@ -85,6 +86,7 @@ spec = describe "Max.Admin" $ do
       needsAuth RMessageStats `shouldBe` True
       needsAuth RPlatformStatus `shouldBe` True
       needsAuth (RPlatformTimeline 42) `shouldBe` True
+      needsAuth (RPlatformTimelineWait 42) `shouldBe` True
       needsAuth (RBlob "abc") `shouldBe` True
       needsAuth RSkillsList `shouldBe` True
       needsAuth RSkillCreate `shouldBe` True

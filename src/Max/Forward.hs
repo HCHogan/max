@@ -14,7 +14,7 @@ import Data.Aeson.Types (Object, Parser, parseEither, withObject, (.:), (.:?))
 import Data.Either (rights)
 import Data.Foldable (for_, toList, traverse_)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (getCurrentTime)
@@ -23,9 +23,12 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobForward), enqueueJob)
+import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.Images (enqueueImagesFromNode)
+import Max.IR (Body (..), ForwardRef (..), Node (NForward))
+import Max.IR.Digest (digest)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.QQ (ensureQQEndpointFor, qqIngestBody)
 import Max.Platform.Store
@@ -45,7 +48,6 @@ import Max.Platform.Types
     NativeUserId (..),
   )
 import OneBot.Action (Action (GetForwardMsg), Response (..))
-import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), parseIntId)
 
@@ -82,19 +84,22 @@ instance FromJSON ForwardJob where
       <*> o .: "group_id"
       <*> o .: "self_id"
 
--- | Enqueue every top-level forward chain in a real group message.
+-- | Enqueue every top-level canonical forward chain.
 -- Nested forwards arrive inlined inside the @get_forward_msg@ response,
 -- so we never enqueue more jobs from inside the worker.
 enqueueForwards ::
   (WithConnection :> es, IOE :> es) =>
   FetchSignal ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es ()
 enqueueForwards sig gm = do
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
       UserId sid = gm.selfId
-      jobs = mapMaybe (mkJob mid gid sid) gm.message
+      jobs =
+        [ ForwardJob mid forward.nativeId gid sid
+        | NForward forward <- gm.body.nodes
+        ]
   traverse_ enqueueOne jobs
   liftIO (notifyFetch sig)
   where
@@ -102,19 +107,6 @@ enqueueForwards sig gm = do
     -- container is part of the key: each lands its own set of nodes.
     enqueueOne j =
       enqueueJob JobForward (T.pack (show j.containerMessageId) <> ":" <> j.forwardId) j
-
-mkJob :: Int64 -> Int64 -> Int64 -> Segment -> Maybe ForwardJob
-mkJob container gid sid = \case
-  SegOther "forward" v -> do
-    fid <- forwardIdFromValue v
-    Just (ForwardJob container fid gid sid)
-  _ -> Nothing
-
-forwardIdFromValue :: Value -> Maybe Text
-forwardIdFromValue (Object o) = case KM.lookup (K.fromText "id") o of
-  Just (String s) | not (T.null s) -> Just s
-  _ -> Nothing
-forwardIdFromValue _ = Nothing
 
 -- | One expansion is a single RPC plus a burst of inserts, so a batch
 -- of a few keeps the round-trips down without holding leases long.
@@ -224,20 +216,26 @@ ingestNode sig endpoint received job parentNative depth path pos node = do
             transcriptKind = "chat",
             qqProvenanceSegments = Just (toJSON node.segments)
           }
-  canonical <- canonicalFromResult <$> ingestEnvelope options envelope
+  ingestResult <- ingestEnvelope options envelope
+  let canonical = canonicalFromResult ingestResult
   compatibilityId <- compatibilityMessageIdForCanonical canonical
   enqueueImagesFromNode sig compatibilityId (Just job.groupId) node.segments
   let inlineChildren = concatMap extractInlineNodes node.segments
-  logInfo "forward node ingested" $
-    object
-      [ "container_message_id" .= job.containerMessageId,
-        "canonical_message_id" .= canonical,
-        "compatibility_message_id" .= compatibilityId,
-        "position" .= pos,
-        "depth" .= depth,
-        "sender_user_id" .= node.userId,
-        "inline_nested" .= length inlineChildren
-      ]
+  case ingestResult of
+    Ingested fresh ->
+      logInfo "forward node ingested" $
+        object
+          [ "container_message_id" .= job.containerMessageId,
+            "canonical_message_id" .= canonical,
+            "compatibility_message_id" .= compatibilityId,
+            "position" .= pos,
+            "depth" .= depth,
+            "sender_user_id" .= node.userId,
+            "inline_nested" .= length inlineChildren,
+            "content" .= digest fresh.canonicalBody
+          ]
+    AlreadyIngested {} -> pure ()
+    DeliveryEcho {} -> pure ()
   if depth >= maxDepth
     then
       unless (null inlineChildren) $

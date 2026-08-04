@@ -12,7 +12,7 @@ module Max.Files
   )
 where
 
-import Data.Aeson (FromJSON (..), ToJSON (..), Value, withObject, (.:), (.:?))
+import Data.Aeson (FromJSON (..), Result (..), ToJSON (..), Value, fromJSON, withObject, (.:), (.:?))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.Foldable (traverse_)
@@ -25,12 +25,13 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobFile), enqueueJob)
 import Max.DB.Files qualified as DB
+import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.Effects.Http (Http, getBytesQqCompatible)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
+import Max.IR (Body (..), MediaKind (MFile), MediaMeta (..), Node (NMedia), Phase (Canonical))
 import OneBot.Action (Action (GetGroupFileUrl), Response (..))
-import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (FileSegInfo (..), Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
@@ -71,19 +72,19 @@ instance FromJSON FileJob where
       <*> o .:? "size_hint"
       <*> o .:? "url_hint"
 
--- | Walk a group message's segments and enqueue every file.  Also
+-- | Walk canonical media nodes and enqueue every QQ file. Also
 -- inserts the catalog row up front so that @list_recent_files@ can
 -- show the file even while the worker is still fetching the bytes.
 enqueueFiles ::
   (WithConnection :> es, IOE :> es) =>
   FetchSignal ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es ()
 enqueueFiles sig gm = do
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
       UserId uid = gm.userId
-      jobs = mapMaybe (mkJob mid gid uid) gm.message
+      jobs = mapMaybe (mkJob mid gid uid) gm.body.nodes
   -- Insert seen rows so list_recent_files works immediately.
   traverse_ insertJob jobs
   traverse_ enqueueOne jobs
@@ -101,10 +102,14 @@ enqueueFiles sig gm = do
     -- QQ's file_id is already the catalog's primary key.
     enqueueOne j = enqueueJob JobFile j.fjFileId j
 
-mkJob :: Int64 -> Int64 -> Int64 -> Segment -> Maybe FileJob
+mkJob :: Int64 -> Int64 -> Int64 -> Node 'Canonical -> Maybe FileJob
 mkJob mid gid uid = \case
-  SegFile fs ->
-    Just
+  NMedia _ meta | meta.kind == MFile -> do
+    raw <- meta.raw
+    SegFile fs <- case fromJSON raw of
+      Success segment -> Just segment
+      Error _ -> Nothing
+    pure
       FileJob
         { fjFileId = fs.fsiFileId,
           fjGroupId = gid,

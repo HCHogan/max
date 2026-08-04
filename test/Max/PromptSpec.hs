@@ -10,6 +10,10 @@ import Data.Time (UTCTime (..), fromGregorian, minutesToTimeZone, secondsToDiffT
 import Max.Context (ContextDecision (..), ContextTrace (..))
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..))
+import Max.DB.History qualified as History
+import Max.Dispatch (DispatchMessage (..))
+import Max.Dispatch qualified as Dispatch
+import Max.DispatchFixture (qqDispatch)
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
@@ -18,7 +22,6 @@ import Max.ModelCatalog (ContextLimits (..))
 import Max.Platform.Types (AdvertisedCaps (..), noAdvertisedCaps, qqAdvertisedCaps)
 import Max.Prompt (CompartmentTier (..), ContextCandidates (..), ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, applyVideoCaptions, cpInputs, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
-import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
@@ -80,30 +83,14 @@ memAt mid content =
       memUpdatedAt = timeAt 12
     }
 
-triggerMsg :: [Segment] -> GroupMessage
+triggerMsg :: [Segment] -> DispatchMessage
 triggerMsg segs =
-  GroupMessage
-    { selfId = UserId botId,
-      groupId = GroupId groupRaw,
-      userId = UserId memberId,
-      messageId = MessageId triggerMid,
-      message = segs,
-      rawMessage = "",
-      sender = Sender (UserId memberId) (Just "Alice") Nothing
-    }
+  qqDispatch (UserId botId) (GroupId groupRaw) (UserId memberId) (MessageId triggerMid) (Just "Alice") segs
 
 -- | Same trigger but arriving via private chat (pseudo group id).
-privateTriggerMsg :: [Segment] -> GroupMessage
+privateTriggerMsg :: [Segment] -> DispatchMessage
 privateTriggerMsg segs =
-  GroupMessage
-    { selfId = UserId botId,
-      groupId = GroupId (negate memberId),
-      userId = UserId memberId,
-      messageId = MessageId triggerMid,
-      message = segs,
-      rawMessage = "",
-      sender = Sender (UserId memberId) (Just "Alice") Nothing
-    }
+  qqDispatch (UserId botId) (GroupId (negate memberId)) (UserId memberId) (MessageId triggerMid) (Just "Alice") segs
 
 emptySession :: Session
 emptySession =
@@ -267,7 +254,7 @@ spec = do
       ub `shouldSatisfy` ("[09:00 SkyRain #8001]" `T.isInfixOf`)
 
     it "retains the native platform label for mirrored speakers" $ do
-      let item = (historyAt 9 8001 otherMemberId (Just "Alice") "from Matrix") {sourcePlatform = "matrix"}
+      let item = (historyAt 9 8001 otherMemberId (Just "Alice") "from Matrix") {History.sourcePlatform = "matrix"}
           inp = baseInputs {transcript = [item]}
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[09:00 Matrix · Alice #8001]" `T.isInfixOf`)
@@ -588,7 +575,7 @@ spec = do
     -- The current message wears the same [HH:MM <name> #<id>]: shape as
     -- every transcript line.  One documented format for "a message in
     -- this conversation"; the old [#id] <name>: was a second shape the
-    -- format guide never mentioned.  A GroupMessage carries no
+    -- format guide never mentioned. A dispatch message carries no
     -- timestamp, so the trigger's time is `now`.
     it "renders the current line like a transcript line, mention stripped" $ do
       let inp =
@@ -746,9 +733,7 @@ spec = do
     it "names the poker and shows no message line" $ do
       let pokeGm =
             (triggerMsg [])
-              { messageId = MessageId 0,
-                sender = Sender (UserId memberId) (Just "Alice") Nothing
-              }
+              { Dispatch.messageId = MessageId 0 }
           inp = baseInputs {origin = OriginPoke, triggerMessage = pokeGm}
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[current message — 戳一戳]" `T.isInfixOf`)

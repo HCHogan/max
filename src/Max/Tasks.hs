@@ -84,7 +84,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
-import OneBot.Event (GroupMessage)
+import Max.Dispatch (DispatchMessage)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
 -- | Short, human-typeable id like @t17@ — easy to !kill from the
@@ -100,7 +100,7 @@ newtype TaskId = TaskId {unTaskId :: Text}
 -- carries it, 'Max.Handler''s dispatch epilogue owns the decision.
 data Note = Note
   { noteLine :: !Text,
-    noteSource :: !(Maybe GroupMessage)
+    noteSource :: !(Maybe DispatchMessage)
   }
 
 -- | The handle the agent loop keeps once it has 'attachTask'ed.  Used

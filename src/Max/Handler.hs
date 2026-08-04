@@ -13,12 +13,12 @@ where
 import Control.Applicative ((<|>))
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (forM_, unless, void, when)
-import Data.Aeson (Result (..), Value, fromJSON, toJSON)
+import Data.Aeson (Value, toJSON)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
 import Data.List (find, partition, unsnoc)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust, listToMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -39,6 +39,8 @@ import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
 import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
 import Max.DB.Permissions (lookupGrant)
+import Max.Dispatch (DispatchMessage (..), dispatchMentionsSelf, dispatchText, stripDispatchVerb)
+import Max.Dispatch qualified as Dispatch
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (LLM)
@@ -53,6 +55,7 @@ import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.IR
+import Max.IR.Digest (digest)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
 import Max.Platform.QQ (ensureQQEndpoint, ensureQQEndpointFor, qqEnvelope, qqIngestBody, qqNoticeEnvelopes)
@@ -74,7 +77,6 @@ import Max.Platform.Store
     ingestEnvelope,
     enqueueReaction,
     isBotAuthoredCompatibilityMessage,
-    platformForLegacyMessage,
     recordInternalMessage,
   )
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId, NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId, ReactionAction (..))
@@ -102,8 +104,8 @@ import Max.Tasks
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import Max.Util (catchSync, trySync)
 import OneBot.Action (Action (..))
-import OneBot.Event (Event (..), GroupMessage (..), MessageNotice (..), PokeEvent (..), Sender (..))
-import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
+import OneBot.Event (Event (..), GroupMessage (..), MessageNotice (..), PokeEvent (..))
+import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 data IngestOutcome
@@ -203,29 +205,6 @@ stripVerb (SegText t : rest)
       SegText (T.stripStart (T.dropWhile (not . isSpace) body)) : rest
 stripVerb (s : rest) = s : stripVerb rest
 
--- | @repliesToBot@ = the message quotes (replies to) one of the
--- bot's own messages; the caller resolves that via DB lookup.  A
--- reply to the bot counts as addressing it, same as an @-mention.
--- In a private chat every message addresses the bot.
-classify :: Bool -> GroupMessage -> Trigger
-classify repliesToBot gm =
-  let raw = T.strip (renderPlainText gm.message)
-      stripped = T.strip (stripMentions gm.selfId raw)
-      addressed =
-        mentionsUser gm.selfId gm.message
-          || repliesToBot
-          || isPrivateChat gm.groupId
-   in case parseCommand stripped of
-        Right (Just _) -> TriggerCommand stripped
-        Left err -> TriggerCommandError err
-        Right Nothing
-          | not addressed -> TriggerNone
-          | otherwise -> case stripped of
-              "ping" -> TriggerPong
-              -- A bare @bot (or bare reply) still triggers — the
-              -- model sees the ambient/reply context and reacts.
-              _ -> TriggerLLM stripped
-
 -- | App-lived event loop. Persists every group message, enqueues image
 -- and forward jobs, dispatches @\@bot@ traffic. DB and dispatch failures
 -- are logged but never tear down the loop.
@@ -298,7 +277,10 @@ handleEvents q fetchSig mIntent = loop
               >>= \case
                 Ingested fresh ->
                   logInfo "QQ meta-event ingested" $
-                    object ["canonical_message_id" .= fresh.canonicalMessageId]
+                    object
+                      [ "canonical_message_id" .= fresh.canonicalMessageId,
+                        "content" .= digest fresh.canonicalBody
+                      ]
                 AlreadyIngested {} -> pure ()
                 DeliveryEcho {} -> pure ()
         EvPoke pk -> onPoke mIntent pk
@@ -342,7 +324,13 @@ persist source raw gm =
                   }
               envelope = (qqEnvelope endpoint received raw gm) {content = qqIngestBody contentSegments}
           ingestEnvelope options envelope >>= \case
-            Ingested fresh -> pure (IngestDurable fresh.canonicalMessageId)
+            Ingested fresh -> do
+              logInfo "QQ event ingested" $
+                object
+                  [ "canonical_message_id" .= fresh.canonicalMessageId,
+                    "content" .= digest fresh.canonicalBody
+                  ]
+              pure (IngestDurable fresh.canonicalMessageId)
             AlreadyIngested _ -> pure IngestDuplicate
             DeliveryEcho _ -> pure IngestDuplicate
       | otherwise = error ("non-QQ event entered the OneBot ingress queue: " <> T.unpack source)
@@ -422,11 +410,11 @@ runDispatchClaim workerId fetchSig mIntent claim =
         mentionNatives <-
           deliveryMentionNatives claim.originEndpointId
             [identity | NMention (MentionIdentity identity) _ <- claim.body.nodes]
-        let gm = dispatchMessage mentionNatives claim
-        enqueueImages fetchSig gm
-        enqueueForwards fetchSig gm
-        enqueueFiles fetchSig gm
-        onGroupMessage mIntent gm
+        let message = dispatchMessage mentionNatives claim
+        enqueueImages fetchSig message
+        enqueueForwards fetchSig message
+        enqueueFiles fetchSig message
+        onDispatchMessage mIntent message
     )
     >>= \case
       Right () -> void (completeDispatch workerId claim.canonicalMessageId DispatchCompleted)
@@ -443,45 +431,21 @@ runDispatchClaim workerId fetchSig mIntent claim =
           ]
       void (completeDispatch workerId claim.canonicalMessageId (DispatchRetry err retryAt))
 
--- | Temporary compatibility view for the unchanged command/agent runtime.
--- The durable claim itself is canonical and this projection never reads the
--- legacy segments column or invents platform labels inside user identity.
-dispatchMessage :: Map.Map PrincipalIdentityId NativeUserId -> DispatchClaim -> GroupMessage
+-- | Runtime view of the canonical claim. No transport event or legacy
+-- segment projection exists beyond the QQ ingress boundary.
+dispatchMessage :: Map.Map PrincipalIdentityId NativeUserId -> DispatchClaim -> DispatchMessage
 dispatchMessage mentionNatives claim =
-  GroupMessage
+  DispatchMessage
     { selfId = UserId claim.compatibilitySelfId,
       groupId = GroupId claim.compatibilityConversationId,
       userId = UserId claim.compatibilityUserId,
       messageId = MessageId claim.compatibilityMessageId,
-      message = reply <> concatMap project claim.body.nodes,
-      rawMessage = plainText claim.body,
-      sender =
-        Sender
-          (UserId claim.compatibilityUserId)
-          claim.senderDisplayName
-          Nothing
+      body = claim.body,
+      replyToMessageId = MessageId <$> claim.replyToCompatibilityMessageId,
+      senderDisplayName = claim.senderDisplayName,
+      sourcePlatform = claim.sourcePlatform,
+      mentionNatives
     }
-  where
-    reply = [SegReply (MessageId target) | Just target <- [claim.replyToCompatibilityMessageId]]
-    project node = case node of
-      NText text -> [SegText text]
-      NMention MentionAll display -> [SegText ("@" <> display)]
-      NMention (MentionIdentity identity) display -> case Map.lookup identity mentionNatives of
-        Just (NativeUserId native) -> case reads (T.unpack native) of
-          [(user, "")] -> [SegAt (UserId user)]
-          _ -> [SegText ("@" <> display)]
-        Nothing -> [SegText ("@" <> display)]
-      NEmote emote -> fromRaw emote.raw [SegText (fallbackText node)]
-      NMedia _ meta -> fromRaw meta.raw [SegText (fallbackText node)]
-      NCard card -> fromRaw card.raw [SegText (fallbackText node)]
-      NForward forward -> [SegOther "forward" (object ["id" .= forward.nativeId])]
-      NUnsupported _ -> [SegText (fallbackText node)]
-    fromRaw raw fallback = case raw >>= decodeSegment of
-      Just segment -> [segment]
-      Nothing -> fallback
-    decodeSegment value = case fromJSON value of
-      Success segment -> Just segment
-      Error _ -> Nothing
 
 dispatchBatchSize :: Int
 dispatchBatchSize = 32
@@ -492,7 +456,7 @@ dispatchLeaseSeconds = 120
 dispatchRetrySeconds :: Int -> NominalDiffTime
 dispatchRetrySeconds attempts = fromIntegral (min (300 :: Int) (2 ^ min 8 (max 0 attempts)))
 
-onGroupMessage ::
+onDispatchMessage ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
@@ -506,29 +470,29 @@ onGroupMessage ::
     IOE :> es
   ) =>
   Maybe IntentState ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es ()
-onGroupMessage mIntent gm = do
+onDispatchMessage mIntent gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
   logInfo "group message" $
     object
       [ "group_id" .= gidRaw,
         "user_id" .= fromRaw,
-        "text" .= renderPlainText gm.message
+        "content" .= digest gm.body
       ]
   -- Cheap pure pass first; only when it says "not addressed" AND the
   -- message quotes something do we pay a PK lookup to see whether
   -- the quoted message was ours (reply-to-bot counts as addressing).
-  trig <- case classify False gm of
+  trig <- case classifyDispatch False gm of
     TriggerNone
-      | Just rid <- listToMaybe [m | SegReply (MessageId m) <- gm.message] -> do
+      | Just (MessageId rid) <- gm.replyToMessageId -> do
           mQuoted <- fetchMessageInScope (conversationScopeFor gm.groupId) rid
           let GroupId groupRaw = gm.groupId
           canonicalBot <- isBotAuthoredCompatibilityMessage groupRaw rid
           let UserId selfRaw = gm.selfId
           pure $ case mQuoted of
-            Just quoted | quoted.userId == selfRaw || canonicalBot -> classify True gm
+            Just quoted | quoted.userId == selfRaw || canonicalBot -> classifyDispatch True gm
             _ -> TriggerNone
     t -> pure t
   -- Any addressed trigger stamps the gate's followup hot window.  The
@@ -547,6 +511,23 @@ onGroupMessage mIntent gm = do
     TriggerCommand body -> noteActivity >> dispatchCommand mIntent gm body
     TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
     TriggerLLM _ -> noteActivity >> dispatchLLM mIntent OriginDirect MayAbsorb [] gm
+
+classifyDispatch :: Bool -> DispatchMessage -> Trigger
+classifyDispatch repliesToBot gm =
+  let raw = T.strip (dispatchText gm)
+      stripped = T.strip (stripMentions gm.selfId raw)
+      addressed =
+        dispatchMentionsSelf gm
+          || repliesToBot
+          || isPrivateChat gm.groupId
+   in case parseCommand stripped of
+        Right (Just _) -> TriggerCommand stripped
+        Left err -> TriggerCommandError err
+        Right Nothing
+          | not addressed -> TriggerNone
+          | otherwise -> case stripped of
+              "ping" -> TriggerPong
+              _ -> TriggerLLM stripped
 
 -- | A 戳一戳 aimed at the bot: a contentless direct wake, the soft
 -- version of an @.  If the group already has a running turn the poke
@@ -604,21 +585,23 @@ onPoke mIntent pk
             object ["group_id" .= gidRaw, "task" .= into]
         Nothing -> dispatchLLM mIntent OriginPoke NeverAbsorb [] (pokeTrigger pk mName)
 
--- | Synthesize the trigger 'GroupMessage' for a poke dispatch.  There
+-- | Synthesize the platform-neutral trigger for a poke dispatch. There
 -- is no real message: id 0 is the "no trigger message" sentinel —
 -- nothing quotes or reacts to it, and 'Max.Tasks.beginDispatch' reads
 -- it as no trigger rather than as an id every poke shares — and the
 -- segment list is empty ('OriginPoke' rendering never shows it).
-pokeTrigger :: PokeEvent -> Maybe T.Text -> GroupMessage
+pokeTrigger :: PokeEvent -> Maybe T.Text -> DispatchMessage
 pokeTrigger pk mName =
-  GroupMessage
+  DispatchMessage
     { selfId = pk.pkSelfId,
       groupId = pk.pkGroupId,
       userId = pk.pkUserId,
       messageId = MessageId 0,
-      message = [],
-      rawMessage = "",
-      sender = Sender pk.pkUserId mName Nothing
+      body = Body [],
+      replyToMessageId = Nothing,
+      senderDisplayName = mName,
+      sourcePlatform = PlatformQQ,
+      mentionNatives = Map.empty
     }
 
 --------------------------------------------------------------------------------
@@ -638,7 +621,7 @@ dispatchCommand ::
     IOE :> es
   ) =>
   Maybe IntentState ->
-  GroupMessage ->
+  DispatchMessage ->
   T.Text ->
   Eff es ()
 dispatchCommand mIntent gm body = localDomain "cmd" $ do
@@ -647,8 +630,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
     Right Nothing -> pure () -- shouldn't reach here; classify already filtered
     Right (Just cmd) -> do
       env :: BotEnv <- ask
-      let MessageId sourceMessageId = gm.messageId
-      sourcePlatform <- platformForLegacyMessage sourceMessageId
+      let sourcePlatform = gm.sourcePlatform
       targetGid <- resolveAdminTarget env gm cmd
       effTier <- effectiveTier env targetGid gm
       allowed <- checkCmdPermission targetGid gm.userId effTier cmd
@@ -664,12 +646,12 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               queueQQReaction gm.groupId gm.messageId deniedFaceId True
         else dispatchAllowed env targetGid effTier sourcePlatform cmd
   where
-    isForeignSource = maybe False (/= "qq")
+    isForeignSource = (/= PlatformQQ)
 
     dispatchAllowed env targetGid effTier sourcePlatform cmd = do
       t <- loadSession env.beSessions env.beDefaultModel targetGid
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
-      let replyTarget = listToMaybe [m | SegReply (MessageId m) <- gm.message]
+      let replyTarget = (\(MessageId target) -> target) <$> gm.replyToMessageId
       result <- CmdDispatch.execute t targetGid gm.userId effTier replyTarget cmd
       case result of
         -- In a group, textual command output (queries, error texts)
@@ -697,7 +679,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
           -- target out of the segments), and attached images keep
           -- their markers.  An earlier version rebuilt the segment
           -- list from the parsed body and silently dropped both.
-          dispatchLLM mIntent OriginDirect NeverAbsorb [] (gm {message = stripVerb gm.message})
+          dispatchLLM mIntent OriginDirect NeverAbsorb [] (stripDispatchVerb gm)
         -- !feedback: aim the note at the turn whose trigger the user
         -- replied to, and at the newest running turn otherwise — a
         -- reply to something that isn't a live turn (mis-click, a turn
@@ -712,7 +694,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
         -- so that alone keeps the failure face.
         FeedbackNote noteBody -> do
           noteAt <- liftIO getCurrentTime
-          let line = renderCurrentLine env.beTimeZone noteAt (gm {message = [SegText noteBody]})
+          let line = renderCurrentLine env.beTimeZone noteAt (gm {Dispatch.body = Body [NText noteBody]})
               -- The !feedback message records as chat (verb stripped),
               -- so it is a visible question in the transcript with the
               -- answer threaded at someone else's message.  Mark it
@@ -733,7 +715,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               -- the group task that was being steered.
               note =
                 Note line $
-                  if redirected then Nothing else Just (gm {message = stripVerb gm.message})
+                  if redirected then Nothing else Just (stripDispatchVerb gm)
           aimed <- case replyTarget of
             Just tgt | not redirected -> liftIO (pushToTrigger env.beTasks targetGid Nothing absorb tgt note)
             _ -> pure Nothing
@@ -760,7 +742,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               | otherwise -> do
                   logInfo "feedback: nothing running, answering as a turn" $
                     object ["len" .= T.length noteBody]
-                  dispatchLLM mIntent OriginDirect MayAbsorb [] (gm {message = stripVerb gm.message})
+                  dispatchLLM mIntent OriginDirect MayAbsorb [] (stripDispatchVerb gm)
 
     -- Recorded against the DM's pseudo-group rather than the group the
     -- command came from: that is the conversation it actually appeared
@@ -793,12 +775,12 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
 -- and an answer that wasn't would read as a question nobody answered.
 sendPong ::
   (Outbound :> es, Log :> es) =>
-  GroupMessage ->
+  DispatchMessage ->
   Eff es ()
 sendPong gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
-      display = fromMaybe (T.pack (show fromRaw)) (gm.sender.card <|> gm.sender.nickname)
+      display = fromMaybe (T.pack (show fromRaw)) gm.senderDisplayName
       mention = [NMention (NativeUserId (T.pack (show fromRaw))) display | not (isPrivateChat gm.groupId)]
   sendAndRecord KindChat DeliverConversation gm.groupId (Body (mention <> [NText " pong"])) (Just gm.messageId)
   logInfo "replied pong" $ object ["to" .= fromRaw, "group_id" .= gidRaw]
@@ -826,7 +808,7 @@ dispatchProactive ::
     IOE :> es
   ) =>
   Maybe IntentState ->
-  [GroupMessage] ->
+  [DispatchMessage] ->
   Eff es ()
 dispatchProactive mIntent batch = case unsnoc batch of
   Nothing -> pure ()
@@ -863,8 +845,8 @@ dispatchLLM ::
   -- steering context that must ride along in the note if this turn is
   -- absorbed.  Empty for every other origin: a direct trigger or poke
   -- is one message.
-  [GroupMessage] ->
-  GroupMessage ->
+  [DispatchMessage] ->
+  DispatchMessage ->
   Eff es ()
 dispatchLLM mIntent origin absorbable companions gm = do
   env :: BotEnv <- ask
@@ -962,7 +944,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 object ["count" .= length dead]
             for_ [src | n <- revivable, Just src <- [n.noteSource]] $ \src -> do
               let orig
-                    | isPrivateChat src.groupId || mentionsUser src.selfId src.message = OriginDirect
+                    | isPrivateChat src.groupId || dispatchMentionsSelf src = OriginDirect
                     | otherwise = OriginProactive
                   MessageId srcMid = src.messageId
               logInfo "dispatch: unserved note re-dispatched" $
@@ -1066,7 +1048,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                   -- dispatch epilogue re-dispatches it as the turn it
                   -- would have been.
                   let note = Note newLine (Just gm)
-                  aimed <- case listToMaybe [m | SegReply (MessageId m) <- gm.message] of
+                  aimed <- case (\(MessageId target) -> target) <$> gm.replyToMessageId of
                     Just tgt ->
                       liftIO (pushToTrigger env.beTasks gm.groupId (Just tid) (Just midRaw) tgt note)
                     Nothing -> pure Nothing
@@ -1257,7 +1239,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
 -- anyway.
 sendTarget ::
   AdvertisedCaps ->
-  GroupMessage ->
+  DispatchMessage ->
   Maybe (Set UserId) ->
   [(T.Text, UserId)] ->
   Bool ->
@@ -1311,7 +1293,7 @@ sendAndRecord kind deliveryScope gid body replyTo =
 -- doesn't read back the UI used to operate it.
 replyText ::
   (Outbound :> es) =>
-  GroupMessage ->
+  DispatchMessage ->
   T.Text ->
   Eff es ()
 replyText gm body =
@@ -1369,7 +1351,7 @@ stripMentions (UserId u) t =
 resolveAdminTarget ::
   (PlatformApi :> es, Log :> es, IOE :> es) =>
   BotEnv ->
-  GroupMessage ->
+  DispatchMessage ->
   Command ->
   Eff es GroupId
 resolveAdminTarget env gm cmd
@@ -1401,7 +1383,7 @@ resolveAdminTarget env gm cmd
 -- list first, then the NapCat role there.  Resolved once per command
 -- and threaded into both the permission check and
 -- 'CmdDispatch.execute' (which needs it for !grant's constraints).
-effectiveTier :: (PlatformApi :> es, Log :> es) => BotEnv -> GroupId -> GroupMessage -> Eff es PermTier
+effectiveTier :: (PlatformApi :> es, Log :> es) => BotEnv -> GroupId -> DispatchMessage -> Eff es PermTier
 effectiveTier env targetGid gm
   | let UserId uid = gm.userId, uid `elem` env.beOwners = pure TierOwner
   | otherwise = actorTier targetGid gm.userId

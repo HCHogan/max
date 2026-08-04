@@ -40,7 +40,6 @@ module Max.Prompt
   )
 where
 
-import Control.Applicative ((<|>))
 import Control.Concurrent (threadDelay)
 import Control.Monad (when)
 import Data.ByteString qualified as BS
@@ -115,11 +114,13 @@ import Max.DB.History
     fetchMessagesByIdsInScope,
     fetchNewestPromptPageBefore,
   )
+import Max.Dispatch (DispatchMessage (..), dispatchText)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), SourceRange (..), episodeHandleText, listActiveCompartments)
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
+import Max.IR (Body (..), Node (..), Phase (Canonical))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
 import Max.Platform.Types (AdvertisedCaps (..), qqAdvertisedCaps)
@@ -127,8 +128,6 @@ import Max.Prompt.System (systemPrompt)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
 import Max.Util (trySync)
-import OneBot.Event (GroupMessage (..), Sender (..))
-import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 -- Group-chat attention gets noisier faster than model windows grow.  These
@@ -178,7 +177,7 @@ buildContext ::
   [(Text, Text)] -> -- skill index for this group (see 'PromptInputs.skills')
   Set Int64 -> -- triggers another turn is already answering (see 'PromptInputs.inFlight')
   Session ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es [ChatMessage]
 buildContext = buildContextWithLimits defaultContextLimits
 
@@ -195,7 +194,7 @@ buildContextWithLimits ::
   [(Text, Text)] ->
   Set Int64 ->
   Session ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es [ChatMessage]
 buildContextWithLimits limits = buildContextWithReadMode limits TieredContext
 
@@ -212,7 +211,7 @@ buildContextWithReadMode ::
   [(Text, Text)] ->
   Set Int64 ->
   Session ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es [ChatMessage]
 buildContextWithReadMode limits readMode defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   buildContextWithReadModeForOutput
@@ -248,7 +247,7 @@ buildContextWithReadModeForOutput ::
   [(Text, Text)] ->
   Set Int64 ->
   Session ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es [ChatMessage]
 buildContextWithReadModeForOutput limits readMode outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let historyWatermarks = historyTokenWatermarks limits multimodal'
@@ -316,7 +315,7 @@ collectContext ::
   [(Text, Text)] ->
   Set Int64 ->
   Session ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es ContextSnapshot
 collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing qqAdvertisedCaps
 
@@ -334,7 +333,7 @@ collectContextPreview ::
   [(Text, Text)] ->
   Set Int64 ->
   Session ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es ContextSnapshot
 collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing qqAdvertisedCaps
 
@@ -358,7 +357,7 @@ collectContextWithWatermarks ::
   [(Text, Text)] ->
   Set Int64 ->
   Session ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es ContextSnapshot
 collectContextWithWatermarks mutationMode readMode materializationWatermarks outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
@@ -451,7 +450,7 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks out
   -- memory_list / context_search.
   groupMems <- listRecentMemories (groupMemoryNamespace scope) memoryInjectCap
   userMems <- listRecentMemories (userMemoryNamespace scope senderId) memoryInjectCap
-  replyCtx0 <- case extractReply gm.message of
+  replyCtx0 <- case (\(MessageId target) -> target) <$> gm.replyToMessageId of
     Nothing -> pure Nothing
     Just rid -> do
       mHist <- fetchMessageInScope scope rid
@@ -509,7 +508,7 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks out
   -- expand inline under the current message like the quoted-reply
   -- path does.
   triggerKids <-
-    if any isForwardSeg gm.message
+    if any isForwardNode gm.body.nodes
       then do
         waitForTriggerForward mid
         -- Same enrichment as every other rendered line — in
@@ -525,7 +524,7 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks out
         -- the model actually sees them.  (Older context images are
         -- either long since fetched or permanently failed; no point
         -- waiting on those.)
-        let expected = downloadableImageCount gm.message
+        let expected = downloadableImageCount gm.body
         when (expected > 0) $ waitForTriggerImages mid expected
         -- Budget priority: the reply target is what the user is
         -- pointing at, then pins (explicit user signals).  Ambient
@@ -547,7 +546,7 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks out
   videos' <-
     if multimodal'
       then do
-        let expectedVids = downloadableVideoCount gm.message
+        let expectedVids = downloadableVideoCount gm.body
         when (expectedVids > 0) (waitForTriggerVideos mid expectedVids)
         let cands =
               maybe
@@ -618,9 +617,9 @@ waitForTriggerImages mid expected = go 0
               go (elapsed + stepMs)
 
 -- | Is this segment a 转发聊天记录 container?
-isForwardSeg :: Segment -> Bool
-isForwardSeg (SegOther "forward" _) = True
-isForwardSeg _ = False
+isForwardNode :: Node 'Canonical -> Bool
+isForwardNode NForward {} = True
+isForwardNode _ = False
 
 -- | At most this many whole videos attached per prompt (trigger +
 -- quoted) — they're far heavier than images.
@@ -750,7 +749,7 @@ contextRoster pi' =
       UserId senderId = pi'.triggerMessage.userId
    in dedupeRoster $
         (selfId', "Max（你自己）")
-          : (senderId, senderDisplayName pi'.triggerMessage)
+          : (senderId, triggerSenderName pi'.triggerMessage)
           : [ (h.userId, displayName selfId' h)
             | h <-
                 pi'.transcript
@@ -1055,7 +1054,7 @@ renderContext :: PromptInputs -> [ChatMessage]
 renderContext pi' =
   let UserId selfId' = pi'.triggerMessage.selfId
       GroupId gidRaw = pi'.triggerMessage.groupId
-      senderName = senderDisplayName pi'.triggerMessage
+      senderName = triggerSenderName pi'.triggerMessage
       memBlock =
         renderMemories
           pi'.tz
@@ -1194,7 +1193,7 @@ contextCostModel =
           ( renderMemories
               inputs.tz
               (isPrivateChat inputs.triggerMessage.groupId)
-              (senderDisplayName inputs.triggerMessage)
+              (triggerSenderName inputs.triggerMessage)
               inputs.groupMemories
               inputs.userMemories
           ),
@@ -1261,7 +1260,7 @@ contextTrace budget inputs messages drops withinBudget =
       "current time, conversation, model, and roster",
     ContextTrace
       "current_message"
-      (estimateTextTokens (renderPlainText inputs.triggerMessage.message))
+      (estimateTextTokens (dispatchText inputs.triggerMessage))
       ContextIncluded
       "protected current trigger",
     ContextTrace
@@ -1624,7 +1623,7 @@ renderUser ::
   Maybe (HistoryItem, [FileRecord], [HistoryItem]) ->
   [HistoryItem] -> -- pinned items, in user pin order
   [HistoryItem] -> -- trigger's own forward children (trigger IS a 转发)
-  GroupMessage ->
+  DispatchMessage ->
   Text
 renderUser tz' now' selfId' origin' compartments' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
   T.intercalate "\n" $
@@ -1672,7 +1671,7 @@ renderUser tz' now' selfId' origin' compartments' mTranscript envText mMemBlock 
                  ]
           OriginPoke ->
             [ "[current message — 戳一戳]",
-              senderDisplayName gm <> " 戳了戳你。没有文字，这是柔和版的 @，意思通常是\"看一眼上面\"。",
+              triggerSenderName gm <> " 戳了戳你。没有文字，这是柔和版的 @，意思通常是\"看一眼上面\"。",
               "",
               "先翻上下文，重点看 TA 自己最近的发言：有可能是刚才有个问题\
               \或话题没 @ 到你（主语不明确没触发你），戳你就是叫你回应它——\
@@ -1784,16 +1783,16 @@ renderReplyFiles xs =
 -- one shape, and a second shape for the current line was a small lie
 -- the model had to work around.
 --
--- Takes the clock because a 'GroupMessage' carries no timestamp: it is
+-- Takes the clock because a dispatch message carries no timestamp: it is
 -- the message being handled right now, so "now" is its time.
-renderCurrentLine :: TimeZone -> UTCTime -> GroupMessage -> Text
+renderCurrentLine :: TimeZone -> UTCTime -> DispatchMessage -> Text
 renderCurrentLine tz' now' gm =
-  let txt = stripBotMention gm.selfId (renderPlainText gm.message)
+  let txt = stripBotMention gm.selfId (dispatchText gm)
       MessageId mid = gm.messageId
    in "["
         <> fmtHM tz' now'
         <> " "
-        <> senderDisplayName gm
+        <> triggerSenderName gm
         <> " #"
         <> T.pack (show mid)
         <> "]: "
@@ -1818,17 +1817,13 @@ displayName selfId' h
   | otherwise = fromMaybe (T.pack (show h.userId)) (bestName h)
 
 -- | Same preference order for the live trigger message's sender.
-senderDisplayName :: GroupMessage -> Text
-senderDisplayName gm =
+triggerSenderName :: DispatchMessage -> Text
+triggerSenderName gm =
   let UserId uid = gm.userId
-      Sender _ nick card = gm.sender
-   in fromMaybe (T.pack (show uid)) (nonBlank card <|> nonBlank nick)
+   in fromMaybe (T.pack (show uid)) (nonBlank gm.senderDisplayName)
   where
     nonBlank (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
     nonBlank _ = Nothing
 
 oneLine :: Text -> Text
 oneLine = T.replace "\n" " ⏎ "
-
-extractReply :: [Segment] -> Maybe Int64
-extractReply segs = listToMaybe [m | SegReply (MessageId m) <- segs]

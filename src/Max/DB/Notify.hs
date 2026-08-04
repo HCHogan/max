@@ -8,13 +8,16 @@
 module Max.DB.Notify
   ( WorkChannel (..),
     claimOrWait,
+    waitForTimeline,
   )
 where
 
 import Control.Exception (bracket_)
 import Control.Monad (void)
+import Data.ByteString.Char8 qualified as BSC
+import Data.Int (Int64)
 import Database.PostgreSQL.Simple qualified as PostgreSQL
-import Database.PostgreSQL.Simple.Notification (getNotification)
+import Database.PostgreSQL.Simple.Notification (Notification (..), getNotification)
 import Database.PostgreSQL.Simple.Types (Query)
 import Effectful
 import Effectful.PostgreSQL.Connection (WithConnection, withConnection)
@@ -56,3 +59,39 @@ unlistenQuery = \case
 
 notificationFallbackMicros :: Int
 notificationFallbackMicros = 30 * 1_000_000
+
+-- | Race-free live-tail wait for the admin ledger. The caller supplies the
+-- durable sequence recheck: subscribe first, recheck second, then wait only
+-- when the requested conversation is still caught up. Notifications for
+-- other conversations are ignored inside one bounded request lifetime.
+waitForTimeline ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Eff es Bool ->
+  Eff es Bool
+waitForTimeline conversation advanced =
+  withConnection $ \listener ->
+    withSeqEffToIO $ \run ->
+      liftIO $
+        bracket_
+          (void (PostgreSQL.execute_ listener "LISTEN max_timeline_work"))
+          (void (PostgreSQL.execute_ listener "UNLISTEN max_timeline_work"))
+          ( do
+              ready <- run advanced
+              if ready
+                then pure True
+                else do
+                  let expected = BSC.pack (show conversation)
+                      waitRelevant = do
+                        notification <- getNotification listener
+                        if notificationData notification == expected
+                          then pure ()
+                          else waitRelevant
+                  woke <- timeout timelineWaitMicros waitRelevant
+                  case woke of
+                    Nothing -> pure False
+                    Just () -> run advanced
+          )
+
+timelineWaitMicros :: Int
+timelineWaitMicros = 25 * 1_000_000

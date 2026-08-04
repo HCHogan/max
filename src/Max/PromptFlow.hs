@@ -18,6 +18,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.List (sortOn)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -39,6 +40,7 @@ import Max.Context.Types (ContextCandidates (..))
 import Max.DB.Calls (redactDataUrls)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..), LedgerItem (LedgerItem), MessageCursor (..))
+import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Agent (assembleToolRound, toolResultMessage)
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM
@@ -53,15 +55,14 @@ import Max.EpisodeStore (EpisodeExpansion (..), EpisodeHandle, SourceRange (..),
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
-import Max.Platform.Types (qqAdvertisedCaps)
+import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), Node (..))
+import Max.Platform.Types (NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId (..), qqAdvertisedCaps)
 import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
 import Max.Session (Session (..))
 import Max.Tools (contextSearchSummary, episodeExpansionSummary)
 import Max.Tools.Images (viewImageSpec)
 import Max.Tools.Video (viewVideoSpec)
-import OneBot.Event (GroupMessage (..), Sender (..))
-import OneBot.Segment (ImageSegInfo (..), Segment (..), VideoSegInfo (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
 renderPromptFlow :: Text
@@ -576,23 +577,36 @@ fixtureSession =
       effortOverride = Nothing
     }
 
-fixtureTrigger :: GroupMessage
+fixtureTrigger :: DispatchMessage
 fixtureTrigger =
-  GroupMessage
+  DispatchMessage
     { selfId = UserId 10086,
       groupId = GroupId 114514191,
       userId = UserId 223344556,
       messageId = MessageId 7413,
-      message =
-        [ SegReply (MessageId 7398),
-          SegAt (UserId 10086),
-          SegText "看看这个报错是啥问题，视频里是复位后的现象 ",
-          SegImage (ImageSegInfo Nothing (Just 0) Nothing),
-          SegText " ",
-          SegVideo (VideoSegInfo "fixture.mp4" Nothing Nothing)
-        ],
-      rawMessage = "",
-      sender = Sender (UserId 223344556) (Just "阿飞") Nothing
+      body =
+        Body
+          [ NMention (MentionIdentity (PrincipalIdentityId 1)) "10086",
+            NText "看看这个报错是啥问题，视频里是复位后的现象 ",
+            NMedia Nothing (fixtureMedia MImage),
+            NText " ",
+            NMedia Nothing (fixtureMedia MVideo)
+          ],
+      replyToMessageId = Just (MessageId 7398),
+      senderDisplayName = Just "阿飞",
+      sourcePlatform = PlatformQQ,
+      mentionNatives = Map.singleton (PrincipalIdentityId 1) (NativeUserId "10086")
+    }
+
+fixtureMedia :: MediaKind -> MediaMeta
+fixtureMedia kind =
+  MediaMeta
+    { kind,
+      mime = Nothing,
+      sizeBytes = Nothing,
+      name = Nothing,
+      description = Nothing,
+      raw = Nothing
     }
 
 fixtureTranscript :: [HistoryItem]

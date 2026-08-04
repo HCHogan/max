@@ -13,6 +13,8 @@ module Max.Matrix
     parseMatrixSyncPage,
     matrixSelfMentionIsDirect,
     matrixMediaSizeDrift,
+    matrixTextPayload,
+    matrixMediaPayload,
     matrixEditPayload,
     matrixReactionPayload,
     matrixCapabilities,
@@ -54,6 +56,7 @@ import Max.HttpRuntime
     runBuffered,
   )
 import Max.IR
+import Max.IR.Digest (digest)
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
 import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryOperation (..), DeliveryTransport (..), loweredText)
 import Max.Platform.Envelope (InboundEnvelope (..))
@@ -221,7 +224,11 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
       case result of
         Ingested fresh ->
           logInfo "matrix event ingested" $
-            object ["event_id" .= event.eventId, "canonical_message_id" .= fresh.canonicalMessageId]
+            object
+              [ "event_id" .= event.eventId,
+                "canonical_message_id" .= fresh.canonicalMessageId,
+                "content" .= digest fresh.canonicalBody
+              ]
         AlreadyIngested {} -> pure ()
         DeliveryEcho {} -> pure ()
 
@@ -293,7 +300,7 @@ matrixDeliveryTransport runtime cfg =
         go chunkIndex native (chunk : rest) =
           matrixChunkPayload runtime cfg (if chunkIndex == 0 then lowered.replyNative else Nothing) chunk >>= \case
             Left (MatrixContractFailure err) -> pure (AttemptPermanentlyFailed err)
-            Left (MatrixMediaFailure err) -> pure (AttemptMediaFallback err)
+            Left (MatrixMediaFailure err) -> pure (AttemptRetryable err)
             Right payload ->
               sendMatrixDelivery runtime cfg claim chunkIndex payload >>= \case
                 Left err -> pure (AttemptRetryable err)
@@ -303,7 +310,7 @@ matrixDeliveryTransport runtime cfg =
       [chunk] ->
         matrixChunkPayload runtime cfg Nothing chunk >>= \case
           Left (MatrixContractFailure err) -> pure (AttemptPermanentlyFailed err)
-          Left (MatrixMediaFailure err) -> pure (AttemptMediaFallback err)
+          Left (MatrixMediaFailure err) -> pure (AttemptRetryable err)
           Right content ->
             sendMatrixEvent runtime cfg claim "edit" "m.room.message" (matrixEditPayload target content) >>= \case
               Left err -> pure (AttemptRetryable err)

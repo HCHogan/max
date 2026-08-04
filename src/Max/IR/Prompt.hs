@@ -21,6 +21,7 @@ module Max.IR.Prompt
     parseModelChunk,
     emitModelChunk,
     promptText,
+    promptCanonicalText,
   )
 where
 
@@ -29,12 +30,14 @@ import Data.Aeson.Key qualified as Key
 import Data.Aeson.Types (parseMaybe)
 import Data.Char (isDigit)
 import Data.Int (Int64)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Read qualified as TR
 import Max.IR
-import Max.Platform.Types (NativeUserId (..), Platform (..))
+import Max.Platform.Types (NativeUserId (..), Platform (..), PrincipalIdentityId)
 import Max.Reply (ReplyPiece (..), parseReplyTokens)
 import OneBot.Segment (Segment (..), renderPlainText, rescueNameMentions, segmentMentions)
 import OneBot.Types (UserId (..))
@@ -151,16 +154,40 @@ nativeNumericId (NativeUserId t) = case TR.signed TR.decimal t of
 -- from segment-derived to IR-derived rendering.  QQ ingest parity is
 -- pinned by golden tests against 'renderPlainText'.
 promptText :: Platform -> Body 'Ingest -> Text
-promptText originPlatform body = T.concat (map node body.nodes)
+promptText originPlatform = renderPromptBody (ingestMention originPlatform)
+
+-- | Render stored IR directly for the model/runtime consumer. Mention
+-- identities are resolved for the origin endpoint by the dispatch claim;
+-- this deliberately shares the ingest projection codec.
+promptCanonicalText :: Platform -> Map PrincipalIdentityId NativeUserId -> Body 'Canonical -> Text
+promptCanonicalText originPlatform identities =
+  renderPromptBody (canonicalMention originPlatform identities)
+
+ingestMention :: Platform -> NativeUserId -> Text -> Text
+ingestMention originPlatform (NativeUserId native) display
+  | originPlatform == PlatformQQ,
+    not (T.null native),
+    T.all isDigit native =
+      "[@#" <> native <> "] "
+  | otherwise = "@" <> display
+
+canonicalMention :: Platform -> Map PrincipalIdentityId NativeUserId -> MentionTarget -> Text -> Text
+canonicalMention originPlatform identities target display = case target of
+  MentionAll -> "@" <> display
+  MentionIdentity identity -> case Map.lookup identity identities of
+    Just native -> ingestMention originPlatform native display
+    Nothing -> "@" <> display
+
+renderPromptBody ::
+  (XUnsupported p ~ Unsupported) =>
+  (XMention p -> Text -> Text) ->
+  Body p ->
+  Text
+renderPromptBody mentionToken body = T.concat (map node body.nodes)
   where
     node = \case
       NText t -> t
-      NMention (NativeUserId native) display
-        | originPlatform == PlatformQQ,
-          not (T.null native),
-          T.all isDigit native ->
-            "[@#" <> native <> "] "
-        | otherwise -> "@" <> display
+      NMention target display -> mentionToken target display
       NEmote e
         | Just sid <- rawId "sticker_id" e.raw ->
             "[sticker#" <> T.pack (show sid) <> maybe "" (": " <>) e.name <> "]"

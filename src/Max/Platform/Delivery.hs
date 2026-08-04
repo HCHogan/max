@@ -38,6 +38,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.DB.Notify (WorkChannel (DeliveryWork), claimOrWait)
 import Max.IR
+import Max.IR.Digest (digest)
 import Max.IR.Lower
 import Max.Platform (PlatformBackend (..))
 import Max.Platform.Store
@@ -68,10 +69,6 @@ data DeliveryAttempt
   | AttemptOutcomeUnknown !Text
   | AttemptPermanentlyFailed !Text
   | AttemptSuppressed !Text
-  | -- | A native media transfer failed before a non-idempotent message send.
-    -- The worker re-runs the shared lowerer with media forced to text; the
-    -- adapter itself never invents a fallback.
-    AttemptMediaFallback !Text
   deriving stock (Eq, Show)
 
 data DeliveryOperation
@@ -228,17 +225,16 @@ deliveryWorker workerId transports = localDomain "delivery" loop
         Right _
           | null lowered.chunks -> pure (DeliverySuppressedAs "lowering produced no output", lowered.notes)
           | otherwise -> do
-              firstAttempt <- runTransport transport claim (operation lowered)
-              case firstAttempt of
-                AttemptMediaFallback err -> do
-                  let relowered = lowerWith (mediaTextCaps claim.capabilities) []
-                      fallbackNote = LowerNote "media_emit" NoteFolded (Just err)
-                  secondAttempt <- runTransport transport claim (operation relowered)
-                  let completion' = case secondAttempt of
-                        AttemptMediaFallback err' -> DeliveryPermanentlyFailed ("media fallback loop: " <> err')
-                        other -> toCompletion claim.attemptCount now other
-                  pure (completion', relowered.notes <> [fallbackNote])
-                other -> pure (toCompletion claim.attemptCount now other, lowered.notes)
+              logInfo "delivery lowered" $
+                object
+                  [ "delivery_id" .= claim.deliveryId,
+                    "canonical_message_id" .= claim.canonicalMessageId,
+                    "platform" .= renderPlatform claim.platform,
+                    "chunks" .= map (digest . Body) lowered.chunks,
+                    "lower_notes" .= toJSON lowered.notes
+                  ]
+              attempt <- runTransport transport claim (operation lowered)
+              pure (toCompletion claim.attemptCount now attempt, lowered.notes)
 
     runTransport transport claim operation =
       liftIO (trySyncIO (transport.deliver claim operation)) >>= \case
@@ -263,21 +259,6 @@ toCompletion attempts now = \case
   AttemptOutcomeUnknown err -> DeliveryUnknown err now
   AttemptPermanentlyFailed err -> DeliveryPermanentlyFailed err
   AttemptSuppressed reason -> DeliverySuppressedAs reason
-  AttemptMediaFallback err -> DeliveryPermanentlyFailed ("unhandled media fallback: " <> err)
-
-mediaTextCaps :: OutboundCaps -> OutboundCaps
-mediaTextCaps caps =
-  caps
-    { image = textUnlessDrop caps.image,
-      sticker = textUnlessDrop caps.sticker,
-      video = textUnlessDrop caps.video,
-      audio = textUnlessDrop caps.audio,
-      file = textUnlessDrop caps.file,
-      maxNativeMedia = 0
-    }
-  where
-    textUnlessDrop TierDrop = TierDrop
-    textUnlessDrop _ = TierText
 
 completionName :: DeliveryCompletion -> Text
 completionName = \case

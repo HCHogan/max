@@ -100,6 +100,100 @@
       <p class="empty" x-show="!groups.length">还没有群。bot 在群里说过话之后才会有记录。</p>
     </section>
 
+    <!-- ── canonical hydrated timeline ─────────────────────────── -->
+    <section x-show="tab === 'timeline'">
+      <form class="row" @submit.prevent="loadTimeline(false)">
+        <input x-model="timeline.group" placeholder="群号 / 私聊 pseudo-group" inputmode="numeric" required>
+        <button type="submit">读取 canonical timeline</button>
+      </form>
+
+      <template x-if="timeline.loaded">
+        <div>
+          <p class="empty">
+            conversation=<code x-text="timeline.conversation_id"></code>
+            · seq=<code x-text="timeline.latest_conversation_seq == null ? '—' : timeline.latest_conversation_seq"></code>
+            · LISTEN/NOTIFY 实时增量
+          </p>
+
+          <h2>endpoint capability matrix / topology</h2>
+          <details class="trace" open>
+            <summary>backlog / parked / poison counters</summary>
+            <pre x-text="pretty(timeline.work_summary)"></pre>
+          </details>
+          <div class="endpoint-grid">
+            <template x-for="endpoint in timeline.endpoints" :key="endpoint.endpoint_id">
+              <details class="trace" open>
+                <summary>
+                  <span x-text="endpoint.platform + ' · ' + endpoint.mode"></span>
+                  <span class="id" x-text="endpoint.endpoint_id"></span>
+                  <span :class="endpoint.enabled ? 'ok' : 'bad'" x-text="endpoint.enabled ? 'enabled' : 'disabled'"></span>
+                  <span class="muted" x-text="'pending ' + endpoint.delivery_pending + ' · failed ' + endpoint.delivery_failed + ' · parked ' + endpoint.delivery_parked"></span>
+                </summary>
+                <pre x-text="pretty(endpoint.capabilities)"></pre>
+              </details>
+            </template>
+          </div>
+
+          <h2>pre-degradation canonical truth / delivery audit</h2>
+          <div class="timeline">
+            <template x-for="item in timeline.items" :key="item.canonical_message_id">
+              <article class="timeline-item">
+                <header>
+                  <span class="stamp" x-text="fmtDate(item.occurred_at)"></span>
+                  <span class="id" x-text="item.canonical_message_id"></span>
+                  <span x-text="item.author_display || ('principal ' + item.author_principal_id)"></span>
+                  <span class="muted" x-text="item.source_platform + ' · ' + item.event_kind + ' · seq ' + item.conversation_seq"></span>
+                </header>
+
+                <div class="canonical-nodes">
+                  <template x-for="(node, index) in item.body.nodes" :key="index">
+                    <div class="canonical-node" :class="'node-' + node.type">
+                      <img x-show="timelineMediaSrc(node)" :src="timelineMediaSrc(node)" alt="media preview" loading="lazy">
+                      <span x-text="nodeSummary(node)"></span>
+                      <details x-show="node.type !== 'text'">
+                        <summary>hydrated</summary>
+                        <pre x-text="pretty(node)"></pre>
+                      </details>
+                    </div>
+                  </template>
+                </div>
+
+                <details class="trace">
+                  <summary>
+                    <span x-text="item.deliveries.length + ' deliveries'"></span>
+                    <span x-text="item.relations.length + ' relations'"></span>
+                    <span class="muted" x-text="'compat #' + item.compatibility_message_id"></span>
+                  </summary>
+                  <table x-show="item.deliveries.length">
+                    <thead><tr><th>endpoint</th><th>platform</th><th>status</th><th>native</th><th>attempt</th><th>lower notes / error</th></tr></thead>
+                    <tbody>
+                      <template x-for="delivery in item.deliveries" :key="delivery.delivery_id">
+                        <tr>
+                          <td><span class="id" x-text="delivery.endpoint_id"></span></td>
+                          <td x-text="delivery.platform"></td>
+                          <td><span class="verdict" :class="{ deny: delivery.status === 'permanent_failure' || delivery.status === 'parked' }" x-text="delivery.status"></span></td>
+                          <td class="id" x-text="delivery.native_event_id || '—'"></td>
+                          <td x-text="delivery.attempt_count"></td>
+                          <td class="wide"><pre x-text="delivery.last_error || pretty(delivery.lower_notes || [])"></pre></td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                  <pre x-show="item.relations.length" x-text="pretty(item.relations)"></pre>
+                  <details>
+                    <summary>prompt/search projection（derived）</summary>
+                    <pre x-text="item.prompt_projection"></pre>
+                  </details>
+                </details>
+              </article>
+            </template>
+          </div>
+          <p class="empty" x-show="!timeline.items.length">这个会话没有消息。</p>
+        </div>
+      </template>
+      <p class="empty" x-show="!timeline.loaded">输入会话兼容 id；页面展示 canonical 节点、身份、媒体、关系和每个端点的 lowering 结果。</p>
+    </section>
+
     <!-- ── unbounded context operations ────────────────────────── -->
     <section x-show="tab === 'context'">
       <form class="row" @submit.prevent="loadContext()">

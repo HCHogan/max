@@ -1,13 +1,14 @@
 module Max.AdminTimelineSpec (spec) where
 
-import Data.Aeson (Value (..), encode, object, (.=))
+import Control.Concurrent.Async (async, wait)
+import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, getCurrentTime)
 import Helpers (truncateAll, withDb)
-import Max.AdminTimeline (loadAdminTimeline)
+import Max.AdminTimeline (loadAdminTimeline, waitAdminTimeline)
 import Max.DB.Connection (DbPool)
 import Max.IR
 import Max.IR.Lower (textOnlyCaps)
@@ -18,6 +19,24 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Max.AdminTimeline" $ do
+  it "tails conversation_seq through the commit-safe LISTEN/NOTIFY path" $ do
+    endpoint <-
+      withDb pool $
+        ensureConfiguredEndpoint
+          PlatformMatrix
+          (NativeAccountId "@max:live.test")
+          (NativeConversationId "!room:live.test")
+          ConversationGroup
+          EndpointStandalone
+          (Just 43)
+          textOnlyCaps
+    waiter <- async (withDb pool (waitAdminTimeline 43 0))
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (baseEnvelope endpoint.endpointId now "live"))
+    wait waiter `shouldReturn` True
+    timeline <- withDb pool (loadAdminTimeline 43 (Just 0) 10)
+    timeline `shouldSatisfy` maybe False (const True)
+
   it "hydrates identities, authenticated blobs, forward children, raw unsupported data, and delivery audit" $ do
     endpoint <-
       withDb pool $
@@ -76,6 +95,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.AdminTimeline" $ do
     rendered `shouldSatisfy` T.isInfixOf "matrix:custom"
     rendered `shouldSatisfy` T.isInfixOf "lower_notes"
     rendered `shouldSatisfy` T.isInfixOf "capabilities"
+    rendered `shouldSatisfy` T.isInfixOf "work_summary"
+    rendered `shouldSatisfy` T.isInfixOf "media_parked_global"
 
 baseEnvelope :: EndpointId -> UTCTime -> Text -> InboundEnvelope
 baseEnvelope endpoint now native =

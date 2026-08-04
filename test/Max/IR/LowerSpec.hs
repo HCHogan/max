@@ -194,10 +194,13 @@ structureSpec = describe "structure" $ do
     flat out `shouldBe` [NText "[聊天记录: 2条][语音消息]"]
     map (.subject) out.notes `shouldBe` ["forward", "unsupported"]
 
-  it "keeps a native card and folds a text-tier card" $ do
-    let c = Card (Just "标题") Nothing (Just "https://e.com") Nothing Nothing Nothing
+  it "keeps a native card only with a captured wire payload" $ do
+    let c = Card (Just "标题") Nothing (Just "https://e.com") Nothing Nothing (Just (String "wire"))
+        semanticOnly = Card (Just "标题") Nothing (Just "https://e.com") Nothing Nothing Nothing
     flat (lower baseEnv {caps = textOnlyCaps {card = TierNative}} (Body [NCard c]))
       `shouldBe` [NCard c]
+    flat (lower baseEnv {caps = textOnlyCaps {card = TierNative}} (Body [NCard semanticOnly]))
+      `shouldBe` [NText "[分享: 标题 | https://e.com]"]
     flat (lower baseEnv (Body [NCard c]))
       `shouldBe` [NText "[分享: 标题 | https://e.com]"]
 

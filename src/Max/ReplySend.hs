@@ -73,6 +73,7 @@ import Max.DB.Stickers (findStickerByCaption)
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.IR
+import Max.IR.Digest (digest)
 import Max.IR.Prompt (MentionRoster (..), parseModelChunk)
 import Max.Platform.Types (NativeUserId (..))
 import Max.Render (renderTableImage)
@@ -267,6 +268,7 @@ sendAndPersistReply rt budget rawBody
       let (mReplyId, parsed0) = parseModelChunk mentionRoster t
           (seen', parsed) = dedupeModelImages b.sbSentImages parsed0
           b' = b {sbSentImages = seen'}
+      logInfo "model chunk parsed" $ object ["content" .= digest parsed0]
       mReplyId' <- case mReplyId of
         _ | not rt.rtCanReply -> pure Nothing
         Nothing -> pure Nothing

@@ -18,6 +18,19 @@ spec = describe "iMessage adapter" $ do
       `shouldBe` Just (NativeEventId "sent-guid")
     iMessageAuthoritativeSendGuid replyTarget (Just "stale-guid") `shouldBe` Nothing
 
+  it "emits native iMessage reply and attachment contracts" $ do
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" [] "Maxwell" 1000
+        target = Just (NativeEventId "parent-guid")
+    iMessageSendParams cfg target "caption" (Just "upload:attachment-id")
+      `shouldBe` object
+        [ "chat_guid" .= ("iMessage;+;chat" :: String),
+          "text" .= ("caption" :: String),
+          "service" .= ("auto" :: String),
+          "transport" .= ("bridge" :: String),
+          "file" .= ("upload:attachment-id" :: String),
+          "reply_to" .= ("parent-guid" :: String)
+        ]
+
   it "parses authoritative messages.after cursor and stable GUID provenance" $ do
     let value =
           object

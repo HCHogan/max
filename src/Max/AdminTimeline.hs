@@ -1,6 +1,7 @@
 -- | Canonical, hydrated conversation timeline for the admin API.
 module Max.AdminTimeline
   ( loadAdminTimeline,
+    waitAdminTimeline,
   )
 where
 
@@ -12,6 +13,7 @@ import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
+import Max.DB.Notify (waitForTimeline)
 import Max.IR (Body, Phase (Canonical))
 import Max.IR.Hydrate (hydrate, hydratedBodyValue)
 import Max.Platform.Types (CanonicalMessageId (..))
@@ -53,6 +55,7 @@ loadAdminTimeline legacyConversation after requestedLimit = do
     [] -> pure Nothing
     [(conversation, title)] -> do
       endpoints <- endpointValues conversation
+      workSummary <- workSummaryValue conversation
       rows <- timelineRows conversation after (max 1 (min 200 requestedLimit))
       items <- traverse timelineValue rows
       pure . Just $
@@ -61,6 +64,7 @@ loadAdminTimeline legacyConversation after requestedLimit = do
             "compatibility_conversation_id" .= legacyConversation,
             "title" .= title,
             "endpoints" .= endpoints,
+            "work_summary" .= workSummary,
             "items" .= items,
             "latest_conversation_seq"
               .= case reverse rows of
@@ -68,6 +72,35 @@ loadAdminTimeline legacyConversation after requestedLimit = do
                 [] -> after
           ]
     _ -> error "loadAdminTimeline: duplicate legacy conversation id"
+
+-- | Block for a bounded LISTEN/NOTIFY interval until the conversation's
+-- durable sequence advances. The sequence query makes notifications hints:
+-- commits in the subscribe/recheck window cannot be missed, and a timeout
+-- returns an ordinary empty incremental page to the browser.
+waitAdminTimeline ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Int64 ->
+  Eff es Bool
+waitAdminTimeline legacyConversation after = do
+  conversations <-
+    query
+      "SELECT conversation_id FROM conversations WHERE legacy_group_id = ?"
+      (Only legacyConversation)
+  case conversations :: [Only Int64] of
+    [] -> pure False
+    [Only conversation] -> waitForTimeline conversation (advanced conversation)
+    _ -> error "waitAdminTimeline: duplicate legacy conversation id"
+  where
+    advanced conversation = do
+      rows <-
+        query
+          "SELECT EXISTS (SELECT 1 FROM messages \
+          \ WHERE conversation_id = ? AND conversation_seq > ?)"
+          (conversation, after)
+      case rows :: [Only Bool] of
+        [Only ready] -> pure ready
+        _ -> error "waitAdminTimeline: sequence check returned an unexpected shape"
 
 endpointValues ::
   (WithConnection :> es, IOE :> es) =>
@@ -83,6 +116,15 @@ endpointValues conversation = do
       \ 'native_conversation_id', endpoint.native_conversation_id, \
       \ 'mode', endpoint.endpoint_mode, \
       \ 'enabled', endpoint.enabled AND account.enabled, \
+      \ 'delivery_pending', (SELECT count(*) FROM message_deliveries delivery \
+      \                      WHERE delivery.endpoint_id = endpoint.endpoint_id \
+      \                        AND delivery.status IN ('pending', 'sending')), \
+      \ 'delivery_failed', (SELECT count(*) FROM message_deliveries delivery \
+      \                     WHERE delivery.endpoint_id = endpoint.endpoint_id \
+      \                       AND delivery.status = 'failed'), \
+      \ 'delivery_parked', (SELECT count(*) FROM message_deliveries delivery \
+      \                     WHERE delivery.endpoint_id = endpoint.endpoint_id \
+      \                       AND delivery.status = 'outcome_unknown'), \
       \ 'capabilities', CASE WHEN endpoint.capabilities = '{}'::jsonb \
       \                      THEN account.capabilities ELSE endpoint.capabilities END) \
       \ FROM conversation_endpoints endpoint \
@@ -91,6 +133,37 @@ endpointValues conversation = do
       \ ORDER BY endpoint.endpoint_id"
       (Only conversation)
   pure (fromOnly <$> rows)
+
+workSummaryValue ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Eff es Value
+workSummaryValue conversation = do
+  rows <-
+    query
+      "SELECT jsonb_build_object( \
+      \ 'delivery_active', (SELECT count(*) FROM message_deliveries delivery \
+      \                     JOIN messages message USING (canonical_message_id) \
+      \                     WHERE message.conversation_id = ? \
+      \                       AND delivery.status IN ('pending', 'sending', 'failed')), \
+      \ 'delivery_outcome_unknown', (SELECT count(*) FROM message_deliveries delivery \
+      \                              JOIN messages message USING (canonical_message_id) \
+      \                              WHERE message.conversation_id = ? \
+      \                                AND delivery.status = 'outcome_unknown'), \
+      \ 'delivery_suppressed', (SELECT count(*) FROM message_deliveries delivery \
+      \                         JOIN messages message USING (canonical_message_id) \
+      \                         WHERE message.conversation_id = ? \
+      \                           AND delivery.status = 'suppressed'), \
+      \ 'dispatch_active', (SELECT count(*) FROM message_dispatches dispatch \
+      \                     JOIN messages message USING (canonical_message_id) \
+      \                     WHERE message.conversation_id = ? \
+      \                       AND dispatch.status IN ('pending', 'claimed', 'failed')), \
+      \ 'media_pending_global', (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL), \
+      \ 'media_parked_global', (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL))"
+      (conversation, conversation, conversation, conversation)
+  case rows :: [Only Value] of
+    [Only summary] -> pure summary
+    _ -> error "workSummaryValue: query returned an unexpected shape"
 
 timelineRows ::
   (WithConnection :> es, IOE :> es) =>

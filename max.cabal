@@ -37,6 +37,7 @@ extra-source-files:
     docs/development.md
     docs/platforms.md
     docs/prompt-flow.md
+    docs/runbooks/*.md
     docker-compose.yml
     eval/README.md
     eval/fixtures/*.jsonl
@@ -125,6 +126,7 @@ library
         Max.DB.Stickers
         Max.DB.Transaction
         Max.DB.Usage
+        Max.Dispatch
         Max.Effects.Agent
         Max.Effects.Blob
         Max.Effects.Embedding
@@ -292,6 +294,22 @@ executable max-prompt-flow
         , max
         , text       >= 2.1  && < 2.2
 
+-- Offline, maintenance-window gate for the atomic ADR 003 schema cutover.
+-- It is intentionally a separate executable: the serving binary must never
+-- start against a half-migrated or projection-inconsistent database.
+executable max-adr003-maintenance
+    import:           warnings, lang
+    hs-source-dirs:   maintenance
+    main-is:          Main.hs
+    build-depends:
+        , aeson                >= 2.2  && < 2.4
+        , base                 >= 4.20 && < 5
+        , containers           >= 0.7  && < 0.9
+        , max
+        , postgresql-simple    >= 0.7  && < 0.8
+        , text                 >= 2.1  && < 2.2
+    ghc-options:      -threaded -rtsopts
+
 -- Offline replay of intent-classifier fixtures against a live LLM
 -- profile; see eval/README.md for the journalctl → fixture → replay
 -- workflow.
@@ -343,6 +361,7 @@ test-suite max-test
         Max.Command.PermissionSpec
         Max.ConversationScopeSpec
         Max.DB.CallsSpec
+        Max.DispatchFixture
         Max.HandlerSpec
         Max.HistorianSpec
         Max.HttpRuntimeSpec

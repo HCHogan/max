@@ -3,6 +3,8 @@ module Max.IntentSpec (spec) where
 import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime, secondsToDiffTime)
+import Max.Dispatch (DispatchMessage (..))
+import Max.DispatchFixture (qqDispatch)
 import Max.Intent
   ( IntentConfig (..),
     IntentKind (..),
@@ -18,7 +20,6 @@ import Max.Intent
     retryIntentBatchAt,
     throttleAllows,
   )
-import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (SegText))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
@@ -159,14 +160,12 @@ spec = do
       throttleAllows cfg (at 5000) KindTopic (Just (Throttle (at 1170) recent))
         `shouldBe` True
 
-mkMessage :: Int -> Int -> Text -> GroupMessage
+mkMessage :: Int -> Int -> Text -> DispatchMessage
 mkMessage gid mid body =
-  GroupMessage
-    { selfId = UserId 99,
-      groupId = GroupId (fromIntegral gid),
-      userId = UserId 7,
-      messageId = MessageId (fromIntegral mid),
-      message = [SegText body],
-      rawMessage = body,
-      sender = Sender (UserId 7) (Just "alice") Nothing
-    }
+  qqDispatch
+    (UserId 99)
+    (GroupId (fromIntegral gid))
+    (UserId 7)
+    (MessageId (fromIntegral mid))
+    (Just "alice")
+    [SegText body]

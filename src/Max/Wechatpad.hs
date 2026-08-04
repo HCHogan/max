@@ -25,6 +25,7 @@ module Max.Wechatpad
     wechatpadWorker,
     parseFrameIds,
     platformName,
+    wechatpadCapabilities,
   )
 where
 
@@ -59,7 +60,8 @@ import Max.HttpRuntime
   )
 import Max.Platform (PlatformBackend (..))
 import Max.IR
-import Max.IR.Lower (textOnlyCaps)
+import Max.IR.Digest (digest)
+import Max.IR.Lower (OutboundCaps, textOnlyCaps)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( IngestResult (..),
@@ -88,6 +90,12 @@ import OneBot.Types (GroupId (..), UserId (..))
 
 platformName :: Text
 platformName = "wechatpad"
+
+-- | The relay's outbound contract is deliberately text-only. Every other
+-- canonical node is folded by the shared lowerer before the OneBot-shaped
+-- transport shim reaches this backend.
+wechatpadCapabilities :: OutboundCaps
+wechatpadCapabilities = textOnlyCaps
 
 data WechatpadConfig = WechatpadConfig
   { -- | WeChatPadPro base URL, e.g. @http://127.0.0.1:8080@.  The WS
@@ -137,10 +145,6 @@ wechatpadBackend runtime runDb cfg =
     sendOut = \case
       SendGroupMsg (GroupId g) segs -> deliver "channel" g segs
       SendPrivateMsg (UserId u) segs -> deliver "user" u segs
-      -- WeChat has no reactions or pokes: swallow silently — these
-      -- fire on every command ack / silence and would spam the log.
-      SetMsgEmojiLike {} -> pure (Right 0)
-      SendPoke {} -> pure (Right 0)
       other -> pure (Left ("wechatpad: unsupported action: " <> T.take 60 (T.pack (show other))))
 
     deliver kind mapped segs = do
@@ -246,7 +250,7 @@ wechatpadWorker cfg = localDomain "wechatpad" $ do
           ConversationGroup
           EndpointStandalone
           (Just legacy)
-          textOnlyCaps
+          wechatpadCapabilities
       pure (room, endpoint)
 
     listenOnce endpoints =
@@ -300,7 +304,11 @@ wechatpadWorker cfg = localDomain "wechatpad" $ do
             ingestEnvelope options envelope >>= \case
               Ingested fresh ->
                 logInfo "wechat event ingested" $
-                  object ["native_event_id" .= nativeEvent, "canonical_message_id" .= fresh.canonicalMessageId]
+                  object
+                    [ "native_event_id" .= nativeEvent,
+                      "canonical_message_id" .= fresh.canonicalMessageId,
+                      "content" .= digest fresh.canonicalBody
+                    ]
               AlreadyIngested {} -> pure ()
               DeliveryEcho {} -> pure ()
 

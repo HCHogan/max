@@ -235,6 +235,54 @@ td select { padding: .15rem .35rem; }
   padding: .5rem; font: 400 11px/1.55 var(--mono);
 }
 
+/* ── canonical timeline ───────────────────────────────────────── */
+
+.endpoint-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: .45rem;
+}
+.endpoint-grid .trace { margin: 0; }
+.endpoint-grid pre { margin-bottom: 0; }
+
+.timeline { display: grid; gap: .7rem; }
+.timeline-item {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  padding: .6rem;
+}
+.timeline-item > header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .25rem .7rem;
+  align-items: baseline;
+  margin-bottom: .5rem;
+}
+.canonical-nodes { display: flex; flex-wrap: wrap; align-items: start; gap: .25rem; }
+.canonical-node {
+  max-width: 100%;
+  border-left: 2px solid var(--rule);
+  padding: .18rem .4rem;
+  overflow-wrap: anywhere;
+}
+.canonical-node.node-mention { border-left-color: var(--info); }
+.canonical-node.node-media,
+.canonical-node.node-card,
+.canonical-node.node-forward { border-left-color: var(--warn); }
+.canonical-node.node-unsupported { border-left-color: var(--fail); }
+.canonical-node img {
+  display: block;
+  width: min(18rem, 70vw);
+  max-height: 18rem;
+  object-fit: contain;
+  background: var(--ground);
+  margin-bottom: .35rem;
+}
+.canonical-node details { font: 400 11px var(--mono); color: var(--dim); }
+.canonical-node details pre,
+.timeline-item td pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: .2rem 0; font: 400 11px/1.45 var(--mono); }
+
 /* ── logs ────────────────────────────────────────────────────────
    The same line the terminal prints: fixed-width time and level so
    the eye can track a column, dim domain (the usual filter), message,

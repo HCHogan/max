@@ -4,11 +4,12 @@ import Data.Aeson (object, (.=))
 import Data.Foldable (for_)
 import Data.Text (Text)
 import Max.IR
+import Max.IR.Lower (textOnlyCaps)
 import Max.IR.Prompt (promptText)
 import Max.Platform
 import Max.Platform.QQ (qqIngestBody)
 import Max.Platform.Types (Platform (..))
-import Max.Wechatpad (parseFrameIds)
+import Max.Wechatpad (parseFrameIds, wechatpadCapabilities)
 import OneBot.Action (Action (..))
 import OneBot.Segment
   ( FileSegInfo (..),
@@ -24,6 +25,9 @@ import Test.Hspec
 spec :: Spec
 spec = do
   describe "wechatpad frame ids" $ do
+    it "advertises exactly its emit-only text contract" $
+      wechatpadCapabilities `shouldBe` textOnlyCaps
+
     it "accepts numeric and wrapped ids without silently erasing them" $ do
       parseFrameIds
         ( object

@@ -56,7 +56,7 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.BuildInfo (gitRev)
-import Max.AdminTimeline (loadAdminTimeline)
+import Max.AdminTimeline (loadAdminTimeline, waitAdminTimeline)
 import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
 import Max.Command.Parser (effortLevels)
 import Max.ContextAdmin
@@ -159,6 +159,7 @@ data Route
   | RCallDetail !Int64
   | RPlatformStatus
   | RPlatformTimeline !Int64
+  | RPlatformTimelineWait !Int64
   | RBlob !Text
   | RContextStatus
   | RContextCaptures
@@ -194,6 +195,7 @@ route m path
       ["api", "calls", i] -> RCallDetail <$> int i
       ["api", "platforms", "status"] -> Just RPlatformStatus
       ["api", "platforms", "timeline", g] -> RPlatformTimeline <$> int g
+      ["api", "platforms", "timeline", g, "wait"] -> RPlatformTimelineWait <$> int g
       ["api", "blobs", sha] | not (T.null sha) -> Just (RBlob sha)
       ["api", "context", "status"] -> Just RContextStatus
       ["api", "context", "captures"] -> Just RContextCaptures
@@ -574,6 +576,16 @@ handle env profiles logBuf r params body = case r of
         (intParam "after")
         (clamp (1, 200) (fromMaybe 100 (intParam "limit")))
     pure (maybe notFound ok timeline)
+  RPlatformTimelineWait legacyConversation -> case intParam "after" of
+    Nothing -> pure (bad "expected ?after=<conversation_seq>")
+    Just after -> do
+      _ <- waitAdminTimeline legacyConversation after
+      timeline <-
+        loadAdminTimeline
+          legacyConversation
+          (Just after)
+          (clamp (1, 200) (fromMaybe 200 (intParam "limit")))
+      pure (maybe notFound ok timeline)
   RBlob sha -> case blobRefFromSha256 sha of
     Nothing -> pure notFound
     Just ref ->

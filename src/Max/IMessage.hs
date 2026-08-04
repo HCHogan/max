@@ -20,6 +20,7 @@ module Max.IMessage
     iMessageIsAddressed,
     iMessageTextNodes,
     iMessageSendTransport,
+    iMessageSendParams,
     iMessageAuthoritativeSendGuid,
     iMessageCapabilities,
     iMessageWorker,
@@ -58,6 +59,7 @@ import Max.HttpRuntime
     withStreamingResponse,
   )
 import Max.IR
+import Max.IR.Digest (digest)
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
 import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryOperation (..), DeliveryTransport (..), loweredText)
 import Max.Platform.Envelope (InboundEnvelope (..))
@@ -65,6 +67,7 @@ import Max.Platform.Store
   ( CursorRecord (..),
     IngestOptions (..),
     IngestResult (..),
+    NewIngest (..),
     RegisteredEndpoint (..),
     UnconfirmedDelivery (..),
     advanceIngestCursorCAS,
@@ -329,7 +332,13 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
               }
       result <- ingestEnvelope options envelope
       case result of
-        Ingested {} -> pure ()
+        Ingested fresh ->
+          logInfo "imessage event ingested" $
+            object
+              [ "native_event_id" .= message.guid,
+                "canonical_message_id" .= fresh.canonicalMessageId,
+                "content" .= digest fresh.canonicalBody
+              ]
         AlreadyIngested {} -> pure ()
         DeliveryEcho {} -> pure ()
 
@@ -414,7 +423,7 @@ iMessageDeliveryTransport runtime cfg =
           prepareChunk (if index == 0 then lowered.replyNative else Nothing) chunk >>= \case
             Left (IMessageContractFailure err) -> pure (AttemptPermanentlyFailed err)
             Left (IMessageMediaFailure err) ->
-              pure $ if sentAny then AttemptOutcomeUnknown err else AttemptMediaFallback err
+              pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRetryable err
             Right (replyTarget, params) ->
               bridgeRpc runtime cfg "send" params >>= \case
                 Left (BridgeBeforeEffect err) ->
@@ -434,7 +443,7 @@ iMessageDeliveryTransport runtime cfg =
     prepareChunk replyTarget chunk = case loweredText chunk of
       Left err -> pure (Left (IMessageContractFailure err))
       Right body -> case [(payload, meta) | NMedia payload meta <- chunk] of
-        [] -> pure (Right (replyTarget, sendParams replyTarget body Nothing))
+        [] -> pure (Right (replyTarget, iMessageSendParams cfg replyTarget body Nothing))
         [(payload, meta)] ->
           resolveDeliveryMedia runtime payload meta.sizeBytes >>= \case
             Left err -> pure (Left (IMessageMediaFailure err))
@@ -442,23 +451,26 @@ iMessageDeliveryTransport runtime cfg =
               uploadBridgeAttachment runtime cfg meta bytes >>= \case
                 Left err -> pure (Left (IMessageMediaFailure err))
                 Right uploadId ->
-                  pure (Right (replyTarget, sendParams replyTarget body (Just ("upload:" <> uploadId))))
+                  pure (Right (replyTarget, iMessageSendParams cfg replyTarget body (Just ("upload:" <> uploadId))))
         _ -> pure (Left (IMessageContractFailure "iMessage emitter received more than one native media node"))
-
-    sendParams replyTarget body upload =
-      object
-        ( [ "chat_guid" .= cfg.chatGuid,
-            "text" .= body,
-            "service" .= ("auto" :: Text),
-            "transport" .= iMessageSendTransport replyTarget
-          ]
-            <> ["file" .= file | Just file <- [upload]]
-            <> ["reply_to" .= target | Just (NativeEventId target) <- [replyTarget]]
-        )
 
 data IMessageEmitFailure
   = IMessageContractFailure !Text
   | IMessageMediaFailure !Text
+
+-- | Pure wire contract for one already-lowered iMessage chunk. Media is an
+-- uploaded bridge handle by this point; absence means a text-only chunk.
+iMessageSendParams :: IMessageConfig -> Maybe NativeEventId -> Text -> Maybe Text -> Value
+iMessageSendParams cfg replyTarget body upload =
+  object
+    ( [ "chat_guid" .= cfg.chatGuid,
+        "text" .= body,
+        "service" .= ("auto" :: Text),
+        "transport" .= iMessageSendTransport replyTarget
+      ]
+        <> ["file" .= file | Just file <- [upload]]
+        <> ["reply_to" .= target | Just (NativeEventId target) <- [replyTarget]]
+    )
 
 -- | The injected IMCore helper is necessary only for native inline replies.
 -- Keeping ordinary sends on AppleScript also gives them an authoritative GUID

@@ -568,6 +568,9 @@ The release is ready only when all of the following hold:
 
 This ADR intentionally requires a maintenance window:
 
+The executable procedure, release gate, smoke matrix, and atomic rollback are
+maintained in [the ADR 003 cutover runbook](../runbooks/adr003-cutover.md).
+
 1. Close external ingress, drain delivery/dispatch workers to a known ledger
    state, and then stop the old service and all remaining writers.
 2. Take and verify a restorable database snapshot.

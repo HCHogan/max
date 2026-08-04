@@ -9,6 +9,7 @@
 module Max.PromptIntegrationSpec (spec) where
 
 import Data.Int (Int64)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -21,13 +22,14 @@ import Max.DB.Connection (DbPool)
 import Max.ContextMaterialization (ContextMaterialization (..))
 import Max.DB.History (LedgerItem (..), MessageCursor (..))
 import Max.DB.Session (fetchOrInit)
+import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.LLM (ChatMessage (..))
 import Max.EpisodeStore
+import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
+import Max.Platform.Types (NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId (..))
 import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), TriggerOrigin (..), buildContext, buildContextWithLimits, buildContextWithReadMode, collectContextPreview, materializeTieredHistory, planContext, renderContextPlan)
 import Max.Session (Session (..))
-import OneBot.Event (GroupMessage (..), Sender (..))
-import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
 
@@ -49,16 +51,18 @@ timeAt h =
     (fromGregorian 2026 6 5)
     (secondsToDiffTime (fromIntegral (h * 3600)))
 
-trigger :: GroupMessage
+trigger :: DispatchMessage
 trigger =
-  GroupMessage
+  DispatchMessage
     { selfId = UserId botRaw,
       groupId = GroupId groupRaw,
       userId = UserId memberRaw,
       messageId = MessageId 9000,
-      message = [SegAt (UserId botRaw), SegText " 现在几点"],
-      rawMessage = "",
-      sender = Sender (UserId memberRaw) (Just "Alice") Nothing
+      body = Body [NMention (MentionIdentity (PrincipalIdentityId 1)) "1000", NText " 现在几点"],
+      replyToMessageId = Nothing,
+      senderDisplayName = Just "Alice",
+      sourcePlatform = PlatformQQ,
+      mentionNatives = Map.singleton (PrincipalIdentityId 1) (NativeUserId "1000")
     }
 
 userBodyOf :: [ChatMessage] -> Text
@@ -356,7 +360,8 @@ spec pool = before_ (truncateAll pool) $
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       let replyTrigger =
             trigger
-              { message = [SegReply (MessageId 1001), SegAt (UserId botRaw), SegText " 看这条"]
+              { body = Body [NMention (MentionIdentity (PrincipalIdentityId 1)) "1000", NText " 看这条"],
+                replyToMessageId = Just (MessageId 1001)
               }
       msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s replyTrigger
       let ub = userBodyOf msgs

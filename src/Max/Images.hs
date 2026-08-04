@@ -13,8 +13,10 @@ import Control.Applicative ((<|>))
 import Control.Exception (IOException, try)
 import Data.Aeson
   ( FromJSON (..),
+    Result (..),
     ToJSON (..),
     Value (Object, String),
+    fromJSON,
     withObject,
     withText,
     (.:),
@@ -34,11 +36,12 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute)
 import Max.DB.FetchQueue (JobKind (JobImage), enqueueJob)
 import Max.DB.Stickers (StickerMeta, recordSticker, stickerMeta)
+import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Blob (Blob, blobRefSha256, blobRefStoredPath, putBlob)
 import Max.Effects.Http (Http, getBytesQqCompatible)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
+import Max.IR qualified as IR
 import Max.Util (withTempDirectory)
-import OneBot.Event (GroupMessage (..))
 import OneBot.Segment (ImageSegInfo (..), Segment (..), VideoSegInfo (..))
 import OneBot.Types (GroupId (..), MessageId (..))
 import System.Exit (ExitCode (..))
@@ -101,18 +104,49 @@ instance FromJSON ImageJob where
       <*> o .:? "sticker"
       <*> o .: "kind"
 
--- | Walk a group message's segments and enqueue every downloadable image
--- (or mface). Segments without URLs (file-id only) are skipped silently —
--- 'get_image' fallback can come later.
+-- | Walk canonical media nodes and enqueue every directly downloadable image,
+-- sticker, or video. The dispatch path never reconstructs OneBot segments.
 enqueueImages ::
   (WithConnection :> es, IOE :> es) =>
   FetchSignal ->
-  GroupMessage ->
+  DispatchMessage ->
   Eff es ()
 enqueueImages sig gm =
   let MessageId mid = gm.messageId
       GroupId gid = gm.groupId
-   in enqueueImagesFromNode sig mid (Just gid) gm.message
+   in enqueueCanonicalMedia sig mid (Just gid) gm.body
+
+enqueueCanonicalMedia ::
+  (WithConnection :> es, IOE :> es) =>
+  FetchSignal ->
+  Int64 ->
+  Maybe Int64 ->
+  IR.Body 'IR.Canonical ->
+  Eff es ()
+enqueueCanonicalMedia sig mid gid body = do
+  traverse_ enqueueOne (mapMaybe pick (zip [0 ..] body.nodes))
+  liftIO (notifyFetch sig)
+  where
+    pick (i, IR.NMedia mRef meta) = do
+      ref <- mRef
+      url <- IR.mediaRefRemoteUrl ref
+      kind <- case meta.kind of
+        IR.MImage -> Just MediaImage
+        IR.MSticker -> Just MediaImage
+        IR.MVideo | "http" `T.isPrefixOf` T.toLower url -> Just MediaVideo
+        _ -> Nothing
+      let sticker = case (meta.kind, meta.raw >>= decodeSegment) of
+            (IR.MSticker, Just segment) -> stickerMeta segment
+            _ -> Nothing
+      pure (ImageJob mid i url gid sticker kind)
+    pick _ = Nothing
+
+    decodeSegment raw = case fromJSON raw of
+      Success segment -> Just segment
+      Error _ -> Nothing
+
+    enqueueOne job =
+      enqueueJob JobImage (T.pack (show job.messageId <> ":" <> show job.segIndex)) job
 
 -- | Enqueue images belonging to an arbitrary 'message_id' — used by the
 -- forward worker to feed synthetic ids for forwarded nodes.
@@ -140,12 +174,23 @@ enqueueImagesFromNode sig mid gid segs = do
 -- i.e. how many 'message_images' rows will eventually exist for it
 -- (barring download failures).  Lets 'Max.Prompt' wait for the
 -- worker to catch up before embedding the trigger's images.
-downloadableImageCount :: [Segment] -> Int
-downloadableImageCount = length . mapMaybe imageUrl
+downloadableImageCount :: IR.Body 'IR.Canonical -> Int
+downloadableImageCount = length . mapMaybe imageNodeUrl . (.nodes)
+  where
+    imageNodeUrl = \case
+      IR.NMedia (Just ref) meta
+        | meta.kind `elem` [IR.MImage, IR.MSticker] -> IR.mediaRefRemoteUrl ref
+      _ -> Nothing
 
 -- | Same, for 'message_videos' rows.
-downloadableVideoCount :: [Segment] -> Int
-downloadableVideoCount = length . mapMaybe videoUrl
+downloadableVideoCount :: IR.Body 'IR.Canonical -> Int
+downloadableVideoCount = length . mapMaybe videoNodeUrl . (.nodes)
+  where
+    videoNodeUrl = \case
+      IR.NMedia (Just ref) meta | meta.kind == IR.MVideo -> do
+        url <- IR.mediaRefRemoteUrl ref
+        if "http" `T.isPrefixOf` T.toLower url then Just url else Nothing
+      _ -> Nothing
 
 imageUrl :: Segment -> Maybe Text
 imageUrl = \case

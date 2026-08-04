@@ -66,12 +66,11 @@ import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.History (HistoryItem (..), fetchRecentInGroup)
+import Max.Dispatch (DispatchMessage (..), dispatchText)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
 import Max.Prompt (renderHistoryLine)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
 import Max.Util (catchSync, trySync)
-import OneBot.Event (GroupMessage (..))
-import OneBot.Segment (renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 -- | Resolved @intent.*@ config; presence enables the whole feature.
@@ -106,7 +105,7 @@ data IntentState = IntentState
 data PendingIntent = PendingIntent
   { piReadyAt :: !UTCTime,
     piAttempt :: !Int,
-    piMessages :: ![GroupMessage]
+    piMessages :: ![DispatchMessage]
   }
 
 -- | Observable retry decision for logs and deterministic scheduler tests.
@@ -175,13 +174,13 @@ noteBotActivity st (GroupId gid) = do
 
 -- | Decide whether a batch is worth an LLM classification; claims the
 -- group's chatter-lane slot when that's the only reason to proceed.
-passesGate :: IntentState -> Int64 -> UTCTime -> [GroupMessage] -> IO Bool
+passesGate :: IntentState -> Int64 -> UTCTime -> [DispatchMessage] -> IO Bool
 passesGate st gid now batch = do
   acts <- readTVarIO st.isActivity
   let hot = case Map.lookup gid acts of
         Just t -> diffUTCTime now t <= followupHotSecs
         Nothing -> False
-      named = any (msgSignal . renderPlainText . (.message)) batch
+      named = any (msgSignal . dispatchText) batch
   if hot || named
     then pure True
     else atomically $ do
@@ -215,13 +214,13 @@ intentRetryDelaySecs attempt
 -- Keep this domain-specific while the project builds on @base-4.20@, whose
 -- "Data.List" does not yet export @takeEnd@.  Do not grow another generic
 -- list utility around it: a future base bump can replace this body directly.
-capPendingMessages :: [GroupMessage] -> [GroupMessage]
+capPendingMessages :: [DispatchMessage] -> [DispatchMessage]
 capPendingMessages xs = drop (length xs - maxPendingPerGroup) xs
 
 -- | Queue one unaddressed group message for classification.  Own
 -- echoes and private chats never enqueue (a private message already
 -- triggers directly).
-enqueueIntent :: IntentState -> GroupMessage -> IO ()
+enqueueIntent :: IntentState -> DispatchMessage -> IO ()
 enqueueIntent st gm
   | gm.userId == gm.selfId || isPrivateChat gm.groupId = pure ()
   | otherwise = do
@@ -277,7 +276,7 @@ intentWorker ::
   Text -> -- default model name (for 'loadSession')
   TimeZone ->
   SessionRegistry ->
-  ([GroupMessage] -> Eff es ()) -> -- proactive dispatch of the whole batch, newest last (see 'Max.Handler.dispatchProactive')
+  ([DispatchMessage] -> Eff es ()) -> -- proactive dispatch of the whole batch, newest last (see 'Max.Handler.dispatchProactive')
   IntentState ->
   Eff es ()
 intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
@@ -409,12 +408,12 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
     spanPartition p xs = (filter p xs, filter (not . p) xs)
 
 -- | Non-blocking deterministic claim used by the worker scheduler and tests.
-claimIntentBatchAt :: IntentState -> UTCTime -> IO (Maybe (Int64, Int, [GroupMessage]))
+claimIntentBatchAt :: IntentState -> UTCTime -> IO (Maybe (Int64, Int, [DispatchMessage]))
 claimIntentBatchAt st now = atomically $ do
   (claimed, _, _) <- claimSnapshot st now
   pure claimed
 
-awaitIntentBatch :: IntentState -> IO (Int64, Int, [GroupMessage])
+awaitIntentBatch :: IntentState -> IO (Int64, Int, [DispatchMessage])
 awaitIntentBatch st = do
   now <- getCurrentTime
   (claimed, mNext, ver) <- atomically (claimSnapshot st now)
@@ -435,7 +434,7 @@ awaitIntentBatch st = do
 claimSnapshot ::
   IntentState ->
   UTCTime ->
-  STM (Maybe (Int64, Int, [GroupMessage]), Maybe UTCTime, Int)
+  STM (Maybe (Int64, Int, [DispatchMessage]), Maybe UTCTime, Int)
 claimSnapshot st now = do
   queued <- readTVar st.isPending
   ver <- readTVar st.isPendingVersion
@@ -453,7 +452,7 @@ retryIntentBatchAt ::
   IntentState ->
   Int64 ->
   Int ->
-  [GroupMessage] ->
+  [DispatchMessage] ->
   UTCTime ->
   IO IntentRetry
 retryIntentBatchAt st gid previousAttempt batch now = do
@@ -476,7 +475,7 @@ retryIntentBatchAt st gid previousAttempt batch now = do
         modifyTVar' st.isPendingVersion (+ 1)
       pure (IntentRetryScheduled readyAt)
 
-drainGroup :: IntentState -> Int64 -> STM [GroupMessage]
+drainGroup :: IntentState -> Int64 -> STM [DispatchMessage]
 drainGroup st gid = do
   m <- readTVar st.isPending
   case Map.lookup gid m of

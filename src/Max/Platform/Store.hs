@@ -209,6 +209,10 @@ data IngestResult
 
 data NewIngest = NewIngest
   { canonicalMessageId :: !CanonicalMessageId,
+    -- | The exact canonical IR committed by this transaction.  Returning it
+    -- lets adapter-edge observability log a bounded digest without decoding
+    -- the row again or retaining the inbound representation.
+    canonicalBody :: !(Body 'Canonical),
     dispatchCreated :: !Bool,
     mirrorDeliveriesCreated :: !Int64
   }
@@ -801,8 +805,8 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
   identityId <- case Map.lookup envelope.senderNativeId identities of
     Just identity -> pure identity
     Nothing -> error "ingestEnvelope: sender identity missing from batch"
-  canonicalBody <- resolveBodyMentions identities envelope.content
-  let contentValue = toJSON canonicalBody
+  resolvedCanonicalBody <- resolveBodyMentions identities envelope.content
+  let contentValue = toJSON resolvedCanonicalBody
       NativeEventId nativeEvent = envelope.nativeEventId
       (safeRaw, rawTruncated) = sanitizeRawPayload options.maxRawPayloadBytes envelope.rawPayload
       ingestLockKey = T.pack (show envelope.endpointId.unEndpointId) <> ":" <> nativeEvent
@@ -852,9 +856,9 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             -- A pre-hardening writer may have committed an incomplete
             -- reservation. The per-native-event transaction lock makes this
             -- caller its sole repair owner.
-            [Only Nothing] -> insertCanonical endpoint identityId contentValue
+            [Only Nothing] -> insertCanonical endpoint identityId resolvedCanonicalBody contentValue
             _ -> error "ingestEnvelope: event reservation disappeared"
-        [_] -> insertCanonical endpoint identityId contentValue
+        [_] -> insertCanonical endpoint identityId resolvedCanonicalBody contentValue
         _ -> error "ingestEnvelope: event reservation returned multiple rows"
   where
     options = sanitizeIngestOptions unsafeOptions
@@ -958,7 +962,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
         isReaction ReactsTo {} = True
         isReaction _ = False
 
-    insertCanonical endpoint identityId contentValue = do
+    insertCanonical endpoint identityId resolvedBody contentValue = do
       let platformName = endpoint.erPlatform
           NativeEventId nativeEvent = envelope.nativeEventId
           NativeUserId nativeUser = envelope.senderNativeId
@@ -1040,6 +1044,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
         ( Ingested
             NewIngest
               { canonicalMessageId = CanonicalMessageId cid,
+                canonicalBody = resolvedBody,
                 dispatchCreated = dispatchable,
                 mirrorDeliveriesCreated = mirrorCount
               }

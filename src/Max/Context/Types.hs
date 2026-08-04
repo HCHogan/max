@@ -26,11 +26,11 @@ import Data.Time (TimeZone, UTCTime)
 import Max.Context (ContextBudget, ContextTrace)
 import Max.DB.Files (FileRecord)
 import Max.DB.History (HistoryItem)
+import Max.Dispatch (DispatchMessage)
 import Max.EpisodeStore (EpisodeHandle)
 import Max.MemoryStore (MemoryItem)
 import Max.Platform.Types (AdvertisedCaps)
 import Max.Session (Session)
-import OneBot.Event (GroupMessage)
 
 -- | Everything 'renderContext' needs in one record.  Splitting the
 -- pipeline into 'PromptInputs' + 'renderContext' lets us unit-test the
@@ -42,7 +42,7 @@ data PromptInputs = PromptInputs
     -- | The active session record (carries persona override + pin list).
     session :: !Session,
     -- | The @\@-bot@ message that triggered this turn.
-    triggerMessage :: !GroupMessage,
+    triggerMessage :: !DispatchMessage,
     -- | One chronological transcript of the conversation: ambient
     -- group chatter and the bot's own thread with people, interleaved
     -- and deduped by message id.
@@ -142,7 +142,7 @@ data TriggerOrigin
     -- (no one addressed it).
     OriginProactive
   | -- | Someone poked (戳一戳) the bot — a contentless nudge; the
-    -- synthesized trigger 'GroupMessage' has no message id or text.
+    -- synthesized dispatch trigger has no message id or text.
     OriginPoke
   deriving stock (Show, Eq)
 

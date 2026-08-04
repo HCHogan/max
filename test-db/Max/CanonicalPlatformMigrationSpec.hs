@@ -3,17 +3,16 @@ module Max.CanonicalPlatformMigrationSpec (spec) where
 import Data.Int (Int64)
 import Data.String (fromString)
 import Data.Text (Text)
-import Database.PostgreSQL.Simple (Only (..), execute, execute_, query, withTransaction)
+import Database.PostgreSQL.Simple (execute_, query, withTransaction)
 import Max.DB.Connection (DbPool, withConn)
 import Test.Hspec
 
--- | Rehearse 049/050 over populated legacy tables.  This is intentionally not a
--- fresh-schema smoke test: it proves that old QQ rows acquire lossless
--- canonical identities and that writes made by the old binary-shaped API keep
--- populating both ledgers after cutover.
+-- | Rehearse the one-time 049/050 backfill over populated legacy tables. The
+-- final runtime never exercises the transitional legacy-writer triggers;
+-- migration 061 removes them before the atomic cutover binary starts.
 spec :: DbPool -> Spec
 spec pool = describe "049/050 canonical platform foundation migrations" $ do
-  it "backfills old rows and canonicalizes subsequent legacy inserts" $
+  it "backfills rows already present at the offline cutover boundary" $
     withConn pool $ \conn -> withTransaction conn $ do
       _ <- execute_ conn "CREATE SCHEMA canonical_platform_migration_test"
       _ <- execute_ conn "SET LOCAL search_path TO canonical_platform_migration_test, public"
@@ -62,40 +61,6 @@ spec pool = describe "049/050 canonical platform foundation migrations" $ do
           ()
       (backfilled :: [(Int64, Int64, Text, Text, Text, Text, Text, Text, Text)])
         `shouldBe` [(1, 42, "qq", "qq", "legacy", "42", "7", "101", "confirmed")]
-
-      _ <-
-        execute
-          conn
-          "INSERT INTO messages \
-          \ (message_id, group_id, user_id, self_id, segments, rendered_text, sender_nickname) \
-          \ VALUES (?, ?, ?, ?, '[]', ?, ?)"
-          (102 :: Int64, 42 :: Int64, 8 :: Int64, 9 :: Int64, "after migration" :: Text, "bob" :: Text)
-      counts <-
-        query
-          conn
-          "SELECT \
-          \ (SELECT count(*) FROM messages WHERE conversation_id IS NOT NULL), \
-          \ (SELECT count(*) FROM platform_events WHERE canonical_message_id IS NOT NULL), \
-          \ (SELECT count(*) FROM message_deliveries WHERE status = 'confirmed'), \
-          \ (SELECT count(*) FROM message_dispatches WHERE status = 'completed')"
-          ()
-      (counts :: [(Int64, Int64, Int64, Int64)]) `shouldBe` [(2, 2, 2, 2)]
-
-      duplicates <-
-        query
-          conn
-          "SELECT count(*) FROM ( \
-          \ SELECT endpoint_id, native_event_id FROM platform_events \
-          \ GROUP BY endpoint_id, native_event_id HAVING count(*) > 1) d"
-          ()
-      (duplicates :: [Only Int64]) `shouldBe` [Only 0]
-
-      hardened <-
-        query
-          conn
-          "SELECT source_platform, message_origin FROM messages WHERE message_id = 102"
-          ()
-      (hardened :: [(Text, Text)]) `shouldBe` [("qq", "legacy")]
 
       _ <- execute_ conn "DROP SCHEMA canonical_platform_migration_test CASCADE"
       pure ()

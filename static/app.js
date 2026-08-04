@@ -12,6 +12,7 @@ function admin() {
     tabs: [
       { id: 'overview', name: '概览' },
       { id: 'groups', name: '群设置' },
+      { id: 'timeline', name: '消息账本' },
       { id: 'context', name: '上下文' },
       { id: 'memories', name: '记忆' },
       { id: 'perms', name: '权限' },
@@ -31,6 +32,18 @@ function admin() {
     memories: [],
     perms: [],
     tasks: [],
+    timeline: {
+      group: '',
+      loaded: false,
+      conversation_id: null,
+      title: null,
+      endpoints: [],
+      work_summary: {},
+      items: [],
+      latest_conversation_seq: null,
+    },
+    timelineMedia: {},
+    timelineAbort: null,
     ctx: {
       group: '',
       loaded: false,
@@ -131,6 +144,7 @@ function admin() {
     },
 
     go(id) {
+      if (id !== 'timeline') this.stopTimelineTail();
       this.tab = id;
       history.replaceState(null, '', '#' + id);
       this.load(id);
@@ -140,6 +154,7 @@ function admin() {
       const fn = {
         overview: () => this.loadCharts(),
         groups: () => this.loadGroups(),
+        timeline: () => (this.timeline.group ? this.loadTimeline(false) : null),
         context: () => this.loadContext(),
         memories: () => (this.mem.id ? this.loadMemories() : null),
         perms: () => this.loadPerms(),
@@ -174,6 +189,121 @@ function admin() {
 
     async loadTasks() {
       this.tasks = await this.api('/tasks');
+    },
+
+    async loadTimeline(tail = false) {
+      if (!this.timeline.group) return;
+      if (!tail) this.stopTimelineTail();
+      const group = this.timeline.group;
+      const after = tail ? this.timeline.latest_conversation_seq : null;
+      const query = new URLSearchParams({ limit: '200' });
+      if (after != null) query.set('after', String(after));
+      const page = await this.api(
+        '/platforms/timeline/' + encodeURIComponent(group) + '?' + query.toString()
+      );
+      if (group !== this.timeline.group) return;
+      if (tail) {
+        if (page.items.length) this.timeline.items.push(...page.items);
+        Object.assign(this.timeline, {
+          conversation_id: page.conversation_id,
+          title: page.title,
+          endpoints: page.endpoints,
+          work_summary: page.work_summary,
+          latest_conversation_seq: page.latest_conversation_seq,
+          loaded: true,
+        });
+      } else {
+        this.releaseTimelineMedia();
+        Object.assign(this.timeline, page, { group, loaded: true });
+      }
+      await this.loadTimelineMedia(page.items);
+      if (!tail) this.startTimelineTail(group);
+    },
+
+    stopTimelineTail() {
+      if (this.timelineAbort) this.timelineAbort.abort();
+      this.timelineAbort = null;
+    },
+
+    startTimelineTail(group) {
+      this.stopTimelineTail();
+      const controller = new AbortController();
+      this.timelineAbort = controller;
+      this.tailTimeline(group, controller).catch((e) => {
+        if (e.name !== 'AbortError') this.err = String(e.message);
+      });
+    },
+
+    async tailTimeline(group, controller) {
+      while (this.tab === 'timeline' && this.timeline.group === group && !controller.signal.aborted) {
+        const after = this.timeline.latest_conversation_seq == null ? 0 : this.timeline.latest_conversation_seq;
+        const query = new URLSearchParams({ after: String(after), limit: '200' });
+        try {
+          const page = await this.api(
+            '/platforms/timeline/' + encodeURIComponent(group) + '/wait?' + query.toString(),
+            { signal: controller.signal }
+          );
+          if (controller.signal.aborted || this.tab !== 'timeline' || this.timeline.group !== group) return;
+          if (page.items.length) this.timeline.items.push(...page.items);
+          Object.assign(this.timeline, {
+            conversation_id: page.conversation_id,
+            title: page.title,
+            endpoints: page.endpoints,
+            work_summary: page.work_summary,
+            latest_conversation_seq: page.latest_conversation_seq,
+            loaded: true,
+          });
+          await this.loadTimelineMedia(page.items);
+        } catch (e) {
+          if (controller.signal.aborted || e.name === 'AbortError' || e.message === 'unauthorized') return;
+          this.err = String(e.message);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    },
+
+    async loadTimelineMedia(items) {
+      const urls = [];
+      for (const item of items) {
+        for (const node of item.body.nodes || []) {
+          if (node.thumbnail && node.thumbnail.startsWith('/api/blobs/')) urls.push(node.thumbnail);
+        }
+      }
+      await Promise.all(
+        [...new Set(urls)].map(async (url) => {
+          if (this.timelineMedia[url]) return;
+          const headers = this.token ? { Authorization: 'Bearer ' + this.token } : {};
+          const response = await fetch(url, { headers });
+          if (!response.ok) throw new Error('media ' + response.status);
+          this.timelineMedia[url] = URL.createObjectURL(await response.blob());
+        })
+      );
+    },
+
+    releaseTimelineMedia() {
+      Object.values(this.timelineMedia).forEach((url) => URL.revokeObjectURL(url));
+      this.timelineMedia = {};
+    },
+
+    timelineMediaSrc(node) {
+      if (!node.thumbnail) return '';
+      return this.timelineMedia[node.thumbnail] || (node.thumbnail.startsWith('/api/') ? '' : node.thumbnail);
+    },
+
+    nodeSummary(node) {
+      switch (node.type) {
+        case 'text': return node.text;
+        case 'mention': {
+          const ids = (node.identities || []).map((i) => i.platform + ':' + i.native_user_id).join(', ');
+          return '@' + node.display + (ids ? ' (' + ids + ')' : '');
+        }
+        case 'emote': return '[emote ' + node.platform + ':' + node.native_id + (node.name ? ' ' + node.name : '') + ']';
+        case 'media': return '[' + node.kind + (node.description ? ': ' + node.description : node.name ? ': ' + node.name : '') + ']';
+        case 'card': return '[card: ' + [node.tag, node.title, node.url].filter(Boolean).join(' · ') + ']';
+        case 'forward': return '[forward → ' + (node.children || []).map((id) => '#' + id).join(', ') + ']';
+        case 'unsupported': return '[unsupported ' + node.source + ': ' + node.description + ']';
+        default: return '[' + node.type + ']';
+      }
     },
 
     // ── unbounded context / memory operations ───────────────────

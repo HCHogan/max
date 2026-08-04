@@ -180,6 +180,38 @@ spec = describe "Matrix adapter" $ do
     matrixCapabilities.edit `shouldBe` True
     matrixCapabilities.redact `shouldBe` True
 
+  it "emits native Matrix mention, reply, and media contracts" $ do
+    let target = Just (NativeEventId "$parent")
+        mentionChunk = [NMention (NativeUserId "@alice:test") "Alice", NText " hi"]
+        mediaMeta =
+          MediaMeta
+            { kind = MImage,
+              mime = Just "image/png",
+              sizeBytes = Just 12,
+              name = Just "cat.png",
+              description = Just "cat",
+              raw = Nothing
+            }
+    matrixTextPayload target mentionChunk "@Alice hi"
+      `shouldBe` object
+        [ "msgtype" .= ("m.text" :: String),
+          "body" .= ("@Alice hi" :: String),
+          "m.relates_to" .= object ["m.in_reply_to" .= object ["event_id" .= ("$parent" :: String)]],
+          "m.mentions" .= object ["user_ids" .= ["@alice:test" :: String]]
+        ]
+    matrixMediaPayload Nothing [] "cat" mediaMeta "mxc://test/cat" (Just 12)
+      `shouldBe` object
+        [ "msgtype" .= ("m.image" :: String),
+          "body" .= ("cat" :: String),
+          "filename" .= (Just "cat.png" :: Maybe String),
+          "url" .= ("mxc://test/cat" :: String),
+          "info"
+            .= object
+              [ "mimetype" .= (Just "image/png" :: Maybe String),
+                "size" .= (Just 12 :: Maybe Int)
+              ]
+        ]
+
   it "emits native Matrix edit and reaction contracts from lowered content" $ do
     let content = object ["msgtype" .= ("m.text" :: String), "body" .= ("fixed" :: String)]
     matrixEditPayload (NativeEventId "$old") content

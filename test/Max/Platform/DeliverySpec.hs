@@ -1,15 +1,17 @@
 module Max.Platform.DeliverySpec (spec) where
 
 import Control.Exception (bracket)
+import Data.Aeson (toJSON)
 import Data.Maybe (fromJust, isNothing)
 import Effectful (runEff)
 import Max.Effects.Blob (blobRefSha256, putBlob, runBlob)
 import Max.IR
 import Max.IR.Lower
 import Max.Platform.Delivery
-import Max.Platform.Types (NativeEventId (..), ReactionAction (..))
+import Max.Platform.Types (NativeEventId (..), NativeUserId (..), Platform (..), ReactionAction (..))
 import OneBot.Action (Action (..))
-import OneBot.Types (MessageId (..))
+import OneBot.Segment (CardInfo (..), Segment (..))
+import OneBot.Types (MessageId (..), UserId (..))
 import System.Directory (createDirectory, getTemporaryDirectory, removeFile, removePathForcibly)
 import System.IO (hClose, openBinaryTempFile)
 import Test.Hspec
@@ -43,6 +45,34 @@ spec = do
         fmap snd resolved `shouldBe` [ResolvedBytes "blob-payload"]
 
   describe "OneBot action emitter contract" $ do
+    it "emits every structural node advertised by QQ capabilities" $ do
+      let cardRaw =
+            "{\"app\":\"fixture\",\"meta\":{\"news\":{\"tag\":\"tag\",\"title\":\"title\",\"jumpUrl\":\"https://example.test\"}}}"
+          nativeCard =
+            SegCard
+              CardInfo
+                { ciApp = "fixture",
+                  ciTag = Just "tag",
+                  ciTitle = Just "title",
+                  ciDesc = Nothing,
+                  ciUrl = Just "https://example.test",
+                  ciPreview = Nothing,
+                  ciRaw = cardRaw
+                }
+          card = Card (Just "title") Nothing (Just "https://example.test") (Just "tag") Nothing (Just (toJSON nativeCard))
+          nodes =
+            [ NText "hello",
+              NMention (NativeUserId "123") "Alice",
+              NEmote (Emote PlatformQQ "66" (Just "惊讶") Nothing),
+              NMedia (ResolvedUrl "https://example.test/image.png") imageMeta,
+              NMedia (ResolvedUrl "https://example.test/sticker.png") imageMeta {kind = MSticker},
+              NCard card
+            ]
+      case oneBotNodes nodes of
+        Right [SegText "hello", SegAt (UserId 123), SegFace 66 (Just "惊讶"), SegImage {}, SegImage {}, cardSegment] ->
+          cardSegment `shouldBe` nativeCard
+        other -> expectationFailure ("unexpected QQ emitter output: " <> show other)
+
     it "maps an advertised QQ reaction to the native add/remove action" $ do
       case oneBotReactionAction (NativeEventId "42") "212" ReactionAdd of
         Just (SetMsgEmojiLike target emoji added) -> do

@@ -35,7 +35,7 @@ where
 import Data.Aeson (ToJSON (..), Value, object, withObject, (.!=), (.:?), (.=))
 import Data.Aeson.Types (parseMaybe)
 import Data.List (mapAccumL)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.IR
@@ -304,7 +304,12 @@ lowerNode env mediaUsed = \case
   n@(NCard c) -> case env.caps.card of
     TierDrop -> dropWith (LowerNote "card" NoteDropped (Just (fallbackText n)))
     TierText -> fold n (LowerNote "card" NoteFolded Nothing)
-    TierNative -> keep (NCard c)
+    -- The captured raw protocol value is a card's native payload. A card
+    -- created on another edge or internally may retain semantic structure
+    -- without one, so fold it here rather than asking an emitter to degrade.
+    TierNative
+      | isJust c.raw -> keep (NCard c)
+      | otherwise -> fold n (LowerNote "card" NoteFolded (Just "no native payload"))
   n@(NForward _) -> fold n (LowerNote "forward" NoteFolded Nothing)
   n@(NUnsupported _) -> fold n (LowerNote "unsupported" NoteFolded Nothing)
   where
