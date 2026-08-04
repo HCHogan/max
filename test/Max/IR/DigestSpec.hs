@@ -2,12 +2,11 @@ module Max.IR.DigestSpec (spec) where
 
 import Data.Aeson (Value (Object))
 import Data.Aeson.KeyMap qualified as KM
-import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Max.IR
 import Max.IR.Digest
-import Max.Platform.Types (NativeUserId (..), Platform (..), PrincipalIdentityId (..))
+import Max.Platform.Types (NativeUserId (..), PrincipalIdentityId (..))
 import Test.Hspec
 
 imgMeta :: Maybe Int -> MediaMeta
@@ -24,15 +23,16 @@ imgMeta size =
 spec :: Spec
 spec = describe "log digest" $ do
   it "digests a canonical body as shapes and references" $ do
-    let body =
+    let sha = T.replicate 64 "a"
+        body =
           Body
             [ NText "你好",
               NMention (MentionIdentity (PrincipalIdentityId 7)) "张三",
-              NMedia (Just (MediaBlob "abcdef1234567890")) (imgMeta (Just 186368))
+              NMedia (mediaBlobRef sha) (imgMeta (Just 186368))
             ] ::
             Body 'Canonical
     digestLine body
-      `shouldBe` "text(6B)+mention(pid:7)+image(blob:abcdef12…,182.0KB)"
+      `shouldBe` "text(6B)+mention(pid:7)+image(blob:aaaaaaaa…,182.0KB)"
 
   it "digests the lowered phase — exactly what went to the wire" $ do
     let body =

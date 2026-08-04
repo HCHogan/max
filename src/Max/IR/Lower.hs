@@ -260,20 +260,24 @@ lower env body =
       contentNotes = concatMap snd results
       (replyNative, replyNodes, replyNotes) = lowerReply env
       substance = trimEdges (mergeText (replyNodes <> contentNodes))
-      assembled = case (env.attribution, substance) of
-        (_, []) -> []
-        (Nothing, _) -> substance
-        (Just a, _) -> mergeText (attributionNode a : substance)
-      chunks = chunkNodes env.caps.maxTextBytes assembled
+      (assembled, attributionNotes) = case (env.attribution, substance) of
+        (_, []) -> ([], [])
+        (Nothing, _) -> (substance, [])
+        (Just a, _)
+          | canEmitText env.caps -> (mergeText (attributionNode a : substance), [])
+          | otherwise -> (substance, [LowerNote "attribution" NoteDropped (Just "endpoint has no text tier")])
+      (chunks, chunkNotes) = chunkNodes env.caps.maxTextBytes assembled
    in LoweredMessage
         { replyNative = if null chunks then Nothing else replyNative,
           chunks,
-          notes = replyNotes <> contentNotes
+          notes = replyNotes <> contentNotes <> attributionNotes <> chunkNotes
         }
 
 lowerNode :: LowerEnv -> Int -> Node 'Canonical -> (Int, ([Node 'Lowered], [LowerNote]))
 lowerNode env mediaUsed = \case
-  NText t -> keep (NText t)
+  NText t
+    | canEmitText env.caps -> keep (NText t)
+    | otherwise -> dropWith (LowerNote "text" NoteDropped (Just "endpoint has no text tier"))
   n@(NMention target display) -> case env.caps.mention of
     TierDrop -> dropWith (LowerNote "mention" NoteDropped (Just display))
     TierText -> fold n (LowerNote "mention" NoteFolded Nothing)
@@ -291,9 +295,15 @@ lowerNode env mediaUsed = \case
   n@(NMedia src meta) ->
     let subject = mediaKindText meta.kind
         foldMedia detail =
-          ( mediaUsed,
-            ([NText (mediaFoldText src meta)], [LowerNote subject NoteFolded detail])
-          )
+          if canEmitText env.caps
+            then
+              ( mediaUsed,
+                ([NText (mediaFoldText src meta)], [LowerNote subject NoteFolded detail])
+              )
+            else
+              ( mediaUsed,
+                ([], [LowerNote subject NoteDropped (Just "endpoint has no text tier")])
+              )
      in case mediaTier env.caps meta.kind of
           TierDrop -> dropWith (LowerNote subject NoteDropped (Just (fallbackText n)))
           TierText -> foldMedia Nothing
@@ -312,8 +322,16 @@ lowerNode env mediaUsed = \case
   n@(NUnsupported _) -> fold n (LowerNote "unsupported" NoteFolded Nothing)
   where
     keep node = (mediaUsed, ([node], []))
-    fold n note = (mediaUsed, ([NText (fallbackText n)], [note]))
+    fold n note
+      | canEmitText env.caps = (mediaUsed, ([NText (fallbackText n)], [note]))
+      | otherwise =
+          ( mediaUsed,
+            ([], [note {outcome = NoteDropped, detail = Just "endpoint has no text tier"}])
+          )
     dropWith note = (mediaUsed, ([], [note]))
+
+canEmitText :: OutboundCaps -> Bool
+canEmitText caps = caps.text && maybe True (> 0) caps.maxTextBytes
 
 mediaTier :: OutboundCaps -> MediaKind -> Tier
 mediaTier caps = \case
@@ -327,9 +345,7 @@ mediaTier caps = \case
 -- blob references are internal and never leak.
 mediaFoldText :: Maybe MediaRef -> MediaMeta -> Text
 mediaFoldText src meta =
-  fallbackText (NMedia src meta) <> case src of
-    Just (MediaRemote url) -> " " <> url
-    _ -> ""
+  fallbackText (NMedia src meta) <> maybe "" (" " <>) (src >>= mediaRefRemoteUrl)
 
 lowerReply :: LowerEnv -> (Maybe NativeEventId, [Node 'Lowered], [LowerNote])
 lowerReply env = case env.replyTarget of
@@ -341,9 +357,12 @@ lowerReply env = case env.replyTarget of
       | otherwise -> quoted rc (Just "no native copy on endpoint")
     TierText -> quoted rc Nothing
   where
-    quoted rc why = case quoteText rc of
-      Just q -> (Nothing, [NText q], [LowerNote "reply" NoteFolded why])
-      Nothing -> (Nothing, [], [LowerNote "reply" NoteDropped (Just "no quotable context")])
+    quoted rc why
+      | not (canEmitText env.caps) =
+          (Nothing, [], [LowerNote "reply" NoteDropped (Just "endpoint has no text tier")])
+      | otherwise = case quoteText rc of
+          Just q -> (Nothing, [NText q], [LowerNote "reply" NoteFolded why])
+          Nothing -> (Nothing, [], [LowerNote "reply" NoteDropped (Just "no quotable context")])
 
 quoteText :: ReplyContext -> Maybe Text
 quoteText rc = case (blank rc.author, truncateText 60 <$> blank rc.excerpt) of
@@ -374,29 +393,37 @@ platformDisplayLabel = \case
 -- Chunking.
 
 -- | Split lowered nodes into chunks whose text cost fits the byte budget.
--- Oversized text nodes split at character boundaries; non-text nodes are
--- never split.  Replaces the old behaviour of permanently failing the
--- delivery on @max_text_bytes@.
-chunkNodes :: Maybe Int -> [Node 'Lowered] -> [[Node 'Lowered]]
-chunkNodes Nothing ns = [ns | not (null ns)]
+-- Oversized text nodes split at character boundaries; an indivisible
+-- text-bearing node that cannot fit is dropped with an audit note.  Replaces
+-- the old behaviour of permanently failing the delivery on
+-- @max_text_bytes@.
+chunkNodes :: Maybe Int -> [Node 'Lowered] -> ([[Node 'Lowered]], [LowerNote])
+chunkNodes Nothing ns = ([ns | not (null ns)], [])
 chunkNodes (Just rawLimit) ns0 = go [] 0 ns0
   where
-    -- A floor keeps a nonsense-small declared limit from degenerating
-    -- into per-character messages.
-    limit = max 64 rawLimit
-    go acc _ [] = [reverse acc | not (null acc)]
+    limit = max 0 rawLimit
+    go acc _ [] = ([reverse acc | not (null acc)], [])
     go acc used (n : rest)
       | used + cost n <= limit = go (n : acc) (used + cost n) rest
       | NText t <- n =
           let (pre, post) = splitAtBytes (limit - used) t
            in if T.null pre
-                then flush acc (n : rest)
-                else reverse (NText pre : acc) : go [] 0 (NText post : rest)
+                then
+                  if null acc
+                    then
+                      let (chunks, notes) = go [] 0 rest
+                       in (chunks, LowerNote "text" NoteDropped (Just "one character exceeds max_text_bytes") : notes)
+                    else flush acc (n : rest)
+                else
+                  let (chunks, notes) = go [] 0 (NText post : rest)
+                   in (reverse (NText pre : acc) : chunks, notes)
       | otherwise = flush acc (n : rest)
-    -- Flush a non-empty accumulator; an oversized indivisible node gets a
-    -- chunk of its own so the walk always progresses.
-    flush [] (n : rest) = [n] : go [] 0 rest
-    flush acc rest = reverse acc : go [] 0 rest
+    flush [] (_ : rest) =
+      let (chunks, notes) = go [] 0 rest
+       in (chunks, LowerNote "node" NoteDropped (Just "node exceeds max_text_bytes") : notes)
+    flush acc rest =
+      let (chunks, notes) = go [] 0 rest
+       in (reverse acc : chunks, notes)
 
     cost = \case
       NText t -> utf8Bytes t

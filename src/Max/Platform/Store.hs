@@ -50,11 +50,10 @@ module Max.Platform.Store
     PlatformEndpointStatus (..),
     listPlatformStatus,
     sanitizeRawPayload,
-    canonicalContentValue,
-    renderCanonicalText,
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Monad (forM, forM_)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
@@ -71,7 +70,9 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.List (find)
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -83,6 +84,9 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import GHC.Generics (Generic)
 import Max.DB.Transaction (withTransaction)
+import Max.IR
+import Max.IR.Prompt (promptText)
+import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Types
 import Text.Read (readMaybe)
 
@@ -217,12 +221,12 @@ data OutboundDraft = OutboundDraft
   { legacyConversationId :: !Int64,
     transcriptKind :: !Text,
     sourceCompatibilityMessageId :: !(Maybe Int64),
-    canonicalContent :: !Value,
+    canonicalBody :: !(Body 'Ingest),
     renderedText :: !Text,
     compatibilitySegments :: !Value,
     replyToCompatibilityMessageId :: !(Maybe Int64)
   }
-  deriving stock (Eq, Show, Generic)
+  deriving stock (Eq, Show)
 
 data EnqueuedOutbound = EnqueuedOutbound
   { canonicalMessageId :: !CanonicalMessageId,
@@ -736,8 +740,24 @@ ingestEnvelope ::
   Eff es IngestResult
 ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
   endpoint <- fetchEndpoint envelope.endpointId
-  identityId <- ensurePrincipalIdentity endpoint envelope.senderNativeId envelope.senderDisplayName
-  let NativeEventId nativeEvent = envelope.nativeEventId
+  -- Sender and mention identities lock in one ascending batch so two
+  -- concurrent ingests can never take identity row locks in opposite
+  -- orders.
+  identities <-
+    ensureIdentityBatch
+      endpoint
+      ( Map.insertWith
+          (<|>)
+          envelope.senderNativeId
+          envelope.senderDisplayName
+          (bodyMentionDisplays envelope.content)
+      )
+  identityId <- case Map.lookup envelope.senderNativeId identities of
+    Just identity -> pure identity
+    Nothing -> error "ingestEnvelope: sender identity missing from batch"
+  canonicalBody <- resolveBodyMentions identities envelope.content
+  let contentValue = toJSON canonicalBody
+      NativeEventId nativeEvent = envelope.nativeEventId
       (safeRaw, rawTruncated) = sanitizeRawPayload options.maxRawPayloadBytes envelope.rawPayload
       ingestLockKey = T.pack (show envelope.endpointId.unEndpointId) <> ":" <> nativeEvent
   -- The platform-event row is initially a reservation and receives its
@@ -752,7 +772,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
   case lockRows :: [Only Bool] of
     [_] -> pure ()
     _ -> error "ingestEnvelope: advisory lock did not return one row"
-  reconciled <- reconcileDeliveryEcho endpoint identityId safeRaw rawTruncated
+  reconciled <- reconcileDeliveryEcho endpoint identityId contentValue safeRaw rawTruncated
   case reconciled of
     Just cid -> pure (DeliveryEcho (CanonicalMessageId cid))
     Nothing -> do
@@ -786,18 +806,17 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             -- A pre-hardening writer may have committed an incomplete
             -- reservation. The per-native-event transaction lock makes this
             -- caller its sole repair owner.
-            [Only Nothing] -> insertCanonical endpoint identityId safeRaw
+            [Only Nothing] -> insertCanonical endpoint identityId contentValue
             _ -> error "ingestEnvelope: event reservation disappeared"
-        [_] -> insertCanonical endpoint identityId safeRaw
+        [_] -> insertCanonical endpoint identityId contentValue
         _ -> error "ingestEnvelope: event reservation returned multiple rows"
   where
     options = sanitizeIngestOptions unsafeOptions
     envelope = sanitizeInboundEnvelope unsafeEnvelope
 
-    reconcileDeliveryEcho endpoint identityId safeRaw rawTruncated = do
+    reconcileDeliveryEcho endpoint identityId contentValue safeRaw rawTruncated = do
       let NativeEventId nativeEvent = envelope.nativeEventId
           NativeUserId sender = envelope.senderNativeId
-          contentValue = canonicalContentValue envelope.content
       exact <-
         query
           "SELECT canonical_message_id FROM message_deliveries \
@@ -856,12 +875,14 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             )
         pure cid
 
-    insertCanonical endpoint identityId _safeRaw = do
+    insertCanonical endpoint identityId contentValue = do
       let platformName = endpoint.erPlatform
           NativeEventId nativeEvent = envelope.nativeEventId
           NativeUserId nativeUser = envelope.senderNativeId
-          contentValue = canonicalContentValue envelope.content
-          rendered = fromMaybe (renderCanonicalText envelope.content) options.renderedTextOverride
+          rendered =
+            fromMaybe
+              (promptText (parsePlatform endpoint.erPlatform) envelope.content)
+              options.renderedTextOverride
       legacySelf <- compatibilityId platformName "user" endpoint.erNativeAccountId
       legacyUser <- compatibilityId platformName "user" nativeUser
       legacyMessage <- compatibilityId platformName "message" nativeEvent
@@ -978,17 +999,27 @@ enqueueOutbound draft = withTransaction $ do
     case primaryRows :: [(Int64, Int64, Int64, Text, Text, Maybe Int64)] of
       [row] -> pure row
       _ -> error "enqueueOutbound: conversation has no enabled endpoint"
-  identityId <-
-    ensurePrincipalIdentity
-      EndpointRow
-        { erConversationId = conversation,
-          erPlatformAccountId = account,
-          erPlatform = platformName,
-          erNativeAccountId = accountNative,
-          erLegacyGroupId = legacyGroup
-        }
-      (NativeUserId accountNative)
-      (Just "max")
+  let endpointRow =
+        EndpointRow
+          { erConversationId = conversation,
+            erPlatformAccountId = account,
+            erPlatform = platformName,
+            erNativeAccountId = accountNative,
+            erLegacyGroupId = legacyGroup
+          }
+  identities <-
+    ensureIdentityBatch
+      endpointRow
+      ( Map.insertWith
+          (<|>)
+          (NativeUserId accountNative)
+          (Just "max")
+          (bodyMentionDisplays draft.canonicalBody)
+      )
+  identityId <- case Map.lookup (NativeUserId accountNative) identities of
+    Just identity -> pure identity
+    Nothing -> error "enqueueOutbound: bot identity missing from batch"
+  canonicalBody <- resolveBodyMentions identities draft.canonicalBody
   principalRows <-
     query
       "SELECT principal_id FROM principal_identities WHERE principal_identity_id = ?"
@@ -1022,7 +1053,7 @@ enqueueOutbound draft = withTransaction $ do
         compatibilitySelf,
         compatibilitySelf,
         Jsonb draft.compatibilitySegments,
-        Jsonb draft.canonicalContent,
+        Jsonb (toJSON canonicalBody),
         draft.renderedText,
         draft.replyToCompatibilityMessageId,
         replyCanonical,
@@ -1486,7 +1517,7 @@ sanitizeInboundEnvelope envelope =
     { nativeEventId = sanitizeNativeEventId envelope.nativeEventId,
       senderNativeId = sanitizeNativeUserId envelope.senderNativeId,
       senderDisplayName = sanitizePostgresText <$> envelope.senderDisplayName,
-      content = sanitizeContentPart <$> envelope.content,
+      content = Body (sanitizeIngestNode <$> envelope.content.nodes),
       relations = sanitizeRelation <$> envelope.relations,
       sourceCursor = sanitizeCursor <$> envelope.sourceCursor,
       rawPayload = sanitizePostgresValue <$> envelope.rawPayload
@@ -1513,70 +1544,115 @@ sanitizeRelation :: MessageRelation -> MessageRelation
 sanitizeRelation = \case
   ReplyTo native -> ReplyTo (sanitizeNativeEventId native)
   Replaces native -> Replaces (sanitizeNativeEventId native)
+  Redacts native -> Redacts (sanitizeNativeEventId native)
   ReactsTo native reaction ->
     ReactsTo (sanitizeNativeEventId native) (sanitizePostgresText reaction)
 
-sanitizeContentPart :: ContentPart -> ContentPart
-sanitizeContentPart = \case
-  ContentText body -> ContentText (sanitizePostgresText body)
-  ContentMention native display ->
-    ContentMention (sanitizeNativeUserId native) (sanitizePostgresText <$> display)
-  ContentMedia source display ->
-    ContentMedia (sanitizeMediaSource source) (sanitizePostgresText <$> display)
-  ContentUnsupported label -> ContentUnsupported (sanitizePostgresText label)
+sanitizeIngestNode :: Node 'Ingest -> Node 'Ingest
+sanitizeIngestNode = \case
+  NText body -> NText (sanitizePostgresText body)
+  NMention native display ->
+    NMention (sanitizeNativeUserId native) (sanitizePostgresText display)
+  NEmote emote ->
+    NEmote
+      Emote
+        { origin = emote.origin,
+          nativeId = sanitizePostgresText emote.nativeId,
+          name = sanitizePostgresText <$> emote.name,
+          raw = sanitizePostgresValue <$> emote.raw
+        }
+  NMedia source meta ->
+    NMedia
+      (sanitizeMediaRef <$> source)
+      MediaMeta
+        { kind = meta.kind,
+          mime = sanitizePostgresText <$> meta.mime,
+          sizeBytes = meta.sizeBytes,
+          name = sanitizePostgresText <$> meta.name,
+          description = sanitizePostgresText <$> meta.description,
+          raw = sanitizePostgresValue <$> meta.raw
+        }
+  NCard card ->
+    NCard
+      Card
+        { title = sanitizePostgresText <$> card.title,
+          subtitle = sanitizePostgresText <$> card.subtitle,
+          url = sanitizePostgresText <$> card.url,
+          tag = sanitizePostgresText <$> card.tag,
+          preview = sanitizeMediaRef <$> card.preview,
+          raw = sanitizePostgresValue <$> card.raw
+        }
+  NForward forward ->
+    NForward
+      ForwardRef
+        { nativeId = sanitizePostgresText forward.nativeId,
+          count = forward.count
+        }
+  NUnsupported unsupported ->
+    NUnsupported
+      Unsupported
+        { source = sanitizePostgresText unsupported.source,
+          description = sanitizePostgresText unsupported.description,
+          raw = sanitizePostgresValue <$> unsupported.raw
+        }
 
-sanitizeMediaSource :: MediaSource -> MediaSource
-sanitizeMediaSource = \case
-  RemoteMedia uri mime bytes digest ->
-    RemoteMedia
-      (sanitizePostgresText uri)
-      (sanitizePostgresText <$> mime)
-      bytes
-      (sanitizePostgresText <$> digest)
-  InlineMedia bytes mime name ->
-    InlineMedia bytes (sanitizePostgresText <$> mime) (sanitizePostgresText <$> name)
+sanitizeMediaRef :: MediaRef -> MediaRef
+sanitizeMediaRef ref =
+  fromMaybe
+    (error "sanitizeMediaRef: validated reference became invalid")
+    (parseMediaRef (sanitizePostgresText (renderMediaRef ref)))
 
-canonicalContentValue :: [ContentPart] -> Value
-canonicalContentValue parts =
-  toArray (partValue <$> parts)
+-- | Ensure principal identities for a batch of native users in ascending
+-- native-id order.  Every caller that takes identity row locks must go
+-- through one sorted batch per transaction, so concurrent transactions
+-- cannot acquire FOR UPDATE locks in opposite orders.
+ensureIdentityBatch ::
+  (WithConnection :> es, IOE :> es) =>
+  EndpointRow ->
+  Map NativeUserId (Maybe Text) ->
+  Eff es (Map NativeUserId Int64)
+ensureIdentityBatch endpoint =
+  Map.traverseWithKey (ensurePrincipalIdentity endpoint)
+
+-- | The identity work one ingest body needs, keyed for one sorted batch.
+-- A display is kept only when it says more than the id itself.
+bodyMentionDisplays :: Body 'Ingest -> Map NativeUserId (Maybe Text)
+bodyMentionDisplays body =
+  Map.fromListWith
+    (<|>)
+    [(native, meaningfulDisplay native display) | NMention native display <- body.nodes]
+
+meaningfulDisplay :: NativeUserId -> Text -> Maybe Text
+meaningfulDisplay (NativeUserId native) display =
+  let stripped = T.strip display
+   in if T.null stripped || stripped == native then Nothing else Just stripped
+
+-- | Turn an adapter's ingest body into the stored canonical phase using a
+-- pre-ensured identity table.  A display that is blank or just the native
+-- id is enriched from the stored identity when one carries a name, so a
+-- bare QQ at-segment can still mirror as a readable @nickname.
+resolveBodyMentions ::
+  (WithConnection :> es, IOE :> es) =>
+  Map NativeUserId Int64 ->
+  Body 'Ingest ->
+  Eff es (Body 'Canonical)
+resolveBodyMentions identities = resolveIngest resolve
   where
-    toArray = toJSON
-    partValue = \case
-      ContentText body -> object ["type" .= ("text" :: Text), "text" .= body]
-      ContentMention (NativeUserId user) display ->
-        object ["type" .= ("mention" :: Text), "native_user_id" .= user, "display" .= display]
-      ContentMedia source caption ->
-        object ["type" .= ("media" :: Text), "source" .= mediaValue source, "caption" .= caption]
-      ContentUnsupported description ->
-        object ["type" .= ("unsupported" :: Text), "description" .= description]
-    mediaValue = \case
-      RemoteMedia url mime size sha ->
-        object
-          [ "kind" .= ("remote" :: Text),
-            "url" .= url,
-            "mime_type" .= mime,
-            "size" .= size,
-            "sha256" .= sha
-          ]
-      InlineMedia bytes mime sha ->
-        object
-          [ "kind" .= ("inline" :: Text),
-            "bytes" .= TE.decodeUtf8 (Base16.encode bytes),
-            "mime_type" .= mime,
-            "sha256" .= sha
-          ]
-
-renderCanonicalText :: [ContentPart] -> Text
-renderCanonicalText = T.intercalate " " . fmap render
-  where
-    render = \case
-      ContentText body -> body
-      ContentMention (NativeUserId user) display -> "@" <> fromMaybe user display
-      ContentMedia _ caption -> fromMaybe "[media]" (caption >>= nonBlank)
-      ContentUnsupported description -> "[unsupported: " <> description <> "]"
-    nonBlank value
-      | T.null (T.strip value) = Nothing
-      | otherwise = Just value
+    resolve native@(NativeUserId nativeText) display = do
+      identity <- case Map.lookup native identities of
+        Just identity -> pure identity
+        Nothing -> error "resolveBodyMentions: mention missing from identity batch"
+      finalDisplay <- case meaningfulDisplay native display of
+        Just meaningful -> pure meaningful
+        Nothing -> do
+          rows <-
+            query
+              "SELECT display_name FROM principal_identities WHERE principal_identity_id = ?"
+              (Only identity)
+          pure $ case rows :: [Only (Maybe Text)] of
+            [Only (Just name)] | isJust (meaningfulDisplay native name) -> name
+            _ -> nativeText
+      pure (MentionIdentity (PrincipalIdentityId identity), finalDisplay)
 
 fetchEndpoint ::
   (WithConnection :> es, IOE :> es) =>
@@ -1603,18 +1679,20 @@ ensurePrincipalIdentity ::
   Maybe Text ->
   Eff es Int64
 ensurePrincipalIdentity endpoint (NativeUserId nativeUser) display = do
-  existing <-
+  let native = NativeUserId nativeUser
+      freshDisplay = display >>= meaningfulDisplay native
+  (existing :: [(Int64, Int64, Maybe Text)]) <-
     query
-      "SELECT principal_identity_id FROM principal_identities \
+      "SELECT principal_identity_id, principal_id, display_name FROM principal_identities \
       \ WHERE platform_account_id = ? AND native_user_id = ? FOR UPDATE"
       (endpoint.erPlatformAccountId, nativeUser)
   case existing of
-    [Only identity] -> pure identity
+    [(identity, principal, storedDisplay)] -> enrich identity principal storedDisplay
     [] -> do
       principalRows <-
         query
           "INSERT INTO principals (display_name) VALUES (?) RETURNING principal_id"
-          (Only display)
+          (Only freshDisplay)
       let principal = exactlyOne "ensurePrincipalIdentity principal" (principalRows :: [Only Int64])
       inserted <-
         query
@@ -1623,19 +1701,38 @@ ensurePrincipalIdentity endpoint (NativeUserId nativeUser) display = do
           \ VALUES (?, ?, ?, ?) \
           \ ON CONFLICT (platform_account_id, native_user_id) DO NOTHING \
           \ RETURNING principal_identity_id"
-          (principal, endpoint.erPlatformAccountId, nativeUser, display)
+          (principal, endpoint.erPlatformAccountId, nativeUser, freshDisplay)
       case (inserted :: [Only Int64]) of
         [Only identity] -> pure identity
         [] -> do
           _ <- execute "DELETE FROM principals WHERE principal_id = ?" (Only principal)
-          winner <-
+          (winner :: [(Int64, Int64, Maybe Text)]) <-
             query
-              "SELECT principal_identity_id FROM principal_identities \
+              "SELECT principal_identity_id, principal_id, display_name FROM principal_identities \
               \ WHERE platform_account_id = ? AND native_user_id = ?"
               (endpoint.erPlatformAccountId, nativeUser)
-          pure (exactlyOne "ensurePrincipalIdentity winner" winner)
+          case winner of
+            [(identity, winnerPrincipal, storedDisplay)] -> enrich identity winnerPrincipal storedDisplay
+            _ -> error "ensurePrincipalIdentity winner: expected exactly one row"
         _ -> error "ensurePrincipalIdentity: multiple inserted identities"
     _ -> error "ensurePrincipalIdentity: duplicate identity invariant violated"
+  where
+    enrich identity principal storedDisplay = do
+      case (display >>= meaningfulDisplay (NativeUserId nativeUser), storedDisplay >>= meaningfulDisplay (NativeUserId nativeUser)) of
+        (Just better, Nothing) -> do
+          _ <-
+            execute
+              "UPDATE principal_identities SET display_name = ? \
+              \ WHERE principal_identity_id = ?"
+              (better, identity)
+          _ <-
+            execute
+              "UPDATE principals SET display_name = ? \
+              \ WHERE principal_id = ? \
+              \   AND (display_name IS NULL OR btrim(display_name) = '' OR display_name = ?)"
+              (better, principal, nativeUser)
+          pure identity
+        _ -> pure identity
 
 compatibilityId ::
   (WithConnection :> es, IOE :> es) =>
@@ -1691,6 +1788,7 @@ insertRelation cid endpoint relation = do
   let (kind, targetNative, reaction) = case relation of
         ReplyTo (NativeEventId target) -> ("reply" :: Text, target, Nothing)
         Replaces (NativeEventId target) -> ("replace", target, Nothing)
+        Redacts (NativeEventId target) -> ("redacts", target, Nothing)
         ReactsTo (NativeEventId target) key -> ("reaction", target, Just key)
   resolved <- resolveNativeTarget endpoint targetNative
   _ <-

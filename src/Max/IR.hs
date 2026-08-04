@@ -38,7 +38,11 @@ module Max.IR
     Unsupported (..),
 
     -- * Phase-specific decorations
-    MediaRef (..),
+    MediaRef,
+    mediaBlobRef,
+    mediaRemoteRef,
+    mediaRefBlobSha,
+    mediaRefRemoteUrl,
     renderMediaRef,
     parseMediaRef,
     ResolvedMedia (..),
@@ -56,6 +60,7 @@ module Max.IR
     -- * Node-list utilities
     mergeText,
     trimEdges,
+    resolveIngest,
   )
 where
 
@@ -81,8 +86,11 @@ import Max.Platform.Types
 import Text.Printf (printf)
 
 -- | Pipeline phases.  'Canonical' is the only stored phase; the others are
--- in-memory shapes on either side of it.
-data Phase = ModelParsed | Canonical | Lowered | Hydrated
+-- in-memory shapes on either side of it.  'Ingest' is what an adapter can
+-- build without database access: identical to 'Canonical' except mentions
+-- still carry the origin-native user id — 'ingestEnvelope' resolves them
+-- to principal identities inside the ingest transaction.
+data Phase = ModelParsed | Ingest | Canonical | Lowered | Hydrated
 
 data Body (p :: Phase) = Body {nodes :: ![Node p]}
 
@@ -102,22 +110,26 @@ data Node (p :: Phase)
 
 type family XMention (p :: Phase) where
   XMention 'ModelParsed = NativeUserId -- raw [@#123] token, pre-roster
+  XMention 'Ingest = NativeUserId -- origin-native, pre-identity
   XMention 'Canonical = MentionTarget
   XMention 'Lowered = NativeUserId -- DESTINATION endpoint's native id
   XMention 'Hydrated = HydratedMention
 
 type family XMedia (p :: Phase) where
   XMedia 'ModelParsed = OutboundMediaRef -- [sticker#42] / [image#7] reference
+  XMedia 'Ingest = Maybe MediaRef
   XMedia 'Canonical = Maybe MediaRef -- never inline bytes at rest
   XMedia 'Lowered = ResolvedMedia -- sendable payload, NOT Maybe
   XMedia 'Hydrated = MediaView
 
 type family XForward (p :: Phase) where
+  XForward 'Ingest = ForwardRef
   XForward 'Canonical = ForwardRef
   XForward 'Hydrated = HydratedForward
   XForward _ = Void -- model can't author; lowering folds
 
 type family XUnsupported (p :: Phase) where
+  XUnsupported 'Ingest = Unsupported
   XUnsupported 'Canonical = Unsupported
   XUnsupported 'Hydrated = Unsupported
   XUnsupported _ = Void -- can never reach a wire
@@ -128,13 +140,13 @@ type ForAllX :: (Type -> Constraint) -> Phase -> Constraint
 type ForAllX c p =
   (c (XMention p), c (XMedia p), c (XForward p), c (XUnsupported p))
 
-deriving stock instance ForAllX Eq p => Eq (Node p)
+deriving stock instance (ForAllX Eq p) => Eq (Node p)
 
-deriving stock instance ForAllX Show p => Show (Node p)
+deriving stock instance (ForAllX Show p) => Show (Node p)
 
-deriving stock instance ForAllX Eq p => Eq (Body p)
+deriving stock instance (ForAllX Eq p) => Eq (Body p)
 
-deriving stock instance ForAllX Show p => Show (Body p)
+deriving stock instance (ForAllX Show p) => Show (Body p)
 
 data MentionTarget
   = -- | Resolves to a principal AND its origin native id; whether the
@@ -175,15 +187,44 @@ data MediaMeta = MediaMeta
 data MediaRef = MediaBlob !Text | MediaRemote !Text
   deriving stock (Eq, Show)
 
+-- | Construct a content-addressed reference.  Canonical blob ids are always
+-- lowercase SHA-256 hex; keeping the constructor private prevents arbitrary
+-- paths or disguised inline payloads from entering the stored phase.
+mediaBlobRef :: Text -> Maybe MediaRef
+mediaBlobRef sha
+  | T.length sha == 64 && T.all isLowerHex sha = Just (MediaBlob sha)
+  | otherwise = Nothing
+  where
+    isLowerHex c = ('0' <= c && c <= '9') || ('a' <= c && c <= 'f')
+
+-- | Construct a bounded-fetch or platform-authenticated remote reference.
+-- Inline/data/file schemes are deliberately rejected: those payloads must be
+-- imported into BlobStore before the body can become canonical.
+mediaRemoteRef :: Text -> Maybe MediaRef
+mediaRemoteRef url
+  | any (`T.isPrefixOf` T.toLower url) ["https://", "http://", "mxc://"] =
+      Just (MediaRemote url)
+  | otherwise = Nothing
+
+mediaRefBlobSha :: MediaRef -> Maybe Text
+mediaRefBlobSha = \case
+  MediaBlob sha -> Just sha
+  MediaRemote _ -> Nothing
+
+mediaRefRemoteUrl :: MediaRef -> Maybe Text
+mediaRefRemoteUrl = \case
+  MediaBlob _ -> Nothing
+  MediaRemote url -> Just url
+
 renderMediaRef :: MediaRef -> Text
 renderMediaRef = \case
   MediaBlob sha -> "blob:" <> sha
   MediaRemote url -> url
 
-parseMediaRef :: Text -> MediaRef
+parseMediaRef :: Text -> Maybe MediaRef
 parseMediaRef t = case T.stripPrefix "blob:" t of
-  Just sha -> MediaBlob sha
-  Nothing -> MediaRemote t
+  Just sha -> mediaBlobRef sha
+  Nothing -> mediaRemoteRef t
 
 -- | A payload an adapter can actually send: bytes already loaded, or a URL
 -- the adapter may fetch through its own bounded runtime.
@@ -337,6 +378,27 @@ mergeText = \case
   (n : rest) -> n : mergeText rest
   [] -> []
 
+-- | Resolve an adapter-built body into the stored phase.  The callback
+-- turns an origin-native mention (id plus captured display) into its
+-- principal identity and the display to persist; every other node converts
+-- unchanged.  Effectful only through the callback, so the ingest
+-- transaction owns all database work.
+resolveIngest ::
+  (Applicative f) =>
+  (NativeUserId -> Text -> f (MentionTarget, Text)) ->
+  Body 'Ingest ->
+  f (Body 'Canonical)
+resolveIngest resolve body = Body <$> traverse go body.nodes
+  where
+    go = \case
+      NText t -> pure (NText t)
+      NMention native display -> uncurry NMention <$> resolve native display
+      NEmote e -> pure (NEmote e)
+      NMedia src meta -> pure (NMedia src meta)
+      NCard c -> pure (NCard c)
+      NForward fr -> pure (NForward fr)
+      NUnsupported u -> pure (NUnsupported u)
+
 -- | Trim whitespace at the outer edges of a node list; an edge text node
 -- that was nothing but whitespace disappears entirely.
 trimEdges :: [Node p] -> [Node p]
@@ -410,7 +472,7 @@ nodeValue = \case
   where
     node :: Text -> [Pair] -> Value
     node ty fields = object (("type" .= ty) : fields)
-    opt :: ToJSON a => Key -> Maybe a -> [Pair]
+    opt :: (ToJSON a) => Key -> Maybe a -> [Pair]
     opt k = maybe [] (\v -> [k .= v])
 
 parseNode :: Value -> Parser (Node 'Canonical)
@@ -436,7 +498,8 @@ parseNode = withObject "Node" $ \o -> do
       pure (NEmote Emote {origin = platform, nativeId, name, raw})
     "media" -> do
       kind <- parseMediaKind =<< o .: "kind"
-      source <- fmap parseMediaRef <$> o .:? "source"
+      sourceText <- o .:? "source"
+      source <- traverse parseStoredMediaRef sourceText
       mime <- o .:? "mime"
       sizeBytes <- o .:? "size"
       name <- o .:? "name"
@@ -448,7 +511,8 @@ parseNode = withObject "Node" $ \o -> do
       subtitle <- o .:? "subtitle"
       url <- o .:? "url"
       tag <- o .:? "tag"
-      preview <- fmap parseMediaRef <$> o .:? "preview"
+      previewText <- o .:? "preview"
+      preview <- traverse parseStoredMediaRef previewText
       raw <- o .:? "raw"
       pure (NCard Card {title, subtitle, url, tag, preview, raw})
     "forward" -> do
@@ -461,6 +525,10 @@ parseNode = withObject "Node" $ \o -> do
       raw <- o .:? "raw"
       pure (NUnsupported Unsupported {source, description, raw})
     other -> fail ("unknown canonical node type " <> T.unpack other)
+
+parseStoredMediaRef :: Text -> Parser MediaRef
+parseStoredMediaRef value =
+  maybe (fail ("invalid canonical media reference " <> T.unpack value)) pure (parseMediaRef value)
 
 mediaKindText :: MediaKind -> Text
 mediaKindText = \case

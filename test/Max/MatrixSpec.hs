@@ -2,8 +2,8 @@ module Max.MatrixSpec (spec) where
 
 import Data.Aeson (object, toJSON, (.=))
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
+import Max.IR
 import Max.Matrix
-import Max.Platform.Store (canonicalContentValue)
 import Max.Platform.Types
 import Test.Hspec
 
@@ -11,14 +11,19 @@ spec :: Spec
 spec = describe "Matrix adapter" $ do
   it "degrades a canonical cross-platform mention to readable @username text" $ do
     let content =
-          canonicalContentValue
-            [ ContentMention (NativeUserId "1578034713") (Just "用户名"),
-              ContentText " 在吗，找你"
-            ]
+          toJSON
+            ( Body
+                [ NMention (MentionIdentity (PrincipalIdentityId 7)) "用户名",
+                  NText " 在吗，找你"
+                ] ::
+                Body 'Canonical
+            )
     matrixCanonicalText content `shouldBe` Just "@用户名 在吗，找你"
 
-  it "falls back to the native id when a mention has no display label" $ do
-    let content = toJSON [object ["type" .= ("mention" :: String), "native_user_id" .= ("1578034713" :: String)]]
+  it "keeps the id-shaped display when no richer label was captured" $ do
+    let content =
+          toJSON
+            (Body [NMention (MentionIdentity (PrincipalIdentityId 7)) "1578034713"] :: Body 'Canonical)
     matrixCanonicalText content `shouldBe` Just "@1578034713"
 
   it "parses one allowlisted room timeline with reply and mention provenance" $ do
@@ -68,7 +73,8 @@ spec = describe "Matrix adapter" $ do
     case page.events of
       [event] -> do
         event.eventId `shouldBe` NativeEventId "$event"
-        event.content `shouldBe` [ContentText "hello Max"]
+        event.content
+          `shouldBe` [NText "hello ", NMention (NativeUserId "@max:test") "Max"]
         event.relations `shouldBe` [ReplyTo (NativeEventId "$parent")]
         event.mentionedUsers `shouldBe` [NativeUserId "@max:test"]
         matrixSelfMentionIsDirect (NativeUserId "@max:test") event `shouldBe` True
@@ -95,7 +101,7 @@ spec = describe "Matrix adapter" $ do
             (NativeUserId "@alice:test")
             (posixSecondsToUTCTime 0)
             EventMessage
-            [ContentText "reply"]
+            [NText "reply"]
             [ReplyTo (NativeEventId "$mirrored-user-message")]
             [self]
             raw

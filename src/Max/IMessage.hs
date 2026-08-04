@@ -7,6 +7,7 @@ module Max.IMessage
   ( IMessageConfig (..),
     IMessagePage (..),
     IMessageMessage (..),
+    IMessageMention (..),
     IMessageAttachment (..),
     IMessageBridgeHealth (..),
     IMessageSendState (..),
@@ -17,6 +18,7 @@ module Max.IMessage
     iMessageIngressIdentity,
     iMessageReplyTarget,
     iMessageIsAddressed,
+    iMessageTextNodes,
     iMessageSendTransport,
     iMessageAuthoritativeSendGuid,
     iMessageCapabilities,
@@ -32,7 +34,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.Int (Int64)
-import Data.List (find)
+import Data.List (find, sortOn)
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -55,7 +57,9 @@ import Max.HttpRuntime
     runBuffered,
     withStreamingResponse,
   )
+import Max.IR
 import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryMedia (..), DeliveryTransport (..))
+import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
     DeliveryClaim (..),
@@ -125,12 +129,21 @@ data IMessageMessage = IMessageMessage
     replyToGuid :: !(Maybe Text),
     -- The actual inline-reply root exposed by Messages.app.
     threadOriginatorGuid :: !(Maybe Text),
+    mentions :: ![IMessageMention],
     mentionedHandles :: ![Text],
     isReaction :: !Bool,
     reactionKey :: !(Maybe Text),
     reactedToGuid :: !(Maybe Text),
     attachments :: ![IMessageAttachment],
     raw :: !Value
+  }
+  deriving stock (Eq, Show, Generic)
+
+data IMessageMention = IMessageMention
+  { handle :: !Text,
+    display :: !Text,
+    utf16Location :: !Int,
+    utf16Length :: !Int
   }
   deriving stock (Eq, Show, Generic)
 
@@ -313,7 +326,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
                 occurredAt = message.createdAt,
                 receivedAt = received,
                 eventKind = kind,
-                content = parts,
+                content = Body parts,
                 relations,
                 sourceCursor = Just (PlatformCursor (Number (fromIntegral next))),
                 rawPayload = Just message.raw
@@ -593,15 +606,25 @@ messageParser raw@(Object o) = do
   createdAt <- maybe (fail "invalid created_at") pure (iso8601ParseM (T.unpack createdText))
   replyToGuid <- o .:? "reply_to_guid"
   threadOriginatorGuid <- o .:? "thread_originator_guid"
-  mentionedHandles <- o .:? "mentioned_handles" .!= []
+  mentions <- o .:? "mentions" .!= [] >>= traverse mentionParser
+  reportedHandles <- o .:? "mentioned_handles" .!= []
   isReaction <- o .:? "is_reaction" .!= False
   reactionType <- o .:? "reaction_type"
   reactionEmoji <- o .:? "reaction_emoji"
   reactedToGuid <- o .:? "reacted_to_guid"
   attachments <- o .:? "attachments" .!= [] >>= traverse attachmentParser
   let reactionKey = reactionEmoji <|> reactionType
-  pure IMessageMessage {rowId, chatId, guid, sender, senderName, isFromMe, text, createdAt, replyToGuid, threadOriginatorGuid, mentionedHandles, isReaction, reactionKey, reactedToGuid, attachments, raw}
+      mentionedHandles = if null reportedHandles then map (.handle) mentions else reportedHandles
+  pure IMessageMessage {rowId, chatId, guid, sender, senderName, isFromMe, text, createdAt, replyToGuid, threadOriginatorGuid, mentions, mentionedHandles, isReaction, reactionKey, reactedToGuid, attachments, raw}
 messageParser _ = fail "message must be an object"
+
+mentionParser :: Value -> Parser IMessageMention
+mentionParser = withObject "mention" $ \o ->
+  IMessageMention
+    <$> o .: "handle"
+    <*> o .: "display"
+    <*> o .: "utf16_location"
+    <*> o .: "utf16_length"
 
 attachmentParser :: Value -> Parser IMessageAttachment
 attachmentParser = withObject "attachment" $ \o ->
@@ -616,27 +639,90 @@ messageContent ::
   HttpRuntime ->
   IMessageConfig ->
   IMessageMessage ->
-  Eff es [ContentPart]
+  Eff es [Node 'Ingest]
 messageContent runtime cfg message = do
   media <- forM message.attachments $ \attachment ->
     if T.null attachment.attachmentId
-      then pure (ContentUnsupported "imessage:attachment-unavailable")
+      then pure (unavailableAttachment attachment)
       else do
         downloaded <- liftIO (fetchAttachment runtime cfg attachment)
         case downloaded of
           Left err -> do
             logAttention "iMessage attachment import failed; text remains durable" $
               object ["attachment_id" .= attachment.attachmentId, "error" .= err]
-            pure (ContentUnsupported "imessage:attachment-unavailable")
+            pure (unavailableAttachment attachment)
           Right bytes -> do
             ref <- putBlob bytes
             let sha = blobRefSha256 ref
             pure $
-              ContentMedia
-                (RemoteMedia ("blob:" <> sha) attachment.mimeType (Just (fromIntegral (BS.length bytes))) (Just sha))
-                attachment.transferName
-  let parts = [ContentText message.text | not (T.null message.text)] <> media
-  pure (parts <> [ContentUnsupported "imessage:empty" | null parts])
+              NMedia
+                (mediaBlobRef sha)
+                MediaMeta
+                  { kind = mediaKindFromMime attachment.mimeType,
+                    mime = attachment.mimeType,
+                    sizeBytes = Just (fromIntegral (BS.length bytes)),
+                    name = attachment.transferName,
+                    description = Nothing,
+                    raw = Nothing
+                  }
+  let parts = iMessageTextNodes cfg message <> media
+  pure
+    ( parts
+        <> [ NUnsupported
+               Unsupported {source = "imessage:empty", description = "empty message", raw = Nothing}
+           | null parts
+           ]
+    )
+  where
+    unavailableAttachment attachment =
+      NUnsupported
+        Unsupported
+          { source = "imessage:attachment-unavailable",
+            description = fromMaybe "attachment unavailable" attachment.transferName,
+            raw = Nothing
+          }
+
+-- Messages stores attributed-string ranges in UTF-16 code units.  Preserve
+-- those exact ranges as semantic mentions; malformed or stale metadata is
+-- ignored without sacrificing the authoritative plain text.
+iMessageTextNodes :: IMessageConfig -> IMessageMessage -> [Node 'Ingest]
+iMessageTextNodes _ message = mergeText (go 0 message.text (sortOn (.utf16Location) message.mentions))
+  where
+    go _ remaining [] = [NText remaining | not (T.null remaining)]
+    go consumed remaining (mention : rest)
+      | mention.utf16Location < consumed = go consumed remaining rest
+      | otherwise = case splitAtUtf16 (mention.utf16Location - consumed) remaining of
+          Nothing -> go consumed remaining rest
+          Just (before, fromMention) -> case splitAtUtf16 mention.utf16Length fromMention of
+            Just (display, after)
+              | display == mention.display ->
+                  [NText before | not (T.null before)]
+                    <> [NMention (NativeUserId mention.handle) display]
+                    <> go (mention.utf16Location + mention.utf16Length) after rest
+            _ -> go consumed remaining rest
+
+splitAtUtf16 :: Int -> Text -> Maybe (Text, Text)
+splitAtUtf16 target input
+  | target < 0 = Nothing
+  | otherwise = do
+      characters <- count 0 0 input
+      pure (T.splitAt characters input)
+  where
+    count units characters remaining
+      | units == target = Just characters
+      | otherwise = case T.uncons remaining of
+          Nothing -> Nothing
+          Just (character, rest) ->
+            let next = units + if fromEnum character > 0xFFFF then 2 else 1
+             in if next > target then Nothing else count next (characters + 1) rest
+
+mediaKindFromMime :: Maybe Text -> MediaKind
+mediaKindFromMime = \case
+  Just mime
+    | "image/" `T.isPrefixOf` mime -> MImage
+    | "video/" `T.isPrefixOf` mime -> MVideo
+    | "audio/" `T.isPrefixOf` mime -> MAudio
+  _ -> MFile
 
 fetchAttachment :: HttpRuntime -> IMessageConfig -> IMessageAttachment -> IO (Either Text BS.ByteString)
 fetchAttachment runtime cfg attachment = do

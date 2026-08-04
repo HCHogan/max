@@ -256,6 +256,22 @@ func TestConfirmedMentionHandlesUsesIdentityNotDisplayText(t *testing.T) {
 	}
 }
 
+func TestAddConfirmedMentionsKeepsIdentityAndAttributedRange(t *testing.T) {
+	message := map[string]any{}
+	addConfirmedMentions(message, []mentionSpan{
+		{Handle: "1578034713", Display: "Maxwell", UTF16Location: 3, UTF16Length: 7},
+		{Handle: "1578034713", UTF16Location: -1},
+	})
+	handles := message["mentioned_handles"].([]string)
+	if len(handles) != 1 || handles[0] != "1578034713" {
+		t.Fatalf("unexpected handles: %#v", handles)
+	}
+	mentions := message["mentions"].([]mentionSpan)
+	if len(mentions) != 1 || mentions[0].Display != "Maxwell" || mentions[0].UTF16Location != 3 {
+		t.Fatalf("unexpected visible mentions: %#v", mentions)
+	}
+}
+
 func TestSanitizeMessagesAddsOnlyConfirmedMentionHandles(t *testing.T) {
 	root := t.TempDir()
 	sqlite := filepath.Join(root, "sqlite3")

@@ -23,6 +23,7 @@ extra-source-files:
     README.md
     browser-image/*
     bridge/imsg/*.go
+    bridge/imsg/*.m
     bridge/imsg/go.mod
     bridge/imsg/README.md
     bridge/imsg/*.example
@@ -155,6 +156,7 @@ library
         Max.IR.Digest
         Max.IR.Lower
         Max.IR.Prompt
+        Max.Platform.Envelope
         Max.LLM.Stream
         Max.Log
         Max.LogBuffer

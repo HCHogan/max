@@ -21,7 +21,7 @@ module Max.Effects.Outbound
     OutboundRequest (..),
     OutboundDeliveryScope (..),
     SendOutcome (..),
-    outboundCanonicalParts,
+    outboundIngestBody,
     runOutbound,
     runOutboundWith,
     sendRecorded,
@@ -30,20 +30,24 @@ module Max.Effects.Outbound
 where
 
 import Data.Aeson (object, toJSON, (.=))
+import Data.ByteString.Base64 qualified as B64
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Exception (SomeException)
 import Effectful.Log (Log, logAttention)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Message (MessageKind (..))
-import Max.Platform.QQ (qqContentParts)
-import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), canonicalContentValue, enqueueOutbound)
-import Max.Platform.Types (ContentPart (ContentMention), NativeUserId (..))
+import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
+import Max.IR
+import Max.Platform.QQ (qqSegmentNodes)
+import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
+import Max.Platform.Types (NativeUserId (..))
 import Max.Util (trySync)
-import OneBot.Segment (Segment (..), renderPlainText)
+import OneBot.Segment (ImageSegInfo (..), Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
 -- | Everything fixed before one visible message is sent.
@@ -98,32 +102,34 @@ type instance DispatchOf Outbound = Dynamic
 -- message; 'SentRecorded' now means the canonical send intent is committed.
 runOutbound ::
   forall es a.
-  (WithConnection :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Eff (Outbound : es) a ->
   Eff es a
 runOutbound = runOutboundWith deliver
   where
     deliver :: OutboundRequest -> Eff es SendOutcome
     deliver req = do
-      let GroupId group = req.orGroupId
-          rendered = fromMaybe (renderPlainText req.orSegments) req.orRenderedText
-          reply = listToMaybe [message | SegReply (MessageId message) <- req.orSegments]
-          canonicalParts = outboundCanonicalParts req
-          draft =
-            OutboundDraft
-              { legacyConversationId = group,
-                transcriptKind = renderMessageKind req.orKind,
-                sourceCompatibilityMessageId = case req.orDeliveryScope of
-                  DeliverConversation -> Nothing
-                  DeliverSourceEndpoint (MessageId source) -> Just source,
-                canonicalContent = canonicalContentValue canonicalParts,
-                renderedText = rendered,
-                compatibilitySegments = toJSON req.orSegments,
-                replyToCompatibilityMessageId = reply
-              }
-      trySync (enqueueOutbound draft) >>= \case
-        Left e -> failed req ("canonical publish failed: " <> T.pack (show (e :: SomeException)))
-        Right queued -> pure (SentRecorded (MessageId queued.compatibilityMessageId))
+      outboundIngestBody req >>= \case
+        Left err -> failed req ("canonical media import failed: " <> err)
+        Right canonicalBody -> do
+          let GroupId group = req.orGroupId
+              rendered = fromMaybe (renderPlainText req.orSegments) req.orRenderedText
+              reply = listToMaybe [message | SegReply (MessageId message) <- req.orSegments]
+              draft =
+                OutboundDraft
+                  { legacyConversationId = group,
+                    transcriptKind = renderMessageKind req.orKind,
+                    sourceCompatibilityMessageId = case req.orDeliveryScope of
+                      DeliverConversation -> Nothing
+                      DeliverSourceEndpoint (MessageId source) -> Just source,
+                    canonicalBody,
+                    renderedText = rendered,
+                    compatibilitySegments = toJSON req.orSegments,
+                    replyToCompatibilityMessageId = reply
+                  }
+          trySync (enqueueOutbound draft) >>= \case
+            Left e -> failed req ("canonical publish failed: " <> T.pack (show (e :: SomeException)))
+            Right queued -> pure (SentRecorded (MessageId queued.compatibilityMessageId))
 
     failed :: OutboundRequest -> Text -> Eff es SendOutcome
     failed req reason = do
@@ -140,16 +146,45 @@ runOutbound = runOutboundWith deliver
       KindCommand -> "command"
       KindDebug -> "debug"
 
--- | Preserve a mention's semantic target in canonical content while retaining
--- the native QQ segment separately for QQ delivery.  Display labels are
--- endpoint-neutral metadata and let text-only mirrors degrade to @username.
-outboundCanonicalParts :: OutboundRequest -> [ContentPart]
-outboundCanonicalParts req = concatMap canonicalize req.orSegments
+-- | The IR body a bot message publishes.  Mentions keep their semantic
+-- target (with the display label for text-tier mirrors) while the native
+-- QQ segment is retained separately for QQ delivery. Inline OneBot
+-- @base64://@ payloads are imported into BlobStore here, before the body can
+-- enter the canonical phase; file/data schemes are refused rather than
+-- smuggled into a nominal remote reference.
+outboundIngestBody :: (Blob :> es) => OutboundRequest -> Eff es (Either Text (Body 'Ingest))
+outboundIngestBody req = do
+  nodes <- traverse toNodes req.orSegments
+  pure (Body . concat <$> sequence nodes)
   where
-    canonicalize segment = case segment of
+    toNodes = \case
       SegAt user@(UserId native) ->
-        [ContentMention (NativeUserId (T.pack (show native))) (lookup user req.orMentionDisplays)]
-      _ -> qqContentParts segment
+        let digits = T.pack (show native)
+         in pure . Right $
+              [ NMention
+                  (NativeUserId digits)
+                  (fromMaybe digits (lookup user req.orMentionDisplays))
+              ]
+      segment@(SegImage image) -> case qqSegmentNodes segment of
+        [NMedia _ meta] -> do
+          source <- case image.isiUrl of
+            Nothing -> pure (Right Nothing)
+            Just raw -> fmap Just <$> materializeSource raw
+          pure ((\ref -> [NMedia ref meta]) <$> source)
+        _ -> pure (Left "QQ image normalization did not produce one media node")
+      segment -> pure (Right (qqSegmentNodes segment))
+
+    materializeSource source
+      | Just encoded <- T.stripPrefix "base64://" source =
+          case B64.decode (TE.encodeUtf8 encoded) of
+            Left _ -> pure (Left "invalid base64 image payload")
+            Right bytes -> do
+              ref <- putBlob bytes
+              pure $ case mediaBlobRef (blobRefSha256 ref) of
+                Just stored -> Right stored
+                Nothing -> Left "BlobStore returned an invalid content address"
+      | Just ref <- parseMediaRef source = pure (Right ref)
+      | otherwise = pure (Left "unsupported canonical media source scheme")
 
 -- | Install any request handler as the interpreter.  Besides keeping
 -- 'runOutbound' small, this is the in-memory seam for Handler/Agent tests: a

@@ -1,25 +1,32 @@
 -- | OneBot/NapCat edge normalization.  QQ protocol values stop here: the
--- shared ledger receives explicit endpoint identity and platform-neutral
--- content, relations and media sources.
+-- shared ledger receives explicit endpoint identity and an ADR 003 ingest
+-- body, relations and media sources.  Nothing degrades at this boundary —
+-- faces, cards, files and videos keep their structure, and every node
+-- retains the raw segment payload for a same-platform native round trip.
 module Max.Platform.QQ
   ( ensureQQEndpoint,
     qqEnvelope,
-    qqContentParts,
+    qqIngestBody,
+    qqSegmentNodes,
     qqCapabilities,
   )
 where
 
 import Control.Applicative ((<|>))
-import Data.Aeson (Value (..))
+import Data.Aeson (Value (..), toJSON)
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.Scientific (toBoundedInteger)
+import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.PostgreSQL (WithConnection)
+import Max.IR
+import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store (RegisteredEndpoint (..), ensureLegacyEndpoint)
 import Max.Platform.Types
 import OneBot.Event (GroupMessage (..), Sender (..))
@@ -29,7 +36,7 @@ import OneBot.Segment
     ImageSegInfo (..),
     Segment (..),
     VideoSegInfo (..),
-    renderPlainText,
+    isStickerImage,
   )
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
@@ -65,7 +72,7 @@ qqEnvelope endpoint received raw message =
       occurredAt = fromMaybe received (eventTime raw),
       receivedAt = received,
       eventKind = EventMessage,
-      content = concatMap qqContentParts message.message,
+      content = qqIngestBody message.message,
       relations = concatMap relation message.message,
       sourceCursor = Nothing,
       rawPayload = Just raw
@@ -84,39 +91,102 @@ qqCapabilities =
       maxTextBytes = Just 12000
     }
 
-qqContentParts :: Segment -> [ContentPart]
-qqContentParts = \case
-  SegText body -> [ContentText body | not (T.null body)]
-  SegAt (UserId user) -> [ContentMention (NativeUserId (decimal user)) Nothing]
+qqIngestBody :: [Segment] -> Body 'Ingest
+qqIngestBody = Body . concatMap qqSegmentNodes
+
+qqSegmentNodes :: Segment -> [Node 'Ingest]
+qqSegmentNodes segment = case segment of
+  SegText body -> [NText body | not (T.null body)]
+  SegAt (UserId user) ->
+    -- Display equals the native id here; the ingest transaction enriches
+    -- it from the stored identity when one exists.
+    let digits = decimal user
+     in [NMention (NativeUserId digits) digits]
   SegReply _ -> []
   SegImage image ->
-    [ ContentMedia
-        (RemoteMedia url Nothing Nothing Nothing)
-        (nonBlank image.isiSummary <|> Just (renderPlainText [SegImage image]))
-    | url <- maybeToList image.isiUrl
+    [ NMedia
+        (image.isiUrl >>= qqRemoteRef)
+        MediaMeta
+          { kind = if isStickerImage image then MSticker else MImage,
+            mime = Nothing,
+            sizeBytes = Nothing,
+            name = Nothing,
+            description = nonBlank =<< image.isiSummary,
+            raw = keepRaw
+          }
     ]
-      <> [ContentText (renderPlainText [SegImage image]) | image.isiUrl == Nothing]
   SegFace faceId name ->
-    [ContentText (fromMaybe ("[face#" <> decimal faceId <> "]") name)]
+    [ NEmote
+        Emote
+          { origin = PlatformQQ,
+            nativeId = decimal faceId,
+            name = name,
+            raw = keepRaw
+          }
+    ]
   SegFile file ->
-    case file.fsiUrl of
-      Just url -> [ContentMedia (RemoteMedia url Nothing file.fsiSize Nothing) (Just file.fsiName)]
-      Nothing -> [ContentText ("[file: " <> file.fsiName <> "]")]
+    [ NMedia
+        (file.fsiUrl >>= qqRemoteRef)
+        MediaMeta
+          { kind = MFile,
+            mime = Nothing,
+            sizeBytes = file.fsiSize,
+            name = Just file.fsiName,
+            description = Nothing,
+            raw = keepRaw
+          }
+    ]
   SegVideo video ->
-    case video.vsiUrl of
-      Just url -> [ContentMedia (RemoteMedia url (Just "video/*") video.vsiSize Nothing) Nothing]
-      Nothing -> [ContentText "[video]"]
+    [ NMedia
+        (video.vsiUrl >>= qqRemoteRef)
+        MediaMeta
+          { kind = MVideo,
+            mime = Nothing,
+            sizeBytes = video.vsiSize,
+            name = Nothing,
+            description = Nothing,
+            raw = keepRaw
+          }
+    ]
   SegCard card ->
-    [ContentText (T.intercalate " · " (filter (not . T.null) (cardText card)))]
-  SegOther segmentType _ -> [ContentUnsupported ("qq:" <> segmentType)]
+    [ NCard
+        Card
+          { title = card.ciTitle,
+            subtitle = card.ciDesc,
+            url = card.ciUrl,
+            tag = card.ciTag,
+            preview = card.ciPreview >>= qqRemoteRef,
+            raw = keepRaw
+          }
+    ]
+  SegOther "forward" payload
+    | Just forwardId <- forwardIdFrom payload ->
+        [NForward ForwardRef {nativeId = forwardId, count = Nothing}]
+  SegOther segmentType payload ->
+    [ NUnsupported
+        Unsupported
+          { source = "qq:" <> segmentType,
+            description = segmentType,
+            raw = Just payload
+          }
+    ]
   where
-    maybeToList = maybe [] pure
-    nonBlank = (>>= \value -> if T.null (T.strip value) then Nothing else Just value)
-    cardText card =
-      maybeToList card.ciTag
-        <> maybeToList card.ciTitle
-        <> maybeToList card.ciDesc
-        <> maybeToList card.ciUrl
+    keepRaw = Just (toJSON segment)
+    nonBlank value =
+      let stripped = T.strip value
+       in if T.null stripped then Nothing else Just stripped
+
+forwardIdFrom :: Value -> Maybe Text
+forwardIdFrom (Object payload) = case KeyMap.lookup (Key.fromText "id") payload of
+  Just (String forwardId) | not (T.null forwardId) -> Just forwardId
+  _ -> Nothing
+forwardIdFrom _ = Nothing
+
+qqRemoteRef :: Text -> Maybe MediaRef
+qqRemoteRef value =
+  mediaRemoteRef $ case T.stripPrefix "//" value of
+    Just rest -> "https://" <> rest
+    Nothing -> value
 
 relation :: Segment -> [MessageRelation]
 relation = \case

@@ -10,9 +10,13 @@ import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, execute_, query, withTransaction)
 import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool, withConn)
+import Max.IR
+import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
 import Max.Platform.Store qualified as PlatformStore
 import Max.Platform.Types
+import OneBot.Segment (ImageSegInfo (..), Segment (..), parseCard)
+import OneBot.Types (UserId (..))
 import Test.Hspec
 
 spec :: DbPool -> Spec
@@ -272,7 +276,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             { legacyConversationId = 42,
               transcriptKind = "chat",
               sourceCompatibilityMessageId = Nothing,
-              canonicalContent = canonicalContentValue [ContentText "hello both sides"],
+              canonicalBody = Body [NText "hello both sides"],
               renderedText = "hello both sides",
               compatibilitySegments = Array mempty,
               replyToCompatibilityMessageId = Nothing
@@ -324,7 +328,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             { legacyConversationId = legacyGroup,
               transcriptKind = "chat",
               sourceCompatibilityMessageId = Nothing,
-              canonicalContent = canonicalContentValue [ContentText "reply"],
+              canonicalBody = Body [NText "reply"],
               renderedText = "reply",
               compatibilitySegments = Array mempty,
               replyToCompatibilityMessageId = Just targetMessage
@@ -368,7 +372,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             { legacyConversationId = 42,
               transcriptKind = "command",
               sourceCompatibilityMessageId = Just sourceMessage,
-              canonicalContent = canonicalContentValue [ContentText "status"],
+              canonicalBody = Body [NText "status"],
               renderedText = "status",
               compatibilitySegments = Array mempty,
               replyToCompatibilityMessageId = Nothing
@@ -586,46 +590,34 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             }
         envelope :: InboundEnvelope
         envelope =
-          (inbound endpoint.endpointId now "qq-image-roundtrip" "")
-            { content =
-                [ ContentMedia
-                    (RemoteMedia imageUrl Nothing Nothing Nothing)
-                    (Just "")
-                ]
-            }
+          inboundBody endpoint.endpointId now "qq-image-roundtrip" $
+            Body
+              [ NMedia
+                  (mediaRemoteRef imageUrl)
+                  MediaMeta
+                    { kind = MImage,
+                      mime = Nothing,
+                      sizeBytes = Nothing,
+                      name = Nothing,
+                      description = Nothing,
+                      raw = Nothing
+                    }
+              ]
     result <- withDb pool (ingestEnvelope options envelope)
-    -- Recreate the projection written by the pre-fix renderer. The current
-    -- renderer already fail-softs a blank caption to "[media]" at ingest.
-    withConn pool $ \conn -> do
-      _ <-
-        execute
-          conn
-          "UPDATE messages SET rendered_text = '' WHERE canonical_message_id = ?"
-          (Only (resultId result).unCanonicalMessageId)
-      pure ()
-    beforeRows <- withConn pool $ \conn ->
+    -- The 053 defect class is unrepresentable now: a blank caption never
+    -- becomes transcript text, and the stored v2 node keeps its source.
+    rows <- withConn pool $ \conn ->
       query
         conn
-        "SELECT rendered_text FROM messages WHERE canonical_message_id = ?"
+        "SELECT rendered_text, canonical_content->>'v', \
+        \       canonical_content->'nodes'->0->>'type', \
+        \       canonical_content->'nodes'->0->>'source' \
+        \ FROM messages WHERE canonical_message_id = ?"
         (Only (resultId result).unCanonicalMessageId)
-    (beforeRows :: [Only Text]) `shouldBe` [Only ""]
-    withConn pool $ \conn -> withTransaction conn $ do
-      migration <- readFile "migrations/053_qq_image_dispatch_roundtrip.sql"
-      _ <- execute_ conn (fromString migration)
-      repaired <-
-        query
-          conn
-          "SELECT m.rendered_text, m.canonical_content->0->>'caption', \
-          \       f.payload->>'url', (f.payload->>'seg_index')::int, f.payload->>'kind' \
-          \ FROM messages m \
-          \ JOIN fetch_jobs f ON f.kind = 'image' \
-          \  AND f.dedupe_key = m.message_id::text || ':0' \
-          \ WHERE m.canonical_message_id = ?"
-          (Only (resultId result).unCanonicalMessageId)
-      (repaired :: [(Text, Text, Text, Int, Text)])
-        `shouldBe` [("[image]", "[image]", imageUrl, 0, "image")]
+    (rows :: [(Text, Text, Text, Text)])
+      `shouldBe` [("[image]", "2", "media", imageUrl)]
 
-  it "restores structural QQ mention projections without touching canonical identity" $ do
+  it "keeps the structural QQ mention projection and resolves its principal identity" $ do
     endpoint <-
       withDb pool $
         ensureLegacyEndpoint
@@ -638,30 +630,179 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     now <- getCurrentTime
     let envelope :: InboundEnvelope
         envelope =
-          (inbound endpoint.endpointId now "qq-mention-projection" "")
-            { content =
-                [ ContentMention (NativeUserId "2291939848") Nothing,
-                  ContentText " hello"
-                ]
-            }
+          inboundBody endpoint.endpointId now "qq-mention-projection" $
+            Body
+              [ NMention (NativeUserId "2291939848") "2291939848",
+                NText " hello"
+              ]
     result <- withDb pool (ingestEnvelope defaultIngestOptions envelope)
-    beforeRows <- withConn pool $ \conn ->
+    -- The 054 defect class is unrepresentable now: the prompt projection
+    -- is structural by construction, and the stored mention carries a
+    -- resolved principal identity instead of a bare native id.
+    rows <- withConn pool $ \conn ->
       query
         conn
-        "SELECT rendered_text FROM messages WHERE canonical_message_id = ?"
+        "SELECT m.rendered_text, m.canonical_content->'nodes'->0->>'display', \
+        \       pi.native_user_id \
+        \ FROM messages m \
+        \ JOIN principal_identities pi \
+        \   ON pi.principal_identity_id = (m.canonical_content->'nodes'->0->>'identity')::bigint \
+        \ WHERE m.canonical_message_id = ?"
         (Only (resultId result).unCanonicalMessageId)
-    (beforeRows :: [Only Text]) `shouldBe` [Only "@2291939848  hello"]
+    (rows :: [(Text, Text, Text)])
+      `shouldBe` [("[@#2291939848]  hello", "2291939848", "2291939848")]
+
+  it "enriches an identity first discovered through a bare mention" $ do
+    endpoint <-
+      withDb pool $
+        ensureLegacyEndpoint
+          PlatformQQ
+          (NativeAccountId "9")
+          (NativeConversationId "42")
+          ConversationGroup
+          42
+          textCapabilities
+    now <- getCurrentTime
+    _ <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          ( inboundBody endpoint.endpointId now "mention-before-profile" $
+              Body [NMention (NativeUserId "2291939848") "2291939848"]
+          )
+    _ <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          ( (inbound endpoint.endpointId now "profile-arrives" "hello")
+              { senderNativeId = NativeUserId "2291939848",
+                senderDisplayName = Just "张三"
+              }
+          )
+    later <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          ( inboundBody endpoint.endpointId now "mention-after-profile" $
+              Body [NMention (NativeUserId "2291939848") "2291939848"]
+          )
+    rows <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT pi.display_name, p.display_name, \
+        \       m.canonical_content->'nodes'->0->>'display' \
+        \ FROM principal_identities pi \
+        \ JOIN principals p USING (principal_id) \
+        \ JOIN messages m ON m.canonical_message_id = ? \
+        \ WHERE pi.platform_account_id = ? AND pi.native_user_id = ?"
+        ( (resultId later).unCanonicalMessageId,
+          endpoint.platformAccountId.unPlatformAccountId,
+          "2291939848" :: Text
+        )
+    (rows :: [(Maybe Text, Maybe Text, Text)])
+      `shouldBe` [(Just "张三", Just "张三", "张三")]
+
+  it "lifts v1 canonical arrays into v2 bodies from QQ segments (055 replay)" $ do
+    endpoint <-
+      withDb pool $
+        ensureLegacyEndpoint
+          PlatformQQ
+          (NativeAccountId "9")
+          (NativeConversationId "42")
+          ConversationGroup
+          42
+          textCapabilities
+    now <- getCurrentTime
+    -- The mentioned user must already own an identity: 055 resolves
+    -- mentions through the origin endpoint but never invents principals.
+    _ <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          ( (inbound endpoint.endpointId now "qq-mentioned-user" "hi")
+              { senderNativeId = NativeUserId "2291939848",
+                senderDisplayName = Just "张三"
+              }
+          )
+    target <-
+      withDb pool $
+        ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "qq-v1-lift" "placeholder")
+    let cardRaw =
+          "{\"app\":\"com.tencent.miniapp_01\",\"meta\":{\"detail_1\":{\"title\":\"哔哩哔哩\",\"desc\":\"一个视频\",\"qqdocurl\":\"https://b23.tv/x\",\"tag\":\"哔哩哔哩\"}}}"
+        card = maybe (error "card fixture must parse") id (parseCard cardRaw)
+        cid = (resultId target).unCanonicalMessageId
+        v1Content =
+          toJSON
+            [ object ["type" .= ("text" :: Text), "text" .= ("看" :: Text)],
+              object ["type" .= ("mention" :: Text), "native_user_id" .= ("2291939848" :: Text)],
+              object
+                [ "type" .= ("media" :: Text),
+                  "source"
+                    .= object
+                      [ "kind" .= ("remote" :: Text),
+                        "url" .= ("https://qq.example/s.jpg" :: Text)
+                      ],
+                  "caption" .= ("[sticker]" :: Text)
+                ],
+              -- This is the only place the old production pipeline kept the
+              -- face name; Segment.ToJSON intentionally omitted it.
+              object ["type" .= ("text" :: Text), "text" .= ("惊讶" :: Text)],
+              object ["type" .= ("unsupported" :: Text), "description" .= ("qq:record" :: Text)],
+              object
+                [ "type" .= ("text" :: Text),
+                  "text" .= ("哔哩哔哩 · 哔哩哔哩 · 一个视频 · https://b23.tv/x" :: Text)
+                ]
+            ]
+        v1Segments =
+          toJSON
+            [ SegText "看",
+              SegAt (UserId 2291939848),
+              SegImage (ImageSegInfo (Just "https://qq.example/s.jpg") (Just 1) (Just "")),
+              SegFace 5 (Just "惊讶"),
+              SegOther "record" (object ["file" .= ("voice.amr" :: Text)]),
+              SegCard card
+            ]
+    withConn pool $ \conn -> do
+      _ <-
+        execute
+          conn
+          "UPDATE messages SET canonical_content = ?::jsonb, segments = ?::jsonb \
+          \ WHERE canonical_message_id = ?"
+          (v1Content, v1Segments, cid)
+      pure ()
     withConn pool $ \conn -> withTransaction conn $ do
-      migration <- readFile "migrations/054_qq_mention_projection.sql"
+      migration <- readFile "migrations/055_canonical_content_v2.sql"
       _ <- execute_ conn (fromString migration)
-      repaired <-
+      rows <-
         query
           conn
-          "SELECT rendered_text, canonical_content->0->>'native_user_id' \
-          \FROM messages WHERE canonical_message_id = ?"
-          (Only (resultId result).unCanonicalMessageId)
-      (repaired :: [(Text, Text)])
-        `shouldBe` [("[@#2291939848]  hello", "2291939848")]
+          "SELECT canonical_content->>'v', \
+          \       jsonb_array_length(canonical_content->'nodes'), \
+          \       canonical_content->'nodes'->1->>'type', \
+          \       canonical_content->'nodes'->1->>'display', \
+          \       (canonical_content->'nodes'->1->>'identity') IS NOT NULL, \
+          \       canonical_content->'nodes'->2->>'kind', \
+          \       canonical_content->'nodes'->2->>'source', \
+          \       canonical_content->'nodes'->3->>'native_id', \
+          \       canonical_content->'nodes'->3->>'name', \
+          \       canonical_content->'nodes'->4->>'source', \
+          \       canonical_content->'nodes'->5->>'title' \
+          \ FROM messages WHERE canonical_message_id = ?"
+          (Only cid)
+      (rows :: [(Text, Int, Text, Text, Bool, Text, Text, Text, Text, Text, Text)])
+        `shouldBe` [ ( "2",
+                       6,
+                       "mention",
+                       "张三",
+                       True,
+                       "sticker",
+                       "https://qq.example/s.jpg",
+                       "5",
+                       "惊讶",
+                       "qq:record",
+                       "哔哩哔哩 · 哔哩哔哩 · 一个视频 · https://b23.tv/x"
+                     )
+                   ]
 
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do
@@ -704,6 +845,10 @@ textCapabilities =
 
 inbound :: EndpointId -> UTCTime -> Text -> Text -> InboundEnvelope
 inbound endpoint now eventId body =
+  inboundBody endpoint now eventId (Body [NText body])
+
+inboundBody :: EndpointId -> UTCTime -> Text -> Body 'Ingest -> InboundEnvelope
+inboundBody endpoint now eventId body =
   InboundEnvelope
     { endpointId = endpoint,
       nativeEventId = NativeEventId eventId,
@@ -712,7 +857,7 @@ inbound endpoint now eventId body =
       occurredAt = addUTCTime (-1) now,
       receivedAt = now,
       eventKind = EventMessage,
-      content = [ContentText body],
+      content = body,
       relations = [],
       sourceCursor = Just (PlatformCursor (String "next")),
       rawPayload = Just (object ["event_id" .= eventId])

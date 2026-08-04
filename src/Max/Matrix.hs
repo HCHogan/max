@@ -28,7 +28,6 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair, Parser, parseEither, parseMaybe)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.Foldable (toList)
 import Data.Int (Int64)
 import Data.List (findIndex)
 import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
@@ -52,7 +51,10 @@ import Max.HttpRuntime
     renderTransportFailure,
     runBuffered,
   )
+import Max.IR
+import Max.IR.Prompt (promptText)
 import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryMedia (..), DeliveryTransport (..), attributedText)
+import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
     DeliveryClaim (..),
@@ -71,7 +73,7 @@ import Max.Platform.Store
 import Max.Platform.Types
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types.URI (urlEncode)
+import Network.HTTP.Types.URI (urlDecode, urlEncode)
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
@@ -104,12 +106,12 @@ data MatrixEvent = MatrixEvent
     sender :: !NativeUserId,
     occurredAt :: !UTCTime,
     eventKind :: !EventKind,
-    content :: ![ContentPart],
+    content :: ![Node 'Ingest],
     relations :: ![MessageRelation],
     mentionedUsers :: ![NativeUserId],
     raw :: !Value
   }
-  deriving stock (Eq, Show, Generic)
+  deriving stock (Eq, Show)
 
 data MatrixSyncPage = MatrixSyncPage
   { nextBatch :: !Text,
@@ -199,7 +201,7 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
                 createMirrorDeliveries = live,
                 transcriptKind = if event.eventKind == EventMessage then "chat" else "debug",
                 compatibilitySegments = toJSON segments,
-                compatibilityRawMessage = renderMatrixContent event.content
+                compatibilityRawMessage = promptText PlatformMatrix (Body event.content)
               }
           envelope =
             InboundEnvelope
@@ -210,7 +212,7 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
                 occurredAt = event.occurredAt,
                 receivedAt = received,
                 eventKind = event.eventKind,
-                content = hydratedContent,
+                content = Body hydratedContent,
                 relations = event.relations,
                 sourceCursor = Just (PlatformCursor (String next)),
                 rawPayload = Just event.raw
@@ -239,7 +241,7 @@ matrixCompatibilitySegments selfNative selfCompatibility event = do
   -- @mentionedUsers@ is converted by the caller-independent native id test:
   -- a synthetic at segment is needed only for Max itself.  The event parser
   -- preserves every other mention in canonical content.
-  pure (reply <> mention <> [SegText (renderMatrixContent event.content)])
+  pure (reply <> mention <> [SegText (promptText PlatformMatrix (Body event.content))])
 
 -- | Matrix includes the replied-to event's transport sender in @m.mentions@
 -- so clients can notify them.  In a mirrored room every QQ event is delivered
@@ -349,33 +351,14 @@ deliveryBody claim
   where
     canonicalBody = fromMaybe claim.renderedText (matrixCanonicalText claim.content)
 
--- | Lower canonical content to Matrix's safe plain-text surface.  Semantic
--- mentions use their source display label when available, and otherwise keep
--- an explicit @native-id fallback.  QQ's executable marker syntax therefore
--- never leaks into a mirror and its target is never silently discarded.
+-- | Lower stored canonical content to Matrix's safe plain-text surface via
+-- the shared fallback vocabulary: mentions render as @display, media by
+-- their captured captions.  QQ's executable marker syntax therefore never
+-- leaks into a mirror and its target is never silently discarded.
+-- (Interim until the slice-3 cutover to 'Max.IR.Lower'.)
 matrixCanonicalText :: Value -> Maybe Text
-matrixCanonicalText = parseMaybe $ withArray "canonical content" $ \parts ->
-  T.concat <$> traverse renderPart (toList parts)
-  where
-    renderPart = withObject "canonical content part" $ \part -> do
-      partType <- part .: "type" :: Parser Text
-      case partType of
-        "text" -> part .: "text"
-        "mention" -> do
-          native <- part .: "native_user_id"
-          display <- part .:? "display"
-          pure ("@" <> fromMaybe native (display >>= nonBlank))
-        "media" -> do
-          caption <- part .:? "caption"
-          pure (fromMaybe "[media]" (caption >>= nonBlank))
-        "unsupported" -> do
-          description <- part .: "description"
-          pure ("[unsupported: " <> description <> "]")
-        _ -> fail ("unknown canonical content part: " <> T.unpack partType)
-
-    nonBlank value
-      | T.null (T.strip value) = Nothing
-      | otherwise = Just value
+matrixCanonicalText value =
+  plainText <$> (parseMaybe parseJSON value :: Maybe (Body 'Canonical))
 
 matrixMsgType :: Maybe Text -> Text
 matrixMsgType = \case
@@ -518,39 +501,135 @@ matrixEventParser raw@(Object o) = do
   pure MatrixEvent {eventId = nativeEvent, sender, occurredAt, eventKind, content = parts, relations, mentionedUsers = mentions, raw}
 matrixEventParser _ = fail "matrix event must be an object"
 
-normalizeMatrixContent :: Text -> Object -> Value -> (EventKind, [ContentPart], [MessageRelation], [NativeUserId])
+normalizeMatrixContent :: Text -> Object -> Value -> (EventKind, [Node 'Ingest], [MessageRelation], [NativeUserId])
 normalizeMatrixContent eventType eventObject contentValue = case eventType of
   "m.room.message" ->
     let relationInfo = relationFrom contentValue
         replacement = any isReplacement relationInfo
-        parts = messageParts contentValue
+        -- The plain-text reply-fallback quote belongs to the transport,
+        -- not the message: reply provenance lives in the relation, so the
+        -- quote must not reach prompts or mirrors as body text.
+        parts = messageParts (any isReplyRelation relationInfo) contentValue
      in (if replacement then EventEdit else EventMessage, parts, relationInfo, mentionsFrom contentValue)
-  "m.reaction" -> (EventReaction, [ContentUnsupported "matrix:reaction"], relationFrom contentValue, [])
+  "m.reaction" -> (EventReaction, [unsupportedNode "reaction"], relationFrom contentValue, [])
   "m.room.redaction" ->
     let target = case KeyMap.lookup "redacts" eventObject of
-          Just (String event) -> [Replaces (NativeEventId event)]
+          Just (String event) -> [Redacts (NativeEventId event)]
           _ -> []
-     in (EventRedaction, [ContentUnsupported "matrix:redaction"], target, [])
-  "m.room.member" -> (EventMembership, [ContentUnsupported "matrix:membership"], [], [])
-  other -> (EventMembership, [ContentUnsupported ("matrix:" <> other)], [], [])
+     in (EventRedaction, [unsupportedNode "redaction"], target, [])
+  "m.room.member" -> (EventMembership, [unsupportedNode "membership"], [], [])
+  other -> (EventMembership, [unsupportedNode other], [], [])
   where
     isReplacement Replaces {} = True
     isReplacement _ = False
+    isReplyRelation ReplyTo {} = True
+    isReplyRelation _ = False
+    unsupportedNode label =
+      NUnsupported
+        Unsupported
+          { source = "matrix:" <> label,
+            description = label,
+            raw = Nothing
+          }
 
-messageParts :: Value -> [ContentPart]
-messageParts value = fromMaybe [ContentUnsupported "matrix:malformed-message"] (parseMaybe parser value)
+messageParts :: Bool -> Value -> [Node 'Ingest]
+messageParts stripReplyFallback value =
+  fromMaybe
+    [ NUnsupported
+        Unsupported
+          { source = "matrix:malformed-message",
+            description = "malformed message",
+            raw = Nothing
+          }
+    ]
+    (parseMaybe parser value)
   where
     parser = withObject "message content" $ \o -> do
       msgtype <- o .:? "msgtype" .!= ("m.text" :: Text)
       body <- o .:? "body" .!= ""
+      formatted <- o .:? "formatted_body" .!= ""
+      mentioned <- o .:? "m.mentions" .!= Object mempty
+      mentionedUsers <- withObject "m.mentions" (.:? "user_ids") mentioned .!= []
       url <- o .:? "url"
       info <- o .:? "info" .!= Object mempty
       (mime, size) <- withObject "media info" (\i -> (,) <$> i .:? "mimetype" <*> i .:? "size") info
       pure $ case (msgtype, url) of
         (kind, Just mxc)
           | kind `elem` ["m.image", "m.video", "m.audio", "m.file"] ->
-              [ContentMedia (RemoteMedia mxc mime size Nothing) (nonEmpty body)]
-        _ -> [ContentText body | not (T.null body)]
+              [ NMedia
+                  (mediaRemoteRef mxc)
+                  MediaMeta
+                    { kind = matrixMediaKind kind,
+                      mime,
+                      sizeBytes = size,
+                      name = nonEmpty body,
+                      description = Nothing,
+                      raw = Nothing
+                    }
+              ]
+        _ ->
+          let visible = if stripReplyFallback then dropPlainReplyFallback body else body
+              visibleFormatted = if stripReplyFallback then dropReplyFallback formatted else formatted
+              formattedAnchors = filter ((`elem` mentionedUsers) . fst) (matrixMentionAnchors visibleFormatted)
+              anchoredUsers = map fst formattedAnchors
+              anchors = formattedAnchors <> [(user, user) | user <- mentionedUsers, user `notElem` anchoredUsers]
+           in mentionTextNodes visible anchors
+
+-- Matrix's notification metadata identifies mention targets, while the
+-- formatted body supplies the visible label and order.  The plain body stays
+-- authoritative for all other text; anchors that do not occur in m.mentions
+-- (notably reply fallbacks) never become semantic mentions.
+matrixMentionAnchors :: Text -> [(Text, Text)]
+matrixMentionAnchors = go
+  where
+    go input = case T.breakOn "<a " input of
+      (_, rest) | T.null rest -> []
+      (_, rest) ->
+        let afterOpen = T.drop 3 rest
+            (_, hrefStart) = T.breakOn "href=\"" afterOpen
+         in if T.null hrefStart
+              then go afterOpen
+              else
+                let hrefAndTail = T.drop 6 hrefStart
+                    (href, afterHref) = T.breakOn "\"" hrefAndTail
+                    (_, afterTagStart) = T.breakOn ">" afterHref
+                    afterTag = T.drop 1 afterTagStart
+                    (label, afterLabel) = T.breakOn "</a>" afterTag
+                    remaining = T.drop 4 afterLabel
+                 in case matrixToUser href of
+                      Just user | not (T.null label) -> (user, label) : go remaining
+                      _ -> go remaining
+
+matrixToUser :: Text -> Maybe Text
+matrixToUser href = do
+  fragment <- sndNonEmpty (T.breakOn "#/" href)
+  let encoded = T.takeWhile (/= '?') (T.drop 2 fragment)
+      decoded = TE.decodeUtf8Lenient (urlDecode True (TE.encodeUtf8 encoded))
+  if "@" `T.isPrefixOf` decoded then Just decoded else Nothing
+  where
+    sndNonEmpty (_, value)
+      | T.null value = Nothing
+      | otherwise = Just value
+
+mentionTextNodes :: Text -> [(Text, Text)] -> [Node 'Ingest]
+mentionTextNodes text0 = mergeText . go text0
+  where
+    go remaining [] = [NText remaining | not (T.null remaining)]
+    go remaining ((native, display) : mentions) =
+      let (before, match) = T.breakOn display remaining
+       in if T.null match
+            then go remaining mentions
+            else
+              [NText before | not (T.null before)]
+                <> [NMention (NativeUserId native) display]
+                <> go (T.drop (T.length display) match) mentions
+
+matrixMediaKind :: Text -> MediaKind
+matrixMediaKind = \case
+  "m.image" -> MImage
+  "m.video" -> MVideo
+  "m.audio" -> MAudio
+  _ -> MFile
 
 relationFrom :: Value -> [MessageRelation]
 relationFrom value = fromMaybe [] (parseMaybe parser value)
@@ -583,47 +662,46 @@ mentionsFrom value = fromMaybe [] (parseMaybe parser value)
       mentions <- o .:? "m.mentions" .!= Object mempty
       withObject "m.mentions" (\m -> fmap NativeUserId <$> (m .:? "user_ids" .!= [])) mentions
 
-renderMatrixContent :: [ContentPart] -> Text
-renderMatrixContent = T.intercalate " " . map render
-  where
-    render = \case
-      ContentText body -> body
-      ContentMention (NativeUserId user) display -> "@" <> fromMaybe user display
-      ContentMedia _ caption -> fromMaybe "[media]" caption
-      ContentUnsupported detail -> "[unsupported: " <> detail <> "]"
-
 hydrateMatrixContent ::
   (Blob :> es, Log :> es, IOE :> es) =>
   HttpRuntime ->
   MatrixConfig ->
   MatrixEvent ->
-  Eff es [ContentPart]
+  Eff es [Node 'Ingest]
 hydrateMatrixContent runtime cfg event = traverse hydrate event.content
   where
-    hydrate part@(ContentMedia (RemoteMedia mxc mime expectedSize _) caption)
-      | "mxc://" `T.isPrefixOf` mxc = do
+    hydrate node@(NMedia (Just ref) meta)
+      | Just mxc <- mediaRefRemoteUrl ref,
+        "mxc://" `T.isPrefixOf` mxc = do
           downloaded <- liftIO (fetchMatrixMedia runtime cfg mxc)
           case downloaded of
             Left err -> do
               logAttention "Matrix media import failed; text remains durable" $
                 object ["event_id" .= event.eventId, "mxc" .= mxc, "error" .= err]
-              pure part
+              pure node
             Right bytes -> do
-              when (matrixMediaSizeDrift expectedSize (BS.length bytes)) $
+              when (matrixMediaSizeDrift meta.sizeBytes (BS.length bytes)) $
                 logAttention "Matrix media size metadata drift; imported bounded response" $
                   object
                     [ "event_id" .= event.eventId,
                       "mxc" .= mxc,
-                      "declared_size" .= expectedSize,
+                      "declared_size" .= meta.sizeBytes,
                       "actual_size" .= BS.length bytes
                     ]
-              ref <- putBlob bytes
-              let sha = blobRefSha256 ref
+              blob <- putBlob bytes
+              let sha = blobRefSha256 blob
               pure $
-                ContentMedia
-                  (RemoteMedia ("blob:" <> sha) mime (Just (fromIntegral (BS.length bytes))) (Just sha))
-                  caption
-    hydrate part = pure part
+                NMedia
+                  (mediaBlobRef sha)
+                  MediaMeta
+                    { kind = meta.kind,
+                      mime = meta.mime,
+                      sizeBytes = Just (fromIntegral (BS.length bytes)),
+                      name = meta.name,
+                      description = meta.description,
+                      raw = meta.raw
+                    }
+    hydrate node = pure node
 
 fetchMatrixMedia ::
   HttpRuntime ->

@@ -107,11 +107,11 @@ in the body.
 
 The tree is indexed by pipeline phase, borrowing the skeleton of Trees That
 Grow but deliberately pruned (see below). The shape is identical across
-phases; only the decorations at four slots change, and two constructors are
-uninhabited outside `Canonical`:
+phases; only the decorations at four slots change. Adapters construct
+`Ingest`; model parsing constructs `ModelParsed`; only `Canonical` is stored:
 
 ```haskell
-data Phase = ModelParsed | Canonical | Lowered | Hydrated
+data Phase = ModelParsed | Ingest | Canonical | Lowered | Hydrated
 
 data Body (p :: Phase) = Body { nodes :: ![Node p] }
 
@@ -126,6 +126,7 @@ data Node (p :: Phase)
 
 type family XMention (p :: Phase) where
   XMention 'ModelParsed = NativeUserId    -- raw [@#123] token, pre-roster
+  XMention 'Ingest      = NativeUserId    -- adapter-authenticated native id
   XMention 'Canonical   = MentionTarget   -- MentionIdentity … | MentionAll
   XMention 'Lowered     = NativeUserId    -- DESTINATION endpoint's native id;
                                           -- constructible only via identity map
@@ -133,18 +134,21 @@ type family XMention (p :: Phase) where
 
 type family XMedia (p :: Phase) where
   XMedia 'ModelParsed = OutboundMediaRef  -- [sticker#42] / [image#7] reference
-  XMedia 'Canonical   = Maybe MediaRef    -- blob:<sha256> | remote URL | none;
+  XMedia 'Ingest      = Maybe MediaRef    -- normalized adapter reference
+  XMedia 'Canonical   = Maybe MediaRef    -- blob:<sha256> | http(s)/mxc URL | none;
                                           -- never inline bytes at rest
   XMedia 'Lowered     = ResolvedMedia     -- sendable payload, NOT Maybe:
                                           -- sourceless media must fold to text
   XMedia 'Hydrated    = MediaView         -- authed blob URL, thumbnail, size
 
 type family XForward (p :: Phase) where
+  XForward 'Ingest    = ForwardRef
   XForward 'Canonical = ForwardRef        -- children are canonical messages
   XForward 'Hydrated  = HydratedForward   -- children as canonical-message links
   XForward _          = Void              -- model can't author; lowering folds
 
 type family XUnsupported (p :: Phase) where
+  XUnsupported 'Ingest = Unsupported
   XUnsupported 'Canonical = Unsupported
   XUnsupported 'Hydrated  = Unsupported   -- raw payload inspectable in admin
   XUnsupported _          = Void          -- can never reach a wire
@@ -195,7 +199,9 @@ data Unsupported = Unsupported
 ```
 
 Phase transitions are the pipeline: `resolve :: Body 'ModelParsed -> Eff es
-(Body 'Canonical)` (roster/sticker lookup in ReplySend), `lower :: LowerEnv
+(Body 'Canonical)` (roster/sticker lookup in ReplySend), `resolveIngest ::
+(NativeUserId -> Text -> Eff es (MentionTarget, Text)) -> Body 'Ingest ->
+Eff es (Body 'Canonical)` (principal identity resolution at durable ingest), `lower :: LowerEnv
 -> Body 'Canonical -> Lowered` (section 2, degradation), `hydrate :: Body
 'Canonical -> Eff es (Body 'Hydrated)` (section 5, enrichment for the admin
 surface), and only `Body 'Canonical` has JSON instances — the stored codec

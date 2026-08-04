@@ -2,7 +2,9 @@ module Max.IMessageSpec (spec) where
 
 import Data.Aeson (Value, object, (.=))
 import Max.IMessage
-import Max.Platform.Types (EventKind (..), NativeEventId (..), NativeUserId (..), PlatformCapabilities (..))
+import Max.IR
+import Max.IR.Prompt (promptText)
+import Max.Platform.Types (EventKind (..), NativeEventId (..), NativeUserId (..), Platform (..), PlatformCapabilities (..))
 import Test.Hspec
 
 spec :: Spec
@@ -178,6 +180,41 @@ spec = describe "iMessage adapter" $ do
         iMessageIsAddressed cfg confirmedMessage `shouldBe` True
         iMessageIsAddressed cfg plainMessage `shouldBe` False
       _ -> expectationFailure "expected one confirmed and one plain message"
+
+  it "maps attributed UTF-16 ranges to semantic mentions without QQ-id guessing" $ do
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["1578034713"] "Maxwell" 1000
+        value =
+          object
+            [ "messages"
+                .= [ object
+                       [ "id" .= (47 :: Int),
+                         "chat_id" .= (7 :: Int),
+                         "guid" .= ("GUID-SPAN" :: String),
+                         "sender" .= ("person@example.com" :: String),
+                         "text" .= ("👋 Maxwell hey" :: String),
+                         "mentions"
+                           .= [ object
+                                  [ "handle" .= ("1578034713" :: String),
+                                    "display" .= ("Maxwell" :: String),
+                                    "utf16_location" .= (3 :: Int),
+                                    "utf16_length" .= (7 :: Int)
+                                  ]
+                              ],
+                         "created_at" .= ("2026-08-03T12:00:05Z" :: String)
+                       ]
+                   ],
+              "next_rowid" .= (47 :: Int),
+              "has_more" .= False
+            ]
+    page <- parseIMessagePage value `shouldSatisfyRight` const True
+    case page.messages of
+      [message] -> do
+        let nodes = iMessageTextNodes cfg message
+        nodes
+          `shouldBe` [NText "👋 ", NMention (NativeUserId "1578034713") "Maxwell", NText " hey"]
+        promptText PlatformIMessage (Body nodes) `shouldBe` "👋 @Maxwell hey"
+        message.mentionedHandles `shouldBe` ["1578034713"]
+      _ -> expectationFailure "expected one mentioned message"
 
   it "advertises bounded outbound attachment delivery" $ do
     iMessageCapabilities.canSendText `shouldBe` True

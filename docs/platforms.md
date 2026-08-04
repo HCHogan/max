@@ -33,6 +33,15 @@ group. The configured iMessage chat is always a separate conversation.
   occupy `(-10^12, 0)` while foreign opaque ids occupy `<= -10^12`; the latter
   remain groups. Canonical `conversation_kind` is still the stored authority.
 
+Since migration 055, `canonical_content` stores the ADR 003 v2 IR body
+(`{"v":2,"nodes":[...]}`): faces, cards, files and videos keep their
+structure, mentions carry a resolved principal identity plus a captured
+display label, and media sources are validated reference strings
+(`blob:<sha256>`, `http(s)://…`, or `mxc://…`) — inline bytes are imported
+into BlobStore before canonical publication and never rest in the ledger.
+`rendered_text` is the prompt projection produced by `Max.IR.Prompt`, whose
+vocabulary reproduces the segment renderer token for token.
+
 QQ image segments survive the durable-dispatch JSON round trip: inbound
 `data.url` and the outbound-compatible `data.file` encoding decode to the same
 media source. Blank NapCat summaries become explicit `[image]` or `[sticker]`
@@ -64,7 +73,7 @@ is published with revision CAS. Inbound authenticated MXC media is bounded at
 homeserver may return a valid file with different container metadata, so Max
 records the bounded response's actual size instead of abandoning it as an
 opaque `mxc://` URI. Outbound canonical media is resolved from
-BlobStore, inline bytes, or a bounded HTTP source, uploaded through Matrix's
+BlobStore or a bounded HTTP source, uploaded through Matrix's
 authenticated media API, and sent as the matching `m.image`, `m.video`,
 `m.audio`, or `m.file` event. Resolution or upload failure degrades to the
 message's canonical text rather than losing the whole delivery. The current
@@ -106,7 +115,9 @@ README.
 Group wakeups use the confirmed mention handle embedded in Messages'
 `attributedBody`, matched against `imessage.mention_handles`. Contact names are
 local presentation and never establish identity, so a member may see the bot
-as `Maxwell` (or any other alias) without changing trigger semantics.
+as `Maxwell` (or any other alias) without changing trigger semantics. The
+bridge also emits the attributed UTF-16 range so canonical content preserves
+the ordered semantic mention and its exact visible label.
 `imessage.bot_name` is only a compatibility fallback for a manually typed
 literal such as `@Maxwell`.
 

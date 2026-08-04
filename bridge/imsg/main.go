@@ -167,6 +167,13 @@ type attachmentRecord struct {
 	size        int64
 }
 
+type mentionSpan struct {
+	Handle        string `json:"handle"`
+	Display       string `json:"display,omitempty"`
+	UTF16Location int    `json:"utf16_location"`
+	UTF16Length   int    `json:"utf16_length"`
+}
+
 func (s *server) authorized(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -424,20 +431,38 @@ func (s *server) sanitizeMessages(raw json.RawMessage) (json.RawMessage, error) 
 	if err != nil {
 		return nil, err
 	}
-	for rowID, handles := range mentions {
-		if len(handles) > 0 {
-			messageByRowID[rowID]["mentioned_handles"] = handles
-		}
+	for rowID, spans := range mentions {
+		addConfirmedMentions(messageByRowID[rowID], spans)
 	}
 	return json.Marshal(result)
+}
+
+func addConfirmedMentions(message map[string]any, spans []mentionSpan) {
+	if len(spans) == 0 {
+		return
+	}
+	handles := make([]string, 0, len(spans))
+	visible := make([]mentionSpan, 0, len(spans))
+	for _, span := range spans {
+		if !containsString(handles, span.Handle) {
+			handles = append(handles, span.Handle)
+		}
+		if span.UTF16Location >= 0 && span.UTF16Length > 0 && span.Display != "" {
+			visible = append(visible, span)
+		}
+	}
+	message["mentioned_handles"] = handles
+	if len(visible) > 0 {
+		message["mentions"] = visible
+	}
 }
 
 // imsg returns only the rendered attributed text. The stable identity behind
 // an iMessage mention remains in attributedBody, so enrich only allowlisted
 // rows before the payload leaves the Mac. The blob itself never crosses the
 // bridge and display names are never treated as identities.
-func (s *server) confirmedMentionsForRows(messages map[int64]map[string]any) (map[int64][]string, error) {
-	result := make(map[int64][]string)
+func (s *server) confirmedMentionsForRows(messages map[int64]map[string]any) (map[int64][]mentionSpan, error) {
+	result := make(map[int64][]mentionSpan)
 	if len(messages) == 0 || s.dbPath == "" {
 		return result, nil
 	}
@@ -477,7 +502,7 @@ func (s *server) confirmedMentionsForRows(messages map[int64]map[string]any) (ma
 		if err != nil {
 			return nil, fmt.Errorf("decode attributedBody for row %d: %w", row.RowID, err)
 		}
-		result[row.RowID] = confirmedMentionHandles(body)
+		result[row.RowID] = decodeMentionSpans(body)
 	}
 	return result, nil
 }

@@ -93,9 +93,10 @@ Because the token is stored in the plist, keep that file user-readable only.
   files or directories. Caller-supplied paths are rejected.
 - `messages.after` is authoritative. Watch only wakes Max early; the durable
   ROWID cursor is still reconciled periodically and after reconnects.
-- Confirmed mention identities are read from each allowlisted row's native
-  `attributedBody` metadata. Only the extracted handles cross the bridge;
-  contact/display names never decide whether Max was mentioned.
+- Confirmed mention identities and their attributed UTF-16 ranges are read
+  from each allowlisted row's native `attributedBody` metadata. The bridge
+  emits the stable handle plus the exact visible substring/range; contact-book
+  names never decide identity or whether Max was mentioned.
 - A `chat.db` replacement changes the source fingerprint. Max then rescans the
   one allowlisted chat and deduplicates by message GUID.
 - Accepted sends are not blindly retried. Echoes or `message.send_status`

@@ -1,8 +1,8 @@
 module Max.Platform.DeliverySpec (spec) where
 
 import Control.Exception (bracket)
-import Data.Aeson (Value, object, toJSON, (.=))
-import Data.Text qualified as T
+import Data.Aeson (Value, object, (.=))
+import Data.Text (Text)
 import Effectful (runEff)
 import Max.Effects.Blob (blobRefSha256, putBlob, runBlob)
 import Max.Platform.Delivery
@@ -12,42 +12,57 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "canonical delivery media" $ do
-  it "decodes inline hexadecimal content without IO" $ do
-    deliveryMediaFromContent (content (inlineSource "68656c6c6f"))
-      `shouldBe` [DeliveryMedia "inline:" (Just "text/plain") (Just 5) (Just "hello.txt") (Just "hello")]
+  it "projects v2 media nodes, preferring the caption and skipping sourceless ones" $ do
+    let body =
+          object
+            [ "v" .= (2 :: Int),
+              "nodes"
+                .= [ object ["type" .= ("text" :: Text), "text" .= ("看这个" :: Text)],
+                     mediaNode (Just "https://x/a.png"),
+                     -- Sourceless media degrades to text at lowering; it is
+                     -- never a deliverable attachment.
+                     object ["type" .= ("media" :: Text), "kind" .= ("image" :: Text)]
+                   ]
+            ]
+    deliveryMediaFromContent body
+      `shouldBe` [DeliveryMedia "https://x/a.png" (Just "image/png") (Just 5) (Just "两只猫") Nothing]
 
-  it "resolves content-addressed and base64 sources under the same worker boundary" $
+  it "resolves content-addressed sources and rejects inline canonical bytes" $
     withBlobRoot $ \root -> do
       resolved <- runEff . runBlob root $ do
         ref <- putBlob "blob-payload"
         let sources =
-              toJSON
-                [ mediaPart (remoteSource ("blob:" <> blobRefSha256 ref) (Just 12)),
-                  mediaPart (remoteSource "base64://YmFzZTY0LXBheWxvYWQ=" (Just 14))
+              object
+                [ "v" .= (2 :: Int),
+                  "nodes"
+                    .= [sizedMediaNode ("blob:" <> blobRefSha256 ref) 12]
                 ]
         loadDeliveryMedia sources
-      fmap (.bytes) resolved `shouldBe` [Just "blob-payload", Just "base64-payload"]
+      fmap (.bytes) resolved `shouldBe` [Just "blob-payload"]
+      deliveryMediaFromContent
+        (object ["v" .= (2 :: Int), "nodes" .= [sizedMediaNode "base64://YmFzZQ==" 6]])
+        `shouldBe` []
 
-content :: Value -> Value
-content source = toJSON [mediaPart source]
-
-mediaPart :: Value -> Value
-mediaPart source = object ["type" .= ("media" :: T.Text), "source" .= source, "caption" .= ("hello.txt" :: T.Text)]
-
-inlineSource :: T.Text -> Value
-inlineSource bytes =
+mediaNode :: Maybe Text -> Value
+mediaNode source =
   object
-    [ "kind" .= ("inline" :: T.Text),
-      "bytes" .= bytes,
-      "mime_type" .= ("text/plain" :: T.Text)
-    ]
+    ( [ "type" .= ("media" :: Text),
+        "kind" .= ("image" :: Text),
+        "mime" .= ("image/png" :: Text),
+        "size" .= (5 :: Int),
+        "name" .= ("a.png" :: Text),
+        "description" .= ("两只猫" :: Text)
+      ]
+        <> maybe [] (\url -> ["source" .= url]) source
+    )
 
-remoteSource :: T.Text -> Maybe Int -> Value
-remoteSource url size =
+sizedMediaNode :: Text -> Int -> Value
+sizedMediaNode source size =
   object
-    [ "kind" .= ("remote" :: T.Text),
-      "url" .= url,
-      "mime_type" .= ("application/octet-stream" :: T.Text),
+    [ "type" .= ("media" :: Text),
+      "kind" .= ("file" :: Text),
+      "source" .= source,
+      "mime" .= ("application/octet-stream" :: Text),
       "size" .= size
     ]
 

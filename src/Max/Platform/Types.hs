@@ -28,23 +28,18 @@ module Max.Platform.Types
     EndpointMode (..),
     EventKind (..),
     MessageRelation (..),
-    MediaSource (..),
-    ContentPart (..),
     PlatformCapabilities (..),
     noCapabilities,
     ConversationOutputCapabilities (..),
     noConversationOutputCapabilities,
     qqConversationOutputCapabilities,
-    InboundEnvelope (..),
     DeliveryStatus (..),
   )
 where
 
 import Data.Aeson (FromJSON, ToJSON, Value)
-import Data.ByteString (ByteString)
 import Data.Int (Int64)
 import Data.Text (Text)
-import Data.Time (UTCTime)
 import GHC.Generics (Generic)
 
 newtype ConversationId = ConversationId {unConversationId :: Int64}
@@ -140,19 +135,10 @@ data EventKind
 data MessageRelation
   = ReplyTo !NativeEventId
   | Replaces !NativeEventId
+  | -- | A redaction/recall of the target.  Distinct from 'Replaces': an
+    -- edit supersedes content, a redaction removes it.
+    Redacts !NativeEventId
   | ReactsTo !NativeEventId !Text
-  deriving stock (Eq, Show, Generic)
-
-data MediaSource
-  = RemoteMedia !Text !(Maybe Text) !(Maybe Int64) !(Maybe Text)
-  | InlineMedia !ByteString !(Maybe Text) !(Maybe Text)
-  deriving stock (Eq, Show, Generic)
-
-data ContentPart
-  = ContentText !Text
-  | ContentMention !NativeUserId !(Maybe Text)
-  | ContentMedia !MediaSource !(Maybe Text)
-  | ContentUnsupported !Text
   deriving stock (Eq, Show, Generic)
 
 -- | Capabilities are data owned by an endpoint, never optimistic defaults.
@@ -213,25 +199,6 @@ qqConversationOutputCapabilities =
       canOutputQQMention = True,
       canOutputQQFace = True
     }
-
--- | Fully normalized input presented to the shared ingest kernel.
--- @rawPayload@ is diagnostic evidence only; the store applies its configured
--- byte limit before persistence and it must never participate in routing or
--- authorization.
-data InboundEnvelope = InboundEnvelope
-  { endpointId :: !EndpointId,
-    nativeEventId :: !NativeEventId,
-    senderNativeId :: !NativeUserId,
-    senderDisplayName :: !(Maybe Text),
-    occurredAt :: !UTCTime,
-    receivedAt :: !UTCTime,
-    eventKind :: !EventKind,
-    content :: ![ContentPart],
-    relations :: ![MessageRelation],
-    sourceCursor :: !(Maybe PlatformCursor),
-    rawPayload :: !(Maybe Value)
-  }
-  deriving stock (Eq, Show, Generic)
 
 data DeliveryStatus
   = DeliveryPending

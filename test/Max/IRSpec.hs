@@ -3,6 +3,7 @@ module Max.IRSpec (spec) where
 import Data.Aeson (Value, object, toJSON, (.=))
 import Data.Aeson.Types (parseEither, parseJSON)
 import Data.Either (isLeft)
+import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.IR
@@ -28,6 +29,12 @@ mkMeta kind name description size =
 
 mention :: Text -> Node 'Canonical
 mention = NMention (MentionIdentity (PrincipalIdentityId 7))
+
+blob :: Text -> MediaRef
+blob marker = fromJust (mediaBlobRef (T.replicate 64 marker))
+
+remote :: Text -> MediaRef
+remote = fromJust . mediaRemoteRef
 
 vocabularySpec :: Spec
 vocabularySpec = describe "fallbackText" $ do
@@ -142,10 +149,10 @@ codecCorpus =
       Body [NEmote (Emote PlatformQQ "5" (Just "惊讶") (Just (object ["faceText" .= ("惊讶" :: Text)])))]
     ),
     ( "media blob",
-      Body [NMedia (Just (MediaBlob "abc123")) (mkMeta MImage Nothing (Just "两只猫") (Just 182000))]
+      Body [NMedia (Just (blob "a")) (mkMeta MImage Nothing (Just "两只猫") (Just 182000))]
     ),
     ( "media remote sticker",
-      Body [NMedia (Just (MediaRemote "https://x/s.png")) (mkMeta MSticker Nothing Nothing Nothing)]
+      Body [NMedia (Just (remote "https://x/s.png")) (mkMeta MSticker Nothing Nothing Nothing)]
     ),
     ("media sourceless", Body [NMedia Nothing (mkMeta MFile (Just "a.txt") Nothing Nothing)]),
     ( "card",
@@ -156,7 +163,7 @@ codecCorpus =
                 subtitle = Nothing,
                 url = Just "https://example.com",
                 tag = Just "知乎",
-                preview = Just (MediaRemote "https://x/p.jpg"),
+                preview = Just (remote "https://x/p.jpg"),
                 raw = Just (object ["app" .= ("com.tencent.structmsg" :: Text)])
               }
         ]
@@ -168,7 +175,7 @@ codecCorpus =
         [ NText "看这个 ",
           mention "张三",
           NText " ",
-          NMedia (Just (MediaBlob "deadbeef")) (mkMeta MImage Nothing Nothing Nothing),
+          NMedia (Just (blob "d")) (mkMeta MImage Nothing Nothing Nothing),
           NEmote (Emote PlatformWeChatPad "wx:doge" Nothing Nothing)
         ]
     )
@@ -185,9 +192,12 @@ codecSpec = describe "canonical codec" $ do
       codecCorpus
 
   it "encodes media refs as their stored string form" $ do
-    renderMediaRef (MediaBlob "ab12") `shouldBe` "blob:ab12"
-    parseMediaRef "blob:ab12" `shouldBe` MediaBlob "ab12"
-    parseMediaRef "https://x/a.png" `shouldBe` MediaRemote "https://x/a.png"
+    let sha = T.replicate 64 "a"
+    renderMediaRef (blob "a") `shouldBe` "blob:" <> sha
+    parseMediaRef ("blob:" <> sha) `shouldBe` Just (blob "a")
+    parseMediaRef "https://x/a.png" `shouldBe` Just (remote "https://x/a.png")
+    parseMediaRef "blob:ab12" `shouldBe` Nothing
+    parseMediaRef "base64://YWJj" `shouldBe` Nothing
 
   it "rejects a v1 flat array" $
     decodeBody (toJSON [object ["type" .= ("text" :: Text), "text" .= ("hi" :: Text)]])

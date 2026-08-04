@@ -20,10 +20,13 @@ module Max.IR.Prompt
   ( MentionRoster (..),
     parseModelChunk,
     emitModelChunk,
+    promptText,
   )
 where
 
+import Data.Char (isDigit)
 import Data.Int (Int64)
+import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Read qualified as TR
@@ -92,6 +95,48 @@ nativeNumericId :: NativeUserId -> Maybe Int64
 nativeNumericId (NativeUserId t) = case TR.signed TR.decimal t of
   Right (n, "") -> Just n
   _ -> Nothing
+
+-- | The transcript/prompt projection of an ingest body — the text stored
+-- as @rendered_text@ and read by prompts, history, search and embeddings.
+--
+-- The vocabulary deliberately reproduces 'OneBot.Segment.renderPlainText'
+-- token for token (@[\@#qq] @, @[face#5: 惊讶]@, @[image]@, @[sticker]@,
+-- @[file:name]@, @[video]@, @[card: …]@, @[forward]@): persisted history
+-- and the model's learned round-trip contract must not notice the switch
+-- from segment-derived to IR-derived rendering.  QQ ingest parity is
+-- pinned by golden tests against 'renderPlainText'.
+promptText :: Platform -> Body 'Ingest -> Text
+promptText originPlatform body = T.concat (map node body.nodes)
+  where
+    node = \case
+      NText t -> t
+      NMention (NativeUserId native) display
+        | originPlatform == PlatformQQ,
+          not (T.null native),
+          T.all isDigit native ->
+            "[@#" <> native <> "] "
+        | otherwise -> "@" <> display
+      NEmote e
+        | e.origin == PlatformQQ ->
+            "[face#" <> e.nativeId <> maybe "" (": " <>) e.name <> "]"
+        | otherwise -> fallbackText (NEmote e :: Node 'Canonical)
+      NMedia _ meta -> case meta.kind of
+        MImage -> "[image]"
+        MSticker -> "[sticker]"
+        MVideo -> "[video]"
+        MAudio -> "[audio]"
+        MFile -> "[file:" <> fromMaybe "" meta.name <> "]"
+      NCard c ->
+        let parts =
+              dedupAdjacent . catMaybes $
+                [c.tag, c.title, T.take 80 <$> c.subtitle, c.url]
+         in "[card: " <> T.intercalate " | " parts <> "]"
+      NForward _ -> "[forward]"
+      NUnsupported u -> "[" <> u.description <> "]"
+    dedupAdjacent (a : b : rest)
+      | a == b = dedupAdjacent (a : rest)
+      | otherwise = a : dedupAdjacent (b : rest)
+    dedupAdjacent xs = xs
 
 -- | Inverse of 'parseModelChunk' on its normal form.  The reply token
 -- leads the chunk; a converted mention carries no trailing space of its

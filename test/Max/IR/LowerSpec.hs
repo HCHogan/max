@@ -1,11 +1,12 @@
 module Max.IR.LowerSpec (spec) where
 
 import Data.Aeson (Value (String), object, (.=))
+import Data.ByteString qualified as BS
 import Data.Foldable (for_)
+import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.ByteString qualified as BS
 import Max.IR
 import Max.IR.Lower
 import Max.Platform.Types
@@ -47,6 +48,12 @@ mentionNode = NMention (MentionIdentity knownIdentity) "张三"
 
 qqFace :: Emote
 qqFace = Emote PlatformQQ "5" (Just "惊讶") Nothing
+
+blob :: Text -> MediaRef
+blob marker = fromJust (mediaBlobRef (T.replicate 64 marker))
+
+remote :: Text -> MediaRef
+remote = fromJust . mediaRemoteRef
 
 flat :: LoweredMessage -> [Node 'Lowered]
 flat lowered = concat lowered.chunks
@@ -124,24 +131,24 @@ mediaSpec = describe "media lowering" $ do
       nativeImages = textOnlyCaps {image = TierNative, maxNativeMedia = 1}
 
   it "keeps resolved media on the native tier" $ do
-    let out = lower baseEnv {caps = nativeImages} (Body [img (Just (MediaBlob "abc"))])
-    flat out `shouldBe` [NMedia (ResolvedUrl "blob:abc") (mkMeta MImage (Just "两只猫"))]
+    let out = lower baseEnv {caps = nativeImages} (Body [img (Just (blob "a"))])
+    flat out `shouldBe` [NMedia (ResolvedUrl ("blob:" <> T.replicate 64 "a")) (mkMeta MImage (Just "两只猫"))]
     out.notes `shouldBe` []
 
   it "folds past the native media budget" $ do
     let out =
           lower
             baseEnv {caps = nativeImages}
-            (Body [img (Just (MediaBlob "a")), img (Just (MediaBlob "b"))])
+            (Body [img (Just (blob "a")), img (Just (blob "b"))])
     flat out
-      `shouldBe` [ NMedia (ResolvedUrl "blob:a") (mkMeta MImage (Just "两只猫")),
+      `shouldBe` [ NMedia (ResolvedUrl ("blob:" <> T.replicate 64 "a")) (mkMeta MImage (Just "两只猫")),
                    NText "[图片: 两只猫]"
                  ]
     out.notes `shouldBe` [LowerNote "image" NoteFolded (Just "media budget")]
 
   it "folds sourceless and unresolvable media with distinct reasons" $ do
     let env = baseEnv {caps = nativeImages, mediaResolve = const Nothing}
-        out = lower env (Body [img Nothing, img (Just (MediaBlob "x"))])
+        out = lower env (Body [img Nothing, img (Just (blob "c"))])
     flat out `shouldBe` [NText "[图片: 两只猫][图片: 两只猫]"]
     out.notes
       `shouldBe` [ LowerNote "image" NoteFolded (Just "no source"),
@@ -152,7 +159,7 @@ mediaSpec = describe "media lowering" $ do
     let out =
           lower
             baseEnv
-            (Body [img (Just (MediaRemote "https://x/a.png")), img (Just (MediaBlob "secret"))])
+            (Body [img (Just (remote "https://x/a.png")), img (Just (blob "d"))])
     flat out `shouldBe` [NText "[图片: 两只猫] https://x/a.png[图片: 两只猫]"]
 
   it "drops with the fallback recorded in the note" $ do
@@ -252,6 +259,11 @@ chunkSpec = describe "chunking" $ do
     T.concat [t | c <- out.chunks, NText t <- c] `shouldBe` body
     for_ out.chunks $ \c -> chunkBytes c `shouldSatisfy` (<= 64)
 
+  it "honours limits smaller than the old 64-byte floor" $ do
+    let body = T.replicate 17 "a"
+        out = lower baseEnv {caps = textOnlyCaps {maxTextBytes = Just 8}} (Body [NText body])
+    fmap chunkBytes out.chunks `shouldBe` [8, 8, 1]
+
   it "never splits inside a multi-byte character" $ do
     let body = T.replicate 30 "汉"
         out = lower baseEnv {caps = textOnlyCaps {maxTextBytes = Just 64}} (Body [NText body])
@@ -330,13 +342,23 @@ capsCodecSpec = describe "capability codec" $ do
 -- native — swept across every tier combination for the two riskiest kinds.
 invariantSpec :: Spec
 invariantSpec = describe "lowering invariants" $ do
+  it "drops text fallbacks when send_text is false while preserving native media" $ do
+    let env =
+          baseEnv
+            { caps = noOutboundCaps {image = TierNative, maxNativeMedia = 1},
+              mediaResolve = const (Just (ResolvedUrl "https://cdn.test/a.png"))
+            }
+        out = lower env (Body [NText "hidden", mentionNode, NMedia (Just (remote "https://x/a.png")) (mkMeta MImage Nothing)])
+    flat out `shouldBe` [NMedia (ResolvedUrl "https://cdn.test/a.png") (mkMeta MImage Nothing)]
+    map (.outcome) out.notes `shouldBe` [NoteDropped, NoteDropped]
+
   it "emits structure only within declared native tiers" $ do
     let tiers = [minBound .. maxBound] :: [Tier]
         body =
           Body
             [ NText "看这个 ",
               mentionNode,
-              NMedia (Just (MediaRemote "https://x/a.png")) (mkMeta MImage Nothing),
+              NMedia (Just (remote "https://x/a.png")) (mkMeta MImage Nothing),
               NEmote qqFace,
               NText " 完"
             ]

@@ -16,14 +16,13 @@ module Max.Platform.Delivery
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent qualified as Concurrent
 import Control.Monad (forM_)
-import Data.Aeson (Result (..), Value, fromJSON, withArray, withObject, (.:), (.:?), (.!=))
+import Data.Aeson (Result (..), Value, fromJSON, withObject, (.!=), (.:), (.:?))
 import Data.Aeson.Types (Parser, parseMaybe)
-import Data.ByteString.Base64 qualified as B64
-import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString qualified as BS
-import Data.Foldable (toList)
+import Data.ByteString.Base64 qualified as B64
 import Data.List (find)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
@@ -35,6 +34,7 @@ import Effectful.Exception (SomeException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
+import Max.IR (parseMediaRef, renderMediaRef)
 import Max.Platform (PlatformBackend (..))
 import Max.Platform.Store
   ( DeliveryClaim (..),
@@ -92,46 +92,34 @@ loadDeliveryMedia value = do
               else case item.declaredSize of
                 Just expected | expected /= actual -> error "canonical delivery media size changed"
                 _ -> pure item {bytes = Just payload, declaredSize = Just actual}
-      | Just encoded <- T.stripPrefix "base64://" item.sourceUrl =
-          case B64.decode (TE.encodeUtf8 encoded) of
-            Left _ -> error "canonical delivery contains invalid base64 media"
-            Right payload ->
-              let actual = BS.length payload
-               in if actual > deliveryMediaItemBytes
-                    then error "canonical delivery media exceeds per-item byte limit"
-                    else case item.declaredSize of
-                      Just expected | expected /= actual -> error "canonical delivery media size changed"
-                      _ -> pure item {bytes = Just payload, declaredSize = Just actual}
       | otherwise = pure item
 
--- | Read the media projection of canonical content without performing IO.
--- Inline canonical bytes are decoded here; blob and base64-backed remote
--- sources are resolved by 'loadDeliveryMedia' under its byte limits.
+-- | Read the media projection of stored canonical content (the ADR 003 v2
+-- body) without performing IO.  Sources are reference strings —
+-- @blob:\<sha256\>@ or a validated remote URL — resolved by
+-- 'loadDeliveryMedia' under its byte limits; sourceless media never
+-- becomes a deliverable attachment.
 deliveryMediaFromContent :: Value -> [DeliveryMedia]
 deliveryMediaFromContent = maybe [] id . parseMaybe parser
   where
-    parser = withArray "canonical content" (fmap catMaybes . traverse part . toList)
-    part = withObject "canonical part" $ \o -> do
-      partType <- o .:? "type" .!= ("" :: Text)
-      if partType /= "media"
+    parser = withObject "canonical body" $ \o -> do
+      nodes <- o .: "nodes" :: Parser [Value]
+      catMaybes <$> traverse node nodes
+    node = withObject "canonical node" $ \o -> do
+      nodeType <- o .:? "type" .!= ("" :: Text)
+      if nodeType /= "media"
         then pure Nothing
-        else do
-          source <- o .: "source"
-          mediaName <- o .:? "caption"
-          withObject "canonical media source" (sourceParser mediaName) source
-    sourceParser mediaName source = do
-      kind <- source .:? "kind" .!= ("remote" :: Text)
-      mediaMime <- source .:? "mime_type"
-      mediaSize <- source .:? "size"
-      case kind of
-        "remote" -> do
-          mediaUrl <- source .: "url"
-          pure . Just $ DeliveryMedia mediaUrl mediaMime mediaSize mediaName Nothing
-        "inline" -> do
-          encoded <- source .: "bytes"
-          payload <- either (fail . show) pure (Base16.decode (TE.encodeUtf8 encoded))
-          pure . Just $ DeliveryMedia "inline:" mediaMime (Just (BS.length payload)) mediaName (Just payload)
-        _ -> pure Nothing
+        else
+          o .:? "source" >>= \case
+            Nothing -> pure Nothing
+            Just sourceRef | Just ref <- parseMediaRef sourceRef -> do
+              mediaMime <- o .:? "mime"
+              mediaSize <- o .:? "size"
+              mediaName <- o .:? "name"
+              description <- o .:? "description"
+              pure . Just $
+                DeliveryMedia (renderMediaRef ref) mediaMime mediaSize (description <|> mediaName) Nothing
+            Just _ -> pure Nothing
 
 deliveryWorker ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
@@ -154,8 +142,9 @@ deliveryWorker workerId transports = localDomain "delivery" loop
         Left e ->
           pure (DeliveryRetry ("media load failed: " <> T.pack (show (e :: SomeException))) (addUTCTime 30 now))
         Right media -> case find ((== claim.platform) . (.platform)) transports of
-          _ | Just capabilityError <- deliveryCapabilityError claim ->
-            pure (DeliveryPermanentlyFailed capabilityError)
+          _
+            | Just capabilityError <- deliveryCapabilityError claim ->
+                pure (DeliveryPermanentlyFailed capabilityError)
           Nothing ->
             pure (DeliveryPermanentlyFailed ("no transport registered for " <> renderPlatform claim.platform))
           Just transport ->

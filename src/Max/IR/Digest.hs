@@ -75,12 +75,13 @@ instance LogDecor Void where
   decorDigest = absurd
 
 refDigest :: MediaRef -> Text
-refDigest = \case
-  MediaBlob sha -> "blob:" <> T.take 8 sha <> "…"
-  MediaRemote url -> bounded 24 url
+refDigest ref = case (mediaRefBlobSha ref, mediaRefRemoteUrl ref) of
+  (Just sha, _) -> "blob:" <> T.take 8 sha <> "…"
+  (_, Just url) -> bounded 24 url
+  _ -> "invalid-ref"
 
 -- | Structured log fields for one body, any phase.
-digest :: ForAllX LogDecor p => Body p -> Value
+digest :: (ForAllX LogDecor p) => Body p -> Value
 digest body =
   object
     [ "nodes" .= length body.nodes,
@@ -88,10 +89,10 @@ digest body =
       "digest" .= digestLine body
     ]
 
-digestLine :: ForAllX LogDecor p => Body p -> Text
+digestLine :: (ForAllX LogDecor p) => Body p -> Text
 digestLine body = truncateText 400 (T.intercalate "+" (map nodeDigest body.nodes))
 
-nodeDigest :: ForAllX LogDecor p => Node p -> Text
+nodeDigest :: (ForAllX LogDecor p) => Node p -> Text
 nodeDigest = \case
   NText t -> "text(" <> T.pack (show (utf8Length t)) <> "B)"
   NMention x _ -> "mention(" <> decorDigest x <> ")"
