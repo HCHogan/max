@@ -237,6 +237,7 @@ reminderWorker tz sched = loop
               orSelfId = UserId r.rmSelfId,
               orRenderedText = Nothing,
               orSegments = segs,
+              orMentionDisplays = [],
               orDeliveryScope = DeliverConversation,
               orTimeoutMs = 30000
             }

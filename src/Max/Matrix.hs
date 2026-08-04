@@ -13,6 +13,7 @@ module Max.Matrix
     parseMatrixSyncPage,
     matrixSelfMentionIsDirect,
     matrixMediaSizeDrift,
+    matrixCanonicalText,
     matrixCapabilities,
     matrixWorker,
     matrixDeliveryTransport,
@@ -27,6 +28,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair, Parser, parseEither, parseMaybe)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Foldable (toList)
 import Data.Int (Int64)
 import Data.List (findIndex)
 import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
@@ -341,8 +343,39 @@ matrixReplyRelation claim = case claim.replyNativeEventId of
 
 deliveryBody :: DeliveryClaim -> Text
 deliveryBody claim
-  | claim.messageOrigin == "inbound" && claim.originPlatform /= PlatformMatrix = attributedText claim
-  | otherwise = claim.renderedText
+  | claim.messageOrigin == "inbound" && claim.originPlatform /= PlatformMatrix =
+      attributedText (claim {renderedText = canonicalBody})
+  | otherwise = canonicalBody
+  where
+    canonicalBody = fromMaybe claim.renderedText (matrixCanonicalText claim.content)
+
+-- | Lower canonical content to Matrix's safe plain-text surface.  Semantic
+-- mentions use their source display label when available, and otherwise keep
+-- an explicit @native-id fallback.  QQ's executable marker syntax therefore
+-- never leaks into a mirror and its target is never silently discarded.
+matrixCanonicalText :: Value -> Maybe Text
+matrixCanonicalText = parseMaybe $ withArray "canonical content" $ \parts ->
+  T.concat <$> traverse renderPart (toList parts)
+  where
+    renderPart = withObject "canonical content part" $ \part -> do
+      partType <- part .: "type" :: Parser Text
+      case partType of
+        "text" -> part .: "text"
+        "mention" -> do
+          native <- part .: "native_user_id"
+          display <- part .:? "display"
+          pure ("@" <> fromMaybe native (display >>= nonBlank))
+        "media" -> do
+          caption <- part .:? "caption"
+          pure (fromMaybe "[media]" (caption >>= nonBlank))
+        "unsupported" -> do
+          description <- part .: "description"
+          pure ("[unsupported: " <> description <> "]")
+        _ -> fail ("unknown canonical content part: " <> T.unpack partType)
+
+    nonBlank value
+      | T.null (T.strip value) = Nothing
+      | otherwise = Just value
 
 matrixMsgType :: Maybe Text -> Text
 matrixMsgType = \case

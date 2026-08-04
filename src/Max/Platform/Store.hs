@@ -112,11 +112,11 @@ data RegisteredEndpoint = RegisteredEndpoint
   }
   deriving stock (Eq, Show, Generic)
 
--- | Intersect the enabled endpoints' semantic output surface.  One canonical
--- reply can fan out to all of them, so advertising a feature supported by only
--- one endpoint would make the prompt promise a delivery the ledger cannot
--- preserve.  QQ mentions/faces are protocol-native and therefore require an
--- all-QQ conversation in addition to the ordinary capability flags.
+-- | Derive the canonical output surface from enabled endpoints.  Features
+-- without a faithful fallback still require the full intersection.  A QQ
+-- mention is different: canonical content preserves its target, QQ lowers it
+-- to SegAt, and text-only mirrors lower it to a readable @id.  Faces remain
+-- QQ-only because no equivalent semantic fallback exists yet.
 conversationOutputCapabilities ::
   (WithConnection :> es, IOE :> es) =>
   Int64 ->
@@ -135,17 +135,18 @@ conversationOutputCapabilities legacyConversation = do
       \       COALESCE(bool_and(COALESCE((caps->>'reply')::boolean, false)), false), \
       \       COALESCE(bool_and(COALESCE((caps->>'reaction')::boolean, false)), false), \
       \       COALESCE(bool_and(COALESCE((caps->>'send_media')::boolean, false)), false), \
+      \       COALESCE(bool_or(platform = 'qq'), false), \
       \       COALESCE(bool_and(platform = 'qq'), false) \
       \FROM enabled"
       (Only legacyConversation)
-  pure $ case rows :: [(Int64, Bool, Bool, Bool, Bool)] of
-    [(count, reply, reaction, media, qqOnly)]
+  pure $ case rows :: [(Int64, Bool, Bool, Bool, Bool, Bool)] of
+    [(count, reply, reaction, media, hasQQ, qqOnly)]
       | count > 0 ->
           ConversationOutputCapabilities
             { canOutputReply = reply,
               canOutputReaction = reaction,
               canOutputMedia = media,
-              canOutputQQMention = qqOnly,
+              canOutputQQMention = hasQQ,
               canOutputQQFace = qqOnly
             }
     _ -> noConversationOutputCapabilities

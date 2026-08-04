@@ -73,7 +73,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
       <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行首 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。"
          | not private && outputCaps.canOutputReply
          ]
-      <> [ "  - 要 @ 某人写 [@#<QQ号>]（对照表见 [environment]），发出时会转成真正的 @。"
+      <> [ "  - 要 @ 某人写 [@#<QQ号>]（对照表见 [environment]）；QQ 端会转成真正的 @，文字镜像端显示 @名字。"
          | not private && outputCaps.canOutputQQMention
          ]
       <> [ "  - 当前端点没有原生引用、QQ 小黄脸或按 QQ 号 @ 的输出动作；直接用普通文字回复。"

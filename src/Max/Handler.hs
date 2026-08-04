@@ -780,6 +780,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               orSelfId = gm.selfId,
               orRenderedText = Nothing,
               orSegments = segs,
+              orMentionDisplays = [],
               orDeliveryScope = DeliverConversation,
               orTimeoutMs = 15000
             }
@@ -1304,6 +1305,7 @@ sendAndRecord kind deliveryScope gid selfId segs =
           orSelfId = selfId,
           orRenderedText = Nothing,
           orSegments = segs,
+          orMentionDisplays = [],
           orDeliveryScope = deliveryScope,
           orTimeoutMs = 15000
         }

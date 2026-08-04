@@ -4,14 +4,16 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Effectful (liftIO, runEff)
 import Max.DB.Message (MessageKind (KindChat))
 import Max.Effects.Outbound
-  ( OutboundRequest (..),
-    OutboundDeliveryScope (..),
+  ( OutboundDeliveryScope (..),
+    OutboundRequest (..),
     SendOutcome (..),
+    outboundCanonicalParts,
     runOutboundWith,
     sendRecorded,
     wasDelivered,
   )
-import OneBot.Segment (Segment (SegText))
+import Max.Platform.Types (ContentPart (..), NativeUserId (..))
+import OneBot.Segment (Segment (SegAt, SegText))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
 
@@ -23,6 +25,7 @@ request =
       orSelfId = UserId 1000,
       orRenderedText = Just "normalised",
       orSegments = [SegText "surface"],
+      orMentionDisplays = [],
       orDeliveryScope = DeliverConversation,
       orTimeoutMs = 30000
     }
@@ -45,3 +48,13 @@ spec = describe "Outbound" $ do
     wasDelivered (SentUnrecorded Nothing "missing message id") `shouldBe` True
     wasDelivered (SentUnrecorded (Just (MessageId 42)) "db unavailable") `shouldBe` True
     wasDelivered (SentRecorded (MessageId 42)) `shouldBe` True
+
+  it "preserves a semantic mention and its display label for mirror lowering" $ do
+    let mentioned = UserId 1578034713
+        req =
+          request
+            { orSegments = [SegAt mentioned, SegText " 在吗，找你"],
+              orMentionDisplays = [(mentioned, "用户名")]
+            }
+    outboundCanonicalParts req
+      `shouldBe` [ContentMention (NativeUserId "1578034713") (Just "用户名"), ContentText " 在吗，找你"]

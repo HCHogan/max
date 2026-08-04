@@ -100,6 +100,7 @@ handleAgentEvent ctx = \case
               orSelfId = ctx.aocReplyTarget.rtSelfId,
               orRenderedText = Nothing,
               orSegments = [SegText body],
+              orMentionDisplays = [],
               orDeliveryScope = DeliverSourceEndpoint ctx.aocSourceMessageId,
               orTimeoutMs = 15000
             }

@@ -18,10 +18,13 @@ group. The configured iMessage chat is always a separate conversation.
 - QQ and iMessage park ambiguous sends. They resume only after an echo or
   authoritative status proves the prior attempt's outcome.
 - Platform roles and native IDs are provenance, never Max authorization.
-- The live prompt advertises only the intersection of every enabled endpoint's
-  output capabilities. QQ mentions, native faces, and reaction controls are
-  available only to QQ-only conversations; numeric compatibility IDs never
-  imply a protocol.
+- The live prompt generally advertises the intersection of every enabled
+  endpoint's output capabilities. Semantic mentions are the deliberate
+  exception when a conversation has a QQ endpoint: canonical content retains
+  the target and display label, QQ lowers it to a native at-segment, and
+  text-only mirrors lower it to readable `@username` text. Native faces and
+  other actions without a faithful fallback remain QQ-only; numeric
+  compatibility IDs never imply a protocol.
 - Outbound replies publish a canonical `message_relations` edge in the same
   transaction as the message. Each delivery resolves that edge to its own
   native event ID or deliberately degrades when its endpoint cannot preserve
@@ -38,7 +41,10 @@ projections and recreates missing image-fetch obligations from their persisted
 source URLs.
 
 QQ mentions keep their structural `[@#qq]` transcript projection even though
-canonical content stores a platform-neutral mention. Matrix replies do not
+canonical content stores a platform-neutral mention plus its known group-card
+or nickname. Outbound QQ delivery uses a native mention while Matrix mirrors
+render the same part as `@username` (or `@native-id` when no label is known).
+Matrix replies do not
 treat the reply-generated `m.mentions` entry for the relay account as an
 explicit @Max: the canonical target's semantic authorship decides whether a
 reply wakes Max. A real Matrix mention outside the reply fallback still does.

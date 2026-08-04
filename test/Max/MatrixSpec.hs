@@ -1,13 +1,26 @@
 module Max.MatrixSpec (spec) where
 
-import Data.Aeson (object, (.=))
+import Data.Aeson (object, toJSON, (.=))
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Max.Matrix
+import Max.Platform.Store (canonicalContentValue)
 import Max.Platform.Types
 import Test.Hspec
 
 spec :: Spec
 spec = describe "Matrix adapter" $ do
+  it "degrades a canonical cross-platform mention to readable @username text" $ do
+    let content =
+          canonicalContentValue
+            [ ContentMention (NativeUserId "1578034713") (Just "用户名"),
+              ContentText " 在吗，找你"
+            ]
+    matrixCanonicalText content `shouldBe` Just "@用户名 在吗，找你"
+
+  it "falls back to the native id when a mention has no display label" $ do
+    let content = toJSON [object ["type" .= ("mention" :: String), "native_user_id" .= ("1578034713" :: String)]]
+    matrixCanonicalText content `shouldBe` Just "@1578034713"
+
   it "parses one allowlisted room timeline with reply and mention provenance" $ do
     let value =
           object

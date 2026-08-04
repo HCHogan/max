@@ -276,6 +276,7 @@ sendImageFromSandboxTool outputCaps gid selfId sandboxes =
                           orSelfId = selfId,
                           orRenderedText = Nothing,
                           orSegments = segs,
+                          orMentionDisplays = [],
                           orDeliveryScope = DeliverConversation,
                           orTimeoutMs = 30000
                         }

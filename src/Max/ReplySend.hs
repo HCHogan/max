@@ -227,6 +227,7 @@ sendAndPersistReply rt budget rawBody
                 orSelfId = rt.rtSelfId,
                 orRenderedText = Just (T.strip rendered),
                 orSegments = segs,
+                orMentionDisplays = [(user, name) | (name, user) <- rt.rtRosterNames],
                 orDeliveryScope = DeliverConversation,
                 orTimeoutMs = 30000
               }

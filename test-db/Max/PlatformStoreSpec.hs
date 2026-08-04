@@ -338,12 +338,13 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     claims <- withDb pool (claimDeliveries "native-reply" 10 30)
     fmap (.replyNativeEventId) claims `shouldBe` [Just (NativeEventId "matrix-target")]
 
-  it "intersects output capabilities and never infers QQ actions from ids" $ do
+  it "keeps semantic mentions when a mirror has a QQ endpoint" $ do
     (qq, matrix) <- mirrorPair pool
     mirrorCaps <- withDb pool (conversationOutputCapabilities 42)
     mirrorCaps.canOutputReply `shouldBe` True
-    mirrorCaps.canOutputQQMention `shouldBe` False
+    mirrorCaps.canOutputQQMention `shouldBe` True
     mirrorCaps.canOutputQQFace `shouldBe` False
+    -- Mention content has a readable per-endpoint fallback; faces do not.
     -- Endpoint identities, not the positive legacy group id, decide this.
     qq.endpointId `shouldNotBe` matrix.endpointId
 

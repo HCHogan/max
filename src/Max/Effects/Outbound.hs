@@ -21,6 +21,7 @@ module Max.Effects.Outbound
     OutboundRequest (..),
     OutboundDeliveryScope (..),
     SendOutcome (..),
+    outboundCanonicalParts,
     runOutbound,
     runOutboundWith,
     sendRecorded,
@@ -40,9 +41,10 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Message (MessageKind (..))
 import Max.Platform.QQ (qqContentParts)
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), canonicalContentValue, enqueueOutbound)
+import Max.Platform.Types (ContentPart (ContentMention), NativeUserId (..))
 import Max.Util (trySync)
 import OneBot.Segment (Segment (..), renderPlainText)
-import OneBot.Types (GroupId (..), MessageId (..), UserId)
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
 -- | Everything fixed before one visible message is sent.
 data OutboundRequest = OutboundRequest
@@ -53,6 +55,10 @@ data OutboundRequest = OutboundRequest
     -- use their markdown source; ordinary messages leave this as 'Nothing'.
     orRenderedText :: !(Maybe Text),
     orSegments :: ![Segment],
+    -- | Display labels for semantic mentions.  QQ still receives native
+    -- 'SegAt' values; text-only mirrors use this metadata for a readable
+    -- @username fallback instead of leaking a QQ id or dropping the target.
+    orMentionDisplays :: ![(UserId, Text)],
     -- | Conversation replies fan out; command/debug output can stay on the
     -- exact endpoint that supplied its durable source message.
     orDeliveryScope :: !OutboundDeliveryScope,
@@ -102,6 +108,7 @@ runOutbound = runOutboundWith deliver
       let GroupId group = req.orGroupId
           rendered = fromMaybe (renderPlainText req.orSegments) req.orRenderedText
           reply = listToMaybe [message | SegReply (MessageId message) <- req.orSegments]
+          canonicalParts = outboundCanonicalParts req
           draft =
             OutboundDraft
               { legacyConversationId = group,
@@ -109,7 +116,7 @@ runOutbound = runOutboundWith deliver
                 sourceCompatibilityMessageId = case req.orDeliveryScope of
                   DeliverConversation -> Nothing
                   DeliverSourceEndpoint (MessageId source) -> Just source,
-                canonicalContent = canonicalContentValue (concatMap qqContentParts req.orSegments),
+                canonicalContent = canonicalContentValue canonicalParts,
                 renderedText = rendered,
                 compatibilitySegments = toJSON req.orSegments,
                 replyToCompatibilityMessageId = reply
@@ -132,6 +139,17 @@ runOutbound = runOutboundWith deliver
       KindChat -> "chat"
       KindCommand -> "command"
       KindDebug -> "debug"
+
+-- | Preserve a mention's semantic target in canonical content while retaining
+-- the native QQ segment separately for QQ delivery.  Display labels are
+-- endpoint-neutral metadata and let text-only mirrors degrade to @username.
+outboundCanonicalParts :: OutboundRequest -> [ContentPart]
+outboundCanonicalParts req = concatMap canonicalize req.orSegments
+  where
+    canonicalize segment = case segment of
+      SegAt user@(UserId native) ->
+        [ContentMention (NativeUserId (T.pack (show native))) (lookup user req.orMentionDisplays)]
+      _ -> qqContentParts segment
 
 -- | Install any request handler as the interpreter.  Besides keeping
 -- 'runOutbound' small, this is the in-memory seam for Handler/Agent tests: a
