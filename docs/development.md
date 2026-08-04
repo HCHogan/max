@@ -87,7 +87,7 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.SelfSourceSpec` — the allowlisted compile-time bundle, stable identity,
   literal search, bounded numbered reads, and host-path rejection
 - `Max.SkillsSpec` — builtin skills parsed from `skills/`, including the
-  `docs/features.md` and live `!help` splices into `self-knowledge`
+  live `!help` splice into the `self-knowledge` navigation map
 - `Max.TasksSpec` — explicit TurnRuntime lifecycle/phase/cancellation plus task
   feeding, aimed `!feedback`, in-flight bookkeeping, and unserved-note recovery
 - `Max.Http.JsonSpec` — buffered HTTP retry policy

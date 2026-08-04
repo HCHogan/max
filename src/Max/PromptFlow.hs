@@ -378,7 +378,7 @@ promptFixture =
           PromptImage "[current message] 里的视频（时长 29 秒）:" "data:video/mp4;base64,Y3VycmVudC12aWRlbw=="
         ],
       skills =
-        [ ("self-knowledge", "Max 自身实现、部署和命令的现行说明"),
+        [ ("self-knowledge", "自知总入口：inspect_source 源码快照的导航图与实时命令帮助"),
           ("sandbox", "在隔离容器中处理代码、数据和文件的流程")
         ],
       now = hkAt 23 10,

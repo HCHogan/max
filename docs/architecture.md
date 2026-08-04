@@ -25,7 +25,7 @@ nix/module.nix     NixOS module for production deployment
 max.cabal          library + max executable
 migrations/*.sql   schema migrations, applied on boot
 skills/*.md        builtin skill manuals, baked into the binary (file-embed);
-                   self-knowledge also splices docs/features.md + live !help
+                   self-knowledge navigates the source snapshot + splices live !help
 
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),
                    segments, events, actions, server
@@ -244,10 +244,13 @@ route a semantic request around it.
 ## Self-knowledge and source inspection
 
 Self-knowledge uses progressive disclosure rather than keeping implementation
-documentation in every prompt. `self-knowledge` merges its short routing and
-deployment guide with the exact embedded `docs/features.md` bytes and live
-`!help`; `self-architecture` is the embedded `docs/architecture.md`. A DB skill
-can shadow either built-in under the ordinary group > DB-global > builtin rule.
+documentation in every prompt. `self-knowledge` is the single entry point: a
+navigation map over the embedded source snapshot plus the live `!help` splice.
+Behaviour, architecture, design rationale and schema are read through
+`inspect_source` from the files themselves (`docs/`, `docs/adr/`,
+`migrations/000_baseline.sql`, `src/`), never mirrored into skill bodies that
+would drift. A DB skill can shadow the built-in under the ordinary
+group > DB-global > builtin rule.
 
 Exact implementation questions bypass prose summaries. The globally visible
 `inspect_source` tool can list, case-insensitively search, and read numbered

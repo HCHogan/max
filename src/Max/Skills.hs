@@ -27,8 +27,11 @@
 -- office) are baked into the binary (file-embed, same deployment
 -- story as the admin panel's assets) and seeded into the registry
 -- with negative ids.  They exist for content that is coupled
--- to the code it ships with — @self-knowledge@ describes THIS
--- binary's behaviour and commands, and a DB copy would go stale a
+-- to the code it ships with — @self-knowledge@ is THIS binary's
+-- self-inspection entry point: a navigation map over the embedded
+-- source snapshot plus the live command help.  Behaviour, design and
+-- architecture questions are answered from the snapshot via
+-- @inspect_source@, never from doc copies that would go stale a
 -- little more every release.  Builtins are immutable through the API;
 -- to hot-fix one without a release, create a DB skill with the same
 -- name — shadowing prefers group over DB-global over builtin.
@@ -63,7 +66,7 @@ import Control.Concurrent.STM
 import Control.Monad (when)
 import Data.ByteString (ByteString)
 import Data.Char (isSpace)
-import Data.FileEmbed (embedDir, embedFile)
+import Data.FileEmbed (embedDir)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -107,32 +110,14 @@ newtype SkillRegistry = SkillRegistry (TVar (Map Int64 Skill))
 builtinSkillFiles :: [(FilePath, ByteString)]
 builtinSkillFiles = $(embedDir "skills")
 
--- | The detailed behaviour reference is spliced into @self-knowledge@;
--- the same bytes render docs/features.md and answer behaviour questions.
-featuresDocument :: ByteString
-featuresDocument = $(embedFile "docs/features.md")
-
--- | Repo architecture doubling as a skill, verbatim — the file IS the skill
--- body, so architecture stays single-sourced in @docs\/@ instead of being
--- paraphrased into @skills\/@ and drifting.  The
--- description (the index line the model picks by) lives here because
--- a doc's first line is a heading for GitHub, not an index entry.
-docSkills :: [(Text, Text, ByteString)]
-docSkills =
-  [ ( "self-architecture",
-      "你的代码结构与运行时数据流（英文）：模块布局、effect 栈、worker 清单",
-      $(embedFile "docs/architecture.md")
-    )
-  ]
-
 -- | Parse one embedded file: first line = description, everything
 -- after the first blank line = body.  Files that don't parse are a
 -- programming error in the repo, but a broken one shipping should
 -- degrade to "skill missing", not "bot won't boot" — hence Maybe.
 --
--- @{{features}}@ and @{{commands}}@ in a body splice the embedded behaviour
--- reference and live @!help@ text respectively.  User-facing docs, command
--- help, and the bot's own behavioural knowledge therefore cannot drift.
+-- @{{commands}}@ in a body splices the live @!help@ text — the one piece
+-- of self-knowledge that is runtime-generated rather than readable from
+-- the source snapshot, so it cannot drift from the shipped commands.
 parseBuiltin :: UTCTime -> Int64 -> (FilePath, ByteString) -> Maybe Skill
 parseBuiltin bootTime sid (path, bytes)
   | takeExtension path /= ".md" = Nothing
@@ -154,27 +139,13 @@ parseBuiltin bootTime sid (path, bytes)
     (descLine, rest) = T.breakOn "\n" (TE.decodeUtf8Lenient bytes)
     desc = T.strip descLine
     body =
-      T.replace "{{features}}" (T.strip (TE.decodeUtf8Lenient featuresDocument))
-        . T.replace "{{commands}}" (T.strip (helpText Nothing))
-        $ T.strip rest
+      T.replace "{{commands}}" (T.strip (helpText Nothing)) (T.strip rest)
 
 newSkillRegistry :: IO SkillRegistry
 newSkillRegistry = do
   bootTime <- getCurrentTime
-  let fromDoc (name, desc, bytes) =
-        Skill
-          { skillId = 0, -- overwritten below
-            skillName = name,
-            skillGroup = Nothing,
-            skillDescription = desc,
-            skillBody = T.strip (TE.decodeUtf8Lenient bytes),
-            skillEnabled = True,
-            skillCreatedBy = Nothing,
-            skillUpdatedAt = bootTime
-          }
-      parsed =
+  let parsed =
         [s | file <- builtinSkillFiles, Just s <- [parseBuiltin bootTime 0 file]]
-          <> map fromDoc docSkills
       builtins = [s {skillId = sid} | (sid, s) <- zip [-1, -2 ..] parsed]
   SkillRegistry <$> newTVarIO (Map.fromList [(s.skillId, s) | s <- builtins])
 
