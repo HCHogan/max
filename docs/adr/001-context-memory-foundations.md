@@ -125,3 +125,75 @@ projection.
   the immutable raw ledger; it does not mutate source or projection state.
 - Rebuilds and policy changes cost additional storage and background work, but
   errors remain recoverable because the raw transcript is authoritative.
+
+## Prior art: comparative survey (2026-08)
+
+Surveyed against source after ADR 003 shipped: AstrBot (master, 2026-08)
+and NekroAgent (d7470d5, 2026-08). Full analysis lives in the 2026-08-05
+session; this records the durable conclusions.
+
+Three ontologies of "context". AstrBot: context is a per-conversation
+OpenAI message array — multi-conversation switching, LLM compression
+written back destructively, long-term memory delegated entirely to a
+plugin market with no core memory API. NekroAgent: context is an
+ephemeral per-run projection rebuilt from its message ledger — no
+assistant turns are retained (history replays as flat text), the window
+is tiny (32 messages / 5120 chars, character-counted), and long-term
+weight is carried by an opt-in memory subsystem instead of the window.
+max: context is a versioned projection over an immutable ledger with
+integrity constraints — the design this ADR records.
+
+- **Flat transcripts are convergent.** NekroAgent independently abandoned
+  user/assistant turns for group history, for the same reason
+  `Max.Context.Types` documents: N speakers break role semantics.
+  AstrBot keeps OpenAI turns and its group support (an in-memory deque,
+  lost on restart) is visibly a patch on a 1:1 chat shape.
+- **Compression philosophies.** AstrBot compresses destructively (the
+  summary replaces stored history; a bad summary is forever). NekroAgent
+  does not compress at all — the window slides and memory consolidation
+  is the answer. max's tiered episodes (P1/P2/P3 coexisting, evidence
+  ranges, rebuildable, expandable) is the only auditable-and-reversible
+  scheme of the three, and costs roughly the other two systems' combined
+  context code to get.
+- **Memory: biological versus accounting models.** NekroAgent's memory is
+  the most sophisticated competitor: dual episodic/semantic state,
+  exponential decay with retrieval reinforcement, an entity/relation
+  graph, narrative episode aggregation — but decay mutates weights
+  autonomously with no audit trail, it is workspace-scoped (no per-user
+  memory), off by default, and the LLM cannot write to it. max's
+  version+evidence+mutation ledgers with CAS and actor permissions are
+  the opposite bet: even forgetting leaves a reasoned trace (the dream
+  worker must justify every shrink). Mirror-image blind spots: their
+  cross-platform identity field on entities is an unwired stub; our
+  `relationship_context` auto-capture ban is a deliberate ADR decision.
+- **Injection versus tools.** AstrBot auto-injects KB top-5 per request
+  (with an agentic-mode opt-out); NekroAgent passively injects a memory
+  block every run. max is the lone holdout: only the 12-memory block is
+  passive, all other recall is the model calling `context_search`. The
+  hidden cost is dependence on the model's tool discipline; the payoff is
+  an unpolluted prompt.
+- **Token accounting.** None of the three counts exactly. AstrBot
+  estimates by character coefficients but calibrates with
+  provider-reported usage when available; NekroAgent counts characters
+  only; max uses its conservative provider-neutral bound.
+- **Nobody survives a mid-turn crash.** All three lose in-flight LLM
+  turns; max's checkpoint-resume roadmap item remains the only concrete
+  plan among them. NekroAgent's durable consolidation cursor and
+  checkpointed memory-rebuild tasks are its strongest durability work.
+- **Evaluation.** max's offline release gates (Historian fixtures through
+  the production prompt, recall fixtures, generated prompt-flow doc under
+  CI drift check) have no counterpart in either system.
+
+Worth borrowing: AstrBot's trusted-usage calibration for the token
+estimator (our `llm_usage` ledger already holds the data); NekroAgent's
+memory admin UI as a form reference for the undecided admin frontend
+(graph view, paragraph-to-anchor tracing, freeze/protect operations — our
+ContextAdmin already serves the equivalent data); staleness/hit-rate as a
+*priority signal* for the dream worker without adopting formula decay;
+AstrBot's rerank-provider abstraction if recall precision ever needs it.
+
+Honest costs on our side: no knowledge base or document ingestion (a real
+gap — "discuss this PDF" currently has no path outside the sandbox); no
+conversation branching; exact-scan recall with no ANN index (fine at
+current volume, revisit at 10x); and a complexity budget justified only
+because there is exactly one deployment to serve.

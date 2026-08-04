@@ -607,3 +607,73 @@ budget.
   snapshot-based rollback, and one coordinated change across every
   transport and content entry point. In return, production never serves a
   mixed content state and carries no transitional compatibility path.
+
+## Prior art: comparative survey (2026-08)
+
+Surveyed after the cutover, against source: AstrBot (master, 2026-08,
+~38.6k stars, 18 adapters) and NekroAgent (d7470d5, 2026-08, ~1.1k stars,
+14 adapters). Full analysis lives in the 2026-08-05 session; this records
+the durable conclusions.
+
+The three systems solve different problems. AstrBot optimizes adapter
+breadth and a plugin ecosystem; NekroAgent optimizes its sandboxed
+code-execution agent model and treats adapters as I/O streams; max is the
+only one that mirrors a conversation across platforms, and everything this
+ADR builds — the identity graph, per-endpoint lowering, the durable
+outbox — is a forced consequence of that one requirement.
+
+Key contrasts:
+
+- **IR.** AstrBot's component chain is OneBot-flavored (Face/Poke/Node are
+  QQ concepts), unversioned, in-memory, and persisted only as a lossy
+  text projection. NekroAgent has 10 inbound segment types but only 4
+  outbound ones (asymmetric), persisted per message. max's closed,
+  versioned, phase-indexed tree with schema-level v2 enforcement has no
+  counterpart in either.
+- **Convergent evolution validates two decisions.** NekroAgent
+  independently arrived at a mandatory per-segment text fallback (this
+  ADR's total-fallback rule) and keeps reply provenance in the envelope's
+  ext_data rather than in a segment (this ADR's relations-out-of-body
+  rule). Independent systems under the same pressure reaching the same
+  conclusions is strong evidence for both.
+- **Degradation locality is the deepest architectural divide.** Both
+  other systems degrade inside each adapter (isinstance branches,
+  hardcoded platform-name lists) — exactly max's pre-ADR shape and the
+  root of its 42df035-class bugs. They are not bitten because without
+  mirroring, one message renders on one platform and inconsistent
+  degradation has no counterpart to diverge from. Mirroring is what turns
+  "degrade in one place" from taste into a correctness requirement.
+- **Delivery guarantees.** AstrBot: in-memory asyncio queue, no retry, no
+  idempotency, crash loses in-flight sends. NekroAgent: a real message
+  ledger, but fire-and-forget sends with process-memory dedup. Neither
+  has an outbox, receipts, or echo reconciliation. Rationale check: for
+  reply-only bots a lost reply is a shrug; for a mirror it is permanent
+  ledger divergence between rooms — max's lease/idempotency/echo
+  machinery is priced by mirroring, and would be over-engineering
+  without it.
+- **Capabilities.** AstrBot: two booleans plus platform-name conditionals
+  in the core pipeline. NekroAgent: config switches, a hardcoded adapter
+  whitelist, and prompt-side capability hints to the LLM. Neither has a
+  declared per-feature capability model; max's three-tier caps with a
+  single total decoder stands alone.
+- **Identity.** Both use string session keys (UMO
+  `platform:type:session`, chat_key `adapter-channel`) with no
+  cross-platform identity linking. max's principals graph exists because
+  mirrored mention lowering requires answering "does this person exist on
+  the destination platform".
+
+Worth borrowing: NekroAgent's one-time session code wrapping prompt
+markers (structurally stronger anti-forgery than our roster-gated token
+grammar); its recall philosophy for redactions (keep the row, tell the
+model it can still see it — our `redacts` relation is stored but not yet
+consumed by the prompt); its channel ACTIVE/OBSERVE/DISABLED tri-state.
+AstrBot's media toolbox (silk/ffmpeg conversion, long-text-to-image) and
+Telegram draft/edit streaming are reference implementations for future
+adapters.
+
+Honest costs on our side: 4 platforms versus 14–18; no plugin ecosystem or
+hot reload (a feature for a single-operator deployment, but a real
+difference); each new max platform pays the ingest-semantics tax, not just
+an emit function. Their adapter counts also show the marginal cost curve:
+platforms with full native semantics (Telegram, Discord) would be cheaper
+for max to add than the four it started with.
