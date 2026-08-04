@@ -36,6 +36,7 @@ import Max.IR
     Phase (Canonical),
   )
 import Max.IR.Prompt (promptCanonicalText)
+import Max.Platform.Store (expiredSendingDeliverySql)
 import Max.Platform.Types
   ( NativeUserId (..),
     PrincipalIdentityId (..),
@@ -86,11 +87,23 @@ run command migrationsDir pool = case command of
       reproject connection
       verify True connection
 
--- | Refuse to cross the irreversible schema boundary with active work. Older
--- pre-049 databases legitimately lack the canonical outbox tables; each check
--- is therefore discovered before its SQL is prepared.
+-- | Quarantine abandoned delivery claims, then refuse to cross the
+-- irreversible schema boundary with any genuinely active work.  An expired
+-- @sending@ lease has already lost its owner; outcome-unknown is the only safe
+-- terminal classification because retrying could duplicate a send.  Older
+-- pre-049 databases legitimately lack the canonical outbox tables, so every
+-- operation is discovered before its SQL is prepared.
 preflightDrained :: Connection -> IO ()
 preflightDrained connection = do
+  deliveriesExist <- tableExists connection "message_deliveries"
+  when deliveriesExist $ do
+    quarantined <- execute connection expiredSendingDeliverySql ()
+    when (quarantined /= 0) $
+      putStrLn
+        ( "preflight: quarantined "
+            <> show quarantined
+            <> " expired sending delivery lease(s) as outcome_unknown"
+        )
   problems <- fmap concat . forM preflightChecks $ \(table, label, sql) -> do
     exists <- tableExists connection table
     if not exists
@@ -313,6 +326,10 @@ schemaChecks =
       \    END \
       \  ) \
       \) SELECT count(*) FROM damaged"
+    ),
+    ( "expired-delivery recovery index missing",
+      "SELECT count(*) FROM (SELECT 1 WHERE \
+      \ to_regclass('message_deliveries_sending_lease_idx') IS NULL) missing"
     ),
     ( "non-QQ messages retaining compatibility segments",
       "SELECT count(*) FROM messages WHERE source_platform <> 'qq' AND segments <> '[]'::jsonb"

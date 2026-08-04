@@ -76,6 +76,11 @@ deployment automation that could restart or replace `max` during the window.
 3. Check the durable work state. Pending/failed dispatches, deliveries, or
    unparked `fetch_jobs` mean the old workers did not drain; restart the old
    release with ingress still closed, let it drain, stop it, and check again.
+   An expired `sending` delivery is different: its worker disappeared after
+   claiming a potentially non-idempotent send, so retrying could duplicate it.
+   The final gate atomically classifies such abandoned leases as
+   `outcome_unknown` and reports the count; it never resends them. A live
+   (unexpired) `sending` lease still blocks the gate.
 4. Snapshot the database and verify it by restoring to a newly created,
    isolated database. Compare schema migration, message, relation, delivery,
    and event counts with production. Drop only that explicitly named

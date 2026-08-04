@@ -175,6 +175,37 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
           (DeliveryConfirmedAs (Just (NativeEventId "qq-echo")))
     completed `shouldBe` True
 
+  it "quarantines an expired sending lease without retrying it or blocking the endpoint" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-expired-1" "maybe sent"))
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId (addUTCTime 1 now) "mx-expired-2" "send after it"))
+    [abandoned] <- withDb pool (claimDeliveries "worker-gone" 10 30)
+    abandoned.endpointId `shouldBe` qq.endpointId
+    _ <- withConn pool $ \conn ->
+      execute
+        conn
+        "UPDATE message_deliveries SET lease_expires_at = now() - interval '1 second' WHERE delivery_id = ?"
+        (Only abandoned.deliveryId.unDeliveryId)
+
+    [next] <- withDb pool (claimDeliveries "worker-next" 10 30)
+    next.endpointId `shouldBe` qq.endpointId
+    next.body `shouldBe` Body [NText "send after it"]
+    next.deliveryId `shouldNotBe` abandoned.deliveryId
+    withDb pool
+      (completeDelivery "worker-gone" abandoned.deliveryId [] (DeliveryConfirmedAs (Just (NativeEventId "late-receipt"))))
+      `shouldReturn` False
+
+    rows <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT status, lease_owner, lease_expires_at, last_error FROM message_deliveries WHERE delivery_id = ?"
+        (Only abandoned.deliveryId.unDeliveryId)
+    (rows :: [(Text, Maybe Text, Maybe UTCTime, Maybe Text)])
+      `shouldSatisfy` \case
+        [("outcome_unknown", Nothing, Nothing, Just err)] -> "lease expired" `T.isInfixOf` err
+        _ -> False
+
   it "persists the shared lowerer's degradation audit on completion" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime

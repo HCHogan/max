@@ -45,6 +45,7 @@ module Max.Platform.Store
     advanceIngestCursorCAS,
     DeliveryClaim (..),
     deliveryMentionNatives,
+    expiredSendingDeliverySql,
     claimDeliveries,
     claimDelivery,
     DeliveryCompletion (..),
@@ -85,6 +86,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, UTCTime)
+import Database.PostgreSQL.Simple (Query)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
@@ -1700,6 +1702,23 @@ claimDelivery workerId (DeliveryId delivery) leaseDuration = do
   claims <- claimDeliveriesWhere workerId (Just delivery) 1 leaseDuration
   pure (listToMaybe claims)
 
+-- | A worker can disappear after durably claiming a non-idempotent send but
+-- before recording the transport outcome.  Retrying that row could duplicate
+-- a message, while leaving it as @sending@ forever blocks every later ordered
+-- delivery on the endpoint.  Once the ownership lease expires, quarantine it
+-- as outcome-unknown: visible to operators and echo reconciliation, excluded
+-- from automatic retry.
+expiredSendingDeliverySql :: Query
+expiredSendingDeliverySql =
+  "UPDATE message_deliveries \
+  \ SET status = 'outcome_unknown', \
+  \     lease_owner = NULL, lease_expires_at = NULL, \
+  \     last_error = COALESCE(last_error, \
+  \       'delivery lease expired before the transport outcome was recorded'), \
+  \     updated_at = now() \
+  \ WHERE status = 'sending' \
+  \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
+
 -- | Resolve canonical mention identities to native ids on the destination
 -- endpoint.  The result is captured before calling the pure lowering
 -- function; transports never perform identity lookups or guess from origin
@@ -1738,6 +1757,10 @@ claimDeliveriesWhere ::
   NominalDiffTime ->
   Eff es [DeliveryClaim]
 claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
+  -- This sweep is deliberately separate from the claim statement: sibling
+  -- data-modifying CTEs share a snapshot and would leave the quarantined row
+  -- visible as @sending@ to the ordering predicate until the next poll.
+  _ <- execute expiredSendingDeliverySql ()
   rows <-
     query
       "WITH candidates AS ( \
