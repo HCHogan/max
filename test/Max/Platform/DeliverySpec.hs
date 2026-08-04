@@ -8,6 +8,7 @@ import Max.Effects.Blob (blobRefSha256, putBlob, runBlob)
 import Max.IR
 import Max.IR.Lower
 import Max.Platform.Delivery
+import Max.Platform.QQ (qqCapabilities)
 import Max.Platform.Types (NativeEventId (..), NativeUserId (..), Platform (..), ReactionAction (..))
 import OneBot.Action (Action (..))
 import OneBot.Segment (CardInfo (..), Segment (..))
@@ -86,6 +87,20 @@ spec = do
         Right [SegText "hello", SegAt (UserId 123), SegFace 66 (Just "惊讶"), SegImage {}, SegImage {}, cardSegment] ->
           cardSegment `shouldBe` nativeCard
         other -> expectationFailure ("unexpected QQ emitter output: " <> show other)
+
+      qqCapabilities.mention `shouldBe` TierNative
+      qqCapabilities.reply `shouldBe` TierNative
+      qqCapabilities.emote `shouldBe` TierNative
+      qqCapabilities.image `shouldBe` TierNative
+      qqCapabilities.sticker `shouldBe` TierNative
+      qqCapabilities.card `shouldBe` TierNative
+      qqCapabilities.reaction `shouldBe` True
+      qqCapabilities.edit `shouldBe` False
+      qqCapabilities.redact `shouldBe` False
+
+      oneBotReplySegment 0 (Just (NativeEventId "42"))
+        `shouldBe` Right [SegReply (MessageId 42)]
+      oneBotReplySegment 1 (Just (NativeEventId "42")) `shouldBe` Right []
 
     it "maps an advertised QQ reaction to the native add/remove action" $ do
       case oneBotReactionAction (NativeEventId "42") "212" ReactionAdd of

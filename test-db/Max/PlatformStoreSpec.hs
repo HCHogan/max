@@ -827,10 +827,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     target <-
       withDb pool $
         ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "qq-v1-lift" "placeholder")
+    collapsed <-
+      withDb pool $
+        ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "qq-v1-collapsed" "placeholder")
     let cardRaw =
           "{\"app\":\"com.tencent.miniapp_01\",\"meta\":{\"detail_1\":{\"title\":\"哔哩哔哩\",\"desc\":\"一个视频\",\"qqdocurl\":\"https://b23.tv/x\",\"tag\":\"哔哩哔哩\"}}}"
         card = maybe (error "card fixture must parse") id (parseCard cardRaw)
         cid = (resultId target).unCanonicalMessageId
+        collapsedCid = (resultId collapsed).unCanonicalMessageId
         v1Content =
           toJSON
             [ object ["type" .= ("text" :: Text), "text" .= ("看" :: Text)],
@@ -862,15 +866,32 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               SegOther "record" (object ["file" .= ("voice.amr" :: Text)]),
               SegCard card
             ]
+        collapsedContent =
+          toJSON [object ["type" .= ("text" :: Text), "text" .= ("temporary flattened projection" :: Text)]]
+        collapsedSegments =
+          toJSON
+            [ SegText "看",
+              SegFace 5 (Just "惊讶"),
+              SegImage (ImageSegInfo (Just "https://qq.example/s.jpg") (Just 1) (Just "")),
+              SegOther "forward" (object ["id" .= ("legacy-forward" :: Text)])
+            ]
     withConn pool $ \conn -> withTransaction conn $ do
       _ <- execute_ conn "SAVEPOINT canonical_v1_rehearsal"
       _ <- execute_ conn "ALTER TABLE messages DROP CONSTRAINT messages_canonical_content_v2_check"
       _ <-
         execute
           conn
-          "UPDATE messages SET canonical_content = ?::jsonb, segments = ?::jsonb \
+          "UPDATE messages SET canonical_content = ?::jsonb, segments = ?::jsonb, \
+          \                    message_origin = 'legacy' \
           \ WHERE canonical_message_id = ?"
           (v1Content, v1Segments, cid)
+      _ <-
+        execute
+          conn
+          "UPDATE messages SET canonical_content = ?::jsonb, segments = ?::jsonb, \
+          \                    message_origin = 'legacy' \
+          \ WHERE canonical_message_id = ?"
+          (collapsedContent, collapsedSegments, collapsedCid)
       migration <- readFile "migrations/055_canonical_content_v2.sql"
       _ <- execute_ conn (fromString migration)
       rows <-
@@ -903,6 +924,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
                        "哔哩哔哩 · 哔哩哔哩 · 一个视频 · https://b23.tv/x"
                      )
                    ]
+      collapsedRows <-
+        query
+          conn
+          "SELECT jsonb_path_query_array(canonical_content, '$.nodes[*].type') \
+          \ FROM messages WHERE canonical_message_id = ?"
+          (Only collapsedCid)
+      (collapsedRows :: [Only Value])
+        `shouldBe` [Only (toJSON (["text", "emote", "media", "forward"] :: [Text]))]
       _ <- execute_ conn "ROLLBACK TO SAVEPOINT canonical_v1_rehearsal"
       pure ()
 

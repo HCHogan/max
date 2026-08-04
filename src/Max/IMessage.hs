@@ -23,6 +23,7 @@ module Max.IMessage
     iMessageSendParams,
     iMessageAuthoritativeSendGuid,
     iMessageCapabilities,
+    iMessageCapabilitiesFor,
     iMessageWorker,
     iMessageDeliveryTransport,
   )

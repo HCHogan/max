@@ -15,6 +15,7 @@ module Max.Platform.Delivery
     mediaTextCaps,
     loweredText,
     oneBotNodes,
+    oneBotReplySegment,
     oneBotReactionAction,
   )
 where
@@ -372,7 +373,7 @@ oneBotDeliveryTransport platform idempotent backend =
     sendChunks claim lowered index sentAny firstNative (chunk : rest) =
       case oneBotNodes chunk of
         Left err -> pure (AttemptPermanentlyFailed err)
-        Right body -> case replySegment index lowered.replyNative of
+        Right body -> case oneBotReplySegment index lowered.replyNative of
           Left err -> pure (AttemptPermanentlyFailed err)
           Right replyPrefix ->
             backend.pbCall (sendChatMsg (GroupId claim.compatibilityConversationId) (replyPrefix <> body)) oneBotTimeoutMs >>= \case
@@ -405,8 +406,8 @@ oneBotReactionAction (NativeEventId target) key action =
     <*> readInt key
     <*> pure (action == ReactionAdd)
 
-replySegment :: Int -> Maybe NativeEventId -> Either Text [Segment]
-replySegment index native
+oneBotReplySegment :: Int -> Maybe NativeEventId -> Either Text [Segment]
+oneBotReplySegment index native
   | index /= 0 = Right []
   | otherwise = case native of
       Nothing -> Right []

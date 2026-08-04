@@ -36,6 +36,17 @@ not production-window sizing evidence:
 
 Do not infer a maintenance-window budget from these empty-database numbers.
 
+A second local rehearsal seeded a migration-030 clone with three legacy QQ
+rows before taking the rollback snapshot. The fixture included mention, face,
+sticker, file, video, card, forward-child, and reply provenance. The 031–064
+gate preserved all three messages, rebuilt the rich row as ordered
+`text/mention/emote/media/media/media/card/forward` v2 nodes, created the
+forward relation, regenerated two stale projections, and passed the complete
+ledger gate. Restoring the snapshot returned the clone to migration 030 with
+all three legacy rows and their reply/forward columns intact. This synthetic
+fixture proves non-empty semantic backfill and rollback mechanics; it is still
+not recent-production sizing or distribution evidence.
+
 ## Prepare
 
 Build and test the final release before the window. Keep both the final and

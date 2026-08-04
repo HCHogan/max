@@ -233,7 +233,17 @@ spec = describe "iMessage adapter" $ do
   it "advertises bounded outbound attachment delivery" $ do
     iMessageCapabilities.text `shouldBe` True
     iMessageCapabilities.image `shouldBe` TierNative
+    iMessageCapabilities.sticker `shouldBe` TierNative
+    iMessageCapabilities.video `shouldBe` TierNative
+    iMessageCapabilities.audio `shouldBe` TierNative
+    iMessageCapabilities.file `shouldBe` TierNative
     iMessageCapabilities.reply `shouldBe` TierText
+    iMessageCapabilities.reaction `shouldBe` False
+    iMessageCapabilities.edit `shouldBe` False
+    iMessageCapabilities.redact `shouldBe` False
+    iMessageCapabilities.maxNativeMedia `shouldBe` 1
+    (iMessageCapabilitiesFor True).reply `shouldBe` TierNative
+    (iMessageCapabilitiesFor False).reply `shouldBe` TierText
 
   it "parses a live IMCore reply capability and defaults old bridges safely" $ do
     parseIMessageBridgeHealth

@@ -17,6 +17,7 @@ module Max.Matrix
     matrixMediaPayload,
     matrixEditPayload,
     matrixReactionPayload,
+    matrixRedactionPath,
     matrixCapabilities,
     matrixWorker,
     matrixDeliveryTransport,
@@ -468,18 +469,24 @@ sendMatrixEvent runtime cfg claim suffix eventType payload = do
 
 sendMatrixRedaction :: HttpRuntime -> MatrixConfig -> DeliveryClaim -> Text -> NativeEventId -> IO (Either Text NativeEventId)
 sendMatrixRedaction runtime cfg claim suffix (NativeEventId target) = do
-  let path =
-        "/_matrix/client/v3/rooms/"
-          <> pathPiece cfg.roomId
-          <> "/redact/"
-          <> pathPiece target
-          <> "/"
-          <> pathPiece (claim.idempotencyKey <> "-" <> suffix)
+  let path = matrixRedactionPath cfg.roomId claim.idempotencyKey suffix (NativeEventId target)
   matrixRequest runtime cfg "PUT" path [] (Just (object [])) >>= \case
     Left err -> pure (Left err)
     Right response -> case parseEither (withObject "matrix redaction" (.: "event_id")) response of
       Left err -> pure (Left ("matrix redaction response: " <> T.pack err))
       Right event -> pure (Right (NativeEventId event))
+
+-- | Exact Client-Server redaction route used both for message redaction and
+-- reaction removal. Keeping it pure gives the advertised action an emitter
+-- contract test without teaching the transport a second routing path.
+matrixRedactionPath :: Text -> Text -> Text -> NativeEventId -> Text
+matrixRedactionPath room idempotencyKey suffix (NativeEventId target) =
+  "/_matrix/client/v3/rooms/"
+    <> pathPiece room
+    <> "/redact/"
+    <> pathPiece target
+    <> "/"
+    <> pathPiece (idempotencyKey <> "-" <> suffix)
 
 resolveDeliveryMedia :: HttpRuntime -> ResolvedMedia -> Maybe Int64 -> IO (Either Text BS.ByteString)
 resolveDeliveryMedia _ (ResolvedBytes bytes) _ = pure (Right bytes)

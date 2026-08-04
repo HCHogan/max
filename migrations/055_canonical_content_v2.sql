@@ -20,12 +20,15 @@ ALTER TABLE message_relations
   ADD CONSTRAINT message_relations_relation_kind_check
   CHECK (relation_kind IN ('reply', 'replace', 'redacts', 'reaction'));
 
--- Part A: QQ inbound rows, rebuilt from segments.
+-- Part A: QQ inbound rows, rebuilt from segments. Rows backfilled by 049 are
+-- labelled message_origin='legacy' by 050; they are the most important rows
+-- here because their temporary v1 canonical_content was only one rendered
+-- text part even when the retained QQ segments were structurally rich.
 WITH qq_rows AS (
   SELECT m.canonical_message_id, m.segments, m.canonical_content, m.origin_endpoint_id
     FROM messages m
    WHERE m.source_platform = 'qq'
-     AND m.message_origin = 'inbound'
+     AND m.message_origin IN ('inbound', 'legacy')
      AND jsonb_typeof(m.canonical_content) = 'array'
      AND jsonb_typeof(m.segments) = 'array'
 ), qq_segments AS (

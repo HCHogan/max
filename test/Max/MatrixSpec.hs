@@ -1,6 +1,8 @@
 module Max.MatrixSpec (spec) where
 
 import Data.Aeson (object, (.=))
+import Data.Foldable (for_)
+import Data.Text (Text)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Max.IR
 import Max.IR.Lower
@@ -188,11 +190,17 @@ spec = describe "Matrix adapter" $ do
 
   it "advertises the outbound features implemented by the adapter" $ do
     matrixCapabilities.text `shouldBe` True
-    matrixCapabilities.image `shouldBe` TierNative
+    matrixCapabilities.mention `shouldBe` TierNative
     matrixCapabilities.reply `shouldBe` TierNative
+    matrixCapabilities.image `shouldBe` TierNative
+    matrixCapabilities.sticker `shouldBe` TierNative
+    matrixCapabilities.video `shouldBe` TierNative
+    matrixCapabilities.audio `shouldBe` TierNative
+    matrixCapabilities.file `shouldBe` TierNative
     matrixCapabilities.reaction `shouldBe` True
     matrixCapabilities.edit `shouldBe` True
     matrixCapabilities.redact `shouldBe` True
+    matrixCapabilities.maxNativeMedia `shouldBe` 1
 
   it "emits native Matrix mention, reply, and media contracts" $ do
     let target = Just (NativeEventId "$parent")
@@ -226,6 +234,30 @@ spec = describe "Matrix adapter" $ do
               ]
         ]
 
+  it "maps every advertised Matrix media kind to a native event contract" $ do
+    let cases :: [(MediaKind, Text, Text)]
+        cases =
+          [ (MImage, "image/png", "m.image"),
+            (MSticker, "image/webp", "m.image"),
+            (MVideo, "video/mp4", "m.video"),
+            (MAudio, "audio/ogg", "m.audio"),
+            (MFile, "application/pdf", "m.file")
+          ]
+    for_ cases $ \(kind, mime, msgtype) -> do
+      let meta = MediaMeta kind (Just mime) (Just 7) (Just "asset") Nothing Nothing
+      matrixMediaPayload Nothing [] "asset" meta "mxc://test/asset" (Just 7)
+        `shouldBe` object
+          [ "msgtype" .= msgtype,
+            "body" .= ("asset" :: String),
+            "filename" .= (Just "asset" :: Maybe String),
+            "url" .= ("mxc://test/asset" :: String),
+            "info"
+              .= object
+                [ "mimetype" .= Just mime,
+                  "size" .= (Just 7 :: Maybe Int)
+                ]
+          ]
+
   it "emits native Matrix edit and reaction contracts from lowered content" $ do
     let content = object ["msgtype" .= ("m.text" :: String), "body" .= ("fixed" :: String)]
     matrixEditPayload (NativeEventId "$old") content
@@ -248,6 +280,8 @@ spec = describe "Matrix adapter" $ do
                 "key" .= ("👍" :: String)
               ]
         ]
+    matrixRedactionPath "!room:test" "delivery:42" "redact" (NativeEventId "$old")
+      `shouldBe` "/_matrix/client/v3/rooms/%21room%3Atest/redact/%24old/delivery%3A42-redact"
 
   it "treats homeserver media size metadata as advisory" $ do
     matrixMediaSizeDrift (Just 145874) 145964 `shouldBe` True

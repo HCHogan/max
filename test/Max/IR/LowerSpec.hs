@@ -3,7 +3,7 @@ module Max.IR.LowerSpec (spec) where
 import Data.Aeson (Value (String), object, (.=))
 import Data.ByteString qualified as BS
 import Data.Foldable (for_)
-import Data.Maybe (fromJust)
+import Data.Maybe (fromJust, fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -342,7 +342,8 @@ capsCodecSpec = describe "capability codec" $ do
       outboundCapsFromValue (outboundCapsToValue caps) `shouldBe` caps
 
 -- | The lowered output may contain a structural node only when its tier is
--- native — swept across every tier combination for the two riskiest kinds.
+-- native. Keep this list exhaustive over every tier-governed constructor so
+-- adding a capability cannot silently escape the shared lowerer.
 invariantSpec :: Spec
 invariantSpec = describe "lowering invariants" $ do
   it "drops text fallbacks when send_text is false while preserving native media" $ do
@@ -355,26 +356,59 @@ invariantSpec = describe "lowering invariants" $ do
     flat out `shouldBe` [NMedia (ResolvedUrl "https://cdn.test/a.png") (mkMeta MImage Nothing)]
     map (.outcome) out.notes `shouldBe` [NoteDropped, NoteDropped]
 
-  it "emits structure only within declared native tiers" $ do
-    let tiers = [minBound .. maxBound] :: [Tier]
-        body =
-          Body
-            [ NText "看这个 ",
-              mentionNode,
-              NMedia (Just (remote "https://x/a.png")) (mkMeta MImage Nothing),
-              NEmote qqFace,
-              NText " 完"
-            ]
-    for_ [(m, i) | m <- tiers, i <- tiers] $ \(m, i) -> do
-      let env = baseEnv {caps = textOnlyCaps {mention = m, image = i, maxNativeMedia = 9}}
-          out = flat (lower env body)
-      for_ out $ \case
-        NMention {} -> m `shouldBe` TierNative
-        NMedia {} -> i `shouldBe` TierNative
-        _ -> pure ()
+  it "emits every tier-governed structure iff that exact tier is native" $ do
+    for_ structuralCases $ \(label, envFor, node, isExpectedStructure, _) ->
+      for_ [TierDrop, TierText, TierNative] $ \tier -> do
+        let output = flat (lower (envFor tier) (Body [node]))
+            survived = any isExpectedStructure output
+        (label, tier, survived) `shouldBe` (label, tier, tier == TierNative)
 
-  it "raising a tier never loses the human-readable information" $ do
-    let display t = T.concat [d | NMention _ d <- t] <> T.concat [x | NText x <- t]
-        run m = flat (lower baseEnv {caps = textOnlyCaps {mention = m}} (Body [mentionNode]))
-    display (run TierNative) `shouldSatisfy` T.isInfixOf "张三"
-    display (run TierText) `shouldSatisfy` T.isInfixOf "张三"
+  it "raising Drop → Text → Native never loses observable content" $ do
+    for_ structuralCases $ \(label, envFor, node, _, evidence) -> do
+      let observable tier =
+            evidence `T.isInfixOf` T.concat (map loweredEvidence (flat (lower (envFor tier) (Body [node]))))
+      (label, map observable [TierDrop, TierText, TierNative])
+        `shouldBe` (label, [False, True, True])
+
+  it "raising the reply tier never loses reply provenance" $ do
+    let replyContext = ReplyContext (Just (NativeEventId "reply-event")) (Just "李四") (Just "原文")
+        observable tier =
+          let output = lower baseEnv {caps = textOnlyCaps {reply = tier}, replyTarget = Just replyContext} (Body [NText "回复"])
+              wireText = T.concat [body | NText body <- flat output]
+           in isJust output.replyNative || "李四: 原文" `T.isInfixOf` wireText
+    map observable [TierDrop, TierText, TierNative] `shouldBe` [False, True, True]
+
+structuralCases :: [(String, Tier -> LowerEnv, Node 'Canonical, Node 'Lowered -> Bool, Text)]
+structuralCases =
+  [ ("mention", withMention, mentionNode, \case NMention {} -> True; _ -> False, "张三"),
+    ("emote", withEmote, NEmote qqFace, \case NEmote {} -> True; _ -> False, "惊讶"),
+    mediaCase "image" MImage (\tier caps -> caps {image = tier}),
+    mediaCase "sticker" MSticker (\tier caps -> caps {sticker = tier}),
+    mediaCase "video" MVideo (\tier caps -> caps {video = tier}),
+    mediaCase "audio" MAudio (\tier caps -> caps {audio = tier}),
+    mediaCase "file" MFile (\tier caps -> caps {file = tier}),
+    ( "card",
+      \tier -> baseEnv {caps = textOnlyCaps {card = tier}},
+      NCard (Card (Just "标题") Nothing Nothing Nothing Nothing (Just (String "wire"))),
+      \case NCard {} -> True; _ -> False,
+      "标题"
+    )
+  ]
+  where
+    withMention tier = baseEnv {caps = textOnlyCaps {mention = tier}}
+    withEmote tier = baseEnv {platform = PlatformQQ, caps = textOnlyCaps {emote = tier}}
+    mediaCase label kind setTier =
+      ( label,
+        \tier -> baseEnv {caps = setTier tier textOnlyCaps {maxNativeMedia = 1}},
+        NMedia (Just (remote ("https://x/" <> T.pack label))) (mkMeta kind (Just (T.pack label))),
+        \case NMedia {} -> True; _ -> False,
+        T.pack label
+      )
+
+loweredEvidence :: Node 'Lowered -> Text
+loweredEvidence = \case
+  NText body -> body
+  NMention _ display -> display
+  NEmote emote -> fromMaybe emote.nativeId emote.name
+  NMedia _ meta -> fromMaybe (mediaKindText meta.kind) meta.description
+  NCard card -> fromMaybe "card" card.title

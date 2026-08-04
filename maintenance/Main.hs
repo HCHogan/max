@@ -273,6 +273,47 @@ schemaChecks =
       \   OR canonical_content->>'v' <> '2' \
       \   OR jsonb_typeof(canonical_content->'nodes') <> 'array'"
     ),
+    ( "legacy QQ rows whose retained segments were not structurally rebuilt",
+      "WITH legacy AS ( \
+      \  SELECT message.* FROM messages message \
+      \  WHERE message.source_platform = 'qq' \
+      \    AND message.message_origin = 'legacy' \
+      \    AND jsonb_typeof(message.segments) = 'array' \
+      \    AND jsonb_array_length(message.segments) > 0 \
+      \), damaged AS ( \
+      \  SELECT legacy.canonical_message_id FROM legacy \
+      \  WHERE jsonb_array_length(legacy.canonical_content->'nodes') <> ( \
+      \    SELECT count(*) FROM jsonb_array_elements(legacy.segments) segment(value) \
+      \    WHERE segment.value->>'type' <> 'reply' \
+      \      AND NOT (segment.value->>'type' = 'text' \
+      \               AND coalesce(segment.value->'data'->>'text', '') = '')) \
+      \  OR EXISTS ( \
+      \    SELECT 1 FROM ( \
+      \      SELECT segment.value, \
+      \             row_number() OVER (ORDER BY segment.ordinality) AS node_ordinal \
+      \      FROM jsonb_array_elements(legacy.segments) WITH ORDINALITY segment(value, ordinality) \
+      \      WHERE segment.value->>'type' <> 'reply' \
+      \        AND NOT (segment.value->>'type' = 'text' \
+      \                 AND coalesce(segment.value->'data'->>'text', '') = '') \
+      \    ) expected \
+      \    JOIN jsonb_array_elements(legacy.canonical_content->'nodes') WITH ORDINALITY actual(value, ordinality) \
+      \      ON actual.ordinality = expected.node_ordinal \
+      \    WHERE CASE expected.value->>'type' \
+      \      WHEN 'text' THEN actual.value->>'type' <> 'text' \
+      \      WHEN 'at' THEN actual.value->>'type' NOT IN ('mention', 'text') \
+      \      WHEN 'face' THEN actual.value->>'type' <> 'emote' \
+      \      WHEN 'image' THEN actual.value->>'type' <> 'media' \
+      \      WHEN 'file' THEN actual.value->>'type' <> 'media' \
+      \      WHEN 'video' THEN actual.value->>'type' <> 'media' \
+      \      WHEN 'json' THEN actual.value->>'type' <> 'card' \
+      \      WHEN 'forward' THEN actual.value->>'type' <> \
+      \        CASE WHEN coalesce(expected.value->'data'->>'id', '') = '' \
+      \             THEN 'unsupported' ELSE 'forward' END \
+      \      ELSE actual.value->>'type' <> 'unsupported' \
+      \    END \
+      \  ) \
+      \) SELECT count(*) FROM damaged"
+    ),
     ( "non-QQ messages retaining compatibility segments",
       "SELECT count(*) FROM messages WHERE source_platform <> 'qq' AND segments <> '[]'::jsonb"
     ),
