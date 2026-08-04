@@ -243,6 +243,12 @@ read back (the `Max.IR` lesson: serialization pinned to one phase, checked
 on load). A row that fails the check deoptimizes to a hole instead of
 crashing the resume.
 
+One reservation for the multi-principal section below: turn results are
+addressable journal values, and a future `turn_edges` table
+(`from_turn`, `to_turn`, `kind`, `created_by`) will reference them —
+so the v1.0 implementation keeps `turn_id` foreign-key friendly. The edge
+table itself is post-1.0.
+
 ### Crash is deoptimization
 
 Process death is a Fault like any other. Recovery re-holes the plan at the
@@ -276,6 +282,8 @@ nodes, not only at LLM boundaries. New `!feedback`, an absorbed supplement, or
 a poke can invalidate the planned continuation and force a hole whose view
 includes the new note. `!kill` remains asynchronous and must cross both the
 elaborator and executor without being converted into an ordinary tool failure.
+(Feedback is one verb of the routing lattice defined in the next section;
+this section describes its executor-side mechanics.)
 
 Other deoptimization triggers include:
 
@@ -289,6 +297,78 @@ Other deoptimization triggers include:
 The residual plan is revalidated under the current policy. Max may always tier
 down to the existing one-step tool loop. Tier-up is allowed only for later
 segments or a future dispatch; already observed effects are never regenerated.
+
+### Multi-principal concurrency: the group is a scheduler
+
+A group chat is several principals submitting, steering, and observing
+work through one conversation. The machine does not change; what multiple
+humans add is **edges between turns**. Concurrent turns are concurrent
+`Config`s over one shared world — the canonical ledger plus shared
+resources — and every human utterance is, relative to each in-flight turn
+and to the dispatcher, a routing event.
+
+Today's `!feedback`/`!btw` pair is a two-value routing policy: the poles
+of a verb lattice whose middle is missing. The full vocabulary:
+
+| Verb | Meaning | Machine interpretation |
+|---|---|---|
+| **steer** (today's feedback) | redirect an in-flight turn | inbox entry + forced hole at the next node |
+| **annotate** | add a fact to a turn without interrupting it | inbox entry, consumed at the next natural hole — no forced `↝λ` |
+| **depend** | "when that finishes, use the result for Y" | new turn whose initial hole carries a cross-turn dataflow edge |
+| **fork-from** | new independent task consuming a turn's result | new turn, initial view includes the result — provenance, not blocking |
+| **abort** (today's `!kill`) | terminate | existing semantics |
+| **observe** (today's `!btw`, and most chatter) | record only | ledger ingest, no task effect |
+
+steer versus annotate is the quietness philosophy expressed in machine
+terms: most supplements are not worth a forced elaboration round.
+
+**Targeting.** With concurrent turns, an untargeted steer is ambiguous —
+this is a present-tense correctness gap, not a future feature. The natural
+targeting UI is the reply: answering a bot message routes to the turn that
+produced it, and the journal contract's send linkage
+(`node_id → canonical_message_id`, roadmap L3) is exactly the table that
+resolves a replied-to message back to its turn. Explicit command syntax
+remains the precise fallback; the intent layer classifies verb and target
+for plain language, reusing the existing command/natural-language dual
+track.
+
+**Dependency edges are journaled typed futures.** A turn's result is an
+addressable journal value, so a depend edge is one row in the same
+journal — cross-turn dependencies are crash-safe by construction. A failed
+or timed-out dependency needs no new mechanism: it is one more attributed
+fact in the dependent hole's view, and the model decides whether to
+abandon or reroute — the same deopt path as guard failure, crash, and
+feedback. Cycle detection runs at edge creation and fails closed. Parent
+`Spawn` edges and sibling depend/fork edges are two kinds in one
+`turn_edges` table; the child-plan section below becomes a special case of
+the turn graph.
+
+**Authority and arbitration split.** The host decides *who may create
+which edge* to whose turn, through the existing role layers (abort
+restricted to the initiator and admins; steer/annotate per group policy).
+The model decides *what conflicting input means* — but only because every
+inbox fact carries attribution: who said it, in what role, when. "The
+initiator said stop" versus "a bystander disagreed" is social judgment the
+model weighs; it is never a rule the machine hardcodes. Attribution is the
+bridge between the two layers, and model-asserted authority still creates
+none.
+
+**Effect scopes double as the lock set.** Concurrent sends are already
+ordered by the delivery outbox; concurrent memory writes are already CAS.
+The one genuinely shared mutable resource is the per-group sandbox: at
+horizon 1 it takes a conservative per-group lease (journal-visible); once
+effect inference exists, inferred `EffWrite` scopes give fine-grained
+conflict detection for free.
+
+**Zero-ceremony principle.** Verbs are inferred, never demanded; observe
+is the overwhelming default; nobody types task ids in casual chat. The
+machinery succeeds precisely when it is invisible until two people's work
+actually collides. Depend and fork edges only matter for long-running
+turns — the median 10–60s turn never creates one, and the machine does
+extra work only when an edge exists.
+
+Everything in this section is post-1.0 except the journal-contract
+reservation above.
 
 ### Child plans narrow view and authority
 
@@ -362,6 +442,10 @@ duplicate or outcome-unknown effects than the current loop.
   explosion or unknown branches honestly.
 - The current loop remains available when planning is disabled, validation
   fails, a guard deoptimizes, or a provider cannot reliably produce the IR.
+- Group-chat concurrency stops being a special case: multiple principals'
+  tasks, cross-task feedback, and task dependencies are edges over the
+  same journal, with authority host-checked and conflict arbitration
+  model-judged over attributed facts.
 - Tool metadata, a validator, a journal, and new replay evaluation add
   substantial complexity before large horizons are safe. The journal, the
   send commit point, and the crash-deopt path are shared with (and paid
