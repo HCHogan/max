@@ -12,8 +12,8 @@
 
 </div>
 
-Max treats a chat bot as a correctness problem. Every message from QQ,
-Matrix, iMessage, or WeChat lands in one immutable canonical ledger with a
+Max treats a chat bot as a correctness problem. Every message, whichever
+platform it arrives on, lands in one immutable canonical ledger with a
 single typed message IR; deliveries — including mirroring one conversation
 across platforms — go through a durable outbox that degrades content
 deliberately instead of dropping it; and the LLM's context is a
@@ -21,7 +21,7 @@ rebuildable, integrity-checked projection of that ledger, not a sliding
 window. The interesting decisions are written down in the ADRs.
 
 ```text
-QQ · Matrix · iMessage · WeChat
+chat platforms
       │  adapters normalize losslessly; nothing degrades at ingest
       ▼
 canonical message ledger ────┬──▶ mirror deliveries: native where a platform
