@@ -1,13 +1,12 @@
 # ADR 002: Partial Plans and Adaptive Elaboration
 
-- Status: Deferred (post-1.0)
-- Date: 2026-08-03
-- Deferral note (2026-08-05): the design remains the agreed direction for
-  the executor, but v1.0 is a convergence release — it closes the
-  correctness and durability promises already made (issue #13, the
-  durability roadmap) rather than opening a new architectural front. The
-  checkpoint/journal work in v1.0 should be built so this ADR can consume
-  it later rather than duplicating it.
+- Status: Proposed — split scope. **The journal contract (its own section
+  below) ships with v1.0** as the substrate of the durability roadmap
+  (issue #14); the elaboration machine itself — validator, frontiers,
+  horizon above 1 — remains post-1.0. v1.0 is a convergence release; this
+  split lets it converge onto the machine's substrate without opening the
+  machine's front.
+- Date: 2026-08-03; journal contract and post-cutover revisions 2026-08-05.
 
 ## Context
 
@@ -36,6 +35,13 @@ Max already has boundaries which a more ambitious executor must preserve:
   ownership, but running turns are intentionally ephemeral across restart.
 - Context is already planned by token and can present full, compressed, or
   retrieval-expanded views without changing source conversation state.
+
+Max in fact already operates the two extreme policy points: the tool loop
+is horizon-1 elaboration, and the sandbox is opaque infinite-horizon code
+execution — the "code mode" shape. What is missing is the typed middle.
+The Plan IR is code mode with holes and an effect system: it recovers the
+mid-flight adjustability that opaque code loses, without paying a model
+round for every deterministic step.
 
 The design question is whether ordinary tool calling, dynamic workflows, and
 code-style execution should become three separate orchestrators, or policies
@@ -128,7 +134,11 @@ including:
 - an effect requiring approval;
 - a dynamic resource target that cannot be bounded statically;
 - an authority or information-flow boundary;
-- an unknown result shape, stale dependency, or exhausted budget.
+- an unknown result shape, stale dependency, or exhausted budget;
+- a liveness window: in a live group chat, `↝λ` boundaries are also where
+  the agent can let new traffic or mid-turn feedback redirect the
+  continuation, so the horizon is socially bounded as well as reflectively
+  bounded.
 
 The initial policy mapping is:
 
@@ -177,6 +187,11 @@ invocation still passes through the same scoped host checks as the current
 agent loop. Model-produced importance, effect annotations, ids, or claims never
 create authority.
 
+Effect ceilings are also the substantive prompt-injection defense at this
+layer: an injected instruction can make the model elaborate an arbitrary
+plan, but not one that both exceeds its hole's declared bounds and passes
+the kernel.
+
 Effect bounds also do not replace information-flow policy. Before Max exposes
 secret-bearing or cross-conversation read capabilities to plans, values need
 provenance/taint labels preventing restricted data from flowing to a public
@@ -189,26 +204,66 @@ discovered capability. Tool search is not mathematically required to be
 multi-round, although it usually becomes so when only the model can interpret a
 new schema.
 
-### Journal execution and deopt only from a known effect state
+### The journal contract (v1.0 slice)
 
-Each executed node receives a stable node id under a Plan hash. The execution
-journal records at least:
+The execution journal is shared infrastructure, not part of the deferred
+machine. It has four consumers: the horizon-1 production loop (durability
+roadmap L2–L4, issue #14), crash-resume replay, the tool-trace digest, and
+— later — this ADR's executor. **It ships with v1.0; the machine does
+not.** At horizon 1 the plan is absorbed into the trace, so the loop needs
+no `Plan` type to write conforming rows; it needs only this schema.
 
-- normalized input and tool/schema version;
-- started, rejected, succeeded, failed, committed, or outcome-unknown state;
-- result/provenance or bounded failure detail;
-- idempotency key when the effect supports one;
-- guard and validation decisions;
-- elaboration/deoptimization reason.
+Rows are normalized execution events, never provider wire messages:
 
-The first implementation may keep this journal in memory because Max turns are
-already ephemeral. A plan must become durably journaled before it may survive a
-restart, detach into background work, or promise durable workflow completion.
+- `node_id` is stable text identity. The horizon-1 loop writes
+  `turn:<turn_id>:<step>`; a future plan executor writes Plan-hash-derived
+  ids into the same column, with `plan_hash` nullable and empty at horizon
+  1 — both id spaces coexist without migration.
+- state ∈ started / rejected / succeeded / failed / committed /
+  outcome-unknown;
+- normalized input plus tool/schema version; result provenance or bounded
+  failure detail; an idempotency key where the effect supports one;
+- conservative host-assigned effect labels from the `PlanEffect`
+  vocabulary;
+- guard/validation decisions and the elaboration or deoptimization reason.
+
+Send effects do not get a second journal. Since the ADR 003 cutover, the
+canonical ledger is already the durable commit point for every visible
+message: `enqueueOutbound` publishes transactionally, and per-endpoint
+deliveries carry accepted/confirmed/outcome-unknown with echo
+reconciliation. A send node journals only the linkage
+`node_id → canonical_message_id`; the durability roadmap's L3
+(`turn_id`/`chunk_index` on outbound rows) *is* that linkage, not a
+separate mechanism. Other effect classes journal their own two-phase state
+(roadmap L4).
+
+Durable journals store erased plans and traces. Resume re-runs the kernel
+— typecheck, effect bounds, scope authorization — before trusting anything
+read back (the `Max.IR` lesson: serialization pinned to one phase, checked
+on load). A row that fails the check deoptimizes to a hole instead of
+crashing the resume.
+
+### Crash is deoptimization
+
+Process death is a Fault like any other. Recovery re-holes the plan at the
+crash point with the journal's facts in the hole's view: completed
+results, committed sends, and outcome-unknown tool states — whose view
+text is exactly the durability roadmap's
+`[工具执行状态未知：服务重启]` injection. Guard failure, operator
+feedback, and crash therefore share one deopt path, and the horizon-1 loop
+exercises that path in production before the machine ever raises the
+horizon.
+
+Resume granularity is the turn, by construction: "continue exactly where
+the model was" is a false concept for a nondeterministic elaborator. What
+must be exact is the effect state, and that lives in the journal and the
+ledger.
 
 A generic fault must not become `reHole` and replay. Only a guard failure,
-pre-effect rejection, invalid result shape, or other known-safe suspension may
-deopt directly. Committed and outcome-unknown effects resume after the recorded
-node; compensation is explicit workflow logic rather than an implicit retry.
+pre-effect rejection, invalid result shape, process death, or other
+known-safe suspension may deopt directly. Committed and outcome-unknown
+effects resume after the recorded node; compensation is explicit workflow
+logic rather than an implicit retry.
 
 Elaboration and execution have separate fuel. Elaboration fuel prevents a
 `deopt → elaborate → fail` loop; execution budgets bound nodes, loops, fan-out,
@@ -266,6 +321,10 @@ Natural-language Goal text alone is not a safe or useful cache identity.
 
 ## Max integration sequence
 
+Step 0 ships with v1.0, independent of everything below: the journal
+contract above, written by the current loop under the durability roadmap
+(issue #14). Every later step consumes it unchanged.
+
 1. Define a small pure `Max.Plan` IR with `Done`, typed/schema-checked `Call`,
    `Guard`, and `Hole`, plus deterministic codecs and stable node ids.
 2. Add tool schema versions, result schemas, and conservative effect metadata
@@ -304,7 +363,10 @@ duplicate or outcome-unknown effects than the current loop.
 - The current loop remains available when planning is disabled, validation
   fails, a guard deoptimizes, or a provider cannot reliably produce the IR.
 - Tool metadata, a validator, a journal, and new replay evaluation add
-  substantial complexity before large horizons are safe.
+  substantial complexity before large horizons are safe. The journal, the
+  send commit point, and the crash-deopt path are shared with (and paid
+  for by) the v1.0 durability work, so the machine's residual cost is the
+  validator and the elaborator.
 - Static effect inference is deliberately conservative. Opaque sandbox code and
   dynamic targets reduce optimization opportunities instead of weakening the
   authority boundary.
