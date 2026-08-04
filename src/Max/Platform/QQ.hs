@@ -26,6 +26,7 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.IR
+import Max.IR.Lower (OutboundCaps (..), Tier (..), textOnlyCaps)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store (RegisteredEndpoint (..), ensureLegacyEndpoint)
 import Max.Platform.Types
@@ -81,13 +82,16 @@ qqEnvelope endpoint received raw message =
     MessageId messageId = message.messageId
     UserId userId = message.userId
 
-qqCapabilities :: PlatformCapabilities
+qqCapabilities :: OutboundCaps
 qqCapabilities =
-  noCapabilities
-    { canSendText = True,
-      canSendMedia = True,
-      canReply = True,
-      canReact = True,
+  textOnlyCaps
+    { mention = TierNative,
+      reply = TierNative,
+      emote = TierNative,
+      image = TierNative,
+      sticker = TierNative,
+      card = TierNative,
+      reaction = True,
       maxTextBytes = Just 12000
     }
 

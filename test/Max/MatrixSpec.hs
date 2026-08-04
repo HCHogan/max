@@ -1,30 +1,30 @@
 module Max.MatrixSpec (spec) where
 
-import Data.Aeson (object, toJSON, (.=))
+import Data.Aeson (object, (.=))
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Max.IR
+import Max.IR.Lower
 import Max.Matrix
+import Max.Platform.Delivery (loweredText)
 import Max.Platform.Types
 import Test.Hspec
 
 spec :: Spec
 spec = describe "Matrix adapter" $ do
-  it "degrades a canonical cross-platform mention to readable @username text" $ do
-    let content =
-          toJSON
-            ( Body
-                [ NMention (MentionIdentity (PrincipalIdentityId 7)) "用户名",
-                  NText " 在吗，找你"
-                ] ::
-                Body 'Canonical
-            )
-    matrixCanonicalText content `shouldBe` Just "@用户名 在吗，找你"
+  it "lowers a canonical cross-platform mention to readable @username text" $ do
+    let lowered =
+          lower matrixTextEnv $
+            Body
+              [ NMention (MentionIdentity (PrincipalIdentityId 7)) "用户名",
+                NText " 在吗，找你"
+              ]
+    traverse loweredText lowered.chunks `shouldBe` Right ["@用户名 在吗，找你"]
 
   it "keeps the id-shaped display when no richer label was captured" $ do
-    let content =
-          toJSON
-            (Body [NMention (MentionIdentity (PrincipalIdentityId 7)) "1578034713"] :: Body 'Canonical)
-    matrixCanonicalText content `shouldBe` Just "@1578034713"
+    let lowered =
+          lower matrixTextEnv $
+            Body [NMention (MentionIdentity (PrincipalIdentityId 7)) "1578034713"]
+    traverse loweredText lowered.chunks `shouldBe` Right ["@1578034713"]
 
   it "parses one allowlisted room timeline with reply and mention provenance" $ do
     let value =
@@ -173,14 +173,25 @@ spec = describe "Matrix adapter" $ do
     show cfg `shouldNotContain` "super-secret"
 
   it "advertises the outbound features implemented by the adapter" $ do
-    matrixCapabilities.canSendText `shouldBe` True
-    matrixCapabilities.canSendMedia `shouldBe` True
-    matrixCapabilities.canReply `shouldBe` True
+    matrixCapabilities.text `shouldBe` True
+    matrixCapabilities.image `shouldBe` TierNative
+    matrixCapabilities.reply `shouldBe` TierNative
 
   it "treats homeserver media size metadata as advisory" $ do
     matrixMediaSizeDrift (Just 145874) 145964 `shouldBe` True
     matrixMediaSizeDrift (Just 145964) 145964 `shouldBe` False
     matrixMediaSizeDrift Nothing 145964 `shouldBe` False
+
+matrixTextEnv :: LowerEnv
+matrixTextEnv =
+  LowerEnv
+    { platform = PlatformMatrix,
+      caps = textOnlyCaps,
+      attribution = Nothing,
+      mentionNative = const Nothing,
+      mediaResolve = const Nothing,
+      replyTarget = Nothing
+    }
 
 shouldSatisfyRight :: (Show e, Show a) => Either e a -> (a -> Bool) -> IO a
 shouldSatisfyRight value predicate = case value of

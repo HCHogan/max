@@ -28,8 +28,6 @@ module Max.Platform.Types
     EndpointMode (..),
     EventKind (..),
     MessageRelation (..),
-    PlatformCapabilities (..),
-    noCapabilities,
     ConversationOutputCapabilities (..),
     noConversationOutputCapabilities,
     qqConversationOutputCapabilities,
@@ -140,30 +138,6 @@ data MessageRelation
     Redacts !NativeEventId
   | ReactsTo !NativeEventId !Text
   deriving stock (Eq, Show, Generic)
-
--- | Capabilities are data owned by an endpoint, never optimistic defaults.
-data PlatformCapabilities = PlatformCapabilities
-  { canSendText :: !Bool,
-    canSendMedia :: !Bool,
-    canReply :: !Bool,
-    canEdit :: !Bool,
-    canReact :: !Bool,
-    canRedact :: !Bool,
-    maxTextBytes :: !(Maybe Int)
-  }
-  deriving stock (Eq, Show, Generic)
-
-noCapabilities :: PlatformCapabilities
-noCapabilities =
-  PlatformCapabilities
-    { canSendText = False,
-      canSendMedia = False,
-      canReply = False,
-      canEdit = False,
-      canReact = False,
-      canRedact = False,
-      maxTextBytes = Nothing
-    }
 
 -- | The portable output surface of one canonical conversation.  A bot reply
 -- may fan out to every enabled endpoint, so semantic actions are advertised

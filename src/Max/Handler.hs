@@ -54,6 +54,7 @@ import Max.Files (enqueueFiles)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
+import Max.IR (Body (..), Node (..), Phase (Ingest))
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
 import Max.Platform.QQ (ensureQQEndpoint, qqEnvelope)
 import Max.Platform.Store
@@ -71,7 +72,7 @@ import Max.Platform.Store
     isBotAuthoredCompatibilityMessage,
     platformForLegacyMessage,
   )
-import Max.Platform.Types (CanonicalMessageId, ConversationOutputCapabilities (..))
+import Max.Platform.Types (CanonicalMessageId, ConversationOutputCapabilities (..), NativeUserId (..))
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutput, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -771,18 +772,14 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
       let GroupId gidRaw = gm.groupId
           UserId uidRaw = gm.userId
           header = "（群 " <> T.pack (show gidRaw) <> " 的命令结果）\n"
-          segs = [SegText (header <> reply)]
       outcome <-
         sendRecorded
           OutboundRequest
             { orKind = KindCommand,
               orGroupId = GroupId (negate uidRaw),
-              orSelfId = gm.selfId,
-              orRenderedText = Nothing,
-              orSegments = segs,
-              orMentionDisplays = [],
-              orDeliveryScope = DeliverConversation,
-              orTimeoutMs = 15000
+              orBody = Body [NText (header <> reply)],
+              orReplyTo = Nothing,
+              orDeliveryScope = DeliverConversation
             }
       if wasDelivered outcome
         then sendAction (SetMsgEmojiLike gm.messageId ackFaceId True)
@@ -804,17 +801,10 @@ sendPong ::
 sendPong gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
-  sendAndRecord KindChat DeliverConversation gm.groupId gm.selfId (replySegs gm " pong")
+      display = fromMaybe (T.pack (show fromRaw)) (gm.sender.card <|> gm.sender.nickname)
+      mention = [NMention (NativeUserId (T.pack (show fromRaw))) display | not (isPrivateChat gm.groupId)]
+  sendAndRecord KindChat DeliverConversation gm.groupId (Body (mention <> [NText " pong"])) (Just gm.messageId)
   logInfo "replied pong" $ object ["to" .= fromRaw, "group_id" .= gidRaw]
-
--- | Reply segments for a trigger: quote it, @-the sender (groups
--- only — a private chat has no third party to disambiguate for, and
--- NapCat renders private at-segments poorly), then the text.
-replySegs :: GroupMessage -> T.Text -> [Segment]
-replySegs gm body =
-  [SegReply gm.messageId]
-    <> [SegAt gm.userId | not (isPrivateChat gm.groupId)]
-    <> [SegText body]
 
 -- | Entry point for the intent worker: dispatch a batch of messages
 -- nobody @-ed at the bot (chronological, newest last), with the
@@ -1293,21 +1283,18 @@ sendAndRecord ::
   MessageKind ->
   OutboundDeliveryScope ->
   GroupId ->
-  UserId -> -- bot self id
-  [Segment] ->
+  Body 'Ingest ->
+  Maybe MessageId ->
   Eff es ()
-sendAndRecord kind deliveryScope gid selfId segs =
+sendAndRecord kind deliveryScope gid body replyTo =
   void $
     sendRecorded
       OutboundRequest
         { orKind = kind,
           orGroupId = gid,
-          orSelfId = selfId,
-          orRenderedText = Nothing,
-          orSegments = segs,
-          orMentionDisplays = [],
-          orDeliveryScope = deliveryScope,
-          orTimeoutMs = 15000
+          orBody = body,
+          orReplyTo = replyTo,
+          orDeliveryScope = deliveryScope
         }
 
 -- | Command output: plain text, no quote and no @ — in the moment
@@ -1320,7 +1307,7 @@ replyText ::
   T.Text ->
   Eff es ()
 replyText gm body =
-  sendAndRecord KindCommand (DeliverSourceEndpoint gm.messageId) gm.groupId gm.selfId [SegText body]
+  sendAndRecord KindCommand (DeliverSourceEndpoint gm.messageId) gm.groupId (Body [NText body]) Nothing
 
 -- | One roster fetch serving two prompt-side consumers: the member id
 -- set for outbound @-mention validation ('Nothing' when there is no

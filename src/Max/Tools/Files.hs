@@ -28,12 +28,10 @@ where
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
-import Data.ByteString.Base64 qualified as B64
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Time (TimeZone)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
@@ -44,21 +42,22 @@ import Max.ConversationScope (ConversationScope)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
 import Max.DB.Message (MessageKind (KindChat))
-import Max.Effects.Blob (Blob, resolveBlobHostPath)
+import Max.Effects.Blob (Blob, blobRefSha256, putBlob, resolveBlobHostPath)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
-import Max.Platform.Types (ConversationOutputCapabilities)
+import Max.IR
+import Max.Platform.Types (ConversationOutputCapabilities, NativeUserId (..))
 import Max.Reply (chunkSource, planReply)
 import Max.ReplySend (modelTextSegs)
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
-import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities, toolSelfId)
+import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities)
 import Max.Util (withTempDirectory)
 import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..))
-import OneBot.Segment (Segment (..), imageSeg)
-import OneBot.Types (GroupId (..), UserId, isPrivateChat, privateChatUserId)
+import OneBot.Segment (Segment (..))
+import OneBot.Types (GroupId (..), UserId (..), isPrivateChat, privateChatUserId)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeFileName, (</>))
 
@@ -84,12 +83,11 @@ fileToolsFor ::
 fileToolsFor tz dc sandboxes =
   [ listRecentFilesTool tz gid,
     importFileToSandboxTool (toolConversationScope dc) gid sandboxes,
-    sendImageFromSandboxTool (toolOutputCapabilities dc) gid selfId sandboxes,
+    sendImageFromSandboxTool (toolOutputCapabilities dc) gid sandboxes,
     sendFileFromSandboxTool gid sandboxes
   ]
   where
     gid = toolGroupId dc
-    selfId = toolSelfId dc
 
 --------------------------------------------------------------------------------
 -- list_recent_files
@@ -224,16 +222,16 @@ importFileToSandboxTool scope gid sandboxes =
 -- send_image_from_sandbox
 
 sendImageFromSandboxTool ::
-  ( Outbound :> es,
+  ( Blob :> es,
+    Outbound :> es,
     Log :> es,
     IOE :> es
   ) =>
   ConversationOutputCapabilities ->
   GroupId ->
-  UserId ->
   SandboxRegistry ->
   Tool es
-sendImageFromSandboxTool outputCaps gid selfId sandboxes =
+sendImageFromSandboxTool outputCaps gid sandboxes =
   Tool
     { toolName = "send_image_from_sandbox",
       toolDescription =
@@ -266,19 +264,19 @@ sendImageFromSandboxTool outputCaps gid selfId sandboxes =
               case eBytes of
                 Left err -> pure (Left err)
                 Right bytes -> do
-                  let b64 = "base64://" <> TE.decodeUtf8 (B64.encode bytes)
-                      segs = captionSegs outputCaps gid mCaption <> [imageSeg b64]
+                  blob <- putBlob bytes
+                  let source = mediaBlobRef (blobRefSha256 blob)
+                      caption = captionSegs outputCaps gid mCaption
+                      body = Body (concatMap captionNode caption <> [NMedia source (imageMeta bytes)])
+                      replyTo = listToMaybe [message | SegReply message <- caption]
                   outcome <-
                     sendRecorded
                       OutboundRequest
                         { orKind = KindChat,
                           orGroupId = gid,
-                          orSelfId = selfId,
-                          orRenderedText = Nothing,
-                          orSegments = segs,
-                          orMentionDisplays = [],
-                          orDeliveryScope = DeliverConversation,
-                          orTimeoutMs = 30000
+                          orBody = body,
+                          orReplyTo = replyTo,
+                          orDeliveryScope = DeliverConversation
                         }
                   case outcome of
                     SendFailed err -> pure (Left ("图片发送失败: " <> err))
@@ -286,6 +284,24 @@ sendImageFromSandboxTool outputCaps gid selfId sandboxes =
                     SentRecorded {} -> sent sid bytes
     }
   where
+    captionNode = \case
+      SegText body -> [NText body]
+      SegAt (UserId user) ->
+        let native = T.pack (show user)
+         in [NMention (NativeUserId native) native]
+      SegReply _ -> []
+      _ -> []
+
+    imageMeta bytes =
+      MediaMeta
+        { kind = MImage,
+          mime = Just "image/png",
+          sizeBytes = Just (fromIntegral (BS.length bytes)),
+          name = Just "sandbox.png",
+          description = Nothing,
+          raw = Nothing
+        }
+
     sent sid bytes = do
       logInfo "image sent from sandbox" $
         object

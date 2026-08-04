@@ -69,8 +69,9 @@ import Max.DB.Reminder
     rescheduleReminder,
   )
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
+import Max.IR (Body (..), Node (..), Phase (Ingest))
+import Max.Platform.Types (NativeUserId (..))
 import Max.Util (catchSync)
-import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 import System.Cron (CronSchedule, nextMatch)
 import System.Cron.Parser (parseCronSchedule)
@@ -228,18 +229,15 @@ reminderWorker tz sched = loop
 
     deliver r = do
       let gid = GroupId r.rmGroupId
-          segs = deliverySegments gid (UserId r.rmUserId) r.rmText
+          body = deliveryBody gid (UserId r.rmUserId) r.rmText
       outcome <-
         sendRecorded
           OutboundRequest
             { orKind = KindChat,
               orGroupId = gid,
-              orSelfId = UserId r.rmSelfId,
-              orRenderedText = Nothing,
-              orSegments = segs,
-              orMentionDisplays = [],
-              orDeliveryScope = DeliverConversation,
-              orTimeoutMs = 30000
+              orBody = body,
+              orReplyTo = Nothing,
+              orDeliveryScope = DeliverConversation
             }
       case outcome of
         SendFailed err -> pure (Left err)
@@ -252,7 +250,9 @@ reminderWorker tz sched = loop
 
 -- | @-mention the asker in groups; plain text in private chats (private
 -- at-segments render poorly — same reasoning as the @say@ tool).
-deliverySegments :: GroupId -> UserId -> Text -> [Segment]
-deliverySegments gid uid body
-  | isPrivateChat gid = [SegText ("⏰ 提醒：" <> body)]
-  | otherwise = [SegAt uid, SegText (" ⏰ 提醒：" <> body)]
+deliveryBody :: GroupId -> UserId -> Text -> Body 'Ingest
+deliveryBody gid (UserId uid) body
+  | isPrivateChat gid = Body [NText ("⏰ 提醒：" <> body)]
+  | otherwise =
+      let native = T.pack (show uid)
+       in Body [NMention (NativeUserId native) native, NText (" ⏰ 提醒：" <> body)]

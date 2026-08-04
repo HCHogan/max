@@ -35,8 +35,8 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Message (MessageKind (KindDebug))
 import Max.Effects.Blob (Blob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded)
+import Max.IR (Body (..), Node (NText))
 import Max.ReplySend (ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
-import OneBot.Segment (Segment (SegText))
 import OneBot.Types (MessageId)
 
 -- | Debug facts emitted by the loop without deciding whether debug output is
@@ -97,12 +97,9 @@ handleAgentEvent ctx = \case
           OutboundRequest
             { orKind = KindDebug,
               orGroupId = ctx.aocReplyTarget.rtGroupId,
-              orSelfId = ctx.aocReplyTarget.rtSelfId,
-              orRenderedText = Nothing,
-              orSegments = [SegText body],
-              orMentionDisplays = [],
-              orDeliveryScope = DeliverSourceEndpoint ctx.aocSourceMessageId,
-              orTimeoutMs = 15000
+              orBody = Body [NText body],
+              orReplyTo = Nothing,
+              orDeliveryScope = DeliverSourceEndpoint ctx.aocSourceMessageId
             }
 
 -- | Render zero or one debug message.  Visible-output tools are silent here:

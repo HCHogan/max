@@ -59,7 +59,7 @@ import Control.Monad (foldM, when)
 import Data.ByteString.Base64 qualified as B64
 import Data.Char (isDigit)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Ord (clamp)
 import Data.Set (Set)
 import Data.Set qualified as Set
@@ -74,9 +74,11 @@ import Max.DB.History (fetchMessageInScope)
 import Max.DB.Media (StoredImage (..), fetchMessageImagesInScope)
 import Max.DB.Message (MessageKind (..))
 import Max.DB.Stickers (findStickerByCaption)
-import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
+import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
-import Max.Platform.Types (ConversationOutputCapabilities (..))
+import Max.IR
+import Max.Platform.QQ (qqSegmentNodes)
+import Max.Platform.Types (ConversationOutputCapabilities (..), NativeUserId (..))
 import Max.Render (renderTableImage)
 import Max.Reply
   ( Chunk (..),
@@ -90,7 +92,7 @@ import Max.Reply
   )
 import Max.Sticker (resolveSticker)
 import Max.Util (trySync)
-import OneBot.Segment (Segment (..), imageSeg, rescueNameMentions, segmentMentions, trimEdgeSegs)
+import OneBot.Segment (ImageSegInfo (..), Segment (..), imageSeg, rescueNameMentions, segmentMentions, trimEdgeSegs)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 import System.Random (randomRIO)
 
@@ -220,22 +222,23 @@ sendAndPersistReply rt budget rawBody
           -- streaming) the wait for the paragraph to complete was.
           when (i > 0) $
             liftIO (threadDelay =<< chunkDelayMicros (T.length rendered))
-          sendRecorded
-            OutboundRequest
-              { orKind = KindChat,
-                orGroupId = rt.rtGroupId,
-                orSelfId = rt.rtSelfId,
-                orRenderedText = Just (T.strip rendered),
-                orSegments = segs,
-                orMentionDisplays = [(user, name) | (name, user) <- rt.rtRosterNames],
-                orDeliveryScope = DeliverConversation,
-                orTimeoutMs = 30000
-              }
-            >>= \case
-              SendFailed err ->
-                logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
-              SentUnrecorded {} -> pure ()
-              SentRecorded {} -> pure ()
+          outboundBody rt segs >>= \case
+            Left err ->
+              logAttention "llm reply IR resolution failed" $ object ["error" .= err, "chunk" .= i]
+            Right (resolvedBody, replyTo) ->
+              sendRecorded
+                OutboundRequest
+                  { orKind = KindChat,
+                    orGroupId = rt.rtGroupId,
+                    orBody = resolvedBody,
+                    orReplyTo = replyTo,
+                    orDeliveryScope = DeliverConversation
+                  }
+                >>= \case
+                  SendFailed err ->
+                    logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
+                  SentUnrecorded {} -> pure ()
+                  SentRecorded {} -> pure ()
           pure b'
 
     -- One chunk → 'Just' (segments to send, rendered_text to store) or
@@ -327,6 +330,41 @@ sendAndPersistReply rt budget rawBody
       | otherwise = segmentMentions (\u -> maybe True (Set.member u) rt.rtMentionable) t
 
     conversation = conversationScopeFor rt.rtGroupId
+
+-- | Resolve the remaining OneBot-shaped reply plan into the sole outbound IR
+-- boundary.  This function is temporary scaffolding for the surrounding
+-- chunk planner; publication and every delivery after it are IR-only.
+outboundBody ::
+  (Blob :> es) =>
+  ReplyTarget ->
+  [Segment] ->
+  Eff es (Either T.Text (Body 'Ingest, Maybe MessageId))
+outboundBody rt segments = do
+  resolved <- traverse node segments
+  pure $ (,listToMaybe [reply | SegReply reply <- segments]) . Body . concat <$> sequence resolved
+  where
+    node = \case
+      SegReply _ -> pure (Right [])
+      SegAt user@(UserId native) ->
+        let nativeText = T.pack (show native)
+            display = fromMaybe nativeText (lookup user [(member, name) | (name, member) <- rt.rtRosterNames])
+         in pure (Right [NMention (NativeUserId nativeText) display])
+      segment@(SegImage image) -> case qqSegmentNodes segment of
+        [NMedia _ meta] -> do
+          source <- traverse materializeSource image.isiUrl
+          pure ((\ref -> [NMedia ref meta]) <$> sequence source)
+        _ -> pure (Left "image normalization did not produce one media node")
+      segment -> pure (Right (qqSegmentNodes segment))
+
+    materializeSource source
+      | Just encoded <- T.stripPrefix "base64://" source =
+          case B64.decode (TE.encodeUtf8 encoded) of
+            Left _ -> pure (Left "invalid base64 image payload")
+            Right bytes -> do
+              ref <- putBlob bytes
+              pure $ maybe (Left "BlobStore returned an invalid content address") Right (mediaBlobRef (blobRefSha256 ref))
+      | Just ref <- parseMediaRef source = pure (Right ref)
+      | otherwise = pure (Left "unsupported canonical media source scheme")
 
 -- | Remove executable QQ mention tokens while preserving an optional display
 -- caption. Used by both ordinary replies and tool captions so no model-text

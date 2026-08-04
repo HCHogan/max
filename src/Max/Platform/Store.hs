@@ -39,6 +39,7 @@ module Max.Platform.Store
     readIngestCursor,
     advanceIngestCursorCAS,
     DeliveryClaim (..),
+    deliveryMentionNatives,
     claimDeliveries,
     claimDelivery,
     DeliveryCompletion (..),
@@ -58,9 +59,11 @@ import Control.Monad (forM, forM_)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
   ( KeyValue ((.=)),
+    Result (..),
     ToJSON,
     Value (..),
     encode,
+    fromJSON,
     object,
     toJSON,
   )
@@ -79,12 +82,21 @@ import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, UTCTime)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
-import Database.PostgreSQL.Simple.Types (Only (..))
+import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import GHC.Generics (Generic)
 import Max.DB.Transaction (withTransaction)
 import Max.IR
+import Max.IR.Lower
+  ( Attribution (..),
+    LowerNote,
+    OutboundCaps,
+    ReplyContext (..),
+    outboundCapsFromValue,
+    outboundCapsToValue,
+    platformDisplayLabel,
+  )
 import Max.IR.Prompt (promptText)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Types
@@ -104,7 +116,7 @@ data EndpointRegistration = EndpointRegistration
     endpointDisplayName :: !(Maybe Text),
     conversationKind :: !ConversationKind,
     endpointMode :: !EndpointMode,
-    capabilities :: !PlatformCapabilities
+    capabilities :: !OutboundCaps
   }
   deriving stock (Eq, Show, Generic)
 
@@ -222,8 +234,6 @@ data OutboundDraft = OutboundDraft
     transcriptKind :: !Text,
     sourceCompatibilityMessageId :: !(Maybe Int64),
     canonicalBody :: !(Body 'Ingest),
-    renderedText :: !Text,
-    compatibilitySegments :: !Value,
     replyToCompatibilityMessageId :: !(Maybe Int64)
   }
   deriving stock (Eq, Show)
@@ -247,20 +257,17 @@ data DeliveryClaim = DeliveryClaim
   { deliveryId :: !DeliveryId,
     canonicalMessageId :: !CanonicalMessageId,
     endpointId :: !EndpointId,
+    platformAccountId :: !PlatformAccountId,
     platform :: !Platform,
     nativeAccountId :: !NativeAccountId,
     nativeConversationId :: !NativeConversationId,
-    content :: !Value,
-    renderedText :: !Text,
+    body :: !(Body 'Canonical),
     compatibilityConversationId :: !Int64,
-    compatibilitySegments :: !Value,
-    replyNativeEventId :: !(Maybe NativeEventId),
-    originPlatform :: !Platform,
-    senderDisplayName :: !(Maybe Text),
-    messageOrigin :: !Text,
+    replyContext :: !(Maybe ReplyContext),
+    attribution :: !(Maybe Attribution),
     idempotencyKey :: !Text,
     attemptCount :: !Int,
-    capabilities :: !Value
+    capabilities :: !OutboundCaps
   }
   deriving stock (Eq, Show, Generic)
 
@@ -343,14 +350,15 @@ data DeliveryClaimRow = DeliveryClaimRow
   { dcDeliveryId :: !Int64,
     dcCanonicalMessageId :: !Int64,
     dcEndpointId :: !Int64,
+    dcPlatformAccountId :: !Int64,
     dcPlatform :: !Text,
     dcNativeAccountId :: !Text,
     dcNativeConversationId :: !Text,
     dcContent :: !Value,
-    dcRenderedText :: !Text,
     dcCompatibilityConversationId :: !Int64,
-    dcCompatibilitySegments :: !Value,
     dcReplyNativeEventId :: !(Maybe Text),
+    dcReplyAuthor :: !(Maybe Text),
+    dcReplyContent :: !(Maybe Value),
     dcOriginPlatform :: !Text,
     dcSenderDisplayName :: !(Maybe Text),
     dcMessageOrigin :: !Text,
@@ -361,7 +369,7 @@ data DeliveryClaimRow = DeliveryClaimRow
 
 instance FromRow DeliveryClaimRow where
   fromRow =
-    DeliveryClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
+    DeliveryClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
 
 data DispatchClaimRow = DispatchClaimRow
   { dcrCanonicalMessageId :: !Int64,
@@ -543,7 +551,7 @@ ensureLegacyEndpoint ::
   NativeConversationId ->
   ConversationKind ->
   Int64 ->
-  PlatformCapabilities ->
+  OutboundCaps ->
   Eff es RegisteredEndpoint
 ensureLegacyEndpoint platform nativeAccount nativeConversation kind legacyGroup capabilities =
   withTransaction $ do
@@ -616,7 +624,7 @@ ensureConfiguredEndpoint ::
   ConversationKind ->
   EndpointMode ->
   Maybe Int64 ->
-  PlatformCapabilities ->
+  OutboundCaps ->
   Eff es RegisteredEndpoint
 ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLegacy capabilities =
   withTransaction $ do
@@ -1020,6 +1028,7 @@ enqueueOutbound draft = withTransaction $ do
     Just identity -> pure identity
     Nothing -> error "enqueueOutbound: bot identity missing from batch"
   canonicalBody <- resolveBodyMentions identities draft.canonicalBody
+  let renderedProjection = promptText (parsePlatform platformName) draft.canonicalBody
   principalRows <-
     query
       "SELECT principal_id FROM principal_identities WHERE principal_identity_id = ?"
@@ -1052,9 +1061,9 @@ enqueueOutbound draft = withTransaction $ do
         draft.legacyConversationId,
         compatibilitySelf,
         compatibilitySelf,
-        Jsonb draft.compatibilitySegments,
+        Jsonb (toJSON ([] :: [Value])),
         Jsonb (toJSON canonicalBody),
-        draft.renderedText,
+        renderedProjection,
         draft.replyToCompatibilityMessageId,
         replyCanonical,
         draft.transcriptKind,
@@ -1256,6 +1265,36 @@ claimDelivery workerId (DeliveryId delivery) leaseDuration = do
   claims <- claimDeliveriesWhere workerId (Just delivery) 1 leaseDuration
   pure (listToMaybe claims)
 
+-- | Resolve canonical mention identities to native ids on the destination
+-- endpoint.  The result is captured before calling the pure lowering
+-- function; transports never perform identity lookups or guess from origin
+-- ids.  A principal with multiple identities on one account resolves to the
+-- most recently updated identity deterministically.
+deliveryMentionNatives ::
+  (WithConnection :> es, IOE :> es) =>
+  EndpointId ->
+  [PrincipalIdentityId] ->
+  Eff es (Map PrincipalIdentityId NativeUserId)
+deliveryMentionNatives _ [] = pure Map.empty
+deliveryMentionNatives (EndpointId endpoint) identities = do
+  rows <-
+    query
+      "SELECT DISTINCT ON (source.principal_identity_id) \
+      \       source.principal_identity_id, destination.native_user_id \
+      \ FROM principal_identities source \
+      \ JOIN conversation_endpoints endpoint ON endpoint.endpoint_id = ? \
+      \ JOIN principal_identities destination \
+      \   ON destination.principal_id = source.principal_id \
+      \  AND destination.platform_account_id = endpoint.platform_account_id \
+      \ WHERE source.principal_identity_id = ANY(?) \
+      \ ORDER BY source.principal_identity_id, destination.updated_at DESC, \
+      \          destination.principal_identity_id DESC"
+      (endpoint, PGArray (map unPrincipalIdentityId identities))
+  pure . Map.fromList $
+    [ (PrincipalIdentityId identity, NativeUserId native)
+      | (identity, native) <- (rows :: [(Int64, Text)])
+    ]
+
 claimDeliveriesWhere ::
   (WithConnection :> es, IOE :> es) =>
   Text ->
@@ -1270,11 +1309,21 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \ SELECT d.delivery_id FROM message_deliveries d \
       \ JOIN conversation_endpoints e ON e.endpoint_id = d.endpoint_id AND e.enabled \
       \ JOIN platform_accounts a ON a.platform_account_id = e.platform_account_id AND a.enabled \
+      \ JOIN messages candidate_message ON candidate_message.canonical_message_id = d.canonical_message_id \
       \ WHERE d.status IN ('pending', 'failed') \
       \   AND d.next_attempt_at <= now() \
       \   AND (d.lease_expires_at IS NULL OR d.lease_expires_at < now()) \
       \   AND (?::bigint IS NULL OR d.delivery_id = ?) \
-      \ ORDER BY d.next_attempt_at, d.delivery_id \
+      \   AND NOT EXISTS ( \
+      \     SELECT 1 FROM message_deliveries earlier \
+      \     JOIN messages earlier_message ON earlier_message.canonical_message_id = earlier.canonical_message_id \
+      \     WHERE earlier.endpoint_id = d.endpoint_id \
+      \       AND earlier.delivery_id <> d.delivery_id \
+      \       AND earlier.status IN ('pending', 'failed', 'sending') \
+      \       AND (earlier_message.conversation_seq, earlier.delivery_id) \
+      \           < (candidate_message.conversation_seq, d.delivery_id) \
+      \   ) \
+      \ ORDER BY candidate_message.conversation_seq, d.delivery_id \
       \ FOR UPDATE OF d SKIP LOCKED LIMIT ? \
       \), claimed AS ( \
       \ UPDATE message_deliveries d \
@@ -1284,19 +1333,11 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \ FROM candidates c WHERE d.delivery_id = c.delivery_id \
       \ RETURNING d.* \
       \) \
-      \ SELECT c.delivery_id, c.canonical_message_id, c.endpoint_id, a.platform, \
-      \        a.native_account_id, e.native_conversation_id, m.canonical_content, \
-      \        m.rendered_text, m.group_id, m.segments, \
-      \        (SELECT COALESCE(target_delivery.native_event_id, target_event.native_event_id) \
-      \           FROM message_relations relation \
-      \           LEFT JOIN message_deliveries target_delivery \
-      \             ON target_delivery.canonical_message_id = relation.target_canonical_message_id \
-      \            AND target_delivery.endpoint_id = c.endpoint_id \
-      \           LEFT JOIN platform_events target_event \
-      \             ON target_event.canonical_message_id = relation.target_canonical_message_id \
-      \            AND target_event.endpoint_id = c.endpoint_id \
-      \          WHERE relation.canonical_message_id = c.canonical_message_id \
-      \            AND relation.relation_kind = 'reply' LIMIT 1), \
+      \ SELECT c.delivery_id, c.canonical_message_id, c.endpoint_id, a.platform_account_id, a.platform, \
+      \        a.native_account_id, e.native_conversation_id, m.canonical_content, m.group_id, \
+      \        reply_copy.native_event_id, \
+      \        COALESCE(reply_message.sender_card, reply_message.sender_nickname), \
+      \        reply_message.canonical_content, \
       \        origin_account.platform, COALESCE(m.sender_card, m.sender_nickname), m.message_origin, \
       \        c.idempotency_key, c.attempt_count, \
       \        CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END \
@@ -1306,6 +1347,33 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \ JOIN messages m ON m.canonical_message_id = c.canonical_message_id \
       \ JOIN conversation_endpoints origin_endpoint ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
       \ JOIN platform_accounts origin_account ON origin_account.platform_account_id = origin_endpoint.platform_account_id \
+      \ LEFT JOIN LATERAL ( \
+      \   SELECT relation.target_canonical_message_id, relation.target_native_event_id \
+      \   FROM message_relations relation \
+      \   WHERE relation.canonical_message_id = c.canonical_message_id \
+      \     AND relation.relation_kind = 'reply' \
+      \   ORDER BY relation.created_at DESC, relation.relation_id DESC LIMIT 1 \
+      \ ) reply_relation ON true \
+      \ LEFT JOIN messages reply_message \
+      \   ON reply_message.canonical_message_id = reply_relation.target_canonical_message_id \
+      \ LEFT JOIN LATERAL ( \
+      \   SELECT copies.native_event_id FROM ( \
+      \     SELECT pe.native_event_id, 0 AS source_rank, pe.occurred_at AS copied_at, pe.platform_event_id AS copy_id \
+      \     FROM platform_events pe \
+      \     WHERE pe.endpoint_id = c.endpoint_id \
+      \       AND (pe.canonical_message_id = reply_relation.target_canonical_message_id \
+      \            OR pe.native_event_id = reply_relation.target_native_event_id) \
+      \     UNION ALL \
+      \     SELECT target_delivery.native_event_id, 1 AS source_rank, target_delivery.updated_at AS copied_at, \
+      \            target_delivery.delivery_id AS copy_id \
+      \     FROM message_deliveries target_delivery \
+      \     WHERE target_delivery.endpoint_id = c.endpoint_id \
+      \       AND target_delivery.native_event_id IS NOT NULL \
+      \       AND (target_delivery.canonical_message_id = reply_relation.target_canonical_message_id \
+      \            OR target_delivery.native_event_id = reply_relation.target_native_event_id) \
+      \   ) copies \
+      \   ORDER BY copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
+      \ ) reply_copy ON true \
       \ ORDER BY c.delivery_id"
       (mDelivery, mDelivery, limit, workerId, realToFrac leaseDuration :: Double)
   pure (toClaim <$> (rows :: [DeliveryClaimRow]))
@@ -1314,9 +1382,10 @@ completeDelivery ::
   (WithConnection :> es, IOE :> es) =>
   Text ->
   DeliveryId ->
+  [LowerNote] ->
   DeliveryCompletion ->
   Eff es Bool
-completeDelivery workerId (DeliveryId delivery) completion = do
+completeDelivery workerId (DeliveryId delivery) lowerNotes completion = do
   withTransaction $ do
     safeCompletion <- discardOwnedNativeEvent completion
     changed <- case safeCompletion of
@@ -1360,12 +1429,14 @@ completeDelivery workerId (DeliveryId delivery) completion = do
       execute
         "UPDATE message_deliveries \
         \ SET status = ?, native_event_id = COALESCE(?, native_event_id), \
+        \     lower_notes = ?, \
         \     last_error = ?, next_attempt_at = COALESCE(?, next_attempt_at), \
         \     confirmed_at = CASE WHEN ? THEN now() ELSE confirmed_at END, \
         \     lease_owner = NULL, lease_expires_at = NULL, updated_at = now() \
         \ WHERE delivery_id = ? AND status = 'sending' AND lease_owner = ?"
         ( status,
           unNativeEventId <$> native,
+          Jsonb (toJSON lowerNotes),
           lastError,
           next,
           confirmed,
@@ -1761,15 +1832,20 @@ resolveReply (EndpointId endpoint) relations = case find isReply relations of
   Just (ReplyTo (NativeEventId nativeTarget)) -> do
     rows <-
       query
-        "SELECT m.canonical_message_id, m.message_id \
+        "SELECT target.canonical_message_id, target.message_id FROM ( \
+        \ SELECT m.canonical_message_id, m.message_id, 0 AS source_rank, \
+        \        pe.occurred_at AS copied_at, pe.platform_event_id AS copy_id \
         \ FROM platform_events pe \
         \ JOIN messages m USING (canonical_message_id) \
         \ WHERE pe.endpoint_id = ? AND pe.native_event_id = ? \
         \ UNION ALL \
-        \ SELECT m.canonical_message_id, m.message_id \
+        \ SELECT m.canonical_message_id, m.message_id, 1 AS source_rank, \
+        \        d.updated_at AS copied_at, d.delivery_id AS copy_id \
         \ FROM message_deliveries d \
         \ JOIN messages m USING (canonical_message_id) \
         \ WHERE d.endpoint_id = ? AND d.native_event_id = ? \
+        \ ) target \
+        \ ORDER BY target.source_rank, target.copied_at DESC, target.copy_id DESC \
         \ LIMIT 1"
         (endpoint, nativeTarget, endpoint, nativeTarget)
     pure (listToMaybe rows)
@@ -1807,11 +1883,18 @@ resolveNativeTarget ::
 resolveNativeTarget (EndpointId endpoint) target = do
   rows <-
     query
-      "SELECT canonical_message_id FROM platform_events \
+      "SELECT target.canonical_message_id FROM ( \
+      \ SELECT canonical_message_id, 0 AS source_rank, occurred_at AS copied_at, \
+      \        platform_event_id AS copy_id \
+      \ FROM platform_events \
       \ WHERE endpoint_id = ? AND native_event_id = ? AND canonical_message_id IS NOT NULL \
       \ UNION ALL \
-      \ SELECT canonical_message_id FROM message_deliveries \
+      \ SELECT canonical_message_id, 1 AS source_rank, updated_at AS copied_at, \
+      \        delivery_id AS copy_id \
+      \ FROM message_deliveries \
       \ WHERE endpoint_id = ? AND native_event_id = ? \
+      \ ) target \
+      \ ORDER BY target.source_rank, target.copied_at DESC, target.copy_id DESC \
       \ LIMIT 1"
       (endpoint, target, endpoint, target)
   pure (fromOnly <$> listToMaybe rows)
@@ -1822,25 +1905,47 @@ exactlyOne label _ = error (label <> ": expected exactly one row")
 
 toClaim :: DeliveryClaimRow -> DeliveryClaim
 toClaim row =
-  DeliveryClaim
-    { deliveryId = DeliveryId row.dcDeliveryId,
-      canonicalMessageId = CanonicalMessageId row.dcCanonicalMessageId,
-      endpointId = EndpointId row.dcEndpointId,
-      platform = parsePlatform row.dcPlatform,
-      nativeAccountId = NativeAccountId row.dcNativeAccountId,
-      nativeConversationId = NativeConversationId row.dcNativeConversationId,
-      content = row.dcContent,
-      renderedText = row.dcRenderedText,
-      compatibilityConversationId = row.dcCompatibilityConversationId,
-      compatibilitySegments = row.dcCompatibilitySegments,
-      replyNativeEventId = NativeEventId <$> row.dcReplyNativeEventId,
-      originPlatform = parsePlatform row.dcOriginPlatform,
-      senderDisplayName = row.dcSenderDisplayName,
-      messageOrigin = row.dcMessageOrigin,
-      idempotencyKey = row.dcIdempotencyKey,
-      attemptCount = row.dcAttemptCount,
-      capabilities = row.dcCapabilities
-    }
+  let destination = parsePlatform row.dcPlatform
+      origin = parsePlatform row.dcOriginPlatform
+      replyBody = decodeCanonical "reply canonical_content" <$> row.dcReplyContent
+      replyContext = case (row.dcReplyNativeEventId, row.dcReplyAuthor, replyBody) of
+        (Nothing, Nothing, Nothing) -> Nothing
+        (native, author, targetBody) ->
+          Just
+            ReplyContext
+              { nativeId = NativeEventId <$> native,
+                author,
+                excerpt = plainText <$> targetBody
+              }
+      attribution
+        | row.dcMessageOrigin == "inbound" && origin /= destination =
+            Just
+              Attribution
+                { platformLabel = platformDisplayLabel origin,
+                  sender = row.dcSenderDisplayName
+                }
+        | otherwise = Nothing
+   in DeliveryClaim
+        { deliveryId = DeliveryId row.dcDeliveryId,
+          canonicalMessageId = CanonicalMessageId row.dcCanonicalMessageId,
+          endpointId = EndpointId row.dcEndpointId,
+          platformAccountId = PlatformAccountId row.dcPlatformAccountId,
+          platform = destination,
+          nativeAccountId = NativeAccountId row.dcNativeAccountId,
+          nativeConversationId = NativeConversationId row.dcNativeConversationId,
+          body = decodeCanonical "canonical_content" row.dcContent,
+          compatibilityConversationId = row.dcCompatibilityConversationId,
+          replyContext,
+          attribution,
+          idempotencyKey = row.dcIdempotencyKey,
+          attemptCount = row.dcAttemptCount,
+          capabilities = outboundCapsFromValue row.dcCapabilities
+        }
+
+decodeCanonical :: String -> Value -> Body 'Canonical
+decodeCanonical label value = case fromJSON value of
+  Success body -> body
+  Error err -> error (label <> ": " <> err)
 
 toDispatchClaim :: DispatchClaimRow -> DispatchClaim
 toDispatchClaim row =
@@ -1877,14 +1982,5 @@ renderEventKind = \case
   EventRedaction -> "redaction"
   EventMembership -> "membership"
 
-capabilitiesValue :: PlatformCapabilities -> Value
-capabilitiesValue capabilities =
-  object
-    [ "send_text" .= capabilities.canSendText,
-      "send_media" .= capabilities.canSendMedia,
-      "reply" .= capabilities.canReply,
-      "edit" .= capabilities.canEdit,
-      "reaction" .= capabilities.canReact,
-      "redact" .= capabilities.canRedact,
-      "max_text_bytes" .= capabilities.maxTextBytes
-    ]
+capabilitiesValue :: OutboundCaps -> Value
+capabilitiesValue = outboundCapsToValue

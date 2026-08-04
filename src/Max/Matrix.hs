@@ -13,7 +13,6 @@ module Max.Matrix
     parseMatrixSyncPage,
     matrixSelfMentionIsDirect,
     matrixMediaSizeDrift,
-    matrixCanonicalText,
     matrixCapabilities,
     matrixWorker,
     matrixDeliveryTransport,
@@ -21,6 +20,7 @@ module Max.Matrix
 where
 
 import Control.Concurrent qualified as Concurrent
+import Control.Applicative ((<|>))
 import Control.Monad (forM_, when)
 import Data.Aeson
 import Data.Aeson.Key qualified as Key
@@ -52,8 +52,9 @@ import Max.HttpRuntime
     runBuffered,
   )
 import Max.IR
+import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
 import Max.IR.Prompt (promptText)
-import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryMedia (..), DeliveryTransport (..), attributedText)
+import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryTransport (..), loweredText)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -121,15 +122,19 @@ data MatrixSyncPage = MatrixSyncPage
   }
   deriving stock (Eq, Show, Generic)
 
-matrixCapabilities :: PlatformCapabilities
+matrixCapabilities :: OutboundCaps
 matrixCapabilities =
-  noCapabilities
-    { canSendText = True,
-      canSendMedia = True,
-      canReply = True,
-      canEdit = True,
-      canReact = True,
-      canRedact = True,
+  textOnlyCaps
+    { mention = TierNative,
+      reply = TierNative,
+      image = TierNative,
+      sticker = TierNative,
+      video = TierNative,
+      audio = TierNative,
+      file = TierNative,
+      reaction = True,
+      edit = True,
+      redact = True,
       maxTextBytes = Just 65536
     }
 
@@ -297,68 +302,90 @@ matrixDeliveryTransport :: HttpRuntime -> MatrixConfig -> DeliveryTransport
 matrixDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformMatrix,
-      deliver = \claim media -> do
-        payload <- case media of
-          [] -> pure (matrixTextPayload claim)
-          firstMedia : _ ->
-            resolveDeliveryMedia runtime firstMedia >>= \case
-              Left _ -> pure (matrixTextPayload claim)
-              Right bytes ->
-                uploadMatrixMedia runtime cfg firstMedia bytes >>= \case
-                  Left _ -> pure (matrixTextPayload claim)
-                  Right contentUri -> pure (matrixMediaPayload claim firstMedia contentUri (BS.length bytes))
-        sendMatrixDelivery runtime cfg claim payload
+      deliver = sendChunks
     }
+  where
+    sendChunks claim lowered =
+      go 0 Nothing lowered.chunks
+      where
+        go _ native [] = pure (AttemptConfirmed native)
+        go chunkIndex native (chunk : rest) =
+          matrixChunkPayload runtime cfg (if chunkIndex == 0 then lowered.replyNative else Nothing) chunk >>= \case
+            Left (MatrixContractFailure err) -> pure (AttemptPermanentlyFailed err)
+            Left (MatrixMediaFailure err) -> pure (AttemptMediaFallback err)
+            Right payload ->
+              sendMatrixDelivery runtime cfg claim chunkIndex payload >>= \case
+                Left err -> pure (AttemptRetryable err)
+                Right eventId -> go (chunkIndex + 1) (native <|> Just eventId) rest
 
-matrixTextPayload :: DeliveryClaim -> Value
-matrixTextPayload claim =
+matrixChunkPayload ::
+  HttpRuntime ->
+  MatrixConfig ->
+  Maybe NativeEventId ->
+  [Node 'Lowered] ->
+  IO (Either MatrixEmitFailure Value)
+matrixChunkPayload runtime cfg replyTarget chunk = case loweredText chunk of
+  Left err -> pure (Left (MatrixContractFailure err))
+  Right visibleBody -> case [(payload, meta) | NMedia payload meta <- chunk] of
+    [] -> pure . Right $ matrixTextPayload replyTarget chunk visibleBody
+    [(ResolvedUrl contentUri, meta)]
+      | "mxc://" `T.isPrefixOf` contentUri ->
+          pure . Right $ matrixMediaPayload replyTarget chunk visibleBody meta contentUri (fromIntegral <$> meta.sizeBytes)
+    [(payload, meta)] ->
+      resolveDeliveryMedia runtime payload meta.sizeBytes >>= \case
+        Left err -> pure (Left (MatrixMediaFailure err))
+        Right bytes ->
+          uploadMatrixMedia runtime cfg meta bytes >>= \case
+            Left err -> pure (Left (MatrixMediaFailure err))
+            Right contentUri ->
+              pure . Right $ matrixMediaPayload replyTarget chunk visibleBody meta contentUri (Just (BS.length bytes))
+    _ -> pure (Left (MatrixContractFailure "Matrix emitter received more than one native media node"))
+
+data MatrixEmitFailure
+  = MatrixContractFailure !Text
+  | MatrixMediaFailure !Text
+
+matrixTextPayload :: Maybe NativeEventId -> [Node 'Lowered] -> Text -> Value
+matrixTextPayload replyTarget chunk body =
   object
     ( [ "msgtype" .= ("m.text" :: Text),
-        "body" .= deliveryBody claim
+        "body" .= body
       ]
-        <> matrixReplyRelation claim
+        <> matrixRelations replyTarget chunk
     )
 
-matrixMediaPayload :: DeliveryClaim -> DeliveryMedia -> Text -> Int -> Value
-matrixMediaPayload claim media contentUri actualSize =
+matrixMediaPayload :: Maybe NativeEventId -> [Node 'Lowered] -> Text -> MediaMeta -> Text -> Maybe Int -> Value
+matrixMediaPayload replyTarget chunk visibleBody meta contentUri actualSize =
   object
-    ( [ "msgtype" .= matrixMsgType media.mimeType,
-        "body" .= fromMaybe (deliveryBody claim) media.name,
-        "filename" .= media.name,
+    ( [ "msgtype" .= matrixMsgType meta.mime,
+        "body" .= firstNonBlank [Just visibleBody, meta.description, meta.name, Just "attachment"],
+        "filename" .= meta.name,
         "url" .= contentUri,
         "info"
           .= object
-            [ "mimetype" .= media.mimeType,
+            [ "mimetype" .= meta.mime,
               "size" .= actualSize
             ]
       ]
-        <> matrixReplyRelation claim
+        <> matrixRelations replyTarget chunk
     )
 
-matrixReplyRelation :: DeliveryClaim -> [Pair]
-matrixReplyRelation claim = case claim.replyNativeEventId of
+matrixRelations :: Maybe NativeEventId -> [Node 'Lowered] -> [Pair]
+matrixRelations replyTarget chunk =
+  matrixReplyRelation replyTarget <> matrixMentionRelation chunk
+
+matrixReplyRelation :: Maybe NativeEventId -> [Pair]
+matrixReplyRelation = \case
   Nothing -> []
   Just (NativeEventId target) ->
     [ "m.relates_to"
         .= object ["m.in_reply_to" .= object ["event_id" .= target]]
     ]
 
-deliveryBody :: DeliveryClaim -> Text
-deliveryBody claim
-  | claim.messageOrigin == "inbound" && claim.originPlatform /= PlatformMatrix =
-      attributedText (claim {renderedText = canonicalBody})
-  | otherwise = canonicalBody
-  where
-    canonicalBody = fromMaybe claim.renderedText (matrixCanonicalText claim.content)
-
--- | Lower stored canonical content to Matrix's safe plain-text surface via
--- the shared fallback vocabulary: mentions render as @display, media by
--- their captured captions.  QQ's executable marker syntax therefore never
--- leaks into a mirror and its target is never silently discarded.
--- (Interim until the slice-3 cutover to 'Max.IR.Lower'.)
-matrixCanonicalText :: Value -> Maybe Text
-matrixCanonicalText value =
-  plainText <$> (parseMaybe parseJSON value :: Maybe (Body 'Canonical))
+matrixMentionRelation :: [Node 'Lowered] -> [Pair]
+matrixMentionRelation chunk = case [native | NMention (NativeUserId native) _ <- chunk] of
+  [] -> []
+  users -> ["m.mentions" .= object ["user_ids" .= users]]
 
 matrixMsgType :: Maybe Text -> Text
 matrixMsgType = \case
@@ -368,37 +395,36 @@ matrixMsgType = \case
     | "audio/" `T.isPrefixOf` mime -> "m.audio"
   _ -> "m.file"
 
-sendMatrixDelivery :: HttpRuntime -> MatrixConfig -> DeliveryClaim -> Value -> IO DeliveryAttempt
-sendMatrixDelivery runtime cfg claim payload = do
+sendMatrixDelivery :: HttpRuntime -> MatrixConfig -> DeliveryClaim -> Int -> Value -> IO (Either Text NativeEventId)
+sendMatrixDelivery runtime cfg claim chunkIndex payload = do
   let path =
         "/_matrix/client/v3/rooms/"
           <> pathPiece cfg.roomId
           <> "/send/m.room.message/"
-          <> pathPiece claim.idempotencyKey
+          <> pathPiece (claim.idempotencyKey <> "-" <> T.pack (show chunkIndex))
   matrixRequest runtime cfg "PUT" path [] (Just payload) >>= \case
-    Left err -> pure (AttemptRetryable err)
+    Left err -> pure (Left err)
     Right response -> case parseEither (withObject "matrix send" (.: "event_id")) response of
-      Left err -> pure (AttemptRetryable ("matrix send response: " <> T.pack err))
-      Right event -> pure (AttemptConfirmed (Just (NativeEventId event)))
+      Left err -> pure (Left ("matrix send response: " <> T.pack err))
+      Right event -> pure (Right (NativeEventId event))
 
-resolveDeliveryMedia :: HttpRuntime -> DeliveryMedia -> IO (Either Text BS.ByteString)
-resolveDeliveryMedia runtime media = case media.bytes of
-  Just bytes -> pure (Right bytes)
-  Nothing
-    | "http://" `T.isPrefixOf` media.sourceUrl || "https://" `T.isPrefixOf` media.sourceUrl ->
-        parseRequestEither (T.unpack media.sourceUrl) >>= \case
+resolveDeliveryMedia :: HttpRuntime -> ResolvedMedia -> Maybe Int64 -> IO (Either Text BS.ByteString)
+resolveDeliveryMedia _ (ResolvedBytes bytes) _ = pure (Right bytes)
+resolveDeliveryMedia runtime (ResolvedUrl sourceUrl) declaredSize
+  | "http://" `T.isPrefixOf` sourceUrl || "https://" `T.isPrefixOf` sourceUrl =
+        parseRequestEither (T.unpack sourceUrl) >>= \case
           Left failure -> pure (Left (renderTransportFailure failure))
           Right request ->
             runBuffered runtime StandardPool matrixMaxMediaBytes matrixStatusPreviewBytes request >>= \case
               Left failure -> pure (Left (renderTransportFailure failure))
               Right response
-                | maybe False (/= BS.length response.body) media.declaredSize -> pure (Left "delivery media size changed")
+                | maybe False (/= fromIntegral (BS.length response.body)) declaredSize -> pure (Left "delivery media size changed")
                 | otherwise -> pure (Right response.body)
-    | otherwise -> pure (Left "delivery media has no transferable source")
+  | otherwise = pure (Left "delivery media has no transferable source")
 
-uploadMatrixMedia :: HttpRuntime -> MatrixConfig -> DeliveryMedia -> BS.ByteString -> IO (Either Text Text)
-uploadMatrixMedia runtime cfg media bytes = do
-  let filename = fromMaybe "attachment" media.name
+uploadMatrixMedia :: HttpRuntime -> MatrixConfig -> MediaMeta -> BS.ByteString -> IO (Either Text Text)
+uploadMatrixMedia runtime cfg meta bytes = do
+  let filename = fromMaybe "attachment" meta.name
       path = "/_matrix/media/v3/upload"
       url = T.dropWhileEnd (== '/') cfg.homeserver <> path <> queryText [("filename", filename)]
   parseRequestEither (T.unpack url) >>= \case
@@ -409,7 +435,7 @@ uploadMatrixMedia runtime cfg media bytes = do
               { HTTP.method = "POST",
                 HTTP.requestHeaders =
                   [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.accessToken),
-                    ("Content-Type", TE.encodeUtf8 (fromMaybe "application/octet-stream" media.mimeType))
+                    ("Content-Type", TE.encodeUtf8 (fromMaybe "application/octet-stream" meta.mime))
                   ],
                 HTTP.requestBody = HTTP.RequestBodyBS bytes,
                 HTTP.responseTimeout = HTTP.responseTimeoutMicro matrixHttpTimeoutMicros
@@ -419,6 +445,13 @@ uploadMatrixMedia runtime cfg media bytes = do
         Right response -> case eitherDecodeStrict' response.body >>= parseEither (withObject "matrix upload" (.: "content_uri")) of
           Left err -> pure (Left ("Matrix media upload response: " <> T.pack err))
           Right contentUri -> pure (Right contentUri)
+
+firstNonBlank :: [Maybe Text] -> Text
+firstNonBlank = fromMaybe "attachment" . foldr choose Nothing
+  where
+    choose candidate rest = case T.strip <$> candidate of
+      Just value | not (T.null value) -> Just value
+      _ -> rest
 
 fetchSync :: HttpRuntime -> MatrixConfig -> Maybe Text -> IO (Either Text MatrixSyncPage)
 fetchSync runtime cfg since = do

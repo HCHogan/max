@@ -58,11 +58,11 @@ import Max.HttpRuntime
     withStreamingResponse,
   )
 import Max.IR
-import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryMedia (..), DeliveryTransport (..))
+import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
+import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryTransport (..), loweredText)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
-    DeliveryClaim (..),
     IngestOptions (..),
     IngestResult (..),
     RegisteredEndpoint (..),
@@ -181,18 +181,18 @@ data IMessageBridgeHealth = IMessageBridgeHealth
   }
   deriving stock (Eq, Show, Generic)
 
-iMessageCapabilities :: PlatformCapabilities
+iMessageCapabilities :: OutboundCaps
 iMessageCapabilities =
-  noCapabilities
-    { canSendText = True,
-      canSendMedia = True,
+  textOnlyCaps
+    { image = TierNative,
+      sticker = TierNative,
+      video = TierNative,
+      audio = TierNative,
+      file = TierNative,
       -- The conservative baseline is the public AppleScript transport. The
       -- worker advertises reply=true only while the bridge reports a live
       -- injected IMCore helper.
-      canReply = False,
-      canEdit = False,
-      canReact = False,
-      canRedact = False,
+      reply = TierText,
       maxTextBytes = Just 65536
     }
 
@@ -419,39 +419,61 @@ iMessageDeliveryTransport :: HttpRuntime -> IMessageConfig -> DeliveryTransport
 iMessageDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformIMessage,
-      deliver = \claim media -> do
-        -- A native relation is present only when the endpoint advertised the
-        -- live IMCore helper. The bridge probes the helper again and imsg fails
-        -- closed rather than silently degrading a requested reply to text.
-        let body = claim.renderedText
-        upload <- case media of
-          [] -> pure Nothing
-          firstMedia : _ ->
-            resolveDeliveryMedia runtime firstMedia >>= \case
-              Left _ -> pure Nothing
-              Right bytes ->
-                uploadBridgeAttachment runtime cfg firstMedia bytes >>= \case
-                  Left _ -> pure Nothing
-                  Right uploadId -> pure (Just ("upload:" <> uploadId))
-        let replyTarget = claim.replyNativeEventId
-            params =
-              object
-                ( [ "chat_guid" .= cfg.chatGuid,
-                    "text" .= body,
-                    "service" .= ("auto" :: Text),
-                    "transport" .= iMessageSendTransport replyTarget
-                  ]
-                    <> ["file" .= file | Just file <- [upload]]
-                    <> ["reply_to" .= target | Just (NativeEventId target) <- [replyTarget]]
-                )
-        bridgeRpc runtime cfg "send" params >>= \case
-          Left (BridgeBeforeEffect err) -> pure (AttemptRetryable err)
-          Left (BridgeRejected err) -> pure (AttemptRetryable err)
-          Left (BridgeOutcomeUnknown err) -> pure (AttemptOutcomeUnknown err)
-          Right value -> case parseEither sendResultParser value of
-            Left err -> pure (AttemptOutcomeUnknown ("imsg send response: " <> T.pack err))
-            Right guid -> pure (AttemptAccepted (iMessageAuthoritativeSendGuid replyTarget guid))
+      deliver = sendChunks
     }
+  where
+    sendChunks _claim lowered = go (0 :: Int) False Nothing lowered.chunks
+      where
+        go _ _ firstNative [] = pure (AttemptAccepted firstNative)
+        go index sentAny firstNative (chunk : rest) =
+          prepareChunk (if index == 0 then lowered.replyNative else Nothing) chunk >>= \case
+            Left (IMessageContractFailure err) -> pure (AttemptPermanentlyFailed err)
+            Left (IMessageMediaFailure err) ->
+              pure $ if sentAny then AttemptOutcomeUnknown err else AttemptMediaFallback err
+            Right (replyTarget, params) ->
+              bridgeRpc runtime cfg "send" params >>= \case
+                Left (BridgeBeforeEffect err) ->
+                  pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRetryable err
+                Left (BridgeRejected err) ->
+                  pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRetryable err
+                Left (BridgeOutcomeUnknown err) -> pure (AttemptOutcomeUnknown err)
+                Right value -> case parseEither sendResultParser value of
+                  Left err -> pure (AttemptOutcomeUnknown ("imsg send response: " <> T.pack err))
+                  Right guid ->
+                    go
+                      (index + 1)
+                      True
+                      (firstNative <|> iMessageAuthoritativeSendGuid replyTarget guid)
+                      rest
+
+    prepareChunk replyTarget chunk = case loweredText chunk of
+      Left err -> pure (Left (IMessageContractFailure err))
+      Right body -> case [(payload, meta) | NMedia payload meta <- chunk] of
+        [] -> pure (Right (replyTarget, sendParams replyTarget body Nothing))
+        [(payload, meta)] ->
+          resolveDeliveryMedia runtime payload meta.sizeBytes >>= \case
+            Left err -> pure (Left (IMessageMediaFailure err))
+            Right bytes ->
+              uploadBridgeAttachment runtime cfg meta bytes >>= \case
+                Left err -> pure (Left (IMessageMediaFailure err))
+                Right uploadId ->
+                  pure (Right (replyTarget, sendParams replyTarget body (Just ("upload:" <> uploadId))))
+        _ -> pure (Left (IMessageContractFailure "iMessage emitter received more than one native media node"))
+
+    sendParams replyTarget body upload =
+      object
+        ( [ "chat_guid" .= cfg.chatGuid,
+            "text" .= body,
+            "service" .= ("auto" :: Text),
+            "transport" .= iMessageSendTransport replyTarget
+          ]
+            <> ["file" .= file | Just file <- [upload]]
+            <> ["reply_to" .= target | Just (NativeEventId target) <- [replyTarget]]
+        )
+
+data IMessageEmitFailure
+  = IMessageContractFailure !Text
+  | IMessageMediaFailure !Text
 
 -- | The injected IMCore helper is necessary only for native inline replies.
 -- Keeping ordinary sends on AppleScript also gives them an authoritative GUID
@@ -468,31 +490,30 @@ iMessageAuthoritativeSendGuid replyTarget guid =
     Nothing -> NativeEventId <$> guid
     Just _ -> Nothing
 
-resolveDeliveryMedia :: HttpRuntime -> DeliveryMedia -> IO (Either Text BS.ByteString)
-resolveDeliveryMedia runtime media = case media.bytes of
-  Just bytes -> pure (Right bytes)
-  Nothing
-    | "http://" `T.isPrefixOf` media.sourceUrl || "https://" `T.isPrefixOf` media.sourceUrl ->
-        parseRequestEither (T.unpack media.sourceUrl) >>= \case
+resolveDeliveryMedia :: HttpRuntime -> ResolvedMedia -> Maybe Int64 -> IO (Either Text BS.ByteString)
+resolveDeliveryMedia _ (ResolvedBytes bytes) _ = pure (Right bytes)
+resolveDeliveryMedia runtime (ResolvedUrl sourceUrl) declaredSize
+  | "http://" `T.isPrefixOf` sourceUrl || "https://" `T.isPrefixOf` sourceUrl =
+        parseRequestEither (T.unpack sourceUrl) >>= \case
           Left failure -> pure (Left (renderTransportFailure failure))
           Right request ->
             runBuffered runtime StandardPool iMessageMaxAttachmentBytes bridgePreviewBytes request >>= \case
               Left failure -> pure (Left (renderTransportFailure failure))
               Right response
-                | maybe False (/= BS.length response.body) media.declaredSize -> pure (Left "delivery media size changed")
+                | maybe False (/= fromIntegral (BS.length response.body)) declaredSize -> pure (Left "delivery media size changed")
                 | otherwise -> pure (Right response.body)
-    | otherwise -> pure (Left "delivery media has no transferable source")
+  | otherwise = pure (Left "delivery media has no transferable source")
 
 uploadBridgeAttachment ::
   HttpRuntime ->
   IMessageConfig ->
-  DeliveryMedia ->
+  MediaMeta ->
   BS.ByteString ->
   IO (Either Text Text)
-uploadBridgeAttachment runtime cfg media bytes = do
+uploadBridgeAttachment runtime cfg meta bytes = do
   let params =
-        [ ("filename", fromMaybe "attachment" media.name),
-          ("mime_type", fromMaybe "application/octet-stream" media.mimeType)
+        [ ("filename", fromMaybe "attachment" meta.name),
+          ("mime_type", fromMaybe "application/octet-stream" meta.mime)
         ]
       url = T.dropWhileEnd (== '/') cfg.bridgeUrl <> "/outbound-attachment" <> queryText params
   parseRequestEither (T.unpack url) >>= \case
@@ -503,7 +524,7 @@ uploadBridgeAttachment runtime cfg media bytes = do
               { HTTP.method = "POST",
                 HTTP.requestHeaders =
                   [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.bridgeToken),
-                    ("Content-Type", TE.encodeUtf8 (fromMaybe "application/octet-stream" media.mimeType))
+                    ("Content-Type", TE.encodeUtf8 (fromMaybe "application/octet-stream" meta.mime))
                   ],
                 HTTP.requestBody = HTTP.RequestBodyBS bytes,
                 HTTP.responseTimeout = HTTP.responseTimeoutMicro bridgeRpcTimeoutMicros
@@ -548,9 +569,9 @@ parseIMessageBridgeHealth = first T.pack . parseEither parser
       replies <- withObject "health capabilities" (\caps -> caps .:? "reply" .!= False) capabilities
       pure (IMessageBridgeHealth fingerprint replies)
 
-iMessageCapabilitiesFor :: Bool -> PlatformCapabilities
+iMessageCapabilitiesFor :: Bool -> OutboundCaps
 iMessageCapabilitiesFor nativeReplies =
-  iMessageCapabilities {canReply = nativeReplies}
+  iMessageCapabilities {reply = if nativeReplies then TierNative else TierText}
 
 resolveChat :: HttpRuntime -> IMessageConfig -> IO (Either BridgeFailure Int64)
 resolveChat runtime cfg =

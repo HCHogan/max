@@ -3,8 +3,9 @@ module Max.IMessageSpec (spec) where
 import Data.Aeson (Value, object, (.=))
 import Max.IMessage
 import Max.IR
+import Max.IR.Lower (OutboundCaps (..), Tier (..))
 import Max.IR.Prompt (promptText)
-import Max.Platform.Types (EventKind (..), NativeEventId (..), NativeUserId (..), Platform (..), PlatformCapabilities (..))
+import Max.Platform.Types (EventKind (..), NativeEventId (..), NativeUserId (..), Platform (..))
 import Test.Hspec
 
 spec :: Spec
@@ -217,9 +218,9 @@ spec = describe "iMessage adapter" $ do
       _ -> expectationFailure "expected one mentioned message"
 
   it "advertises bounded outbound attachment delivery" $ do
-    iMessageCapabilities.canSendText `shouldBe` True
-    iMessageCapabilities.canSendMedia `shouldBe` True
-    iMessageCapabilities.canReply `shouldBe` False
+    iMessageCapabilities.text `shouldBe` True
+    iMessageCapabilities.image `shouldBe` TierNative
+    iMessageCapabilities.reply `shouldBe` TierText
 
   it "parses a live IMCore reply capability and defaults old bridges safely" $ do
     parseIMessageBridgeHealth

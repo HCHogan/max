@@ -1,70 +1,64 @@
 module Max.Platform.DeliverySpec (spec) where
 
 import Control.Exception (bracket)
-import Data.Aeson (Value, object, (.=))
-import Data.Text (Text)
+import Data.Maybe (fromJust)
 import Effectful (runEff)
 import Max.Effects.Blob (blobRefSha256, putBlob, runBlob)
+import Max.IR
+import Max.IR.Lower
 import Max.Platform.Delivery
 import System.Directory (createDirectory, getTemporaryDirectory, removeFile, removePathForcibly)
 import System.IO (hClose, openBinaryTempFile)
 import Test.Hspec
 
 spec :: Spec
-spec = describe "canonical delivery media" $ do
-  it "projects v2 media nodes, preferring the caption and skipping sourceless ones" $ do
-    let body =
-          object
-            [ "v" .= (2 :: Int),
-              "nodes"
-                .= [ object ["type" .= ("text" :: Text), "text" .= ("看这个" :: Text)],
-                     mediaNode (Just "https://x/a.png"),
-                     -- Sourceless media degrades to text at lowering; it is
-                     -- never a deliverable attachment.
-                     object ["type" .= ("media" :: Text), "kind" .= ("image" :: Text)]
-                   ]
-            ]
-    deliveryMediaFromContent body
-      `shouldBe` [DeliveryMedia "https://x/a.png" (Just "image/png") (Just 5) (Just "两只猫") Nothing]
+spec = describe "canonical delivery media resolution" $ do
+  it "resolves only native-tier media within the endpoint budget" $
+    withBlobRoot $ \root -> do
+      let first = fromJust (mediaRemoteRef "https://x/a.png")
+          second = fromJust (mediaRemoteRef "https://x/b.png")
+          caps = textOnlyCaps {image = TierNative, maxNativeMedia = 1}
+          body =
+            Body
+              [ NText "看这个",
+                NMedia (Just first) imageMeta,
+                NMedia Nothing imageMeta,
+                NMedia (Just second) imageMeta
+              ]
+      resolved <- runEff . runBlob root $ loadDeliveryMedia caps body
+      resolved `shouldBe` [(first, ResolvedUrl "https://x/a.png")]
 
-  it "resolves content-addressed sources and rejects inline canonical bytes" $
+  it "loads content-addressed sources and verifies their declared size" $
     withBlobRoot $ \root -> do
       resolved <- runEff . runBlob root $ do
-        ref <- putBlob "blob-payload"
-        let sources =
-              object
-                [ "v" .= (2 :: Int),
-                  "nodes"
-                    .= [sizedMediaNode ("blob:" <> blobRefSha256 ref) 12]
-                ]
-        loadDeliveryMedia sources
-      fmap (.bytes) resolved `shouldBe` [Just "blob-payload"]
-      deliveryMediaFromContent
-        (object ["v" .= (2 :: Int), "nodes" .= [sizedMediaNode "base64://YmFzZQ==" 6]])
-        `shouldBe` []
+        blobRef <- putBlob "blob-payload"
+        let source = fromJust (mediaBlobRef (blobRefSha256 blobRef))
+            caps = textOnlyCaps {file = TierNative}
+            body = Body [NMedia (Just source) fileMeta]
+        loadDeliveryMedia caps body
+      fmap snd resolved `shouldBe` [ResolvedBytes "blob-payload"]
 
-mediaNode :: Maybe Text -> Value
-mediaNode source =
-  object
-    ( [ "type" .= ("media" :: Text),
-        "kind" .= ("image" :: Text),
-        "mime" .= ("image/png" :: Text),
-        "size" .= (5 :: Int),
-        "name" .= ("a.png" :: Text),
-        "description" .= ("两只猫" :: Text)
-      ]
-        <> maybe [] (\url -> ["source" .= url]) source
-    )
+imageMeta :: MediaMeta
+imageMeta =
+  MediaMeta
+    { kind = MImage,
+      mime = Just "image/png",
+      sizeBytes = Nothing,
+      name = Just "a.png",
+      description = Just "两只猫",
+      raw = Nothing
+    }
 
-sizedMediaNode :: Text -> Int -> Value
-sizedMediaNode source size =
-  object
-    [ "type" .= ("media" :: Text),
-      "kind" .= ("file" :: Text),
-      "source" .= source,
-      "mime" .= ("application/octet-stream" :: Text),
-      "size" .= size
-    ]
+fileMeta :: MediaMeta
+fileMeta =
+  MediaMeta
+    { kind = MFile,
+      mime = Just "application/octet-stream",
+      sizeBytes = Just 12,
+      name = Just "a.bin",
+      description = Nothing,
+      raw = Nothing
+    }
 
 withBlobRoot :: (FilePath -> IO a) -> IO a
 withBlobRoot = bracket acquire removePathForcibly

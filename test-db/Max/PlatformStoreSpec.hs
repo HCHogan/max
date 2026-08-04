@@ -11,6 +11,7 @@ import Database.PostgreSQL.Simple (Only (..), execute, execute_, query, withTran
 import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool, withConn)
 import Max.IR
+import Max.IR.Lower
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
 import Max.Platform.Store qualified as PlatformStore
@@ -133,7 +134,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-status" "status"))
     [claim] <- withDb pool (claimDeliveries "worker-a" 10 30)
     claim.endpointId `shouldBe` qq.endpointId
-    _ <- withDb pool (completeDelivery "worker-a" claim.deliveryId (DeliveryUnknown "timeout" now))
+    _ <- withDb pool (completeDelivery "worker-a" claim.deliveryId [] (DeliveryUnknown "timeout" now))
     statuses <- withDb pool listPlatformStatus
     case [status | status <- statuses, status.endpointId == qq.endpointId] of
       [status] -> status.outcomeUnknownDeliveries `shouldBe` 1
@@ -162,6 +163,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         completeDelivery
           "worker-b"
           claim.deliveryId
+          []
           (DeliveryConfirmedAs (Just (NativeEventId "qq-echo")))
     stolen `shouldBe` False
     completed <-
@@ -169,21 +171,47 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         completeDelivery
           "worker-a"
           claim.deliveryId
+          []
           (DeliveryConfirmedAs (Just (NativeEventId "qq-echo")))
     completed `shouldBe` True
+
+  it "persists the shared lowerer's degradation audit on completion" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-lower-notes" "hello"))
+    [claim] <- withDb pool (claimDeliveries "worker-a" 10 30)
+    let notes = [LowerNote "mention" NoteFolded (Just "no identity on endpoint")]
+    withDb pool (completeDelivery "worker-a" claim.deliveryId notes (DeliveryConfirmedAs Nothing))
+      `shouldReturn` True
+    rows <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT lower_notes FROM message_deliveries WHERE delivery_id = ?"
+        (Only claim.deliveryId.unDeliveryId)
+    (rows :: [Only Value]) `shouldBe` [Only (toJSON notes)]
+    claim.endpointId `shouldBe` qq.endpointId
 
   it "discards a provider receipt already owned by another delivery" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-reused-1" "first"))
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-reused-2" "second"))
-    claims <- withDb pool (claimDeliveries "worker-a" 10 30)
-    claims `shouldSatisfy` \xs -> length xs == 2 && all (\claim -> claim.endpointId == qq.endpointId) xs
-    case claims of
-      [firstClaim, secondClaim] -> do
-        withDb pool (completeDelivery "worker-a" firstClaim.deliveryId (DeliveryAccepted (Just (NativeEventId "reused-native"))))
+    firstClaims <- withDb pool (claimDeliveries "worker-a" 10 30)
+    firstClaims `shouldSatisfy` \case
+      [claim] -> claim.endpointId == qq.endpointId && claim.body == Body [NText "first"]
+      _ -> False
+    case firstClaims of
+      [firstClaim] -> do
+        withDb pool (completeDelivery "worker-a" firstClaim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "reused-native"))))
           `shouldReturn` True
-        withDb pool (completeDelivery "worker-a" secondClaim.deliveryId (DeliveryAccepted (Just (NativeEventId "reused-native"))))
+        secondClaims <- withDb pool (claimDeliveries "worker-a" 10 30)
+        secondClaims `shouldSatisfy` \case
+          [claim] -> claim.endpointId == qq.endpointId && claim.body == Body [NText "second"]
+          _ -> False
+        secondClaim <- case secondClaims of
+          [claim] -> pure claim
+          _ -> expectationFailure "expected the second ordered delivery" >> fail "unreachable"
+        withDb pool (completeDelivery "worker-a" secondClaim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "reused-native"))))
           `shouldReturn` True
         deliveries <- withConn pool $ \conn ->
           query
@@ -192,7 +220,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             (Only qq.endpointId.unEndpointId)
         (deliveries :: [(Text, Maybe Text)])
           `shouldBe` [("accepted_unconfirmed", Just "reused-native"), ("accepted_unconfirmed", Nothing)]
-      _ -> expectationFailure "expected two leased deliveries"
+      _ -> expectationFailure "expected the first ordered delivery"
 
   it "never automatically retries an outcome-unknown non-idempotent delivery" $ do
     (qq, matrix) <- mirrorPair pool
@@ -202,7 +230,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     claim.endpointId `shouldBe` qq.endpointId
     unknown <-
       withDb pool $
-        completeDelivery "worker-a" claim.deliveryId (DeliveryUnknown "timeout after write" (addUTCTime (-1) now))
+        completeDelivery "worker-a" claim.deliveryId [] (DeliveryUnknown "timeout after write" (addUTCTime (-1) now))
     unknown `shouldBe` True
     withDb pool (claimDeliveries "worker-b" 10 30) `shouldReturn` []
 
@@ -214,7 +242,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     claim.endpointId `shouldBe` matrix.endpointId
     accepted <-
       withDb pool $
-        completeDelivery "worker-a" claim.deliveryId (DeliveryAccepted (Just (NativeEventId "native-out")))
+        completeDelivery "worker-a" claim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "native-out")))
     accepted `shouldBe` True
     withDb pool (claimDeliveries "worker-b" 10 30) `shouldReturn` []
     unconfirmed <- withDb pool (listUnconfirmedDeliveries PlatformMatrix 10)
@@ -231,7 +259,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-confirm" "confirm me"))
     [claim] <- withDb pool (claimDeliveries "worker-a" 10 30)
     claim.endpointId `shouldBe` matrix.endpointId
-    _ <- withDb pool (completeDelivery "worker-a" claim.deliveryId (DeliveryAccepted (Just (NativeEventId "native-confirm"))))
+    _ <- withDb pool (completeDelivery "worker-a" claim.deliveryId [] (DeliveryAccepted (Just (NativeEventId "native-confirm"))))
     withDb pool (confirmUnconfirmedDelivery claim.deliveryId (NativeEventId "native-confirm"))
       `shouldReturn` True
     withDb pool (listUnconfirmedDeliveries PlatformMatrix 10) `shouldReturn` []
@@ -256,7 +284,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     now <- getCurrentTime
     original <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-relay" "same body"))
     [claim] <- withDb pool (claimDeliveries "worker-a" 10 30)
-    _ <- withDb pool (completeDelivery "worker-a" claim.deliveryId (DeliveryUnknown "response lost" now))
+    _ <- withDb pool (completeDelivery "worker-a" claim.deliveryId [] (DeliveryUnknown "response lost" now))
     let echo =
           (inbound qq.endpointId (addUTCTime 1 now) "qq-echo" "same body")
             { senderNativeId = NativeUserId "9"
@@ -277,8 +305,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               transcriptKind = "chat",
               sourceCompatibilityMessageId = Nothing,
               canonicalBody = Body [NText "hello both sides"],
-              renderedText = "hello both sides",
-              compatibilitySegments = Array mempty,
               replyToCompatibilityMessageId = Nothing
             }
     queued.deliveriesCreated `shouldBe` 2
@@ -329,8 +355,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               transcriptKind = "chat",
               sourceCompatibilityMessageId = Nothing,
               canonicalBody = Body [NText "reply"],
-              renderedText = "reply",
-              compatibilitySegments = Array mempty,
               replyToCompatibilityMessageId = Just targetMessage
             }
     relations <- withConn pool $ \conn ->
@@ -340,7 +364,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         (Only queued.canonicalMessageId.unCanonicalMessageId)
     (relations :: [Only Int64]) `shouldBe` [Only (resultId target).unCanonicalMessageId]
     claims <- withDb pool (claimDeliveries "native-reply" 10 30)
-    fmap (.replyNativeEventId) claims `shouldBe` [Just (NativeEventId "matrix-target")]
+    fmap (\delivery -> delivery.replyContext >>= (.nativeId)) claims
+      `shouldBe` [Just (NativeEventId "matrix-target")]
 
   it "keeps semantic mentions when a mirror has a QQ endpoint" $ do
     (qq, matrix) <- mirrorPair pool
@@ -373,8 +398,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               transcriptKind = "command",
               sourceCompatibilityMessageId = Just sourceMessage,
               canonicalBody = Body [NText "status"],
-              renderedText = "status",
-              compatibilitySegments = Array mempty,
               replyToCompatibilityMessageId = Nothing
             }
     queued.deliveriesCreated `shouldBe` 1
@@ -835,11 +858,10 @@ mirrorPair pool = withDb pool $ do
         }
   pure (qq, matrix)
 
-textCapabilities :: PlatformCapabilities
+textCapabilities :: OutboundCaps
 textCapabilities =
-  noCapabilities
-    { canSendText = True,
-      canReply = True,
+  textOnlyCaps
+    { reply = TierNative,
       maxTextBytes = Just 32768
     }
 
