@@ -11,7 +11,7 @@ spec = describe "deployed self-source snapshot" $ do
     truncated `shouldBe` False
     paths `shouldContain` ["src/Max/Historian.hs"]
     paths `shouldContain` ["test/Max/HistorianSpec.hs"]
-    paths `shouldContain` ["migrations/048_context_emergency_reader.sql"]
+    paths `shouldContain` ["migrations/000_baseline.sql"]
     paths `shouldContain` ["docs/adr/001-context-memory-foundations.md"]
     paths `shouldContain` ["docs/adr/002-partial-plans-adaptive-elaboration.md"]
     paths `shouldContain` [".env.example"]

@@ -445,24 +445,18 @@ test-suite max-test-db
     other-modules:
         Helpers
         Max.AdminTimelineSpec
-        Max.CanonicalPlatformMigrationSpec
         Max.DB.ConversationCursorSpec
-        Max.DB.EmbeddingMigrationSpec
         Max.DB.FilesSpec
         Max.DB.FetchQueueSpec
         Max.DB.SessionSpec
         Max.DB.TransactionSpec
-        Max.ContextMaterializationMigrationSpec
-        Max.UnboundedContextMigrationSpec
         Max.ContextMaterializationSpec
         Max.ContextAdminSpec
         Max.EpisodeStoreSpec
-        Max.HistorianMigrationSpec
         Max.HistorianSpec
         Max.DB.HistorySpec
         Max.DB.MediaSpec
         Max.MemoryStoreSpec
-        Max.MemoryStoreMigrationSpec
         Max.MaintenanceLeaseSpec
         Max.DB.ReminderSpec
         Max.PromptIntegrationSpec

@@ -3,11 +3,10 @@ module Max.PlatformStoreSpec (spec) where
 import Control.Concurrent.Async (concurrently)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Int (Int64)
-import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
-import Database.PostgreSQL.Simple (Only (..), execute, execute_, query, withTransaction)
+import Database.PostgreSQL.Simple (Only (..), execute, query)
 import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool, withConn)
 import Max.IR
@@ -16,8 +15,6 @@ import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
 import Max.Platform.Store qualified as PlatformStore
 import Max.Platform.Types
-import OneBot.Segment (ImageSegInfo (..), Segment (..), parseCard)
-import OneBot.Types (UserId (..))
 import Test.Hspec
 
 spec :: DbPool -> Spec
@@ -640,57 +637,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         persisted `shouldNotSatisfy` T.any (== '\NUL')
       _ -> expectationFailure "missing sanitized canonical event"
 
-  it "removes Mac attachment paths from existing iMessage raw provenance" $ do
-    endpoint <-
-      withDb pool $
-        ensureConfiguredEndpoint
-          PlatformIMessage
-          (NativeAccountId "mac-account")
-          (NativeConversationId "iMessage;+;chat-test")
-          ConversationGroup
-          EndpointStandalone
-          Nothing
-          textCapabilities
-    now <- getCurrentTime
-    let envelope =
-          (inbound endpoint.endpointId now "attachment-path" "photo")
-            { rawPayload =
-                Just
-                  ( object
-                      [ "attachments"
-                          .= [ object
-                                 [ "path" .= ("/Users/max/Library/Messages/old.jpg" :: Text),
-                                   "original_path" .= ("/Users/max/Library/Messages/photo.jpg" :: Text),
-                                   "filename" .= ("~/Library/Messages/photo.jpg" :: Text),
-                                   "transfer_name" .= ("photo.jpg" :: Text),
-                                   "mime_type" .= ("image/jpeg" :: Text)
-                                 ]
-                             ]
-                      ]
-                  )
-            }
-    _ <- withDb pool (ingestEnvelope defaultIngestOptions envelope)
-    withConn pool $ \conn -> withTransaction conn $ do
-      migration <- readFile "migrations/052_imessage_raw_attachment_paths.sql"
-      _ <- execute_ conn (fromString migration)
-      payloads <-
-        query
-          conn
-          "SELECT raw_payload FROM platform_events WHERE endpoint_id = ? AND native_event_id = 'attachment-path'"
-          (Only endpoint.endpointId.unEndpointId)
-      (payloads :: [Only Value])
-        `shouldBe` [ Only
-                       ( object
-                           [ "attachments"
-                               .= [ object
-                                      [ "transfer_name" .= ("photo.jpg" :: Text),
-                                        "mime_type" .= ("image/jpeg" :: Text)
-                                      ]
-                                  ]
-                           ]
-                       )
-                   ]
-
   it "repairs blank QQ image projections and recreates their fetch jobs" $ do
     endpoint <-
       withDb pool $
@@ -832,139 +778,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         )
     (rows :: [(Maybe Text, Maybe Text, Text)])
       `shouldBe` [(Just "张三", Just "张三", "张三")]
-
-  it "lifts v1 canonical arrays into v2 bodies from QQ segments (055 replay)" $ do
-    endpoint <-
-      withDb pool $
-        ensureLegacyEndpoint
-          PlatformQQ
-          (NativeAccountId "9")
-          (NativeConversationId "42")
-          ConversationGroup
-          42
-          textCapabilities
-    now <- getCurrentTime
-    -- The mentioned user must already own an identity: 055 resolves
-    -- mentions through the origin endpoint but never invents principals.
-    _ <-
-      withDb pool $
-        ingestEnvelope
-          defaultIngestOptions
-          ( (inbound endpoint.endpointId now "qq-mentioned-user" "hi")
-              { senderNativeId = NativeUserId "2291939848",
-                senderDisplayName = Just "张三"
-              }
-          )
-    target <-
-      withDb pool $
-        ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "qq-v1-lift" "placeholder")
-    collapsed <-
-      withDb pool $
-        ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "qq-v1-collapsed" "placeholder")
-    let cardRaw =
-          "{\"app\":\"com.tencent.miniapp_01\",\"meta\":{\"detail_1\":{\"title\":\"哔哩哔哩\",\"desc\":\"一个视频\",\"qqdocurl\":\"https://b23.tv/x\",\"tag\":\"哔哩哔哩\"}}}"
-        card = maybe (error "card fixture must parse") id (parseCard cardRaw)
-        cid = (resultId target).unCanonicalMessageId
-        collapsedCid = (resultId collapsed).unCanonicalMessageId
-        v1Content =
-          toJSON
-            [ object ["type" .= ("text" :: Text), "text" .= ("看" :: Text)],
-              object ["type" .= ("mention" :: Text), "native_user_id" .= ("2291939848" :: Text)],
-              object
-                [ "type" .= ("media" :: Text),
-                  "source"
-                    .= object
-                      [ "kind" .= ("remote" :: Text),
-                        "url" .= ("https://qq.example/s.jpg" :: Text)
-                      ],
-                  "caption" .= ("[sticker]" :: Text)
-                ],
-              -- This is the only place the old production pipeline kept the
-              -- face name; Segment.ToJSON intentionally omitted it.
-              object ["type" .= ("text" :: Text), "text" .= ("惊讶" :: Text)],
-              object ["type" .= ("unsupported" :: Text), "description" .= ("qq:record" :: Text)],
-              object
-                [ "type" .= ("text" :: Text),
-                  "text" .= ("哔哩哔哩 · 哔哩哔哩 · 一个视频 · https://b23.tv/x" :: Text)
-                ]
-            ]
-        v1Segments =
-          toJSON
-            [ SegText "看",
-              SegAt (UserId 2291939848),
-              SegImage (ImageSegInfo (Just "https://qq.example/s.jpg") (Just 1) (Just "")),
-              SegFace 5 (Just "惊讶"),
-              SegOther "record" (object ["file" .= ("voice.amr" :: Text)]),
-              SegCard card
-            ]
-        collapsedContent =
-          toJSON [object ["type" .= ("text" :: Text), "text" .= ("temporary flattened projection" :: Text)]]
-        collapsedSegments =
-          toJSON
-            [ SegText "看",
-              SegFace 5 (Just "惊讶"),
-              SegImage (ImageSegInfo (Just "https://qq.example/s.jpg") (Just 1) (Just "")),
-              SegOther "forward" (object ["id" .= ("legacy-forward" :: Text)])
-            ]
-    withConn pool $ \conn -> withTransaction conn $ do
-      _ <- execute_ conn "SAVEPOINT canonical_v1_rehearsal"
-      _ <- execute_ conn "ALTER TABLE messages DROP CONSTRAINT messages_canonical_content_v2_check"
-      _ <-
-        execute
-          conn
-          "UPDATE messages SET canonical_content = ?::jsonb, segments = ?::jsonb, \
-          \                    message_origin = 'legacy' \
-          \ WHERE canonical_message_id = ?"
-          (v1Content, v1Segments, cid)
-      _ <-
-        execute
-          conn
-          "UPDATE messages SET canonical_content = ?::jsonb, segments = ?::jsonb, \
-          \                    message_origin = 'legacy' \
-          \ WHERE canonical_message_id = ?"
-          (collapsedContent, collapsedSegments, collapsedCid)
-      migration <- readFile "migrations/055_canonical_content_v2.sql"
-      _ <- execute_ conn (fromString migration)
-      rows <-
-        query
-          conn
-          "SELECT canonical_content->>'v', \
-          \       jsonb_array_length(canonical_content->'nodes'), \
-          \       canonical_content->'nodes'->1->>'type', \
-          \       canonical_content->'nodes'->1->>'display', \
-          \       (canonical_content->'nodes'->1->>'identity') IS NOT NULL, \
-          \       canonical_content->'nodes'->2->>'kind', \
-          \       canonical_content->'nodes'->2->>'source', \
-          \       canonical_content->'nodes'->3->>'native_id', \
-          \       canonical_content->'nodes'->3->>'name', \
-          \       canonical_content->'nodes'->4->>'source', \
-          \       canonical_content->'nodes'->5->>'title' \
-          \ FROM messages WHERE canonical_message_id = ?"
-          (Only cid)
-      (rows :: [(Text, Int, Text, Text, Bool, Text, Text, Text, Text, Text, Text)])
-        `shouldBe` [ ( "2",
-                       6,
-                       "mention",
-                       "张三",
-                       True,
-                       "sticker",
-                       "https://qq.example/s.jpg",
-                       "5",
-                       "惊讶",
-                       "qq:record",
-                       "哔哩哔哩 · 哔哩哔哩 · 一个视频 · https://b23.tv/x"
-                     )
-                   ]
-      collapsedRows <-
-        query
-          conn
-          "SELECT jsonb_path_query_array(canonical_content, '$.nodes[*].type') \
-          \ FROM messages WHERE canonical_message_id = ?"
-          (Only collapsedCid)
-      (collapsedRows :: [Only Value])
-        `shouldBe` [Only (toJSON (["text", "emote", "media", "forward"] :: [Text]))]
-      _ <- execute_ conn "ROLLBACK TO SAVEPOINT canonical_v1_rehearsal"
-      pure ()
 
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do

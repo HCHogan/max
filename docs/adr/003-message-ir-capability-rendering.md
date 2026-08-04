@@ -1,6 +1,6 @@
 # ADR 003: Message IR and Capability-Tiered Rendering
 
-- Status: Accepted
+- Status: Accepted / Implemented
 - Date: 2026-08-04
 
 ## Context

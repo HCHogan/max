@@ -17,14 +17,11 @@ module Main (main) where
 import Control.Exception (bracket)
 import Data.Text qualified as T
 import Helpers (truncateAll)
-import Max.CanonicalPlatformMigrationSpec qualified as CanonicalPlatformMigrationSpec
 import Max.AdminTimelineSpec qualified as AdminTimelineSpec
 import Max.ContextAdminSpec qualified as ContextAdminSpec
-import Max.ContextMaterializationMigrationSpec qualified as ContextMaterializationMigrationSpec
 import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
-import Max.DB.EmbeddingMigrationSpec qualified as EmbeddingMigrationSpec
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
@@ -34,15 +31,12 @@ import Max.DB.ReminderSpec qualified as ReminderSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
-import Max.HistorianMigrationSpec qualified as HistorianMigrationSpec
 import Max.HistorianSpec qualified as HistorianSpec
 import Max.MaintenanceLeaseSpec qualified as MaintenanceLeaseSpec
-import Max.MemoryStoreMigrationSpec qualified as MemoryStoreMigrationSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import Max.PlatformStoreSpec qualified as PlatformStoreSpec
 import Max.RecallSpec qualified as RecallSpec
-import Max.UnboundedContextMigrationSpec qualified as UnboundedContextMigrationSpec
 import System.Environment (lookupEnv)
 import System.Exit (exitSuccess)
 import Test.Hspec (hspec)
@@ -62,19 +56,13 @@ main = do
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
         AdminTimelineSpec.spec pool
-        CanonicalPlatformMigrationSpec.spec pool
-        EmbeddingMigrationSpec.spec pool
-        MemoryStoreMigrationSpec.spec pool
         MaintenanceLeaseSpec.spec pool
         SessionSpec.spec pool
         TransactionSpec.spec pool
         ConversationCursorSpec.spec pool
-        ContextMaterializationMigrationSpec.spec pool
-        UnboundedContextMigrationSpec.spec pool
         ContextMaterializationSpec.spec pool
         ContextAdminSpec.spec pool
         EpisodeStoreSpec.spec pool
-        HistorianMigrationSpec.spec pool
         HistorianSpec.spec pool
         HistorySpec.spec pool
         FilesSpec.spec pool

@@ -29,7 +29,7 @@ runMigrations pool dir = do
     then pure []
     else withConn pool $ \c -> do
       ensureTable c
-      done <- listApplied c
+      done <- reconcileSquash c =<< listApplied c
       files <- sort . filter (".sql" `isSuffixOf`) <$> listDirectory dir
       let unknown = Set.filter (`notElem` files) done
       unless (Set.null unknown) $
@@ -40,6 +40,30 @@ runMigrations pool dir = do
       let pending = filter (`Set.notMember` done) files
       for_ pending (applyOne c dir)
       pure pending
+
+-- | The pre-squash history was collapsed into 'squashBaseline'.  A database
+-- that already records the final pre-squash migration carries the exact
+-- schema the baseline describes, so it adopts the baseline as bookkeeping
+-- only — the file is never executed against it.  Fresh databases skip this
+-- path and execute the baseline normally.
+squashBaseline :: String
+squashBaseline = "000_baseline.sql"
+
+squashSentinel :: String
+squashSentinel = "064_admin_timeline_state_notifications.sql"
+
+reconcileSquash :: Connection -> Set.Set String -> IO (Set.Set String)
+reconcileSquash c done
+  | squashSentinel `Set.member` done && squashBaseline `Set.notMember` done =
+      withTransaction c $ do
+        _ <- execute_ c "DELETE FROM schema_migrations"
+        _ <-
+          execute
+            c
+            "INSERT INTO schema_migrations (filename) VALUES (?)"
+            (Only squashBaseline)
+        pure (Set.singleton squashBaseline)
+  | otherwise = pure done
 
 ensureTable :: Connection -> IO ()
 ensureTable c = do
