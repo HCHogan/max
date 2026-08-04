@@ -196,6 +196,26 @@ SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL;
 Investigate growing failed queues, parked media, unexpected suppressions, or
 non-monotone per-endpoint native events before ending the observation window.
 
+## Post-cutover repairs
+
+**2026-08-04 legacy emote/card projection repair.** The 055 backfill paired
+QQ segments with v1 content parts to recover face names and card titles.
+That pairing invariant held for `inbound` rows but not for 049-backfilled
+`legacy` rows, whose v1 content was one flattened text part: 448 emote
+nodes absorbed the entire old `rendered_text` as their name and 167 card
+titles did the same, and the gate reprojection burned nested tokens into
+`rendered_text`. Repaired in place with the service stopped (16 minutes):
+real face names were regex-recovered from the absorbed text itself
+(anchored `[face#N: …]` forms, bracket-wrapped names like `[偷感]`
+included; unrecoverable bare tokens dropped the name), card titles
+recovered their `[card: …]` line, and `rendered_text` was reprojected for
+exactly the 615 affected rows in SQL. Zero nested tokens and zero node
+pollution remained afterwards; the embedder re-embedded the touched rows
+by staleness detection. Pre-repair snapshot:
+`/var/tmp/max-pre-face-repair-20260804.dump` (463 MiB, keep until the
+observation window ends). The migration squash below removed the
+replayable 055, so the defect class cannot recur on fresh databases.
+
 ## Atomic rollback
 
 There is no binary-only rollback. If a release-blocking fault appears:
