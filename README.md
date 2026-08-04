@@ -24,9 +24,9 @@ window. The interesting decisions are written down in the ADRs.
 chat platforms
       │  adapters normalize losslessly; nothing degrades at ingest
       ▼
-canonical message ledger ────┬──▶ mirror deliveries: native where a platform
-(one phase-indexed IR,       │     can, readable text where it can't —
- PostgreSQL, durable outbox, │     never silently dropped
+canonical message ledger ────┬──▶ mirror deliveries: native where a 
+(one phase-indexed IR,       │     platform can, readable text where
+ PostgreSQL, durable outbox, │     it can't - never silently dropped
  echo reconciliation)        ├──▶ agent turns: LLM, tools, sandbox,
                              │     browser, files, media
                              └──▶ context projections: episodes,
