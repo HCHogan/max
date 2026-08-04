@@ -12,6 +12,7 @@ module Max.Platform.Delivery
     deliveryWorker,
     oneBotDeliveryTransport,
     loadDeliveryMedia,
+    mediaTextCaps,
     loweredText,
     oneBotNodes,
     oneBotReactionAction,
@@ -69,6 +70,10 @@ data DeliveryAttempt
   | AttemptOutcomeUnknown !Text
   | AttemptPermanentlyFailed !Text
   | AttemptSuppressed !Text
+  | -- | Native media preparation failed before the adapter emitted any
+    -- message. The worker may safely re-run the shared lowerer at text tier;
+    -- adapters never construct that fallback themselves.
+    AttemptMediaFallback !Text
   deriving stock (Eq, Show)
 
 data DeliveryOperation
@@ -225,16 +230,34 @@ deliveryWorker workerId transports = localDomain "delivery" loop
         Right _
           | null lowered.chunks -> pure (DeliverySuppressedAs "lowering produced no output", lowered.notes)
           | otherwise -> do
-              logInfo "delivery lowered" $
-                object
-                  [ "delivery_id" .= claim.deliveryId,
-                    "canonical_message_id" .= claim.canonicalMessageId,
-                    "platform" .= renderPlatform claim.platform,
-                    "chunks" .= map (digest . Body) lowered.chunks,
-                    "lower_notes" .= toJSON lowered.notes
-                  ]
               attempt <- runTransport transport claim (operation lowered)
-              pure (toCompletion claim.attemptCount now attempt, lowered.notes)
+              case attempt of
+                AttemptMediaFallback err -> do
+                  let relowered = lowerWith (mediaTextCaps claim.capabilities) []
+                      fallbackNote = LowerNote "media_emit" NoteFolded (Just err)
+                      fallbackNotes = relowered.notes <> [fallbackNote]
+                  if null relowered.chunks
+                    then pure (DeliverySuppressedAs "media fallback produced no output", fallbackNotes)
+                    else do
+                      logLowered claim "delivery lowered after media failure" relowered fallbackNotes
+                      secondAttempt <- runTransport transport claim (operation relowered)
+                      let completion' = case secondAttempt of
+                            AttemptMediaFallback err' -> DeliveryPermanentlyFailed ("media fallback loop: " <> err')
+                            other -> toCompletion claim.attemptCount now other
+                      pure (completion', fallbackNotes)
+                other -> do
+                  logLowered claim "delivery lowered" lowered lowered.notes
+                  pure (toCompletion claim.attemptCount now other, lowered.notes)
+
+    logLowered claim message lowered notes =
+      logInfo message $
+        object
+          [ "delivery_id" .= claim.deliveryId,
+            "canonical_message_id" .= claim.canonicalMessageId,
+            "platform" .= renderPlatform claim.platform,
+            "chunks" .= map (digest . Body) lowered.chunks,
+            "lower_notes" .= toJSON notes
+          ]
 
     runTransport transport claim operation =
       liftIO (trySyncIO (transport.deliver claim operation)) >>= \case
@@ -259,6 +282,24 @@ toCompletion attempts now = \case
   AttemptOutcomeUnknown err -> DeliveryUnknown err now
   AttemptPermanentlyFailed err -> DeliveryPermanentlyFailed err
   AttemptSuppressed reason -> DeliverySuppressedAs reason
+  AttemptMediaFallback err -> DeliveryPermanentlyFailed ("unhandled media fallback: " <> err)
+
+-- | Force every native media tier to its total text fallback while preserving
+-- an explicitly configured drop. Used only after an adapter proves that no
+-- message was emitted during native media preparation.
+mediaTextCaps :: OutboundCaps -> OutboundCaps
+mediaTextCaps caps =
+  caps
+    { image = textUnlessDrop caps.image,
+      sticker = textUnlessDrop caps.sticker,
+      video = textUnlessDrop caps.video,
+      audio = textUnlessDrop caps.audio,
+      file = textUnlessDrop caps.file,
+      maxNativeMedia = 0
+    }
+  where
+    textUnlessDrop TierDrop = TierDrop
+    textUnlessDrop _ = TierText
 
 completionName :: DeliveryCompletion -> Text
 completionName = \case

@@ -261,7 +261,8 @@ schemaChecks =
       \ ('057_capability_tiers.sql'), ('058_work_notifications.sql'), \
       \ ('059_meta_event_outbox.sql'), ('060_canonical_forward_children.sql'), \
       \ ('061_remove_legacy_message_writers.sql'), ('062_canonical_source_hash.sql'), \
-      \ ('063_admin_timeline_notifications.sql') \
+      \ ('063_admin_timeline_notifications.sql'), \
+      \ ('064_admin_timeline_state_notifications.sql') \
       \) required(filename) \
       \LEFT JOIN schema_migrations migration USING (filename) \
       \WHERE migration.filename IS NULL"

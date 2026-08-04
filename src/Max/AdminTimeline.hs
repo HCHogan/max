@@ -49,11 +49,15 @@ loadAdminTimeline ::
 loadAdminTimeline legacyConversation after requestedLimit = do
   conversations <-
     query
-      "SELECT conversation_id, title FROM conversations WHERE legacy_group_id = ?"
+      "SELECT conversation.conversation_id, conversation.title, \
+      \       COALESCE(revision.revision, 0) \
+      \ FROM conversations conversation \
+      \ LEFT JOIN admin_timeline_revisions revision USING (conversation_id) \
+      \ WHERE conversation.legacy_group_id = ?"
       (Only legacyConversation)
-  case conversations :: [(Int64, Maybe Text)] of
+  case conversations :: [(Int64, Maybe Text, Int64)] of
     [] -> pure Nothing
-    [(conversation, title)] -> do
+    [(conversation, title, timelineRevision)] -> do
       endpoints <- endpointValues conversation
       workSummary <- workSummaryValue conversation
       rows <- timelineRows conversation after (max 1 (min 200 requestedLimit))
@@ -63,6 +67,7 @@ loadAdminTimeline legacyConversation after requestedLimit = do
           [ "conversation_id" .= conversation,
             "compatibility_conversation_id" .= legacyConversation,
             "title" .= title,
+            "timeline_revision" .= timelineRevision,
             "endpoints" .= endpoints,
             "work_summary" .= workSummary,
             "items" .= items,
@@ -74,15 +79,16 @@ loadAdminTimeline legacyConversation after requestedLimit = do
     _ -> error "loadAdminTimeline: duplicate legacy conversation id"
 
 -- | Block for a bounded LISTEN/NOTIFY interval until the conversation's
--- durable sequence advances. The sequence query makes notifications hints:
--- commits in the subscribe/recheck window cannot be missed, and a timeout
--- returns an ordinary empty incremental page to the browser.
+-- durable message sequence or rendered-state revision advances. Both cursors
+-- are checked after subscribing, so notifications are latency hints and a
+-- commit between browser requests cannot be lost.
 waitAdminTimeline ::
   (WithConnection :> es, IOE :> es) =>
   Int64 ->
   Int64 ->
+  Int64 ->
   Eff es Bool
-waitAdminTimeline legacyConversation after = do
+waitAdminTimeline legacyConversation after afterRevision = do
   conversations <-
     query
       "SELECT conversation_id FROM conversations WHERE legacy_group_id = ?"
@@ -96,8 +102,10 @@ waitAdminTimeline legacyConversation after = do
       rows <-
         query
           "SELECT EXISTS (SELECT 1 FROM messages \
-          \ WHERE conversation_id = ? AND conversation_seq > ?)"
-          (conversation, after)
+          \               WHERE conversation_id = ? AND conversation_seq > ?) \
+          \    OR COALESCE((SELECT revision FROM admin_timeline_revisions \
+          \                 WHERE conversation_id = ?), 0) > ?"
+          (conversation, after, conversation, afterRevision)
       case rows :: [Only Bool] of
         [Only ready] -> pure ready
         _ -> error "waitAdminTimeline: sequence check returned an unexpected shape"

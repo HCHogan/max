@@ -28,11 +28,11 @@ not production-window sizing evidence:
 
 | Operation | Result | Wall time |
 | --- | --- | ---: |
-| custom-format snapshot | success | 0.079 s |
-| restore verification | success | 0.058 s |
-| migrations 031–062 + projection + release gate | success | 0.437 s |
-| rollback restore; schema returned to migration 030 | success | 0.057 s |
-| fresh empty database migrations 001–063 + release gate | success | 0.40 s |
+| custom-format snapshot | success | 0.04 s |
+| restore verification | success | 0.05 s |
+| migrations 031–064 + projection + release gate | success | 0.44 s |
+| rollback restore; schema returned to migration 030 | success | 0.05 s |
+| fresh empty database migrations 001–064 + release gate | success | 0.49 s |
 
 Do not infer a maintenance-window budget from these empty-database numbers.
 

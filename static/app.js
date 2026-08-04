@@ -41,6 +41,7 @@ function admin() {
       work_summary: {},
       items: [],
       latest_conversation_seq: null,
+      timeline_revision: 0,
     },
     timelineMedia: {},
     timelineAbort: null,
@@ -210,6 +211,7 @@ function admin() {
           endpoints: page.endpoints,
           work_summary: page.work_summary,
           latest_conversation_seq: page.latest_conversation_seq,
+          timeline_revision: page.timeline_revision,
           loaded: true,
         });
       } else {
@@ -237,22 +239,32 @@ function admin() {
     async tailTimeline(group, controller) {
       while (this.tab === 'timeline' && this.timeline.group === group && !controller.signal.aborted) {
         const after = this.timeline.latest_conversation_seq == null ? 0 : this.timeline.latest_conversation_seq;
-        const query = new URLSearchParams({ after: String(after), limit: '200' });
+        const query = new URLSearchParams({
+          after: String(after),
+          revision: String(this.timeline.timeline_revision || 0),
+          limit: '200',
+        });
         try {
           const page = await this.api(
             '/platforms/timeline/' + encodeURIComponent(group) + '/wait?' + query.toString(),
             { signal: controller.signal }
           );
           if (controller.signal.aborted || this.tab !== 'timeline' || this.timeline.group !== group) return;
-          if (page.items.length) this.timeline.items.push(...page.items);
-          Object.assign(this.timeline, {
-            conversation_id: page.conversation_id,
-            title: page.title,
-            endpoints: page.endpoints,
-            work_summary: page.work_summary,
-            latest_conversation_seq: page.latest_conversation_seq,
-            loaded: true,
-          });
+          if (page.replace) {
+            this.releaseTimelineMedia();
+            Object.assign(this.timeline, page, { group, loaded: true });
+          } else {
+            if (page.items.length) this.timeline.items.push(...page.items);
+            Object.assign(this.timeline, {
+              conversation_id: page.conversation_id,
+              title: page.title,
+              endpoints: page.endpoints,
+              work_summary: page.work_summary,
+              latest_conversation_seq: page.latest_conversation_seq,
+              timeline_revision: page.timeline_revision,
+              loaded: true,
+            });
+          }
           await this.loadTimelineMedia(page.items);
         } catch (e) {
           if (controller.signal.aborted || e.name === 'AbortError' || e.message === 'unauthorized') return;

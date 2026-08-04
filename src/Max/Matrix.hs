@@ -293,24 +293,32 @@ matrixDeliveryTransport runtime cfg =
         DeliverRedaction target -> sendRedaction claim "redact" target
     }
   where
-    sendChunks claim lowered =
-      go 0 Nothing lowered.chunks
+    sendChunks claim lowered = do
+      prepareAll (0 :: Int) lowered.chunks >>= \case
+        Left (MatrixContractFailure err) -> pure (AttemptPermanentlyFailed err)
+        Left (MatrixMediaFailure err) -> pure (AttemptMediaFallback err)
+        Right payloads -> sendAll 0 Nothing payloads
       where
-        go _ native [] = pure (AttemptConfirmed native)
-        go chunkIndex native (chunk : rest) =
+        prepareAll _ [] = pure (Right [])
+        prepareAll chunkIndex (chunk : rest) =
           matrixChunkPayload runtime cfg (if chunkIndex == 0 then lowered.replyNative else Nothing) chunk >>= \case
-            Left (MatrixContractFailure err) -> pure (AttemptPermanentlyFailed err)
-            Left (MatrixMediaFailure err) -> pure (AttemptRetryable err)
-            Right payload ->
-              sendMatrixDelivery runtime cfg claim chunkIndex payload >>= \case
-                Left err -> pure (AttemptRetryable err)
-                Right eventId -> go (chunkIndex + 1) (native <|> Just eventId) rest
+            Left err -> pure (Left err)
+            Right payload -> fmap (payload :) <$> prepareAll (chunkIndex + 1) rest
+
+        sendAll _ native [] = pure (AttemptConfirmed native)
+        sendAll chunkIndex native (payload : rest) =
+          sendMatrixDelivery runtime cfg claim chunkIndex payload >>= \case
+            Left err ->
+              pure $ case native of
+                Nothing -> AttemptRetryable err
+                Just _ -> AttemptOutcomeUnknown err
+            Right eventId -> sendAll (chunkIndex + 1) (native <|> Just eventId) rest
 
     sendEdit claim target lowered = case lowered.chunks of
       [chunk] ->
         matrixChunkPayload runtime cfg Nothing chunk >>= \case
           Left (MatrixContractFailure err) -> pure (AttemptPermanentlyFailed err)
-          Left (MatrixMediaFailure err) -> pure (AttemptRetryable err)
+          Left (MatrixMediaFailure err) -> pure (AttemptMediaFallback err)
           Right content ->
             sendMatrixEvent runtime cfg claim "edit" "m.room.message" (matrixEditPayload target content) >>= \case
               Left err -> pure (AttemptRetryable err)
@@ -604,11 +612,12 @@ normalizeMatrixContent eventType eventObject contentValue = case eventType of
   "m.room.message" ->
     let relationInfo = relationFrom contentValue
         replacement = any isReplacement relationInfo
+        semanticContent = if replacement then matrixReplacementContent contentValue else contentValue
         -- The plain-text reply-fallback quote belongs to the transport,
         -- not the message: reply provenance lives in the relation, so the
         -- quote must not reach prompts or mirrors as body text.
-        parts = messageParts (any isReplyRelation relationInfo) contentValue
-     in (if replacement then EventEdit else EventMessage, parts, relationInfo, mentionsFrom contentValue)
+        parts = messageParts (any isReplyRelation relationInfo) semanticContent
+     in (if replacement then EventEdit else EventMessage, parts, relationInfo, mentionsFrom semanticContent)
   "m.reaction" -> (EventReaction, [unsupportedNode "reaction"], relationFrom contentValue, [])
   "m.room.redaction" ->
     let target = case KeyMap.lookup "redacts" eventObject of
@@ -629,6 +638,15 @@ normalizeMatrixContent eventType eventObject contentValue = case eventType of
             description = label,
             raw = Nothing
           }
+
+-- Matrix edits carry a human-facing fallback in the outer @body@ and the
+-- authoritative replacement payload in @m.new_content@. Relations remain on
+-- the outer object, but canonical content and mentions must come from here.
+matrixReplacementContent :: Value -> Value
+matrixReplacementContent outer@(Object fields) = case KeyMap.lookup "m.new_content" fields of
+  Just replacement@(Object _) -> replacement
+  _ -> outer
+matrixReplacementContent outer = outer
 
 messageParts :: Bool -> Value -> [Node 'Ingest]
 messageParts stripReplyFallback value =
@@ -768,7 +786,7 @@ hydrateMatrixContent ::
   Eff es [Node 'Ingest]
 hydrateMatrixContent runtime cfg event = traverse hydrate event.content
   where
-    hydrate node@(NMedia (Just ref) meta)
+    hydrate (NMedia (Just ref) meta)
       | Just mxc <- mediaRefRemoteUrl ref,
         "mxc://" `T.isPrefixOf` mxc = do
           downloaded <- liftIO (fetchMatrixMedia runtime cfg mxc)
@@ -776,7 +794,7 @@ hydrateMatrixContent runtime cfg event = traverse hydrate event.content
             Left err -> do
               logAttention "Matrix media import failed; text remains durable" $
                 object ["event_id" .= event.eventId, "mxc" .= mxc, "error" .= err]
-              pure node
+              pure (NMedia Nothing meta)
             Right bytes -> do
               when (matrixMediaSizeDrift meta.sizeBytes (BS.length bytes)) $
                 logAttention "Matrix media size metadata drift; imported bounded response" $

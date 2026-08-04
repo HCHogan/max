@@ -62,8 +62,11 @@ notificationFallbackMicros = 30 * 1_000_000
 
 -- | Race-free live-tail wait for the admin ledger. The caller supplies the
 -- durable sequence recheck: subscribe first, recheck second, then wait only
--- when the requested conversation is still caught up. Notifications for
--- other conversations are ignored inside one bounded request lifetime.
+-- when the requested conversation is still caught up. A relevant notification
+-- means the rendered view changed even when conversation_seq did not (for
+-- example a delivery completed); @*@ denotes global backlog/capability state.
+-- Notifications for other conversations are ignored inside one bounded
+-- request lifetime.
 waitForTimeline ::
   (WithConnection :> es, IOE :> es) =>
   Int64 ->
@@ -84,13 +87,13 @@ waitForTimeline conversation advanced =
                   let expected = BSC.pack (show conversation)
                       waitRelevant = do
                         notification <- getNotification listener
-                        if notificationData notification == expected
+                        if notificationData notification `elem` [expected, "*"]
                           then pure ()
                           else waitRelevant
                   woke <- timeout timelineWaitMicros waitRelevant
                   case woke of
                     Nothing -> pure False
-                    Just () -> run advanced
+                    Just () -> pure True
           )
 
 timelineWaitMicros :: Int

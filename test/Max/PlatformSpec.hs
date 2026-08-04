@@ -9,7 +9,7 @@ import Max.IR.Prompt (promptText)
 import Max.Platform
 import Max.Platform.QQ (qqIngestBody)
 import Max.Platform.Types (Platform (..))
-import Max.Wechatpad (parseFrameIds, wechatpadCapabilities)
+import Max.Wechatpad (parseFrameIds, wechatInboundBody, wechatpadCapabilities)
 import OneBot.Action (Action (..))
 import OneBot.Segment
   ( FileSegInfo (..),
@@ -38,6 +38,23 @@ spec = do
             ]
         )
         `shouldBe` Just ("12345", 67890)
+
+    it "keeps non-text room events in canonical ingest instead of dropping them" $ do
+      wechatInboundBody "wxid_max" "Max" 3 "<img encrypted payload>"
+        `shouldBe` Body
+          [ NUnsupported
+              Unsupported
+                { source = "wechatpad:3",
+                  description = "微信图片消息",
+                  raw =
+                    Just
+                      ( object
+                          [ "msg_type" .= (3 :: Int),
+                            "content_preview" .= ("<img encrypted payload>" :: Text)
+                          ]
+                      )
+                }
+          ]
 
   describe "explicit platform backend registry" $ do
     it "selects only an exact declared platform" $ do

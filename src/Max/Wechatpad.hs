@@ -26,6 +26,7 @@ module Max.Wechatpad
     parseFrameIds,
     platformName,
     wechatpadCapabilities,
+    wechatInboundBody,
   )
 where
 
@@ -265,17 +266,17 @@ wechatpadWorker cfg = localDomain "wechatpad" $ do
         Just frame -> for_ (parseMaybe frameParser frame) (translate endpoints frame)
 
     translate endpoints frame wm
-      | wm.wmMsgType /= 1 = pure ()
       | not ("@chatroom" `T.isSuffixOf` wm.wmFrom) = pure ()
       | Nothing <- Map.lookup wm.wmFrom endpoints = pure ()
       | otherwise = do
-          let (senderWxid, body0) = splitSender wm.wmContent
+          let (parsedSender, body0) = splitSender wm.wmContent
+              senderWxid = if T.null parsedSender then wm.wmFrom else parsedSender
           -- The bot's own messages echo back on the sync stream.
           unless (senderWxid == cfg.wpSelfWxid) $ do
             received <- liftIO getCurrentTime
             let endpoint = endpoints Map.! wm.wmFrom
                 nativeEvent = if wm.wmNewMsgId == 0 then wm.wmMsgId else T.pack (show wm.wmNewMsgId)
-                content = wechatBody cfg.wpSelfWxid cfg.wpBotName body0
+                content = wechatInboundBody cfg.wpSelfWxid cfg.wpBotName wm.wmMsgType body0
                 options = defaultIngestOptions
                 envelope =
                   InboundEnvelope
@@ -338,6 +339,38 @@ wechatBody selfWxid botName = Body . mergeText . go
               <> [NMention (NativeUserId selfWxid) botName]
               <> go (fromMaybe (T.drop (T.length token) rest) (T.stripPrefix " " (T.drop (T.length token) rest)))
 
+-- | Preserve every room event even when this relay frame does not expose a
+-- stable native media reference. Known non-text message kinds become explicit
+-- unsupported nodes with a total human fallback and a bounded diagnostic
+-- fragment; they can be inspected and mirrored instead of disappearing.
+wechatInboundBody :: Text -> Text -> Int -> Text -> Body 'Ingest
+wechatInboundBody selfWxid botName msgType content
+  | msgType == 1 = wechatBody selfWxid botName content
+  | otherwise =
+      Body
+        [ NUnsupported
+            Unsupported
+              { source = "wechatpad:" <> T.pack (show msgType),
+                description = wechatMessageDescription msgType,
+                raw =
+                  Just
+                    ( object
+                        [ "msg_type" .= msgType,
+                          "content_preview" .= T.take 2048 content
+                        ]
+                    )
+              }
+        ]
+
+wechatMessageDescription :: Int -> Text
+wechatMessageDescription = \case
+  3 -> "微信图片消息"
+  34 -> "微信语音消息"
+  43 -> "微信视频消息"
+  47 -> "微信表情消息"
+  49 -> "微信分享或文件消息"
+  msgType -> "微信消息（类型 " <> T.pack (show msgType) <> "）"
+
 -- | push_content usually reads "昵称 : 内容" — harvest the nickname.
 pushNick :: Text -> Maybe Text
 pushNick pc = case T.breakOn " : " pc of
@@ -356,9 +389,8 @@ data WMsg = WMsg
     wmNewMsgId :: !Int64,
     -- | WeChat's own send timestamp (unix seconds).  We stamp
     -- @messages.received_at@ with our /ingest/ time, so this is the
-    -- only trace of when the sender actually sent it — logged rather
-    -- than stored, which is enough to spot delivery lag or a relay
-    -- whose clock has drifted.
+    -- authoritative trace of when the sender actually sent it; it becomes
+    -- the envelope's occurred_at while received_at records local ingest.
     wmCreateTime :: !Int64
   }
 

@@ -576,16 +576,20 @@ handle env profiles logBuf r params body = case r of
         (intParam "after")
         (clamp (1, 200) (fromMaybe 100 (intParam "limit")))
     pure (maybe notFound ok timeline)
-  RPlatformTimelineWait legacyConversation -> case intParam "after" of
-    Nothing -> pure (bad "expected ?after=<conversation_seq>")
-    Just after -> do
-      _ <- waitAdminTimeline legacyConversation after
+  RPlatformTimelineWait legacyConversation -> case (intParam "after", intParam "revision") of
+    (Nothing, _) -> pure (bad "expected ?after=<conversation_seq>")
+    (_, Nothing) -> pure (bad "expected ?revision=<timeline_revision>")
+    (Just after, Just revision) -> do
+      changed <- waitAdminTimeline legacyConversation after revision
       timeline <-
         loadAdminTimeline
           legacyConversation
-          (Just after)
+          (if changed then Nothing else Just after)
           (clamp (1, 200) (fromMaybe 200 (intParam "limit")))
-      pure (maybe notFound ok timeline)
+      pure . maybe notFound ok $
+        case timeline of
+          Just (Object fields) -> Just (Object (KM.insert "replace" (Bool changed) fields))
+          other -> other
   RBlob sha -> case blobRefFromSha256 sha of
     Nothing -> pure notFound
     Just ref ->

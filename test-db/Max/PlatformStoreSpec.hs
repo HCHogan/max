@@ -428,6 +428,32 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     redactionClaim.endpointId `shouldBe` matrix.endpointId
     redactionClaim.actionTarget `shouldBe` Just (NativeEventId "matrix-meta-target")
 
+  it "uses the total capability decoder for meta fan-out" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <-
+      withDb pool $
+        ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-meta-malformed-target" "before")
+    [targetCopy] <- withDb pool (claimDeliveries "meta-malformed-target" 10 30)
+    withDb pool
+      (completeDelivery "meta-malformed-target" targetCopy.deliveryId [] (DeliveryConfirmedAs (Just (NativeEventId "matrix-meta-malformed-target"))))
+      `shouldReturn` True
+    _ <- withConn pool $ \conn ->
+      execute
+        conn
+        "UPDATE conversation_endpoints SET capabilities = '\"malformed\"'::jsonb WHERE endpoint_id = ?"
+        (Only matrix.endpointId.unEndpointId)
+    let editEnvelope =
+          (inboundBody qq.endpointId (addUTCTime 1 now) "qq-malformed-edit" (Body [NText "after"]))
+            { eventKind = EventEdit,
+              relations = [Replaces (NativeEventId "qq-meta-malformed-target")]
+            }
+    edit <- withDb pool (ingestEnvelope defaultIngestOptions editEnvelope)
+    case edit of
+      Ingested fresh -> fresh.mirrorDeliveriesCreated `shouldBe` 0
+      other -> expectationFailure ("expected new edit: " <> show other)
+    withDb pool (claimDeliveries "meta-malformed-edit" 10 30) `shouldReturn` []
+
   it "publishes bot QQ reactions idempotently and reconciles their notice echo" $ do
     (qq, _) <- mirrorPair pool
     now <- getCurrentTime
@@ -473,6 +499,36 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     rows <- withConn pool $ \conn ->
       query conn "SELECT count(*) FROM messages" ()
     (rows :: [Only Int64]) `shouldBe` [Only 2]
+
+  it "quietly declines bot reactions when the sole decoder rejects endpoint capabilities" $ do
+    (qq, _) <- mirrorPair pool
+    now <- getCurrentTime
+    target <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions {createMirrorDeliveries = False}
+          (inbound qq.endpointId now "qq-malformed-reaction-target" "target")
+    [Only targetMessage] <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT message_id FROM messages WHERE canonical_message_id = ?"
+        (Only (resultId target).unCanonicalMessageId)
+    _ <- withConn pool $ \conn ->
+      execute
+        conn
+        "UPDATE conversation_endpoints SET capabilities = '\"malformed\"'::jsonb WHERE endpoint_id = ?"
+        (Only qq.endpointId.unEndpointId)
+    let draft =
+          ReactionDraft
+            { legacyConversationId = 42,
+              targetCompatibilityMessageId = targetMessage,
+              reactionKey = "212",
+              reactionAction = ReactionAdd,
+              requiredPlatform = Just PlatformQQ
+            }
+    withDb pool (enqueueReaction draft) `shouldReturn` Nothing
+    rows <- withConn pool $ \conn -> query conn "SELECT count(*) FROM messages" ()
+    (rows :: [Only Int64]) `shouldBe` [Only 1]
 
   it "keeps semantic mentions when a mirror has a QQ endpoint" $ do
     (qq, matrix) <- mirrorPair pool

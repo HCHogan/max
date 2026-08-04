@@ -124,7 +124,15 @@ spec = describe "Matrix adapter" $ do
             ("m.room.message" :: String)
             ( object
                 [ "msgtype" .= ("m.text" :: String),
-                  "body" .= ("fixed" :: String),
+                  "body" .= ("* stale fallback" :: String),
+                  "m.new_content"
+                    .= object
+                      [ "msgtype" .= ("m.text" :: String),
+                        "body" .= ("fixed Alice" :: String),
+                        "formatted_body"
+                          .= ("fixed <a href=\"https://matrix.to/#/@alice:test\">Alice</a>" :: String),
+                        "m.mentions" .= object ["user_ids" .= ["@alice:test" :: String]]
+                      ],
                   "m.relates_to"
                     .= object
                       [ "rel_type" .= ("m.replace" :: String),
@@ -167,6 +175,12 @@ spec = describe "Matrix adapter" $ do
             ]
     result <- parseMatrixSyncPage "!room:test" sync `shouldSatisfyRight` const True
     fmap (.eventKind) result.events `shouldBe` [EventEdit, EventReaction, EventRedaction]
+    case result.events of
+      editEvent : _ -> do
+        editEvent.content
+          `shouldBe` [NText "fixed ", NMention (NativeUserId "@alice:test") "Alice"]
+        editEvent.mentionedUsers `shouldBe` [NativeUserId "@alice:test"]
+      _ -> expectationFailure "expected edit event"
 
   it "never renders an access token through Show" $ do
     let cfg = MatrixConfig "https://matrix.test" "super-secret" "@max:test" "!room:test" (Just 42) 30000

@@ -44,6 +44,20 @@ spec = do
           loadDeliveryMedia caps body
         fmap snd resolved `shouldBe` [ResolvedBytes "blob-payload"]
 
+    it "re-lowers failed native media to text without reviving declared drops" $ do
+      let caps =
+            textOnlyCaps
+              { image = TierNative,
+                video = TierDrop,
+                file = TierNative,
+                maxNativeMedia = 3
+              }
+          fallback = mediaTextCaps caps
+      fallback.image `shouldBe` TierText
+      fallback.video `shouldBe` TierDrop
+      fallback.file `shouldBe` TierText
+      fallback.maxNativeMedia `shouldBe` 0
+
   describe "OneBot action emitter contract" $ do
     it "emits every structural node advertised by QQ capabilities" $ do
       let cardRaw =

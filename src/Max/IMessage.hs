@@ -416,29 +416,33 @@ iMessageDeliveryTransport runtime cfg =
         DeliverRedaction {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised redaction without an emitter")
     }
   where
-    sendChunks _claim lowered = go (0 :: Int) False Nothing lowered.chunks
+    sendChunks _claim lowered = do
+      prepareAll (0 :: Int) lowered.chunks >>= \case
+        Left (IMessageContractFailure err) -> pure (AttemptPermanentlyFailed err)
+        Left (IMessageMediaFailure err) -> pure (AttemptMediaFallback err)
+        Right prepared -> sendAll False Nothing prepared
       where
-        go _ _ firstNative [] = pure (AttemptAccepted firstNative)
-        go index sentAny firstNative (chunk : rest) =
+        prepareAll _ [] = pure (Right [])
+        prepareAll index (chunk : rest) =
           prepareChunk (if index == 0 then lowered.replyNative else Nothing) chunk >>= \case
-            Left (IMessageContractFailure err) -> pure (AttemptPermanentlyFailed err)
-            Left (IMessageMediaFailure err) ->
+            Left err -> pure (Left err)
+            Right prepared -> fmap (prepared :) <$> prepareAll (index + 1) rest
+
+        sendAll _ firstNative [] = pure (AttemptAccepted firstNative)
+        sendAll sentAny firstNative ((replyTarget, params) : rest) =
+          bridgeRpc runtime cfg "send" params >>= \case
+            Left (BridgeBeforeEffect err) ->
               pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRetryable err
-            Right (replyTarget, params) ->
-              bridgeRpc runtime cfg "send" params >>= \case
-                Left (BridgeBeforeEffect err) ->
-                  pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRetryable err
-                Left (BridgeRejected err) ->
-                  pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRetryable err
-                Left (BridgeOutcomeUnknown err) -> pure (AttemptOutcomeUnknown err)
-                Right value -> case parseEither sendResultParser value of
-                  Left err -> pure (AttemptOutcomeUnknown ("imsg send response: " <> T.pack err))
-                  Right guid ->
-                    go
-                      (index + 1)
-                      True
-                      (firstNative <|> iMessageAuthoritativeSendGuid replyTarget guid)
-                      rest
+            Left (BridgeRejected err) ->
+              pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRetryable err
+            Left (BridgeOutcomeUnknown err) -> pure (AttemptOutcomeUnknown err)
+            Right value -> case parseEither sendResultParser value of
+              Left err -> pure (AttemptOutcomeUnknown ("imsg send response: " <> T.pack err))
+              Right guid ->
+                sendAll
+                  True
+                  (firstNative <|> iMessageAuthoritativeSendGuid replyTarget guid)
+                  rest
 
     prepareChunk replyTarget chunk = case loweredText chunk of
       Left err -> pure (Left (IMessageContractFailure err))
@@ -693,10 +697,14 @@ messageContent runtime cfg message = do
     )
   where
     unavailableAttachment attachment =
-      NUnsupported
-        Unsupported
-          { source = "imessage:attachment-unavailable",
-            description = fromMaybe "attachment unavailable" attachment.transferName,
+      NMedia
+        Nothing
+        MediaMeta
+          { kind = mediaKindFromMime attachment.mimeType,
+            mime = attachment.mimeType,
+            sizeBytes = attachment.byteSize,
+            name = attachment.transferName,
+            description = attachment.transferName,
             raw = Nothing
           }
 

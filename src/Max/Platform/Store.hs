@@ -1069,15 +1069,15 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
         \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
         (cid, cid, originEndpoint.unEndpointId)
 
-    insertMetaMirrors cid originEndpoint relationKind capabilityKey =
-      execute
-        "INSERT INTO message_deliveries \
-        \ (canonical_message_id, endpoint_id, status, idempotency_key) \
-        \ SELECT ?, target.endpoint_id, 'pending', \
-        \        'relay:' || ?::text || ':' || target.endpoint_id::text \
-        \ FROM conversation_endpoints origin \
-        \ JOIN conversation_endpoints target \
-        \   ON target.conversation_id = origin.conversation_id \
+    insertMetaMirrors cid originEndpoint relationKind capabilityKey = do
+      candidates <-
+        query
+          "SELECT target.endpoint_id, \
+          \       CASE WHEN target.capabilities = '{}'::jsonb \
+          \            THEN target_account.capabilities ELSE target.capabilities END \
+          \ FROM conversation_endpoints origin \
+          \ JOIN conversation_endpoints target \
+          \   ON target.conversation_id = origin.conversation_id \
         \  AND target.endpoint_id <> origin.endpoint_id \
         \ JOIN platform_accounts target_account \
         \   ON target_account.platform_account_id = target.platform_account_id \
@@ -1085,24 +1085,35 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
         \   ON relation.canonical_message_id = ? \
         \  AND relation.relation_kind = ? \
         \  AND relation.target_canonical_message_id IS NOT NULL \
-        \ WHERE origin.endpoint_id = ? \
-        \   AND origin.endpoint_mode = 'mirror' \
-        \   AND target.endpoint_mode = 'mirror' \
-        \   AND target.enabled AND target_account.enabled \
-        \   AND COALESCE(((CASE WHEN target.capabilities = '{}'::jsonb \
-        \                        THEN target_account.capabilities ELSE target.capabilities END) \
-        \                 ->> ?)::boolean, false) \
-        \   AND ( \
-        \     EXISTS (SELECT 1 FROM platform_events copy \
+          \ WHERE origin.endpoint_id = ? \
+          \   AND origin.endpoint_mode = 'mirror' \
+          \   AND target.endpoint_mode = 'mirror' \
+          \   AND target.enabled AND target_account.enabled \
+          \   AND ( \
+          \     EXISTS (SELECT 1 FROM platform_events copy \
         \             WHERE copy.endpoint_id = target.endpoint_id \
         \               AND copy.canonical_message_id = relation.target_canonical_message_id) \
         \     OR EXISTS (SELECT 1 FROM message_deliveries copy \
         \                WHERE copy.endpoint_id = target.endpoint_id \
-        \                  AND copy.canonical_message_id = relation.target_canonical_message_id \
-        \                  AND copy.native_event_id IS NOT NULL) \
-        \   ) \
+          \                  AND copy.canonical_message_id = relation.target_canonical_message_id \
+          \                  AND copy.native_event_id IS NOT NULL) \
+          \   ) \
+          \ ORDER BY target.endpoint_id"
+          (cid, relationKind, originEndpoint.unEndpointId)
+      let endpointIds =
+            PGArray
+              [ endpoint
+              | (endpoint, manifest) <- (candidates :: [(Int64, Value)]),
+                metaCapabilityEnabled capabilityKey (outboundCapsFromValue manifest)
+              ]
+      execute
+        "INSERT INTO message_deliveries \
+        \ (canonical_message_id, endpoint_id, status, idempotency_key) \
+        \ SELECT ?, target.endpoint_id, 'pending', \
+        \        'relay:' || ?::text || ':' || target.endpoint_id::text \
+        \ FROM unnest(?::bigint[]) AS target(endpoint_id) \
         \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
-        (cid, cid, cid, relationKind, originEndpoint.unEndpointId, capabilityKey)
+        (cid, cid, endpointIds)
 
 -- | Publish one bot-authored semantic message and every endpoint copy in one
 -- transaction.  No network operation precedes this commit, so a crash can
@@ -1432,17 +1443,15 @@ enqueueReaction draft = withTransaction $ do
     _ -> error "enqueueReaction: duplicate compatibility target invariant violated"
   where
     publish targetCanonical conversation sourceKey requiredName = do
-      endpointRows <-
+      endpointCandidates <-
         query
-          "SELECT e.endpoint_id, e.platform_account_id, a.platform, a.native_account_id, c.legacy_group_id \
+          "SELECT e.endpoint_id, e.platform_account_id, a.platform, a.native_account_id, c.legacy_group_id, \
+          \       CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END \
           \ FROM conversation_endpoints e \
           \ JOIN platform_accounts a USING (platform_account_id) \
           \ JOIN conversations c USING (conversation_id) \
           \ WHERE e.conversation_id = ? AND e.enabled AND a.enabled \
           \   AND (?::text IS NULL OR a.platform = ?) \
-          \   AND COALESCE(((CASE WHEN e.capabilities = '{}'::jsonb \
-          \                        THEN a.capabilities ELSE e.capabilities END) \
-          \                 ->> 'reaction')::boolean, false) \
           \   AND ( \
           \     EXISTS (SELECT 1 FROM platform_events copy \
           \             WHERE copy.endpoint_id = e.endpoint_id \
@@ -1454,7 +1463,13 @@ enqueueReaction draft = withTransaction $ do
           \   ) \
           \ ORDER BY CASE a.platform WHEN 'qq' THEN 0 ELSE 1 END, e.endpoint_id"
           (conversation, requiredName, requiredName, targetCanonical, targetCanonical)
-      case endpointRows :: [(Int64, Int64, Text, Text, Maybe Int64)] of
+      let endpointRows =
+            [ (endpoint, account, platformName, accountNative, legacyGroup)
+            | (endpoint, account, platformName, accountNative, legacyGroup, manifest) <-
+                (endpointCandidates :: [(Int64, Int64, Text, Text, Maybe Int64, Value)]),
+              (outboundCapsFromValue manifest).reaction
+            ]
+      case endpointRows of
         [] -> pure Nothing
         rows@((originEndpoint, account, platformName, accountNative, legacyGroup) : _) -> do
           let endpointRow =
@@ -1527,6 +1542,13 @@ enqueueReaction draft = withTransaction $ do
                     deliveriesCreated = deliveryCount
                   }
             )
+
+metaCapabilityEnabled :: Text -> OutboundCaps -> Bool
+metaCapabilityEnabled capability = case capability of
+  "edit" -> (.edit)
+  "reaction" -> (.reaction)
+  "redact" -> (.redact)
+  _ -> const False
 
 readIngestCursor ::
   (WithConnection :> es, IOE :> es) =>

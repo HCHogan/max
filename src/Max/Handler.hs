@@ -235,8 +235,11 @@ handleEvents q fetchSig mIntent = loop
         EvHeartbeat -> pure ()
         EvLifecycle sub ->
           logInfo "lifecycle" $ object ["sub_type" .= sub]
-        EvRaw v ->
-          logTrace "unhandled event" v
+        EvRaw _ ->
+          -- Unknown OneBot events may contain an entire user-authored payload.
+          -- Keep the diagnostic marker, but leave the durable raw copy to the
+          -- canonical ingest paths that understand the event shape.
+          logTrace "unhandled event" $ object []
         EvGroupMessage source raw gm -> do
           -- Move the quiet boundary before the row becomes visible to the
           -- historian's DB scan.  Otherwise a due scan could race persistence
