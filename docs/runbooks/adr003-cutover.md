@@ -36,6 +36,41 @@ not production-window sizing evidence:
 
 Do not infer a maintenance-window budget from these empty-database numbers.
 
+### Recent-production snapshot rehearsal — 2026-08-04
+
+Candidate revision `a59c12a` was rehearsed against a stopped, consistent
+snapshot of the `h610` production database at 2026-08-04 22:00:03 HKT. The
+source was PostgreSQL 17.10 at migration 054 with 74,987 messages and a
+database size of 941,954,739 bytes (898 MiB). The custom archive was
+421,081,690 bytes with SHA-256
+`73367dc40aea27a119bd9e2efd8bbf66bbb66512d2ca323cc825a94ea70adc51`.
+The deployed rollback closure was
+`/nix/store/vbqjya9ihpjdpc2nf1bdk128ksa63l6a-max-0.13.0`.
+
+| Operation | Result | Wall time |
+| --- | --- | ---: |
+| graceful stop and drain | success, zero in-flight dispatches | 1 s |
+| custom-format production snapshot | success | about 50 s |
+| isolated verification restore | all seven ledger/queue counts matched | 16 s |
+| migrations 055–064 + projection + release gate | success; 8,907 projections regenerated | 29.375 s |
+| sampled blocking lock wait during gate | none observed at 50 ms sampling | 0 ms |
+| atomic rollback replacement and restore | migration 054, all counts and legacy writers restored | 15.815 s |
+
+The gate converted one abandoned eight-hour-old `sending` Matrix lease to
+`outcome_unknown` without retrying it; that production-derived failure led to
+the runtime recovery and partial-index guard in revision `a59c12a`. After the
+upgrade, all 74,987 messages decoded as v2 and the ledger contained 74,895
+platform events, 6,383 semantic relations, 75,158 deliveries, and 74,987
+dispatches. The rollback copy returned exactly to 54 migrations, 74,987 v1
+messages, 256 relations, 75,158 deliveries, 74,895 events, 74,987 dispatches,
+and 52 parked fetch jobs. Actual service downtime was 6 minutes 57 seconds,
+including initial privilege/setup failures before the successful snapshot;
+do not use that total as the expected cutover duration.
+
+This rehearsal completed the recent-production database evidence only. It did
+not deploy the final binary or perform the four-platform live smoke, which
+remain mandatory before reopening ingress in the actual cutover window.
+
 A second local rehearsal seeded a migration-030 clone with three legacy QQ
 rows before taking the rollback snapshot. The fixture included mention, face,
 sticker, file, video, card, forward-child, and reply provenance. The 031–064
