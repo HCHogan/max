@@ -3,6 +3,7 @@ module Max.Handler
     dispatchPendingWorker,
     dispatchProactive,
     recordAs,
+    qqRenderedText,
     IngestOutcome (..),
     ingestAllowsDownstream,
     isSilentReply,
@@ -187,6 +188,12 @@ recordAs gm =
       Feedback note -> Just note
       _ -> Nothing
 
+-- | QQ's transcript projection remains the structural OneBot form the model
+-- can round-trip.  Only conversational command bodies use 'recordAs's
+-- deliberate stripped override.
+qqRenderedText :: GroupMessage -> T.Text
+qqRenderedText gm = fromMaybe (renderPlainText gm.message) (snd (recordAs gm))
+
 -- | Drop the leading @!verb@ from the first text segment carrying one,
 -- leaving everything before it — notably the @-mention — in place, so
 -- the line reads like any other message to the bot.
@@ -312,11 +319,16 @@ persist source raw gm =
       | source == "qq" = do
           endpoint <- ensureQQEndpoint gm
           received <- liftIO getCurrentTime
-          let (kind, renderedOverride) = recordAs gm
+          let (kind, _) = recordAs gm
+              -- Canonical content stays platform-neutral, but the prompt's QQ
+              -- projection is deliberately structural: [@#qq] can round-trip
+              -- back into a real mention whereas a generic @123 string cannot.
+              -- Command-like conversation keeps recordAs's stripped body.
+              qqRendered = qqRenderedText gm
               options =
                 defaultIngestOptions
                   { transcriptKind = renderMessageKind kind,
-                    renderedTextOverride = renderedOverride,
+                    renderedTextOverride = Just qqRendered,
                     compatibilitySegments = toJSON gm.message,
                     compatibilityRawMessage = gm.rawMessage
                   }

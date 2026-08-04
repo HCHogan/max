@@ -1,6 +1,7 @@
 module Max.MatrixSpec (spec) where
 
 import Data.Aeson (object, (.=))
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Max.Matrix
 import Max.Platform.Types
 import Test.Hspec
@@ -31,6 +32,8 @@ spec = describe "Matrix adapter" $ do
                                                    .= object
                                                      [ "msgtype" .= ("m.text" :: String),
                                                        "body" .= ("hello Max" :: String),
+                                                       "formatted_body"
+                                                         .= ("<mx-reply><a href=\"https://matrix.to/#/@max:test\">old</a></mx-reply><a href=\"https://matrix.to/#/@max:test\">Max</a> hello" :: String),
                                                        "m.mentions" .= object ["user_ids" .= ["@max:test" :: String]],
                                                        "m.relates_to"
                                                          .= object
@@ -55,7 +58,35 @@ spec = describe "Matrix adapter" $ do
         event.content `shouldBe` [ContentText "hello Max"]
         event.relations `shouldBe` [ReplyTo (NativeEventId "$parent")]
         event.mentionedUsers `shouldBe` [NativeUserId "@max:test"]
+        matrixSelfMentionIsDirect (NativeUserId "@max:test") event `shouldBe` True
       _ -> expectationFailure "expected exactly one event"
+
+  it "does not turn a reply-generated mention of the mirror transport into an @Max trigger" $ do
+    let self = NativeUserId "@max:test"
+        raw =
+          object
+            [ "content"
+                .= object
+                  [ "body" .= ("reply" :: String),
+                    "m.mentions" .= object ["user_ids" .= ["@max:test" :: String]],
+                    "m.relates_to"
+                      .= object
+                        [ "m.in_reply_to"
+                            .= object ["event_id" .= ("$mirrored-user-message" :: String)]
+                        ]
+                  ]
+            ]
+        event =
+          MatrixEvent
+            (NativeEventId "$reply")
+            (NativeUserId "@alice:test")
+            (posixSecondsToUTCTime 0)
+            EventMessage
+            [ContentText "reply"]
+            [ReplyTo (NativeEventId "$mirrored-user-message")]
+            [self]
+            raw
+    matrixSelfMentionIsDirect self event `shouldBe` False
 
   it "keeps edits, reactions, and redactions as distinct event kinds" $ do
     let event eventId eventType content extra =

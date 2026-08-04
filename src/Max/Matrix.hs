@@ -11,6 +11,7 @@ module Max.Matrix
     MatrixSyncPage (..),
     MatrixEvent (..),
     parseMatrixSyncPage,
+    matrixSelfMentionIsDirect,
     matrixMediaSizeDrift,
     matrixCapabilities,
     matrixWorker,
@@ -232,11 +233,61 @@ matrixCompatibilitySegments selfNative selfCompatibility event = do
       mapped <- compatibilityPlatformId PlatformMatrix "message" (unNativeEventId target)
       pure [SegReply (MessageId mapped)]
     [] -> pure []
-  let mention = [SegAt (UserId selfCompatibility) | selfNative `elem` event.mentionedUsers]
+  let mention = [SegAt (UserId selfCompatibility) | matrixSelfMentionIsDirect selfNative event]
   -- @mentionedUsers@ is converted by the caller-independent native id test:
   -- a synthetic at segment is needed only for Max itself.  The event parser
   -- preserves every other mention in canonical content.
   pure (reply <> mention <> [SegText (renderMatrixContent event.content)])
+
+-- | Matrix includes the replied-to event's transport sender in @m.mentions@
+-- so clients can notify them.  In a mirrored room every QQ event is delivered
+-- by Max's Matrix account, even though its semantic author is a QQ user.  That
+-- implicit notification must not become a synthetic @Max trigger: canonical
+-- reply resolution below will independently wake Max only when the target was
+-- actually bot-authored.
+--
+-- A mention on a non-reply is direct.  On a reply we require evidence in the
+-- visible body outside the optional @mx-reply@ fallback, preserving an
+-- explicit Matrix permalink mention without trusting the notification set.
+matrixSelfMentionIsDirect :: NativeUserId -> MatrixEvent -> Bool
+matrixSelfMentionIsDirect self event =
+  self `elem` event.mentionedUsers
+    && (not (any isReply event.relations) || explicitlyMentions self event.raw)
+  where
+    isReply ReplyTo {} = True
+    isReply _ = False
+
+explicitlyMentions :: NativeUserId -> Value -> Bool
+explicitlyMentions (NativeUserId self) value = fromMaybe False (parseMaybe parser value)
+  where
+    encodedSelf = TE.decodeUtf8 (urlEncode True (TE.encodeUtf8 self))
+    parser = withObject "matrix event" $ \event -> do
+      content <- event .:? "content" .!= Object mempty
+      withObject
+        "matrix message content"
+        ( \message -> do
+            body <- message .:? "body" .!= ""
+            formatted <- message .:? "formatted_body" .!= ""
+            let visibleBody = dropPlainReplyFallback body
+                visibleFormatted = dropReplyFallback formatted
+                containsSelf text = self `T.isInfixOf` text || encodedSelf `T.isInfixOf` text
+            pure (containsSelf visibleBody || containsSelf visibleFormatted)
+        )
+        content
+
+dropReplyFallback :: Text -> Text
+dropReplyFallback formatted
+  | "<mx-reply>" `T.isPrefixOf` T.stripStart formatted =
+      let (_, suffix) = T.breakOn "</mx-reply>" formatted
+       in if T.null suffix then formatted else T.drop (T.length "</mx-reply>") suffix
+  | otherwise = formatted
+
+dropPlainReplyFallback :: Text -> Text
+dropPlainReplyFallback body
+  | "> " `T.isPrefixOf` T.stripStart body =
+      let (_, suffix) = T.breakOn "\n\n" body
+       in if T.null suffix then body else T.drop 2 suffix
+  | otherwise = body
 
 matrixDeliveryTransport :: HttpRuntime -> MatrixConfig -> DeliveryTransport
 matrixDeliveryTransport runtime cfg =

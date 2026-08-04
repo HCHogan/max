@@ -3,7 +3,7 @@
 module Max.HandlerSpec (spec) where
 
 import Max.DB.Message (MessageKind (..))
-import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs)
+import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, qqRenderedText, recordAs)
 import Max.ReplySend (stripBareMarkers, stripStickerText)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -133,6 +133,12 @@ spec = do
       rec' [SegText "今天吃啥"] `shouldBe` (KindChat, Nothing)
       rec' [SegAt (UserId 1000), SegText " 帮我看下这个报错"]
         `shouldBe` (KindChat, Nothing)
+
+    it "projects QQ mentions in the structural prompt form" $ do
+      qqRenderedText (msg [SegAt (UserId 2291939848), SegText " 你好"])
+        `shouldBe` "[@#2291939848]  你好"
+      qqRenderedText (msg [SegAt (UserId 1000), SegText " !fb 改成 B 方案"])
+        `shouldBe` "[@#1000] 改成 B 方案"
 
     it "records operating commands as command" $ do
       fst (rec' [SegText "!ps"]) `shouldBe` KindCommand

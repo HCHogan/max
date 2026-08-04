@@ -37,6 +37,12 @@ markers, never empty transcript rows. Migration 053 repairs affected canonical
 projections and recreates missing image-fetch obligations from their persisted
 source URLs.
 
+QQ mentions keep their structural `[@#qq]` transcript projection even though
+canonical content stores a platform-neutral mention. Matrix replies do not
+treat the reply-generated `m.mentions` entry for the relay account as an
+explicit @Max: the canonical target's semantic authorship decides whether a
+reply wakes Max. A real Matrix mention outside the reply fallback still does.
+
 ## Matrix mirror
 
 Create a dedicated Matrix account, join it to the target room, and obtain a

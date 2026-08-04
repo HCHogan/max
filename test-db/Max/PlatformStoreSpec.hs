@@ -624,6 +624,44 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
       (repaired :: [(Text, Text, Text, Int, Text)])
         `shouldBe` [("[image]", "[image]", imageUrl, 0, "image")]
 
+  it "restores structural QQ mention projections without touching canonical identity" $ do
+    endpoint <-
+      withDb pool $
+        ensureLegacyEndpoint
+          PlatformQQ
+          (NativeAccountId "9")
+          (NativeConversationId "42")
+          ConversationGroup
+          42
+          textCapabilities
+    now <- getCurrentTime
+    let envelope :: InboundEnvelope
+        envelope =
+          (inbound endpoint.endpointId now "qq-mention-projection" "")
+            { content =
+                [ ContentMention (NativeUserId "2291939848") Nothing,
+                  ContentText " hello"
+                ]
+            }
+    result <- withDb pool (ingestEnvelope defaultIngestOptions envelope)
+    beforeRows <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT rendered_text FROM messages WHERE canonical_message_id = ?"
+        (Only (resultId result).unCanonicalMessageId)
+    (beforeRows :: [Only Text]) `shouldBe` [Only "@2291939848  hello"]
+    withConn pool $ \conn -> withTransaction conn $ do
+      migration <- readFile "migrations/054_qq_mention_projection.sql"
+      _ <- execute_ conn (fromString migration)
+      repaired <-
+        query
+          conn
+          "SELECT rendered_text, canonical_content->0->>'native_user_id' \
+          \FROM messages WHERE canonical_message_id = ?"
+          (Only (resultId result).unCanonicalMessageId)
+      (repaired :: [(Text, Text)])
+        `shouldBe` [("[@#2291939848]  hello", "2291939848")]
+
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do
   conversation <- createConversation ConversationGroup (Just "mirror test")
