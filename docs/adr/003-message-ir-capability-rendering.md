@@ -248,9 +248,11 @@ Design rules:
   content. `reply_to_canonical_message_id` remains as a derived convenience
   column; `reply_to_message_id` is frozen legacy.
 - **Versioned encoding.** `canonical_content` becomes
-  `{"v":2,"nodes":[...]}`. Readers accept v1 arrays during transition; one
-  backfill lifts v1 (consulting `segments` to recover faces/cards/replies
-  that v1 destroyed) and stamps v2.
+  `{"v":2,"nodes":[...]}`. Runtime application code accepts v2 only. A
+  one-shot offline backfill lifts v1 (consulting `segments` to recover
+  faces/cards/replies that v1 destroyed) and stamps v2 while the old
+  service is stopped, before the new binary starts serving. The migration
+  may decode legacy rows; the deployed application may not.
 
 ### 2. Lowering: one degradation library; adapters only emit
 
@@ -487,9 +489,14 @@ These are known defects the refactor passes through; fix them in place:
 - Delivery/dispatch workers move from 500ms polling to LISTEN/NOTIFY
   wakeups.
 
-## Rollout
+## Implementation and atomic rollout
 
-Each slice is releasable alone; no dual-write windows.
+The numbered slices below are implementation milestones, **not deployable
+states**. No slice is released independently. Production moves directly
+from the old content pipeline to the completed ADR in one maintenance-window
+cutover, after all transports, entry points, migrations, cleanup, and tests
+are ready. No production binary contains a v1/v2 dual reader, a dual writer,
+or a legacy delivery fallback.
 
 1. **IR core.** `Max.IR.Types` (phase-indexed tree, families, `Void`
    pruning) + `Max.IR.Lower` + plain emitter + bounded log digest emitter
@@ -499,18 +506,19 @@ Each slice is releasable alone; no dual-write windows.
    codec round-trip (`parse . emit ≡ id` on mention/reply/sticker tokens);
    JSON instances exist for `Body 'Canonical` only.
 2. **Ingest writes v2.** Adapters produce IR (QQ stops degrading faces/
-   cards/media; Matrix/iMessage mention+reply fixes). Backfill migration
-   lifts v1 + segments → v2. Readers accept both shapes until backfill
-   completes.
-3. **Delivery reads IR — one transport at a time, Matrix first.** Claims
-   carry IR + resolved reply + attribution; transports become emit-only;
-   `renderedText`/`compatibilitySegments` leave the claim once the last
-   transport cuts over; chunking, media budget, poison-pill, ordering, and
-   `LIMIT 1` fixes land here. Cutover order: Matrix (idempotent PUT —
-   safest to iterate on), then OneBot (QQ + wechatpad), then iMessage.
-   Lower notes persist to `message_deliveries.lower_notes`. (The admin
-   hydrated timeline can land incrementally any time after slice 2; the
-   degradation audit needs this slice.)
+   cards/media; Matrix/iMessage mention+reply fixes). Implement the offline
+   v1 + segments → v2 backfill and rehearse it against a recent production
+   snapshot. The final runtime codec accepts v2 only.
+3. **Delivery reads IR — implement one transport at a time, Matrix first.**
+   Claims carry IR + resolved reply + attribution; transports become
+   emit-only. `renderedText`/`compatibilitySegments` leave the claim after
+   the last transport is converted locally and before release; chunking,
+   media budget, poison-pill, ordering, and `LIMIT 1` fixes land here. Local
+   implementation order is Matrix (idempotent PUT — safest to iterate on),
+   then OneBot (QQ + wechatpad), then iMessage, but none is deployed before
+   all are complete. Lower notes persist to
+   `message_deliveries.lower_notes`. The admin hydrated timeline may be
+   implemented any time after slice 2; it is part of the same release.
 4. **Bot outbound through IR.** ReplySend parses model tokens → IR;
    `enqueueOutbound` stores IR; `ConversationOutputCapabilities` replaced
    by `AdvertisedCaps`; one outbound path.
@@ -519,10 +527,67 @@ Each slice is releasable alone; no dual-write windows.
 6. **Meta-event mirroring + inbound completeness.** QQ recall/reaction
    parsing, capability-routed reactions in the outbox, edit/redact
    mirroring, forward chains as canonical children.
-7. **Cleanup.** `rendered_text` regenerable-only; `segments` frozen;
-   dispatch de-OneBot-ification; LISTEN/NOTIFY; delete the dead renderers
-   (`matrixCanonicalText`, `renderOutbound`, `renderCanonicalText`,
-   `attributedText`).
+7. **Cleanup.** `rendered_text` becomes a regenerable prompt/search
+   projection and `segments` frozen provenance; neither is readable by the
+   delivery path. Dispatch is de-OneBot-ified and workers use
+   LISTEN/NOTIFY. Delete the v1 runtime decoder, `ContentPart`, legacy
+   wechatpad insertion, compatibility delivery branches, the superseded
+   capability models, and the dead renderers (`matrixCanonicalText`,
+   `renderOutbound`, `renderCanonicalText`, `attributedText`). Delete tests
+   that assert removed implementation details; preserve every regression's
+   semantic intent by rewriting it against ingest → canonical → lower →
+   emit and the prompt codec.
+
+### Definition of done
+
+The release is ready only when all of the following hold:
+
+- Every inbound adapter produces `InboundEnvelope` and `Body 'Ingest`, and
+  every stored message has v2 `Body 'Canonical`; runtime code has no v1
+  decoder.
+- Every endpoint delivery follows canonical → `lower` → emit. Bot replies,
+  proactive sends, mirrors, and admin-triggered sends enter that same path.
+- Delivery claims contain neither `renderedText` nor
+  `compatibilitySegments`, and delivery code cannot read `rendered_text` or
+  `segments`.
+- One capabilities decoder and one lowering/action-routing implementation
+  govern all endpoints. Advertised native capabilities have emit contract
+  tests; unsupported reactions are quiet no-ops.
+- wechatpad is canonicalized; mention/reply/media ingest completeness and
+  edit/redact/reaction mirroring are implemented; deterministic reply
+  resolution, media poison-pill handling, endpoint ordering, generic mirror
+  topology, canonical dispatch claims, and LISTEN/NOTIFY are complete.
+- The old renderers, content types, entry points, compatibility branches,
+  and tests that exist solely for them are gone. Historical regression
+  cases remain, rewritten as final-pipeline tests.
+- A fresh database can migrate to the final schema, and the backfill,
+  integrity checks, smoke tests, and rollback procedure have all succeeded
+  in a rehearsal using a recent production snapshot.
+
+### Production cutover
+
+This ADR intentionally requires a maintenance window:
+
+1. Close external ingress, drain delivery/dispatch workers to a known ledger
+   state, and then stop the old service and all remaining writers.
+2. Take and verify a restorable database snapshot.
+3. Run the final schema migrations and offline v1 + segments → v2 backfill.
+   Do not start the new application until it completes.
+4. Run integrity checks: every `canonical_content` is valid v2, message and
+   relation counts reconcile, delivery rows still reference valid messages
+   and endpoints, and prompt/search projections can be regenerated.
+5. Deploy the final binary and smoke-test representative QQ, Matrix,
+   iMessage, and wechatpad ingress, prompt rendering, bot outbound, mirror
+   delivery, meta-events, and echo reconciliation before reopening writes.
+6. Resume workers and external ingress, then monitor permanent failures,
+   parked deliveries, lower notes, and per-endpoint ordering.
+
+Rollback is a single atomic boundary: stop the new service, restore the
+pre-cutover database snapshot, and redeploy the old binary. Rolling back
+only the binary is forbidden because the old application does not
+understand v2. Backfill duration, table locks, snapshot time, and restore
+time must be measured in rehearsal and included in the maintenance-window
+budget.
 
 ## Consequences
 
@@ -535,7 +600,7 @@ Each slice is releasable alone; no dual-write windows.
   over IR, so prompt fidelity and mirror fidelity can no longer diverge.
 - The 049 ledger, lease/idempotency delivery machinery, and echo
   reconciliation are unchanged; this is a content-layer refactor.
-- Cost: a real backfill migration over `messages`, a transition window
-  where readers accept two content encodings, and slice 3 touching every
-  transport at once. The slices are ordered so the riskiest step (3) sits
-  on top of an already-tested lowering library.
+- Cost: a full-table offline backfill, an explicit maintenance window, a
+  snapshot-based rollback, and one coordinated change across every
+  transport and content entry point. In return, production never serves a
+  mixed content state and carries no transitional compatibility path.
