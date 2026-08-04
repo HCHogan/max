@@ -7,7 +7,7 @@ import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
-import Database.PostgreSQL.Simple (Only (..), execute_, query, withTransaction)
+import Database.PostgreSQL.Simple (Only (..), execute, execute_, query, withTransaction)
 import Helpers (truncateAll, withDb)
 import Max.DB.Connection (DbPool, withConn)
 import Max.Platform.Store
@@ -554,6 +554,75 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
                            ]
                        )
                    ]
+
+  it "repairs blank QQ image projections and recreates their fetch jobs" $ do
+    endpoint <-
+      withDb pool $
+        ensureLegacyEndpoint
+          PlatformQQ
+          (NativeAccountId "9")
+          (NativeConversationId "42")
+          ConversationGroup
+          42
+          textCapabilities
+    now <- getCurrentTime
+    let imageUrl = "https://qq.example/image.jpg"
+        options :: IngestOptions
+        options =
+          defaultIngestOptions
+            { PlatformStore.compatibilitySegments =
+                toJSON
+                  [ object
+                      [ "type" .= ("image" :: Text),
+                        "data"
+                          .= object
+                            [ "file" .= imageUrl,
+                              "summary" .= ("" :: Text),
+                              "sub_type" .= (0 :: Int)
+                            ]
+                      ]
+                  ]
+            }
+        envelope :: InboundEnvelope
+        envelope =
+          (inbound endpoint.endpointId now "qq-image-roundtrip" "")
+            { content =
+                [ ContentMedia
+                    (RemoteMedia imageUrl Nothing Nothing Nothing)
+                    (Just "")
+                ]
+            }
+    result <- withDb pool (ingestEnvelope options envelope)
+    -- Recreate the projection written by the pre-fix renderer. The current
+    -- renderer already fail-softs a blank caption to "[media]" at ingest.
+    withConn pool $ \conn -> do
+      _ <-
+        execute
+          conn
+          "UPDATE messages SET rendered_text = '' WHERE canonical_message_id = ?"
+          (Only (resultId result).unCanonicalMessageId)
+      pure ()
+    beforeRows <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT rendered_text FROM messages WHERE canonical_message_id = ?"
+        (Only (resultId result).unCanonicalMessageId)
+    (beforeRows :: [Only Text]) `shouldBe` [Only ""]
+    withConn pool $ \conn -> withTransaction conn $ do
+      migration <- readFile "migrations/053_qq_image_dispatch_roundtrip.sql"
+      _ <- execute_ conn (fromString migration)
+      repaired <-
+        query
+          conn
+          "SELECT m.rendered_text, m.canonical_content->0->>'caption', \
+          \       f.payload->>'url', (f.payload->>'seg_index')::int, f.payload->>'kind' \
+          \ FROM messages m \
+          \ JOIN fetch_jobs f ON f.kind = 'image' \
+          \  AND f.dedupe_key = m.message_id::text || ':0' \
+          \ WHERE m.canonical_message_id = ?"
+          (Only (resultId result).unCanonicalMessageId)
+      (repaired :: [(Text, Text, Text, Int, Text)])
+        `shouldBe` [("[image]", "[image]", imageUrl, 0, "image")]
 
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do

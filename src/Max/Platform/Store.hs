@@ -1571,8 +1571,11 @@ renderCanonicalText = T.intercalate " " . fmap render
     render = \case
       ContentText body -> body
       ContentMention (NativeUserId user) display -> "@" <> fromMaybe user display
-      ContentMedia _ caption -> fromMaybe "[media]" caption
+      ContentMedia _ caption -> fromMaybe "[media]" (caption >>= nonBlank)
       ContentUnsupported description -> "[unsupported: " <> description <> "]"
+    nonBlank value
+      | T.null (T.strip value) = Nothing
+      | otherwise = Just value
 
 fetchEndpoint ::
   (WithConnection :> es, IOE :> es) =>

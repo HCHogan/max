@@ -5,7 +5,7 @@ import Data.ByteString.Lazy qualified as BSL
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
-import OneBot.Segment (CardInfo (..), Segment (..), VideoSegInfo (..), renderPlainText, rescueNameMentions, segmentMentions)
+import OneBot.Segment (CardInfo (..), ImageSegInfo (..), Segment (..), VideoSegInfo (..), renderPlainText, rescueNameMentions, segmentMentions)
 import OneBot.Types (UserId (..))
 import Test.Hspec
 
@@ -17,6 +17,7 @@ decodeSeg = decodeStrict' . TE.encodeUtf8
 spec :: Spec
 spec = do
   faceSpec
+  imageSpec
   videoSpec
   cardSpec
   mentionSpec
@@ -168,3 +169,13 @@ mentionSpec = describe "segmentMentions" $ do
                    SegAt (UserId 10001),
                    SegText " 记得带伞"
                  ]
+
+imageSpec :: Spec
+imageSpec = describe "image segments" $ do
+  let napcat =
+        "{\"type\":\"image\",\"data\":{\"url\":\"https://qq.example/image.jpg\",\"file\":\"A.jpg\",\"summary\":\"\",\"sub_type\":0}}"
+      expected = SegImage (ImageSegInfo (Just "https://qq.example/image.jpg") (Just 0) (Just ""))
+
+  it "round-trips a real NapCat image through the durable file encoding" $ do
+    decodeSeg napcat `shouldBe` Just expected
+    (decodeStrict' (BSL.toStrict (encode expected)) :: Maybe Segment) `shouldBe` Just expected

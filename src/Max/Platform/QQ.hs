@@ -9,9 +9,9 @@ module Max.Platform.QQ
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.Aeson (Value (..))
 import Data.Aeson.KeyMap qualified as KeyMap
-import Control.Applicative ((<|>))
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe)
 import Data.Scientific (toBoundedInteger)
@@ -92,7 +92,7 @@ qqContentParts = \case
   SegImage image ->
     [ ContentMedia
         (RemoteMedia url Nothing Nothing Nothing)
-        image.isiSummary
+        (nonBlank image.isiSummary <|> Just (renderPlainText [SegImage image]))
     | url <- maybeToList image.isiUrl
     ]
       <> [ContentText (renderPlainText [SegImage image]) | image.isiUrl == Nothing]
@@ -111,6 +111,7 @@ qqContentParts = \case
   SegOther segmentType _ -> [ContentUnsupported ("qq:" <> segmentType)]
   where
     maybeToList = maybe [] pure
+    nonBlank = (>>= \value -> if T.null (T.strip value) then Nothing else Just value)
     cardText card =
       maybeToList card.ciTag
         <> maybeToList card.ciTitle

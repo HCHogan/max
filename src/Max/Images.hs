@@ -9,6 +9,7 @@ module Max.Images
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Exception (IOException, try)
 import Data.Aeson
   ( FromJSON (..),
@@ -150,7 +151,7 @@ imageUrl :: Segment -> Maybe Text
 imageUrl = \case
   SegImage info -> info.isiUrl
   SegOther "mface" (Object o) -> lookupString "url" o
-  SegOther "image" (Object o) -> lookupString "url" o
+  SegOther "image" (Object o) -> lookupString "url" o <|> lookupString "file" o
   _ -> Nothing
 
 -- | NapCat's container-local-path fallback isn't fetchable by us —

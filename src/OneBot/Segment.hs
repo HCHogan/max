@@ -137,7 +137,12 @@ instance FromJSON Segment where
           "at" -> SegAt <$> d .: "qq"
           "reply" -> SegReply <$> d .: "id"
           "image" -> do
-            url <- d .:? "url"
+            -- Inbound OneBot uses @url@, while our outbound-compatible
+            -- 'ToJSON' necessarily writes the same value as @file@. Durable
+            -- dispatch persists that encoding and must decode it losslessly.
+            url <- do
+              nativeUrl <- d .:? "url"
+              maybe (d .:? "file") (pure . Just) nativeUrl
             -- NapCat is number/string-inconsistent here too.
             mSub <- d .:? "sub_type"
             subTy <- traverse parseFlexInt mSub

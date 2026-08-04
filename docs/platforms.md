@@ -30,6 +30,13 @@ group. The configured iMessage chat is always a separate conversation.
   occupy `(-10^12, 0)` while foreign opaque ids occupy `<= -10^12`; the latter
   remain groups. Canonical `conversation_kind` is still the stored authority.
 
+QQ image segments survive the durable-dispatch JSON round trip: inbound
+`data.url` and the outbound-compatible `data.file` encoding decode to the same
+media source. Blank NapCat summaries become explicit `[image]` or `[sticker]`
+markers, never empty transcript rows. Migration 053 repairs affected canonical
+projections and recreates missing image-fetch obligations from their persisted
+source URLs.
+
 ## Matrix mirror
 
 Create a dedicated Matrix account, join it to the target room, and obtain a
