@@ -1,7 +1,13 @@
 # ADR 002: Partial Plans and Adaptive Elaboration
 
-- Status: Proposed
+- Status: Deferred (post-1.0)
 - Date: 2026-08-03
+- Deferral note (2026-08-05): the design remains the agreed direction for
+  the executor, but v1.0 is a convergence release — it closes the
+  correctness and durability promises already made (issue #13, the
+  durability roadmap) rather than opening a new architectural front. The
+  checkpoint/journal work in v1.0 should be built so this ADR can consume
+  it later rather than duplicating it.
 
 ## Context
 

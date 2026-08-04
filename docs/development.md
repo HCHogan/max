@@ -261,6 +261,15 @@ something already released needs correcting on its own.
 Tags are lightweight `vX.Y.Z`, placed on the commit that bumps the version —
 later commits at the same version stay behind the tag rather than moving it.
 
+What version numbers are **not**: an API promise. Max has no downstream
+consumers; its actual compatibility surface is the model-facing token
+contract (`[@#qq]`, `[↩#id]`, `[sticker#id]`, …) plus the stored formats,
+and those are guarded by tests and migrations, not by semver. Version
+numbers mark architecture eras. `v1.0.0` is defined as the release where
+every written promise holds: the post-cutover defect list is empty, the
+durability roadmap is complete, and routine verification can run against
+the live database (see the v1.0 milestone).
+
 Startup refuses to run against a database that records migrations this binary
 doesn't ship, so an old max can never touch a newer schema.
 
