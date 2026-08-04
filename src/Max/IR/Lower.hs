@@ -12,10 +12,8 @@
 -- Capabilities are data with three explicit tiers per content feature.
 -- 'TierDrop' is a deliberate, declared choice; a missing or malformed
 -- declaration falls back to 'TierText', which is always achievable because
--- every node carries its own fallback.  The decoder also honours the
--- legacy boolean manifest keys (@send_text@/@send_media@/@reply@/…)
--- written by 'Max.Platform.Store', so existing endpoint rows keep working
--- until they are rewritten with tier keys.
+-- every node carries its own fallback.  The atomic cutover migration rewrites
+-- old boolean manifests; runtime has exactly this one v2 decoder.
 module Max.IR.Lower
   ( Tier (..),
     OutboundCaps (..),
@@ -100,25 +98,22 @@ textOnlyCaps =
       maxNativeMedia = 1
     }
 
--- | Total decoder over the endpoint's capability jsonb.  Tier keys
--- (@mention_tier@, @image_tier@, …) win; absent ones fall back to the
--- legacy boolean vocabulary, then to 'TierText'.
+-- | Total decoder over the endpoint capability manifest.  Missing or unknown
+-- content tiers safely become text; meta-actions safely become unavailable.
 outboundCapsFromValue :: Value -> OutboundCaps
 outboundCapsFromValue = fromMaybe noOutboundCaps . parseMaybe parser
   where
     parser = withObject "outbound capabilities" $ \o -> do
       text <- o .:? "send_text" .!= False
-      legacyMedia <- o .:? "send_media" .!= False
-      let mediaDefault = if legacyMedia then TierNative else TierText
-      mention <- tierField o "mention_tier" (pure TierText)
-      reply <- tierField o "reply_tier" (legacyBool o "reply")
-      emote <- tierField o "emote_tier" (pure TierText)
-      image <- tierField o "image_tier" (pure mediaDefault)
-      sticker <- tierField o "sticker_tier" (pure mediaDefault)
-      video <- tierField o "video_tier" (pure mediaDefault)
-      audio <- tierField o "audio_tier" (pure mediaDefault)
-      file <- tierField o "file_tier" (pure mediaDefault)
-      card <- tierField o "card_tier" (pure TierText)
+      mention <- tierField o "mention_tier"
+      reply <- tierField o "reply_tier"
+      emote <- tierField o "emote_tier"
+      image <- tierField o "image_tier"
+      sticker <- tierField o "sticker_tier"
+      video <- tierField o "video_tier"
+      audio <- tierField o "audio_tier"
+      file <- tierField o "file_tier"
+      card <- tierField o "card_tier"
       reaction <- o .:? "reaction" .!= False
       edit <- o .:? "edit" .!= False
       redact <- o .:? "redact" .!= False
@@ -142,14 +137,9 @@ outboundCapsFromValue = fromMaybe noOutboundCaps . parseMaybe parser
             maxTextBytes,
             maxNativeMedia
           }
-    tierField o key fallback =
+    tierField o key =
       o .:? key >>= \case
         Just (t :: Text) -> pure (tierFromText t)
-        Nothing -> fallback
-    legacyBool o key =
-      o .:? key >>= \case
-        Just True -> pure TierNative
-        Just False -> pure TierText
         Nothing -> pure TierText
 
 tierFromText :: Text -> Tier
@@ -164,14 +154,11 @@ tierText = \case
   TierText -> "text"
   TierDrop -> "drop"
 
--- | Encode both vocabularies: tier keys for the new decoder, legacy
--- booleans for SQL readers that still aggregate them during the cutover.
+-- | Encode the sole runtime manifest vocabulary.
 outboundCapsToValue :: OutboundCaps -> Value
 outboundCapsToValue caps =
   object $
     [ "send_text" .= caps.text,
-      "send_media" .= any (== TierNative) [caps.image, caps.sticker, caps.video, caps.audio, caps.file],
-      "reply" .= (caps.reply == TierNative),
       "reaction" .= caps.reaction,
       "edit" .= caps.edit,
       "redact" .= caps.redact,

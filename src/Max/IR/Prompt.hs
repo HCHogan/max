@@ -24,6 +24,9 @@ module Max.IR.Prompt
   )
 where
 
+import Data.Aeson (Value, withObject, (.:))
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.Types (parseMaybe)
 import Data.Char (isDigit)
 import Data.Int (Int64)
 import Data.Maybe (catMaybes, fromMaybe)
@@ -58,7 +61,7 @@ parseModelChunk roster t0 =
       ]
     knownLegacy (UserId uid) = roster.known (NativeUserId (T.pack (show uid)))
     pieceNodes = \case
-      PieceText s -> map segNode (segmentMentions knownLegacy s)
+      PieceText s -> mentionNodes s
       PieceSticker n -> [NMedia (RefSticker n) (mediaRefMeta MSticker Nothing)]
       PieceStickerDesc d -> [NMedia (RefStickerDesc d) (mediaRefMeta MSticker (Just d))]
       PieceImage n -> [NMedia (RefImage n) (mediaRefMeta MImage Nothing)]
@@ -75,10 +78,52 @@ parseModelChunk roster t0 =
       SegText s -> NText s
       SegAt (UserId uid) ->
         let digits = T.pack (show uid)
-         in NMention (NativeUserId digits) digits
+            native = NativeUserId digits
+            display = fromMaybe digits (lookup native [(member, label) | (label, member) <- roster.names])
+         in NMention native display
       -- 'segmentMentions' only produces text and at segments; anything
       -- else would be a contract change upstream — degrade it readably.
       other -> NText (renderPlainText [other])
+
+    -- The historical display form [@#id: name] predates the compact prompt
+    -- emitter.  OneBot's parser intentionally ignores that suffix, so retain
+    -- it here before delegating ordinary/bare mentions to the proven parser.
+    mentionNodes input = case T.breakOn "[@#" input of
+      (before, rest)
+        | T.null rest -> map segNode (segmentMentions knownLegacy before)
+        | Just (native, display, after) <- displayMention rest,
+          roster.known native ->
+            map segNode (segmentMentions knownLegacy before)
+              <> (NMention native display : mentionTail after)
+        | otherwise ->
+            map segNode (segmentMentions knownLegacy (before <> "["))
+              <> mentionNodes (T.drop 1 rest)
+
+    displayMention token = do
+      afterOpen <- T.stripPrefix "[@#" token
+      let (digits, suffix) = T.span isDigit afterOpen
+      if T.null digits then Nothing else do
+        let native = NativeUserId digits
+            rosterDisplay = fromMaybe digits (lookup native [(member, label) | (label, member) <- roster.names])
+        case T.uncons suffix of
+          Just (']', after) -> Just (native, rosterDisplay, after)
+          Just (':', captionAndClose) ->
+            let (caption, close) = T.breakOn "]" captionAndClose
+             in if T.null close
+                  then Nothing
+                  else Just (native, fromMaybe rosterDisplay (nonBlank caption), T.drop 1 close)
+          _ -> Nothing
+
+    mentionTail after =
+      let remaining = fromMaybe after (T.stripPrefix " " after)
+       in case mentionNodes remaining of
+            [] -> []
+            NText text : nodes -> NText (" " <> text) : nodes
+            nodes -> NText " " : nodes
+
+    nonBlank value =
+      let stripped = T.strip value
+       in if T.null stripped then Nothing else Just stripped
 
 mediaRefMeta :: MediaKind -> Maybe Text -> MediaMeta
 mediaRefMeta kind description =
@@ -117,15 +162,12 @@ promptText originPlatform body = T.concat (map node body.nodes)
             "[@#" <> native <> "] "
         | otherwise -> "@" <> display
       NEmote e
+        | Just sid <- rawId "sticker_id" e.raw ->
+            "[sticker#" <> T.pack (show sid) <> maybe "" (": " <>) e.name <> "]"
         | e.origin == PlatformQQ ->
             "[face#" <> e.nativeId <> maybe "" (": " <>) e.name <> "]"
         | otherwise -> fallbackText (NEmote e :: Node 'Canonical)
-      NMedia _ meta -> case meta.kind of
-        MImage -> "[image]"
-        MSticker -> "[sticker]"
-        MVideo -> "[video]"
-        MAudio -> "[audio]"
-        MFile -> "[file:" <> fromMaybe "" meta.name <> "]"
+      NMedia _ meta -> fromMaybe (mediaToken meta) (rawText "prompt_text" meta.raw)
       NCard c ->
         let parts =
               dedupAdjacent . catMaybes $
@@ -137,6 +179,22 @@ promptText originPlatform body = T.concat (map node body.nodes)
       | a == b = dedupAdjacent (a : rest)
       | otherwise = a : dedupAdjacent (b : rest)
     dedupAdjacent xs = xs
+    handle kind ident = "[" <> kind <> "#" <> T.pack (show ident) <> "]"
+    mediaToken meta = case meta.kind of
+      MImage -> maybe "[image]" (handle "image") (rawId "source_message_id" meta.raw)
+      MSticker ->
+        maybe "[sticker]"
+          (\sid -> "[sticker#" <> T.pack (show sid) <> maybe "" (": " <>) meta.description <> "]")
+          (rawId "sticker_id" meta.raw)
+      MVideo -> "[video]"
+      MAudio -> "[audio]"
+      MFile -> "[file:" <> fromMaybe "" meta.name <> "]"
+
+rawId :: Text -> Maybe Value -> Maybe Int64
+rawId key raw = raw >>= parseMaybe (withObject "media prompt metadata" (.: Key.fromText key))
+
+rawText :: Text -> Maybe Value -> Maybe Text
+rawText key raw = raw >>= parseMaybe (withObject "media prompt metadata" (.: Key.fromText key))
 
 -- | Inverse of 'parseModelChunk' on its normal form.  The reply token
 -- leads the chunk; a converted mention carries no trailing space of its

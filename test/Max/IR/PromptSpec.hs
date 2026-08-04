@@ -16,7 +16,7 @@ roster =
     }
 
 mentionNode :: Text -> Node 'ModelParsed
-mentionNode digits = NMention (NativeUserId digits) digits
+mentionNode digits = NMention (NativeUserId digits) (if digits == "123456" then "张三" else digits)
 
 stickerMeta :: Maybe Text -> MediaMeta
 stickerMeta description =
@@ -64,6 +64,10 @@ mentionSpec = describe "mention parsing" $ do
   it "rescues an @display-name span through the roster" $
     parse "@张三 你好"
       `shouldBe` (Nothing, Body [mentionNode "123456", NText " 你好"])
+
+  it "captures the explicit display fallback in the historical token" $
+    parse "[@#123456: 老张] 你好"
+      `shouldBe` (Nothing, Body [NMention (NativeUserId "123456") "老张", NText " 你好"])
 
 tokenSpec :: Spec
 tokenSpec = describe "placeholder tokens" $ do

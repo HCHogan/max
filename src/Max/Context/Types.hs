@@ -28,7 +28,7 @@ import Max.DB.Files (FileRecord)
 import Max.DB.History (HistoryItem)
 import Max.EpisodeStore (EpisodeHandle)
 import Max.MemoryStore (MemoryItem)
-import Max.Platform.Types (ConversationOutputCapabilities)
+import Max.Platform.Types (AdvertisedCaps)
 import Max.Session (Session)
 import OneBot.Event (GroupMessage)
 
@@ -95,7 +95,7 @@ data PromptInputs = PromptInputs
     -- | Portable semantic output surface shared by every enabled endpoint in
     -- this conversation.  Prompt actions must be a subset of this record;
     -- delivery adapters are not allowed to guess from compatibility ids.
-    outputCapabilities :: !ConversationOutputCapabilities,
+    outputCapabilities :: !AdvertisedCaps,
     -- | What woke the bot — see 'TriggerOrigin'.  The trigger block
     -- is labelled honestly per origin: proactive turns get the "no
     -- one @-ed you" framing with @[silence]@ explicitly offered; poke

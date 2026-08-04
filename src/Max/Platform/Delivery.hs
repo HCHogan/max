@@ -16,7 +16,6 @@ module Max.Platform.Delivery
   )
 where
 
-import Control.Concurrent qualified as Concurrent
 import Control.Applicative ((<|>))
 import Control.Monad (forM_)
 import Data.Aeson (Result (..), fromJSON, toJSON)
@@ -35,6 +34,7 @@ import Effectful.Exception (SomeException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
+import Max.DB.Notify (WorkChannel (DeliveryWork), claimOrWait)
 import Max.IR
 import Max.IR.Lower
 import Max.Platform (PlatformBackend (..))
@@ -128,10 +128,10 @@ deliveryWorker ::
 deliveryWorker workerId transports = localDomain "delivery" loop
   where
     loop = do
-      claims <- claimDeliveries workerId deliveryBatchSize deliveryLeaseSeconds
-      if null claims
-        then liftIO (Concurrent.threadDelay deliveryPollMicros)
-        else forM_ claims deliverClaim
+      claims <-
+        claimOrWait DeliveryWork $
+          claimDeliveries workerId deliveryBatchSize deliveryLeaseSeconds
+      forM_ claims deliverClaim
       loop
 
     deliverClaim claim = do
@@ -345,9 +345,6 @@ deliveryBatchSize = 32
 
 deliveryLeaseSeconds :: NominalDiffTime
 deliveryLeaseSeconds = 120
-
-deliveryPollMicros :: Int
-deliveryPollMicros = 500000
 
 oneBotTimeoutMs :: Int
 oneBotTimeoutMs = 30000

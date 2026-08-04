@@ -3,7 +3,6 @@ module Max.Handler
     dispatchPendingWorker,
     dispatchProactive,
     recordAs,
-    qqRenderedText,
     IngestOutcome (..),
     ingestAllowsDownstream,
     isSilentReply,
@@ -12,7 +11,6 @@ module Max.Handler
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent qualified as ConcurrentIO
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (forM_, unless, void, when)
 import Data.Aeson (Result (..), Value, fromJSON, toJSON)
@@ -39,7 +37,8 @@ import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
 import Max.Command.Types (Command (..))
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
-import Max.DB.Message (MessageKind (..), insertGroupMessage, insertSilence)
+import Max.DB.Message (MessageKind (..), insertSilence)
+import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
 import Max.DB.Permissions (lookupGrant)
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.Blob (Blob)
@@ -54,9 +53,10 @@ import Max.Files (enqueueFiles)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
-import Max.IR (Body (..), Node (..), Phase (Ingest))
+import Max.IR
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
-import Max.Platform.QQ (ensureQQEndpoint, qqEnvelope)
+import Max.Platform.QQ (ensureQQEndpoint, qqEnvelope, qqIngestBody)
+import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( DispatchClaim (..),
     DispatchCompletion (..),
@@ -66,13 +66,14 @@ import Max.Platform.Store
     claimDispatch,
     claimDispatches,
     completeDispatch,
-    conversationOutputCapabilities,
+    conversationAdvertisedCaps,
     defaultIngestOptions,
+    deliveryMentionNatives,
     ingestEnvelope,
     isBotAuthoredCompatibilityMessage,
     platformForLegacyMessage,
   )
-import Max.Platform.Types (CanonicalMessageId, ConversationOutputCapabilities (..), NativeUserId (..))
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId, NativeUserId (..), PrincipalIdentityId)
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutput, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -102,7 +103,7 @@ import OneBot.Segment (Segment (..), mentionsUser, renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 
 data IngestOutcome
-  = IngestDurable !(Maybe CanonicalMessageId)
+  = IngestDurable !CanonicalMessageId
   | IngestDuplicate
   | IngestFailed !T.Text
   deriving stock (Show, Eq)
@@ -189,12 +190,6 @@ recordAs gm =
       Feedback note -> Just note
       _ -> Nothing
 
--- | QQ's transcript projection remains the structural OneBot form the model
--- can round-trip.  Only conversational command bodies use 'recordAs's
--- deliberate stripped override.
-qqRenderedText :: GroupMessage -> T.Text
-qqRenderedText gm = fromMaybe (renderPlainText gm.message) (snd (recordAs gm))
-
 -- | Drop the leading @!verb@ from the first text segment carrying one,
 -- leaving everything before it — notably the @-mention — in place, so
 -- the line reads like any other message to the bot.
@@ -268,15 +263,8 @@ handleEvents q fetchSig mIntent = loop
           for_ env.beEpisodeScheduler $ \scheduler -> liftIO (bumpEpisode scheduler gm.groupId)
           persisted <- persist source raw gm
           case persisted of
-            IngestDurable (Just canonical) ->
+            IngestDurable canonical ->
               processCanonicalDispatch "event-handler" fetchSig mIntent canonical
-            IngestDurable Nothing -> do
-              -- Transitional WeChat path.  QQ, Matrix and iMessage all use
-              -- the durable canonical dispatch queue.
-              enqueueImages fetchSig gm
-              enqueueForwards fetchSig gm
-              enqueueFiles fetchSig gm
-              onGroupMessage mIntent gm
             IngestDuplicate -> do
               let MessageId messageId = gm.messageId
               logTrace "ingest: duplicate source event ignored" $
@@ -320,26 +308,21 @@ persist source raw gm =
       | source == "qq" = do
           endpoint <- ensureQQEndpoint gm
           received <- liftIO getCurrentTime
-          let (kind, _) = recordAs gm
-              -- Canonical content stays platform-neutral, but the prompt's QQ
-              -- projection is deliberately structural: [@#qq] can round-trip
-              -- back into a real mention whereas a generic @123 string cannot.
-              -- Command-like conversation keeps recordAs's stripped body.
-              qqRendered = qqRenderedText gm
+          let (kind, rewritten) = recordAs gm
+              contentSegments = case (kind, rewritten) of
+                (KindChat, Just _) -> stripVerb gm.message
+                _ -> gm.message
               options =
                 defaultIngestOptions
                   { transcriptKind = renderMessageKind kind,
-                    renderedTextOverride = Just qqRendered,
-                    compatibilitySegments = toJSON gm.message,
-                    compatibilityRawMessage = gm.rawMessage
+                    qqProvenanceSegments = Just (toJSON gm.message)
                   }
-          ingestEnvelope options (qqEnvelope endpoint received raw gm) >>= \case
-            Ingested fresh -> pure (IngestDurable (Just fresh.canonicalMessageId))
+              envelope = (qqEnvelope endpoint received raw gm) {content = qqIngestBody contentSegments}
+          ingestEnvelope options envelope >>= \case
+            Ingested fresh -> pure (IngestDurable fresh.canonicalMessageId)
             AlreadyIngested _ -> pure IngestDuplicate
             DeliveryEcho _ -> pure IngestDuplicate
-      | otherwise = do
-          uncurry insertGroupMessage (recordAs gm) gm
-          pure (IngestDurable Nothing)
+      | otherwise = error ("non-QQ event entered the OneBot ingress queue: " <> T.unpack source)
 
     renderMessageKind = \case
       KindChat -> "chat"
@@ -370,10 +353,10 @@ dispatchPendingWorker ::
 dispatchPendingWorker workerId fetchSig mIntent = localDomain "dispatch" loop
   where
     loop = do
-      claims <- claimDispatches workerId dispatchBatchSize dispatchLeaseSeconds
-      if null claims
-        then liftIO (ConcurrentIO.threadDelay dispatchPollMicros)
-        else forM_ claims (runDispatchClaim workerId fetchSig mIntent)
+      claims <-
+        claimOrWait DispatchWork $
+          claimDispatches workerId dispatchBatchSize dispatchLeaseSeconds
+      forM_ claims (runDispatchClaim workerId fetchSig mIntent)
       loop
 
 processCanonicalDispatch ::
@@ -416,19 +399,20 @@ runDispatchClaim ::
   DispatchClaim ->
   Eff es ()
 runDispatchClaim workerId fetchSig mIntent claim =
-  case dispatchMessage claim of
-    Left err -> failClaim err
-    Right gm ->
-      trySync
-        ( do
-            enqueueImages fetchSig gm
-            enqueueForwards fetchSig gm
-            enqueueFiles fetchSig gm
-            onGroupMessage mIntent gm
-        )
-        >>= \case
-          Right () -> void (completeDispatch workerId claim.canonicalMessageId DispatchCompleted)
-          Left e -> failClaim (T.pack (show (e :: SomeException)))
+  trySync
+    ( do
+        mentionNatives <-
+          deliveryMentionNatives claim.originEndpointId
+            [identity | NMention (MentionIdentity identity) _ <- claim.body.nodes]
+        let gm = dispatchMessage mentionNatives claim
+        enqueueImages fetchSig gm
+        enqueueForwards fetchSig gm
+        enqueueFiles fetchSig gm
+        onGroupMessage mIntent gm
+    )
+    >>= \case
+      Right () -> void (completeDispatch workerId claim.canonicalMessageId DispatchCompleted)
+      Left e -> failClaim (T.pack (show (e :: SomeException)))
   where
     failClaim err = do
       now <- liftIO getCurrentTime
@@ -441,56 +425,51 @@ runDispatchClaim workerId fetchSig mIntent claim =
           ]
       void (completeDispatch workerId claim.canonicalMessageId (DispatchRetry err retryAt))
 
-dispatchMessage :: DispatchClaim -> Either T.Text GroupMessage
-dispatchMessage claim = case fromJSON claim.compatibilitySegments of
-  Error err -> Left ("invalid compatibility segments: " <> T.pack err)
-  Success segments ->
-    let normalizedSegments = case claim.replyToCompatibilityMessageId of
-          Nothing -> segments
-          Just target -> SegReply (MessageId target) : filter (\case SegReply _ -> False; _ -> True) segments
-        (nickname, card)
-          | claim.sourcePlatform == "qq" = (claim.senderNickname, claim.senderCard)
-          | otherwise =
-              ( Just
-                  ( sourcePlatformLabel claim.sourcePlatform
-                      <> " · "
-                      <> fromMaybe
-                        (T.pack (show claim.compatibilityUserId))
-                        (claim.senderCard <|> claim.senderNickname)
-                  ),
-                Nothing
-              )
-     in
-    Right
-      GroupMessage
-        { selfId = UserId claim.compatibilitySelfId,
-          groupId = GroupId claim.compatibilityConversationId,
-          userId = UserId claim.compatibilityUserId,
-          messageId = MessageId claim.compatibilityMessageId,
-          message = normalizedSegments,
-          rawMessage = claim.compatibilityRawMessage,
-          sender =
-            Sender
-              (UserId claim.compatibilityUserId)
-              nickname
-              card
-        }
-
-sourcePlatformLabel :: T.Text -> T.Text
-sourcePlatformLabel = \case
-  "matrix" -> "Matrix"
-  "imessage" -> "iMessage"
-  "wechatpad" -> "WeChat"
-  other -> other
+-- | Temporary compatibility view for the unchanged command/agent runtime.
+-- The durable claim itself is canonical and this projection never reads the
+-- legacy segments column or invents platform labels inside user identity.
+dispatchMessage :: Map.Map PrincipalIdentityId NativeUserId -> DispatchClaim -> GroupMessage
+dispatchMessage mentionNatives claim =
+  GroupMessage
+    { selfId = UserId claim.compatibilitySelfId,
+      groupId = GroupId claim.compatibilityConversationId,
+      userId = UserId claim.compatibilityUserId,
+      messageId = MessageId claim.compatibilityMessageId,
+      message = reply <> concatMap project claim.body.nodes,
+      rawMessage = plainText claim.body,
+      sender =
+        Sender
+          (UserId claim.compatibilityUserId)
+          claim.senderDisplayName
+          Nothing
+    }
+  where
+    reply = [SegReply (MessageId target) | Just target <- [claim.replyToCompatibilityMessageId]]
+    project node = case node of
+      NText text -> [SegText text]
+      NMention MentionAll display -> [SegText ("@" <> display)]
+      NMention (MentionIdentity identity) display -> case Map.lookup identity mentionNatives of
+        Just (NativeUserId native) -> case reads (T.unpack native) of
+          [(user, "")] -> [SegAt (UserId user)]
+          _ -> [SegText ("@" <> display)]
+        Nothing -> [SegText ("@" <> display)]
+      NEmote emote -> fromRaw emote.raw [SegText (fallbackText node)]
+      NMedia _ meta -> fromRaw meta.raw [SegText (fallbackText node)]
+      NCard card -> fromRaw card.raw [SegText (fallbackText node)]
+      NForward forward -> [SegOther "forward" (object ["id" .= forward.nativeId])]
+      NUnsupported _ -> [SegText (fallbackText node)]
+    fromRaw raw fallback = case raw >>= decodeSegment of
+      Just segment -> [segment]
+      Nothing -> fallback
+    decodeSegment value = case fromJSON value of
+      Success segment -> Just segment
+      Error _ -> Nothing
 
 dispatchBatchSize :: Int
 dispatchBatchSize = 32
 
 dispatchLeaseSeconds :: NominalDiffTime
 dispatchLeaseSeconds = 120
-
-dispatchPollMicros :: Int
-dispatchPollMicros = 500000
 
 dispatchRetrySeconds :: Int -> NominalDiffTime
 dispatchRetrySeconds attempts = fromIntegral (min (300 :: Int) (2 ^ min 8 (max 0 attempts)))
@@ -881,7 +860,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
             "message_id" .= midRaw,
             "origin" .= T.pack (show origin)
           ]
-  outputCaps <- conversationOutputCapabilities gidRaw
+  outputCaps <- conversationAdvertisedCaps gidRaw
   -- Claim the shutdown slot out here rather than inside the async:
   -- 'Max.Effects.Agent.agentTurn' doesn't reach its 'registerTask'
   -- until after 'Max.Prompt.buildContext', which on its own can spend
@@ -908,7 +887,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- as the crash and denied-command paths.  Direct triggers only:
       -- proactive turns stay traceless and a poke has no message to
       -- react to.
-      when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
+      when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
         sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
     Just turn ->
       void . async $
@@ -926,7 +905,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 -- face.  Swap in the failure face so a crash is visibly a
                 -- crash — direct triggers only; proactive turns stay
                 -- traceless, and a poke has no message to react to.
-                when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
+                when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
                   sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
               )
               `catch` \TaskCancelled ->
@@ -947,7 +926,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
               finishTurnRuntime env.beTasks turn
             let absorbed = completion.tcAbsorbedTriggers
                 unserved = completion.tcUnservedNotes
-            when (outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
+            when (outputCaps.canReaction && outputCaps.canFace) $
               for_ absorbed $ \m ->
                 sendAction (SetMsgEmojiLike (MessageId m) processingFaceId False)
             -- Notes this turn accepted but never answered ('endDispatch'
@@ -997,7 +976,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
     -- no other trace: the 托腮 just vanishes, no reason face.  Pokes
     -- have no message to react to.
     withProcessingReaction outputCaps act
-      | origin == OriginPoke || not (outputCaps.canOutputReaction && outputCaps.canOutputQQFace) = act
+      | origin == OriginPoke || not (outputCaps.canReaction && outputCaps.canFace) = act
       | otherwise =
           (sendAction (SetMsgEmojiLike gm.messageId processingFaceId True) >> act)
             `finally` sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
@@ -1090,7 +1069,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                     -- only: an absorbed proactive candidate was never
                     -- addressed to the bot, and reacting would break
                     -- the "traceless until it speaks" rule.
-                    when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
+                    when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
                       sendAction (SetMsgEmojiLike gm.messageId processingFaceId True)
                   pure (isJust landed)
         _ -> pure False
@@ -1129,7 +1108,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           gm
       let debugEff = fromMaybe env.beDebugDefault s.debugOverride
           stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
-          platformStickers = stickersEff && outputCaps.canOutputMedia
+          platformStickers = stickersEff && outputCaps.canMedia
           toolCtx =
             mkToolContext
               (TurnIdentity gm.groupId gm.messageId gm.userId gm.selfId)
@@ -1156,7 +1135,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "turns" .= result.turnsUsed,
                 "aborted" .= result.aborted
               ]
-          when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $ do
+          when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $ do
             sendAction (SetMsgEmojiLike gm.messageId processingFaceId False)
             sendAction (SetMsgEmojiLike gm.messageId failureFaceId True)
         Just replyRaw -> handleReply outputCaps env s mentionable rosterNames streamBudget result replyRaw
@@ -1175,7 +1154,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- a paragraph — the remainder plans into chunks exactly as it
       -- would have on its own.
       let remaining = T.drop (T.length result.sentPrefix) replyRaw
-          stickersEff = fromMaybe env.beStickerDefault s.stickerOverride && outputCaps.canOutputMedia
+          stickersEff = fromMaybe env.beStickerDefault s.stickerOverride && outputCaps.canMedia
           stripped = cleanModelText remaining
       when (stripped /= T.strip remaining) $
         logAttention "reply: hallucinated model markers stripped" $
@@ -1209,7 +1188,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "aborted" .= result.aborted
               ]
           insertSilence gm (if T.null stripped then "[silence]" else stripped)
-          when (origin == OriginDirect && outputCaps.canOutputReaction && outputCaps.canOutputQQFace) $
+          when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
             sendAction
               (SetMsgEmojiLike gm.messageId (fromMaybe defaultSilenceFace mFace) True)
         Nothing -> do
@@ -1248,7 +1227,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
 -- because every field is derived from something the caller holds
 -- anyway.
 sendTarget ::
-  ConversationOutputCapabilities ->
+  AdvertisedCaps ->
   GroupMessage ->
   Maybe (Set UserId) ->
   [(T.Text, UserId)] ->
@@ -1261,10 +1240,10 @@ sendTarget outputCaps gm mentionable rosterNames stickersOn =
       rtMentionable = mentionable,
       rtRosterNames = rosterNames,
       rtStickers = stickersOn,
-      rtCanReply = outputCaps.canOutputReply,
-      rtCanMention = outputCaps.canOutputQQMention,
-      rtCanFace = outputCaps.canOutputQQFace,
-      rtCanImage = outputCaps.canOutputMedia
+      rtCanReply = outputCaps.canReply,
+      rtCanMention = outputCaps.canMention,
+      rtCanFace = outputCaps.canFace,
+      rtCanImage = outputCaps.canMedia
     }
 
 -- | Send a message and write it down, so the messages table mirrors
@@ -1318,11 +1297,11 @@ replyText gm body =
 -- just doesn't get the block).
 fetchGroupContext ::
   (PlatformApi :> es, Log :> es) =>
-  ConversationOutputCapabilities ->
+  AdvertisedCaps ->
   GroupId ->
   Eff es (Maybe (Set UserId), [(T.Text, UserId)], [T.Text])
 fetchGroupContext outputCaps gid
-  | isPrivateChat gid || not outputCaps.canOutputQQMention = pure (Nothing, [], [])
+  | isPrivateChat gid || not outputCaps.canMention = pure (Nothing, [], [])
   | otherwise = do
       members <- fetchGroupMembers gid
       meta <- fetchGroupMeta gid

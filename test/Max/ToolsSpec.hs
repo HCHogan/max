@@ -7,7 +7,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Embedding (Embedding)
 import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.Tools (Tool (..))
-import Max.Platform.Types (qqConversationOutputCapabilities)
+import Max.Platform.Types (qqAdvertisedCaps)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import Max.Tools (builtinsFor)
 import Max.Tools.Memory (memoryToolsFor)
@@ -22,7 +22,7 @@ toolContext :: ToolContext
 toolContext =
   mkToolContext
     (TurnIdentity (GroupId 123) (MessageId 456) (UserId 789) (UserId 999))
-    (TurnCapabilities False False False qqConversationOutputCapabilities)
+    (TurnCapabilities False False False qqAdvertisedCaps)
 
 spec :: Spec
 spec = describe "model-visible builtins" $ do

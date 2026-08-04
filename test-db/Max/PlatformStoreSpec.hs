@@ -369,10 +369,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
 
   it "keeps semantic mentions when a mirror has a QQ endpoint" $ do
     (qq, matrix) <- mirrorPair pool
-    mirrorCaps <- withDb pool (conversationOutputCapabilities 42)
-    mirrorCaps.canOutputReply `shouldBe` True
-    mirrorCaps.canOutputQQMention `shouldBe` True
-    mirrorCaps.canOutputQQFace `shouldBe` False
+    mirrorCaps <- withDb pool (conversationAdvertisedCaps 42)
+    mirrorCaps.canReply `shouldBe` True
+    mirrorCaps.canMention `shouldBe` True
+    mirrorCaps.canFace `shouldBe` True
     -- Mention content has a readable per-endpoint fallback; faces do not.
     -- Endpoint identities, not the positive legacy group id, decide this.
     qq.endpointId `shouldNotBe` matrix.endpointId
@@ -426,9 +426,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             }
         options =
           defaultIngestOptions
-            { renderedTextOverride = Just "rendered\0text",
-              compatibilitySegments = object ["text" .= ("segment\0text" :: Text)],
-              compatibilityRawMessage = "raw\0message"
+            { qqProvenanceSegments = Just (object ["text" .= ("segment\0text" :: Text)])
             }
     result <- withDb pool (ingestEnvelope options envelope)
     rows <- withConn pool $ \conn ->
@@ -470,7 +468,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
                 ]
             ]
         staleOptions :: IngestOptions
-        staleOptions = defaultIngestOptions {PlatformStore.compatibilitySegments = staleReplySegments}
+        staleOptions = defaultIngestOptions {PlatformStore.qqProvenanceSegments = Just staleReplySegments}
         falseEnvelope =
           (inbound endpoint.endpointId now "ambient-child" "ambient")
             { relations = [ReplyTo (NativeEventId "previous")],
@@ -598,8 +596,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         options :: IngestOptions
         options =
           defaultIngestOptions
-            { PlatformStore.compatibilitySegments =
-                toJSON
+            { PlatformStore.qqProvenanceSegments =
+                Just . toJSON $
                   [ object
                       [ "type" .= ("image" :: Text),
                         "data"

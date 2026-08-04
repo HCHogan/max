@@ -1,6 +1,7 @@
 -- |
--- WeChat backend over a WeChatPadPro relay (0.4 slice B — minimal
--- demo: text in, text out, whitelisted chatrooms only).
+-- WeChat backend over a WeChatPadPro relay.  Inbound frames enter the same
+-- canonical envelope pipeline as every other adapter; outbound receives only
+-- text nodes already lowered for this endpoint's honest text-only caps.
 --
 -- Protocol (verified against nekro-agent's adapter and the
 -- WeChatPadPro API):
@@ -15,10 +16,7 @@
 --     with @{"MsgItem":[{"MsgType":1,"TextContent":…,"ToUserName":…}]}@;
 --     @Code == 200@ in the envelope means accepted.
 --
--- Ids are folded into max's bigint world via "Max.DB.PlatformIds".
--- Degradations (WeChat has no reactions / reply segments / pokes):
--- reactions and pokes silently no-op; reply/at segments render into
--- plain text; non-text media renders as a bracket marker.
+-- Ids are folded into max's bigint compatibility world only at the edge.
 --
 -- 已知风险：iPad 协议逆向，封号风险自担（跑小号）。
 module Max.Wechatpad
@@ -31,21 +29,23 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Concurrent (threadDelay)
-import Control.Concurrent.STM (TQueue, atomically, writeTQueue)
-import Control.Monad (forever, unless)
+import Control.Monad (forM, forever, unless)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.Foldable (for_)
 import Data.Int (Int64)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Text.Read qualified as TR
+import Data.Time (getCurrentTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.PlatformIds (mappedId, nativeId)
+import Max.DB.PlatformIds qualified as PlatformIds
 import Max.HttpRuntime
   ( BufferedResponse (body),
     HttpPool (StandardPool),
@@ -56,13 +56,33 @@ import Max.HttpRuntime
     runBuffered,
   )
 import Max.Platform (PlatformBackend (..))
+import Max.IR
+import Max.IR.Lower (textOnlyCaps)
+import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Store
+  ( IngestResult (..),
+    NewIngest (..),
+    RegisteredEndpoint (..),
+    defaultIngestOptions,
+    ensureConfiguredEndpoint,
+    ingestEnvelope,
+  )
+import Max.Platform.Types
+  ( ConversationKind (ConversationGroup),
+    EndpointMode (EndpointStandalone),
+    EventKind (EventMessage),
+    NativeAccountId (..),
+    NativeConversationId (..),
+    NativeEventId (..),
+    NativeUserId (..),
+    Platform (PlatformWeChatPad),
+  )
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
 import Network.WebSockets qualified as WS
 import OneBot.Action (Action (..), Response (..))
-import OneBot.Event (Event (..), GroupMessage (..), Sender (..))
-import OneBot.Segment (Segment (..), renderPlainText)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import OneBot.Segment (Segment (..))
+import OneBot.Types (GroupId (..), UserId (..))
 
 platformName :: Text
 platformName = "wechatpad"
@@ -122,33 +142,30 @@ wechatpadBackend runtime runDb cfg =
       other -> pure (Left ("wechatpad: unsupported action: " <> T.take 60 (T.pack (show other))))
 
     deliver kind mapped segs = do
-      mNative <- runDb (nativeId platformName kind mapped)
+      mNative <- runDb (PlatformIds.nativeId platformName kind mapped)
       case mNative of
         Nothing -> pure (Left ("wechatpad: no native id for " <> T.pack (show mapped)))
         Just to -> do
-          let body = renderOutbound segs
-          if T.null (T.strip body)
-            then pure (Right 0)
-            else
-              postText runtime cfg to body >>= \case
+          case wireText segs of
+            Left err -> pure (Left err)
+            Right body
+              | T.null (T.strip body) -> pure (Right 0)
+              | otherwise -> postText runtime cfg to body >>= \case
                 Left err -> pure (Left err)
                 Right () -> do
                   -- Allocate a synthetic id for the sent message so
                   -- the caller can persist the bot's own line.
-                  mid <- runDb (mappedId platformName "message" ("sent:" <> to <> ":" <> T.take 32 body))
+                  mid <- runDb (PlatformIds.mappedId platformName "message" ("sent:" <> to <> ":" <> T.take 32 body))
                   pure (Right mid)
 
--- | Flatten outbound segments to WeChat text.  Reply/at have no
--- native form; media falls back to a marker.
-renderOutbound :: [Segment] -> Text
-renderOutbound = T.concat . map go
+-- | Protocol emission only.  Any non-text segment is a violated lowering
+-- contract, never an invitation for an adapter-local fallback.
+wireText :: [Segment] -> Either Text Text
+wireText = fmap T.concat . traverse go
   where
     go = \case
-      SegText t -> t
-      SegAt _ -> ""
-      SegReply _ -> ""
-      SegImage _ -> "[图片]"
-      other -> renderPlainText [other]
+      SegText t -> Right t
+      other -> Left ("wechatpad: lowering emitted non-text segment: " <> T.take 60 (T.pack (show other)))
 
 postText :: HttpRuntime -> WechatpadConfig -> Text -> Text -> IO (Either Text ())
 postText runtime cfg to content = do
@@ -198,19 +215,18 @@ statusPreviewBytes = 1024
 --------------------------------------------------------------------------------
 -- Inbound worker.
 
--- | Long-lived WS listener: parse sync frames, translate whitelisted
--- chatroom text messages into 'EvGroupMessage's on the shared queue.
--- Reconnects forever with a fixed backoff.
+-- | Long-lived WS listener.  Every allowlisted room is registered as a
+-- canonical endpoint before ingress opens; frames publish an 'InboundEnvelope'
+-- and atomically create dispatch/mirror work in 'ingestEnvelope'.
 wechatpadWorker ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   WechatpadConfig ->
-  TQueue Event ->
   Eff es ()
-wechatpadWorker cfg q = localDomain "wechatpad" $ do
+wechatpadWorker cfg = localDomain "wechatpad" $ do
   logInfo "wechatpad worker started" $ object ["chatrooms" .= cfg.wpChatrooms]
-  selfMapped <- mappedId platformName "user" cfg.wpSelfWxid
+  endpoints <- Map.fromList <$> forM cfg.wpChatrooms registerRoom
   forever $ do
-    listenOnce selfMapped `catchSync` \e ->
+    listenOnce endpoints `catchSync` \e ->
       logAttention "wechatpad: connection lost, retrying in 5s" $
         object ["error" .= T.pack (show e)]
     liftIO (threadDelay 5_000_000)
@@ -218,52 +234,73 @@ wechatpadWorker cfg q = localDomain "wechatpad" $ do
     (host, port) = parseHostPort cfg.wpApiUrl
     wsPath = "/ws/GetSyncMsg?key=" <> T.unpack cfg.wpAuthKey
 
-    listenOnce selfMapped =
+    registerRoom room = do
+      legacy <- PlatformIds.mappedId platformName "channel" room
+      endpoint <-
+        ensureConfiguredEndpoint
+          PlatformWeChatPad
+          (NativeAccountId cfg.wpSelfWxid)
+          (NativeConversationId room)
+          ConversationGroup
+          EndpointStandalone
+          (Just legacy)
+          textOnlyCaps
+      pure (room, endpoint)
+
+    listenOnce endpoints =
       withRunInIO $ \unlift ->
         WS.runClient host port wsPath $ \conn -> forever $ do
           raw <- WS.receiveData conn
-          unlift (handleFrame selfMapped raw)
+          unlift (handleFrame endpoints raw)
 
-    handleFrame selfMapped raw =
+    handleFrame endpoints raw =
       case decodeStrictText raw of
         Nothing -> pure ()
-        Just frame -> for_ (parseMaybe frameParser frame) (translate selfMapped frame)
+        Just frame -> for_ (parseMaybe frameParser frame) (translate endpoints frame)
 
-    translate selfMapped frame wm
-      -- Demo scope: whitelisted chatroom text messages only.
+    translate endpoints frame wm
       | wm.wmMsgType /= 1 = pure ()
       | not ("@chatroom" `T.isSuffixOf` wm.wmFrom) = pure ()
-      | wm.wmFrom `notElem` cfg.wpChatrooms = pure ()
+      | Nothing <- Map.lookup wm.wmFrom endpoints = pure ()
       | otherwise = do
           let (senderWxid, body0) = splitSender wm.wmContent
           -- The bot's own messages echo back on the sync stream.
           unless (senderWxid == cfg.wpSelfWxid) $ do
-            gid <- mappedId platformName "channel" wm.wmFrom
-            uid <- mappedId platformName "user" senderWxid
-            mid <- mappedId platformName "message" (T.pack (show wm.wmNewMsgId))
-            let (mentioned, body) = detectMention cfg.wpBotName body0
-                segs =
-                  [SegAt (UserId selfMapped) | mentioned]
-                    <> [SegText body]
-                nick = pushNick wm.wmPushContent
-                gm =
-                  GroupMessage
-                    { selfId = UserId selfMapped,
-                      groupId = GroupId gid,
-                      userId = UserId uid,
-                      messageId = MessageId mid,
-                      message = segs,
-                      rawMessage = wm.wmContent,
-                      sender = Sender (UserId uid) nick Nothing
+            received <- liftIO getCurrentTime
+            let endpoint = endpoints Map.! wm.wmFrom
+                nativeEvent = if wm.wmNewMsgId == 0 then wm.wmMsgId else T.pack (show wm.wmNewMsgId)
+                content = wechatBody cfg.wpSelfWxid cfg.wpBotName body0
+                options = defaultIngestOptions
+                envelope =
+                  InboundEnvelope
+                    { endpointId = endpoint.endpointId,
+                      nativeEventId = NativeEventId nativeEvent,
+                      senderNativeId = NativeUserId senderWxid,
+                      senderDisplayName = pushNick wm.wmPushContent,
+                      occurredAt =
+                        if wm.wmCreateTime > 0
+                          then posixSecondsToUTCTime (fromIntegral wm.wmCreateTime)
+                          else received,
+                      receivedAt = received,
+                      eventKind = EventMessage,
+                      content,
+                      relations = [],
+                      sourceCursor = Nothing,
+                      rawPayload = Just frame
                     }
             logInfo "wechat message" $
               object
                 [ "chatroom" .= wm.wmFrom,
                   "sender" .= senderWxid,
-                  "len" .= T.length body,
+                  "len" .= T.length body0,
                   "create_time" .= wm.wmCreateTime
                 ]
-            liftIO (atomically (writeTQueue q (EvGroupMessage platformName frame gm)))
+            ingestEnvelope options envelope >>= \case
+              Ingested fresh ->
+                logInfo "wechat event ingested" $
+                  object ["native_event_id" .= nativeEvent, "canonical_message_id" .= fresh.canonicalMessageId]
+              AlreadyIngested {} -> pure ()
+              DeliveryEcho {} -> pure ()
 
 -- | Chatroom frames carry the sender folded into the content as
 -- @wxid:\\ntext@; a frame without that shape belongs to the room
@@ -276,15 +313,20 @@ splitSender c = case T.breakOn ":\n" c of
         (w, T.drop 2 rest)
   _ -> ("", c)
 
--- | \@-detection by display name: "@名字" (with the usual trailing
--- space or end) triggers; the token is stripped so the model sees a
--- clean body plus a synthesized 'SegAt'.
-detectMention :: Text -> Text -> (Bool, Text)
-detectMention name t =
-  let token = "@" <> name
-   in if token `T.isInfixOf` t
-        then (True, T.strip (T.replace token "" t))
-        else (False, t)
+-- | Preserve the order of text and the only mention whose authenticated
+-- native identity this adapter knows: the bot itself.  Other visible @names
+-- remain text rather than being guessed into identities.
+wechatBody :: Text -> Text -> Text -> Body 'Ingest
+wechatBody selfWxid botName = Body . mergeText . go
+  where
+    token = "@" <> botName
+    go input = case T.breakOn token input of
+      (before, rest)
+        | T.null rest -> [NText before | not (T.null before)]
+        | otherwise ->
+            [NText before | not (T.null before)]
+              <> [NMention (NativeUserId selfWxid) botName]
+              <> go (fromMaybe (T.drop (T.length token) rest) (T.stripPrefix " " (T.drop (T.length token) rest)))
 
 -- | push_content usually reads "昵称 : 内容" — harvest the nickname.
 pushNick :: Text -> Maybe Text
@@ -300,6 +342,7 @@ data WMsg = WMsg
     wmFrom :: !Text,
     wmContent :: !Text,
     wmPushContent :: !Text,
+    wmMsgId :: !Text,
     wmNewMsgId :: !Int64,
     -- | WeChat's own send timestamp (unix seconds).  We stamp
     -- @messages.received_at@ with our /ingest/ time, so this is the
@@ -315,9 +358,10 @@ frameParser = withObject "frame" $ \o -> do
   from <- strField o "from_user_name"
   content <- strField o "content"
   pc <- o .:? "push_content" .!= ""
+  mi <- strField o "msg_id"
   nmi <- o .:? "new_msg_id" .!= 0
   ct <- o .:? "create_time" .!= 0
-  pure (WMsg ty from content pc nmi ct)
+  pure (WMsg ty from content pc mi nmi ct)
   where
     strField o k =
       (o .:? k) >>= \case

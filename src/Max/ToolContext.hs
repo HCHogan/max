@@ -21,7 +21,7 @@ module Max.ToolContext
 where
 
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
-import Max.Platform.Types (ConversationOutputCapabilities)
+import Max.Platform.Types (AdvertisedCaps)
 import OneBot.Types (GroupId, MessageId, UserId)
 
 data TurnIdentity = TurnIdentity
@@ -36,7 +36,7 @@ data TurnCapabilities = TurnCapabilities
   { tcMultimodal :: !Bool,
     tcStickers :: !Bool,
     tcSkills :: !Bool,
-    tcOutput :: !ConversationOutputCapabilities
+    tcOutput :: !AdvertisedCaps
   }
   deriving stock (Show, Eq)
 
@@ -78,5 +78,5 @@ toolStickers = (.toolCapabilities.tcStickers)
 toolSkills :: ToolContext -> Bool
 toolSkills = (.toolCapabilities.tcSkills)
 
-toolOutputCapabilities :: ToolContext -> ConversationOutputCapabilities
+toolOutputCapabilities :: ToolContext -> AdvertisedCaps
 toolOutputCapabilities = (.toolCapabilities.tcOutput)

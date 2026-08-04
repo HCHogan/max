@@ -337,7 +337,7 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
             <> [ worker "call-pruner" OptionalWorker (callPruner cfg.adminCallRetentionDays)
                | _ <- maybeToList cfg.admin
                ]
-            <> [ worker "wechatpad" OptionalWorker (wechatpadWorker wc eventQ)
+            <> [ worker "wechatpad" OptionalWorker (wechatpadWorker wc)
                | wc <- maybeToList cfg.wechatpad
                ]
             <> [ worker "matrix" OptionalWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler)

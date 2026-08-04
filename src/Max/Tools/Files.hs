@@ -21,14 +21,14 @@ module Max.Tools.Files
   ( fileToolsFor,
 
     -- * Exposed for tests
-    captionSegs,
+    captionBody,
   )
 where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Maybe (fromMaybe)
 import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -47,17 +47,16 @@ import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundReque
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.IR
-import Max.Platform.Types (ConversationOutputCapabilities, NativeUserId (..))
+import Max.IR.Prompt (MentionRoster (..), parseModelChunk)
+import Max.Platform.Types (AdvertisedCaps (..))
 import Max.Reply (chunkSource, planReply)
-import Max.ReplySend (modelTextSegs)
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
 import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities)
 import Max.Util (withTempDirectory)
 import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..))
-import OneBot.Segment (Segment (..))
-import OneBot.Types (GroupId (..), UserId (..), isPrivateChat, privateChatUserId)
+import OneBot.Types (GroupId (..), MessageId (..), isPrivateChat, privateChatUserId)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeFileName, (</>))
 
@@ -227,7 +226,7 @@ sendImageFromSandboxTool ::
     Log :> es,
     IOE :> es
   ) =>
-  ConversationOutputCapabilities ->
+  AdvertisedCaps ->
   GroupId ->
   SandboxRegistry ->
   Tool es
@@ -266,9 +265,8 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
                 Right bytes -> do
                   blob <- putBlob bytes
                   let source = mediaBlobRef (blobRefSha256 blob)
-                      caption = captionSegs outputCaps gid mCaption
-                      body = Body (concatMap captionNode caption <> [NMedia source (imageMeta bytes)])
-                      replyTo = listToMaybe [message | SegReply message <- caption]
+                      (replyTo, caption) = captionBody outputCaps gid mCaption
+                      body = Body (caption.nodes <> [NMedia source (imageMeta bytes)])
                   outcome <-
                     sendRecorded
                       OutboundRequest
@@ -284,14 +282,6 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
                     SentRecorded {} -> sent sid bytes
     }
   where
-    captionNode = \case
-      SegText body -> [NText body]
-      SegAt (UserId user) ->
-        let native = T.pack (show user)
-         in [NMention (NativeUserId native) native]
-      SegReply _ -> []
-      _ -> []
-
     imageMeta bytes =
       MediaMeta
         { kind = MImage,
@@ -318,7 +308,7 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
     parseArgs :: Object -> Parser (Text, Text, Maybe Text)
     parseArgs o = (,,) <$> o .: "sandbox_id" <*> o .: "path" <*> o .:? "caption"
 
--- | The segments an image caption becomes, ahead of the image itself.
+-- | Parse a model-authored image caption directly into ingest IR.
 --
 -- The caption is model-authored text, written under the same format
 -- guide as a reply, so it arrives carrying the same placeholders — and
@@ -326,9 +316,9 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
 -- Production: @"[↩#493645310] 画好了，macOS belike：…"@ went to the
 -- group with the token visible, weeks after the reply and narration
 -- paths were both taught to consume it.  Pure and top-level for the
--- same reason 'Max.ReplySend.modelTextSegs' is: a sender with
--- its own private idea of what model text means is how this keeps
--- happening.
+-- It shares the model-token codec with ordinary replies; model-only media
+-- handles are deliberately dropped because the image tool has already chosen
+-- the attachment it is publishing.
 --
 -- One message, so @[split]@ cannot be honoured the way it is elsewhere;
 -- plan the caption anyway and rejoin, which eats the markers instead of
@@ -337,19 +327,28 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
 -- no roster to check membership against.  A caption that is nothing but
 -- a quote still quotes: unlike a narration line, the message it rides
 -- on is going out regardless.
-captionSegs :: ConversationOutputCapabilities -> GroupId -> Maybe Text -> [Segment]
-captionSegs _ _ Nothing = []
-captionSegs outputCaps gid (Just c)
-  | null body = quote
-  | otherwise = quote <> body <> [SegText "\n"]
+captionBody :: AdvertisedCaps -> GroupId -> Maybe Text -> (Maybe MessageId, Body 'Ingest)
+captionBody _ _ Nothing = (Nothing, Body [])
+captionBody outputCaps gid (Just caption) =
+  ( MessageId <$> if outputCaps.canReply then quoted else Nothing,
+    Body (if null body then [] else body <> [NText "\n"])
+  )
   where
-    (mQuoted, body) =
-      modelTextSegs
-        outputCaps
-        (isPrivateChat gid)
-        Nothing
-        (T.intercalate "\n" (map chunkSource (planReply c)))
-    quote = [SegReply m | Just m <- [mQuoted]]
+    (quoted, parsed) =
+      parseModelChunk
+        MentionRoster {known = const True, names = []}
+        (T.intercalate "\n" (map chunkSource (planReply caption)))
+    body = trimEdges (mergeText (concatMap resolve parsed.nodes))
+    resolve = \case
+      NText text -> [NText text]
+      NMention native display
+        | outputCaps.canMention && not (isPrivateChat gid) -> [NMention native display]
+        | otherwise -> [NText ("@" <> display)]
+      NEmote emote
+        | outputCaps.canFace -> [NEmote emote]
+        | otherwise -> []
+      NMedia {} -> []
+      NCard card -> [NCard card]
 
 -- | Stage a file from a container into a host temp file, read it,
 -- delete the temp.  Used for the base64-image path; bytes stay in

@@ -15,7 +15,7 @@ module Max.Platform.Store
     findConversationByLegacyId,
     platformForLegacyConversation,
     platformForLegacyMessage,
-    conversationOutputCapabilities,
+    conversationAdvertisedCaps,
     compatibilityPlatformId,
     isBotAuthoredCompatibilityMessage,
     registerEndpoint,
@@ -91,11 +91,12 @@ import Max.IR
 import Max.IR.Lower
   ( Attribution (..),
     LowerNote,
-    OutboundCaps,
+    OutboundCaps (..),
     ReplyContext (..),
     outboundCapsFromValue,
     outboundCapsToValue,
     platformDisplayLabel,
+    Tier (..),
   )
 import Max.IR.Prompt (promptText)
 import Max.Platform.Envelope (InboundEnvelope (..))
@@ -128,53 +129,48 @@ data RegisteredEndpoint = RegisteredEndpoint
   }
   deriving stock (Eq, Show, Generic)
 
--- | Derive the canonical output surface from enabled endpoints.  Features
--- without a faithful fallback still require the full intersection.  A QQ
--- mention is different: canonical content preserves its target, QQ lowers it
--- to SegAt, and text-only mirrors lower it to a readable @id.  Faces remain
--- QQ-only because no equivalent semantic fallback exists yet.
-conversationOutputCapabilities ::
+-- | Derive the semantic surface advertised to the model.  Content actions
+-- are enabled when they have a total lowering path; joining a text-only
+-- endpoint therefore cannot hide reply, mention or media.  Reactions and QQ
+-- faces remain gated because they have no textual action equivalent.
+conversationAdvertisedCaps ::
   (WithConnection :> es, IOE :> es) =>
   Int64 ->
-  Eff es ConversationOutputCapabilities
-conversationOutputCapabilities legacyConversation = do
+  Eff es AdvertisedCaps
+conversationAdvertisedCaps legacyConversation = do
   rows <-
     query
-      "WITH enabled AS ( \
-      \ SELECT a.platform, CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END AS caps \
-      \ FROM conversations c \
+      "SELECT a.platform, CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END \
+      \FROM conversations c \
       \ JOIN conversation_endpoints e USING (conversation_id) \
       \ JOIN platform_accounts a USING (platform_account_id) \
       \ WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
-      \) \
-      \SELECT count(*)::bigint, \
-      \       COALESCE(bool_and(COALESCE((caps->>'reply')::boolean, false)), false), \
-      \       COALESCE(bool_and(COALESCE((caps->>'reaction')::boolean, false)), false), \
-      \       COALESCE(bool_and(COALESCE((caps->>'send_media')::boolean, false)), false), \
-      \       COALESCE(bool_or(platform = 'qq'), false), \
-      \       COALESCE(bool_and(platform = 'qq'), false) \
-      \FROM enabled"
+      \ ORDER BY e.endpoint_id"
       (Only legacyConversation)
-  pure $ case rows :: [(Int64, Bool, Bool, Bool, Bool, Bool)] of
-    [(count, reply, reaction, media, hasQQ, qqOnly)]
-      | count > 0 ->
-          ConversationOutputCapabilities
-            { canOutputReply = reply,
-              canOutputReaction = reaction,
-              canOutputMedia = media,
-              canOutputQQMention = hasQQ,
-              canOutputQQFace = qqOnly
-            }
-    _ -> noConversationOutputCapabilities
+  let endpoints =
+        [ (parsePlatform platform, outboundCapsFromValue manifest)
+        | (platform, manifest) <- (rows :: [(Text, Value)])
+        ]
+      present = not (null endpoints)
+      anyMedia caps = any (/= TierDrop) [caps.image, caps.sticker, caps.video, caps.audio, caps.file]
+  pure
+    AdvertisedCaps
+      { canReply = present,
+        canMention = present,
+        canMedia = any (anyMedia . snd) endpoints,
+        canReaction = any (reaction . snd) endpoints,
+        canFace = any ((== PlatformQQ) . fst) endpoints
+      }
 
 data IngestOptions = IngestOptions
   { maxRawPayloadBytes :: !Int,
     createDispatch :: !Bool,
     createMirrorDeliveries :: !Bool,
     transcriptKind :: !Text,
-    renderedTextOverride :: !(Maybe Text),
-    compatibilitySegments :: !Value,
-    compatibilityRawMessage :: !Text
+    -- | Raw OneBot segment provenance.  Only the QQ adapter may populate it;
+    -- every other platform leaves @messages.segments@ as the frozen empty
+    -- array and uses canonical content exclusively.
+    qqProvenanceSegments :: !(Maybe Value)
   }
   deriving stock (Eq, Show, Generic)
 
@@ -185,9 +181,7 @@ defaultIngestOptions =
       createDispatch = True,
       createMirrorDeliveries = True,
       transcriptKind = "chat",
-      renderedTextOverride = Nothing,
-      compatibilitySegments = toJSON ([] :: [Value]),
-      compatibilityRawMessage = ""
+      qqProvenanceSegments = Nothing
     }
 
 data IngestResult
@@ -204,21 +198,19 @@ data NewIngest = NewIngest
   deriving stock (Eq, Show, Generic)
 
 -- | One durable eligibility decision waiting to cross into the live runtime.
--- The compatibility projection is kept at this boundary while Handler still
--- consumes OneBot-shaped messages; adapters and storage remain platform
--- neutral.
+-- Content and provenance are canonical; numeric ids remain only as temporary
+-- keys for the unchanged session/command runtime, never as content authority.
 data DispatchClaim = DispatchClaim
   { canonicalMessageId :: !CanonicalMessageId,
     compatibilityMessageId :: !Int64,
     compatibilityConversationId :: !Int64,
     compatibilityUserId :: !Int64,
     compatibilitySelfId :: !Int64,
-    compatibilitySegments :: !Value,
+    body :: !(Body 'Canonical),
+    originEndpointId :: !EndpointId,
     replyToCompatibilityMessageId :: !(Maybe Int64),
-    compatibilityRawMessage :: !Text,
-    sourcePlatform :: !Text,
-    senderNickname :: !(Maybe Text),
-    senderCard :: !(Maybe Text),
+    sourcePlatform :: !Platform,
+    senderDisplayName :: !(Maybe Text),
     attemptCount :: !Int
   }
   deriving stock (Eq, Show, Generic)
@@ -377,18 +369,17 @@ data DispatchClaimRow = DispatchClaimRow
     dcrGroupId :: !Int64,
     dcrUserId :: !Int64,
     dcrSelfId :: !Int64,
-    dcrSegments :: !Value,
+    dcrContent :: !Value,
+    dcrOriginEndpointId :: !Int64,
     dcrReplyToMessageId :: !(Maybe Int64),
-    dcrRawMessage :: !Text,
     dcrSourcePlatform :: !Text,
-    dcrSenderNickname :: !(Maybe Text),
-    dcrSenderCard :: !(Maybe Text),
+    dcrSenderDisplayName :: !(Maybe Text),
     dcrAttemptCount :: !Int
   }
 
 instance FromRow DispatchClaimRow where
   fromRow =
-    DispatchClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
+    DispatchClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
 
 createConversation ::
   (WithConnection :> es, IOE :> es) =>
@@ -588,10 +579,9 @@ ensureLegacyEndpoint platform nativeAccount nativeConversation kind legacyGroup 
         \ RETURNING endpoint_id"
         (conversation.unConversationId, account, conversationNative, renderConversationKind kind, capabilitiesJson)
     let endpoint = exactlyOne "ensureLegacyEndpoint endpoint" endpointRows
-    -- A configured Matrix mirror may have claimed this legacy conversation
-    -- before its QQ endpoint was first observed.  In that ordering the QQ
-    -- endpoint must inherit mirror mode; otherwise both endpoints share the
-    -- conversation but the relay query deliberately creates no deliveries.
+    -- A configured mirror may have claimed this conversation before another
+    -- endpoint is first observed.  Mirror membership is conversation topology,
+    -- never a platform-pair special case.
     _ <-
       execute
         "UPDATE conversation_endpoints current_endpoint \
@@ -599,11 +589,9 @@ ensureLegacyEndpoint platform nativeAccount nativeConversation kind legacyGroup 
         \ WHERE current_endpoint.endpoint_id = ? \
         \   AND EXISTS ( \
         \     SELECT 1 FROM conversation_endpoints peer \
-        \     JOIN platform_accounts peer_account USING (platform_account_id) \
         \     WHERE peer.conversation_id = current_endpoint.conversation_id \
         \       AND peer.endpoint_id <> current_endpoint.endpoint_id \
-        \       AND peer.endpoint_mode = 'mirror' \
-        \       AND peer_account.platform = 'matrix')"
+        \       AND peer.endpoint_mode = 'mirror')"
         (Only endpoint)
     pure
       RegisteredEndpoint
@@ -693,20 +681,16 @@ ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLe
         \ SET endpoint_mode = ?, endpoint_kind = ?, capabilities = ?, enabled = true, updated_at = now() \
         \ WHERE endpoint_id = ?"
         (renderEndpointMode mode, renderConversationKind kind, capabilitiesJson, endpoint)
-    -- Attaching a configured Matrix mirror to an already active QQ
-    -- conversation is one linking operation.  Promote the existing QQ side
-    -- in the same transaction so there is never a half-mirror that silently
-    -- drops relay deliveries.
+    -- Attaching any configured mirror is one platform-neutral linking
+    -- operation.  Promote all peers in the same transaction so adding a third
+    -- platform cannot recreate a half-mirror.
     case (mode, mLegacy) of
       (EndpointMirror, Just _) -> do
         _ <-
           execute
-            "UPDATE conversation_endpoints peer \
+            "UPDATE conversation_endpoints \
             \ SET endpoint_mode = 'mirror', updated_at = now() \
-            \ FROM platform_accounts peer_account \
-            \ WHERE peer.platform_account_id = peer_account.platform_account_id \
-            \   AND peer.conversation_id = ? \
-            \   AND peer_account.platform = 'qq'"
+            \ WHERE conversation_id = ?"
             (Only conversation)
         pure ()
       _ -> pure ()
@@ -887,10 +871,10 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
       let platformName = endpoint.erPlatform
           NativeEventId nativeEvent = envelope.nativeEventId
           NativeUserId nativeUser = envelope.senderNativeId
-          rendered =
-            fromMaybe
-              (promptText (parsePlatform endpoint.erPlatform) envelope.content)
-              options.renderedTextOverride
+          rendered = promptText (parsePlatform endpoint.erPlatform) envelope.content
+          provenanceSegments
+            | platformName == "qq" = fromMaybe (toJSON ([] :: [Value])) options.qqProvenanceSegments
+            | otherwise = toJSON ([] :: [Value])
       legacySelf <- compatibilityId platformName "user" endpoint.erNativeAccountId
       legacyUser <- compatibilityId platformName "user" nativeUser
       legacyMessage <- compatibilityId platformName "message" nativeEvent
@@ -917,10 +901,10 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             legacySelf,
             envelope.receivedAt,
             envelope.occurredAt,
-            Jsonb options.compatibilitySegments,
+            Jsonb provenanceSegments,
             Jsonb contentValue,
             rendered,
-            options.compatibilityRawMessage,
+            rendered,
             envelope.senderDisplayName,
             replyLegacy,
             replyCanonical,
@@ -1212,7 +1196,8 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
       \ RETURNING md.canonical_message_id, md.attempt_count \
       \) \
       \SELECT c.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
-      \       m.segments, m.reply_to_message_id, m.raw_message, m.source_platform, m.sender_nickname, m.sender_card, c.attempt_count \
+      \       m.canonical_content, m.origin_endpoint_id, m.reply_to_message_id, \
+      \       m.source_platform, m.sender_nickname, c.attempt_count \
       \FROM claimed c JOIN messages m USING (canonical_message_id) \
       \ORDER BY c.canonical_message_id"
       ( mCanonical,
@@ -1600,9 +1585,7 @@ sanitizeIngestOptions :: IngestOptions -> IngestOptions
 sanitizeIngestOptions options =
   options
     { transcriptKind = sanitizePostgresText options.transcriptKind,
-      renderedTextOverride = sanitizePostgresText <$> options.renderedTextOverride,
-      compatibilitySegments = sanitizePostgresValue options.compatibilitySegments,
-      compatibilityRawMessage = sanitizePostgresText options.compatibilityRawMessage
+      qqProvenanceSegments = sanitizePostgresValue <$> options.qqProvenanceSegments
     }
 
 sanitizeNativeUserId :: NativeUserId -> NativeUserId
@@ -1955,12 +1938,11 @@ toDispatchClaim row =
       compatibilityConversationId = row.dcrGroupId,
       compatibilityUserId = row.dcrUserId,
       compatibilitySelfId = row.dcrSelfId,
-      compatibilitySegments = row.dcrSegments,
+      body = decodeCanonical "dispatch canonical_content" row.dcrContent,
+      originEndpointId = EndpointId row.dcrOriginEndpointId,
       replyToCompatibilityMessageId = row.dcrReplyToMessageId,
-      compatibilityRawMessage = row.dcrRawMessage,
-      sourcePlatform = row.dcrSourcePlatform,
-      senderNickname = row.dcrSenderNickname,
-      senderCard = row.dcrSenderCard,
+      sourcePlatform = parsePlatform row.dcrSourcePlatform,
+      senderDisplayName = row.dcrSenderDisplayName,
       attemptCount = row.dcrAttemptCount
     }
 

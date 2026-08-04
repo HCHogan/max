@@ -3,7 +3,10 @@
 module Max.HandlerSpec (spec) where
 
 import Max.DB.Message (MessageKind (..))
-import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, qqRenderedText, recordAs)
+import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs)
+import Max.IR.Prompt (promptText)
+import Max.Platform.QQ (qqIngestBody)
+import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ))
 import Max.ReplySend (stripBareMarkers, stripStickerText)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -14,7 +17,7 @@ spec :: Spec
 spec = do
   describe "durable ingest policy" $ do
     it "allows media/dispatch work only after the immutable ledger is durable" $ do
-      ingestAllowsDownstream (IngestDurable Nothing) `shouldBe` True
+      ingestAllowsDownstream (IngestDurable (CanonicalMessageId 1)) `shouldBe` True
       ingestAllowsDownstream IngestDuplicate `shouldBe` False
       ingestAllowsDownstream (IngestFailed "postgres unavailable") `shouldBe` False
 
@@ -135,10 +138,10 @@ spec = do
         `shouldBe` (KindChat, Nothing)
 
     it "projects QQ mentions in the structural prompt form" $ do
-      qqRenderedText (msg [SegAt (UserId 2291939848), SegText " 你好"])
+      promptText PlatformQQ (qqIngestBody [SegAt (UserId 2291939848), SegText " 你好"])
         `shouldBe` "[@#2291939848]  你好"
-      qqRenderedText (msg [SegAt (UserId 1000), SegText " !fb 改成 B 方案"])
-        `shouldBe` "[@#1000] 改成 B 方案"
+      snd (rec' [SegAt (UserId 1000), SegText " !fb 改成 B 方案"])
+        `shouldBe` Just "[@#1000] 改成 B 方案"
 
     it "records operating commands as command" $ do
       fst (rec' [SegText "!ps"]) `shouldBe` KindCommand

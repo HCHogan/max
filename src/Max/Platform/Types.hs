@@ -28,9 +28,9 @@ module Max.Platform.Types
     EndpointMode (..),
     EventKind (..),
     MessageRelation (..),
-    ConversationOutputCapabilities (..),
-    noConversationOutputCapabilities,
-    qqConversationOutputCapabilities,
+    AdvertisedCaps (..),
+    noAdvertisedCaps,
+    qqAdvertisedCaps,
     DeliveryStatus (..),
   )
 where
@@ -139,39 +139,36 @@ data MessageRelation
   | ReactsTo !NativeEventId !Text
   deriving stock (Eq, Show, Generic)
 
--- | The portable output surface of one canonical conversation.  A bot reply
--- may fan out to every enabled endpoint, so semantic actions are advertised
--- only when every recipient can preserve them.  QQ-only actions are kept
--- explicit instead of being inferred from legacy numeric identifiers.
-data ConversationOutputCapabilities = ConversationOutputCapabilities
-  { canOutputReply :: !Bool,
-    canOutputReaction :: !Bool,
-    canOutputMedia :: !Bool,
-    canOutputQQMention :: !Bool,
-    canOutputQQFace :: !Bool
+-- | Semantic actions advertised to the model.  Content actions are not an
+-- endpoint intersection: reply, mention and media may lower to text on weak
+-- endpoints.  Only genuinely non-degradable actions stay capability-gated.
+data AdvertisedCaps = AdvertisedCaps
+  { canReply :: !Bool,
+    canMention :: !Bool,
+    canMedia :: !Bool,
+    canReaction :: !Bool,
+    canFace :: !Bool
   }
   deriving stock (Eq, Show, Generic)
 
-noConversationOutputCapabilities :: ConversationOutputCapabilities
-noConversationOutputCapabilities =
-  ConversationOutputCapabilities
-    { canOutputReply = False,
-      canOutputReaction = False,
-      canOutputMedia = False,
-      canOutputQQMention = False,
-      canOutputQQFace = False
+noAdvertisedCaps :: AdvertisedCaps
+noAdvertisedCaps =
+  AdvertisedCaps
+    { canReply = False,
+      canMention = False,
+      canMedia = False,
+      canReaction = False,
+      canFace = False
     }
 
--- | Compatibility default for pure prompt fixtures and legacy callers.  Live
--- dispatches always read the endpoint-owned value from 'Max.Platform.Store'.
-qqConversationOutputCapabilities :: ConversationOutputCapabilities
-qqConversationOutputCapabilities =
-  ConversationOutputCapabilities
-    { canOutputReply = True,
-      canOutputReaction = True,
-      canOutputMedia = True,
-      canOutputQQMention = True,
-      canOutputQQFace = True
+qqAdvertisedCaps :: AdvertisedCaps
+qqAdvertisedCaps =
+  AdvertisedCaps
+    { canReply = True,
+      canMention = True,
+      canMedia = True,
+      canReaction = True,
+      canFace = True
     }
 
 data DeliveryStatus

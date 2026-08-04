@@ -291,7 +291,7 @@ capsCodecSpec = describe "capability codec" $ do
     caps.reaction `shouldBe` False
     caps.maxNativeMedia `shouldBe` 1
 
-  it "honours the legacy boolean manifest" $ do
+  it "does not interpret removed legacy capability booleans" $ do
     let caps =
           outboundCapsFromValue
             ( object
@@ -302,14 +302,14 @@ capsCodecSpec = describe "capability codec" $ do
                 ]
             )
     caps.text `shouldBe` True
-    caps.image `shouldBe` TierNative
-    caps.file `shouldBe` TierNative
-    caps.reply `shouldBe` TierNative
+    caps.image `shouldBe` TierText
+    caps.file `shouldBe` TierText
+    caps.reply `shouldBe` TierText
     caps.maxTextBytes `shouldBe` Just 12000
 
-  it "lets tier keys override the legacy booleans" $ do
-    let caps = outboundCapsFromValue (object ["reply" .= True, "reply_tier" .= ("text" :: Text)])
-    caps.reply `shouldBe` TierText
+  it "reads the v2 tier keys" $ do
+    let caps = outboundCapsFromValue (object ["reply_tier" .= ("native" :: Text)])
+    caps.reply `shouldBe` TierNative
 
   it "parses drop and treats junk tiers as text" $ do
     let caps =

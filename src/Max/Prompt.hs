@@ -122,7 +122,7 @@ import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
-import Max.Platform.Types (ConversationOutputCapabilities (..), qqConversationOutputCapabilities)
+import Max.Platform.Types (AdvertisedCaps (..), qqAdvertisedCaps)
 import Max.Prompt.System (systemPrompt)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
@@ -218,7 +218,7 @@ buildContextWithReadMode limits readMode defaultPersona multimodal' historyTurns
   buildContextWithReadModeForOutput
     limits
     readMode
-    qqConversationOutputCapabilities
+    qqAdvertisedCaps
     defaultPersona
     multimodal'
     historyTurns'
@@ -238,7 +238,7 @@ buildContextWithReadModeForOutput ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   ContextLimits ->
   ContextReadMode ->
-  ConversationOutputCapabilities ->
+  AdvertisedCaps ->
   Text ->
   Bool ->
   Bool ->
@@ -318,7 +318,7 @@ collectContext ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing qqConversationOutputCapabilities
+collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing qqAdvertisedCaps
 
 -- | Read-only collection for admin previews and replay evaluation. It never
 -- publishes a materialization revision or a diagnostic row; callers may pass
@@ -336,7 +336,7 @@ collectContextPreview ::
   Session ->
   GroupMessage ->
   Eff es ContextSnapshot
-collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing qqConversationOutputCapabilities
+collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing qqAdvertisedCaps
 
 data ContextMutationMode
   = PublishMaterialization
@@ -348,7 +348,7 @@ collectContextWithWatermarks ::
   ContextMutationMode ->
   ContextReadMode ->
   Maybe HistoryTokenWatermarks ->
-  ConversationOutputCapabilities ->
+  AdvertisedCaps ->
   Text ->
   Bool ->
   Bool ->
@@ -1068,14 +1068,14 @@ renderContext pi' =
             if isPrivateChat pi'.triggerMessage.groupId
               then "  场景：与 " <> senderName <> " 一对一私聊"
               else
-                (if pi'.outputCapabilities.canOutputQQMention then "  群号：" else "  会话 ID：")
+                (if pi'.outputCapabilities.canMention then "  群号：" else "  会话 ID：")
                   <> T.pack (show gidRaw)
           ]
             <> map ("  " <>) pi'.groupBrief
             <> ["  当前模型：" <> pi'.session.model]
             <> [ "  成员对照（[@#QQ号] 即 @某人）："
                    <> T.intercalate "、" ["[@#" <> T.pack (show u) <> "]=" <> n | (u, n) <- roster]
-               | pi'.outputCapabilities.canOutputQQMention
+               | pi'.outputCapabilities.canMention
                ]
       -- Questions somebody else's turn is already handling never reach
       -- the model, whichever shape we build.

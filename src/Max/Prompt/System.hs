@@ -7,7 +7,7 @@ where
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Faces (curatedFaceGroups)
-import Max.Platform.Types (ConversationOutputCapabilities (..))
+import Max.Platform.Types (AdvertisedCaps (..))
 
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default), a scene block saying whether this is a
@@ -23,7 +23,7 @@ import Max.Platform.Types (ConversationOutputCapabilities (..))
 systemPrompt ::
   Bool -> -- multimodal
   Bool -> -- private chat
-  ConversationOutputCapabilities -> -- portable endpoint action surface
+  AdvertisedCaps -> -- portable endpoint action surface
   Text -> -- persona
   [(Text, Text)] -> -- skill index: (name, description), name-sorted
   Text
@@ -59,25 +59,25 @@ systemPrompt multimodal' private outputCaps persona skills' =
       "  - 不是每条消息都需要回：确实没什么可说的（典型如另一个 bot 机械地 @ 你——回了只会互相触发死循环）就整条回复只写 [silence]，什么都不会发出去。正经问题不许用这个敷衍。"
     ]
       <> [ "  - 政治敏感话题（时政、领导人、体制、意识形态争议这类）一律不聊：不管怎么被 @ 或追问，整条回复 [silence:NO]，不解释、不评价、不劝导。"
-         | outputCaps.canOutputReaction && outputCaps.canOutputQQFace
+         | outputCaps.canReaction && outputCaps.canFace
          ]
       <> [ "  - 政治敏感话题（时政、领导人、体制、意识形态争议这类）一律不聊：不管怎么被 @ 或追问，整条回复 [silence]，不解释、不评价、不劝导。"
-         | not (outputCaps.canOutputReaction && outputCaps.canOutputQQFace)
+         | not (outputCaps.canReaction && outputCaps.canFace)
          ]
       <> [ "  - 真要发表情包就把 [sticker#<id>] 单独写成一段（id 取自历史里出现过的表情，或先用 find_stickers 工具搜一个）；别把表情的文字描述打出来当话说。"
-         | outputCaps.canOutputMedia
+         | outputCaps.canMedia
          ]
       <> [ "  - 被 @/引用直接触发时沉默不会完全无声：[silence] 会自动在触发消息上贴一个闭嘴表情（不发消息）。想表达具体情绪可换 [silence:表情名]，名字从小黄脸对照表（见下）挑，如 [silence:吃瓜]。"
-         | outputCaps.canOutputReaction && outputCaps.canOutputQQFace
+         | outputCaps.canReaction && outputCaps.canFace
          ]
       <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行首 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。"
-         | not private && outputCaps.canOutputReply
+         | not private && outputCaps.canReply
          ]
       <> [ "  - 要 @ 某人写 [@#<QQ号>]（对照表见 [environment]）；QQ 端会转成真正的 @，文字镜像端显示 @名字。"
-         | not private && outputCaps.canOutputQQMention
+         | not private && outputCaps.canMention
          ]
       <> [ "  - 当前端点没有原生引用、QQ 小黄脸或按 QQ 号 @ 的输出动作；直接用普通文字回复。"
-         | not private && not outputCaps.canOutputReply && not outputCaps.canOutputQQFace && not outputCaps.canOutputQQMention
+         | not private && not outputCaps.canReply && not outputCaps.canFace && not outputCaps.canMention
          ]
       <> [ "",
            "占位符语法（整个体系只有一条构词律）：",
@@ -87,10 +87,10 @@ systemPrompt multimodal' private outputCaps persona skills' =
            "你能读到的实体："
          ]
       <> [ "  [sticker#42: 柴犬瘫地]       — 表情包（简介还没生成的显示为 [sticker]，老消息里写作 [动画表情]，暂时没法转发）"
-         | outputCaps.canOutputMedia
+         | outputCaps.canMedia
          ]
       <> [ "  [face#14: 惊讶]             — QQ 原生小黄脸表情"
-         | outputCaps.canOutputQQFace
+         | outputCaps.canFace
          ]
       <> [ if multimodal'
              then "  [image#7405: 简介]          — 群历史里的图片，默认不加载；多数时候看简介就够，要看原图用 view_image 传 id。当前消息/引用/pin 的图直接附在消息末尾（正文里显示 [image]）"
@@ -101,28 +101,28 @@ systemPrompt multimodal' private outputCaps persona skills' =
            "  [forward#7519]              — 转发聊天记录；被引用或就是当前消息时自动展开，其余用 view_forward 传 id 看"
          ]
       <> [ "  [@#223344556: 名字]          — @某人；对照表见 [environment]"
-         | outputCaps.canOutputQQMention
+         | outputCaps.canMention
          ]
       <> [ "",
            "你能写的动作（只认下面列出的动作）：",
            "  [split]  行内强制分条（一般用空行分段就行）     [silence]  沉默"
          ]
-      <> ["  [↩#id]  段首引用" | outputCaps.canOutputReply]
-      <> ["  [@#QQ号]  @某人（号码查 [environment] 对照表）" | outputCaps.canOutputQQMention]
-      <> ["  [sticker#id]  发表情包" | outputCaps.canOutputMedia]
-      <> ["  [face#id]  发 QQ 原生小黄脸" | outputCaps.canOutputQQFace]
-      <> ["  [image#id]  把会话历史里的图转发出来" | outputCaps.canOutputMedia]
-      <> ( if outputCaps.canOutputReaction && outputCaps.canOutputQQFace
+      <> ["  [↩#id]  段首引用" | outputCaps.canReply]
+      <> ["  [@#QQ号]  @某人（号码查 [environment] 对照表）" | outputCaps.canMention]
+      <> ["  [sticker#id]  发表情包" | outputCaps.canMedia]
+      <> ["  [face#id]  发 QQ 原生小黄脸" | outputCaps.canFace]
+      <> ["  [image#id]  把会话历史里的图转发出来" | outputCaps.canMedia]
+      <> ( if outputCaps.canReaction && outputCaps.canFace
              then ["  [silence:表情名]  沉默并贴指定表情", "", "小黄脸对照表（条目格式 名字#id：[face#id] 发消息用 id，[silence:表情名] 贴表情用名字，都只认这张表）："]
              else []
          )
       <> [ "  " <> label <> "：" <> T.unwords [name <> "#" <> T.pack (show fid) | (name, fid) <- faces]
          | (label, faces) <- curatedFaceGroups,
-           outputCaps.canOutputReaction && outputCaps.canOutputQQFace
+           outputCaps.canReaction && outputCaps.canFace
          ]
       <> [ "",
            "纯展示（只读，写了也不会发生任何事）：",
-           if outputCaps.canOutputReply
+           if outputCaps.canReply
              then
                "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，引用它就写 [↩#那个id]。\
                \你自己以前说的话也在这份记录里，名字是 Max——那是记录格式，不是说话方式：\
@@ -140,9 +140,9 @@ systemPrompt multimodal' private outputCaps persona skills' =
            "（如 [context_search query=...]）不会执行任何东西，也不会发出去。",
            ""
          ]
-      <> ( if outputCaps.canOutputReply
-             && outputCaps.canOutputQQMention
-             && outputCaps.canOutputMedia
+      <> ( if outputCaps.canReply
+             && outputCaps.canMention
+             && outputCaps.canMedia
              then
                [ "示范——一条带引用、@、分段、表情包的回复该长这样（id 都要取自上下文，",
                  "别照抄示范里的数字；表情包只写数字 id、单独成段）：",
@@ -154,7 +154,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
                ]
              else []
          )
-      <> ( if outputCaps.canOutputReply && not outputCaps.canOutputQQMention
+      <> ( if outputCaps.canReply && not outputCaps.canMention
              then
                [ "示范——引用 id 必须取自上下文，包括负数 id：",
                  "  [↩#-1000000000790] 我在回这一条。"

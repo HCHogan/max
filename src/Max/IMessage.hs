@@ -68,7 +68,6 @@ import Max.Platform.Store
     RegisteredEndpoint (..),
     UnconfirmedDelivery (..),
     advanceIngestCursorCAS,
-    compatibilityPlatformId,
     confirmUnconfirmedDelivery,
     defaultIngestOptions,
     ensureConfiguredEndpoint,
@@ -81,8 +80,7 @@ import Max.Platform.Types
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.URI (urlEncode)
-import OneBot.Segment (Segment (..))
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import OneBot.Types (GroupId (..))
 
 data IMessageConfig = IMessageConfig
   { bridgeUrl :: !Text,
@@ -215,25 +213,24 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
       EndpointStandalone
       Nothing
       (iMessageCapabilitiesFor health.nativeReplies)
-  selfCompatibility <- compatibilityPlatformId PlatformIMessage "user" cfg.accountKey
   logInfo "iMessage worker started" $
     object
       [ "chat_guid" .= cfg.chatGuid,
         "endpoint_id" .= registered.endpointId,
         "native_replies" .= health.nativeReplies
       ]
-  loop registered selfCompatibility health.nativeReplies
+  loop registered health.nativeReplies
   where
-    loop registered selfCompatibility advertisedNativeReplies = do
+    loop registered advertisedNativeReplies = do
       nextNativeReplies <-
-        runCycle registered selfCompatibility advertisedNativeReplies `catchSync` \e -> do
+        runCycle registered advertisedNativeReplies `catchSync` \e -> do
           logAttention "iMessage cycle failed; cursor retained" $
             object ["error" .= T.pack (show e)]
           liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
           pure advertisedNativeReplies
-      loop registered selfCompatibility nextNativeReplies
+      loop registered nextNativeReplies
 
-    runCycle registered selfCompatibility advertisedNativeReplies = do
+    runCycle registered advertisedNativeReplies = do
       health <-
         liftIO (fetchBridgeHealth runtime cfg)
           >>= either (error . T.unpack . bridgeFailureText) pure
@@ -250,7 +247,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
         logAttention "iMessage native reply capability changed" $
           object ["native_replies" .= health.nativeReplies]
       reconcileSends
-      (chatId, cursor) <- catchUp registered selfCompatibility health.sourceFingerprint
+      (chatId, cursor) <- catchUp registered health.sourceFingerprint
       -- Watch is a wake-up hint.  The bridge closes a quiet stream after 30s;
       -- either a notification or EOF returns here and the next cycle pages the
       -- authoritative physical ROWID cursor again.
@@ -261,7 +258,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
         Right () -> pure ()
       pure health.nativeReplies
 
-    catchUp registered selfCompatibility fingerprint = do
+    catchUp registered fingerprint = do
       chatId <- liftIO (resolveChat runtime cfg) >>= either (error . T.unpack . bridgeFailureText) pure
       current <- readIngestCursor registered.platformAccountId iMessageStreamKey
       let sourceReset = maybe False ((/= Just fingerprint) . (.fingerprint)) current
@@ -270,14 +267,14 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
       when sourceReset $
         logAttention "iMessage source database changed; rescanning allowlisted chat by GUID" $
           object ["chat_guid" .= cfg.chatGuid, "source_fingerprint" .= fingerprint]
-      pageFrom registered selfCompatibility chatId fingerprint bootstrap current since
+      pageFrom registered chatId fingerprint bootstrap current since
 
-    pageFrom registered selfCompatibility chatId fingerprint bootstrap current since = do
+    pageFrom registered chatId fingerprint bootstrap current since = do
       page <-
         liftIO (fetchAfter runtime cfg chatId since) >>= either (error . T.unpack . bridgeFailureText) pure
       when (page.nextRowId < since) $
         error "iMessage: source returned a ROWID behind the committed cursor"
-      forM_ page.messages (ingestIMessage registered selfCompatibility bootstrap page.nextRowId)
+      forM_ page.messages (ingestIMessage registered bootstrap page.nextRowId)
       published <-
         advanceIngestCursorCAS
           registered.platformAccountId
@@ -292,12 +289,11 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
           readIngestCursor registered.platformAccountId iMessageStreamKey >>= maybe (error "iMessage: cursor disappeared") pure
         Just record -> pure record
       if page.hasMore
-        then pageFrom registered selfCompatibility chatId fingerprint bootstrap (Just nextRecord) page.nextRowId
+        then pageFrom registered chatId fingerprint bootstrap (Just nextRecord) page.nextRowId
         else pure (chatId, page.nextRowId)
 
-    ingestIMessage registered selfCompatibility bootstrap next message = do
+    ingestIMessage registered bootstrap next message = do
       received <- liftIO getCurrentTime
-      segments <- compatibilitySegments selfCompatibility message
       parts <- messageContent runtime cfg message
       forM_ episodeScheduler $ \scheduler ->
         liftIO (bumpEpisode scheduler (GroupId registered.compatibilityConversationId))
@@ -312,9 +308,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
           options =
             defaultIngestOptions
               { createDispatch = not bootstrap,
-                transcriptKind = if kind == EventMessage then "chat" else "debug",
-                compatibilitySegments = toJSON segments,
-                compatibilityRawMessage = message.text
+                transcriptKind = if kind == EventMessage then "chat" else "debug"
               }
           (senderNative, senderDisplayName) = iMessageIngressIdentity cfg message
           envelope =
@@ -336,21 +330,6 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
         Ingested {} -> pure ()
         AlreadyIngested {} -> pure ()
         DeliveryEcho {} -> pure ()
-
-    compatibilitySegments selfCompatibility message = do
-      reply <- case iMessageReplyTarget message of
-        Nothing -> pure []
-        Just target -> do
-          mapped <- compatibilityPlatformId PlatformIMessage "message" target
-          pure [SegReply (MessageId mapped)]
-      let addressed = iMessageIsAddressed cfg message
-          mention = [SegAt (UserId selfCompatibility) | addressed]
-          attachmentLabels =
-            [ fromMaybe "[media]" (("[media: " <>) . (<> "]") <$> attachment.transferName)
-            | attachment <- message.attachments
-            ]
-          visibleText = T.intercalate " " (filter (not . T.null) (message.text : attachmentLabels))
-      pure (reply <> mention <> [SegText visibleText])
 
     reconcileSends = do
       pending <- listUnconfirmedDeliveries PlatformIMessage iMessageReconcileBatchSize

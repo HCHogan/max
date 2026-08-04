@@ -53,7 +53,7 @@ import Max.EpisodeStore (EpisodeExpansion (..), EpisodeHandle, SourceRange (..),
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
-import Max.Platform.Types (qqConversationOutputCapabilities)
+import Max.Platform.Types (qqAdvertisedCaps)
 import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
 import Max.Session (Session (..))
@@ -363,7 +363,7 @@ promptFixture =
       replyCtx = Just (quotedMessage, [quotedFile], []),
       triggerForward = [],
       multimodal = True,
-      outputCapabilities = qqConversationOutputCapabilities,
+      outputCapabilities = qqAdvertisedCaps,
       origin = OriginDirect,
       groupBrief =
         [ "群名：单片机与嵌入式交流（47人）",

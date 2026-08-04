@@ -8,25 +8,33 @@
 -- 'Max.Handler.sendAndPersistReply'), so the logic moved here to be
 -- shared.
 module Max.Sticker
-  ( resolveSticker,
+  ( ResolvedSticker (..),
+    resolveSticker,
   )
 where
 
-import Data.Aeson (Value (Number, Object, String))
+import Data.Aeson (ToJSON (toJSON), Value (Number, Object, String), object, (.=))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
-import Data.ByteString.Base64 qualified as B64
+import Data.ByteString qualified as BS
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Text.Read qualified as TR
 import Database.PostgreSQL.Simple (Only (..), (:.) (..))
 import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
-import OneBot.Segment (Segment (..), stickerSeg)
+import Max.IR
+import Max.Platform.Types (Platform (PlatformQQ))
+import OneBot.Segment (Segment (..))
+
+data ResolvedSticker = ResolvedSticker
+  { description :: !Text,
+    node :: !(Node 'Ingest)
+  }
+  deriving stock (Eq, Show)
 
 -- | Resolve a sticker id into the segments that resend it — an mface
 -- goes back natively (animates in-client) when we still have its
@@ -38,7 +46,7 @@ import OneBot.Segment (Segment (..), stickerSeg)
 resolveSticker ::
   (Blob :> es, WithConnection :> es, IOE :> es) =>
   Int64 ->
-  Eff es (Either Text (Text, [Segment]))
+  Eff es (Either Text ResolvedSticker)
 resolveSticker sid = do
   rows <-
     query
@@ -56,33 +64,56 @@ resolveSticker sid = do
     (((sha, kind, eid, pid, key) :. (summ, desc)) : _) ->
       buildSegs sha kind eid pid key summ >>= \case
         Left err -> pure (Left err)
-        Right segs -> do
+        Right node -> do
           _ <-
             execute
               "UPDATE stickers SET times_sent = times_sent + 1 WHERE sha256 = ?"
               (Only sha)
-          pure (Right (desc, segs))
+          pure (Right (ResolvedSticker desc node))
   where
     buildSegs sha kind eid pid key summ = case (kind, eid, pid, key) of
       ("mface", Just e, Just p, Just k) ->
-        pure . Right $
-          [ SegOther "mface" . Object . mkObj $
-              [ ("emoji_id", String e),
-                ("emoji_package_id", numberish p),
-                ("key", String k)
-              ]
-                <> [("summary", String s) | Just s <- [summ]]
-          ]
+        let native =
+              SegOther "mface" . Object . mkObj $
+                [ ("emoji_id", String e),
+                  ("emoji_package_id", numberish p),
+                  ("key", String k)
+                ]
+                  <> [("summary", String s) | Just s <- [summ]]
+         in pure . Right $
+              NEmote
+                Emote
+                  { origin = PlatformQQ,
+                    nativeId = e,
+                    name = summ,
+                    raw = Just (withStickerId sid (toJSON native))
+                  }
       _ -> case blobRefFromSha256 sha of
         Nothing -> pure (Left "sticker blob reference is invalid")
         Just ref -> do
           ebytes <- try @IOException (readBlob ref)
           pure $ case ebytes of
             Left e -> Left ("sticker blob read failed: " <> T.pack (show e))
-            Right bytes ->
-              Right [stickerSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]
+            Right bytes -> case mediaBlobRef sha of
+              Nothing -> Left "sticker blob reference is invalid"
+              Just source ->
+                Right
+                  ( NMedia
+                      (Just source)
+                      MediaMeta
+                        { kind = MSticker,
+                          mime = Nothing,
+                          sizeBytes = Just (fromIntegral (BS.length bytes)),
+                          name = Nothing,
+                          description = summ,
+                          raw = Just (object ["sticker_id" .= sid])
+                        }
+                  )
 
     mkObj = KM.fromList . map (\(k, v) -> (K.fromText k, v))
+    withStickerId stickerId = \case
+      Object value -> Object (KM.insert "sticker_id" (toJSON stickerId) value)
+      value -> value
     -- NapCat ships emoji_package_id as a JSON number; send back what
     -- parses as one, else the string we stored.
     numberish t = case TR.decimal t of

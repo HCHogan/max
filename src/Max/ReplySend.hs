@@ -45,8 +45,7 @@ module Max.ReplySend
     cleanModelText,
     stripStickerText,
     stripBareMarkers,
-    modelTextSegs,
-    messageImageSegs,
+    messageImageNodes,
     chunkDelayMicros,
 
     -- * Exposed for tests
@@ -56,17 +55,14 @@ where
 
 import Control.Concurrent (threadDelay)
 import Control.Monad (foldM, when)
-import Data.ByteString.Base64 qualified as B64
+import Data.ByteString qualified as BS
 import Data.Char (isDigit)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Ord (clamp)
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Effectful
-import Effectful.Exception (SomeException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
@@ -74,25 +70,20 @@ import Max.DB.History (fetchMessageInScope)
 import Max.DB.Media (StoredImage (..), fetchMessageImagesInScope)
 import Max.DB.Message (MessageKind (..))
 import Max.DB.Stickers (findStickerByCaption)
-import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
+import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.IR
-import Max.Platform.QQ (qqSegmentNodes)
-import Max.Platform.Types (ConversationOutputCapabilities (..), NativeUserId (..))
+import Max.IR.Prompt (MentionRoster (..), parseModelChunk)
+import Max.Platform.Types (NativeUserId (..))
 import Max.Render (renderTableImage)
 import Max.Reply
   ( Chunk (..),
-    ReplyPiece (..),
     chunkSource,
-    dedupeImagePieces,
     maxChunks,
-    parseReplyTokens,
     planReply,
     stripHallucinatedTokens,
   )
-import Max.Sticker (resolveSticker)
-import Max.Util (trySync)
-import OneBot.Segment (ImageSegInfo (..), Segment (..), imageSeg, rescueNameMentions, segmentMentions, trimEdgeSegs)
+import Max.Sticker (ResolvedSticker (..), resolveSticker)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 import System.Random (randomRIO)
 
@@ -215,46 +206,66 @@ sendAndPersistReply rt budget rawBody
       (b', mPlan) <- planChunk b chunk
       case mPlan of
         Nothing -> pure b'
-        Just (segs, rendered) -> do
+        Just (resolvedBody, replyTo, pacingText) -> do
           -- Typing-pace delay between chunks: instant multi-message
           -- bursts read as a bot.  The first chunk of a call needs none
           -- — either the LLM round-trip was its "typing time", or (when
           -- streaming) the wait for the paragraph to complete was.
           when (i > 0) $
-            liftIO (threadDelay =<< chunkDelayMicros (T.length rendered))
-          outboundBody rt segs >>= \case
-            Left err ->
-              logAttention "llm reply IR resolution failed" $ object ["error" .= err, "chunk" .= i]
-            Right (resolvedBody, replyTo) ->
-              sendRecorded
-                OutboundRequest
-                  { orKind = KindChat,
-                    orGroupId = rt.rtGroupId,
-                    orBody = resolvedBody,
-                    orReplyTo = replyTo,
-                    orDeliveryScope = DeliverConversation
-                  }
-                >>= \case
-                  SendFailed err ->
-                    logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
-                  SentUnrecorded {} -> pure ()
-                  SentRecorded {} -> pure ()
+            liftIO (threadDelay =<< chunkDelayMicros (T.length pacingText))
+          sendRecorded
+            OutboundRequest
+              { orKind = KindChat,
+                orGroupId = rt.rtGroupId,
+                orBody = resolvedBody,
+                orReplyTo = replyTo,
+                orDeliveryScope = DeliverConversation
+              }
+            >>= \case
+              SendFailed err ->
+                logAttention "llm reply send failed" $ object ["error" .= err, "chunk" .= i]
+              SentUnrecorded {} -> pure ()
+              SentRecorded {} -> pure ()
           pure b'
 
-    -- One chunk → 'Just' (segments to send, rendered_text to store) or
-    -- 'Nothing' to skip; threads the set of already-resent image
-    -- message ids so a duplicated [image#<id>] never resends.
+    -- One chunk becomes one ingest-phase body plus an envelope reply.
+    -- Model-only handles are resolved before publication, and image handles
+    -- are deduplicated across the complete streamed reply.
     planChunk b (TableChunk src) = do
       rendered <- liftIO (renderTableImage src)
       case rendered of
-        Right png ->
-          pure (b, Just ([imageSeg ("base64://" <> TE.decodeASCII (B64.encode png))], src))
+        Right png -> do
+          blob <- putBlob png
+          case mediaBlobRef (blobRefSha256 blob) of
+            Nothing -> do
+              logAttention "table render produced an invalid blob reference" $ object []
+              pure (b, Just (Body [NText src], Nothing, src))
+            Just source ->
+              pure
+                ( b,
+                  Just
+                    ( Body
+                        [ NMedia
+                            (Just source)
+                            MediaMeta
+                              { kind = MImage,
+                                mime = Just "image/png",
+                                sizeBytes = Just (fromIntegral (BS.length png)),
+                                name = Just "table.png",
+                                description = Nothing,
+                                raw = Just (object ["prompt_text" .= src])
+                              }
+                        ],
+                      Nothing,
+                      src
+                    )
+                )
         Left err -> do
           logAttention "table render failed, sending source" $ object ["error" .= err]
-          pure (b, Just ([SegText src], src))
+          pure (b, Just (Body [NText src], Nothing, src))
     planChunk b (TextChunk t) = do
-      let (mReplyId, pieces0) = parseReplyTokens t
-          (seen', pieces) = dedupeImagePieces b.sbSentImages pieces0
+      let (mReplyId, parsed0) = parseModelChunk mentionRoster t
+          (seen', parsed) = dedupeModelImages b.sbSentImages parsed0
           b' = b {sbSentImages = seen'}
       mReplyId' <- case mReplyId of
         _ | not rt.rtCanReply -> pure Nothing
@@ -266,128 +277,70 @@ sendAndPersistReply rt budget rawBody
               logAttention "reply placeholder outside conversation" $
                 object ["message_id" .= rid]
               pure Nothing
-      (content, rendered) <- resolvePieces pieces
-      pure . (b',) $
-        if null content
-          then Nothing
-          else
-            let prefix = [SegReply (MessageId rid) | Just rid <- [mReplyId']]
-             in Just (prefix <> trimEdgeSegs (coalesceTextSegments content), T.strip rendered)
+      resolved <- concat <$> traverse resolveModelNode parsed.nodes
+      let content = trimEdges (mergeText resolved)
+      pure
+        ( b',
+          if null content
+            then Nothing
+            else Just (Body content, MessageId <$> mReplyId', t)
+        )
 
-    -- Resolve parsed pieces into (segments, normalised rendered text).
-    resolvePieces pieces = do
-      parts <- traverse resolve pieces
-      pure (concatMap fst parts, T.concat (map snd parts))
-      where
-        resolve (PieceText t0) =
-          -- "@显示名" → canonical [@#id] first (small models skip the
-          -- roster lookup), then the usual mention conversion.
-          let t = rescueNameMentions rt.rtRosterNames t0
-           in pure (mentionSegs t, t)
-        -- Sticker sending disabled for this group: drop the token
-        -- (the model shouldn't emit one, but never leak it as text).
-        resolve (PieceSticker _) | not rt.rtStickers = pure ([], "")
-        resolve (PieceStickerDesc _) | not rt.rtStickers = pure ([], "")
-        -- Caption in the id slot ('PieceStickerDesc'): resolve it
-        -- against the library, then proceed as if the id had been
-        -- written.  No match → drop, same rule as an unknown id.
-        resolve (PieceStickerDesc d) =
-          findStickerByCaption d >>= \case
-            Just sid -> resolve (PieceSticker sid)
-            Nothing -> do
-              logAttention "sticker caption unresolved" $ object ["caption" .= d]
-              pure ([], "")
-        resolve (PieceSticker sid) =
-          resolveSticker sid >>= \case
-            Right (desc, segs) ->
-              pure (segs, "[sticker#" <> T.pack (show sid) <> ": " <> T.take 80 desc <> "]")
-            Left err -> do
-              logAttention "sticker placeholder unresolved" $
-                object ["id" .= sid, "error" .= err]
-              pure ([], "")
-        resolve (PieceImage _) | not rt.rtCanImage = pure ([], "")
-        resolve (PieceImage mid) = do
-          segs <- messageImageSegs conversation mid
-          if null segs
-            then do
-              logAttention "image placeholder unresolved" $ object ["message_id" .= mid]
-              pure ([], "")
-            else
-              -- Keep the id in the persisted form: the model reads
-              -- back the same [image#<id>] handle it wrote (and can
-              -- resend from it again), instead of a bare [image] it
-              -- was told is a hallucination.
-              pure (segs, "[image#" <> T.pack (show mid) <> "]")
-        resolve (PieceFace _) | not rt.rtCanFace = pure ([], "")
-        resolve (PieceFace fid) =
-          pure ([SegFace fid Nothing], "[face#" <> T.pack (show fid) <> "]")
+    mentionRoster =
+      MentionRoster
+        { known = \(NativeUserId native) ->
+            case reads (T.unpack native) of
+              [(nativeId, "")] -> maybe True (Set.member (UserId nativeId)) rt.rtMentionable
+              _ -> False,
+          names = [(display, NativeUserId (T.pack (show native))) | (display, UserId native) <- rt.rtRosterNames]
+        }
 
-    -- Private chats keep raw text: NapCat renders private
-    -- at-segments poorly.
-    mentionSegs t
-      | not rt.rtCanMention = [SegText (stripMentionTokens t)]
-      | isPrivateChat rt.rtGroupId = [SegText t]
-      | otherwise = segmentMentions (\u -> maybe True (Set.member u) rt.rtMentionable) t
+    resolveModelNode = \case
+      NText text -> pure [NText text]
+      NMention native display
+        | not rt.rtCanMention || isPrivateChat rt.rtGroupId -> pure [NText ("@" <> display)]
+        | otherwise -> pure [NMention native display]
+      NEmote emote
+        | rt.rtCanFace -> pure [NEmote emote]
+        | otherwise -> pure []
+      NMedia ref _ -> resolveModelMedia ref
+      NCard card -> pure [NCard card]
+
+    resolveModelMedia = \case
+      RefSticker _ | not rt.rtStickers -> pure []
+      RefStickerDesc _ | not rt.rtStickers -> pure []
+      RefStickerDesc caption ->
+        findStickerByCaption caption >>= \case
+          Just stickerId -> resolveModelMedia (RefSticker stickerId)
+          Nothing -> do
+            logAttention "sticker caption unresolved" $ object ["caption" .= caption]
+            pure []
+      RefSticker stickerId ->
+        resolveSticker stickerId >>= \case
+          Right sticker -> pure [sticker.node]
+          Left err -> do
+            logAttention "sticker placeholder unresolved" $
+              object ["id" .= stickerId, "error" .= err]
+            pure []
+      RefImage _ | not rt.rtCanImage -> pure []
+      RefImage messageId -> do
+        images <- messageImageNodes conversation messageId
+        when (null images) $
+          logAttention "image placeholder unresolved" $ object ["message_id" .= messageId]
+        pure images
 
     conversation = conversationScopeFor rt.rtGroupId
 
--- | Resolve the remaining OneBot-shaped reply plan into the sole outbound IR
--- boundary.  This function is temporary scaffolding for the surrounding
--- chunk planner; publication and every delivery after it are IR-only.
-outboundBody ::
-  (Blob :> es) =>
-  ReplyTarget ->
-  [Segment] ->
-  Eff es (Either T.Text (Body 'Ingest, Maybe MessageId))
-outboundBody rt segments = do
-  resolved <- traverse node segments
-  pure $ (,listToMaybe [reply | SegReply reply <- segments]) . Body . concat <$> sequence resolved
+dedupeModelImages :: Set Int64 -> Body 'ModelParsed -> (Set Int64, Body 'ModelParsed)
+dedupeModelImages seen0 body =
+  let (seen, kept) = foldl' step (seen0, []) body.nodes
+   in (seen, Body (reverse kept))
   where
-    node = \case
-      SegReply _ -> pure (Right [])
-      SegAt user@(UserId native) ->
-        let nativeText = T.pack (show native)
-            display = fromMaybe nativeText (lookup user [(member, name) | (name, member) <- rt.rtRosterNames])
-         in pure (Right [NMention (NativeUserId nativeText) display])
-      segment@(SegImage image) -> case qqSegmentNodes segment of
-        [NMedia _ meta] -> do
-          source <- traverse materializeSource image.isiUrl
-          pure ((\ref -> [NMedia ref meta]) <$> sequence source)
-        _ -> pure (Left "image normalization did not produce one media node")
-      segment -> pure (Right (qqSegmentNodes segment))
-
-    materializeSource source
-      | Just encoded <- T.stripPrefix "base64://" source =
-          case B64.decode (TE.encodeUtf8 encoded) of
-            Left _ -> pure (Left "invalid base64 image payload")
-            Right bytes -> do
-              ref <- putBlob bytes
-              pure $ maybe (Left "BlobStore returned an invalid content address") Right (mediaBlobRef (blobRefSha256 ref))
-      | Just ref <- parseMediaRef source = pure (Right ref)
-      | otherwise = pure (Left "unsupported canonical media source scheme")
-
--- | Remove executable QQ mention tokens while preserving an optional display
--- caption. Used by both ordinary replies and tool captions so no model-text
--- sender can bypass endpoint capability checks.
-stripMentionTokens :: T.Text -> T.Text
-stripMentionTokens = go
-  where
-    go input = case T.breakOn "[@#" input of
-      (before, rest)
-        | T.null rest -> input
-        | otherwise ->
-            let afterOpen = T.drop 3 rest
-                (inside, close) = T.breakOn "]" afterOpen
-             in if T.null close || not (validMentionId (T.takeWhile (/= ':') inside))
-                  then before <> "[@#" <> go afterOpen
-                  else
-                    let caption = case T.breakOn ":" inside of
-                          (_, desc) | not (T.null desc) -> T.strip (T.drop 1 desc)
-                          _ -> ""
-                     in before <> caption <> go (T.drop 1 close)
-    validMentionId raw =
-      let unsigned = fromMaybe raw (T.stripPrefix "-" raw)
-       in not (T.null unsigned) && T.all isDigit unsigned
+    step (seen, kept) node = case node of
+      NMedia (RefImage messageId) _
+        | Set.member messageId seen -> (seen, kept)
+        | otherwise -> (Set.insert messageId seen, node : kept)
+      _ -> (seen, node : kept)
 
 -- | Everything model text must lose before it can become visible.  Kept in
 -- the same module as sending so streamed final text, progress narration, and
@@ -426,59 +379,6 @@ stripStickerText t0 = foldl' stripOpener t0 ["[sticker:", "[sticker：", "[表�
       Just ('#', r) -> maybe False (isDigit . fst) (T.uncons r)
       _ -> False
 
--- | Model-authored text → the segments of __one__ message, for the remaining
--- inline sender: the caption a sandbox image tool posts alongside its image.
---
--- This remaining inline sender has drifted before: a sandbox caption leaked
--- @[↩#493645310]@ because the format guide is written once for all model text,
--- while the caption originally skipped its token handling.
---
--- The quote target comes back separately because the caption rides with an
--- image even when no text remains, so the quote still counts.
---
--- Sticker and image placeholders are dropped rather than resolved —
--- either needs a DB round-trip apiece and neither sender is worth one.
--- Dropping loses something invisible; leaking the raw token is the bug this
--- exists to prevent. Reply, face, and mention actions survive only when the
--- conversation's complete endpoint set can preserve them.
---
--- Note this handles /tokens/, not /chunking/: @[split]@ is
--- 'planReply''s job, and a caller that can only send one message has to
--- decide what to do with it before calling here.
-modelTextSegs ::
-  ConversationOutputCapabilities ->
-  -- | Private chat?  NapCat renders private at-segments poorly, so
-  -- mentions stay as plain text there.
-  Bool ->
-  -- | Mentionable ids, as in 'rtMentionable' — 'Nothing' checks syntax
-  -- only rather than refusing to @ anyone.
-  Maybe (Set UserId) ->
-  T.Text ->
-  (Maybe MessageId, [Segment])
-modelTextSegs outputCaps private mentionable raw =
-  ( MessageId <$> if outputCaps.canOutputReply then mQuoted else Nothing,
-    trimEdgeSegs (coalesceTextSegments (concatMap piece pieces))
-  )
-  where
-    (mQuoted, pieces) = parseReplyTokens (T.strip raw)
-    piece = \case
-      PieceText t
-        | not outputCaps.canOutputQQMention -> [SegText (stripMentionTokens t)]
-        | private -> [SegText t]
-        | otherwise -> segmentMentions (\u -> maybe True (Set.member u) mentionable) t
-      PieceFace fid
-        | outputCaps.canOutputQQFace -> [SegFace fid Nothing]
-        | otherwise -> []
-      PieceSticker _ -> []
-      PieceStickerDesc _ -> []
-      PieceImage _ -> []
-
-coalesceTextSegments :: [Segment] -> [Segment]
-coalesceTextSegments = foldr step []
-  where
-    step (SegText left) (SegText right : rest) = SegText (left <> right) : rest
-    step segment rest = segment : rest
-
 -- | Fold everything past the remaining allowance into one last message,
 -- the same way 'Max.Reply.capChunks' does within a single call — loud
 -- but bounded beats truncated, and the bot's own history still records
@@ -499,27 +399,32 @@ chunkDelayMicros nChars = do
   f <- randomRIO (0.7, 1.3 :: Double)
   pure (clamp (200_000, 2_000_000) (round (fromIntegral nChars * 35_000 * f)))
 
--- | Load a stored message's images back off disk as outgoing segments.
--- A blob that can't be read is skipped, not fatal: resending N-1 of N
--- pictures beats failing the reply.
-messageImageSegs ::
-  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+-- | Resolve a model-authored image handle to canonical blob-backed nodes.
+-- The delivery worker owns blob loading and permanent-failure policy; the
+-- publication path records only content addresses and never re-encodes bytes.
+messageImageNodes ::
+  (WithConnection :> es, Log :> es, IOE :> es) =>
   ConversationScope ->
   Int64 ->
-  Eff es [Segment]
-messageImageSegs scope mid = do
+  Eff es [Node 'Ingest]
+messageImageNodes scope mid = do
   rows <- fetchMessageImagesInScope scope mid
-  fmap concat . traverse (loadOne . (.storedImageSha256)) $ rows
+  fmap concat . traverse node $ rows
   where
-    loadOne sha = case blobRefFromSha256 sha of
+    node image = case mediaBlobRef image.storedImageSha256 of
       Nothing -> do
-        logAttention "image resend: invalid blob ref" $ object ["sha256" .= sha]
+        logAttention "image resend: invalid blob ref" $ object ["sha256" .= image.storedImageSha256]
         pure []
-      Just ref ->
-        trySync (readBlob ref) >>= \case
-          Left e -> do
-            logAttention "image resend: blob read failed" $
-              object ["sha256" .= sha, "error" .= T.pack (show (e :: SomeException))]
-            pure []
-          Right bytes ->
-            pure [imageSeg ("base64://" <> TE.decodeUtf8 (B64.encode bytes))]
+      Just source ->
+        pure
+          [ NMedia
+              (Just source)
+              MediaMeta
+                { kind = MImage,
+                  mime = Just image.storedImageMime,
+                  sizeBytes = Nothing,
+                  name = Nothing,
+                  description = Nothing,
+                  raw = Just (object ["source_message_id" .= mid])
+                }
+          ]

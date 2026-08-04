@@ -53,7 +53,6 @@ import Max.HttpRuntime
   )
 import Max.IR
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
-import Max.IR.Prompt (promptText)
 import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryTransport (..), loweredText)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
@@ -64,7 +63,6 @@ import Max.Platform.Store
     NewIngest (..),
     RegisteredEndpoint (..),
     advanceIngestCursorCAS,
-    compatibilityPlatformId,
     defaultIngestOptions,
     ensureConfiguredEndpoint,
     ingestEnvelope,
@@ -75,8 +73,7 @@ import Max.Platform.Types
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.URI (urlDecode, urlEncode)
-import OneBot.Segment (Segment (..))
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import OneBot.Types (GroupId (..))
 
 data MatrixConfig = MatrixConfig
   { homeserver :: !Text,
@@ -132,7 +129,9 @@ matrixCapabilities =
       video = TierNative,
       audio = TierNative,
       file = TierNative,
-      reaction = True,
+      -- No outbound reaction emitter exists yet; advertising this would route
+      -- a non-degradable action to no backend and fail by construction.
+      reaction = False,
       edit = True,
       redact = True,
       maxTextBytes = Just 65536
@@ -154,23 +153,22 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
       (maybe EndpointStandalone (const EndpointMirror) cfg.mirrorQQGroup)
       cfg.mirrorQQGroup
       matrixCapabilities
-  selfCompatibility <- compatibilityPlatformId PlatformMatrix "user" cfg.userId
   logInfo "matrix worker started" $
     object
       [ "room_id" .= cfg.roomId,
         "endpoint_id" .= registered.endpointId,
         "mode" .= maybe ("standalone" :: Text) (const "mirror") cfg.mirrorQQGroup
       ]
-  loop registered selfCompatibility
+  loop registered
   where
-    loop registered selfCompatibility = do
-      syncOnce registered selfCompatibility `catchSync` \e -> do
+    loop registered = do
+      syncOnce registered `catchSync` \e -> do
         logAttention "matrix sync failed; cursor retained" $
           object ["error" .= T.pack (show e)]
         liftIO (Concurrent.threadDelay matrixFailureBackoffMicros)
-      loop registered selfCompatibility
+      loop registered
 
-    syncOnce registered selfCompatibility = do
+    syncOnce registered = do
       current <- readIngestCursor registered.platformAccountId matrixStreamKey
       page <- liftIO (fetchSync runtime cfg (cursorText =<< current)) >>= either (error . T.unpack) pure
       boundary <- latestNativeEventId registered.endpointId
@@ -182,7 +180,7 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
             _ -> error "matrix: limited timeline has no recoverable boundary"
           else pure []
       let live = current /= Nothing
-      forM_ (gap <> page.events) (ingestMatrixEvent live registered selfCompatibility page.nextBatch)
+      forM_ (gap <> page.events) (ingestMatrixEvent live registered page.nextBatch)
       published <-
         advanceIngestCursorCAS
           registered.platformAccountId
@@ -194,8 +192,7 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
         logInfo "matrix cursor CAS lost; page will deduplicate on replay" $
           object ["next_batch" .= page.nextBatch]
 
-    ingestMatrixEvent live registered selfCompatibility next event = do
-      segments <- matrixCompatibilitySegments (NativeUserId cfg.userId) selfCompatibility event
+    ingestMatrixEvent live registered next event = do
       hydratedContent <- hydrateMatrixContent runtime cfg event
       received <- liftIO getCurrentTime
       forM_ episodeScheduler $ \scheduler ->
@@ -204,9 +201,7 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
             defaultIngestOptions
               { createDispatch = live,
                 createMirrorDeliveries = live,
-                transcriptKind = if event.eventKind == EventMessage then "chat" else "debug",
-                compatibilitySegments = toJSON segments,
-                compatibilityRawMessage = promptText PlatformMatrix (Body event.content)
+                transcriptKind = if event.eventKind == EventMessage then "chat" else "debug"
               }
           envelope =
             InboundEnvelope
@@ -229,24 +224,6 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
             object ["event_id" .= event.eventId, "canonical_message_id" .= fresh.canonicalMessageId]
         AlreadyIngested {} -> pure ()
         DeliveryEcho {} -> pure ()
-
-matrixCompatibilitySegments ::
-  (WithConnection :> es, IOE :> es) =>
-  NativeUserId ->
-  Int64 ->
-  MatrixEvent ->
-  Eff es [Segment]
-matrixCompatibilitySegments selfNative selfCompatibility event = do
-  reply <- case [target | ReplyTo target <- event.relations] of
-    target : _ -> do
-      mapped <- compatibilityPlatformId PlatformMatrix "message" (unNativeEventId target)
-      pure [SegReply (MessageId mapped)]
-    [] -> pure []
-  let mention = [SegAt (UserId selfCompatibility) | matrixSelfMentionIsDirect selfNative event]
-  -- @mentionedUsers@ is converted by the caller-independent native id test:
-  -- a synthetic at segment is needed only for Max itself.  The event parser
-  -- preserves every other mention in canonical content.
-  pure (reply <> mention <> [SegText (promptText PlatformMatrix (Body event.content))])
 
 -- | Matrix includes the replied-to event's transport sender in @m.mentions@
 -- so clients can notify them.  In a mirrored room every QQ event is delivered
