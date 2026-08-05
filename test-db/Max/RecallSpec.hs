@@ -10,7 +10,7 @@ import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Simple (Only (..), execute_)
 import Effectful.PostgreSQL (query)
-import Helpers (insertMessageWithCanonicalId, requireJust, testTime, truncateAll, withDb)
+import Helpers (insertMessageWithCanonicalId, insertRawKind, requireJust, testTime, truncateAll, withDb)
 import Max.ConversationScope (ConversationScope, conversationScopeFor, currentConversationRecall)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History (MessageCursor (..))
@@ -50,6 +50,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
 
     crossScope <- withDb pool $ searchRecall (currentConversationRecall scopeB) "tea" Nothing 30
     crossScope `shouldBe` []
+
+  -- A 撤回 or a 贴表情 is a fact about the conversation, so it is findable
+  -- like any other; a tool trace nobody saw is not.
+  it "reaches what the room watched happen but not what only max did" $ do
+    watched <- insertRawKind pool "system" 5001 groupA member botId testTime Nothing "[unsend#4242]"
+    _ <- insertRawKind pool "debug" 5002 groupA botId botId testTime Nothing "⚙ unsend_probe {}"
+    hits <- withDb pool $ searchRecall (currentConversationRecall scopeA) "unsend" Nothing 10
+    [message | hit <- hits, Just message <- [hit.rhMessageId]] `shouldBe` [watched]
 
   it "fuses only compatible semantic candidates and remains scoped" $ do
     seedRecallFixture pool

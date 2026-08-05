@@ -518,9 +518,16 @@ choice, not the discreet one: the 撤回 window is two minutes, dispatch has
 usually already run, and max's own reply to it is still in the transcript —
 delete the question and its answer becomes a non-sequitur. Everyone else in
 the room read it too. The system prompt carries the social rule the schema
-cannot: read it, never repeat it. `context_search` and historian evidence stay
-`kind = 'chat'`-only, so it is visible while the window holds it and never
-becomes durable memory.
+cannot: read it, never repeat it.
+
+`context_search` reaches `kind IN ('chat', 'system')`: a 撤回 or a 贴表情 is a
+fact about the conversation and findable like any other, while a tool trace
+nobody saw is not. The embedder never filtered on `kind`, so system rows get
+vectors as soon as they have a projection to embed — before §6a their
+`rendered_text` was empty and too short to qualify. One honest cost of §6b's
+grammar: `[unsend#7405]` contains no Chinese, so searching 撤回 does not find
+it and searching `unsend` does. Historian evidence stays `chat`-only — what a
+compartment may cite is a separate decision from what search may reach.
 
 ### 7. Correctness fixes folded into the same work
 

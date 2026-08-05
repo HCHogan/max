@@ -461,7 +461,7 @@ lexicalCandidatesSql =
   \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
   \  FROM messages AS message CROSS JOIN input LEFT JOIN pins USING (canonical_message_id) \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
-  \    AND message.kind = 'chat' \
+  \    AND message.kind IN ('chat', 'system') \
   \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
   \                    WHERE containment.canonical_message_id = message.canonical_message_id \
   \                      AND containment.relation_kind = 'contained_in') \
@@ -559,7 +559,7 @@ semanticCandidatesSql =
   \  SELECT message.*, input.query_vector, input.candidate_limit \
   \  FROM messages AS message CROSS JOIN input \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
-  \    AND message.kind = 'chat' \
+  \    AND message.kind IN ('chat', 'system') \
   \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
   \                    WHERE containment.canonical_message_id = message.canonical_message_id \
   \                      AND containment.relation_kind = 'contained_in') \
