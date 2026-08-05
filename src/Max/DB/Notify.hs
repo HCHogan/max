@@ -18,7 +18,7 @@ module Max.DB.Notify
   )
 where
 
-import Control.Monad (void)
+import Control.Monad (unless, void)
 import Data.ByteString.Char8 qualified as BSC
 import Data.Int (Int64)
 import Database.PostgreSQL.Simple qualified as PostgreSQL
@@ -90,9 +90,7 @@ waitForTimeline conversation advanced =
               let expected = BSC.pack (show conversation)
                   waitRelevant = do
                     notification <- getNotification listener
-                    if notificationData notification `elem` [expected, "*"]
-                      then pure ()
-                      else waitRelevant
+                    unless (notificationData notification `elem` [expected, "*"]) waitRelevant
               woke <- liftIO (timeout timelineWaitMicros waitRelevant)
               case woke of
                 Nothing -> pure False

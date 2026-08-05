@@ -2,6 +2,7 @@ module OneBot.Event
   ( Event (..),
     GroupMessage (..),
     MessageNotice (..),
+    NoticeKind (..),
     EmojiLike (..),
     PokeEvent (..),
     Sender (..),
@@ -65,21 +66,26 @@ instance FromJSON EmojiLike where
       <$> o .: "emoji_id"
       <*> o .:? "count" .!= 0
 
-data MessageNotice
-  = MessageRecalled
-      { mnSelfId :: !UserId,
-        mnGroupId :: !GroupId,
-        mnActorId :: !UserId,
-        mnTargetMessageId :: !MessageId
-      }
-  | MessageReacted
-      { mnSelfId :: !UserId,
-        mnGroupId :: !GroupId,
-        mnActorId :: !UserId,
-        mnTargetMessageId :: !MessageId,
-        mnLikes :: ![EmojiLike],
-        mnReactionAdded :: !Bool
-      }
+-- | Something happened to an existing message.  Every notice names the same
+-- four things — whose connection saw it, where, who did it, and to which
+-- message — so those are plain fields and only the variant payload lives in
+-- 'mnKind'.  Splitting it the other way (one constructor per notice with the
+-- reaction payload inline) gave @mnLikes@ and @mnReactionAdded@ partial
+-- selectors that throw on a recall.
+data MessageNotice = MessageNotice
+  { mnSelfId :: !UserId,
+    mnGroupId :: !GroupId,
+    mnActorId :: !UserId,
+    mnTargetMessageId :: !MessageId,
+    mnKind :: !NoticeKind
+  }
+  deriving stock (Eq, Show)
+
+data NoticeKind
+  = NoticeRecalled
+  | -- | The emoji set carried by this event, and whether it was added or
+    -- removed.
+    NoticeReacted ![EmojiLike] !Bool
   deriving stock (Eq, Show)
 
 -- | High-level event we care about. Anything we don't decode lands in 'EvRaw'
@@ -149,32 +155,33 @@ parsePoke o = do
 
 parseGroupRecall :: Object -> Parser MessageNotice
 parseGroupRecall o =
-  MessageRecalled
+  MessageNotice
     <$> o .: "self_id"
     <*> o .: "group_id"
     <*> (o .:? "operator_id" >>= maybe (o .: "user_id") pure)
     <*> o .: "message_id"
+    <*> pure NoticeRecalled
 
 parseFriendRecall :: Object -> Parser MessageNotice
 parseFriendRecall o = do
   user <- o .: "user_id"
-  MessageRecalled
+  MessageNotice
     <$> o .: "self_id"
     <*> pure (privateChatGroupId user)
     <*> pure user
     <*> o .: "message_id"
+    <*> pure NoticeRecalled
 
 parseMessageReaction :: Object -> Parser MessageNotice
 parseMessageReaction o = do
   likes <- o .:? "likes" .!= []
   added <- o .:? "is_add" .!= any ((> 0) . (.count)) likes
-  MessageReacted
+  MessageNotice
     <$> o .: "self_id"
     <*> o .: "group_id"
     <*> (o .:? "user_id" >>= maybe (o .: "operator_id") pure)
     <*> o .: "message_id"
-    <*> pure likes
-    <*> pure added
+    <*> pure (NoticeReacted likes added)
 
 parseGroupMessage :: Object -> Parser GroupMessage
 parseGroupMessage o =

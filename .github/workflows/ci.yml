@@ -76,6 +76,14 @@ jobs:
       - name: Verify generated docs
         run: nix develop --impure -c cabal run max-prompt-flow -- --check
 
+      # Zero hints is the committed state; .hlint.yaml records both the
+      # language settings hlint needs to parse this codebase and the hint
+      # classes we deliberately decline.
+      - name: Lint
+        run: >-
+          nix develop --impure -c hlint
+          src app maintenance test test-db prompt-flow eval context-eval
+
       - name: Test
         run: nix develop --impure -c cabal test max-test --test-show-details=direct
 

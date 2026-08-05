@@ -15,6 +15,7 @@ where
 
 import Data.Aeson (Value, object, (.=))
 import Data.ByteString qualified as BS
+import Control.Applicative ((<|>))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -109,7 +110,7 @@ nodeDigest = \case
   NForward x -> "forward(" <> decorDigest x <> ")"
   NUnsupported x -> "unsupported(" <> decorDigest x <> ")"
   where
-    orElse a b = maybe b Just a
+    orElse a b = a <|> b
 
 utf8Length :: Text -> Int
 utf8Length = BS.length . TE.encodeUtf8

@@ -1,0 +1,42 @@
+# HLint configuration.
+#
+# Run it with the dev shell's hlint:
+#
+#     hlint src app maintenance test test-db prompt-flow eval context-eval
+#
+# The language block is not optional: without it hlint parses `record.field`
+# as function composition, which both hides real hints and invents dozens of
+# fake "redundant bracket" ones.
+
+- arguments:
+    - --language=GHC2024
+    - -XDuplicateRecordFields
+    - -XLambdaCase
+    - -XOverloadedRecordDot
+    - -XOverloadedStrings
+    - -XStrictData
+
+# Declined hint classes.  Each is a house rule, not a backlog item.
+
+# Point-free spelling is not automatically clearer, and eta-reducing a binding
+# can change when GHC shares its work.  Keep the argument visible where it
+# names something.
+- ignore: {name: Eta reduce}
+
+# `\x -> x `op` y` reads left to right; the backtick section it becomes does
+# not.  Explicitness wins in the cases hlint finds here.
+- ignore: {name: Avoid lambda using `infix`}
+- ignore: {name: Avoid lambda}
+
+# StrictData is on project-wide, so `data X = X T` forces its field while
+# `newtype X = X T` cannot: the conversion silently drops the strictness every
+# module here opted into.  Not equivalent, so not automatic.
+- ignore: {name: Use newtype instead of data}
+
+# A `concat` of several optional line groups reads as a list of sections;
+# spelling five of them as `<>` chains does not.
+- ignore: {name: Use ++, within: Max.Roster}
+
+# The parentheses hlint wants removed are what make the scope of `finally`
+# obvious, and that scope is the whole point of the dispatch cleanup block.
+- ignore: {name: Move brackets to avoid $, within: Max.Handler}

@@ -68,7 +68,6 @@ prepareImageForLLM mime bytes
             "ffmpeg"
             ["-y", "-loglevel", "error", "-i", inPath, "-vf", scale, "-frames:v", "1", "-q:v", "4", outPath]
             ""
-      out <- case res of
+      case res of
         Just (ExitSuccess, _, _) -> Just <$> BS.readFile outPath
         _ -> pure Nothing
-      pure out

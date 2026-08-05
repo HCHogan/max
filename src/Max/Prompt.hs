@@ -997,8 +997,8 @@ loadPromptImages tz' selfId' mid replyIds candidates = do
             <> [Right (h, mp) | h <- candidates', mp <- imagesOf h.messageId]
       (triggerPicked, contextUnsorted) = partitionEithers picked
       contextPicked = sortOn (\(h, _) -> h.receivedAt) contextUnsorted
-  ctxImgs <- fmap concat $ traverse (uncurry loadCtx) contextPicked
-  trigImgs <- fmap concat $ traverse (loadOne "[current message] 里的图片:") triggerPicked
+  ctxImgs <- concat <$> traverse (uncurry loadCtx) contextPicked
+  trigImgs <- concat <$> traverse (loadOne "[current message] 里的图片:") triggerPicked
   pure (ctxImgs <> trigImgs)
   where
     loadCtx h mp =

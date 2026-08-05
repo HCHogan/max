@@ -8,6 +8,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Faces (curatedFaceGroups)
 import Max.Platform.Types (AdvertisedCaps (..))
+import Max.Util (tshow)
 
 -- | Assemble the system prompt: the @persona@ (from session override
 -- or AppConfig default), a scene block saying whether this is a
@@ -116,9 +117,9 @@ systemPrompt multimodal' private outputCaps persona skills' =
              then ["  [silence:表情名]  沉默并贴指定表情", "", "小黄脸对照表（条目格式 名字#id：[face#id] 发消息用 id，[silence:表情名] 贴表情用名字，都只认这张表）："]
              else []
          )
-      <> [ "  " <> label <> "：" <> T.unwords [name <> "#" <> T.pack (show fid) | (name, fid) <- faces]
-         | (label, faces) <- curatedFaceGroups,
-           outputCaps.canReaction && outputCaps.canFace
+      <> [ "  " <> label <> "：" <> T.unwords [name <> "#" <> tshow fid | (name, fid) <- faces]
+         | outputCaps.canReaction && outputCaps.canFace,
+           (label, faces) <- curatedFaceGroups
          ]
       <> [ "",
            "纯展示（只读，写了也不会发生任何事）：",

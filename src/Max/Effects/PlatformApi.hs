@@ -163,11 +163,9 @@ awaitWithTimeout ::
   IO (Either Text Response)
 awaitWithTimeout tm timeoutMs = do
   timer <- registerDelay (timeoutMs * 1000)
-  res <-
-    atomically $
-      takeTMVar tm
-        `orElse` ( do
-                     done <- readTVar timer
-                     if done then pure (Left "timeout") else retry
-                 )
-  pure res
+  atomically $
+    takeTMVar tm
+      `orElse` ( do
+                   done <- readTVar timer
+                   if done then pure (Left "timeout") else retry
+               )

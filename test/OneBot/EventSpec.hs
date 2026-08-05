@@ -3,7 +3,7 @@ module OneBot.EventSpec (spec) where
 import Data.Aeson (Value, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.Text (Text)
-import OneBot.Event (EmojiLike (..), Event (..), GroupMessage (..), MessageNotice (..), PokeEvent (..), parseEvent)
+import OneBot.Event (EmojiLike (..), Event (..), GroupMessage (..), MessageNotice (..), NoticeKind (..), PokeEvent (..), parseEvent)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 import Test.Hspec
 
@@ -81,11 +81,11 @@ spec = describe "parseEvent" $ do
             "message_id" .= (9000 :: Int)
           ]
       ) of
-      Right (EvMessageNotice _ MessageRecalled {mnGroupId, mnActorId, mnTargetMessageId}) -> do
-        mnGroupId `shouldBe` GroupId 7777
-        mnActorId `shouldBe` UserId 3001
-        mnTargetMessageId `shouldBe` MessageId 9000
-      other -> expectationFailure ("expected MessageRecalled, got: " <> show other)
+      Right (EvMessageNotice _ notice) | NoticeRecalled <- notice.mnKind -> do
+        notice.mnGroupId `shouldBe` GroupId 7777
+        notice.mnActorId `shouldBe` UserId 3001
+        notice.mnTargetMessageId `shouldBe` MessageId 9000
+      other -> expectationFailure ("expected a recall notice, got: " <> show other)
 
   it "parses reaction polarity and emoji ids" $
     case parseEvent
@@ -100,10 +100,10 @@ spec = describe "parseEvent" $ do
             "is_add" .= False
           ]
       ) of
-      Right (EvMessageNotice _ MessageReacted {mnLikes, mnReactionAdded}) -> do
-        mnLikes `shouldBe` [EmojiLike "212" 0]
-        mnReactionAdded `shouldBe` False
-      other -> expectationFailure ("expected MessageReacted, got: " <> show other)
+      Right (EvMessageNotice _ notice) | NoticeReacted likes added <- notice.mnKind -> do
+        likes `shouldBe` [EmojiLike "212" 0]
+        added `shouldBe` False
+      other -> expectationFailure ("expected a reaction notice, got: " <> show other)
 
 pokeEvent :: [Pair] -> Value
 pokeEvent extra =

@@ -163,15 +163,15 @@ fetchVideoInfo ref = do
   case q of
     Nothing -> pure (Left "内部错误：短链应先 resolveShort")
     Just query' ->
-      fmap (>>= parseVideoInfo) $
-        getJson ("https://api.bilibili.com/x/web-interface/view?" <> query')
+      (>>= parseVideoInfo)
+        <$> getJson ("https://api.bilibili.com/x/web-interface/view?" <> query')
 
 -- | Top comments by like count, first page.  A closed comment section
 -- (or any API refusal) is a 'Left' the caller may degrade to empty.
 fetchTopComments :: Http :> es => Int64 -> Int -> Eff es (Either Text [BiliComment])
 fetchTopComments aid n =
-  fmap (>>= parseComments n) $
-    getJson
+  (>>= parseComments n)
+    <$> getJson
       ( "https://api.bilibili.com/x/v2/reply?type=1&sort=2&ps="
           <> T.pack (show n)
           <> "&oid="
@@ -181,8 +181,8 @@ fetchTopComments aid n =
 -- | Progressive MP4 URL + its size for the first page of a video.
 fetchStreamUrl :: Http :> es => Text -> Int64 -> Eff es (Either Text (Text, Int64))
 fetchStreamUrl bvid cid =
-  fmap (>>= parseStreamUrl) $
-    getJson
+  (>>= parseStreamUrl)
+    <$> getJson
       ( "https://api.bilibili.com/x/player/playurl?platform=html5&high_quality=1&qn=32&bvid="
           <> bvid
           <> "&cid="

@@ -320,7 +320,7 @@ validatePresent args view (name, Object propertySchema) = case KeyMap.lookup nam
   where
     validateEnum value = case KeyMap.lookup "enum" propertySchema of
       Just (Array allowed)
-        | value `notElem` toList allowed ->
+        | value `notElem` allowed ->
             Left (rejectedFault view (Key.toText name <> " is not an allowed value"))
       _ -> Right ()
 

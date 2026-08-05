@@ -40,7 +40,7 @@ readTool =
     { toolName = "read",
       toolDescription = "read a value",
       toolSchema = schema,
-      toolRun = \args -> pure (Right args)
+      toolRun = pure . Right
     }
 
 spec :: Spec
@@ -99,7 +99,7 @@ spec = describe "validated tool kernel" $ do
     (specs, views) <- runEff . runTools catalog $ (,) <$> listToolSpecs <*> listCatalogTools
     map (.specName) specs `shouldBe` ["read"]
     map (.ctDefinition.tdRef) views `shouldBe` [ToolRef "read"]
-    map (.ctSchemaHash) views `shouldSatisfy` all (/= SchemaHash "")
+    map (.ctSchemaHash) views `shouldSatisfy` notElem (SchemaHash "")
   where
     isDuplicateDefinition (Left DuplicateToolDefinition {}) = True
     isDuplicateDefinition _ = False

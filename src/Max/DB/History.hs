@@ -87,8 +87,8 @@ data LedgerItem = LedgerItem
 
 instance FromRow LedgerItem where
   fromRow =
-    LedgerItem
-      <$> (MessageCursor <$> field)
+    LedgerItem . MessageCursor
+      <$> field
       <*> fromRow
       <*> field
 

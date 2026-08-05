@@ -13,6 +13,7 @@ import Control.Monad (forM, unless, when)
 import Data.Aeson (Result (..), Value, fromJSON)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple
@@ -70,7 +71,7 @@ main :: IO ()
 main = do
   command <- parseCommand =<< getArgs
   dbUrl <- requireEnv "MAX_DB_URL"
-  migrationsDir <- maybe "migrations" id <$> lookupEnv "MAX_MIGRATIONS_DIR"
+  migrationsDir <- fromMaybe "migrations" <$> lookupEnv "MAX_MIGRATIONS_DIR"
   bracket
     (newDbPool (DbConfig (T.pack dbUrl) 1))
     closeDbPool

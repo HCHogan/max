@@ -9,7 +9,7 @@ import Control.Concurrent.MVar
     takeMVar,
   )
 import Control.Exception (finally)
-import Control.Monad (forM, forM_)
+import Control.Monad (forM, forM_, replicateM, when)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Max.Browser.Registry (BrowserRegistry, newBrowserRegistry, withBrowserSession)
 import Max.HttpRuntime (newHttpRuntime)
@@ -22,7 +22,7 @@ spec = describe "withBrowserSession" $ do
   it "serializes complete operations for the same group" $ do
     reg <- testRegistry
     counters <- newMVar (0 :: Int, 0 :: Int)
-    done <- forM [1 .. 4 :: Int] $ \_ -> do
+    done <- replicateM 4 $ do
       finished <- newEmptyMVar
       _ <- forkIO $ operation reg counters `finally` putMVar finished ()
       pure finished
@@ -45,7 +45,7 @@ spec = describe "withBrowserSession" $ do
             gid
             ( do
                 n <- atomicModifyIORef' entered (\x -> let next = x + 1 in (next, next))
-                if n == 2 then putMVar bothEntered () else pure ()
+                when (n == 2) (putMVar bothEntered ())
                 takeMVar release
             )
             `finally` putMVar finished ()

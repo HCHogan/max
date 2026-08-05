@@ -8,6 +8,7 @@ where
 
 import Data.Aeson (Value, object, (.=))
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
@@ -84,7 +85,7 @@ mediaView source meta =
 adminMediaUrl :: MediaRef -> Text
 adminMediaUrl ref = case mediaRefBlobSha ref of
   Just sha -> "/api/blobs/" <> sha
-  Nothing -> maybe "" id (mediaRefRemoteUrl ref)
+  Nothing -> fromMaybe "" (mediaRefRemoteUrl ref)
 
 hydrateForward ::
   (WithConnection :> es, IOE :> es) =>

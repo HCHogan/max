@@ -20,6 +20,7 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..))
+import Control.Monad (void)
 import Effectful
 import Effectful.Exception (finally)
 import Effectful.PostgreSQL (WithConnection, execute, query)
@@ -116,4 +117,4 @@ withMaintenanceLease domain owner ttlSeconds action =
   claimMaintenanceLease domain owner ttlSeconds >>= \case
     Nothing -> pure Nothing
     Just lease ->
-      Just <$> action lease `finally` (releaseMaintenanceLease lease >> pure ())
+      Just <$> action lease `finally` void (releaseMaintenanceLease lease)

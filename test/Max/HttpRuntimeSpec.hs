@@ -6,6 +6,7 @@ import Control.Exception (fromException, toException)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Data.Maybe (isJust)
 import Max.HttpRuntime
 import Network.HTTP.Client
   ( HttpException (..),
@@ -99,7 +100,7 @@ spec = do
       result <- waitCatch worker
       case result of
         Left exception ->
-          (fromException exception :: Maybe AsyncCancelled) `shouldSatisfy` maybe False (const True)
+          (fromException exception :: Maybe AsyncCancelled) `shouldSatisfy` isJust
         Right value -> expectationFailure ("cancellation became a value: " <> show value)
       readIORef closes `shouldReturn` 1
 

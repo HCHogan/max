@@ -509,7 +509,7 @@ classifyOnce mGid profile persona ctxLines newLines = do
     Left err -> do
       logAttention "intent: classify failed" $ object ["error" .= err]
       pure Nothing
-    Right (ToolCallsResp _ _ _) -> do
+    Right (ToolCallsResp {}) -> do
       logAttention "intent: unexpected tool_calls" $ object []
       pure Nothing
     Right (ContentResp txt) -> case parseVerdict txt of
@@ -630,7 +630,7 @@ classifySupplement cfg gid ctxLines newLine = do
     Left err -> do
       logAttention "intent: supplement classify failed" $ object ["error" .= err]
       pure False
-    Right (ToolCallsResp _ _ _) -> pure False
+    Right (ToolCallsResp {}) -> pure False
     Right (ContentResp txt) -> case parseSupplement txt of
       Nothing -> do
         logAttention "intent: unparseable supplement verdict" $

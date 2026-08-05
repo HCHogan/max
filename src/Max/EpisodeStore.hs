@@ -158,8 +158,8 @@ data SourceRange = SourceRange
 
 instance FromRow SourceRange where
   fromRow =
-    SourceRange
-      <$> (MessageCursor <$> field)
+    SourceRange . MessageCursor
+      <$> field
       <*> (MessageCursor <$> field)
       <*> field
       <*> field
@@ -187,7 +187,7 @@ instance FromRow CaptureRun where
       <$> field
       <*> field
       <*> (MessageCursor <$> field)
-      <*> (SourceRange <$> (MessageCursor <$> field) <*> (MessageCursor <$> field) <*> field <*> field)
+      <*> (SourceRange . MessageCursor <$> field <*> (MessageCursor <$> field) <*> field <*> field)
       <*> field
       <*> field
       <*> field
@@ -1012,11 +1012,9 @@ publishCaptureRun scope lease validated = withTransaction $ do
   insertRejectedProposals run validated.rejectedProposals
   forM validated.validatedProposals (applyMemoryProposal scope run compartment) >>= mapM_ (insertProposalOutcome run)
   activateCompartment run compartment
-  if runRequiresLiveCursor run
-    then do
-      advanced <- advanceCursor scope historianCursor run.crExpectedCursor run.crRange.srEnd
-      unless advanced (publicationFailure "historian cursor compare-and-swap conflict")
-    else pure ()
+  when (runRequiresLiveCursor run) $ do
+    advanced <- advanceCursor scope historianCursor run.crExpectedCursor run.crRange.srEnd
+    unless advanced (publicationFailure "historian cursor compare-and-swap conflict")
   changed <-
     execute
       "UPDATE episode_capture_runs \
@@ -1335,7 +1333,7 @@ instance FromRow ActiveCompartment where
     ActiveCompartment
       <$> field
       <*> field
-      <*> (SourceRange <$> (MessageCursor <$> field) <*> (MessageCursor <$> field) <*> field <*> field)
+      <*> (SourceRange . MessageCursor <$> field <*> (MessageCursor <$> field) <*> field <*> field)
       <*> field
       <*> field
       <*> field

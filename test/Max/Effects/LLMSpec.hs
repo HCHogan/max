@@ -4,9 +4,8 @@ import Data.Aeson (Value (..), decode, eitherDecode, encode, object, toJSON, (.=
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Key (Key)
 import Data.Map.Strict qualified as Map
-import Data.Text (isPrefixOf)
 import Data.Aeson.Types (parseEither)
-import Data.Text (Text)
+import Data.Text (Text, isPrefixOf)
 import Data.Vector qualified as V
 import Max.Effects.LLM
   ( ChatMessage (..),

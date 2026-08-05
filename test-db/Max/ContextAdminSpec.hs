@@ -3,6 +3,7 @@ module Max.ContextAdminSpec (spec) where
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
@@ -103,7 +104,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.ContextAdmin" $ do
             }
     detail <- withDb pool (fetchMemoryHistoryAdmin memory.memId)
     detail `shouldSatisfy` (/= Nothing)
-    parseMemoryCounts (maybe (error "missing detail") id detail) `shouldBe` Right (1, 1, 1)
+    parseMemoryCounts (fromMaybe (error "missing detail") detail) `shouldBe` Right (1, 1, 1)
 
 parseCoverage :: Value -> Either String (Int64, Int64, [Text])
 parseCoverage = parseEither $ withObject "status" $ \root -> do

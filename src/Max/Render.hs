@@ -41,7 +41,7 @@ parseTable src = case filter (not . T.null) (map T.strip (T.lines src)) of
   (h : sep : rest) -> do
     let header = splitRow h
         seps = splitRow sep
-        cols = maximum (length header : map length (map splitRow rest))
+        cols = maximum (length header : map (length . splitRow) rest)
         pad r = take cols (r <> repeat "")
     Just
       Table
@@ -118,10 +118,9 @@ compileTypst source = do
             "typst"
             ["compile", "--format", "png", "--ppi", "144", inPath, outPath]
             ""
-      out <- case result of
+      case result of
         Nothing -> pure (Left "typst timed out")
         Just (ExitSuccess, _, _) -> Right <$> BS.readFile outPath
         Just (ExitFailure c, _, err) ->
           pure . Left $
             "typst exited " <> T.pack (show c) <> ": " <> T.pack (take 500 err)
-      pure out

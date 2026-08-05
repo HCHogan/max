@@ -37,7 +37,7 @@ import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store (RegisteredEndpoint (..), ensureLegacyEndpoint)
 import Max.Platform.Types
 import Max.Util (tshow)
-import OneBot.Event (EmojiLike (..), GroupMessage (..), MessageNotice (..), Sender (..))
+import OneBot.Event (EmojiLike (..), GroupMessage (..), MessageNotice (..), NoticeKind (..), Sender (..))
 import OneBot.Segment
   ( CardInfo (..),
     FileSegInfo (..),
@@ -98,32 +98,30 @@ qqEnvelope endpoint received raw message =
     UserId userId = message.userId
 
 qqNoticeEnvelopes :: RegisteredEndpoint -> UTCTime -> Value -> MessageNotice -> [InboundEnvelope]
-qqNoticeEnvelopes endpoint received raw notice = case notice of
-  MessageRecalled _ _ actor target ->
+qqNoticeEnvelopes endpoint received raw notice = case notice.mnKind of
+  NoticeRecalled ->
     [ envelope
         (noticeId "recall")
-        actor
         EventRedaction
-        [Redacts (nativeMessage target)]
+        [Redacts (nativeMessage notice.mnTargetMessageId)]
     ]
-  MessageReacted _ _ actor target likes added ->
+  NoticeReacted likes added ->
     [ envelope
-        (noticeId ("reaction:" <> like.emojiId <> ":" <> actionText))
-        actor
+        (noticeId ("reaction:" <> like.emojiId <> ":" <> (if added then "add" else "remove")))
         EventReaction
         [ ReactsTo
-            (nativeMessage target)
+            (nativeMessage notice.mnTargetMessageId)
             like.emojiId
             (if added then ReactionAdd else ReactionRemove)
         ]
     | like <- likes
     ]
   where
-    envelope native actor kind relations =
+    envelope native kind relations =
       InboundEnvelope
         { endpointId = endpoint.endpointId,
           nativeEventId = NativeEventId native,
-          senderNativeId = NativeUserId (userText actor),
+          senderNativeId = NativeUserId (userText notice.mnActorId),
           senderDisplayName = Nothing,
           occurredAt = fromMaybe received (eventTime raw),
           receivedAt = received,
@@ -133,9 +131,6 @@ qqNoticeEnvelopes endpoint received raw notice = case notice of
           sourceCursor = Nothing,
           rawPayload = Just raw
         }
-    actionText = case notice of
-      MessageReacted {mnReactionAdded = True} -> "add"
-      _ -> "remove"
     noticeId suffix =
       "notice:"
         <> TE.decodeUtf8 (Base16.encode (SHA256.hash (LBS.toStrict (encode raw))))

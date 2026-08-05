@@ -264,10 +264,7 @@ handleEvents q fetchSig mIntent = loop
                     "state" .= ("not-durable" :: T.Text)
                   ]
         EvMessageNotice raw notice -> do
-          let (self, group) = case notice of
-                MessageRecalled {mnSelfId, mnGroupId} -> (mnSelfId, mnGroupId)
-                MessageReacted {mnSelfId, mnGroupId} -> (mnSelfId, mnGroupId)
-          endpoint <- ensureQQEndpointFor self group
+          endpoint <- ensureQQEndpointFor notice.mnSelfId notice.mnGroupId
           received <- liftIO getCurrentTime
           forM_ (qqNoticeEnvelopes endpoint received raw notice) $ \envelope -> do
             ingestEnvelope

@@ -71,6 +71,8 @@ import Data.ByteString (ByteString)
 import Data.Int (Int64)
 import Data.Kind (Constraint, Type)
 import Data.List (unsnoc)
+import Control.Applicative ((<|>))
+import Data.Char (isDigit)
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -196,7 +198,7 @@ mediaBlobRef sha
   | T.length sha == 64 && T.all isLowerHex sha = Just (MediaBlob sha)
   | otherwise = Nothing
   where
-    isLowerHex c = ('0' <= c && c <= '9') || ('a' <= c && c <= 'f')
+    isLowerHex c = isDigit c || ('a' <= c && c <= 'f')
 
 -- | Construct a bounded-fetch or platform-authenticated remote reference.
 -- Inline/data/file schemes are deliberately rejected: those payloads must be
@@ -326,7 +328,7 @@ mediaFallback meta = "[" <> label <> maybe "" (": " <>) detail <> "]"
           (Just n, Nothing) -> Just n
           (Nothing, _) -> nonBlank =<< meta.description
       _ -> firstNonBlank [meta.description, meta.name]
-    firstNonBlank = foldr (\m acc -> maybe acc Just (nonBlank =<< m)) Nothing
+    firstNonBlank = foldr (\m acc -> (nonBlank =<< m) <|> acc) Nothing
 
 cardFallback :: Card -> Text
 cardFallback c = case parts of

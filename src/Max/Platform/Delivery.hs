@@ -29,6 +29,7 @@ import Control.Monad (forM_)
 import Data.Aeson (Result (..), fromJSON, toJSON)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
+import Data.Either (fromRight, lefts, rights)
 import Data.List (find, nubBy)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
@@ -134,8 +135,8 @@ loadDeliveryMedia ::
   Eff es DeliveryMedia
 loadDeliveryMedia caps body = do
   loaded <- traverse loadOne candidates
-  let resolved = [entry | Right entry <- loaded]
-      notes = [note | Left note <- loaded]
+  let resolved = rights loaded
+      notes = lefts loaded
       totalBytes = sum [BS.length bytes | (_, ResolvedBytes bytes) <- resolved]
   if totalBytes > deliveryMediaTotalBytes
     then error "canonical delivery media exceeds total byte limit"
@@ -280,7 +281,7 @@ deliveryWorker workerId transports = localDomain "delivery" loop
       nativeMentions <-
         deliveryMentionNatives claim.endpointId (mentionIdentities claim.body)
       mediaResult <- trySync (loadDeliveryMedia claim.capabilities claim.body)
-      let media = either (const DeliveryMedia {resolved = [], notes = []}) id mediaResult
+      let media = fromRight DeliveryMedia {resolved = [], notes = []} mediaResult
           lowerWith caps resolved =
             lower
               LowerEnv
@@ -495,8 +496,8 @@ oneBotDeliveryTransport platform backend =
 
 oneBotReactionAction :: NativeEventId -> Text -> ReactionAction -> Maybe Action
 oneBotReactionAction (NativeEventId target) key action =
-  SetMsgEmojiLike
-    <$> (MessageId <$> readIntegral target)
+  SetMsgEmojiLike . MessageId
+    <$> readIntegral target
     <*> readIntegral key
     <*> pure (action == ReactionAdd)
 

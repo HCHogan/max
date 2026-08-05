@@ -202,8 +202,8 @@ data HistorianExpect = HistorianExpect
 
 instance FromJSON HistorianExpect where
   parseJSON = withObject "historian expectations" $ \o ->
-    HistorianExpect
-      <$> (fromMaybe [] <$> o .:? "summary_term_groups")
+    HistorianExpect . fromMaybe []
+      <$> o .:? "summary_term_groups"
       <*> (fromMaybe [] <$> o .:? "forbidden_summary_terms")
       <*> (fromMaybe [] <$> o .:? "p1_evidence_message_ids")
       <*> (fromMaybe [] <$> o .:? "memory_proposals")
@@ -411,8 +411,8 @@ evaluateCapture fixture run source capture =
     missing = [proposal | proposal <- expected, not (any (proposalMatches proposal) actual)]
     unexpected =
       [ proposal
-      | proposal <- actual,
-        not expectations.heAllowAdditionalProposals,
+      | not expectations.heAllowAdditionalProposals,
+        proposal <- actual,
         not (any (`proposalMatches` proposal) expected)
       ]
     proposalErrors =
@@ -426,7 +426,7 @@ proposalMatches expected actual =
     && maybe True (== userId) expected.epUserId
     && (null expected.epCategories || category `elem` expected.epCategories)
     && maybe True (== memoryId) expected.epMemoryId
-    && all (\alternatives -> any ((`T.isInfixOf` T.toCaseFold content) . T.toCaseFold) alternatives) expected.epContentTermGroups
+    && all (any ((`T.isInfixOf` T.toCaseFold content) . T.toCaseFold)) expected.epContentTermGroups
     && all (`elem` evidence) expected.epEvidenceIds
   where
     (action, scope, userId, category, memoryId, content, evidence) = proposalParts actual

@@ -30,6 +30,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
+import Data.Bifunctor (first)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import System.FilePath (isPathSeparator, takeExtension, takeFileName, (</>))
@@ -89,7 +90,7 @@ embeddedFiles =
        ]
 
 prefixDirectory :: FilePath -> [(FilePath, BS.ByteString)] -> [(FilePath, BS.ByteString)]
-prefixDirectory directory = map (\(path, bytes) -> (directory </> path, bytes))
+prefixDirectory directory = map (first (directory </>))
 
 sourceFiles :: Map Text Text
 sourceFiles = Map.fromList (mapMaybe decodeSource embeddedFiles)

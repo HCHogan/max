@@ -10,6 +10,7 @@ module Max.ContextTraceStore
   )
 where
 
+import Data.Either (fromRight)
 import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Int (Int64)
 import Data.Text (Text)
@@ -166,7 +167,7 @@ listContextPlanTraces conversationId requestedLimit = do
             cptrAttachmentReserve = stored.storedAttachmentReserve,
             cptrToolRoundReserve = stored.storedToolRoundReserve,
             cptrWithinBudget = stored.storedWithinBudget,
-            cptrDecisions = either (const (object ["decode_error" .= True])) id (eitherDecodeValue stored.storedDecisions),
+            cptrDecisions = fromRight (object ["decode_error" .= True]) (eitherDecodeValue stored.storedDecisions),
             cptrCreatedAt = stored.storedCreatedAt
           }
 

@@ -3,6 +3,20 @@
 Tests, versioning, and debugging. For layout and internals see
 [architecture.md](architecture.md).
 
+## Lint
+
+```sh
+hlint src app maintenance test test-db prompt-flow eval context-eval
+```
+
+Zero hints is the committed state and CI enforces it. `.hlint.yaml` carries
+two things: the language settings hlint needs (without `-XOverloadedRecordDot`
+it reads `record.field` as function composition, hides real hints and invents
+fake ones), and the hint classes this project declines — eta reduction,
+lambda-to-section rewrites, and `data`→`newtype`, which is not a safe rewrite
+under the project-wide `StrictData`. Each ignore carries its reason; add one
+the same way rather than leaving a hint to rot.
+
 ## Tests
 
 Two test suites — one in-memory, one against Postgres — plus CI (GitHub Actions)

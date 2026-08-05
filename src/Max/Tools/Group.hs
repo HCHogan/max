@@ -44,10 +44,8 @@ groupToolsFor ::
   ToolContext ->
   [Tool es]
 groupToolsFor dc =
-  concat
-    [ [membersTool (toolGroupId dc) | not private],
-      [avatarTool dc | toolMultimodal dc]
-    ]
+  [membersTool (toolGroupId dc) | not private]
+    <> [avatarTool dc | toolMultimodal dc]
   where
     private = isPrivateChat (toolGroupId dc)
 

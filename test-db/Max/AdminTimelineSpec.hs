@@ -4,6 +4,7 @@ import Control.Concurrent.Async (async, wait)
 import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -38,7 +39,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.AdminTimeline" $ do
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (baseEnvelope endpoint.endpointId now "live"))
     wait waiter `shouldReturn` True
     timeline <- withDb pool (loadAdminTimeline 43 (Just 0) 10)
-    timeline `shouldSatisfy` maybe False (const True)
+    timeline `shouldSatisfy` isJust
 
   it "wakes for delivery-state changes that do not advance conversation_seq" $ do
     endpoint <-
@@ -82,7 +83,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.AdminTimeline" $ do
           textOnlyCaps
     now <- getCurrentTime
     let sha = T.replicate 64 "a"
-        media = maybe (error "valid blob fixture") id (mediaBlobRef sha)
+        media = fromMaybe (error "valid blob fixture") (mediaBlobRef sha)
         parentEnvelope =
           (baseEnvelope endpoint.endpointId now "parent")
             { content =

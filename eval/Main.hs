@@ -87,8 +87,8 @@ data Case = Case
 
 instance FromJSON Case where
   parseJSON = withObject "case" $ \o ->
-    Case
-      <$> (fromMaybe [] <$> o .:? "context")
+    Case . fromMaybe []
+      <$> o .:? "context"
       <*> o .: "new"
       <*> o .: "expect_trigger"
       <*> o .:? "expect_kind"

@@ -711,7 +711,7 @@ formatTasks now callerGid tasks =
 formatOne :: UTCTime -> Maybe GroupId -> TaskInfo -> Text
 formatOne now callerGid ti =
   T.intercalate "  " $
-    [ "  " <> (ti.tiId.unTaskId),
+    [ "  " <> ti.tiId.unTaskId,
       ti.tiKind,
       ageText now ti.tiStartedAt,
       -- Who started it.  Informational only — anyone may !feedback at

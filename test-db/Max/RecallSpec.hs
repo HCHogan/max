@@ -4,6 +4,7 @@ import Data.Aeson (encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.List (nub, sort)
+import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
@@ -45,7 +46,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
       `shouldBe` [1002]
     [message | hit <- hits, hit.rhSource == "caption", Just message <- [hit.rhMessageId]]
       `shouldBe` [1003]
-    hits `shouldSatisfy` any (\hit -> hit.rhSource == "episode" && hit.rhEpisodeHandle /= Nothing)
+    hits `shouldSatisfy` any (\hit -> hit.rhSource == "episode" && isJust hit.rhEpisodeHandle)
 
     crossScope <- withDb pool $ searchRecall (currentConversationRecall scopeB) "tea" Nothing 30
     crossScope `shouldBe` []
@@ -74,7 +75,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
 
     memoryHits <- withDb pool $ searchRecallIn policyA (Set.singleton RecallMemories) "tea" Nothing 30
     memoryHits `shouldSatisfy` (not . null)
-    memoryHits `shouldSatisfy` all (\hit -> hit.rhSource == "memory" && hit.rhMemoryId /= Nothing)
+    memoryHits `shouldSatisfy` all (\hit -> hit.rhSource == "memory" && isJust hit.rhMemoryId)
 
     foreignMemoryHits <- withDb pool $ searchRecallIn policyB (Set.singleton RecallMemories) "tea" Nothing 30
     foreignMemoryHits `shouldBe` []

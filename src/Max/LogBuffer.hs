@@ -140,7 +140,7 @@ queryLogs buf q = do
     keep e =
       maybe True (\l -> rank e.leLevel >= rank l) q.lqMinLevel
         && maybe True (== e.leDomain) q.lqDomain
-        && maybe True (`T.isInfixOf` e.leHaystack) (T.toLower <$> q.lqSearch)
+        && maybe True ((`T.isInfixOf` e.leHaystack) . T.toLower) q.lqSearch
         && maybe True (< e.leSeq) q.lqAfter
     rank :: LogLevel -> Int
     rank = \case

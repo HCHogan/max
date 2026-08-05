@@ -168,7 +168,7 @@ mediaCaptionWorker profile = localDomain "media-caption" $ do
                       []
                   case eres of
                     Left err -> failed ("chat: " <> err)
-                    Right (ToolCallsResp _ _ _) -> failed "chat: unexpected tool calls"
+                    Right (ToolCallsResp {}) -> failed "chat: unexpected tool calls"
                     Right (ContentResp raw)
                       | T.null (T.strip raw) -> failed "chat: empty caption"
                       | otherwise -> store (T.strip raw)
@@ -210,7 +210,6 @@ firstFrame inPath = do
           "ffmpeg"
           ["-y", "-loglevel", "error", "-i", inPath, "-frames:v", "1", outPath]
           ""
-      out <- case code of
+      case code of
         ExitSuccess -> Just <$> BS.readFile outPath
         ExitFailure _ -> pure Nothing
-      pure out

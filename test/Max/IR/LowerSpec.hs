@@ -28,7 +28,7 @@ baseEnv =
       attribution = Nothing,
       mentionNative = \pid ->
         if pid == knownIdentity then Just (NativeUserId "123456") else Nothing,
-      mediaResolve = \ref -> Just (ResolvedUrl (renderMediaRef ref)),
+      mediaResolve = Just . ResolvedUrl . renderMediaRef,
       replyTarget = Nothing
     }
 

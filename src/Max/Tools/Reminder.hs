@@ -173,7 +173,7 @@ listRemindersTool tz dc =
           "cron" .= r.rmCron
         ]
     status r
-      | isJust r.rmParkedAt = ("parked" :: Text)
+      | isJust r.rmParkedAt = "parked" :: Text
       | isJust r.rmNextAttemptAt = "retrying"
       | otherwise = "scheduled"
 

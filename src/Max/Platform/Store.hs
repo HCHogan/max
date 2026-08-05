@@ -366,8 +366,8 @@ data PlatformEndpointStatus = PlatformEndpointStatus
 
 instance FromRow PlatformEndpointStatus where
   fromRow =
-    PlatformEndpointStatus
-      <$> (EndpointId <$> field)
+    PlatformEndpointStatus . EndpointId
+      <$> field
       <*> (ConversationId <$> field)
       <*> field
       <*> field

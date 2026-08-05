@@ -16,6 +16,7 @@ where
 import Data.Aeson (ToJSON (toJSON), Value (Number, Object, String), object, (.=))
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
+import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.Int (Int64)
 import Data.Text (Text)
@@ -110,7 +111,7 @@ resolveSticker sid = do
                         }
                   )
 
-    mkObj = KM.fromList . map (\(k, v) -> (K.fromText k, v))
+    mkObj = KM.fromList . map (first K.fromText)
     withStickerId stickerId = \case
       Object value -> Object (KM.insert "sticker_id" (toJSON stickerId) value)
       value -> value
