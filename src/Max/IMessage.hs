@@ -212,9 +212,7 @@ iMessageWorker ::
   Maybe EpisodeScheduler ->
   Eff es ()
 iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
-  health <-
-    liftIO (fetchBridgeHealth runtime cfg)
-      >>= either (error . T.unpack . bridgeFailureText) pure
+  health <- awaitBridgeHealth
   registered <-
     ensureConfiguredEndpoint
       PlatformIMessage
@@ -232,6 +230,22 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
       ]
   loop registered health.nativeReplies
   where
+    -- The startup probe is the one bridge call that ran outside 'loop', and
+    -- therefore outside its catchSync.  A Mac asleep behind the bridge is an
+    -- ordinary fact about an optional platform, but as a fatal error it
+    -- reached the linked thread and took QQ, Matrix, the historian and every
+    -- other worker down with it — then again ninety seconds later, for as
+    -- long as the bridge stayed away.  Waiting is what every other adapter
+    -- does when its edge is unreachable.
+    awaitBridgeHealth =
+      liftIO (fetchBridgeHealth runtime cfg) >>= \case
+        Right health -> pure health
+        Left failure -> do
+          logAttention "iMessage bridge unreachable; waiting rather than ending the process" $
+            object ["error" .= bridgeFailureText failure]
+          liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
+          awaitBridgeHealth
+
     loop registered advertisedNativeReplies = do
       nextNativeReplies <-
         runCycle registered advertisedNativeReplies `catchSync` \e -> do
