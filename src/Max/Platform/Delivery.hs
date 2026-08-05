@@ -46,8 +46,9 @@ import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.DB.Notify (WorkChannel (DeliveryWork), claimOrWait)
 import Max.HttpRuntime
   ( BufferedResponse (body),
-    HttpPool (StandardPool),
+    HttpPool (LegacyEmsPool, StandardPool),
     HttpRuntime,
+    TransportFailure (TlsFailed),
     parseRequestEither,
     renderTransportFailure,
     runBuffered,
@@ -190,13 +191,23 @@ resolveDeliveryMedia runtime maxBytes previewBytes (ResolvedUrl sourceUrl) decla
   | "http://" `T.isPrefixOf` sourceUrl || "https://" `T.isPrefixOf` sourceUrl =
       parseRequestEither (T.unpack sourceUrl) >>= \case
         Left failure -> pure (Left (renderTransportFailure failure))
-        Right request ->
-          runBuffered runtime StandardPool maxBytes previewBytes request >>= \case
-            Left failure -> pure (Left (renderTransportFailure failure))
+        Right request -> do
+          first <- runBuffered runtime StandardPool maxBytes previewBytes request
+          -- Tencent's file CDN never implemented RFC 7627, so a current TLS
+          -- stack refuses the handshake outright and a mirrored file went out
+          -- as a bare CDN link.  The image fetch worker has always reached
+          -- those hosts through the legacy pool; this path simply never did.
+          -- The concession stays earned rather than assumed: only a proven
+          -- handshake failure downgrades, and only for that one request.
+          settled <- case first of
+            Left (TlsFailed _) -> runBuffered runtime LegacyEmsPool maxBytes previewBytes request
+            other -> pure other
+          pure $ case settled of
+            Left failure -> Left (renderTransportFailure failure)
             Right response
               | maybe False (/= fromIntegral (BS.length response.body)) declaredSize ->
-                  pure (Left "delivery media size changed")
-              | otherwise -> pure (Right response.body)
+                  Left "delivery media size changed"
+              | otherwise -> Right response.body
   | otherwise = pure (Left "delivery media has no transferable source")
 
 nativeMediaTier :: OutboundCaps -> MediaKind -> Tier

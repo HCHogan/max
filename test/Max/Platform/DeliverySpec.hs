@@ -1,14 +1,18 @@
 module Max.Platform.DeliverySpec (spec) where
 
-import Control.Exception (SomeException, try)
+import Control.Exception (SomeException, throwIO, try)
 import Data.Aeson (toJSON)
+import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
 import Data.Either (isLeft)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Maybe (fromJust, isNothing)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful (runEff)
 import Max.Effects.Blob (blobRefSha256, putBlob, runBlob)
+import Max.HttpRuntime (httpRuntimeFromManagers)
 import Max.IR
 import Max.IR.Lower
 import Max.Platform.Delivery
@@ -16,6 +20,14 @@ import Max.Platform.QQ (qqCapabilities)
 import Max.Platform.Store (DeliveryCompletion (..))
 import Max.Platform.Types (NativeEventId (..), NativeUserId (..), Platform (..), ReactionAction (..))
 import Max.Util (withTempDirectory)
+import Network.HTTP.Client
+  ( Manager,
+    ManagerSettings (..),
+    defaultManagerSettings,
+    makeConnection,
+    newManager,
+  )
+import Network.TLS qualified as TLS
 import OneBot.Action (Action (..))
 import OneBot.Segment (CardInfo (..), Segment (..))
 import OneBot.Types (MessageId (..), UserId (..))
@@ -99,6 +111,28 @@ spec = do
       fallback.video `shouldBe` TierDrop
       fallback.file `shouldBe` TierText
       fallback.maxNativeMedia `shouldBe` 0
+
+  -- Tencent's file CDN never implemented RFC 7627, so a mirrored file used to
+  -- reach the other platform as a bare, unclickable CDN link.
+  describe "legacy-TLS media origins" $ do
+    it "retries a refused handshake on the legacy pool" $ do
+      opens <- newIORef 0
+      standard <- handshakeRefusingManager
+      legacy <- countingManager (rawOkResponse "%PDF-1.4") opens
+      let runtime = httpRuntimeFromManagers standard legacy
+      resolveDeliveryMedia runtime 4096 64 (ResolvedUrl "http://cdn.test/f.pdf") Nothing
+        `shouldReturn` Right "%PDF-1.4"
+      readIORef opens `shouldReturn` 1
+
+    it "keeps the concession earned, not assumed" $ do
+      opens <- newIORef 0
+      standard <- countingManager (rawStatusResponse "404 Not Found" "") =<< newIORef 0
+      legacy <- countingManager (rawOkResponse "never asked") opens
+      let runtime = httpRuntimeFromManagers standard legacy
+      outcome <- resolveDeliveryMedia runtime 4096 64 (ResolvedUrl "http://cdn.test/f.pdf") Nothing
+      outcome `shouldSatisfy` isLeft
+      -- A 404 is an answer.  Only an unusable handshake earns the downgrade.
+      readIORef opens `shouldReturn` 0
 
   -- ADR 003 §7's one unimplemented promise: a deterministic rejection is
   -- retryable-shaped forever, and every retry re-blocks the endpoint's
@@ -212,6 +246,44 @@ spec = do
           added `shouldBe` True
         other -> expectationFailure ("unexpected reaction action: " <> show other)
       oneBotReactionAction (NativeEventId "$matrix") "👍" ReactionAdd `shouldSatisfy` isNothing
+
+-- | A pool that cannot complete a handshake, the way a current TLS stack
+-- meets an origin without Extended Main Secret.
+handshakeRefusingManager :: IO Manager
+handshakeRefusingManager =
+  newManager
+    defaultManagerSettings
+      { managerRawConnection = pure $ \_ _ _ -> throwIO TLS.ConnectionNotEstablished,
+        managerRetryableException = const False
+      }
+
+-- | Serves one canned response and counts how many connections it was asked
+-- for, so a test can assert a pool was never reached at all.
+countingManager :: ByteString -> IORef Int -> IO Manager
+countingManager responseBytes opens =
+  newManager
+    defaultManagerSettings
+      { managerRawConnection = pure $ \_ _ _ -> do
+          modifyIORef' opens (+ 1)
+          chunks <- newIORef [responseBytes]
+          makeConnection
+            (atomicModifyIORef' chunks $ \case [] -> ([], BS.empty); chunk : rest -> (rest, chunk))
+            (const (pure ()))
+            (pure ()),
+        managerRetryableException = const False
+      }
+
+rawOkResponse :: ByteString -> ByteString
+rawOkResponse = rawStatusResponse "200 OK"
+
+rawStatusResponse :: ByteString -> ByteString -> ByteString
+rawStatusResponse status responseBody =
+  "HTTP/1.1 "
+    <> status
+    <> "\r\nContent-Length: "
+    <> BS.pack (map (fromIntegral . fromEnum) (show (BS.length responseBody)))
+    <> "\r\nConnection: close\r\n\r\n"
+    <> responseBody
 
 epoch :: UTCTime
 epoch = posixSecondsToUTCTime 0
