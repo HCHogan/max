@@ -3,7 +3,7 @@
 module Max.HandlerSpec (spec) where
 
 import Max.MessageKind (MessageKind (..))
-import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs)
+import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs, splitQuoteHandles)
 import Max.IR.Prompt (promptText)
 import Max.Platform.QQ (qqIngestBody)
 import Max.Platform.Types (CanonicalMessageId (..))
@@ -57,6 +57,25 @@ spec = do
       parseSilence "[reply#7413]" `shouldBe` Just Nothing -- a bare quote says nothing at all
     it "does not mute ordinary replies" $
       isSilentReply "今天天气不错" `shouldBe` False
+
+  -- The quote is what the silence declines, so it decides both the stored
+  -- reply link and where the face lands — the trigger is only the answer
+  -- when the model named nothing.
+  describe "splitQuoteHandles" $ do
+    it "returns the quoted ids and the marker separately" $ do
+      splitQuoteHandles "[reply#7413] [silence]" `shouldBe` ([7413], "[silence]")
+      splitQuoteHandles "[reply#-88][reply#7413] [silence:吃瓜]"
+        `shouldBe` ([-88, 7413], "[silence:吃瓜]")
+
+    it "leaves a mid-text quote as content" $
+      splitQuoteHandles "说两句 [reply#7413] [silence]"
+        `shouldBe` ([], "说两句 [reply#7413] [silence]")
+
+    it "reads the pre-rename opener alongside the current one" $
+      splitQuoteHandles "[↩#7413] [silence]" `shouldBe` ([7413], "[silence]")
+
+    it "finds nothing to strip in a bare marker" $
+      splitQuoteHandles "[silence]" `shouldBe` ([], "[silence]")
 
   describe "stripStickerText" $ do
     it "leaves text without a sticker span untouched" $

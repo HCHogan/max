@@ -7,10 +7,12 @@ module Max.Handler
     ingestAllowsDownstream,
     isSilentReply,
     parseSilence,
+    splitQuoteHandles,
   )
 where
 
 import Control.Applicative ((<|>))
+import Data.Int (Int64)
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (forM_, unless, void, when)
 import Data.Aeson (Value, toJSON)
@@ -103,7 +105,7 @@ import Max.Tasks
     turnRuntimeTaskId,
   )
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
-import Max.Util (catchSync, trySync, tshow)
+import Max.Util (catchSync, readIntegral, trySync, tshow)
 import OneBot.Action (Action (..))
 import OneBot.Event (Event (..), GroupMessage (..), MessageNotice (..), PokeEvent (..))
 import OneBot.Segment (Segment (..), renderPlainText)
@@ -1222,8 +1224,19 @@ dispatchLLM mIntent origin absorbable companions gm = do
               ]
           let GroupId group = gm.groupId
               CanonicalMessageId triggerMessage = gm.canonicalId
-              silenceText = if T.null stripped then "[silence]" else stripped
+              -- The quote is consumed, not stored: 'replyToCanonicalMessageId'
+              -- already says what this declines, and leaving the token in the
+              -- body too made the next turn's transcript line carry two of
+              -- them — the rendered one and the literal one, naming different
+              -- messages.
+              (quoted, marker) = splitQuoteHandles stripped
+              silenceText = if T.null marker then "[silence]" else marker
               sourceMessage = if triggerMessage == 0 then Nothing else Just triggerMessage
+              -- A negative id is a pre-cutover compatibility id echoed out of
+              -- old history; it names no canonical message, so it is not a
+              -- target for either the link or the face.
+              quotedTarget = listToMaybe [q | q <- quoted, q > 0]
+              declined = quotedTarget <|> sourceMessage
           void $
             recordInternalMessage
               OutboundDraft
@@ -1231,10 +1244,18 @@ dispatchLLM mIntent origin absorbable companions gm = do
                   transcriptKind = renderMessageKind KindChat,
                   sourceCanonicalMessageId = sourceMessage,
                   canonicalBody = Body [NText silenceText],
-                  replyToCanonicalMessageId = sourceMessage
+                  replyToCanonicalMessageId = declined
                 }
+          -- On the message being declined, which is only the trigger when the
+          -- model did not say otherwise.  The two differ whenever it answers
+          -- an earlier message in the thread, and the face belongs on the one
+          -- it named.
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-            queueQQReaction gm.groupId gm.canonicalId (fromMaybe defaultSilenceFace mFace) True
+            queueQQReaction
+              gm.groupId
+              (maybe gm.canonicalId CanonicalMessageId quotedTarget)
+              (fromMaybe defaultSilenceFace mFace)
+              True
         Nothing -> do
           -- Outbound gets the platform message_id and persists this
           -- message into the messages table.  That's where
@@ -1532,21 +1553,28 @@ parseSilence t0
       (T.stripPrefix "[silence:" t <|> T.stripPrefix "[silence：" t)
         >>= T.stripSuffix "]"
 
--- | Strip leading @[reply#id]@ handles (ids may be negative — forward
--- children) and surrounding whitespace.  Only the prefix: a quote in
--- the middle of real text is content.
--- Both openers, for the same reason 'Max.Reply.matchToken' reads both: a
--- model quoting a pre-rename line writes what that line spells.
+-- | Leading @[reply#id]@ handles and the text after them.  Only the prefix:
+-- a quote in the middle of real text is content.  Both openers are read for
+-- the same reason 'Max.Reply.matchToken' reads both — a model quoting a
+-- pre-rename line writes what that line spells.
+--
+-- The ids come back because a silence quotes what it is declining, and that
+-- is a more useful reaction target than whatever woke max.
+splitQuoteHandles :: T.Text -> ([Int64], T.Text)
+splitQuoteHandles = go []
+  where
+    go acc s =
+      let s' = T.stripStart s
+       in case listToMaybe (mapMaybe (`T.stripPrefix` s') ["[reply#", "[↩#"]) of
+            Just rest
+              | (num, rest') <- T.span (\c -> isDigit c || c == '-') rest,
+                not (T.null (T.filter isDigit num)),
+                Just rest'' <- T.stripPrefix "]" rest' ->
+                  go (acc <> maybe [] pure (readIntegral num)) rest''
+            _ -> (acc, s')
+
 dropQuoteHandles :: T.Text -> T.Text
-dropQuoteHandles s =
-  let s' = T.stripStart s
-   in case listToMaybe (mapMaybe (`T.stripPrefix` s') ["[reply#", "[↩#"]) of
-        Just rest
-          | (num, rest') <- T.span (\c -> isDigit c || c == '-') rest,
-            not (T.null (T.filter isDigit num)),
-            Just rest'' <- T.stripPrefix "]" rest' ->
-              dropQuoteHandles rest''
-        _ -> s'
+dropQuoteHandles = snd . splitQuoteHandles
 
 isSilentReply :: T.Text -> Bool
 isSilentReply = isJust . parseSilence
