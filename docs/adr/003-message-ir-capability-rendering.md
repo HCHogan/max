@@ -466,6 +466,37 @@ Inbound completeness work this unlocks (adapter fixes, same IR):
 - wechatpad: enter the canonical pipeline (endpoint registration,
   `InboundEnvelope` ingest, mirror fan-out) with honest text-only caps.
 
+#### 6a. `system`, added 2026-08-06
+
+This section landed every meta-event in the ledger and filed all of them under
+`kind = 'debug'`, because the only question being asked was "does a prompt
+reader select this". That put max's own tool traces and *somebody 撤回了 a
+message* in one bucket whose sole shared property was being hidden. The cost
+stayed invisible until a QQ recall arrived: max was the one participant in the
+room who could not see it happen.
+
+`MessageKind` gains `KindSystem` — **the room saw it, so the model may read
+it, and it still never triggers a reply**. The cut is "would a member have
+seen this", not "what kind of platform event was it"; `event_kind` already
+answers the second question and answering it twice is how the two drift apart.
+The default in every adapter flips with it: a non-message event is `system`
+unless something chooses `debug`.
+
+A meta event carries no content nodes — its whole meaning is the relation —
+so `Max.IR.Prompt.systemEventText` supplies the projection, resolved inside
+the ingest transaction that turns the native relation id canonical. The line
+names its target as `#<canonical id>`, the same handle ADR 004 gave the model
+for every other cross-reference.
+
+**A recalled message keeps its text.** Hiding it would be the incoherent
+choice, not the discreet one: the 撤回 window is two minutes, dispatch has
+usually already run, and max's own reply to it is still in the transcript —
+delete the question and its answer becomes a non-sequitur. Everyone else in
+the room read it too. The system prompt carries the social rule the schema
+cannot: read it, never repeat it. `context_search` and historian evidence stay
+`kind = 'chat'`-only, so it is visible while the window holds it and never
+becomes durable memory.
+
 ### 7. Correctness fixes folded into the same work
 
 These are known defects the refactor passes through; fix them in place:

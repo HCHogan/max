@@ -5,7 +5,7 @@ import Data.Maybe (isNothing)
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawMessage, truncateAll, withDb)
+import Helpers (insertRawKind, insertRawMessage, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History
@@ -56,6 +56,17 @@ spec pool = before_ (truncateAll pool) $
         excluded <- insertRawMessage pool 1004 groupId memberA botId (timeAt 12) (Just "Alice") "excluded"
         rows <- withDb pool $ fetchRecentInGroup groupId excluded Nothing 10
         map (.canonicalId) rows `shouldBe` [a, b, c]
+
+      -- The room watched a 撤回 or a 贴表情 happen, so max reads it too;
+      -- a tool trace nobody saw stays out.  Splitting these apart is the
+      -- whole point of 'system' existing next to 'debug'.
+      it "shows what the room saw happen and still hides what only max did" $ do
+        said <- insertRawMessage pool 1001 groupId memberA botId (timeAt 9) (Just "Alice") "msg-a"
+        watched <- insertRawKind pool "system" 1002 groupId memberB botId (timeAt 10) (Just "Bob") "[撤回了 #1001]"
+        _ <- insertRawKind pool "debug" 1003 groupId botId botId (timeAt 11) Nothing "⚙ view_image {...}"
+        _ <- insertRawKind pool "command" 1004 groupId memberA botId (timeAt 12) Nothing "!version"
+        rows <- withDb pool $ fetchRecentInGroup groupId 9999 Nothing 10
+        map (.canonicalId) rows `shouldBe` [said, watched]
 
       it "applies the LIMIT to the LATEST N (not the earliest)" $ do
         _ <- insertRawMessage pool 1001 groupId memberA botId (timeAt 9) Nothing "old-1"

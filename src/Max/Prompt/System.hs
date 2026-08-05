@@ -100,7 +100,14 @@ systemPrompt multimodal' private outputCaps persona skills' =
            if multimodal'
              then "  [video#7407.0: 首帧简介](29 秒) — 群里的视频；(29 秒) 是实测时长，以它为准（抽帧看视频容易把时长感知错）。被引用或就是当前消息时整段附给你，其余用 view_video 传这两个数字看"
              else "  [video#7407.0: 首帧简介](29 秒) — 视频（你看不到画面；时长是实测的）",
-           "  [forward#7519]              — 转发聊天记录；被引用或就是当前消息时自动展开，其余用 view_forward 传 id 看"
+           "  [forward#7519]              — 转发聊天记录；被引用或就是当前消息时自动展开，其余用 view_forward 传 id 看",
+           -- The room watched these happen, so max sees them too.  A recall
+           -- is the one that needs saying out loud: the original stays in the
+           -- transcript on purpose (max may already have answered it, and
+           -- everyone else read it), but "撤回" is a person taking something
+           -- back, and reading it is not licence to repeat it.
+           "  [撤回了 #7405]              — 那条消息被撤回了；原文还在上面，因为大家都看见了、你可能也已经回过了。但那是本人要收回的话，别复述、别引用、别追问，除非本人自己又提起",
+           "  [贴了表情 花朵脸 #7405]     — 有人给那条消息贴了表情（[取消了…] 是撤下）"
          ]
       <> [ "  [@#7: 名字]                 — @某人；对照表见 [environment]"
          | outputCaps.canMention

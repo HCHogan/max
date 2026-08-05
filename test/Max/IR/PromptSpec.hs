@@ -6,7 +6,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Max.IR
 import Max.IR.Prompt
-import Max.Platform.Types (CanonicalMessageId (..), Platform (..), PrincipalId (..))
+import Max.Platform.Types (CanonicalMessageId (..), EventKind (..), Platform (..), PrincipalId (..))
 import Test.Hspec
 
 -- | The roster the prompt showed this turn: display name → principal.  There
@@ -44,6 +44,39 @@ spec = do
   mentionSpec
   tokenSpec
   roundTripSpec
+  systemEventSpec
+
+-- | A meta event has no content nodes, so this is the whole of what the
+-- transcript can say about it.  Every line has to name its target with the
+-- same @#id@ the model uses everywhere else, or it cannot be matched to the
+-- message it is about.
+systemEventSpec :: Spec
+systemEventSpec = describe "system event projection" $ do
+  it "names the message a recall took back" $
+    systemEventText EventRedaction (Just 7405) Nothing True
+      `shouldBe` "[撤回了 #7405]"
+
+  it "resolves a QQ reaction key to the same face name the model sends by" $
+    systemEventText EventReaction (Just 7405) (Just "212") True
+      `shouldSatisfy` \line ->
+        "[贴了表情 " `T.isPrefixOf` line && " #7405]" `T.isSuffixOf` line && not ("212" `T.isInfixOf` line)
+
+  it "keeps an uncurated face id numeric rather than calling it something else" $
+    systemEventText EventReaction (Just 7405) (Just "999999") True
+      `shouldBe` "[贴了表情 999999 #7405]"
+
+  it "distinguishes removing a reaction from adding one" $
+    systemEventText EventReaction (Just 7405) (Just "999999") False
+      `shouldBe` "[取消了表情 999999 #7405]"
+
+  -- A target that no longer resolves is still worth a line: the room saw
+  -- something get taken back even when the ledger cannot say which thing.
+  it "still reports an event whose target is not in the ledger" $
+    systemEventText EventRedaction Nothing Nothing True
+      `shouldBe` "[撤回了一条消息]"
+
+  it "leaves an ordinary message to its own body" $
+    systemEventText EventMessage (Just 7405) Nothing True `shouldBe` ""
 
 mentionSpec :: Spec
 mentionSpec = describe "mention parsing" $ do

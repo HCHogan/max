@@ -15,6 +15,7 @@ module Max.Faces
   ( curatedFaceGroups,
     curatedFaces,
     faceIdByName,
+    faceNameById,
   )
 where
 
@@ -157,3 +158,10 @@ curatedFaces = concatMap snd curatedFaceGroups
 -- caller's default rather than guessing.
 faceIdByName :: Text -> Maybe Int
 faceIdByName n = lookup n curatedFaces
+
+-- | The other direction, for reading a face back out of the ledger: a QQ
+-- 贴表情 records only the QSid, so a transcript line would otherwise say
+-- "贴了表情 212" and leave the model to guess.  Unknown ids stay numeric
+-- rather than being described as something they are not.
+faceNameById :: Int -> Maybe Text
+faceNameById i = lookup i [(qsid, name) | (name, qsid) <- curatedFaces]

@@ -71,6 +71,7 @@ import Max.Platform.Delivery
     loweredText,
     resolveDeliveryMedia,
   )
+import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -239,7 +240,8 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
                 -- is exempt: replaying a room max has spoken in before, its
                 -- own lines are history like anyone else's.
                 selfEventsAreEchoes = live,
-                transcriptKind = if event.eventKind == EventMessage then "chat" else "debug"
+                transcriptKind =
+                  renderMessageKind (if event.eventKind == EventMessage then KindChat else KindSystem)
               }
           envelope =
             InboundEnvelope

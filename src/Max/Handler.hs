@@ -272,7 +272,7 @@ handleEvents q fetchSig mIntent = loop
               defaultIngestOptions
                 { createDispatch = False,
                   createMirrorDeliveries = True,
-                  transcriptKind = "debug"
+                  transcriptKind = renderMessageKind KindSystem
                 }
               envelope
               >>= \case

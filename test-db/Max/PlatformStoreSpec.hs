@@ -464,7 +464,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
   it "fans edit, reaction, and redaction through capable native copies" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
-    _ <-
+    metaTarget <-
       withDb pool $
         ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-meta-target" "before")
     [targetCopy] <- withDb pool (claimDeliveries "meta-target" 10 30)
@@ -521,6 +521,23 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     redactionClaim.eventKind `shouldBe` EventRedaction
     redactionClaim.endpointId `shouldBe` matrix.endpointId
     redactionClaim.actionTarget `shouldBe` Just (NativeEventId "matrix-meta-target")
+
+    -- A meta event has no content nodes, so its stored projection can only
+    -- come from the relation.  Before this it was the empty string, which is
+    -- why the transcript could not show these at all — and the target is
+    -- named with the canonical id the model already uses everywhere else.
+    let targetId = (resultId metaTarget).unCanonicalMessageId
+    projections <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT event_kind, rendered_text FROM messages \
+        \ WHERE event_kind <> 'message' ORDER BY canonical_message_id"
+        ()
+    (projections :: [(Text, Text)])
+      `shouldBe` [ ("edit", "[编辑了 #" <> tshow targetId <> "]"),
+                   ("reaction", "[贴了表情 托腮 #" <> tshow targetId <> "]"),
+                   ("redaction", "[撤回了 #" <> tshow targetId <> "]")
+                 ]
 
   it "uses the total capability decoder for meta fan-out" $ do
     (qq, matrix) <- mirrorPair pool

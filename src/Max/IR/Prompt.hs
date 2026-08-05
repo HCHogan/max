@@ -32,6 +32,7 @@ module Max.IR.Prompt
     emitModelChunk,
     promptText,
     promptCanonicalText,
+    systemEventText,
   )
 where
 
@@ -46,9 +47,11 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Max.Faces (faceNameById)
 import Max.IR
 import Max.Platform.Types
   ( CanonicalMessageId (..),
+    EventKind (..),
     Platform (..),
     PrincipalId (..),
     PrincipalIdentityId,
@@ -197,6 +200,33 @@ promptText = renderPromptBody (\_ display -> mentionToken display)
 -- rather than inventing a handle.
 promptCanonicalText :: Map PrincipalIdentityId PrincipalId -> Body 'Canonical -> Text
 promptCanonicalText principals = renderPromptBody (canonicalMention principals)
+
+-- | The transcript body of a row the room /watched/ rather than heard: a
+-- 撤回, a 贴表情, an edit.  A meta event carries no content nodes at all —
+-- its entire meaning is the relation it points at — so without this its
+-- rendered projection is the empty string, which is exactly why these rows
+-- could only ever be classified as debug.
+--
+-- The target is named as @#\<canonical id\>@ because that is already the
+-- handle the model uses for every other cross-reference (ADR 004): it can
+-- match the line against the message above it, or expand it with
+-- @get_message_by_id@, without a second vocabulary.
+systemEventText :: EventKind -> Maybe Int64 -> Maybe Text -> Bool -> Text
+systemEventText kind target reactionKey added = case kind of
+  EventMessage -> ""
+  EventRedaction -> wrap ("撤回了" <> about)
+  EventEdit -> wrap ("编辑了" <> about)
+  EventReaction -> wrap ((if added then "贴了" else "取消了") <> face <> about)
+  EventMembership -> wrap "群成员变动"
+  where
+    wrap t = "[" <> t <> "]"
+    about = maybe "一条消息" ((" #" <>) . tshow) target
+    -- A QQ reaction key is a bare QSid.  "贴了表情 212" tells the model
+    -- nothing it can use, and the curated table is the same one the model is
+    -- offered for sending faces, so both directions agree on the name.
+    face = case reactionKey of
+      Nothing -> "表情"
+      Just key -> "表情 " <> fromMaybe key (faceNameById =<< readIntegral key)
 
 -- | No trailing space, unlike the QQ wire form this replaces.  Every
 -- adapter's mention node is followed by a text node that already begins with

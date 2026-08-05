@@ -71,6 +71,7 @@ import Max.Platform.Delivery
     loweredText,
     resolveDeliveryMedia,
   )
+import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -335,7 +336,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
           options =
             defaultIngestOptions
               { createDispatch = not bootstrap,
-                transcriptKind = if kind == EventMessage then "chat" else "debug"
+                transcriptKind = renderMessageKind (if kind == EventMessage then KindChat else KindSystem)
               }
           (senderNative, senderDisplayName) = iMessageIngressIdentity cfg message
           envelope =

@@ -63,7 +63,7 @@ module Max.Platform.Store
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (forM, forM_, when)
+import Control.Monad (forM, forM_, join, when)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
   ( KeyValue ((.=)),
@@ -83,7 +83,7 @@ import Data.Int (Int64)
 import Data.List (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -107,7 +107,7 @@ import Max.IR.Lower
     platformDisplayLabel,
     Tier (..),
   )
-import Max.IR.Prompt (promptCanonicalText)
+import Max.IR.Prompt (promptCanonicalText, systemEventText)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Types
@@ -1009,7 +1009,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
       let platformName = endpoint.erPlatform
           NativeEventId nativeEvent = envelope.nativeEventId
           NativeUserId nativeUser = envelope.senderNativeId
-          rendered = promptCanonicalText (identityPrincipals identities) resolvedBody
+          bodyProjection = promptCanonicalText (identityPrincipals identities) resolvedBody
           provenanceSegments
             | platformName == "qq" = fromMaybe (toJSON ([] :: [Value])) options.qqProvenanceSegments
             | otherwise = toJSON ([] :: [Value])
@@ -1020,6 +1020,12 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
         Just gid -> pure gid
         Nothing -> error "ingestEnvelope: endpoint conversation lacks compatibility projection"
       replyTarget <- resolveReply envelope.endpointId envelope.relations
+      -- A meta event's body is empty by construction, so its projection has
+      -- to come from the relation instead.  Resolved here because this is
+      -- already the transaction that turns native relation ids into canonical
+      -- ones, and a row whose rendered_text is filled in later is a row that
+      -- can be read blank in between.
+      rendered <- metaProjection bodyProjection
       let replyLegacy = snd <$> replyTarget
           replyCanonical = fst <$> replyTarget
       inserted <-
@@ -1100,6 +1106,30 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
                 mirrorDeliveriesCreated = mirrorCount
               }
         )
+
+    -- | An ordinary message projects its own body; anything else projects
+    -- what it did to another message.  A meta event carries at most one such
+    -- relation, and a reaction is the only one that also carries a key.
+    metaProjection bodyProjection = case envelope.eventKind of
+      EventMessage -> pure bodyProjection
+      kind -> do
+        let described = listToMaybe (mapMaybe describes envelope.relations)
+        target <- traverse (resolveNativeTarget envelope.endpointId . fst) described
+        pure $
+          systemEventText
+            kind
+            (join target)
+            (snd =<< described)
+            (all metaAdded envelope.relations)
+      where
+        describes = \case
+          Redacts (NativeEventId target) -> Just (target, Nothing)
+          Replaces (NativeEventId target) -> Just (target, Nothing)
+          ReactsTo (NativeEventId target) key _ -> Just (target, Just key)
+          _ -> Nothing
+        metaAdded = \case
+          ReactsTo _ _ action -> action == ReactionAdd
+          _ -> True
 
     insertMessageMirrors cid originEndpoint =
       execute

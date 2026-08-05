@@ -176,7 +176,7 @@ fetchRecentInGroup gid excludeId since n = do
       " AND NOT EXISTS (SELECT 1 FROM message_relations containment \
       \                 WHERE containment.canonical_message_id = messages.canonical_message_id \
       \                   AND containment.relation_kind = 'contained_in') \
-      \ AND NOT is_synthetic AND kind = 'chat'"
+      \ AND NOT is_synthetic AND kind IN ('chat', 'system')"
 
 -- | Every prompt-eligible chat row after an exact conversation cursor,
 -- ordered by the database ingestion sequence.  This complete-range helper is
@@ -226,7 +226,7 @@ fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
            \   AND NOT EXISTS (SELECT 1 FROM message_relations containment \
            \                   WHERE containment.canonical_message_id = messages.canonical_message_id \
            \                     AND containment.relation_kind = 'contained_in') \
-           \   AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat'"
+           \   AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system')"
 
 -- | Read one newest-first I/O page inside an exact cursor tail, returning the
 -- page itself in chronological order.  @before@ is an exclusive continuation
@@ -256,7 +256,7 @@ fetchNewestPromptPageBefore scope (MessageCursor after) before excludeId since r
              \   AND NOT EXISTS (SELECT 1 FROM message_relations containment \
              \                   WHERE containment.canonical_message_id = messages.canonical_message_id \
              \                     AND containment.relation_kind = 'contained_in') \
-             \   AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat' \
+             \   AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system') \
              \   AND (?::timestamptz IS NULL OR received_at > ?) \
              \ ORDER BY ingest_seq DESC \
              \ LIMIT ?"
@@ -344,7 +344,7 @@ transcriptEligibleExpr =
   "(NOT EXISTS (SELECT 1 FROM message_relations containment \
   \             WHERE containment.canonical_message_id = messages.canonical_message_id \
   \               AND containment.relation_kind = 'contained_in') \
-  \ AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat')"
+  \ AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system'))"
 
 pageEndCursor :: HistoryPage -> Maybe MessageCursor
 pageEndCursor page = case reverse page.items of
