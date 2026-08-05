@@ -277,16 +277,17 @@ wechatpadWorker cfg = localDomain "wechatpad" $ do
               senderWxid = if T.null parsedSender then wm.wmFrom else parsedSender
               -- The relay hands the bot's own messages back on the sync
               -- stream, and that echo is the only receipt WeChat ever gives:
-              -- it carries the real native id the send call withheld.  Offer
-              -- it as reconciliation evidence instead of discarding it, but
-              -- never let it become a second copy of a message max already
-              -- authored.
+              -- it carries the real native id the send call withheld.  Ingest
+              -- offers it as reconciliation evidence instead of discarding it
+              -- ('selfEventsAreEchoes'), so it never becomes a second copy of
+              -- a message max already authored.  Here the same fact only
+              -- decides whether the frame is worth an inbound log line.
               selfEcho = senderWxid == cfg.wpSelfWxid
           received <- liftIO getCurrentTime
           let endpoint = endpoints Map.! wm.wmFrom
               nativeEvent = if wm.wmNewMsgId == 0 then wm.wmMsgId else T.pack (show wm.wmNewMsgId)
               content = wechatInboundBody cfg.wpSelfWxid cfg.wpBotName wm.wmMsgType body0
-              options = defaultIngestOptions {reconcileEchoOnly = selfEcho}
+              options = defaultIngestOptions {selfEventsAreEchoes = True}
               envelope =
                 InboundEnvelope
                   { endpointId = endpoint.endpointId,

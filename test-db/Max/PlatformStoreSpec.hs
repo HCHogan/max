@@ -94,6 +94,47 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     sourceConfirmed `shouldBe` 1
     mirrorPending `shouldBe` 1
 
+  it "mirrors what the transcript shows and keeps a command on its own endpoint" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions {transcriptKind = "command"}
+          (inbound matrix.endpointId now "mx-command" "!version")
+    mirrored <- deliveriesFor pool qq.endpointId
+    -- The other platform's members did not type it and cannot act on it, and
+    -- an endpoint that echoes its own sends would read the copy back as a
+    -- brand new message.
+    mirrored `shouldBe` []
+    _ <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          (inbound matrix.endpointId (addUTCTime 1 now) "mx-chat" "早")
+    chatMirror <- deliveriesFor pool qq.endpointId
+    map fst chatMirror `shouldBe` ["pending"]
+
+  it "reads only max's own account as an echo when self events are echoes" $ do
+    (_, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    -- The flag is an endpoint policy, not a claim about this event: a member
+    -- speaking on an echoing endpoint is still a message.
+    fromMember <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions {selfEventsAreEchoes = True}
+          (inbound matrix.endpointId now "mx-member" "在的")
+    fromMember `shouldSatisfy` isNew
+    let selfSpoke =
+          (inbound matrix.endpointId (addUTCTime 1 now) "mx-self" "[QQ · 好吧] !version")
+            { senderNativeId = NativeUserId "@max:example.test"
+            }
+    withDb pool (ingestEnvelope defaultIngestOptions {selfEventsAreEchoes = True} selfSpoke)
+      `shouldReturn` EchoUnmatched
+    stored <- withConn pool $ \conn -> query conn "SELECT count(*) FROM messages" ()
+    (stored :: [Only Int64]) `shouldBe` [Only 1]
+
   it "uses cursor CAS so stale pollers cannot skip a page" $ do
     (_, matrix) <- mirrorPair pool
     first <-
@@ -852,7 +893,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
 
   -- The WeChat relay acknowledges a send without an id; the bot's own message
   -- coming back on the sync stream is the only receipt it ever gets.
-  it "confirms a receipt-less send from a reconcile-only self echo" $ do
+  it "confirms a receipt-less send from an endpoint whose self events are echoes" $ do
     conversation <- withDb pool (createConversation ConversationGroup (Just "Echo only"))
     endpoint <-
       withDb pool $
@@ -895,7 +936,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             { senderNativeId = NativeUserId "wxid_max"
             }
     withDb pool
-      (ingestEnvelope defaultIngestOptions {reconcileEchoOnly = True} (echo "wx-echo" "我在"))
+      (ingestEnvelope defaultIngestOptions {selfEventsAreEchoes = True} (echo "wx-echo" "我在"))
       `shouldReturn` DeliveryEcho queued.canonicalMessageId
     delivery <- withConn pool $ \conn ->
       query
@@ -908,7 +949,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     -- exists as an outbound row, and a second copy would be transcript noise.
     before' <- storedMessageCount
     withDb pool
-      (ingestEnvelope defaultIngestOptions {reconcileEchoOnly = True} (echo "wx-stray" "谁在说话"))
+      (ingestEnvelope defaultIngestOptions {selfEventsAreEchoes = True} (echo "wx-stray" "谁在说话"))
       `shouldReturn` EchoUnmatched
     after' <- storedMessageCount
     after' `shouldBe` before'
@@ -985,6 +1026,16 @@ isDuplicate _ = False
 
 tuple8ToList :: (a, a, a, a, a, a, a, a) -> [a]
 tuple8ToList (a, b, c, d, e, f, g, h) = [a, b, c, d, e, f, g, h]
+
+-- | Every delivery queued against one endpoint, as @(status, idempotency key)@.
+deliveriesFor :: DbPool -> EndpointId -> IO [(Text, Text)]
+deliveriesFor pool (EndpointId endpoint) =
+  withConn pool $ \conn ->
+    query
+      conn
+      "SELECT status, idempotency_key FROM message_deliveries \
+      \ WHERE endpoint_id = ? ORDER BY delivery_id"
+      (Only endpoint)
 
 ledgerCounts :: DbPool -> EndpointId -> EndpointId -> IO (Int64, Int64, Int64, Int64, Int64)
 ledgerCounts pool (EndpointId source) (EndpointId target) = withConn pool $ \conn -> do

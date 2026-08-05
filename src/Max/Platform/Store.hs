@@ -108,6 +108,7 @@ import Max.IR.Lower
     Tier (..),
   )
 import Max.IR.Prompt (promptCanonicalText)
+import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Types
 import Text.Read (readMaybe)
@@ -192,14 +193,20 @@ data IngestOptions = IngestOptions
     -- every other platform leaves @messages.segments@ as the frozen empty
     -- array and uses canonical content exclusively.
     qqProvenanceSegments :: !(Maybe Value),
-    -- | Offer this event only as evidence about an outstanding delivery.  A
-    -- match confirms that delivery exactly as an ordinary echo does; no match
-    -- stores nothing at all and answers 'EchoUnmatched'.  Adapters whose own
-    -- sends come back on the inbound stream use this to prove a
-    -- non-idempotent send landed without minting a second copy of the bot's
-    -- message whenever the platform's rendering differs from the canonical
-    -- body.
-    reconcileEchoOnly :: !Bool
+    -- | On this endpoint, an event max's own account authored is only ever
+    -- evidence about an outstanding delivery.  A match confirms that delivery
+    -- exactly as an ordinary echo does; no match stores nothing at all and
+    -- answers 'EchoUnmatched'.  Events from anyone else are unaffected.
+    --
+    -- Adapters whose own sends come back on the inbound stream set this to
+    -- prove a non-idempotent send landed without minting a second copy of a
+    -- message max already authored.  Two things make the copy's rendering
+    -- differ from the canonical body it should have matched, so the copy is
+    -- not hypothetical: a mirror copy carries an attribution prefix, and the
+    -- echo can arrive before the send response that names its native id.
+    -- The trade is that a human typing from the bot's own account is read as
+    -- an echo too; a bot account exists to be a bot.
+    selfEventsAreEchoes :: !Bool
   }
   deriving stock (Eq, Show, Generic)
 
@@ -211,14 +218,14 @@ defaultIngestOptions =
       createMirrorDeliveries = True,
       transcriptKind = "chat",
       qqProvenanceSegments = Nothing,
-      reconcileEchoOnly = False
+      selfEventsAreEchoes = False
     }
 
 data IngestResult
   = Ingested !NewIngest
   | AlreadyIngested !CanonicalMessageId
   | DeliveryEcho !CanonicalMessageId
-  | -- | A 'reconcileEchoOnly' event that matched no delivery.  Nothing was
+  | -- | A 'selfEventsAreEchoes' event that matched no delivery.  Nothing was
     -- written, so the caller may drop it.
     EchoUnmatched
   deriving stock (Eq, Show, Generic)
@@ -857,7 +864,10 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
   reconciled <- reconcileDeliveryEcho endpoint identityId contentValue safeRaw rawTruncated
   case reconciled of
     Just cid -> pure (DeliveryEcho (CanonicalMessageId cid))
-    Nothing | options.reconcileEchoOnly -> pure EchoUnmatched
+    Nothing
+      | options.selfEventsAreEchoes
+          && envelope.senderNativeId.unNativeUserId == endpoint.erNativeAccountId ->
+          pure EchoUnmatched
     Nothing -> do
       reserved <-
         query
@@ -1068,7 +1078,15 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
         if not options.createMirrorDeliveries
           then pure 0
           else case envelope.eventKind of
-            EventMessage -> insertMessageMirrors cid envelope.endpointId
+            -- Only what the transcript shows crosses to another platform.  A
+            -- command is addressed to max, not to the room: nobody there typed
+            -- it, nobody there can act on it, and every prompt reader already
+            -- hides it.  Meta events stay mirrorable — a reaction or an edit
+            -- is /about/ a message the other endpoints do hold.
+            EventMessage
+              | options.transcriptKind == renderMessageKind KindChat ->
+                  insertMessageMirrors cid envelope.endpointId
+              | otherwise -> pure 0
             EventEdit -> insertMetaMirrors cid envelope.endpointId ("replace" :: Text) ("edit" :: Text)
             EventReaction -> insertMetaMirrors cid envelope.endpointId ("reaction" :: Text) ("reaction" :: Text)
             EventRedaction -> insertMetaMirrors cid envelope.endpointId ("redacts" :: Text) ("redact" :: Text)

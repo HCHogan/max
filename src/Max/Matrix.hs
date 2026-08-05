@@ -232,6 +232,13 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
             defaultIngestOptions
               { createDispatch = live,
                 createMirrorDeliveries = live,
+                -- /sync hands max its own sends back, and it can win the race
+                -- against the send response that names the event id — so the
+                -- exact-id match is not always available and a mirror copy's
+                -- attribution prefix defeats the content fallback.  Backfill
+                -- is exempt: replaying a room max has spoken in before, its
+                -- own lines are history like anyone else's.
+                selfEventsAreEchoes = live,
                 transcriptKind = if event.eventKind == EventMessage then "chat" else "debug"
               }
           envelope =
@@ -261,7 +268,13 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
               ]
         AlreadyIngested {} -> pure ()
         DeliveryEcho {} -> pure ()
-        EchoUnmatched -> pure ()
+        -- The delivery this echo belongs to stays unconfirmed until its own
+        -- send response lands.  Worth a line: on a mirror endpoint this is the
+        -- ordinary race, and anywhere else it means max's account spoke
+        -- outside the delivery path.
+        EchoUnmatched ->
+          logInfo "matrix self echo matched no delivery" $
+            object ["event_id" .= event.eventId]
 
 -- | Matrix includes the replied-to event's transport sender in @m.mentions@
 -- so clients can notify them.  In a mirrored room every QQ event is delivered
