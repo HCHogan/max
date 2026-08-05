@@ -26,6 +26,7 @@ import Max.Effects.Http (Http, getBytesQqCompatible)
 import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
+import Max.IR (sniffMediaMime)
 import Max.Roster
   ( GroupMember (..),
     GroupMeta (..),
@@ -194,7 +195,7 @@ fetchAndQueue url label =
         object ["url" .= url, "error" .= err]
       pure $ Left ("头像下载失败: " <> err)
     Right (bytes, mime) -> do
-      let mime' = fromMaybe (defaultMime mime) (sniffImageMime bytes)
+      let mime' = fromMaybe (defaultMime mime) (sniffMediaMime bytes)
           b64 = TE.decodeUtf8 (B64.encode bytes)
           dataUrl = "data:" <> mime' <> ";base64," <> b64
       ok <- queueInlineMedia (InlineMedia label dataUrl)
@@ -207,11 +208,3 @@ fetchAndQueue url label =
       | "image/" `T.isPrefixOf` m = m
       | otherwise = "image/jpeg"
 
--- | Magic-byte sniffing for the formats qlogo actually serves.
-sniffImageMime :: ByteString -> Maybe Text
-sniffImageMime bs
-  | BS.take 3 bs == "\xFF\xD8\xFF" = Just "image/jpeg"
-  | BS.take 8 bs == "\x89PNG\r\n\SUB\n" = Just "image/png"
-  | BS.take 4 bs == "GIF8" = Just "image/gif"
-  | BS.take 4 bs == "RIFF" && BS.take 4 (BS.drop 8 bs) == "WEBP" = Just "image/webp"
-  | otherwise = Nothing

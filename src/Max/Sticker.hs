@@ -103,7 +103,10 @@ resolveSticker sid = do
                       (Just source)
                       MediaMeta
                         { kind = MSticker,
-                          mime = Nothing,
+                          -- The bytes are already read; every consumer that
+                          -- has to name this file downstream would otherwise
+                          -- be guessing.
+                          mime = sniffMediaMime bytes,
                           sizeBytes = Just (fromIntegral (BS.length bytes)),
                           name = Nothing,
                           description = summ,

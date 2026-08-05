@@ -1,6 +1,7 @@
 module Max.MatrixSpec (spec) where
 
 import Data.Aeson (Value, object, (.=))
+import Data.ByteString qualified as BS
 import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -319,6 +320,29 @@ spec = describe "Matrix adapter" $ do
                   "size" .= (Just 7 :: Maybe Int)
                 ]
           ]
+
+  it "does not ship an untyped picture as a nameless binary attachment" $ do
+    -- QQ names neither the type nor the file, so this is the shape of every
+    -- mirrored picture and sticker.
+    let untyped = MediaMeta MSticker Nothing (Just 8) Nothing Nothing Nothing
+        gif = "GIF89a" :: BS.ByteString
+        typed = untyped {mime = sniffMediaMime gif}
+    matrixMediaPayload Nothing [] "" untyped "mxc://test/s" (Just 8)
+      `shouldBe` object
+        [ "msgtype" .= ("m.file" :: String),
+          "body" .= ("attachment" :: String),
+          "filename" .= ("attachment" :: String),
+          "url" .= ("mxc://test/s" :: String),
+          "info" .= object ["mimetype" .= (Nothing :: Maybe String), "size" .= (Just 8 :: Maybe Int)]
+        ]
+    matrixMediaPayload Nothing [] "" typed "mxc://test/s" (Just 8)
+      `shouldBe` object
+        [ "msgtype" .= ("m.image" :: String),
+          "body" .= ("attachment" :: String),
+          "filename" .= ("attachment.gif" :: String),
+          "url" .= ("mxc://test/s" :: String),
+          "info" .= object ["mimetype" .= Just ("image/gif" :: String), "size" .= (Just 8 :: Maybe Int)]
+        ]
 
   it "emits native Matrix edit and reaction contracts from lowered content" $ do
     let content = object ["msgtype" .= ("m.text" :: String), "body" .= ("fixed" :: String)]

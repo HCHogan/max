@@ -2,7 +2,9 @@ module Max.IRSpec (spec) where
 
 import Data.Aeson (Value, object, toJSON, (.=))
 import Data.Aeson.Types (parseEither, parseJSON)
+import Data.ByteString (ByteString)
 import Data.Either (isLeft)
+import Data.Foldable (for_)
 import Data.Maybe (fromJust)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -15,6 +17,22 @@ spec = do
   vocabularySpec
   utilitySpec
   codecSpec
+
+-- | One valid header per format 'sniffMediaMime' claims to know.
+mimeSamples :: [(ByteString, Text)]
+mimeSamples =
+  [ ("\xFF\xD8\xFF\xE0", "image/jpeg"),
+    ("\x89PNG\r\n\SUB\n", "image/png"),
+    ("GIF89a", "image/gif"),
+    ("RIFF\0\0\0\0WEBPVP8 ", "image/webp"),
+    ("RIFF\0\0\0\0AVI LIST", "video/x-msvideo"),
+    ("\0\0\0\CANftypisom", "video/mp4"),
+    ("\0\0\0\CANftypqt  ", "video/quicktime"),
+    ("\0\0\0\CANftypM4A ", "audio/mp4"),
+    ("\x1A\x45\xDF\xA3", "video/webm"),
+    ("ID3\x04", "audio/mpeg"),
+    ("OggS", "audio/ogg")
+  ]
 
 mkMeta :: MediaKind -> Maybe Text -> Maybe Text -> Maybe Int -> MediaMeta
 mkMeta kind name description size =
@@ -110,6 +128,23 @@ vocabularySpec = describe "fallbackText" $ do
 
 utilitySpec :: Spec
 utilitySpec = do
+  describe "sniffMediaMime" $ do
+    it "names the formats a group chat actually carries" $
+      for_ mimeSamples $ \(bytes, expected) ->
+        sniffMediaMime bytes `shouldBe` Just expected
+
+    it "admits it cannot tell rather than guessing" $ do
+      sniffMediaMime "" `shouldBe` Nothing
+      sniffMediaMime "%PDF-1.4" `shouldBe` Nothing
+      -- A RIFF container that is not WebP is not an image.
+      sniffMediaMime "RIFF\0\0\0\0WAVEfmt " `shouldBe` Nothing
+
+    -- An upload's filename is derived from the sniff, so a type it can name
+    -- but not spell would still reach Matrix as a bare "attachment".
+    it "gives every type it can name an extension" $
+      for_ mimeSamples $ \(_, mime) ->
+        mimeExtension mime `shouldSatisfy` maybe False ("." `T.isPrefixOf`)
+
   describe "humanBytes" $
     it "picks sensible units" $ do
       humanBytes 512 `shouldBe` "512B"

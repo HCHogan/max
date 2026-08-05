@@ -45,6 +45,8 @@ module Max.IR
     mediaRefRemoteUrl,
     renderMediaRef,
     parseMediaRef,
+    sniffMediaMime,
+    mimeExtension,
     ResolvedMedia (..),
     OutboundMediaRef (..),
     HydratedMention (..),
@@ -70,6 +72,7 @@ where
 import Data.Aeson
 import Data.Aeson.Types (Pair, Parser)
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
 import Data.Int (Int64)
 import Data.Kind (Constraint, Type)
 import Data.List (unsnoc)
@@ -233,6 +236,49 @@ parseMediaRef :: Text -> Maybe MediaRef
 parseMediaRef t = case T.stripPrefix "blob:" t of
   Just sha -> mediaBlobRef sha
   Nothing -> mediaRemoteRef t
+
+-- | Read the media type out of the payload itself.  Most producers cannot
+-- populate 'MediaMeta.mime': QQ hands us a URL and no type, and the bytes do
+-- not exist yet at ingest.  An adapter that uploads, though, is holding the
+-- bytes — and a platform told @application/octet-stream@ renders a picture as
+-- a file attachment.  Magic bytes are the one source that is always present
+-- and never lies about what it is.
+sniffMediaMime :: ByteString -> Maybe Text
+sniffMediaMime bs
+  | BS.take 3 bs == "\xFF\xD8\xFF" = Just "image/jpeg"
+  | BS.take 8 bs == "\x89PNG\r\n\SUB\n" = Just "image/png"
+  | BS.take 4 bs == "GIF8" = Just "image/gif"
+  | riff "WEBP" = Just "image/webp"
+  | riff "AVI " = Just "video/x-msvideo"
+  | BS.take 4 (BS.drop 4 bs) `elem` ["ftyp", "styp"] = Just (isoBaseMedia (BS.take 4 (BS.drop 8 bs)))
+  | BS.take 4 bs == "\x1A\x45\xDF\xA3" = Just "video/webm"
+  | BS.take 3 bs == "ID3" || BS.take 2 bs == "\xFF\xFB" = Just "audio/mpeg"
+  | BS.take 4 bs == "OggS" = Just "audio/ogg"
+  | otherwise = Nothing
+  where
+    riff tag = BS.take 4 bs == "RIFF" && BS.take 4 (BS.drop 8 bs) == tag
+    -- One container, several intents; the brand is what the player reads.
+    isoBaseMedia brand
+      | brand `elem` ["M4A ", "M4B "] = "audio/mp4"
+      | brand == "qt  " = "video/quicktime"
+      | otherwise = "video/mp4"
+
+-- | The extension a platform expects to see on a file of this type, so an
+-- upload's filename does not read as an opaque blob.
+mimeExtension :: Text -> Maybe Text
+mimeExtension = \case
+  "image/jpeg" -> Just ".jpg"
+  "image/png" -> Just ".png"
+  "image/gif" -> Just ".gif"
+  "image/webp" -> Just ".webp"
+  "video/mp4" -> Just ".mp4"
+  "video/webm" -> Just ".webm"
+  "video/quicktime" -> Just ".mov"
+  "video/x-msvideo" -> Just ".avi"
+  "audio/mp4" -> Just ".m4a"
+  "audio/mpeg" -> Just ".mp3"
+  "audio/ogg" -> Just ".ogg"
+  _ -> Nothing
 
 -- | A payload an adapter can actually send: bytes already loaded, or a URL
 -- the adapter may fetch through its own bounded runtime.

@@ -399,11 +399,16 @@ matrixChunkPayload runtime cfg replyTarget chunk = case loweredText chunk of
     [(payload, meta)] ->
       resolveDeliveryMedia runtime matrixMaxMediaBytes matrixStatusPreviewBytes payload meta.sizeBytes >>= \case
         Left err -> pure (Left (MatrixMediaFailure err))
-        Right bytes ->
-          uploadMatrixMedia runtime cfg meta bytes >>= \case
+        Right bytes -> do
+          -- The canonical body rarely knows the type: QQ hands out a URL and
+          -- no mime, so an untyped upload made Matrix show every picture and
+          -- sticker as a nondescript file.  This is the one point that holds
+          -- the bytes, and what they are is written in their first eight.
+          let typed = meta {mime = meta.mime <|> sniffMediaMime bytes}
+          uploadMatrixMedia runtime cfg typed bytes >>= \case
             Left err -> pure (Left (MatrixMediaFailure err))
             Right contentUri ->
-              pure . Right $ matrixMediaPayload replyTarget chunk visibleBody meta contentUri (Just (BS.length bytes))
+              pure . Right $ matrixMediaPayload replyTarget chunk visibleBody typed contentUri (Just (BS.length bytes))
     _ -> pure (Left (MatrixContractFailure "Matrix emitter received more than one native media node"))
 
 data MatrixEmitFailure
@@ -424,7 +429,7 @@ matrixMediaPayload replyTarget chunk visibleBody meta contentUri actualSize =
   object
     ( [ "msgtype" .= matrixMsgType meta.mime,
         "body" .= firstNonBlank [Just visibleBody, meta.description, meta.name, Just "attachment"],
-        "filename" .= meta.name,
+        "filename" .= matrixMediaFilename meta,
         "url" .= contentUri,
         "info"
           .= object
@@ -483,6 +488,14 @@ matrixReactionPayload (NativeEventId target) key =
           ]
     ]
 
+-- | What the upload and the event call this file.  A name the sender supplied
+-- wins; otherwise the type earns an extension, because a bare @attachment@
+-- reads as an opaque blob no matter what the mimetype says.
+matrixMediaFilename :: MediaMeta -> Text
+matrixMediaFilename meta = case meta.name of
+  Just name | not (T.null (T.strip name)) -> name
+  _ -> "attachment" <> fromMaybe "" (mimeExtension =<< meta.mime)
+
 matrixMsgType :: Maybe Text -> Text
 matrixMsgType = \case
   Just mime
@@ -533,7 +546,7 @@ matrixRedactionPath room idempotencyKey suffix (NativeEventId target) =
 
 uploadMatrixMedia :: HttpRuntime -> MatrixConfig -> MediaMeta -> BS.ByteString -> IO (Either Text Text)
 uploadMatrixMedia runtime cfg meta bytes = do
-  let filename = fromMaybe "attachment" meta.name
+  let filename = matrixMediaFilename meta
       path = "/_matrix/media/v3/upload"
       url = T.dropWhileEnd (== '/') cfg.homeserver <> path <> queryText [("filename", filename)]
   parseRequestEither (T.unpack url) >>= \case
