@@ -873,7 +873,7 @@ loadCaptureSource run =
     \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
     \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
     \                      AND containment.relation_kind = 'contained_in') \
-    \        AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
+    \        AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system')) \
     \ FROM messages \
     \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? \
     \ ORDER BY ingest_seq"
@@ -1409,7 +1409,7 @@ expandEpisode policy handle requestedAfter requestedSize = do
           \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
           \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
           \                      AND containment.relation_kind = 'contained_in') \
-          \        AND (NOT is_synthetic OR user_id = self_id) AND kind = 'chat') \
+          \        AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system')) \
           \ FROM messages \
           \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND ingest_seq > ? \
           \ ORDER BY ingest_seq \
