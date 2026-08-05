@@ -2,7 +2,7 @@ module Main (main) where
 
 import Control.Monad (unless)
 import Data.Text.IO qualified as TIO
-import Max.PromptFlow (renderPromptFlow)
+import PromptFlow (renderPromptFlow)
 import System.Directory (doesFileExist)
 import System.Environment (getArgs)
 import System.Exit (die)

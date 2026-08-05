@@ -7,7 +7,7 @@
 -- 'Max.Effects.LLM.requestBodyFor' owns protocol encoding.  No documentation
 -- copy of any of those rules exists here; this module only supplies stable
 -- input data and Markdown framing around their output.
-module Max.PromptFlow
+module PromptFlow
   ( renderPromptFlow,
   )
 where
@@ -53,8 +53,7 @@ import Max.Effects.LLM
 import Max.Effects.ToolOutput (InlineMedia (..))
 import Max.EpisodeStore (EpisodeExpansion (..), EpisodeHandle, SourceRange (..), parseEpisodeHandle)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
-import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
-import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
+import Max.ModelCatalog (ContextLimits (..), LLMProfile (..), Protocol (..), defaultContextLimits)
 import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), Node (..))
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..), qqAdvertisedCaps)
 import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
@@ -63,7 +62,7 @@ import Max.Session (Session (..))
 import Max.Tools (contextSearchSummary, episodeExpansionSummary)
 import Max.Tools.Images (viewImageSpec)
 import Max.Tools.Video (viewVideoSpec)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 
 renderPromptFlow :: Text
 renderPromptFlow =

@@ -667,11 +667,11 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
             else
               -- Same NO face as [silence:NO]: visibly refused, zero noise.
               queueQQReaction gm.groupId gm.canonicalId deniedFaceId True
-        else dispatchAllowed env targetGid effTier sourcePlatform cmd
+        else dispatchAllowed env targetGid sourcePlatform cmd
   where
     isForeignSource = (/= PlatformQQ)
 
-    dispatchAllowed env targetGid effTier sourcePlatform cmd = do
+    dispatchAllowed env targetGid sourcePlatform cmd = do
       t <- loadSession env.beSessions env.beDefaultModel targetGid
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = (\(CanonicalMessageId target) -> target) <$> gm.replyTo

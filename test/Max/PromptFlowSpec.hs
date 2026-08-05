@@ -5,7 +5,7 @@ module Max.PromptFlowSpec (spec) where
 import Data.FileEmbed (embedFile)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8)
-import Max.PromptFlow (renderPromptFlow)
+import PromptFlow (renderPromptFlow)
 import Test.Hspec
 
 spec :: Spec

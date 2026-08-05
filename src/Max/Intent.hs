@@ -72,7 +72,7 @@ import Max.Prompt (renderHistoryLine)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
 import Max.Util (catchSync, trySync)
 import Max.Platform.Types (CanonicalMessageId (..))
-import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
+import OneBot.Types (GroupId (..), isPrivateChat)
 
 -- | Resolved @intent.*@ config; presence enables the whole feature.
 data IntentConfig = IntentConfig

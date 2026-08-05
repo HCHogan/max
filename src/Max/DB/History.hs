@@ -5,6 +5,8 @@ module Max.DB.History
     HistoryPage (..),
     bestName,
     fetchRecentInGroup,
+    historyColumns,
+    transcriptEligibleExpr,
     fetchPromptLedgerAfter,
     fetchNewestPromptPageBefore,
     fetchTranscriptAfter,
@@ -222,11 +224,8 @@ fetchPromptLedgerAfter scope (MessageCursor after) excludeId since =
       "SELECT ingest_seq, "
         <> historyColumns
         <> ", true FROM messages \
-           \ WHERE group_id = ? AND ingest_seq > ? AND canonical_message_id <> ? \
-           \   AND NOT EXISTS (SELECT 1 FROM message_relations containment \
-           \                   WHERE containment.canonical_message_id = messages.canonical_message_id \
-           \                     AND containment.relation_kind = 'contained_in') \
-           \   AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system')"
+           \ WHERE group_id = ? AND ingest_seq > ? AND canonical_message_id <> ? AND "
+        <> transcriptEligibleExpr
 
 -- | Read one newest-first I/O page inside an exact cursor tail, returning the
 -- page itself in chronological order.  @before@ is an exclusive continuation

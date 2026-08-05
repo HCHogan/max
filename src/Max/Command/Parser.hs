@@ -327,15 +327,6 @@ parseInt64 t = case TR.signed TR.decimal (T.strip t) of
   Right (n, rest) | T.null rest -> Just n
   _ -> Nothing
 
--- | A user reference in command args: the canonical @[\@#qq]@ token
--- (what an @-mention renders as), a bare @\@qq@, or a raw QQ number.
-parseUserRef :: Text -> Maybe Int64
-parseUserRef t0 = case T.stripPrefix "[@#" t0 of
-  Just rest -> T.stripSuffix "]" rest >>= parseInt64
-  Nothing -> case T.stripPrefix "@" t0 of
-    Just bare -> parseInt64 bare
-    Nothing -> parseInt64 t0
-
 -- | Effort levels @!effort@ accepts — the union of Anthropic's
 -- (low/medium/high/xhigh/max) and OpenAI-compatible spellings
 -- (minimal/none).  Whether the active profile's provider honours a

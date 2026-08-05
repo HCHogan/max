@@ -6,6 +6,8 @@
 -- a Cabal-hidden internal module used only by configuration and LLM execution.
 module Max.ModelCatalog
   ( ModelCatalog,
+    LLMProfile (..),
+    Protocol (..),
     ModelCatalogError (..),
     ContextLimits (..),
     defaultContextLimits,
@@ -22,6 +24,8 @@ import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Max.ModelCatalog.Internal
   ( ContextLimits (..),
+    LLMProfile (..),
+    Protocol (..),
     ModelCapabilities (..),
     ModelCatalog,
     ModelCatalogError (..),

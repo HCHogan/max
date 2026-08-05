@@ -176,7 +176,6 @@ library
         Max.Platform.QQ
         Max.Prompt
         Max.Prompt.System
-        Max.PromptFlow
         Max.Recall
         Max.Reminder
         Max.Render
@@ -288,11 +287,17 @@ executable max-prompt-flow
     import:           warnings, lang
     hs-source-dirs:   prompt-flow
     main-is:          Main.hs
+    other-modules:    PromptFlow
     build-depends:
-        , base       >= 4.20 && < 5
-        , directory  >= 1.3  && < 1.4
+        , aeson       >= 2.2  && < 2.3
+        , base        >= 4.20 && < 5
+        , bytestring  >= 0.12 && < 0.13
+        , containers  >= 0.7  && < 0.8
+        , directory   >= 1.3  && < 1.4
         , max
-        , text       >= 2.1  && < 2.2
+        , text        >= 2.1  && < 2.2
+        , time        >= 1.12 && < 1.15
+        , vector      >= 0.13 && < 0.14
 
 -- Offline, maintenance-window gate for the atomic ADR 003 schema cutover.
 -- It is intentionally a separate executable: the serving binary must never
@@ -351,7 +356,7 @@ executable max-context-eval
 test-suite max-test
     import:             warnings, lang
     type:               exitcode-stdio-1.0
-    hs-source-dirs:     test
+    hs-source-dirs:     test, prompt-flow
     main-is:            Spec.hs
     other-modules:
         Max.AdminSpec
@@ -402,6 +407,7 @@ test-suite max-test
         Max.PlatformSpec
         Max.Platform.DeliverySpec
         Max.PromptFlowSpec
+        PromptFlow
         Max.MemoryExtractSpec
         Max.MatrixSpec
         Max.ModelCatalogSpec

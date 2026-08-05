@@ -83,7 +83,7 @@ import Max.ConversationScope
     recallConversationScope,
   )
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
-import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
+import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..), historyColumns, transcriptEligibleExpr)
 import Max.DB.Transaction (withTransaction)
 import Max.MemoryStore
   ( ExpectedVersion (..),
@@ -868,15 +868,14 @@ loadCaptureSource ::
   Eff es [LedgerItem]
 loadCaptureSource run =
   query
-    "SELECT ingest_seq, \
-    \       canonical_message_id, author_principal_id, (user_id = self_id), sender_nickname, sender_card, rendered_text, received_at, reply_to_canonical_message_id, \
-    \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
-    \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
-    \                      AND containment.relation_kind = 'contained_in') \
-    \        AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system')) \
-    \ FROM messages \
-    \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? \
-    \ ORDER BY ingest_seq"
+    ( "SELECT ingest_seq, "
+        <> historyColumns
+        <> ", "
+        <> transcriptEligibleExpr
+        <> " FROM messages \
+           \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? \
+           \ ORDER BY ingest_seq"
+    )
     (run.crConversationId, run.crRange.srStart.ingestSeq, run.crRange.srEnd.ingestSeq)
 
 recordCaptureGenerated ::
@@ -1404,16 +1403,15 @@ expandEpisode policy handle requestedAfter requestedSize = do
       let after = max (start - 1) (maybe (start - 1) (.ingestSeq) requestedAfter)
       rows <-
         query
-          "SELECT ingest_seq, \
-          \       canonical_message_id, author_principal_id, (user_id = self_id), sender_nickname, sender_card, rendered_text, received_at, reply_to_canonical_message_id, \
-          \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
-          \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
-          \                      AND containment.relation_kind = 'contained_in') \
-          \        AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system')) \
-          \ FROM messages \
-          \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND ingest_seq > ? \
-          \ ORDER BY ingest_seq \
-          \ LIMIT ?"
+          ( "SELECT ingest_seq, "
+              <> historyColumns
+              <> ", "
+              <> transcriptEligibleExpr
+              <> " FROM messages \
+                 \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND ingest_seq > ? \
+                 \ ORDER BY ingest_seq \
+                 \ LIMIT ?"
+          )
           (conversationId, start, end, after, pageSize + 1)
       let allRows = rows :: [LedgerItem]
           page = take pageSize allRows
