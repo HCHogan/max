@@ -135,6 +135,30 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     stored <- withConn pool $ \conn -> query conn "SELECT count(*) FROM messages" ()
     (stored :: [Only Int64]) `shouldBe` [Only 1]
 
+  -- group_members was the OneBot member-list call, so a Matrix or iMessage
+  -- conversation answered "成员列表获取失败" — the model was told nobody was
+  -- in the room.  The ledger can answer anywhere, and it answers in
+  -- principals, which is the only id ADR 004 lets the model act on.
+  it "answers who is in the room on a platform with no member-list API" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-1" "在"))
+    _ <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          ((inbound qq.endpointId (addUTCTime 1 now) "qq-1" "也在") {senderNativeId = NativeUserId "2001"})
+    roster <- withDb pool (conversationRoster 42)
+    -- Both endpoints' accounts, plus max's own identity on each.
+    map renderPlatform roster.crPlatforms `shouldMatchList` ["qq", "matrix"]
+    map (.riNativeUserId) roster.crIdentities
+      `shouldMatchList` ["9", "2001", "@max:example.test", "@alice:example.test"]
+    -- Every entry names a person, and the native id is carried so a platform
+    -- that can enumerate silent members has something to join on.
+    roster.crIdentities `shouldSatisfy` all (\i -> i.riPrincipalId > PrincipalId 0)
+    [i.riPrincipalId | i <- roster.crIdentities, i.riNativeUserId == "@alice:example.test"]
+      `shouldSatisfy` ((== 1) . length)
+
   it "uses cursor CAS so stale pollers cannot skip a page" $ do
     (_, matrix) <- mirrorPair pool
     first <-

@@ -16,6 +16,9 @@ module Max.Platform.Store
     platformForLegacyConversation,
     platformForLegacyMessage,
     compatibilityMessageIdForCanonical,
+    RosterIdentity (..),
+    ConversationRoster (..),
+    conversationRoster,
     conversationAdvertisedCaps,
     compatibilityPlatformId,
     registerEndpoint,
@@ -138,6 +141,72 @@ data RegisteredEndpoint = RegisteredEndpoint
     compatibilityConversationId :: !Int64
   }
   deriving stock (Eq, Show, Generic)
+
+-- | One account this conversation's endpoints have an identity row for,
+-- together with the person behind it.
+data RosterIdentity = RosterIdentity
+  { riPrincipalId :: !PrincipalId,
+    riPlatform :: !Platform,
+    riNativeUserId :: !Text,
+    riDisplayName :: !(Maybe Text)
+  }
+  deriving stock (Eq, Show, Generic)
+
+data ConversationRoster = ConversationRoster
+  { crPlatforms :: ![Platform],
+    crIdentities :: ![RosterIdentity]
+  }
+  deriving stock (Eq, Show, Generic)
+
+-- | The ledger's answer to "who is in this room", as /people/.
+--
+-- Available on every platform, because it is assembled from what the
+-- conversation's endpoints have already seen rather than from a member-list
+-- API only QQ implements.  The trade runs the other way: it knows everyone
+-- who has spoken or been addressed here and nobody else, so a platform that
+-- can enumerate silent members should union its own answer on top rather
+-- than replace this one — which is why the native id comes back too, as the
+-- only key such a union can join on.
+--
+-- 'crPlatforms' is separate because a conversation has endpoints whether or
+-- not anyone has spoken on them, and a caller deciding whether to ask QQ for
+-- a member list needs that answer before it has any identities.
+conversationRoster ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Eff es ConversationRoster
+conversationRoster legacyConversation = do
+  platforms <-
+    query
+      "SELECT DISTINCT a.platform \
+      \ FROM conversations c \
+      \ JOIN conversation_endpoints e USING (conversation_id) \
+      \ JOIN platform_accounts a USING (platform_account_id) \
+      \ WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled"
+      (Only legacyConversation)
+  rows <-
+    query
+      "SELECT pi.principal_id, a.platform, pi.native_user_id, pi.display_name \
+      \ FROM conversations c \
+      \ JOIN conversation_endpoints e USING (conversation_id) \
+      \ JOIN platform_accounts a USING (platform_account_id) \
+      \ JOIN principal_identities pi USING (platform_account_id) \
+      \ WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
+      \ ORDER BY pi.principal_id, pi.principal_identity_id"
+      (Only legacyConversation)
+  pure
+    ConversationRoster
+      { crPlatforms = map (parsePlatform . fromOnly) platforms,
+        crIdentities =
+          [ RosterIdentity
+              { riPrincipalId = PrincipalId principal,
+                riPlatform = parsePlatform platform,
+                riNativeUserId = native,
+                riDisplayName = name
+              }
+          | (principal, platform, native, name) <- rows :: [(Int64, Text, Text, Maybe Text)]
+          ]
+      }
 
 -- | Derive the semantic surface advertised to the model.  Content actions
 -- are enabled when they have a total lowering path; joining a text-only
