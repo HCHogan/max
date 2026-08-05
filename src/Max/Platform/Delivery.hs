@@ -440,7 +440,7 @@ loweredText = fmap T.concat . traverse emit
     emit :: Node 'Lowered -> Either Text Text
     emit = \case
       NText body -> Right body
-      NMention _ display -> Right ("@" <> display)
+      NMention _ display -> Right (mentionToken display)
       NMedia {} -> Right ""
       NEmote {} -> Left "text emitter received a native emote"
       NCard {} -> Left "text emitter received a native card"

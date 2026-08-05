@@ -1,8 +1,10 @@
 module Max.MatrixSpec (spec) where
 
-import Data.Aeson (object, (.=))
+import Data.Aeson (Value, object, (.=))
 import Data.Foldable (for_)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Max.IR
 import Max.IR.Lower
@@ -27,6 +29,66 @@ spec = describe "Matrix adapter" $ do
           lower matrixTextEnv $
             Body [NMention (MentionIdentity (PrincipalIdentityId 7)) "1578034713"]
     traverse loweredText lowered.chunks `shouldBe` Right ["@1578034713"]
+
+  -- A client that sends markdown in the plain body writes the pill as
+  -- [label](https://matrix.to/#/@user).  Matching only the label left the
+  -- brackets and the URL in the transcript as text.
+  it "consumes a markdown-wrapped pill instead of leaving its link debris" $ do
+    let value =
+          syncPage
+            [ ( "[@max:test](https://matrix.to/#/@max:test) help" :: Text,
+                "<a href=\"https://matrix.to/#/@max:test\">@max:test</a> help" :: Text
+              )
+            ]
+    page <- parseMatrixSyncPage "!room:test" value `shouldSatisfyRight` const True
+    case page.events of
+      [event] ->
+        event.content
+          `shouldBe` [NMention (NativeUserId "@max:test") "@max:test", NText " help"]
+      _ -> expectationFailure "expected exactly one event"
+
+  it "renders an mxid mention with one @, not two" $
+    plainText (Body [NMention (MentionIdentity (PrincipalIdentityId 7)) "@max:test", NText " help"])
+      `shouldBe` "@max:test help"
+
+  -- The mxid is the only identifier Matrix has; the readable name lives in
+  -- per-room member state.  Ignoring it left every Matrix speaker addressed
+  -- by id in the transcript.
+  it "learns member display names and keeps the events themselves out of the ledger" $ do
+    let member user display membership =
+          object
+            [ "type" .= ("m.room.member" :: Text),
+              "state_key" .= (user :: Text),
+              "sender" .= user,
+              "event_id" .= ("$member-" <> user),
+              "origin_server_ts" .= (900 :: Int),
+              "content" .= object ["membership" .= (membership :: Text), "displayname" .= (display :: Text)]
+            ]
+        value =
+          object
+            [ "next_batch" .= ("s2" :: Text),
+              "rooms"
+                .= object
+                  [ "join"
+                      .= object
+                        [ "!room:test"
+                            .= object
+                              [ "state" .= object ["events" .= [member "@hank:test" "hank" "join"]],
+                                "timeline"
+                                  .= object
+                                    [ "events"
+                                        .= [ member "@alice:test" "Alice" "join",
+                                             member "@ghost:test" "Ghost" "leave"
+                                           ]
+                                    ]
+                              ]
+                        ]
+                  ]
+            ]
+    page <- parseMatrixSyncPage "!room:test" value `shouldSatisfyRight` const True
+    page.memberNames
+      `shouldBe` Map.fromList [("@hank:test", "hank"), ("@alice:test", "Alice")]
+    page.events `shouldBe` []
 
   it "parses one allowlisted room timeline with reply and mention provenance" $ do
     let value =
@@ -305,3 +367,36 @@ shouldSatisfyRight value predicate = case value of
   Right result -> do
     result `shouldSatisfy` predicate
     pure result
+
+-- | One joined room, one @m.text@ event per (plain body, formatted body)
+-- pair, with @m.mentions@ naming the bot.
+syncPage :: [(Text, Text)] -> Value
+syncPage bodies =
+  object
+    [ "next_batch" .= ("s2" :: Text),
+      "rooms"
+        .= object
+          [ "join"
+              .= object
+                [ "!room:test"
+                    .= object
+                      [ "timeline" .= object ["events" .= zipWith event [0 :: Int ..] bodies]
+                      ]
+                ]
+          ]
+    ]
+  where
+    event index (body, formatted) =
+      object
+        [ "event_id" .= ("$event" <> T.pack (show index)),
+          "sender" .= ("@alice:test" :: Text),
+          "origin_server_ts" .= (1000 :: Int),
+          "type" .= ("m.room.message" :: Text),
+          "content"
+            .= object
+              [ "msgtype" .= ("m.text" :: Text),
+                "body" .= body,
+                "formatted_body" .= formatted,
+                "m.mentions" .= object ["user_ids" .= (["@max:test"] :: [Text])]
+              ]
+        ]

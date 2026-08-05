@@ -419,7 +419,7 @@ chunkNodes (Just rawLimit) ns0 = go [] 0 ns0
 
     cost = \case
       NText t -> utf8Bytes t
-      NMention _ display -> utf8Bytes ("@" <> display)
+      NMention _ display -> utf8Bytes (mentionToken display)
       _ -> 0
 
 splitAtBytes :: Int -> Text -> (Text, Text)

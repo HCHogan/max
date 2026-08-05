@@ -365,6 +365,7 @@ test-suite max-test
         Max.ConversationScopeSpec
         Max.DB.CallsSpec
         Max.DispatchFixture
+        Max.DispatchSpec
         Max.HandlerSpec
         Max.HistorianSpec
         Max.HttpRuntimeSpec

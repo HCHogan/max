@@ -7,6 +7,7 @@
 module Max.Dispatch
   ( DispatchMessage (..),
     dispatchText,
+    dispatchTextWithoutSelf,
     dispatchMentionsSelf,
     stripDispatchVerb,
   )
@@ -19,11 +20,14 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Max.IR
 import Max.IR.Prompt (promptCanonicalText)
-import Max.Platform.Types (NativeUserId (..), Platform, PrincipalIdentityId)
+import Max.Platform.Types (NativeAccountId (..), NativeUserId (..), Platform, PrincipalIdentityId)
 import OneBot.Types (GroupId, MessageId, UserId (..))
 
 data DispatchMessage = DispatchMessage
   { selfId :: !UserId,
+    -- | The bot's id on the origin platform.  'selfId' is a compatibility
+    -- bigint that only coincides with it on QQ.
+    selfNative :: !NativeAccountId,
     groupId :: !GroupId,
     userId :: !UserId,
     messageId :: !MessageId,
@@ -39,16 +43,40 @@ dispatchText :: DispatchMessage -> Text
 dispatchText message =
   promptCanonicalText message.sourcePlatform message.mentionNatives message.body
 
+-- | The same text with the bot's own mentions removed — what the command
+-- parser and the current-message line want, since @\@max help@ is a request
+-- for help, not for "@max help".
+--
+-- Structural by necessity: deleting the /rendered/ token only ever worked on
+-- QQ, where the mention renders as the bot's compatibility id.  A Matrix
+-- mention renders as @\@max:server@ and an iMessage one as a handle, so the
+-- node is the only thing every platform agrees on.
+dispatchTextWithoutSelf :: DispatchMessage -> Text
+dispatchTextWithoutSelf message =
+  promptCanonicalText
+    message.sourcePlatform
+    message.mentionNatives
+    (Body (trimEdges (mergeText (filter (not . selfMention message) message.body.nodes))))
+
+-- | Did this message address the bot?  A mention of everyone counts; a
+-- mention of the bot by identity counts however that identity spells itself
+-- on the origin platform.
 dispatchMentionsSelf :: DispatchMessage -> Bool
-dispatchMentionsSelf message = any mentionsSelf message.body.nodes
+dispatchMentionsSelf message = any addressesSelf message.body.nodes
   where
-    UserId self = message.selfId
-    nativeSelf = T.pack (show self)
-    mentionsSelf = \case
-      NMention (MentionIdentity identity) _ ->
-        Map.lookup identity message.mentionNatives == Just (NativeUserId nativeSelf)
+    addressesSelf node = selfMention message node || mentionAll node
+    mentionAll = \case
       NMention MentionAll _ -> True
       _ -> False
+
+selfMention :: DispatchMessage -> Node 'Canonical -> Bool
+selfMention message = \case
+  NMention (MentionIdentity identity) _ ->
+    Map.lookup identity message.mentionNatives == Just native
+  _ -> False
+  where
+    NativeAccountId account = message.selfNative
+    native = NativeUserId account
 
 -- | Remove the first command verb from canonical text while preserving every
 -- semantic non-text node and relation. Used by !btw/!feedback when the same

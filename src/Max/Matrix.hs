@@ -34,7 +34,10 @@ import Data.Aeson.Types (Pair, Parser, parseEither, parseMaybe)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
+import Data.Either (fromRight)
 import Data.List (findIndex)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -128,6 +131,11 @@ data MatrixEvent = MatrixEvent
 data MatrixSyncPage = MatrixSyncPage
   { nextBatch :: !Text,
     events :: ![MatrixEvent],
+    -- | Display names learned from this page's @m.room.member@ events, keyed
+    -- by MXID.  Matrix keeps no other name: the id is @\@user:server@ and the
+    -- human-readable label lives in per-room member state, so an adapter that
+    -- ignores it has nothing but the id to call anybody.
+    memberNames :: !(Map Text Text),
     limited :: !Bool,
     prevBatch :: !(Maybe Text)
   }
@@ -171,16 +179,25 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
         "endpoint_id" .= registered.endpointId,
         "mode" .= maybe ("standalone" :: Text) (const "mirror") cfg.mirrorQQGroup
       ]
-  loop registered
+  seed <- liftIO (fetchJoinedMembers runtime cfg)
+  case seed of
+    Left err ->
+      logAttention "matrix: member roster unavailable; senders fall back to their mxid" $
+        object ["error" .= err]
+    Right members ->
+      logInfo "matrix roster loaded" $ object ["members" .= Map.size members]
+  loop registered (fromRight Map.empty seed)
   where
-    loop registered = do
-      syncOnce registered `catchSync` \e -> do
-        logAttention "matrix sync failed; cursor retained" $
-          object ["error" .= T.pack (show e)]
-        liftIO (Concurrent.threadDelay matrixFailureBackoffMicros)
-      loop registered
+    loop registered members = do
+      next <-
+        syncOnce registered members `catchSync` \e -> do
+          logAttention "matrix sync failed; cursor retained" $
+            object ["error" .= T.pack (show e)]
+          liftIO (Concurrent.threadDelay matrixFailureBackoffMicros)
+          pure members
+      loop registered next
 
-    syncOnce registered = do
+    syncOnce registered members = do
       current <- readIngestCursor registered.platformAccountId matrixStreamKey
       page <- liftIO (fetchSync runtime cfg (cursorText =<< current)) >>= either (error . T.unpack) pure
       boundary <- latestNativeEventId registered.endpointId
@@ -192,7 +209,8 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
             _ -> error "matrix: limited timeline has no recoverable boundary"
           else pure []
       let live = isJust current
-      forM_ (gap <> page.events) (ingestMatrixEvent live registered page.nextBatch)
+          known = page.memberNames <> members
+      forM_ (gap <> page.events) (ingestMatrixEvent live registered known page.nextBatch)
       published <-
         advanceIngestCursorCAS
           registered.platformAccountId
@@ -203,8 +221,9 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
       when (isNothing published) $
         logInfo "matrix cursor CAS lost; page will deduplicate on replay" $
           object ["next_batch" .= page.nextBatch]
+      pure known
 
-    ingestMatrixEvent live registered next event = do
+    ingestMatrixEvent live registered members next event = do
       hydratedContent <- hydrateMatrixContent runtime cfg event
       received <- liftIO getCurrentTime
       forM_ episodeScheduler $ \scheduler ->
@@ -220,7 +239,9 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
               { endpointId = registered.endpointId,
                 nativeEventId = event.eventId,
                 senderNativeId = event.sender,
-                senderDisplayName = Just (unNativeUserId event.sender),
+                senderDisplayName =
+                  Map.lookup (unNativeUserId event.sender) members
+                    <|> Just (unNativeUserId event.sender),
                 occurredAt = event.occurredAt,
                 receivedAt = received,
                 eventKind = event.eventKind,
@@ -528,6 +549,28 @@ firstNonBlank = fromMaybe "attachment" . foldr choose Nothing
       Just value | not (T.null value) -> Just value
       _ -> rest
 
+-- | The room's current member names, so somebody who has not spoken (or
+-- renamed) since this process started is still called by name.  Sync only
+-- reports member state as it changes; this is the snapshot it changes from.
+fetchJoinedMembers :: HttpRuntime -> MatrixConfig -> IO (Either Text (Map Text Text))
+fetchJoinedMembers runtime cfg = do
+  let path = "/_matrix/client/v3/rooms/" <> pathPiece cfg.roomId <> "/joined_members"
+  matrixRequest runtime cfg "GET" path [] Nothing >>= \case
+    Left err -> pure (Left err)
+    Right value -> pure (Right (fromMaybe Map.empty (parseMaybe parser value)))
+  where
+    parser = withObject "joined members" $ \o -> do
+      joined <- o .:? "joined" .!= Object mempty
+      withObject "joined" (pure . KeyMap.foldrWithKey collect Map.empty) joined
+    collect key value acc = case parseMaybe named value of
+      Just display -> Map.insert (Key.toText key) display acc
+      Nothing -> acc
+    named = withObject "member" $ \m -> do
+      display <- m .:? "display_name"
+      case T.strip <$> display of
+        Just name | not (T.null name) -> pure name
+        _ -> fail "member has no display name"
+
 fetchSync :: HttpRuntime -> MatrixConfig -> Maybe Text -> IO (Either Text MatrixSyncPage)
 fetchSync runtime cfg since = do
   let params =
@@ -562,34 +605,69 @@ parseMatrixSyncPage room value =
     parser = withObject "sync" $ \root -> do
       next <- root .: "next_batch"
       rooms <- root .:? "rooms" .!= Object mempty
-      (events, limited, prev) <- roomTimeline room rooms
-      pure (MatrixSyncPage next events limited prev)
+      (events, names, limited, prev) <- roomTimeline room rooms
+      pure (MatrixSyncPage next events names limited prev)
 
-roomTimeline :: Text -> Value -> Parser ([MatrixEvent], Bool, Maybe Text)
+roomTimeline :: Text -> Value -> Parser ([MatrixEvent], Map Text Text, Bool, Maybe Text)
 roomTimeline room = withObject "rooms" $ \rooms -> do
   joins <- rooms .:? "join" .!= Object mempty
   withObject
     "joined rooms"
     ( \joined -> case KeyMap.lookup (Key.fromText room) joined of
-        Nothing -> pure ([], False, Nothing)
+        Nothing -> pure ([], Map.empty, False, Nothing)
         Just roomValue ->
           withObject
             "joined room"
             ( \roomObject -> do
                 timeline <- roomObject .:? "timeline" .!= Object mempty
+                state <- roomObject .:? "state" .!= Object mempty
+                stateEvents <- withObject "state" (\s -> s .:? "events" .!= []) state
                 withObject
                   "timeline"
                   ( \timelineObject -> do
                       rawEvents <- timelineObject .:? "events" .!= []
                       limited <- timelineObject .:? "limited" .!= False
                       prev <- timelineObject .:? "prev_batch"
-                      pure (mapMaybe (parseMaybe matrixEventParser) rawEvents, limited, prev)
+                      -- Member events are room state that happens to ride the
+                      -- timeline.  They name people; they are not messages,
+                      -- and ingesting them would put join/rename noise in the
+                      -- ledger.
+                      let names = Map.fromList (mapMaybe memberName (stateEvents <> rawEvents))
+                          messages = filter (not . isMemberEvent) rawEvents
+                      pure (mapMaybe (parseMaybe matrixEventParser) messages, names, limited, prev)
                   )
                   timeline
             )
             roomValue
     )
     joins
+
+isMemberEvent :: Value -> Bool
+isMemberEvent value =
+  parseMaybe (withObject "event" (.:? "type")) value == Just (Just ("m.room.member" :: Text))
+
+-- | The (mxid, display name) a member event announces.  Only join/invite
+-- states carry a name worth keeping, and a member with no @displayname@ has
+-- none — the caller falls back to the id, exactly as it does for a QQ user
+-- with neither 名片 nor 昵称.
+memberName :: Value -> Maybe (Text, Text)
+memberName = parseMaybe . withObject "member event" $ \o -> do
+  eventType <- o .:? "type" .!= ("" :: Text)
+  user <- o .:? "state_key" .!= ""
+  content <- o .:? "content" .!= Object mempty
+  (membership, name) <-
+    withObject
+      "member content"
+      (\c -> (,) <$> c .:? "membership" .!= ("" :: Text) <*> c .:? "displayname")
+      content
+  case name of
+    Just display
+      | eventType == "m.room.member",
+        membership `elem` ["join", "invite"],
+        not (T.null user),
+        not (T.null (T.strip display)) ->
+          pure (user, T.strip display)
+    _ -> fail "not a named member"
 
 messagesPageParser :: Value -> Parser ([MatrixEvent], Text)
 messagesPageParser = withObject "messages page" $ \o -> do
@@ -733,14 +811,29 @@ mentionTextNodes :: Text -> [(Text, Text)] -> [Node 'Ingest]
 mentionTextNodes text0 = mergeText . go text0
   where
     go remaining [] = [NText remaining | not (T.null remaining)]
-    go remaining ((native, display) : mentions) =
-      let (before, match) = T.breakOn display remaining
-       in if T.null match
-            then go remaining mentions
-            else
-              [NText before | not (T.null before)]
-                <> [NMention (NativeUserId native) display]
-                <> go (T.drop (T.length display) match) mentions
+    go remaining ((native, display) : mentions) = case locate remaining display of
+      Nothing -> go remaining mentions
+      Just (before, after) ->
+        [NText before | not (T.null before)]
+          <> [NMention (NativeUserId native) display]
+          <> go after mentions
+
+    -- A client that puts markdown in the plain body spells the pill
+    -- @[label](https://matrix.to/#/@user:server)@.  The whole span is the
+    -- mention: matching only the label leaves the brackets and the URL behind
+    -- as text, which is how @[@@max:server](https://matrix.to/…) help@ used to
+    -- reach the prompt.
+    locate haystack display =
+      let linkOpen = "[" <> display <> "]("
+       in case T.breakOn linkOpen haystack of
+            (before, match)
+              | not (T.null match),
+                (_, closed) <- T.breakOn ")" (T.drop (T.length linkOpen) match),
+                not (T.null closed) ->
+                  Just (before, T.drop 1 closed)
+            _ -> case T.breakOn display haystack of
+              (_, match) | T.null match -> Nothing
+              (before, match) -> Just (before, T.drop (T.length display) match)
 
 matrixMediaKind :: Text -> MediaKind
 matrixMediaKind = \case
@@ -907,10 +1000,14 @@ matrixFilter room =
                   [ "types"
                       .= [ "m.room.message" :: Text,
                            "m.reaction",
-                           "m.room.redaction"
+                           "m.room.redaction",
+                           -- Not ingested: consumed for the member's display
+                           -- name, which is the only place Matrix keeps one.
+                           "m.room.member"
                          ],
                     "limit" .= (100 :: Int)
-                  ]
+                  ],
+              "state" .= object ["types" .= (["m.room.member"] :: [Text])]
             ],
         "presence" .= object ["types" .= ([] :: [Text])]
       ]

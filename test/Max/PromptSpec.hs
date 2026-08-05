@@ -253,11 +253,16 @@ spec = do
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[09:00 SkyRain #8001]" `T.isInfixOf`)
 
-    it "retains the native platform label for mirrored speakers" $ do
-      let item = (historyAt 9 8001 otherMemberId (Just "Alice") "from Matrix") {History.sourcePlatform = "matrix"}
-          inp = baseInputs {transcript = [item]}
-          (_, ub) = splitMessages (renderContext inp)
-      ub `shouldSatisfy` ("[09:00 Matrix · Alice #8001]" `T.isInfixOf`)
+    -- Which transport carried a message is routing metadata.  Naming it in
+    -- the transcript made the unlabelled platform the implicit home and split
+    -- one principal into two speakers; the model sees people, not endpoints.
+    it "names a speaker the same way whatever transport carried them" $ do
+      let onQQ = historyAt 9 8001 otherMemberId (Just "Alice") "一句话"
+          onMatrix = (historyAt 9 8002 otherMemberId (Just "Alice") "另一句") {History.sourcePlatform = "matrix"}
+          (_, ub) = splitMessages (renderContext baseInputs {transcript = [onQQ, onMatrix]})
+      ub `shouldSatisfy` ("[09:00 Alice #8001]" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[09:00 Alice #8002]" `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("Matrix" `T.isInfixOf`))
 
   describe "renderContext private chat" $ do
     it "labels the environment as 私聊 instead of 群号" $ do

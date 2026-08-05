@@ -165,25 +165,25 @@ ingestMention originPlatform (NativeUserId native) display
     not (T.null native),
     T.all isDigit native =
       "[@#" <> native <> "] "
-  | otherwise = "@" <> display
+  | otherwise = mentionToken display
 
 canonicalMention :: Platform -> Map PrincipalIdentityId NativeUserId -> MentionTarget -> Text -> Text
 canonicalMention originPlatform identities target display = case target of
-  MentionAll -> "@" <> display
+  MentionAll -> mentionToken display
   MentionIdentity identity -> case Map.lookup identity identities of
     Just native -> ingestMention originPlatform native display
-    Nothing -> "@" <> display
+    Nothing -> mentionToken display
 
 renderPromptBody ::
   (XUnsupported p ~ Unsupported) =>
   (XMention p -> Text -> Text) ->
   Body p ->
   Text
-renderPromptBody mentionToken body = T.concat (map node body.nodes)
+renderPromptBody mention body = T.concat (map node body.nodes)
   where
     node = \case
       NText t -> t
-      NMention target display -> mentionToken target display
+      NMention target display -> mention target display
       NEmote e
         | Just sid <- rawId "sticker_id" e.raw ->
             "[sticker#" <> T.pack (show sid) <> maybe "" (": " <>) e.name <> "]"

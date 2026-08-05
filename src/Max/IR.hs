@@ -57,6 +57,7 @@ module Max.IR
     humanBytes,
     truncateText,
     nonBlank,
+    mentionToken,
 
     -- * Node-list utilities
     mergeText,
@@ -299,7 +300,7 @@ data Unsupported = Unsupported
 fallbackText :: Node 'Canonical -> Text
 fallbackText = \case
   NText t -> t
-  NMention _ display -> "@" <> display
+  NMention _ display -> mentionToken display
   NEmote e -> case nonBlank =<< e.name of
     Just n -> "[表情: " <> n <> "]"
     Nothing -> "[表情]"
@@ -351,6 +352,13 @@ cardFallback c = case parts of
 -- concatenation — spacing is captured at ingest, never invented here.
 plainText :: Body 'Canonical -> Text
 plainText body = T.concat (map fallbackText body.nodes)
+
+-- | The visible @-form of a mention display.  Matrix ids already start with
+-- '@' and a second one is not a nicer way to say the same thing.
+mentionToken :: Text -> Text
+mentionToken display
+  | "@" `T.isPrefixOf` display = display
+  | otherwise = "@" <> display
 
 nonBlank :: Text -> Maybe Text
 nonBlank t =

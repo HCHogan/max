@@ -16,7 +16,6 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -96,7 +95,7 @@ viewImageTool tz dc =
             "["
               <> fmtHM tz h.receivedAt
               <> " "
-              <> fromMaybe (T.pack (show h.userId)) (bestName h)
+              <> bestName h
               <> "] 消息里的图片"
 
     attachAll _ [] _ = pure (0 :: Int)

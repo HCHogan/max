@@ -241,6 +241,10 @@ data DispatchClaim = DispatchClaim
     compatibilityConversationId :: !Int64,
     compatibilityUserId :: !Int64,
     compatibilitySelfId :: !Int64,
+    -- | The bot's id /on the origin platform/.  The compatibility self id is
+    -- the same number only on QQ; everywhere else it is a synthetic bigint,
+    -- so anything deciding "was I mentioned" has to compare against this.
+    nativeAccountId :: !NativeAccountId,
     body :: !(Body 'Canonical),
     originEndpointId :: !EndpointId,
     replyToCompatibilityMessageId :: !(Maybe Int64),
@@ -433,6 +437,7 @@ data DispatchClaimRow = DispatchClaimRow
     dcrGroupId :: !Int64,
     dcrUserId :: !Int64,
     dcrSelfId :: !Int64,
+    dcrNativeAccountId :: !Text,
     dcrContent :: !Value,
     dcrOriginEndpointId :: !Int64,
     dcrReplyToMessageId :: !(Maybe Int64),
@@ -443,7 +448,19 @@ data DispatchClaimRow = DispatchClaimRow
 
 instance FromRow DispatchClaimRow where
   fromRow =
-    DispatchClaimRow <$> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field <*> field
+    DispatchClaimRow
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
 
 createConversation ::
   (WithConnection :> es, IOE :> es) =>
@@ -1667,9 +1684,15 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
       \ RETURNING md.canonical_message_id, md.attempt_count \
       \) \
       \SELECT c.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
+      \       origin_account.native_account_id, \
       \       m.canonical_content, m.origin_endpoint_id, m.reply_to_message_id, \
       \       m.source_platform, m.sender_nickname, c.attempt_count \
-      \FROM claimed c JOIN messages m USING (canonical_message_id) \
+      \FROM claimed c \
+      \JOIN messages m USING (canonical_message_id) \
+      \JOIN conversation_endpoints origin_endpoint \
+      \  ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
+      \JOIN platform_accounts origin_account \
+      \  ON origin_account.platform_account_id = origin_endpoint.platform_account_id \
       \ORDER BY c.canonical_message_id"
       ( mCanonical,
         mCanonical,
@@ -2529,6 +2552,7 @@ toDispatchClaim row =
       compatibilityConversationId = row.dcrGroupId,
       compatibilityUserId = row.dcrUserId,
       compatibilitySelfId = row.dcrSelfId,
+      nativeAccountId = NativeAccountId row.dcrNativeAccountId,
       body = decodeCanonical "dispatch canonical_content" row.dcrContent,
       originEndpointId = EndpointId row.dcrOriginEndpointId,
       replyToCompatibilityMessageId = row.dcrReplyToMessageId,

@@ -301,7 +301,7 @@ sendAndPersistReply rt budget rawBody
     resolveModelNode = \case
       NText text -> pure [NText text]
       NMention native display
-        | not rt.rtCanMention || isPrivateChat rt.rtGroupId -> pure [NText ("@" <> display)]
+        | not rt.rtCanMention || isPrivateChat rt.rtGroupId -> pure [NText (mentionToken display)]
         | otherwise -> pure [NMention native display]
       NEmote emote
         | rt.rtCanFace -> pure [NEmote emote]

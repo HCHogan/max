@@ -241,7 +241,7 @@ expandedHistoryItem tz entry =
     [ "ingest_cursor" .= entry.cursor.ingestSeq,
       "message_id" .= h.messageId,
       "sender_user_id" .= h.userId,
-      "sender" .= fromMaybe (T.pack (show h.userId)) (bestName h),
+      "sender" .= bestName h,
       "time" .= fmtDateHM tz h.receivedAt,
       "text" .= h.renderedText,
       "prompt_eligible" .= entry.transcriptEligible
@@ -342,7 +342,7 @@ historyItemSummary tz h =
     [ "message_id" .= h.messageId,
       "sender_user_id" .= h.userId,
       -- 群名片 > 昵称 > QQ号, matching the prompt's context lines.
-      "sender" .= fromMaybe (T.pack (show h.userId)) (bestName h),
+      "sender" .= bestName h,
       "time" .= fmtDateHM tz h.receivedAt,
       "text" .= shorten 400 h.renderedText
     ]

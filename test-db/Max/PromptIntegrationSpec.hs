@@ -27,7 +27,7 @@ import Max.Effects.LLM (ChatMessage (..))
 import Max.EpisodeStore
 import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
-import Max.Platform.Types (NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId (..))
+import Max.Platform.Types (NativeAccountId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId (..))
 import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), TriggerOrigin (..), buildContext, buildContextWithLimits, buildContextWithReadMode, collectContextPreview, materializeTieredHistory, planContext, renderContextPlan)
 import Max.Session (Session (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -55,6 +55,7 @@ trigger :: DispatchMessage
 trigger =
   DispatchMessage
     { selfId = UserId botRaw,
+      selfNative = NativeAccountId (T.pack (show (botRaw :: Int64))),
       groupId = GroupId groupRaw,
       userId = UserId memberRaw,
       messageId = MessageId 9000,

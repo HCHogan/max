@@ -39,7 +39,7 @@ import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
 import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
 import Max.DB.Permissions (lookupGrant)
-import Max.Dispatch (DispatchMessage (..), dispatchMentionsSelf, dispatchText, stripDispatchVerb)
+import Max.Dispatch (DispatchMessage (..), dispatchMentionsSelf, dispatchTextWithoutSelf, stripDispatchVerb)
 import Max.Dispatch qualified as Dispatch
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.Blob (Blob)
@@ -79,7 +79,7 @@ import Max.Platform.Store
     isBotAuthoredCompatibilityMessage,
     recordInternalMessage,
   )
-import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId, NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId, ReactionAction (..))
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId, NativeAccountId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId, ReactionAction (..))
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutput, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -102,7 +102,7 @@ import Max.Tasks
     turnRuntimeTaskId,
   )
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
-import Max.Util (catchSync, trySync)
+import Max.Util (catchSync, trySync, tshow)
 import OneBot.Action (Action (..))
 import OneBot.Event (Event (..), GroupMessage (..), MessageNotice (..), PokeEvent (..))
 import OneBot.Segment (Segment (..), renderPlainText)
@@ -439,6 +439,7 @@ dispatchMessage :: Map.Map PrincipalIdentityId NativeUserId -> DispatchClaim -> 
 dispatchMessage mentionNatives claim =
   DispatchMessage
     { selfId = UserId claim.compatibilitySelfId,
+      selfNative = claim.nativeAccountId,
       groupId = GroupId claim.compatibilityConversationId,
       userId = UserId claim.compatibilityUserId,
       messageId = MessageId claim.compatibilityMessageId,
@@ -516,8 +517,7 @@ onDispatchMessage mIntent gm = do
 
 classifyDispatch :: Bool -> DispatchMessage -> Trigger
 classifyDispatch repliesToBot gm =
-  let raw = T.strip (dispatchText gm)
-      stripped = T.strip (stripMentions gm.selfId raw)
+  let stripped = T.strip (dispatchTextWithoutSelf gm)
       addressed =
         dispatchMentionsSelf gm
           || repliesToBot
@@ -596,6 +596,8 @@ pokeTrigger :: PokeEvent -> Maybe T.Text -> DispatchMessage
 pokeTrigger pk mName =
   DispatchMessage
     { selfId = pk.pkSelfId,
+      -- Pokes are QQ-only, where the two ids coincide.
+      selfNative = let UserId self = pk.pkSelfId in NativeAccountId (tshow self),
       groupId = pk.pkGroupId,
       userId = pk.pkUserId,
       messageId = MessageId 0,
@@ -1334,6 +1336,9 @@ fetchGroupContext outputCaps gid
     nonBlankName (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
     nonBlankName _ = Nothing
 
+-- | QQ-ingress only: this path still holds the raw OneBot segments, where the
+-- bot's compatibility id and its native id are the same number.  Canonical
+-- dispatch uses 'dispatchTextWithoutSelf' instead.
 stripMentions :: UserId -> T.Text -> T.Text
 stripMentions (UserId u) t =
   foldr

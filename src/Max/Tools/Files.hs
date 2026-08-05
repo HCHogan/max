@@ -318,7 +318,7 @@ captionBody outputCaps gid (Just caption) =
       NText text -> [NText text]
       NMention native display
         | outputCaps.canMention && not (isPrivateChat gid) -> [NMention native display]
-        | otherwise -> [NText ("@" <> display)]
+        | otherwise -> [NText (mentionToken display)]
       NEmote emote
         | outputCaps.canFace -> [NEmote emote]
         | otherwise -> []

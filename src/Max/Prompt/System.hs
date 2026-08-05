@@ -37,7 +37,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
           "对话场景：一对一私聊。对方的每条消息都是直接对你说的，\
           \正常对话即可；没有其他人在看。"
         else
-          "对话场景：多人群聊。你同时面对多名群成员，上下文里 [HH:MM <platform · name>] \
+          "对话场景：多人群聊。你同时面对多名群成员，上下文里 [HH:MM <name> #<msgid>] \
           \前缀标明谁在说话；大部分消息是成员之间的闲聊，只有 @你 或引用你的\
           \消息才是在叫你。",
       "",

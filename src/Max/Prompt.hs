@@ -114,7 +114,7 @@ import Max.DB.History
     fetchMessagesByIdsInScope,
     fetchNewestPromptPageBefore,
   )
-import Max.Dispatch (DispatchMessage (..), dispatchText)
+import Max.Dispatch (DispatchMessage (..), dispatchText, dispatchTextWithoutSelf)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), SourceRange (..), episodeHandleText, listActiveCompartments)
@@ -1787,7 +1787,7 @@ renderReplyFiles xs =
 -- the message being handled right now, so "now" is its time.
 renderCurrentLine :: TimeZone -> UTCTime -> DispatchMessage -> Text
 renderCurrentLine tz' now' gm =
-  let txt = stripBotMention gm.selfId (dispatchText gm)
+  let txt = dispatchTextWithoutSelf gm
       MessageId mid = gm.messageId
    in "["
         <> fmtHM tz' now'
@@ -1798,23 +1798,12 @@ renderCurrentLine tz' now' gm =
         <> "]: "
         <> T.strip txt
 
-stripBotMention :: UserId -> Text -> Text
-stripBotMention (UserId u) t =
-  foldr
-    (\m acc -> T.replace m "" acc)
-    t
-    -- Canonical token (with and without its trailing space), then the
-    -- legacy bare form still present in old rows.
-    ["[@#" <> uid <> "] ", "[@#" <> uid <> "]", "@" <> uid]
-  where
-    uid = T.pack (show u)
-
 -- | 群名片 > 昵称 > QQ 号 — matching what other members see on
 -- screen, so the model calls people what the group calls them.
 displayName :: Int64 -> HistoryItem -> Text
 displayName selfId' h
   | h.userId == selfId' = "Max"
-  | otherwise = fromMaybe (T.pack (show h.userId)) (bestName h)
+  | otherwise = bestName h
 
 -- | Same preference order for the live trigger message's sender.
 triggerSenderName :: DispatchMessage -> Text

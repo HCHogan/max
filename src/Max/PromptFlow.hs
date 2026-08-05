@@ -56,7 +56,7 @@ import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
 import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), Node (..))
-import Max.Platform.Types (NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId (..), qqAdvertisedCaps)
+import Max.Platform.Types (NativeAccountId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId (..), qqAdvertisedCaps)
 import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
 import Max.Session (Session (..))
@@ -581,6 +581,7 @@ fixtureTrigger :: DispatchMessage
 fixtureTrigger =
   DispatchMessage
     { selfId = UserId 10086,
+      selfNative = NativeAccountId "10086",
       groupId = GroupId 114514191,
       userId = UserId 223344556,
       messageId = MessageId 7413,

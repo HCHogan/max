@@ -31,8 +31,6 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.IR (nonBlank)
-import Max.IR.Lower (platformDisplayLabel)
-import Max.Platform.Types (parsePlatform)
 
 -- | A database-owned total order over message ingestion.  Unlike platform
 -- message ids or timestamps, this is unique and monotonic.
@@ -98,17 +96,23 @@ data HistoryPage = HistoryPage
   }
   deriving stock (Show)
 
--- | The name group members actually see for this sender: 群名片
--- first, then nickname; 'Nothing' when both are absent/blank (QQ
--- sends @\"\"@ for an unset card, so blanks count as absent).
-bestName :: HistoryItem -> Maybe Text
-bestName h
-  | h.sourcePlatform == "qq" = nativeName
-  | otherwise = Just (platformLabel h.sourcePlatform <> " · " <> fromMaybe (T.pack (show h.userId)) nativeName)
+-- | How a speaker is named in every transcript: what the other members see —
+-- 群名片 first, then nickname, then the bare id when the platform gave us
+-- neither (QQ sends @\"\"@ for an unset card, so blanks count as absent).
+--
+-- Deliberately no platform label.  Which transport carried a message is
+-- routing metadata: the delivery layer needs it to pick capabilities and to
+-- attribute a mirrored copy, the model does not.  Naming it here did two
+-- things wrong — it made the unlabelled platform the transcript's implicit
+-- home, and it split one principal into "QQ · 张三" and "Matrix · 张三",
+-- which is precisely what principal identities exist to prevent.
+bestName :: HistoryItem -> Text
+bestName h =
+  fromMaybe
+    (T.pack (show h.userId))
+    (blankless h.senderCard <|> blankless h.senderNickname)
   where
-    nativeName = blankless h.senderCard <|> blankless h.senderNickname
     blankless = (>>= nonBlank)
-    platformLabel = platformDisplayLabel . parsePlatform
 
 -- | Last @n@ real (non-synthetic, non-forward-child) messages in @gid@,
 -- *excluding* @excludeId@.  When @since@ is @Just@, also filters out

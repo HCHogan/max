@@ -36,7 +36,6 @@ import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
 import Data.Ord (Down (..))
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -657,7 +656,7 @@ renderHistorianSourceLine tz history =
     <> " user_id="
     <> tshow history.userId
     <> " name="
-    <> fromMaybe (tshow history.userId) (bestName history)
+    <> bestName history
     <> " message_id="
     <> tshow history.messageId
     <> maybe "" (\reply -> " reply_to=" <> tshow reply) history.replyTo
