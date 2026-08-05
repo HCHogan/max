@@ -90,7 +90,7 @@ import Max.ModelCatalog
 import Max.Session.Types (Session (..))
 import Max.Tasks (TaskRegistry, inFlightTriggers)
 import Max.Time (fmtDateHM, fmtEnvStamp)
-import Max.Util (catchSync, trySync)
+import Max.Util (catchSync, trySync, tshow)
 import OneBot.Types (GroupId (..))
 
 historianPromptVersion :: Text
@@ -147,7 +147,7 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
           `catchSync` \err -> do
             retryConversation gid
             logAttention "historian: scheduling round crashed" $
-              object ["group_id" .= unGroupId gid, "error" .= T.pack (show err)]
+              object ["group_id" .= unGroupId gid, "error" .= tshow err]
       )
       (liftIO (releaseEpisodeClaim scheduler gid))
   where
@@ -259,7 +259,7 @@ historianWorker profile timeoutSeconds catalog tz tasks defaultModel scheduler =
               healCoverage gid
             Right CaptureRetryScheduled -> retryConversation (GroupId lease.leaseRun.crConversationId)
             Right CaptureAbandoned -> retryConversation (GroupId lease.leaseRun.crConversationId)
-            Left err -> recoverLeaseFailure lease (T.pack (show err))
+            Left err -> recoverLeaseFailure lease (tshow err)
           drainAvailableRuns
 
     recoverLeaseFailure lease err = do
@@ -731,9 +731,6 @@ historianSystem =
 
 captureJsonText :: EpisodeCapture -> Text
 captureJsonText = TE.decodeUtf8 . LBS.toStrict . encode
-
-tshow :: (Show a) => a -> Text
-tshow = T.pack . show
 
 unGroupId :: GroupId -> Int64
 unGroupId (GroupId gid) = gid

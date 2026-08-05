@@ -4,6 +4,9 @@
 -- 'truncateAll' (wipes every test-touched table between cases).
 module Helpers
   ( withDb,
+    requireJust,
+    resultId,
+    testTime,
     withDbLog,
     truncateAll,
     insertRawMessage,
@@ -25,6 +28,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Log.Logger (Logger, mkLogger)
 import Max.DB.Connection (DbPool, withConn)
+import Test.Hspec (expectationFailure)
 import Max.DB.Session qualified as SessionDB
 import Max.Effects.Blob (Blob, runBlob)
 import Max.IR (Body (..), Node (NText))
@@ -32,12 +36,15 @@ import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.QQ (ensureQQEndpointFor)
 import Max.Platform.Store
   ( IngestOptions (..),
+    IngestResult (..),
+    NewIngest (..),
     RegisteredEndpoint (..),
     defaultIngestOptions,
     ingestEnvelope,
   )
 import Max.Platform.Types
-  ( EventKind (EventMessage),
+  ( CanonicalMessageId,
+    EventKind (EventMessage),
     MessageRelation (ReplyTo),
     NativeEventId (..),
     NativeUserId (..),
@@ -249,3 +256,22 @@ updateDbSession pool gid defaultModel f = withDb pool $ do
   SessionDB.saveSessionCAS current next >>= \case
     Just _ -> pure next
     Nothing -> error "test Session CAS unexpectedly conflicted"
+
+-- | Unwrap a fixture that must exist, failing the example instead of the
+-- whole suite.  Six specs had grown a private copy of this.
+requireJust :: String -> Maybe a -> IO a
+requireJust label = \case
+  Just value -> pure value
+  Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)
+
+-- | The frozen clock every ledger fixture is stamped with.
+testTime :: UTCTime
+testTime = read "2026-08-02 12:00:00 UTC"
+
+-- | The canonical id an ingest produced, however it got there.
+resultId :: IngestResult -> CanonicalMessageId
+resultId = \case
+  Ingested fresh -> fresh.canonicalMessageId
+  AlreadyIngested canonical -> canonical
+  DeliveryEcho canonical -> canonical
+  EchoUnmatched -> error "resultId: a reconcile-only ingest stored no message"

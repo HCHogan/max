@@ -208,6 +208,7 @@ library
         Max.Tools.Pins
         Max.Tools.Reminder
         Max.Tools.Sandbox
+        Max.Tools.Schema
         Max.Tools.Search
         Max.Tools.SelfSource
         Max.Tools.Skills
@@ -305,6 +306,8 @@ executable max-adr003-maintenance
         , aeson                >= 2.2  && < 2.4
         , base                 >= 4.20 && < 5
         , containers           >= 0.7  && < 0.9
+        , effectful            >= 2.5  && < 2.7
+        , effectful-postgresql >= 0.1  && < 0.2
         , max
         , postgresql-simple    >= 0.7  && < 0.8
         , text                 >= 2.1  && < 2.2

@@ -19,6 +19,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Max.Effects.Tools (Tool (..))
+import Max.Tools.Schema (stringParam, toolObject)
 import Max.Skills (Skill (..), SkillRegistry, lookupSkill, skillsForGroup)
 import Max.ToolContext (ToolContext, toolGroupId, toolSkills)
 
@@ -37,19 +38,7 @@ useSkillTool reg dc =
             "说明是预先写好的操作流程，取到后照着做。",
             "只在条目简介和手头的事明确对上时取用。"
           ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "name"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("技能对照表里的技能名" :: Text)
-                      ]
-                ],
-            "required" .= (["name"] :: [Text])
-          ],
+      toolSchema = toolObject [("name", stringParam "技能对照表里的技能名")] ["name"],
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "name")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (name :: Text) -> do

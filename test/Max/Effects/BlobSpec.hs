@@ -1,6 +1,5 @@
 module Max.Effects.BlobSpec (spec) where
 
-import Control.Exception (bracket)
 import Data.ByteString.Char8 qualified as BS8
 import Data.Maybe (isJust)
 import Data.Text qualified as T
@@ -14,21 +13,15 @@ import Max.Effects.Blob
     resolveBlobHostPath,
     runBlob,
   )
-import System.Directory
-  ( createDirectory,
-    doesFileExist,
-    getTemporaryDirectory,
-    removeFile,
-    removePathForcibly,
-  )
+import System.Directory (doesFileExist)
+import Max.Util (withTempDirectory)
 import System.FilePath ((</>))
-import System.IO (hClose, openBinaryTempFile)
 import Test.Hspec
 
 spec :: Spec
 spec = describe "Blob" $ do
   it "round-trips bytes through an opaque content reference" $
-    withBlobRoot $ \root -> do
+    withTempDirectory "max-blob-test" $ \root -> do
       let payload = BS8.pack "blob boundary"
       (ref, bytes, host) <-
         runEff . runBlob root $ do
@@ -48,14 +41,3 @@ spec = describe "Blob" $ do
     blobRefFromSha256 (T.replicate 64 "A") `shouldBe` Nothing
     blobRefFromSha256 "../../outside" `shouldBe` Nothing
     blobRefFromSha256 (T.replicate 64 "f") `shouldSatisfy` isJust
-
-withBlobRoot :: (FilePath -> IO a) -> IO a
-withBlobRoot = bracket acquire removePathForcibly
-  where
-    acquire = do
-      tmp <- getTemporaryDirectory
-      (path, handle) <- openBinaryTempFile tmp "max-blob-test"
-      hClose handle
-      removeFile path
-      createDirectory path
-      pure path

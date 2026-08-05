@@ -35,7 +35,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.List (findIndex)
-import Data.Maybe (catMaybes, fromMaybe, mapMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -53,13 +53,21 @@ import Max.HttpRuntime
     HttpRuntime,
     TransportFailure (..),
     parseRequestEither,
+    pathPiece,
+    queryText,
     renderTransportFailure,
     runBuffered,
   )
 import Max.IR
 import Max.IR.Digest (digest)
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
-import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryOperation (..), DeliveryTransport (..), loweredText)
+import Max.Platform.Delivery
+  ( DeliveryAttempt (..),
+    DeliveryOperation (..),
+    DeliveryTransport (..),
+    loweredText,
+    resolveDeliveryMedia,
+  )
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -177,13 +185,13 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
       page <- liftIO (fetchSync runtime cfg (cursorText =<< current)) >>= either (error . T.unpack) pure
       boundary <- latestNativeEventId registered.endpointId
       gap <-
-        if page.limited && current /= Nothing
+        if page.limited && isJust current
           then case (boundary, page.prevBatch) of
             (Just eventBoundary, Just token) ->
               liftIO (fillGap runtime cfg eventBoundary token) >>= either (error . T.unpack) pure
             _ -> error "matrix: limited timeline has no recoverable boundary"
           else pure []
-      let live = current /= Nothing
+      let live = isJust current
       forM_ (gap <> page.events) (ingestMatrixEvent live registered page.nextBatch)
       published <-
         advanceIngestCursorCAS
@@ -192,7 +200,7 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
           ((.revision) <$> current)
           (PlatformCursor (String page.nextBatch))
           (Just (matrixSourceFingerprint cfg))
-      when (published == Nothing) $
+      when (isNothing published) $
         logInfo "matrix cursor CAS lost; page will deduplicate on replay" $
           object ["next_batch" .= page.nextBatch]
 
@@ -232,6 +240,7 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
               ]
         AlreadyIngested {} -> pure ()
         DeliveryEcho {} -> pure ()
+        EchoUnmatched -> pure ()
 
 -- | Matrix includes the replied-to event's transport sender in @m.mentions@
 -- so clients can notify them.  In a mirrored room every QQ event is delivered
@@ -354,7 +363,7 @@ matrixChunkPayload runtime cfg replyTarget chunk = case loweredText chunk of
       | "mxc://" `T.isPrefixOf` contentUri ->
           pure . Right $ matrixMediaPayload replyTarget chunk visibleBody meta contentUri (fromIntegral <$> meta.sizeBytes)
     [(payload, meta)] ->
-      resolveDeliveryMedia runtime payload meta.sizeBytes >>= \case
+      resolveDeliveryMedia runtime matrixMaxMediaBytes matrixStatusPreviewBytes payload meta.sizeBytes >>= \case
         Left err -> pure (Left (MatrixMediaFailure err))
         Right bytes ->
           uploadMatrixMedia runtime cfg meta bytes >>= \case
@@ -487,20 +496,6 @@ matrixRedactionPath room idempotencyKey suffix (NativeEventId target) =
     <> pathPiece target
     <> "/"
     <> pathPiece (idempotencyKey <> "-" <> suffix)
-
-resolveDeliveryMedia :: HttpRuntime -> ResolvedMedia -> Maybe Int64 -> IO (Either Text BS.ByteString)
-resolveDeliveryMedia _ (ResolvedBytes bytes) _ = pure (Right bytes)
-resolveDeliveryMedia runtime (ResolvedUrl sourceUrl) declaredSize
-  | "http://" `T.isPrefixOf` sourceUrl || "https://" `T.isPrefixOf` sourceUrl =
-        parseRequestEither (T.unpack sourceUrl) >>= \case
-          Left failure -> pure (Left (renderTransportFailure failure))
-          Right request ->
-            runBuffered runtime StandardPool matrixMaxMediaBytes matrixStatusPreviewBytes request >>= \case
-              Left failure -> pure (Left (renderTransportFailure failure))
-              Right response
-                | maybe False (/= fromIntegral (BS.length response.body)) declaredSize -> pure (Left "delivery media size changed")
-                | otherwise -> pure (Right response.body)
-  | otherwise = pure (Left "delivery media has no transferable source")
 
 uploadMatrixMedia :: HttpRuntime -> MatrixConfig -> MediaMeta -> BS.ByteString -> IO (Either Text Text)
 uploadMatrixMedia runtime cfg meta bytes = do
@@ -899,16 +894,6 @@ matrixRequest runtime cfg method path params payload = do
         Right response -> case eitherDecodeStrict' response.body of
           Left err -> pure (Left ("Matrix JSON: " <> T.pack err))
           Right value -> pure (Right value)
-
-queryText :: [(Text, Text)] -> Text
-queryText [] = ""
-queryText queryPairs =
-  "?" <> T.intercalate "&" [encoded key <> "=" <> encoded value | (key, value) <- queryPairs]
-  where
-    encoded = TE.decodeUtf8 . urlEncode True . TE.encodeUtf8
-
-pathPiece :: Text -> Text
-pathPiece = TE.decodeUtf8 . urlEncode True . TE.encodeUtf8
 
 matrixFilter :: Text -> Text
 matrixFilter room =

@@ -82,6 +82,7 @@ import Effectful.PostgreSQL (WithConnection, execute, query, query_)
 import Max.Command.Help (helpText)
 import OneBot.Types (GroupId (..))
 import System.FilePath (dropExtension, takeExtension)
+import Max.Util (tshow)
 
 -- | One skill row, cached verbatim.
 data Skill = Skill
@@ -338,6 +339,3 @@ deleteSkill (SkillRegistry t) sid
       n <- execute "DELETE FROM skills WHERE id = ?" (Only sid)
       when (n > 0) . liftIO . atomically $ modifyTVar' t (Map.delete sid)
       pure (n > 0)
-
-tshow :: Show a => a -> Text
-tshow = T.pack . show

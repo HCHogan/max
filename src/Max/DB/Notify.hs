@@ -5,6 +5,12 @@
 -- notification, so workers cannot sleep through the commit window.  The
 -- bounded timeout is only for expired leases and delayed retries, which do not
 -- themselves change a row when they become eligible.
+--
+-- Every waiter holds exactly one pooled connection: the recheck runs on the
+-- pinned listener connection rather than asking the pool for a second one.
+-- Otherwise a waiter that already owns a connection blocks — with no timeout —
+-- on acquiring another, and enough concurrent waiters (two work channels plus
+-- admin long-polls) deadlock the pool against itself.
 module Max.DB.Notify
   ( WorkChannel (..),
     claimOrWait,
@@ -12,7 +18,6 @@ module Max.DB.Notify
   )
 where
 
-import Control.Exception (bracket_)
 import Control.Monad (void)
 import Data.ByteString.Char8 qualified as BSC
 import Data.Int (Int64)
@@ -20,7 +25,9 @@ import Database.PostgreSQL.Simple qualified as PostgreSQL
 import Database.PostgreSQL.Simple.Notification (Notification (..), getNotification)
 import Database.PostgreSQL.Simple.Types (Query)
 import Effectful
+import Effectful.Exception (bracket_)
 import Effectful.PostgreSQL.Connection (WithConnection, withConnection)
+import Max.DB.Transaction (withPinnedConnection)
 import System.Timeout (timeout)
 
 data WorkChannel = DispatchWork | DeliveryWork
@@ -33,19 +40,17 @@ claimOrWait ::
   Eff es [a]
 claimOrWait channel claim =
   withConnection $ \listener ->
-    withSeqEffToIO $ \run ->
-      liftIO $
-        bracket_
-          (void (PostgreSQL.execute_ listener (listenQuery channel)))
-          (void (PostgreSQL.execute_ listener (unlistenQuery channel)))
-          ( do
-              ready <- run claim
-              if null ready
-                then do
-                  _ <- timeout notificationFallbackMicros (getNotification listener)
-                  run claim
-                else pure ready
-          )
+    bracket_
+      (liftIO (void (PostgreSQL.execute_ listener (listenQuery channel))))
+      (liftIO (void (PostgreSQL.execute_ listener (unlistenQuery channel))))
+      ( do
+          ready <- withPinnedConnection listener claim
+          if null ready
+            then do
+              _ <- liftIO (timeout notificationFallbackMicros (getNotification listener))
+              withPinnedConnection listener claim
+            else pure ready
+      )
 
 listenQuery :: WorkChannel -> Query
 listenQuery = \case
@@ -74,27 +79,25 @@ waitForTimeline ::
   Eff es Bool
 waitForTimeline conversation advanced =
   withConnection $ \listener ->
-    withSeqEffToIO $ \run ->
-      liftIO $
-        bracket_
-          (void (PostgreSQL.execute_ listener "LISTEN max_timeline_work"))
-          (void (PostgreSQL.execute_ listener "UNLISTEN max_timeline_work"))
-          ( do
-              ready <- run advanced
-              if ready
-                then pure True
-                else do
-                  let expected = BSC.pack (show conversation)
-                      waitRelevant = do
-                        notification <- getNotification listener
-                        if notificationData notification `elem` [expected, "*"]
-                          then pure ()
-                          else waitRelevant
-                  woke <- timeout timelineWaitMicros waitRelevant
-                  case woke of
-                    Nothing -> pure False
-                    Just () -> pure True
-          )
+    bracket_
+      (liftIO (void (PostgreSQL.execute_ listener "LISTEN max_timeline_work")))
+      (liftIO (void (PostgreSQL.execute_ listener "UNLISTEN max_timeline_work")))
+      ( do
+          ready <- withPinnedConnection listener advanced
+          if ready
+            then pure True
+            else do
+              let expected = BSC.pack (show conversation)
+                  waitRelevant = do
+                    notification <- getNotification listener
+                    if notificationData notification `elem` [expected, "*"]
+                      then pure ()
+                      else waitRelevant
+              woke <- liftIO (timeout timelineWaitMicros waitRelevant)
+              case woke of
+                Nothing -> pure False
+                Just () -> pure True
+      )
 
 timelineWaitMicros :: Int
 timelineWaitMicros = 25 * 1_000_000

@@ -16,7 +16,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime, utc)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (execute, query)
-import Helpers (insertRawKind, insertRawMessage, truncateAll, updateDbSession, withDb, withDbLog)
+import Helpers (insertRawKind, insertRawMessage, requireJust, truncateAll, updateDbSession, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
 import Max.ContextMaterialization (ContextMaterialization (..))
@@ -397,11 +397,6 @@ cursorFor pool messageId = do
   case rows :: [Only Int64] of
     Only cursor : _ -> pure (MessageCursor cursor)
     _ -> expectationFailure "missing message cursor" >> pure (MessageCursor 0)
-
-requireJust :: String -> Maybe a -> IO a
-requireJust label = \case
-  Just value -> pure value
-  Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)
 
 publishNextCompartment :: DbPool -> MessageCursor -> [Int64] -> Text -> IO (CompartmentId, MessageCursor)
 publishNextCompartment pool expected evidence summary = do

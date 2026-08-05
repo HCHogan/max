@@ -7,7 +7,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query)
-import Helpers (truncateAll, withDb)
+import Helpers (resultId, truncateAll, withDb)
 import Max.DB.Connection (DbPool, withConn)
 import Max.IR
 import Max.IR.Lower
@@ -202,6 +202,29 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
       `shouldSatisfy` \case
         [("outcome_unknown", Nothing, Nothing, Just err)] -> "lease expired" `T.isInfixOf` err
         _ -> False
+
+  -- The retry budget in Max.Platform.Delivery converts an exhausted retryable
+  -- attempt into a suppression precisely so the endpoint's ordered lane stops
+  -- waiting on a copy that can never land.  That only works if a suppressed
+  -- row leaves the blocking set.
+  it "releases the ordered lane once a poisoned copy is suppressed" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-poison" "risk controlled"))
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId (addUTCTime 1 now) "mx-after" "queued behind it"))
+    [poisoned] <- withDb pool (claimDeliveries "worker-a" 10 30)
+    poisoned.endpointId `shouldBe` qq.endpointId
+    -- Its successor stays blocked while the head is retryable.
+    withDb pool (completeDelivery "worker-a" poisoned.deliveryId [] (DeliveryRetry "retcode 1200" now))
+      `shouldReturn` True
+    retried <- withDb pool (claimDeliveries "worker-b" 10 30)
+    fmap (.deliveryId) retried `shouldBe` [poisoned.deliveryId]
+    withDb pool
+      (completeDelivery "worker-b" poisoned.deliveryId [] (DeliverySuppressedAs "retry budget exhausted after 16 attempts: retcode 1200"))
+      `shouldReturn` True
+    released <- withDb pool (claimDeliveries "worker-c" 10 30)
+    fmap (.canonicalMessageId) released `shouldSatisfy` ((== 1) . length)
+    released `shouldSatisfy` all ((/= poisoned.deliveryId) . (.deliveryId))
 
   it "persists the shared lowerer's degradation audit on completion" $ do
     (qq, matrix) <- mirrorPair pool
@@ -779,6 +802,121 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     (rows :: [(Maybe Text, Maybe Text, Text)])
       `shouldBe` [(Just "张三", Just "张三", "张三")]
 
+  -- Ingest used to render the prompt projection from the pre-identity ingest
+  -- body while `maintenance verify`/`reproject` recompute it from the stored
+  -- canonical body.  On any platform whose mention token carries the display
+  -- name, enrichment made the two disagree and a correct row read as stale.
+  it "renders the prompt projection from the enriched canonical body" $ do
+    conversation <- withDb pool (createConversation ConversationGroup (Just "Matrix only"))
+    matrix <-
+      withDb pool $
+        registerEndpoint
+          EndpointRegistration
+            { conversationId = conversation,
+              platform = PlatformMatrix,
+              nativeAccountId = NativeAccountId "@max:example.test",
+              accountDisplayName = Just "max",
+              nativeConversationId = NativeConversationId "!projection:example.test",
+              endpointDisplayName = Just "Projection test",
+              conversationKind = ConversationGroup,
+              endpointMode = EndpointStandalone,
+              capabilities = textCapabilities
+            }
+    now <- getCurrentTime
+    _ <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          ( (inbound matrix.endpointId now "mx-profile" "hello")
+              { senderNativeId = NativeUserId "@zhang:example.test",
+                senderDisplayName = Just "张三"
+              }
+          )
+    mention <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          ( inboundBody matrix.endpointId (addUTCTime 1 now) "mx-mention" $
+              Body
+                [ NMention (NativeUserId "@zhang:example.test") "@zhang:example.test",
+                  NText " 在吗"
+                ]
+          )
+    rows <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT rendered_text, canonical_content->'nodes'->0->>'display' \
+        \ FROM messages WHERE canonical_message_id = ?"
+        (Only (resultId mention).unCanonicalMessageId)
+    (rows :: [(Text, Text)]) `shouldBe` [("@张三 在吗", "张三")]
+
+  -- The WeChat relay acknowledges a send without an id; the bot's own message
+  -- coming back on the sync stream is the only receipt it ever gets.
+  it "confirms a receipt-less send from a reconcile-only self echo" $ do
+    conversation <- withDb pool (createConversation ConversationGroup (Just "Echo only"))
+    endpoint <-
+      withDb pool $
+        registerEndpoint
+          EndpointRegistration
+            { conversationId = conversation,
+              platform = PlatformWeChatPad,
+              nativeAccountId = NativeAccountId "wxid_max",
+              accountDisplayName = Just "max",
+              nativeConversationId = NativeConversationId "room@chatroom",
+              endpointDisplayName = Just "Echo room",
+              conversationKind = ConversationGroup,
+              endpointMode = EndpointStandalone,
+              capabilities = textCapabilities
+            }
+    now <- getCurrentTime
+    seed <- withDb pool (ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "wx-seed" "trigger"))
+    [Only legacyGroup] <-
+      withConn pool $ \conn ->
+        query
+          conn
+          "SELECT group_id FROM messages WHERE canonical_message_id = ?"
+          (Only (resultId seed).unCanonicalMessageId) ::
+        IO [Only Int64]
+    queued <-
+      withDb pool $
+        enqueueOutbound
+          OutboundDraft
+            { legacyConversationId = legacyGroup,
+              transcriptKind = "chat",
+              sourceCompatibilityMessageId = Nothing,
+              canonicalBody = Body [NText "我在"],
+              replyToCompatibilityMessageId = Nothing
+            }
+    [claim] <- withDb pool (claimDeliveries "wechat-worker" 10 30)
+    withDb pool (completeDelivery "wechat-worker" claim.deliveryId [] (DeliveryAccepted Nothing))
+      `shouldReturn` True
+    let echo eventId body =
+          (inboundBody endpoint.endpointId (addUTCTime 1 now) eventId (Body [NText body]))
+            { senderNativeId = NativeUserId "wxid_max"
+            }
+    withDb pool
+      (ingestEnvelope defaultIngestOptions {reconcileEchoOnly = True} (echo "wx-echo" "我在"))
+      `shouldReturn` DeliveryEcho queued.canonicalMessageId
+    delivery <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT status, native_event_id FROM message_deliveries WHERE delivery_id = ?"
+        (Only claim.deliveryId.unDeliveryId)
+    (delivery :: [(Text, Maybe Text)]) `shouldBe` [("confirmed", Just "wx-echo")]
+
+    -- An echo that matches nothing stores nothing: the bot's own line already
+    -- exists as an outbound row, and a second copy would be transcript noise.
+    before' <- storedMessageCount
+    withDb pool
+      (ingestEnvelope defaultIngestOptions {reconcileEchoOnly = True} (echo "wx-stray" "谁在说话"))
+      `shouldReturn` EchoUnmatched
+    after' <- storedMessageCount
+    after' `shouldBe` before'
+  where
+    storedMessageCount = do
+      rows <- withConn pool $ \conn -> query conn "SELECT count(*) FROM messages" ()
+      pure (rows :: [Only Int64])
+
 mirrorPair :: DbPool -> IO (RegisteredEndpoint, RegisteredEndpoint)
 mirrorPair pool = withDb pool $ do
   conversation <- createConversation ConversationGroup (Just "mirror test")
@@ -836,12 +974,6 @@ inboundBody endpoint now eventId body =
       sourceCursor = Just (PlatformCursor (String "next")),
       rawPayload = Just (object ["event_id" .= eventId])
     }
-
-resultId :: IngestResult -> CanonicalMessageId
-resultId = \case
-  Ingested result -> result.canonicalMessageId
-  AlreadyIngested cid -> cid
-  DeliveryEcho cid -> cid
 
 isNew :: IngestResult -> Bool
 isNew (Ingested _) = True

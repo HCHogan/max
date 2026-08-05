@@ -33,6 +33,7 @@ where
 
 import Control.Applicative ((<|>))
 import Data.Char (isAlpha, isAscii, isDigit, isSpace)
+import Data.List (unsnoc)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -41,7 +42,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Read qualified as TR
+import Max.Util (readIntegral)
 
 -- | One outgoing message.  'TableChunk' carries the markdown table
 -- source — the caller renders it to an image and falls back to
@@ -209,12 +210,13 @@ matchToken t =
     -- write the bare [verb#id], but echoing the full inbound display
     -- form ("[video#7407: 首帧…](29秒)") must still act — only the id
     -- is trusted, decorations are consumed and dropped.
+    tokenClose :: Text -> Maybe (Int64, Text)
     tokenClose s =
       let (digits, rest) = T.span isDigit s
        in if T.null digits
             then Nothing
             else do
-              n <- readInt64 digits
+              n <- readIntegral digits
               after <- case T.uncons rest of
                 Just (']', r) -> Just r
                 Just (':', r') -> case T.breakOn "]" r' of
@@ -225,6 +227,7 @@ matchToken t =
     -- Foreign-platform compatibility message ids come from a dedicated
     -- negative namespace.  They are still valid conversation-scoped handles,
     -- unlike sticker/face ids, which remain positive-only.
+    signedTokenClose :: Text -> Maybe (Int64, Text)
     signedTokenClose s =
       let (sign, unsigned) = case T.uncons s of
             Just ('-', unsignedRest) -> ("-", unsignedRest)
@@ -233,7 +236,7 @@ matchToken t =
        in if T.null digits
             then Nothing
             else do
-              n <- readInt64 (sign <> digits)
+              n <- readIntegral (sign <> digits)
               after <- case T.uncons rest of
                 Just (']', r) -> Just r
                 Just (':', r') -> case T.breakOn "]" r' of
@@ -265,11 +268,6 @@ matchToken t =
         (_, close) | not (T.null close) -> T.drop 1 close
         _ -> r
       Nothing -> r
-
-readInt64 :: Text -> Maybe Int64
-readInt64 s = case TR.signed TR.decimal s of
-  Right (n, "") -> Just n
-  _ -> Nothing
 
 -- | Remove tool-call-looking bracket spans a model hallucinated into
 -- its reply — the observed failure shape is a tool name in brackets,
@@ -391,11 +389,12 @@ splitChunks body = filter (not . T.null) (map T.strip (go False [] (T.lines body
       | isBlank l = emit acc : go False [] rest
       | splitMarker `T.isInfixOf` l =
           case T.splitOn splitMarker l of
-            (firstP : more) ->
-              let mids = init more
-                  lastP = last more
-               in [emit (firstP : acc)] <> mids <> go False [lastP] rest
-            [] -> go inFence (l : acc) rest -- unreachable: splitOn is non-empty
+            -- 'unsnoc' is what makes the split total: the marker guarantees
+            -- at least two pieces, and the type no longer takes that on faith.
+            firstP : more
+              | Just (mids, lastP) <- unsnoc more ->
+                  [emit (firstP : acc)] <> mids <> go False [lastP] rest
+            _ -> go inFence (l : acc) rest
       | otherwise = go inFence (l : acc) rest
     emit acc = T.intercalate "\n" (reverse acc)
     isBlank = T.null . T.strip
@@ -528,16 +527,13 @@ texMath = squeeze . go
 matchBrace :: Text -> (Text, Text)
 matchBrace = go (0 :: Int) []
   where
-    go _ acc t | T.null t = (T.pack (reverse acc), "")
-    go depth acc t =
-      let c = T.head t
-          rest = T.tail t
-       in case c of
-            '{' -> go (depth + 1) (c : acc) rest
-            '}'
-              | depth == 0 -> (T.pack (reverse acc), rest)
-              | otherwise -> go (depth - 1) (c : acc) rest
-            _ -> go depth (c : acc) rest
+    go depth acc t = case T.uncons t of
+      Nothing -> (T.pack (reverse acc), "")
+      Just ('{', rest) -> go (depth + 1) ('{' : acc) rest
+      Just ('}', rest)
+        | depth == 0 -> (T.pack (reverse acc), rest)
+        | otherwise -> go (depth - 1) ('}' : acc) rest
+      Just (c, rest) -> go depth (c : acc) rest
 
 -- | Map every char through a super/subscript table; if any char has
 -- no unicode form, fall back to @^(..)@ / @_(..)@ (or bare @^x@).

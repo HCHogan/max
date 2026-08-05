@@ -41,7 +41,7 @@ module Max.Prompt
 where
 
 import Control.Concurrent (threadDelay)
-import Control.Monad (when)
+import Control.Monad (unless, when)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Either (partitionEithers)
@@ -288,7 +288,7 @@ buildContextWithReadModeForOutput limits readMode outputCaps defaultPersona mult
       logAttention "context: failed to persist planning trace" $
         object ["group_id" .= (let GroupId groupId = gm.groupId in groupId), "error" .= T.pack (show err)]
     Right () -> pure ()
-  when (not plan.cpWithinBudget) $
+  unless plan.cpWithinBudget $
     logAttention "context plan exceeds model input budget" $
       object
         [ "estimated_prompt_tokens" .= plan.cpEstimatedPromptTokens,

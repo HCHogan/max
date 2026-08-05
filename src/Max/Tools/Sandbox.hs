@@ -37,6 +37,15 @@ import Data.Text qualified as T
 import Data.Time (TimeZone)
 import Effectful
 import Max.Effects.Tools (Tool (..))
+import Max.Tools.Schema
+  ( enumParam,
+    integerParam,
+    noArguments,
+    stringArrayParam,
+    stringParam,
+    toolObject,
+    withKeys,
+  )
 import Max.Sandbox.Docker (ExecResult (..), maxOutputBytes, shellQuote, wrapPackages)
 import Max.Sandbox.Registry
   ( SandboxCreateOpts (..),
@@ -82,24 +91,14 @@ createTool gid reg =
             "开工前先 use_skill 取 sandbox 手册。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "image"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("Docker image (default max-sandbox:latest, the nix-enabled base; only override if you have a specific reason)." :: Text)
-                      ],
-                  "network"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("bridge | none (default bridge)." :: Text),
-                        "enum" .= (["bridge", "none"] :: [Text])
-                      ]
-                ],
-            "required" .= ([] :: [Text])
-          ],
+        toolObject
+          [ ( "image",
+              stringParam
+                "Docker image (default max-sandbox:latest, the nix-enabled base; only override if you have a specific reason)."
+            ),
+            ("network", enumParam ["bridge", "none"] "bridge | none (default bridge).")
+          ]
+          [],
       toolRun = \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
@@ -144,28 +143,17 @@ execTool gid reg =
             "(first use downloads — raise timeout_seconds to 120-300)."
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "sandbox_id" .= stringField "Sandbox id from sandbox_create.",
-                  "command" .= stringField "Shell command to run.",
-                  "packages"
-                    .= object
-                      [ "type" .= ("array" :: Text),
-                        "items" .= object ["type" .= ("string" :: Text)],
-                        "description"
-                          .= ("nixpkgs attributes to put on PATH for this command (find them with nix_search)." :: Text)
-                      ],
-                  "timeout_seconds"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("Max wallclock seconds (default 30, max 600)." :: Text),
-                        "default" .= (30 :: Int)
-                      ]
-                ],
-            "required" .= (["sandbox_id", "command"] :: [Text])
-          ],
+        toolObject
+          [ ("sandbox_id", stringParam "Sandbox id from sandbox_create."),
+            ("command", stringParam "Shell command to run."),
+            ( "packages",
+              stringArrayParam "nixpkgs attributes to put on PATH for this command (find them with nix_search)."
+            ),
+            ( "timeout_seconds",
+              withKeys ["default" .= (30 :: Int)] (integerParam "Max wallclock seconds (default 30, max 600).")
+            )
+          ]
+          ["sandbox_id", "command"],
       toolRun = \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
@@ -210,15 +198,11 @@ nixSearchTool gid reg =
             "broaden the regex."
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "sandbox_id" .= stringField "Sandbox id to search in.",
-                  "query" .= stringField "Regex matched against package names and descriptions."
-                ],
-            "required" .= (["sandbox_id", "query"] :: [Text])
-          ],
+        toolObject
+          [ ("sandbox_id", stringParam "Sandbox id to search in."),
+            ("query", stringParam "Regex matched against package names and descriptions.")
+          ]
+          ["sandbox_id", "query"],
       toolRun = \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
@@ -254,12 +238,7 @@ listTool tz gid reg =
     { toolName = "sandbox_list",
       toolDescription =
         "List sandboxes available in this group's session (created by you or by other parallel dispatches).",
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties" .= object [],
-            "required" .= ([] :: [Text])
-          ],
+      toolSchema = noArguments,
       toolRun = \_args -> do
         entries <- liftIO (listSandboxesForGroup reg gid)
         pure $
@@ -285,15 +264,7 @@ destroyTool gid reg =
       toolDescription =
         "Permanently destroy a sandbox and its /work data (downloaded packages \
         \survive in the shared store).  Use when done, to free resources.",
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "sandbox_id" .= stringField "Sandbox id to destroy."
-                ],
-            "required" .= (["sandbox_id"] :: [Text])
-          ],
+      toolSchema = toolObject [("sandbox_id", stringParam "Sandbox id to destroy.")] ["sandbox_id"],
       toolRun = \args ->
         case parseEither (withObject "args" (\o -> o .: "sandbox_id")) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
@@ -315,21 +286,14 @@ readFileTool gid reg =
         "Read up to max_bytes of a text file in a sandbox (path relative to \
         \/work, or absolute; UTF-8, silently truncated at the cap).",
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "sandbox_id" .= stringField "Sandbox id.",
-                  "path" .= stringField "File path (relative to /work, or absolute).",
-                  "max_bytes"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("Cap (default 16384, max 65536)." :: Text),
-                        "default" .= (maxOutputBytes :: Int)
-                      ]
-                ],
-            "required" .= (["sandbox_id", "path"] :: [Text])
-          ],
+        toolObject
+          [ ("sandbox_id", stringParam "Sandbox id."),
+            ("path", stringParam "File path (relative to /work, or absolute)."),
+            ( "max_bytes",
+              withKeys ["default" .= (maxOutputBytes :: Int)] (integerParam "Cap (default 16384, max 65536).")
+            )
+          ]
+          ["sandbox_id", "path"],
       toolRun = \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
@@ -363,16 +327,12 @@ writeFileTool gid reg =
         "Write a text file in a sandbox (creates parent dirs, overwrites) — \
         \e.g. drop a script before sandbox_exec runs it.",
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "sandbox_id" .= stringField "Sandbox id.",
-                  "path" .= stringField "File path (relative to /work, or absolute).",
-                  "content" .= stringField "File content (UTF-8 text)."
-                ],
-            "required" .= (["sandbox_id", "path", "content"] :: [Text])
-          ],
+        toolObject
+          [ ("sandbox_id", stringParam "Sandbox id."),
+            ("path", stringParam "File path (relative to /work, or absolute)."),
+            ("content", stringParam "File content (UTF-8 text).")
+          ]
+          ["sandbox_id", "path", "content"],
       toolRun = \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
@@ -388,10 +348,3 @@ writeFileTool gid reg =
 
 --------------------------------------------------------------------------------
 -- Helpers.
-
-stringField :: Text -> Value
-stringField desc =
-  object
-    [ "type" .= ("string" :: Text),
-      "description" .= desc
-    ]

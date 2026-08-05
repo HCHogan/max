@@ -3,10 +3,9 @@ module Max.ContextMaterializationSpec (spec) where
 import Control.Exception (SomeException)
 import Data.Int (Int64)
 import Data.Text (Text)
-import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawMessage, truncateAll, withDb)
+import Helpers (insertRawMessage, requireJust, testTime, truncateAll, withDb)
 import Max.ContextMaterialization
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
@@ -101,18 +100,10 @@ requireValid run source capture = case validateEpisodeCapture run source capture
   Right value -> pure value
   Left errors -> expectationFailure (show errors) >> error "invalid capture"
 
-requireJust :: String -> Maybe a -> IO a
-requireJust label = \case
-  Just value -> pure value
-  Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)
-
 groupId, memberId, botId :: Int64
 groupId = 100
 memberId = 2001
 botId = 1000
-
-testTime :: UTCTime
-testTime = read "2026-08-02 12:00:00 UTC"
 
 fixtureEnd :: MessageCursor
 fixtureEnd = MessageCursor 2

@@ -67,7 +67,7 @@ import Max.Tasks
     listTasks,
   )
 import Max.Toolset (toolCountFor)
-import Max.Util (trySyncIO)
+import Max.Util (trySyncIO, tshow)
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 import Paths_max (version)
 import System.Info (arch, fullCompilerVersion, os)
@@ -233,7 +233,7 @@ execute t gid uid granterTier replyTarget cmd = do
         Just mid -> do
           mMsg <- fetchMessageInScope conversation mid
           case mMsg of
-            Nothing -> reply $ "找不到 message_id=" <> T.pack (show mid)
+            Nothing -> reply $ "找不到 message_id=" <> tshow mid
             Just _ -> do
               updateSession t (\s -> (Session.addPin mid s, ()))
               logInfo "session: pinned" $ object ["message_id" .= mid]
@@ -322,7 +322,7 @@ execute t gid uid granterTier replyTarget cmd = do
         then do
           logInfo "memory: removed via !memory" $ object ["id" .= mid]
           ack
-        else reply $ "没有 id=" <> T.pack (show mid) <> " 的本会话记忆"
+        else reply $ "没有 id=" <> tshow mid <> " 的本会话记忆"
     --
     StickerStats -> do
       st <- Stickers.stickerStats
@@ -455,7 +455,7 @@ execute t gid uid granterTier replyTarget cmd = do
       rows <- listGrantsFor target
       reply $
         "用户 "
-          <> T.pack (show target)
+          <> tshow target
           <> " 的显式授权：\n"
           <> if null rows
             then "（无；生效的是身份层级：owner / 群管理员 / 成员）"
@@ -465,7 +465,7 @@ execute t gid uid granterTier replyTarget cmd = do
                 [ "  "
                     <> (if deny then "✗ 禁用 " else "✓ ")
                     <> cap
-                    <> maybe "（全局）" (\g -> "（群 " <> T.pack (show g) <> "）") mScope
+                    <> maybe "（全局）" (\g -> "（群 " <> tshow g <> "）") mScope
                 | (cap, mScope, deny) <- rows
                 ]
     -- Admin-console target selection.  Only meaningful in DMs: in a
@@ -478,20 +478,20 @@ execute t gid uid granterTier replyTarget cmd = do
           let UserId uidRaw = uid
           targets <- liftIO (readTVarIO env.beAdminTarget)
           reply $ case Map.lookup uidRaw targets of
-            Just g -> "当前操作对象：群 " <> T.pack (show g) <> "（!use clear 退出）"
+            Just g -> "当前操作对象：群 " <> tshow g <> "（!use clear 退出）"
             Nothing -> "没有选中的群；!use <群号> 之后，你在私聊里发的命令都作用于那个群"
     UseSet g
       | not (isPrivateChat gid) -> reply "!use 只在私聊里有意义"
       | otherwise -> do
           known <- groupKnown g
           if not known
-            then reply $ "我没见过群 " <> T.pack (show g) <> "（bot 不在这个群，或还没收到过它的消息）"
+            then reply $ "我没见过群 " <> tshow g <> "（bot 不在这个群，或还没收到过它的消息）"
             else do
               let UserId uidRaw = uid
               liftIO (atomically (modifyTVar' env.beAdminTarget (Map.insert uidRaw g)))
               reply $
                 "好，接下来你私聊里的命令都作用于群 "
-                  <> T.pack (show g)
+                  <> tshow g
                   <> "。\n权限按你在那个群的身份算；!use clear 退出，!status 看概览。"
     UseClear
       | not (isPrivateChat gid) -> reply "!use 只在私聊里有意义"
@@ -505,15 +505,15 @@ execute t gid uid granterTier replyTarget cmd = do
       memCount <- countMemories (groupMemoryNamespace conversation)
       tasks <- liftIO (listTasks env.beTasks (Just gid))
       reply . T.intercalate "\n" $
-        [ (if isPrivateChat gid then "本私聊" else "群 " <> T.pack (show gidRaw)) <> " 状态：",
+        [ (if isPrivateChat gid then "本私聊" else "群 " <> tshow gidRaw) <> " 状态：",
           "  model: " <> s.model,
           "  persona: " <> maybe "（默认）" (\p -> T.take 40 p <> if T.length p > 40 then "…" else "") s.persona,
           "  debug: " <> onOff env.beDebugDefault s.debugOverride,
           "  sticker: " <> onOff env.beStickerDefault s.stickerOverride,
           "  proactive: " <> onOff (isJust env.beIntent) s.proactiveOverride,
-          "  pin: " <> T.pack (show (length s.pinned)) <> " 条",
-          "  记忆: " <> T.pack (show memCount) <> " 条",
-          "  任务: " <> T.pack (show (length tasks)) <> " 个在跑",
+          "  pin: " <> tshow (length s.pinned) <> " 条",
+          "  记忆: " <> tshow memCount <> " 条",
+          "  任务: " <> tshow (length tasks) <> " 个在跑",
           "  !clear 水位: " <> maybe "无" (T.pack . show) s.clearedAt
         ]
     Unknown v _ ->
@@ -617,9 +617,9 @@ formatMemories private gms ums =
   where
     memLine m =
       "  #"
-        <> T.pack (show m.memId.unMemoryId)
+        <> tshow m.memId.unMemoryId
         <> "@v"
-        <> T.pack (show m.memVersion.unMemoryVersion)
+        <> tshow m.memVersion.unMemoryVersion
         <> "  "
         <> m.memContent
 
@@ -641,9 +641,6 @@ formatStickers rows =
             <> T.take 40 r.srDescription
         | r <- rows
         ]
-
-tshow :: (Show a) => a -> Text
-tshow = T.pack . show
 
 -- | Wallclock cap for a user @! \<cmd\>@ shell command.  A plain
 -- command gets an interactive-snappy 30s; one that pulls @+pkg@ gets
@@ -689,9 +686,9 @@ formatPins items =
   where
     oneLine h =
       "  "
-        <> T.pack (show h.messageId)
+        <> tshow h.messageId
         <> "  "
-        <> (case h.senderNickname of Just n -> n; Nothing -> T.pack (show h.userId))
+        <> (case h.senderNickname of Just n -> n; Nothing -> tshow h.userId)
         <> "  "
         <> trunc 60 h.renderedText
     trunc n t
@@ -727,17 +724,17 @@ formatOne now callerGid ti =
   where
     GroupId raw = ti.tiGroup
     UserId uidRaw = ti.tiUser
-    byTag = "by=" <> T.pack (show uidRaw)
+    byTag = "by=" <> tshow uidRaw
     -- The message to reply to when aiming a !feedback at this turn
     -- rather than at whatever is newest.
     triggerTag = "on=#" <> maybe "" (T.pack . show) ti.tiTrigger
-    groupTag = "group=" <> T.pack (show raw)
-    pendingTag = "fb=" <> T.pack (show ti.tiPending)
+    groupTag = "group=" <> tshow raw
+    pendingTag = "fb=" <> tshow ti.tiPending
 
 ageText :: UTCTime -> UTCTime -> Text
 ageText now started =
   let secs = round (realToFrac (diffUTCTime now started) :: Double) :: Int
    in case secs of
-        n | n < 60 -> T.pack (show n) <> "s"
-        n | n < 3600 -> T.pack (show (n `div` 60)) <> "m"
-        n -> T.pack (show (n `div` 3600)) <> "h"
+        n | n < 60 -> tshow n <> "s"
+        n | n < 3600 -> tshow (n `div` 60) <> "m"
+        n -> tshow (n `div` 3600) <> "h"

@@ -24,6 +24,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobForward), enqueueJob)
 import Max.Dispatch (DispatchMessage (..))
+import Max.Util (tshow)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.Images (enqueueImagesFromNode)
@@ -106,7 +107,7 @@ enqueueForwards sig gm = do
     -- The same chain can be forwarded into several messages, so the
     -- container is part of the key: each lands its own set of nodes.
     enqueueOne j =
-      enqueueJob JobForward (T.pack (show j.containerMessageId) <> ":" <> j.forwardId) j
+      enqueueJob JobForward (tshow j.containerMessageId <> ":" <> j.forwardId) j
 
 -- | One expansion is a single RPC plus a burst of inserts, so a batch
 -- of a few keeps the round-trips down without holding leases long.
@@ -140,7 +141,7 @@ processJob sig job = do
       | rc /= 0 ->
           -- Usually a chain QQ has since expired; the attempt budget
           -- turns that into a few retries and then a parked row.
-          pure (Left ("get_forward_msg retcode " <> T.pack (show rc) <> " (" <> job.forwardId <> ")"))
+          pure (Left ("get_forward_msg retcode " <> tshow rc <> " (" <> job.forwardId <> ")"))
     Right (Response _ _ payload _) ->
       case parseEither nodesParser payload of
         Left perr ->
@@ -162,7 +163,7 @@ ingestNodes ::
   Eff es ()
 ingestNodes sig endpoint received job nodes =
   for_ (zip [0 ..] nodes) $ \(i, node) ->
-    ingestNode sig endpoint received job (decimal job.containerMessageId) 1 [i] i node
+    ingestNode sig endpoint received job (tshow job.containerMessageId) 1 [i] i node
 
 ingestNode ::
   (Log :> es, WithConnection :> es, IOE :> es) =>
@@ -179,11 +180,11 @@ ingestNode ::
 ingestNode sig endpoint received job parentNative depth path pos node = do
   let childNative =
         "forward:"
-          <> decimal job.containerMessageId
+          <> tshow job.containerMessageId
           <> ":"
           <> job.forwardId
           <> ":"
-          <> T.intercalate "." (decimal <$> path)
+          <> T.intercalate "." (tshow <$> path)
       occurred = maybe received (posixSecondsToUTCTime . fromIntegral) node.time
       raw =
         object
@@ -199,7 +200,7 @@ ingestNode sig endpoint received job parentNative depth path pos node = do
         InboundEnvelope
           { endpointId = endpoint.endpointId,
             nativeEventId = NativeEventId childNative,
-            senderNativeId = NativeUserId (decimal node.userId),
+            senderNativeId = NativeUserId (tshow node.userId),
             senderDisplayName = if T.null node.nickname then Nothing else Just node.nickname,
             occurredAt = occurred,
             receivedAt = received,
@@ -236,6 +237,7 @@ ingestNode sig endpoint received job parentNative depth path pos node = do
           ]
     AlreadyIngested {} -> pure ()
     DeliveryEcho {} -> pure ()
+    EchoUnmatched -> pure ()
   if depth >= maxDepth
     then
       unless (null inlineChildren) $
@@ -253,6 +255,9 @@ canonicalFromResult = \case
   Ingested fresh -> fresh.canonicalMessageId
   AlreadyIngested canonical -> canonical
   DeliveryEcho canonical -> canonical
+  -- Forward expansion always publishes; it never offers a node as
+  -- reconcile-only echo evidence, which is the sole source of this answer.
+  EchoUnmatched -> error "forward node ingest returned no canonical message"
 
 -- | Pull nested-forward children inlined in a @forward@ segment's
 -- @data.content@ (NapCat-style; whole tree comes in one @get_forward_msg@
@@ -303,6 +308,3 @@ lookupStringIn :: Text -> Object -> Maybe Text
 lookupStringIn k o = case KM.lookup (K.fromText k) o of
   Just (String s) -> Just s
   _ -> Nothing
-
-decimal :: Show a => a -> Text
-decimal = T.pack . show

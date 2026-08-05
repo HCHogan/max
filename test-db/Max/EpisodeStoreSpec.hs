@@ -2,16 +2,17 @@ module Max.EpisodeStoreSpec (spec) where
 
 import Control.Exception (SomeException)
 import Data.Aeson (encode)
+import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), execute)
+import Database.PostgreSQL.Simple.Types (Query (..))
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawKind, insertRawMessage, truncateAll, withDb)
+import Helpers (insertRawKind, insertRawMessage, requireJust, testTime, truncateAll, withDb)
 import Max.ContextMaterialization
 import Max.ConversationScope (ConversationScope, conversationScopeFor, currentConversationRecall)
 import Max.DB.Connection (DbPool, withConn)
@@ -214,6 +215,37 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     warnings <- withDb pool $ query "SELECT jsonb_array_length(validation_errors) FROM episode_capture_runs" ()
     (warnings :: [Only Int]) `shouldBe` [Only 1]
 
+  -- Migration 062 changed conversation_source_hash and the ledger columns it
+  -- reads, so every hash stamped before the ADR 003 cutover describes an input
+  -- set that no longer exists: the admin integrity check reported the entire
+  -- history as bad_source_ranges.  065 re-stamps them.
+  it "re-stamps a stale compartment source hash without churning fresh ones" $ do
+    seedConversation pool
+    lease <- prepareLease pool
+    source <- withDb pool $ loadCaptureSource lease.leaseRun
+    let capture = validCapture [1001, 1002, 1003] []
+    validated <- requireValid lease.leaseRun source capture
+    withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
+    _ <- withDb pool $ publishCaptureRun scopeA lease validated
+
+    let matching =
+          withDb pool $
+            query
+              "SELECT source_hash = conversation_source_hash(conversation_id, start_ingest_seq, end_ingest_seq) \
+              \ FROM conversation_compartments"
+              ()
+    matching `shouldReturn` [Only True]
+    -- A freshly published compartment is already correct: re-stamping must be
+    -- a no-op on it, or the migration would erase real drift evidence.
+    restampCompartments pool `shouldReturn` 0
+
+    stale <- withConn pool $ \conn ->
+      execute conn "UPDATE conversation_compartments SET source_hash = repeat('0', 64)" ()
+    stale `shouldBe` 1
+    matching `shouldReturn` [Only False]
+    restampCompartments pool `shouldReturn` 1
+    matching `shouldReturn` [Only True]
+
   it "rolls the whole publication back when the source hash changes" $ do
     seedConversation pool
     lease <- prepareLease pool
@@ -385,6 +417,13 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
     withDb pool (publishContextMaterialization scopeA Nothing materialization)
       `shouldThrow` (\(_ :: SomeException) -> True)
 
+-- | Run the shipped re-stamp migration itself, so the test pins the SQL that
+-- production will execute rather than a copy of it.
+restampCompartments :: DbPool -> IO Int64
+restampCompartments pool = do
+  sql <- BS.readFile "migrations/065_restamp_compartment_source_hash.sql"
+  withConn pool $ \conn -> execute conn (Query sql) ()
+
 seedConversation :: DbPool -> IO ()
 seedConversation pool = do
   insertRawMessage pool 1001 groupA member botId testTime Nothing "Alice: tea?"
@@ -430,11 +469,3 @@ requireValid :: CaptureRun -> [LedgerItem] -> EpisodeCapture -> IO ValidatedEpis
 requireValid run source capture = case validateEpisodeCapture run source capture of
   Right validated -> pure validated
   Left errors -> expectationFailure (show errors) >> error "invalid capture"
-
-requireJust :: String -> Maybe a -> IO a
-requireJust label = \case
-  Just value -> pure value
-  Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)
-
-testTime :: UTCTime
-testTime = read "2026-08-02 12:00:00 UTC"

@@ -10,8 +10,7 @@ module Max.ContextTraceStore
   )
 where
 
-import Data.Aeson (ToJSON, Value, eitherDecodeStrict', encode, object, (.=))
-import Data.ByteString.Lazy qualified as LBS
+import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
@@ -21,6 +20,7 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Context (ContextBudget (..), ContextDecision (..), ContextTrace (..))
 import Max.ConversationScope (ConversationScope, conversationStorageId)
+import Max.Util (encodeText)
 
 data ContextPlanTraceRow = ContextPlanTraceRow
   { cptrId :: !Int64,
@@ -185,9 +185,6 @@ decisionText = \case
   ContextDropped -> "dropped"
   ContextReserved -> "reserved"
   ContextOverBudget -> "over_budget"
-
-encodeText :: (ToJSON a) => a -> Text
-encodeText = TE.decodeUtf8 . LBS.toStrict . encode
 
 eitherDecodeValue :: Text -> Either String Value
 eitherDecodeValue = eitherDecodeStrict' . TE.encodeUtf8

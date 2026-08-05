@@ -28,6 +28,7 @@ import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
+import Max.Tools.Schema (integerParam, toolObject)
 import Max.Time (fmtDurationSec)
 import Max.ToolContext (ToolContext, toolConversationScope)
 
@@ -104,17 +105,5 @@ viewVideoSpec =
             "下一条消息里给你看（占用本次任务 8 个附件配额中的 1 个）。",
             "同一个视频看一次就够了。"
           ],
-      specSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "message_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("[video#<id>] 标记里的消息 id" :: Text)
-                      ]
-                ],
-            "required" .= (["message_id"] :: [Text])
-          ]
+      specSchema = toolObject [("message_id", integerParam "[video#<id>] 标记里的消息 id")] ["message_id"]
     }

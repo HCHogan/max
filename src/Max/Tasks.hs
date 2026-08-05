@@ -71,7 +71,7 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException, throwIO)
-import Control.Monad (filterM, void)
+import Control.Monad (filterM, void, when)
 import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.List (sortOn)
@@ -249,7 +249,7 @@ setTurnPhase (TurnRuntime entry) phase = atomically (writeTVar entry.teKind phas
 checkTurnCancellation :: TurnRuntime -> IO ()
 checkTurnCancellation (TurnRuntime entry) = do
   killed <- readTVarIO entry.teKilled
-  if killed then throwIO TaskCancelled else pure ()
+  when killed (throwIO TaskCancelled)
 
 drainTurnInbox :: TurnRuntime -> IO [Note]
 drainTurnInbox (TurnRuntime entry) = atomically $ do

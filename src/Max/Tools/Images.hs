@@ -31,6 +31,7 @@ import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
+import Max.Tools.Schema (integerParam, toolObject)
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Time (fmtHM)
 import Max.ToolContext (ToolContext, toolConversationScope, toolMultimodal)
@@ -141,17 +142,5 @@ viewImageSpec =
         "查看上下文里标记为 [image#<id>] 的图片：传 message_id，那条消息的图\
         \会附在下一条消息里给你看。只在图片跟当前话题相关时用；\
         \与 view_avatar 共用每次任务 8 张的配额。",
-      specSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "message_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("[image#<id>] 里的那个 id" :: Text)
-                      ]
-                ],
-            "required" .= (["message_id"] :: [Text])
-          ]
+      specSchema = toolObject [("message_id", integerParam "[image#<id>] 里的那个 id")] ["message_id"]
     }

@@ -9,14 +9,18 @@ module Max.Platform.Delivery
   ( DeliveryAttempt (..),
     DeliveryOperation (..),
     DeliveryTransport (..),
+    DeliveryMedia (..),
     deliveryWorker,
     oneBotDeliveryTransport,
     loadDeliveryMedia,
+    resolveDeliveryMedia,
     mediaTextCaps,
     loweredText,
     oneBotNodes,
     oneBotReplySegment,
     oneBotReactionAction,
+    toCompletion,
+    deliveryAttemptBudget,
   )
 where
 
@@ -39,6 +43,14 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.DB.Notify (WorkChannel (DeliveryWork), claimOrWait)
+import Max.HttpRuntime
+  ( BufferedResponse (body),
+    HttpPool (StandardPool),
+    HttpRuntime,
+    parseRequestEither,
+    renderTransportFailure,
+    runBuffered,
+  )
 import Max.IR
 import Max.IR.Digest (digest)
 import Max.IR.Lower
@@ -59,7 +71,7 @@ import Max.Platform.Types
     ReactionAction (..),
     renderPlatform,
   )
-import Max.Util (trySync, trySyncIO)
+import Max.Util (readIntegral, trySync, trySyncIO)
 import OneBot.Action (Action (SetMsgEmojiLike), Response (..), extractOutMid, sendChatMsg)
 import OneBot.Segment (Segment (..), imageSeg, stickerSeg)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -67,7 +79,16 @@ import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 data DeliveryAttempt
   = AttemptConfirmed !(Maybe NativeEventId)
   | AttemptAccepted !(Maybe NativeEventId)
-  | AttemptRetryable !Text
+  | -- | The edge could not be reached and provably had no effect.  Retried
+    -- without a bound: while it is down nothing else can be delivered to this
+    -- endpoint either, so waiting denies the ordered lane to no one.  A real
+    -- QQ edge outage took 159 attempts over eleven hours and then delivered.
+    AttemptRetryable !Text
+  | -- | A reachable edge refused this content (QQ risk control, a reaction on
+    -- a deleted target).  Rejections can be transient, so it is retried — but
+    -- the endpoint is demonstrably working, so the lane must not wait on it
+    -- forever; 'deliveryAttemptBudget' ends it.
+    AttemptRejected !Text
   | AttemptOutcomeUnknown !Text
   | AttemptPermanentlyFailed !Text
   | AttemptSuppressed !Text
@@ -89,20 +110,36 @@ data DeliveryTransport = DeliveryTransport
     deliver :: !(DeliveryClaim -> DeliveryOperation -> IO DeliveryAttempt)
   }
 
+-- | What the native media tier resolved to, plus the audit trail for what it
+-- could not resolve.  A reference the store cannot produce bytes for is
+-- absent from 'resolved', which is exactly how the shared lowerer already
+-- spells "sourceless": that node folds to its text tier.
+data DeliveryMedia = DeliveryMedia
+  { resolved :: ![(MediaRef, ResolvedMedia)],
+    notes :: ![LowerNote]
+  }
+  deriving stock (Eq, Show)
+
 -- | Resolve only media that can survive lowering's native tier and budget.
--- Blob failures and size-integrity violations are deterministic poison, not
--- transient transport failures; the worker marks them permanently failed.
+--
+-- Size-integrity violations are deterministic poison: the canonical body
+-- promises bytes the endpoint must not be handed, and the worker marks the
+-- delivery permanently failed.  A blob the store cannot read is a different
+-- fact — the message is sourceless, not oversized (ADR 003 §2), so it folds
+-- to the text tier here and the message's text still goes out.
 loadDeliveryMedia ::
   (Blob :> es) =>
   OutboundCaps ->
   Body 'Canonical ->
-  Eff es [(MediaRef, ResolvedMedia)]
+  Eff es DeliveryMedia
 loadDeliveryMedia caps body = do
   loaded <- traverse loadOne candidates
-  let totalBytes = sum [BS.length bytes | (_, ResolvedBytes bytes) <- loaded]
+  let resolved = [entry | Right entry <- loaded]
+      notes = [note | Left note <- loaded]
+      totalBytes = sum [BS.length bytes | (_, ResolvedBytes bytes) <- resolved]
   if totalBytes > deliveryMediaTotalBytes
     then error "canonical delivery media exceeds total byte limit"
-    else pure loaded
+    else pure DeliveryMedia {resolved, notes}
   where
     candidates =
       nubBy (\(left, _) (right, _) -> left == right) . take (max 0 caps.maxNativeMedia) $
@@ -114,18 +151,53 @@ loadDeliveryMedia caps body = do
       _ -> Nothing
 
     loadOne (ref, declaredSize) = case mediaRefBlobSha ref of
-      Nothing -> pure (ref, ResolvedUrl (renderMediaRef ref))
+      Nothing -> pure (Right (ref, ResolvedUrl (renderMediaRef ref)))
       Just sha -> case blobRefFromSha256 sha of
-        Nothing -> error "canonical delivery contains an invalid blob reference"
-        Just blobRef -> do
-          payload <- readBlob blobRef
-          let actual = BS.length payload
-          if actual > deliveryMediaItemBytes
-            then error "canonical delivery media exceeds per-item byte limit"
-            else case declaredSize of
-              Just expected | expected /= fromIntegral actual ->
-                error "canonical delivery media size changed"
-              _ -> pure (ref, ResolvedBytes payload)
+        Nothing -> pure (Left (unresolvable ref "invalid blob reference"))
+        Just blobRef ->
+          trySync (readBlob blobRef) >>= \case
+            Left e -> pure (Left (unresolvable ref (T.pack (show (e :: SomeException)))))
+            Right payload -> do
+              let actual = BS.length payload
+              if actual > deliveryMediaItemBytes
+                then error "canonical delivery media exceeds per-item byte limit"
+                else case declaredSize of
+                  Just expected | expected /= fromIntegral actual ->
+                    error "canonical delivery media size changed"
+                  _ -> pure (Right (ref, ResolvedBytes payload))
+
+    unresolvable ref detail =
+      LowerNote "media_source" NoteFolded (Just (renderMediaRef ref <> ": " <> detail))
+
+-- | Produce the bytes an upload-style transport must hand its platform.
+-- Blob-backed media already carries them; a remote URL is fetched once,
+-- bounded by the caller's own attachment limit and checked against the size
+-- the canonical body declared.  Matrix and iMessage both upload before they
+-- send, and a private copy of this in each adapter was one edit away from
+-- disagreeing about that size check.
+resolveDeliveryMedia ::
+  HttpRuntime ->
+  -- | attachment byte ceiling
+  Int ->
+  -- | diagnostic preview bytes for a failing status
+  Int ->
+  ResolvedMedia ->
+  -- | size the canonical body declared, when it declared one
+  Maybe Int64 ->
+  IO (Either Text BS.ByteString)
+resolveDeliveryMedia _ _ _ (ResolvedBytes bytes) _ = pure (Right bytes)
+resolveDeliveryMedia runtime maxBytes previewBytes (ResolvedUrl sourceUrl) declaredSize
+  | "http://" `T.isPrefixOf` sourceUrl || "https://" `T.isPrefixOf` sourceUrl =
+      parseRequestEither (T.unpack sourceUrl) >>= \case
+        Left failure -> pure (Left (renderTransportFailure failure))
+        Right request ->
+          runBuffered runtime StandardPool maxBytes previewBytes request >>= \case
+            Left failure -> pure (Left (renderTransportFailure failure))
+            Right response
+              | maybe False (/= fromIntegral (BS.length response.body)) declaredSize ->
+                  pure (Left "delivery media size changed")
+              | otherwise -> pure (Right response.body)
+  | otherwise = pure (Left "delivery media has no transferable source")
 
 nativeMediaTier :: OutboundCaps -> MediaKind -> Tier
 nativeMediaTier caps = \case
@@ -208,7 +280,7 @@ deliveryWorker workerId transports = localDomain "delivery" loop
       nativeMentions <-
         deliveryMentionNatives claim.endpointId (mentionIdentities claim.body)
       mediaResult <- trySync (loadDeliveryMedia claim.capabilities claim.body)
-      let media = either (const []) id mediaResult
+      let media = either (const DeliveryMedia {resolved = [], notes = []}) id mediaResult
           lowerWith caps resolved =
             lower
               LowerEnv
@@ -220,23 +292,24 @@ deliveryWorker workerId transports = localDomain "delivery" loop
                   replyTarget = if claim.eventKind == EventMessage then claim.replyContext else Nothing
                 }
               claim.body
-          lowered = lowerWith claim.capabilities media
+          lowered = lowerWith claim.capabilities media.resolved
+          loweredNotes = lowered.notes <> media.notes
       case mediaResult of
         Left e ->
           pure
             ( DeliveryPermanentlyFailed
                 ("media load failed: " <> T.pack (show (e :: SomeException))),
-              lowered.notes
+              loweredNotes
             )
         Right _
-          | null lowered.chunks -> pure (DeliverySuppressedAs "lowering produced no output", lowered.notes)
+          | null lowered.chunks -> pure (DeliverySuppressedAs "lowering produced no output", loweredNotes)
           | otherwise -> do
               attempt <- runTransport transport claim (operation lowered)
               case attempt of
                 AttemptMediaFallback err -> do
                   let relowered = lowerWith (mediaTextCaps claim.capabilities) []
                       fallbackNote = LowerNote "media_emit" NoteFolded (Just err)
-                      fallbackNotes = relowered.notes <> [fallbackNote]
+                      fallbackNotes = relowered.notes <> media.notes <> [fallbackNote]
                   if null relowered.chunks
                     then pure (DeliverySuppressedAs "media fallback produced no output", fallbackNotes)
                     else do
@@ -247,8 +320,8 @@ deliveryWorker workerId transports = localDomain "delivery" loop
                             other -> toCompletion claim.attemptCount now other
                       pure (completion', fallbackNotes)
                 other -> do
-                  logLowered claim "delivery lowered" lowered lowered.notes
-                  pure (toCompletion claim.attemptCount now other, lowered.notes)
+                  logLowered claim "delivery lowered" lowered loweredNotes
+                  pure (toCompletion claim.attemptCount now other, loweredNotes)
 
     logLowered claim message lowered notes =
       logInfo message $
@@ -275,11 +348,28 @@ mentionIdentities body =
     | NMention (MentionIdentity identity) _ <- body.nodes
   ]
 
+-- | ADR 003 §7's attempt budget.  A rejection by a live edge is
+-- retryable-shaped forever, and every retry re-blocks the endpoint's ordered
+-- lane behind one row that will never land.  A rejection is only reported
+-- once the transport has proved no message was emitted, so ending it is a
+-- content decision, not an undecidable outcome: the copy is suppressed and
+-- the lane releases.  Attempts that could have taken effect are already
+-- terminal as @outcome_unknown@ on their first occurrence, and an unreachable
+-- edge is deliberately unbounded — see 'AttemptRetryable'.
 toCompletion :: Int -> UTCTime -> DeliveryAttempt -> DeliveryCompletion
 toCompletion attempts now = \case
   AttemptConfirmed native -> DeliveryConfirmedAs native
   AttemptAccepted native -> DeliveryAccepted native
   AttemptRetryable err -> DeliveryRetry err (addUTCTime (retryDelay attempts) now)
+  AttemptRejected err
+    | attempts >= deliveryAttemptBudget ->
+        DeliverySuppressedAs
+          ( "retry budget exhausted after "
+              <> T.pack (show attempts)
+              <> " attempts: "
+              <> err
+          )
+    | otherwise -> DeliveryRetry err (addUTCTime (retryDelay attempts) now)
   AttemptOutcomeUnknown err -> DeliveryUnknown err now
   AttemptPermanentlyFailed err -> DeliveryPermanentlyFailed err
   AttemptSuppressed reason -> DeliverySuppressedAs reason
@@ -319,10 +409,10 @@ oneBotNodes = traverse emit
     emit = \case
       NText body -> Right (SegText body)
       NMention (NativeUserId native) _ ->
-        maybe (Left ("invalid OneBot mention id " <> native)) (Right . SegAt . UserId) (readInt64 native)
+        maybe (Left ("invalid OneBot mention id " <> native)) (Right . SegAt . UserId) (readIntegral native)
       NEmote emote -> case emote.raw >>= rawSegment of
         Just face@SegFace {} -> Right face
-        _ -> maybe (Left ("invalid OneBot emote id " <> emote.nativeId)) (\n -> Right (SegFace n emote.name)) (readInt emote.nativeId)
+        _ -> maybe (Left ("invalid OneBot emote id " <> emote.nativeId)) (\n -> Right (SegFace n emote.name)) (readIntegral emote.nativeId)
       NMedia payload meta -> case meta.kind of
         MImage -> Right (imageSeg (mediaPayload payload))
         MSticker -> Right (stickerSeg (mediaPayload payload))
@@ -355,10 +445,11 @@ loweredText = fmap T.concat . traverse emit
       NCard {} -> Left "text emitter received a native card"
 
 -- | Adapter for OneBot-shaped edge transports.  Each lowered chunk is one
--- send.  Once any non-idempotent chunk may have taken effect, a later failure
--- parks the delivery rather than retrying and duplicating the prefix chunks.
-oneBotDeliveryTransport :: Platform -> Bool -> PlatformBackend -> DeliveryTransport
-oneBotDeliveryTransport platform idempotent backend =
+-- send, and no OneBot send is idempotent: once a chunk may have taken effect,
+-- a later failure parks the delivery rather than retrying and duplicating the
+-- prefix chunks.
+oneBotDeliveryTransport :: Platform -> PlatformBackend -> DeliveryTransport
+oneBotDeliveryTransport platform backend =
   DeliveryTransport
     { platform,
       deliver = \claim -> \case
@@ -368,8 +459,7 @@ oneBotDeliveryTransport platform idempotent backend =
         DeliverRedaction {} -> pure (AttemptPermanentlyFailed "OneBot endpoint advertised redaction without an emitter")
     }
   where
-    sendChunks _ _ _ _ firstNative [] =
-      pure $ if idempotent then AttemptConfirmed firstNative else AttemptAccepted firstNative
+    sendChunks _ _ _ _ firstNative [] = pure (AttemptAccepted firstNative)
     sendChunks claim lowered index sentAny firstNative (chunk : rest) =
       case oneBotNodes chunk of
         Left err -> pure (AttemptPermanentlyFailed err)
@@ -378,13 +468,15 @@ oneBotDeliveryTransport platform idempotent backend =
           Right replyPrefix ->
             backend.pbCall (sendChatMsg (GroupId claim.compatibilityConversationId) (replyPrefix <> body)) oneBotTimeoutMs >>= \case
               Left err
-                | idempotent -> pure (AttemptRetryable err)
                 | sentAny || not (failedBeforeEffect err) -> pure (AttemptOutcomeUnknown err)
                 | otherwise -> pure (AttemptRetryable err)
+              -- The edge answered, so it is up: this is a refusal of the
+              -- content itself (risk control, a banned link, a dead target),
+              -- not a transport outage.
               Right (Response _ retcode payload _)
                 | retcode /= 0 ->
                     let err = "retcode " <> T.pack (show retcode)
-                     in pure $ if sentAny && not idempotent then AttemptOutcomeUnknown err else AttemptRetryable err
+                     in pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRejected err
                 | otherwise -> do
                     let native = NativeEventId . T.pack . show <$> extractOutMid payload
                     sendChunks claim lowered (index + 1) True (firstNative <|> native) rest
@@ -396,14 +488,16 @@ oneBotDeliveryTransport platform idempotent backend =
             Left err -> pure (AttemptRetryable err)
             Right (Response _ retcode _ _)
               | retcode == 0 -> pure (AttemptConfirmed Nothing)
-              | otherwise -> pure (AttemptRetryable ("retcode " <> T.pack (show retcode)))
+              -- A reaction whose target was deleted refuses forever, and it
+              -- would otherwise hold every later copy on this endpoint.
+              | otherwise -> pure (AttemptRejected ("retcode " <> T.pack (show retcode)))
         Nothing -> pure (AttemptSuppressed "reaction is not a QQ face id or target")
 
 oneBotReactionAction :: NativeEventId -> Text -> ReactionAction -> Maybe Action
 oneBotReactionAction (NativeEventId target) key action =
   SetMsgEmojiLike
-    <$> (MessageId <$> readInt64 target)
-    <*> readInt key
+    <$> (MessageId <$> readIntegral target)
+    <*> readIntegral key
     <*> pure (action == ReactionAdd)
 
 oneBotReplySegment :: Int -> Maybe NativeEventId -> Either Text [Segment]
@@ -412,17 +506,7 @@ oneBotReplySegment index native
   | otherwise = case native of
       Nothing -> Right []
       Just (NativeEventId raw) ->
-        maybe (Left ("invalid OneBot reply id " <> raw)) (Right . pure . SegReply . MessageId) (readInt64 raw)
-
-readInt64 :: Text -> Maybe Int64
-readInt64 raw = case reads (T.unpack raw) of
-  [(value, "")] -> Just value
-  _ -> Nothing
-
-readInt :: Text -> Maybe Int
-readInt raw = case reads (T.unpack raw) of
-  [(value, "")] -> Just value
-  _ -> Nothing
+        maybe (Left ("invalid OneBot reply id " <> raw)) (Right . pure . SegReply . MessageId) (readIntegral raw)
 
 failedBeforeEffect :: Text -> Bool
 failedBeforeEffect err =
@@ -430,6 +514,15 @@ failedBeforeEffect err =
 
 retryDelay :: Int -> NominalDiffTime
 retryDelay attempts = fromIntegral (min (300 :: Int) (2 ^ min 8 (max 0 attempts)))
+
+-- | How many claimed attempts one /rejected/ delivery may spend before its
+-- endpoint's ordered lane matters more than this copy.  With 'retryDelay'
+-- that is 2+4+…+256 then 256s per attempt: roughly 45 minutes, long enough
+-- for a transient refusal to clear and short enough that one poisoned row
+-- cannot hold the conversation hostage.  An unreachable edge is not budgeted
+-- at all, so this never truncates an outage backlog.
+deliveryAttemptBudget :: Int
+deliveryAttemptBudget = 16
 
 deliveryBatchSize :: Int
 deliveryBatchSize = 32

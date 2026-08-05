@@ -61,6 +61,8 @@ import Max.MemoryStore
     userMemoryNamespace,
   )
 import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolMessageId, toolUserId)
+import Max.Tools.Schema (enumParam, integerParam, stringParam, toolObject)
+import Max.Util (tshow)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 
 -- | Per (scope, scope_id) ceiling.  Hitting it turns 'memory_save'
@@ -101,33 +103,15 @@ saveTool dc =
             "别重复存。存了不必在回复里宣布。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "scope"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "enum" .= (["group", "user"] :: [Text]),
-                        "description" .= ("group=关于本会话；user=关于某个人（仅限本会话）。" :: Text)
-                      ],
-                  "content"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description"
-                          .= ( "一条紧凑的事实（≤"
-                                 <> T.pack (show maxMemoryChars)
-                                 <> " 字），第三人称陈述句，不带上下文引用。"
-                             )
-                      ],
-                  "user_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("scope=user 时记忆归属的 QQ 号；缺省为当前发言者。" :: Text)
-                      ]
-                ],
-            "required" .= (["scope", "content"] :: [Text])
-          ],
+        toolObject
+          [ ("scope", enumParam ["group", "user"] "group=关于本会话；user=关于某个人（仅限本会话）。"),
+            ( "content",
+              stringParam
+                ("一条紧凑的事实（≤" <> tshow maxMemoryChars <> " 字），第三人称陈述句，不带上下文引用。")
+            ),
+            ("user_id", integerParam "scope=user 时记忆归属的 QQ 号；缺省为当前发言者。")
+          ]
+          ["scope", "content"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, content, mUid) -> do
@@ -151,7 +135,7 @@ saveTool dc =
                     pure $
                       Left $
                         "该 scope 的记忆已满（"
-                          <> T.pack (show maxMemoriesPerScope)
+                          <> tshow maxMemoriesPerScope
                           <> " 条）。先用 memory_forget 删掉过时的，或用 memory_update 合并相近条目，再保存。"
                   else do
                     let MessageId sourceMessage = toolMessageId dc
@@ -188,24 +172,12 @@ updateTool dc =
             "memory_list）。当事实变化、或要把几条相近记忆合并成一条时用它。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "id" .= object ["type" .= ("integer" :: Text), "description" .= ("记忆 id。" :: Text)],
-                  "version"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("当前版本号（和 id 一起显示）。" :: Text)
-                      ],
-                  "content"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("替换后的完整内容（≤" <> T.pack (show maxMemoryChars) <> " 字）。" :: Text)
-                      ]
-                ],
-            "required" .= (["id", "version", "content"] :: [Text])
-          ],
+        toolObject
+          [ ("id", integerParam "记忆 id。"),
+            ("version", integerParam "当前版本号（和 id 一起显示）。"),
+            ("content", stringParam ("替换后的完整内容（≤" <> tshow maxMemoryChars <> " 字）。"))
+          ]
+          ["id", "version", "content"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, version, content) ->
@@ -249,15 +221,11 @@ forgetTool dc =
             "记忆过时且无修订价值、或用户要求忘记时用它。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "id" .= object ["type" .= ("integer" :: Text), "description" .= ("记忆 id。" :: Text)],
-                  "version" .= object ["type" .= ("integer" :: Text), "description" .= ("当前版本号。" :: Text)]
-                ],
-            "required" .= (["id", "version"] :: [Text])
-          ],
+        toolObject
+          [ ("id", integerParam "记忆 id。"),
+            ("version", integerParam "当前版本号。")
+          ]
+          ["id", "version"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, version) -> do
@@ -296,24 +264,11 @@ listTool dc =
             "更新的一部分——要看全量、或涉及别的人时用这个。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "scope"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "enum" .= (["group", "user"] :: [Text]),
-                        "description" .= ("group 或 user。" :: Text)
-                      ],
-                  "user_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("scope=user 时的 QQ 号；缺省为当前发言者。group 始终是本会话。" :: Text)
-                      ]
-                ],
-            "required" .= (["scope"] :: [Text])
-          ],
+        toolObject
+          [ ("scope", enumParam ["group", "user"] "group 或 user。"),
+            ("user_id", integerParam "scope=user 时的 QQ 号；缺省为当前发言者。group 始终是本会话。")
+          ]
+          ["scope"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, mSid) -> do
@@ -347,7 +302,7 @@ checkContent :: Text -> Either Text Text
 checkContent raw
   | T.null c = Left "content 不能为空"
   | T.length c > maxMemoryChars =
-      Left ("content 太长（" <> T.pack (show (T.length c)) <> " 字），压缩到 " <> T.pack (show maxMemoryChars) <> " 字以内")
+      Left ("content 太长（" <> tshow (T.length c) <> " 字），压缩到 " <> tshow maxMemoryChars <> " 字以内")
   | otherwise = Right c
   where
     c = T.strip raw

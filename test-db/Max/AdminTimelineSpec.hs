@@ -9,7 +9,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query)
-import Helpers (truncateAll, withDb)
+import Helpers (resultId, truncateAll, withDb)
 import Max.AdminTimeline (loadAdminTimeline, waitAdminTimeline)
 import Max.DB.Connection (DbPool, withConn)
 import Max.IR
@@ -145,12 +145,6 @@ baseEnvelope endpoint now native =
       sourceCursor = Nothing,
       rawPayload = Nothing
     }
-
-resultId :: IngestResult -> CanonicalMessageId
-resultId = \case
-  Ingested fresh -> fresh.canonicalMessageId
-  AlreadyIngested canonical -> canonical
-  DeliveryEcho canonical -> canonical
 
 currentRevision :: DbPool -> Int64 -> IO Int64
 currentRevision pool legacyConversation = do

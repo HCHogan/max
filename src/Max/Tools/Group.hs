@@ -36,6 +36,7 @@ import Max.Roster
     userAvatarUrl,
   )
 import Max.ToolContext (ToolContext, toolGroupId, toolMultimodal)
+import Max.Tools.Schema (boolParam, integerParam, stringParam, toolObject)
 import OneBot.Types (GroupId, UserId (..), isPrivateChat)
 
 groupToolsFor ::
@@ -64,22 +65,11 @@ membersTool gid =
         \人数和头像 URL（群头像 + 成员头像的 URL 规则，可直接引用或发给别人）。\
         \可选 query 按名字或 QQ号 过滤；成员太多时用 offset 翻页。",
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "query"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("按名字/群名片/QQ号 子串过滤（可选）" :: Text)
-                      ],
-                  "offset"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("跳过前多少个匹配结果，翻页用（默认 0）" :: Text)
-                      ]
-                ]
-          ],
+        toolObject
+          [ ("query", stringParam "按名字/群名片/QQ号 子串过滤（可选）"),
+            ("offset", integerParam "跳过前多少个匹配结果，翻页用（默认 0）")
+          ]
+          [],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mQuery, offset) ->
@@ -153,22 +143,11 @@ avatarTool dc =
         "查看头像：传 qq 看该用户的头像，传 group=true 看本群群头像。\
         \图片会附在下一条消息里给你看。每次任务最多看 8 张。",
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "qq"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("要看头像的 QQ号" :: Text)
-                      ],
-                  "group"
-                    .= object
-                      [ "type" .= ("boolean" :: Text),
-                        "description" .= ("true = 看群头像（与 qq 二选一）" :: Text)
-                      ]
-                ]
-          ],
+        toolObject
+          [ ("qq", integerParam "要看头像的 QQ号"),
+            ("group", boolParam "true = 看群头像（与 qq 二选一）")
+          ]
+          [],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (Nothing, False) -> pure $ Left "要么传 qq，要么传 group=true"

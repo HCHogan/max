@@ -20,7 +20,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Foldable (asum)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (LocalTime, TimeZone, defaultTimeLocale, localTimeToUTC, parseTimeM)
@@ -38,6 +38,7 @@ import Max.Prompt (tagMediaMarkers)
 import Max.Recall (RecallHit (..), searchRecall)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId)
+import Max.Tools.Schema (boundedIntegerParam, integerParam, stringParam, toolObject, withKeys)
 import Max.Tools.SelfSource (selfSourceTools)
 import OneBot.Action (Action (..), Response (..))
 import OneBot.Types (UserId (..))
@@ -75,19 +76,7 @@ getMessageByIdTool tz dc =
             "want the full original text of something quoted/forwarded.",
             "Returns null if the message is not in the bot's database."
           ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "message_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("QQ message_id (positive integer)" :: Text)
-                      ]
-                ],
-            "required" .= (["message_id"] :: [Text])
-          ],
+      toolSchema = toolObject [("message_id", integerParam "QQ message_id (positive integer)")] ["message_id"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
@@ -115,25 +104,11 @@ contextSearchTool tz dc =
             "episode 的细节用返回的 handle 调 context_expand。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "query"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("要回忆的自然语言主题或关键词" :: Text)
-                      ],
-                  "limit"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "minimum" .= (1 :: Int),
-                        "maximum" .= (30 :: Int),
-                        "default" .= (10 :: Int)
-                      ]
-                ],
-            "required" .= (["query"] :: [Text])
-          ],
+        toolObject
+          [ ("query", stringParam "要回忆的自然语言主题或关键词"),
+            ("limit", boundedIntegerParam 1 30 10)
+          ]
+          ["query"],
       toolRun = \args -> case parseEither (withObject "args" parseRecallArgs) args of
         Left err -> pure $ Left ("bad args: " <> T.pack err)
         Right (rawQuery, limit)
@@ -146,7 +121,7 @@ contextSearchTool tz dc =
                 contextSearchSummary
                   tz
                   rawQuery
-                  (maybe False (const True) embedding)
+                  (isJust embedding)
                   hits
     }
   where
@@ -212,31 +187,14 @@ contextExpandTool tz dc =
             "长 episode 会分页，按返回的 next_after_cursor 继续读取。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "handle"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "format" .= ("uuid" :: Text),
-                        "description" .= ("[episode#<handle>] 标记中的 opaque handle" :: Text)
-                      ],
-                  "after_cursor"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("继续读取时使用上页返回的 next_after_cursor" :: Text)
-                      ],
-                  "limit"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "minimum" .= (1 :: Int),
-                        "maximum" .= (100 :: Int),
-                        "default" .= (40 :: Int)
-                      ]
-                ],
-            "required" .= (["handle"] :: [Text])
-          ],
+        toolObject
+          [ ( "handle",
+              withKeys ["format" .= ("uuid" :: Text)] (stringParam "[episode#<handle>] 标记中的 opaque handle")
+            ),
+            ("after_cursor", integerParam "继续读取时使用上页返回的 next_after_cursor"),
+            ("limit", boundedIntegerParam 1 100 40)
+          ]
+          ["handle"],
       toolRun = \args -> case parseEither (withObject "args" parseExpandArgs) args of
         Left err -> pure $ Left ("bad args: " <> T.pack err)
         Right (rawHandle, after, limit) -> case parseEpisodeHandle rawHandle of
@@ -328,19 +286,7 @@ viewForwardTool tz dc =
           [ "展开一条转发聊天记录：传 [forward#<id>] 里的 <id>（容器消息的 message_id），",
             "返回里面的每条消息。嵌套的转发同样以 [forward#<id>] 出现，可以继续展开。"
           ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "message_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("[forward#<id>] 标记里的 id（可能是负数）" :: Text)
-                      ]
-                ],
-            "required" .= (["message_id"] :: [Text])
-          ],
+      toolSchema = toolObject [("message_id", integerParam "[forward#<id>] 标记里的 id（可能是负数）")] ["message_id"],
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid :: Int64) -> do
@@ -372,19 +318,7 @@ pokeTool dc =
             "回应别人戳你、提醒某人看消息、打招呼。",
             "一次任务最多戳一下，别对同一个人连戳。"
           ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "qq"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("要戳的人的 QQ号" :: Text)
-                      ]
-                ],
-            "required" .= (["qq"] :: [Text])
-          ],
+      toolSchema = toolObject [("qq", integerParam "要戳的人的 QQ号")] ["qq"],
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "qq")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (qq :: Int64) -> do

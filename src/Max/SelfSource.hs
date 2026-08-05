@@ -33,6 +33,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import System.FilePath (isPathSeparator, takeExtension, takeFileName, (</>))
+import Max.Util (tshow)
 
 data SourceMatch = SourceMatch
   { smPath :: !Text,
@@ -270,6 +271,3 @@ normalizePath path
 underPrefix :: Text -> Text -> Bool
 underPrefix "" _ = True
 underPrefix prefix path = path == prefix || (prefix <> "/") `T.isPrefixOf` path
-
-tshow :: (Show a) => a -> Text
-tshow = T.pack . show

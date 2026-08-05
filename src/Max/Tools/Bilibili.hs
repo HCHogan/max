@@ -26,6 +26,7 @@ import Max.Bilibili
 import Max.Effects.Http (Http, getBytesWithLegacyTls)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
+import Max.Tools.Schema (boolParam, stringParam, toolObject, withKeys)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolMultimodal)
 
@@ -61,24 +62,13 @@ viewBilibiliTool tz dc =
             "时长上限等细节见 use_skill 的 web 手册。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "url"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("B站视频链接 / BV号 / b23.tv 短链" :: Text)
-                      ],
-                  "with_video"
-                    .= object
-                      [ "type" .= ("boolean" :: Text),
-                        "default" .= True,
-                        "description" .= ("默认 true：下载整段视频附给你看（仅多模态可用）。false = 只要文本信息。" :: Text)
-                      ]
-                ],
-            "required" .= (["url"] :: [Text])
-          ],
+        toolObject
+          [ ("url", stringParam "B站视频链接 / BV号 / b23.tv 短链"),
+            ( "with_video",
+              withKeys ["default" .= True] (boolParam "默认 true：下载整段视频附给你看（仅多模态可用）。false = 只要文本信息。")
+            )
+          ]
+          ["url"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (rawUrl, withVideo) ->

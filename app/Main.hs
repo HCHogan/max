@@ -155,10 +155,10 @@ main = do
                 | Just wc <- [cfg.wechatpad]
                 ]
               deliveryTransports =
-                [oneBotDeliveryTransport PlatformQQ False qqEdge]
+                [oneBotDeliveryTransport PlatformQQ qqEdge]
                   <> [matrixDeliveryTransport httpRuntime matrixCfg | matrixCfg <- maybeToList cfg.matrix]
                   <> [iMessageDeliveryTransport httpRuntime iMessageCfg | iMessageCfg <- maybeToList cfg.imessage]
-                  <> [ oneBotDeliveryTransport PlatformWeChatPad False backend
+                  <> [ oneBotDeliveryTransport PlatformWeChatPad backend
                      | backend <- wechatEdges
                      ]
           runEff

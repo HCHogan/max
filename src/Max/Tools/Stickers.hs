@@ -34,6 +34,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.Effects.Embedding (Embedding, embedBatch, renderEmbeddingFault)
 import Max.Effects.Tools (Tool (..))
+import Max.Tools.Schema (stringParam, toolObject)
 import Max.Embedding (EmbeddingRecord (..))
 
 stickerToolsFor ::
@@ -77,19 +78,7 @@ findStickersTool =
             "（如\"嘲讽\"、\"开心的猫猫\"、\"无语\"）。返回若干候选，每个带一个整数 id 和简介。",
             "挑中后在回复里把 [sticker#<id>] 用 [split] 单独隔成一条就会发出去（本工具只搜不发）。"
           ],
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "query"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("想表达的情绪/内容，中文短语" :: Text)
-                      ]
-                ],
-            "required" .= (["query"] :: [Text])
-          ],
+      toolSchema = toolObject [("query", stringParam "想表达的情绪/内容，中文短语")] ["query"],
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "query")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (q :: Text) -> run q

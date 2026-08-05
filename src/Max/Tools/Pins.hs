@@ -23,6 +23,8 @@ import Max.Effects.Tools (Tool (..))
 import Max.Session (Session (..), SessionRegistry, loadSession, updateSession)
 import Max.Session qualified as Session
 import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId)
+import Max.Tools.Schema (integerParam, toolObject)
+import Max.Util (tshow)
 
 pinToolsFor ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
@@ -58,18 +60,7 @@ pinTool sessions defaultModel dc =
             "不需要请示用户，直接 pin 即可。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "message_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("要固定的消息 id（上下文行里的 #<id>）" :: Text)
-                      ]
-                ],
-            "required" .= (["message_id"] :: [Text])
-          ],
+        toolObject [("message_id", integerParam "要固定的消息 id（上下文行里的 #<id>）")] ["message_id"],
       toolRun = \args -> case parseEither (withObject "args" parseMessageId) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid ->
@@ -110,18 +101,7 @@ unpinTool sessions defaultModel dc =
             "看到里面有过时、已解决或不再相关的内容时，主动清理。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "message_id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("要移除的消息 id（[pinned] 行里的 #<id>）" :: Text)
-                      ]
-                ],
-            "required" .= (["message_id"] :: [Text])
-          ],
+        toolObject [("message_id", integerParam "要移除的消息 id（[pinned] 行里的 #<id>）")] ["message_id"],
       toolRun = \args -> case parseEither (withObject "args" parseMessageId) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
@@ -139,6 +119,3 @@ unpinTool sessions defaultModel dc =
 
 parseMessageId :: Object -> Parser Int64
 parseMessageId o = o .: "message_id"
-
-tshow :: (Show a) => a -> Text
-tshow = T.pack . show

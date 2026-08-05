@@ -28,7 +28,7 @@ where
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -54,6 +54,7 @@ import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
 import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities)
+import Max.Tools.Schema (integerParam, stringParam, toolObject, withKeys)
 import Max.Util (withTempDirectory)
 import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..))
 import OneBot.Types (GroupId (..), MessageId (..), isPrivateChat, privateChatUserId)
@@ -104,19 +105,9 @@ listRecentFilesTool tz (GroupId gid) =
         \sender, size, 'ready').  Once ready, import_file_to_sandbox takes \
         \the file_id.",
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "limit"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("Max results (default 10, max 50)." :: Text),
-                        "default" .= (10 :: Int)
-                      ]
-                ],
-            "required" .= ([] :: [Text])
-          ],
+        toolObject
+          [("limit", withKeys ["default" .= (10 :: Int)] (integerParam "Max results (default 10, max 50)."))]
+          [],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right lim -> do
@@ -141,7 +132,7 @@ listRecentFilesTool tz (GroupId gid) =
           "time" .= fmtDateHMS tz r.frReceivedAt,
           "bytes" .= r.frBytesSize,
           "mime" .= r.frMimeType,
-          "ready" .= (case r.frBlobRef of Just _ -> True; Nothing -> False)
+          "ready" .= isJust r.frBlobRef
         ]
 
 --------------------------------------------------------------------------------
@@ -164,20 +155,12 @@ importFileToSandboxTool scope gid sandboxes =
         "Copy a group file (file_id from list_recent_files) into a sandbox's \
         \/work.  Fails while its download hasn't finished (ready=false).",
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "file_id" .= stringField "file_id from list_recent_files.",
-                  "sandbox_id" .= stringField "Target sandbox.",
-                  "dest_path"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("Path inside /work (default: original file name)." :: Text)
-                      ]
-                ],
-            "required" .= (["file_id", "sandbox_id"] :: [Text])
-          ],
+        toolObject
+          [ ("file_id", stringParam "file_id from list_recent_files."),
+            ("sandbox_id", stringParam "Target sandbox."),
+            ("dest_path", stringParam "Path inside /work (default: original file name).")
+          ]
+          ["file_id", "sandbox_id"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (fid, sid, mDest) -> do
@@ -238,20 +221,12 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
         \(charts, screenshots; a few MB max — larger or non-image artifacts go \
         \via send_file_from_sandbox).  Optional 'caption' text precedes it.",
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "sandbox_id" .= stringField "Sandbox the image lives in.",
-                  "path" .= stringField "Path to the image file (relative to /work, or absolute).",
-                  "caption"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("Optional caption to send before the image." :: Text)
-                      ]
-                ],
-            "required" .= (["sandbox_id", "path"] :: [Text])
-          ],
+        toolObject
+          [ ("sandbox_id", stringParam "Sandbox the image lives in."),
+            ("path", stringParam "Path to the image file (relative to /work, or absolute)."),
+            ("caption", stringParam "Optional caption to send before the image.")
+          ]
+          ["sandbox_id", "path"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (sid, path, mCaption) -> do
@@ -380,20 +355,12 @@ sendFileFromSandboxTool gid sandboxes =
         "Upload a file from a sandbox into the group's 群文件 (any artifact: \
         \.csv/.pdf/.zip/…).  Optional 'name' overrides the displayed filename.",
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "sandbox_id" .= stringField "Sandbox the file lives in.",
-                  "path" .= stringField "Path to the file (relative to /work, or absolute).",
-                  "name"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("Display name in QQ (default: basename of path)." :: Text)
-                      ]
-                ],
-            "required" .= (["sandbox_id", "path"] :: [Text])
-          ],
+        toolObject
+          [ ("sandbox_id", stringParam "Sandbox the file lives in."),
+            ("path", stringParam "Path to the file (relative to /work, or absolute)."),
+            ("name", stringParam "Display name in QQ (default: basename of path).")
+          ]
+          ["sandbox_id", "path"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (sid, path, mName) -> do
@@ -444,10 +411,3 @@ sendFileFromSandboxTool gid sandboxes =
 
 --------------------------------------------------------------------------------
 -- Helpers.
-
-stringField :: Text -> Value
-stringField desc =
-  object
-    [ "type" .= ("string" :: Text),
-      "description" .= desc
-    ]

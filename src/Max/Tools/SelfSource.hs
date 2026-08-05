@@ -11,6 +11,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Max.BuildInfo (gitRev)
 import Max.Effects.Tools (Tool (..))
+import Max.Tools.Schema (boundedIntegerParam, paramOfType, stringParam, toolObject, withKeys)
 import Max.SelfSource
 
 selfSourceTools :: [Tool es]
@@ -28,53 +29,16 @@ inspectSourceTool =
             "source defaults are not evidence of the production effective configuration."
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "action"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "enum" .= (["search", "read", "tree"] :: [Text])
-                      ],
-                  "query"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("search: case-insensitive literal code/text" :: Text)
-                      ],
-                  "path"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("read: exact path; tree: optional directory prefix" :: Text)
-                      ],
-                  "path_prefix"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("search: optional directory/file prefix" :: Text)
-                      ],
-                  "start_line"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "minimum" .= (1 :: Int),
-                        "default" .= (1 :: Int)
-                      ],
-                  "line_count"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "minimum" .= (1 :: Int),
-                        "maximum" .= (240 :: Int),
-                        "default" .= (120 :: Int)
-                      ],
-                  "limit"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "minimum" .= (1 :: Int),
-                        "maximum" .= (300 :: Int),
-                        "default" .= (20 :: Int)
-                      ]
-                ],
-            "required" .= (["action"] :: [Text])
-          ],
+        toolObject
+          [ ("action", withKeys ["enum" .= (["search", "read", "tree"] :: [Text])] (paramOfType "string")),
+            ("query", stringParam "search: case-insensitive literal code/text"),
+            ("path", stringParam "read: exact path; tree: optional directory prefix"),
+            ("path_prefix", stringParam "search: optional directory/file prefix"),
+            ("start_line", withKeys ["minimum" .= (1 :: Int), "default" .= (1 :: Int)] (paramOfType "integer")),
+            ("line_count", boundedIntegerParam 1 240 120),
+            ("limit", boundedIntegerParam 1 300 20)
+          ]
+          ["action"],
       toolRun = \args -> case parseEither (withObject "inspect_source args" parseRequest) args of
         Left err -> pure (Left ("bad args: " <> T.pack err))
         Right request -> pure (runRequest request)

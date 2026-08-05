@@ -52,6 +52,7 @@ import Max.Browser.Registry
     withBrowserSession,
   )
 import Max.Effects.Tools (Tool (..))
+import Max.Tools.Schema (boolParam, enumParam, numberParam, stringParam, toolObject)
 import Max.MCP.Client (mcpTextContent)
 import OneBot.Types (GroupId)
 
@@ -153,30 +154,6 @@ passThrough (Object o) keys = [(k, x) | k <- keys, Just x <- [KM.lookup k o]]
 passThrough _ _ = []
 
 --------------------------------------------------------------------------------
--- Schemas.
-
-obj :: [(Key, Value)] -> [Text] -> Value
-obj props required =
-  object
-    [ "type" .= ("object" :: Text),
-      "properties" .= object props,
-      "required" .= required
-    ]
-
-str :: Text -> Value
-str desc = object ["type" .= ("string" :: Text), "description" .= desc]
-
-boolP :: Text -> Value
-boolP desc = object ["type" .= ("boolean" :: Text), "description" .= desc]
-
-numP :: Text -> Value
-numP desc = object ["type" .= ("number" :: Text), "description" .= desc]
-
-enumP :: [Text] -> Text -> Value
-enumP vals desc =
-  object ["type" .= ("string" :: Text), "enum" .= vals, "description" .= desc]
-
---------------------------------------------------------------------------------
 -- Tools.
 
 navigateTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
@@ -187,7 +164,7 @@ navigateTool gid reg =
         "Open a URL in the group's stealth browser (camoufox). Starts the browser on \
         \first use and reopens it transparently if the session expired. Returns the \
         \page's visible text; call browser_snapshot for interactive elements.",
-      toolSchema = obj [("url", str "Absolute URL to open, e.g. https://example.com")] ["url"],
+      toolSchema = toolObject [("url", stringParam "Absolute URL to open, e.g. https://example.com")] ["url"],
       toolRun = \args -> liftIO $ do
         case argText args "url" of
           Nothing -> pure (Left "missing required argument: url")
@@ -237,8 +214,8 @@ viewZhihuTool gid reg =
         \知乎链接直接传）。自动过知乎的首访验证，稍慢是正常的；翻页看更多的\
         \流程见 use_skill 的 web 手册。",
       toolSchema =
-        obj
-          [("url", str "知乎链接（zhihu.com/question/…、…/answer/…、zhuanlan.zhihu.com/p/…）")]
+        toolObject
+          [("url", stringParam "知乎链接（zhihu.com/question/…、…/answer/…、zhuanlan.zhihu.com/p/…）")]
           ["url"],
       toolRun = \args -> liftIO $ do
         case argText args "url" of
@@ -301,9 +278,9 @@ snapshotTool gid reg =
         \this after navigating or after any action that changes the page; selectors \
         \from an old snapshot may be stale.",
       toolSchema =
-        obj
-          [ ("selector", str "Optional CSS selector to limit the snapshot to one element."),
-            ("maxElements", numP "Maximum interactive elements to return (default 100).")
+        toolObject
+          [ ("selector", stringParam "Optional CSS selector to limit the snapshot to one element."),
+            ("maxElements", numberParam "Maximum interactive elements to return (default 100).")
           ]
           [],
       toolRun = \args ->
@@ -325,7 +302,7 @@ clickTool gid reg =
         "Click an element identified by a CSS selector from the latest browser_snapshot. \
         \Returns a fresh snapshot after the click.",
       toolSchema =
-        obj [("selector", str "CSS selector of the element, from the latest snapshot.")] ["selector"],
+        toolObject [("selector", stringParam "CSS selector of the element, from the latest snapshot.")] ["selector"],
       toolRun = \args -> liftIO $ case argText args "selector" of
         Nothing -> pure (Left "missing required argument: selector")
         Just sel ->
@@ -341,10 +318,10 @@ typeTool gid reg =
         "Fill text into an editable element identified by a CSS selector from the latest \
         \snapshot (replaces its current value). Set submit=true to press Enter afterwards.",
       toolSchema =
-        obj
-          [ ("selector", str "CSS selector of the field, from the latest snapshot."),
-            ("text", str "Text to fill in."),
-            ("submit", boolP "Press Enter after filling (default false).")
+        toolObject
+          [ ("selector", stringParam "CSS selector of the field, from the latest snapshot."),
+            ("text", stringParam "Text to fill in."),
+            ("submit", boolParam "Press Enter after filling (default false).")
           ]
           ["selector", "text"],
       toolRun = \args -> liftIO $ case (argText args "selector", argText args "text") of
@@ -365,9 +342,9 @@ pressKeyTool gid reg =
         "Press a single key, e.g. Enter, ArrowDown, Escape — on a specific element \
         \(selector) or the currently focused one.",
       toolSchema =
-        obj
-          [ ("key", str "Key name, e.g. Enter or ArrowDown."),
-            ("selector", str "Optional CSS selector to focus before pressing.")
+        toolObject
+          [ ("key", stringParam "Key name, e.g. Enter or ArrowDown."),
+            ("selector", stringParam "Optional CSS selector to focus before pressing.")
           ]
           ["key"],
       toolRun = \args -> liftIO $ case argText args "key" of
@@ -391,11 +368,11 @@ waitForTool gid reg =
         \load state. Give at least one of selector / loadState. Useful after an action \
         \that triggers async loading.",
       toolSchema =
-        obj
-          [ ("selector", str "CSS selector to wait on."),
-            ("state", enumP ["attached", "detached", "visible", "hidden"] "Element state to wait for (default visible)."),
-            ("loadState", enumP ["domcontentloaded", "load", "networkidle"] "Page load state to wait for."),
-            ("timeout", numP "Timeout in milliseconds (100-60000).")
+        toolObject
+          [ ("selector", stringParam "CSS selector to wait on."),
+            ("state", enumParam ["attached", "detached", "visible", "hidden"] "Element state to wait for (default visible)."),
+            ("loadState", enumParam ["domcontentloaded", "load", "networkidle"] "Page load state to wait for."),
+            ("timeout", numberParam "Timeout in milliseconds (100-60000).")
           ]
           [],
       toolRun = \args ->
@@ -415,10 +392,10 @@ scrollTool gid reg =
         "Scroll the page (or an element) vertically/horizontally. Positive deltaY \
         \scrolls down (default 600 px). Returns a fresh snapshot afterwards.",
       toolSchema =
-        obj
-          [ ("deltaY", numP "Vertical scroll amount in px (negative scrolls up; default 600)."),
-            ("deltaX", numP "Horizontal scroll amount in px."),
-            ("selector", str "Optional CSS selector of a scrollable element.")
+        toolObject
+          [ ("deltaY", numberParam "Vertical scroll amount in px (negative scrolls up; default 600)."),
+            ("deltaX", numberParam "Horizontal scroll amount in px."),
+            ("selector", stringParam "Optional CSS selector of a scrollable element.")
           ]
           [],
       toolRun = \args ->

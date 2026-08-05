@@ -27,6 +27,8 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
 import Max.Effects.Tools (Tool (..))
+import Max.Tools.Schema (integerParam, stringParam, toolObject, withKeys)
+import Max.Util (tshow)
 import Max.Http.Json (postAndParse)
 import Max.HttpRuntime (HttpRuntime)
 
@@ -71,28 +73,15 @@ webSearchTool runtime cfg =
             "fetch from a sandbox if you need the full page text."
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "query"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("Natural-language search query." :: Text)
-                      ],
-                  "max_results"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description"
-                          .= ( "Number of results to return (default "
-                                 <> T.pack (show cfg.scDefaultMaxResults)
-                                 <> ", max 10)."
-                             ),
-                        "default" .= cfg.scDefaultMaxResults
-                      ]
-                ],
-            "required" .= (["query"] :: [Text])
-          ],
+        toolObject
+          [ ("query", stringParam "Natural-language search query."),
+            ( "max_results",
+              withKeys
+                ["default" .= cfg.scDefaultMaxResults]
+                (integerParam ("Number of results to return (default " <> tshow cfg.scDefaultMaxResults <> ", max 10)."))
+            )
+          ]
+          ["query"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (q, mMax) -> do

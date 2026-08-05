@@ -124,10 +124,6 @@ parseModelChunk roster t0 =
             NText text : nodes -> NText (" " <> text) : nodes
             nodes -> NText " " : nodes
 
-    nonBlank value =
-      let stripped = T.strip value
-       in if T.null stripped then Nothing else Just stripped
-
 mediaRefMeta :: MediaKind -> Maybe Text -> MediaMeta
 mediaRefMeta kind description =
   MediaMeta

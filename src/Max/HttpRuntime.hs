@@ -12,6 +12,8 @@ module Max.HttpRuntime
     readBodyBounded,
     classifyTransportException,
     renderTransportFailure,
+    queryText,
+    pathPiece,
   )
 where
 
@@ -20,6 +22,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Max.Util (trySyncIO)
 import Network.Connection (TLSSettings (..))
 import Network.HTTP.Client
@@ -40,6 +43,7 @@ import Network.HTTP.Client
 import Network.HTTP.Client.TLS (mkManagerSettings, tlsManagerSettings)
 import Network.HTTP.Types.Header (ResponseHeaders)
 import Network.HTTP.Types.Status (Status, statusCode, statusIsSuccessful)
+import Network.HTTP.Types.URI (urlEncode)
 import Network.TLS qualified as TLS
 import System.X509 (getSystemCertificateStore)
 
@@ -294,3 +298,15 @@ readPreview requestedLimit bodyReader = go (max 0 requestedLimit) []
 
 defaultExceptionPreviewLimit :: Int
 defaultExceptionPreviewLimit = 1024
+
+-- | Percent-encoded query string, empty when there is nothing to encode.
+-- Every adapter that builds URLs by hand needs exactly this; keeping one
+-- copy beside the runtime keeps their escaping identical.
+queryText :: [(Text, Text)] -> Text
+queryText [] = ""
+queryText queryPairs =
+  "?" <> T.intercalate "&" [pathPiece key <> "=" <> pathPiece value | (key, value) <- queryPairs]
+
+-- | Percent-encode one path or query component.
+pathPiece :: Text -> Text
+pathPiece = TE.decodeUtf8 . urlEncode True . TE.encodeUtf8

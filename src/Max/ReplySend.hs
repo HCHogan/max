@@ -85,6 +85,7 @@ import Max.Reply
     stripHallucinatedTokens,
   )
 import Max.Sticker (ResolvedSticker (..), resolveSticker)
+import Max.Util (readIntegral)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 import System.Random (randomRIO)
 
@@ -291,9 +292,9 @@ sendAndPersistReply rt budget rawBody
     mentionRoster =
       MentionRoster
         { known = \(NativeUserId native) ->
-            case reads (T.unpack native) of
-              [(nativeId, "")] -> maybe True (Set.member (UserId nativeId)) rt.rtMentionable
-              _ -> False,
+            case readIntegral native of
+              Just nativeId -> maybe True (Set.member (UserId nativeId)) rt.rtMentionable
+              Nothing -> False,
           names = [(display, NativeUserId (T.pack (show native))) | (display, UserId native) <- rt.rtRosterNames]
         }
 

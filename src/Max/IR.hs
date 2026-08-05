@@ -56,6 +56,7 @@ module Max.IR
     plainText,
     humanBytes,
     truncateText,
+    nonBlank,
 
     -- * Node-list utilities
     mergeText,

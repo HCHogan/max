@@ -13,7 +13,6 @@ import Control.Monad (forM, unless, when)
 import Data.Aeson (Result (..), Value, fromJSON)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple
@@ -26,9 +25,10 @@ import Database.PostgreSQL.Simple
     withTransaction,
   )
 import Database.PostgreSQL.Simple.FromRow qualified as FromRow
-import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Max.DB.Connection (DbConfig (..), DbPool, closeDbPool, newDbPool, withConn)
 import Max.DB.Migrations (runMigrations)
+import Effectful (runEff)
+import Effectful.PostgreSQL.Connection (runWithConnection)
 import Max.IR
   ( Body (..),
     MentionTarget (..),
@@ -36,10 +36,11 @@ import Max.IR
     Phase (Canonical),
   )
 import Max.IR.Prompt (promptCanonicalText)
-import Max.Platform.Store (expiredSendingDeliverySql)
+import Max.Platform.Store (deliveryMentionNatives, expiredSendingDeliverySql)
 import Max.Platform.Types
-  ( NativeUserId (..),
-    PrincipalIdentityId (..),
+  ( EndpointId (..),
+    NativeUserId,
+    PrincipalIdentityId,
     parsePlatform,
   )
 import System.Environment (getArgs, lookupEnv)
@@ -226,38 +227,20 @@ verifyProjections connection = do
           | expected /= row.renderedText
         ]
 
+-- | The gate must resolve mentions exactly the way the writer did, so it
+-- calls the writer's own resolution instead of keeping a second copy of the
+-- query.  The two did drift once: only this one learned to prefer the
+-- mentioned identity itself.
 mentionNatives ::
   Connection ->
   Int64 ->
   Body 'Canonical ->
   IO (Map PrincipalIdentityId NativeUserId)
-mentionNatives _ _ (Body []) = pure Map.empty
-mentionNatives connection endpoint body
-  | null identities = pure Map.empty
-  | otherwise = do
-      rows <-
-        query
-          connection
-          "SELECT DISTINCT ON (source.principal_identity_id) \
-          \       source.principal_identity_id, destination.native_user_id \
-          \FROM principal_identities source \
-          \JOIN conversation_endpoints endpoint ON endpoint.endpoint_id = ? \
-          \JOIN principal_identities destination \
-          \  ON destination.principal_id = source.principal_id \
-          \ AND destination.platform_account_id = endpoint.platform_account_id \
-          \WHERE source.principal_identity_id = ANY(?) \
-          \ORDER BY source.principal_identity_id, destination.updated_at DESC, \
-          \         destination.principal_identity_id DESC"
-          (endpoint, PGArray (map unPrincipalIdentityId identities))
-      pure . Map.fromList $
-        [ (PrincipalIdentityId identity, NativeUserId native)
-          | (identity, native) <- (rows :: [(Int64, Text)])
-        ]
-  where
-    identities =
-      [ identity
-        | NMention (MentionIdentity identity) _ <- body.nodes
-      ]
+mentionNatives connection endpoint body =
+  runEff . runWithConnection connection $
+    deliveryMentionNatives
+      (EndpointId endpoint)
+      [identity | NMention (MentionIdentity identity) _ <- body.nodes]
 
 scalarCount :: Connection -> Query -> IO Int64
 scalarCount connection sql = do
@@ -268,15 +251,12 @@ scalarCount connection sql = do
 
 schemaChecks :: [(String, Query)]
 schemaChecks =
-  [ ( "required final migrations missing",
-      "SELECT count(*) FROM (VALUES \
-      \ ('055_canonical_content_v2.sql'), ('056_delivery_lowering.sql'), \
-      \ ('057_capability_tiers.sql'), ('058_work_notifications.sql'), \
-      \ ('059_meta_event_outbox.sql'), ('060_canonical_forward_children.sql'), \
-      \ ('061_remove_legacy_message_writers.sql'), ('062_canonical_source_hash.sql'), \
-      \ ('063_admin_timeline_notifications.sql'), \
-      \ ('064_admin_timeline_state_notifications.sql') \
-      \) required(filename) \
+    -- The 55-64 ADR 003 chain was squashed into one production baseline, and
+    -- 'reconcileSquash' rewrites schema_migrations to record only that file.
+    -- Requiring the individual pre-squash names now fails on every database,
+    -- including the one this gate exists to protect.
+  [ ( "post-cutover schema baseline missing",
+      "SELECT count(*) FROM (VALUES ('000_baseline.sql')) required(filename) \
       \LEFT JOIN schema_migrations migration USING (filename) \
       \WHERE migration.filename IS NULL"
     ),

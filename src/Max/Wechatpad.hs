@@ -65,7 +65,8 @@ import Max.IR.Digest (digest)
 import Max.IR.Lower (OutboundCaps, textOnlyCaps)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
-  ( IngestResult (..),
+  ( IngestOptions (..),
+    IngestResult (..),
     NewIngest (..),
     RegisteredEndpoint (..),
     defaultIngestOptions,
@@ -128,21 +129,30 @@ wechatpadBackend runtime runDb cfg =
   PlatformBackend
     { pbPlatform = platformName,
       pbName = platformName,
-      pbSend = \a -> sendOut a >>= either (pure . Left) (const (pure (Right ()))),
+      pbSend = sendOut,
       pbCall = \a _timeoutMs ->
         sendOut a >>= \case
           Left err -> pure (Left err)
-          Right mid ->
+          Right () ->
             pure . Right $
               Response
                 { status = "ok",
                   retcode = 0,
-                  payload = object ["message_id" .= mid],
+                  -- The relay acknowledges a send without returning any
+                  -- identifier for it.  Reporting no @message_id@ is the
+                  -- honest answer: the delivery parks as accepted-unconfirmed
+                  -- until the bot's own message comes back on the sync stream
+                  -- carrying WeChat's real id ('wechatpadWorker').  A
+                  -- synthesised receipt would be worse than none — it is
+                  -- indistinguishable from a real native id to every reply
+                  -- and reaction that later resolves a target, and derived
+                  -- from the text it collides across identical messages.
+                  payload = object [],
                   echo = ""
                 }
     }
   where
-    sendOut :: Action -> IO (Either Text Int64)
+    sendOut :: Action -> IO (Either Text ())
     sendOut = \case
       SendGroupMsg (GroupId g) segs -> deliver "channel" g segs
       SendPrivateMsg (UserId u) segs -> deliver "user" u segs
@@ -156,14 +166,8 @@ wechatpadBackend runtime runDb cfg =
           case wireText segs of
             Left err -> pure (Left err)
             Right body
-              | T.null (T.strip body) -> pure (Right 0)
-              | otherwise -> postText runtime cfg to body >>= \case
-                Left err -> pure (Left err)
-                Right () -> do
-                  -- Allocate a synthetic id for the sent message so
-                  -- the caller can persist the bot's own line.
-                  mid <- runDb (PlatformIds.mappedId platformName "message" ("sent:" <> to <> ":" <> T.take 32 body))
-                  pure (Right mid)
+              | T.null (T.strip body) -> pure (Right ())
+              | otherwise -> postText runtime cfg to body
 
 -- | Protocol emission only.  Any non-text segment is a violated lowering
 -- contract, never an invitation for an adapter-local fallback.
@@ -271,30 +275,36 @@ wechatpadWorker cfg = localDomain "wechatpad" $ do
       | otherwise = do
           let (parsedSender, body0) = splitSender wm.wmContent
               senderWxid = if T.null parsedSender then wm.wmFrom else parsedSender
-          -- The bot's own messages echo back on the sync stream.
-          unless (senderWxid == cfg.wpSelfWxid) $ do
-            received <- liftIO getCurrentTime
-            let endpoint = endpoints Map.! wm.wmFrom
-                nativeEvent = if wm.wmNewMsgId == 0 then wm.wmMsgId else T.pack (show wm.wmNewMsgId)
-                content = wechatInboundBody cfg.wpSelfWxid cfg.wpBotName wm.wmMsgType body0
-                options = defaultIngestOptions
-                envelope =
-                  InboundEnvelope
-                    { endpointId = endpoint.endpointId,
-                      nativeEventId = NativeEventId nativeEvent,
-                      senderNativeId = NativeUserId senderWxid,
-                      senderDisplayName = pushNick wm.wmPushContent,
-                      occurredAt =
-                        if wm.wmCreateTime > 0
-                          then posixSecondsToUTCTime (fromIntegral wm.wmCreateTime)
-                          else received,
-                      receivedAt = received,
-                      eventKind = EventMessage,
-                      content,
-                      relations = [],
-                      sourceCursor = Nothing,
-                      rawPayload = Just frame
-                    }
+              -- The relay hands the bot's own messages back on the sync
+              -- stream, and that echo is the only receipt WeChat ever gives:
+              -- it carries the real native id the send call withheld.  Offer
+              -- it as reconciliation evidence instead of discarding it, but
+              -- never let it become a second copy of a message max already
+              -- authored.
+              selfEcho = senderWxid == cfg.wpSelfWxid
+          received <- liftIO getCurrentTime
+          let endpoint = endpoints Map.! wm.wmFrom
+              nativeEvent = if wm.wmNewMsgId == 0 then wm.wmMsgId else T.pack (show wm.wmNewMsgId)
+              content = wechatInboundBody cfg.wpSelfWxid cfg.wpBotName wm.wmMsgType body0
+              options = defaultIngestOptions {reconcileEchoOnly = selfEcho}
+              envelope =
+                InboundEnvelope
+                  { endpointId = endpoint.endpointId,
+                    nativeEventId = NativeEventId nativeEvent,
+                    senderNativeId = NativeUserId senderWxid,
+                    senderDisplayName = pushNick wm.wmPushContent,
+                    occurredAt =
+                      if wm.wmCreateTime > 0
+                        then posixSecondsToUTCTime (fromIntegral wm.wmCreateTime)
+                        else received,
+                    receivedAt = received,
+                    eventKind = EventMessage,
+                    content,
+                    relations = [],
+                    sourceCursor = Nothing,
+                    rawPayload = Just frame
+                  }
+          unless selfEcho $
             logInfo "wechat message" $
               object
                 [ "chatroom" .= wm.wmFrom,
@@ -302,16 +312,28 @@ wechatpadWorker cfg = localDomain "wechatpad" $ do
                   "len" .= T.length body0,
                   "create_time" .= wm.wmCreateTime
                 ]
-            ingestEnvelope options envelope >>= \case
-              Ingested fresh ->
-                logInfo "wechat event ingested" $
-                  object
-                    [ "native_event_id" .= nativeEvent,
-                      "canonical_message_id" .= fresh.canonicalMessageId,
-                      "content" .= digest fresh.canonicalBody
-                    ]
-              AlreadyIngested {} -> pure ()
-              DeliveryEcho {} -> pure ()
+          ingestEnvelope options envelope >>= \case
+            Ingested fresh ->
+              logInfo "wechat event ingested" $
+                object
+                  [ "native_event_id" .= nativeEvent,
+                    "canonical_message_id" .= fresh.canonicalMessageId,
+                    "content" .= digest fresh.canonicalBody
+                  ]
+            AlreadyIngested {} -> pure ()
+            DeliveryEcho canonical ->
+              logInfo "wechat delivery confirmed by echo" $
+                object
+                  [ "native_event_id" .= nativeEvent,
+                    "canonical_message_id" .= canonical
+                  ]
+            -- Every send whose echo does not match a delivery leaves that
+            -- delivery accepted-unconfirmed: two identical texts in flight
+            -- are deliberately ambiguous, and a mirror copy carries an
+            -- attribution prefix the canonical body does not.
+            EchoUnmatched ->
+              logInfo "wechat self echo matched no delivery" $
+                object ["native_event_id" .= nativeEvent, "len" .= T.length body0]
 
 -- | Chatroom frames carry the sender folded into the content as
 -- @wxid:\\ntext@; a frame without that shape belongs to the room

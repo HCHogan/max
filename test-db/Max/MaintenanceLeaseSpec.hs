@@ -1,7 +1,7 @@
 module Max.MaintenanceLeaseSpec (spec) where
 
 import Database.PostgreSQL.Simple (execute_)
-import Helpers (truncateAll, withDb)
+import Helpers (requireJust, truncateAll, withDb)
 import Max.DB.Connection (DbPool, withConn)
 import Max.MaintenanceLease
 import Test.Hspec
@@ -42,8 +42,3 @@ spec pool = before_ (truncateAll pool) $ describe "Max.MaintenanceLease" $ do
     withDb pool (releaseMaintenanceLease first) `shouldReturn` False
     withDb pool (renewMaintenanceLease second 60) `shouldReturn` True
     withDb pool (releaseMaintenanceLease second) `shouldReturn` True
-
-requireJust :: String -> Maybe a -> IO a
-requireJust label = \case
-  Just value -> pure value
-  Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)

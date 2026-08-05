@@ -4,10 +4,9 @@ import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Int (Int64)
 import Data.Text (Text)
-import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawMessage, truncateAll, withDb)
+import Helpers (insertRawMessage, testTime, truncateAll, withDb)
 import Max.Context (ContextDecision (..), ContextTrace (..), contextBudget)
 import Max.ContextAdmin
 import Max.ContextTraceStore (ContextPlanTraceRow (..), listContextPlanTraces, recordContextPlanTrace)
@@ -152,6 +151,3 @@ groupId = 100
 otherGroup = 101
 memberId = 2001
 botId = 1000
-
-testTime :: UTCTime
-testTime = read "2026-08-02 12:00:00 UTC"

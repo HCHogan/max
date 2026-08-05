@@ -286,6 +286,7 @@ handleEvents q fetchSig mIntent = loop
                       ]
                 AlreadyIngested {} -> pure ()
                 DeliveryEcho {} -> pure ()
+                EchoUnmatched -> pure ()
         EvPoke pk -> onPoke mIntent pk
         -- Auto-approve friend requests: being friends is what makes
         -- private query delivery (silent commands) reliable on QQ —
@@ -336,6 +337,7 @@ persist source raw gm =
               pure (IngestDurable fresh.canonicalMessageId)
             AlreadyIngested _ -> pure IngestDuplicate
             DeliveryEcho _ -> pure IngestDuplicate
+            EchoUnmatched -> pure IngestDuplicate
       | otherwise = error ("non-QQ event entered the OneBot ingress queue: " <> T.unpack source)
 
 -- | Recover the commit-to-runtime crash window.  The source adapter may call

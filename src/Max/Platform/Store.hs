@@ -61,7 +61,7 @@ module Max.Platform.Store
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (forM, forM_)
+import Control.Monad (forM, forM_, when)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
   ( KeyValue ((.=)),
@@ -81,7 +81,7 @@ import Data.Int (Int64)
 import Data.List (find)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust, listToMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -105,7 +105,7 @@ import Max.IR.Lower
     platformDisplayLabel,
     Tier (..),
   )
-import Max.IR.Prompt (promptText)
+import Max.IR.Prompt (promptCanonicalText)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Types
 import Text.Read (readMaybe)
@@ -189,7 +189,15 @@ data IngestOptions = IngestOptions
     -- | Raw OneBot segment provenance.  Only the QQ adapter may populate it;
     -- every other platform leaves @messages.segments@ as the frozen empty
     -- array and uses canonical content exclusively.
-    qqProvenanceSegments :: !(Maybe Value)
+    qqProvenanceSegments :: !(Maybe Value),
+    -- | Offer this event only as evidence about an outstanding delivery.  A
+    -- match confirms that delivery exactly as an ordinary echo does; no match
+    -- stores nothing at all and answers 'EchoUnmatched'.  Adapters whose own
+    -- sends come back on the inbound stream use this to prove a
+    -- non-idempotent send landed without minting a second copy of the bot's
+    -- message whenever the platform's rendering differs from the canonical
+    -- body.
+    reconcileEchoOnly :: !Bool
   }
   deriving stock (Eq, Show, Generic)
 
@@ -200,13 +208,17 @@ defaultIngestOptions =
       createDispatch = True,
       createMirrorDeliveries = True,
       transcriptKind = "chat",
-      qqProvenanceSegments = Nothing
+      qqProvenanceSegments = Nothing,
+      reconcileEchoOnly = False
     }
 
 data IngestResult
   = Ingested !NewIngest
   | AlreadyIngested !CanonicalMessageId
   | DeliveryEcho !CanonicalMessageId
+  | -- | A 'reconcileEchoOnly' event that matched no delivery.  Nothing was
+    -- written, so the caller may drop it.
+    EchoUnmatched
   deriving stock (Eq, Show, Generic)
 
 data NewIngest = NewIngest
@@ -827,6 +839,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
   reconciled <- reconcileDeliveryEcho endpoint identityId contentValue safeRaw rawTruncated
   case reconciled of
     Just cid -> pure (DeliveryEcho (CanonicalMessageId cid))
+    Nothing | options.reconcileEchoOnly -> pure EchoUnmatched
     Nothing -> do
       reserved <-
         query
@@ -858,9 +871,9 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             -- A pre-hardening writer may have committed an incomplete
             -- reservation. The per-native-event transaction lock makes this
             -- caller its sole repair owner.
-            [Only Nothing] -> insertCanonical endpoint identityId resolvedCanonicalBody contentValue
+            [Only Nothing] -> insertCanonical endpoint identityId identities resolvedCanonicalBody contentValue
             _ -> error "ingestEnvelope: event reservation disappeared"
-        [_] -> insertCanonical endpoint identityId resolvedCanonicalBody contentValue
+        [_] -> insertCanonical endpoint identityId identities resolvedCanonicalBody contentValue
         _ -> error "ingestEnvelope: event reservation returned multiple rows"
   where
     options = sanitizeIngestOptions unsafeOptions
@@ -964,11 +977,15 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
         isReaction ReactsTo {} = True
         isReaction _ = False
 
-    insertCanonical endpoint identityId resolvedBody contentValue = do
+    insertCanonical endpoint identityId identities resolvedBody contentValue = do
       let platformName = endpoint.erPlatform
           NativeEventId nativeEvent = envelope.nativeEventId
           NativeUserId nativeUser = envelope.senderNativeId
-          rendered = promptText (parsePlatform endpoint.erPlatform) envelope.content
+          rendered =
+            promptCanonicalText
+              (parsePlatform endpoint.erPlatform)
+              (identityNatives identities)
+              resolvedBody
           provenanceSegments
             | platformName == "qq" = fromMaybe (toJSON ([] :: [Value])) options.qqProvenanceSegments
             | otherwise = toJSON ([] :: [Value])
@@ -1169,7 +1186,8 @@ enqueueOutbound draft = withTransaction $ do
     Just identity -> pure identity
     Nothing -> error "enqueueOutbound: bot identity missing from batch"
   canonicalBody <- resolveBodyMentions identities draft.canonicalBody
-  let renderedProjection = promptText (parsePlatform platformName) draft.canonicalBody
+  let renderedProjection =
+        promptCanonicalText (parsePlatform platformName) (identityNatives identities) canonicalBody
   principalRows <-
     query
       "SELECT principal_id FROM principal_identities WHERE principal_identity_id = ?"
@@ -1214,7 +1232,7 @@ enqueueOutbound draft = withTransaction $ do
         "max:" <> T.pack (show canonical),
         platformName
       )
-  if inserted /= 1 then error "enqueueOutbound: canonical insert did not affect one row" else pure ()
+  when (inserted /= 1) (error "enqueueOutbound: canonical insert did not affect one row")
   -- Delivery adapters resolve replies through the canonical relation table,
   -- not through the legacy compatibility column.  Keeping both projections
   -- in the same publish transaction lets Matrix preserve native replies and
@@ -1243,7 +1261,7 @@ enqueueOutbound draft = withTransaction $ do
       \ WHERE e.conversation_id = ? AND e.enabled AND a.enabled \
       \   AND (?::boolean OR e.endpoint_id = ?) \
       \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
-      (canonical, canonical, conversation, draft.sourceCompatibilityMessageId == Nothing, primaryEndpoint)
+      (canonical, canonical, conversation, isNothing draft.sourceCompatibilityMessageId, primaryEndpoint)
   primaryDeliveryRows <-
     query
       "SELECT delivery_id FROM message_deliveries \
@@ -1309,7 +1327,8 @@ recordInternalMessage draft = withTransaction $ do
     Just identity -> pure identity
     Nothing -> error "recordInternalMessage: bot identity missing from batch"
   canonicalBody <- resolveBodyMentions identities draft.canonicalBody
-  let renderedProjection = promptText (parsePlatform platformName) draft.canonicalBody
+  let renderedProjection =
+        promptCanonicalText (parsePlatform platformName) (identityNatives identities) canonicalBody
       contentHash = TE.decodeUtf8 (Base16.encode (SHA256.hash (LBS.toStrict (encode canonicalBody))))
       sourceKey =
         "max:internal:"
@@ -1377,7 +1396,7 @@ recordInternalMessage draft = withTransaction $ do
             sourceKey,
             platformName
           )
-      if inserted /= 1 then error "recordInternalMessage: canonical insert did not affect one row" else pure ()
+      when (inserted /= 1) (error "recordInternalMessage: canonical insert did not affect one row")
       forM_ replyCanonical $ \target -> do
         _ <-
           execute
@@ -1516,7 +1535,7 @@ enqueueReaction draft = withTransaction $ do
                 sourceKey,
                 platformName
               )
-          if inserted /= 1 then error "enqueueReaction: canonical insert did not affect one row" else pure ()
+          when (inserted /= 1) (error "enqueueReaction: canonical insert did not affect one row")
           _ <-
             execute
               "INSERT INTO message_relations \
@@ -1723,7 +1742,9 @@ expiredSendingDeliverySql =
 -- endpoint.  The result is captured before calling the pure lowering
 -- function; transports never perform identity lookups or guess from origin
 -- ids.  A principal with multiple identities on one account resolves to the
--- most recently updated identity deterministically.
+-- mentioned identity itself when it lives on this account, and otherwise to
+-- the most recently updated one deterministically — so a copy delivered back
+-- to the origin endpoint reproduces the id the author actually wrote.
 deliveryMentionNatives ::
   (WithConnection :> es, IOE :> es) =>
   EndpointId ->
@@ -1741,7 +1762,9 @@ deliveryMentionNatives (EndpointId endpoint) identities = do
       \   ON destination.principal_id = source.principal_id \
       \  AND destination.platform_account_id = endpoint.platform_account_id \
       \ WHERE source.principal_identity_id = ANY(?) \
-      \ ORDER BY source.principal_identity_id, destination.updated_at DESC, \
+      \ ORDER BY source.principal_identity_id, \
+      \          (destination.principal_identity_id = source.principal_identity_id) DESC, \
+      \          destination.updated_at DESC, \
       \          destination.principal_identity_id DESC"
       (endpoint, PGArray (map unPrincipalIdentityId identities))
   pure . Map.fromList $
@@ -2212,6 +2235,21 @@ ensureIdentityBatch ::
   Eff es (Map NativeUserId Int64)
 ensureIdentityBatch endpoint =
   Map.traverseWithKey (ensurePrincipalIdentity endpoint)
+
+-- | The mention resolution the canonical prompt projection needs, read back
+-- from the identity batch this transaction already ensured.
+--
+-- Every writer renders @rendered_text@ from the /resolved/ canonical body,
+-- never from the pre-identity ingest body: the two disagree exactly where
+-- 'resolveBodyMentions' enriched a bare native id into a stored display name,
+-- and @maintenance verify@/@reproject@ recompute from the canonical body.
+-- Rendering from the ingest body is what made a correct row look stale.
+identityNatives :: Map NativeUserId Int64 -> Map PrincipalIdentityId NativeUserId
+identityNatives identities =
+  Map.fromList
+    [ (PrincipalIdentityId identity, native)
+    | (native, identity) <- Map.toList identities
+    ]
 
 -- | The identity work one ingest body needs, keyed for one sorted batch.
 -- A display is kept only when it says more than the id itself.

@@ -31,13 +31,13 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Concurrent qualified as Concurrent
-import Control.Monad (forM, forM_, when)
+import Control.Monad (forM, forM_, unless, void, when)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.Int (Int64)
 import Data.List (find, sortOn)
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -55,6 +55,8 @@ import Max.HttpRuntime
     HttpRuntime,
     TransportFailure (..),
     parseRequestEither,
+    pathPiece,
+    queryText,
     renderTransportFailure,
     runBuffered,
     withStreamingResponse,
@@ -62,7 +64,13 @@ import Max.HttpRuntime
 import Max.IR
 import Max.IR.Digest (digest)
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
-import Max.Platform.Delivery (DeliveryAttempt (..), DeliveryOperation (..), DeliveryTransport (..), loweredText)
+import Max.Platform.Delivery
+  ( DeliveryAttempt (..),
+    DeliveryOperation (..),
+    DeliveryTransport (..),
+    loweredText,
+    resolveDeliveryMedia,
+  )
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -83,7 +91,6 @@ import Max.Platform.Store
 import Max.Platform.Types
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
-import Network.HTTP.Types.URI (urlEncode)
 import OneBot.Types (GroupId (..))
 
 data IMessageConfig = IMessageConfig
@@ -266,7 +273,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
       chatId <- liftIO (resolveChat runtime cfg) >>= either (error . T.unpack . bridgeFailureText) pure
       current <- readIngestCursor registered.platformAccountId iMessageStreamKey
       let sourceReset = maybe False ((/= Just fingerprint) . (.fingerprint)) current
-          bootstrap = current == Nothing || sourceReset
+          bootstrap = isNothing current || sourceReset
           since = if bootstrap then 0 else maybe 0 cursorRowId current
       when sourceReset $
         logAttention "iMessage source database changed; rescanning allowlisted chat by GUID" $
@@ -342,6 +349,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
               ]
         AlreadyIngested {} -> pure ()
         DeliveryEcho {} -> pure ()
+        EchoUnmatched -> pure ()
 
     reconcileSends = do
       pending <- listUnconfirmedDeliveries PlatformIMessage iMessageReconcileBatchSize
@@ -450,7 +458,7 @@ iMessageDeliveryTransport runtime cfg =
       Right body -> case [(payload, meta) | NMedia payload meta <- chunk] of
         [] -> pure (Right (replyTarget, iMessageSendParams cfg replyTarget body Nothing))
         [(payload, meta)] ->
-          resolveDeliveryMedia runtime payload meta.sizeBytes >>= \case
+          resolveDeliveryMedia runtime iMessageMaxAttachmentBytes bridgePreviewBytes payload meta.sizeBytes >>= \case
             Left err -> pure (Left (IMessageMediaFailure err))
             Right bytes ->
               uploadBridgeAttachment runtime cfg meta bytes >>= \case
@@ -491,20 +499,6 @@ iMessageAuthoritativeSendGuid replyTarget guid =
   case replyTarget of
     Nothing -> NativeEventId <$> guid
     Just _ -> Nothing
-
-resolveDeliveryMedia :: HttpRuntime -> ResolvedMedia -> Maybe Int64 -> IO (Either Text BS.ByteString)
-resolveDeliveryMedia _ (ResolvedBytes bytes) _ = pure (Right bytes)
-resolveDeliveryMedia runtime (ResolvedUrl sourceUrl) declaredSize
-  | "http://" `T.isPrefixOf` sourceUrl || "https://" `T.isPrefixOf` sourceUrl =
-        parseRequestEither (T.unpack sourceUrl) >>= \case
-          Left failure -> pure (Left (renderTransportFailure failure))
-          Right request ->
-            runBuffered runtime StandardPool iMessageMaxAttachmentBytes bridgePreviewBytes request >>= \case
-              Left failure -> pure (Left (renderTransportFailure failure))
-              Right response
-                | maybe False (/= fromIntegral (BS.length response.body)) declaredSize -> pure (Left "delivery media size changed")
-                | otherwise -> pure (Right response.body)
-  | otherwise = pure (Left "delivery media has no transferable source")
 
 uploadBridgeAttachment ::
   HttpRuntime ->
@@ -547,7 +541,7 @@ parseIMessageSendState = first T.pack . parseEither parser
   where
     parser = withObject "message.send_status" $ \o -> do
       ok <- o .:? "ok" .!= False
-      when (not ok) (fail "status was not accepted")
+      unless ok (fail "status was not accepted")
       state <- o .: "send_state" :: Parser Text
       case state of
         "pending" -> pure IMessageSendPending
@@ -774,9 +768,9 @@ watchOnce runtime cfg chatId since = do
         Left failure -> Left (renderTransportFailure failure)
         Right () -> Right ()
   where
-    awaitNotification reader = do
-      chunk <- HTTP.brRead reader
-      if BS.null chunk then pure () else pure ()
+    -- One chunk is the whole signal: the bridge writes a byte when the chat
+    -- changed, and the caller re-runs catch-up either way.
+    awaitNotification reader = void (HTTP.brRead reader)
 
 bridgeRpc :: HttpRuntime -> IMessageConfig -> Text -> Value -> IO (Either BridgeFailure Value)
 bridgeRpc runtime cfg method params =
@@ -840,16 +834,6 @@ cursorRowId :: CursorRecord -> Int64
 cursorRowId record = case record.cursor of
   PlatformCursor (Number value) -> floor value
   _ -> 0
-
-queryText :: [(Text, Text)] -> Text
-queryText [] = ""
-queryText queryPairs =
-  "?" <> T.intercalate "&" [encoded key <> "=" <> encoded value | (key, value) <- queryPairs]
-  where
-    encoded = TE.decodeUtf8 . urlEncode True . TE.encodeUtf8
-
-pathPiece :: Text -> Text
-pathPiece = TE.decodeUtf8 . urlEncode True . TE.encodeUtf8
 
 iMessageStreamKey :: Text
 iMessageStreamKey = "messages.after"

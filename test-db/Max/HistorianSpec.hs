@@ -3,12 +3,12 @@ module Max.HistorianSpec (spec) where
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime, minutesToTimeZone)
+import Data.Time (minutesToTimeZone)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful (IOE, liftIO, runEff)
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
-import Helpers (insertRawMessage, insertRawMessageAtSeq, truncateAll, withDb, withDbLog)
+import Helpers (insertRawMessage, insertRawMessageAtSeq, requireJust, testTime, truncateAll, withDb, withDbLog)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool)
 import Max.DB.ConversationCursor (historianCursor, loadCursor)
@@ -180,11 +180,6 @@ latestCursor pool = do
     Only (Just cursor) : _ -> pure (MessageCursor cursor)
     _ -> expectationFailure "expected a latest cursor" >> pure (MessageCursor 0)
 
-requireJust :: String -> Maybe a -> IO a
-requireJust label = \case
-  Just value -> pure value
-  Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)
-
 rawCapture :: Text
 rawCapture =
   "{\"summary_p1\":{\"text\":\"Alice said she likes green tea; Max acknowledged it.\",\"evidence_message_ids\":[1001,1002]},\"summary_p2\":{\"text\":\"Alice likes green tea.\",\"evidence_message_ids\":[1001]},\"summary_p3\":{\"text\":\"Alice's green-tea preference was acknowledged.\",\"evidence_message_ids\":[1001,1002]},\"importance\":0.7,\"confidence\":0.95,\"episode_kind\":\"max_interaction\",\"memory_proposals\":[{\"action\":\"add\",\"scope\":\"user\",\"user_id\":2001,\"content\":\"Alice likes green tea.\",\"category\":\"preference\",\"evidence_message_ids\":[1001]}]}"
@@ -193,6 +188,3 @@ groupId, member, botId :: Int64
 groupId = 100
 member = 2001
 botId = 1000
-
-testTime :: UTCTime
-testTime = read "2026-08-02 12:00:00 UTC"

@@ -17,6 +17,7 @@ module Max.Toolset
   )
 where
 
+import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful
@@ -131,7 +132,7 @@ toolDefinitionsFor env gid caps =
       MultimodalOnly -> caps.tcMultimodal
       StickersOnly -> caps.tcStickers && env.beEmbeddingEnabled
       SkillsOnly -> caps.tcSkills
-      SearchOnly -> maybe False (const True) env.beSearch
+      SearchOnly -> isJust env.beSearch
 
 data ToolGate
   = Always

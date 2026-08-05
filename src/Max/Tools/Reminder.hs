@@ -32,6 +32,7 @@ import Max.Reminder (ReminderScheduler, nextCronFire, notifyReminderChange)
 import Max.Time (fmtDateHM)
 import Max.Tools (parseTimeArg)
 import Max.ToolContext (ToolContext, toolGroupId, toolSelfId, toolUserId)
+import Max.Tools.Schema (integerParam, noArguments, stringParam, toolObject)
 import System.Cron.Parser (parseCronSchedule)
 
 reminderToolsFor ::
@@ -75,38 +76,19 @@ setReminderTool tz sched dc =
             "用户说'一小时后/明天下午3点'用 in_minutes 或 at；说'每天/每周/每2小时'用 cron。"
           ],
       toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "text"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("提醒内容（到点原样发给用户）。" :: Text)
-                      ],
-                  "in_minutes"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("几分钟后提醒（一次性）。" :: Text)
-                      ],
-                  "at"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description" .= ("一次性绝对时间：'YYYY-MM-DD HH:MM'（按机器人显示时区）。" :: Text)
-                      ],
-                  "cron"
-                    .= object
-                      [ "type" .= ("string" :: Text),
-                        "description"
-                          .= ( "循环提醒的 5 段 cron（分 时 日 月 周，按显示时区墙钟）。"
-                                 <> "例：每天9点 '0 9 * * *'；每2小时 '0 */2 * * *'；"
-                                 <> "每周一三五10点 '0 10 * * 1,3,5'；每月1号8点 '0 8 1 * *'。" ::
-                                 Text
-                             )
-                      ]
-                ],
-            "required" .= (["text"] :: [Text])
-          ],
+        toolObject
+          [ ("text", stringParam "提醒内容（到点原样发给用户）。"),
+            ("in_minutes", integerParam "几分钟后提醒（一次性）。"),
+            ("at", stringParam "一次性绝对时间：'YYYY-MM-DD HH:MM'（按机器人显示时区）。"),
+            ( "cron",
+              stringParam
+                ( "循环提醒的 5 段 cron（分 时 日 月 周，按显示时区墙钟）。"
+                    <> "例：每天9点 '0 9 * * *'；每2小时 '0 */2 * * *'；"
+                    <> "每周一三五10点 '0 10 * * 1,3,5'；每月1号8点 '0 8 1 * *'。"
+                )
+            )
+          ]
+          ["text"],
       toolRun = \args -> case parseEither (withObject "args" parseSet) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right sa -> do
@@ -173,7 +155,7 @@ listRemindersTool tz dc =
   Tool
     { toolName = "list_reminders",
       toolDescription = "列出本会话所有还没触发的提醒（含投递重试或已暂停状态）。",
-      toolSchema = object ["type" .= ("object" :: Text), "properties" .= object []],
+      toolSchema = noArguments,
       toolRun = \_ -> do
         rs <- listPending (toolGroupId dc)
         pure $ Right $ toJSON (map summarize rs)
@@ -203,19 +185,7 @@ cancelReminderTool sched dc =
   Tool
     { toolName = "cancel_reminder",
       toolDescription = "按 id 取消一个未触发的提醒（循环提醒会就此停止）。id 从 list_reminders 或 set_reminder 的返回里拿。",
-      toolSchema =
-        object
-          [ "type" .= ("object" :: Text),
-            "properties"
-              .= object
-                [ "id"
-                    .= object
-                      [ "type" .= ("integer" :: Text),
-                        "description" .= ("要取消的提醒 id。" :: Text)
-                      ]
-                ],
-            "required" .= (["id"] :: [Text])
-          ],
+      toolSchema = toolObject [("id", integerParam "要取消的提醒 id。")] ["id"],
       toolRun = \args -> case parseEither (withObject "args" (.: "id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (rid :: Int64) -> do

@@ -34,6 +34,7 @@ import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.DB.History (MessageCursor (..))
 import Max.DB.Transaction (withTransaction)
 import Max.EpisodeStore (CompartmentId (..))
+import Max.Util (encodeText)
 
 data MaterializedCompartment = MaterializedCompartment
   { mcCompartmentId :: !CompartmentId,
@@ -228,9 +229,6 @@ materializationFingerprint draft =
         "policy_version" .= draft.mdPolicyVersion,
         "items" .= draft.mdItems
       ]
-
-encodeText :: (ToJSON a) => a -> Text
-encodeText = TE.decodeUtf8 . LBS.toStrict . encode
 
 decodeItems :: (IOE :> es) => Text -> Eff es [MaterializedCompartment]
 decodeItems raw = case eitherDecodeStrict' (TE.encodeUtf8 raw) of

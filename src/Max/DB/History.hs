@@ -30,6 +30,9 @@ import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
+import Max.IR (nonBlank)
+import Max.IR.Lower (platformDisplayLabel)
+import Max.Platform.Types (parsePlatform)
 
 -- | A database-owned total order over message ingestion.  Unlike platform
 -- message ids or timestamps, this is unique and monotonic.
@@ -103,18 +106,9 @@ bestName h
   | h.sourcePlatform == "qq" = nativeName
   | otherwise = Just (platformLabel h.sourcePlatform <> " · " <> fromMaybe (T.pack (show h.userId)) nativeName)
   where
-    nativeName = nonBlank h.senderCard <|> nonBlank h.senderNickname
-
-platformLabel :: Text -> Text
-platformLabel = \case
-  "matrix" -> "Matrix"
-  "imessage" -> "iMessage"
-  "wechatpad" -> "WeChat"
-  other -> other
-
-nonBlank :: Maybe Text -> Maybe Text
-nonBlank (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
-nonBlank _ = Nothing
+    nativeName = blankless h.senderCard <|> blankless h.senderNickname
+    blankless = (>>= nonBlank)
+    platformLabel = platformDisplayLabel . parsePlatform
 
 -- | Last @n@ real (non-synthetic, non-forward-child) messages in @gid@,
 -- *excluding* @excludeId@.  When @since@ is @Just@, also filters out

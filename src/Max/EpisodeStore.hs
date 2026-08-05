@@ -59,7 +59,7 @@ import Data.Int (Int64)
 import Data.List (nub)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Set qualified as Set
 import Data.String (fromString)
 import Data.Text (Text)
@@ -108,6 +108,7 @@ import Max.MemoryStore
     parseScope,
     updateVisibleMemory,
   )
+import Max.Util (encodeText, tshow)
 
 newtype CaptureRunId = CaptureRunId {unCaptureRunId :: Int64}
   deriving stock (Show, Eq, Ord)
@@ -515,7 +516,7 @@ validateProposal source index proposal = case proposal of
               <> categoryErrors
               <> categoryScopeErrors ScopeGroup categoryRaw
               <> evidenceErrs
-              <> [err "user_id" "group scope must not specify user_id" | userId /= Nothing]
+              <> [err "user_id" "group scope must not specify user_id" | isJust userId]
           )
         Just ScopeUser ->
           let subjectErrors = case userId of
@@ -582,9 +583,6 @@ evidenceErrors source path evidence =
        | messageId <- evidence,
          Map.notMember messageId source
        ]
-
-tshow :: (Show a) => a -> Text
-tshow = T.pack . show
 
 --------------------------------------------------------------------------------
 -- Durable job/store operations.
@@ -1068,7 +1066,7 @@ verifyRunSource scope run = do
 
 runRequiresLiveCursor :: CaptureRun -> Bool
 runRequiresLiveCursor run =
-  run.crReplacesCompartment == Nothing && run.crReason /= "backfill"
+  isNothing run.crReplacesCompartment && run.crReason /= "backfill"
 
 insertStagedCompartment ::
   (WithConnection :> es, IOE :> es) =>
@@ -1187,7 +1185,7 @@ applyMemoryProposal scope _run compartment indexed = case indexed.ivpValidated o
         namespace = memoryNamespace scope memoryScope subject
     duplicate <- findExactMemory namespace content
     count <- countMemories namespace
-    if duplicate /= Nothing
+    if isJust duplicate
       then rejected "exact duplicate already exists" evidence
       else
         if count >= historianMemoryCap
@@ -1441,9 +1439,6 @@ expandEpisode policy handle requestedAfter requestedSize = do
 
 publicationFailure :: (IOE :> es) => String -> Eff es a
 publicationFailure = liftIO . throwIO . userError
-
-encodeText :: (ToJSON a) => a -> Text
-encodeText = TE.decodeUtf8 . LBS.toStrict . encode
 
 fromTextQuery :: Text -> Query
 fromTextQuery = fromString . T.unpack

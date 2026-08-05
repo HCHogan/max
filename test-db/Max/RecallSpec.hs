@@ -7,10 +7,9 @@ import Data.List (nub, sort)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
-import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), execute_)
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawMessage, truncateAll, withDb)
+import Helpers (insertRawMessage, requireJust, testTime, truncateAll, withDb)
 import Max.ConversationScope (ConversationScope, conversationScopeFor, currentConversationRecall)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History (MessageCursor (..))
@@ -198,13 +197,5 @@ request =
 captureJson :: EpisodeCapture -> Text
 captureJson = TE.decodeUtf8 . LBS.toStrict . encode
 
-requireJust :: String -> Maybe a -> IO a
-requireJust label = \case
-  Just value -> pure value
-  Nothing -> expectationFailure ("missing " <> label) >> error ("missing " <> label)
-
 replicateText :: Int -> Text -> Text
 replicateText count = mconcat . replicate count
-
-testTime :: UTCTime
-testTime = read "2026-08-02 12:00:00 UTC"

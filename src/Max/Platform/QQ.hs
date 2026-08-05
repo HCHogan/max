@@ -36,6 +36,7 @@ import Max.IR.Lower (OutboundCaps (..), Tier (..), textOnlyCaps)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store (RegisteredEndpoint (..), ensureLegacyEndpoint)
 import Max.Platform.Types
+import Max.Util (tshow)
 import OneBot.Event (EmojiLike (..), GroupMessage (..), MessageNotice (..), Sender (..))
 import OneBot.Segment
   ( CardInfo (..),
@@ -62,7 +63,7 @@ ensureQQEndpointFor ::
 ensureQQEndpointFor selfId groupId =
   ensureLegacyEndpoint
     PlatformQQ
-    (NativeAccountId (decimal self))
+    (NativeAccountId (tshow self))
     (NativeConversationId nativeConversation)
     conversationKind
     group
@@ -71,8 +72,8 @@ ensureQQEndpointFor selfId groupId =
     UserId self = selfId
     GroupId group = groupId
     nativeConversation
-      | isPrivateChat groupId = "user:" <> decimal (abs group)
-      | otherwise = decimal group
+      | isPrivateChat groupId = "user:" <> tshow (abs group)
+      | otherwise = tshow group
     conversationKind
       | isPrivateChat groupId = ConversationDirect
       | otherwise = ConversationGroup
@@ -81,8 +82,8 @@ qqEnvelope :: RegisteredEndpoint -> UTCTime -> Value -> GroupMessage -> InboundE
 qqEnvelope endpoint received raw message =
   InboundEnvelope
     { endpointId = endpoint.endpointId,
-      nativeEventId = NativeEventId (decimal messageId),
-      senderNativeId = NativeUserId (decimal userId),
+      nativeEventId = NativeEventId (tshow messageId),
+      senderNativeId = NativeUserId (tshow userId),
       senderDisplayName = message.sender.card <|> message.sender.nickname,
       occurredAt = fromMaybe received (eventTime raw),
       receivedAt = received,
@@ -140,8 +141,8 @@ qqNoticeEnvelopes endpoint received raw notice = case notice of
         <> TE.decodeUtf8 (Base16.encode (SHA256.hash (LBS.toStrict (encode raw))))
         <> ":"
         <> suffix
-    nativeMessage (MessageId target) = NativeEventId (decimal target)
-    userText (UserId actor) = decimal actor
+    nativeMessage (MessageId target) = NativeEventId (tshow target)
+    userText (UserId actor) = tshow actor
 
 qqCapabilities :: OutboundCaps
 qqCapabilities =
@@ -153,7 +154,13 @@ qqCapabilities =
       sticker = TierNative,
       card = TierNative,
       reaction = True,
-      maxTextBytes = Just 12000
+      maxTextBytes = Just 12000,
+      -- A QQ message carries several image segments, and the OneBot emitter
+      -- encodes each one, so resending a multi-image message must not fold
+      -- everything after the first into bare [图片] text.  Nine matches the
+      -- client's own album ceiling; the delivery worker still enforces the
+      -- byte budget.
+      maxNativeMedia = 9
     }
 
 qqIngestBody :: [Segment] -> Body 'Ingest
@@ -165,7 +172,7 @@ qqSegmentNodes segment = case segment of
   SegAt (UserId user) ->
     -- Display equals the native id here; the ingest transaction enriches
     -- it from the stored identity when one exists.
-    let digits = decimal user
+    let digits = tshow user
      in [NMention (NativeUserId digits) digits]
   SegReply _ -> []
   SegImage image ->
@@ -184,7 +191,7 @@ qqSegmentNodes segment = case segment of
     [ NEmote
         Emote
           { origin = PlatformQQ,
-            nativeId = decimal faceId,
+            nativeId = tshow faceId,
             name = name,
             raw = keepRaw
           }
@@ -237,10 +244,6 @@ qqSegmentNodes segment = case segment of
     ]
   where
     keepRaw = Just (toJSON segment)
-    nonBlank value =
-      let stripped = T.strip value
-       in if T.null stripped then Nothing else Just stripped
-
 forwardIdFrom :: Value -> Maybe Text
 forwardIdFrom (Object payload) = case KeyMap.lookup (Key.fromText "id") payload of
   Just (String forwardId) | not (T.null forwardId) -> Just forwardId
@@ -255,7 +258,7 @@ qqRemoteRef value =
 
 relation :: Segment -> [MessageRelation]
 relation = \case
-  SegReply (MessageId target) -> [ReplyTo (NativeEventId (decimal target))]
+  SegReply (MessageId target) -> [ReplyTo (NativeEventId (tshow target))]
   _ -> []
 
 eventTime :: Value -> Maybe UTCTime
@@ -264,6 +267,3 @@ eventTime (Object values) = do
   epoch <- toBoundedInteger seconds :: Maybe Int64
   pure (posixSecondsToUTCTime (fromIntegral epoch))
 eventTime _ = Nothing
-
-decimal :: (Show a) => a -> T.Text
-decimal = T.pack . show

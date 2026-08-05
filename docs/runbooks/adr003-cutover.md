@@ -216,6 +216,40 @@ by staleness detection. Pre-repair snapshot:
 observation window ends). The migration squash below removed the
 replayable 055, so the defect class cannot recur on fresh databases.
 
+**2026-08-05 compartment source-hash re-stamp (migration 065).** Migration 062
+changed `conversation_source_hash` and the ledger columns it reads (055 rewrote
+`canonical_content`, 059 added `event_kind`, 060 changed `occurred_at`), so
+every hash stamped before the cutover describes an input set the function can
+no longer produce: the admin integrity check counted the whole history as
+`bad_source_ranges` and every expand handle reported a source mismatch. The
+migration re-stamps only rows whose stored hash differs, and runs itself on the
+next boot — no manual step.
+
+Production before the fix: 161 of 186 compartments stale, and the split falls
+exactly on the cutover — every stale row was created between 2026-08-02 18:46
+and 2026-08-04 14:22 (before 062), every correct row from 14:53 onward. So the
+re-stamp touches only hashes computed by the old function and leaves
+post-cutover drift evidence alone. Drift detection is meaningful again from
+that deploy forward.
+
+**2026-08-05 delivery retry budget.** A rejection by a reachable edge (QQ risk
+control, a reaction on a deleted target) was retryable-shaped forever and held
+the endpoint's ordered lane behind it. It now ends as `suppressed` after
+`deliveryAttemptBudget` attempts (~45 minutes). An *unreachable* edge is
+deliberately exempt: production delivery 72552 spent 159 attempts across an
+eleven-hour QQ outage and then landed, and while an edge is down the lane is
+denied to nobody. Exactly one delivery in the whole ledger has ever exceeded
+the budget, and it was that outage.
+
+**2026-08-05 release-gate repair.** `max-adr003-maintenance verify` was unsafe
+to run after the squash: it required the individual 055–064 filenames that
+`reconcileSquash` had already collapsed into `000_baseline.sql`, and it
+recomputed `rendered_text` from the enriched canonical body while ingest still
+rendered it from the pre-identity ingest body, so it failed on every row whose
+mention display had been enriched. Both sides now render from the resolved
+canonical body, and the gate requires the baseline. `verify` is safe to run
+against the live database again.
+
 ## Atomic rollback
 
 There is no binary-only rollback. If a release-blocking fault appears:
