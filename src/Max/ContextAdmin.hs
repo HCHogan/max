@@ -27,6 +27,7 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ContextTraceStore (ContextPlanTraceRow (..), listContextPlanTraces)
 import Max.ConversationScope (conversationScopeFor)
+import Max.DB.History (notForwardChild)
 import Max.DB.Transaction (withTransaction)
 import Max.EpisodeStore
   ( ActiveCompartment (..),
@@ -607,13 +608,12 @@ loadEmbeddingStatus ::
 loadEmbeddingStatus targetModel conversationId = do
   rows <-
     query
-      "WITH corpus AS ( \
-      \  SELECT 'message'::text AS corpus, message.group_id AS conversation_id, message.rendered_text AS content, \
-      \         message.embedding IS NOT NULL AS has_embedding, message.embedding_model, message.embedding_dimensions, message.embedding_content_hash \
-      \  FROM messages AS message WHERE NOT message.is_synthetic \
-      \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
-      \                    WHERE containment.canonical_message_id = message.canonical_message_id \
-      \                      AND containment.relation_kind = 'contained_in') \
+      ( "WITH corpus AS ( \
+        \  SELECT 'message'::text AS corpus, message.group_id AS conversation_id, message.rendered_text AS content, \
+        \         message.embedding IS NOT NULL AS has_embedding, message.embedding_model, message.embedding_dimensions, message.embedding_content_hash \
+        \  FROM messages AS message WHERE NOT message.is_synthetic AND "
+          <> notForwardChild "message"
+          <> " \
       \    AND char_length(message.rendered_text) >= 4 \
       \  UNION ALL \
       \  SELECT 'memory', COALESCE(memory.source_group_id, memory.scope_id), memory.content, \
@@ -637,6 +637,7 @@ loadEmbeddingStatus targetModel conversationId = do
       \        count(*) FILTER (WHERE has_embedding AND embedding_content_hash IS DISTINCT FROM expected_hash) AS stale_hash, \
       \        string_agg(DISTINCT COALESCE(embedding_model, '(pending)') || ':' || COALESCE(embedding_dimensions::text, '-'), ', ' ORDER BY COALESCE(embedding_model, '(pending)') || ':' || COALESCE(embedding_dimensions::text, '-')) AS stored_spaces \
       \ FROM classified GROUP BY corpus ORDER BY corpus"
+      )
       (conversationId, conversationId, targetModel, targetModel)
   pure $
     object

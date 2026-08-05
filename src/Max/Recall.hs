@@ -35,6 +35,7 @@ import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (RecallPolicy, conversationStorageId, recallConversationScope)
+import Max.DB.History (notForwardChild)
 import Max.Embedding (EmbeddingRecord (..))
 import Max.EpisodeStore (EpisodeHandle)
 import Max.MemoryStore (MemoryId)
@@ -462,9 +463,9 @@ lexicalCandidatesSql =
   \  FROM messages AS message CROSS JOIN input LEFT JOIN pins USING (canonical_message_id) \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
   \    AND message.kind IN ('chat', 'system') \
-  \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
-  \                    WHERE containment.canonical_message_id = message.canonical_message_id \
-  \                      AND containment.relation_kind = 'contained_in') \
+  \    AND "
+    <> notForwardChild "message"
+    <> " \
   \    AND (position(lower(input.query_text) in lower(message.rendered_text)) > 0 \
   \      OR similarity(message.rendered_text, input.query_text) >= 0.08) \
   \  ORDER BY lexical_score DESC, message.received_at DESC, message.canonical_message_id \
@@ -560,9 +561,9 @@ semanticCandidatesSql =
   \  FROM messages AS message CROSS JOIN input \
   \  WHERE message.group_id = input.conversation_id AND NOT message.is_synthetic \
   \    AND message.kind IN ('chat', 'system') \
-  \    AND NOT EXISTS (SELECT 1 FROM message_relations containment \
-  \                    WHERE containment.canonical_message_id = message.canonical_message_id \
-  \                      AND containment.relation_kind = 'contained_in') \
+  \    AND "
+    <> notForwardChild "message"
+    <> " \
   \    AND message.embedding_model = input.model_id AND message.embedding_dimensions = input.dimensions \
   \), message_candidates AS ( \
   \  SELECT CASE WHEN pins.canonical_message_id IS NULL THEN 'message' ELSE 'pin' END::text AS source, \

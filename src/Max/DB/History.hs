@@ -7,6 +7,7 @@ module Max.DB.History
     fetchRecentInGroup,
     historyColumns,
     transcriptEligibleExpr,
+    notForwardChild,
     fetchPromptLedgerAfter,
     fetchNewestPromptPageBefore,
     fetchTranscriptAfter,
@@ -174,11 +175,14 @@ fetchRecentInGroup gid excludeId since n = do
   pure (reverse (rows :: [HistoryItem]))
   where
     selectHistory = "SELECT " <> historyColumns <> " FROM messages WHERE group_id = ? AND canonical_message_id <> ?"
+    -- Deliberately stricter than 'transcriptEligibleExpr': the prompt window
+    -- drops every legacy synthetic row, where the exact-cursor paths keep the
+    -- bot-authored ones.  The difference predates ADR 004 and is left alone
+    -- rather than unified by a refactor that was only meant to remove copies.
     promptFilters =
-      " AND NOT EXISTS (SELECT 1 FROM message_relations containment \
-      \                 WHERE containment.canonical_message_id = messages.canonical_message_id \
-      \                   AND containment.relation_kind = 'contained_in') \
-      \ AND NOT is_synthetic AND kind IN ('chat', 'system')"
+      " AND "
+        <> notForwardChild "messages"
+        <> " AND NOT is_synthetic AND kind IN ('chat', 'system')"
 
 -- | Every prompt-eligible chat row after an exact conversation cursor,
 -- ordered by the database ingestion sequence.  This complete-range helper is
@@ -251,12 +255,9 @@ fetchNewestPromptPageBefore scope (MessageCursor after) before excludeId since r
           <> ", true FROM messages \
              \ WHERE group_id = ? AND ingest_seq > ? \
              \   AND (?::bigint IS NULL OR ingest_seq < ?) \
-             \   AND canonical_message_id <> ? \
-             \   AND NOT EXISTS (SELECT 1 FROM message_relations containment \
-             \                   WHERE containment.canonical_message_id = messages.canonical_message_id \
-             \                     AND containment.relation_kind = 'contained_in') \
-             \   AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system') \
-             \   AND (?::timestamptz IS NULL OR received_at > ?) \
+             \   AND canonical_message_id <> ? AND "
+          <> transcriptEligibleExpr
+          <> " AND (?::timestamptz IS NULL OR received_at > ?) \
              \ ORDER BY ingest_seq DESC \
              \ LIMIT ?"
       )
@@ -340,10 +341,22 @@ fetchOldestPageThrough scope (MessageCursor after) (MessageCursor through) reque
 
 transcriptEligibleExpr :: Query
 transcriptEligibleExpr =
-  "(NOT EXISTS (SELECT 1 FROM message_relations containment \
-  \             WHERE containment.canonical_message_id = messages.canonical_message_id \
-  \               AND containment.relation_kind = 'contained_in') \
-  \ AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system'))"
+  "("
+    <> notForwardChild "messages"
+    <> " AND (NOT is_synthetic OR user_id = self_id) AND kind IN ('chat', 'system'))"
+
+-- | \"…and this row is not a forward child\".  A forward child renders inside
+-- its container, never as a line of its own, so every query that reads the
+-- ledger as a conversation excludes them — five of them did it by writing the
+-- same correlated subquery out again.  The alias is the parameter because it
+-- is the only thing that differed.
+notForwardChild :: Query -> Query
+notForwardChild alias =
+  "NOT EXISTS (SELECT 1 FROM message_relations containment \
+  \            WHERE containment.canonical_message_id = "
+    <> alias
+    <> ".canonical_message_id \
+       \              AND containment.relation_kind = 'contained_in')"
 
 pageEndCursor :: HistoryPage -> Maybe MessageCursor
 pageEndCursor page = case reverse page.items of

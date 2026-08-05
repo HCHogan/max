@@ -25,6 +25,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.DB.History (notForwardChild)
 import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
 import Max.Embedding (EmbeddingRecord (..))
 import Max.MaintenanceLease
@@ -80,14 +81,13 @@ embedWorker owner = forever $ do
       let modelId = space.esModelId
       msgs <-
         query
-          "SELECT message_id, rendered_text FROM messages \
-          \ WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM ?) \
-          \   AND NOT is_synthetic \
-          \   AND NOT EXISTS (SELECT 1 FROM message_relations containment \
-          \                   WHERE containment.canonical_message_id = messages.canonical_message_id \
-          \                     AND containment.relation_kind = 'contained_in') \
-          \   AND char_length(rendered_text) >= 4 \
-          \ ORDER BY received_at DESC LIMIT 64"
+          ( "SELECT message_id, rendered_text FROM messages \
+            \ WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM ?) \
+            \   AND NOT is_synthetic AND "
+              <> notForwardChild "messages"
+              <> " AND char_length(rendered_text) >= 4 \
+                 \ ORDER BY received_at DESC LIMIT 64"
+          )
           [modelId]
       mems <- listPendingMemoryEmbeddings modelId batchSize
       episodes <-
