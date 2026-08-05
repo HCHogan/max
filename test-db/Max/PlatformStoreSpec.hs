@@ -534,9 +534,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         \ WHERE event_kind <> 'message' ORDER BY canonical_message_id"
         ()
     (projections :: [(Text, Text)])
-      `shouldBe` [ ("edit", "[编辑了 #" <> tshow targetId <> "]"),
-                   ("reaction", "[贴了表情 托腮 #" <> tshow targetId <> "]"),
-                   ("redaction", "[撤回了 #" <> tshow targetId <> "]")
+      `shouldBe` [ ("edit", "[edit#" <> tshow targetId <> "]"),
+                   ("reaction", "[react#" <> tshow targetId <> ": 托腮]"),
+                   ("redaction", "[unsend#" <> tshow targetId <> "]")
                  ]
 
   it "uses the total capability decoder for meta fan-out" $ do
@@ -801,7 +801,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     -- through, which only the identity row still knows about.
     case rows :: [(Text, Text, Text, Int64)] of
       [(rendered, display, native, principal)] ->
-        (rendered, display, native) `shouldBe` ("[@#" <> tshow principal <> "] hello", "2291939848", "2291939848")
+        (rendered, display, native) `shouldBe` ("[mention#" <> tshow principal <> "] hello", "2291939848", "2291939848")
       other -> expectationFailure ("unexpected projection rows: " <> show other)
 
   it "enriches an identity first discovered through a bare mention" $ do
@@ -905,7 +905,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         (Only (resultId mention).unCanonicalMessageId)
     case rows :: [(Text, Text, Int64)] of
       [(rendered, display, principal)] ->
-        (rendered, display) `shouldBe` ("[@#" <> tshow principal <> "] 在吗", "张三")
+        (rendered, display) `shouldBe` ("[mention#" <> tshow principal <> "] 在吗", "张三")
       other -> expectationFailure ("unexpected projection rows: " <> show other)
 
   -- The WeChat relay acknowledges a send without an id; the bot's own message

@@ -148,15 +148,15 @@ spec = do
         `shouldBe` [TableChunk "| a |\n|---|\n| 1 |"]
 
   describe "parseReplyTokens" $ do
-    it "hoists a leading [↩#id] and strips it from the text" $
-      parseReplyTokens "[↩#8472] 说得对"
+    it "hoists a leading [reply#id] and strips it from the text" $
+      parseReplyTokens "[reply#8472] 说得对"
         `shouldBe` (Just 8472, [PieceText " 说得对"])
 
     it "still accepts a pre-ADR-004 negative handle rather than leaking it" $ do
       -- Canonical ids are positive.  A model echoing a line the reproject
       -- has not rewritten yet must not put the raw token in the group; it
       -- simply resolves to nothing.
-      parseReplyTokens "[↩#-1000000000790] 说得对"
+      parseReplyTokens "[reply#-1000000000790] 说得对"
         `shouldBe` (Just (-1000000000790), [PieceText " 说得对"])
       parseReplyTokens "看这张 [image#-1000000000790]"
         `shouldBe` (Nothing, [PieceText "看这张 ", PieceImage (-1000000000790) Nothing])
@@ -201,11 +201,11 @@ spec = do
         `shouldBe` (Nothing, [PieceText "这是 [image] 标记"])
 
     it "keeps the first reply id when several appear" $
-      parseReplyTokens "[↩#1] a [↩#2] b"
+      parseReplyTokens "[reply#1] a [reply#2] b"
         `shouldBe` (Just 1, [PieceText " a  b"])
 
     it "combines a quote and a sticker in one chunk" $
-      parseReplyTokens "[↩#9] 看这个 [sticker#3]"
+      parseReplyTokens "[reply#9] 看这个 [sticker#3]"
         `shouldBe` (Just 9, [PieceText " 看这个 ", PieceSticker 3])
 
     it "splits an inline [face#id] token out of the text" $
@@ -225,7 +225,7 @@ spec = do
         `shouldBe` (Nothing, [PieceImage 7405 Nothing, PieceText " 笑死"])
       parseReplyTokens "[sticker#42: 柴犬瘫地](旧图)"
         `shouldBe` (Nothing, [PieceSticker 42])
-      parseReplyTokens "[↩#9: 引文](x) 对"
+      parseReplyTokens "[reply#9: 引文](x) 对"
         `shouldBe` (Just 9, [PieceText " 对"])
 
     it "does not eat an unrelated paren after a bare token" $
@@ -253,7 +253,7 @@ spec = do
 
     it "leaves a malformed token as literal text" $ do
       parseReplyTokens "[sticker#]" `shouldBe` (Nothing, [PieceText "[sticker#]"])
-      parseReplyTokens "[↩#abc]" `shouldBe` (Nothing, [PieceText "[↩#abc]"])
+      parseReplyTokens "[reply#abc]" `shouldBe` (Nothing, [PieceText "[reply#abc]"])
       parseReplyTokens "[image#]" `shouldBe` (Nothing, [PieceText "[image#]"])
       parseReplyTokens "[face#]" `shouldBe` (Nothing, [PieceText "[face#]"])
 
@@ -263,7 +263,7 @@ spec = do
         `shouldBe` "无语  真是"
 
     it "keeps grammar tokens and plain bracketed prose" $ do
-      stripHallucinatedTokens "[↩#9] 看 [sticker#42]" `shouldBe` "[↩#9] 看 [sticker#42]"
+      stripHallucinatedTokens "[reply#9] 看 [sticker#42]" `shouldBe` "[reply#9] 看 [sticker#42]"
       stripHallucinatedTokens "这是 [重点] 内容" `shouldBe` "这是 [重点] 内容"
 
     it "leaves code fences untouched" $

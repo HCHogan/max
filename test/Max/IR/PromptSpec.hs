@@ -54,26 +54,26 @@ systemEventSpec :: Spec
 systemEventSpec = describe "system event projection" $ do
   it "names the message a recall took back" $
     systemEventText EventRedaction (Just 7405) Nothing True
-      `shouldBe` "[撤回了 #7405]"
+      `shouldBe` "[unsend#7405]"
 
   it "resolves a QQ reaction key to the same face name the model sends by" $
     systemEventText EventReaction (Just 7405) (Just "212") True
       `shouldSatisfy` \line ->
-        "[贴了表情 " `T.isPrefixOf` line && " #7405]" `T.isSuffixOf` line && not ("212" `T.isInfixOf` line)
+        "[react#7405: " `T.isPrefixOf` line && "]" `T.isSuffixOf` line && not ("212" `T.isInfixOf` line)
 
   it "keeps an uncurated face id numeric rather than calling it something else" $
     systemEventText EventReaction (Just 7405) (Just "999999") True
-      `shouldBe` "[贴了表情 999999 #7405]"
+      `shouldBe` "[react#7405: 999999]"
 
   it "distinguishes removing a reaction from adding one" $
     systemEventText EventReaction (Just 7405) (Just "999999") False
-      `shouldBe` "[取消了表情 999999 #7405]"
+      `shouldBe` "[unreact#7405: 999999]"
 
   -- A target that no longer resolves is still worth a line: the room saw
   -- something get taken back even when the ledger cannot say which thing.
   it "still reports an event whose target is not in the ledger" $
     systemEventText EventRedaction Nothing Nothing True
-      `shouldBe` "[撤回了一条消息]"
+      `shouldBe` "[unsend]"
 
   it "leaves an ordinary message to its own body" $
     systemEventText EventMessage (Just 7405) Nothing True `shouldBe` ""
@@ -81,13 +81,13 @@ systemEventSpec = describe "system event projection" $ do
 mentionSpec :: Spec
 mentionSpec = describe "mention parsing" $ do
   it "converts the canonical bracket token with the space convention" $
-    parse "[@#123] 你好"
+    parse "[mention#123] 你好"
       `shouldBe` (Nothing, Body [mentionNode 123, NText " 你好"])
 
   it "converts a principal it has never seen, and lets resolution decide" $
     -- A hallucinated id is not the parser's problem: it resolves to no
     -- account on this conversation and the send path folds it to @name.
-    parse "[@#999] 在吗"
+    parse "[mention#999] 在吗"
       `shouldBe` (Nothing, Body [NMention (PrincipalId 999) "999", NText " 在吗"])
 
   it "no longer reads a bare @<digits> span as a mention" $
@@ -102,18 +102,34 @@ mentionSpec = describe "mention parsing" $ do
     parse "@张三 你好"
       `shouldBe` (Nothing, Body [mentionNode 123, NText " 你好"])
 
-  it "captures the explicit display fallback in the historical token" $
+  -- 10779 stored rows spell a mention [@#id] and 20 spell a quote [↩#id];
+  -- a model's transcript is partly its own past output, so it copies what it
+  -- reads.  Dropping either opener silently turns those lines into prose —
+  -- which is exactly what happened once while making this rename.
+  it "still reads both pre-rename openers" $ do
+    parse "[@#123] 你好" `shouldBe` (Nothing, Body [mentionNode 123, NText " 你好"])
     parse "[@#123: 老张] 你好"
+      `shouldBe` (Nothing, Body [NMention (PrincipalId 123) "老张", NText " 你好"])
+    parse "[↩#98765] 说得对" `shouldBe` (Just 98765, Body [NText "说得对"])
+    -- Mixed spellings in one chunk, which is what a window spanning the
+    -- rename actually looks like.
+    parse "[reply#7413] [@#123] 和 [mention#123]"
+      `shouldBe` ( Just 7413,
+                   Body [mentionNode 123, NText " 和 ", mentionNode 123]
+                 )
+
+  it "captures the explicit display fallback in the historical token" $
+    parse "[mention#123: 老张] 你好"
       `shouldBe` (Nothing, Body [NMention (PrincipalId 123) "老张", NText " 你好"])
 
 tokenSpec :: Spec
 tokenSpec = describe "placeholder tokens" $ do
   it "extracts the reply target and strips the seam" $
-    parse "[↩#98765] 说得对"
+    parse "[reply#98765] 说得对"
       `shouldBe` (Just 98765, Body [NText "说得对"])
 
   it "still accepts a negative id, so a pre-cutover echo cannot leak as text" $
-    fst (parse "[↩#-42] ok") `shouldBe` Just (-42)
+    fst (parse "[reply#-42] ok") `shouldBe` Just (-42)
 
   it "parses sticker ids, display forms and caption references" $ do
     parse "好的[sticker#42]"
@@ -149,11 +165,11 @@ roundTripSpec :: Spec
 roundTripSpec = describe "round trip" $ do
   it "parse . emit ≡ id on parser output (the persisted-history contract)" $ do
     let inputs =
-          [ "[@#123] 你好",
+          [ "[mention#123] 你好",
             "@张三 你好",
-            "喊 [@#987] 来看[sticker#42]",
-            "[↩#98765] 说得对 [face#5]",
-            "[↩#-42] [image#7407] 再看一遍",
+            "喊 [mention#987] 来看[sticker#42]",
+            "[reply#98765] 说得对 [face#5]",
+            "[reply#-42] [image#7407] 再看一遍",
             "看这张 [image#7407.2] 就够了",
             "[sticker#柴犬瘫地]",
             "plain text, no tokens 中文",
@@ -166,4 +182,4 @@ roundTripSpec = describe "round trip" $ do
 
   it "emits the documented normal form" $
     emitModelChunk (Just 5) (Body [mentionNode 123, NText " 好"])
-      `shouldBe` "[↩#5] [@#123] 好"
+      `shouldBe` "[reply#5] [mention#123] 好"

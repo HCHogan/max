@@ -361,7 +361,7 @@ renderPlainText = T.concat . map go
 
 -- | Trim whitespace at the outer edges of a segment list.
 --
--- Removing a placeholder leaves a seam: @"[↩#id] 说得对"@ becomes a
+-- Removing a placeholder leaves a seam: @"[reply#id] 说得对"@ becomes a
 -- text segment starting with a space once the quote token is gone.
 -- An edge segment that was nothing but whitespace disappears entirely.
 --

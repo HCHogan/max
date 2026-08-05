@@ -48,13 +48,13 @@ spec = do
 
     -- The format guide drills "回谁就引谁", so the model quotes the
     -- message it is declining; that must not turn the marker into a
-    -- literal message (production: [↩#id] [silence] went out as text).
+    -- literal message (production: [reply#id] [silence] went out as text).
     it "sees through leading quote handles" $ do
-      parseSilence "[↩#7413] [silence]" `shouldBe` Just Nothing
-      parseSilence "[↩#7413][silence:吃瓜]" `shouldBe` Just (Just 271)
-      parseSilence "[↩#-88][↩#7413] [silence]" `shouldBe` Just Nothing -- forward-child id
-      parseSilence "[↩#7413] 这条不用回但我说两句" `shouldBe` Nothing
-      parseSilence "[↩#7413]" `shouldBe` Just Nothing -- a bare quote says nothing at all
+      parseSilence "[reply#7413] [silence]" `shouldBe` Just Nothing
+      parseSilence "[reply#7413][silence:吃瓜]" `shouldBe` Just (Just 271)
+      parseSilence "[reply#-88][reply#7413] [silence]" `shouldBe` Just Nothing -- forward-child id
+      parseSilence "[reply#7413] 这条不用回但我说两句" `shouldBe` Nothing
+      parseSilence "[reply#7413]" `shouldBe` Just Nothing -- a bare quote says nothing at all
     it "does not mute ordinary replies" $
       isSilentReply "今天天气不错" `shouldBe` False
 

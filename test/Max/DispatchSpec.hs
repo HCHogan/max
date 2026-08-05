@@ -35,7 +35,7 @@ spec = describe "canonical dispatch addressing" $ do
   describe "the text the command parser and the current line see" $ do
     it "renders a mention as the person's canonical handle" $ do
       let message = qq [NMention (MentionIdentity (PrincipalIdentityId 2)) "Alice", NText " 在吗"]
-      dispatchText message `shouldBe` "[@#2] 在吗"
+      dispatchText message `shouldBe` "[mention#2] 在吗"
 
     it "drops the bot's own mention on QQ" $ do
       let message = qq [NMention (MentionIdentity (PrincipalIdentityId 1)) "Max", NText " !status"]
@@ -43,7 +43,7 @@ spec = describe "canonical dispatch addressing" $ do
 
     it "drops it on Matrix, through the bot's other account" $ do
       let message = matrix [NMention (MentionIdentity (PrincipalIdentityId 11)) "Max", NText " help"]
-      dispatchText message `shouldBe` "[@#1] help"
+      dispatchText message `shouldBe` "[mention#1] help"
       dispatchTextWithoutSelf message `shouldBe` "help"
 
     it "keeps mentions of other people" $ do
@@ -53,7 +53,7 @@ spec = describe "canonical dispatch addressing" $ do
                 NText " 转告 ",
                 NMention (MentionIdentity (PrincipalIdentityId 2)) "Alice"
               ]
-      dispatchTextWithoutSelf message `shouldBe` "转告 [@#2]"
+      dispatchTextWithoutSelf message `shouldBe` "转告 [mention#2]"
 
     it "falls back to @name when a mention resolves to nobody" $ do
       let message = qq [NMention (MentionIdentity (PrincipalIdentityId 99)) "Ghost", NText " ?"]

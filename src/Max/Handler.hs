@@ -18,7 +18,7 @@ import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
 import Data.List (find, partition, unsnoc)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime)
@@ -1293,7 +1293,7 @@ sendTarget outputCaps gm rosterNames stickersOn =
 --
 -- Recording requires the round-trip: @message_id@ is assigned by QQ
 -- and only comes back in the send response, and it is the table's
--- primary key — the id every @[↩#id]@ quote and reply link resolves
+-- primary key — the id every @[reply#id]@ quote and reply link resolves
 -- against.  Fire-and-forget cannot record anything.
 --
 -- Every failure only logs.  A message that went out but couldn't be
@@ -1532,13 +1532,15 @@ parseSilence t0
       (T.stripPrefix "[silence:" t <|> T.stripPrefix "[silence：" t)
         >>= T.stripSuffix "]"
 
--- | Strip leading @[↩#id]@ handles (ids may be negative — forward
+-- | Strip leading @[reply#id]@ handles (ids may be negative — forward
 -- children) and surrounding whitespace.  Only the prefix: a quote in
 -- the middle of real text is content.
+-- Both openers, for the same reason 'Max.Reply.matchToken' reads both: a
+-- model quoting a pre-rename line writes what that line spells.
 dropQuoteHandles :: T.Text -> T.Text
 dropQuoteHandles s =
   let s' = T.stripStart s
-   in case T.stripPrefix "[↩#" s' of
+   in case listToMaybe (mapMaybe (`T.stripPrefix` s') ["[reply#", "[↩#"]) of
         Just rest
           | (num, rest') <- T.span (\c -> isDigit c || c == '-') rest,
             not (T.null (T.filter isDigit num)),

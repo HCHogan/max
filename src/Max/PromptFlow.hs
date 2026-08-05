@@ -615,11 +615,11 @@ fixtureMedia kind =
 fixtureTranscript :: [HistoryItem]
 fixtureTranscript =
   [ history 7402 9 "小美" 22 48 "今晚有人打游戏吗",
-    history 7404 5 "老张" 22 50 "[↩#7402] 不打，在调板子",
+    history 7404 5 "老张" 22 50 "[reply#7402] 不打，在调板子",
     history 7405 5 "老张" 22 52 "我这个波形好怪 [image#7405.1: 示波器截图，黄色方波上升沿明显圆角]",
     history 7406 9 "小美" 22 53 "[sticker#212: 猫猫瞪大眼睛凑近屏幕]",
     history 7407 5 "老张" 22 54 "拍了段视频你们看 [video#7407.1: 首帧是一块面包板电路](42秒)",
-    history 7408 1 "Max" 22 55 "[↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档",
+    history 7408 1 "Max" 22 55 "[reply#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档",
     history 7409 7 "阿飞" 22 56 "[card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]",
     history 7410 7 "阿飞" 22 57 "[face#187: 幽灵] 我的板子也出鬼畜问题了",
     history 7411 9 "小美" 22 58 "楼上俩难兄难弟 ⏎ 建议直接烧了重买"

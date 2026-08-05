@@ -71,10 +71,10 @@ systemPrompt multimodal' private outputCaps persona skills' =
       <> [ "  - 被 @/引用直接触发时沉默不会完全无声：[silence] 会自动在触发消息上贴一个闭嘴表情（不发消息）。想表达具体情绪可换 [silence:表情名]，名字从小黄脸对照表（见下）挑，如 [silence:吃瓜]。"
          | outputCaps.canReaction && outputCaps.canFace
          ]
-      <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行首 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。"
+      <> [ "  - 引用要主动用：回谁就在那段开头写 [reply#<msgid>]（对方消息的 id 见行首 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。"
          | not private && outputCaps.canReply
          ]
-      <> [ "  - 要 @ 某人写 [@#<id>]（id 查 [environment] 的成员对照表）；有原生 @ 的端会转成真正的 @，其余端显示 @名字。"
+      <> [ "  - 要 @ 某人写 [mention#<id>]（id 查 [environment] 的成员对照表）；有原生 @ 的端会转成真正的 @，其余端显示 @名字。"
          | not private && outputCaps.canMention
          ]
       <> [ "  - 当前端点没有原生引用、QQ 小黄脸或按 QQ 号 @ 的输出动作；直接用普通文字回复。"
@@ -106,18 +106,18 @@ systemPrompt multimodal' private outputCaps persona skills' =
            -- transcript on purpose (max may already have answered it, and
            -- everyone else read it), but "撤回" is a person taking something
            -- back, and reading it is not licence to repeat it.
-           "  [撤回了 #7405]              — 那条消息被撤回了；原文还在上面，因为大家都看见了、你可能也已经回过了。但那是本人要收回的话，别复述、别引用、别追问，除非本人自己又提起",
-           "  [贴了表情 花朵脸 #7405]     — 有人给那条消息贴了表情（[取消了…] 是撤下）"
+           "  [unsend#7405]              — 那条消息被撤回了；原文还在上面，因为大家都看见了、你可能也已经回过了。但那是本人要收回的话，别复述、别引用、别追问，除非本人自己又提起",
+           "  [react#7405: 花朵脸]        — 有人给那条消息贴了表情（[unreact#…] 是撤下，[edit#…] 是编辑过）"
          ]
-      <> [ "  [@#7: 名字]                 — @某人；对照表见 [environment]"
+      <> [ "  [mention#7: 名字]           — @某人；对照表见 [environment]"
          | outputCaps.canMention
          ]
       <> [ "",
            "你能写的动作（只认下面列出的动作）：",
            "  [split]  行内强制分条（一般用空行分段就行）     [silence]  沉默"
          ]
-      <> ["  [↩#id]  段首引用" | outputCaps.canReply]
-      <> ["  [@#id]  @某人（id 查 [environment] 对照表）" | outputCaps.canMention]
+      <> ["  [reply#id]  段首引用" | outputCaps.canReply]
+      <> ["  [mention#id]  @某人（id 查 [environment] 对照表）" | outputCaps.canMention]
       <> ["  [sticker#id]  发表情包" | outputCaps.canMedia]
       <> ["  [face#id]  发 QQ 原生小黄脸" | outputCaps.canFace]
       <> ["  [image#id.序号]  把会话历史里的某张图转发出来（省略 .序号 就是那条消息的全部图）" | outputCaps.canMedia]
@@ -133,7 +133,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
            "纯展示（只读，写了也不会发生任何事）：",
            if outputCaps.canReply
              then
-               "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，引用它就写 [↩#那个id]。\
+               "  行首 [HH:MM <name> #<msgid>]: — 历史消息行；#后是消息 id，引用它就写 [reply#那个id]。\
                \你自己以前说的话也在这份记录里，名字是 Max——那是记录格式，不是说话方式：\
                \你的回复正文直接写内容，绝对不要带这个行首前缀。"
              else
@@ -141,7 +141,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
                \你自己以前说的话也在这份记录里，名字是 Max——那是记录格式，不是说话方式：\
                \你的回复正文直接写内容，绝对不要带这个行首前缀。",
            "  [episode#<uuid> 日期..日期 P1/P2/P3] — 更早聊天的可重建摘要；需要原话时把 uuid 传给 context_expand。",
-           "  [↩ quoted ...]               — 用户引用的那条消息（内容已展开；也可用 get_message_by_id 展开任意 id）",
+           "  [reply quoted ...]               — 用户引用的那条消息（内容已展开；也可用 get_message_by_id 展开任意 id）",
            "  [card: 来源 | 标题 | 链接]     — 分享卡片；B站卡用 view_bilibili、知乎卡用 view_zhihu，传链接看内容",
            "  [file:<name>]                — 群文件；用 import_file_to_sandbox 处理",
            "",
@@ -155,9 +155,9 @@ systemPrompt multimodal' private outputCaps persona skills' =
              then
                [ "示范——一条带引用、@、分段、表情包的回复该长这样（id 都要取自上下文，",
                  "别照抄示范里的数字；表情包只写数字 id、单独成段）：",
-                 "  [↩#7413] 这是 HardFault，PC 指到 0x08003a2c，查一下链接脚本。",
+                 "  [reply#7413] 这是 HardFault，PC 指到 0x08003a2c，查一下链接脚本。",
                  "  [split]",
-                 "  [↩#7405] [@#7] 你那个是探头打了 1X，切 10X 再看。",
+                 "  [reply#7405] [mention#7] 你那个是探头打了 1X，切 10X 再看。",
                  "  [split]",
                  "  [sticker#3407]"
                ]
@@ -166,7 +166,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
       <> ( if outputCaps.canReply && not outputCaps.canMention
              then
                [ "示范——引用 id 必须取自上下文，照抄行首 # 后面那个数字：",
-                 "  [↩#7413] 我在回这一条。"
+                 "  [reply#7413] 我在回这一条。"
                ]
              else []
          )

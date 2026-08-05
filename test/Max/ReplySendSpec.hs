@@ -106,9 +106,9 @@ spec = do
       fst (readyPrefix body) `shouldBe` ""
 
     it "keeps a quote token with the paragraph that wrote it" $ do
-      let body = "[↩#7405] 上升沿圆角是探头没补偿\n\n另外你那个 1X 档也要换"
+      let body = "[reply#7405] 上升沿圆角是探头没补偿\n\n另外你那个 1X 档也要换"
           (a, b) = split body
-      take 1 a `shouldBe` ["[↩#7405] 上升沿圆角是探头没补偿"]
+      take 1 a `shouldBe` ["[reply#7405] 上升沿圆角是探头没补偿"]
       (a <> b) `shouldBe` sources (planReply body)
 
   describe "capTo" $ do

@@ -166,10 +166,10 @@ spec = do
           (system, user) = splitMessages (renderContext baseInputs {outputCapabilities = imessageCaps})
       system `shouldSatisfy` T.isInfixOf "当前端点没有原生引用、QQ 小黄脸或按 QQ 号 @ 的输出动作"
       system `shouldSatisfy` (not . T.isInfixOf "[face#id]  发 QQ 原生小黄脸")
-      system `shouldSatisfy` (not . T.isInfixOf "[↩#id]  段首引用")
-      system `shouldSatisfy` (not . T.isInfixOf "[@#QQ号]  @某人")
+      system `shouldSatisfy` (not . T.isInfixOf "[reply#id]  段首引用")
+      system `shouldSatisfy` (not . T.isInfixOf "[mention#QQ号]  @某人")
       user `shouldSatisfy` T.isInfixOf "会话 ID：7777"
-      user `shouldSatisfy` (not . T.isInfixOf "成员对照（[@#QQ号]")
+      user `shouldSatisfy` (not . T.isInfixOf "成员对照（[mention#QQ号]")
 
   describe "renderContext system prompt" $ do
     it "uses default persona when session has no override" $ do
@@ -244,9 +244,9 @@ spec = do
       let inp = baseInputs {transcript = [historyAt 9 8001 otherMemberId (Just "Bob") "早"]}
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("成员对照" `T.isInfixOf`)
-      ub `shouldSatisfy` (("[@#" <> T.pack (show botId) <> "]=Max（你自己）") `T.isInfixOf`)
-      ub `shouldSatisfy` (("[@#" <> T.pack (show memberId) <> "]=Alice") `T.isInfixOf`)
-      ub `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=Bob") `T.isInfixOf`)
+      ub `shouldSatisfy` (("[mention#" <> T.pack (show botId) <> "]=Max（你自己）") `T.isInfixOf`)
+      ub `shouldSatisfy` (("[mention#" <> T.pack (show memberId) <> "]=Alice") `T.isInfixOf`)
+      ub `shouldSatisfy` (("[mention#" <> T.pack (show otherMemberId) <> "]=Bob") `T.isInfixOf`)
 
     it "prefers 群名片 over nickname in context lines and the roster" $ do
       let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just "sleepy"}
@@ -254,7 +254,7 @@ spec = do
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[09:00 sleepy #8001]" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("SkyRain" `T.isInfixOf`))
-      ub `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=sleepy") `T.isInfixOf`)
+      ub `shouldSatisfy` (("[mention#" <> T.pack (show otherMemberId) <> "]=sleepy") `T.isInfixOf`)
 
     -- A row carries the name captured when it was written.  Production called
     -- a Matrix member by their mxid for as long as one pre-rename line stayed
@@ -264,7 +264,7 @@ spec = do
           newer = historyAt 10 8002 otherMemberId (Just "Bob") "在"
           inp = baseInputs {transcript = [older, newer]}
           (_, ub) = splitMessages (renderContext inp)
-      ub `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=Bob") `T.isInfixOf`)
+      ub `shouldSatisfy` (("[mention#" <> T.pack (show otherMemberId) <> "]=Bob") `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("]=@bob:server" `T.isInfixOf`))
       -- The lines themselves still say what each one said at the time.
       ub `shouldSatisfy` ("[09:00 @bob:server #8001]" `T.isInfixOf`)
@@ -646,16 +646,16 @@ spec = do
       sysOn `shouldSatisfy` ("直接附在消息末尾" `T.isInfixOf`)
 
   describe "renderContext reply handles" $ do
-    it "prefixes a transcript reply line with a [↩#<id>] handle" $ do
+    it "prefixes a transcript reply line with a [reply#<id>] handle" $ do
       let quoter = (historyAt 9 7001 memberId (Just "Alice") "同意") {History.replyTo = Just 6001}
           inp = baseInputs {transcript = [quoter]}
           (_, ub) = splitMessages (renderContext inp)
-      ub `shouldSatisfy` ("[↩#6001] 同意" `T.isInfixOf`)
+      ub `shouldSatisfy` ("[reply#6001] 同意" `T.isInfixOf`)
 
     it "leaves non-reply transcript lines without a handle" $ do
       let inp = baseInputs {transcript = [historyAt 9 7001 memberId (Just "Alice") "随便说说"]}
           (_, ub) = splitMessages (renderContext inp)
-      ub `shouldSatisfy` (not . ("[↩#" `T.isInfixOf`))
+      ub `shouldSatisfy` (not . ("[reply#" `T.isInfixOf`))
 
   describe "applyStickerCaptions" $ do
     let caps = Map.fromList [(50 :: Int64, [(700 :: Int64, "柴犬歪头，配字\"啊?\"，表达疑惑")])]

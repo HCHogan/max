@@ -11,7 +11,7 @@
 -- give one of those its own copy of \"turn model text into messages\"
 -- produced the same bug twice in one day (@a0faa5b@, @d7f8177@):
 -- narration had a private copy, so it missed 'parseReplyTokens' and
--- then 'trimEdgeSegs', and a literal @[↩#111091811]@ went out as
+-- then 'trimEdgeSegs', and a literal @[reply#111091811]@ went out as
 -- visible text.  One implementation, two callers.
 --
 -- == Splitting a reply across calls
@@ -155,7 +155,7 @@ canStream b = b.sbChunksLeft > 1
 -- which is what lets the model quote a different message from each
 -- paragraph and drop a sticker inline:
 --
---   * a leading @[↩#\<id\>]@ becomes the chunk's 'SegReply' quote —
+--   * a leading @[reply#\<id\>]@ becomes the chunk's 'SegReply' quote —
 --     nothing is auto-quoted, the model decides;
 --   * @[sticker#\<id\>]@ becomes a sticker segment ('resolveSticker'),
 --     an unknown id is dropped rather than failing the reply;
@@ -166,7 +166,7 @@ canStream b = b.sbChunksLeft > 1
 --     account in this conversation, and folds to @\@name@ text when they do
 --     not — which is also what a principal id the model invented does.
 --
--- A chunk that resolves to no content (a lone @[↩#id]@, or only a bad
+-- A chunk that resolves to no content (a lone @[reply#id]@, or only a bad
 -- sticker token) is skipped.  Each chunk persists with its /resolved/
 -- surface form as @rendered_text@ (sticker tokens normalised to
 -- @[sticker#\<id\>: \<caption\>]@, image tokens keeping their

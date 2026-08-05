@@ -13,7 +13,7 @@
 --
 -- No cap on chunk count: the system prompt already pushes for short
 -- multi-chunk replies, and every chunk carries its own optional
--- [↩#<id>] quote — folding tails together broke those.
+-- [reply#<id>] quote — folding tails together broke those.
 --
 -- Everything here is pure; the effectful part (typst rendering,
 -- sending) lives with the caller.
@@ -91,7 +91,7 @@ planReply body = capChunks (concatMap explode (splitTables body))
 --
 -- __Deliberately far above ordinary use.__  A 5-chunk cap existed once
 -- and was removed in v0.2.7 for a good reason: folding the tail
--- together breaks per-chunk @[↩#id]@ quotes, since 'parseReplyTokens'
+-- together breaks per-chunk @[reply#id]@ quotes, since 'parseReplyTokens'
 -- keeps only the first quote in a chunk and strips the rest.  That
 -- tradeoff is still real, so the ceiling sits where only pathological
 -- output reaches it rather than where deliberate multi-part replies do
@@ -105,7 +105,7 @@ maxChunks = 10
 -- dropping it — loud but bounded beats truncated, and the bot's own
 -- history still records what it said.  A table caught in the tail
 -- degrades to its markdown source, the same fallback a failed render
--- already takes; a second @[↩#id]@ in the tail is lost, which is the
+-- already takes; a second @[reply#id]@ in the tail is lost, which is the
 -- cost 'maxChunks' documents.
 capChunks :: [Chunk] -> [Chunk]
 capChunks cs
@@ -115,7 +115,7 @@ capChunks cs
     (keep, spill) = splitAt (maxChunks - 1) cs
 
 --------------------------------------------------------------------------------
--- Outbound placeholders: [↩#<id>] quotes, [sticker#<id>] stickers,
+-- Outbound placeholders: [reply#<id>] quotes, [sticker#<id>] stickers,
 -- [image#<id>] resends, [face#<id>] QQ faces.
 
 -- | A parsed span of one planned text chunk.  'PieceText' still holds
@@ -141,8 +141,8 @@ data ReplyPiece
 -- | Pull the reply/sticker/image placeholders out of one planned text
 -- chunk.
 --
---   * @[↩#\<id\>]@ — a quote.  The first one becomes the chunk's reply
---     target ('fst' of the result); every @[↩#…]@ token is stripped
+--   * @[reply#\<id\>]@ — a quote.  The first one becomes the chunk's reply
+--     target ('fst' of the result); every @[reply#…]@ token is stripped
 --     from the text regardless of position.
 --   * @[sticker#\<id\>]@ — a sticker, becomes a 'PieceSticker'.  The
 --     inbound display form @[sticker#\<id\>: …]@ is accepted too (the
@@ -198,7 +198,10 @@ data Token
 
 matchToken :: Text -> Maybe (Token, Text)
 matchToken t =
-  (do rest <- T.stripPrefix "[↩#" t; (n, r) <- signedTokenClose rest; pure (TokReply n, r))
+  (do rest <- T.stripPrefix "[reply#" t; (n, r) <- signedTokenClose rest; pure (TokReply n, r))
+    -- Pre-rename reply opener, kept readable for the same reason the
+    -- sticker one is: history and the model's own past lines carry it.
+    <|> (do rest <- T.stripPrefix "[↩#" t; (n, r) <- signedTokenClose rest; pure (TokReply n, r))
     <|> (do rest <- T.stripPrefix "[image#" t; (n, seg, r) <- segmentedTokenClose rest; pure (TokImage n seg, r))
     <|> (do rest <- T.stripPrefix "[face#" t; (n, r) <- tokenClose rest; pure (TokFace (fromIntegral n), r))
     <|> (do rest <- T.stripPrefix "[sticker#" t; (n, r) <- tokenClose rest; pure (TokSticker n, r))

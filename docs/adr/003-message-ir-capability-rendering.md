@@ -484,9 +484,34 @@ unless something chooses `debug`.
 
 A meta event carries no content nodes — its whole meaning is the relation —
 so `Max.IR.Prompt.systemEventText` supplies the projection, resolved inside
-the ingest transaction that turns the native relation id canonical. The line
-names its target as `#<canonical id>`, the same handle ADR 004 gave the model
-for every other cross-reference.
+the ingest transaction that turns the native relation id canonical:
+`[unsend#7405]`, `[edit#7405]`, `[react#7405: 托腮]`, `[unreact#…]`.
+
+#### 6b. One token grammar
+
+The same pass finished the job §4 started. Every model-facing handle is now
+`[word#id]` or `[word#id: label]` — `[reply#…]` and `[mention#…]` replace
+`[↩#…]` and `[@#…]`, the two that spelled themselves with symbols.
+
+Consistency is the smaller half of the reason. A display token written as
+prose — `[撤回了 #7405]` was the first draft — is a well-formed sentence, and
+the transcript's own format is the single thing max is most often told not to
+speak (`[HH:MM <name> #<msgid>]:` gets its own warning in the format guide).
+A machine token cannot be mistaken for something to say.
+
+Both spellings are **read** for as long as either survives in history:
+`Max.IR.Prompt.mentionOpeners`, `Max.Reply.matchToken`, and
+`Max.Handler.dropQuoteHandles`. A model's transcript is partly its own past
+output, so it copies what it reads; dropping the old opener would turn those
+lines into prose. Only the new spelling is ever written. `[@#<qq number>]` in
+`OneBot.Segment.renderPlainText` is a different id space feeding the command
+parser and deliberately keeps its wire spelling — the rename is what finally
+makes the two visibly distinct.
+
+`rendered_text` stores the mention token, so 10779 rows carry the old
+spelling until `max-adr003-maintenance reproject` regenerates them from
+`canonical_content`; `verify` reports the mismatch until it does. The reply
+token is computed at render time and needs no migration.
 
 **A recalled message keeps its text.** Hiding it would be the incoherent
 choice, not the discreet one: the 撤回 window is two minutes, dispatch has

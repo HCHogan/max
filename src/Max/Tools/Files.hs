@@ -288,7 +288,7 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
 -- The caption is model-authored text, written under the same format
 -- guide as a reply, so it arrives carrying the same placeholders — and
 -- this was the last sender that never learned to read them.
--- Production: @"[↩#493645310] 画好了，macOS belike：…"@ went to the
+-- Production: @"[reply#493645310] 画好了，macOS belike：…"@ went to the
 -- group with the token visible, weeks after the reply and narration
 -- paths were both taught to consume it.  Pure and top-level for the
 -- It shares the model-token codec with ordinary replies; model-only media

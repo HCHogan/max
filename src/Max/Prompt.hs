@@ -1031,7 +1031,7 @@ renderContext pi' =
             <> map ("  " <>) pi'.groupBrief
             <> ["  当前模型：" <> pi'.session.model]
             <> [ "  成员对照（[@#<id>] 即 @某人）："
-                   <> T.intercalate "、" ["[@#" <> tshow principal <> "]=" <> name | (principal, name) <- roster]
+                   <> T.intercalate "、" ["[mention#" <> tshow principal <> "]=" <> name | (principal, name) <- roster]
                | pi'.outputCapabilities.canMention
                ]
       -- Questions somebody else's turn is already handling never reach
@@ -1693,7 +1693,7 @@ renderReplyLine tz' h =
 -- same message).  Empty for non-replies.  This keeps a quote chain
 -- walkable one hop at a time instead of recursively pre-expanding it.
 replyPrefix :: HistoryItem -> Text
-replyPrefix h = maybe "" (\r -> "[↩#" <> T.pack (show r) <> "] ") h.replyTo
+replyPrefix h = maybe "" (\r -> "[reply#" <> T.pack (show r) <> "] ") h.replyTo
 
 -- | The expanded contents of a quoted 转发聊天记录.  Lines carry the
 -- original send times; each line is truncated to keep a huge bundle

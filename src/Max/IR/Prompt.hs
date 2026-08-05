@@ -5,9 +5,9 @@
 -- ADR 004 fixed the vocabulary this module speaks.  Every handle names a
 -- canonical key verbatim, with no mapping table on either side:
 --
---   * @[\@#\<principal_id\>]@ — a person, not an account.  Which account
+--   * @[mention#\<principal_id\>]@ — a person, not an account.  Which account
 --     carries the mention is the send path's problem.
---   * @[↩#\<canonical_message_id\>]@ — a quote.
+--   * @[reply#\<canonical_message_id\>]@ — a quote.
 --   * @[image#\<canonical_message_id\>(.\<seg\>)?]@ — a message's images,
 --     or one of them; @(canonical_message_id, seg_index)@ is the primary
 --     key of @message_images@.
@@ -44,7 +44,7 @@ import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, fromMaybe)
+import Data.Maybe (catMaybes, fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Faces (faceNameById)
@@ -94,12 +94,12 @@ parseModelChunk roster t0 =
               }
         ]
 
-    -- The display form [@#id: name] predates the compact prompt emitter and
-    -- is still what a model echoing an old line writes; the caption is
+    -- The display form [mention#id: name] predates the compact prompt emitter
+    -- and is still what a model echoing an old line writes; the caption is
     -- accepted and used as the display.
-    mentionNodes input = case T.breakOn "[@#" input of
-      (before, rest)
-        | T.null rest -> [NText before | not (T.null before)]
+    mentionNodes input = case earliestMention input of
+      Nothing -> [NText input | not (T.null input)]
+      Just (before, rest)
         | Just (principal, display, after) <- mentionToken' rest ->
             [NText before | not (T.null before)]
               <> (NMention principal display : mentionTail after)
@@ -109,8 +109,22 @@ parseModelChunk roster t0 =
                   NText text : nodes -> NText (before <> opener <> text) : nodes
                   nodes -> NText (before <> opener) : nodes
 
+    -- Both spellings are read for as long as either survives in history.  A
+    -- model's transcript includes its own past output, so a rename that
+    -- stopped accepting the old opener would leave max unable to copy the
+    -- line directly above it.  Only the first is ever written.
+    mentionOpeners = ["[mention#", "[@#"]
+
+    earliestMention input =
+      listToMaybe . sortOn (T.length . fst) $
+        [ split
+        | opener <- mentionOpeners,
+          let split@(_, rest) = T.breakOn opener input,
+          not (T.null rest)
+        ]
+
     mentionToken' token = do
-      afterOpen <- T.stripPrefix "[@#" token
+      afterOpen <- listToMaybe (mapMaybe (`T.stripPrefix` token) mentionOpeners)
       let (digits, suffix) = T.span isDigit afterOpen
       if T.null digits
         then Nothing
@@ -140,7 +154,7 @@ parseModelChunk roster t0 =
             nodes -> NText " " : nodes
 
 -- | Rescue @\@显示名@ spans a model wrote instead of the canonical
--- @[\@#\<principal_id\>]@ token.  The span converts when the text right
+-- @[mention#\<principal_id\>]@ token.  The span converts when the text right
 -- after the @ starts with a roster display name (longest match wins; names
 -- shorter than 2 characters or leading with a digit are ignored — too
 -- collision-prone with ordinary prose and with the token form itself).
@@ -168,7 +182,7 @@ rescueNameMentions names0 t0
                        n `T.isPrefixOf` cand
                      ] of
                   ((PrincipalId principal, after) : _) ->
-                    before <> "[@#" <> tshow principal <> "]" <> go after
+                    before <> "[mention#" <> tshow principal <> "]" <> go after
                   [] -> before <> "@" <> go cand
 
 mediaRefMeta :: MediaKind -> Maybe Text -> MediaMeta
@@ -214,19 +228,24 @@ promptCanonicalText principals = renderPromptBody (canonicalMention principals)
 systemEventText :: EventKind -> Maybe Int64 -> Maybe Text -> Bool -> Text
 systemEventText kind target reactionKey added = case kind of
   EventMessage -> ""
-  EventRedaction -> wrap ("撤回了" <> about)
-  EventEdit -> wrap ("编辑了" <> about)
-  EventReaction -> wrap ((if added then "贴了" else "取消了") <> face <> about)
-  EventMembership -> wrap "群成员变动"
+  EventRedaction -> token "unsend" Nothing
+  EventEdit -> token "edit" Nothing
+  EventReaction -> token (if added then "react" else "unreact") (Just face)
+  EventMembership -> "[membership]"
   where
-    wrap t = "[" <> t <> "]"
-    about = maybe "一条消息" ((" #" <>) . tshow) target
-    -- A QQ reaction key is a bare QSid.  "贴了表情 212" tells the model
+    -- The same @[word#id: label]@ shape every other display token uses.
+    -- Prose here would be worse than inconsistent: "撤回了 #7405" is a
+    -- well-formed Chinese sentence, and the transcript's own format is the
+    -- thing max is most often told not to speak.  A machine token cannot be
+    -- mistaken for something to say.
+    token name label =
+      "[" <> name <> maybe "" (("#" <>) . tshow) target <> maybe "" (": " <>) label <> "]"
+    -- A QQ reaction key is a bare QSid.  "react#7405: 212" tells the model
     -- nothing it can use, and the curated table is the same one the model is
-    -- offered for sending faces, so both directions agree on the name.
+    -- offered for sending faces, so both directions agree that 212 is 托腮.
     face = case reactionKey of
       Nothing -> "表情"
-      Just key -> "表情 " <> fromMaybe key (faceNameById =<< readIntegral key)
+      Just key -> fromMaybe key (faceNameById =<< readIntegral key)
 
 -- | No trailing space, unlike the QQ wire form this replaces.  Every
 -- adapter's mention node is followed by a text node that already begins with
@@ -239,7 +258,7 @@ canonicalMention :: Map PrincipalIdentityId PrincipalId -> MentionTarget -> Text
 canonicalMention principals target display = case target of
   MentionAll -> mentionToken display
   MentionIdentity identity -> case Map.lookup identity principals of
-    Just (PrincipalId principal) -> "[@#" <> tshow principal <> "]"
+    Just (PrincipalId principal) -> "[mention#" <> tshow principal <> "]"
     Nothing -> mentionToken display
 
 renderPromptBody ::
@@ -301,12 +320,12 @@ rawText key raw = raw >>= parseMaybe (withObject "media prompt metadata" (.: Key
 -- own (the following text node holds it, exactly as parsing leaves it).
 emitModelChunk :: Maybe Int64 -> Body 'ModelParsed -> Text
 emitModelChunk replyTarget body =
-  maybe "" (\rid -> "[↩#" <> tshow rid <> "] ") replyTarget
+  maybe "" (\rid -> "[reply#" <> tshow rid <> "] ") replyTarget
     <> T.concat (map nodeToken body.nodes)
   where
     nodeToken = \case
       NText t -> t
-      NMention (PrincipalId principal) _ -> "[@#" <> tshow principal <> "]"
+      NMention (PrincipalId principal) _ -> "[mention#" <> tshow principal <> "]"
       NEmote e -> "[face#" <> e.nativeId <> "]"
       NMedia ref _ -> case ref of
         RefSticker n -> "[sticker#" <> tshow n <> "]"

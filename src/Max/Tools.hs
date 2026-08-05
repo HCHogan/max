@@ -73,11 +73,11 @@ getMessageByIdTool tz dc =
     { toolName = "get_message_by_id",
       toolDescription =
         T.unwords
-          [ "按 id 取一条历史消息：传上下文行里 #<id> 或 [↩#<id>] 的那个数字。",
+          [ "按 id 取一条历史消息：传上下文行里 #<id> 或 [reply#<id>] 的那个数字。",
             "适合有人提到一条旧消息、或者你想看引用/转发的原文时用。",
             "库里没有这条就返回 null。"
           ],
-      toolSchema = toolObject [("message_id", integerParam "上下文里 #<id> / [↩#<id>] 的那个数字")] ["message_id"],
+      toolSchema = toolObject [("message_id", integerParam "上下文里 #<id> / [reply#<id>] 的那个数字")] ["message_id"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
@@ -362,7 +362,7 @@ historyItemSummary tz h =
     ]
       -- The message this one quotes, so a quote chain is walkable one
       -- get_message_by_id hop at a time (the same handle rendered as
-      -- [↩#<id>] in the prompt's context lines).
+      -- [reply#<id>] in the prompt's context lines).
       <> ["reply_to" .= r | Just r <- [h.replyTo]]
 
 shorten :: Int -> Text -> Text
