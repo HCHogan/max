@@ -256,6 +256,19 @@ spec = do
       ub `shouldSatisfy` (not . ("SkyRain" `T.isInfixOf`))
       ub `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=sleepy") `T.isInfixOf`)
 
+    -- A row carries the name captured when it was written.  Production called
+    -- a Matrix member by their mxid for as long as one pre-rename line stayed
+    -- in the window, because the roster kept the oldest entry per principal.
+    it "names a renamed speaker by what they are called now" $ do
+      let older = historyAt 9 8001 otherMemberId (Just "@bob:server") "早"
+          newer = historyAt 10 8002 otherMemberId (Just "Bob") "在"
+          inp = baseInputs {transcript = [older, newer]}
+          (_, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` (("[@#" <> T.pack (show otherMemberId) <> "]=Bob") `T.isInfixOf`)
+      ub `shouldSatisfy` (not . ("]=@bob:server" `T.isInfixOf`))
+      -- The lines themselves still say what each one said at the time.
+      ub `shouldSatisfy` ("[09:00 @bob:server #8001]" `T.isInfixOf`)
+
     it "treats a blank card as absent" $ do
       let item = (historyAt 9 8001 otherMemberId (Just "SkyRain") "早") {senderCard = Just ""}
           inp = baseInputs {transcript = [item]}

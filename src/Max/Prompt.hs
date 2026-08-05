@@ -791,7 +791,14 @@ contextRoster pi' =
    in dedupeRoster $
         (selfPrincipal, "Max（你自己）")
           : (senderPrincipal, triggerSenderName pi'.triggerMessage)
-          : [ (h.authorPrincipalId, bestName h)
+          -- Newest line first, because a speaker's name is whatever they are
+          -- called *now*: a row carries the name captured when it was
+          -- written, so the oldest line in a window is the stalest answer.
+          -- Production called a Matrix member by their mxid for as long as
+          -- one pre-rename line stayed in context.  The bot and the trigger's
+          -- sender still lead, so their two deliberate names win.
+          : reverse
+            [ (h.authorPrincipalId, bestName h)
             | h <-
                 pi'.transcript
                   <> pi'.pinnedItems
@@ -799,7 +806,8 @@ contextRoster pi' =
               not h.fromBot
             ]
 
--- | Keep the first (name) entry per principal.
+-- | Keep the first (name) entry per principal; callers order the input so
+-- that the entry they want to win comes first.
 dedupeRoster :: [(Int64, Text)] -> [(Int64, Text)]
 dedupeRoster = go Set.empty
   where

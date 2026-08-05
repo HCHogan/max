@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               max
-version:            0.15.0
+version:            0.15.1
 synopsis:           Multi-platform group agent with durable context and memory
 license:            MIT
 license-file:       LICENSE
