@@ -118,7 +118,6 @@ library
         Max.DB.History
         Max.DB.Media
         Max.DB.Notify
-        Max.DB.Permissions
         Max.DB.PlatformIds
         Max.DB.Migrations
         Max.DB.Reminder

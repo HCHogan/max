@@ -10,7 +10,6 @@ spec = describe "Max.Admin" $ do
       route "GET" ["api", "overview"] `shouldBe` Just ROverview
       route "GET" ["api", "groups"] `shouldBe` Just RGroups
       route "GET" ["api", "memories"] `shouldBe` Just RMemoriesList
-      route "GET" ["api", "permissions"] `shouldBe` Just RGrantsList
       route "GET" ["api", "tasks"] `shouldBe` Just RTasksList
       route "GET" ["api", "usage"] `shouldBe` Just RUsage
       route "GET" ["api", "stats", "messages"] `shouldBe` Just RMessageStats
@@ -31,9 +30,7 @@ spec = describe "Max.Admin" $ do
       route "PATCH" ["api", "groups", "123", "session"] `shouldBe` Just (RSessionPatch 123)
       route "PATCH" ["api", "groups", "-42", "session"] `shouldBe` Just (RSessionPatch (-42))
       route "DELETE" ["api", "memories", "7"] `shouldBe` Just (RMemoryDelete 7)
-      route "DELETE" ["api", "permissions", "3"] `shouldBe` Just (RGrantDelete 3)
       route "DELETE" ["api", "tasks", "t17"] `shouldBe` Just (RTaskKill "t17")
-      route "POST" ["api", "permissions"] `shouldBe` Just RGrantCreate
       route "GET" ["api", "skills"] `shouldBe` Just RSkillsList
       route "POST" ["api", "skills"] `shouldBe` Just RSkillCreate
       route "POST" ["api", "context", "rebuild"] `shouldBe` Just RContextRebuild
@@ -77,9 +74,6 @@ spec = describe "Max.Admin" $ do
       needsAuth (RSessionPatch 1) `shouldBe` True
       needsAuth RMemoriesList `shouldBe` True
       needsAuth (RMemoryDelete 1) `shouldBe` True
-      needsAuth RGrantsList `shouldBe` True
-      needsAuth RGrantCreate `shouldBe` True
-      needsAuth (RGrantDelete 1) `shouldBe` True
       needsAuth RTasksList `shouldBe` True
       needsAuth (RTaskKill "t1") `shouldBe` True
       needsAuth RUsage `shouldBe` True

@@ -47,26 +47,6 @@ spec = do
         Right (Just (Unknown "effort" _)) -> pure ()
         other -> expectationFailure $ "expected Unknown effort, got: " <> show other
 
-  describe "!grant / !revoke / !perms" $ do
-    it "grant with canonical mention token" $
-      "!grant [@#223344556] persona" `parsesTo` Grant 223344556 "persona" False False
-    it "grant with bare qq and flags" $
-      "!grant 223344556 model --deny --global" `parsesTo` Grant 223344556 "model" True True
-    it "grant with separate short flags" $
-      "!grant 223344556 model -d -g" `parsesTo` Grant 223344556 "model" True True
-    it "grant with a bundled short cluster" $
-      "!grant 223344556 model -dg" `parsesTo` Grant 223344556 "model" True True
-    it "revoke with a short flag" $
-      "!revoke @223344556 persona -g" `parsesTo` Revoke 223344556 "persona" True
-    it "revoke with @qq form" $
-      "!revoke @223344556 persona" `parsesTo` Revoke 223344556 "persona" False
-    it "perms defaults to self" $ "!perms" `parsesTo` Perms Nothing
-    it "perms with target" $ "!perms [@#10001]" `parsesTo` Perms (Just 10001)
-    it "non-numeric target falls through to Unknown" $
-      case parseCommand "!grant 阿飞 persona" of
-        Right (Just (Unknown "grant" _)) -> pure ()
-        other -> expectationFailure $ "expected Unknown grant, got: " <> show other
-
   describe "!use / !status" $ do
     it "use show" $ "!use" `parsesTo` UseShow
     it "use set" $ "!use 114514191" `parsesTo` UseSet 114514191

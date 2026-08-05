@@ -39,7 +39,6 @@ import Max.Command.Types (Command (..))
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
 import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
-import Max.DB.Permissions (lookupGrant)
 import Max.Dispatch (DispatchMessage (..), dispatchMentionsSelf, dispatchTextWithoutSelf, stripDispatchVerb)
 import Max.Dispatch qualified as Dispatch
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
@@ -657,7 +656,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
       let sourcePlatform = gm.sourcePlatform
       targetGid <- resolveAdminTarget env gm cmd
       effTier <- effectiveTier env targetGid gm
-      allowed <- checkCmdPermission targetGid gm.userId effTier cmd
+      let allowed = checkCmdPermission effTier cmd
       if not allowed
         then do
           let UserId uidRaw = gm.userId
@@ -676,7 +675,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
       t <- loadSession env.beSessions env.beDefaultModel targetGid
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
       let replyTarget = (\(CanonicalMessageId target) -> target) <$> gm.replyTo
-      result <- CmdDispatch.execute t targetGid gm.userId gm.authorPrincipalId effTier replyTarget cmd
+      result <- CmdDispatch.execute t targetGid gm.userId gm.authorPrincipalId replyTarget cmd
       case result of
         -- In a group, textual command output (queries, error texts)
         -- goes to the sender's DMs — the group only sees an OK
@@ -1425,32 +1424,19 @@ resolveAdminTarget env gm cmd
 
 -- | The sender's effective tier IN THE TARGET GROUP: config owner
 -- list first, then the NapCat role there.  Resolved once per command
--- and threaded into both the permission check and
--- 'CmdDispatch.execute' (which needs it for !grant's constraints).
+-- and threaded into both the permission check and 'CmdDispatch.execute'.
 effectiveTier :: (PlatformApi :> es, Log :> es) => BotEnv -> GroupId -> DispatchMessage -> Eff es PermTier
 effectiveTier env targetGid gm
   | let UserId uid = gm.userId, uid `elem` env.beOwners = pure TierOwner
   | otherwise = actorTier targetGid gm.userId
 
--- | Resolve whether the sender may run this command against the
--- target group.  Order (first hit wins): owner tier > explicit
--- grant/deny row (group scope beats global) > role tier default.
--- Commands without a capability are open to all.
-checkCmdPermission ::
-  (WithConnection :> es, IOE :> es) =>
-  GroupId ->
-  UserId ->
-  PermTier ->
-  Command ->
-  Eff es Bool
-checkCmdPermission (GroupId gid) (UserId uid) effTier cmd = case requiredCapability cmd of
-  Nothing -> pure True
-  Just (cap, tier)
-    | effTier == TierOwner -> pure True
-    | otherwise ->
-        lookupGrant uid cap gid >>= \case
-          Just explicit -> pure explicit
-          Nothing -> pure (tierSatisfied tier effTier)
+-- | May the sender run this command against the target group?  The tier the
+-- command declares against the tier the sender has.  Commands without a
+-- capability are open to all.
+checkCmdPermission :: PermTier -> Command -> Bool
+checkCmdPermission effTier cmd = case requiredCapability cmd of
+  Nothing -> True
+  Just (_, tier) -> tierSatisfied tier effTier
 
 -- | The sender's role tier in a group.  A private pseudo-group means
 -- the sender administers their own session by definition; owner tier

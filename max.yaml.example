@@ -126,7 +126,7 @@ persona: |
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Bot owners: the top permission tier — every command capability in every
-# group, plus the owner-only ones (!model, !grant, !kill --all, !use).
+# group, plus the owner-only ones (!model, !kill --all, !use).
 #
 # Worth double-checking, because getting it wrong fails silently and
 # completely: a misspelled key leaves the list empty, nobody is an owner, and

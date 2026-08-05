@@ -243,20 +243,6 @@ freeTextVerbs = ["persona", "btw", "feedback", "fb"]
 classify :: Text -> RawArgs -> Command
 classify verb raw@(RawArgs pos flags) = case verb of
   "help" -> Help (listToMaybe pos)
-  "grant" -> case pos of
-    [target, cap]
-      | Just uid <- parseUserRef target ->
-          Grant uid cap ("deny" `Map.member` flags) ("global" `Map.member` flags)
-    _ -> Unknown verb raw
-  "revoke" -> case pos of
-    [target, cap]
-      | Just uid <- parseUserRef target ->
-          Revoke uid cap ("global" `Map.member` flags)
-    _ -> Unknown verb raw
-  "perms" -> case pos of
-    [] -> Perms Nothing
-    [target] | Just uid <- parseUserRef target -> Perms (Just uid)
-    _ -> Unknown verb raw
   "use" -> case pos of
     [] -> UseShow
     ["clear"] -> UseClear

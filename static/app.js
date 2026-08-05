@@ -15,7 +15,6 @@ function admin() {
       { id: 'timeline', name: '消息账本' },
       { id: 'context', name: '上下文' },
       { id: 'memories', name: '记忆' },
-      { id: 'perms', name: '权限' },
       { id: 'tasks', name: '任务' },
       { id: 'calls', name: '调用' },
       { id: 'logs', name: '日志' },
@@ -30,7 +29,6 @@ function admin() {
     overview: { profiles: [], effort_levels: [] },
     groups: [],
     memories: [],
-    perms: [],
     tasks: [],
     timeline: {
       group: '',
@@ -63,7 +61,6 @@ function admin() {
     // layout puts in front of each value.
     fieldLabel: { debug: 'debug', sticker: '表情', proactive: '主动说话' },
     mem: { scope: 'group', id: '', loaded: false },
-    grant: { user_id: '', capability: '', scope_group_id: '', deny: false },
     charts: {},
 
     logs: [],
@@ -158,7 +155,6 @@ function admin() {
         timeline: () => (this.timeline.group ? this.loadTimeline(false) : null),
         context: () => this.loadContext(),
         memories: () => (this.mem.id ? this.loadMemories() : null),
-        perms: () => this.loadPerms(),
         tasks: () => this.loadTasks(),
         calls: () => this.loadCalls(),
         logs: () => this.reloadLogs(),
@@ -182,10 +178,6 @@ function admin() {
         '/memories?scope=' + this.mem.scope + '&id=' + encodeURIComponent(this.mem.id)
       );
       this.mem.loaded = true;
-    },
-
-    async loadPerms() {
-      this.perms = await this.api('/permissions');
     },
 
     async loadTasks() {
@@ -519,25 +511,6 @@ function admin() {
       if (!confirm('删掉这条记忆?\n\n' + m.content)) return;
       await this.api('/memories/' + m.id, { method: 'DELETE' });
       this.memories = this.memories.filter((x) => x.id !== m.id);
-    },
-
-    async addGrant() {
-      const g = this.grant;
-      this.perms = await this.api('/permissions', {
-        method: 'POST',
-        body: JSON.stringify({
-          user_id: Number(g.user_id),
-          capability: g.capability.trim(),
-          scope_group_id: g.scope_group_id ? Number(g.scope_group_id) : null,
-          deny: g.deny,
-        }),
-      });
-      this.grant = { user_id: '', capability: '', scope_group_id: '', deny: false };
-    },
-
-    async delGrant(p) {
-      await this.api('/permissions/' + p.id, { method: 'DELETE' });
-      this.perms = this.perms.filter((x) => x.id !== p.id);
     },
 
     async kill(t) {

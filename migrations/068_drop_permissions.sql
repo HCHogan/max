@@ -1,0 +1,17 @@
+-- The 0.3 permission model had two halves and only one of them ever ran.
+--
+-- The static half — owner from config, 群主/管理员 from the platform, member
+-- otherwise — refused three commands in the last thirty days (!kill-all,
+-- !clear, !model, all from one non-owner). It stays.
+--
+-- The dynamic half is this table, and it is empty. Not "rarely used": zero
+-- rows, ever, across 764 commands from 12 different people, none of which
+-- was a !grant or a !revoke. It bought a resolution order with four levels
+-- and a scope precedence rule ("group beats global"), to express something
+-- nobody has ever needed to say.
+--
+-- Dropped rather than left in place, because an empty table that a query
+-- still consults is worse than no table: it reads as a feature, and the next
+-- person to touch checkCmdPermission has to work out that the branch it
+-- guards has never once been taken.
+DROP TABLE IF EXISTS permissions;

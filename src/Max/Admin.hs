@@ -16,7 +16,7 @@
 -- public internet are the reverse proxy's job (cloudflared/Zitadel or
 -- an ssh forward).  Absent config section = server never starts.
 --
--- Mutations deliberately mirror the command DSL's semantics (grant
+-- Mutations deliberately mirror the command DSL's semantics (the
 -- rows, session overrides, task kills) rather than growing their own:
 -- the API caller is the owner tier by definition — whoever can reach
 -- this port can also edit max.yaml.
@@ -73,7 +73,6 @@ import Max.ContextAdmin
 import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
 import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
 import Max.DB.History (MessageCursor (..), messageStatsDaily)
-import Max.DB.Permissions (GrantRow (..), deleteGrantById, insertGrant, listGrants)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
 import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
@@ -145,9 +144,6 @@ data Route
   | RSkillCreate
   | RSkillPatch !Int64
   | RSkillDelete !Int64
-  | RGrantsList
-  | RGrantCreate
-  | RGrantDelete !Int64
   | RTasksList
   | RTaskKill !Text
   | RUsage
@@ -185,7 +181,6 @@ route m path
       ["api", "groups"] -> Just RGroups
       ["api", "memories"] -> Just RMemoriesList
       ["api", "skills"] -> Just RSkillsList
-      ["api", "permissions"] -> Just RGrantsList
       ["api", "tasks"] -> Just RTasksList
       ["api", "usage"] -> Just RUsage
       ["api", "quota"] -> Just RQuota
@@ -223,11 +218,9 @@ route m path
   | m == methodDelete = case path of
       ["api", "memories", i] -> RMemoryDelete <$> int i
       ["api", "skills", i] -> RSkillDelete <$> int i
-      ["api", "permissions", i] -> RGrantDelete <$> int i
       ["api", "tasks", t] | not (T.null t) -> Just (RTaskKill t)
       _ -> Nothing
   | m == methodPost = case path of
-      ["api", "permissions"] -> Just RGrantCreate
       ["api", "skills"] -> Just RSkillCreate
       ["api", "context", "rebuild"] -> Just RContextRebuild
       ["api", "context", "reindex"] -> Just RContextReindex
@@ -433,7 +426,7 @@ handle env profiles logBuf r params body = case r of
                 nsBody = ps.psBody,
                 nsEnabled = ps.psEnabled,
                 -- NULL marks rows minted here rather than taught from
-                -- chat; same audit convention as grants' granted_by 0.
+                -- chat; 0 marks a row minted here rather than by a user.
                 nsCreatedBy = Nothing
               }
         case res of
@@ -453,18 +446,6 @@ handle env profiles logBuf r params body = case r of
         logInfo "admin: skill deleted" $ object ["id" .= sid]
         pure deleted
       else pure notFound
-  RGrantsList -> ok . map grantJson <$> listGrants
-  RGrantCreate ->
-    case A.eitherDecode body :: Either String PostGrant of
-      Left err -> pure (bad ("invalid json: " <> T.pack err))
-      Right g -> do
-        -- granted_by 0 marks rows minted here rather than by a QQ
-        -- user; the audit column keeps meaning either way.
-        insertGrant g.pgUser g.pgCapability g.pgScope g.pgDeny 0
-        ok . map grantJson <$> listGrants
-  RGrantDelete rid -> do
-    gone <- deleteGrantById rid
-    pure (if gone then deleted else notFound)
   RTasksList -> do
     tasks <- liftIO (listTasks env.beTasks Nothing)
     pure (ok (map taskJson tasks))
@@ -918,18 +899,6 @@ skillJson s =
       "updated_at" .= s.skillUpdatedAt
     ]
 
-grantJson :: GrantRow -> Value
-grantJson g =
-  object
-    [ "id" .= g.grId,
-      "user_id" .= g.grUser,
-      "capability" .= g.grCapability,
-      "scope_group_id" .= g.grScope,
-      "deny" .= g.grDeny,
-      "granted_by" .= g.grGrantedBy,
-      "granted_at" .= g.grGrantedAt
-    ]
-
 callRowJson :: CallRow -> Value
 callRowJson c =
   object
@@ -978,22 +947,6 @@ instance A.FromJSON PostSkill where
       <*> o A..: "description"
       <*> o A..: "body"
       <*> (fromMaybe True <$> o A..:? "enabled")
-
--- | Body of @POST /api/permissions@.
-data PostGrant = PostGrant
-  { pgUser :: !Int64,
-    pgCapability :: !Text,
-    pgScope :: !(Maybe Int64),
-    pgDeny :: !Bool
-  }
-
-instance A.FromJSON PostGrant where
-  parseJSON = A.withObject "grant" $ \o ->
-    PostGrant
-      <$> o A..: "user_id"
-      <*> o A..: "capability"
-      <*> o A..:? "scope_group_id"
-      <*> (fromMaybe False <$> o A..:? "deny")
 
 data PostContextRebuild = PostContextRebuild
   { pcrConversationId :: !Int64,

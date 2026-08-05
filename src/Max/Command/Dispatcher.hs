@@ -30,11 +30,9 @@ import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Browser.Registry (destroyBrowsersForGroup)
 import Max.BuildInfo (gitRev)
 import Max.Command.Help (helpText)
-import Max.Command.Permission (PermTier (..), adminGrantable, knownCapabilities)
 import Max.Command.Types
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope, fetchMessagesByIdsInScope)
-import Max.DB.Permissions (deleteGrant, insertGrant, listGrantsFor)
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
 import Max.Intent (IntentConfig (..))
@@ -117,11 +115,10 @@ execute ::
   GroupId ->
   UserId -> -- the command's sender (permission scope for !memory rm)
   PrincipalId -> -- the same sender as a person, for memory scoping
-  PermTier -> -- the sender's effective tier (Handler resolves it)
   Maybe Int64 -> -- replyTarget canonical message id, if the command was a reply
   Command ->
   Eff es DispatchResult
-execute t gid uid senderPrincipal granterTier replyTarget cmd = do
+execute t gid uid senderPrincipal replyTarget cmd = do
   env :: BotEnv <- ask
   catalog :: ModelCatalog <- ask
   let conversation = conversationScopeFor gid
@@ -415,61 +412,6 @@ execute t gid uid senderPrincipal granterTier replyTarget cmd = do
     StickerBan prefix -> banSticker True prefix
     StickerUnban prefix -> banSticker False prefix
     --
-    Grant target cap deny global
-      | cap `notElem` knownCapabilities ->
-          reply $ "未知权限名: " <> cap <> "\n可用: " <> T.intercalate "、" knownCapabilities
-      | granterTier < TierOwner && (global || deny) ->
-          reply "--global / --deny 需要 owner 权限"
-      | granterTier < TierOwner && cap `notElem` adminGrantable ->
-          reply $ "群管理员只能授予: " <> T.intercalate "、" adminGrantable
-      | otherwise -> do
-          let GroupId gidRaw = gid
-              UserId granterRaw = uid
-              scope = if global then Nothing else Just gidRaw
-          insertGrant target cap scope deny granterRaw
-          logInfo "perm: granted" $
-            object
-              [ "target" .= target,
-                "capability" .= cap,
-                "scope" .= scope,
-                "deny" .= deny,
-                "by" .= granterRaw
-              ]
-          ack
-    Revoke target cap global
-      | granterTier < TierOwner && global ->
-          reply "--global 需要 owner 权限"
-      | granterTier < TierOwner && cap `notElem` adminGrantable ->
-          reply $ "群管理员只能撤销: " <> T.intercalate "、" adminGrantable
-      | otherwise -> do
-          let GroupId gidRaw = gid
-              scope = if global then Nothing else Just gidRaw
-          ok <- deleteGrant target cap scope
-          if ok
-            then do
-              logInfo "perm: revoked" $
-                object ["target" .= target, "capability" .= cap, "scope" .= scope]
-              ack
-            else reply "没有这条授权（注意 scope：群内授权和 --global 是两条）"
-    Perms mTarget -> do
-      let UserId uidRaw = uid
-          target = fromMaybe uidRaw mTarget
-      rows <- listGrantsFor target
-      reply $
-        "用户 "
-          <> tshow target
-          <> " 的显式授权：\n"
-          <> if null rows
-            then "（无；生效的是身份层级：owner / 群管理员 / 成员）"
-            else
-              T.intercalate
-                "\n"
-                [ "  "
-                    <> (if deny then "✗ 禁用 " else "✓ ")
-                    <> cap
-                    <> maybe "（全局）" (\g -> "（群 " <> tshow g <> "）") mScope
-                | (cap, mScope, deny) <- rows
-                ]
     -- Admin-console target selection.  Only meaningful in DMs: in a
     -- group the command already acts on that group.  NB: 'gid' here is
     -- the ORIGINAL chat id — Handler skips target redirection for the

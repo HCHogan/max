@@ -382,36 +382,6 @@
       <p class="empty" x-show="!mem.loaded">输入群号或 QQ 号来查。</p>
     </section>
 
-    <!-- ── permissions ──────────────────────────────────────────── -->
-    <section x-show="tab === 'perms'">
-      <form class="row" @submit.prevent="addGrant()">
-        <input x-model="grant.user_id" placeholder="QQ 号" inputmode="numeric" required>
-        <input x-model="grant.capability" placeholder="capability" required>
-        <input x-model="grant.scope_group_id" placeholder="群号(留空=全局)" inputmode="numeric">
-        <label class="check"><input type="checkbox" x-model="grant.deny"> 改为禁止</label>
-        <button type="submit">授权</button>
-      </form>
-      <table x-show="perms.length">
-        <thead><tr><th>用户</th><th>capability</th><th>范围</th><th></th><th>授予</th><th></th></tr></thead>
-        <tbody>
-          <template x-for="p in perms" :key="p.id">
-            <tr>
-              <td class="rowkey" data-label="用户"><span class="id" x-text="p.user_id"></span></td>
-              <td data-label="capability" x-text="p.capability"></td>
-              <td data-label="范围">
-                <span class="id" x-show="p.scope_group_id" x-text="p.scope_group_id"></span>
-                <span class="muted" x-show="!p.scope_group_id">全局</span>
-              </td>
-              <td data-label="效果"><span class="verdict" :class="{ deny: p.deny }" x-text="p.deny ? '禁止' : '允许'"></span></td>
-              <td class="stamp" data-label="授予" x-text="fmtDate(p.granted_at)"></td>
-              <td class="act"><button class="danger" @click="delGrant(p)">删</button></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-      <p class="empty" x-show="!perms.length">没有显式授权,全部按角色默认走。</p>
-    </section>
-
     <!-- ── llm calls ────────────────────────────────────────────── -->
     <section class="logs-page" x-show="tab === 'calls'">
       <form class="filters" @submit.prevent="loadCalls()">

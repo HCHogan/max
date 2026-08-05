@@ -18,8 +18,6 @@ module Max.Command.Permission
   ( PermTier (..),
     requiredCapability,
     tierSatisfied,
-    knownCapabilities,
-    adminGrantable,
   )
 where
 
@@ -57,22 +55,6 @@ requiredCapability = \case
   ClearAll -> Just ("clear", TierGroupAdmin)
   Unclear -> Just ("clear", TierGroupAdmin)
   Kill _ -> Just ("kill", TierGroupAdmin)
-  -- granting itself is a capability: admins can hand out their own
-  -- tier's capabilities (further constrained inside execute — no
-  -- --global/--deny, only 'adminGrantable' names)
-  Grant {} -> Just ("grant", TierGroupAdmin)
-  Revoke {} -> Just ("grant", TierGroupAdmin)
   -- everything else: queries, own-scope actions (!memory rm already
   -- ownership-checks inside execute), sandboxed !shell, pins, btw
   _ -> Nothing
-
--- | Every capability name @!grant@ may hand out.
-knownCapabilities :: [Text]
-knownCapabilities =
-  ["model", "debug", "sticker", "proactive", "kill-all", "persona", "clear", "kill", "grant"]
-
--- | The subset a (non-owner) group admin may grant: their own tier's
--- capabilities.  Owner-tier names and cross-group flags stay
--- owner-only.
-adminGrantable :: [Text]
-adminGrantable = ["persona", "clear", "kill"]
