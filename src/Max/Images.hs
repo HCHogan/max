@@ -43,7 +43,8 @@ import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.IR qualified as IR
 import Max.Util (withTempDirectory)
 import OneBot.Segment (ImageSegInfo (..), Segment (..), VideoSegInfo (..))
-import OneBot.Types (GroupId (..), MessageId (..))
+import Max.Platform.Types (CanonicalMessageId (..))
+import OneBot.Types (GroupId (..))
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
@@ -60,7 +61,7 @@ data MediaKind = MediaImage | MediaVideo
 -- 动画表情/商城表情, so the worker can register it in the sticker
 -- library once the bytes (and thus the sha) are known.
 data ImageJob = ImageJob
-  { messageId :: !Int64,
+  { canonicalMessageId :: !Int64,
     segIndex :: !Int,
     url :: !Text,
     groupId :: !(Maybe Int64),
@@ -86,7 +87,7 @@ instance FromJSON MediaKind where
 instance ToJSON ImageJob where
   toJSON j =
     object
-      [ "message_id" .= j.messageId,
+      [ "canonical_message_id" .= j.canonicalMessageId,
         "seg_index" .= j.segIndex,
         "url" .= j.url,
         "group_id" .= j.groupId,
@@ -97,7 +98,7 @@ instance ToJSON ImageJob where
 instance FromJSON ImageJob where
   parseJSON = withObject "ImageJob" $ \o ->
     ImageJob
-      <$> o .: "message_id"
+      <$> o .: "canonical_message_id"
       <*> o .: "seg_index"
       <*> o .: "url"
       <*> o .:? "group_id"
@@ -112,7 +113,7 @@ enqueueImages ::
   DispatchMessage ->
   Eff es ()
 enqueueImages sig gm =
-  let MessageId mid = gm.messageId
+  let CanonicalMessageId mid = gm.canonicalId
       GroupId gid = gm.groupId
    in enqueueCanonicalMedia sig mid (Just gid) gm.body
 
@@ -146,10 +147,10 @@ enqueueCanonicalMedia sig mid gid body = do
       Error _ -> Nothing
 
     enqueueOne job =
-      enqueueJob JobImage (T.pack (show job.messageId <> ":" <> show job.segIndex)) job
+      enqueueJob JobImage (T.pack (show job.canonicalMessageId <> ":" <> show job.segIndex)) job
 
--- | Enqueue images belonging to an arbitrary 'message_id' — used by the
--- forward worker to feed synthetic ids for forwarded nodes.
+-- | Enqueue images belonging to an arbitrary canonical message — used by the
+-- forward worker to feed the rows it just created for forwarded nodes.
 enqueueImagesFromNode ::
   (WithConnection :> es, IOE :> es) =>
   FetchSignal ->
@@ -168,7 +169,7 @@ enqueueImagesFromNode sig mid gid segs = do
     -- One segment holds at most one downloadable thing, so its index
     -- within the message is the whole natural key.
     enqueueOne j =
-      enqueueJob JobImage (T.pack (show j.messageId <> ":" <> show j.segIndex)) j
+      enqueueJob JobImage (T.pack (show j.canonicalMessageId <> ":" <> show j.segIndex)) j
 
 -- | How many of a message's segments the worker will try to fetch —
 -- i.e. how many 'message_images' rows will eventually exist for it
@@ -240,7 +241,7 @@ processOne job = do
   logInfo "image downloading" $
     object
       [ "url" .= job.url,
-        "message_id" .= job.messageId,
+        "canonical_message_id" .= job.canonicalMessageId,
         "seg_index" .= job.segIndex
       ]
   r <- getBytesQqCompatible job.url maxBytes
@@ -271,7 +272,7 @@ processOne job = do
             "size" .= BS.length bytes,
             "mime" .= mime,
             "kind" .= T.pack (show job.kind),
-            "message_id" .= job.messageId
+            "canonical_message_id" .= job.canonicalMessageId
           ]
       pure (Right ())
   where
@@ -300,9 +301,9 @@ recordImage sha mime size rel job = do
       (sha, mime, fromIntegral size :: Int64, rel)
   _ <-
     execute
-      "INSERT INTO message_images (message_id, sha256, seg_index) \
+      "INSERT INTO message_images (canonical_message_id, sha256, seg_index) \
       \ VALUES (?,?,?) ON CONFLICT DO NOTHING"
-      (job.messageId, sha, job.segIndex)
+      (job.canonicalMessageId, sha, job.segIndex)
   pure ()
 
 recordVideo ::
@@ -322,9 +323,9 @@ recordVideo sha mime size rel dur job = do
       (sha, mime, fromIntegral size :: Int64, rel, dur)
   _ <-
     execute
-      "INSERT INTO message_videos (message_id, sha256, seg_index) \
+      "INSERT INTO message_videos (canonical_message_id, sha256, seg_index) \
       \ VALUES (?,?,?) ON CONFLICT DO NOTHING"
-      (job.messageId, sha, job.segIndex)
+      (job.canonicalMessageId, sha, job.segIndex)
   pure ()
 
 -- | Probe a downloaded video's duration via ffprobe (temp-file

@@ -128,8 +128,11 @@ data ReplyPiece
     -- against sticker captions at send time; unresolvable ones are
     -- dropped, never leaked as text.
     PieceStickerDesc !Text
-  | -- | A @[image#\<message_id\>]@ resend of a stored group image.
-    PieceImage !Int64
+  | -- | A @[image#\<canonical_message_id\>]@ resend of a stored group
+    -- image, or @[image#\<canonical_message_id\>.\<seg\>]@ for one
+    -- picture of a message carrying several.  'Nothing' is every image
+    -- on that message, which is what the bare form has always meant.
+    PieceImage !Int64 !(Maybe Int)
   | -- | A @[face#\<id\>]@ QQ built-in face — the same form
     -- 'OneBot.Segment.renderPlainText' shows inbound faces in.
     PieceFace !Int
@@ -144,8 +147,9 @@ data ReplyPiece
 --   * @[sticker#\<id\>]@ — a sticker, becomes a 'PieceSticker'.  The
 --     inbound display form @[sticker#\<id\>: …]@ is accepted too (the
 --     trailing caption is ignored) so echoing what was seen still sends.
---   * @[image#\<message_id\>]@ — resend a stored group image, becomes a
---     'PieceImage' (the same handle the model reads inbound).
+--   * @[image#\<id\>]@ / @[image#\<id\>.\<seg\>]@ — resend a stored group
+--     image, becomes a 'PieceImage' (the same handle the model reads
+--     inbound).
 --   * @[face#\<id\>]@ — a QQ built-in face, becomes a 'PieceFace'.
 --
 -- Anything that isn't a well-formed token stays literal 'PieceText'.
@@ -167,9 +171,9 @@ parseReplyTokens = go
             Just (TokStickerDesc d, rest') ->
               let (mrid, ps) = go rest'
                in (mrid, prepend before (PieceStickerDesc d : ps))
-            Just (TokImage n, rest') ->
+            Just (TokImage n seg, rest') ->
               let (mrid, ps) = go rest'
-               in (mrid, prepend before (PieceImage n : ps))
+               in (mrid, prepend before (PieceImage n seg : ps))
             Just (TokFace n, rest') ->
               let (mrid, ps) = go rest'
                in (mrid, prepend before (PieceFace n : ps))
@@ -185,12 +189,17 @@ parseReplyTokens = go
           (PieceText t : rest) -> PieceText (s <> t) : rest
           _ -> PieceText s : ps
 
-data Token = TokReply !Int64 | TokSticker !Int64 | TokStickerDesc !Text | TokImage !Int64 | TokFace !Int
+data Token
+  = TokReply !Int64
+  | TokSticker !Int64
+  | TokStickerDesc !Text
+  | TokImage !Int64 !(Maybe Int)
+  | TokFace !Int
 
 matchToken :: Text -> Maybe (Token, Text)
 matchToken t =
   (do rest <- T.stripPrefix "[↩#" t; (n, r) <- signedTokenClose rest; pure (TokReply n, r))
-    <|> (do rest <- T.stripPrefix "[image#" t; (n, r) <- signedTokenClose rest; pure (TokImage n, r))
+    <|> (do rest <- T.stripPrefix "[image#" t; (n, seg, r) <- segmentedTokenClose rest; pure (TokImage n seg, r))
     <|> (do rest <- T.stripPrefix "[face#" t; (n, r) <- tokenClose rest; pure (TokFace (fromIntegral n), r))
     <|> (do rest <- T.stripPrefix "[sticker#" t; (n, r) <- tokenClose rest; pure (TokSticker n, r))
     -- Pre-rename sticker opener: old rows (and models echoing them)
@@ -211,39 +220,48 @@ matchToken t =
     -- form ("[video#7407: 首帧…](29秒)") must still act — only the id
     -- is trusted, decorations are consumed and dropped.
     tokenClose :: Text -> Maybe (Int64, Text)
-    tokenClose s =
-      let (digits, rest) = T.span isDigit s
-       in if T.null digits
-            then Nothing
-            else do
-              n <- readIntegral digits
-              after <- case T.uncons rest of
-                Just (']', r) -> Just r
-                Just (':', r') -> case T.breakOn "]" r' of
-                  (_, close) | not (T.null close) -> Just (T.drop 1 close)
-                  _ -> Nothing
-                _ -> Nothing
-              pure (n, dropAttrGroup after)
-    -- Foreign-platform compatibility message ids come from a dedicated
-    -- negative namespace.  They are still valid conversation-scoped handles,
-    -- unlike sticker/face ids, which remain positive-only.
+    tokenClose s = do
+      (n, rest) <- unsignedId s
+      after <- closer rest
+      pure (n, after)
+    -- Canonical message ids are positive, but the sign is still accepted:
+    -- history written before ADR 004 spelled foreign-platform messages with
+    -- a minted negative, and a model echoing one back must not have the
+    -- token leak into the group as literal text.  It simply won't resolve.
     signedTokenClose :: Text -> Maybe (Int64, Text)
-    signedTokenClose s =
+    signedTokenClose s = do
+      (n, rest) <- signedId s
+      after <- closer rest
+      pure (n, after)
+    -- Media addresses one picture of a message: "[image#4711.2]" is the
+    -- (canonical_message_id, seg_index) primary key of 'message_images',
+    -- rendered verbatim.  The bare form still means every image on that
+    -- message.
+    segmentedTokenClose :: Text -> Maybe (Int64, Maybe Int, Text)
+    segmentedTokenClose s = do
+      (n, rest) <- signedId s
+      let (seg, rest') = case T.stripPrefix "." rest of
+            Just afterDot | (ds, r) <- T.span isDigit afterDot, not (T.null ds) ->
+              (readIntegral ds, r)
+            _ -> (Nothing, rest)
+      after <- closer rest'
+      pure (n, seg, after)
+
+    unsignedId s =
+      let (digits, rest) = T.span isDigit s
+       in if T.null digits then Nothing else (,rest) <$> readIntegral digits
+    signedId s =
       let (sign, unsigned) = case T.uncons s of
             Just ('-', unsignedRest) -> ("-", unsignedRest)
             _ -> ("", s)
           (digits, rest) = T.span isDigit unsigned
-       in if T.null digits
-            then Nothing
-            else do
-              n <- readIntegral (sign <> digits)
-              after <- case T.uncons rest of
-                Just (']', r) -> Just r
-                Just (':', r') -> case T.breakOn "]" r' of
-                  (_, close) | not (T.null close) -> Just (T.drop 1 close)
-                  _ -> Nothing
-                _ -> Nothing
-              pure (n, dropAttrGroup after)
+       in if T.null digits then Nothing else (,rest) <$> readIntegral (sign <> digits)
+    closer rest = dropAttrGroup <$> case T.uncons rest of
+      Just (']', r) -> Just r
+      Just (':', r') -> case T.breakOn "]" r' of
+        (_, close) | not (T.null close) -> Just (T.drop 1 close)
+        _ -> Nothing
+      _ -> Nothing
     -- Caption text in the id slot: short, single-line, no nested
     -- bracket.  Deliberately narrow — anything wider risks eating a
     -- legitimate "[...]" prose span that happens to follow the word
@@ -301,20 +319,23 @@ stripHallucinatedTokens body = T.intercalate "\n" (go False (T.lines body))
             && T.any (\ch -> ch `elem` ("=\"“”" :: String)) c
 
 -- | Drop duplicate @[image#\<id\>]@ resend tokens, keeping the first.
--- A multi-image message renders inbound as several markers carrying
--- the *same* message id, and each outbound token resends *all* of
--- that message's images — echoing the markers verbatim would send
--- N×N images.  The seen-set threads across chunks so a duplicate in
--- a later paragraph is dropped too.
-dedupeImagePieces :: Set Int64 -> [ReplyPiece] -> (Set Int64, [ReplyPiece])
+-- Echoing the markers of a multi-image message verbatim would otherwise
+-- send the same picture twice.  The seen-set threads across chunks so a
+-- duplicate in a later paragraph is dropped too.
+--
+-- A bare @[image#\<id\>]@ resends every image on that message, so it also
+-- subsumes any later @[image#\<id\>.\<seg\>]@ of the same message — that
+-- picture has already gone out.  The reverse is not true: naming seg 0
+-- says nothing about seg 1.
+dedupeImagePieces :: Set (Int64, Maybe Int) -> [ReplyPiece] -> (Set (Int64, Maybe Int), [ReplyPiece])
 dedupeImagePieces = go
   where
     go seen [] = (seen, [])
-    go seen (PieceImage m : rest)
-      | m `Set.member` seen = go seen rest
+    go seen (PieceImage m seg : rest)
+      | (m, seg) `Set.member` seen || (m, Nothing) `Set.member` seen = go seen rest
       | otherwise =
-          let (seen', rest') = go (Set.insert m seen) rest
-           in (seen', PieceImage m : rest')
+          let (seen', rest') = go (Set.insert (m, seg) seen) rest
+           in (seen', PieceImage m seg : rest')
     go seen (p : rest) =
       let (seen', rest') = go seen rest
        in (seen', p : rest')

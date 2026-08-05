@@ -74,7 +74,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
       <> [ "  - 引用要主动用：回谁就在那段开头写 [↩#<msgid>]（对方消息的 id 见行首 #，当前 @ 你那条的 id 见 [current message]）。群里消息穿插，默认就该引一下你在回的那条——尤其回的不是最新消息、或同时有好几个人在说话时，不引别人就不知道你在回谁。分段回复时每段可各自引用对应的消息；只有紧接着刚说完的话继续搭腔时才可以不引。"
          | not private && outputCaps.canReply
          ]
-      <> [ "  - 要 @ 某人写 [@#<QQ号>]（对照表见 [environment]）；QQ 端会转成真正的 @，文字镜像端显示 @名字。"
+      <> [ "  - 要 @ 某人写 [@#<id>]（id 查 [environment] 的成员对照表）；有原生 @ 的端会转成真正的 @，其余端显示 @名字。"
          | not private && outputCaps.canMention
          ]
       <> [ "  - 当前端点没有原生引用、QQ 小黄脸或按 QQ 号 @ 的输出动作；直接用普通文字回复。"
@@ -82,7 +82,8 @@ systemPrompt multimodal' private outputCaps persona skills' =
          ]
       <> [ "",
            "占位符语法（整个体系只有一条构词律）：",
-           "  [类型#id: 描述](属性)   —— 描述、(属性) 都是可选的补充，只给你看；消息 id 可能是负数，其余 id 是正数",
+           "  [类型#id: 描述](属性)   —— 描述、(属性) 都是可选的补充，只给你看",
+           "  媒体的 id 写成 <消息id>.<序号>，指的是那条消息里的第几个（从 0 数）。",
            "  想发同款/执行动作，只写 [类型#id]，描述和 (属性) 都不要抄（抄了也只认 id）。",
            "",
            "你能读到的实体："
@@ -94,14 +95,14 @@ systemPrompt multimodal' private outputCaps persona skills' =
          | outputCaps.canFace
          ]
       <> [ if multimodal'
-             then "  [image#7405: 简介]          — 群历史里的图片，默认不加载；多数时候看简介就够，要看原图用 view_image 传 id。当前消息/引用/pin 的图直接附在消息末尾（正文里显示 [image]）"
-             else "  [image#7405: 简介] / [image] — 图片（你看不到原图，看简介或请用户描述）",
+             then "  [image#7405.0: 简介]        — 群历史里的图片，默认不加载；多数时候看简介就够，要看原图用 view_image 传这两个数字。当前消息/引用/pin 的图直接附在消息末尾（正文里显示 [image]）"
+             else "  [image#7405.0: 简介] / [image] — 图片（你看不到原图，看简介或请用户描述）",
            if multimodal'
-             then "  [video#7407: 首帧简介](29秒) — 群里的视频；(29秒) 是实测时长，以它为准（抽帧看视频容易把时长感知错）。被引用或就是当前消息时整段附给你，其余用 view_video 传 id 看"
-             else "  [video#7407: 首帧简介](29秒) — 视频（你看不到画面；时长是实测的）",
+             then "  [video#7407.0: 首帧简介](29 秒) — 群里的视频；(29 秒) 是实测时长，以它为准（抽帧看视频容易把时长感知错）。被引用或就是当前消息时整段附给你，其余用 view_video 传这两个数字看"
+             else "  [video#7407.0: 首帧简介](29 秒) — 视频（你看不到画面；时长是实测的）",
            "  [forward#7519]              — 转发聊天记录；被引用或就是当前消息时自动展开，其余用 view_forward 传 id 看"
          ]
-      <> [ "  [@#223344556: 名字]          — @某人；对照表见 [environment]"
+      <> [ "  [@#7: 名字]                 — @某人；对照表见 [environment]"
          | outputCaps.canMention
          ]
       <> [ "",
@@ -109,10 +110,10 @@ systemPrompt multimodal' private outputCaps persona skills' =
            "  [split]  行内强制分条（一般用空行分段就行）     [silence]  沉默"
          ]
       <> ["  [↩#id]  段首引用" | outputCaps.canReply]
-      <> ["  [@#QQ号]  @某人（号码查 [environment] 对照表）" | outputCaps.canMention]
+      <> ["  [@#id]  @某人（id 查 [environment] 对照表）" | outputCaps.canMention]
       <> ["  [sticker#id]  发表情包" | outputCaps.canMedia]
       <> ["  [face#id]  发 QQ 原生小黄脸" | outputCaps.canFace]
-      <> ["  [image#id]  把会话历史里的图转发出来" | outputCaps.canMedia]
+      <> ["  [image#id.序号]  把会话历史里的某张图转发出来（省略 .序号 就是那条消息的全部图）" | outputCaps.canMedia]
       <> ( if outputCaps.canReaction && outputCaps.canFace
              then ["  [silence:表情名]  沉默并贴指定表情", "", "小黄脸对照表（条目格式 名字#id：[face#id] 发消息用 id，[silence:表情名] 贴表情用名字，都只认这张表）："]
              else []
@@ -149,7 +150,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
                  "别照抄示范里的数字；表情包只写数字 id、单独成段）：",
                  "  [↩#7413] 这是 HardFault，PC 指到 0x08003a2c，查一下链接脚本。",
                  "  [split]",
-                 "  [↩#7405] [@#223344556] 你那个是探头打了 1X，切 10X 再看。",
+                 "  [↩#7405] [@#7] 你那个是探头打了 1X，切 10X 再看。",
                  "  [split]",
                  "  [sticker#3407]"
                ]
@@ -157,8 +158,8 @@ systemPrompt multimodal' private outputCaps persona skills' =
          )
       <> ( if outputCaps.canReply && not outputCaps.canMention
              then
-               [ "示范——引用 id 必须取自上下文，包括负数 id：",
-                 "  [↩#-1000000000790] 我在回这一条。"
+               [ "示范——引用 id 必须取自上下文，照抄行首 # 后面那个数字：",
+                 "  [↩#7413] 我在回这一条。"
                ]
              else []
          )

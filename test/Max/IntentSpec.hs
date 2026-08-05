@@ -21,6 +21,7 @@ import Max.Intent
     throttleAllows,
   )
 import OneBot.Segment (Segment (SegText))
+import Max.Platform.Types (CanonicalMessageId (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
 import Test.Hspec
 
@@ -44,7 +45,7 @@ spec = do
       enqueueIntent st (mkMessage 42 1 "max?")
       now <- getCurrentTime
       Just (gid, attempt0, batch0) <- claimIntentBatchAt st (addUTCTime 1 now)
-      map (.messageId) batch0 `shouldBe` [MessageId 1]
+      map (.canonicalId) batch0 `shouldBe` [CanonicalMessageId 1]
 
       first <- retryIntentBatchAt st gid attempt0 batch0 now
       first `shouldBe` IntentRetryScheduled (addUTCTime 15 now)
@@ -56,7 +57,7 @@ spec = do
       beforeRetry `shouldSatisfy` isNothing
 
       Just (_, attempt1, batch1) <- claimIntentBatchAt st (addUTCTime 15 now)
-      map (.messageId) batch1 `shouldBe` [MessageId 1, MessageId 3]
+      map (.canonicalId) batch1 `shouldBe` [CanonicalMessageId 1, CanonicalMessageId 3]
       second <- retryIntentBatchAt st gid attempt1 batch1 now
       second `shouldBe` IntentRetryScheduled (addUTCTime 60 now)
 

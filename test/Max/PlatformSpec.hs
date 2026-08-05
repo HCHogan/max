@@ -8,7 +8,6 @@ import Max.IR.Lower (textOnlyCaps)
 import Max.IR.Prompt (promptText)
 import Max.Platform
 import Max.Platform.QQ (qqIngestBody)
-import Max.Platform.Types (Platform (..))
 import Max.Wechatpad (parseFrameIds, wechatInboundBody, wechatpadCapabilities)
 import OneBot.Action (Action (..))
 import OneBot.Segment
@@ -81,11 +80,17 @@ spec = do
           -- A blank summary is never stored as a caption (the 053 class).
           meta.description `shouldBe` Nothing
         other -> expectationFailure ("unexpected nodes: " <> show other)
-      promptText PlatformQQ body `shouldBe` "[image]"
+      promptText body `shouldBe` "[image]"
 
   -- The prompt projection of the ingest body must reproduce the segment
-  -- renderer token for token: persisted history and the model's learned
-  -- round-trip contract pin this vocabulary (ADR 003 §4).
+  -- renderer token for token for everything that is *content*: persisted
+  -- history and the model's learned round-trip contract pin this vocabulary
+  -- (ADR 003 §4).
+  --
+  -- Mentions are deliberately excluded.  ADR 004 made the model's mention
+  -- vocabulary name people, and 'renderPlainText' is QQ's own wire spelling
+  -- of an at-segment; the two agreeing was the coincidence this project has
+  -- been unpicking, not a contract.
   describe "QQ prompt-projection parity" $
     it "matches renderPlainText over the segment corpus" $ do
       let biliCard =
@@ -95,8 +100,7 @@ spec = do
               \\"qqdocurl\":\"https://b23.tv/x\",\"tag\":\"哔哩哔哩\"}}}"
           corpus :: [(String, [Segment])]
           corpus =
-            [ ("text+mention", [SegAt (UserId 123456), SegText "在吗"]),
-              ("reply stripped", [SegReply (MessageId 42), SegText "说得对"]),
+            [ ("reply stripped", [SegReply (MessageId 42), SegText "说得对"]),
               ("photo", [SegText "看", SegImage (ImageSegInfo (Just "https://x/a.jpg") (Just 0) Nothing)]),
               ("sticker", [SegImage (ImageSegInfo (Just "https://x/s.jpg") (Just 1) (Just "[动画表情]"))]),
               ("sourceless image", [SegImage (ImageSegInfo Nothing Nothing Nothing)]),
@@ -109,7 +113,7 @@ spec = do
               ("forward", [SegOther "forward" (object ["id" .= ("7391948582" :: Text)])])
             ]
       for_ corpus $ \(label, segments) ->
-        (label, promptText PlatformQQ (qqIngestBody segments))
+        (label, promptText (qqIngestBody segments))
           `shouldBe` (label, renderPlainText segments)
   where
     fake platform =

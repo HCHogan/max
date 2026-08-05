@@ -8,7 +8,7 @@ import Database.PostgreSQL.Simple (Only (..))
 import Effectful (IOE, liftIO, runEff)
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
-import Helpers (insertRawMessage, insertRawMessageAtSeq, requireJust, testTime, truncateAll, withDb, withDbLog)
+import Helpers (insertMessageWithCanonicalId, insertRawMessageAtSeq, requireJust, testTime, truncateAll, withDb, withDbLog)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool)
 import Max.DB.ConversationCursor (historianCursor, loadCursor)
@@ -29,14 +29,16 @@ import Max.Historian
     processCaptureLease,
   )
 import Max.Tasks (newTaskRegistry)
+import Max.Util (tshow)
 import OneBot.Types (GroupId (..))
 import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ do
   it "persists the raw structured response and atomically publishes its capture" $ do
-    insertRawMessage pool 1001 groupId member botId testTime (Just "Alice") "Alice likes green tea"
-    insertRawMessage pool 1002 groupId botId botId testTime Nothing "Max acknowledges"
+    insertMessageWithCanonicalId pool 1001 groupId member botId testTime Nothing "Alice likes green tea"
+    insertMessageWithCanonicalId pool 1002 groupId botId botId testTime Nothing "Max acknowledges"
+    memberPrincipal <- principalFor pool member
     end <- latestCursor pool
     let scope = conversationScopeFor (GroupId groupId)
         request =
@@ -53,7 +55,7 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
     result <-
       runEff
         . runWithConnectionPool pool
-        . runLLMWith (fakeHistorian rawCapture)
+        . runLLMWith (fakeHistorian memberPrincipal (rawCapture memberPrincipal))
         $ processCaptureLease 16_000 600 (minutesToTimeZone 480) tasks lease
     result `shouldSatisfy` \case CapturePublished _ -> True; _ -> False
 
@@ -63,7 +65,7 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
           "SELECT status, raw_output, parsed_output->>'episode_kind' FROM episode_capture_runs"
           ()
     (rows :: [(Text, Maybe Text, Maybe Text)])
-      `shouldBe` [("published", Just rawCapture, Just "max_interaction")]
+      `shouldBe` [("published", Just (rawCapture memberPrincipal), Just "max_interaction")]
     withDb pool (loadCursor scope historianCursor) `shouldReturn` end
     compartments <- withDb pool $ query "SELECT summary_p1, summary_p3 FROM conversation_compartments WHERE state = 'active'" ()
     (compartments :: [(Text, Text)])
@@ -72,18 +74,21 @@ spec pool = before_ (truncateAll pool) $ describe "Historian v2 worker core" $ d
   it "heals a commit-order skip below the live cursor without rewinding it" $ do
     let scope = conversationScopeFor (GroupId groupId)
     -- Episode one: seqs 1-2 are captured and the cursor advances to 2.
-    insertRawMessage pool 1001 groupId member botId testTime (Just "Alice") "seq one"
-    insertRawMessage pool 1002 groupId member botId testTime (Just "Alice") "seq two"
+    insertMessageWithCanonicalId pool 1001 groupId member botId testTime Nothing "seq one"
+    insertMessageWithCanonicalId pool 1002 groupId member botId testTime Nothing "seq two"
     end2 <- latestCursor pool
     publishRange pool scope (MessageCursor 0) end2 [1001, 1002]
     -- A concurrent handler allocated seq 3 but has not committed when the
     -- next window is scanned: the scan sees only seq 4 and publishes it.
-    insertRawMessageAtSeq pool 4 1004 groupId member botId testTime (Just "Bob") "seq four"
+    _ <- withDb pool $ query "SELECT setval('canonical_message_id_seq', 1003, true)" () :: IO [Only Int64]
+    _ <- insertRawMessageAtSeq pool 4 1004 groupId member botId testTime (Just "Bob") "seq four"
     publishRange pool scope end2 (MessageCursor 4) [1004]
     withDb pool (loadCursor scope historianCursor) `shouldReturn` MessageCursor 4
     -- The skipped insert commits only now: at/below the cursor, owned by no
     -- active compartment.  Restart used to be the first chance to see it.
-    insertRawMessageAtSeq pool 3 1003 groupId member botId testTime (Just "Bob") "late seq three"
+    _ <- withDb pool $ query "SELECT setval('canonical_message_id_seq', 1002, true)" () :: IO [Only Int64]
+    _ <- insertRawMessageAtSeq pool 3 1003 groupId member botId testTime (Just "Bob") "late seq three"
+    _ <- withDb pool $ query "SELECT setval('canonical_message_id_seq', 1004, true)" () :: IO [Only Int64]
     withDb pool (findOldestBackfillGap scope)
       `shouldReturn` Just (BackfillGap end2 (MessageCursor 3))
 
@@ -152,8 +157,8 @@ requireValid run source capture = case validateEpisodeCapture run source capture
   Right validated -> pure validated
   Left errors -> expectationFailure (show errors) >> error "invalid capture"
 
-fakeHistorian :: Text -> LLMInterpreter '[WithConnection, IOE]
-fakeHistorian raw =
+fakeHistorian :: Int64 -> Text -> LLMInterpreter '[WithConnection, IOE]
+fakeHistorian memberPrincipal raw =
   LLMInterpreter
     { liChat = \ctx profile messages tools sink -> do
         liftIO $ do
@@ -168,7 +173,7 @@ fakeHistorian raw =
             Just _ -> expectationFailure "historian unexpectedly used streaming"
           messages `shouldSatisfy` \case
             [MsgSystem _, MsgUser input] ->
-              all (`T.isInfixOf` input) ["user_id=2001", "message_id=1001", "message_id=1002"]
+              all (`T.isInfixOf` input) ["principal_id=" <> tshow memberPrincipal, "message_id=1001", "message_id=1002"]
             _ -> False
         pure (Right (ContentResp raw))
     }
@@ -180,11 +185,25 @@ latestCursor pool = do
     Only (Just cursor) : _ -> pure (MessageCursor cursor)
     _ -> expectationFailure "expected a latest cursor" >> pure (MessageCursor 0)
 
-rawCapture :: Text
-rawCapture =
-  "{\"summary_p1\":{\"text\":\"Alice said she likes green tea; Max acknowledged it.\",\"evidence_message_ids\":[1001,1002]},\"summary_p2\":{\"text\":\"Alice likes green tea.\",\"evidence_message_ids\":[1001]},\"summary_p3\":{\"text\":\"Alice's green-tea preference was acknowledged.\",\"evidence_message_ids\":[1001,1002]},\"importance\":0.7,\"confidence\":0.95,\"episode_kind\":\"max_interaction\",\"memory_proposals\":[{\"action\":\"add\",\"scope\":\"user\",\"user_id\":2001,\"content\":\"Alice likes green tea.\",\"category\":\"preference\",\"evidence_message_ids\":[1001]}]}"
+-- A proposal's subject is a principal since ADR 004, and it has to be the
+-- principal that spoke a cited message.
+rawCapture :: Int64 -> Text
+rawCapture memberPrincipal =
+  "{\"summary_p1\":{\"text\":\"Alice said she likes green tea; Max acknowledged it.\",\"evidence_message_ids\":[1001,1002]},\"summary_p2\":{\"text\":\"Alice likes green tea.\",\"evidence_message_ids\":[1001]},\"summary_p3\":{\"text\":\"Alice's green-tea preference was acknowledged.\",\"evidence_message_ids\":[1001,1002]},\"importance\":0.7,\"confidence\":0.95,\"episode_kind\":\"max_interaction\",\"memory_proposals\":[{\"action\":\"add\",\"scope\":\"user\",\"user_id\":"
+    <> tshow memberPrincipal
+    <> ",\"content\":\"Alice likes green tea.\",\"category\":\"preference\",\"evidence_message_ids\":[1001]}]}"
 
 groupId, member, botId :: Int64
 groupId = 100
 member = 2001
 botId = 1000
+
+-- | The principal behind a fixture's native (QQ) user id.
+principalFor :: DbPool -> Int64 -> IO Int64
+principalFor pool native = do
+  rows <-
+    withDb pool $
+      query "SELECT principal_id FROM principal_identities WHERE native_user_id = ?" (Only (show native))
+  case rows :: [Only Int64] of
+    Only principal : _ -> pure principal
+    [] -> expectationFailure ("no principal for native " <> show native) >> pure 0

@@ -56,7 +56,7 @@ import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..))
 import Max.IR (Body (..), MediaKind (..), MediaMeta (..), MentionTarget (..), Node (..))
-import Max.Platform.Types (NativeAccountId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId (..), qqAdvertisedCaps)
+import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..), qqAdvertisedCaps)
 import Max.Prompt (CompartmentTier (..), ContextCompartment (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), planContext, renderContextPlan)
 import Max.Recall (RecallHit (..))
 import Max.Session (Session (..))
@@ -360,7 +360,7 @@ promptFixture =
       compartments = fixtureCompartments,
       historyTurns = False,
       inFlight = Set.empty,
-      pinnedItems = [history 7301 777888999 "老张" 19 2 "本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个"],
+      pinnedItems = [history 7301 5 "老张" 19 2 "本群入门资料汇总 [file:STM32入门.pdf] 新人先看这个"],
       replyCtx = Just (quotedMessage, [quotedFile], []),
       triggerForward = [],
       multimodal = True,
@@ -507,6 +507,7 @@ contextExpandFixture :: Value
 contextExpandFixture =
   episodeExpansionSummary
     hkTimeZone
+    Map.empty
     EpisodeExpansion
       { expansionHandle = contextEpisodeHandle,
         expansionRange =
@@ -581,22 +582,23 @@ fixtureTrigger :: DispatchMessage
 fixtureTrigger =
   DispatchMessage
     { selfId = UserId 10086,
-      selfNative = NativeAccountId "10086",
       groupId = GroupId 114514191,
       userId = UserId 223344556,
-      messageId = MessageId 7413,
+      selfPrincipalId = PrincipalId 1,
+      authorPrincipalId = PrincipalId 7,
+      canonicalId = CanonicalMessageId 7413,
       body =
         Body
-          [ NMention (MentionIdentity (PrincipalIdentityId 1)) "10086",
+          [ NMention (MentionIdentity (PrincipalIdentityId 1)) "Max",
             NText "看看这个报错是啥问题，视频里是复位后的现象 ",
             NMedia Nothing (fixtureMedia MImage),
             NText " ",
             NMedia Nothing (fixtureMedia MVideo)
           ],
-      replyToMessageId = Just (MessageId 7398),
+      replyTo = Just (CanonicalMessageId 7398),
       senderDisplayName = Just "阿飞",
       sourcePlatform = PlatformQQ,
-      mentionNatives = Map.singleton (PrincipalIdentityId 1) (NativeUserId "10086")
+      mentionPrincipals = Map.singleton (PrincipalIdentityId 1) (PrincipalId 1)
     }
 
 fixtureMedia :: MediaKind -> MediaMeta
@@ -612,26 +614,26 @@ fixtureMedia kind =
 
 fixtureTranscript :: [HistoryItem]
 fixtureTranscript =
-  [ history 7402 445566778 "小美" 22 48 "今晚有人打游戏吗",
-    history 7404 777888999 "老张" 22 50 "[↩#7402] 不打，在调板子",
-    history 7405 777888999 "老张" 22 52 "我这个波形好怪 [image#7405: 示波器截图，黄色方波上升沿明显圆角]",
-    history 7406 445566778 "小美" 22 53 "[sticker#212: 猫猫瞪大眼睛凑近屏幕]",
-    history 7407 777888999 "老张" 22 54 "拍了段视频你们看 [video#7407: 首帧是一块面包板电路](42秒)",
-    history 7408 10086 "Max" 22 55 "[↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档",
-    history 7409 223344556 "阿飞" 22 56 "[card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]",
-    history 7410 223344556 "阿飞" 22 57 "[face#187: 幽灵] 我的板子也出鬼畜问题了",
-    history 7411 445566778 "小美" 22 58 "楼上俩难兄难弟 ⏎ 建议直接烧了重买"
+  [ history 7402 9 "小美" 22 48 "今晚有人打游戏吗",
+    history 7404 5 "老张" 22 50 "[↩#7402] 不打，在调板子",
+    history 7405 5 "老张" 22 52 "我这个波形好怪 [image#7405.1: 示波器截图，黄色方波上升沿明显圆角]",
+    history 7406 9 "小美" 22 53 "[sticker#212: 猫猫瞪大眼睛凑近屏幕]",
+    history 7407 5 "老张" 22 54 "拍了段视频你们看 [video#7407.1: 首帧是一块面包板电路](42秒)",
+    history 7408 1 "Max" 22 55 "[↩#7405] 上升沿圆角一般是探头电容补偿没调，或者还挂在 1X 档",
+    history 7409 7 "阿飞" 22 56 "[card: 哔哩哔哩 | 示波器探头 10X 档到底干嘛用的 | https://b23.tv/fixture]",
+    history 7410 7 "阿飞" 22 57 "[face#187: 幽灵] 我的板子也出鬼畜问题了",
+    history 7411 9 "小美" 22 58 "楼上俩难兄难弟 ⏎ 建议直接烧了重买"
   ]
 
 quotedMessage :: HistoryItem
-quotedMessage = history 7398 223344556 "阿飞" 22 45 "烧录完就这样了，串口一直打这个 [image]"
+quotedMessage = history 7398 7 "阿飞" 22 45 "烧录完就这样了，串口一直打这个 [image]"
 
 quotedFile :: FileRecord
 quotedFile =
   FileRecord
     { frFileId = "c8a3f2d1e0",
       frGroupId = 114514191,
-      frMessageId = Just 7398,
+      frCanonicalMessageId = Just 7398,
       frSenderUserId = 223344556,
       frFileName = "firmware.bin",
       frMimeType = Just "application/octet-stream",
@@ -645,12 +647,11 @@ history :: Int64 -> Int64 -> Text -> Int -> Int -> Text -> HistoryItem
 history = historyOn fixtureDay
 
 historyOn :: Day -> Int64 -> Int64 -> Text -> Int -> Int -> Text -> HistoryItem
-historyOn day mid uid name hour minute body =
+historyOn day mid principal name hour minute body =
   HistoryItem
-    { messageId = mid,
-      userId = uid,
-      selfId = 10086,
-      sourcePlatform = "qq",
+    { canonicalId = mid,
+      authorPrincipalId = principal,
+      fromBot = principal == 1,
       senderNickname = Just name,
       senderCard = Nothing,
       renderedText = body,

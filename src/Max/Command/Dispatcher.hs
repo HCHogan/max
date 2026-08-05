@@ -33,7 +33,7 @@ import Max.Command.Help (helpText)
 import Max.Command.Permission (PermTier (..), adminGrantable, knownCapabilities)
 import Max.Command.Types
 import Max.ConversationScope (conversationScopeFor)
-import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchMessagesByIdsInScope)
+import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope, fetchMessagesByIdsInScope)
 import Max.DB.Permissions (deleteGrant, insertGrant, listGrantsFor)
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
@@ -56,6 +56,7 @@ import Max.MemoryStore
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, lookupModelCapabilities, modelProfileNames)
 import Max.Sandbox.Docker (ExecResult (..), wrapPackages)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
+import Max.Platform.Types (PrincipalId (..))
 import Max.Session (Session (..), SessionHandle, updateSession)
 import Max.Session qualified as Session
 import Max.Skills (skillsForGroup)
@@ -115,11 +116,12 @@ execute ::
   SessionHandle ->
   GroupId ->
   UserId -> -- the command's sender (permission scope for !memory rm)
+  PrincipalId -> -- the same sender as a person, for memory scoping
   PermTier -> -- the sender's effective tier (Handler resolves it)
-  Maybe Int64 -> -- replyTarget message_id, if the command was a reply
+  Maybe Int64 -> -- replyTarget canonical message id, if the command was a reply
   Command ->
   Eff es DispatchResult
-execute t gid uid granterTier replyTarget cmd = do
+execute t gid uid senderPrincipal granterTier replyTarget cmd = do
   env :: BotEnv <- ask
   catalog :: ModelCatalog <- ask
   let conversation = conversationScopeFor gid
@@ -297,15 +299,15 @@ execute t gid uid granterTier replyTarget cmd = do
     -- conversation. Cross-conversation self-audit can be added later as an
     -- explicit projection; it must not be an exception hidden in this path.
     MemoryList -> do
-      let UserId uidRaw = uid
+      let PrincipalId principal = senderPrincipal
           private = isPrivateChat gid
       gms <- listMemories (groupMemoryNamespace conversation)
-      ums <- listMemories (userMemoryNamespace conversation uidRaw)
+      ums <- listMemories (userMemoryNamespace conversation principal)
       reply (formatMemories private gms ums)
     MemoryRm mid -> do
-      let UserId uidRaw = uid
+      let PrincipalId principal = senderPrincipal
           memoryId = MemoryId mid
-          actor = MemoryActor ActorCommand (Just uidRaw) (Just "!memory rm")
+          actor = MemoryActor ActorCommand (Just principal) (Just "!memory rm")
           archiveCurrent namespace =
             fetchMemory namespace memoryId >>= \case
               Nothing -> pure False
@@ -317,7 +319,7 @@ execute t gid uid granterTier replyTarget cmd = do
       removedUser <-
         if removedGroup
           then pure False
-          else archiveCurrent (userMemoryNamespace conversation uidRaw)
+          else archiveCurrent (userMemoryNamespace conversation principal)
       if removedGroup || removedUser
         then do
           logInfo "memory: removed via !memory" $ object ["id" .= mid]
@@ -686,9 +688,9 @@ formatPins items =
   where
     oneLine h =
       "  "
-        <> tshow h.messageId
+        <> tshow h.canonicalId
         <> "  "
-        <> (case h.senderNickname of Just n -> n; Nothing -> tshow h.userId)
+        <> bestName h
         <> "  "
         <> trunc 60 h.renderedText
     trunc n t

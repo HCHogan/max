@@ -16,7 +16,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime, utc)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (execute, query)
-import Helpers (insertRawKind, insertRawMessage, requireJust, truncateAll, updateDbSession, withDb, withDbLog)
+import Helpers (insertMessageWithCanonicalId, insertRawKind, insertRawMessage, requireJust, truncateAll, updateDbSession, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
 import Max.ContextMaterialization (ContextMaterialization (..))
@@ -27,10 +27,10 @@ import Max.Effects.LLM (ChatMessage (..))
 import Max.EpisodeStore
 import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
-import Max.Platform.Types (NativeAccountId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId (..))
+import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..))
 import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), TriggerOrigin (..), buildContext, buildContextWithLimits, buildContextWithReadMode, collectContextPreview, materializeTieredHistory, planContext, renderContextPlan)
 import Max.Session (Session (..))
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
 groupRaw :: (Integral a) => a
@@ -55,15 +55,16 @@ trigger :: DispatchMessage
 trigger =
   DispatchMessage
     { selfId = UserId botRaw,
-      selfNative = NativeAccountId (T.pack (show (botRaw :: Int64))),
       groupId = GroupId groupRaw,
       userId = UserId memberRaw,
-      messageId = MessageId 9000,
-      body = Body [NMention (MentionIdentity (PrincipalIdentityId 1)) "1000", NText " 现在几点"],
-      replyToMessageId = Nothing,
+      selfPrincipalId = PrincipalId 1,
+      authorPrincipalId = PrincipalId 2,
+      canonicalId = CanonicalMessageId 9000,
+      body = Body [NMention (MentionIdentity (PrincipalIdentityId 1)) "Max", NText " 现在几点"],
+      replyTo = Nothing,
       senderDisplayName = Just "Alice",
       sourcePlatform = PlatformQQ,
-      mentionNatives = Map.singleton (PrincipalIdentityId 1) (NativeUserId "1000")
+      mentionPrincipals = Map.singleton (PrincipalIdentityId 1) (PrincipalId 1)
     }
 
 userBodyOf :: [ChatMessage] -> Text
@@ -75,8 +76,8 @@ spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $
   describe "Max.Prompt.buildContext (integration)" $ do
     it "renders ambient rows from the messages table" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "随便聊"
-      insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "另一条"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "随便聊"
+      insertMessageWithCanonicalId pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "另一条"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <-
         withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
@@ -85,8 +86,8 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("另一条" `T.isInfixOf`)
 
     it "honours cleared_at watermark — older rows are dropped" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "旧"
-      insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "新"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "旧"
+      insertMessageWithCanonicalId pool 1002 groupRaw memberRaw botRaw (timeAt 11) (Just "Alice") "新"
       s <-
         updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
           current {clearedAt = Just (timeAt 10)}
@@ -96,8 +97,8 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("新" `T.isInfixOf`)
 
     it "renders prior @-mention and the bot's reply as transcript lines" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 你好"
-      insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "你好 Alice"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 你好"
+      insertMessageWithCanonicalId pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "你好 Alice"
       _ <- withDb pool $ execute "UPDATE messages SET is_synthetic = true WHERE message_id = ?" (Only (1002 :: Int64))
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
@@ -111,11 +112,11 @@ spec pool = before_ (truncateAll pool) $
         other -> expectationFailure $ "unexpected message shape: " <> show other
 
     it "keeps one chronological raw stream before the first compartment" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 1) (Just "Alice") "@1000 昨天那事呢"
-      insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 2) Nothing "已经办好了"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 1) (Just "Alice") "@1000 昨天那事呢"
+      insertMessageWithCanonicalId pool 1002 groupRaw botRaw botRaw (timeAt 2) Nothing "已经办好了"
       mapM_
         ( \i ->
-            insertRawMessage pool (2000 + i) groupRaw otherMemberRaw botRaw (timeAt (3 + fromIntegral i)) (Just "Bob") ("闲聊" <> T.pack (show i))
+            insertMessageWithCanonicalId pool (2000 + i) groupRaw otherMemberRaw botRaw (timeAt (3 + fromIntegral i)) (Just "Bob") ("闲聊" <> T.pack (show i))
         )
         [1 .. 5 :: Int64]
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
@@ -126,8 +127,8 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("闲聊5" `T.isInfixOf`)
 
     it "renders one chronological compartment stream plus its complete raw tail" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "settled raw one"
-      insertRawMessage pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "settled raw two"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "settled raw one"
+      insertMessageWithCanonicalId pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "settled raw two"
       let scope = conversationScopeFor (GroupId groupRaw)
       end <- cursorFor pool 1002
       run <-
@@ -162,7 +163,7 @@ spec pool = before_ (truncateAll pool) $
         Left errors -> expectationFailure (show errors) >> error "invalid capture"
       _ <- withDb pool $ recordCaptureGenerated lease "exact raw historian response" capture []
       _ <- withDb pool $ publishCaptureRun scope lease validated
-      insertRawMessage pool 1003 groupRaw otherMemberRaw botRaw (timeAt 11) (Just "Bob") "ambient raw tail"
+      insertMessageWithCanonicalId pool 1003 groupRaw otherMemberRaw botRaw (timeAt 11) (Just "Bob") "ambient raw tail"
 
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <-
@@ -223,7 +224,7 @@ spec pool = before_ (truncateAll pool) $
       userBodyOf fallback `shouldSatisfy` ("ambient raw tail" `T.isInfixOf`)
 
     it "changes the durable prefix once when raw tokens cross the high watermark" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "first settled range"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "first settled range"
       (_firstCompartment, firstEnd) <- publishNextCompartment pool (MessageCursor 0) [1001] "first materialized summary"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       let tightLimits = ContextLimits 8000 512 0 0
@@ -246,7 +247,7 @@ spec pool = before_ (truncateAll pool) $
       (initial :: [(Int64, Text, Int)]) `shouldBe` [(1, "initial_materialization", 1)]
 
       let hugeRaw = T.replicate 10000 "unmaterialized "
-      insertRawMessage pool 1002 groupRaw otherMemberRaw botRaw (timeAt 10) (Just "Bob") hugeRaw
+      insertMessageWithCanonicalId pool 1002 groupRaw otherMemberRaw botRaw (timeAt 10) (Just "Bob") hugeRaw
       _ <- publishNextCompartment pool firstEnd [1002] "second materialized summary"
       msgs <- build
       let ub = userBodyOf msgs
@@ -264,13 +265,13 @@ spec pool = before_ (truncateAll pool) $
     -- command message used to sit in the transcript as a question, and
     -- a later turn would answer it again.
     it "shows only kind='chat' rows in the transcript" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "普通聊天"
-      insertRawKind pool "command" 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "!btw 顺便问一下"
-      insertRawKind pool "command" 1003 groupRaw botRaw botRaw (timeAt 11) (Just "max") "在跑的任务: t3"
-      insertRawKind pool "debug" 1004 groupRaw botRaw botRaw (timeAt 12) (Just "max") "⚙ web_search {\"q\":\"foo\"}"
-      insertRawKind pool "debug" 1005 groupRaw botRaw botRaw (timeAt 13) (Just "max") "↳ web_search {\"results\":[]}"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "普通聊天"
+      _ <- insertRawKind pool "command" 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "!btw 顺便问一下"
+      _ <- insertRawKind pool "command" 1003 groupRaw botRaw botRaw (timeAt 11) (Just "max") "在跑的任务: t3"
+      _ <- insertRawKind pool "debug" 1004 groupRaw botRaw botRaw (timeAt 12) (Just "max") "⚙ web_search {\"q\":\"foo\"}"
+      _ <- insertRawKind pool "debug" 1005 groupRaw botRaw botRaw (timeAt 13) (Just "max") "↳ web_search {\"results\":[]}"
       -- The bot's narration is conversation, so it stays.
-      insertRawMessage pool 1006 groupRaw botRaw botRaw (timeAt 14) (Just "max") "我查一下日志"
+      insertMessageWithCanonicalId pool 1006 groupRaw botRaw botRaw (timeAt 14) (Just "max") "我查一下日志"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       let ub = userBodyOf msgs
@@ -327,13 +328,13 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` (not . ("oldest-sentinel" `T.isInfixOf`))
 
     it "shows each raw-ledger message exactly once" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 只此一次"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 只此一次"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
       T.count "只此一次" (userBodyOf msgs) `shouldBe` 1
 
     it "renders pinned messages in the [pinned] section" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "重要信息"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "重要信息"
       s <-
         updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
           current {pinned = [1001]}
@@ -343,7 +344,7 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
 
     it "collects and plans a read-only preview without publishing materialization or trace rows" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "preview source"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "preview source"
       _ <- publishNextCompartment pool (MessageCursor 0) [1001] "preview summary"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       snapshot <-
@@ -357,12 +358,12 @@ spec pool = before_ (truncateAll pool) $
       (traces :: Int64) `shouldBe` 0
 
     it "renders reply context when trigger has SegReply" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "被引用的话"
+      quoted <- insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "被引用的话"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       let replyTrigger =
             trigger
-              { body = Body [NMention (MentionIdentity (PrincipalIdentityId 1)) "1000", NText " 看这条"],
-                replyToMessageId = Just (MessageId 1001)
+              { body = Body [NMention (MentionIdentity (PrincipalIdentityId 1)) "Max", NText " 看这条"],
+                replyTo = Just (CanonicalMessageId quoted)
               }
       msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s replyTrigger
       let ub = userBodyOf msgs
@@ -370,8 +371,8 @@ spec pool = before_ (truncateAll pool) $
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)
 
     it "reports the dropped tail region when the historian is behind and no fold target exists" $ do
-      insertRawMessage pool 1001 groupRaw memberRaw botRaw (timeAt 1) (Just "Alice") "folded one"
-      insertRawMessage pool 1002 groupRaw memberRaw botRaw (timeAt 2) (Just "Alice") "folded two"
+      insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 1) (Just "Alice") "folded one"
+      insertMessageWithCanonicalId pool 1002 groupRaw memberRaw botRaw (timeAt 2) (Just "Alice") "folded two"
       (_, end) <- publishNextCompartment pool (MessageCursor 0) [1001, 1002] "folded summary"
       -- More raw rows after the last compartment than one fetch page (256),
       -- and far more tokens than the tiny high watermark below.  With no

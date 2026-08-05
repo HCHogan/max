@@ -37,7 +37,7 @@ import Max.Effects.Blob (Blob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded)
 import Max.IR (Body (..), Node (NText))
 import Max.ReplySend (ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
-import OneBot.Types (MessageId)
+import Max.Platform.Types (CanonicalMessageId)
 
 -- | Debug facts emitted by the loop without deciding whether debug output is
 -- enabled or how the values should be formatted for chat.
@@ -58,10 +58,10 @@ type AgentEventSink m = forall a. AgentEvent a -> m a
 -- | Everything fixed while one dispatch's events are interpreted.
 data AgentOutputContext = AgentOutputContext
   { aocReplyTarget :: !ReplyTarget,
-    -- | Durable compatibility id of the inbound event that started this
-    -- dispatch. Debug UI is operational output, so it must return only to
-    -- that event's endpoint instead of being mirrored as conversation text.
-    aocSourceMessageId :: !MessageId,
+    -- | Canonical id of the inbound event that started this dispatch. Debug
+    -- UI is operational output, so it must return only to that event's
+    -- endpoint instead of being mirrored as conversation text.
+    aocSourceMessageId :: !CanonicalMessageId,
     aocDebug :: !Bool,
     -- | Shared only by final-stream events and the final remainder.  Progress
     -- narration is a separate utterance and receives its own bounded budget.

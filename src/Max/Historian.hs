@@ -440,7 +440,7 @@ processCaptureLease inputBudget timeoutSeconds tz tasks lease = do
         else do
           source <- loadCaptureSource run
           protected <- liftIO (inFlightTriggers tasks gid)
-          let sourceMessageIds = Set.fromList [entry.history.messageId | entry <- source]
+          let sourceMessageIds = Set.fromList [entry.history.canonicalId | entry <- source]
               protectedInRange = Set.intersection protected sourceMessageIds
           if not (Set.null protectedInRange)
             then do
@@ -596,10 +596,10 @@ loadMemoryCatalog scope source = do
         . sortOn (Down . snd)
         . Map.toList
         . Map.fromListWith (+)
-        $ [ (entry.history.userId, 1 :: Int)
+        $ [ (entry.history.authorPrincipalId, 1 :: Int)
           | entry <- source,
             entry.transcriptEligible,
-            entry.history.userId /= entry.history.selfId
+            not entry.history.fromBot
           ]
     loadUser userId = (userId,) <$> listMemories (userMemoryNamespace scope userId)
     memoryLines [] = ["(none)"]
@@ -653,12 +653,12 @@ renderHistorianSourceLine :: TimeZone -> HistoryItem -> Text
 renderHistorianSourceLine tz history =
   "["
     <> fmtDateHM tz history.receivedAt
-    <> " user_id="
-    <> tshow history.userId
+    <> " principal_id="
+    <> tshow history.authorPrincipalId
     <> " name="
     <> bestName history
     <> " message_id="
-    <> tshow history.messageId
+    <> tshow history.canonicalId
     <> maybe "" (\reply -> " reply_to=" <> tshow reply) history.replyTo
     <> "]: "
     <> T.replace "\n" " ⏎ " history.renderedText

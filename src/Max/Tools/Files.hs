@@ -48,7 +48,7 @@ import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.IR
 import Max.IR.Prompt (MentionRoster (..), parseModelChunk)
-import Max.Platform.Types (AdvertisedCaps (..))
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..))
 import Max.Reply (chunkSource, planReply)
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
@@ -126,7 +126,7 @@ listRecentFilesTool tz (GroupId gid) =
         [ "file_id" .= r.frFileId,
           -- Useful for correlating with reply context (\"the file in
           -- the message the user just quoted\").
-          "message_id" .= r.frMessageId,
+          "message_id" .= r.frCanonicalMessageId,
           "name" .= r.frFileName,
           "sender_user_id" .= r.frSenderUserId,
           "time" .= fmtDateHMS tz r.frReceivedAt,
@@ -302,23 +302,27 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
 -- no roster to check membership against.  A caption that is nothing but
 -- a quote still quotes: unlike a narration line, the message it rides
 -- on is going out regardless.
-captionBody :: AdvertisedCaps -> GroupId -> Maybe Text -> (Maybe MessageId, Body 'Ingest)
+--
+-- Mentions fold to text unconditionally.  A caption is written by a tool,
+-- not by the reply path, so there is nothing here to resolve a principal
+-- against an account with — and "@name" is the honest rendering of an
+-- unresolved mention everywhere else too.
+captionBody ::
+  AdvertisedCaps -> GroupId -> Maybe Text -> (Maybe CanonicalMessageId, Body 'Canonical)
 captionBody _ _ Nothing = (Nothing, Body [])
-captionBody outputCaps gid (Just caption) =
-  ( MessageId <$> if outputCaps.canReply then quoted else Nothing,
+captionBody outputCaps _ (Just caption) =
+  ( CanonicalMessageId <$> if outputCaps.canReply then quoted else Nothing,
     Body (if null body then [] else body <> [NText "\n"])
   )
   where
     (quoted, parsed) =
       parseModelChunk
-        MentionRoster {known = const True, names = []}
+        MentionRoster {names = []}
         (T.intercalate "\n" (map chunkSource (planReply caption)))
     body = trimEdges (mergeText (concatMap resolve parsed.nodes))
     resolve = \case
       NText text -> [NText text]
-      NMention native display
-        | outputCaps.canMention && not (isPrivateChat gid) -> [NMention native display]
-        | otherwise -> [NText (mentionToken display)]
+      NMention _ display -> [NText (mentionToken display)]
       NEmote emote
         | outputCaps.canFace -> [NEmote emote]
         | otherwise -> []

@@ -71,7 +71,8 @@ import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, 
 import Max.Prompt (renderHistoryLine)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
 import Max.Util (catchSync, trySync)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
+import Max.Platform.Types (CanonicalMessageId (..))
+import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 
 -- | Resolved @intent.*@ config; presence enables the whole feature.
 data IntentConfig = IntentConfig
@@ -356,11 +357,10 @@ intentWorker cfg defaultPersona defaultModel tz sessions dispatch st =
       if not gated
         then pure True
         else do
-          let UserId selfId' = gm.selfId
-              batchIds = Set.fromList [m | b <- batch, let MessageId m = b.messageId]
+          let batchIds = Set.fromList [m | b <- batch, let CanonicalMessageId m = b.canonicalId]
           rows <- fetchRecentInGroup gid 0 s.clearedAt (cfg.icContextLines + length batch)
-          let (news, ctx) = spanPartition (\h -> h.messageId `Set.member` batchIds) rows
-              render = renderHistoryLine tz selfId'
+          let (news, ctx) = spanPartition (\h -> h.canonicalId `Set.member` batchIds) rows
+              render = renderHistoryLine tz
           -- Rows for the batch can be missing only in pathological
           -- flood cases; classify anyway with whatever context we have.
           verdict <- classifyOnce (Just gid) cfg.icProfile (fromMaybe defaultPersona s.persona) (map render ctx) (map render news)

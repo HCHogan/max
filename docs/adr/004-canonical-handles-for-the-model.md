@@ -1,7 +1,7 @@
 # ADR 004: Canonical Handles and the Identity the Model Addresses
 
-- Status: Accepted — not yet implemented
-- Date: 2026-08-05
+- Status: Implemented
+- Date: 2026-08-05 (implemented 2026-08-05, migration `066`)
 
 ## Context
 
@@ -226,6 +226,9 @@ rendered, not stored.
    message id; it also gains the foreign key it never had). Each is a join
    against `messages` on the same row — the two id spaces are 1:1, so there
    is no ambiguity.
+
+   Implementation found a fourth: `group_files.message_id`. It has no foreign
+   key, which is exactly why walking the FK graph missed it.
 2. **Stored media handles**: `raw.source_message_id` inside canonical media
    nodes exists on **2 rows** in the whole ledger (bot-authored image
    resends via `messageImageNodes`). Inbound media never stored one —
@@ -249,6 +252,27 @@ no ids (checked — 193 compartments and 348 memories, zero real matches). The
 one exception is a memory whose text records `群内用户 好吧（QQ 2107570581）`,
 written by the extractor as a person's identity; that is a separate defect
 in the extractor's prompt, not a consequence of this change.
+
+## What implementation added
+
+Two things this ADR did not anticipate, both the same defect it exists to end.
+
+**`group_files`** was a fourth straggler, invisible to an FK-graph audit
+because it has no FK.
+
+**Four columns already claimed to hold principals and did not.**
+`compartment_evidence.source_principal_id`, `memory_evidence`'s and
+`memory_mutations`' equivalents, and `memories.scope_id` under user scope had
+been storing compatibility *user* ids since they were written — the writers
+passed `messages.user_id` into a column named for a principal, and nothing
+broke because nothing ever joined them to `principals`.
+
+Decision 3 makes that untenable rather than merely untidy: once the historian
+cites principals, a memory proposal's subject and a summary's evidence are in
+different id spaces, and every user-scope proposal is rejected. So they moved
+too, and gained the foreign keys that would have caught it. Seven memories
+named an account the ledger had never seen speak; those accounts got the
+identity they should always have had rather than losing the memory.
 
 ## Consequences
 

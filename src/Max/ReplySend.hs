@@ -74,8 +74,10 @@ import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
 import Max.IR
 import Max.IR.Digest (digest)
+import Data.Map.Strict qualified as Map
 import Max.IR.Prompt (MentionRoster (..), parseModelChunk)
-import Max.Platform.Types (NativeUserId (..))
+import Max.Platform.Store (resolveMentionIdentities)
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId)
 import Max.Render (renderTableImage)
 import Max.Reply
   ( Chunk (..),
@@ -85,8 +87,7 @@ import Max.Reply
     stripHallucinatedTokens,
   )
 import Max.Sticker (ResolvedSticker (..), resolveSticker)
-import Max.Util (readIntegral)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
+import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 import System.Random (randomRIO)
 
 -- | Where a reply is going and what it may do when it gets there.
@@ -95,14 +96,11 @@ data ReplyTarget = ReplyTarget
   { rtGroupId :: !GroupId,
     -- | The bot's own QQ id, for attributing the persisted rows.
     rtSelfId :: !UserId,
-    -- | The group's member ids: the whitelist for turning a raw
-    -- @\@\<qq\>@ span into a real at-segment.  'Nothing' when
-    -- unavailable (private chat, roster fetch failed) — conversion then
-    -- checks syntax only, rather than silently refusing to @ anyone.
-    rtMentionable :: !(Maybe (Set UserId)),
-    -- | Display-name → id, so @\@显示名@ can be rescued into the
+    -- | Display-name → principal, so @\@显示名@ can be rescued into the
     -- canonical @[\@#id]@ form small models keep forgetting to write.
-    rtRosterNames :: ![(T.Text, UserId)],
+    -- This is the roster the prompt actually showed, so the names the model
+    -- may write are exactly the names it was given.
+    rtRosterNames :: ![(T.Text, PrincipalId)],
     -- | Whether sticker sending is enabled for this group.
     rtStickers :: !Bool,
     -- | Portable endpoint gates.  The prompt is the friendly policy; these
@@ -117,8 +115,9 @@ data ReplyTarget = ReplyTarget
 -- that a reply split by streaming is bounded exactly like an unsplit
 -- one; see the module header.
 data SendBudget = SendBudget
-  { -- | Message ids whose images have already been resent this reply.
-    sbSentImages :: !(Set Int64),
+  { -- | Images already resent this reply, keyed the way the model names
+    -- them: a whole message, or one @(message, seg_index)@ picture of it.
+    sbSentImages :: !(Set (Int64, Maybe Int)),
     -- | Chunks still allowed before the rest is folded into one.
     sbChunksLeft :: !Int
   }
@@ -160,13 +159,12 @@ canStream b = b.sbChunksLeft > 1
 --     nothing is auto-quoted, the model decides;
 --   * @[sticker#\<id\>]@ becomes a sticker segment ('resolveSticker'),
 --     an unknown id is dropped rather than failing the reply;
---   * @[image#\<id\>]@ resends that message's stored images; duplicate
---     ids are dropped across the whole reply — a multi-image message
---     tags all its markers with one id, so an echo would otherwise
---     resend N images N times;
+--   * @[image#\<id\>(.\<seg\>)?]@ resends that message's stored images, or
+--     the one picture named; duplicates are dropped across the whole reply;
 --   * @[face#\<id\>]@ becomes a QQ built-in face segment;
---   * raw @\@\<qq\>@ spans become real at-segments when the id passes
---     the membership check ('segmentMentions').
+--   * @[\@#\<principal_id\>]@ becomes a real mention when that person has an
+--     account in this conversation, and folds to @\@name@ text when they do
+--     not — which is also what a principal id the model invented does.
 --
 -- A chunk that resolves to no content (a lone @[↩#id]@, or only a bad
 -- sticker token) is skipped.  Each chunk persists with its /resolved/
@@ -269,6 +267,10 @@ sendAndPersistReply rt budget rawBody
       let (mReplyId, parsed0) = parseModelChunk mentionRoster t
           (seen', parsed) = dedupeModelImages b.sbSentImages parsed0
           b' = b {sbSentImages = seen'}
+      mentions <-
+        if rt.rtCanMention && not (isPrivateChat rt.rtGroupId)
+          then resolveMentionIdentities conversationId [p | NMention p _ <- parsed.nodes]
+          else pure Map.empty
       logInfo "model chunk parsed" $ object ["content" .= digest parsed0]
       mReplyId' <- case mReplyId of
         _ | not rt.rtCanReply -> pure Nothing
@@ -280,29 +282,22 @@ sendAndPersistReply rt budget rawBody
               logAttention "reply placeholder outside conversation" $
                 object ["message_id" .= rid]
               pure Nothing
-      resolved <- concat <$> traverse resolveModelNode parsed.nodes
+      resolved <- concat <$> traverse (resolveModelNode mentions) parsed.nodes
       let content = trimEdges (mergeText resolved)
       pure
         ( b',
           if null content
             then Nothing
-            else Just (Body content, MessageId <$> mReplyId', t)
+            else Just (Body content, CanonicalMessageId <$> mReplyId', t)
         )
 
-    mentionRoster =
-      MentionRoster
-        { known = \(NativeUserId native) ->
-            case readIntegral native of
-              Just nativeId -> maybe True (Set.member (UserId nativeId)) rt.rtMentionable
-              Nothing -> False,
-          names = [(display, NativeUserId (T.pack (show native))) | (display, UserId native) <- rt.rtRosterNames]
-        }
+    mentionRoster = MentionRoster {names = rt.rtRosterNames}
 
-    resolveModelNode = \case
+    resolveModelNode mentions = \case
       NText text -> pure [NText text]
-      NMention native display
-        | not rt.rtCanMention || isPrivateChat rt.rtGroupId -> pure [NText (mentionToken display)]
-        | otherwise -> pure [NMention native display]
+      NMention principal display -> case Map.lookup principal mentions of
+        Just identity -> pure [NMention (MentionIdentity identity) display]
+        Nothing -> pure [NText (mentionToken display)]
       NEmote emote
         | rt.rtCanFace -> pure [NEmote emote]
         | otherwise -> pure []
@@ -325,24 +320,27 @@ sendAndPersistReply rt budget rawBody
             logAttention "sticker placeholder unresolved" $
               object ["id" .= stickerId, "error" .= err]
             pure []
-      RefImage _ | not rt.rtCanImage -> pure []
-      RefImage messageId -> do
-        images <- messageImageNodes conversation messageId
+      RefImage _ _ | not rt.rtCanImage -> pure []
+      RefImage (CanonicalMessageId messageId) seg -> do
+        images <- messageImageNodes conversation messageId seg
         when (null images) $
-          logAttention "image placeholder unresolved" $ object ["message_id" .= messageId]
+          logAttention "image placeholder unresolved" $
+            object ["canonical_message_id" .= messageId, "seg_index" .= seg]
         pure images
 
     conversation = conversationScopeFor rt.rtGroupId
+    GroupId conversationId = rt.rtGroupId
 
-dedupeModelImages :: Set Int64 -> Body 'ModelParsed -> (Set Int64, Body 'ModelParsed)
+dedupeModelImages ::
+  Set (Int64, Maybe Int) -> Body 'ModelParsed -> (Set (Int64, Maybe Int), Body 'ModelParsed)
 dedupeModelImages seen0 body =
   let (seen, kept) = foldl' step (seen0, []) body.nodes
    in (seen, Body (reverse kept))
   where
     step (seen, kept) node = case node of
-      NMedia (RefImage messageId) _
-        | Set.member messageId seen -> (seen, kept)
-        | otherwise -> (Set.insert messageId seen, node : kept)
+      NMedia (RefImage (CanonicalMessageId messageId) seg) _
+        | Set.member (messageId, seg) seen || Set.member (messageId, Nothing) seen -> (seen, kept)
+        | otherwise -> (Set.insert (messageId, seg) seen, node : kept)
       _ -> (seen, node : kept)
 
 -- | Everything model text must lose before it can become visible.  Kept in
@@ -409,9 +407,10 @@ messageImageNodes ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   ConversationScope ->
   Int64 ->
-  Eff es [Node 'Ingest]
-messageImageNodes scope mid = do
-  rows <- fetchMessageImagesInScope scope mid
+  Maybe Int ->
+  Eff es [Node 'Canonical]
+messageImageNodes scope mid seg = do
+  rows <- fetchMessageImagesInScope scope mid seg
   fmap concat . traverse node $ rows
   where
     node image = case mediaBlobRef image.storedImageSha256 of
@@ -428,6 +427,15 @@ messageImageNodes scope mid = do
                   sizeBytes = Nothing,
                   name = Nothing,
                   description = Nothing,
-                  raw = Just (object ["source_message_id" .= mid])
+                  -- The handle this picture is known by, carried so the
+                  -- resend's own transcript line names the same picture the
+                  -- model pointed at rather than a bare [image] marker.
+                  raw =
+                    Just
+                      ( object
+                          [ "source_message_id" .= mid,
+                            "source_seg_index" .= image.storedImageSegIndex
+                          ]
+                      )
                 }
           ]

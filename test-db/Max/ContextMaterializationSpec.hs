@@ -5,7 +5,7 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawMessage, requireJust, testTime, truncateAll, withDb)
+import Helpers (insertMessageWithCanonicalId, requireJust, testTime, truncateAll, withDb)
 import Max.ContextMaterialization
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
@@ -54,8 +54,8 @@ scope = conversationScopeFor (GroupId groupId)
 
 publishFixtureCompartment :: DbPool -> IO CompartmentId
 publishFixtureCompartment pool = do
-  insertRawMessage pool 1001 groupId memberId botId testTime Nothing "first"
-  insertRawMessage pool 1002 groupId botId botId testTime Nothing "second"
+  insertMessageWithCanonicalId pool 1001 groupId memberId botId testTime Nothing "first"
+  insertMessageWithCanonicalId pool 1002 groupId botId botId testTime Nothing "second"
   end <- latestCursor pool
   run <-
     withDb

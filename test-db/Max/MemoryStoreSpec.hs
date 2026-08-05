@@ -1,11 +1,12 @@
 module Max.MemoryStoreSpec (spec) where
 
 import Control.Exception (SomeException)
+import Control.Monad (void)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
-import Helpers (truncateAll, withDb)
+import Helpers (insertMessageWithCanonicalId, testTime, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor, currentConversationRecall)
 import Max.DB.Connection (DbPool, withConn)
 import Max.Embedding (EmbeddingRecord (..))
@@ -14,13 +15,16 @@ import OneBot.Types (GroupId (..), UserId (..), privateChatGroupId)
 import Test.Hspec
 
 spec :: DbPool -> Spec
-spec pool = before_ (truncateAll pool) $
-  describe "Max.MemoryStore" $ do
+spec pool = do
+  -- Principals survive truncateAll, so seeding once up front and again before
+  -- each example yields the same subject every time.
+  subject <- runIO (seedEvidenceMessages pool)
+  before_ (void (seedEvidenceMessages pool)) $ describe "Max.MemoryStore" $ do
     let scopeA = conversationScopeFor (GroupId 100)
         scopeB = conversationScopeFor (GroupId 200)
-        nsA = userMemoryNamespace scopeA 3001
-        nsB = userMemoryNamespace scopeB 3001
-        evidenceA = MessageEvidence scopeA (Just 3001) 9001
+        nsA = userMemoryNamespace scopeA subject
+        nsB = userMemoryNamespace scopeB subject
+        evidenceA = MessageEvidence scopeA (Just subject) 9001
 
     it "atomically creates a version, evidence link, and audit event" $ do
       item <- withDb pool $ createMemory extractor nsA (activeDraft evidenceA "first fact")
@@ -38,11 +42,11 @@ spec pool = before_ (truncateAll pool) $
       evidence <-
         withDb pool $
           query
-            "SELECT evidence_kind, source_conversation_id, source_principal_id, source_message_id \
+            "SELECT evidence_kind, source_conversation_id, source_principal_id, source_canonical_message_id \
             \ FROM memory_evidence WHERE memory_id = ?"
             (Only item.memId)
       (evidence :: [(Text, Maybe Int64, Maybe Int64, Maybe Int64)])
-        `shouldBe` [("message", Just 100, Just 3001, Just 9001)]
+        `shouldBe` [("message", Just 100, Just subject, Just 9001)]
 
       audit <-
         withDb pool $
@@ -105,7 +109,7 @@ spec pool = before_ (truncateAll pool) $
       item <-
         withDb pool $
           createMemory
-            toolActor
+            (toolActor subject)
             nsA
             (activeDraft evidenceA "explicitly remembered") {draftLifecycle = MemoryPermanent}
       automaticUpdate <-
@@ -124,7 +128,7 @@ spec pool = before_ (truncateAll pool) $
 
       explicitArchive <-
         withDb pool $
-          archiveMemory toolActor nsA item.memId (ExpectedVersion item.memVersion)
+          archiveMemory (toolActor subject) nsA item.memId (ExpectedVersion item.memVersion)
       explicitArchive `shouldSatisfy` \case MemoryMutationApplied _ -> True; _ -> False
 
     it "atomically supersedes within one namespace and rejects foreign targets" $ do
@@ -135,7 +139,7 @@ spec pool = before_ (truncateAll pool) $
           createMemory
             extractor
             nsB
-            (activeDraft (MessageEvidence scopeB (Just 3001) 9002) "foreign fact")
+            (activeDraft (MessageEvidence scopeB (Just subject) 9002) "foreign fact")
       denied <-
         withDb pool $
           supersedeMemory extractor nsA old.memId (ExpectedVersion old.memVersion) foreignItem.memId
@@ -160,7 +164,7 @@ spec pool = before_ (truncateAll pool) $
       old <- withDb pool $ createMemory extractor nsA (activeDraft evidenceA "old preference")
       replacement <-
         withDb pool $
-          createMemory extractor nsA (activeDraft (MessageEvidence scopeA (Just 3001) 9002) "new preference")
+          createMemory extractor nsA (activeDraft (MessageEvidence scopeA (Just subject) 9002) "new preference")
       entries <- withDb pool $ listMemoryMaintenanceEntries nsA
       let oldEntry = filter ((== old.memId) . (.mmeMemory.memId)) entries
       oldEntry `shouldSatisfy` \case
@@ -204,7 +208,7 @@ spec pool = before_ (truncateAll pool) $
         `shouldBe` [("supersede", "dreamer", Just "integration test")]
 
     it "rejects evidence whose origin does not match the authorized namespace" $ do
-      let foreignEvidence = MessageEvidence scopeB (Just 3001) 9002
+      let foreignEvidence = MessageEvidence scopeB (Just subject) 9002
       withDb pool (createMemory extractor nsA (activeDraft foreignEvidence "bad provenance"))
         `shouldThrow` (\(_ :: SomeException) -> True)
       item <- withDb pool $ createMemory extractor nsA (activeDraft evidenceA "good provenance")
@@ -225,7 +229,7 @@ spec pool = before_ (truncateAll pool) $
           createMemory
             extractor
             nsB
-            (activeDraft (MessageEvidence scopeB (Just 3001) 9002) "from B")
+            (activeDraft (MessageEvidence scopeB (Just subject) 9002) "from B")
       map (.memId) <$> withDb pool (listMemories nsA) `shouldReturn` [itemA.memId]
       denied <-
         withDb pool $
@@ -234,25 +238,25 @@ spec pool = before_ (truncateAll pool) $
             (currentConversationRecall scopeB)
             itemA.memId
             (ExpectedVersion itemA.memVersion)
-            (MemoryUpdate "stolen" (MessageEvidence scopeB (Just 3001) 9002))
+            (MemoryUpdate "stolen" (MessageEvidence scopeB (Just subject) 9002))
       denied `shouldBe` MemoryMutationRejected
 
     it "does not project group memory into a direct chat" $ do
       _ <- withDb pool $ createMemory extractor (groupMemoryNamespace scopeA) (activeDraft evidenceA "group only")
-      let direct = conversationScopeFor (privateChatGroupId (UserId 3001))
+      let direct = conversationScopeFor (privateChatGroupId (UserId nativeSubject))
       withDb pool (listMemories (groupMemoryNamespace direct)) `shouldReturn` []
 
     it "partitions direct chats from one another" $ do
-      let directA = conversationScopeFor (privateChatGroupId (UserId 3001))
+      let directA = conversationScopeFor (privateChatGroupId (UserId nativeSubject))
           directB = conversationScopeFor (privateChatGroupId (UserId 3002))
-          directNsA = userMemoryNamespace directA 3001
-          directNsB = userMemoryNamespace directB 3001
+          directNsA = userMemoryNamespace directA subject
+          directNsB = userMemoryNamespace directB subject
       item <-
         withDb pool $
           createMemory
             extractor
             directNsA
-            (activeDraft (MessageEvidence directA (Just 3001) 8001) "private")
+            (activeDraft (MessageEvidence directA (Just subject) 8001) "private")
       map (.memId) <$> withDb pool (listMemories directNsA) `shouldReturn` [item.memId]
       withDb pool (listMemories directNsB) `shouldReturn` []
 
@@ -345,8 +349,8 @@ extractor = MemoryActor ActorExtractor Nothing (Just "integration test")
 dreamer :: MemoryActor
 dreamer = MemoryActor ActorDreamer Nothing (Just "integration test")
 
-toolActor :: MemoryActor
-toolActor = MemoryActor ActorAgentTool (Just 3001) (Just "explicit request")
+toolActor :: Int64 -> MemoryActor
+toolActor principal = MemoryActor ActorAgentTool (Just principal) (Just "explicit request")
 
 threeDimensionalEmbedding :: EmbeddingRecord
 threeDimensionalEmbedding =
@@ -365,3 +369,28 @@ twoDimensionalEmbedding =
       erContentHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       erVector = "[1,2]"
     }
+
+-- | memory_evidence gained its foreign key in ADR 004, so the messages these
+-- fixtures cite have to be real rows.  Seeded at the exact canonical ids the
+-- examples name, in ascending order; returns the subject's principal id.
+seedEvidenceMessages :: DbPool -> IO Int64
+seedEvidenceMessages pool = do
+  truncateAll pool
+  insertMessageWithCanonicalId pool 8001 (unGroup (privateChatGroupId (UserId nativeSubject))) nativeSubject 1000 testTime Nothing "private"
+  insertMessageWithCanonicalId pool 9001 100 nativeSubject 1000 testTime Nothing "evidence in A"
+  insertMessageWithCanonicalId pool 9002 200 nativeSubject 1000 testTime Nothing "evidence in B"
+  rows <-
+    withDb pool $
+      query
+        "SELECT principal_id FROM principal_identities WHERE native_user_id = ?"
+        (Only (show nativeSubject))
+  case rows :: [Only Int64] of
+    Only principal : _ -> pure principal
+    [] -> expectationFailure "seeded subject has no principal" >> pure 0
+  where
+    unGroup (GroupId g) = g
+
+-- | The QQ number these fixtures speak from.  Its principal is what a
+-- user-scope memory is now keyed by; the two are unrelated numbers.
+nativeSubject :: Int64
+nativeSubject = 3001

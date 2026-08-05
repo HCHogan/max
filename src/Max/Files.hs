@@ -33,7 +33,8 @@ import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.IR (Body (..), MediaKind (MFile), MediaMeta (..), Node (NMedia), Phase (Canonical))
 import OneBot.Action (Action (GetGroupFileUrl), Response (..))
 import OneBot.Segment (FileSegInfo (..), Segment (..))
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import Max.Platform.Types (CanonicalMessageId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 
 -- | One inbound file pending fetch.
 data FileJob = FileJob
@@ -81,7 +82,7 @@ enqueueFiles ::
   DispatchMessage ->
   Eff es ()
 enqueueFiles sig gm = do
-  let MessageId mid = gm.messageId
+  let CanonicalMessageId mid = gm.canonicalId
       GroupId gid = gm.groupId
       UserId uid = gm.userId
       jobs = mapMaybe (mkJob mid gid uid) gm.body.nodes

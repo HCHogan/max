@@ -19,8 +19,9 @@ import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
-import Max.Platform.Types (AdvertisedCaps (..), noAdvertisedCaps, qqAdvertisedCaps)
-import Max.Prompt (CompartmentTier (..), ContextCandidates (..), ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, applyVideoCaptions, cpInputs, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), noAdvertisedCaps, qqAdvertisedCaps)
+import Max.DB.Media (MediaSegment (..), MessageMedia (..), noMessageMedia)
+import Max.Prompt (CompartmentTier (..), ContextCandidates (..), ContextCompartment (..), ContextPlan (..), ContextSnapshot (..), PromptImage (..), PromptInputs (..), TriggerOrigin (..), applyBaseCompartmentTiers, applyStickerCaptions, cpInputs, planContext, renderContext, renderContextPlan, tagImageMarkers, tagMediaMarkers)
 import Max.Session (Session (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -52,23 +53,31 @@ timeAt h =
 
 historyAt ::
   Int -> -- hour
-  Int64 -> -- message_id
-  Int64 -> -- user_id
+  Int64 -> -- canonical_message_id
+  Int64 -> -- author principal id
   Maybe Text -> -- nickname
   Text -> -- rendered_text
   HistoryItem
-historyAt h mid uid nick body =
+historyAt h mid principal nick body =
   HistoryItem
-    { messageId = mid,
-      userId = uid,
-      selfId = botId,
-      sourcePlatform = "qq",
+    { canonicalId = mid,
+      authorPrincipalId = principal,
+      fromBot = principal == botId,
       senderNickname = nick,
       senderCard = Nothing,
       renderedText = body,
       receivedAt = timeAt h,
       replyTo = Nothing
     }
+
+-- | Media fixtures in the shape 'Max.DB.Media.fetchMediaSegments' returns.
+imageSegs :: Int64 -> [(Int, Maybe Text)] -> Map.Map Int64 MessageMedia
+imageSegs mid segs =
+  Map.singleton mid noMessageMedia {mmImages = [MediaSegment i d Nothing | (i, d) <- segs]}
+
+videoSegs :: Int64 -> [(Int, Maybe Text, Maybe Double)] -> Map.Map Int64 MessageMedia
+videoSegs mid segs =
+  Map.singleton mid noMessageMedia {mmVideos = [MediaSegment i d dur | (i, d, dur) <- segs]}
 
 memAt :: Int64 -> Text -> MemoryItem
 memAt mid content =
@@ -256,10 +265,12 @@ spec = do
     -- Which transport carried a message is routing metadata.  Naming it in
     -- the transcript made the unlabelled platform the implicit home and split
     -- one principal into two speakers; the model sees people, not endpoints.
+    -- Since ADR 004 a 'HistoryItem' cannot express the transport at all,
+    -- which is the strongest form this invariant can take.
     it "names a speaker the same way whatever transport carried them" $ do
-      let onQQ = historyAt 9 8001 otherMemberId (Just "Alice") "一句话"
-          onMatrix = (historyAt 9 8002 otherMemberId (Just "Alice") "另一句") {History.sourcePlatform = "matrix"}
-          (_, ub) = splitMessages (renderContext baseInputs {transcript = [onQQ, onMatrix]})
+      let earlier = historyAt 9 8001 otherMemberId (Just "Alice") "一句话"
+          later = historyAt 9 8002 otherMemberId (Just "Alice") "另一句"
+          (_, ub) = splitMessages (renderContext baseInputs {transcript = [earlier, later]})
       ub `shouldSatisfy` ("[09:00 Alice #8001]" `T.isInfixOf`)
       ub `shouldSatisfy` ("[09:00 Alice #8002]" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("Matrix" `T.isInfixOf`))
@@ -542,7 +553,7 @@ spec = do
             FileRecord
               { frFileId = "abc-123",
                 frGroupId = groupRaw,
-                frMessageId = Just 5001,
+                frCanonicalMessageId = Just 5001,
                 frSenderUserId = otherMemberId,
                 frFileName = "report.pdf",
                 frMimeType = Just "application/pdf",
@@ -564,7 +575,7 @@ spec = do
             FileRecord
               { frFileId = "x",
                 frGroupId = groupRaw,
-                frMessageId = Just 5001,
+                frCanonicalMessageId = Just 5001,
                 frSenderUserId = otherMemberId,
                 frFileName = "a.txt",
                 frMimeType = Nothing,
@@ -623,7 +634,7 @@ spec = do
 
   describe "renderContext reply handles" $ do
     it "prefixes a transcript reply line with a [↩#<id>] handle" $ do
-      let quoter = (historyAt 9 7001 memberId (Just "Alice") "同意") {replyTo = Just 6001}
+      let quoter = (historyAt 9 7001 memberId (Just "Alice") "同意") {History.replyTo = Just 6001}
           inp = baseInputs {transcript = [quoter]}
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[↩#6001] 同意" `T.isInfixOf`)
@@ -687,58 +698,54 @@ spec = do
       ub `shouldSatisfy` ("转发里第二句" `T.isInfixOf`)
 
   describe "tagMediaMarkers" $ do
-    it "upgrades a bare [forward] with the message's own id" $
-      (tagMediaMarkers (historyAt 9 8001 memberId (Just "Alice") "看这个 [forward]")).renderedText
+    it "upgrades a bare [forward] with the container's canonical id" $
+      (tagMediaMarkers Map.empty (historyAt 9 8001 memberId (Just "Alice") "看这个 [forward]")).renderedText
         `shouldBe` "看这个 [forward#8001]"
 
-    it "upgrades a bare [video] the same way" $
-      (tagMediaMarkers (historyAt 9 8002 memberId (Just "Alice") "[video] 好活")).renderedText
-        `shouldBe` "[video#8002] 好活"
+    it "names one clip, with its description and probed duration" $
+      (tagMediaMarkers (videoSegs 8002 [(1, Just "猫打键盘", Just 29)]) (historyAt 9 8002 memberId (Just "Alice") "[video] 好活")).renderedText
+        `shouldBe` "[video#8002.1: 猫打键盘](29 秒) 好活"
+
+    it "renders duration alone when the captioner has not run yet" $
+      (tagMediaMarkers (videoSegs 8002 [(0, Nothing, Just 29)]) (historyAt 9 8002 memberId (Just "Alice") "[video] 好活")).renderedText
+        `shouldBe` "[video#8002.0](29 秒) 好活"
+
+    it "leaves a marker bare when the download never landed a row" $
+      -- No row means view_video has nothing to return either, so a handle
+      -- here would be a promise the tool cannot keep.
+      (tagMediaMarkers Map.empty (historyAt 9 8002 memberId (Just "Alice") "[video] 好活")).renderedText
+        `shouldBe` "[video] 好活"
 
     it "leaves text without the marker untouched" $
-      (tagMediaMarkers (historyAt 9 8001 memberId (Just "Alice") "普通消息")).renderedText
+      (tagMediaMarkers Map.empty (historyAt 9 8001 memberId (Just "Alice") "普通消息")).renderedText
         `shouldBe` "普通消息"
 
   describe "tagImageMarkers" $ do
-    it "appends the caption when one exists" $ do
-      let caps = Map.fromList [(8001 :: Int64, ["一张报错截图" :: Text])]
-      (tagImageMarkers caps (Set.fromList [8001]) (historyAt 9 8001 memberId (Just "Alice") "看 [image]")).renderedText
-        `shouldBe` "看 [image#8001: 一张报错截图]"
+    it "names the picture and appends its caption" $
+      (tagImageMarkers (imageSegs 8001 [(0, Just "一张报错截图")]) (historyAt 9 8001 memberId (Just "Alice") "看 [image]")).renderedText
+        `shouldBe` "看 [image#8001.0: 一张报错截图]"
 
     it "falls back to the bare handle without a caption" $
-      (tagImageMarkers Map.empty (Set.fromList [8001]) (historyAt 9 8001 memberId (Just "Alice") "看 [image]")).renderedText
-        `shouldBe` "看 [image#8001]"
+      (tagImageMarkers (imageSegs 8001 [(0, Nothing)]) (historyAt 9 8001 memberId (Just "Alice") "看 [image]")).renderedText
+        `shouldBe` "看 [image#8001.0]"
 
-    it "consumes captions left-to-right across several markers" $ do
-      let caps = Map.fromList [(8001 :: Int64, ["图一" :: Text])]
-      (tagImageMarkers caps (Set.fromList [8001]) (historyAt 9 8001 memberId (Just "Alice") "[image] 和 [image]")).renderedText
-        `shouldBe` "[image#8001: 图一] 和 [image#8001]"
+    it "gives each picture of a multi-image message its own handle" $
+      (tagImageMarkers (imageSegs 8001 [(0, Just "图一"), (2, Nothing)]) (historyAt 9 8001 memberId (Just "Alice") "[image] 和 [image]")).renderedText
+        `shouldBe` "[image#8001.0: 图一] 和 [image#8001.2]"
 
-    it "does not touch untagged messages" $ do
-      let caps = Map.fromList [(8001 :: Int64, ["图一" :: Text])]
-      (tagImageMarkers caps Set.empty (historyAt 9 8001 memberId (Just "Alice") "看 [image]")).renderedText
+    it "leaves a marker bare once the segments run out" $
+      (tagImageMarkers (imageSegs 8001 [(0, Just "图一")]) (historyAt 9 8001 memberId (Just "Alice") "[image] 和 [image]")).renderedText
+        `shouldBe` "[image#8001.0: 图一] 和 [image]"
+
+    it "does not touch a message with no stored media" $
+      (tagImageMarkers Map.empty (historyAt 9 8001 memberId (Just "Alice") "看 [image]")).renderedText
         `shouldBe` "看 [image]"
-
-  describe "applyVideoCaptions" $ do
-    it "renders description in the colon slot and duration as a paren attribute" $ do
-      let caps = Map.fromList [(8002 :: Int64, [(Just "猫打键盘" :: Maybe Text, Just "29 秒" :: Maybe Text)])]
-      (applyVideoCaptions caps (historyAt 9 8002 memberId (Just "Alice") "[video#8002] 好活")).renderedText
-        `shouldBe` "[video#8002: 猫打键盘](29 秒) 好活"
-
-    it "renders duration alone when no caption yet" $ do
-      let caps = Map.fromList [(8002 :: Int64, [(Nothing :: Maybe Text, Just "29 秒" :: Maybe Text)])]
-      (applyVideoCaptions caps (historyAt 9 8002 memberId (Just "Alice") "[video#8002] 好活")).renderedText
-        `shouldBe` "[video#8002](29 秒) 好活"
-
-    it "leaves the handle alone without a caption" $
-      (applyVideoCaptions Map.empty (historyAt 9 8002 memberId (Just "Alice") "[video#8002] 好活")).renderedText
-        `shouldBe` "[video#8002] 好活"
 
   describe "renderContext poke turns" $ do
     it "names the poker and shows no message line" $ do
       let pokeGm =
             (triggerMsg [])
-              { Dispatch.messageId = MessageId 0 }
+              { Dispatch.canonicalId = CanonicalMessageId 0 }
           inp = baseInputs {origin = OriginPoke, triggerMessage = pokeGm}
           (_, ub) = splitMessages (renderContext inp)
       ub `shouldSatisfy` ("[current message — 戳一戳]" `T.isInfixOf`)
@@ -774,7 +781,7 @@ spec = do
           shortPlan = planContext generousLimits (snapshot shortOnly)
           tightLimits = ContextLimits shortPlan.cpEstimatedPromptTokens 512 0 0
           pressured = planContext tightLimits (snapshot baseInputs {transcript = [veryLong, short]})
-      map (.messageId) (cpInputs pressured).transcript `shouldBe` [short.messageId]
+      map (.canonicalId) (cpInputs pressured).transcript `shouldBe` [short.canonicalId]
       pressured.cpWithinBudget `shouldBe` True
       pressured.cpTrace
         `shouldSatisfy` any (\trace -> trace.ctSource == "history.raw" && trace.ctDecision == ContextDropped)
@@ -788,7 +795,7 @@ spec = do
             planContext
               tightLimits
               (snapshot rawOnly {groupMemories = [memAt 20 (T.replicate 1000 "old memory ")]})
-      map (.messageId) (cpInputs pressured).transcript `shouldBe` [recent.messageId]
+      map (.canonicalId) (cpInputs pressured).transcript `shouldBe` [recent.canonicalId]
       (cpInputs pressured).groupMemories `shouldSatisfy` null
       pressured.cpWithinBudget `shouldBe` True
 
@@ -816,7 +823,7 @@ spec = do
           tightLimits = ContextLimits rawPlan.cpEstimatedPromptTokens 512 0 0
           large = compartmentAt 1 (timeAt 10) 0.5 (T.replicate 4000 "P1 ") (T.replicate 2000 "P2 ") (T.replicate 500 "P3 ")
           pressured = planContext tightLimits (tieredSnapshot baseInputs {compartments = [large], transcript = [raw]})
-      map (.messageId) (cpInputs pressured).transcript `shouldBe` [raw.messageId]
+      map (.canonicalId) (cpInputs pressured).transcript `shouldBe` [raw.canonicalId]
       map (.contextTier) (cpInputs pressured).compartments `shouldBe` [TierP4]
       pressured.cpTrace
         `shouldSatisfy` any (\trace -> trace.ctSource == "history.compartment.p3->p4" && trace.ctDecision == ContextDropped)

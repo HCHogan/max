@@ -12,7 +12,7 @@ import Max.Effects.Outbound
     wasDelivered,
   )
 import Max.IR
-import Max.Platform.Types (NativeUserId (..))
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalIdentityId (..))
 import OneBot.Types (GroupId (..), MessageId (..))
 import Test.Hspec
 
@@ -30,7 +30,7 @@ spec :: Spec
 spec = describe "Outbound" $ do
   it "can be interpreted in memory without a platform or database" $ do
     seen <- newIORef Nothing
-    let receipt = SentRecorded (MessageId 42)
+    let receipt = SentRecorded (CanonicalMessageId 42)
     actual <-
       runEff
         . runOutboundWith
@@ -43,18 +43,18 @@ spec = describe "Outbound" $ do
     wasDelivered (SendFailed "offline") `shouldBe` False
     wasDelivered (SentUnrecorded Nothing "missing message id") `shouldBe` True
     wasDelivered (SentUnrecorded (Just (MessageId 42)) "db unavailable") `shouldBe` True
-    wasDelivered (SentRecorded (MessageId 42)) `shouldBe` True
+    wasDelivered (SentRecorded (CanonicalMessageId 42)) `shouldBe` True
 
   it "carries semantic IR and keeps reply outside the content body" $ do
     let req =
           request
             { orBody =
                 Body
-                  [ NMention (NativeUserId "1578034713") "用户名",
+                  [ NMention (MentionIdentity (PrincipalIdentityId 12)) "用户名",
                     NText " 在吗，找你"
                   ],
-              orReplyTo = Just (MessageId 99)
+              orReplyTo = Just (CanonicalMessageId 99)
             }
     req.orBody
-      `shouldBe` Body [NMention (NativeUserId "1578034713") "用户名", NText " 在吗，找你"]
-    req.orReplyTo `shouldBe` Just (MessageId 99)
+      `shouldBe` Body [NMention (MentionIdentity (PrincipalIdentityId 12)) "用户名", NText " 在吗，找你"]
+    req.orReplyTo `shouldBe` Just (CanonicalMessageId 99)

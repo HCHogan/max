@@ -30,6 +30,7 @@ import Database.PostgreSQL.Simple (Only (..), Query)
 import Database.PostgreSQL.Simple.FromRow (FromRow, field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.Platform.Types (PrincipalId (..))
 import OneBot.Types (GroupId (..), UserId (..))
 
 -- | One scheduled reminder.  'rmCron' distinguishes one-shot
@@ -38,7 +39,10 @@ import OneBot.Types (GroupId (..), UserId (..))
 data Reminder = Reminder
   { rmId :: !Int64,
     rmGroupId :: !Int64,
-    rmUserId :: !Int64,
+    -- | Who asked, as a person (ADR 004).  Nullable because a reminder
+    -- written before principals existed has no honest answer, and inventing
+    -- one to keep a column NOT NULL would be worse than not @-ing them.
+    rmAuthorPrincipalId :: !(Maybe Int64),
     rmSelfId :: !Int64,
     rmText :: !Text,
     rmCron :: !(Maybe Text),
@@ -70,7 +74,7 @@ instance FromRow Reminder where
 -- | Column list matching 'FromRow', for every SELECT below.
 selectCols :: Query
 selectCols =
-  "id, group_id, user_id, self_id, text, cron_expr, fire_at, created_at, \
+  "id, group_id, author_principal_id, self_id, text, cron_expr, fire_at, created_at, \
   \delivery_attempts, next_attempt_at, last_error, parked_at"
 
 -- | Effective scheduler deadline: the original/next cron fire unless a
@@ -82,18 +86,18 @@ reminderDueAt r = fromMaybe r.rmFireAt r.rmNextAttemptAt
 insertReminder ::
   (WithConnection :> es, IOE :> es) =>
   GroupId ->
-  UserId -> -- who asked
+  PrincipalId -> -- who asked
   UserId -> -- bot self_id
   Text -> -- reminder body
   Maybe Text -> -- cron expression; 'Nothing' = one-shot
   UTCTime -> -- first (or only) fire time
   Eff es Int64
-insertReminder (GroupId gid) (UserId uid) (UserId sid) body cron fireAt = do
+insertReminder (GroupId gid) (PrincipalId principal) (UserId sid) body cron fireAt = do
   rows <-
     query
-      "INSERT INTO reminders (group_id, user_id, self_id, text, cron_expr, fire_at) \
+      "INSERT INTO reminders (group_id, author_principal_id, self_id, text, cron_expr, fire_at) \
       \  VALUES (?, ?, ?, ?, ?, ?) RETURNING id"
-      (gid, uid, sid, body, cron, fireAt)
+      (gid, principal, sid, body, cron, fireAt)
   pure $ case rows of
     [Only n] -> n
     _ -> 0 -- unreachable: RETURNING on a successful insert yields one row

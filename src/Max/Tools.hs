@@ -34,7 +34,9 @@ import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
 import Max.Embedding (EmbeddingRecord)
 import Max.EpisodeStore (EpisodeExpansion (..), SourceRange (..), episodeHandleText, expandEpisode, parseEpisodeHandle)
-import Max.Prompt (tagMediaMarkers)
+import Data.Map.Strict qualified as Map
+import Max.DB.Media (MessageMedia, fetchMediaSegments)
+import Max.Prompt (tagMediaMarkers, withMediaHandles)
 import Max.Recall (RecallHit (..), searchRecall)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId)
@@ -71,17 +73,17 @@ getMessageByIdTool tz dc =
     { toolName = "get_message_by_id",
       toolDescription =
         T.unwords
-          [ "Fetch one historical message by its QQ message_id.",
-            "Useful when the user references an old message id or you",
-            "want the full original text of something quoted/forwarded.",
-            "Returns null if the message is not in the bot's database."
+          [ "按 id 取一条历史消息：传上下文行里 #<id> 或 [↩#<id>] 的那个数字。",
+            "适合有人提到一条旧消息、或者你想看引用/转发的原文时用。",
+            "库里没有这条就返回 null。"
           ],
-      toolSchema = toolObject [("message_id", integerParam "QQ message_id (positive integer)")] ["message_id"],
+      toolSchema = toolObject [("message_id", integerParam "上下文里 #<id> / [↩#<id>] 的那个数字")] ["message_id"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
           m <- fetchMessageInScope (toolConversationScope dc) mid
-          pure $ Right (toJSON (fmap (historyItemSummary tz . tagMediaMarkers) m))
+          tagged <- withMediaHandles (maybe [] pure m)
+          pure $ Right (toJSON (map (historyItemSummary tz) tagged))
     }
   where
     parseArgs :: Object -> Parser Int64
@@ -201,15 +203,16 @@ contextExpandTool tz dc =
           Nothing -> pure (Left "bad args: handle must be the UUID from an [episode#...] marker")
           Just handle -> do
             let scope = toolConversationScope dc
-            expanded <-
+            expanded0 <-
               expandEpisode
                 (currentConversationRecall scope)
                 handle
                 (MessageCursor <$> after)
                 limit
+            expanded <- traverse (withEpisodeMedia tz) expanded0
             pure $ case expanded of
               Nothing -> Left "episode not found or not visible in this conversation"
-              Just episode -> Right (episodeExpansionSummary tz episode)
+              Just episode -> Right episode
     }
   where
     parseExpandArgs o =
@@ -218,8 +221,19 @@ contextExpandTool tz dc =
         <*> o .:? "after_cursor"
         <*> (fromMaybe 40 <$> o .:? "limit")
 
-episodeExpansionSummary :: TimeZone -> EpisodeExpansion -> Value
-episodeExpansionSummary tz episode =
+-- | Attach the media handles each expanded line needs, then render.  One
+-- query for the page, the same way the prompt builder does it for a turn.
+withEpisodeMedia ::
+  (WithConnection :> es, IOE :> es) =>
+  TimeZone ->
+  EpisodeExpansion ->
+  Eff es Value
+withEpisodeMedia tz episode = do
+  media <- fetchMediaSegments [entry.history.canonicalId | entry <- episode.expansionMessages]
+  pure (episodeExpansionSummary tz media episode)
+
+episodeExpansionSummary :: TimeZone -> Map.Map Int64 MessageMedia -> EpisodeExpansion -> Value
+episodeExpansionSummary tz media episode =
   object
     [ "handle" .= episodeHandleText episode.expansionHandle,
       "source_range"
@@ -230,17 +244,17 @@ episodeExpansionSummary tz episode =
           ],
       "projection_state" .= episode.expansionState,
       "source_hash_matches" .= episode.expansionSourceHashMatches,
-      "messages" .= map (expandedHistoryItem tz) episode.expansionMessages,
+      "messages" .= map (expandedHistoryItem tz media) episode.expansionMessages,
       "has_more" .= episode.expansionHasMore,
       "next_after_cursor" .= fmap (.ingestSeq) episode.expansionNextCursor
     ]
 
-expandedHistoryItem :: TimeZone -> LedgerItem -> Value
-expandedHistoryItem tz entry =
+expandedHistoryItem :: TimeZone -> Map.Map Int64 MessageMedia -> LedgerItem -> Value
+expandedHistoryItem tz media entry =
   object $
     [ "ingest_cursor" .= entry.cursor.ingestSeq,
-      "message_id" .= h.messageId,
-      "sender_user_id" .= h.userId,
+      "message_id" .= h.canonicalId,
+      "principal_id" .= h.authorPrincipalId,
       "sender" .= bestName h,
       "time" .= fmtDateHM tz h.receivedAt,
       "text" .= h.renderedText,
@@ -248,7 +262,7 @@ expandedHistoryItem tz entry =
     ]
       <> ["reply_to" .= reply | Just reply <- [h.replyTo]]
   where
-    h = tagMediaMarkers entry.history
+    h = tagMediaMarkers media entry.history
 
 -- | Accept the timestamp shapes a model plausibly emits.  Naive times
 -- are read in the display timezone — the same clock the tool's results
@@ -297,9 +311,9 @@ viewForwardTool tz dc =
               maxForwardChildren
           if null kids
             then pure $ Left "这条消息没有已展开的转发内容（不是转发聊天记录，或还没抓取完）"
-            else
-              pure . Right . toJSON $
-                map (historyItemSummary tz . tagMediaMarkers) kids
+            else do
+              tagged <- withMediaHandles kids
+              pure . Right . toJSON $ map (historyItemSummary tz) tagged
     }
 
 --------------------------------------------------------------------------------
@@ -339,9 +353,9 @@ pokeTool dc =
 historyItemSummary :: TimeZone -> HistoryItem -> Value
 historyItemSummary tz h =
   object $
-    [ "message_id" .= h.messageId,
-      "sender_user_id" .= h.userId,
-      -- 群名片 > 昵称 > QQ号, matching the prompt's context lines.
+    [ "message_id" .= h.canonicalId,
+      "principal_id" .= h.authorPrincipalId,
+      -- 群名片 > 昵称 > principal id, matching the prompt's context lines.
       "sender" .= bestName h,
       "time" .= fmtDateHM tz h.receivedAt,
       "text" .= shorten 400 h.renderedText

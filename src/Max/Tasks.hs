@@ -85,7 +85,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Max.Dispatch (DispatchMessage)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import Max.Platform.Types (CanonicalMessageId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 
 -- | Short, human-typeable id like @t17@ — easy to !kill from the
 -- group.  Counter resets on restart.
@@ -200,7 +201,7 @@ instance Exception TaskCancelled where
 -- | Create the one runtime object that owns a dispatch's task lifecycle.
 -- Visibility begins in the same STM transaction that allocates its task id,
 -- before context/media collection or any LLM call.
-beginTurnRuntime :: TaskRegistry -> GroupId -> UserId -> Maybe MessageId -> IO TurnRuntime
+beginTurnRuntime :: TaskRegistry -> GroupId -> UserId -> Maybe CanonicalMessageId -> IO TurnRuntime
 beginTurnRuntime reg gid uid mTrigger = do
   now <- getCurrentTime
   inbox <- newTVarIO []
@@ -228,7 +229,7 @@ beginTurnRuntime reg gid uid mTrigger = do
     pure (TurnRuntime entry)
   where
     realTrigger = \case
-      Just (MessageId message) | message /= 0 -> Just message
+      Just (CanonicalMessageId message) | message /= 0 -> Just message
       _ -> Nothing
 
 turnRuntimeTaskId :: TurnRuntime -> TaskId
@@ -281,10 +282,10 @@ finishTurnRuntime reg (TurnRuntime entry) = atomically $ do
 -- entry, ahead of the slow prologue — see the module header.
 --
 -- @trigger@ is the message that caused it; pass 'Nothing' when there
--- isn't one.  A poke's synthetic 'MessageId' 0 counts as no trigger:
+-- isn't one.  A poke's synthetic canonical id 0 counts as no trigger:
 -- it is a sentinel every poke shares, so treating it as a real id would
 -- make two concurrent pokes indistinguishable.
-beginDispatch :: TaskRegistry -> GroupId -> UserId -> Maybe MessageId -> IO TaskId
+beginDispatch :: TaskRegistry -> GroupId -> UserId -> Maybe CanonicalMessageId -> IO TaskId
 beginDispatch reg gid uid mTrigger =
   turnRuntimeTaskId <$> beginTurnRuntime reg gid uid mTrigger
 
@@ -321,7 +322,7 @@ attachTask ::
   GroupId ->
   UserId ->
   -- | The dispatch's trigger message, matched against 'teTrigger'.
-  Maybe MessageId ->
+  Maybe CanonicalMessageId ->
   -- | Kind label shown in @!ps@; "llm" / "search" / etc.
   Text ->
   -- | Cancel action; runs when 'cancelTask' targets this entry.
@@ -374,7 +375,7 @@ attachTask reg gid uid mTrigger kind cancel = do
     -- no trigger to match on (they all share the sentinel id), so it
     -- never adopts and always opens its own entry.
     adoptable e = case mTrigger of
-      Just (MessageId t)
+      Just (CanonicalMessageId t)
         | t /= 0 && e.teGroup == gid && e.teTrigger == Just t ->
             isNothing <$> readTVar e.teCancel
       _ -> pure False

@@ -528,7 +528,7 @@ fetchMemoryHistoryAdmin memoryId = do
       evidence <-
         query
           "SELECT id, memory_version, evidence_kind, source_conversation_id, source_principal_id, \
-          \       source_message_id, source_start_ingest_seq, source_end_ingest_seq, source_episode_id, note, created_at \
+          \       source_canonical_message_id, source_start_ingest_seq, source_end_ingest_seq, source_episode_id, note, created_at \
           \ FROM memory_evidence WHERE memory_id = ? ORDER BY id DESC"
           (Only memoryId)
       mutations <-

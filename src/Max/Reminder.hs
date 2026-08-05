@@ -69,10 +69,12 @@ import Max.DB.Reminder
     rescheduleReminder,
   )
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
-import Max.IR (Body (..), Node (..), Phase (Ingest))
-import Max.Platform.Types (NativeUserId (..))
-import Max.Util (catchSync)
-import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
+import Data.Map.Strict qualified as Map
+import Max.IR (Body (..), MentionTarget (..), Node (..), Phase (Canonical))
+import Max.Platform.Store (resolveMentionIdentities)
+import Max.Platform.Types (PrincipalId (..))
+import Max.Util (catchSync, tshow)
+import OneBot.Types (GroupId (..), isPrivateChat)
 import System.Cron (CronSchedule, nextMatch)
 import System.Cron.Parser (parseCronSchedule)
 
@@ -229,7 +231,7 @@ reminderWorker tz sched = loop
 
     deliver r = do
       let gid = GroupId r.rmGroupId
-          body = deliveryBody gid (UserId r.rmUserId) r.rmText
+      body <- deliveryBody gid (PrincipalId <$> r.rmAuthorPrincipalId) r.rmText
       outcome <-
         sendRecorded
           OutboundRequest
@@ -250,9 +252,30 @@ reminderWorker tz sched = loop
 
 -- | @-mention the asker in groups; plain text in private chats (private
 -- at-segments render poorly — same reasoning as the @say@ tool).
-deliveryBody :: GroupId -> UserId -> Text -> Body 'Ingest
-deliveryBody gid (UserId uid) body
-  | isPrivateChat gid = Body [NText ("⏰ 提醒：" <> body)]
-  | otherwise =
-      let native = T.pack (show uid)
-       in Body [NMention (NativeUserId native) native, NText (" ⏰ 提醒：" <> body)]
+--
+-- The reminder stores who asked as a principal, so the account that carries
+-- the mention is chosen at fire time against whatever endpoints the
+-- conversation has now.  A principal that no longer resolves there degrades
+-- to plain text rather than to a dead handle.
+deliveryBody ::
+  (WithConnection :> es, IOE :> es) =>
+  GroupId ->
+  Maybe PrincipalId ->
+  Text ->
+  Eff es (Body 'Canonical)
+deliveryBody gid mPrincipal body
+  | isPrivateChat gid = pure plain
+  | otherwise = case mPrincipal of
+      Nothing -> pure plain
+      Just principal -> do
+        let GroupId conversation = gid
+        resolved <- resolveMentionIdentities conversation [principal]
+        pure $ case Map.lookup principal resolved of
+          Nothing -> plain
+          Just identity ->
+            Body
+              [ NMention (MentionIdentity identity) (tshow principal.unPrincipalId),
+                NText (" ⏰ 提醒：" <> body)
+              ]
+  where
+    plain = Body [NText ("⏰ 提醒：" <> body)]

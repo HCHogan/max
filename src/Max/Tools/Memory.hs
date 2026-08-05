@@ -60,10 +60,11 @@ import Max.MemoryStore
     updateVisibleMemory,
     userMemoryNamespace,
   )
-import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolMessageId, toolUserId)
+import Max.ToolContext (ToolContext, toolAuthorPrincipalId, toolCanonicalId, toolConversationScope, toolGroupId)
 import Max.Tools.Schema (enumParam, integerParam, stringParam, toolObject)
 import Max.Util (tshow)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import OneBot.Types (GroupId (..))
 
 -- | Per (scope, scope_id) ceiling.  Hitting it turns 'memory_save'
 -- into an error that demands consolidation first — the pressure that
@@ -116,7 +117,7 @@ saveTool dc =
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, content, mUid) -> do
           let GroupId gid = toolGroupId dc
-              UserId triggerUid = toolUserId dc
+              PrincipalId triggerPrincipal = toolAuthorPrincipalId dc
               conversation = toolConversationScope dc
           case parseScope scopeRaw of
             Nothing -> pure $ Left "scope 必须是 group 或 user"
@@ -125,7 +126,7 @@ saveTool dc =
               Right c -> do
                 let sid = case scope of
                       ScopeGroup -> gid
-                      ScopeUser -> fromMaybe triggerUid mUid
+                      ScopeUser -> fromMaybe triggerPrincipal mUid
                     namespace = case scope of
                       ScopeGroup -> groupMemoryNamespace conversation
                       ScopeUser -> userMemoryNamespace conversation sid
@@ -138,14 +139,14 @@ saveTool dc =
                           <> tshow maxMemoriesPerScope
                           <> " 条）。先用 memory_forget 删掉过时的，或用 memory_update 合并相近条目，再保存。"
                   else do
-                    let MessageId sourceMessage = toolMessageId dc
-                        actor = MemoryActor ActorAgentTool (Just triggerUid) (Just "memory_save tool")
+                    let CanonicalMessageId sourceMessage = toolCanonicalId dc
+                        actor = MemoryActor ActorAgentTool (Just triggerPrincipal) (Just "memory_save tool")
                         draft =
                           MemoryDraft
                             { draftContent = c,
                               draftLifecycle = MemoryPermanent,
                               draftCategory = Nothing,
-                              draftEvidence = MessageEvidence conversation (Just triggerUid) sourceMessage
+                              draftEvidence = MessageEvidence conversation (Just triggerPrincipal) sourceMessage
                             }
                     saved <- createMemory actor namespace draft
                     logInfo "memory: saved" $
@@ -184,17 +185,17 @@ updateTool dc =
           case checkContent content of
             Left err -> pure (Left err)
             Right c -> do
-              let UserId triggerUid = toolUserId dc
-                  MessageId sourceMessage = toolMessageId dc
+              let PrincipalId triggerPrincipal = toolAuthorPrincipalId dc
+                  CanonicalMessageId sourceMessage = toolCanonicalId dc
                   conversation = toolConversationScope dc
-                  actor = MemoryActor ActorAgentTool (Just triggerUid) (Just "memory_update tool")
+                  actor = MemoryActor ActorAgentTool (Just triggerPrincipal) (Just "memory_update tool")
               result <-
                 updateVisibleMemory
                   actor
                   (currentConversationRecall conversation)
                   mid
                   (ExpectedVersion version)
-                  (MemoryUpdate c (MessageEvidence conversation (Just triggerUid) sourceMessage))
+                  (MemoryUpdate c (MessageEvidence conversation (Just triggerPrincipal) sourceMessage))
               case result of
                 MemoryMutationApplied updated -> do
                   logInfo "memory: updated" $ object ["id" .= updated.memId, "version" .= updated.memVersion]
@@ -229,9 +230,9 @@ forgetTool dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, version) -> do
-          let UserId triggerUid = toolUserId dc
+          let PrincipalId triggerPrincipal = toolAuthorPrincipalId dc
               conversation = toolConversationScope dc
-              actor = MemoryActor ActorAgentTool (Just triggerUid) (Just "memory_forget tool")
+              actor = MemoryActor ActorAgentTool (Just triggerPrincipal) (Just "memory_forget tool")
           result <-
             archiveVisibleMemory
               actor
@@ -272,14 +273,14 @@ listTool dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (scopeRaw, mSid) -> do
-          let UserId triggerUid = toolUserId dc
+          let PrincipalId triggerPrincipal = toolAuthorPrincipalId dc
               conversation = toolConversationScope dc
           case parseScope scopeRaw of
             Nothing -> pure $ Left "scope 必须是 group 或 user"
             Just scope -> do
               let namespace = case scope of
                     ScopeGroup -> groupMemoryNamespace conversation
-                    ScopeUser -> userMemoryNamespace conversation (fromMaybe triggerUid mSid)
+                    ScopeUser -> userMemoryNamespace conversation (fromMaybe triggerPrincipal mSid)
               items <- listMemories namespace
               pure $ Right (toJSON (map memorySummary items))
     }

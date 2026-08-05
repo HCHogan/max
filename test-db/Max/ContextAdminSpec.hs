@@ -23,8 +23,8 @@ import Test.Hspec
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Max.ContextAdmin" $ do
   it "reports raw-tail lag and fails integrity when a cursor jumps over uncovered source" $ do
-    insertRawMessage pool 1001 groupId memberId botId testTime Nothing "first"
-    insertRawMessage pool 1002 groupId memberId botId testTime Nothing "second"
+    _ <- insertRawMessage pool 1001 groupId memberId botId testTime Nothing "first"
+    _ <- insertRawMessage pool 1002 groupId memberId botId testTime Nothing "second"
 
     initial <- withDb pool (loadContextStatus (Just groupId))
     parseCoverage initial `shouldBe` Right (0, 2, [])
@@ -70,8 +70,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.ContextAdmin" $ do
       `shouldBe` [("tiered", 456, True)]
 
   it "invalidates only the requested conversation embedding projection" $ do
-    insertRawMessage pool 1001 groupId memberId botId testTime Nothing "searchable message"
-    insertRawMessage pool 2001 otherGroup memberId botId testTime Nothing "other message"
+    _ <- insertRawMessage pool 1001 groupId memberId botId testTime Nothing "searchable message"
+    _ <- insertRawMessage pool 2001 otherGroup memberId botId testTime Nothing "other message"
     withConn pool $ \conn -> do
       _ <-
         execute

@@ -13,6 +13,7 @@ module Helpers
     insertRawMessageAtSeq,
     insertRawKind,
     insertRawReply,
+    insertMessageWithCanonicalId,
     updateDbSession,
   )
 where
@@ -20,6 +21,7 @@ where
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Control.Monad (unless)
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), execute, execute_, query)
 import Effectful (Eff, IOE, runEff)
@@ -43,7 +45,7 @@ import Max.Platform.Store
     ingestEnvelope,
   )
 import Max.Platform.Types
-  ( CanonicalMessageId,
+  ( CanonicalMessageId (..),
     EventKind (EventMessage),
     MessageRelation (ReplyTo),
     NativeEventId (..),
@@ -132,7 +134,7 @@ insertRawMessage ::
   UTCTime -> -- received_at
   Maybe Text -> -- sender_nickname
   Text -> -- rendered_text
-  IO ()
+  IO Int64 -- canonical_message_id
 insertRawMessage pool mid gid uid sid receivedAt nick body =
   insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body Nothing
 
@@ -150,15 +152,15 @@ insertRawMessageAtSeq ::
   UTCTime -> -- received_at
   Maybe Text -> -- sender_nickname
   Text -> -- rendered_text
-  IO ()
+  IO Int64 -- canonical_message_id
 insertRawMessageAtSeq pool seq' mid gid uid sid receivedAt nick body = do
-  insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body Nothing
+  canonical <- insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body Nothing
   withConn pool $ \c -> do
     _ <-
       execute
         c
-        "UPDATE messages SET ingest_seq = ?, conversation_seq = ? WHERE message_id = ?"
-        (seq', seq', mid)
+        "UPDATE messages SET ingest_seq = ?, conversation_seq = ? WHERE canonical_message_id = ?"
+        (seq', seq', canonical)
     _ <-
       query
         c
@@ -167,6 +169,7 @@ insertRawMessageAtSeq pool seq' mid gid uid sid receivedAt nick body = do
         (Only seq') ::
         IO [Only Int64]
     pure ()
+  pure canonical
 
 -- | Like 'insertRawMessage' but with an explicit @kind@ — @'command'@
 -- or @'debug'@ for rows the chat saw but the transcript must skip.
@@ -180,7 +183,7 @@ insertRawKind ::
   UTCTime -> -- received_at
   Maybe Text -> -- sender_nickname
   Text -> -- rendered_text
-  IO ()
+  IO Int64 -- canonical_message_id
 insertRawKind pool kind mid gid uid sid receivedAt nick body =
   insertCanonicalFixture pool kind mid gid uid sid receivedAt nick body Nothing
 
@@ -194,8 +197,8 @@ insertRawReply ::
   UTCTime -> -- received_at
   Maybe Text -> -- sender_nickname
   Text -> -- rendered_text
-  Int64 -> -- reply_to_message_id
-  IO ()
+  Int64 -> -- the native (QQ) id of the message being replied to
+  IO Int64 -- canonical_message_id
 insertRawReply pool mid gid uid sid receivedAt nick body replyTo =
   insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body (Just replyTo)
 
@@ -213,7 +216,7 @@ insertCanonicalFixture ::
   Maybe Text ->
   Text ->
   Maybe Int64 ->
-  IO ()
+  IO Int64
 insertCanonicalFixture pool kind mid gid uid sid receivedAt nick body replyTo =
   withDb pool $ do
     endpoint <- ensureQQEndpointFor (UserId sid) (GroupId gid)
@@ -238,8 +241,9 @@ insertCanonicalFixture pool kind mid gid uid sid receivedAt nick body replyTo =
               createMirrorDeliveries = False,
               transcriptKind = kind
             }
-    _ <- ingestEnvelope options envelope
-    pure ()
+    result <- ingestEnvelope options envelope
+    let CanonicalMessageId canonical = resultId result
+    pure canonical
 
 -- | Test-only versioned Session mutation.  Production callers go through
 -- 'Max.Session.updateSession'; integration fixtures use this helper when they
@@ -275,3 +279,37 @@ resultId = \case
   AlreadyIngested canonical -> canonical
   DeliveryEcho canonical -> canonical
   EchoUnmatched -> error "resultId: a reconcile-only ingest stored no message"
+
+-- | Insert a fixture message whose canonical id is exactly @canonical@, by
+-- pinning the canonical sequence just below it first.
+--
+-- The native (QQ) id space and the canonical id space are unrelated in
+-- production — that is the whole point of ADR 004 — and most fixtures now
+-- bind whatever canonical id an insert returns.  This exists for the specs
+-- that state one id and then assert on it in several places (evidence links,
+-- citations, file attachments), where threading a binding through would cost
+-- more clarity than the coincidence does.  Deliberately explicit, so nothing
+-- reads it as a rule about the two spaces.
+insertMessageWithCanonicalId ::
+  DbPool ->
+  Int64 -> -- the canonical id to land on, also used as the native id
+  Int64 -> -- group_id
+  Int64 -> -- user_id
+  Int64 -> -- self_id
+  UTCTime ->
+  Maybe Text -> -- sender_nickname
+  Text -> -- rendered_text
+  IO ()
+insertMessageWithCanonicalId pool canonical gid uid sid receivedAt nick body = do
+  withConn pool $ \c -> do
+    _ <-
+      query
+        c
+        "SELECT setval('canonical_message_id_seq', ?, true)"
+        (Only (canonical - 1)) ::
+        IO [Only Int64]
+    pure ()
+  landed <- insertRawMessage pool canonical gid uid sid receivedAt nick body
+  unless (landed == canonical) $
+    expectationFailure
+      ("fixture message landed on canonical id " <> show landed <> ", expected " <> show canonical)

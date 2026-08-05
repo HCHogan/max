@@ -18,7 +18,6 @@ module Max.Platform.Store
     compatibilityMessageIdForCanonical,
     conversationAdvertisedCaps,
     compatibilityPlatformId,
-    isBotAuthoredCompatibilityMessage,
     registerEndpoint,
     ensureLegacyEndpoint,
     ensureConfiguredEndpoint,
@@ -45,6 +44,9 @@ module Max.Platform.Store
     advanceIngestCursorCAS,
     DeliveryClaim (..),
     deliveryMentionNatives,
+    resolveMentionIdentities,
+    ensureEndpointPrincipals,
+    mentionPrincipalsFor,
     expiredSendingDeliverySql,
     claimDeliveries,
     claimDelivery,
@@ -145,13 +147,13 @@ conversationAdvertisedCaps ::
   Int64 ->
   Maybe Int64 ->
   Eff es AdvertisedCaps
-conversationAdvertisedCaps legacyConversation targetCompatibilityMessage = do
+conversationAdvertisedCaps legacyConversation targetCanonicalMessage = do
   rows <-
     query
       "SELECT a.platform, CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END, \
       \       (?::bigint IS NULL OR EXISTS ( \
       \          SELECT 1 FROM messages target \
-      \          WHERE target.conversation_id = c.conversation_id AND target.message_id = ? \
+      \          WHERE target.conversation_id = c.conversation_id AND target.canonical_message_id = ? \
       \            AND ( \
       \              EXISTS (SELECT 1 FROM platform_events pe \
       \                      WHERE pe.endpoint_id = e.endpoint_id \
@@ -165,7 +167,7 @@ conversationAdvertisedCaps legacyConversation targetCompatibilityMessage = do
       \ JOIN platform_accounts a USING (platform_account_id) \
       \ WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
       \ ORDER BY e.endpoint_id"
-      (targetCompatibilityMessage, targetCompatibilityMessage, legacyConversation)
+      (targetCanonicalMessage, targetCanonicalMessage, legacyConversation)
   let endpoints =
         [ (parsePlatform platform, outboundCapsFromValue manifest, holdsTarget)
         | (platform, manifest, holdsTarget) <- (rows :: [(Text, Value, Bool)])
@@ -241,13 +243,16 @@ data DispatchClaim = DispatchClaim
     compatibilityConversationId :: !Int64,
     compatibilityUserId :: !Int64,
     compatibilitySelfId :: !Int64,
-    -- | The bot's id /on the origin platform/.  The compatibility self id is
-    -- the same number only on QQ; everywhere else it is a synthetic bigint,
-    -- so anything deciding "was I mentioned" has to compare against this.
-    nativeAccountId :: !NativeAccountId,
+    -- | The sender and the bot as /people/ (ADR 004).  Deciding "was I
+    -- addressed" by comparing principals is what makes the answer the same
+    -- on every platform: an account id only ever agreed with the
+    -- compatibility self id on QQ, and every @ elsewhere silently read as
+    -- "not addressed".
+    authorPrincipalId :: !PrincipalId,
+    selfPrincipalId :: !PrincipalId,
     body :: !(Body 'Canonical),
     originEndpointId :: !EndpointId,
-    replyToCompatibilityMessageId :: !(Maybe Int64),
+    replyToCanonicalMessageId :: !(Maybe Int64),
     sourcePlatform :: !Platform,
     senderDisplayName :: !(Maybe Text),
     attemptCount :: !Int
@@ -263,9 +268,12 @@ data DispatchCompletion
 data OutboundDraft = OutboundDraft
   { legacyConversationId :: !Int64,
     transcriptKind :: !Text,
-    sourceCompatibilityMessageId :: !(Maybe Int64),
-    canonicalBody :: !(Body 'Ingest),
-    replyToCompatibilityMessageId :: !(Maybe Int64)
+    sourceCanonicalMessageId :: !(Maybe Int64),
+    -- | Already canonical: the send path resolves every principal the model
+    -- addressed to a real account before publishing, so publication never
+    -- mints an identity for a number a model invented.
+    canonicalBody :: !(Body 'Canonical),
+    replyToCanonicalMessageId :: !(Maybe Int64)
   }
   deriving stock (Eq, Show)
 
@@ -283,7 +291,7 @@ data EnqueuedOutbound = EnqueuedOutbound
 -- endpoint holding a native copy of the target.
 data ReactionDraft = ReactionDraft
   { legacyConversationId :: !Int64,
-    targetCompatibilityMessageId :: !Int64,
+    targetCanonicalMessageId :: !Int64,
     reactionKey :: !Text,
     reactionAction :: !ReactionAction,
     requiredPlatform :: !(Maybe Platform)
@@ -437,10 +445,11 @@ data DispatchClaimRow = DispatchClaimRow
     dcrGroupId :: !Int64,
     dcrUserId :: !Int64,
     dcrSelfId :: !Int64,
-    dcrNativeAccountId :: !Text,
+    dcrAuthorPrincipalId :: !Int64,
+    dcrSelfPrincipalId :: !Int64,
     dcrContent :: !Value,
     dcrOriginEndpointId :: !Int64,
-    dcrReplyToMessageId :: !(Maybe Int64),
+    dcrReplyToCanonicalMessageId :: !(Maybe Int64),
     dcrSourcePlatform :: !Text,
     dcrSenderDisplayName :: !(Maybe Text),
     dcrAttemptCount :: !Int
@@ -450,6 +459,7 @@ instance FromRow DispatchClaimRow where
   fromRow =
     DispatchClaimRow
       <$> field
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -534,24 +544,6 @@ compatibilityPlatformId ::
   Text ->
   Eff es Int64
 compatibilityPlatformId platform kind = compatibilityId (renderPlatform platform) kind
-
-isBotAuthoredCompatibilityMessage ::
-  (WithConnection :> es, IOE :> es) =>
-  Int64 ->
-  Int64 ->
-  Eff es Bool
-isBotAuthoredCompatibilityMessage legacyConversation legacyMessage = do
-  rows <-
-    query
-      "SELECT EXISTS ( \
-      \ SELECT 1 FROM messages m \
-      \ JOIN conversations c USING (conversation_id) \
-      \ WHERE c.legacy_group_id = ? AND m.message_id = ? \
-      \   AND m.message_origin IN ('outbound', 'internal'))"
-      (legacyConversation, legacyMessage)
-  pure $ case rows :: [Only Bool] of
-    [Only authored] -> authored
-    _ -> False
 
 registerEndpoint ::
   (WithConnection :> es, IOE :> es) =>
@@ -829,14 +821,23 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
       endpoint
       ( Map.insertWith
           (<|>)
-          envelope.senderNativeId
-          envelope.senderDisplayName
-          (bodyMentionDisplays envelope.content)
+          -- The bot itself, so "was I addressed?" always has a principal to
+          -- compare a mention against on this endpoint (ADR 004).  It is a
+          -- member of the conversation like anyone else; only the outbound
+          -- path used to say so.
+          (NativeUserId endpoint.erNativeAccountId)
+          (Just "max")
+          ( Map.insertWith
+              (<|>)
+              envelope.senderNativeId
+              envelope.senderDisplayName
+              (bodyMentionDisplays envelope.content)
+          )
       )
   identityId <- case Map.lookup envelope.senderNativeId identities of
-    Just identity -> pure identity
+    Just (identity, _) -> pure identity
     Nothing -> error "ingestEnvelope: sender identity missing from batch"
-  resolvedCanonicalBody <- resolveBodyMentions identities envelope.content
+  resolvedCanonicalBody <- resolveBodyMentions (batchIdentities identities) envelope.content
   let contentValue = toJSON resolvedCanonicalBody
       NativeEventId nativeEvent = envelope.nativeEventId
       (safeRaw, rawTruncated) = sanitizeRawPayload options.maxRawPayloadBytes envelope.rawPayload
@@ -998,11 +999,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
       let platformName = endpoint.erPlatform
           NativeEventId nativeEvent = envelope.nativeEventId
           NativeUserId nativeUser = envelope.senderNativeId
-          rendered =
-            promptCanonicalText
-              (parsePlatform endpoint.erPlatform)
-              (identityNatives identities)
-              resolvedBody
+          rendered = promptCanonicalText (identityPrincipals identities) resolvedBody
           provenanceSegments
             | platformName == "qq" = fromMaybe (toJSON ([] :: [Value])) options.qqProvenanceSegments
             | otherwise = toJSON ([] :: [Value])
@@ -1170,13 +1167,13 @@ enqueueOutbound draft = withTransaction $ do
       \ WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
       \   AND (?::bigint IS NULL OR e.endpoint_id = ( \
       \     SELECT source.origin_endpoint_id FROM messages source \
-      \     WHERE source.group_id = ? AND source.message_id = ?)) \
+      \     WHERE source.group_id = ? AND source.canonical_message_id = ?)) \
       \ ORDER BY CASE a.platform WHEN 'qq' THEN 0 ELSE 1 END, e.endpoint_id \
       \ LIMIT 1 FOR UPDATE OF c"
       ( draft.legacyConversationId,
-        draft.sourceCompatibilityMessageId,
+        draft.sourceCanonicalMessageId,
         draft.legacyConversationId,
-        draft.sourceCompatibilityMessageId
+        draft.sourceCanonicalMessageId
       )
   (primaryEndpoint, conversation, account, platformName, accountNative, legacyGroup) <-
     case primaryRows :: [(Int64, Int64, Int64, Text, Text, Maybe Int64)] of
@@ -1190,40 +1187,25 @@ enqueueOutbound draft = withTransaction $ do
             erNativeAccountId = accountNative,
             erLegacyGroupId = legacyGroup
           }
+  -- An outbound body already names identities: the send path resolved every
+  -- principal the model addressed against a real account before publishing.
+  -- The only identity this transaction has to ensure is the bot's own.
   identities <-
-    ensureIdentityBatch
-      endpointRow
-      ( Map.insertWith
-          (<|>)
-          (NativeUserId accountNative)
-          (Just "max")
-          (bodyMentionDisplays draft.canonicalBody)
-      )
-  identityId <- case Map.lookup (NativeUserId accountNative) identities of
-    Just identity -> pure identity
+    ensureIdentityBatch endpointRow (Map.singleton (NativeUserId accountNative) (Just "max"))
+  (_, principal) <- case Map.lookup (NativeUserId accountNative) identities of
+    Just found -> pure found
     Nothing -> error "enqueueOutbound: bot identity missing from batch"
-  canonicalBody <- resolveBodyMentions identities draft.canonicalBody
+  mentionPrincipals <- mentionPrincipalsFor (mentionIdentities draft.canonicalBody)
   let renderedProjection =
-        promptCanonicalText (parsePlatform platformName) (identityNatives identities) canonicalBody
-  principalRows <-
-    query
-      "SELECT principal_id FROM principal_identities WHERE principal_identity_id = ?"
-      (Only identityId)
-  let principal = exactlyOne "enqueueOutbound principal" (principalRows :: [Only Int64])
+        promptCanonicalText (Map.union (identityPrincipals identities) mentionPrincipals) draft.canonicalBody
   canonicalRows <- query "SELECT nextval('canonical_message_id_seq')" ()
   let canonical = exactlyOne "enqueueOutbound canonical id" (canonicalRows :: [Only Int64])
   compatibilityRows <- query "SELECT -nextval('synthetic_message_id_seq')" ()
   let compatibilityMessage = exactlyOne "enqueueOutbound compatibility id" (compatibilityRows :: [Only Int64])
   compatibilitySelf <- compatibilityId platformName "user" accountNative
-  replyCanonical <- case draft.replyToCompatibilityMessageId of
-    Nothing -> pure Nothing
-    Just replyLegacy -> do
-      rows <-
-        query
-          "SELECT canonical_message_id FROM messages \
-          \ WHERE conversation_id = ? AND message_id = ?"
-          (conversation, replyLegacy)
-      pure (fromOnly <$> listToMaybe (rows :: [Only Int64]))
+  replyTarget <- resolveReplyProjections conversation draft.replyToCanonicalMessageId
+  let replyCanonical = fst <$> replyTarget
+      replyCompatibility = snd <$> replyTarget
   inserted <-
     execute
       "INSERT INTO messages \
@@ -1238,9 +1220,9 @@ enqueueOutbound draft = withTransaction $ do
         compatibilitySelf,
         compatibilitySelf,
         Jsonb (toJSON ([] :: [Value])),
-        Jsonb (toJSON canonicalBody),
+        Jsonb (toJSON draft.canonicalBody),
         renderedProjection,
-        draft.replyToCompatibilityMessageId,
+        replyCompatibility,
         replyCanonical,
         draft.transcriptKind,
         conversation,
@@ -1278,7 +1260,7 @@ enqueueOutbound draft = withTransaction $ do
       \ WHERE e.conversation_id = ? AND e.enabled AND a.enabled \
       \   AND (?::boolean OR e.endpoint_id = ?) \
       \ ON CONFLICT (canonical_message_id, endpoint_id) DO NOTHING"
-      (canonical, canonical, conversation, isNothing draft.sourceCompatibilityMessageId, primaryEndpoint)
+      (canonical, canonical, conversation, isNothing draft.sourceCanonicalMessageId, primaryEndpoint)
   primaryDeliveryRows <-
     query
       "SELECT delivery_id FROM message_deliveries \
@@ -1311,13 +1293,13 @@ recordInternalMessage draft = withTransaction $ do
       \ WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
       \   AND (?::bigint IS NULL OR e.endpoint_id = ( \
       \     SELECT source.origin_endpoint_id FROM messages source \
-      \     WHERE source.group_id = ? AND source.message_id = ?)) \
+      \     WHERE source.group_id = ? AND source.canonical_message_id = ?)) \
       \ ORDER BY CASE a.platform WHEN 'qq' THEN 0 ELSE 1 END, e.endpoint_id \
       \ LIMIT 1 FOR UPDATE OF c"
       ( draft.legacyConversationId,
-        draft.sourceCompatibilityMessageId,
+        draft.sourceCanonicalMessageId,
         draft.legacyConversationId,
-        draft.sourceCompatibilityMessageId
+        draft.sourceCanonicalMessageId
       )
   (primaryEndpoint, conversation, account, platformName, accountNative) <-
     case primaryRows :: [(Int64, Int64, Int64, Text, Text)] of
@@ -1332,26 +1314,19 @@ recordInternalMessage draft = withTransaction $ do
             erLegacyGroupId = Just draft.legacyConversationId
           }
   identities <-
-    ensureIdentityBatch
-      endpointRow
-      ( Map.insertWith
-          (<|>)
-          (NativeUserId accountNative)
-          (Just "max")
-          (bodyMentionDisplays draft.canonicalBody)
-      )
-  identityId <- case Map.lookup (NativeUserId accountNative) identities of
-    Just identity -> pure identity
+    ensureIdentityBatch endpointRow (Map.singleton (NativeUserId accountNative) (Just "max"))
+  (_, principal) <- case Map.lookup (NativeUserId accountNative) identities of
+    Just found -> pure found
     Nothing -> error "recordInternalMessage: bot identity missing from batch"
-  canonicalBody <- resolveBodyMentions identities draft.canonicalBody
+  mentionPrincipals <- mentionPrincipalsFor (mentionIdentities draft.canonicalBody)
   let renderedProjection =
-        promptCanonicalText (parsePlatform platformName) (identityNatives identities) canonicalBody
-      contentHash = TE.decodeUtf8 (Base16.encode (SHA256.hash (LBS.toStrict (encode canonicalBody))))
+        promptCanonicalText (Map.union (identityPrincipals identities) mentionPrincipals) draft.canonicalBody
+      contentHash = TE.decodeUtf8 (Base16.encode (SHA256.hash (LBS.toStrict (encode draft.canonicalBody))))
       sourceKey =
         "max:internal:"
           <> T.pack (show conversation)
           <> ":"
-          <> maybe "none" (T.pack . show) draft.sourceCompatibilityMessageId
+          <> maybe "none" (T.pack . show) draft.sourceCanonicalMessageId
           <> ":"
           <> contentHash
   lockRows <-
@@ -1370,25 +1345,14 @@ recordInternalMessage draft = withTransaction $ do
   case existing :: [Only Int64] of
     [Only canonical] -> pure (CanonicalMessageId canonical)
     [] -> do
-      principalRows <-
-        query
-          "SELECT principal_id FROM principal_identities WHERE principal_identity_id = ?"
-          (Only identityId)
-      let principal = exactlyOne "recordInternalMessage principal" (principalRows :: [Only Int64])
       canonicalRows <- query "SELECT nextval('canonical_message_id_seq')" ()
       compatibilityRows <- query "SELECT -nextval('synthetic_message_id_seq')" ()
       let canonical = exactlyOne "recordInternalMessage canonical id" (canonicalRows :: [Only Int64])
           compatibilityMessage = exactlyOne "recordInternalMessage compatibility id" (compatibilityRows :: [Only Int64])
       compatibilitySelf <- compatibilityId platformName "user" accountNative
-      replyCanonical <- case draft.replyToCompatibilityMessageId of
-        Nothing -> pure Nothing
-        Just replyLegacy -> do
-          rows <-
-            query
-              "SELECT canonical_message_id FROM messages \
-              \ WHERE conversation_id = ? AND message_id = ?"
-              (conversation, replyLegacy)
-          pure (fromOnly <$> listToMaybe (rows :: [Only Int64]))
+      replyTarget <- resolveReplyProjections conversation draft.replyToCanonicalMessageId
+      let replyCanonical = fst <$> replyTarget
+          replyCompatibility = snd <$> replyTarget
       inserted <-
         execute
           "INSERT INTO messages \
@@ -1402,9 +1366,9 @@ recordInternalMessage draft = withTransaction $ do
             draft.legacyConversationId,
             compatibilitySelf,
             compatibilitySelf,
-            Jsonb (toJSON canonicalBody),
+            Jsonb (toJSON draft.canonicalBody),
             renderedProjection,
-            draft.replyToCompatibilityMessageId,
+            replyCompatibility,
             replyCanonical,
             draft.transcriptKind,
             conversation,
@@ -1443,8 +1407,8 @@ enqueueReaction draft = withTransaction $ do
     query
       "SELECT m.canonical_message_id, m.conversation_id \
       \ FROM messages m JOIN conversations c USING (conversation_id) \
-      \ WHERE c.legacy_group_id = ? AND m.message_id = ?"
-      (draft.legacyConversationId, draft.targetCompatibilityMessageId)
+      \ WHERE c.legacy_group_id = ? AND m.canonical_message_id = ?"
+      (draft.legacyConversationId, draft.targetCanonicalMessageId)
   case targetRows :: [(Int64, Int64)] of
     [] -> pure Nothing
     [(targetCanonical, conversation)] -> do
@@ -1518,12 +1482,7 @@ enqueueReaction draft = withTransaction $ do
                     erNativeAccountId = accountNative,
                     erLegacyGroupId = legacyGroup
                   }
-          identity <- ensurePrincipalIdentity endpointRow (NativeUserId accountNative) (Just "max")
-          principalRows <-
-            query
-              "SELECT principal_id FROM principal_identities WHERE principal_identity_id = ?"
-              (Only identity)
-          let principal = exactlyOne "enqueueReaction principal" (principalRows :: [Only Int64])
+          (_, principal) <- ensurePrincipalIdentity endpointRow (NativeUserId accountNative) (Just "max")
           canonicalRows <- query "SELECT nextval('canonical_message_id_seq')" ()
           compatibilityRows <- query "SELECT -nextval('synthetic_message_id_seq')" ()
           let canonical = exactlyOne "enqueueReaction canonical id" (canonicalRows :: [Only Int64])
@@ -1684,8 +1643,8 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
       \ RETURNING md.canonical_message_id, md.attempt_count \
       \) \
       \SELECT c.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
-      \       origin_account.native_account_id, \
-      \       m.canonical_content, m.origin_endpoint_id, m.reply_to_message_id, \
+      \       m.author_principal_id, self_identity.principal_id, \
+      \       m.canonical_content, m.origin_endpoint_id, m.reply_to_canonical_message_id, \
       \       m.source_platform, m.sender_nickname, c.attempt_count \
       \FROM claimed c \
       \JOIN messages m USING (canonical_message_id) \
@@ -1693,6 +1652,9 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
       \  ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
       \JOIN platform_accounts origin_account \
       \  ON origin_account.platform_account_id = origin_endpoint.platform_account_id \
+      \JOIN principal_identities self_identity \
+      \  ON self_identity.platform_account_id = origin_endpoint.platform_account_id \
+      \ AND self_identity.native_user_id = origin_account.native_account_id \
       \ORDER BY c.canonical_message_id"
       ( mCanonical,
         mCanonical,
@@ -2255,24 +2217,123 @@ ensureIdentityBatch ::
   (WithConnection :> es, IOE :> es) =>
   EndpointRow ->
   Map NativeUserId (Maybe Text) ->
-  Eff es (Map NativeUserId Int64)
+  Eff es (Map NativeUserId (Int64, Int64))
 ensureIdentityBatch endpoint =
   Map.traverseWithKey (ensurePrincipalIdentity endpoint)
 
 -- | The mention resolution the canonical prompt projection needs, read back
 -- from the identity batch this transaction already ensured.
 --
+-- The prompt names /people/ (ADR 004), so this is the identity → principal
+-- join, produced for free by the batch rather than queried again.
+--
 -- Every writer renders @rendered_text@ from the /resolved/ canonical body,
 -- never from the pre-identity ingest body: the two disagree exactly where
 -- 'resolveBodyMentions' enriched a bare native id into a stored display name,
 -- and @maintenance verify@/@reproject@ recompute from the canonical body.
 -- Rendering from the ingest body is what made a correct row look stale.
-identityNatives :: Map NativeUserId Int64 -> Map PrincipalIdentityId NativeUserId
-identityNatives identities =
+identityPrincipals :: Map NativeUserId (Int64, Int64) -> Map PrincipalIdentityId PrincipalId
+identityPrincipals identities =
   Map.fromList
-    [ (PrincipalIdentityId identity, native)
-    | (native, identity) <- Map.toList identities
+    [ (PrincipalIdentityId identity, PrincipalId principal)
+    | (identity, principal) <- Map.elems identities
     ]
+
+-- | Just the identity ids, for the paths that resolve mention nodes.
+batchIdentities :: Map NativeUserId (Int64, Int64) -> Map NativeUserId Int64
+batchIdentities = Map.map fst
+
+-- | The identity → principal join every model-facing projection needs
+-- (ADR 004).  Always defined: an identity belongs to exactly one principal,
+-- and the column is @NOT NULL@.
+mentionPrincipalsFor ::
+  (WithConnection :> es, IOE :> es) =>
+  [PrincipalIdentityId] ->
+  Eff es (Map PrincipalIdentityId PrincipalId)
+mentionPrincipalsFor [] = pure Map.empty
+mentionPrincipalsFor identities = do
+  rows <-
+    query
+      "SELECT principal_identity_id, principal_id FROM principal_identities \
+      \ WHERE principal_identity_id = ANY(?)"
+      (Only (PGArray (map unPrincipalIdentityId identities)))
+  pure . Map.fromList $
+    [ (PrincipalIdentityId identity, PrincipalId principal)
+    | (identity, principal) <- (rows :: [(Int64, Int64)])
+    ]
+
+-- | The people behind a set of native accounts on one endpoint, creating the
+-- identity where the platform has just proved the account exists.
+--
+-- Used by the paths that carry a real interaction but no message — a poke —
+-- and therefore never reached 'ingestEnvelope', which is where every other
+-- participant gets their principal.
+ensureEndpointPrincipals ::
+  (WithConnection :> es, IOE :> es) =>
+  EndpointId ->
+  Map NativeUserId (Maybe Text) ->
+  Eff es (Map NativeUserId PrincipalId)
+ensureEndpointPrincipals endpointId natives
+  | Map.null natives = pure Map.empty
+  | otherwise = withTransaction $ do
+      endpoint <- fetchEndpoint endpointId
+      Map.map (PrincipalId . snd) <$> ensureIdentityBatch endpoint natives
+
+-- | The send-side half of ADR 004's identity rule: the model addressed
+-- /people/, and publication stores /accounts/, so every principal it wrote
+-- resolves here to an account that can actually carry the mention.
+--
+-- Preference is the account this conversation's messages primarily go out
+-- on (the same ordering 'enqueueOutbound' picks its primary endpoint by),
+-- falling back to any other account the conversation has an endpoint for —
+-- which is what makes a mirrored room work: the model addresses someone who
+-- only has a Matrix account, the node names their Matrix identity, Matrix
+-- delivery produces a native mention, and QQ delivery folds it to @name.
+--
+-- Scoping to the conversation's own endpoints is deliberate.  A principal id
+-- that resolves nowhere in this room does not resolve at all, so a number a
+-- model invented can neither mint an identity nor address a stranger.
+resolveMentionIdentities ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 -> -- legacy conversation id
+  [PrincipalId] ->
+  Eff es (Map PrincipalId PrincipalIdentityId)
+resolveMentionIdentities _ [] = pure Map.empty
+resolveMentionIdentities conversation principals = do
+  rows <-
+    query
+      "SELECT DISTINCT ON (pi.principal_id) pi.principal_id, pi.principal_identity_id \
+      \ FROM conversations c \
+      \ JOIN conversation_endpoints e ON e.conversation_id = c.conversation_id AND e.enabled \
+      \ JOIN platform_accounts a ON a.platform_account_id = e.platform_account_id AND a.enabled \
+      \ JOIN principal_identities pi ON pi.platform_account_id = a.platform_account_id \
+      \ WHERE c.legacy_group_id = ? AND pi.principal_id = ANY(?) \
+      \ ORDER BY pi.principal_id, \
+      \          CASE a.platform WHEN 'qq' THEN 0 ELSE 1 END, e.endpoint_id, \
+      \          pi.updated_at DESC, pi.principal_identity_id DESC"
+      (conversation, PGArray (map unPrincipalId principals))
+  pure . Map.fromList $
+    [ (PrincipalId principal, PrincipalIdentityId identity)
+    | (principal, identity) <- (rows :: [(Int64, Int64)])
+    ]
+
+-- | Both projections of a reply target, looked up once.  The canonical id is
+-- the relation; the compatibility id is the column ADR 003 left in place for
+-- the session/command plumbing, and deriving it here is what keeps a caller
+-- from having to hold two ids for one message.
+resolveReplyProjections ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 -> -- conversation id
+  Maybe Int64 -> -- canonical message id
+  Eff es (Maybe (Int64, Int64))
+resolveReplyProjections _ Nothing = pure Nothing
+resolveReplyProjections conversation (Just target) = do
+  rows <-
+    query
+      "SELECT canonical_message_id, message_id FROM messages \
+      \ WHERE conversation_id = ? AND canonical_message_id = ?"
+      (conversation, target)
+  pure (listToMaybe (rows :: [(Int64, Int64)]))
 
 -- | The identity work one ingest body needs, keyed for one sorted batch.
 -- A display is kept only when it says more than the id itself.
@@ -2337,7 +2398,7 @@ ensurePrincipalIdentity ::
   EndpointRow ->
   NativeUserId ->
   Maybe Text ->
-  Eff es Int64
+  Eff es (Int64, Int64)
 ensurePrincipalIdentity endpoint (NativeUserId nativeUser) display = do
   let native = NativeUserId nativeUser
       freshDisplay = display >>= meaningfulDisplay native
@@ -2363,7 +2424,7 @@ ensurePrincipalIdentity endpoint (NativeUserId nativeUser) display = do
           \ RETURNING principal_identity_id"
           (principal, endpoint.erPlatformAccountId, nativeUser, freshDisplay)
       case (inserted :: [Only Int64]) of
-        [Only identity] -> pure identity
+        [Only identity] -> pure (identity, principal)
         [] -> do
           _ <- execute "DELETE FROM principals WHERE principal_id = ?" (Only principal)
           (winner :: [(Int64, Int64, Maybe Text)]) <-
@@ -2391,8 +2452,8 @@ ensurePrincipalIdentity endpoint (NativeUserId nativeUser) display = do
               \ WHERE principal_id = ? \
               \   AND (display_name IS NULL OR btrim(display_name) = '' OR display_name = ?)"
               (better, principal, nativeUser)
-          pure identity
-        _ -> pure identity
+          pure (identity, principal)
+        _ -> pure (identity, principal)
 
 compatibilityId ::
   (WithConnection :> es, IOE :> es) =>
@@ -2552,10 +2613,11 @@ toDispatchClaim row =
       compatibilityConversationId = row.dcrGroupId,
       compatibilityUserId = row.dcrUserId,
       compatibilitySelfId = row.dcrSelfId,
-      nativeAccountId = NativeAccountId row.dcrNativeAccountId,
+      authorPrincipalId = PrincipalId row.dcrAuthorPrincipalId,
+      selfPrincipalId = PrincipalId row.dcrSelfPrincipalId,
       body = decodeCanonical "dispatch canonical_content" row.dcrContent,
       originEndpointId = EndpointId row.dcrOriginEndpointId,
-      replyToCompatibilityMessageId = row.dcrReplyToMessageId,
+      replyToCanonicalMessageId = row.dcrReplyToCanonicalMessageId,
       sourcePlatform = parsePlatform row.dcrSourcePlatform,
       senderDisplayName = row.dcrSenderDisplayName,
       attemptCount = row.dcrAttemptCount

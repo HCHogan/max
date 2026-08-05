@@ -6,7 +6,7 @@ import Max.MessageKind (MessageKind (..))
 import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, parseSilence, recordAs)
 import Max.IR.Prompt (promptText)
 import Max.Platform.QQ (qqIngestBody)
-import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ))
+import Max.Platform.Types (CanonicalMessageId (..))
 import Max.ReplySend (stripBareMarkers, stripStickerText)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
@@ -137,9 +137,14 @@ spec = do
       rec' [SegAt (UserId 1000), SegText " 帮我看下这个报错"]
         `shouldBe` (KindChat, Nothing)
 
-    it "projects QQ mentions in the structural prompt form" $ do
-      promptText PlatformQQ (qqIngestBody [SegAt (UserId 2291939848), SegText " 你好"])
-        `shouldBe` "[@#2291939848]  你好"
+    it "projects a pre-identity mention as @name, since it names no person yet" $ do
+      -- An ingest body knows the account, not the principal, and ADR 004
+      -- spells a mention by principal.  @display is the same degradation the
+      -- stored projection applies to a mention it cannot resolve.
+      promptText (qqIngestBody [SegAt (UserId 2291939848), SegText " 你好"])
+        `shouldBe` "@2291939848 你好"
+      -- The QQ *segment* projection is a different thing and keeps its own
+      -- wire spelling: it feeds the command parser, never the model.
       snd (rec' [SegAt (UserId 1000), SegText " !fb 改成 B 方案"])
         `shouldBe` Just "[@#1000] 改成 B 方案"
 

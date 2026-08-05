@@ -473,10 +473,9 @@ historianSource fixture =
   [ LedgerItem
       (MessageCursor sequenceNumber)
       HistoryItem
-        { messageId = message.fmId,
-          userId = message.fmUserId,
-          selfId = 999999,
-          sourcePlatform = "qq",
+        { canonicalId = message.fmId,
+          authorPrincipalId = message.fmUserId,
+          fromBot = False,
           senderNickname = Just message.fmName,
           senderCard = Nothing,
           renderedText = message.fmText,

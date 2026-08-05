@@ -28,7 +28,6 @@ module Max.Prompt
     renderContext,
     contextRoster,
     applyStickerCaptions,
-    applyVideoCaptions,
     tagImageMarkers,
 
     -- * Shared line rendering (used by "Max.Intent" / "Max.Handler")
@@ -37,6 +36,7 @@ module Max.Prompt
 
     -- * Forward markers (shared with "Max.Tools")
     tagMediaMarkers,
+    withMediaHandles,
   )
 where
 
@@ -103,6 +103,7 @@ import Max.ContextTraceStore (recordContextPlanTrace)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
+import Max.DB.Media (MediaSegment (..), MessageMedia (..), fetchMediaSegments, noMessageMedia)
 import Max.DB.History
   ( HistoryItem (..),
     HistoryPage (..),
@@ -123,12 +124,12 @@ import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.IR (Body (..), Node (..), Phase (Canonical))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
-import Max.Platform.Types (AdvertisedCaps (..), qqAdvertisedCaps)
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.Prompt.System (systemPrompt)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
-import Max.Util (trySync)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
+import Max.Util (trySync, tshow)
+import OneBot.Types (GroupId (..), isPrivateChat)
 
 -- Group-chat attention gets noisier faster than model windows grow.  These
 -- ceilings keep the protected verbatim tail roomy but stable when a future
@@ -214,20 +215,21 @@ buildContextWithReadMode ::
   DispatchMessage ->
   Eff es [ChatMessage]
 buildContextWithReadMode limits readMode defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
-  buildContextWithReadModeForOutput
-    limits
-    readMode
-    qqAdvertisedCaps
-    defaultPersona
-    multimodal'
-    historyTurns'
-    origin'
-    tz'
-    brief
-    skills'
-    inFlight'
-    s
-    gm
+  fst
+    <$> buildContextWithReadModeForOutput
+      limits
+      readMode
+      qqAdvertisedCaps
+      defaultPersona
+      multimodal'
+      historyTurns'
+      origin'
+      tz'
+      brief
+      skills'
+      inFlight'
+      s
+      gm
 
 -- | Production variant whose action grammar is constrained by the enabled
 -- conversation endpoints.  The compatibility wrapper above keeps pure/legacy
@@ -248,7 +250,11 @@ buildContextWithReadModeForOutput ::
   Set Int64 ->
   Session ->
   DispatchMessage ->
-  Eff es [ChatMessage]
+  -- | The rendered prompt, plus the roster it shows.  They travel together
+  -- because the send path has to accept exactly the handles the model was
+  -- given: any other source of names is a second identity vocabulary, which
+  -- is the thing ADR 004 removes.
+  Eff es ([ChatMessage], [(Int64, Text)])
 buildContextWithReadModeForOutput limits readMode outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let historyWatermarks = historyTokenWatermarks limits multimodal'
   snapshot <-
@@ -268,7 +274,7 @@ buildContextWithReadModeForOutput limits readMode outputCaps defaultPersona mult
       s
       gm
   let plan = planContext limits snapshot
-      MessageId triggerMessageId = gm.messageId
+      CanonicalMessageId triggerMessageId = gm.canonicalId
       scope = conversationScopeFor gm.groupId
   traceStored <-
     trySync $
@@ -295,7 +301,7 @@ buildContextWithReadModeForOutput limits readMode outputCaps defaultPersona mult
           "prompt_token_limit" .= plan.cpBudget.cbPromptTokenLimit,
           "policy_version" .= plan.cpPolicyVersion
         ]
-  pure (renderContextPlan plan)
+  pure (renderContextPlan plan, contextRoster (cpInputs plan))
 
 contextReadModeText :: ContextReadMode -> Text
 contextReadModeText = \case
@@ -361,9 +367,8 @@ collectContextWithWatermarks ::
   Eff es ContextSnapshot
 collectContextWithWatermarks mutationMode readMode materializationWatermarks outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
-      MessageId mid = gm.messageId
-      UserId selfId' = gm.selfId
-      UserId senderId = gm.userId
+      CanonicalMessageId mid = gm.canonicalId
+      PrincipalId senderPrincipal = gm.authorPrincipalId
       scope = conversationScopeFor gm.groupId
   now' <- liftIO getCurrentTime
   -- Every conversation uses one chronological stream.  The normal path is a
@@ -449,37 +454,37 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks out
   -- of uncached tokens.  The long tail stays reachable through
   -- memory_list / context_search.
   groupMems <- listRecentMemories (groupMemoryNamespace scope) memoryInjectCap
-  userMems <- listRecentMemories (userMemoryNamespace scope senderId) memoryInjectCap
-  replyCtx0 <- case (\(MessageId target) -> target) <$> gm.replyToMessageId of
+  userMems <- listRecentMemories (userMemoryNamespace scope senderPrincipal) memoryInjectCap
+  replyCtx0 <- case (\(CanonicalMessageId target) -> target) <$> gm.replyTo of
     Nothing -> pure Nothing
     Just rid -> do
       mHist <- fetchMessageInScope scope rid
       case mHist of
         Nothing -> pure Nothing
         Just h -> do
-          files <- DBFiles.fetchFilesForMessageInScope scope h.messageId
+          files <- DBFiles.fetchFilesForMessageInScope scope h.canonicalId
           -- Expand a quoted 转发聊天记录: its contents were filed by
           -- the forward worker as child rows.  Empty for ordinary
           -- messages — one cheap indexed lookup either way.
-          kids <- fetchForwardChildrenInScope scope h.messageId maxForwardLines
+          kids <- fetchForwardChildrenInScope scope h.canonicalId maxForwardLines
           pure (Just (h, files, kids))
   -- Context stickers the caption worker has already described read
   -- as [sticker#<id>: <caption>] instead of an opaque [sticker]
   -- marker — a non-multimodal model gets to "see" them, and a
   -- multimodal one saves image budget for real photos.
   let ctxIds =
-        map (.messageId) $
+        map (.canonicalId) $
           transcript'
             <> pinnedItems'
             <> maybe [] (\(r, _, kids) -> r : kids) replyCtx0
   capMap <- stickerCaptionsFor ctxIds
   -- Same idea for ordinary photos and videos (Max.MediaCaption):
-  -- described media renders as [image#<id>: <简介>] / [video#<id>:
-  -- <简介>], so the model knows what's behind a marker without
-  -- spending a view_image/view_video call on it.
-  imgCaps <- imageCaptionsFor ctxIds
-  vidCaps <- videoCaptionsFor ctxIds
-  let enrich = applyVideoCaptions vidCaps . tagMediaMarkers . applyStickerCaptions capMap
+  -- described media renders as [image#<id>.<seg>: <简介>] /
+  -- [video#<id>.<seg>: <简介>], so the model knows what's behind a
+  -- marker without spending a view_image/view_video call on it — and
+  -- can point at one picture of a message carrying several.
+  mediaSegs <- fetchMediaSegments ctxIds
+  let enrich = tagMediaMarkers mediaSegs . applyStickerCaptions capMap
       transcript'' = map enrich transcript'
       pinnedItems'' = map enrich pinnedItems'
       replyCtx' = fmap (\(r, f, kids) -> (enrich r, f, map enrich kids)) replyCtx0
@@ -487,21 +492,16 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks out
   -- Unrelated pictures in the ambient chatter are attention magnets:
   -- only images the user is plausibly pointing at (reply target, the
   -- trigger itself, pins) go inline.  Everything else keeps a text
-  -- marker, upgraded with the message id ("[image#123]") so the model
-  -- can pull it via the view_image tool when it actually matters.
-  transcriptCtx <-
-    if multimodal'
-      then do
-        let inlineIds =
-              Set.fromList (mid : map (.messageId) (replyItems <> pinnedItems''))
-            taggable =
-              [ h.messageId
-              | h <- transcript'',
-                h.messageId `Set.notMember` inlineIds
-              ]
-        tagIds <- messagesWithImages taggable
-        pure (map (tagImageMarkers imgCaps tagIds) transcript'')
-      else pure transcript''
+  -- marker, upgraded to an [image#<id>.<seg>] handle so the model can
+  -- pull it via the view_image tool when it actually matters.
+  let transcriptCtx
+        | multimodal' =
+            let inlineIds =
+                  Set.fromList (mid : map (.canonicalId) (replyItems <> pinnedItems''))
+             in [ if h.canonicalId `Set.member` inlineIds then h else tagImageMarkers mediaSegs h
+                | h <- transcript''
+                ]
+        | otherwise = transcript''
   -- The trigger itself may BE a 转发聊天记录 (typical in private
   -- chat, where any message dispatches).  Its children are being
   -- fetched by the forward worker right now — wait for them, then
@@ -532,9 +532,8 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks out
         -- marker-tagging pass above.
         loadPromptImages
           tz'
-          selfId'
           mid
-          (Set.fromList (map (.messageId) replyItems))
+          (Set.fromList (map (.canonicalId) replyItems))
           (dedupById (replyItems <> pinnedItems''))
       else pure []
   -- Videos the user is pointing at (the trigger itself, or the quoted
@@ -551,7 +550,7 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks out
         let cands =
               maybe
                 []
-                (\(r, _, _) -> [(r.messageId, "[↩ quoted message] 里的视频")])
+                (\(r, _, _) -> [(r.canonicalId, "[↩ quoted message] 里的视频")])
                 replyCtx0
                 <> [(mid, "[current message] 里的视频") | expectedVids > 0]
         take maxPromptVideos . concat <$> traverse loadMessageVideos cands
@@ -608,7 +607,7 @@ waitForTriggerImages mid expected = go 0
       | otherwise = do
           rows <-
             query
-              "SELECT count(*) FROM message_images WHERE message_id = ?"
+              "SELECT count(*) FROM message_images WHERE canonical_message_id = ?"
               (Only mid)
           case rows of
             [Only (n :: Int64)] | n >= fromIntegral expected -> pure ()
@@ -646,7 +645,7 @@ waitForTriggerVideos mid expected = go 0
       | otherwise = do
           rows <-
             query
-              "SELECT count(*) FROM message_videos WHERE message_id = ?"
+              "SELECT count(*) FROM message_videos WHERE canonical_message_id = ?"
               (Only mid)
           case rows of
             [Only (n :: Int64)] | n >= fromIntegral expected -> pure ()
@@ -667,7 +666,7 @@ loadMessageVideos (mid, label) = do
       "SELECT v.mime_type, v.sha256, v.duration_seconds \
       \  FROM message_videos mv \
       \  JOIN videos v USING (sha256) \
-      \  WHERE mv.message_id = ? \
+      \  WHERE mv.canonical_message_id = ? \
       \  ORDER BY mv.seg_index"
       (Only mid)
   fmap concat . traverse loadOne $ (rows :: [(Text, Text, Maybe Double)])
@@ -725,40 +724,82 @@ waitForTriggerForward mid = go 0
               liftIO (threadDelay (stepMs * 1000))
               go (elapsed + stepMs)
 
--- | Upgrade bare opaque-media display markers to id-carrying handles
--- the model can pass to a tool: @[forward]@ → @[forward#\<mid\>]@
--- (view_forward) and @[video]@ → @[video#\<mid\>]@ (view_video).  The
--- id is the containing message's own id — that's what forward child
--- rows are keyed under and what the video tool reads segments from.
-tagMediaMarkers :: HistoryItem -> HistoryItem
-tagMediaMarkers h = h {renderedText = foldr tag h.renderedText ["forward", "video"]}
+-- | Upgrade bare opaque-media display markers to the canonical handles the
+-- model can pass to a tool (ADR 004):
+--
+--   * @[forward]@ → @[forward#\<id\>]@, naming the container message, which
+--     is what the child rows are keyed under;
+--   * @[video]@ → @[video#\<id\>.\<seg\>: \<简介\>](\<时长\>)@, naming one
+--     clip, because @(canonical_message_id, seg_index)@ is the primary key
+--     of @message_videos@.
+--
+-- Markers are consumed left to right against the segments in @seg_index@
+-- order: both orders come from the canonical node list, so they agree.  A
+-- marker with no segment left (the download failed, so no row exists) keeps
+-- its bare form — @view_video@ could not have returned it either.
+tagMediaMarkers :: Map.Map Int64 MessageMedia -> HistoryItem -> HistoryItem
+tagMediaMarkers segments h =
+  h {renderedText = tagVideos (T.replace "[forward]" forwardHandle h.renderedText)}
   where
-    tag kind t =
-      T.replace
-        ("[" <> kind <> "]")
-        ("[" <> kind <> "#" <> T.pack (show h.messageId) <> "]")
-        t
+    forwardHandle = "[forward#" <> tshow h.canonicalId <> "]"
+    media = Map.findWithDefault noMessageMedia h.canonicalId segments
+    tagVideos = consumeMarkers "[video]" (mmVideos media) videoHandle
+    videoHandle seg =
+      "[video#"
+        <> tshow h.canonicalId
+        <> "."
+        <> tshow seg.msSegIndex
+        <> maybe "" (\d -> ": " <> T.take 120 d) seg.msDescription
+        <> "]"
+        <> maybe "" (\d -> "(" <> fmtDurationSec d <> ")") seg.msDurationSeconds
 
--- | Everyone appearing in this turn's context, QQ号 ↔ display name.
--- Rendered text shows mentions as [@#<QQ号>] tokens (the wire
--- event carries), so without this table the model cannot tell who
--- @123456 is — including itself.
+-- | 'tagMediaMarkers' for callers holding a handful of rows rather than a
+-- whole turn's context: fetch the media segments those rows need, then tag.
+-- One query, so a tool returning a forward bundle costs the same as one
+-- returning a single message.
+withMediaHandles ::
+  (WithConnection :> es, IOE :> es) =>
+  [HistoryItem] ->
+  Eff es [HistoryItem]
+withMediaHandles [] = pure []
+withMediaHandles items = do
+  segments <- fetchMediaSegments (map (.canonicalId) items)
+  pure (map (tagMediaMarkers segments) items)
+
+-- | Replace each occurrence of @marker@, left to right, with the handle
+-- built from the next media segment; occurrences past the end of the
+-- segment list are left alone.
+consumeMarkers :: Text -> [MediaSegment] -> (MediaSegment -> Text) -> Text -> Text
+consumeMarkers marker = go
+  where
+    go [] _ t = t
+    go (seg : rest) handle t = case T.breakOn marker t of
+      (_, "") -> t
+      (before, suffix) ->
+        before <> handle seg <> go rest handle (T.drop (T.length marker) suffix)
+
+-- | Everyone appearing in this turn's context, principal ↔ display name.
+--
+-- Rendered text shows mentions as @[\@#\<principal_id\>]@ tokens (ADR 004),
+-- so without this table the model cannot tell who @[\@#123]@ is — including
+-- itself.  It is also the vocabulary the send path rescues @\@显示名@
+-- against, so the names the model may write are exactly the names it read.
 contextRoster :: PromptInputs -> [(Int64, Text)]
 contextRoster pi' =
-  let UserId selfId' = pi'.triggerMessage.selfId
-      UserId senderId = pi'.triggerMessage.userId
+  let PrincipalId selfPrincipal = pi'.triggerMessage.selfPrincipalId
+      PrincipalId senderPrincipal = pi'.triggerMessage.authorPrincipalId
    in dedupeRoster $
-        (selfId', "Max（你自己）")
-          : (senderId, triggerSenderName pi'.triggerMessage)
-          : [ (h.userId, displayName selfId' h)
+        (selfPrincipal, "Max（你自己）")
+          : (senderPrincipal, triggerSenderName pi'.triggerMessage)
+          : [ (h.authorPrincipalId, bestName h)
             | h <-
                 pi'.transcript
                   <> pi'.pinnedItems
                   <> maybe [] (\(r, _, _) -> [r]) pi'.replyCtx,
-              h.userId /= selfId'
+              not h.fromBot
             ]
 
--- | Keep the first (name) entry per user id.
+-- | Keep the first (name) entry per principal.
 dedupeRoster :: [(Int64, Text)] -> [(Int64, Text)]
 dedupeRoster = go Set.empty
   where
@@ -767,117 +808,24 @@ dedupeRoster = go Set.empty
       | u `Set.member` seen = go seen rest
       | otherwise = (u, n) : go (Set.insert u seen) rest
 
--- | Which of the given messages have at least one stored image —
--- the candidates for @[image#\<id\>]@ marker tagging.
-messagesWithImages ::
-  (WithConnection :> es, IOE :> es) =>
-  [Int64] ->
-  Eff es (Set.Set Int64)
-messagesWithImages [] = pure Set.empty
-messagesWithImages ids = do
-  rows <-
-    query
-      "SELECT DISTINCT message_id FROM message_images WHERE message_id IN ?"
-      (Only (In ids))
-  pure (Set.fromList [m | Only m <- rows])
-
--- | Upgrade the plain @[image]@ markers of a withheld-image message
--- to @[image#\<message_id\>]@ so the model has a handle to pass to
--- the view_image tool — with the caption appended
--- (@[image#\<id\>: \<简介\>]@) when the media captioner has described
--- that picture.  Markers are consumed left-to-right in seg order,
--- matching the caption list.  Runs after sticker-caption
--- substitution, so captioned stickers are already out of marker form
--- (and sticker shas are excluded from the caption map).
-tagImageMarkers :: Map.Map Int64 [Text] -> Set.Set Int64 -> HistoryItem -> HistoryItem
-tagImageMarkers caps tagged h
-  | h.messageId `Set.member` tagged =
-      h {renderedText = go (Map.findWithDefault [] h.messageId caps) h.renderedText}
-  | otherwise = h
+-- | Upgrade the plain @[image]@ markers of a withheld-image message to
+-- @[image#\<id\>.\<seg\>]@ so the model has a handle to pass to the
+-- view_image tool — with the caption appended when the media captioner has
+-- described that picture.  Runs after sticker-caption substitution, so
+-- captioned stickers are already out of marker form (and sticker shas are
+-- excluded from 'fetchMediaSegments').
+tagImageMarkers :: Map.Map Int64 MessageMedia -> HistoryItem -> HistoryItem
+tagImageMarkers segments h =
+  h {renderedText = consumeMarkers "[image]" (mmImages media) handle h.renderedText}
   where
-    handle = "[image#" <> T.pack (show h.messageId)
-    go cs t = case T.breakOn "[image]" t of
-      (_, "") -> t
-      (pre, suf) ->
-        let rest = T.drop (T.length ("[image]" :: Text)) suf
-            (mark, cs') = case cs of
-              (c : more) -> (handle <> ": " <> T.take 120 c <> "]", more)
-              [] -> (handle <> "]", [])
-         in pre <> mark <> go cs' rest
-
--- | Append captions to the @[video#\<id\>]@ handles 'tagMediaMarkers'
--- produced: @[video#\<id\>: \<简介\>]@.  Successive markers consume
--- successive captions (seg order), the common case being one video
--- per message.
-applyVideoCaptions :: Map.Map Int64 [(Maybe Text, Maybe Text)] -> HistoryItem -> HistoryItem
-applyVideoCaptions caps h = case Map.lookup h.messageId caps of
-  Nothing -> h
-  Just ds -> h {renderedText = go ds h.renderedText}
-  where
-    marker = "[video#" <> T.pack (show h.messageId) <> "]"
-    go [] t = t
-    go ((mDesc, mAttr) : ds) t = case T.breakOn marker t of
-      (_, "") -> t
-      (pre, suf) ->
-        pre
-          <> "[video#"
-          <> T.pack (show h.messageId)
-          <> maybe "" (\d -> ": " <> T.take 120 d) mDesc
-          <> "]"
-          <> maybe "" (\a -> "(" <> a <> ")") mAttr
-          <> go ds (T.drop (T.length marker) suf)
-
--- | Captions of already-described ordinary images (sticker shas
--- excluded — those substitute via 'applyStickerCaptions') appearing
--- in the given messages, in seg_index order per message.
-imageCaptionsFor ::
-  (WithConnection :> es, IOE :> es) =>
-  [Int64] ->
-  Eff es (Map.Map Int64 [Text])
-imageCaptionsFor [] = pure Map.empty
-imageCaptionsFor ids = do
-  rows <-
-    query
-      "SELECT mi.message_id, i.description \
-      \  FROM message_images mi \
-      \  JOIN images i USING (sha256) \
-      \  WHERE mi.message_id IN ? \
-      \    AND i.description IS NOT NULL \
-      \    AND NOT EXISTS (SELECT 1 FROM stickers s WHERE s.sha256 = mi.sha256) \
-      \  ORDER BY mi.message_id, mi.seg_index"
-      (Only (In ids))
-  pure (Map.fromListWith (flip (<>)) [(m, [d]) | (m, d) <- rows :: [(Int64, Text)]])
-
--- | Same for videos: probed duration + first-frame description,
--- joined into one caption ("时长 29 秒，首帧是…").  Duration alone
--- still renders — it's known at ingest, before the captioner runs,
--- and the model's own duration perception is unreliable.
-videoCaptionsFor ::
-  (WithConnection :> es, IOE :> es) =>
-  [Int64] ->
-  Eff es (Map.Map Int64 [(Maybe Text, Maybe Text)])
-videoCaptionsFor [] = pure Map.empty
-videoCaptionsFor ids = do
-  rows <-
-    query
-      "SELECT mv.message_id, v.description, v.duration_seconds \
-      \  FROM message_videos mv \
-      \  JOIN videos v USING (sha256) \
-      \  WHERE mv.message_id IN ? \
-      \    AND (v.description IS NOT NULL OR v.duration_seconds IS NOT NULL) \
-      \  ORDER BY mv.message_id, mv.seg_index"
-      (Only (In ids))
-  pure $
-    Map.fromListWith
-      (flip (<>))
-      [ (m, [capText mDesc mDur])
-      | (m, mDesc, mDur) <- rows :: [(Int64, Maybe Text, Maybe Double)]
-      ]
-  where
-    -- (colon-slot description, paren-slot attribute) — duration is
-    -- metadata, not content, so it rides the attribute group:
-    -- "[video#7407: 首帧…](29秒)".
-    capText mDesc mDur = (mDesc, fmtDurationSec <$> mDur)
+    media = Map.findWithDefault noMessageMedia h.canonicalId segments
+    handle seg =
+      "[image#"
+        <> tshow h.canonicalId
+        <> "."
+        <> tshow seg.msSegIndex
+        <> maybe "" (\d -> ": " <> T.take 120 d) seg.msDescription
+        <> "]"
 
 -- | Captions of already-described stickers appearing in the given
 -- messages, in seg_index order per message.
@@ -889,12 +837,12 @@ stickerCaptionsFor [] = pure Map.empty
 stickerCaptionsFor ids = do
   rows <-
     query
-      "SELECT mi.message_id, s.id, s.description \
+      "SELECT mi.canonical_message_id, s.id, s.description \
       \  FROM message_images mi \
       \  JOIN stickers s USING (sha256) \
-      \  WHERE mi.message_id IN ? \
+      \  WHERE mi.canonical_message_id IN ? \
       \    AND s.description IS NOT NULL AND NOT s.banned \
-      \  ORDER BY mi.message_id, mi.seg_index"
+      \  ORDER BY mi.canonical_message_id, mi.seg_index"
       (Only (In ids))
   pure (Map.fromListWith (flip (<>)) [(m, [(sid, d)]) | (m, sid, d) <- rows :: [(Int64, Int64, Text)]])
 
@@ -903,7 +851,7 @@ stickerCaptionsFor ids = do
 -- @[image]@ is accepted too because rows persisted before sub_type
 -- survived parsing rendered stickers that way.
 applyStickerCaptions :: Map.Map Int64 [(Int64, Text)] -> HistoryItem -> HistoryItem
-applyStickerCaptions caps h = case Map.lookup h.messageId caps of
+applyStickerCaptions caps h = case Map.lookup h.canonicalId caps of
   Nothing -> h
   Just ds -> h {renderedText = replaceStickerMarkers ds h.renderedText}
 
@@ -944,8 +892,8 @@ dedupById = go Set.empty
   where
     go _ [] = []
     go seen (h : rest)
-      | h.messageId `Set.member` seen = go seen rest
-      | otherwise = h : go (Set.insert h.messageId seen) rest
+      | h.canonicalId `Set.member` seen = go seen rest
+      | otherwise = h : go (Set.insert h.canonicalId seen) rest
 
 -- | Total images attached to one prompt.  Keeps worst-case context
 -- growth bounded (8 × ~1 MiB of base64) while covering the common
@@ -970,21 +918,20 @@ maxImageBytes = 20 * 1024 * 1024
 loadPromptImages ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   TimeZone -> -- display timezone for the image labels' HH:MM
-  Int64 -> -- bot self id (for display names in labels)
-  Int64 -> -- trigger message_id
-  Set.Set Int64 -> -- message ids belonging to the quoted reply (incl. forward children)
+  Int64 -> -- trigger canonical message id
+  Set.Set Int64 -> -- canonical ids belonging to the quoted reply (incl. forward children)
   [HistoryItem] -> -- context candidates, priority order, deduped
   Eff es [PromptImage]
-loadPromptImages tz' selfId' mid replyIds candidates = do
-  let candidates' = filter (\h -> h.messageId /= mid) candidates
-      ids = mid : map (.messageId) candidates'
+loadPromptImages tz' mid replyIds candidates = do
+  let candidates' = filter (\h -> h.canonicalId /= mid) candidates
+      ids = mid : map (.canonicalId) candidates'
   rows <-
     query
-      "SELECT mi.message_id, i.mime_type, i.sha256 \
+      "SELECT mi.canonical_message_id, i.mime_type, i.sha256 \
       \  FROM message_images mi \
       \  JOIN images i ON i.sha256 = mi.sha256 \
-      \  WHERE mi.message_id IN ? \
-      \  ORDER BY mi.message_id, mi.seg_index"
+      \  WHERE mi.canonical_message_id IN ? \
+      \  ORDER BY mi.canonical_message_id, mi.seg_index"
       (Only (In ids))
   let byMsg =
         Map.fromListWith
@@ -994,7 +941,7 @@ loadPromptImages tz' selfId' mid replyIds candidates = do
       picked =
         take maxPromptImages $
           map Left (imagesOf mid)
-            <> [Right (h, mp) | h <- candidates', mp <- imagesOf h.messageId]
+            <> [Right (h, mp) | h <- candidates', mp <- imagesOf h.canonicalId]
       (triggerPicked, contextUnsorted) = partitionEithers picked
       contextPicked = sortOn (\(h, _) -> h.receivedAt) contextUnsorted
   ctxImgs <- concat <$> traverse (uncurry loadCtx) contextPicked
@@ -1006,17 +953,17 @@ loadPromptImages tz' selfId' mid replyIds candidates = do
       -- picture are you asking about" must not depend on the model
       -- correlating timestamps.
       let label
-            | h.messageId `Set.member` replyIds =
+            | h.canonicalId `Set.member` replyIds =
                 "[↩ quoted message（"
                   <> fmtHM tz' h.receivedAt
                   <> " "
-                  <> displayName selfId' h
+                  <> displayName h
                   <> "）] 里的图片:"
             | otherwise =
                 "["
                   <> fmtHM tz' h.receivedAt
                   <> " "
-                  <> displayName selfId' h
+                  <> displayName h
                   <> "] 消息里的图片:"
        in loadOne label mp
     loadOne label (mime, sha) = case blobRefFromSha256 sha of
@@ -1052,8 +999,7 @@ loadPromptImages tz' selfId' mid replyIds candidates = do
 --     pinned messages, and the current trigger.
 renderContext :: PromptInputs -> [ChatMessage]
 renderContext pi' =
-  let UserId selfId' = pi'.triggerMessage.selfId
-      GroupId gidRaw = pi'.triggerMessage.groupId
+  let GroupId gidRaw = pi'.triggerMessage.groupId
       senderName = triggerSenderName pi'.triggerMessage
       memBlock =
         renderMemories
@@ -1076,18 +1022,18 @@ renderContext pi' =
           ]
             <> map ("  " <>) pi'.groupBrief
             <> ["  当前模型：" <> pi'.session.model]
-            <> [ "  成员对照（[@#QQ号] 即 @某人）："
-                   <> T.intercalate "、" ["[@#" <> T.pack (show u) <> "]=" <> n | (u, n) <- roster]
+            <> [ "  成员对照（[@#<id>] 即 @某人）："
+                   <> T.intercalate "、" ["[@#" <> tshow principal <> "]=" <> name | (principal, name) <- roster]
                | pi'.outputCapabilities.canMention
                ]
       -- Questions somebody else's turn is already handling never reach
       -- the model, whichever shape we build.
-      visible = dropInFlight selfId' pi'.inFlight pi'.transcript
+      visible = dropInFlight pi'.inFlight pi'.transcript
       -- Flat: everything goes in the user body.  Turns: everything up
       -- to the bot's last message becomes turns, the rest rejoins the
       -- user body so the turn list ends on an assistant.
       (turnRows, bodyRows)
-        | pi'.historyTurns = splitTrailingUser selfId' visible
+        | pi'.historyTurns = splitTrailingUser visible
         | otherwise = ([], visible)
       mTranscript
         | pi'.historyTurns = if null bodyRows then Nothing else Just bodyRows
@@ -1096,7 +1042,6 @@ renderContext pi' =
         renderUser
           pi'.tz
           pi'.now
-          selfId'
           pi'.origin
           pi'.compartments
           mTranscript
@@ -1135,7 +1080,7 @@ renderContext pi' =
       -- could reach a strict provider: there is exactly one of each.
       messages =
         [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) pi'.outputCapabilities effectivePersona pi'.skills)]
-          <> historyTurnMessages pi'.tz selfId' turnRows
+          <> historyTurnMessages pi'.tz turnRows
           <> [userMessage]
    in messages
 
@@ -1566,9 +1511,9 @@ compartmentTierFromStorageText = \case
 -- here failed exactly that way — it came back as the bot's reply.
 -- Bot rows are never dropped; nothing puts the bot's own id in flight,
 -- but losing its side of the conversation would be the worse failure.
-dropInFlight :: Int64 -> Set Int64 -> [HistoryItem] -> [HistoryItem]
-dropInFlight botId inFlight =
-  filter (\h -> h.userId == botId || h.messageId `Set.notMember` inFlight)
+dropInFlight :: Set Int64 -> [HistoryItem] -> [HistoryItem]
+dropInFlight inFlight =
+  filter (\h -> h.fromBot || h.canonicalId `Set.notMember` inFlight)
 
 -- | History as real @user@\/@assistant@ turns
 -- ('PromptInputs.historyTurns').
@@ -1586,14 +1531,14 @@ dropInFlight botId inFlight =
 -- likely to teach the model to open its own replies that way.  The
 -- cost is that the bot's own messages have no quotable id in this
 -- shape — the flat transcript is the only one where they do.
-historyTurnMessages :: TimeZone -> Int64 -> [HistoryItem] -> [ChatMessage]
-historyTurnMessages tz' botId =
+historyTurnMessages :: TimeZone -> [HistoryItem] -> [ChatMessage]
+historyTurnMessages tz' =
   map render . groupBy ((==) `on` isBot)
   where
-    isBot h = h.userId == botId
+    isBot h = h.fromBot
     render hs
       | all isBot hs = MsgAssistant (T.intercalate "\n\n" (map (.renderedText) hs))
-      | otherwise = MsgUser (T.intercalate "\n" (map (renderHistoryLine tz' botId) hs))
+      | otherwise = MsgUser (T.intercalate "\n" (map (renderHistoryLine tz') hs))
 
 -- | Split the transcript so the turn list ends on an assistant turn:
 -- any non-bot rows trailing the bot's last message go back into the
@@ -1603,15 +1548,14 @@ historyTurnMessages tz' botId =
 -- user messages — precisely the thing this shape exists to avoid, and
 -- it happens on every turn where the last thing said wasn't said by
 -- the bot, which in a group is most of them.
-splitTrailingUser :: Int64 -> [HistoryItem] -> ([HistoryItem], [HistoryItem])
-splitTrailingUser botId hs =
-  let (revTail, revHead) = span (\h -> h.userId /= botId) (reverse hs)
+splitTrailingUser :: [HistoryItem] -> ([HistoryItem], [HistoryItem])
+splitTrailingUser hs =
+  let (revTail, revHead) = break (.fromBot) (reverse hs)
    in (reverse revHead, reverse revTail)
 
 renderUser ::
   TimeZone ->
   UTCTime -> -- now; the current message carries no timestamp of its own
-  Int64 ->
   TriggerOrigin ->
   [ContextCompartment] ->
   -- | The conversation transcript, chronological — or 'Nothing' when
@@ -1625,7 +1569,7 @@ renderUser ::
   [HistoryItem] -> -- trigger's own forward children (trigger IS a 转发)
   DispatchMessage ->
   Text
-renderUser tz' now' selfId' origin' compartments' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
+renderUser tz' now' origin' compartments' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -1633,14 +1577,14 @@ renderUser tz' now' selfId' origin' compartments' mTranscript envText mMemBlock 
           then []
           else
             [ "[pinned — 长期保留的消息（用户 !pin 或你 pin_message 的），!clear 也不清；过时的用 unpin_message 清理]",
-              T.intercalate "\n" (map (renderHistoryLine tz' selfId') pinnedItems'),
+              T.intercalate "\n" (map (renderHistoryLine tz') pinnedItems'),
               ""
             ],
         renderCompartments tz' compartments',
         case mTranscript of
           Nothing -> []
           Just [] -> ["[recent messages]", "(无历史消息)"]
-          Just hs -> "[recent messages]" : map (renderHistoryLine tz' selfId') hs,
+          Just hs -> "[recent messages]" : map (renderHistoryLine tz') hs,
         -- Everything above this line is meant to be byte-stable across
         -- dispatches so a provider's prefix cache can cover it; the
         -- clock and the per-turn roster necessarily aren't, so they go
@@ -1653,16 +1597,16 @@ renderUser tz' now' selfId' origin' compartments' mTranscript envText mMemBlock 
           Nothing -> []
           Just (r, files, kids) ->
             "[quoted context]"
-              : renderReplyLine tz' selfId' r
+              : renderReplyLine tz' r
               : renderReplyFiles files
-                <> renderReplyForward tz' selfId' kids
+                <> renderReplyForward tz' kids
                 <> [""],
         case origin' of
           OriginProactive ->
             [ "[current message — 没人 @ 你，意图识别判断你可能想接话]",
               renderCurrentLine tz' now' gm
             ]
-              <> renderReplyForward tz' selfId' triggerFwd'
+              <> renderReplyForward tz' triggerFwd'
               <> [ "",
                    "你没有被 @。想接话就接，语气自然点，别表现得像被点名回答问题；\
                    \插话要短，一两句说完，说完就收，别追着展开；\
@@ -1684,7 +1628,7 @@ renderUser tz' now' selfId' origin' compartments' mTranscript envText mMemBlock 
             [ "[current message]",
               renderCurrentLine tz' now' gm
             ]
-              <> renderReplyForward tz' selfId' triggerFwd'
+              <> renderReplyForward tz' triggerFwd'
               <> [ "",
                    "请回复当前消息。"
                  ]
@@ -1712,26 +1656,26 @@ renderCompartments tz' compartments' = case mapMaybe renderOne compartments' of
           <> "]: "
           <> oneLine summary
 
-renderHistoryLine :: TimeZone -> Int64 -> HistoryItem -> Text
-renderHistoryLine tz' selfId' h =
+renderHistoryLine :: TimeZone -> HistoryItem -> Text
+renderHistoryLine tz' h =
   "["
     <> fmtHM tz' h.receivedAt
     <> " "
-    <> displayName selfId' h
+    <> displayName h
     <> " #"
-    <> T.pack (show h.messageId)
+    <> tshow h.canonicalId
     <> "]: "
     <> replyPrefix h
     <> oneLine h.renderedText
 
-renderReplyLine :: TimeZone -> Int64 -> HistoryItem -> Text
-renderReplyLine tz' selfId' h =
+renderReplyLine :: TimeZone -> HistoryItem -> Text
+renderReplyLine tz' h =
   "[↩ quoted "
     <> fmtHM tz' h.receivedAt
     <> " "
-    <> displayName selfId' h
+    <> displayName h
     <> " #"
-    <> T.pack (show h.messageId)
+    <> tshow h.canonicalId
     <> "]: "
     <> replyPrefix h
     <> oneLine h.renderedText
@@ -1746,11 +1690,11 @@ replyPrefix h = maybe "" (\r -> "[↩#" <> T.pack (show r) <> "] ") h.replyTo
 -- | The expanded contents of a quoted 转发聊天记录.  Lines carry the
 -- original send times; each line is truncated to keep a huge bundle
 -- from eating the prompt.
-renderReplyForward :: TimeZone -> Int64 -> [HistoryItem] -> [Text]
-renderReplyForward _ _ [] = []
-renderReplyForward tz' selfId' kids =
+renderReplyForward :: TimeZone -> [HistoryItem] -> [Text]
+renderReplyForward _ [] = []
+renderReplyForward tz' kids =
   ("  转发记录内容" <> capNote <> ":")
-    : map (("    " <>) . T.take 200 . renderHistoryLine tz' selfId') kids
+    : map (("    " <>) . T.take 200 . renderHistoryLine tz') kids
   where
     capNote
       | length kids >= maxForwardLines = "（前 " <> T.pack (show maxForwardLines) <> " 条）"
@@ -1788,28 +1732,28 @@ renderReplyFiles xs =
 renderCurrentLine :: TimeZone -> UTCTime -> DispatchMessage -> Text
 renderCurrentLine tz' now' gm =
   let txt = dispatchTextWithoutSelf gm
-      MessageId mid = gm.messageId
+      CanonicalMessageId mid = gm.canonicalId
    in "["
         <> fmtHM tz' now'
         <> " "
         <> triggerSenderName gm
         <> " #"
-        <> T.pack (show mid)
+        <> tshow mid
         <> "]: "
         <> T.strip txt
 
--- | 群名片 > 昵称 > QQ 号 — matching what other members see on
+-- | 群名片 > 昵称 > principal id — matching what other members see on
 -- screen, so the model calls people what the group calls them.
-displayName :: Int64 -> HistoryItem -> Text
-displayName selfId' h
-  | h.userId == selfId' = "Max"
+displayName :: HistoryItem -> Text
+displayName h
+  | h.fromBot = "Max"
   | otherwise = bestName h
 
 -- | Same preference order for the live trigger message's sender.
 triggerSenderName :: DispatchMessage -> Text
 triggerSenderName gm =
-  let UserId uid = gm.userId
-   in fromMaybe (T.pack (show uid)) (nonBlank gm.senderDisplayName)
+  let PrincipalId principal = gm.authorPrincipalId
+   in fromMaybe (tshow principal) (nonBlank gm.senderDisplayName)
   where
     nonBlank (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
     nonBlank _ = Nothing

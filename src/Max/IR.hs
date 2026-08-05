@@ -60,6 +60,7 @@ module Max.IR
     mentionToken,
 
     -- * Node-list utilities
+    mentionIdentities,
     mergeText,
     trimEdges,
     resolveIngest,
@@ -113,14 +114,17 @@ data Node (p :: Phase)
   | NUnsupported !(XUnsupported p)
 
 type family XMention (p :: Phase) where
-  XMention 'ModelParsed = NativeUserId -- raw [@#123] token, pre-roster
+  -- | ADR 004: the model addresses /people/.  A @[\@#123]@ token names a
+  -- principal; resolving it to the account that will carry the mention is
+  -- the send path's job, and an unknown principal simply does not resolve.
+  XMention 'ModelParsed = PrincipalId
   XMention 'Ingest = NativeUserId -- origin-native, pre-identity
   XMention 'Canonical = MentionTarget
   XMention 'Lowered = NativeUserId -- DESTINATION endpoint's native id
   XMention 'Hydrated = HydratedMention
 
 type family XMedia (p :: Phase) where
-  XMedia 'ModelParsed = OutboundMediaRef -- [sticker#42] / [image#7] reference
+  XMedia 'ModelParsed = OutboundMediaRef -- [sticker#42] / [image#7.0] reference
   XMedia 'Ingest = Maybe MediaRef
   XMedia 'Canonical = Maybe MediaRef -- never inline bytes at rest
   XMedia 'Lowered = ResolvedMedia -- sendable payload, NOT Maybe
@@ -238,10 +242,18 @@ data ResolvedMedia
   deriving stock (Eq, Show)
 
 -- | Model-authored media references, mirroring the reply-token grammar.
+--
+-- 'RefImage' carries a canonical message id and, when the model addressed
+-- one picture rather than the message, its @seg_index@ — together the
+-- primary key of @message_images@ (ADR 004).  'Nothing' means every image
+-- on that message, which is what a bare @[image#\<id\>]@ has always meant.
+--
+-- Sticker ids are a different namespace entirely: @stickers.id@ names a
+-- library entry, not a message, so it stays a bare 'Int64'.
 data OutboundMediaRef
   = RefSticker !Int64
   | RefStickerDesc !Text
-  | RefImage !Int64
+  | RefImage !CanonicalMessageId !(Maybe Int)
   deriving stock (Eq, Show)
 
 data HydratedMention = HydratedMention
@@ -382,6 +394,13 @@ truncateText limit t
 
 --------------------------------------------------------------------------------
 -- Node-list utilities (phase-polymorphic: they only touch 'NText').
+
+-- | Every principal identity a stored body mentions, in node order.  The
+-- one place that answers "who does this message address", shared by
+-- delivery (identity -> native id on the destination) and by every
+-- model-facing projection (identity -> principal).
+mentionIdentities :: Body 'Canonical -> [PrincipalIdentityId]
+mentionIdentities body = [identity | NMention (MentionIdentity identity) _ <- body.nodes]
 
 -- | Merge adjacent text runs, dropping empty ones.
 mergeText :: [Node p] -> [Node p]

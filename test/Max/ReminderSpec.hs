@@ -33,7 +33,7 @@ fixture =
   Reminder
     { rmId = 1,
       rmGroupId = 42,
-      rmUserId = 7,
+      rmAuthorPrincipalId = Just 7,
       rmSelfId = 99,
       rmText = "喝水",
       rmCron = Nothing,

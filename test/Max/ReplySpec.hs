@@ -152,11 +152,14 @@ spec = do
       parseReplyTokens "[↩#8472] 说得对"
         `shouldBe` (Just 8472, [PieceText " 说得对"])
 
-    it "accepts foreign-platform negative message handles" $ do
+    it "still accepts a pre-ADR-004 negative handle rather than leaking it" $ do
+      -- Canonical ids are positive.  A model echoing a line the reproject
+      -- has not rewritten yet must not put the raw token in the group; it
+      -- simply resolves to nothing.
       parseReplyTokens "[↩#-1000000000790] 说得对"
         `shouldBe` (Just (-1000000000790), [PieceText " 说得对"])
       parseReplyTokens "看这张 [image#-1000000000790]"
-        `shouldBe` (Nothing, [PieceText "看这张 ", PieceImage (-1000000000790)])
+        `shouldBe` (Nothing, [PieceText "看这张 ", PieceImage (-1000000000790) Nothing])
 
     it "keeps QQ-native ids positive-only" $ do
       parseReplyTokens "[face#-66]" `shouldBe` (Nothing, [PieceText "[face#-66]"])
@@ -181,7 +184,17 @@ spec = do
 
     it "splits an inline [image#id] resend token out of the text" $
       parseReplyTokens "看这张 [image#123] 笑死"
-        `shouldBe` (Nothing, [PieceText "看这张 ", PieceImage 123, PieceText " 笑死"])
+        `shouldBe` (Nothing, [PieceText "看这张 ", PieceImage 123 Nothing, PieceText " 笑死"])
+
+    it "reads the seg_index half of a media handle" $ do
+      parseReplyTokens "看这张 [image#123.2] 笑死"
+        `shouldBe` (Nothing, [PieceText "看这张 ", PieceImage 123 (Just 2), PieceText " 笑死"])
+      parseReplyTokens "[image#123.0: 示波器截图]"
+        `shouldBe` (Nothing, [PieceImage 123 (Just 0)])
+
+    it "does not read a trailing dot with no index as a segment" $
+      parseReplyTokens "看 [image#123.] 这个"
+        `shouldBe` (Nothing, [PieceText "看 [image#123.] 这个"])
 
     it "does not treat a bare [image] as a resend token" $
       parseReplyTokens "这是 [image] 标记"
@@ -209,7 +222,7 @@ spec = do
 
     it "consumes a trailing attribute group when echoing a decorated token" $ do
       parseReplyTokens "[image#7405: 示波器截图](1.2MB) 笑死"
-        `shouldBe` (Nothing, [PieceImage 7405, PieceText " 笑死"])
+        `shouldBe` (Nothing, [PieceImage 7405 Nothing, PieceText " 笑死"])
       parseReplyTokens "[sticker#42: 柴犬瘫地](旧图)"
         `shouldBe` (Nothing, [PieceSticker 42])
       parseReplyTokens "[↩#9: 引文](x) 对"
@@ -259,16 +272,28 @@ spec = do
 
   describe "dedupeImagePieces" $ do
     it "keeps the first [image#id] and drops later duplicates" $
-      dedupeImagePieces Set.empty [PieceImage 7, PieceText " x ", PieceImage 7]
-        `shouldBe` (Set.fromList [7], [PieceImage 7, PieceText " x "])
+      dedupeImagePieces Set.empty [PieceImage 7 Nothing, PieceText " x ", PieceImage 7 Nothing]
+        `shouldBe` (Set.fromList [(7, Nothing)], [PieceImage 7 Nothing, PieceText " x "])
 
     it "keeps distinct ids" $
-      dedupeImagePieces Set.empty [PieceImage 7, PieceImage 8]
-        `shouldBe` (Set.fromList [7, 8], [PieceImage 7, PieceImage 8])
+      dedupeImagePieces Set.empty [PieceImage 7 Nothing, PieceImage 8 Nothing]
+        `shouldBe` (Set.fromList [(7, Nothing), (8, Nothing)], [PieceImage 7 Nothing, PieceImage 8 Nothing])
+
+    it "keeps distinct pictures of one message" $
+      dedupeImagePieces Set.empty [PieceImage 7 (Just 0), PieceImage 7 (Just 1)]
+        `shouldBe` ( Set.fromList [(7, Just 0), (7, Just 1)],
+                     [PieceImage 7 (Just 0), PieceImage 7 (Just 1)]
+                   )
+
+    it "treats a whole-message resend as subsuming its individual pictures" $
+      -- [image#7] already sent every picture on message 7; naming one of
+      -- them afterwards would send it twice.
+      dedupeImagePieces Set.empty [PieceImage 7 Nothing, PieceImage 7 (Just 1)]
+        `shouldBe` (Set.fromList [(7, Nothing)], [PieceImage 7 Nothing])
 
     it "drops ids already sent by an earlier chunk" $
-      dedupeImagePieces (Set.fromList [7]) [PieceImage 7, PieceText "好"]
-        `shouldBe` (Set.fromList [7], [PieceText "好"])
+      dedupeImagePieces (Set.fromList [(7, Nothing)]) [PieceImage 7 Nothing, PieceText "好"]
+        `shouldBe` (Set.fromList [(7, Nothing)], [PieceText "好"])
 
     it "leaves stickers and faces alone" $
       dedupeImagePieces Set.empty [PieceSticker 3, PieceFace 178, PieceSticker 3]

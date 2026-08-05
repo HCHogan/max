@@ -5,7 +5,7 @@ import Max.IMessage
 import Max.IR
 import Max.IR.Lower (OutboundCaps (..), Tier (..))
 import Max.IR.Prompt (promptText)
-import Max.Platform.Types (EventKind (..), NativeEventId (..), NativeUserId (..), Platform (..))
+import Max.Platform.Types (EventKind (..), NativeEventId (..), NativeUserId (..))
 import Test.Hspec
 
 spec :: Spec
@@ -226,7 +226,7 @@ spec = describe "iMessage adapter" $ do
         let nodes = iMessageTextNodes cfg message
         nodes
           `shouldBe` [NText "👋 ", NMention (NativeUserId "1578034713") "Maxwell", NText " hey"]
-        promptText PlatformIMessage (Body nodes) `shouldBe` "👋 @Maxwell hey"
+        promptText (Body nodes) `shouldBe` "👋 @Maxwell hey"
         message.mentionedHandles `shouldBe` ["1578034713"]
       _ -> expectationFailure "expected one mentioned message"
 

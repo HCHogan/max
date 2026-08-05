@@ -8,15 +8,15 @@ module Max.Tools.FilesSpec (spec) where
 
 import Data.Text (Text)
 import Max.IR
-import Max.Platform.Types (NativeUserId (..), noAdvertisedCaps, qqAdvertisedCaps)
+import Max.Platform.Types (CanonicalMessageId (..), noAdvertisedCaps, qqAdvertisedCaps)
 import Max.Tools.Files (captionBody)
-import OneBot.Types (GroupId (..), MessageId (..))
+import OneBot.Types (GroupId (..))
 import Test.Hspec
 
 gid :: GroupId
 gid = GroupId 7777
 
-qqCaption :: Maybe Text -> (Maybe MessageId, Body 'Ingest)
+qqCaption :: Maybe Text -> (Maybe CanonicalMessageId, Body 'Canonical)
 qqCaption = captionBody qqAdvertisedCaps gid
 
 spec :: Spec
@@ -35,12 +35,12 @@ spec = describe "captionBody" $ do
   -- The regression.
   it "consumes a leading reply token instead of printing it" $
     qqCaption (Just "[↩#493645310] 画好了，macOS belike")
-      `shouldBe` (Just (MessageId 493645310), Body [NText "画好了，macOS belike", NText "\n"])
+      `shouldBe` (Just (CanonicalMessageId 493645310), Body [NText "画好了，macOS belike", NText "\n"])
 
   -- Unlike a narration line, the message this rides on goes out either
   -- way, so a caption that is only a quote still quotes.
   it "still quotes when that is all the caption was" $
-    qqCaption (Just "[↩#999]") `shouldBe` (Just (MessageId 999), Body [])
+    qqCaption (Just "[↩#999]") `shouldBe` (Just (CanonicalMessageId 999), Body [])
 
   -- One message cannot be two, so the marker is eaten rather than shown.
   it "eats a [split] it cannot honour" $
@@ -51,9 +51,12 @@ spec = describe "captionBody" $ do
     qqCaption (Just "画好了 [split] 你看看")
       `shouldBe` (Nothing, Body [NText "画好了\n你看看", NText "\n"])
 
-  it "converts a mention" $
+  -- A tool has no roster to resolve a principal against, so a mention in a
+  -- caption folds to text — the same rendering an unresolvable mention gets
+  -- everywhere else.
+  it "renders a mention as text" $
     qqCaption (Just "[@#2001] 给你")
-      `shouldBe` (Nothing, Body [NMention (NativeUserId "2001") "2001", NText " 给你", NText "\n"])
+      `shouldBe` (Nothing, Body [NText "@2001 给你", NText "\n"])
 
   -- Dropped, not printed — same trade the narration path makes.
   it "drops a sticker placeholder rather than leaking it" $

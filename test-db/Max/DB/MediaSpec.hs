@@ -25,21 +25,29 @@ spec pool = before_ (truncateAll pool) $
     let scopeA = conversationScopeFor (GroupId groupA)
 
     it "does not load images attached to another conversation message" $ do
-      insertRawMessage pool 9002 groupB sender botId receivedAt Nothing "[image]"
+      elsewhere <- insertRawMessage pool 9002 groupB sender botId receivedAt Nothing "[image]"
       withConn pool $ \conn -> do
         _ <- execute conn "INSERT INTO images (sha256, mime_type, bytes_size, local_path) VALUES (?, 'image/png', 3, 'secret')" ["sha-image" :: String]
-        _ <- execute conn "INSERT INTO message_images (message_id, sha256, seg_index) VALUES (9002, ?, 0)" ["sha-image" :: String]
+        _ <-
+          execute
+            conn
+            "INSERT INTO message_images (canonical_message_id, sha256, seg_index) VALUES (?, ?, 0)"
+            (elsewhere, "sha-image" :: String)
         pure ()
-      rows <- withDb pool $ fetchMessageImagesInScope scopeA 9002
+      rows <- withDb pool $ fetchMessageImagesInScope scopeA elsewhere Nothing
       rows `shouldSatisfy` null
 
     it "does not load video attached to another conversation message" $ do
-      insertRawMessage pool 9003 groupB sender botId receivedAt Nothing "[video]"
+      elsewhere <- insertRawMessage pool 9003 groupB sender botId receivedAt Nothing "[video]"
       withConn pool $ \conn -> do
         _ <- execute conn "INSERT INTO videos (sha256, mime_type, bytes_size, local_path, duration_seconds) VALUES (?, 'video/mp4', 3, 'secret', 2.5)" ["sha-video" :: String]
-        _ <- execute conn "INSERT INTO message_videos (message_id, sha256, seg_index) VALUES (9003, ?, 0)" ["sha-video" :: String]
+        _ <-
+          execute
+            conn
+            "INSERT INTO message_videos (canonical_message_id, sha256, seg_index) VALUES (?, ?, 0)"
+            (elsewhere, "sha-video" :: String)
         pure ()
-      row <- withDb pool $ fetchMessageVideoInScope scopeA 9003
+      row <- withDb pool $ fetchMessageVideoInScope scopeA elsewhere Nothing
       row `shouldSatisfy` isNothing
 
 isNothing :: Maybe a -> Bool

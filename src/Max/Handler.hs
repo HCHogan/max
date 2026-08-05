@@ -19,7 +19,6 @@ import Data.Foldable (for_)
 import Data.List (find, partition, unsnoc)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
-import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime)
@@ -62,6 +61,7 @@ import Max.Platform.QQ (ensureQQEndpoint, ensureQQEndpointFor, qqEnvelope, qqIng
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
   ( DispatchClaim (..),
+    RegisteredEndpoint (..),
     DispatchCompletion (..),
     IngestOptions (..),
     IngestResult (..),
@@ -73,13 +73,14 @@ import Max.Platform.Store
     completeDispatch,
     conversationAdvertisedCaps,
     defaultIngestOptions,
-    deliveryMentionNatives,
+    ensureEndpointPrincipals,
     ingestEnvelope,
+    resolveMentionIdentities,
+    mentionPrincipalsFor,
     enqueueReaction,
-    isBotAuthoredCompatibilityMessage,
     recordInternalMessage,
   )
-import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId, NativeAccountId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId, ReactionAction (..))
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId, ReactionAction (..))
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutput, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -409,10 +410,8 @@ runDispatchClaim ::
 runDispatchClaim workerId fetchSig mIntent claim =
   trySync
     ( do
-        mentionNatives <-
-          deliveryMentionNatives claim.originEndpointId
-            [identity | NMention (MentionIdentity identity) _ <- claim.body.nodes]
-        let message = dispatchMessage mentionNatives claim
+        mentionPrincipals <- mentionPrincipalsFor (mentionIdentities claim.body)
+        let message = dispatchMessage mentionPrincipals claim
         enqueueImages fetchSig message
         enqueueForwards fetchSig message
         enqueueFiles fetchSig message
@@ -435,19 +434,20 @@ runDispatchClaim workerId fetchSig mIntent claim =
 
 -- | Runtime view of the canonical claim. No transport event or legacy
 -- segment projection exists beyond the QQ ingress boundary.
-dispatchMessage :: Map.Map PrincipalIdentityId NativeUserId -> DispatchClaim -> DispatchMessage
-dispatchMessage mentionNatives claim =
+dispatchMessage :: Map.Map PrincipalIdentityId PrincipalId -> DispatchClaim -> DispatchMessage
+dispatchMessage mentionPrincipals claim =
   DispatchMessage
     { selfId = UserId claim.compatibilitySelfId,
-      selfNative = claim.nativeAccountId,
       groupId = GroupId claim.compatibilityConversationId,
       userId = UserId claim.compatibilityUserId,
-      messageId = MessageId claim.compatibilityMessageId,
+      selfPrincipalId = claim.selfPrincipalId,
+      authorPrincipalId = claim.authorPrincipalId,
+      canonicalId = claim.canonicalMessageId,
       body = claim.body,
-      replyToMessageId = MessageId <$> claim.replyToCompatibilityMessageId,
+      replyTo = CanonicalMessageId <$> claim.replyToCanonicalMessageId,
       senderDisplayName = claim.senderDisplayName,
       sourcePlatform = claim.sourcePlatform,
-      mentionNatives
+      mentionPrincipals
     }
 
 dispatchBatchSize :: Int
@@ -489,13 +489,10 @@ onDispatchMessage mIntent gm = do
   -- the quoted message was ours (reply-to-bot counts as addressing).
   trig <- case classifyDispatch False gm of
     TriggerNone
-      | Just (MessageId rid) <- gm.replyToMessageId -> do
+      | Just (CanonicalMessageId rid) <- gm.replyTo -> do
           mQuoted <- fetchMessageInScope (conversationScopeFor gm.groupId) rid
-          let GroupId groupRaw = gm.groupId
-          canonicalBot <- isBotAuthoredCompatibilityMessage groupRaw rid
-          let UserId selfRaw = gm.selfId
           pure $ case mQuoted of
-            Just quoted | quoted.userId == selfRaw || canonicalBot -> classifyDispatch True gm
+            Just quoted | quoted.fromBot -> classifyDispatch True gm
             _ -> TriggerNone
     t -> pure t
   -- Any addressed trigger stamps the gate's followup hot window.  The
@@ -585,27 +582,48 @@ onPoke mIntent pk
         Just (TaskId into) ->
           logInfo "poke: injected into running task" $
             object ["group_id" .= gidRaw, "task" .= into]
-        Nothing -> dispatchLLM mIntent OriginPoke NeverAbsorb [] (pokeTrigger pk mName)
+        Nothing -> do
+          -- A poke is a real interaction that never went through ingest, so
+          -- both parties may still lack a principal here.
+          endpoint <- ensureQQEndpointFor pk.pkSelfId pk.pkGroupId
+          let UserId selfRaw = pk.pkSelfId
+          principals <-
+            ensureEndpointPrincipals
+              endpoint.endpointId
+              ( Map.fromList
+                  [ (NativeUserId (tshow selfRaw), Just "max"),
+                    (NativeUserId (tshow pokerRaw), mName)
+                  ]
+              )
+          case ( Map.lookup (NativeUserId (tshow selfRaw)) principals,
+                 Map.lookup (NativeUserId (tshow pokerRaw)) principals
+               ) of
+            (Just selfPrincipal, Just pokerPrincipal) ->
+              dispatchLLM mIntent OriginPoke NeverAbsorb [] $
+                pokeTrigger pk selfPrincipal pokerPrincipal mName
+            _ ->
+              logAttention "poke: could not resolve principals" $
+                object ["group_id" .= gidRaw, "user_id" .= pokerRaw]
 
 -- | Synthesize the platform-neutral trigger for a poke dispatch. There
 -- is no real message: id 0 is the "no trigger message" sentinel —
 -- nothing quotes or reacts to it, and 'Max.Tasks.beginDispatch' reads
 -- it as no trigger rather than as an id every poke shares — and the
--- segment list is empty ('OriginPoke' rendering never shows it).
-pokeTrigger :: PokeEvent -> Maybe T.Text -> DispatchMessage
-pokeTrigger pk mName =
+-- body is empty ('OriginPoke' rendering never shows it).
+pokeTrigger :: PokeEvent -> PrincipalId -> PrincipalId -> Maybe T.Text -> DispatchMessage
+pokeTrigger pk selfPrincipal senderPrincipal mName =
   DispatchMessage
     { selfId = pk.pkSelfId,
-      -- Pokes are QQ-only, where the two ids coincide.
-      selfNative = let UserId self = pk.pkSelfId in NativeAccountId (tshow self),
       groupId = pk.pkGroupId,
       userId = pk.pkUserId,
-      messageId = MessageId 0,
+      selfPrincipalId = selfPrincipal,
+      authorPrincipalId = senderPrincipal,
+      canonicalId = CanonicalMessageId 0,
       body = Body [],
-      replyToMessageId = Nothing,
+      replyTo = Nothing,
       senderDisplayName = mName,
       sourcePlatform = PlatformQQ,
-      mentionNatives = Map.empty
+      mentionPrincipals = Map.empty
     }
 
 --------------------------------------------------------------------------------
@@ -647,7 +665,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
             then replyText gm "没有权限"
             else
               -- Same NO face as [silence:NO]: visibly refused, zero noise.
-              queueQQReaction gm.groupId gm.messageId deniedFaceId True
+              queueQQReaction gm.groupId gm.canonicalId deniedFaceId True
         else dispatchAllowed env targetGid effTier sourcePlatform cmd
   where
     isForeignSource = (/= PlatformQQ)
@@ -655,8 +673,8 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
     dispatchAllowed env targetGid effTier sourcePlatform cmd = do
       t <- loadSession env.beSessions env.beDefaultModel targetGid
       logInfo "command" $ object ["cmd" .= T.pack (show cmd)]
-      let replyTarget = (\(MessageId target) -> target) <$> gm.replyToMessageId
-      result <- CmdDispatch.execute t targetGid gm.userId effTier replyTarget cmd
+      let replyTarget = (\(CanonicalMessageId target) -> target) <$> gm.replyTo
+      result <- CmdDispatch.execute t targetGid gm.userId gm.authorPrincipalId effTier replyTarget cmd
       case result of
         -- In a group, textual command output (queries, error texts)
         -- goes to the sender's DMs — the group only sees an OK
@@ -672,7 +690,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
         -- beats another line of chat noise.
         ReplyAck
           | isForeignSource sourcePlatform -> replyText gm "OK"
-          | otherwise -> queueQQReaction gm.groupId gm.messageId ackFaceId True
+          | otherwise -> queueQQReaction gm.groupId gm.canonicalId ackFaceId True
         SideQuestion askBody -> do
           logInfo "btw: side question" $
             object ["len" .= T.length askBody]
@@ -705,7 +723,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               -- absorbed for the lifetime of the turn that took it, or
               -- a concurrent dispatch answers it a second time — the
               -- implicit path has needed this all along.
-              MessageId noteMid = gm.messageId
+              CanonicalMessageId noteMid = gm.canonicalId
               absorb = Just noteMid
               -- A reply target only means something in the chat it was
               -- typed in: under a !use redirect the quoted mid belongs
@@ -736,13 +754,13 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               -- trigger wears.  The absorbing turn takes it back off
               -- when it ends (see the 'absorbedTriggers' sweep in
               -- 'dispatchLLM').
-              queueQQReaction gm.groupId gm.messageId processingFaceId True
+              queueQQReaction gm.groupId gm.canonicalId processingFaceId True
             Nothing
               | redirected -> do
                   let GroupId targetRaw = targetGid
                   logInfo "feedback: nothing running in redirect target" $
                     object ["group_id" .= targetRaw]
-                  queueQQReaction gm.groupId gm.messageId failureFaceId True
+                  queueQQReaction gm.groupId gm.canonicalId failureFaceId True
               | otherwise -> do
                   logInfo "feedback: nothing running, answering as a turn" $
                     object ["len" .= T.length noteBody]
@@ -765,7 +783,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               orDeliveryScope = DeliverConversation
             }
       if wasDelivered outcome
-        then queueQQReaction gm.groupId gm.messageId ackFaceId True
+        then queueQQReaction gm.groupId gm.canonicalId ackFaceId True
         else do
           logInfo "cmd: private delivery failed, group fallback" $
             object ["user_id" .= uidRaw, "group_id" .= gidRaw]
@@ -778,15 +796,22 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
 -- call, so it records as 'KindChat' — the trigger is in the transcript
 -- and an answer that wasn't would read as a question nobody answered.
 sendPong ::
-  (Outbound :> es, Log :> es) =>
+  (Outbound :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   DispatchMessage ->
   Eff es ()
 sendPong gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
-      display = fromMaybe (T.pack (show fromRaw)) gm.senderDisplayName
-      mention = [NMention (NativeUserId (T.pack (show fromRaw))) display | not (isPrivateChat gm.groupId)]
-  sendAndRecord KindChat DeliverConversation gm.groupId (Body (mention <> [NText " pong"])) (Just gm.messageId)
+      display = fromMaybe (tshow fromRaw) gm.senderDisplayName
+  resolved <-
+    if isPrivateChat gm.groupId
+      then pure Map.empty
+      else resolveMentionIdentities gidRaw [gm.authorPrincipalId]
+  let mention =
+        [ NMention (MentionIdentity identity) display
+        | Just identity <- [Map.lookup gm.authorPrincipalId resolved]
+        ]
+  sendAndRecord KindChat DeliverConversation gm.groupId (Body (mention <> [NText " pong"])) (Just gm.canonicalId)
   logInfo "replied pong" $ object ["to" .= fromRaw, "group_id" .= gidRaw]
 
 -- | Entry point for the intent worker: dispatch a batch of messages
@@ -856,7 +881,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
   env :: BotEnv <- ask
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
-      MessageId midRaw = gm.messageId
+      CanonicalMessageId midRaw = gm.canonicalId
       ident =
         object
           [ "group_id" .= gidRaw,
@@ -879,7 +904,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
   -- and !kill.  The registry entry opens now and the loop adopts it.
   mTurn <-
     if started
-      then Just <$> liftIO (beginTurnRuntime env.beTasks gm.groupId gm.userId (Just gm.messageId))
+      then Just <$> liftIO (beginTurnRuntime env.beTasks gm.groupId gm.userId (Just gm.canonicalId))
       else pure Nothing
   case mTurn of
     Nothing -> do
@@ -892,7 +917,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- proactive turns stay traceless and a poke has no message to
       -- react to.
       when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-        queueQQReaction gm.groupId gm.messageId failureFaceId True
+        queueQQReaction gm.groupId gm.canonicalId failureFaceId True
     Just turn ->
       void . async $
         ( localDomain "llm" $ do
@@ -910,7 +935,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 -- crash — direct triggers only; proactive turns stay
                 -- traceless, and a poke has no message to react to.
                 when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-                  queueQQReaction gm.groupId gm.messageId failureFaceId True
+                  queueQQReaction gm.groupId gm.canonicalId failureFaceId True
               )
               `catch` \TaskCancelled ->
                 -- User-initiated !kill — quieter log, not an error.
@@ -932,7 +957,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 unserved = completion.tcUnservedNotes
             when (outputCaps.canReaction && outputCaps.canFace) $
               for_ absorbed $ \m ->
-                queueQQReaction gm.groupId (MessageId m) processingFaceId False
+                queueQQReaction gm.groupId (CanonicalMessageId m) processingFaceId False
             -- Notes this turn accepted but never answered ('endDispatch'
             -- returns none for a killed turn — !kill drops them by
             -- contract).  Ones that ARE a message get a turn of their
@@ -950,7 +975,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
               let orig
                     | isPrivateChat src.groupId || dispatchMentionsSelf src = OriginDirect
                     | otherwise = OriginProactive
-                  MessageId srcMid = src.messageId
+                  CanonicalMessageId srcMid = src.canonicalId
               logInfo "dispatch: unserved note re-dispatched" $
                 object ["message_id" .= srcMid]
               dispatchLLM mIntent orig NeverAbsorb [] src
@@ -982,8 +1007,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
     withProcessingReaction outputCaps act
       | origin == OriginPoke || not (outputCaps.canReaction && outputCaps.canFace) = act
       | otherwise =
-          (queueQQReaction gm.groupId gm.messageId processingFaceId True >> act)
-            `finally` queueQQReaction gm.groupId gm.messageId processingFaceId False
+          (queueQQReaction gm.groupId gm.canonicalId processingFaceId True >> act)
+            `finally` queueQQReaction gm.groupId gm.canonicalId processingFaceId False
 
     -- The implicit half of the feedback split: when the group already
     -- has another turn running, a fresh trigger is often steering
@@ -1016,8 +1041,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
             then pure False
             else do
               let GroupId gidRaw = gm.groupId
-                  MessageId midRaw = gm.messageId
-                  UserId selfRaw = gm.selfId
+                  CanonicalMessageId midRaw = gm.canonicalId
               rows <- fetchRecentInGroup gidRaw 0 s.clearedAt (icfg.icContextLines + length companions)
               noteAt <- liftIO getCurrentTime
               -- Companions (the earlier messages of a proactive batch)
@@ -1029,12 +1053,12 @@ dispatchLLM mIntent origin absorbable companions gm = do
               -- their DB rows for real timestamps; a row missing in a
               -- pathological flood just drops its line, same call the
               -- intent worker already makes.
-              let render = renderHistoryLine env.beTimeZone selfRaw
+              let render = renderHistoryLine env.beTimeZone
                   companionMids =
-                    Set.fromList [m | c <- companions, let MessageId m = c.messageId]
-                  rest = filter (\h -> h.messageId /= midRaw) rows
+                    Set.fromList [m | c <- companions, let CanonicalMessageId m = c.canonicalId]
+                  rest = filter (\h -> h.canonicalId /= midRaw) rows
                   (companionRows, ctxRows) =
-                    partition (\h -> h.messageId `Set.member` companionMids) rest
+                    partition (\h -> h.canonicalId `Set.member` companionMids) rest
                   ctxLines = map render ctxRows
                   newLine =
                     T.intercalate "\n" $
@@ -1052,7 +1076,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                   -- dispatch epilogue re-dispatches it as the turn it
                   -- would have been.
                   let note = Note newLine (Just gm)
-                  aimed <- case (\(MessageId target) -> target) <$> gm.replyToMessageId of
+                  aimed <- case (\(CanonicalMessageId target) -> target) <$> gm.replyTo of
                     Just tgt ->
                       liftIO (pushToTrigger env.beTasks gm.groupId (Just tid) (Just midRaw) tgt note)
                     Nothing -> pure Nothing
@@ -1074,7 +1098,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                     -- addressed to the bot, and reacting would break
                     -- the "traceless until it speaks" rule.
                     when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-                      queueQQReaction gm.groupId gm.messageId processingFaceId True
+                      queueQQReaction gm.groupId gm.canonicalId processingFaceId True
                   pure (isJust landed)
         _ -> pure False
 
@@ -1084,10 +1108,10 @@ dispatchLLM mIntent origin absorbable companions gm = do
           multimodal = maybe False supportsMultimodal capabilities
           historyTurns = maybe False usesHistoryTurns capabilities
           limits = maybe defaultContextLimits (.contextLimits) capabilities
-      (mentionable, rosterNames, brief) <- fetchGroupContext outputCaps gm.groupId
+      brief <- fetchGroupBrief outputCaps gm.groupId
       -- Questions another turn is already working on.  Ours is in there
       -- too (claimed just above) — drop it, it isn't history yet.
-      let MessageId ownMid = gm.messageId
+      let CanonicalMessageId ownMid = gm.canonicalId
       inFlight <- Set.delete ownMid <$> liftIO (inFlightTriggers env.beTasks gm.groupId)
       -- One registry snapshot serves both halves of the disclosure:
       -- the index rendered into the system prompt and the tool-capability
@@ -1095,7 +1119,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
       liftIO (setTurnPhase turn "context")
-      ctx <-
+      (ctx, roster) <-
         buildContextWithReadModeForOutput
           limits
           (if env.beForceRawContext then RawLedgerEmergency else TieredContext)
@@ -1115,16 +1139,21 @@ dispatchLLM mIntent origin absorbable companions gm = do
           platformStickers = stickersEff && outputCaps.canMedia
           toolCtx =
             mkToolContext
-              (TurnIdentity gm.groupId gm.messageId gm.userId gm.selfId)
+              (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId)
               (TurnCapabilities multimodal platformStickers (not (null skills)) outputCaps)
           agentCtx = AgentContext toolCtx s.effortOverride
-          target = sendTarget outputCaps gm mentionable rosterNames platformStickers
+          -- The name→principal map the send path rescues "@显示名" against is
+          -- the roster the prompt just showed the model, so the names it may
+          -- write are exactly the names it read.  Before ADR 004 this was a
+          -- separate QQ member-list fetch, in a different id space.
+          rosterNames = [(name, PrincipalId principal) | (principal, name) <- roster]
+          target = sendTarget outputCaps gm rosterNames platformStickers
       -- The streaming sink.  It sends whole paragraphs the model has
       -- finished with, down the same path the final reply takes — the
       -- budget TVar is what keeps the two halves of one split reply
       -- bounded together (see "Max.ReplySend").
       streamBudget <- liftIO (newTVarIO freshBudget)
-      let output = AgentOutputContext target gm.messageId debugEff streamBudget
+      let output = AgentOutputContext target gm.canonicalId debugEff streamBudget
       result <- agentTurn turn agentCtx s.model ctx (handleAgentEvent output)
       case result.reply of
         -- The loop produced no model-authored reply — upstream API
@@ -1140,11 +1169,11 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "aborted" .= result.aborted
               ]
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $ do
-            queueQQReaction gm.groupId gm.messageId processingFaceId False
-            queueQQReaction gm.groupId gm.messageId failureFaceId True
-        Just replyRaw -> handleReply outputCaps env s mentionable rosterNames streamBudget result replyRaw
+            queueQQReaction gm.groupId gm.canonicalId processingFaceId False
+            queueQQReaction gm.groupId gm.canonicalId failureFaceId True
+        Just replyRaw -> handleReply outputCaps env s rosterNames streamBudget result replyRaw
 
-    handleReply outputCaps env s mentionable rosterNames streamBudget result replyRaw = do
+    handleReply outputCaps env s rosterNames streamBudget result replyRaw = do
       -- Real stickers/images are the [sticker#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
       -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
@@ -1192,7 +1221,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 "aborted" .= result.aborted
               ]
           let GroupId group = gm.groupId
-              MessageId triggerMessage = gm.messageId
+              CanonicalMessageId triggerMessage = gm.canonicalId
               silenceText = if T.null stripped then "[silence]" else stripped
               sourceMessage = if triggerMessage == 0 then Nothing else Just triggerMessage
           void $
@@ -1200,12 +1229,12 @@ dispatchLLM mIntent origin absorbable companions gm = do
               OutboundDraft
                 { legacyConversationId = group,
                   transcriptKind = renderMessageKind KindChat,
-                  sourceCompatibilityMessageId = sourceMessage,
+                  sourceCanonicalMessageId = sourceMessage,
                   canonicalBody = Body [NText silenceText],
-                  replyToCompatibilityMessageId = sourceMessage
+                  replyToCanonicalMessageId = sourceMessage
                 }
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-            queueQQReaction gm.groupId gm.messageId (fromMaybe defaultSilenceFace mFace) True
+            queueQQReaction gm.groupId gm.canonicalId (fromMaybe defaultSilenceFace mFace) True
         Nothing -> do
           -- Outbound gets the platform message_id and persists this
           -- message into the messages table.  That's where
@@ -1217,7 +1246,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           budget <- liftIO (readTVarIO streamBudget)
           _ <-
             sendAndPersistReply
-              (sendTarget outputCaps gm mentionable rosterNames stickersEff)
+              (sendTarget outputCaps gm rosterNames stickersEff)
               budget
               stripped
           logInfo "llm replied" $
@@ -1244,15 +1273,13 @@ dispatchLLM mIntent origin absorbable companions gm = do
 sendTarget ::
   AdvertisedCaps ->
   DispatchMessage ->
-  Maybe (Set UserId) ->
-  [(T.Text, UserId)] ->
+  [(T.Text, PrincipalId)] ->
   Bool ->
   ReplyTarget
-sendTarget outputCaps gm mentionable rosterNames stickersOn =
+sendTarget outputCaps gm rosterNames stickersOn =
   ReplyTarget
     { rtGroupId = gm.groupId,
       rtSelfId = gm.selfId,
-      rtMentionable = mentionable,
       rtRosterNames = rosterNames,
       rtStickers = stickersOn,
       rtCanReply = outputCaps.canReply,
@@ -1277,8 +1304,8 @@ sendAndRecord ::
   MessageKind ->
   OutboundDeliveryScope ->
   GroupId ->
-  Body 'Ingest ->
-  Maybe MessageId ->
+  Body 'Canonical ->
+  Maybe CanonicalMessageId ->
   Eff es ()
 sendAndRecord kind deliveryScope gid body replyTo =
   void $
@@ -1301,7 +1328,7 @@ replyText ::
   T.Text ->
   Eff es ()
 replyText gm body =
-  sendAndRecord KindCommand (DeliverSourceEndpoint gm.messageId) gm.groupId (Body [NText body]) Nothing
+  sendAndRecord KindCommand (DeliverSourceEndpoint gm.canonicalId) gm.groupId (Body [NText body]) Nothing
 
 -- | One roster fetch serving two prompt-side consumers: the member id
 -- set for outbound @-mention validation ('Nothing' when there is no
@@ -1310,31 +1337,20 @@ replyText gm body =
 -- legitimate @s), and the rendered 群信息 lines for the system
 -- prompt's [environment] block (empty on the same failures — the model
 -- just doesn't get the block).
-fetchGroupContext ::
+-- | The group's own description lines for the environment block.  QQ-only,
+-- and no longer a source of identity: the roster the model reads and the
+-- names the send path accepts both come from the ledger now.
+fetchGroupBrief ::
   (PlatformApi :> es, Log :> es) =>
   AdvertisedCaps ->
   GroupId ->
-  Eff es (Maybe (Set UserId), [(T.Text, UserId)], [T.Text])
-fetchGroupContext outputCaps gid
-  | isPrivateChat gid || not outputCaps.canMention = pure (Nothing, [], [])
+  Eff es [T.Text]
+fetchGroupBrief outputCaps gid
+  | isPrivateChat gid || not outputCaps.canMention = pure []
   | otherwise = do
       members <- fetchGroupMembers gid
       meta <- fetchGroupMeta gid
-      -- Display-name → id pairs (card > nickname, blanks skipped) for
-      -- rescuing "@显示名" spans in replies — see 'rescueNameMentions'.
-      let names =
-            [ (nm, m.mUserId)
-            | m <- fromMaybe [] members,
-              Just nm <- [nonBlankName m.mCard <|> nonBlankName m.mNickname]
-            ]
-      pure
-        ( Set.fromList . map (.mUserId) <$> members,
-          names,
-          renderGroupBrief meta members
-        )
-  where
-    nonBlankName (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
-    nonBlankName _ = Nothing
+      pure (renderGroupBrief meta members)
 
 -- | QQ-ingress only: this path still holds the raw OneBot segments, where the
 -- bot's compatibility id and its native id are the same number.  Canonical
@@ -1435,16 +1451,16 @@ actorTier gid uid
 queueQQReaction ::
   (WithConnection :> es, Log :> es, IOE :> es) =>
   GroupId ->
-  MessageId ->
+  CanonicalMessageId ->
   Int ->
   Bool ->
   Eff es ()
-queueQQReaction (GroupId group) (MessageId message) faceId added =
+queueQQReaction (GroupId group) (CanonicalMessageId message) faceId added =
   trySync
     ( enqueueReaction
         ReactionDraft
           { legacyConversationId = group,
-            targetCompatibilityMessageId = message,
+            targetCanonicalMessageId = message,
             reactionKey = T.pack (show faceId),
             reactionAction = if added then ReactionAdd else ReactionRemove,
             requiredPlatform = Just PlatformQQ

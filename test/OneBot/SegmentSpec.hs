@@ -2,10 +2,9 @@ module OneBot.SegmentSpec (spec) where
 
 import Data.Aeson (decodeStrict', encode, object, (.=))
 import Data.ByteString.Lazy qualified as BSL
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
-import OneBot.Segment (CardInfo (..), ImageSegInfo (..), Segment (..), VideoSegInfo (..), renderPlainText, rescueNameMentions, segmentMentions)
+import OneBot.Segment (CardInfo (..), ImageSegInfo (..), Segment (..), VideoSegInfo (..), renderPlainText)
 import OneBot.Types (UserId (..))
 import Test.Hspec
 
@@ -104,71 +103,16 @@ videoSpec = describe "video segments" $ do
   it "renders as the bare [video] marker" $
     renderPlainText [SegVideo (VideoSegInfo "f" Nothing Nothing)] `shouldBe` "[video]"
 
+-- | ADR 004 moved the model's mention grammar out of this module: the
+-- outbound lexer it used to hold (bare @\<5-11 digits\>, the roster
+-- whitelist, the display-name rescue) was QQ's wire spelling, and principal
+-- ids are not QQ numbers.  What survives here is the inbound rendering of a
+-- QQ at-segment, which the command parser still reads.
 mentionSpec :: Spec
-mentionSpec = describe "segmentMentions" $ do
-  let roster = Set.fromList [UserId 12345678, UserId 10001, UserId 99999999999]
-      conv = segmentMentions (`Set.member` roster)
-
-  it "normalises to exactly one space after a converted mention" $
-    conv "叫一下@12345678 看看"
-      `shouldBe` [SegText "叫一下", SegAt (UserId 12345678), SegText " 看看"]
-
-  it "converts the canonical [@#qq] token" $
-    conv "叫一下[@#12345678] 看看"
-      `shouldBe` [SegText "叫一下", SegAt (UserId 12345678), SegText " 看看"]
-
-  it "keeps an unknown [@#qq] literal" $
-    conv "[@#55555]" `shouldBe` [SegText "[@#55555]"]
-
+mentionSpec = describe "at-segment rendering" $
   it "renders an inbound mention as the [@#qq] token" $
     renderPlainText [SegAt (UserId 12345678)] `shouldBe` "[@#12345678] "
 
-  it "rescues @displayname into the canonical token, longest name first" $ do
-    let names = [("阿飞", UserId 10001), ("阿飞哥", UserId 12345678)]
-    rescueNameMentions names "@阿飞哥 看看" `shouldBe` "[@#12345678] 看看"
-    rescueNameMentions names "@阿飞 看看" `shouldBe` "[@#10001] 看看"
-    rescueNameMentions names "@路人 看看" `shouldBe` "@路人 看看"
-    rescueNameMentions names "邮箱 a@阿飞.com" `shouldBe` "邮箱 a[@#10001].com"
-
-  it "converts a mention at the start and end of text (no trailing space at the end)" $
-    conv "@12345678 收到了吗@10001"
-      `shouldBe` [ SegAt (UserId 12345678),
-                   SegText " 收到了吗",
-                   SegAt (UserId 10001)
-                 ]
-
-  it "converts adjacent mentions, each followed by a space" $
-    conv "@12345678 @10001 开会了"
-      `shouldBe` [SegAt (UserId 12345678), SegText " ", SegAt (UserId 10001), SegText " 开会了"]
-
-  it "inserts a space even when CJK is flush against the mention" $
-    conv "问@12345678你好"
-      `shouldBe` [SegText "问", SegAt (UserId 12345678), SegText " 你好"]
-
-  it "keeps an id outside the roster as plain text" $
-    conv "@87654321 在吗" `shouldBe` [SegText "@87654321 在吗"]
-
-  it "keeps digit runs shorter than a QQ号 as plain text" $
-    conv "发到 hank@163.com" `shouldBe` [SegText "发到 hank@163.com"]
-
-  it "keeps spans glued to ASCII word characters as plain text" $
-    conv "id是x@12345678y" `shouldBe` [SegText "id是x@12345678y"]
-
-  it "keeps a lone @ and text without mentions untouched" $ do
-    conv "@ 大家好" `shouldBe` [SegText "@ 大家好"]
-    conv "没有提及任何人" `shouldBe` [SegText "没有提及任何人"]
-
-  it "handles the 11-digit upper bound" $
-    conv "@99999999999 hi"
-      `shouldBe` [SegAt (UserId 99999999999), SegText " hi"]
-
-  it "normalises spacing around multiple mentions in one line" $
-    conv "@12345678 明天@10001 记得带伞"
-      `shouldBe` [ SegAt (UserId 12345678),
-                   SegText " 明天",
-                   SegAt (UserId 10001),
-                   SegText " 记得带伞"
-                 ]
 
 imageSpec :: Spec
 imageSpec = describe "image segments" $ do

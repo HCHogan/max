@@ -32,18 +32,12 @@ import Effectful (runEff)
 import Effectful.PostgreSQL.Connection (runWithConnection)
 import Max.IR
   ( Body (..),
-    MentionTarget (..),
-    Node (NMention),
     Phase (Canonical),
+    mentionIdentities,
   )
 import Max.IR.Prompt (promptCanonicalText)
-import Max.Platform.Store (deliveryMentionNatives, expiredSendingDeliverySql)
-import Max.Platform.Types
-  ( EndpointId (..),
-    NativeUserId,
-    PrincipalIdentityId,
-    parsePlatform,
-  )
+import Max.Platform.Store (expiredSendingDeliverySql, mentionPrincipalsFor)
+import Max.Platform.Types (PrincipalId, PrincipalIdentityId)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (die)
 
@@ -52,8 +46,6 @@ data Command = Migrate | Reproject | Verify | Gate
 
 data ProjectionRow = ProjectionRow
   { canonicalMessageId :: !Int64,
-    sourcePlatform :: !Text,
-    originEndpointId :: !Int64,
     canonicalContent :: !Value,
     renderedText :: !Text
   }
@@ -62,8 +54,6 @@ instance FromRow.FromRow ProjectionRow where
   fromRow =
     ProjectionRow
       <$> FromRow.field
-      <*> FromRow.field
-      <*> FromRow.field
       <*> FromRow.field
       <*> FromRow.field
 
@@ -144,8 +134,8 @@ reproject connection = withTransaction connection $ do
   rows <- projectionRows connection
   changed <- fmap sum . forM rows $ \row -> do
     body <- decodeBody row
-    identities <- mentionNatives connection row.originEndpointId body
-    let expected = promptCanonicalText (parsePlatform row.sourcePlatform) identities body
+    principals <- mentionPrincipals connection body
+    let expected = promptCanonicalText principals body
     if expected == row.renderedText
       then pure (0 :: Int)
       else do
@@ -192,8 +182,7 @@ projectionRows :: Connection -> IO [ProjectionRow]
 projectionRows connection =
   query_
     connection
-    "SELECT canonical_message_id, source_platform, origin_endpoint_id, \
-    \       canonical_content, rendered_text \
+    "SELECT canonical_message_id, canonical_content, rendered_text \
     \FROM messages ORDER BY canonical_message_id"
 
 decodeBody :: ProjectionRow -> IO (Body 'Canonical)
@@ -219,8 +208,8 @@ verifyProjections connection = do
             <> err
         ]
     Success body -> do
-      identities <- mentionNatives connection row.originEndpointId body
-      let expected = promptCanonicalText (parsePlatform row.sourcePlatform) identities body
+      principals <- mentionPrincipals connection body
+      let expected = promptCanonicalText principals body
       pure
         [ "canonical message "
             <> show row.canonicalMessageId
@@ -232,16 +221,17 @@ verifyProjections connection = do
 -- calls the writer's own resolution instead of keeping a second copy of the
 -- query.  The two did drift once: only this one learned to prefer the
 -- mentioned identity itself.
-mentionNatives ::
+--
+-- Since ADR 004 that resolution is identity → principal, which is one
+-- always-defined join and no longer depends on the endpoint at all: the
+-- prompt names people, not accounts.
+mentionPrincipals ::
   Connection ->
-  Int64 ->
   Body 'Canonical ->
-  IO (Map PrincipalIdentityId NativeUserId)
-mentionNatives connection endpoint body =
+  IO (Map PrincipalIdentityId PrincipalId)
+mentionPrincipals connection body =
   runEff . runWithConnection connection $
-    deliveryMentionNatives
-      (EndpointId endpoint)
-      [identity | NMention (MentionIdentity identity) _ <- body.nodes]
+    mentionPrincipalsFor (mentionIdentities body)
 
 scalarCount :: Connection -> Query -> IO Int64
 scalarCount connection sql = do

@@ -12,6 +12,7 @@ import Max.DB.Connection (DbPool, withConn)
 import Max.IR
 import Max.IR.Lower
 import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Util (tshow)
 import Max.Platform.Store
 import Max.Platform.Store qualified as PlatformStore
 import Max.Platform.Types
@@ -354,9 +355,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
           OutboundDraft
             { legacyConversationId = 42,
               transcriptKind = "chat",
-              sourceCompatibilityMessageId = Nothing,
+              sourceCanonicalMessageId = Nothing,
               canonicalBody = Body [NText "hello both sides"],
-              replyToCompatibilityMessageId = Nothing
+              replyToCanonicalMessageId = Nothing
             }
     queued.deliveriesCreated `shouldBe` 2
     claims <- withDb pool (claimDeliveries "delivery-worker" 10 30)
@@ -392,21 +393,22 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
             }
     now <- getCurrentTime
     target <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "matrix-target" "target"))
-    [(legacyGroup, targetMessage)] <-
+    [Only legacyGroup] <-
       withConn pool $ \conn ->
         query
           conn
-          "SELECT group_id, message_id FROM messages WHERE canonical_message_id = ?"
+          "SELECT group_id FROM messages WHERE canonical_message_id = ?"
           (Only (resultId target).unCanonicalMessageId)
+    let targetMessage = (resultId target).unCanonicalMessageId
     queued <-
       withDb pool $
         enqueueOutbound
           OutboundDraft
             { legacyConversationId = legacyGroup,
               transcriptKind = "chat",
-              sourceCompatibilityMessageId = Nothing,
+              sourceCanonicalMessageId = Nothing,
               canonicalBody = Body [NText "reply"],
-              replyToCompatibilityMessageId = Just targetMessage
+              replyToCanonicalMessageId = Just targetMessage
             }
     relations <- withConn pool $ \conn ->
       query
@@ -513,11 +515,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         ingestEnvelope
           defaultIngestOptions {createMirrorDeliveries = False}
           (inbound qq.endpointId now "qq-reaction-target" "target")
-    [Only targetMessage] <- withConn pool $ \conn ->
-      query
-        conn
-        "SELECT message_id FROM messages WHERE canonical_message_id = ?"
-        (Only (resultId target).unCanonicalMessageId)
+    let targetMessage = (resultId target).unCanonicalMessageId
     caps <- withDb pool (conversationAdvertisedCaps 42 (Just targetMessage))
     caps.canReaction `shouldBe` True
     missingCaps <- withDb pool (conversationAdvertisedCaps 42 (Just 999999999))
@@ -525,7 +523,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     let draft =
           ReactionDraft
             { legacyConversationId = 42,
-              targetCompatibilityMessageId = targetMessage,
+              targetCanonicalMessageId = targetMessage,
               reactionKey = "212",
               reactionAction = ReactionAdd,
               requiredPlatform = Just PlatformQQ
@@ -559,11 +557,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         ingestEnvelope
           defaultIngestOptions {createMirrorDeliveries = False}
           (inbound qq.endpointId now "qq-malformed-reaction-target" "target")
-    [Only targetMessage] <- withConn pool $ \conn ->
-      query
-        conn
-        "SELECT message_id FROM messages WHERE canonical_message_id = ?"
-        (Only (resultId target).unCanonicalMessageId)
+    let targetMessage = (resultId target).unCanonicalMessageId
     _ <- withConn pool $ \conn ->
       execute
         conn
@@ -572,7 +566,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     let draft =
           ReactionDraft
             { legacyConversationId = 42,
-              targetCompatibilityMessageId = targetMessage,
+              targetCanonicalMessageId = targetMessage,
               reactionKey = "212",
               reactionAction = ReactionAdd,
               requiredPlatform = Just PlatformQQ
@@ -599,20 +593,16 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         ingestEnvelope
           defaultIngestOptions {createMirrorDeliveries = False}
           (inbound matrix.endpointId now "mx-command" "!status")
-    sourceRows <- withConn pool $ \conn ->
-      query conn "SELECT message_id FROM messages WHERE canonical_message_id = ?" (Only (resultId source).unCanonicalMessageId)
-    sourceMessage <- case sourceRows :: [Only Int64] of
-      [Only message] -> pure message
-      _ -> expectationFailure "missing source compatibility message" >> fail "unreachable"
+    let sourceMessage = (resultId source).unCanonicalMessageId
     queued <-
       withDb pool $
         enqueueOutbound
           OutboundDraft
             { legacyConversationId = 42,
               transcriptKind = "command",
-              sourceCompatibilityMessageId = Just sourceMessage,
+              sourceCanonicalMessageId = Just sourceMessage,
               canonicalBody = Body [NText "status"],
-              replyToCompatibilityMessageId = Nothing
+              replyToCanonicalMessageId = Nothing
             }
     queued.deliveriesCreated `shouldBe` 1
     claims <- withDb pool (claimDeliveries "local-command" 10 30)
@@ -743,14 +733,18 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
       query
         conn
         "SELECT m.rendered_text, m.canonical_content->'nodes'->0->>'display', \
-        \       pi.native_user_id \
+        \       pi.native_user_id, pi.principal_id \
         \ FROM messages m \
         \ JOIN principal_identities pi \
         \   ON pi.principal_identity_id = (m.canonical_content->'nodes'->0->>'identity')::bigint \
         \ WHERE m.canonical_message_id = ?"
         (Only (resultId result).unCanonicalMessageId)
-    (rows :: [(Text, Text, Text)])
-      `shouldBe` [("[@#2291939848]  hello", "2291939848", "2291939848")]
+    -- The mention names the person; 2291939848 is the account it resolved
+    -- through, which only the identity row still knows about.
+    case rows :: [(Text, Text, Text, Int64)] of
+      [(rendered, display, native, principal)] ->
+        (rendered, display, native) `shouldBe` ("[@#" <> tshow principal <> "] hello", "2291939848", "2291939848")
+      other -> expectationFailure ("unexpected projection rows: " <> show other)
 
   it "enriches an identity first discovered through a bare mention" $ do
     endpoint <-
@@ -845,10 +839,16 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     rows <- withConn pool $ \conn ->
       query
         conn
-        "SELECT rendered_text, canonical_content->'nodes'->0->>'display' \
-        \ FROM messages WHERE canonical_message_id = ?"
+        "SELECT m.rendered_text, m.canonical_content->'nodes'->0->>'display', pi.principal_id \
+        \ FROM messages m \
+        \ JOIN principal_identities pi \
+        \   ON pi.principal_identity_id = (m.canonical_content->'nodes'->0->>'identity')::bigint \
+        \ WHERE m.canonical_message_id = ?"
         (Only (resultId mention).unCanonicalMessageId)
-    (rows :: [(Text, Text)]) `shouldBe` [("@张三 在吗", "张三")]
+    case rows :: [(Text, Text, Int64)] of
+      [(rendered, display, principal)] ->
+        (rendered, display) `shouldBe` ("[@#" <> tshow principal <> "] 在吗", "张三")
+      other -> expectationFailure ("unexpected projection rows: " <> show other)
 
   -- The WeChat relay acknowledges a send without an id; the bot's own message
   -- coming back on the sync stream is the only receipt it ever gets.
@@ -883,9 +883,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
           OutboundDraft
             { legacyConversationId = legacyGroup,
               transcriptKind = "chat",
-              sourceCompatibilityMessageId = Nothing,
+              sourceCanonicalMessageId = Nothing,
               canonicalBody = Body [NText "我在"],
-              replyToCompatibilityMessageId = Nothing
+              replyToCanonicalMessageId = Nothing
             }
     [claim] <- withDb pool (claimDeliveries "wechat-worker" 10 30)
     withDb pool (completeDelivery "wechat-worker" claim.deliveryId [] (DeliveryAccepted Nothing))

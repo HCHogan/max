@@ -9,10 +9,7 @@ module OneBot.Segment
     stickerSeg,
     isStickerImage,
     renderPlainText,
-    segmentMentions,
     trimEdgeSegs,
-    rescueNameMentions,
-    mentionsUser,
   )
 where
 
@@ -361,116 +358,6 @@ renderPlainText = T.concat . map go
                 catMaybes [ci.ciTag, ci.ciTitle, T.take 80 <$> ci.ciDesc, ci.ciUrl]
          in "[card: " <> T.intercalate " | " parts <> "]"
       SegOther t _ -> "[" <> t <> "]"
-
--- | Parse LLM-authored reply text into segments, converting raw
--- @\@\<QQ号\>@ spans into structural 'SegAt's — the outbound inverse
--- of 'renderPlainText', which is exactly the shape the model sees
--- inbound mentions in.  A span converts only when it reads as a
--- standalone mention — 5 to 11 digits, not glued to an ASCII word
--- character on either side (so emails and identifiers pass through;
--- CJK neighbours are fine) — AND @known@ accepts the id.  Callers
--- pass a membership check (typically against the group's member
--- list), which keeps hallucinated numbers and non-members as plain
--- text; pass @const True@ to convert on syntax alone.  One space
--- after a converted mention is swallowed: 'renderPlainText' adds it
--- back, so persisted history round-trips without growing padding.
-segmentMentions :: (UserId -> Bool) -> Text -> [Segment]
-segmentMentions known = go
-  where
-    go t = case T.breakOn "@" t of
-      (before, rest)
-        | T.null rest -> [SegText before | not (T.null before)]
-        | otherwise ->
-            let cand = T.drop 1 rest -- past the @
-             in case bracketForm before cand of
-                  -- The canonical "[@#<qq>]" token (what the grammar
-                  -- teaches, and what inbound mentions render as) —
-                  -- unambiguous, so no boundary heuristics needed.
-                  Just (before', uid, after)
-                    | known uid ->
-                        [SegText before' | not (T.null before')]
-                          <> (SegAt uid : spaceAfter (go (fromMaybe after (T.stripPrefix " " after))))
-                  _ -> bareForm before cand
-    -- "[@#123456]" — 'before' carries the '[', 'cand' starts at '#'.
-    bracketForm before cand = do
-      before' <- T.stripSuffix "[" before
-      r <- T.stripPrefix "#" cand
-      let (digits, rest') = T.span isDigit r
-      after <- T.stripPrefix "]" rest'
-      if T.null digits
-        then Nothing
-        else do
-          (n, _) <- either (const Nothing) Just (TR.decimal digits)
-          pure (before', UserId n, after)
-    -- Legacy bare "@<qq>" span, boundary-guessed (5-11 digits, not
-    -- glued to an ASCII word char).  Kept forever: persisted history
-    -- and older models still speak it.
-    bareForm before cand =
-      let digits = T.takeWhile isDigit cand
-          after = T.drop (T.length digits) cand
-          n = T.length digits
-          asciiWord c = isAscii c && isAlphaNum c
-          okBefore = maybe True (not . asciiWord . snd) (T.unsnoc before)
-          okAfter = maybe True (not . asciiWord . fst) (T.uncons after)
-          uid = UserId (either (const 0) fst (TR.decimal digits))
-       in if n >= 5 && n <= 11 && okBefore && okAfter && known uid
-            then
-              [SegText before | not (T.null before)]
-                <> (SegAt uid : spaceAfter (go (fromMaybe after (T.stripPrefix " " after))))
-            else case go cand of
-              -- Not a mention: keep the literal @ and fold it
-              -- into the following text run.
-              SegText t' : segs -> SegText (before <> "@" <> t') : segs
-              segs -> SegText (before <> "@") : segs
-
-    -- A real @ on QQ is always followed by a space; the client
-    -- inserts one after the name.  We swallow the space the author
-    -- typed (if any) above, then re-emit exactly one — merged into
-    -- the next text run to avoid adjacent segments, and dropped
-    -- entirely when the mention is the last thing in the message.
-    spaceAfter (SegText t' : segs) = SegText (" " <> t') : segs
-    spaceAfter [] = []
-    spaceAfter segs = SegText " " : segs
-
--- | Rescue "@显示名" spans a model wrote instead of the canonical
--- @[\@#QQ号]@ token — small local models skip the roster lookup and
--- @ people by name, which sends as dead text.  The span converts to
--- the canonical token when the text right after the @ starts with a
--- roster display name (longest match wins; names shorter than 2
--- chars or leading with a digit are ignored — too collision-prone
--- with real text and QQ号 forms).  Runs as a textual pre-pass, so
--- 'segmentMentions' then treats the result like any other mention.
-rescueNameMentions :: [(Text, UserId)] -> Text -> Text
-rescueNameMentions names t0
-  | null usable = t0
-  | otherwise = go t0
-  where
-    usable =
-      sortOn (negate . T.length . fst) $
-        [ (n, u)
-        | (n0, u) <- names,
-          let n = T.strip n0,
-          T.length n >= 2,
-          maybe True (not . isDigit . fst) (T.uncons n),
-          not ("@" `T.isInfixOf` n)
-        ]
-    go t = case T.breakOn "@" t of
-      (before, rest)
-        | T.null rest -> t
-        | otherwise ->
-            let cand = T.drop 1 rest
-             in case [ (u, T.drop (T.length n) cand)
-                     | (n, u) <- usable,
-                       n `T.isPrefixOf` cand
-                     ] of
-                  ((UserId u, after) : _) ->
-                    before <> "[@#" <> T.pack (show u) <> "]" <> go after
-                  [] -> before <> "@" <> go cand
-
-mentionsUser :: UserId -> [Segment] -> Bool
-mentionsUser uid = any $ \case
-  SegAt u -> u == uid
-  _ -> False
 
 -- | Trim whitespace at the outer edges of a segment list.
 --

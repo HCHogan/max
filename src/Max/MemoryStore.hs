@@ -312,8 +312,13 @@ groupMemoryNamespace :: ConversationScope -> MemoryNamespace
 groupMemoryNamespace scope =
   MemoryNamespace ScopeGroup (conversationStorageId scope) scope
 
+-- | A person's memories inside one conversation.  The subject is a
+-- @principal_id@ (ADR 004): a memory is about a human, and which account they
+-- happened to speak from is transport.  The column held a compatibility user
+-- id until migration 066, which is why it is named 'scope_id' and not
+-- 'principal_id'.
 userMemoryNamespace :: ConversationScope -> Int64 -> MemoryNamespace
-userMemoryNamespace scope uid = MemoryNamespace ScopeUser uid scope
+userMemoryNamespace scope principal = MemoryNamespace ScopeUser principal scope
 
 memoryNamespace :: ConversationScope -> MemoryScope -> Int64 -> MemoryNamespace
 memoryNamespace scope ScopeGroup _ = groupMemoryNamespace scope
@@ -477,7 +482,7 @@ createMemory actor ns draft = do
       \), evidenced AS ( \
       \  INSERT INTO memory_evidence \
       \    (memory_id, memory_version, evidence_kind, source_conversation_id, \
-      \     source_principal_id, source_message_id, source_start_ingest_seq, \
+      \     source_principal_id, source_canonical_message_id, source_start_ingest_seq, \
       \     source_end_ingest_seq, source_episode_id, note) \
       \  SELECT id, version, ?, ?, ?, ?, ?, ?, ?, ? FROM inserted \
       \), audited AS ( \
@@ -549,7 +554,7 @@ runContentUpdate actor target update = do
           <> "), evidenced AS ("
           <> " INSERT INTO memory_evidence "
           <> " (memory_id, memory_version, evidence_kind, source_conversation_id, source_principal_id, "
-          <> " source_message_id, source_start_ingest_seq, source_end_ingest_seq, source_episode_id, note) "
+          <> " source_canonical_message_id, source_start_ingest_seq, source_end_ingest_seq, source_episode_id, note) "
           <> " SELECT id, version, ?, ?, ?, ?, ?, ?, ?, ? FROM updated"
           <> "), audited AS ("
           <> " INSERT INTO memory_mutations "
@@ -721,7 +726,7 @@ runLifecycleMutationWithEvidence actor operation lifecycle replacement target mE
         Just _ ->
           ", evidenced AS ( INSERT INTO memory_evidence "
             <> " (memory_id, memory_version, evidence_kind, source_conversation_id, source_principal_id, "
-            <> " source_message_id, source_start_ingest_seq, source_end_ingest_seq, source_episode_id, note) "
+            <> " source_canonical_message_id, source_start_ingest_seq, source_end_ingest_seq, source_episode_id, note) "
             <> " SELECT id, version, ?, ?, ?, ?, ?, ?, ?, ? FROM updated)"
       sql =
         "WITH updated AS ( UPDATE memories "
@@ -968,13 +973,13 @@ listMemoryMaintenanceEntries ns = do
     "SELECT memory.id, memory.version, memory.scope, memory.scope_id, \
     \       memory.content, memory.lifecycle, memory.category, memory.updated_at, \
     \       evidence.evidence_kind, evidence.source_conversation_id, \
-    \       evidence.source_principal_id, evidence.source_message_id, \
+    \       evidence.source_principal_id, evidence.source_canonical_message_id, \
     \       evidence.source_start_ingest_seq, evidence.source_end_ingest_seq, \
     \       evidence.source_episode_id, evidence.note, evidence.created_at \
     \ FROM memories AS memory \
     \ LEFT JOIN LATERAL ( \
     \   SELECT evidence_kind, source_conversation_id, source_principal_id, \
-    \          source_message_id, source_start_ingest_seq, source_end_ingest_seq, \
+    \          source_canonical_message_id, source_start_ingest_seq, source_end_ingest_seq, \
     \          source_episode_id, note, created_at \
     \   FROM memory_evidence \
     \   WHERE memory_id = memory.id AND memory_version = memory.version \

@@ -11,12 +11,22 @@ import Data.Text qualified as T
 import Max.Dispatch (DispatchMessage (..))
 import Max.IR (MentionTarget (MentionIdentity), resolveIngest)
 import Max.Platform.QQ (qqIngestBody)
-import Max.Platform.Types (NativeAccountId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalIdentityId (..))
+import Max.Platform.Types
+  ( CanonicalMessageId (..),
+    NativeUserId (..),
+    Platform (PlatformQQ),
+    PrincipalId (..),
+    PrincipalIdentityId (..),
+  )
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId, MessageId (..), UserId (..))
 
 -- | Test fixture that exercises the real QQ normalizer and then performs the
 -- same native-id → principal-identity phase transition as ingestEnvelope.
+--
+-- Identity and principal ids are derived from the QQ number so a fixture can
+-- state one number and have both spaces agree, the way a real 1:1 ledger row
+-- does.  Nothing in production may assume that correspondence.
 qqDispatch ::
   UserId ->
   GroupId ->
@@ -25,20 +35,23 @@ qqDispatch ::
   Maybe Text ->
   [Segment] ->
   DispatchMessage
-qqDispatch self group user messageId display segments =
+qqDispatch self group user (MessageId messageId) display segments =
   DispatchMessage
     { selfId = self,
-      selfNative = let UserId raw = self in NativeAccountId (T.pack (show raw)),
       groupId = group,
       userId = user,
-      messageId,
+      selfPrincipalId = let UserId raw = self in PrincipalId raw,
+      authorPrincipalId = let UserId raw = user in PrincipalId raw,
+      canonicalId = CanonicalMessageId messageId,
       body = runIdentity (resolveIngest resolve (qqIngestBody segments)),
-      replyToMessageId = listToMaybe [target | SegReply target <- segments],
+      replyTo =
+        listToMaybe
+          [CanonicalMessageId target | SegReply (MessageId target) <- segments],
       senderDisplayName = display,
       sourcePlatform = PlatformQQ,
-      mentionNatives =
+      mentionPrincipals =
         Map.fromList
-          [ (identity native, native)
+          [ (identity native, principal native)
           | SegAt (UserId nativeId) <- segments,
             let native = NativeUserId (T.pack (show nativeId))
           ]
@@ -46,3 +59,4 @@ qqDispatch self group user messageId display segments =
   where
     resolve native shown = Identity (MentionIdentity (identity native), shown)
     identity (NativeUserId native) = PrincipalIdentityId (read (T.unpack native))
+    principal (NativeUserId native) = PrincipalId (read (T.unpack native))

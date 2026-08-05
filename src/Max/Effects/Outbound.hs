@@ -39,6 +39,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.IR
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
+import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Util (trySync)
 import OneBot.Types (GroupId (..), MessageId (..))
 
@@ -46,11 +47,12 @@ import OneBot.Types (GroupId (..), MessageId (..))
 data OutboundRequest = OutboundRequest
   { orKind :: !MessageKind,
     orGroupId :: !GroupId,
-    -- | The one semantic body published to the ledger.  Inline bytes and
-    -- model-only handles must be resolved before crossing this boundary.
-    orBody :: !(Body 'Ingest),
+    -- | The one semantic body published to the ledger.  Inline bytes,
+    -- model-only handles and model-authored principals must all be resolved
+    -- before crossing this boundary.
+    orBody :: !(Body 'Canonical),
     -- | Reply is an envelope relation, never a content node.
-    orReplyTo :: !(Maybe MessageId),
+    orReplyTo :: !(Maybe CanonicalMessageId),
     -- | Conversation replies fan out; command/debug output can stay on the
     -- exact endpoint that supplied its durable source message.
     orDeliveryScope :: !OutboundDeliveryScope
@@ -59,7 +61,7 @@ data OutboundRequest = OutboundRequest
 
 data OutboundDeliveryScope
   = DeliverConversation
-  | DeliverSourceEndpoint !MessageId
+  | DeliverSourceEndpoint !CanonicalMessageId
   deriving stock (Show, Eq)
 
 -- | What became externally observable after a send attempt.
@@ -68,7 +70,7 @@ data SendOutcome
   | -- | The user saw the message, but the transcript did not get a row.  The
     -- id is absent when the platform returned success without one.
     SentUnrecorded !(Maybe MessageId) !Text
-  | SentRecorded !MessageId
+  | SentRecorded !CanonicalMessageId
   deriving stock (Show, Eq)
 
 wasDelivered :: SendOutcome -> Bool
@@ -99,15 +101,15 @@ runOutbound = runOutboundWith deliver
             OutboundDraft
               { legacyConversationId = group,
                 transcriptKind = renderMessageKind req.orKind,
-                sourceCompatibilityMessageId = case req.orDeliveryScope of
+                sourceCanonicalMessageId = case req.orDeliveryScope of
                   DeliverConversation -> Nothing
-                  DeliverSourceEndpoint (MessageId source) -> Just source,
+                  DeliverSourceEndpoint (CanonicalMessageId source) -> Just source,
                 canonicalBody = req.orBody,
-                replyToCompatibilityMessageId = (\(MessageId reply) -> reply) <$> req.orReplyTo
+                replyToCanonicalMessageId = (\(CanonicalMessageId reply) -> reply) <$> req.orReplyTo
               }
       trySync (enqueueOutbound draft) >>= \case
         Left e -> failed req ("canonical publish failed: " <> T.pack (show (e :: SomeException)))
-        Right queued -> pure (SentRecorded (MessageId queued.compatibilityMessageId))
+        Right queued -> pure (SentRecorded queued.canonicalMessageId)
 
     failed :: OutboundRequest -> Text -> Eff es SendOutcome
     failed req reason = do

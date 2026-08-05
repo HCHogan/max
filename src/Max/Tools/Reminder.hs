@@ -31,7 +31,7 @@ import Max.Effects.Tools (Tool (..))
 import Max.Reminder (ReminderScheduler, nextCronFire, notifyReminderChange)
 import Max.Time (fmtDateHM)
 import Max.Tools (parseTimeArg)
-import Max.ToolContext (ToolContext, toolGroupId, toolSelfId, toolUserId)
+import Max.ToolContext (ToolContext, toolAuthorPrincipalId, toolGroupId, toolSelfId)
 import Max.Tools.Schema (integerParam, noArguments, stringParam, toolObject)
 import System.Cron.Parser (parseCronSchedule)
 
@@ -99,7 +99,7 @@ setReminderTool tz sched dc =
               rid <-
                 insertReminder
                   (toolGroupId dc)
-                  (toolUserId dc)
+                  (toolAuthorPrincipalId dc)
                   (toolSelfId dc)
                   (T.strip sa.saText)
                   cron

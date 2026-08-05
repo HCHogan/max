@@ -60,8 +60,8 @@ viewImageTool tz dc =
       toolSchema = viewImageSpec.specSchema,
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right mid -> do
-          rows <- fetchMessageImagesInScope scope mid
+        Right (mid, seg) -> do
+          rows <- fetchMessageImagesInScope scope mid seg
           case rows of
             [] -> pure $ Left "这条消息没有已存的图片（id 写错了？或图片没下载成功）"
             imgs -> do
@@ -80,8 +80,8 @@ viewImageTool tz dc =
                         ]
     }
   where
-    parseArgs :: Object -> Parser Int64
-    parseArgs o = o .: "message_id"
+    parseArgs :: Object -> Parser (Int64, Maybe Int)
+    parseArgs o = (,) <$> o .: "message_id" <*> o .:? "seg_index"
 
     scope = toolConversationScope dc
 
@@ -138,8 +138,14 @@ viewImageSpec =
   ToolSpec
     { specName = "view_image",
       specDescription =
-        "查看上下文里标记为 [image#<id>] 的图片：传 message_id，那条消息的图\
-        \会附在下一条消息里给你看。只在图片跟当前话题相关时用；\
+        "查看上下文里标记为 [image#<id>.<seg>] 的图片：把这两个数字分别传给\
+        \ message_id 和 seg_index，那张图会附在下一条消息里给你看；省略\
+        \ seg_index 就是那条消息的全部图片。只在图片跟当前话题相关时用；\
         \与 view_avatar 共用每次任务 8 张的配额。",
-      specSchema = toolObject [("message_id", integerParam "[image#<id>] 里的那个 id")] ["message_id"]
+      specSchema =
+        toolObject
+          [ ("message_id", integerParam "[image#<id>.<seg>] 里 . 前面那个数字"),
+            ("seg_index", integerParam "[image#<id>.<seg>] 里 . 后面那个数字；省略就看这条消息的全部图片")
+          ]
+          ["message_id"]
     }

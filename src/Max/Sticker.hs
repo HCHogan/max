@@ -33,7 +33,7 @@ import OneBot.Segment (Segment (..))
 
 data ResolvedSticker = ResolvedSticker
   { description :: !Text,
-    node :: !(Node 'Ingest)
+    node :: !(Node 'Canonical)
   }
   deriving stock (Eq, Show)
 

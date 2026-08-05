@@ -10,8 +10,9 @@ module Max.ToolContext
     toolCapabilities,
     toolConversationScope,
     toolGroupId,
-    toolMessageId,
+    toolCanonicalId,
     toolUserId,
+    toolAuthorPrincipalId,
     toolSelfId,
     toolMultimodal,
     toolStickers,
@@ -21,14 +22,18 @@ module Max.ToolContext
 where
 
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
-import Max.Platform.Types (AdvertisedCaps)
-import OneBot.Types (GroupId, MessageId, UserId)
+import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
+import OneBot.Types (GroupId, UserId)
 
 data TurnIdentity = TurnIdentity
   { tiGroupId :: !GroupId,
-    tiMessageId :: !MessageId,
+    tiCanonicalId :: !CanonicalMessageId,
     tiUserId :: !UserId,
-    tiSelfId :: !UserId
+    tiSelfId :: !UserId,
+    -- | Who is asking, as a person.  Tools that record something on the
+    -- user's behalf (a reminder, a memory) name them by principal, so what
+    -- they store survives the account they happened to speak from.
+    tiAuthorPrincipalId :: !PrincipalId
   }
   deriving stock (Show, Eq)
 
@@ -60,8 +65,11 @@ mkToolContext identity capabilities =
 toolGroupId :: ToolContext -> GroupId
 toolGroupId = (.toolIdentity.tiGroupId)
 
-toolMessageId :: ToolContext -> MessageId
-toolMessageId = (.toolIdentity.tiMessageId)
+toolCanonicalId :: ToolContext -> CanonicalMessageId
+toolCanonicalId = (.toolIdentity.tiCanonicalId)
+
+toolAuthorPrincipalId :: ToolContext -> PrincipalId
+toolAuthorPrincipalId = (.toolIdentity.tiAuthorPrincipalId)
 
 toolUserId :: ToolContext -> UserId
 toolUserId = (.toolIdentity.tiUserId)

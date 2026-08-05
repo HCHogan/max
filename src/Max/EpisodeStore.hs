@@ -452,7 +452,7 @@ validateEpisodeCapture run source capture =
   where
     eligibleByMessage =
       Map.fromList
-        [ (entry.history.messageId, entry.history.userId)
+        [ (entry.history.canonicalId, entry.history.authorPrincipalId)
         | entry <- source,
           entry.transcriptEligible
         ]
@@ -869,7 +869,7 @@ loadCaptureSource ::
 loadCaptureSource run =
   query
     "SELECT ingest_seq, \
-    \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
+    \       canonical_message_id, author_principal_id, (user_id = self_id), sender_nickname, sender_card, rendered_text, received_at, reply_to_canonical_message_id, \
     \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
     \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
     \                      AND containment.relation_kind = 'contained_in') \
@@ -1125,9 +1125,9 @@ insertSummaryEvidence run compartment capture = do
       inserted <-
         execute
           "INSERT INTO compartment_evidence \
-          \ (compartment_id, summary_tier, source_message_id, source_principal_id) \
-          \ SELECT ?, ?, message_id, user_id FROM messages \
-          \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND message_id IN ?"
+          \ (compartment_id, summary_tier, source_canonical_message_id, source_principal_id) \
+          \ SELECT ?, ?, canonical_message_id, author_principal_id FROM messages \
+          \ WHERE group_id = ? AND ingest_seq BETWEEN ? AND ? AND canonical_message_id IN ?"
           ( compartment,
             tier,
             run.crConversationId,
@@ -1405,7 +1405,7 @@ expandEpisode policy handle requestedAfter requestedSize = do
       rows <-
         query
           "SELECT ingest_seq, \
-          \       message_id, user_id, self_id, source_platform, sender_nickname, sender_card, rendered_text, received_at, reply_to_message_id, \
+          \       canonical_message_id, author_principal_id, (user_id = self_id), sender_nickname, sender_card, rendered_text, received_at, reply_to_canonical_message_id, \
           \       (NOT EXISTS (SELECT 1 FROM message_relations containment \
           \                    WHERE containment.canonical_message_id = messages.canonical_message_id \
           \                      AND containment.relation_kind = 'contained_in') \

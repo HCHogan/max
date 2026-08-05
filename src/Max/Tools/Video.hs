@@ -12,7 +12,7 @@ module Max.Tools.Video
 where
 
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
@@ -47,10 +47,10 @@ viewVideoTool dc =
     { toolName = viewVideoSpec.specName,
       toolDescription = viewVideoSpec.specDescription,
       toolSchema = viewVideoSpec.specSchema,
-      toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
+      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (mid :: Int64) -> do
-          mVideo <- fetchMessageVideoInScope scope mid
+        Right (mid, seg) -> do
+          mVideo <- fetchMessageVideoInScope scope mid seg
           case mVideo of
             Nothing ->
               pure $
@@ -71,6 +71,8 @@ viewVideoTool dc =
     }
   where
     scope = toolConversationScope dc
+
+    parseArgs o = (,) <$> (o .: "message_id" :: Parser Int64) <*> o .:? "seg_index"
 
     -- Stated duration beats the model's own sampled-frame guess.
     attach mid mDur mime bytes = do
@@ -101,9 +103,14 @@ viewVideoSpec =
     { specName = "view_video",
       specDescription =
         T.unwords
-          [ "看一条群里发的视频：传 [video#<id>] 里的 <id>，整段视频会附在",
-            "下一条消息里给你看（占用本次任务 8 个附件配额中的 1 个）。",
-            "同一个视频看一次就够了。"
+          [ "看一条群里发的视频：把 [video#<id>.<seg>] 里的两个数字分别传给",
+            "message_id 和 seg_index，整段视频会附在下一条消息里给你看",
+            "（占用本次任务 8 个附件配额中的 1 个）。同一个视频看一次就够了。"
           ],
-      specSchema = toolObject [("message_id", integerParam "[video#<id>] 标记里的消息 id")] ["message_id"]
+      specSchema =
+        toolObject
+          [ ("message_id", integerParam "[video#<id>.<seg>] 里 . 前面那个数字"),
+            ("seg_index", integerParam "[video#<id>.<seg>] 里 . 后面那个数字；省略就取这条消息的第一个视频")
+          ]
+          ["message_id"]
     }

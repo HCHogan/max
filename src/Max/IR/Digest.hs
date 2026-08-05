@@ -23,7 +23,8 @@ import Data.Text.Encoding qualified as TE
 import Data.Void (Void, absurd)
 import Max.IR
 import Max.Platform.Types
-  ( NativeUserId (..),
+  ( CanonicalMessageId (..),
+    NativeUserId (..),
     PrincipalId (..),
     PrincipalIdentityId (..),
   )
@@ -35,6 +36,9 @@ class LogDecor x where
 
 instance LogDecor NativeUserId where
   decorDigest (NativeUserId native) = "@" <> bounded 16 native
+
+instance LogDecor PrincipalId where
+  decorDigest (PrincipalId principal) = "@#" <> T.pack (show principal)
 
 instance LogDecor MentionTarget where
   decorDigest = \case
@@ -53,7 +57,8 @@ instance LogDecor OutboundMediaRef where
   decorDigest = \case
     RefSticker n -> "sticker#" <> T.pack (show n)
     RefStickerDesc d -> "sticker#" <> bounded 12 d
-    RefImage n -> "image#" <> T.pack (show n)
+    RefImage (CanonicalMessageId n) seg ->
+      "image#" <> T.pack (show n) <> maybe "" (\s -> "." <> T.pack (show s)) seg
 
 instance LogDecor HydratedMention where
   decorDigest hm = case hm.principal of

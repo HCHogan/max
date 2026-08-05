@@ -68,7 +68,6 @@ import Max.Platform.Types
     NativeEventId (..),
     NativeUserId (..),
     Platform,
-    PrincipalIdentityId,
     ReactionAction (..),
     renderPlatform,
   )
@@ -342,12 +341,6 @@ deliveryWorker workerId transports = localDomain "delivery" loop
                 ("transport exception: " <> T.pack (show (e :: SomeException)))
             )
         Right attempt -> pure attempt
-
-mentionIdentities :: Body 'Canonical -> [PrincipalIdentityId]
-mentionIdentities body =
-  [ identity
-    | NMention (MentionIdentity identity) _ <- body.nodes
-  ]
 
 -- | ADR 003 §7's attempt budget.  A rejection by a live edge is
 -- retryable-shaped forever, and every retry re-blocks the endpoint's ordered

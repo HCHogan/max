@@ -42,7 +42,7 @@ import Max.Platform.Store
     ingestEnvelope,
   )
 import Max.Platform.Types
-  ( CanonicalMessageId,
+  ( CanonicalMessageId (..),
     EventKind (EventMessage),
     MessageRelation (ContainedIn),
     NativeEventId (..),
@@ -50,7 +50,7 @@ import Max.Platform.Types
   )
 import OneBot.Action (Action (GetForwardMsg), Response (..))
 import OneBot.Segment (Segment (..))
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..), parseIntId)
+import OneBot.Types (GroupId (..), UserId (..), parseIntId)
 
 -- | Stop recursing inline content past this depth — sanity bound against
 -- pathological NapCat responses. Anything deeper stays in jsonb.
@@ -94,7 +94,7 @@ enqueueForwards ::
   DispatchMessage ->
   Eff es ()
 enqueueForwards sig gm = do
-  let MessageId mid = gm.messageId
+  let CanonicalMessageId mid = gm.canonicalId
       GroupId gid = gm.groupId
       UserId sid = gm.selfId
       jobs =

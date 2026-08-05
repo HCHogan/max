@@ -28,7 +28,7 @@ import Max.Effects.Blob (BlobRef, blobRefFromSha256, blobRefSha256, blobRefStore
 data FileRecord = FileRecord
   { frFileId :: !Text,
     frGroupId :: !Int64,
-    frMessageId :: !(Maybe Int64),
+    frCanonicalMessageId :: !(Maybe Int64),
     frSenderUserId :: !Int64,
     frFileName :: !Text,
     frMimeType :: !(Maybe Text),
@@ -55,7 +55,7 @@ instance FromRow FileRecord where
       FileRecord
         { frFileId = fileId,
           frGroupId = groupId,
-          frMessageId = messageId,
+          frCanonicalMessageId = messageId,
           frSenderUserId = senderUserId,
           frFileName = fileName,
           frMimeType = mimeType,
@@ -72,7 +72,7 @@ insertSeen ::
   (WithConnection :> es, IOE :> es) =>
   Text -> -- file_id
   Int64 -> -- group_id
-  Maybe Int64 -> -- message_id
+  Maybe Int64 -> -- canonical_message_id
   Int64 -> -- sender_user_id
   Text -> -- file_name
   Maybe Int64 -> -- bytes_size (if known at receipt)
@@ -81,7 +81,7 @@ insertSeen fid gid mid sender name size = do
   _ <-
     execute
       "INSERT INTO group_files \
-      \  (file_id, group_id, message_id, sender_user_id, file_name, bytes_size) \
+      \  (file_id, group_id, canonical_message_id, sender_user_id, file_name, bytes_size) \
       \ VALUES (?,?,?,?,?,?) \
       \ ON CONFLICT (file_id) DO NOTHING"
       (fid, gid, mid, sender, name, size)
@@ -115,7 +115,7 @@ fetchByFileIdInScope ::
 fetchByFileIdInScope scope fid = do
   rows <-
     query
-      "SELECT file_id, group_id, message_id, sender_user_id, file_name, \
+      "SELECT file_id, group_id, canonical_message_id, sender_user_id, file_name, \
       \       mime_type, bytes_size, sha256, received_at, fetched_at \
       \  FROM group_files \
       \  WHERE group_id = ? AND file_id = ? \
@@ -133,10 +133,10 @@ fetchFilesForMessageInScope ::
   Eff es [FileRecord]
 fetchFilesForMessageInScope scope mid =
   query
-    "SELECT file_id, group_id, message_id, sender_user_id, file_name, \
+    "SELECT file_id, group_id, canonical_message_id, sender_user_id, file_name, \
     \       mime_type, bytes_size, sha256, received_at, fetched_at \
     \  FROM group_files \
-    \  WHERE group_id = ? AND message_id = ? \
+    \  WHERE group_id = ? AND canonical_message_id = ? \
     \  ORDER BY received_at ASC"
     (conversationStorageId scope, mid)
 
@@ -148,7 +148,7 @@ listRecentInGroup ::
   Eff es [FileRecord]
 listRecentInGroup gid lim = do
   query
-    "SELECT file_id, group_id, message_id, sender_user_id, file_name, \
+    "SELECT file_id, group_id, canonical_message_id, sender_user_id, file_name, \
     \       mime_type, bytes_size, sha256, received_at, fetched_at \
     \  FROM group_files \
     \  WHERE group_id = ? \

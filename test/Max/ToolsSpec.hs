@@ -7,11 +7,11 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Embedding (Embedding)
 import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.Tools (Tool (..))
-import Max.Platform.Types (qqAdvertisedCaps)
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import Max.Tools (builtinsFor)
 import Max.Tools.Memory (memoryToolsFor)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
 type BuiltinEffects = '[WithConnection, PlatformApi, Embedding, Log, IOE]
@@ -21,7 +21,7 @@ type MemoryEffects = '[WithConnection, Log, IOE]
 toolContext :: ToolContext
 toolContext =
   mkToolContext
-    (TurnIdentity (GroupId 123) (MessageId 456) (UserId 789) (UserId 999))
+    (TurnIdentity (GroupId 123) (CanonicalMessageId 456) (UserId 789) (UserId 999) (PrincipalId 789))
     (TurnCapabilities False False False qqAdvertisedCaps)
 
 spec :: Spec

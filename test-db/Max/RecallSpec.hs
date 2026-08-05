@@ -10,7 +10,7 @@ import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Simple (Only (..), execute_)
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawMessage, requireJust, testTime, truncateAll, withDb)
+import Helpers (insertMessageWithCanonicalId, requireJust, testTime, truncateAll, withDb)
 import Max.ConversationScope (ConversationScope, conversationScopeFor, currentConversationRecall)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History (MessageCursor (..))
@@ -110,9 +110,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
 
 seedRecallFixture :: DbPool -> IO ()
 seedRecallFixture pool = do
-  insertRawMessage pool 1001 groupA member botId testTime Nothing "tea raw message"
-  insertRawMessage pool 1002 groupA member botId testTime Nothing "tea pinned message"
-  insertRawMessage pool 1003 groupA member botId testTime Nothing "photo only"
+  insertMessageWithCanonicalId pool 1001 groupA member botId testTime Nothing "tea raw message"
+  insertMessageWithCanonicalId pool 1002 groupA member botId testTime Nothing "tea pinned message"
+  insertMessageWithCanonicalId pool 1003 groupA member botId testTime Nothing "photo only"
   _ <-
     withDb pool $
       createMemory
@@ -131,7 +131,7 @@ seedRecallFixture pool = do
         conn
         "INSERT INTO images (sha256, mime_type, bytes_size, local_path, description) \
         \ VALUES ('tea-image', 'image/png', 1, 'tea.png', 'tea caption')"
-    _ <- execute_ conn "INSERT INTO message_images (message_id, sha256, seg_index) VALUES (1003, 'tea-image', 0)"
+    _ <- execute_ conn "INSERT INTO message_images (canonical_message_id, sha256, seg_index) VALUES (1003, 'tea-image', 0)"
     pure ()
 
   end <- latestCursor pool

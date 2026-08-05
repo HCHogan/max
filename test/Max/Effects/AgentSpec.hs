@@ -40,7 +40,7 @@ import Max.Effects.Tools
     buildToolCatalog,
   )
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
-import Max.Platform.Types (qqAdvertisedCaps)
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.Tasks
   ( Note (..),
     TaskCancelled,
@@ -55,7 +55,7 @@ import Max.Tasks
     turnRuntimeTaskId,
   )
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
+import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
 data SeenEvent
@@ -139,7 +139,7 @@ dispatchContext :: AgentContext
 dispatchContext =
   AgentContext
     ( mkToolContext
-        (TurnIdentity (GroupId 7777) (MessageId 7413) (UserId 2001) (UserId 1000))
+        (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001))
         (TurnCapabilities False True False qqAdvertisedCaps)
     )
     Nothing
@@ -150,7 +150,7 @@ spec = describe "Agent full loop" $ do
     events <- newIORef []
     calls <- newIORef (0 :: Int)
     tasks <- newTaskRegistry
-    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     result <-
       withCompactLogger ColorNever Nothing $ \logger ->
         runEff
@@ -191,7 +191,7 @@ spec = describe "Agent full loop" $ do
     calls <- newIORef (0 :: Int)
     events <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     let recordedTool name =
           Tool
             { toolName = name,
@@ -246,7 +246,7 @@ spec = describe "Agent full loop" $ do
     seenMessages <- newIORef ([] :: [[ChatMessage]])
     events <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "改成方案 B" Nothing)
     let llm =
           LLMInterpreter
@@ -274,7 +274,7 @@ spec = describe "Agent full loop" $ do
     entered <- newEmptyMVar
     events <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     let blockingLLM =
           LLMInterpreter
             { liChat = \_ _ _ _ _ -> do
@@ -305,7 +305,7 @@ spec = describe "Agent full loop" $ do
   it "requeues feedback that races a streamed final paragraph for root redispatch" $ do
     events <- newIORef []
     tasks <- newTaskRegistry
-    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (MessageId 7413))
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     injected <- newIORef False
     let streamingLLM =
           LLMInterpreter
