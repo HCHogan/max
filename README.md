@@ -103,6 +103,7 @@ cabal build all
 | [ADR 001](docs/adr/001-context-memory-foundations.md) | context/memory invariants and privacy boundaries |
 | [ADR 002](docs/adr/002-partial-plans-adaptive-elaboration.md) | partial plans, adaptive elaboration, and safe deoptimization |
 | [ADR 003](docs/adr/003-message-ir-capability-rendering.md) | the message IR, capability-tiered lowering, and prior-art survey |
+| [ADR 004](docs/adr/004-canonical-handles-for-the-model.md) | canonical handles for the model, and the identity it addresses |
 | [development.md](docs/development.md) | tests, evaluation, versioning, and debugging |
 | [prompt-flow.md](docs/prompt-flow.md) | generated prompt and tool-round wire examples |
 
