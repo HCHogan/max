@@ -28,3 +28,8 @@ max.yaml
 # Editor
 .vscode/
 .idea/
+
+# Claude Code local state (settings.local.json, task locks, installed
+# skills) — per-machine tooling, never part of the project.
+.claude/
+.agents/
