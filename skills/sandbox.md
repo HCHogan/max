@@ -12,7 +12,10 @@ sandbox_create 的可选参数：network 传 "none" 可断网跑不可信代码�
 
 # 装软件（nix，不是 apt）
 
-镜像预装的几乎只有基础 shell 环境和 jq——其他一切工具都按需取。不要 apt/yum
+镜像预装的是一套接近 Ubuntu 默认的基础环境，直接可用不必再传 packages：
+bash/coreutils/sed/awk/grep/find/diff/patch/file/tree/bc、tar/gzip/xz/bzip2/zstd/
+zip/unzip、curl/wget/openssl/rsync/socat/nc、ip/ss/ping/dig、ps/top/lsof/pstree、
+git/vim/nano、python3/perl、jq/rg/make。除此之外的工具都按需取。不要 apt/yum
 （镜像里没有包管理器数据库，只会浪费一轮）。要用没预装的工具，把 nixpkgs
 attribute 传给 sandbox_exec 的 packages 参数：实现是 `nix shell nixpkgs#<attr>
 -c sh -c <命令>`，只对这一条命令生效（放进 PATH），无需安装，可以一次传多个。
@@ -20,10 +23,10 @@ attribute 名用 nix_search 查（regex 匹配名字和描述，最多回 30 条
 'python.*opencv'、'^nodejs$'；空结果就放宽 regex）。包 store 全沙箱共享：某个包
 第一次用要下载，那一次把 timeout_seconds 提到 120-300；下过之后所有沙箱瞬时可用。
 
-Python 专门提醒：nixpkgs 的 python3Packages.* 传给 packages 只会把它的命令行
-工具放进 PATH，`import` 不到——要用第三方库，正确路子是 packages=["python3"]，
-然后 `python3 -m venv /work/venv && /work/venv/bin/pip install <库>`（bridge
-网络下可用；大多数库有预编译 wheel，需要源码编译时把 "gcc" 也加进 packages）。
+Python 专门提醒：python3 本身已预装，标准库直接跑。nixpkgs 的 python3Packages.*
+传给 packages 只会把它的命令行工具放进 PATH，`import` 不到——要用第三方库，正确
+路子是 `python3 -m venv /work/venv && /work/venv/bin/pip install <库>`（bridge
+网络下可用；大多数库有预编译 wheel，需要源码编译时把 "gcc" 加进 packages）。
 venv 建在 /work 里，同一沙箱后续命令直接复用。
 
 # 跑命令
