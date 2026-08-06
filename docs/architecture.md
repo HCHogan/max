@@ -26,7 +26,8 @@ nix/module.nix     NixOS module for production deployment
 max.cabal          library + max executable
 migrations/*.sql   schema migrations, applied on boot
 skills/*.md        builtin skill manuals, baked into the binary (file-embed);
-                   self-knowledge navigates the source snapshot + splices live !help
+                   self-knowledge navigates the source snapshot + splices live
+                   !help and this build's !version identity
 
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),
                    segments, events, actions, server

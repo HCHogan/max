@@ -29,7 +29,8 @@
 -- with negative ids.  They exist for content that is coupled
 -- to the code it ships with — @self-knowledge@ is THIS binary's
 -- self-inspection entry point: a navigation map over the embedded
--- source snapshot plus the live command help.  Behaviour, design and
+-- source snapshot, plus the live command help and this build's
+-- identity spliced in at registry init.  Behaviour, design and
 -- architecture questions are answered from the snapshot via
 -- @inspect_source@, never from doc copies that would go stale a
 -- little more every release.  Builtins are immutable through the API;
@@ -80,6 +81,7 @@ import Effectful
 import Effectful.Exception (try)
 import Effectful.PostgreSQL (WithConnection, execute, query, query_)
 import Max.Command.Help (helpText)
+import Max.Command.Version (buildIdentityLines, readOsPretty)
 import OneBot.Types (GroupId (..))
 import System.FilePath (dropExtension, takeExtension)
 import Max.Util (tshow)
@@ -116,11 +118,15 @@ builtinSkillFiles = $(embedDir "skills")
 -- programming error in the repo, but a broken one shipping should
 -- degrade to "skill missing", not "bot won't boot" — hence Maybe.
 --
--- @{{commands}}@ in a body splices the live @!help@ text — the one piece
--- of self-knowledge that is runtime-generated rather than readable from
--- the source snapshot, so it cannot drift from the shipped commands.
-parseBuiltin :: UTCTime -> Int64 -> (FilePath, ByteString) -> Maybe Skill
-parseBuiltin bootTime sid (path, bytes)
+-- Two placeholders splice the pieces of self-knowledge that are
+-- runtime-generated rather than readable from the source snapshot, so
+-- neither can drift from what the bot actually ships: @{{commands}}@
+-- takes the live @!help@ text, @{{version}}@ the build-identity half
+-- of the @!version@ card (the half that is fixed for this process —
+-- uptime and per-group counts stay with the command, which reads them
+-- per invocation).
+parseBuiltin :: UTCTime -> Text -> Int64 -> (FilePath, ByteString) -> Maybe Skill
+parseBuiltin bootTime osName sid (path, bytes)
   | takeExtension path /= ".md" = Nothing
   | T.null name || T.null desc || T.null body = Nothing
   | otherwise =
@@ -140,13 +146,16 @@ parseBuiltin bootTime sid (path, bytes)
     (descLine, rest) = T.breakOn "\n" (TE.decodeUtf8Lenient bytes)
     desc = T.strip descLine
     body =
-      T.replace "{{commands}}" (T.strip (helpText Nothing)) (T.strip rest)
+      T.replace "{{commands}}" (T.strip (helpText Nothing))
+        . T.replace "{{version}}" (T.intercalate "\n" (buildIdentityLines osName))
+        $ T.strip rest
 
 newSkillRegistry :: IO SkillRegistry
 newSkillRegistry = do
   bootTime <- getCurrentTime
+  osName <- readOsPretty
   let parsed =
-        [s | file <- builtinSkillFiles, Just s <- [parseBuiltin bootTime 0 file]]
+        [s | file <- builtinSkillFiles, Just s <- [parseBuiltin bootTime osName 0 file]]
       builtins = [s {skillId = sid} | (sid, s) <- zip [-1, -2 ..] parsed]
   SkillRegistry <$> newTVarIO (Map.fromList [(s.skillId, s) | s <- builtins])
 

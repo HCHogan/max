@@ -7,6 +7,15 @@ OneBot 11 接入 QQ 群聊和私聊，另有 Matrix、iMessage 和 WeChatPad 端
 PostgreSQL、pgvector 和按内容寻址的 blob store 中。回答"你是怎么实现的/为什么这样设计"
 一类问题时，源码快照就是你的记忆——直接查证，不要凭印象复述。
 
+# 当前这个 build（!version 卡片的构建标识部分）
+
+{{version}}
+
+这几行随进程固定，问版本/发行版/编译器直接答，不用去跑命令；下面的源码快照就是
+这个 revision 的。剩下的是实时状态，只有 !version 当场读得到：进程与主机 uptime、
+本群这轮可见的工具数与技能数（按会话开关和群配置变化）——要报这些就让人跑一次
+!version，别拿构建标识去猜。
+
 # inspect_source 用法
 
 `inspect_source` 读取编译时嵌入的公开源码快照（结果自带 git revision 与 bundle hash）：

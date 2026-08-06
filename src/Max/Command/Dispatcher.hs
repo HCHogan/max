@@ -17,20 +17,16 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.IO qualified as TIO
 import Data.Time (diffUTCTime, getCurrentTime)
-import Data.Version (showVersion)
 import Database.PostgreSQL.Simple (Only (..))
-import Distribution.Pretty (prettyShow)
-import Distribution.Simple.Utils (cabalVersion)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Browser.Registry (destroyBrowsersForGroup)
-import Max.BuildInfo (gitRev)
 import Max.Command.Help (helpText)
 import Max.Command.Types
+import Max.Command.Version (readHostUptime, readOsPretty, versionCard)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope, fetchMessagesByIdsInScope)
 import Max.DB.Stickers qualified as Stickers
@@ -66,11 +62,8 @@ import Max.Tasks
     listTasks,
   )
 import Max.Toolset (toolCountFor)
-import Max.Util (trySyncIO, tshow)
+import Max.Util (tshow)
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
-import Paths_max (version)
-import System.Info (arch, fullCompilerVersion, os)
-import Text.Read (readMaybe)
 
 -- | What the caller should do after dispatching a command.
 --
@@ -394,18 +387,15 @@ execute t gid uid senderPrincipal replyTarget cmd = do
               multimodal
               (fromMaybe env.beStickerDefault sess.stickerOverride)
               (skillCount > 0)
-      -- Single newlines only: a blank line would split the card into
-      -- separate messages ('planReply').  Public on purpose: the
-      -- version card is group trivia, not a personal query.
-      pure . ReplyPublicText . T.intercalate "\n" $
-        [ "🦈 max v" <> T.pack (showVersion version) <> maybe "" (\r -> " (" <> T.pack r <> ")") gitRev,
-          "🌊 " <> osName <> " · " <> T.pack arch,
-          "🫧 ghc " <> T.pack (showVersion fullCompilerVersion) <> " · cabal " <> T.pack (prettyShow cabalVersion),
-          "🐚 " <> tshow toolCount <> " tools · " <> tshow skillCount <> " skills",
-          "⏱️ up "
-            <> fmtDur (realToFrac (diffUTCTime now env.beStartedAt))
-            <> maybe "" (\u -> " · host " <> fmtDur u) hostUp
-        ]
+      -- Public on purpose: the version card is group trivia, not a
+      -- personal query.
+      pure . ReplyPublicText $
+        versionCard
+          osName
+          toolCount
+          skillCount
+          (realToFrac (diffUTCTime now env.beStartedAt))
+          hostUp
     StickerList -> do
       rows <- Stickers.listRecentStickers 10
       reply (formatStickers rows)
@@ -493,43 +483,6 @@ execute t gid uid senderPrincipal replyTarget cmd = do
           if n == 0
             then reply ("没有匹配 " <> prefix <> "* 的表情")
             else ack
-
---------------------------------------------------------------------------------
--- !version system info (best-effort, Linux; fall back quietly).
-
--- | Distro name from /etc/os-release's PRETTY_NAME; falls back to the
--- compiler's notion of the OS.
-readOsPretty :: IO Text
-readOsPretty = do
-  r <- trySyncIO (TIO.readFile "/etc/os-release")
-  pure $ case r of
-    Right c
-      | (l : _) <- [l | l <- T.lines c, "PRETTY_NAME=" `T.isPrefixOf` l] ->
-          T.dropAround (== '"') (T.drop (T.length "PRETTY_NAME=") l)
-    _ -> T.pack os
-
--- | Host uptime in seconds (/proc/uptime's first field).
-readHostUptime :: IO (Maybe Double)
-readHostUptime = do
-  r <- trySyncIO (TIO.readFile "/proc/uptime")
-  pure $ case r of
-    Right c | (w : _) <- T.words c, Just d <- readMaybe (T.unpack w) -> Just d
-    _ -> Nothing
-
--- | Compact duration: the two most significant units ("3d 4h",
--- "2h 13m", "5m 12s").
-fmtDur :: Double -> Text
-fmtDur secs =
-  let s = max 0 (round secs) :: Int
-      (d, s1) = s `divMod` 86400
-      (h, s2) = s1 `divMod` 3600
-      (m, sec) = s2 `divMod` 60
-   in case () of
-        _
-          | d > 0 -> tshow d <> "d " <> tshow h <> "h"
-          | h > 0 -> tshow h <> "h " <> tshow m <> "m"
-          | m > 0 -> tshow m <> "m " <> tshow sec <> "s"
-          | otherwise -> tshow sec <> "s"
 
 renderDebugState :: Bool -> Maybe Bool -> Text
 renderDebugState defB = \case
