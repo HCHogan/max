@@ -7,7 +7,8 @@
   split lets it converge onto the machine's substrate without opening the
   machine's front.
 - Date: 2026-08-03; journal contract and post-cutover revisions 2026-08-05;
-  sandbox observability and narrator revisions 2026-08-06.
+  sandbox observability, narrator, and continuity (ADR 005)
+  cross-references 2026-08-06.
 
 ## Context
 
@@ -240,9 +241,10 @@ honest only for ledger sends.
 ### The journal contract (v1.0 slice)
 
 The execution journal is shared infrastructure, not part of the deferred
-machine. It has five consumers: the horizon-1 production loop (durability
+machine. It has six consumers: the horizon-1 production loop (durability
 roadmap L2–L4, issue #14), crash-resume replay, the tool-trace digest,
-the narrator (its own section below), and — later — this ADR's executor. **It ships with v1.0; the machine does
+the narrator (its own section below), the continuation view (ADR 005),
+and — later — this ADR's executor. **It ships with v1.0; the machine does
 not.** At horizon 1 the plan is absorbed into the trace, so the loop needs
 no `Plan` type to write conforming rows; it needs only this schema.
 
@@ -263,6 +265,11 @@ Rows are normalized execution events, never provider wire messages:
 Alongside effect nodes the journal carries zero-authority fact rows:
 `model_note` records the model's in-band tool-round narration as evidence
 for the narrator and the admin timeline, never as something to execute.
+
+Wire items may additionally be archived verbatim as blob-referenced
+cache artifacts for ADR 005's replay tier. An archive is disposable —
+TTL'd, model-family-bound, never load-bearing: the normalized rows stay
+the only record that replay and audit may trust.
 
 Send effects do not get a second journal. Since the ADR 003 cutover, the
 canonical ledger is already the durable commit point for every visible
@@ -301,8 +308,10 @@ crashing the resume.
 One reservation for the multi-principal section below: turn results are
 addressable journal values, and a future `turn_edges` table
 (`from_turn`, `to_turn`, `kind`, `created_by`) will reference them —
-so the v1.0 implementation keeps `turn_id` foreign-key friendly. The edge
-table itself is post-1.0.
+so the v1.0 implementation keeps `turn_id` foreign-key friendly. The
+edge table arrives with ADR 005's continuation slice — `fork-from` is
+its first tenant, in the degenerate sequential case; the concurrent-turn
+verbs stay post-1.0.
 
 ### Crash is deoptimization
 
@@ -466,7 +475,8 @@ turns — the median 10–60s turn never creates one, and the machine does
 extra work only when an edge exists.
 
 Everything in this section is post-1.0 except the journal-contract
-reservation above.
+reservation above and the `fork-from` edge, which ADR 005 realizes for
+the sequential single-principal case.
 
 ### Child plans narrow view and authority
 
