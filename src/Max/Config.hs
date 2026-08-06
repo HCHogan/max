@@ -76,6 +76,7 @@ import Max.Matrix (MatrixConfig (..))
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
 import Max.Tools.Search (SearchConfig (..))
+import Max.WechatHook (WechatHookConfig (..))
 import Max.Wechatpad (WechatpadConfig (..))
 import OneBot.Server (ServerConfig (..))
 import OptEnvConf
@@ -150,6 +151,9 @@ data AppConfig = AppConfig
     -- | WeChat backend over a WeChatPadPro relay; 'Nothing' = QQ
     -- only.  Demo scope: whitelisted chatrooms, text in/out.
     wechatpad :: !(Maybe WechatpadConfig),
+    -- | WeChat backend over a hooked Windows PC client.  Independent of
+    -- 'wechatpad': both may be configured, and each owns its own endpoints.
+    wechathook :: !(Maybe WechatHookConfig),
     -- | Proactive-trigger intent classification; 'Nothing' disables
     -- it (the bot only answers @-mentions/quotes, as before).
     intent :: !(Maybe IntentConfig),
@@ -379,6 +383,7 @@ appConfigParser usedRef =
     matrix <- subConfig "matrix" matrixParser
     imessage <- subConfig "imessage" iMessageParser
     wechatpad <- subConfig "wechatpad" wechatpadParser
+    wechathook <- subConfig "wechathook" wechatHookParser
     intent <- subConfig "intent" intentParser
     admin <- subConfig "admin" adminParser
     adminCallRetentionDays <-
@@ -887,6 +892,141 @@ wechatpadParser = do
           wpSelfWxid = selfWxid,
           wpBotName = botName,
           wpChatrooms = chatrooms
+        }
+
+-- | @wechathook@ block: presence of @api_url@ enables the WeChat backend over
+-- a hooked Windows PC client.
+--
+-- Two settings are security-relevant rather than cosmetic.  The callback the
+-- hook posts is unsigned and unauthenticated, so @listen_host@ must stay on a
+-- private interface and @callback_path@ must carry an unguessable segment —
+-- together they are the only thing keeping a forged @sender@ out of max's
+-- authorization layer.
+--
+-- 已知风险：DLL 注入 + 内存偏移写死在特定微信版本，客户端升级即失效；封号自担（跑小号）。
+wechatHookParser :: Parser (Maybe WechatHookConfig)
+wechatHookParser = do
+  mUrl <-
+    optional $
+      setting
+        [ help "WeChat-Hook HTTP base URL (presence enables the WeChat hook backend)",
+          reader str,
+          option,
+          long "wechathook-api-url",
+          env "MAX_WECHATHOOK_API_URL",
+          conf "api_url",
+          metavar "URL"
+        ]
+  listenHost <-
+    setting
+      [ help "Bind address for the callback listener — keep it off any public interface",
+        reader str,
+        option,
+        long "wechathook-listen-host",
+        env "MAX_WECHATHOOK_LISTEN_HOST",
+        conf "listen_host",
+        metavar "ADDR",
+        value "127.0.0.1"
+      ]
+  listenPort <-
+    setting
+      [ help "Port for the callback listener",
+        reader auto,
+        option,
+        long "wechathook-listen-port",
+        env "MAX_WECHATHOOK_LISTEN_PORT",
+        conf "listen_port",
+        metavar "PORT",
+        value 8787
+      ]
+  callbackPath <-
+    setting
+      [ help "Path the callback listener answers on; include an unguessable segment",
+        reader str,
+        option,
+        long "wechathook-callback-path",
+        env "MAX_WECHATHOOK_CALLBACK_PATH",
+        conf "callback_path",
+        metavar "PATH",
+        value "/wechat/callback"
+      ]
+  callbackUrl <-
+    setting
+      [ help "Callback URL as reachable from the Windows host; re-asserted every minute",
+        reader str,
+        option,
+        long "wechathook-callback-url",
+        env "MAX_WECHATHOOK_CALLBACK_URL",
+        conf "callback_url",
+        metavar "URL",
+        value ""
+      ]
+  selfWxid <-
+    setting
+      [ help "The bot WeChat account's own wxid",
+        reader str,
+        option,
+        long "wechathook-self-wxid",
+        env "MAX_WECHATHOOK_SELF_WXID",
+        conf "self_wxid",
+        metavar "WXID",
+        value ""
+      ]
+  botName <-
+    setting
+      [ help "Display name used for @-detection in chatroom texts",
+        reader str,
+        option,
+        long "wechathook-bot-name",
+        env "MAX_WECHATHOOK_BOT_NAME",
+        conf "bot_name",
+        metavar "NAME",
+        value "Max"
+      ]
+  chatrooms <-
+    setting
+      [ help "Chatroom whitelist (xxx@chatroom ids, comma separated)",
+        reader (commaSeparatedList str),
+        option,
+        long "wechathook-chatrooms",
+        env "MAX_WECHATHOOK_CHATROOMS",
+        conf "chatrooms",
+        metavar "ID[,ID..]",
+        value []
+      ]
+  nicknames <-
+    setting
+      [ help "wxid -> display name (config file only).  WeChat 4.x leaves the \
+             \hook's contact database unreachable, so this table is the only \
+             \source of names; an unlisted sender stays honestly nameless.",
+        conf "nicknames",
+        valueWithShown (const "{}") Map.empty
+      ]
+  silenceSeconds <-
+    setting
+      [ help "Warn when no callback has arrived for this many seconds (0 disables)",
+        reader auto,
+        option,
+        long "wechathook-silence-seconds",
+        env "MAX_WECHATHOOK_SILENCE_SECONDS",
+        conf "silence_seconds",
+        metavar "SECONDS",
+        value 21600
+      ]
+  pure $ do
+    url <- mUrl
+    pure
+      WechatHookConfig
+        { whApiUrl = url,
+          whListenHost = listenHost,
+          whListenPort = listenPort,
+          whCallbackPath = callbackPath,
+          whCallbackUrl = callbackUrl,
+          whSelfWxid = selfWxid,
+          whBotName = botName,
+          whChatrooms = chatrooms,
+          whNicknames = nicknames,
+          whSilenceSeconds = silenceSeconds
         }
 
 intentParser :: Parser (Maybe IntentConfig)

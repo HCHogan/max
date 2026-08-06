@@ -359,6 +359,45 @@ llm:
 #   chatrooms: ["12345678@chatroom"]
 
 # ─────────────────────────────────────────────────────────────────────────────
+# WeChat via an aixed/WeChat-Hook DLL injected into a Windows PC client.
+# Same degradation as wechatpad: text in and out, no reactions, no
+# quote-replies, no pokes.
+#
+# Deployment: WeChat + version.dll run on a Windows host; max reaches its HTTP
+# API and it posts callbacks back.  No bridge process — both directions are
+# plain HTTP over the private network.
+#
+#   listen_host / callback_path are SECURITY settings, not cosmetics.  The
+#   callback carries no signature and no auth, so anything that can reach the
+#   listener can forge a `sender` and impersonate a group member straight into
+#   the permission system.  Bind the private interface and give the path an
+#   unguessable segment.
+#
+#   Nicknames are hand-maintained on purpose: WeChat 4.x leaves the hook's
+#   /QueryDB/* module non-functional (it reports IsLogin:0 while logged in and
+#   cannot open a database), so the contact table is unreachable.  An unlisted
+#   sender simply shows as its wxid.
+#
+#   Liveness comes from re-asserting the callback registration every minute —
+#   which also restores it after a WeChat restart, since set_callback is
+#   in-process DLL state.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# wechathook:
+#   api_url: http://b650.tailnet:30001    # WeChat-Hook, as reachable from max
+#   listen_host: 100.x.x.x                # max's private address; NOT 0.0.0.0
+#   listen_port: 8787
+#   callback_path: /wechat/<random>/callback
+#   callback_url: http://100.x.x.x:8787/wechat/<random>/callback   # from Windows
+#   self_wxid: wxid_xxxxxxxx
+#   bot_name: Max
+#   chatrooms: ["12345678901@chatroom"]
+#   silence_seconds: 21600                # warn after 6h of no callbacks; 0 = off
+#   nicknames:                            # wxid -> display name
+#     wxid_exampleuser01: 老王
+#     wxid_exampleuser02: 小李
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Embeddings (vector search).  Any OpenAI-compatible /embeddings endpoint;
 # presence of base_url + model enables the background embed worker and adds
 # semantic candidates to the unified context_search tool.

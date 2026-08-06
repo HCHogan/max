@@ -1,13 +1,25 @@
 module Max.PlatformSpec (spec) where
 
-import Data.Aeson (object, (.=))
+import Data.Aeson (decodeStrict', object, (.=))
 import Data.Foldable (for_)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
+import Data.Text.Encoding qualified as TE
 import Max.IR
 import Max.IR.Lower (textOnlyCaps)
 import Max.IR.Prompt (promptText)
 import Max.Platform
 import Max.Platform.QQ (qqIngestBody)
+import Max.Platform.Types (NativeUserId (..))
+import Max.WechatHook
+  ( CallbackMsg (..),
+    WechatHookConfig (..),
+    callbackPathSegments,
+    displayNameFor,
+    parseCallback,
+    wechatHookCapabilities,
+    wechatHookInboundBody,
+  )
 import Max.Wechatpad (parseFrameIds, wechatInboundBody, wechatpadCapabilities)
 import OneBot.Action (Action (..))
 import OneBot.Segment
@@ -54,6 +66,81 @@ spec = do
                       )
                 }
           ]
+
+  describe "wechathook callback" $ do
+    it "advertises exactly its emit-only text contract" $
+      wechatHookCapabilities `shouldBe` textOnlyCaps
+
+    -- The frame shape a hooked WeChat 4.1.10.27 client really sends (captured
+    -- 2026-08-07; every identifier here is synthetic).  Parsing it from UTF-8
+    -- bytes rather than from a rebuilt Value is the point: the field spelling,
+    -- the encoding, and a msgid far past the range Double represents exactly
+    -- are all contract, and a silent reshape upstream should fail here rather
+    -- than in production.
+    it "parses a chatroom callback from the wire bytes" $
+      (decodeStrict' capturedCallback >>= parseCallback)
+        `shouldBe` Just
+          CallbackMsg
+            { cbEventType = 1001,
+              cbMsgId = 4611686018427387903,
+              cbType = 1,
+              cbTimestamp = 1750000000,
+              cbWxid = "12345678901@chatroom",
+              cbSender = "wxid_exampleuser02",
+              cbRoomId = "12345678901@chatroom",
+              cbContent = "好吧"
+            }
+
+    -- A chatroom frame repeats the room in @wxid@; a direct one puts the peer
+    -- there and leaves @roomid@ empty.  So @roomid@ is the only field that
+    -- discriminates, and reading @wxid@ for that would silently classify
+    -- every direct message as a group.
+    it "leaves roomid as the only group discriminator" $ do
+      let direct =
+            parseCallback $
+              object
+                [ "msgid" .= (7 :: Int),
+                  "wxid" .= ("wxid_peer" :: Text),
+                  "sender" .= ("wxid_peer" :: Text),
+                  "roomid" .= ("" :: Text),
+                  "content" .= ("hi" :: Text)
+                ]
+      (cbRoomId <$> direct) `shouldBe` Just ""
+      (cbWxid <$> direct) `shouldBe` Just "wxid_peer"
+
+    -- WeChat separates an @-token from the following text with U+2005, not a
+    -- space.  Missing that leaves the separator in the text tier.
+    it "resolves a mention through WeChat's U+2005 separator" $
+      wechatHookInboundBody "wxid_max" "Max" 1 "@Max\x2005在吗"
+        `shouldBe` Body [NMention (NativeUserId "wxid_max") "Max", NText "在吗"]
+
+    it "keeps non-text room events in canonical ingest instead of dropping them" $
+      wechatHookInboundBody "wxid_max" "Max" 49 "<appmsg>x</appmsg>"
+        `shouldBe` Body
+          [ NUnsupported
+              Unsupported
+                { source = "wechathook:49",
+                  description = "微信分享或文件消息",
+                  raw =
+                    Just
+                      ( object
+                          [ "msg_type" .= (49 :: Int),
+                            "content_preview" .= ("<appmsg>x</appmsg>" :: Text)
+                          ]
+                      )
+                }
+          ]
+
+    -- The hook's contact database is unreachable on WeChat 4.x, so a name
+    -- exists only if the operator wrote it down.  A blank entry is a typo,
+    -- not a name, and must not become one.
+    it "names only senders the operator actually listed" $ do
+      displayNameFor hookConfig "wxid_exampleuser02" `shouldBe` Just "小李"
+      displayNameFor hookConfig "wxid_unlisted" `shouldBe` Nothing
+      displayNameFor hookConfig "wxid_blank" `shouldBe` Nothing
+
+    it "decomposes the callback path the way wai's pathInfo will" $
+      callbackPathSegments "/wechat/s3cret/callback" `shouldBe` ["wechat", "s3cret", "callback"]
 
   describe "explicit platform backend registry" $ do
     it "selects only an exact declared platform" $ do
@@ -122,4 +209,32 @@ spec = do
           pbName = platform,
           pbSend = const (pure (Right ())),
           pbCall = \_ _ -> pure (Left "unused")
+        }
+
+    -- Encoded rather than written as a ByteString literal: IsString for
+    -- ByteString truncates to 8 bits, which would quietly corrupt 好吧 and
+    -- turn this fixture into a test of the wrong thing.
+    capturedCallback =
+      TE.encodeUtf8
+        "{\"event_type\":1001,\"msgid\":4611686018427387903,\"type\":1,\
+        \\"timestamp\":1750000000,\"wxid\":\"12345678901@chatroom\",\
+        \\"sender\":\"wxid_exampleuser02\",\"roomid\":\"12345678901@chatroom\",\
+        \\"content\":\"好吧\"}"
+
+    hookConfig =
+      WechatHookConfig
+        { whApiUrl = "http://b650.example:30001",
+          whListenHost = "127.0.0.1",
+          whListenPort = 8787,
+          whCallbackPath = "/wechat/s3cret/callback",
+          whCallbackUrl = "http://max.example:8787/wechat/s3cret/callback",
+          whSelfWxid = "wxid_max",
+          whBotName = "Max",
+          whChatrooms = ["12345678901@chatroom"],
+          whNicknames =
+            Map.fromList
+              [ ("wxid_exampleuser02", "小李"),
+                ("wxid_blank", "   ")
+              ],
+          whSilenceSeconds = 21600
         }

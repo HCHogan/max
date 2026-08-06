@@ -68,6 +68,7 @@ import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
 import Max.Toolset (allToolsFor)
 import Max.Util (trySync)
+import Max.WechatHook (wechatHookBackend, wechatHookWorker)
 import Max.Wechatpad (wechatpadBackend, wechatpadWorker)
 import Max.Worker (WorkerCriticality (..), withWorkers, worker)
 import OneBot.Event (Event)
@@ -154,12 +155,23 @@ main = do
                 [ wechatpadBackend httpRuntime (runEff . runWithConnectionPool pool) wc
                 | Just wc <- [cfg.wechatpad]
                 ]
+              wechatHookEdges =
+                [ wechatHookBackend httpRuntime (runEff . runWithConnectionPool pool) wh
+                | Just wh <- [cfg.wechathook]
+                ]
+              -- Every non-QQ backend the action router may resolve a target
+              -- to.  Ownership stays canonical database state; this list only
+              -- says which platforms this process can actually reach.
+              foreignEdges = wechatEdges <> wechatHookEdges
               deliveryTransports =
                 [oneBotDeliveryTransport PlatformQQ qqEdge]
                   <> [matrixDeliveryTransport httpRuntime matrixCfg | matrixCfg <- maybeToList cfg.matrix]
                   <> [iMessageDeliveryTransport httpRuntime iMessageCfg | iMessageCfg <- maybeToList cfg.imessage]
                   <> [ oneBotDeliveryTransport PlatformWeChatPad backend
                      | backend <- wechatEdges
+                     ]
+                  <> [ oneBotDeliveryTransport PlatformWeChatHook backend
+                     | backend <- wechatHookEdges
                      ]
           runEff
             . runConcurrent
@@ -168,7 +180,7 @@ main = do
             . runEmbedding mEmbed
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
-            . runPlatformApi qqEdge wechatEdges
+            . runPlatformApi qqEdge foreignEdges
             . runOutbound
             -- Token accounting goes through its own pooled connection
             -- (a plain IO writer): the LLM interpreter sits outside
@@ -339,6 +351,9 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
                ]
             <> [ worker "wechatpad" OptionalWorker (wechatpadWorker wc)
                | wc <- maybeToList cfg.wechatpad
+               ]
+            <> [ worker "wechathook" OptionalWorker (wechatHookWorker httpRuntime wh)
+               | wh <- maybeToList cfg.wechathook
                ]
             <> [ worker "matrix" OptionalWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler)
                | matrixCfg <- maybeToList cfg.matrix

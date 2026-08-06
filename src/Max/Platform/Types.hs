@@ -98,6 +98,11 @@ data Platform
   | PlatformMatrix
   | PlatformIMessage
   | PlatformWeChatPad
+  | -- | WeChat through a hooked Windows PC client.  A distinct platform from
+    -- 'PlatformWeChatPad' even though both are WeChat: the native id spaces
+    -- coincide but the endpoints, capabilities and delivery evidence do not,
+    -- and an endpoint's platform is what routes its outbound traffic.
+    PlatformWeChatHook
   | PlatformCustom !Text
   deriving stock (Eq, Ord, Show, Generic)
 
@@ -107,6 +112,7 @@ renderPlatform = \case
   PlatformMatrix -> "matrix"
   PlatformIMessage -> "imessage"
   PlatformWeChatPad -> "wechatpad"
+  PlatformWeChatHook -> "wechathook"
   PlatformCustom name -> name
 
 parsePlatform :: Text -> Platform
@@ -115,6 +121,7 @@ parsePlatform = \case
   "matrix" -> PlatformMatrix
   "imessage" -> PlatformIMessage
   "wechatpad" -> PlatformWeChatPad
+  "wechathook" -> PlatformWeChatHook
   name -> PlatformCustom name
 
 data ConversationKind = ConversationGroup | ConversationDirect

@@ -214,6 +214,7 @@ library
         Max.Tools.Stickers
         Max.Tools.Video
         Max.Util
+        Max.WechatHook
         Max.Wechatpad
         Max.Worker
     other-modules:
