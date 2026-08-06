@@ -70,6 +70,12 @@
               </summary>
               <div class="switch-menu">
                 <input class="search" x-model="convFilter" placeholder="搜索会话" @click.stop>
+                <!-- 上下文 reads every conversation at once; the other
+                     ledger views need one, and say so. -->
+                <button class="switch-item" :class="{ on: !focus }" @click="pickConversation(null)">
+                  <span class="who">全部会话</span>
+                  <span class="gid" x-text="conversations.length"></span>
+                </button>
                 <template x-for="c in filteredConversations()" :key="c.conversation_id">
                   <button class="switch-item" :class="{ on: String(c.legacy_group_id) === String(focus) }"
                           @click="pickConversation(c)">
@@ -201,118 +207,199 @@
           </template>
         </div>
 
+        <!-- ChartAreaInteractive: the range picker lives in the card's
+             action slot — a toggle group where the card is wide enough
+             for one, a <select> where it isn't. -->
         <div class="card">
-          <div class="card-header">
+          <div class="card-header has-action">
             <h2>token 用量</h2>
-            <!-- prompt and completion differ by an order of magnitude,
-                 so they are two small multiples with a synced cursor
-                 rather than one chart with two y-axes. -->
-            <p class="card-desc">30 天 · prompt 与 completion 各自成轴,光标联动</p>
+            <!-- prompt and completion differ by two orders of
+                 magnitude, so they are two small multiples with a
+                 synced cursor rather than one chart with two y-axes.
+                 Inside prompt, cache is a real part-of-whole and
+                 stacks. -->
+            <p class="card-desc">
+              <span class="desc-long" x-text="rangeWords('usage') + ' · prompt 的缓存命中与 completion 各自成轴,光标联动'"></span>
+              <span class="desc-short" x-text="rangeWords('usage')"></span>
+            </p>
+            <div class="card-action">
+              <div class="tabs-list range-toggle">
+                <template x-for="r in ranges" :key="r.v">
+                  <button class="tabs-trigger" style="padding-inline:1rem"
+                          :data-state="range.usage === r.v ? 'active' : 'inactive'"
+                          @click="setRange('usage', r.v)" x-text="r.label"></button>
+                </template>
+              </div>
+              <div class="select-wrap range-select" style="width:6.5rem">
+                <select style="width:6.5rem" :value="range.usage" @change="setRange('usage', $event.target.value)">
+                  <template x-for="r in ranges" :key="r.v">
+                    <option :value="r.v" :selected="range.usage === r.v" x-text="r.label"></option>
+                  </template>
+                </select>
+                <span x-html="icon('chevron-down')"></span>
+              </div>
+            </div>
           </div>
           <div class="card-content">
-            <div class="chart" id="chart-prompt"></div>
-            <div class="chart" id="chart-completion"></div>
+            <!-- The swatches are the bands' own mixes, so the legend
+                 and the chart are the same two colours. -->
+            <div class="chart-legend">
+              <span><i style="background:color-mix(in oklab, var(--chart-1) 50%, var(--card))"></i>缓存命中</span>
+              <span><i style="background:color-mix(in oklab, var(--chart-1) 14%, var(--card))"></i>新读入</span>
+              <span><i style="background:color-mix(in oklab, var(--chart-2) 22%, var(--card))"></i>completion</span>
+            </div>
+            <div class="chart-multiple">
+              <div class="cap">prompt
+                <span class="n" x-text="rangeTotal('prompt_tokens') + ' · 缓存 ' + rangeTotal('cached_prompt_tokens')"></span>
+              </div>
+              <div class="chart" id="chart-prompt"></div>
+            </div>
+            <div class="chart-multiple">
+              <div class="cap">completion
+                <span class="n" x-text="rangeTotal('completion_tokens')"></span>
+              </div>
+              <div class="chart" id="chart-completion"></div>
+            </div>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-header">
+          <div class="card-header has-action">
             <h2>消息</h2>
             <!-- Only chat rows reach the model: the chart answers "is
-                 the bot talking, or just being operated". -->
-            <p class="card-desc">14 天 · 对话进入模型,命令与 debug 归为操作</p>
+                 the bot talking, or just being operated".  Both series
+                 count the same thing, so they stack into the day's
+                 total. -->
+            <p class="card-desc">
+              <span class="desc-long" x-text="rangeWords('msgs') + ' · 对话进入模型,命令与 debug 归为操作'"></span>
+              <span class="desc-short" x-text="rangeWords('msgs')"></span>
+            </p>
+            <div class="card-action">
+              <div class="tabs-list range-toggle">
+                <template x-for="r in ranges" :key="r.v">
+                  <button class="tabs-trigger" style="padding-inline:1rem"
+                          :data-state="range.msgs === r.v ? 'active' : 'inactive'"
+                          @click="setRange('msgs', r.v)" x-text="r.label"></button>
+                </template>
+              </div>
+              <div class="select-wrap range-select" style="width:6.5rem">
+                <select style="width:6.5rem" :value="range.msgs" @change="setRange('msgs', $event.target.value)">
+                  <template x-for="r in ranges" :key="r.v">
+                    <option :value="r.v" :selected="range.msgs === r.v" x-text="r.label"></option>
+                  </template>
+                </select>
+                <span x-html="icon('chevron-down')"></span>
+              </div>
+            </div>
           </div>
           <div class="card-content">
+            <div class="chart-legend">
+              <span><i style="background:color-mix(in oklab, var(--chart-1) 22%, var(--card))"></i>对话 <span class="muted" x-text="msgTotal(true)"></span></span>
+              <span><i style="background:color-mix(in oklab, var(--chart-2) 22%, var(--card))"></i>操作 <span class="muted" x-text="msgTotal(false)"></span></span>
+            </div>
             <div class="chart" id="chart-msgs"></div>
           </div>
         </div>
 
-        <template x-if="quota && quota.configured">
-          <div class="card">
-            <div class="card-header">
-              <h2>quota</h2>
-              <p class="card-desc" x-text="'cli-proxy · ' + quota.base_url"></p>
+        <!-- The two "is the plumbing healthy" tables share one frame:
+             outbound (can max deliver) and upstream (can max be
+             served).  One DataTable, one segmented switch. -->
+        <div class="tabs">
+          <div class="tabs-bar">
+            <div class="tabs-list">
+              <button class="tabs-trigger" :data-state="ovTab === 'endpoints' ? 'active' : 'inactive'"
+                      @click="ovTab = 'endpoints'">
+                <span>端点投递</span>
+                <span class="badge secondary" x-show="endpoints.length" x-text="endpoints.length"></span>
+              </button>
+              <button class="tabs-trigger" :data-state="ovTab === 'quota' ? 'active' : 'inactive'"
+                      @click="ovTab = 'quota'">
+                <span>quota</span>
+                <span class="badge secondary" x-show="quota && quota.credentials"
+                      x-text="quota && quota.credentials ? quota.credentials.length : ''"></span>
+              </button>
             </div>
-            <div class="card-content flush">
+            <div class="tabs-actions">
+              <button @click="loadQuota(); loadEndpoints()">
+                <span x-html="icon('refresh')"></span><span class="lg-up">刷新</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="tabs-content" x-show="ovTab === 'endpoints'">
+            <p class="card-desc">每个端点的投递健康与最近活动</p>
+            <div class="table-wrap">
               <table>
-                <thead><tr><th>凭证</th><th>plan</th><th>状态</th><th>成功</th><th>失败</th><th>最近</th></tr></thead>
+                <thead><tr><th>会话</th><th>端点</th><th>状态</th><th class="text-right">pending</th><th class="text-right">failed</th><th class="text-right">unknown</th><th>最近入站</th></tr></thead>
                 <tbody>
-                  <template x-for="c in quota.credentials" :key="c.id">
+                  <template x-for="e in endpoints" :key="e.endpointId">
                     <tr>
-                      <td class="rowkey" data-label="凭证">
+                      <td class="rowkey" data-label="会话">
+                        <span class="id" x-text="gname(e.legacyConversationId == null ? e.conversationId : e.legacyConversationId)"></span>
+                      </td>
+                      <td data-label="端点" x-text="e.platform + ' · ' + e.endpointMode"></td>
+                      <td data-label="状态">
+                        <span class="verdict" :class="{ deny: !e.enabled }" x-text="e.enabled ? 'enabled' : 'disabled'"></span>
+                      </td>
+                      <td class="num text-right" data-label="pending" x-text="e.pendingDeliveries"></td>
+                      <td class="num text-right" data-label="failed" x-text="e.failedDeliveries"></td>
+                      <td class="num text-right" data-label="unknown" x-text="e.outcomeUnknownDeliveries"></td>
+                      <td class="stamp" data-label="最近入站" x-text="fmtDate(e.lastInboundAt)"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p class="empty" x-show="!endpoints.length">还没有端点。</p>
+            </div>
+          </div>
+
+          <div class="tabs-content" x-show="ovTab === 'quota'">
+            <p class="card-desc" x-text="quota && quota.configured ? 'cli-proxy · ' + quota.base_url : 'cli-proxy'"></p>
+            <div class="table-wrap" x-show="quota && quota.configured">
+              <table>
+                <thead><tr><th>凭证</th><th>plan</th><th>状态</th><th class="text-right">成功</th><th class="text-right">失败</th><th class="text-right">最近 60m</th></tr></thead>
+                <tbody>
+                  <template x-for="c in (quota && quota.credentials) || []" :key="c.id">
+                    <tr>
+                      <td class="rowkey" data-label="凭证" :title="c.label || c.email || c.provider">
                         <span x-text="c.label || c.email || c.provider"></span>
-                        <span class="muted" x-text="c.provider"></span>
                       </td>
                       <td data-label="plan" x-text="c.plan_type || '-'"></td>
-                      <td data-label="状态">
+                      <td class="wide" data-label="状态" :title="c.status_message || ''">
                         <span class="verdict" :class="{ deny: c.disabled, hold: !c.disabled && (c.unavailable || !c.serving) }"
                               x-text="c.disabled ? '停用' : c.unavailable ? '不可用' : c.serving ? '在服' : c.status"></span>
                         <span class="muted" x-text="c.status_message || ''"></span>
                       </td>
-                      <td class="num" data-label="成功" x-text="c.success"></td>
-                      <td class="num" data-label="失败" x-text="c.failed"></td>
-                      <td class="num" data-label="最近"
-                          x-text="c.recent ? c.recent.window_minutes + 'm: ' + c.recent.success + '/' + c.recent.failed : '-'"></td>
+                      <td class="num text-right" data-label="成功" x-text="c.success.toLocaleString()"></td>
+                      <td class="num text-right" data-label="失败" x-text="c.failed.toLocaleString()"></td>
+                      <td class="num text-right" data-label="最近 60m"
+                          x-text="c.recent ? c.recent.success + '/' + c.recent.failed : '-'"></td>
                     </tr>
                   </template>
                 </tbody>
               </table>
             </div>
-          </div>
-        </template>
-        <template x-if="quotaErr">
-          <div class="card">
-            <div class="card-header">
-              <h2>quota</h2>
-              <p class="card-desc">cli-proxy</p>
-            </div>
-            <div class="card-content">
-              <p class="empty">上游不可达:<code x-text="quotaErr"></code></p>
-            </div>
-          </div>
-        </template>
-
-        <div class="card">
-          <div class="card-header">
-            <h2>端点投递</h2>
-            <p class="card-desc">每个端点的投递健康与最近活动</p>
-          </div>
-          <div class="card-content flush">
-            <table x-show="endpoints.length">
-              <thead><tr><th>会话</th><th>端点</th><th>状态</th><th>pending</th><th>failed</th><th>unknown</th><th>最近入站</th></tr></thead>
-              <tbody>
-                <template x-for="e in endpoints" :key="e.endpointId">
-                  <tr>
-                    <td class="rowkey" data-label="会话">
-                      <span class="id" x-text="gname(e.legacyConversationId == null ? e.conversationId : e.legacyConversationId)"></span>
-                    </td>
-                    <td data-label="端点" x-text="e.platform + ' · ' + e.endpointMode"></td>
-                    <td data-label="状态">
-                      <span class="verdict" :class="{ deny: !e.enabled }" x-text="e.enabled ? 'enabled' : 'disabled'"></span>
-                    </td>
-                    <td class="num" data-label="pending" x-text="e.pendingDeliveries"></td>
-                    <td class="num" data-label="failed" x-text="e.failedDeliveries"></td>
-                    <td class="num" data-label="unknown" x-text="e.outcomeUnknownDeliveries"></td>
-                    <td class="stamp" data-label="最近入站" x-text="fmtDate(e.lastInboundAt)"></td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-            <p class="empty" x-show="!endpoints.length">还没有端点。</p>
+            <p class="empty" x-show="quotaErr">上游不可达:<code x-text="quotaErr"></code></p>
+            <p class="empty" x-show="!quotaErr && quota && !quota.configured">没有配置 cli-proxy。</p>
           </div>
         </div>
       </section>
 
       <!-- ── 消息账本 ─────────────────────────────────────────── -->
       <section x-show="tab === 'timeline'">
-        <form class="row" @submit.prevent="loadTimeline(false)">
-          <input x-model="focus" @change="focusChanged(true)" list="convs"
-                 placeholder="群号 / 私聊 pseudo-group" inputmode="numeric" required>
-          <button type="submit">读取</button>
-        </form>
+        <!-- No conversation picker here: the rail owns the focus, and
+             two controls for one piece of state is how they drift. -->
+        <div class="tabs-bar">
+          <p class="card-desc" x-text="focus ? focusTitle() + ' · ' + gname(focus) : '在左边的切换器里选一个会话'"></p>
+          <div class="tabs-actions">
+            <button :disabled="!focus" @click="loadTimeline(false)">
+              <span x-html="icon('refresh')"></span><span class="lg-up">重读</span>
+            </button>
+          </div>
+        </div>
 
         <template x-if="timeline.loaded">
-          <div>
+          <div class="stack-col">
             <div class="facts">
               <span><i>conversation</i><b x-text="timeline.conversation_id"></b></span>
               <span><i>seq</i><b x-text="timeline.latest_conversation_seq == null ? '-' : timeline.latest_conversation_seq"></b></span>
@@ -415,145 +502,156 @@
             </div>
           </div>
         </template>
-        <p class="empty" x-show="!timeline.loaded">输入会话兼容 id;页面展示 canonical 节点、身份、媒体、关系和每个端点的 lowering 结果。</p>
+        <p class="empty" x-show="!timeline.loaded">选一个会话;页面展示 canonical 节点、身份、媒体、关系和每个端点的 lowering 结果。</p>
       </section>
 
-      <!-- ── 上下文 ───────────────────────────────────────────── -->
+      <!-- ── 上下文 ─────────────────────────────────────────────
+           Six views of one pipeline.  Stacked they were a page you
+           scrolled past; behind the DataTable's tab bar they are one
+           screen, and the maintenance verbs move into the bar's action
+           slot where they can say which conversation they'd act on. -->
       <section x-show="tab === 'context'">
-        <form class="row" @submit.prevent="loadContext()">
-          <input x-model="focus" @change="focusChanged(true)" list="convs"
-                 placeholder="群号 / 私聊 pseudo-group(留空=全部)" inputmode="numeric">
-          <button type="submit">刷新</button>
-          <button type="button" :disabled="!focus" @click="contextRebuild()">完整 rebuild</button>
-          <button type="button" :disabled="!focus" @click="contextReindex(['memory'])">memory reindex</button>
-          <button type="button" :disabled="!focus" @click="contextReindex(['message','memory','episode'])">全部 reindex</button>
-        </form>
-
-        <div class="facts" x-show="ctx.status.historian_profile">
-          <span><i>historian</i><b x-text="ctx.status.historian_profile"></b></span>
-          <span><i>reader</i><b x-text="ctx.status.force_raw_context ? 'raw-emergency' : ctx.status.cutover?.reader_mode"></b></span>
-          <span><i>integrity</i><b :class="ctx.integrity && ctx.integrity.ok ? 'ok' : 'bad'"
+        <div class="facts px6">
+          <span><i>会话</i><b x-text="focus ? focusTitle() : '全部'"></b></span>
+          <span x-show="ctx.status.historian_profile"><i>historian</i><b x-text="ctx.status.historian_profile"></b></span>
+          <span x-show="ctx.status.historian_profile"><i>reader</i><b x-text="ctx.status.force_raw_context ? 'raw-emergency' : ctx.status.cutover?.reader_mode"></b></span>
+          <span x-show="ctx.integrity"><i>integrity</i><b :class="ctx.integrity && ctx.integrity.ok ? 'ok' : 'bad'"
                                   x-text="ctx.integrity && ctx.integrity.ok ? 'ok' : 'issues'"></b></span>
         </div>
 
-        <div class="card">
-          <div class="card-header">
-            <h2>coverage / doctor</h2>
+        <div class="tabs">
+          <div class="tabs-bar">
+            <div class="select-wrap view-select" style="width:9rem">
+              <select style="width:9rem" x-model="ctxTab">
+                <template x-for="t in ctxTabs" :key="t.v">
+                  <option :value="t.v" x-text="t.label"></option>
+                </template>
+              </select>
+              <span x-html="icon('chevron-down')"></span>
+            </div>
+            <div class="tabs-list view-tabs">
+              <template x-for="t in ctxTabs" :key="t.v">
+                <button class="tabs-trigger" :data-state="ctxTab === t.v ? 'active' : 'inactive'"
+                        @click="ctxTab = t.v">
+                  <span x-text="t.label"></span>
+                  <span class="badge secondary" x-show="ctxCount(t.v)" x-text="ctxCount(t.v)"></span>
+                </button>
+              </template>
+            </div>
+            <div class="tabs-actions">
+              <details class="dd" @click.outside="$el.open = false">
+                <summary class="btn">
+                  <span x-html="icon('adjustments')"></span>
+                  <span class="lg-up">维护</span>
+                  <span x-html="icon('chevron-down')"></span>
+                </summary>
+                <div class="dd-menu w56">
+                  <!-- Every one of these rewrites a conversation's
+                       derived state, so none of them runs against
+                       "all". -->
+                  <div class="dd-label" x-text="focus ? focusTitle() : '先选一个会话'"></div>
+                  <button class="dd-item" :disabled="!focus" @click="contextRebuild(); $el.closest('details').open = false">
+                    <span x-html="icon('refresh')"></span>完整 rebuild
+                  </button>
+                  <button class="dd-item" :disabled="!focus" @click="contextReindex(['memory']); $el.closest('details').open = false">
+                    <span x-html="icon('brain')"></span>memory reindex
+                  </button>
+                  <button class="dd-item" :disabled="!focus" @click="contextReindex(['message','memory','episode']); $el.closest('details').open = false">
+                    <span x-html="icon('stack-2')"></span>全部 reindex
+                  </button>
+                </div>
+              </details>
+              <button class="sm" @click="loadContext()">
+                <span x-html="icon('refresh')"></span><span class="lg-up">刷新</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- coverage / doctor -->
+          <div class="tabs-content" x-show="ctxTab === 'coverage'">
             <p class="card-desc">每个会话的账本覆盖、cursor 滞后与 materialization</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr>
+                  <th>会话</th><th>消息</th><th>cursor</th><th>compartments</th><th>raw tail</th><th>未覆盖 settled</th><th>materialization</th><th>状态</th>
+                </tr></thead>
+                <tbody>
+                  <template x-for="c in ctx.status.conversations" :key="c.conversation_id">
+                    <tr>
+                      <td class="rowkey" data-label="会话"><span class="id" x-text="gname(c.conversation_id)"></span></td>
+                      <td class="num" data-label="消息" x-text="c.message_count"></td>
+                      <td data-label="cursor"><span class="id" x-text="c.historian_cursor == null ? '-' : c.historian_cursor"></span></td>
+                      <td class="num" data-label="compartments" x-text="c.active_compartments"></td>
+                      <td class="num" data-label="raw tail" x-text="c.live_tail_messages"></td>
+                      <td class="num" data-label="未覆盖 settled" x-text="c.uncovered_settled_messages"></td>
+                      <td data-label="materialization">
+                        <span class="id" x-text="c.materialization.revision == null ? '-' : 'r' + c.materialization.revision"></span>
+                        <span class="muted" x-text="c.materialization.reason || ''"></span>
+                      </td>
+                      <td data-label="状态">
+                        <span class="verdict" :class="{ deny: c.issues.length }"
+                              x-text="c.issues.length ? c.issues.join(';') : 'ok'"></span>
+                      </td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p class="empty" x-show="!ctx.status.conversations.length">没有 context 数据。</p>
+            </div>
           </div>
-          <div class="card-content flush">
-            <table x-show="ctx.status.conversations.length">
-              <thead><tr>
-                <th>会话</th><th>消息</th><th>cursor</th><th>compartments</th><th>raw tail</th><th>未覆盖 settled</th><th>materialization</th><th>状态</th>
-              </tr></thead>
-              <tbody>
-                <template x-for="c in ctx.status.conversations" :key="c.conversation_id">
-                  <tr>
-                    <td class="rowkey" data-label="会话"><span class="id" x-text="gname(c.conversation_id)"></span></td>
-                    <td class="num" data-label="消息" x-text="c.message_count"></td>
-                    <td data-label="cursor"><span class="id" x-text="c.historian_cursor == null ? '-' : c.historian_cursor"></span></td>
-                    <td class="num" data-label="compartments" x-text="c.active_compartments"></td>
-                    <td class="num" data-label="raw tail" x-text="c.live_tail_messages"></td>
-                    <td class="num" data-label="未覆盖 settled" x-text="c.uncovered_settled_messages"></td>
-                    <td data-label="materialization">
-                      <span class="id" x-text="c.materialization.revision == null ? '-' : 'r' + c.materialization.revision"></span>
-                      <span class="muted" x-text="c.materialization.reason || ''"></span>
-                    </td>
-                    <td data-label="状态">
-                      <span class="verdict" :class="{ deny: c.issues.length }"
-                            x-text="c.issues.length ? c.issues.join(';') : 'ok'"></span>
-                    </td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-            <p class="empty" x-show="ctx.loaded && !ctx.status.conversations.length">没有 context 数据。</p>
-          </div>
-        </div>
 
-        <div class="card">
-          <div class="card-header">
-            <h2>embedding backlog</h2>
-            <p class="card-desc" x-text="ctx.embeddings.configured ? '目标空间 ' + ctx.embeddings.target_model : 'embedding 未配置'"></p>
-          </div>
-          <div class="card-content flush">
-            <table x-show="ctx.embeddings.corpora && ctx.embeddings.corpora.length">
-              <thead><tr><th>corpus</th><th>total</th><th>ready</th><th>pending</th><th>stale hash</th><th>spaces</th></tr></thead>
-              <tbody>
-                <template x-for="e in ctx.embeddings.corpora" :key="e.corpus">
-                  <tr>
-                    <td class="rowkey" data-label="corpus" x-text="e.corpus"></td>
-                    <td class="num" data-label="total" x-text="e.total"></td>
-                    <td class="num" data-label="ready" x-text="e.ready"></td>
-                    <td class="num" data-label="pending" x-text="e.pending"></td>
-                    <td class="num" data-label="stale hash" x-text="e.stale_content_hash"></td>
-                    <td class="wide" data-label="spaces" x-text="e.stored_spaces || ''"></td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-header">
-            <h2>capture runs</h2>
+          <!-- capture runs -->
+          <div class="tabs-content" x-show="ctxTab === 'capture'">
             <p class="card-desc">leases、attempt 与 validation 失败原因</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>run</th><th>会话</th><th>range</th><th>状态</th><th>attempt</th><th>worker / retry</th><th>错误</th></tr></thead>
+                <tbody>
+                  <template x-for="r in ctx.captures" :key="r.id">
+                    <tr>
+                      <td class="rowkey" data-label="run"><span class="id" x-text="r.id"></span></td>
+                      <td data-label="会话"><span class="id" x-text="gname(r.conversation_id)"></span></td>
+                      <td data-label="range"><span class="id" x-text="r.start_ingest_seq + '..' + r.end_ingest_seq"></span></td>
+                      <td data-label="状态"><span class="verdict" :class="{ deny: r.status === 'failed' || r.status === 'abandoned' }" x-text="r.status + ' / ' + r.reason"></span></td>
+                      <td class="num" data-label="attempt" x-text="r.attempt"></td>
+                      <td class="stamp" data-label="worker / retry" x-text="r.lease_owner || fmtDate(r.next_retry_at)"></td>
+                      <td class="wide" data-label="错误" :title="r.last_error || ''" x-text="r.last_error || (r.validation_errors && r.validation_errors.length ? pretty(r.validation_errors) : '')"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p class="empty" x-show="!ctx.captures.length">没有 capture run。</p>
+            </div>
           </div>
-          <div class="card-content flush">
-            <table x-show="ctx.captures.length">
-              <thead><tr><th>run</th><th>会话</th><th>range</th><th>状态</th><th>attempt</th><th>worker / retry</th><th>错误</th></tr></thead>
-              <tbody>
-                <template x-for="r in ctx.captures" :key="r.id">
-                  <tr>
-                    <td class="rowkey" data-label="run"><span class="id" x-text="r.id"></span></td>
-                    <td data-label="会话"><span class="id" x-text="gname(r.conversation_id)"></span></td>
-                    <td data-label="range"><span class="id" x-text="r.start_ingest_seq + '..' + r.end_ingest_seq"></span></td>
-                    <td data-label="状态"><span class="verdict" :class="{ deny: r.status === 'failed' || r.status === 'abandoned' }" x-text="r.status + ' / ' + r.reason"></span></td>
-                    <td class="num" data-label="attempt" x-text="r.attempt"></td>
-                    <td class="stamp" data-label="worker / retry" x-text="r.lease_owner || fmtDate(r.next_retry_at)"></td>
-                    <td class="wide" data-label="错误" x-text="r.last_error || (r.validation_errors && r.validation_errors.length ? pretty(r.validation_errors) : '')"></td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-            <p class="empty" x-show="!ctx.captures.length">没有 capture run。</p>
-          </div>
-        </div>
 
-        <div class="card">
-          <div class="card-header">
-            <h2>compartments</h2>
+          <!-- compartments -->
+          <div class="tabs-content" x-show="ctxTab === 'compartments'">
             <p class="card-desc">已发布的 episode 分格与投影版本</p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>id</th><th>range</th><th>state</th><th>kind</th><th>importance</th><th>projection</th><th>evidence</th><th></th></tr></thead>
+                <tbody>
+                  <template x-for="c in ctx.compartments" :key="c.id">
+                    <tr>
+                      <td class="rowkey" data-label="id"><span class="id" x-text="c.id"></span></td>
+                      <td data-label="range"><span class="id" x-text="c.start_ingest_seq + '..' + c.end_ingest_seq"></span></td>
+                      <td data-label="state" x-text="c.state"></td>
+                      <td data-label="kind" x-text="c.episode_kind"></td>
+                      <td class="num" data-label="importance" x-text="c.importance.toFixed(2)"></td>
+                      <td data-label="projection" x-text="'v' + c.materialization_version"></td>
+                      <td class="num" data-label="evidence" x-text="c.evidence_links"></td>
+                      <td class="act"><button class="ghost sm" x-show="c.state === 'active'" @click="contextRebuild(c.id)">rebuild</button></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p class="empty" x-show="!ctx.compartments.length">没有 compartment。</p>
+            </div>
           </div>
-          <div class="card-content flush">
-            <table x-show="ctx.compartments.length">
-              <thead><tr><th>id</th><th>range</th><th>state</th><th>kind</th><th>importance</th><th>projection</th><th>evidence</th><th></th></tr></thead>
-              <tbody>
-                <template x-for="c in ctx.compartments" :key="c.id">
-                  <tr>
-                    <td class="rowkey" data-label="id"><span class="id" x-text="c.id"></span></td>
-                    <td data-label="range"><span class="id" x-text="c.start_ingest_seq + '..' + c.end_ingest_seq"></span></td>
-                    <td data-label="state" x-text="c.state"></td>
-                    <td data-label="kind" x-text="c.episode_kind"></td>
-                    <td class="num" data-label="importance" x-text="c.importance.toFixed(2)"></td>
-                    <td data-label="projection" x-text="'v' + c.materialization_version"></td>
-                    <td class="num" data-label="evidence" x-text="c.evidence_links"></td>
-                    <td class="act"><button x-show="c.state === 'active'" @click="contextRebuild(c.id)">rebuild</button></td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
-            <p class="empty" x-show="!ctx.compartments.length">没有 compartment。</p>
-          </div>
-        </div>
 
-        <div class="card">
-          <div class="card-header">
-            <h2>prompt token / tier decisions</h2>
+          <!-- prompt token / tier decisions -->
+          <div class="tabs-content" x-show="ctxTab === 'plans'">
             <p class="card-desc">每次 dispatch 的 token 预算与降级决策,只存决策不存正文</p>
-          </div>
-          <div class="card-content">
             <div class="logs" x-show="ctx.plans.length">
               <template x-for="p in ctx.plans" :key="p.id">
                 <details class="trace">
@@ -571,7 +669,7 @@
                           <td class="rowkey" data-label="source" x-text="d.source"></td>
                           <td class="num" data-label="tokens" x-text="d.estimated_tokens"></td>
                           <td data-label="decision" x-text="d.decision"></td>
-                          <td class="wide" data-label="reason" x-text="d.reason"></td>
+                          <td class="wide" data-label="reason" :title="d.reason" x-text="d.reason"></td>
                         </tr>
                       </template>
                     </tbody>
@@ -581,130 +679,209 @@
             </div>
             <p class="empty" x-show="!ctx.plans.length">没有 plan 记录。</p>
           </div>
-        </div>
 
-        <div class="card">
-          <div class="card-header">
-            <h2>retrieval trace</h2>
-            <p class="card-desc">跑一次真实的 unified recall,看候选与打分</p>
+          <!-- embedding backlog -->
+          <div class="tabs-content" x-show="ctxTab === 'embedding'">
+            <p class="card-desc" x-text="ctx.embeddings.configured ? '目标空间 ' + ctx.embeddings.target_model : 'embedding 未配置'"></p>
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>corpus</th><th>total</th><th>ready</th><th>pending</th><th>stale hash</th><th>spaces</th></tr></thead>
+                <tbody>
+                  <template x-for="e in ctx.embeddings.corpora" :key="e.corpus">
+                    <tr>
+                      <td class="rowkey" data-label="corpus" x-text="e.corpus"></td>
+                      <td class="num" data-label="total" x-text="e.total"></td>
+                      <td class="num" data-label="ready" x-text="e.ready"></td>
+                      <td class="num" data-label="pending" x-text="e.pending"></td>
+                      <td class="num" data-label="stale hash" x-text="e.stale_content_hash"></td>
+                      <td class="wide" data-label="spaces" :title="e.stored_spaces || ''" x-text="e.stored_spaces || ''"></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p class="empty" x-show="!(ctx.embeddings.corpora && ctx.embeddings.corpora.length)">没有语料。</p>
+            </div>
           </div>
-          <div class="card-content">
-            <form class="row" @submit.prevent="contextRecall()">
-              <input class="search grow" x-model="ctx.recallQuery" placeholder="诊断 query(必须先填会话)">
-              <button type="submit" :disabled="!focus">搜索</button>
-            </form>
-            <template x-if="ctx.recall">
-              <div>
-                <div class="facts">
-                  <span><i>lexical</i><b x-text="ctx.recall.lexical_candidates"></b></span>
-                  <span><i>semantic</i><b x-text="ctx.recall.semantic_candidates"></b></span>
-                  <span><i>merged</i><b x-text="ctx.recall.merged_candidates"></b></span>
-                  <span x-show="ctx.recall.embedding_error"><i>embedding</i><b class="bad" x-text="ctx.recall.embedding_error"></b></span>
-                </div>
-                <table>
-                  <thead><tr><th>source</th><th>score</th><th>lexical</th><th>semantic</th><th>decision</th><th>snippet</th></tr></thead>
-                  <tbody>
-                    <template x-for="(c, i) in ctx.recall.candidates" :key="i">
-                      <tr>
-                        <td class="rowkey" data-label="source" x-text="c.source"></td>
-                        <td class="num" data-label="score" x-text="c.final_score.toFixed(3)"></td>
-                        <td class="num" data-label="lexical" x-text="c.lexical_score == null ? '-' : c.lexical_score.toFixed(3)"></td>
-                        <td class="num" data-label="semantic" x-text="c.semantic_score == null ? '-' : c.semantic_score.toFixed(3)"></td>
-                        <td data-label="decision" x-text="c.decision"></td>
-                        <td class="wide" data-label="snippet" x-text="c.snippet"></td>
-                      </tr>
-                    </template>
-                  </tbody>
-                </table>
+
+          <!-- retrieval trace + memory provenance: the two one-off
+               probes, which are questions rather than lists. -->
+          <div class="tabs-content" x-show="ctxTab === 'probe'">
+            <div class="card">
+              <div class="card-header">
+                <h2>retrieval trace</h2>
+                <p class="card-desc">跑一次真实的 unified recall,看候选与打分</p>
               </div>
-            </template>
-          </div>
-        </div>
+              <div class="card-content">
+                <form class="row" @submit.prevent="contextRecall()">
+                  <input class="search grow" x-model="ctx.recallQuery" placeholder="诊断 query(必须先选会话)">
+                  <button type="submit" :disabled="!focus">搜索</button>
+                </form>
+                <template x-if="ctx.recall">
+                  <div>
+                    <div class="facts">
+                      <span><i>lexical</i><b x-text="ctx.recall.lexical_candidates"></b></span>
+                      <span><i>semantic</i><b x-text="ctx.recall.semantic_candidates"></b></span>
+                      <span><i>merged</i><b x-text="ctx.recall.merged_candidates"></b></span>
+                      <span x-show="ctx.recall.embedding_error"><i>embedding</i><b class="bad" x-text="ctx.recall.embedding_error"></b></span>
+                    </div>
+                    <div class="table-wrap">
+                      <table>
+                        <thead><tr><th>source</th><th>score</th><th>lexical</th><th>semantic</th><th>decision</th><th>snippet</th></tr></thead>
+                        <tbody>
+                          <template x-for="(c, i) in ctx.recall.candidates" :key="i">
+                            <tr>
+                              <td class="rowkey" data-label="source" x-text="c.source"></td>
+                              <td class="num" data-label="score" x-text="c.final_score.toFixed(3)"></td>
+                              <td class="num" data-label="lexical" x-text="c.lexical_score == null ? '-' : c.lexical_score.toFixed(3)"></td>
+                              <td class="num" data-label="semantic" x-text="c.semantic_score == null ? '-' : c.semantic_score.toFixed(3)"></td>
+                              <td data-label="decision" x-text="c.decision"></td>
+                              <td class="wide" data-label="snippet" :title="c.snippet" x-text="c.snippet"></td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
 
-        <div class="card">
-          <div class="card-header">
-            <h2>memory provenance</h2>
-            <p class="card-desc">一条记忆的版本、证据链与每次改动的理由</p>
-          </div>
-          <div class="card-content">
-            <form class="row" @submit.prevent="contextMemory()">
-              <input x-model="ctx.memoryId" placeholder="memory id" inputmode="numeric">
-              <button type="submit">读取</button>
-            </form>
-            <details class="trace" x-show="ctx.memory" open>
-              <summary x-text="ctx.memory ? 'memory #' + ctx.memory.current.id + ' @v' + ctx.memory.current.version : ''"></summary>
-              <pre x-text="ctx.memory ? pretty(ctx.memory) : ''"></pre>
-            </details>
+            <div class="card">
+              <div class="card-header">
+                <h2>memory provenance</h2>
+                <p class="card-desc">一条记忆的版本、证据链与每次改动的理由</p>
+              </div>
+              <div class="card-content">
+                <form class="row" @submit.prevent="contextMemory()">
+                  <input x-model="ctx.memoryId" placeholder="memory id" inputmode="numeric">
+                  <button type="submit">读取</button>
+                </form>
+                <details class="trace" x-show="ctx.memory" open>
+                  <summary x-text="ctx.memory ? 'memory #' + ctx.memory.current.id + ' @v' + ctx.memory.current.version : ''"></summary>
+                  <pre x-text="ctx.memory ? pretty(ctx.memory) : ''"></pre>
+                </details>
+              </div>
+            </div>
           </div>
         </div>
       </section>
 
-      <!-- ── 记忆 ─────────────────────────────────────────────── -->
+      <!-- ── 记忆 ───────────────────────────────────────────────
+           A DataTable: the query in the bar, the rows in the frame,
+           and a pager, because this is the one list with no ceiling —
+           a group that has been running a year has hundreds. -->
       <section x-show="tab === 'memories'">
-        <form class="row" @submit.prevent="loadMemories()">
-          <select x-model="mem.scope">
-            <option value="group">群记忆</option>
-            <option value="user">个人记忆</option>
-          </select>
-          <input x-model="mem.id" placeholder="群号 / QQ 号" inputmode="numeric">
-          <button type="submit">查</button>
-        </form>
-        <div class="card" x-show="memories.length">
-          <div class="card-content flush">
-            <table>
-              <thead><tr><th>id</th><th>记住的事</th><th>lifecycle</th><th>分类</th><th>更新</th><th></th></tr></thead>
-              <tbody>
-                <template x-for="m in memories" :key="m.id">
-                  <tr>
-                    <td class="rowkey" data-label="id">
-                      <span class="id" x-text="m.id"></span>
-                      <span class="muted num" x-text="'v' + m.version"></span>
-                    </td>
-                    <td class="wide" data-label="记住的事" x-text="m.content"></td>
-                    <td data-label="lifecycle">
-                      <span class="verdict" :class="{ hold: m.lifecycle === 'permanent' }"
-                            x-text="m.lifecycle"></span>
-                    </td>
-                    <td data-label="分类"><span class="muted" x-text="m.category || '-'"></span></td>
-                    <td class="stamp" data-label="更新" x-text="fmtDate(m.updated_at)"></td>
-                    <!-- 归档而非删除:记录保留版本与出处,这正是记忆系统
-                         的约定。按钮说实话。 -->
-                    <td class="act"><button class="danger" @click="archiveMemory(m)">归档</button></td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
+        <div class="tabs">
+          <div class="tabs-bar">
+            <form @submit.prevent="loadMemories()">
+              <div class="select-wrap" style="width:7.5rem">
+                <select style="width:7.5rem" x-model="mem.scope" @change="mem.loaded && loadMemories()">
+                  <option value="group">群记忆</option>
+                  <option value="user">个人记忆</option>
+                </select>
+                <span x-html="icon('chevron-down')"></span>
+              </div>
+              <input x-model="mem.id" style="width:11rem" list="convs"
+                     placeholder="群号 / QQ 号" inputmode="numeric">
+              <button type="submit">查</button>
+            </form>
+            <div class="tabs-actions">
+              <span class="muted num" x-show="mem.loaded" x-text="memories.length + ' 条'"></span>
+            </div>
+          </div>
+
+          <div class="tabs-content">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>id</th><th>记住的事</th><th>lifecycle</th><th>分类</th><th>更新</th><th></th></tr></thead>
+                <tbody>
+                  <template x-for="m in memRows()" :key="m.id">
+                    <tr>
+                      <td class="rowkey" data-label="id">
+                        <span class="id" x-text="m.id"></span>
+                        <span class="muted num" x-text="'v' + m.version"></span>
+                      </td>
+                      <td class="wide" data-label="记住的事" :title="m.content" x-text="m.content"></td>
+                      <td data-label="lifecycle">
+                        <span class="verdict" :class="{ hold: m.lifecycle === 'permanent' }"
+                              x-text="m.lifecycle"></span>
+                      </td>
+                      <td data-label="分类"><span class="muted" x-text="m.category || '-'"></span></td>
+                      <td class="stamp" data-label="更新" x-text="fmtDate(m.updated_at)"></td>
+                      <!-- 归档而非删除:记录保留版本与出处,这正是记忆系统
+                           的约定。按钮说实话。 -->
+                      <td class="act"><button class="danger sm" @click="archiveMemory(m)">归档</button></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p class="empty" x-show="mem.loaded && !memories.length">这里还没有记忆。</p>
+              <p class="empty" x-show="!mem.loaded">输入群号或 QQ 号来查。</p>
+            </div>
+
+            <div class="pagination" x-show="memories.length">
+              <div class="count" x-text="'第 ' + (memPage * memPageSize + 1) + '–' + Math.min((memPage + 1) * memPageSize, memories.length) + ' 条,共 ' + memories.length"></div>
+              <div class="controls">
+                <div class="rows-per-page">
+                  <label for="mem-per-page">每页</label>
+                  <div class="select-wrap">
+                    <select id="mem-per-page" style="width:5rem" x-model.number="memPageSize" @change="memPage = 0">
+                      <template x-for="n in [10, 20, 50, 100]" :key="n">
+                        <option :value="n" x-text="n"></option>
+                      </template>
+                    </select>
+                    <span x-html="icon('chevron-down')"></span>
+                  </div>
+                </div>
+                <div class="page-of" x-text="(memPage + 1) + ' / ' + memPageCount()"></div>
+                <div class="pager">
+                  <button class="size-8 lg-up" :disabled="memPage === 0" @click="memPage = 0"
+                          aria-label="第一页" x-html="icon('chevrons-left')"></button>
+                  <button class="size-8" :disabled="memPage === 0" @click="memPage--"
+                          aria-label="上一页" x-html="icon('chevron-left')"></button>
+                  <button class="size-8" :disabled="memPage >= memPageCount() - 1" @click="memPage++"
+                          aria-label="下一页" x-html="icon('chevron-right')"></button>
+                  <button class="size-8 lg-up" :disabled="memPage >= memPageCount() - 1" @click="memPage = memPageCount() - 1"
+                          aria-label="最后一页" x-html="icon('chevrons-right')"></button>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-        <p class="empty" x-show="mem.loaded && !memories.length">这里还没有记忆。</p>
-        <p class="empty" x-show="!mem.loaded">输入群号或 QQ 号来查。</p>
       </section>
 
       <!-- ── 任务 ─────────────────────────────────────────────── -->
       <section x-show="tab === 'tasks'">
-        <div class="row"><button @click="loadTasks()">刷新</button></div>
-        <div class="card" x-show="tasks.length">
-          <div class="card-content flush">
-            <table>
-              <thead><tr><th>任务</th><th>群</th><th>发起</th><th>类型</th><th>触发</th><th>开始</th><th>待处理</th><th></th></tr></thead>
-              <tbody>
-                <template x-for="t in tasks" :key="t.id">
-                  <tr>
-                    <td class="rowkey" data-label="任务"><span class="id" x-text="t.id"></span></td>
-                    <td data-label="群"><span class="id" x-text="gname(t.group_id)"></span></td>
-                    <td data-label="发起"><span class="id" x-text="t.user_id"></span></td>
-                    <td data-label="类型" x-text="t.kind"></td>
-                    <td data-label="触发"><span class="id" x-text="t.trigger_message_id == null ? '-' : t.trigger_message_id"></span></td>
-                    <td class="stamp" data-label="开始" x-text="fmtDate(t.started_at)"></td>
-                    <td class="num" data-label="待处理" x-text="t.pending_notes || ''"></td>
-                    <td class="act"><button class="danger" @click="kill(t)">kill</button></td>
-                  </tr>
-                </template>
-              </tbody>
-            </table>
+        <div class="tabs">
+          <div class="tabs-bar">
+            <p class="card-desc">进程内在跑的任务;kill 立即取消,重启也会清空</p>
+            <div class="tabs-actions">
+              <button @click="loadTasks()"><span x-html="icon('refresh')"></span><span class="lg-up">刷新</span></button>
+            </div>
+          </div>
+          <div class="tabs-content">
+            <div class="table-wrap">
+              <table>
+                <thead><tr><th>任务</th><th>群</th><th>发起</th><th>类型</th><th>触发</th><th>开始</th><th>待处理</th><th></th></tr></thead>
+                <tbody>
+                  <template x-for="t in tasks" :key="t.id">
+                    <tr>
+                      <td class="rowkey" data-label="任务"><span class="id" x-text="t.id"></span></td>
+                      <td data-label="群"><span class="id" x-text="gname(t.group_id)"></span></td>
+                      <td data-label="发起"><span class="id" x-text="t.user_id"></span></td>
+                      <td data-label="类型" x-text="t.kind"></td>
+                      <td data-label="触发"><span class="id" x-text="t.trigger_message_id == null ? '-' : t.trigger_message_id"></span></td>
+                      <td class="stamp" data-label="开始" x-text="fmtDate(t.started_at)"></td>
+                      <td class="num" data-label="待处理" x-text="t.pending_notes || ''"></td>
+                      <td class="act"><button class="danger sm" @click="kill(t)">kill</button></td>
+                    </tr>
+                  </template>
+                </tbody>
+              </table>
+              <p class="empty" x-show="!tasks.length">现在没有在跑的任务。</p>
+            </div>
           </div>
         </div>
-        <p class="empty" x-show="!tasks.length">现在没有在跑的任务。</p>
       </section>
 
       <!-- ── 调用 ─────────────────────────────────────────────── -->
@@ -898,11 +1075,18 @@
 
       <!-- ── 技能 ─────────────────────────────────────────────── -->
       <section x-show="tab === 'skills'">
-        <form class="row" @submit.prevent="loadSkills()">
-          <input x-model="skillq.group" list="convs" placeholder="群号(留空=builtin+全局)" inputmode="numeric">
-          <button type="submit">查</button>
-          <button type="button" class="primary" @click="newSkill()">新建 skill</button>
-        </form>
+        <div class="tabs-bar">
+          <form @submit.prevent="loadSkills()">
+            <input x-model="skillq.group" list="convs" style="width:14rem"
+                   placeholder="群号(留空=builtin+全局)" inputmode="numeric">
+            <button type="submit">查</button>
+          </form>
+          <div class="tabs-actions">
+            <button class="primary" @click="newSkill()">
+              <span x-html="icon('plus')"></span><span class="lg-up">新建 skill</span>
+            </button>
+          </div>
+        </div>
 
         <!-- Create — also where a builtin lands when you shadow it:
              a same-name DB row wins over the baked-in manual, which
@@ -930,26 +1114,27 @@
           </div>
         </template>
 
-        <div class="card" x-show="skills.length">
-          <div class="card-content flush">
+        <div class="px6">
+          <div class="table-wrap">
             <table>
               <thead><tr><th>skill</th><th>来源</th><th>状态</th><th>描述</th><th>更新</th></tr></thead>
               <tbody>
                 <template x-for="s in skills" :key="s.id">
                   <tr @click="openSkill(s)" style="cursor:pointer">
-                    <td class="rowkey" data-label="skill"><span class="num" x-text="s.name"></span></td>
+                    <td class="rowkey" data-label="skill"><button class="link-btn" x-text="s.name"></button></td>
                     <td data-label="来源">
                       <span class="muted" x-text="s.builtin ? 'builtin' : s.group_id == null ? '全局' : '群 ' + gname(s.group_id)"></span>
                     </td>
                     <td data-label="状态">
                       <span class="verdict" :class="{ deny: !s.enabled }" x-text="s.enabled ? '启用' : '停用'"></span>
                     </td>
-                    <td class="wide" data-label="描述"><span class="muted" x-text="s.description"></span></td>
+                    <td class="wide" data-label="描述" :title="s.description"><span class="muted" x-text="s.description"></span></td>
                     <td class="stamp" data-label="更新" x-text="s.builtin ? '随二进制' : fmtDate(s.updated_at)"></td>
                   </tr>
                 </template>
               </tbody>
             </table>
+            <p class="empty" x-show="!skills.length">没有 skill。builtin 总该在,这行字意味着查询还没跑或者失败了。</p>
           </div>
         </div>
 
@@ -990,7 +1175,6 @@
           </div>
         </template>
 
-        <p class="empty" x-show="!skills.length">没有 skill。builtin 总该在,这行字意味着查询还没跑或者失败了。</p>
         <p class="empty" x-show="skills.length">
           名字相同的行按 群 > 全局 > builtin 遮蔽;prompt 只带一行索引,正文按需取。
         </p>
@@ -1000,6 +1184,14 @@
     </div>
   </div>
   </template>
+
+  <!-- The `list=` targets for every group-id input on the page: the
+       ids the bot actually has, named. -->
+  <datalist id="convs">
+    <template x-for="c in conversations" :key="c.conversation_id">
+      <option :value="c.legacy_group_id" x-text="convName(c)"></option>
+    </template>
+  </datalist>
 </div>
 
 <script src="static/vendor/uplot.iife.min.js"></script>

@@ -50,10 +50,18 @@ function admin() {
     clock: '',
 
     overview: { profiles: [], effort_levels: [] },
-    // Raw chart rows, kept so the stat cards can read the last two
-    // days without a second fetch.
+    // 90 days are fetched once and the range picker slices them in the
+    // browser, so switching windows is instant and costs the database
+    // nothing.  The stat cards read the newest two days out of the same
+    // rows rather than asking again.
     usageRows: [],
     msgRows: [],
+    ranges: [
+      { v: 90, label: '90 天' },
+      { v: 30, label: '30 天' },
+      { v: 7, label: '7 天' },
+    ],
+    range: { usage: 30, msgs: 30 },
     // The one conversation the ledger views share.  Set in the rail
     // (or any of the views), remembered across sessions.
     focus: localStorage.getItem('max-admin-focus') || '',
@@ -89,10 +97,27 @@ function admin() {
       memoryId: '',
       memory: null,
     },
+    // The context view is six tables of the same pipeline seen from
+    // six angles; the DataTable's tab bar is what keeps it one page
+    // rather than a scroll.
+    // Outbound health and upstream health share one DataTable on the
+    // overview: both answer "is the plumbing open".
+    ovTab: 'endpoints',
+    ctxTab: 'coverage',
+    ctxTabs: [
+      { v: 'coverage', label: '覆盖' },
+      { v: 'capture', label: 'capture' },
+      { v: 'compartments', label: '分格' },
+      { v: 'plans', label: '计划' },
+      { v: 'embedding', label: 'embedding' },
+      { v: 'probe', label: '诊断' },
+    ],
     // Column headings double as the per-field labels the mobile card
     // layout puts in front of each value.
     fieldLabel: { debug: 'debug', sticker: '表情', proactive: '主动说话' },
     mem: { scope: 'group', id: '', loaded: false },
+    memPage: 0,
+    memPageSize: 20,
     charts: {},
 
     personaEdit: null,
@@ -301,11 +326,17 @@ function admin() {
     },
 
     pickConversation(c) {
-      this.focus = String(c.legacy_group_id ?? '');
+      this.focus = c ? String(c.legacy_group_id ?? '') : '';
       this.convFilter = '';
       if (this.$refs.switcher) this.$refs.switcher.open = false;
       this.focusChanged();
-      // A picked conversation means you want to look at it.
+      // A picked conversation means you want to look at it — but "all
+      // conversations" is a window only the context view has, and the
+      // ledger has nothing to show without one.
+      if (!c) {
+        if (this.tab === 'timeline') this.go('context');
+        return;
+      }
       if (!['timeline', 'context', 'memories'].includes(this.tab)) this.go('timeline');
     },
 
@@ -417,6 +448,7 @@ function admin() {
         '/memories?scope=' + this.mem.scope + '&id=' + encodeURIComponent(this.mem.id)
       );
       this.mem.loaded = true;
+      this.memPage = 0;
     },
 
     async loadTasks() {
@@ -552,6 +584,31 @@ function admin() {
         case 'unsupported': return '[unsupported ' + node.source + ': ' + node.description + ']';
         default: return '[' + node.type + ']';
       }
+    },
+
+    // A tab badge counts the rows behind the tab, the way the block's
+    // does.  What is *wrong* in there is the rail badge's job — one
+    // number per meaning, or neither can be read at a glance.
+    ctxCount(v) {
+      const n = {
+        coverage: this.ctx.status.conversations,
+        capture: this.ctx.captures,
+        compartments: this.ctx.compartments,
+        plans: this.ctx.plans,
+        embedding: this.ctx.embeddings.corpora,
+      }[v];
+      return n ? n.length : 0;
+    },
+
+    // Memories are the one list that grows without bound — a group
+    // that has been running a year has hundreds — so it is the one
+    // that pages.
+    memPageCount() {
+      return Math.max(1, Math.ceil(this.memories.length / this.memPageSize));
+    },
+    memRows() {
+      const start = this.memPage * this.memPageSize;
+      return this.memories.slice(start, start + this.memPageSize);
     },
 
     // ── unbounded context / memory operations ───────────────────
@@ -880,36 +937,113 @@ function admin() {
 
     async loadCharts() {
       const [usage, msgs] = await Promise.all([
-        this.api('/usage?days=30'),
-        this.api('/stats/messages?days=14'),
+        this.api('/usage?days=90'),
+        this.api('/stats/messages?days=90'),
       ]);
       this.usageRows = usage;
       this.msgRows = msgs;
+      this.drawCharts();
+    },
+
+    setRange(which, v) {
+      this.range[which] = Number(v);
+      this.$nextTick(() => this.drawCharts());
+    },
+
+    rangeWords(which) {
+      return '最近 ' + this.range[which] + ' 天';
+    },
+
+    // The newest day present is "today": the server buckets in its own
+    // timezone, and re-deriving the boundary from the client's clock
+    // would drop or duplicate a day around midnight.
+    daysBack(rows, days) {
+      let newest = '';
+      for (const r of rows) if (r.day > newest) newest = r.day;
+      if (!newest) return [];
+      const cut = isoDay(new Date(Date.parse(newest + 'T00:00:00') - (days - 1) * 86400000));
+      return rows.filter((r) => r.day >= cut);
+    },
+
+    drawCharts() {
       const c = palette();
 
       // Token spend splits by what the tokens were, not by who spent
       // them: prompt vs completion is the axis that decides the bill.
       //
-      // They differ by an order of magnitude — prompt runs ~20k
-      // against completion's ~2k — so they are two small multiples
-      // with a synced cursor rather than one chart with two y-axes:
-      // completion, the number you watch for runaway replies, keeps a
-      // scale of its own and a floor of its own.
-      this.plot('chart-prompt', 'prompt', sumByDay(usage, ['prompt_tokens']), [
-        { label: 'prompt', stroke: c.s1, fill: wash(c.s1) },
-      ], { height: 150, sync: 'usage' });
-      this.plot('chart-completion', 'completion', sumByDay(usage, ['completion_tokens']), [
-        { label: 'completion', stroke: c.s2, fill: wash(c.s2) },
-      ], { height: 150, sync: 'usage' });
+      // They differ by two orders of magnitude — prompt runs ~15M a
+      // day against completion's ~400k — so they are two small
+      // multiples with a synced cursor rather than one stack or one
+      // chart with two y-axes.  Completion, the number you watch for
+      // runaway replies, keeps a scale of its own.
+      //
+      // Inside prompt the split that matters is cache: two thirds of
+      // every prompt is usually a re-read of context the provider
+      // already holds, and it is billed differently.  That is a real
+      // part-of-whole, so it stacks.
+      const u = this.daysBack(this.usageRows, this.range.usage);
+      const tok = sumByDay(u, ['prompt_tokens', 'cached_prompt_tokens', 'completion_tokens']);
+      const [xs, prompt, cachedTok, completion] = tok;
+
+      // Drawn total-first so the cached band paints over the top of
+      // it: two bands, no blended overlap.
+      this.plot('chart-prompt', 'prompt', [xs, prompt, cachedTok], [
+        { label: '新读入', stroke: c.s1, fill: wash(c.s1, 0.20, 0.06) },
+        { label: '缓存命中', stroke: c.s1, fill: wash(c.s1, 0.62, 0.40) },
+      ], {
+        height: 170,
+        sync: 'usage',
+        tip: (i) => ({
+          rows: [
+            { name: '新读入', colour: c.s1, alpha: 0.35, val: compact(prompt[i] - cachedTok[i]) },
+            { name: '缓存命中', colour: c.s1, alpha: 1, val: compact(cachedTok[i]) },
+          ],
+          foot: 'prompt 合计 ' + compact(prompt[i]),
+        }),
+      });
+      this.plot('chart-completion', 'completion', [xs, completion], [
+        { label: 'completion', stroke: c.s2, fill: wash(c.s2, 0.34, 0.04) },
+      ], {
+        height: 120,
+        sync: 'usage',
+        tip: (i) => ({ rows: [{ name: 'completion', colour: c.s2, alpha: 1, val: compact(completion[i]) }] }),
+      });
 
       // Messages split the way the prompt itself splits them: only
       // chat rows reach the model, so the chart answers "is the bot
-      // talking, or just being operated" — command and debug fold
-      // into one operations series.
-      this.plot('chart-msgs', 'msgs', chatOps(msgs), [
-        { label: '对话', stroke: c.s1, fill: wash(c.s1) },
-        { label: '操作', stroke: c.s2 },
-      ], { height: 190 });
+      // talking, or just being operated" — command, debug and system
+      // fold into one operations series.  Both are counts of the same
+      // thing, so here the stack is the whole point.
+      const m = chatOps(this.daysBack(this.msgRows, this.range.msgs));
+      const [mxs, chat, ops] = m;
+      const total = chat.map((v, i) => v + ops[i]);
+      this.plot('chart-msgs', 'msgs', [mxs, total, chat], [
+        { label: '操作', stroke: c.s2, fill: wash(c.s2, 0.34, 0.04) },
+        { label: '对话', stroke: c.s1, fill: wash(c.s1, 0.34, 0.04) },
+      ], {
+        height: 240,
+        tip: (i) => ({
+          rows: [
+            { name: '操作', colour: c.s2, alpha: 1, val: ops[i].toLocaleString() },
+            { name: '对话', colour: c.s1, alpha: 1, val: chat[i].toLocaleString() },
+          ],
+          foot: '合计 ' + total[i].toLocaleString() + ' 条',
+        }),
+      });
+    },
+
+    // Totals under each small multiple's caption — the chart shows the
+    // shape, the caption answers "how much, over the window I picked".
+    rangeTotal(field) {
+      const rows = this.daysBack(this.usageRows, this.range.usage);
+      return compact(rows.reduce((n, r) => n + (r[field] || 0), 0));
+    },
+    msgTotal(chat) {
+      const rows = this.daysBack(this.msgRows, this.range.msgs);
+      return rows
+        .filter((r) => (r.kind === 'chat') === chat)
+        .reduce((n, r) => n + (r.count || 0), 0)
+        .toLocaleString();
     },
 
     // ── stat cards ────────────────────────────────────────────────
@@ -1008,28 +1142,49 @@ function admin() {
       }
       el.innerHTML = '';
       const c = palette();
+
+      // ChartTooltipContent: a small card naming the day and reading
+      // out every band, instead of uPlot's legend table.
+      const tip = document.createElement('div');
+      tip.className = 'chart-tooltip';
+      el.appendChild(tip);
+      // A synced cursor moves both multiples, but the pointer is only
+      // ever over one of them — so a tooltip speaks only for the chart
+      // being pointed at.  Bound to the container, which outlives the
+      // uPlot instance a redraw replaces.
+      if (!el.dataset.bound) {
+        el.dataset.bound = '1';
+        el.addEventListener('pointerenter', () => { el.dataset.over = '1'; });
+        el.addEventListener('pointerleave', () => { delete el.dataset.over; });
+      }
+
       const axis = {
         stroke: c.dim,
-        grid: { stroke: c.line, width: 1 },
         ticks: { show: false },
         font: '11.5px ' + sansStack(),
       };
-      // shadcn charts draw a clean 2px line with a gradient wash and
-      // no resting point markers; the dot appears under the cursor.
+      // The shadcn area: a spline through the points, a gradient wash
+      // under it, a clean 2px line, and no resting markers — the dot
+      // appears under the cursor.
+      const spline = uPlot.paths.spline();
       const series = seriesDefs.map((s) =>
-        Object.assign({ width: 2, points: { show: false } }, s)
+        Object.assign({ width: 2, paths: spline, points: { show: false } }, s)
       );
       const axes = [
         // Just M/D.  uPlot's default stacks a year row underneath,
         // which is noise for a window that never spans one — and it
         // reserves 50px of height for the privilege; one row of
-        // labels needs 28.
+        // labels needs 28.  Whole days only: the data is daily, so
+        // sub-day tick candidates would repeat a label.
         Object.assign({}, axis, {
           size: 28,
+          grid: { show: false },          // CartesianGrid vertical={false}
+          incrs: [86400, 2 * 86400, 3 * 86400, 5 * 86400, 7 * 86400, 14 * 86400, 28 * 86400],
           values: (_u, splits) => splits.map((v) => fmtDay(new Date(v * 1000))),
         }),
         Object.assign({}, axis, {
-          size: 50,
+          size: 46,
+          grid: { stroke: c.line, width: 1 },
           values: (_u, splits) => splits.map(compact),
         }),
       ];
@@ -1041,19 +1196,36 @@ function admin() {
         {
           width: el.clientWidth,
           height: opts.height || 210,
-          // A vertical rule that snaps to the day under the pointer,
-          // with the legend reading out that day's values — the whole
-          // point of the chart is "how much on which day", and eyeing
-          // a pixel against a gridline doesn't answer it.
+          // Room for the first and last x tick to sit inside the plot
+          // rather than being clipped by the card's padding.
+          padding: [8, 10, 0, 0],
           cursor,
-          legend: { live: true },
-          scales: { x: { time: true } },
-          series: [{ label: '日', value: (_u, v) => (v == null ? '' : fmtDay(new Date(v * 1000))) }].concat(
-            series.map((s) =>
-              Object.assign({ value: (_u, v) => (v == null ? '-' : v.toLocaleString()) }, s)
-            )
-          ),
+          legend: { show: false },
+          // A stack starts at zero or the bands lie about their size.
+          scales: { x: { time: true }, y: { range: (_u, _min, max) => [0, max * 1.05 || 1] } },
+          series: [{}].concat(series),
           axes,
+          hooks: {
+            setCursor: [
+              (u) => {
+                const i = u.cursor.idx;
+                if (i == null || !el.dataset.over || !opts.tip) {
+                  tip.style.display = 'none';
+                  return;
+                }
+                const t = opts.tip(i);
+                tip.innerHTML =
+                  '<div class="label">' + fmtDay(new Date(data[0][i] * 1000)) + '</div>' +
+                  t.rows.map(tipRow).join('') +
+                  (t.foot ? '<div class="foot">' + t.foot + '</div>' : '');
+                tip.style.display = 'block';
+                const x = u.valToPos(data[0][i], 'x');
+                const w = tip.offsetWidth;
+                tip.style.left = Math.min(Math.max(x - w / 2, 2), el.clientWidth - w - 2) + 'px';
+                tip.style.top = '4px';
+              },
+            ],
+          },
         },
         data,
         el
@@ -1063,7 +1235,7 @@ function admin() {
         let t;
         const redraw = () => {
           clearTimeout(t);
-          t = setTimeout(() => this.tab === 'overview' && this.loadCharts(), 150);
+          t = setTimeout(() => this.tab === 'overview' && this.drawCharts(), 150);
         };
         addEventListener('resize', redraw);
         matchMedia('(prefers-color-scheme: light)').addEventListener('change', redraw);
@@ -1124,26 +1296,84 @@ function sansStack() {
   return getComputedStyle(document.documentElement).getPropertyValue('--sans').trim();
 }
 
-// #rrggbb + alpha → rgba(); canvas gradients want resolved colours.
-function hexA(hex, a) {
-  const n = parseInt(hex.slice(1), 16);
-  return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+// A colour at an alpha, for the tooltip swatches.
+function hexA(colour, a) {
+  return 'rgba(' + toRGB(colour).join(',') + ',' + a + ')';
 }
 
 // The shadcn area look: a vertical wash from the line colour down to
-// nothing.  uPlot evaluates fill functions at draw time, so the
-// gradient tracks resizes and scheme flips for free — but it also
-// asks once for the legend marker before the first layout, when the
-// bbox is still NaN; that call gets a flat colour instead.
-function wash(colour) {
+// almost nothing.  uPlot evaluates fill functions at draw time, so the
+// gradient tracks resizes and scheme flips for free — but it also asks
+// once before the first layout, when the bbox is still NaN; that call
+// gets a flat colour instead.
+//
+// The stops are composited against the surface rather than left
+// translucent: a stacked chart paints the upper band first and the
+// lower band over it, and two alpha washes would blend into a third
+// colour exactly where the reader is trying to tell them apart.
+function wash(colour, top, bottom) {
   return (u) => {
-    const { top, height } = u.bbox;
-    if (!isFinite(top) || !isFinite(height) || height <= 0) return hexA(colour, 0.15);
-    const g = u.ctx.createLinearGradient(0, top, 0, top + height);
-    g.addColorStop(0, hexA(colour, 0.28));
-    g.addColorStop(1, hexA(colour, 0.02));
+    const bg = surface(u.root);
+    const box = u.bbox;
+    if (!isFinite(box.top) || !isFinite(box.height) || box.height <= 0) return blend(colour, bg, top);
+    const g = u.ctx.createLinearGradient(0, box.top, 0, box.top + box.height);
+    g.addColorStop(0, blend(colour, bg, top));
+    g.addColorStop(1, blend(colour, bg, bottom));
     return g;
   };
+}
+
+// What is actually behind the chart: the first ancestor that paints
+// one.  An unset background computes to rgba(0,0,0,0) in every engine,
+// which is how "keeps looking" is spelled.
+function surface(el) {
+  for (let n = el; n; n = n.parentElement) {
+    const bg = getComputedStyle(n).backgroundColor;
+    if (bg && bg !== 'transparent' && !/^rgba\(0,\s*0,\s*0,\s*0\)$/.test(bg)) return toRGB(bg);
+  }
+  return [255, 255, 255];
+}
+
+// The tokens are oklch and getComputedStyle hands them back that way,
+// but blending needs channels — so let the browser resolve the colour
+// by painting one pixel with it.  Cached: a redraw asks for the same
+// three colours every time, and an invalid string would silently
+// resolve to the black left in fillStyle.
+const rgbCache = new Map();
+function toRGB(css) {
+  let hit = rgbCache.get(css);
+  if (hit) return hit;
+  const c = document.createElement('canvas');
+  c.width = c.height = 1;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = '#000';
+  ctx.fillStyle = css;
+  ctx.fillRect(0, 0, 1, 1);
+  const d = ctx.getImageData(0, 0, 1, 1).data;
+  hit = [d[0], d[1], d[2]];
+  rgbCache.set(css, hit);
+  return hit;
+}
+
+// `colour` at `a` over `bg`, flattened.
+function blend(colour, bg, a) {
+  const fg = toRGB(colour);
+  return 'rgb(' + fg.map((v, i) => Math.round(v * a + bg[i] * (1 - a))).join(',') + ')';
+}
+
+function tipRow(r) {
+  return (
+    '<div class="row"><span class="dot" style="background:' + hexA(r.colour, r.alpha) + '"></span>' +
+    '<span class="name">' + r.name + '</span><span class="val">' + r.val + '</span></div>'
+  );
+}
+
+function isoDay(d) {
+  return (
+    d.getFullYear() + '-' +
+    String(d.getMonth() + 1).padStart(2, '0') + '-' +
+    String(d.getDate()).padStart(2, '0')
+  );
 }
 
 // Newest-last [{day, v}] with `f` summed per day.

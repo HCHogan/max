@@ -271,6 +271,10 @@ svg { display: block; flex: none; }
 /* ── inset ───────────────────────────────────────────────────── */
 
 .inset {
+  /* The block's `px-4 lg:px-6`, named once: everything laid out
+     directly on the panel — stat grid, cards, tab bars, the ledger —
+     answers to it, and only a table inside a card bleeds past it. */
+  --gutter: 1.5rem;
   position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0;
   background: var(--background);
   margin: .5rem .5rem .5rem 0;           /* m-2 ml-0 */
@@ -299,7 +303,13 @@ svg { display: block; flex: none; }
   container-type: inline-size; container-name: main;   /* @container/main */
 }
 .stack { display: flex; flex-direction: column; gap: 1.5rem; padding: 1.5rem 0; }
-.px6 { padding-left: 1.5rem; padding-right: 1.5rem; }
+.px6 { padding-left: var(--gutter); padding-right: var(--gutter); }
+/* A view lays its blocks out the way the stack does; .stack-col is
+   the same thing for a wrapper an x-if has to introduce. */
+:is(.stack > section, .stack-col) { display: flex; flex-direction: column; gap: 1.5rem; }
+:is(.stack > section, .stack-col) > :is(.card, .row, .filters, .facts, .empty, form) {
+  margin: 0 var(--gutter);
+}
 
 /* ── cards ───────────────────────────────────────────────────── */
 
@@ -318,23 +328,24 @@ svg { display: block; flex: none; }
 .card-header.has-action { grid-template-columns: minmax(0, 1fr) auto; }
 .card-title, .card-header h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; }
 .card-desc { margin: 0; font-size: 13px; color: var(--muted-foreground); }
-.card-action { grid-column: 2; grid-row: 1 / span 2; align-self: start; justify-self: end; }
-/* Placed explicitly, so a card whose action is hidden (no delta to
-   show) does not let the value flow up into the empty column. */
-.card-header.has-action > .card-desc { grid-column: 1; grid-row: 1; }
-.card-header.has-action > .stat-value { grid-column: 1; grid-row: 2; }
+.card-action { grid-column: 2; grid-row: 1 / span 2; align-self: start; justify-self: end; display: flex; gap: .5rem; }
+/* Placed explicitly on the stat cards, so one whose action is hidden
+   (no delta to show) does not let the value flow up into the empty
+   column.  A chart card's header is title-then-description and places
+   itself in source order. */
+.stat-grid .card-header.has-action > .card-desc { grid-column: 1; grid-row: 1; }
+.stat-grid .card-header.has-action > .stat-value { grid-column: 1; grid-row: 2; }
 .card-content { padding: 0 1.5rem; }
 .card-footer { display: flex; padding: 0 1.5rem; }
 /* Tables and log lists bleed to the card edge. */
 .card-content.flush { padding: 0; }
-.card-content.flush th:first-child, .card-content.flush td:first-child { padding-left: 1.5rem; }
-.card-content.flush th:last-child, .card-content.flush td:last-child { padding-right: 1.5rem; }
-.card-content.flush tbody tr:last-child td { border-bottom: 0; }
-.card-content.flush .empty { padding: .25rem 1.5rem .5rem; }
+.card-content.flush th:first-child, .card-content.flush td:first-child { padding-left: var(--gutter); }
+.card-content.flush th:last-child, .card-content.flush td:last-child { padding-right: var(--gutter); }
+.card-content.flush .empty { padding: .25rem var(--gutter) .5rem; }
 .card-content.flush .logs { padding: 0 .75rem; }
 
 /* Stat cards: @xl/main → 2 up, @5xl/main → 4 up. */
-.stat-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; padding: 0 1.5rem; }
+.stat-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; padding: 0 var(--gutter); }
 @container main (min-width: 36rem) { .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @container main (min-width: 64rem) { .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .stat-grid > .card {
@@ -397,10 +408,30 @@ textarea {
 
 /* Native select styled as shadcn's trigger; the popover is the
    platform's, which is the honest zero-build substitute for Radix. */
-select { appearance: none; padding-right: 2rem; background-color: var(--background); }
+/* A bare <select> — a table cell's, where a wrapper would be noise —
+   still has to say that it opens; appearance:none took the native
+   arrow away.  One painted chevron, mid-grey so it reads on both
+   surfaces. */
+select {
+  appearance: none; padding-right: 2rem;
+  background-color: var(--background);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right .5rem center;
+  background-size: 1rem 1rem;
+}
+/* Inside a wrapper the chevron is a real element; don't paint a second. */
+.select-wrap select { background-image: none; }
 @media (prefers-color-scheme: dark) { select { background-color: oklch(1 0 0 / 5%); } }
 .select-wrap { position: relative; display: inline-flex; }
-.select-wrap > svg { position: absolute; right: .5rem; top: 50%; transform: translateY(-50%); width: 1rem; height: 1rem; opacity: .5; pointer-events: none; }
+/* The chevron arrives via x-html, so it is wrapped in a span — take
+   both out of flow or the span pads the trigger's width. */
+.select-wrap > svg, .select-wrap > span {
+  position: absolute; right: .5rem; top: 50%; transform: translateY(-50%);
+  opacity: .5; pointer-events: none;
+}
+.select-wrap > span > svg { width: 1rem; height: 1rem; }
+.select-wrap > svg { width: 1rem; height: 1rem; }
 .select-wrap select { width: 100%; }
 
 .checkbox {
@@ -440,7 +471,7 @@ select { appearance: none; padding-right: 2rem; background-color: var(--backgrou
   display: inline-flex; align-items: center; gap: .25rem;
   border: 1px solid var(--border); border-radius: 999px;
   padding: .125rem .5rem;
-  font-size: 12px; font-weight: 500; line-height: 1.5;
+  font-size: 12px; font-weight: 500; line-height: 1.34;
   white-space: nowrap;
 }
 .verdict::before {
@@ -463,7 +494,7 @@ select { appearance: none; padding-right: 2rem; background-color: var(--backgrou
   background: color-mix(in oklab, var(--fail) 7%, transparent);
   color: var(--fail);
   border-radius: calc(var(--radius) - 2px);
-  padding: .55rem .8rem; margin: 1rem 1.5rem 0;
+  padding: .55rem .8rem; margin: 1rem var(--gutter) 0;
   font-size: 13px; cursor: pointer;
 }
 
@@ -481,7 +512,6 @@ select { appearance: none; padding-right: 2rem; background-color: var(--backgrou
 /* ── charts ──────────────────────────────────────────────────── */
 
 .chart { width: 100%; position: relative; }
-.chart + .chart { margin-top: .75rem; }
 .chart .u-legend { display: none; }
 /* recharts passes cursor={false}: no rule follows the pointer. */
 .chart .u-cursor-x, .chart .u-cursor-y { display: none; }
@@ -497,18 +527,171 @@ select { appearance: none; padding-right: 2rem; background-color: var(--backgrou
 .chart-tooltip .row .dot { width: .625rem; height: .625rem; border-radius: 2px; }
 .chart-tooltip .row .name { color: var(--muted-foreground); }
 .chart-tooltip .row .val { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+.chart-tooltip .foot { margin-top: .25rem; padding-top: .25rem; border-top: 1px solid var(--border); color: var(--muted-foreground); }
+
+/* ChartLegendContent: identity is never colour-alone, so the swatches
+   carry names even when nothing is hovered. */
+.chart-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .35rem 1rem;
+  padding: .25rem 0 1rem; font-size: 12px; color: var(--muted-foreground);
+}
+.chart-legend span { display: flex; align-items: center; gap: .375rem; }
+/* The pale end of a stack is a pale swatch; the ring keeps it findable. */
+.chart-legend i {
+  width: .625rem; height: .625rem; border-radius: 2px; flex: none;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, currentColor 30%, transparent);
+}
+
+/* Small multiples: two measures an order of magnitude apart each keep
+   a scale of their own, so each band needs to say which one it is. */
+.chart-multiple + .chart-multiple { margin-top: 1.25rem; }
+.chart-multiple > .cap {
+  display: flex; align-items: baseline; gap: .5rem;
+  font-size: 12px; font-weight: 500; margin-bottom: .4rem;
+}
+.chart-multiple > .cap .n { margin-left: auto; font: 400 12px var(--mono); color: var(--muted-foreground); }
 
 /* ── tables ──────────────────────────────────────────────────── */
 
-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-th, td { text-align: left; padding: .5rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
-th { height: 2.5rem; padding-block: 0; font-weight: 500; color: var(--muted-foreground); white-space: nowrap; }
+/* Transcribed from the block's table.tsx: text-sm, a 2.5rem header
+   band, p-2 cells, the rule on the row rather than the cell, and —
+   the one that decides how a table reads — whitespace-nowrap.  One
+   line per row means every row is the same height; a value too long
+   for the width scrolls the frame instead of growing the row. */
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+thead { position: sticky; top: 0; z-index: 10; background: var(--muted); }
+thead tr, tbody tr { border-bottom: 1px solid var(--border); }
+tbody tr:last-child { border-bottom: 0; }
 tbody tr:hover { background: color-mix(in oklab, var(--muted) 50%, transparent); }
+th {
+  height: 2.5rem; padding: 0 .5rem; text-align: left; vertical-align: middle;
+  font-weight: 500; color: var(--muted-foreground); white-space: nowrap;
+}
+td { padding: .5rem; text-align: left; vertical-align: middle; white-space: nowrap; }
 td select, td button { height: 2rem; }
 td select { font-size: 12.5px; padding: 0 1.75rem 0 .5rem; }
 .persona { color: var(--muted-foreground); cursor: pointer; }
 .persona:hover { color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
 .act { text-align: right; }
+.text-right, td.text-right, th.text-right { text-align: right; }
+
+/* The prose columns max has and the block doesn't: a memory, an error,
+   a retrieval snippet.  Capped and clipped so they stay one line like
+   every other cell; the title attribute carries the rest, and the
+   phone layout below prints them in full. */
+td.wide { max-width: 26rem; overflow: hidden; text-overflow: ellipsis; }
+td.wide pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* A table that stands on its own rather than inside a card wears the
+   DataTable's own frame: overflow-hidden rounded-lg border.  The
+   scroll lives here, which is also what makes the header stick. */
+.table-wrap {
+  border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px);
+  overflow: auto; max-height: 34rem;
+}
+.table-wrap .empty { padding: 1.25rem 1rem; text-align: center; }
+/* Inside a card the card supplies the frame, but the scroll still has
+   to live somewhere. */
+.card-content.flush { overflow-x: auto; }
+
+/* A cell whose text opens the row. */
+.link-btn {
+  border: 0; background: none; padding: 0; box-shadow: none; height: auto;
+  color: var(--foreground); font: inherit; font-size: 13.5px; font-weight: 500;
+  text-align: left; cursor: pointer;
+}
+.link-btn:hover { background: none; text-decoration: underline; text-underline-offset: 4px; }
+
+/* ── tabs ────────────────────────────────────────────────────────
+   The DataTable's own frame: a bar carrying the view switcher (a tab
+   list at width, a <select> below it) with the actions pushed right,
+   then the panel. */
+
+.tabs { display: flex; flex-direction: column; gap: 1.5rem; width: 100%; }
+.tabs-bar { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: 0 var(--gutter); }
+.tabs-list {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: fit-content; height: 2.25rem; padding: 3px;
+  background: var(--muted); border-radius: calc(var(--radius) - 2px);
+  color: var(--muted-foreground);
+}
+.tabs-trigger {
+  display: inline-flex; align-items: center; justify-content: center; gap: .375rem;
+  flex: 1; height: calc(100% - 1px); padding: .25rem .625rem;
+  border: 1px solid transparent; border-radius: calc(var(--radius) - 4px);
+  background: transparent; color: inherit; box-shadow: none;
+  font: inherit; font-size: 13.5px; font-weight: 500; white-space: nowrap;
+  cursor: pointer; transition: color .15s, box-shadow .15s;
+}
+.tabs-trigger:hover { background: transparent; color: var(--foreground); }
+.tabs-trigger[data-state='active'] {
+  background: var(--background); color: var(--foreground); box-shadow: var(--shadow-sm);
+}
+@media (prefers-color-scheme: dark) {
+  .tabs-trigger[data-state='active'] { background: var(--input); border-color: var(--input); }
+}
+/* The block sizes the count badges inside a trigger down to a 20px pill. */
+.tabs-trigger .badge {
+  width: 1.25rem; height: 1.25rem; padding: 0 .25rem; border: 0;
+  background: color-mix(in oklab, var(--muted-foreground) 30%, transparent);
+}
+.tabs-content { display: flex; flex-direction: column; gap: 1rem; padding: 0 var(--gutter); }
+.tabs-actions { display: flex; align-items: center; gap: .5rem; flex: none; }
+/* Everything living in a tab bar is the block's `sm` size. */
+.tabs-bar form { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: 0; }
+.tabs-bar input, .tabs-bar select, .tabs-bar button { height: 2rem; font-size: 13px; }
+.tabs-bar button { padding: 0 .75rem; gap: .375rem; }
+.tabs-bar .card-desc { margin: 0; }
+.badge.secondary { background: var(--secondary); border-color: transparent; }
+
+/* ── pagination ──────────────────────────────────────────────── */
+
+.pagination { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.pagination .count { flex: 1; font-size: 13px; color: var(--muted-foreground); }
+.pagination .controls { display: flex; align-items: center; gap: 2rem; width: fit-content; }
+.pagination .rows-per-page { display: flex; align-items: center; gap: .5rem; }
+.pagination label { font-size: 13px; font-weight: 500; }
+.pagination .page-of { font-size: 13px; font-weight: 500; white-space: nowrap; }
+.pagination .pager { display: flex; align-items: center; gap: .5rem; }
+
+/* ── dropdown ────────────────────────────────────────────────────
+   A native <details>, which is the honest zero-build substitute for
+   Radix: it opens on click, closes on click-outside via the @click
+   handler, and needs no JS to position. */
+
+.dd { position: relative; }
+.dd > summary { list-style: none; cursor: pointer; }
+.dd > summary::-webkit-details-marker { display: none; }
+/* A <summary> is the trigger, so it has to wear the button. */
+summary.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .375rem;
+  height: 2rem; padding: 0 .75rem;
+  border: 1px solid var(--input); border-radius: calc(var(--radius) - 2px);
+  background: var(--background); box-shadow: var(--shadow-xs);
+  font-size: 13.5px; font-weight: 500; white-space: nowrap;
+}
+summary.btn:hover { background: var(--accent); }
+@media (prefers-color-scheme: dark) { summary.btn { background: oklch(1 0 0 / 5%); } }
+.dd-menu {
+  position: absolute; right: 0; top: calc(100% + .25rem); z-index: 50;
+  min-width: 8rem; padding: .25rem;
+  background: var(--popover); color: var(--foreground);
+  border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px);
+  box-shadow: var(--shadow-md);
+}
+.dd-menu.w56 { width: 14rem; }
+.dd-item {
+  display: flex; align-items: center; gap: .5rem; width: 100%; height: auto;
+  padding: .375rem .5rem; border: 0; border-radius: calc(var(--radius) - 4px);
+  background: none; box-shadow: none; color: inherit;
+  font: inherit; font-size: 13.5px; font-weight: 400;
+  text-align: left; cursor: pointer; white-space: nowrap;
+}
+.dd-item:hover { background: var(--accent); color: var(--accent-foreground); }
+.dd-item > svg { width: 1rem; height: 1rem; color: var(--muted-foreground); }
+.dd-item:disabled { pointer-events: none; opacity: .5; }
+.dd-sep { height: 1px; background: var(--border); margin: .25rem -.25rem; }
+.dd-label { padding: .375rem .5rem; font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
 
 /* Collapsible raw payloads. */
 .trace {
@@ -529,12 +712,14 @@ td select { font-size: 12.5px; padding: 0 1.75rem 0 .5rem; }
 
 /* ── the canonical ledger ────────────────────────────────────── */
 
-.ledger { padding: 0 1.5rem; }
+.ledger { padding: 0 var(--gutter); }
 .entry {
   display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 0 1.1rem;
   padding: .75rem 0; border-bottom: 1px solid var(--border);
 }
-.entry:last-child { border-bottom: 0; }
+/* of-type, not child: the empty-state <p> is the ledger's real last
+   child even when it is hidden. */
+.entry:last-of-type { border-bottom: 0; }
 .entry > .gutter {
   font: 400 11.5px/1.75 var(--mono); color: var(--muted-foreground);
   text-align: right; border-right: 2px solid var(--border); padding-right: .8rem;
@@ -634,7 +819,31 @@ td select { font-size: 12.5px; padding: 0 1.75rem 0 .5rem; }
 .gate .err { margin: .6rem 0 0; }
 
 /* ── responsive ──────────────────────────────────────────────────
-   Below md the sidebar is a Sheet; below lg the content padding
+   Container-query swaps first, matching the block: the chart's range
+   picker is a toggle group at @[767px]/card and a <select> below it,
+   the view picker a tab list at @4xl/main and a <select> below.  These
+   answer to the space the component has, not to the viewport — a card
+   in a narrow column is narrow whatever the window is doing. */
+
+.range-toggle, .view-tabs { display: none; }
+.range-select, .view-select { display: inline-flex; }
+@container card (min-width: 767px) {
+  .range-toggle { display: inline-flex; }
+  .range-select { display: none; }
+}
+@container main (min-width: 56rem) {
+  .view-tabs { display: inline-flex; }
+  .view-select { display: none; }
+}
+/* The chart description shortens at @[540px]/card. */
+.desc-long { display: none; }
+.desc-short { display: block; }
+@container card (min-width: 540px) {
+  .desc-long { display: block; }
+  .desc-short { display: none; }
+}
+
+/* Below md the sidebar is a Sheet; below lg the content padding
    drops to 1rem, matching the block's `px-4 lg:px-6`. */
 
 @media (max-width: 48rem) {
@@ -656,11 +865,7 @@ td select { font-size: 12.5px; padding: 0 1.75rem 0 .5rem; }
 
 @media (max-width: 64rem) {
   .lg-up { display: none !important; }
-  .stat-grid, .px6, .ledger { padding-left: 1rem; padding-right: 1rem; }
-  .card-content.flush th:first-child, .card-content.flush td:first-child { padding-left: 1rem; }
-  .card-content.flush th:last-child, .card-content.flush td:last-child { padding-right: 1rem; }
-  .card-content.flush .empty { padding-left: 1rem; padding-right: 1rem; }
-  .err { margin-left: 1rem; margin-right: 1rem; }
+  .inset { --gutter: 1rem; }
 }
 
 /* Nothing scrolls sideways: each table row becomes a labelled card,
@@ -671,6 +876,16 @@ td select { font-size: 12.5px; padding: 0 1.75rem 0 .5rem; }
   .card { gap: 1rem; padding: 1rem 0; }
   .card-header, .card-content, .card-footer { padding-left: 1rem; padding-right: 1rem; }
   .card-content.flush { padding: .5rem .75rem; }
+
+  /* The row-as-card layout below already draws a border per row, so
+     the DataTable frame would be a box around boxes. */
+  .tabs { gap: 1rem; }
+  .table-wrap { border: 0; border-radius: 0; overflow: visible; max-height: none; }
+  .table-wrap tbody tr:last-child td { border-bottom: 0; }
+  .tabs-bar { flex-wrap: wrap; }
+  .pagination .count, .pagination .rows-per-page { display: none; }
+  .pagination .controls { width: 100%; }
+  .pagination .pager { margin-left: auto; }
 
   table, tbody, tr, td { display: block; width: auto; }
   thead { display: none; }
@@ -683,10 +898,14 @@ td select { font-size: 12.5px; padding: 0 1.75rem 0 .5rem; }
     margin-bottom: .6rem;
   }
   tbody tr:hover { background: var(--card); }
+  /* A row is a card here, not a line, so nothing is clipped: the
+     values wrap and the prose columns print in full. */
   td {
     display: flex; align-items: baseline; justify-content: space-between;
     gap: .75rem; padding: .24rem 0; border-bottom: 0;
+    white-space: normal; max-width: none; overflow: visible;
   }
+  tbody tr, thead tr { border-bottom: 0; }
   td::before {
     content: attr(data-label);
     color: var(--muted-foreground); font-size: 11.5px; font-weight: 500; flex: none;
@@ -696,8 +915,12 @@ td select { font-size: 12.5px; padding: 0 1.75rem 0 .5rem; }
   .card-content.flush th:first-child, .card-content.flush td:first-child,
   .card-content.flush th:last-child, .card-content.flush td:last-child { padding-left: 0; padding-right: 0; }
 
-  /* The row's identity leads the card. */
-  td.rowkey { border-bottom: 1px solid var(--border); margin-bottom: .2rem; padding-bottom: .4rem; }
+  /* The row's identity leads the card — reading left, and keeping
+     clear of the action button pinned to the same corner. */
+  td.rowkey {
+    justify-content: flex-start; gap: .5rem; padding-right: 4.5rem;
+    border-bottom: 1px solid var(--border); margin-bottom: .2rem; padding-bottom: .4rem;
+  }
   td.rowkey::before { display: none; }
   td.rowkey > * { text-align: left; }
 
