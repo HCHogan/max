@@ -101,6 +101,9 @@ data ReplyTarget = ReplyTarget
     -- This is the roster the prompt actually showed, so the names the model
     -- may write are exactly the names it was given.
     rtRosterNames :: ![(T.Text, PrincipalId)],
+    -- | The bot's own principal, so a self-mention the model copied out of
+    -- the transcript is dropped instead of sent.
+    rtSelfPrincipal :: !PrincipalId,
     -- | Whether sticker sending is enabled for this group.
     rtStickers :: !Bool,
     -- | Portable endpoint gates.  The prompt is the friendly policy; these
@@ -291,7 +294,7 @@ sendAndPersistReply rt budget rawBody
             else Just (Body content, CanonicalMessageId <$> mReplyId', t)
         )
 
-    mentionRoster = MentionRoster {names = rt.rtRosterNames}
+    mentionRoster = MentionRoster {names = rt.rtRosterNames, selfPrincipal = Just rt.rtSelfPrincipal}
 
     resolveModelNode mentions = \case
       NText text -> pure [NText text]

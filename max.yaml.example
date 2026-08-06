@@ -360,8 +360,13 @@ llm:
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WeChat via an aixed/WeChat-Hook DLL injected into a Windows PC client.
-# Same degradation as wechatpad: text in and out, no reactions, no
-# quote-replies, no pokes.
+#
+# Capabilities, as the hook actually exposes them: text in and out, inbound
+# @-mentions, and inbound quote-replies (the reply text plus which message it
+# answered).  Outbound has no @-mention, no quote, no reaction, no recall and
+# no poke — the send API takes only a target and a string, and plain "@name"
+# text notifies nobody on WeChat.  Images and files exist in the API but read
+# from a path on the Windows host's own disk, which max cannot write to.
 #
 # Deployment: WeChat + version.dll run on a Windows host; max reaches its HTTP
 # API and it posts callbacks back.  No bridge process — both directions are

@@ -10,14 +10,21 @@ import Max.IR.Lower (textOnlyCaps)
 import Max.IR.Prompt (promptText)
 import Max.Platform
 import Max.Platform.QQ (qqIngestBody)
-import Max.Platform.Types (NativeUserId (..))
+import Max.Platform.Types
+  ( MessageRelation (..),
+    NativeEventId (..),
+    NativeUserId (..),
+  )
 import Max.WechatHook
   ( CallbackMsg (..),
+    Quote (..),
     WechatHookConfig (..),
     callbackPathSegments,
     displayNameFor,
     parseCallback,
+    parseQuote,
     wechatHookCapabilities,
+    wechatHookContent,
     wechatHookInboundBody,
   )
 import Max.Wechatpad (parseFrameIds, wechatInboundBody, wechatpadCapabilities)
@@ -142,6 +149,44 @@ spec = do
     it "decomposes the callback path the way wai's pathInfo will" $
       callbackPathSegments "/wechat/s3cret/callback" `shouldBe` ["wechat", "s3cret", "callback"]
 
+  -- Quoting is the most conversational thing anyone does in a group, and it
+  -- arrives under the same type-49 catch-all as files and links.  Before this
+  -- was read, the reply text was lost outright and max saw only
+  -- "[微信分享或文件消息]".
+  describe "wechathook quote replies" $ do
+    it "recovers the reply text and the quoted message's native id" $
+      parseQuote quoteXml
+        `shouldBe` Just Quote {qText = "走远了", qTargetId = "1234567890123456789"}
+
+    it "emits the reply relation alongside the recovered text" $
+      wechatHookContent "wxid_max" "Max" 49 quoteXml
+        `shouldBe` ( Body [NText "走远了"],
+                     [ReplyTo (NativeEventId "1234567890123456789")]
+                   )
+
+    -- <type> occurs on both sides of <refermsg> and means different things:
+    -- 57 outside marks the quote, the inner one describes what was quoted.
+    -- Reading the inner one would classify a quoted text message as not a
+    -- quote at all.
+    it "reads the outer subtype, not the quoted message's own type" $
+      (qTargetId <$> parseQuote quoteXml) `shouldBe` Just "1234567890123456789"
+
+    -- Files and links share type 49.  Anything without a quote payload must
+    -- land on the unsupported path it took before, never vanish.
+    it "leaves a non-quote app message on the unsupported path" $ do
+      parseQuote "<msg><appmsg><type>6</type><title>报告.pdf</title></appmsg></msg>"
+        `shouldBe` Nothing
+      case wechatHookContent "wxid_max" "Max" 49 "<msg><appmsg><type>6</type></appmsg></msg>" of
+        (Body [NUnsupported u], []) -> u.source `shouldBe` "wechathook:49"
+        other -> expectationFailure ("expected unsupported degradation: " <> show other)
+
+    it "decodes entities in the recovered text without unescaping twice" $
+      qText
+        <$> parseQuote
+          "<msg><appmsg><type>57</type><title>a &amp;lt; b &amp; c</title>\
+          \<refermsg><svrid>1</svrid></refermsg></appmsg></msg>"
+        `shouldBe` Just "a &lt; b & c"
+
   describe "explicit platform backend registry" $ do
     it "selects only an exact declared platform" $ do
       (.pbPlatform) <$> backendForPlatform "matrix" [fake "qq", fake "matrix"]
@@ -220,6 +265,32 @@ spec = do
         \\"timestamp\":1750000000,\"wxid\":\"12345678901@chatroom\",\
         \\"sender\":\"wxid_exampleuser02\",\"roomid\":\"12345678901@chatroom\",\
         \\"content\":\"好吧\"}"
+
+    -- The real shape a WeChat 4.1.10.27 quote-reply arrives in, identifiers
+    -- replaced.  Kept whole rather than minimised: <type> appearing on both
+    -- sides of <refermsg>, and <msgsource> carrying a second escaped document
+    -- inside <refermsg>, are exactly the traps a hand-written reader falls
+    -- into.
+    quoteXml =
+      "<?xml version=\"1.0\"?>\n\
+      \<msg>\n\
+      \\t<appmsg appid=\"\" sdkver=\"0\">\n\
+      \\t\t<title>走远了</title>\n\
+      \\t\t<type>57</type>\n\
+      \\t\t<appattach><cdnthumbaeskey /><aeskey></aeskey></appattach>\n\
+      \\t\t<refermsg>\n\
+      \\t\t\t<type>1</type>\n\
+      \\t\t\t<svrid>1234567890123456789</svrid>\n\
+      \\t\t\t<fromusr>12345678901@chatroom</fromusr>\n\
+      \\t\t\t<chatusr>wxid_exampleuser02</chatusr>\n\
+      \\t\t\t<displayname>Max</displayname>\n\
+      \\t\t\t<content>先给你个小甜点</content>\n\
+      \\t\t\t<msgsource>&lt;msgsource&gt;&lt;membercount&gt;9&lt;/membercount&gt;&lt;/msgsource&gt;</msgsource>\n\
+      \\t\t\t<createtime>1750000000</createtime>\n\
+      \\t\t</refermsg>\n\
+      \\t</appmsg>\n\
+      \\t<fromusername>wxid_exampleuser01</fromusername>\n\
+      \</msg>"
 
     hookConfig =
       WechatHookConfig

@@ -784,12 +784,29 @@ consumeMarkers marker = go
 -- so without this table the model cannot tell who @[\@#123]@ is — including
 -- itself.  It is also the vocabulary the send path rescues @\@显示名@
 -- against, so the names the model may write are exactly the names it read.
+-- | The roster /line/ is where the model is told which id is its own.  The
+-- roster /table/ must stay undecorated, because the same entries resolve the
+-- display of a mention the model writes, and a display is shipped content.
+selfRosterLabel :: PromptInputs -> Int64 -> Text -> Text
+selfRosterLabel pi' principal name
+  | PrincipalId self <- pi'.triggerMessage.selfPrincipalId,
+    principal == self =
+      name <> "（你自己）"
+  | otherwise = name
+
 contextRoster :: PromptInputs -> [(Int64, Text)]
 contextRoster pi' =
   let PrincipalId selfPrincipal = pi'.triggerMessage.selfPrincipalId
       PrincipalId senderPrincipal = pi'.triggerMessage.authorPrincipalId
    in dedupeRoster $
-        (selfPrincipal, "Max（你自己）")
+        -- A bare name, never an annotated one.  This table is dual-purpose:
+        -- the prompt reads it, and 'Max.IR.Prompt.parseModelChunk' reads it
+        -- back to resolve the display of any [@#id] the model writes.  So
+        -- anything decorative here becomes a mention's display name and then
+        -- user-visible text — "Max（你自己）" shipped to a WeChat group as
+        -- "@Max（你自己）".  The "you" annotation belongs to the rendered
+        -- roster line alone; see 'selfRosterLabel'.
+        (selfPrincipal, "Max")
           : (senderPrincipal, triggerSenderName pi'.triggerMessage)
           -- Newest line first, because a speaker's name is whatever they are
           -- called *now*: a row carries the name captured when it was
@@ -1031,7 +1048,11 @@ renderContext pi' =
             <> map ("  " <>) pi'.groupBrief
             <> ["  当前模型：" <> pi'.session.model]
             <> [ "  成员对照（[@#<id>] 即 @某人）："
-                   <> T.intercalate "、" ["[mention#" <> tshow principal <> "]=" <> name | (principal, name) <- roster]
+                   <> T.intercalate
+                     "、"
+                     [ "[mention#" <> tshow principal <> "]=" <> selfRosterLabel pi' principal name
+                     | (principal, name) <- roster
+                     ]
                | pi'.outputCapabilities.canMention
                ]
       -- Questions somebody else's turn is already handling never reach

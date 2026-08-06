@@ -317,7 +317,7 @@ captionBody outputCaps _ (Just caption) =
   where
     (quoted, parsed) =
       parseModelChunk
-        MentionRoster {names = []}
+        MentionRoster {names = [], selfPrincipal = Nothing}
         (T.intercalate "\n" (map chunkSource (planReply caption)))
     body = trimEdges (mergeText (concatMap resolve parsed.nodes))
     resolve = \case

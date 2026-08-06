@@ -1302,6 +1302,7 @@ sendTarget outputCaps gm rosterNames stickersOn =
     { rtGroupId = gm.groupId,
       rtSelfId = gm.selfId,
       rtRosterNames = rosterNames,
+      rtSelfPrincipal = gm.selfPrincipalId,
       rtStickers = stickersOn,
       rtCanReply = outputCaps.canReply,
       rtCanMention = outputCaps.canMention,

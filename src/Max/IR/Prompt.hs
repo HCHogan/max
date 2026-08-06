@@ -67,8 +67,14 @@ import Max.Util (readIntegral, tshow)
 -- simply fails to resolve to an account at send time and the mention folds
 -- back to @\@name@ text, which is the same answer the old whitelist gave
 -- and one fewer thing to keep in sync with the platform.
-newtype MentionRoster = MentionRoster
-  { names :: [(Text, PrincipalId)]
+data MentionRoster = MentionRoster
+  { names :: [(Text, PrincipalId)],
+    -- | The bot's own principal, when the caller knows it.  A model that has
+    -- just read a transcript where every line addressed it copies that token
+    -- back out; on an endpoint where mentions lower to text, the result is
+    -- the bot visibly @-ing itself.  Nobody addresses themselves, so the
+    -- token is dropped rather than rendered.
+    selfPrincipal :: Maybe PrincipalId
   }
 
 parseModelChunk :: MentionRoster -> Text -> (Maybe Int64, Body 'ModelParsed)
@@ -100,6 +106,12 @@ parseModelChunk roster t0 =
     mentionNodes input = case earliestMention input of
       Nothing -> [NText input | not (T.null input)]
       Just (before, rest)
+        -- Addressing yourself is never what was meant, so the token leaves no
+        -- trace: not a mention, and not the @name text a fold would leave
+        -- either.  Whatever the model wrote around it still stands on its own.
+        | Just (principal, _, after) <- mentionToken' rest,
+          Just principal == roster.selfPrincipal ->
+            [NText before | not (T.null before)] <> mentionNodes (T.stripStart after)
         | Just (principal, display, after) <- mentionToken' rest ->
             [NText before | not (T.null before)]
               <> (NMention principal display : mentionTail after)

@@ -53,7 +53,10 @@ module Max.WechatHook
     wechatHookWorker,
     platformName,
     wechatHookCapabilities,
+    wechatHookContent,
     wechatHookInboundBody,
+    parseQuote,
+    Quote (..),
     CallbackMsg (..),
     parseCallback,
     callbackPathSegments,
@@ -116,6 +119,7 @@ import Max.Platform.Types
   ( ConversationKind (ConversationGroup),
     EndpointMode (EndpointStandalone),
     EventKind (EventMessage),
+    MessageRelation (ReplyTo),
     NativeAccountId (..),
     NativeConversationId (..),
     NativeEventId (..),
@@ -258,7 +262,26 @@ postJson runtime url payload =
             request0
               { HTTP.method = "POST",
                 HTTP.requestBody = HTTP.RequestBodyLBS (encode payload),
-                HTTP.requestHeaders = [("Content-Type", "application/json")]
+                HTTP.requestHeaders =
+                  [ ("Content-Type", "application/json"),
+                    -- The DLL's embedded HTTP server abandons pooled
+                    -- connections: a request written onto one it has already
+                    -- closed comes back as NoResponseDataReceived.  Six
+                    -- minutes of live traffic produced three, two of them on
+                    -- sends — and a send that fails this way parks at
+                    -- outcome_unknown precisely because the message most
+                    -- likely did arrive; only the response was lost.
+                    --
+                    -- Taking a fresh connection per request is the fix that
+                    -- stays honest.  The tempting alternative — letting
+                    -- http-client retry a request that failed on a reused
+                    -- connection — is disabled process-wide on purpose
+                    -- ('noImplicitRetryTlsSettings'), and re-enabling it for
+                    -- this backend would risk posting a message twice for
+                    -- exactly the failure that cannot be told from success.
+                    -- Connection setup is free at this traffic level.
+                    ("Connection", "close")
+                  ]
               }
       runBuffered runtime StandardPool maxResponseBytes statusPreviewBytes request >>= \case
         Left (HttpStatusFailure code _ preview _) ->
@@ -391,6 +414,8 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
           let endpoint = endpoints Map.! cb.cbRoomId
               nativeEvent = T.pack (show cb.cbMsgId)
               selfAuthored = cb.cbSender == cfg.whSelfWxid
+              (body, relations) =
+                wechatHookContent cfg.whSelfWxid cfg.whBotName cb.cbType cb.cbContent
               envelope =
                 InboundEnvelope
                   { endpointId = endpoint.endpointId,
@@ -403,8 +428,8 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
                         else now,
                     receivedAt = now,
                     eventKind = EventMessage,
-                    content = wechatHookInboundBody cfg.whSelfWxid cfg.whBotName cb.cbType cb.cbContent,
-                    relations = [],
+                    content = body,
+                    relations,
                     sourceCursor = Nothing,
                     rawPayload = Just (toJSON cb)
                   }
@@ -528,6 +553,94 @@ wechatHookInboundBody selfWxid botName msgType content
                     )
               }
         ]
+
+-- | Content and relations for one callback.
+--
+-- A quote-reply is the one non-text kind this transport describes well enough
+-- to recover: WeChat carries it as an ordinary app message whose payload names
+-- both what the sender typed and which message they were answering.  Without
+-- this, the most conversational thing anyone does in a group reaches max as
+-- @[微信分享或文件消息]@ — the reply text lost entirely.
+--
+-- The reply relation resolves only when max ingested the quoted message, which
+-- means quoting a person works and quoting max's own message does not: this
+-- transport never reports the id of a message max sent, so there is nothing on
+-- record to point at.  The text is recovered either way, which is the part
+-- that carries the meaning.
+wechatHookContent :: Text -> Text -> Int -> Text -> (Body 'Ingest, [MessageRelation])
+wechatHookContent selfWxid botName msgType content
+  | msgType == appMessageType,
+    Just quote <- parseQuote content =
+      ( wechatHookBody selfWxid botName quote.qText,
+        [ReplyTo (NativeEventId quote.qTargetId)]
+      )
+  | otherwise = (wechatHookInboundBody selfWxid botName msgType content, [])
+
+-- | The reply a quote carries: what the sender wrote, and the native id of the
+-- message they wrote it about.
+data Quote = Quote
+  { qText :: !Text,
+    qTargetId :: !Text
+  }
+  deriving stock (Eq, Show)
+
+-- | Recognise a quote-reply inside a type-49 app message.
+--
+-- Deliberately not a general XML parser, and no new dependency for one: the
+-- payload is machine-written by WeChat, and exactly three fields are wanted
+-- from it.  Every failure returns 'Nothing', which lands the message on the
+-- unsupported path it would have taken anyway — a shape this does not
+-- recognise degrades, it never disappears.
+--
+-- The document is split at @refermsg@ before anything is read, because
+-- @\<type\>@ appears on both sides and means different things: 57 on the outer
+-- app message is what makes this a quote, while the inner one describes the
+-- message being quoted.
+parseQuote :: Text -> Maybe Quote
+parseQuote xml = do
+  let (outer, refer) = T.breakOn "<refermsg>" xml
+  if T.null refer
+    then Nothing
+    else do
+      subtype <- tagText "type" outer
+      if T.strip subtype /= quoteSubtype
+        then Nothing
+        else do
+          target <- T.strip <$> tagText "svrid" refer
+          if T.null target
+            then Nothing
+            else Just Quote {qText = fromMaybe "" (tagText "title" outer), qTargetId = target}
+
+-- | Body of the first @\<tag\>…\</tag\>@ pair, entity-decoded.
+tagText :: Text -> Text -> Maybe Text
+tagText tag input =
+  let open = "<" <> tag <> ">"
+      close = "</" <> tag <> ">"
+      (_, atOpen) = T.breakOn open input
+   in if T.null atOpen
+        then Nothing
+        else
+          let (inner, rest) = T.breakOn close (T.drop (T.length open) atOpen)
+           in if T.null rest then Nothing else Just (unescapeXml inner)
+
+-- | @&amp;@ resolves last: undoing it first would turn a literally escaped
+-- @&amp;lt;@ into a @<@ that was never in the text.
+unescapeXml :: Text -> Text
+unescapeXml =
+  T.replace "&amp;" "&"
+    . T.replace "&#39;" "'"
+    . T.replace "&apos;" "'"
+    . T.replace "&quot;" "\""
+    . T.replace "&gt;" ">"
+    . T.replace "&lt;" "<"
+
+-- | WeChat's catch-all for app messages: files, links, quotes and more all
+-- arrive under it, separated only by the inner subtype.
+appMessageType :: Int
+appMessageType = 49
+
+quoteSubtype :: Text
+quoteSubtype = "57"
 
 wechatMessageDescription :: Int -> Text
 wechatMessageDescription = \case

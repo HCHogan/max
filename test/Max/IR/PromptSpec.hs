@@ -14,7 +14,7 @@ import Test.Hspec
 -- fails to resolve to an account at send time and the mention folds back to
 -- text, which is the same answer the old whitelist gave.
 roster :: MentionRoster
-roster = MentionRoster {names = [("张三", PrincipalId 123)]}
+roster = MentionRoster {names = [("张三", PrincipalId 123)], selfPrincipal = Just (PrincipalId 7)}
 
 mentionNode :: Int64 -> Node 'ModelParsed
 mentionNode principal =
@@ -89,6 +89,18 @@ mentionSpec = describe "mention parsing" $ do
     -- account on this conversation and the send path folds it to @name.
     parse "[mention#999] 在吗"
       `shouldBe` (Nothing, Body [NMention (PrincipalId 999) "999", NText " 在吗"])
+
+  -- Every line that reaches the bot addresses the bot, so a model copying the
+  -- shape of its own transcript writes its own id back out.  On an endpoint
+  -- where mentions lower to text that shipped as a visible "@Max（你自己）" —
+  -- the roster's instructional label, sent to a WeChat group.  The token now
+  -- leaves nothing behind: not a mention, and not @name text either.
+  it "drops a mention of the bot itself rather than addressing itself" $ do
+    parse "[mention#7] 先给你个小甜点"
+      `shouldBe` (Nothing, Body [NText "先给你个小甜点"])
+    -- Only the self token goes; a real addressee in the same line survives.
+    parse "[mention#7] 问 [mention#123] 去"
+      `shouldBe` (Nothing, Body [NText "问 ", NMention (PrincipalId 123) "张三", NText " 去"])
 
   it "no longer reads a bare @<digits> span as a mention" $
     -- That was QQ's wire spelling of an at-segment.  Principal ids are not
