@@ -1,45 +1,59 @@
-/* max admin panel.
+/* max admin panel — the console build.
  *
- * The palette is not chosen from a swatch library — it is lifted from
- * the artifact the operator already reads every day: `journalctl -u
- * max` with colour on.  INFO renders cyan, WARN amber, and the bot's
- * own reaction-face vocabulary supplies the rest (裂开 = failed, OK =
- * green, silence = grey).  Status colour in here therefore means the
- * same thing it means in the logs and in the group.
+ * The palette is still lifted from the artifact the operator already
+ * reads every day: `journalctl -u max` with colour on.  INFO renders
+ * cyan, WARN amber, and the bot's own reaction-face vocabulary
+ * supplies the rest (裂开 = failed, OK = green).  Status colour in
+ * here means the same thing it means in the logs and in the group.
  *
- * Type follows the transcript line — `[11:32 Max #761459602]: 文本`.
- * Identity is monospace, payload is prose.  Every id in this panel is
- * a `#nnnn` handle you scan, never text you read, and it is set that
- * way.  CJK falls back to system faces on purpose: a subsetted Han
+ * The shape is new.  The system's thesis is one canonical ledger with
+ * many projections, and the panel now wears it: a fixed instrument
+ * rail carries the live vitals and a pipeline-grouped map of the
+ * views, and every view renders as a projection of the same ledger —
+ * mono identity on the left, prose payload on the right, hairlines
+ * instead of boxes.  Section headers draw the same `── label ───`
+ * rule the source files use to divide themselves.
+ *
+ * Chart series are separate steps of the same two hues, sat in the
+ * OKLCH band chart marks need (validated for CVD separation and
+ * contrast in both schemes); text tokens keep the contrast text
+ * needs.  CJK falls back to system faces on purpose: a subsetted Han
  * webfont is megabytes, and this is a tool one person opens over a
  * tailnet.
  */
 
 @font-face {
   font-family: 'Plex Mono';
-  src: url('/static/vendor/plex-mono-400.woff2') format('woff2');
+  src: url('vendor/plex-mono-400.woff2') format('woff2');
   font-weight: 400;
   font-display: swap;
 }
 @font-face {
   font-family: 'Plex Mono';
-  src: url('/static/vendor/plex-mono-600.woff2') format('woff2');
+  src: url('vendor/plex-mono-600.woff2') format('woff2');
   font-weight: 600;
   font-display: swap;
 }
 
 :root {
-  --ground: #0c1114;
-  --panel: #131b1f;
-  --rule: #1e2a30;
-  --fg: #dbe4e7;
-  --dim: #78898f;
+  --bg: #0a0f12;
+  --surface: #10171b;
+  --inset: #0d1417;
+  --line: #1d282e;
+  --fg: #d7e0e4;
+  --dim: #8fa0a7;
+  --faint: #5f7077;
 
   /* Semantics, straight from the bot's own vocabulary. */
-  --info: #47b6c8;  /* journalctl INFO — also the interactive accent */
-  --warn: #d7a13f;  /* journalctl WARN — and 托腮, "working on it" */
-  --fail: #e06a52;  /* 裂开 */
-  --ok: #57b183;
+  --info: #4cb5c6;  /* journalctl INFO — also the interactive accent */
+  --warn: #d3a04c;  /* journalctl WARN — and 托腮, "working on it" */
+  --fail: #e0684f;  /* 裂开 */
+  --ok: #52ae80;
+
+  /* Chart steps of the same two hues, in the lightness band marks
+     need rather than the band text needs. */
+  --chart-1: #1e9cb0;
+  --chart-2: #bd8a1a;
 
   --mono: 'Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   --sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
@@ -49,56 +63,63 @@
    same instrument in daylight, not a different one. */
 @media (prefers-color-scheme: light) {
   :root {
-    --ground: #eef2f3;
-    --panel: #fff;
-    --rule: #dae1e4;
-    --fg: #16232a;
-    --dim: #5d6f76;
-    --info: #15788a;
-    --warn: #8f6413;
-    --fail: #b5442c;
-    --ok: #2f7c56;
+    --bg: #eef1f2;
+    --surface: #fff;
+    --inset: #e8edef;
+    --line: #d6dee1;
+    --fg: #172429;
+    --dim: #55666d;
+    --faint: #82959c;
+    --info: #0d7286;
+    --warn: #8a5f11;
+    --fail: #b23f28;
+    --ok: #257a51;
+    --chart-1: #0087a6;
+    --chart-2: #95660d;
   }
 }
 
 [x-cloak] { display: none !important; }
 * { box-sizing: border-box; }
 
+/* One radius for everything interactive or contained: 2px, just
+   enough to stop corners glinting.  An instrument, not an app. */
+
 body {
   margin: 0;
-  padding: 0 1rem 3rem;
-  background: var(--ground);
+  background: var(--bg);
   color: var(--fg);
-  font: 15px/1.55 var(--sans);
+  font: 14px/1.55 var(--sans);
   -webkit-text-size-adjust: 100%;
 }
 
-/* ── the log line ────────────────────────────────────────────────
-   The signature.  Reads as one line out of `journalctl -u max`,
-   because that is what this panel is a window onto.  It replaces the
-   stat-card row: same facts, a quarter of the height, and it says
-   whose console this is. */
+/* ── frame ───────────────────────────────────────────────────────
+   Desktop: a fixed instrument rail on the left, content on the
+   right.  The rail is the old log-line header given a column: it
+   says whose console this is, holds the live vitals, and maps the
+   views onto the pipeline they inspect. */
 
-.logline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: .3rem .85rem;
-  font: 400 13px/2.6 var(--mono);
-  color: var(--dim);
-  border-bottom: 1px solid var(--rule);
+.frame { display: grid; grid-template-columns: 15rem 1fr; min-height: 100dvh; }
+
+.rail {
+  position: sticky; top: 0; align-self: start;
+  height: 100dvh; overflow-y: auto;
+  border-right: 1px solid var(--line);
+  padding: 1rem .9rem 1.2rem;
+  display: flex; flex-direction: column; gap: 1.1rem;
+  font: 400 12.5px/1.8 var(--mono);
 }
-.logline time { color: var(--dim); }
-.logline .app { color: var(--fg); font-weight: 600; }
-.logline .ver { color: var(--info); }
-.logline b { color: var(--fg); font-weight: 600; }
-.logline i { font-style: normal; }
+
+.brand { display: flex; align-items: baseline; gap: .5rem; }
+.brand .app { color: var(--fg); font-weight: 600; font-size: 14px; }
+.brand .ver { color: var(--info); }
+.brand .rev { color: var(--faint); }
 
 /* Breathing only while the bot is actually working — the pulse
    carries state, so an idle panel holds still. */
 .dot {
   width: .5rem; height: .5rem; border-radius: 50%;
-  background: var(--ok); align-self: center;
+  background: var(--ok); align-self: center; flex: none;
 }
 .dot.busy { background: var(--warn); animation: breathe 2.4s ease-in-out infinite; }
 @keyframes breathe { 50% { opacity: .25; } }
@@ -106,42 +127,125 @@ body {
   .dot.busy { animation: none; }
 }
 
-nav {
-  display: flex; gap: .15rem; flex-wrap: wrap;
-  padding: .6rem 0 0;
-}
-nav button {
-  background: none; border: 0; border-bottom: 2px solid transparent;
-  color: var(--dim); padding: .3rem .7rem; border-radius: 0;
-  font: inherit;
-}
-nav button:hover { color: var(--fg); }
-nav button.active { color: var(--fg); border-bottom-color: var(--info); }
+/* Vitals read as the log line always did: key=value, dim key. */
+.vitals { color: var(--dim); }
+.vitals div { display: flex; justify-content: space-between; gap: .6rem; }
+.vitals b { color: var(--fg); font-weight: 400; }
 
-section { padding-top: 1.4rem; }
+/* The one conversation the ledger views share.  Set it once here;
+   消息账本 / 上下文 / 记忆 all follow. */
+.focus label { display: block; color: var(--faint); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+.focus input { width: 100%; }
+
+.navgroups { display: flex; flex-direction: column; gap: .9rem; }
+.navgroup > h3 {
+  margin: 0 0 .15rem;
+  font: 600 10px/1.6 var(--mono);
+  letter-spacing: .1em; text-transform: uppercase;
+  color: var(--faint);
+}
+.navgroup button {
+  display: flex; width: 100%; justify-content: space-between; align-items: baseline;
+  background: none; border: 0; border-left: 2px solid transparent; border-radius: 0;
+  color: var(--dim); padding: .12rem .45rem .12rem .55rem;
+  font: inherit; cursor: pointer; text-align: left;
+}
+.navgroup button:hover { color: var(--fg); }
+.navgroup button.active { color: var(--fg); border-left-color: var(--info); background: var(--surface); }
+/* The digit doubles as documentation: press it anywhere outside an
+   input and you are on that view. */
+.navgroup button kbd { color: var(--faint); font: 400 10.5px var(--mono); }
+
+.content { padding: 1.1rem 1.4rem 3rem; min-width: 0; }
+
+/* Mobile keeps the old signature instead: one line out of
+   `journalctl -u max`, then a tab strip.  Glanced at, not read, so
+   it must not steal rows from the content — anything over the edge
+   scrolls rather than wrapping. */
+.logline { display: none; }
+
+@media (max-width: 64rem) {
+  .frame { display: block; }
+  .rail { display: none; }
+  .content { padding: 0 .55rem 2rem; }
+
+  .logline {
+    display: flex;
+    align-items: baseline;
+    gap: .55rem;
+    font: 400 11.5px/2.4 var(--mono);
+    color: var(--dim);
+    border-bottom: 1px solid var(--line);
+    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
+  }
+  .logline::-webkit-scrollbar { display: none; }
+  .logline > * { flex: none; }
+  .logline .app { color: var(--fg); font-weight: 600; }
+  .logline .ver { color: var(--info); }
+  .logline b { color: var(--fg); font-weight: 600; }
+
+  .tabs {
+    display: flex; gap: .15rem;
+    overflow-x: auto; scrollbar-width: none;
+    padding: .45rem 0 0;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tabs button {
+    flex: none;
+    background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
+    color: var(--dim); padding: .25rem .6rem; font: inherit; cursor: pointer;
+  }
+  .tabs button.active { color: var(--fg); border-bottom-color: var(--info); }
+}
+@media (min-width: 64.01rem) {
+  .tabs { display: none; }
+}
+
+/* ── section grammar ─────────────────────────────────────────────
+   The h2 draws the same `── label ───────` divider the source files
+   use to section themselves; the rule is a border, not glyphs, so it
+   meets the right edge cleanly at any width. */
+
+section { padding-top: 1.2rem; }
 
 h2 {
+  display: flex; align-items: center; gap: .6rem;
   font: 600 11px/1 var(--mono);
   letter-spacing: .08em; text-transform: uppercase;
-  color: var(--dim); margin: 1.75rem 0 .6rem;
+  color: var(--dim); margin: 1.9rem 0 .65rem;
 }
+h2::before { content: ''; width: 1.1rem; border-top: 1px solid var(--line); }
+h2::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
 h2:first-child { margin-top: 0; }
 
 /* ── identity vs payload ─────────────────────────────────────────
    Every opaque handle the bot uses — group, QQ, message, task —
    wears the same `#nnnn` form it has in the transcript. */
 
-.id { font: 400 .9em var(--mono); color: var(--fg); }
-.id::before { content: '#'; color: var(--dim); }
+.id { font: 400 .9em var(--mono); color: var(--fg); overflow-wrap: anywhere; }
+.id::before { content: '#'; color: var(--faint); }
 .muted { color: var(--dim); }
 .stamp { font: 400 .85em var(--mono); color: var(--dim); }
 
+/* Allow/deny is a two-value fact; a dot and a word beats a pill. */
+.verdict::before {
+  content: ''; display: inline-block; width: .45rem; height: .45rem;
+  border-radius: 50%; margin-right: .4rem; vertical-align: .05em;
+  background: var(--ok);
+}
+.verdict.deny::before { background: var(--fail); }
+.verdict.hold::before { background: var(--warn); }
+.verdict { font: 400 .85em var(--mono); }
+
+.ok { color: var(--ok) !important; }
+.bad { color: var(--fail) !important; }
+
 /* ── token gate ──────────────────────────────────────────────── */
 
-.gate { display: flex; align-items: center; justify-content: center; min-height: 82vh; }
+.gate { display: flex; align-items: center; justify-content: center; min-height: 88dvh; }
 .gate form {
-  background: var(--panel); border: 1px solid var(--rule); border-radius: 6px;
-  padding: 1.5rem; width: min(21rem, 100%);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
+  padding: 1.5rem; width: min(21rem, calc(100% - 2rem));
 }
 .gate h1 { font: 600 15px/1 var(--mono); margin: 0 0 .35rem; }
 .gate p { margin: 0; font-size: .85rem; }
@@ -150,42 +254,67 @@ h2:first-child { margin-top: 0; }
 
 /* ── controls ────────────────────────────────────────────────── */
 
-button, input, select {
+button, input, select, textarea {
   font: inherit; color: var(--fg);
-  background: var(--panel); border: 1px solid var(--rule);
-  border-radius: 4px; padding: .3rem .55rem;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: 2px; padding: .3rem .55rem;
 }
-input, select { font-family: var(--mono); font-size: .9em; }
+input, select, textarea { font-family: var(--mono); font-size: .9em; }
+input::placeholder, textarea::placeholder { color: var(--faint); opacity: 1; }
 button { cursor: pointer; font-size: .9em; }
 button:hover { border-color: var(--info); }
-button:disabled { cursor: not-allowed; opacity: .45; border-color: var(--rule); }
+button:active { transform: translateY(1px); }
+button:disabled { cursor: not-allowed; opacity: .45; border-color: var(--line); transform: none; }
 :focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
 
-button[type='submit'] { color: var(--info); border-color: color-mix(in srgb, var(--info) 45%, var(--rule)); }
+button[type='submit'], button.primary {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 45%, var(--line));
+}
 button.danger { color: var(--fail); border-color: transparent; padding: .15rem .45rem; }
 button.danger:hover { border-color: var(--fail); }
+button.ghost { color: var(--dim); border-color: transparent; }
+button.ghost:hover { color: var(--fg); border-color: var(--line); }
 
-.row { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.1rem; }
+textarea { width: 100%; min-height: 8rem; resize: vertical; line-height: 1.6; }
+
+.row { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.1rem; align-items: center; }
 .row input { min-width: 7rem; flex: 1 1 7rem; }
+.row .grow { flex: 1 1 12rem; }
 .check { display: flex; align-items: center; gap: .3rem; color: var(--dim); font-size: .9em; }
 
-/* Log filters.  Declared before the mobile override below, which
-   regrids them — same specificity, so source order decides. */
 .filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.1rem; }
 .filters .search { flex: 1 1 12rem; min-width: 8rem; }
 
+/* An error is a warning line, in the log's own grammar — because
+   that is what it is.  Click dismisses. */
 .err {
   border-left: 2px solid var(--fail);
   background: color-mix(in srgb, var(--fail) 8%, transparent);
-  padding: .5rem .7rem; margin: .9rem 0; cursor: pointer;
-  font: 400 .9em var(--mono);
+  padding: .45rem .7rem; margin: .9rem 0; cursor: pointer;
+  font: 400 12px/1.7 var(--mono);
 }
+.err::before { content: 'WARN '; color: var(--fail); }
+
+.empty { color: var(--dim); font: 400 .9em var(--mono); padding: .5rem 0; }
+.empty code { color: var(--info); font-family: var(--mono); }
+
+/* A fact strip: the header line of a view, key=value in mono, same
+   grammar as the rail vitals and the old log line. */
+.facts {
+  display: flex; flex-wrap: wrap; gap: .3rem 1rem;
+  font: 400 12px/1.8 var(--mono); color: var(--dim);
+  margin: .2rem 0 .9rem;
+}
+.facts i { font-style: normal; }
+.facts i::after { content: '='; color: var(--faint); }
+.facts b { color: var(--fg); font-weight: 400; }
 
 /* ── charts ──────────────────────────────────────────────────── */
 
 .chart {
-  background: var(--panel); border: 1px solid var(--rule); border-radius: 6px;
-  padding: .6rem .4rem .2rem; overflow: hidden;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
+  padding: .6rem .4rem .2rem; overflow: hidden; margin-bottom: .5rem;
 }
 .u-legend { font: 400 11px var(--mono); color: var(--dim); padding-top: .2rem; }
 /* uPlot underlines each legend label with the series stroke, which
@@ -197,45 +326,90 @@ button.danger:hover { border-color: var(--fail); }
 /* ── tables ──────────────────────────────────────────────────── */
 
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: .45rem .55rem; border-bottom: 1px solid var(--rule); }
+th, td { text-align: left; padding: .45rem .55rem; border-bottom: 1px solid var(--line); vertical-align: baseline; }
 th {
   font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
   color: var(--dim); padding-bottom: .5rem;
 }
-tbody tr:hover { background: var(--panel); }
-td select { padding: .15rem .35rem; }
-.persona { color: var(--dim); font-size: .9em; }
+td { font-size: .95em; }
+tbody tr:hover { background: var(--surface); }
+td select { padding: .15rem .35rem; max-width: 100%; }
+.persona { color: var(--dim); font-size: .9em; cursor: pointer; }
+.persona:hover { color: var(--fg); }
+.num { font: 400 .9em var(--mono); }
 
-/* Allow/deny is a two-value fact; a dot and a word beats a pill. */
-.verdict::before {
-  content: ''; display: inline-block; width: .45rem; height: .45rem;
-  border-radius: 50%; margin-right: .4rem; vertical-align: .05em;
-  background: var(--ok);
-}
-.verdict.deny::before { background: var(--fail); }
-.verdict { font: 400 .85em var(--mono); }
-
-.empty { color: var(--dim); font: 400 .9em var(--mono); padding: .5rem 0; }
-.empty code { color: var(--info); }
-.ok { color: var(--ok) !important; }
-.bad { color: var(--fail) !important; }
+/* An editor that unfolds under its row — persona, a skill body —
+   belongs to the table, not to a dialog. */
+tr.editor > td { background: var(--inset); padding: .7rem .55rem .9rem; }
+.editor .row { margin-bottom: .5rem; }
+.editor .row:last-child { margin-bottom: 0; }
 
 .trace {
-  background: var(--panel); border: 1px solid var(--rule); border-radius: 5px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
   margin: .4rem 0; padding: .35rem .55rem;
 }
 .trace > summary {
   cursor: pointer; display: flex; flex-wrap: wrap; gap: .35rem 1rem;
+  align-items: baseline;
   color: var(--dim); font: 400 11px/1.7 var(--mono);
 }
 .trace > summary:hover { color: var(--fg); }
-.trace pre {
+.trace pre, .editor pre {
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 26rem; overflow-y: auto;
-  background: var(--ground); border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--inset); border: 1px solid var(--line); border-radius: 2px;
   padding: .5rem; font: 400 11px/1.55 var(--mono);
 }
 
-/* ── canonical timeline ───────────────────────────────────────── */
+/* ── the ledger ──────────────────────────────────────────────────
+   The canonical timeline is the panel's centre, and it reads as the
+   ledger it is: a mono gutter of seq/time/id on the left, the
+   hydrated payload on the right, one hairline between entries.  The
+   gutter column is the spine the eye tracks. */
+
+.ledger { border-top: 1px solid var(--line); }
+.entry {
+  display: grid; grid-template-columns: 6.5rem minmax(0, 1fr);
+  gap: 0 1rem;
+  padding: .55rem 0;
+  border-bottom: 1px solid var(--line);
+}
+.entry > .gutter {
+  font: 400 11px/1.7 var(--mono); color: var(--dim);
+  text-align: right;
+  border-right: 2px solid var(--line);
+  padding-right: .7rem;
+}
+.gutter .seq { color: var(--fg); }
+.gutter .seq::before { content: 'seq '; color: var(--faint); }
+.entry > .payload { min-width: 0; }
+.payload > header {
+  display: flex; flex-wrap: wrap; gap: .25rem .7rem; align-items: baseline;
+  margin-bottom: .25rem;
+}
+.payload > header .who { font-weight: 600; font-size: .95em; }
+
+.nodes { display: flex; flex-direction: column; gap: .15rem; }
+.node {
+  border-left: 2px solid var(--line);
+  padding: .1rem .45rem;
+  overflow-wrap: anywhere;
+  max-width: 60rem;
+}
+.node.node-mention { border-left-color: var(--info); }
+.node.node-media, .node.node-card, .node.node-forward { border-left-color: var(--warn); }
+.node.node-unsupported { border-left-color: var(--fail); }
+.node img {
+  display: block;
+  width: min(18rem, 70vw); max-height: 18rem;
+  object-fit: contain; background: var(--inset);
+  margin: .2rem 0 .35rem;
+}
+.node details { font: 400 11px var(--mono); color: var(--dim); }
+.node details pre, .entry td pre {
+  white-space: pre-wrap; overflow-wrap: anywhere; margin: .2rem 0;
+  font: 400 11px/1.45 var(--mono);
+}
+.entry .trace { margin-bottom: 0; }
 
 .endpoint-grid {
   display: grid;
@@ -245,49 +419,11 @@ td select { padding: .15rem .35rem; }
 .endpoint-grid .trace { margin: 0; }
 .endpoint-grid pre { margin-bottom: 0; }
 
-.timeline { display: grid; gap: .7rem; }
-.timeline-item {
-  background: var(--panel);
-  border: 1px solid var(--rule);
-  border-radius: 6px;
-  padding: .6rem;
-}
-.timeline-item > header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .25rem .7rem;
-  align-items: baseline;
-  margin-bottom: .5rem;
-}
-.canonical-nodes { display: flex; flex-wrap: wrap; align-items: start; gap: .25rem; }
-.canonical-node {
-  max-width: 100%;
-  border-left: 2px solid var(--rule);
-  padding: .18rem .4rem;
-  overflow-wrap: anywhere;
-}
-.canonical-node.node-mention { border-left-color: var(--info); }
-.canonical-node.node-media,
-.canonical-node.node-card,
-.canonical-node.node-forward { border-left-color: var(--warn); }
-.canonical-node.node-unsupported { border-left-color: var(--fail); }
-.canonical-node img {
-  display: block;
-  width: min(18rem, 70vw);
-  max-height: 18rem;
-  object-fit: contain;
-  background: var(--ground);
-  margin-bottom: .35rem;
-}
-.canonical-node details { font: 400 11px var(--mono); color: var(--dim); }
-.canonical-node details pre,
-.timeline-item td pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: .2rem 0; font: 400 11px/1.45 var(--mono); }
-
 /* ── logs ────────────────────────────────────────────────────────
    The same line the terminal prints: fixed-width time and level so
-   the eye can track a column, dim domain (the usual filter), message,
-   then key=value.  Wrapping rather than truncating — a log line you
-   have to scroll to finish is a log line you don't read. */
+   the eye can track a column, dim domain (the usual filter),
+   message, then key=value.  Wrapping rather than truncating — a log
+   line you have to scroll to finish is a log line you don't read. */
 
 .logs { font: 400 12px/1.7 var(--mono); }
 .line {
@@ -296,25 +432,31 @@ td select { padding: .15rem .35rem; }
   overflow-wrap: anywhere;
   cursor: pointer;
 }
-.line:hover { background: var(--panel); }
+.line:hover { background: var(--surface); }
 .line.warn { border-left-color: var(--warn); }
-.line.open { background: var(--panel); }
+.line.open { background: var(--surface); }
 /* Expanding is a UI state; the level owns the rail's colour and must
-   keep it, or a warning stops looking like one the moment you open it
-   to read why.  Only lines with no colour of their own borrow the
+   keep it, or a warning stops looking like one the moment you open
+   it to read why.  Only lines with no colour of their own borrow the
    accent to show they are expanded. */
 .line.open:not(.warn) { border-left-color: var(--info); }
 .line .lt { color: var(--dim); }
 .line .lv { text-transform: uppercase; font-size: .85em; margin: 0 .35rem; }
 .line.info .lv { color: var(--info); }
 .line.warn .lv { color: var(--warn); }
-.line.trace .lv { color: var(--dim); }
+.line.trace .lv { color: var(--faint); }
 .line .ld { color: var(--dim); margin-right: .5rem; }
 .line .lm { color: var(--fg); }
 .line .lf { margin-left: .6rem; white-space: nowrap; }
 .line .lf i { color: var(--dim); font-style: normal; }
 .line .lf i::after { content: '='; }
 .line .lf b { font-weight: 400; color: var(--fg); }
+
+/* Expanded: every field on its own row, full value, wrapped.  This
+   is the desktop shape too — a long db_url is unreadable inline at
+   any width. */
+.line.open .lf { display: block; margin: .1rem 0 0 1.2rem; white-space: normal; }
+.line.open .head { display: block; }
 
 /* ── call detail ─────────────────────────────────────────────────
    The prompt is the thing you came to read, so it gets the room: one
@@ -327,9 +469,12 @@ td select { padding: .15rem .35rem; }
   font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
   color: var(--dim); margin: 1rem 0 .4rem;
 }
+/* The byte count and model name ride along in the heading but are
+   identifiers, not labels — casing carries meaning there. */
+.detail h3 .muted { text-transform: none; letter-spacing: 0; }
 .detail pre {
   margin: 0; padding: .5rem .6rem;
-  background: var(--ground); border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--inset); border: 1px solid var(--line); border-radius: 2px;
   white-space: pre-wrap; overflow-wrap: anywhere;
   font: 400 11.5px/1.6 var(--mono); color: var(--fg);
   max-height: 22rem; overflow-y: auto;
@@ -341,60 +486,30 @@ td select { padding: .15rem .35rem; }
   color: var(--info);
 }
 .detail details { margin-top: .5rem; }
-.detail summary {
-  cursor: pointer; color: var(--dim);
-  font: 400 11px var(--mono); padding: .2rem 0;
-}
+.detail summary { cursor: pointer; color: var(--dim); font: 400 11px var(--mono); padding: .2rem 0; }
 .detail summary:hover { color: var(--fg); }
 
-/* Expanded: every field on its own row, full value, wrapped.  This is
-   the desktop shape too — a long db_url is unreadable inline at any
-   width. */
-.line.open .lf {
-  display: block;
-  margin: .1rem 0 0 1.2rem;
-  white-space: normal;
-}
-.line.open .head { display: block; }
+/* ── mobile ──────────────────────────────────────────────────────
+   Nothing scrolls sideways.  A table wide enough to need a swipe is
+   a table you stop reading, so each row becomes a card instead: the
+   first cell is its heading, the rest are labelled key/value rows.
+   The labels come from data-label, so there is one set of markup for
+   both layouts rather than a phone copy that drifts. */
 
 @media (max-width: 40rem) {
-  body { padding: 0 .55rem 2rem; }
-
-  /* One line, always.  The status header is glanced at, not read, so
-     it must not steal a second row from the content — the `uptime=` /
-     `model=` keys go (their values are self-describing), and anything
-     still over the edge scrolls rather than wrapping. */
-  .logline {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-    font-size: 11.5px;
-    line-height: 2.4;
-    gap: .55rem;
-  }
-  .logline::-webkit-scrollbar { display: none; }
-  .logline > * { flex: none; }
-  .logline i { display: none; }
-
-  /* Nothing scrolls sideways.  A table wide enough to need a swipe is
-     a table you stop reading, so each row becomes a card instead: the
-     first cell is its heading, the rest are labelled key/value rows.
-     The labels come from data-label, so there is one set of markup
-     for both layouts rather than a phone copy that drifts. */
-  section { overflow-x: visible; }
   table, tbody, tr, td { display: block; width: auto; }
   thead { display: none; }
   table { min-width: 0; }
 
   tbody tr {
-    background: var(--panel);
-    border: 1px solid var(--rule);
-    border-radius: 6px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 2px;
     padding: .3rem .6rem .45rem;
     margin-bottom: .6rem;
     position: relative;
   }
-  tbody tr:hover { background: var(--panel); }
+  tbody tr:hover { background: var(--surface); }
 
   td {
     display: flex;
@@ -418,15 +533,16 @@ td select { padding: .15rem .35rem; }
   /* The row's identity leads the card, so it gets no label and sits
      on its own line above the fields. */
   td.rowkey {
-    border-bottom: 1px solid var(--rule);
+    border-bottom: 1px solid var(--line);
     margin-bottom: .2rem;
     padding-bottom: .35rem;
   }
   td.rowkey::before { display: none; }
   td.rowkey > * { text-align: left; font-size: 1.05em; }
 
-  /* Prose (a memory, a persona) reads badly right-aligned in a narrow
-     column; give it the full width under its label. */
+  /* Prose (a memory, a persona, a skill body) reads badly
+     right-aligned in a narrow column; give it the full width under
+     its label. */
   td.wide { display: block; }
   td.wide::before { display: block; margin-bottom: .15rem; }
   td.wide > *, td.wide { text-align: left; }
@@ -435,11 +551,20 @@ td select { padding: .15rem .35rem; }
   td.act { position: absolute; top: .3rem; right: .5rem; padding: 0; }
   td.act::before { display: none; }
 
-  /* Logs are not a table: they must wrap inside the viewport, never
-     scroll sideways — a log you have to swipe to finish is a log you
-     skip.  Collapsed lines cap each field so one event stays one or
-     two rows; tapping opens the full values. */
-  .logs-page { overflow-x: visible; }
+  /* Unfolded editors are cards of their own already. */
+  tr.editor { padding: .6rem; }
+  tr.editor > td { display: block; }
+  tr.editor > td::before { display: none; }
+  tr.editor > td > * { text-align: left; }
+
+  /* The ledger gutter moves above its payload — a phone has no room
+     for a spine column. */
+  .entry { display: block; }
+  .entry > .gutter {
+    text-align: left; border-right: 0; padding-right: 0;
+    display: flex; gap: .8rem;
+  }
+
   .logs { font-size: 11.5px; line-height: 1.65; }
   .line { padding-left: .4rem; }
   .line .lf { margin-left: .5rem; }
@@ -453,14 +578,8 @@ td select { padding: .15rem .35rem; }
   }
 
   /* Two selects share a row, the search box takes its own, and the
-     tail toggle sits beside it — the previous single flex row pushed
-     the checkbox and its label apart. */
-  .filters {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: .4rem;
-    margin-bottom: .9rem;
-  }
+     tail toggle sits beside it. */
+  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; margin-bottom: .9rem; }
   .filters .search { grid-column: 1 / -1; }
   .filters .check { grid-column: 1 / -1; }
 }

@@ -1,6 +1,6 @@
 // max admin panel.  No build step: this file is served verbatim and
 // runs against the JSON API in Max.Admin.  Alpine drives the DOM,
-// uPlot draws the two time series.
+// uPlot draws the time series.
 //
 // Auth: the API needs a bearer token when one is configured, but a
 // <script> tag can't carry a header — so the static assets are public
@@ -9,16 +9,30 @@
 
 function admin() {
   return {
-    tabs: [
-      { id: 'overview', name: '概览' },
-      { id: 'groups', name: '群设置' },
-      { id: 'timeline', name: '消息账本' },
-      { id: 'context', name: '上下文' },
-      { id: 'memories', name: '记忆' },
-      { id: 'tasks', name: '任务' },
-      { id: 'calls', name: '调用' },
-      { id: 'logs', name: '日志' },
+    // The nav is the README's pipeline diagram folded into a list:
+    // the ledger and its projections in the middle, the machinery
+    // that runs them below, the knobs last.  The digit is a live
+    // keyboard accelerator, not decoration.
+    nav: [
+      { name: '状态', tabs: [{ id: 'overview', name: '概览', key: '1' }] },
+      { name: '账本', tabs: [
+        { id: 'timeline', name: '消息账本', key: '2' },
+        { id: 'context', name: '上下文', key: '3' },
+        { id: 'memories', name: '记忆', key: '4' },
+      ] },
+      { name: '运行', tabs: [
+        { id: 'tasks', name: '任务', key: '5' },
+        { id: 'calls', name: '调用', key: '6' },
+        { id: 'logs', name: '日志', key: '7' },
+      ] },
+      { name: '配置', tabs: [
+        { id: 'groups', name: '群设置', key: '8' },
+        { id: 'skills', name: '技能', key: '9' },
+      ] },
     ],
+    get tabsFlat() {
+      return this.nav.flatMap((g) => g.tabs);
+    },
     tab: 'overview',
     needToken: false,
     tokenInput: '',
@@ -27,9 +41,15 @@ function admin() {
     clock: '',
 
     overview: { profiles: [], effort_levels: [] },
+    // The one conversation the ledger views share.  Set in the rail
+    // (or any of the views), remembered across sessions.
+    focus: localStorage.getItem('max-admin-focus') || '',
     groups: [],
     memories: [],
     tasks: [],
+    quota: null,
+    quotaErr: '',
+    endpoints: [],
     timeline: {
       group: '',
       loaded: false,
@@ -44,7 +64,6 @@ function admin() {
     timelineMedia: {},
     timelineAbort: null,
     ctx: {
-      group: '',
       loaded: false,
       status: { summary: {}, conversations: [], maintenance_leases: [], capture_workers: [] },
       captures: [],
@@ -63,6 +82,21 @@ function admin() {
     mem: { scope: 'group', id: '', loaded: false },
     charts: {},
 
+    personaEdit: null,
+    personaDraft: '',
+    get personaEditGroup() {
+      return this.groups.find((g) => g.group_id === this.personaEdit) || null;
+    },
+
+    skills: [],
+    skillq: { group: '' },
+    skillOpenId: null,
+    skillDraft: {},
+    skillNew: null,
+    get skillOpenRow() {
+      return this.skills.find((s) => s.id === this.skillOpenId) || null;
+    },
+
     logs: [],
     logq: { level: '', domain: '', q: '' },
     domains: [],
@@ -75,6 +109,7 @@ function admin() {
 
     calls: [],
     callq: { source: '', group: '', failed: false },
+    callsDone: false,
     callSources: ['turn', 'wrapup', 'intent', 'supplement', 'historian', 'memory-dream', 'memx', 'memx-compact', 'memx-dream', 'caption'],
     // Bodies, fetched per call on first open and kept for the session.
     detail: {},
@@ -116,13 +151,12 @@ function admin() {
       // Deep-link support: #groups etc., so a phone bookmark can land
       // straight on the page you actually check.
       const h = location.hash.slice(1);
-      if (this.tabs.some((t) => t.id === h)) this.tab = h;
+      if (this.tabsFlat.some((t) => t.id === h)) this.tab = h;
       this.load(this.tab);
     },
 
-    // The log line carries a live clock — it is the one part of the
-    // header that would otherwise be a still photograph of a running
-    // system.
+    // The rail carries a live clock — it is the one part of the frame
+    // that would otherwise be a still photograph of a running system.
     tick() {
       const d = new Date();
       this.clock = [d.getHours(), d.getMinutes(), d.getSeconds()]
@@ -141,6 +175,33 @@ function admin() {
       });
     },
 
+    // Digits switch views, `/` lands in the visible view's filter,
+    // Escape leaves an input.  Nothing fires while you type.
+    keys(e) {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target;
+      if (t && ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) {
+        if (e.key === 'Escape') t.blur();
+        return;
+      }
+      if (e.key >= '1' && e.key <= '9') {
+        const dest = this.tabsFlat[Number(e.key) - 1];
+        if (dest) {
+          e.preventDefault();
+          this.go(dest.id);
+        }
+      } else if (e.key === '/') {
+        const section = [...document.querySelectorAll('main section')].find(
+          (s) => s.offsetParent !== null
+        );
+        const input = section && (section.querySelector('input.search') || section.querySelector('input'));
+        if (input) {
+          e.preventDefault();
+          input.focus();
+        }
+      }
+    },
+
     go(id) {
       if (id !== 'timeline') this.stopTimelineTail();
       this.tab = id;
@@ -150,22 +211,56 @@ function admin() {
 
     load(id) {
       const fn = {
-        overview: () => this.loadCharts(),
+        overview: () => this.loadOverviewView(),
         groups: () => this.loadGroups(),
-        timeline: () => (this.timeline.group ? this.loadTimeline(false) : null),
+        timeline: () => (this.focus ? this.loadTimeline(false) : null),
         context: () => this.loadContext(),
-        memories: () => (this.mem.id ? this.loadMemories() : null),
+        memories: () => {
+          if (!this.mem.id && this.mem.scope === 'group' && this.focus) this.mem.id = this.focus;
+          return this.mem.id ? this.loadMemories() : null;
+        },
         tasks: () => this.loadTasks(),
         calls: () => this.loadCalls(),
         logs: () => this.reloadLogs(),
+        skills: () => this.loadSkills(),
       }[id];
       if (fn) Promise.resolve(fn()).catch((e) => (this.err = String(e.message)));
+    },
+
+    // A rail change re-reads whichever ledger view is on screen; a
+    // change made inside a view leaves the reload to that view's own
+    // submit, so Enter doesn't fetch twice.
+    focusChanged(fromView = false) {
+      localStorage.setItem('max-admin-focus', this.focus);
+      if (fromView) return;
+      if (this.tab === 'timeline' && this.focus) this.load('timeline');
+      else if (this.tab === 'context') this.load('context');
     },
 
     // ── loaders ───────────────────────────────────────────────────
 
     async loadOverview() {
       this.overview = await this.api('/overview');
+    },
+
+    async loadOverviewView() {
+      await Promise.all([this.loadCharts(), this.loadQuota(), this.loadEndpoints()]);
+    },
+
+    async loadQuota() {
+      try {
+        this.quota = await this.api('/quota');
+        this.quotaErr = '';
+      } catch (e) {
+        if (e.message === 'unauthorized') throw e;
+        // 502 when cli-proxy is down: keep the section, show the why.
+        this.quota = null;
+        this.quotaErr = String(e.message);
+      }
+    },
+
+    async loadEndpoints() {
+      this.endpoints = await this.api('/platforms/status');
     },
 
     async loadGroups() {
@@ -184,17 +279,19 @@ function admin() {
       this.tasks = await this.api('/tasks');
     },
 
+    // ── canonical timeline ────────────────────────────────────────
+
     async loadTimeline(tail = false) {
-      if (!this.timeline.group) return;
+      if (!this.focus) return;
       if (!tail) this.stopTimelineTail();
-      const group = this.timeline.group;
+      const group = this.focus;
       const after = tail ? this.timeline.latest_conversation_seq : null;
       const query = new URLSearchParams({ limit: '200' });
       if (after != null) query.set('after', String(after));
       const page = await this.api(
         '/platforms/timeline/' + encodeURIComponent(group) + '?' + query.toString()
       );
-      if (group !== this.timeline.group) return;
+      if (group !== this.focus) return;
       if (tail) {
         if (page.items.length) this.timeline.items.push(...page.items);
         Object.assign(this.timeline, {
@@ -229,7 +326,7 @@ function admin() {
     },
 
     async tailTimeline(group, controller) {
-      while (this.tab === 'timeline' && this.timeline.group === group && !controller.signal.aborted) {
+      while (this.tab === 'timeline' && this.focus === group && !controller.signal.aborted) {
         const after = this.timeline.latest_conversation_seq == null ? 0 : this.timeline.latest_conversation_seq;
         const query = new URLSearchParams({
           after: String(after),
@@ -241,7 +338,7 @@ function admin() {
             '/platforms/timeline/' + encodeURIComponent(group) + '/wait?' + query.toString(),
             { signal: controller.signal }
           );
-          if (controller.signal.aborted || this.tab !== 'timeline' || this.timeline.group !== group) return;
+          if (controller.signal.aborted || this.tab !== 'timeline' || this.focus !== group) return;
           if (page.replace) {
             this.releaseTimelineMedia();
             Object.assign(this.timeline, page, { group, loaded: true });
@@ -266,6 +363,9 @@ function admin() {
       }
     },
 
+    // Blob media sits behind the same bearer token as everything
+    // else, so an <img src> can't reach it: fetch with the header,
+    // hold an object URL, release on replace.
     async loadTimelineMedia(items) {
       const urls = [];
       for (const item of items) {
@@ -314,7 +414,7 @@ function admin() {
 
     contextQuery(extra = {}) {
       const p = new URLSearchParams(extra);
-      if (this.ctx.group) p.set('group', this.ctx.group);
+      if (this.focus) p.set('group', this.focus);
       const query = p.toString();
       return query ? '?' + query : '';
     },
@@ -333,7 +433,7 @@ function admin() {
     },
 
     async contextRecall() {
-      if (!this.ctx.group || !this.ctx.recallQuery.trim()) return;
+      if (!this.focus || !this.ctx.recallQuery.trim()) return;
       this.ctx.recall = await this.api(
         '/context/recall' + this.contextQuery({ q: this.ctx.recallQuery.trim(), limit: '10' })
       );
@@ -345,13 +445,13 @@ function admin() {
     },
 
     async contextRebuild(compartmentId = null) {
-      if (!this.ctx.group) return;
+      if (!this.focus) return;
       const what = compartmentId == null ? '这个会话的全部 active compartments' : 'compartment #' + compartmentId;
-      if (!confirm('重新构建 ' + what + '?\n\n旧版本会继续服务，直到新版本完整发布。')) return;
+      if (!confirm('重新构建 ' + what + '?\n\n旧版本会继续服务,直到新版本完整发布。')) return;
       await this.api('/context/rebuild', {
         method: 'POST',
         body: JSON.stringify({
-          conversation_id: Number(this.ctx.group),
+          conversation_id: Number(this.focus),
           compartment_id: compartmentId,
         }),
       });
@@ -359,24 +459,28 @@ function admin() {
     },
 
     async contextReindex(corpora) {
-      if (!this.ctx.group) return;
+      if (!this.focus) return;
       if (!confirm('清空这个会话的 ' + corpora.join(', ') + ' vectors 并交给 embedding worker 重建?')) return;
       await this.api('/context/reindex', {
         method: 'POST',
-        body: JSON.stringify({ conversation_id: Number(this.ctx.group), corpora }),
+        body: JSON.stringify({ conversation_id: Number(this.focus), corpora }),
       });
       await this.loadContext();
     },
 
     // ── llm calls ─────────────────────────────────────────────────
 
-    async loadCalls() {
+    async loadCalls(more = false) {
       const p = new URLSearchParams();
       if (this.callq.source) p.set('source', this.callq.source);
       if (this.callq.group) p.set('group', this.callq.group);
       if (this.callq.failed) p.set('failed', '1');
+      if (more && this.calls.length) p.set('before', String(this.calls[this.calls.length - 1].id));
       const s = p.toString();
-      this.calls = await this.api('/calls' + (s ? '?' + s : ''));
+      const page = await this.api('/calls' + (s ? '?' + s : ''));
+      if (more) this.calls.push(...page);
+      else this.calls = page;
+      this.callsDone = page.length < 50;
     },
 
     async openCall(c) {
@@ -507,16 +611,125 @@ function admin() {
       }
     },
 
-    async delMemory(m) {
-      if (!confirm('删掉这条记忆?\n\n' + m.content)) return;
-      await this.api('/memories/' + m.id, { method: 'DELETE' });
-      this.memories = this.memories.filter((x) => x.id !== m.id);
+    openPersona(g) {
+      this.personaEdit = g.group_id;
+      this.personaDraft = g.persona || '';
+    },
+
+    async savePersona() {
+      const g = this.personaEditGroup;
+      if (!g) return;
+      const text = this.personaDraft.trim();
+      await this.patch(g, { persona: text ? this.personaDraft : null });
+      this.personaEdit = null;
+    },
+
+    // The API archives rather than deletes — versions and provenance
+    // survive, which is the memory system's whole contract.
+    async archiveMemory(m) {
+      if (!confirm('归档这条记忆?(记录和出处保留,只是不再生效)\n\n' + m.content)) return;
+      try {
+        await this.api('/memories/' + m.id, { method: 'DELETE' });
+        this.memories = this.memories.filter((x) => x.id !== m.id);
+      } catch (e) {
+        this.err = String(e.message);
+      }
     },
 
     async kill(t) {
       if (!confirm('kill ' + t.id + '?')) return;
-      await this.api('/tasks/' + t.id, { method: 'DELETE' });
+      await this.api('/tasks/' + encodeURIComponent(t.id), { method: 'DELETE' });
       await this.loadTasks();
+    },
+
+    // ── skills ────────────────────────────────────────────────────
+
+    async loadSkills() {
+      const s = this.skillq.group ? '?group=' + encodeURIComponent(this.skillq.group) : '';
+      this.skills = await this.api('/skills' + s);
+      this.skillOpenId = null;
+    },
+
+    openSkill(s) {
+      if (this.skillOpenId === s.id) {
+        this.skillOpenId = null;
+        return;
+      }
+      this.skillOpenId = s.id;
+      if (!s.builtin) {
+        this.skillDraft = {
+          name: s.name,
+          description: s.description,
+          group_id: s.group_id == null ? '' : String(s.group_id),
+          enabled: s.enabled,
+          body: s.body,
+        };
+      }
+    },
+
+    skillPayload(d) {
+      return {
+        name: d.name.trim(),
+        group_id: String(d.group_id).trim() === '' ? null : Number(d.group_id),
+        description: d.description.trim(),
+        body: d.body,
+        enabled: !!d.enabled,
+      };
+    },
+
+    async saveSkill() {
+      const id = this.skillOpenId;
+      try {
+        await this.api('/skills/' + id, {
+          method: 'PATCH',
+          body: JSON.stringify(this.skillPayload(this.skillDraft)),
+        });
+        await this.loadSkills();
+      } catch (e) {
+        this.err = String(e.message); // 校验错误是中文的,原样给人看
+      }
+    },
+
+    async createSkill() {
+      try {
+        await this.api('/skills', {
+          method: 'POST',
+          body: JSON.stringify(this.skillPayload(this.skillNew)),
+        });
+        this.skillNew = null;
+        await this.loadSkills();
+      } catch (e) {
+        this.err = String(e.message);
+      }
+    },
+
+    async deleteSkill(s) {
+      if (!confirm('删掉 skill ' + s.name + '?\n\n被它遮蔽的同名 builtin(如果有)会重新生效。')) return;
+      try {
+        await this.api('/skills/' + s.id, { method: 'DELETE' });
+        this.skillOpenId = null;
+        await this.loadSkills();
+      } catch (e) {
+        this.err = String(e.message);
+      }
+    },
+
+    newSkill() {
+      this.skillNew = { name: '', group_id: this.skillq.group || '', description: '', body: '', enabled: true };
+    },
+
+    // A builtin is baked into the binary; the way to change it is a
+    // same-name DB row, which shadows it at registry level.
+    shadowSkill(s) {
+      this.skillNew = {
+        name: s.name,
+        group_id: this.skillq.group || '',
+        description: s.description,
+        body: s.body,
+        enabled: true,
+      };
+      this.skillOpenId = null;
+      window.scrollTo({ top: 0 });
     },
 
     // ── charts ────────────────────────────────────────────────────
@@ -531,41 +744,34 @@ function admin() {
       // Token spend splits by what the tokens were, not by who spent
       // them: prompt vs completion is the axis that decides the bill.
       //
-      // They get separate scales because they differ by an order of
-      // magnitude — prompt runs ~20k against completion's ~2k, and on
-      // one axis completion is a flat line pinned to the floor, which
-      // is exactly the number you want to watch for runaway replies.
-      this.plot('chart-usage', 'usage', sumByDay(usage, ['prompt_tokens', 'completion_tokens']), [
-        { label: 'prompt', stroke: c.info, scale: 'p', fill: fade(c.info) },
-        { label: 'completion', stroke: c.warn, scale: 'c' },
-      ], { right: 'c' });
+      // They differ by an order of magnitude — prompt runs ~20k
+      // against completion's ~2k — so they are two small multiples
+      // with a synced cursor rather than one chart with two y-axes:
+      // completion, the number you watch for runaway replies, keeps a
+      // scale of its own and a floor of its own.
+      this.plot('chart-prompt', 'prompt', sumByDay(usage, ['prompt_tokens']), [
+        { label: 'prompt', stroke: c.s1, fill: fade(c.s1) },
+      ], { height: 150, sync: 'usage' });
+      this.plot('chart-completion', 'completion', sumByDay(usage, ['completion_tokens']), [
+        { label: 'completion', stroke: c.s2, fill: fade(c.s2) },
+      ], { height: 150, sync: 'usage' });
 
-      // Messages split by kind, because that is the distinction the
-      // prompt itself makes: only `chat` rows reach the model, so a
-      // merged line would hide whether the bot is talking or just
-      // being operated.
-      const m = pivotByDay(msgs, 'kind', 'count');
-      const kindColour = { chat: c.info, command: c.dim, debug: c.warn };
-      const kindLabel = { chat: '对话', command: '命令', debug: 'debug' };
-      this.plot(
-        'chart-msgs',
-        'msgs',
-        m.data,
-        m.keys.map((k) => ({
-          label: kindLabel[k] || k,
-          stroke: kindColour[k] || c.dim,
-          fill: k === 'chat' ? fade(c.info) : undefined,
-        }))
-      );
+      // Messages split the way the prompt itself splits them: only
+      // chat rows reach the model, so the chart answers "is the bot
+      // talking, or just being operated" — command and debug fold
+      // into one operations series.
+      this.plot('chart-msgs', 'msgs', chatOps(msgs), [
+        { label: '对话', stroke: c.s1, fill: fade(c.s1) },
+        { label: '操作', stroke: c.s2 },
+      ], { height: 190 });
     },
 
     // uPlot takes a pixel size, so the chart is rebuilt on resize (and
     // whenever the tab is reopened) against the current container
     // width.  Cheap at this data volume; the redraw is debounced so a
-    // dragged window edge doesn't rebuild on every frame.
-    //
-    // @opts.right names a scale to hang off a second, right-hand axis
-    // for series whose magnitude would otherwise flatten them.
+    // dragged window edge doesn't rebuild on every frame.  A scheme
+    // flip rebuilds too — the series colours are read from CSS at
+    // draw time.
     plot(elId, key, data, seriesDefs, opts = {}) {
       const el = document.getElementById(elId);
       if (!el) return;
@@ -573,12 +779,9 @@ function admin() {
         this.charts[key].destroy();
         delete this.charts[key];
       }
-      // No series at all is the normal state of a fresh install, and
-      // of any window where nothing happened: the message chart builds
-      // one series per message kind seen, so an empty range gives it
-      // none.  Say so instead of drawing an axis pair around nothing —
-      // and note this used to read series[0] and throw, taking the
-      // whole overview down with it.
+      // No data at all is the normal state of a fresh install, and of
+      // any window where nothing happened.  Say so instead of drawing
+      // an axis pair around nothing.
       if (!seriesDefs.length || !data[0] || !data[0].length) {
         el.innerHTML = '';
         const p = document.createElement('p');
@@ -591,7 +794,7 @@ function admin() {
       const c = palette();
       const axis = {
         stroke: c.dim,
-        grid: { stroke: c.rule, width: 1 },
+        grid: { stroke: c.line, width: 1 },
         ticks: { show: false },
         font: '11px ' + monoStack(),
       };
@@ -600,43 +803,36 @@ function admin() {
       );
       const axes = [
         // Just M/D.  uPlot's default stacks a year row underneath,
-        // which is noise for a window that never spans one.
+        // which is noise for a window that never spans one — and it
+        // reserves 50px of height for the privilege; one row of
+        // labels needs 28.
         Object.assign({}, axis, {
+          size: 28,
           values: (_u, splits) => splits.map((v) => fmtDay(new Date(v * 1000))),
         }),
         Object.assign({}, axis, {
-          scale: series[0].scale,
           size: 50,
           values: (_u, splits) => splits.map(compact),
         }),
       ];
-      if (opts.right) {
-        const rc = series.find((s) => s.scale === opts.right);
-        axes.push(
-          Object.assign({}, axis, {
-            scale: opts.right,
-            side: 1,
-            size: 50,
-            stroke: rc ? rc.stroke : c.dim,
-            grid: { show: false },
-            values: (_u, splits) => splits.map(compact),
-          })
-        );
-      }
+      const cursor = { y: false, points: { size: 7 } };
+      // The two usage multiples share one crosshair: the question is
+      // always "that day — how much of each".
+      if (opts.sync) cursor.sync = { key: opts.sync };
       this.charts[key] = new uPlot(
         {
           width: el.clientWidth,
-          height: 210,
+          height: opts.height || 210,
           // A vertical rule that snaps to the day under the pointer,
           // with the legend reading out that day's values — the whole
           // point of the chart is "how much on which day", and eyeing
           // a pixel against a gridline doesn't answer it.
-          cursor: { y: false, points: { size: 7 } },
+          cursor,
           legend: { live: true },
           scales: { x: { time: true } },
-          series: [{ value: (_u, v) => (v == null ? '' : fmtDay(new Date(v * 1000))) }].concat(
+          series: [{ label: '日', value: (_u, v) => (v == null ? '' : fmtDay(new Date(v * 1000))) }].concat(
             series.map((s) =>
-              Object.assign({ value: (_u, v) => (v == null ? '—' : v.toLocaleString()) }, s)
+              Object.assign({ value: (_u, v) => (v == null ? '-' : v.toLocaleString()) }, s)
             )
           ),
           axes,
@@ -644,13 +840,15 @@ function admin() {
         data,
         el
       );
-      if (!this._resizeBound) {
-        this._resizeBound = true;
+      if (!this._chartsBound) {
+        this._chartsBound = true;
         let t;
-        addEventListener('resize', () => {
+        const redraw = () => {
           clearTimeout(t);
           t = setTimeout(() => this.tab === 'overview' && this.loadCharts(), 150);
-        });
+        };
+        addEventListener('resize', redraw);
+        matchMedia('(prefers-color-scheme: light)').addEventListener('change', redraw);
       }
     },
 
@@ -664,7 +862,7 @@ function admin() {
     },
 
     fmtUptime(secs) {
-      if (secs == null) return '—';
+      if (secs == null) return '-';
       const d = Math.floor(secs / 86400);
       const h = Math.floor((secs % 86400) / 3600);
       const m = Math.floor((secs % 3600) / 60);
@@ -696,11 +894,12 @@ function admin() {
 
 // The chart colours are the panel's colours, read back at draw time so
 // a light/dark switch repaints correctly instead of baking in whatever
-// the scheme was at load.
+// the scheme was at load.  Series use the chart steps of the two
+// hues; axes use the text tokens.
 function palette() {
   const s = getComputedStyle(document.documentElement);
   const v = (n) => s.getPropertyValue(n).trim();
-  return { info: v('--info'), warn: v('--warn'), dim: v('--dim'), rule: v('--rule') };
+  return { s1: v('--chart-1'), s2: v('--chart-2'), dim: v('--dim'), line: v('--line') };
 }
 
 function monoStack() {
@@ -708,7 +907,7 @@ function monoStack() {
 }
 
 // A wash under the primary line — enough to read the shape at a
-// glance, faint enough that the second series stays legible over it.
+// glance, faint enough that a second series stays legible over it.
 function fade(colour) {
   return 'color-mix(in srgb, ' + colour + ' 14%, transparent)';
 }
@@ -743,16 +942,14 @@ function sumByDay(rows, fields) {
   return frame(days, (sorted) => fields.map((_, i) => sorted.map(([, v]) => v[i])));
 }
 
-// One series per distinct value of `dim` (e.g. one line per message
-// kind), summing `value` per day.  Absent combinations read as 0 so a
-// kind that stops appearing draws a floor rather than a gap.
-function pivotByDay(rows, dim, value) {
-  const keys = [...new Set(rows.map((r) => r[dim]))].sort();
+// chat vs everything-else per day.  Absent days read as 0 on both
+// series so a quiet kind draws a floor rather than a gap.
+function chatOps(rows) {
   const days = new Map();
   for (const r of rows) {
     let acc = days.get(r.day);
-    if (!acc) days.set(r.day, (acc = Object.fromEntries(keys.map((k) => [k, 0]))));
-    acc[r[dim]] += r[value] || 0;
+    if (!acc) days.set(r.day, (acc = [0, 0]));
+    acc[r.kind === 'chat' ? 0 : 1] += r.count || 0;
   }
-  return { keys, data: frame(days, (sorted) => keys.map((k) => sorted.map(([, v]) => v[k]))) };
+  return frame(days, (sorted) => [0, 1].map((i) => sorted.map(([, v]) => v[i])));
 }
