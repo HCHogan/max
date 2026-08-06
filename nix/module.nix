@@ -431,6 +431,84 @@ in
         # and the DB pool.  Systemd has to outwait that, or it SIGKILLs
         # mid-drain and the waiting bought nothing.
         TimeoutStopSec = drainSeconds + 30;
+
+        # Sandboxing.  The whole of what this process needs from the host
+        # is: TCP in (WS endpoint, admin panel) and out (LLM APIs, web
+        # tools), two unix sockets (/run/postgresql, /run/docker.sock),
+        # its own state directory, and a writable /tmp for the typst and
+        # ffmpeg workspaces.  Everything below takes away something it
+        # never asked for.
+        #
+        # Read this before adding more: the service user is in the
+        # `docker` group, and the docker socket is root on this host by
+        # construction.  These settings shrink the blast radius of a bug;
+        # they do not contain an attacker who knows the socket is there.
+        # The fix for *that* is rootless docker or a socket proxy, not a
+        # longer list here.
+        NoNewPrivileges = true;
+        CapabilityBoundingSet = [ "" ];
+        AmbientCapabilities = [ "" ];
+        # Both listeners are unprivileged ports, so no capability is
+        # needed to bind them.
+        ProtectSystem = "strict";
+        ProtectHome = true;
+        PrivateTmp = true;
+        PrivateDevices = true;
+        PrivateMounts = true;
+        ProtectProc = "invisible";
+        ProtectClock = true;
+        ProtectHostname = true;
+        ProtectKernelTunables = true;
+        ProtectKernelModules = true;
+        ProtectKernelLogs = true;
+        ProtectControlGroups = true;
+        RestrictNamespaces = true;
+        RestrictRealtime = true;
+        RestrictSUIDSGID = true;
+        LockPersonality = true;
+        RemoveIPC = true;
+        SystemCallArchitectures = "native";
+        SystemCallFilter = [ "@system-service" ];
+        SystemCallErrorNumber = "EPERM";
+        # Maps every uid but this one to nobody.  Verified against the
+        # two things that could plausibly break: the docker socket still
+        # opens through the `docker` supplementary group, and postgres
+        # peer auth still sees max-bot rather than an overflow uid.  If
+        # something ever behaves strangely under this unit, drop this
+        # line first — it is the only setting here that adds a namespace
+        # rather than removing an ability.
+        PrivateUsers = true;
+        # AF_NETLINK is kept, but not because DNS dies without it —
+        # measured, glibc falls back to assuming both families work.
+        # What it loses is getaddrinfo's address sorting, so a
+        # dual-stack endpoint can get tried in the useless order first.
+        # 0.1 of exposure is not worth that class of intermittent
+        # timeout.
+        RestrictAddressFamilies = [
+          "AF_UNIX"
+          "AF_INET"
+          "AF_INET6"
+          "AF_NETLINK"
+        ];
+        # Blobs, staged outbox files and rendered tables are the bot's
+        # own; nothing on this host reads them as another user.  NapCat
+        # reads the outbox as container root through the bind mount,
+        # which 0600 does not stop.
+        UMask = "0077";
+        # Left off on purpose, each for a reason that outlives the next
+        # `systemd-analyze security` run:
+        #   PrivateNetwork  — the bot *is* a network service.
+        #   IPAddressDeny   — LLM APIs, web search and the browser tool
+        #                     reach arbitrary hosts; there is no list.
+        #   ProcSubset=pid  — hides /proc/uptime, which the status
+        #                     command reads for host uptime (measured:
+        #                     ENOENT, not a permission error, so the
+        #                     uptime silently reads as unknown).
+        #   MemoryDenyWriteExecute — GHC's adjustors want RWX pages the
+        #                     moment any dependency takes a `foreign
+        #                     import "wrapper"` callback.  Worth 0.1,
+        #                     costs an RTS abort at an unpredictable
+        #                     hour; enable only behind a soak test.
       };
     };
 
