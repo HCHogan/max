@@ -6,7 +6,8 @@
   horizon above 1 — remains post-1.0. v1.0 is a convergence release; this
   split lets it converge onto the machine's substrate without opening the
   machine's front.
-- Date: 2026-08-03; journal contract and post-cutover revisions 2026-08-05.
+- Date: 2026-08-03; journal contract and post-cutover revisions 2026-08-05;
+  sandbox observability and narrator revisions 2026-08-06.
 
 ## Context
 
@@ -99,7 +100,8 @@ runner.
 Arbitrary Haskell, shell, or Python is not the Plan IR. A sandbox tool may
 remain one deliberately coarse capability boundary, but hidden effects inside
 an opaque script cannot be advertised as statically inferred fine-grained
-effects.
+effects. That conservatism binds only the declaration layer; what an exec
+*did* touch is separately observable after the fact (its own section below).
 
 ### Existing tool calling is the fallback policy
 
@@ -204,12 +206,43 @@ discovered capability. Tool search is not mathematically required to be
 multi-round, although it usually becomes so when only the model can interpret a
 new schema.
 
+### Sandbox effects: declared ceilings versus observed manifests
+
+The coarse-boundary rule above answers only the validation-time question:
+what a sandbox node may be *declared* to do, a priori, for the effect
+ceiling and approval. Execution-time observability is a different layer
+with the opposite freedom: the host cannot infer what an opaque script
+*will* touch, but it can cheaply record what it *did* touch.
+
+Every sandbox operation therefore journals an observed manifest alongside
+its coarse declared label:
+
+- the full command line, exit code, and wall-clock duration;
+- stdout/stderr digests (hash and length) plus the spill path when output
+  exceeded the cap;
+- a filesystem delta: a marker file touched before the exec and a bounded
+  `find /work -newer` sweep after it list the paths the command wrote;
+  `docker diff` covers writes that landed outside the work volume;
+- the network mode the exec ran under.
+
+Observation grants no authority and weakens no boundary — static
+inference stays conservative — but it turns "the sandbox did something"
+into rows that resume, the admin console, and the narrator can consume.
+
+One hole is named rather than papered over: the default sandbox network
+is `bridge`, so an exec running `curl` is an `EffSend` bypass — an
+arbitrary external effect the outbound ledger never sees. Recording the
+network mode makes the exposure visible per row; closing it (default
+`none`, per-sandbox egress grants, or an egress proxy) is authority work
+deferred post-1.0. Until then the effect vocabulary's send story is
+honest only for ledger sends.
+
 ### The journal contract (v1.0 slice)
 
 The execution journal is shared infrastructure, not part of the deferred
-machine. It has four consumers: the horizon-1 production loop (durability
-roadmap L2–L4, issue #14), crash-resume replay, the tool-trace digest, and
-— later — this ADR's executor. **It ships with v1.0; the machine does
+machine. It has five consumers: the horizon-1 production loop (durability
+roadmap L2–L4, issue #14), crash-resume replay, the tool-trace digest,
+the narrator (its own section below), and — later — this ADR's executor. **It ships with v1.0; the machine does
 not.** At horizon 1 the plan is absorbed into the trace, so the loop needs
 no `Plan` type to write conforming rows; it needs only this schema.
 
@@ -227,6 +260,10 @@ Rows are normalized execution events, never provider wire messages:
   vocabulary;
 - guard/validation decisions and the elaboration or deoptimization reason.
 
+Alongside effect nodes the journal carries zero-authority fact rows:
+`model_note` records the model's in-band tool-round narration as evidence
+for the narrator and the admin timeline, never as something to execute.
+
 Send effects do not get a second journal. Since the ADR 003 cutover, the
 canonical ledger is already the durable commit point for every visible
 message: `enqueueOutbound` publishes transactionally, and per-endpoint
@@ -236,6 +273,24 @@ reconciliation. A send node journals only the linkage
 (`turn_id`/`chunk_index` on outbound rows) *is* that linkage, not a
 separate mechanism. Other effect classes journal their own two-phase state
 (roadmap L4).
+
+Sandbox operations are roadmap L4's first real tenant. An exec writes its
+`started` row — command, sandbox id, timeout, network mode — before
+`docker exec` launches, so process death mid-command leaves exactly the
+outcome-unknown state whose resume view is the durability roadmap's
+injection text; completion updates the row with the observed manifest
+above. Journal rows record events, not state, and a shell exec is
+nondeterministic — replaying the journal can never reconstruct the
+volume. The durable unit is the volume itself: sandbox lifecycle metadata
+moves to a `sandboxes` table, the in-memory registry becomes a
+write-through cache, and boot reconciles instead of reaping — adopt a
+live container, rebuild a dead one from image plus surviving volume, mark
+the row destroyed only when the volume is gone — with TTL-based GC
+replacing the boot reap. The volume carries the current state; the
+journal carries the history that produced it. Per-exec volume snapshots
+stay out of scope until plan replay/fork needs them. The mechanics belong
+to the durability roadmap (issue #14); this contract fixes only the row
+semantics.
 
 Durable journals store erased plans and traces. Resume re-runs the kernel
 — typecheck, effect bounds, scope authorization — before trusting anything
@@ -274,6 +329,49 @@ logic rather than an implicit retry.
 Elaboration and execution have separate fuel. Elaboration fuel prevents a
 `deopt → elaborate → fail` loop; execution budgets bound nodes, loops, fan-out,
 and wall time.
+
+### The narrator is a journal projection
+
+Progress narration today is the model's own tool-round text forwarded
+verbatim to the chat. That couples two jobs that want different
+registers: the working model thinks out loud ("我看看啊…"), while the
+user wants a terse, truthful account of where the turn stands. The
+narrator decouples them:
+
+- The model's in-band narration is demoted to evidence: it journals as a
+  zero-authority `model_note` row and is never shown verbatim.
+- The narrator consumes the journal and nothing else. Its input is the
+  rows since its last watermark — node transitions, deopts, absorbed
+  feedback, `model_note` color; its output is at most one short progress
+  message. Journal rows are ground truth and the note supplies only
+  intent flavor, a structural bound on hallucinated progress.
+- Rendering uses a small model, falling back to the deterministic
+  tool-debug template when that fails.
+
+Triggering is edge-triggered on material transitions with a debounce,
+never level-triggered per round: a node failure or retry, a deopt or
+absorbed feedback (the direction changed), a long-running exec starting,
+or elapsed silence past a threshold with newly completed nodes. A pending
+narration is cancelled when the final answer lands first, and the first
+tool round triggers nothing — a median 10–60s turn should say nothing at
+all. Narration draws a per-turn budget, making restraint structural
+rather than prompted.
+
+The cost is explicit. Streamed text and narration are currently
+disambiguated only after the response ends, which is the entire reason
+the sent-prefix watermark exists. Under the narrator, tool-capable calls
+no longer release paragraphs mid-response — final answers give up
+intra-response streaming (the forced tool-free final call may still
+stream) — and in exchange the sent-prefix bookkeeping and the
+feedback-raced-a-streamed-answer requeue path are deleted: nothing was
+released, so a late note can always re-answer for free.
+
+Narrator output is an ordinary reply through the send path, so it lands
+in the canonical ledger with the send linkage like any visible message —
+what the narrator said is itself replayable. The narrator does not wait
+for the machine: it consumes horizon-1 rows from day one, and serves as
+an early second consumer that exercises the journal schema before the
+executor arrives.
 
 ### Feedback, cancellation, reflection, and policy changes invalidate residual work
 
@@ -403,7 +501,9 @@ Natural-language Goal text alone is not a safe or useful cache identity.
 
 Step 0 ships with v1.0, independent of everything below: the journal
 contract above, written by the current loop under the durability roadmap
-(issue #14). Every later step consumes it unchanged.
+(issue #14). Every later step consumes it unchanged. The sandbox effect
+class and the narrator both attach to this step — they consume horizon-1
+rows and need nothing from the machine.
 
 1. Define a small pure `Max.Plan` IR with `Done`, typed/schema-checked `Call`,
    `Guard`, and `Hole`, plus deterministic codecs and stable node ids.
@@ -453,7 +553,12 @@ duplicate or outcome-unknown effects than the current loop.
   validator and the elaborator.
 - Static effect inference is deliberately conservative. Opaque sandbox code and
   dynamic targets reduce optimization opportunities instead of weakening the
-  authority boundary.
+  authority boundary. Observed manifests recover per-exec visibility after the
+  fact without pretending the inference got finer.
+- Progress UX decouples from the working model's register: narration becomes a
+  bounded, edge-triggered projection of the journal, and the streaming/narration
+  entanglement — the sent-prefix watermark and the feedback-raced-stream requeue
+  path — is deleted rather than maintained.
 
 ## Rejected alternatives
 
