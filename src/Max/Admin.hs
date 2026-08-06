@@ -54,7 +54,7 @@ import Data.Time (diffUTCTime, getCurrentTime, timeZoneMinutes)
 import Data.Version (showVersion)
 import Effectful
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL (WithConnection, query)
 import Max.BuildInfo (gitRev)
 import Max.AdminTimeline (loadAdminTimeline, waitAdminTimeline)
 import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
@@ -97,7 +97,7 @@ import Max.MemoryStore
     listMemories,
     listUserMemoriesEverywhereAdmin,
   )
-import Max.Platform.Store (listPlatformStatus)
+import Max.Platform.Store (ConversationSummary (..), listConversations, listPlatformStatus)
 import Max.Recall
   ( RecallCandidate (..),
     RecallHit (..),
@@ -136,6 +136,8 @@ data AdminConfig = AdminConfig
 -- handler's business; this is just method + path shape.
 data Route
   = ROverview
+  | -- | Every conversation the ledger knows, for the panel's picker.
+    RConversations
   | RGroups
   | RSessionPatch !Int64
   | RMemoriesList
@@ -178,6 +180,7 @@ route :: Method -> [Text] -> Maybe Route
 route m path
   | m == methodGet = case path of
       ["api", "overview"] -> Just ROverview
+      ["api", "conversations"] -> Just RConversations
       ["api", "groups"] -> Just RGroups
       ["api", "memories"] -> Just RMemoriesList
       ["api", "skills"] -> Just RSkillsList
@@ -366,6 +369,9 @@ handle env profiles logBuf r params body = case r of
     now <- liftIO getCurrentTime
     tasks <- liftIO (listTasks env.beTasks Nothing)
     sessions <- listSessions env.beDefaultModel
+    accounts <- botAccounts
+    health <- healthCounters
+    warned <- liftIO (LogBuffer.countAtLeast logBuf LogAttention)
     pure . ok $
       object
         [ "version" .= showVersion version,
@@ -376,8 +382,17 @@ handle env profiles logBuf r params body = case r of
           "effort_levels" .= effortLevels,
           "owners" .= env.beOwners,
           "groups" .= length sessions,
-          "running_tasks" .= length tasks
+          "running_tasks" .= length tasks,
+          -- Who the bot is on each platform it is logged into: the
+          -- panel's footer says whose console this is, and until now
+          -- the API could not answer that.
+          "accounts" .= accounts,
+          -- One glance's worth of "is anything wrong", cheap enough to
+          -- ride along with every overview poll.  The panel hangs its
+          -- sidebar badges off these.
+          "health" .= addObjectFields ["warn_logs" .= warned] health
         ]
+  RConversations -> ok . map conversationJson <$> listConversations
   RGroups -> do
     sessions <- listSessions env.beDefaultModel
     pure (ok (map sessionJson sessions))
@@ -685,6 +700,64 @@ handle env profiles logBuf r params body = case r of
       case TR.signed TR.decimal v of
         Right (n, "") -> Just n
         _ -> Nothing
+
+-- | The accounts the bot itself is logged in as, one row per platform.
+botAccounts :: (WithConnection :> es, IOE :> es) => Eff es [Value]
+botAccounts = do
+  rows <-
+    query
+      "SELECT platform, native_account_id, display_name, enabled \
+      \ FROM platform_accounts ORDER BY platform, platform_account_id"
+      ()
+  pure
+    [ object
+        [ "platform" .= platform,
+          "native_account_id" .= native,
+          "display_name" .= display,
+          "enabled" .= enabled
+        ]
+    | (platform, native, display, enabled) <-
+        rows :: [(Text, Text, Maybe Text, Bool)]
+    ]
+
+-- | The counters worth a badge: work that is stuck rather than work
+-- that is merely queued.  One round trip, four index-backed counts.
+healthCounters :: (WithConnection :> es, IOE :> es) => Eff es Value
+healthCounters = do
+  rows <-
+    query
+      "SELECT \
+      \  (SELECT count(*) FROM message_deliveries WHERE status = 'failed'), \
+      \  (SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'), \
+      \  (SELECT count(*) FROM episode_capture_runs WHERE status = 'failed'), \
+      \  (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL), \
+      \  (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL)"
+      ()
+  pure $ case rows :: [(Int64, Int64, Int64, Int64, Int64)] of
+    [(failed, unknown, captures, pending, parked)] ->
+      object
+        [ "failed_deliveries" .= failed,
+          "unknown_deliveries" .= unknown,
+          "failed_captures" .= captures,
+          "media_pending" .= pending,
+          "media_parked" .= parked
+        ]
+    _ -> object []
+
+-- | A conversation as a picker wants it: what to call it, what it is,
+-- and how recently it mattered.
+conversationJson :: ConversationSummary -> Value
+conversationJson c =
+  object
+    [ "conversation_id" .= c.csConversationId,
+      "legacy_group_id" .= c.csLegacyGroupId,
+      "kind" .= c.csKind,
+      "title" .= c.csTitle,
+      "platforms" .= maybe [] (T.splitOn ",") c.csPlatforms,
+      "endpoints" .= c.csEndpoints,
+      "message_count" .= c.csMessageCount,
+      "last_message_at" .= c.csLastMessageAt
+    ]
 
 addObjectFields :: [Pair] -> Value -> Value
 addObjectFields fields = \case

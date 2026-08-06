@@ -61,12 +61,15 @@ module Max.Platform.Store
     retryUnconfirmedDelivery,
     PlatformEndpointStatus (..),
     listPlatformStatus,
+    ConversationSummary (..),
+    listConversations,
+    rememberConversationTitle,
     sanitizeRawPayload,
   )
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (forM, forM_, join, when)
+import Control.Monad (forM, forM_, join, void, when)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
   ( KeyValue ((.=)),
@@ -2183,6 +2186,91 @@ listPlatformStatus =
     \ JOIN conversations c USING (conversation_id) \
     \ ORDER BY e.conversation_id, e.endpoint_id"
     ()
+
+-- | One row per canonical conversation, ordered by how recently it
+-- said anything — the shape a conversation picker wants.
+--
+-- @title@ is what a human calls this room: the ledger's own title
+-- when we have learned one ('rememberConversationTitle'), else any
+-- endpoint display name, else 'Nothing' and the caller shows the id.
+data ConversationSummary = ConversationSummary
+  { csConversationId :: !Int64,
+    csLegacyGroupId :: !(Maybe Int64),
+    csKind :: !Text,
+    csTitle :: !(Maybe Text),
+    csPlatforms :: !(Maybe Text),
+    csEndpoints :: !Int64,
+    csMessageCount :: !Int64,
+    csLastMessageAt :: !(Maybe UTCTime)
+  }
+  deriving stock (Eq, Show)
+
+instance FromRow ConversationSummary where
+  fromRow =
+    ConversationSummary
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+-- | Every conversation the ledger knows, newest activity first.
+--
+-- The two aggregates are grouped once and joined rather than run as
+-- correlated subqueries per row: this is the same single pass over
+-- @messages@ the context doctor already makes, not one scan per
+-- conversation.
+listConversations ::
+  (WithConnection :> es, IOE :> es) =>
+  Eff es [ConversationSummary]
+listConversations =
+  query
+    "SELECT c.conversation_id, c.legacy_group_id, c.conversation_kind, \
+    \       COALESCE(c.title, e.display_name), e.platforms, \
+    \       COALESCE(e.endpoints, 0), COALESCE(m.message_count, 0), m.last_message_at \
+    \ FROM conversations c \
+    \ LEFT JOIN ( \
+    \   SELECT ce.conversation_id, count(*) AS endpoints, \
+    \          string_agg(DISTINCT a.platform, ',' ORDER BY a.platform) AS platforms, \
+    \          max(ce.display_name) AS display_name \
+    \   FROM conversation_endpoints ce \
+    \   JOIN platform_accounts a USING (platform_account_id) \
+    \   GROUP BY ce.conversation_id \
+    \ ) e USING (conversation_id) \
+    \ LEFT JOIN ( \
+    \   SELECT conversation_id, count(*) AS message_count, max(occurred_at) AS last_message_at \
+    \   FROM messages GROUP BY conversation_id \
+    \ ) m USING (conversation_id) \
+    \ ORDER BY m.last_message_at DESC NULLS LAST, c.conversation_id"
+    ()
+
+-- | Write through the name a platform just told us for a room.
+--
+-- The bot fetches group metadata every turn to build the prompt's
+-- 群信息 lines, and until now that name died with the turn: the
+-- ledger's @title@ column was written by nothing, so every consumer
+-- (the admin panel, any future export) had only a numeric id to show.
+-- Keyed by legacy group id because that is the identifier the QQ
+-- roster path holds; the @IS DISTINCT FROM@ guard keeps a renamed
+-- group to one write instead of one per turn.
+rememberConversationTitle ::
+  (WithConnection :> es, IOE :> es) =>
+  Int64 ->
+  Text ->
+  Eff es ()
+rememberConversationTitle legacyId title
+  | T.null (T.strip title) = pure ()
+  | otherwise =
+      void $
+        execute
+          "UPDATE conversations SET title = ? \
+          \ WHERE legacy_group_id = ? AND title IS DISTINCT FROM ?"
+          (stripped, legacyId, stripped)
+  where
+    stripped = T.strip title
 
 sanitizeRawPayload :: Int -> Maybe Value -> (Maybe Value, Bool)
 sanitizeRawPayload _ Nothing = (Nothing, False)

@@ -8,6 +8,7 @@ spec = describe "Max.Admin" $ do
   describe "route" $ do
     it "maps the read endpoints" $ do
       route "GET" ["api", "overview"] `shouldBe` Just ROverview
+      route "GET" ["api", "conversations"] `shouldBe` Just RConversations
       route "GET" ["api", "groups"] `shouldBe` Just RGroups
       route "GET" ["api", "memories"] `shouldBe` Just RMemoriesList
       route "GET" ["api", "tasks"] `shouldBe` Just RTasksList
@@ -70,6 +71,7 @@ spec = describe "Max.Admin" $ do
 
     it "gates every data route" $ do
       needsAuth ROverview `shouldBe` True
+      needsAuth RConversations `shouldBe` True
       needsAuth RGroups `shouldBe` True
       needsAuth (RSessionPatch 1) `shouldBe` True
       needsAuth RMemoriesList `shouldBe` True

@@ -18,6 +18,7 @@ module Max.LogBuffer
     newLogBuffer,
     pushLog,
     queryLogs,
+    countAtLeast,
     LogQuery (..),
     emptyQuery,
   )
@@ -128,6 +129,22 @@ emptyQuery =
       lqAfter = Nothing,
       lqLimit = 200
     }
+
+-- | How many buffered lines are at least this severe.
+--
+-- A count, not a page: 'queryLogs' truncates at 'lqLimit', so asking
+-- it "how many warnings" gives the limit back once there are more
+-- than that.  A badge needs the real number.
+countAtLeast :: LogBuffer -> LogLevel -> IO Int
+countAtLeast buf level = do
+  entries <- readTVarIO buf.lbEntries
+  pure (Seq.length (Seq.filter ((>= rank level) . rank . leLevel) entries))
+  where
+    rank :: LogLevel -> Int
+    rank = \case
+      LogTrace -> 0
+      LogInfo -> 1
+      LogAttention -> 2
 
 -- | Newest-first, capped at 'lqLimit'.  Newest-first because that is
 -- the order the question is asked in ("what just happened"), and it

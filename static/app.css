@@ -1,585 +1,724 @@
-/* max admin panel — the console build.
+/* max admin panel.
  *
- * The palette is still lifted from the artifact the operator already
- * reads every day: `journalctl -u max` with colour on.  INFO renders
- * cyan, WARN amber, and the bot's own reaction-face vocabulary
- * supplies the rest (裂开 = failed, OK = green).  Status colour in
- * here means the same thing it means in the logs and in the group.
+ * The shell is shadcn/ui's dashboard-01 rebuilt by hand: an inset
+ * sidebar over a rounded content panel, Geist type, and the v4
+ * `neutral` token set (values lifted from the registry, not guessed).
+ * shadcn proper is React + Tailwind + a build step; this panel is
+ * three files embedded in one binary (see the v0.11.0 commit), so
+ * every utility it needs is transcribed here from the component
+ * sources — button/badge/card/input/table/tabs/sidebar/sheet — with
+ * the Tailwind class it replaces named in the comment.
  *
- * The shape is new.  The system's thesis is one canonical ledger with
- * many projections, and the panel now wears it: a fixed instrument
- * rail carries the live vitals and a pipeline-grouped map of the
- * views, and every view renders as a projection of the same ledger —
- * mono identity on the left, prose payload on the right, hairlines
- * instead of boxes.  Section headers draw the same `── label ───`
- * rule the source files use to divide themselves.
+ * On top of that sit the parts shadcn has no component for and max
+ * needs: the canonical ledger, the journalctl-shaped log list, the
+ * LLM call inspector.  Those keep max's own grammar — identity in
+ * mono with a #nnnn handle, payload in prose, status colour meaning
+ * what it means in the group (green ok, amber working, red 裂开).
  *
- * Chart series are separate steps of the same two hues, sat in the
- * OKLCH band chart marks need (validated for CVD separation and
- * contrast in both schemes); text tokens keep the contrast text
- * needs.  CJK falls back to system faces on purpose: a subsetted Han
- * webfont is megabytes, and this is a tool one person opens over a
- * tailnet.
+ * CJK falls back to system faces on purpose: Geist has no Han
+ * glyphs, and a subsetted Han webfont is megabytes for a tool one
+ * person opens over a tailnet.
  */
 
 @font-face {
-  font-family: 'Plex Mono';
-  src: url('vendor/plex-mono-400.woff2') format('woff2');
-  font-weight: 400;
-  font-display: swap;
+  font-family: 'Geist';
+  src: url('vendor/geist-sans-latin-400-normal.woff2') format('woff2');
+  font-weight: 400; font-display: swap;
 }
 @font-face {
-  font-family: 'Plex Mono';
-  src: url('vendor/plex-mono-600.woff2') format('woff2');
-  font-weight: 600;
-  font-display: swap;
+  font-family: 'Geist';
+  src: url('vendor/geist-sans-latin-500-normal.woff2') format('woff2');
+  font-weight: 500; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('vendor/geist-sans-latin-600-normal.woff2') format('woff2');
+  font-weight: 600; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('vendor/geist-mono-latin-400-normal.woff2') format('woff2');
+  font-weight: 400; font-display: swap;
+}
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('vendor/geist-mono-latin-500-normal.woff2') format('woff2');
+  font-weight: 500; font-display: swap;
 }
 
 :root {
-  --bg: #0a0f12;
-  --surface: #10171b;
-  --inset: #0d1417;
-  --line: #1d282e;
-  --fg: #d7e0e4;
-  --dim: #8fa0a7;
-  --faint: #5f7077;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-border: oklch(0.922 0 0);
 
-  /* Semantics, straight from the bot's own vocabulary. */
-  --info: #4cb5c6;  /* journalctl INFO — also the interactive accent */
-  --warn: #d3a04c;  /* journalctl WARN — and 托腮, "working on it" */
-  --fail: #e0684f;  /* 裂开 */
-  --ok: #52ae80;
+  /* State, in the bot's own vocabulary: OK green, 托腮 amber, 裂开
+     red.  A colour means here what it means in the group. */
+  --ok: oklch(0.596 0.145 163);
+  --warn: oklch(0.554 0.135 66);
+  --fail: oklch(0.577 0.245 27.325);
 
-  /* Chart steps of the same two hues, in the lightness band marks
-     need rather than the band text needs. */
-  --chart-1: #1e9cb0;
-  --chart-2: #bd8a1a;
+  /* Two chart series, validated for CVD separation and contrast
+     against both surfaces.  Not the neutral theme's grey ramp: max's
+     series are distinct measures, not ordered steps. */
+  --chart-1: #0087a6;
+  --chart-2: #95660d;
 
-  --mono: 'Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --sans: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --header-height: 3rem;
+  --sidebar-width: 15rem;
+  --sidebar-width-mobile: 18rem;
+
+  --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / .05);
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / .1), 0 1px 2px -1px rgb(0 0 0 / .1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / .1), 0 2px 4px -2px rgb(0 0 0 / .1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / .1), 0 4px 6px -4px rgb(0 0 0 / .1);
+
+  --sans: 'Geist', system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, 'PingFang SC', monospace;
 }
 
-/* Light stays cool rather than turning to cream: the panel is the
-   same instrument in daylight, not a different one. */
-@media (prefers-color-scheme: light) {
+@media (prefers-color-scheme: dark) {
   :root {
-    --bg: #eef1f2;
-    --surface: #fff;
-    --inset: #e8edef;
-    --line: #d6dee1;
-    --fg: #172429;
-    --dim: #55666d;
-    --faint: #82959c;
-    --info: #0d7286;
-    --warn: #8a5f11;
-    --fail: #b23f28;
-    --ok: #257a51;
-    --chart-1: #0087a6;
-    --chart-2: #95660d;
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.269 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.269 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.556 0 0);
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --ok: oklch(0.723 0.164 163);
+    --warn: oklch(0.769 0.153 70);
+    --fail: oklch(0.704 0.191 22.216);
+    --chart-1: #1e9cb0;
+    --chart-2: #bd8a1a;
+    --shadow-xs: 0 1px 2px 0 rgb(0 0 0 / .3);
+    --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / .35), 0 1px 2px -1px rgb(0 0 0 / .35);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / .4), 0 2px 4px -2px rgb(0 0 0 / .4);
   }
+  /* shadcn dark inputs sit on a faint wash (bg-input/30). */
+  input, select, textarea { background: oklch(1 0 0 / 5%); }
 }
 
-[x-cloak] { display: none !important; }
 * { box-sizing: border-box; }
-
-/* One radius for everything interactive or contained: 2px, just
-   enough to stop corners glinting.  An instrument, not an app. */
+[x-cloak] { display: none !important; }
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font: 14px/1.55 var(--sans);
+  background: var(--sidebar);            /* has-data-[variant=inset]:bg-sidebar */
+  color: var(--foreground);
+  font: 400 14px/1.5 var(--sans);
+  -webkit-font-smoothing: antialiased;
   -webkit-text-size-adjust: 100%;
 }
 
-/* ── frame ───────────────────────────────────────────────────────
-   Desktop: a fixed instrument rail on the left, content on the
-   right.  The rail is the old log-line header given a column: it
-   says whose console this is, holds the live vitals, and maps the
-   views onto the pipeline they inspect. */
+svg { display: block; flex: none; }
+.icon { width: 1rem; height: 1rem; }
+.icon-5 { width: 1.25rem; height: 1.25rem; }
+.icon-3 { width: .75rem; height: .75rem; }
 
-.frame { display: grid; grid-template-columns: 15rem 1fr; min-height: 100dvh; }
+/* ── sidebar ─────────────────────────────────────────────────── */
 
-.rail {
-  position: sticky; top: 0; align-self: start;
-  height: 100dvh; overflow-y: auto;
-  border-right: 1px solid var(--line);
-  padding: 1rem .9rem 1.2rem;
-  display: flex; flex-direction: column; gap: 1.1rem;
-  font: 400 12.5px/1.8 var(--mono);
+.wrapper { display: flex; min-height: 100svh; width: 100%; }
+
+.sidebar {
+  width: var(--sidebar-width);
+  flex: none;
+  padding: .5rem;                        /* inset variant p-2 */
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; height: 100svh;
+  color: var(--sidebar-foreground);
 }
+@media (min-width: 48.0625rem) {
+  .sidebar.closed { display: none; }     /* collapsible=offcanvas */
+}
+.sheet-overlay { position: fixed; inset: 0; z-index: 40; background: rgb(0 0 0 / .5); }
 
-.brand { display: flex; align-items: baseline; gap: .5rem; }
-.brand .app { color: var(--fg); font-weight: 600; font-size: 14px; }
-.brand .ver { color: var(--info); }
-.brand .rev { color: var(--faint); }
+.sidebar-inner { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.sidebar-header { display: flex; flex-direction: column; gap: .5rem; padding: .5rem; }
+.sidebar-content { display: flex; flex-direction: column; gap: .25rem; flex: 1; min-height: 0; overflow: auto; }
+.sidebar-footer { display: flex; flex-direction: column; gap: .5rem; padding: .5rem; }
+.sidebar-group { display: flex; flex-direction: column; width: 100%; min-width: 0; padding: .5rem; }
+.sidebar-group-label {
+  display: flex; align-items: center; height: 2rem; flex: none;
+  padding: 0 .5rem; border-radius: calc(var(--radius) - 2px);
+  font-size: 12px; font-weight: 500;
+  color: color-mix(in oklab, var(--sidebar-foreground) 70%, transparent);
+}
+.sidebar-menu { display: flex; flex-direction: column; gap: .25rem; width: 100%; min-width: 0; list-style: none; margin: 0; padding: 0; }
+.sidebar-menu-item { position: relative; }
+
+/* sidebarMenuButtonVariants: h-8 w-full gap-2 rounded-md p-2 text-sm */
+.menu-btn {
+  display: flex; width: 100%; align-items: center; gap: .5rem;
+  justify-content: flex-start;           /* not the button default */
+  height: 2rem; padding: .5rem; overflow: hidden;
+  border: 0; border-radius: calc(var(--radius) - 2px);
+  background: transparent; color: inherit;
+  font: inherit; font-size: 14px; font-weight: 400; text-align: left;
+  box-shadow: none;
+  cursor: pointer;
+}
+.menu-btn > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.menu-btn:hover { background: var(--sidebar-accent); color: var(--accent-foreground); }
+.menu-btn.active { background: var(--sidebar-accent); font-weight: 500; }
+.menu-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--ring); }
+.menu-btn.lg { height: 3rem; }
+.menu-btn.brand { padding: .375rem !important; }
+.menu-btn.brand .name { font-size: 16px; font-weight: 600; }
+
+/* SidebarMenuBadge: absolute right-1 h-5 min-w-5 rounded-md px-1
+   text-xs tabular-nums.  It carries a live count, so it also carries
+   the state colour that count means. */
+.menu-badge {
+  pointer-events: none; position: absolute; right: .25rem; top: .375rem;
+  display: flex; align-items: center; justify-content: center;
+  height: 1.25rem; min-width: 1.25rem; padding: 0 .25rem;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums;
+  user-select: none;
+  color: var(--muted-foreground);
+}
+.menu-badge.busy { color: var(--warn); }
+.menu-badge.bad { color: var(--fail); }
+
+/* The conversation switcher: the panel's own "team switcher".
+   Everything ledger-shaped reads the conversation it names. */
+.switcher { position: relative; }
+.switcher > summary { list-style: none; cursor: pointer; }
+.switcher > summary::-webkit-details-marker { display: none; }
+.switch-btn {
+  display: flex; width: 100%; align-items: center; gap: .5rem;
+  height: 3rem; padding: .5rem;
+  border-radius: calc(var(--radius) - 2px);
+}
+.switch-btn:hover { background: var(--sidebar-accent); }
+.switch-mark {
+  display: flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; flex: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--primary); color: var(--primary-foreground);
+}
+.switch-text { display: grid; flex: 1; text-align: left; line-height: 1.25; min-width: 0; }
+.switch-text .t1 { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switch-text .t2 { font-size: 12px; color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); }
+.switch-menu {
+  position: absolute; left: 0; right: 0; top: calc(100% + .25rem); z-index: 50;
+  max-height: 22rem; overflow-y: auto; padding: .25rem;
+  background: var(--popover); border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px); box-shadow: var(--shadow-md);
+}
+.switch-menu .search { width: 100%; margin-bottom: .25rem; }
+.switch-item {
+  display: flex; width: 100%; align-items: center; gap: .5rem;
+  padding: .375rem .5rem; border: 0; border-radius: calc(var(--radius) - 4px);
+  background: none; color: inherit; font: inherit; font-size: 13px;
+  text-align: left; cursor: pointer;
+}
+.switch-item:hover { background: var(--accent); }
+.switch-item .who { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.switch-item .gid { font: 400 11.5px var(--mono); color: var(--muted-foreground); }
+.switch-item.on { font-weight: 500; }
+
+/* Sidebar footer: the bot's own identity, not a user account. */
+.bot-card { display: flex; align-items: center; gap: .5rem; height: 3rem; padding: .5rem; border-radius: calc(var(--radius) - 2px); }
+.bot-mark {
+  display: flex; align-items: center; justify-content: center;
+  width: 2rem; height: 2rem; flex: none;
+  border-radius: calc(var(--radius) - 2px);
+  background: var(--muted);
+}
+.bot-text { display: grid; flex: 1; text-align: left; line-height: 1.25; min-width: 0; }
+.bot-text .t1 { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bot-text .t2 { font: 400 11.5px var(--mono); color: var(--muted-foreground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Breathing only while the bot is actually working — the pulse
    carries state, so an idle panel holds still. */
-.dot {
-  width: .5rem; height: .5rem; border-radius: 50%;
-  background: var(--ok); align-self: center; flex: none;
-}
+.dot { width: .5rem; height: .5rem; border-radius: 50%; background: var(--ok); flex: none; }
 .dot.busy { background: var(--warn); animation: breathe 2.4s ease-in-out infinite; }
 @keyframes breathe { 50% { opacity: .25; } }
-@media (prefers-reduced-motion: reduce) {
-  .dot.busy { animation: none; }
+@media (prefers-reduced-motion: reduce) { .dot.busy { animation: none; } }
+
+/* ── inset ───────────────────────────────────────────────────── */
+
+.inset {
+  position: relative; display: flex; flex-direction: column; flex: 1; min-width: 0;
+  background: var(--background);
+  margin: .5rem .5rem .5rem 0;           /* m-2 ml-0 */
+  border-radius: .75rem;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
+/* peer-data-[state=collapsed]:ml-2 — with the sidebar gone, its own
+   padding no longer supplies the left gap. */
+.inset.collapsed { margin-left: .5rem; }
 
-/* Vitals read as the log line always did: key=value, dim key. */
-.vitals { color: var(--dim); }
-.vitals div { display: flex; justify-content: space-between; gap: .6rem; }
-.vitals b { color: var(--fg); font-weight: 400; }
-
-/* The one conversation the ledger views share.  Set it once here;
-   消息账本 / 上下文 / 记忆 all follow. */
-.focus label { display: block; color: var(--faint); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-.focus input { width: 100%; }
-
-.navgroups { display: flex; flex-direction: column; gap: .9rem; }
-.navgroup > h3 {
-  margin: 0 0 .15rem;
-  font: 600 10px/1.6 var(--mono);
-  letter-spacing: .1em; text-transform: uppercase;
-  color: var(--faint);
+.site-header {
+  display: flex; align-items: center; gap: .5rem; flex: none;
+  height: var(--header-height);
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+  position: sticky; top: 0; z-index: 20;
 }
-.navgroup button {
-  display: flex; width: 100%; justify-content: space-between; align-items: baseline;
-  background: none; border: 0; border-left: 2px solid transparent; border-radius: 0;
-  color: var(--dim); padding: .12rem .45rem .12rem .55rem;
-  font: inherit; cursor: pointer; text-align: left;
+.site-header .bar { display: flex; width: 100%; align-items: center; gap: .5rem; padding: 0 1rem; }
+.site-header h1 { margin: 0; font-size: 16px; font-weight: 500; }
+.sep-v { width: 1px; height: 1rem; background: var(--border); margin: 0 .5rem; flex: none; }
+.header-actions { margin-left: auto; display: flex; align-items: center; gap: .5rem; }
+
+.main-col {
+  display: flex; flex-direction: column; flex: 1;
+  container-type: inline-size; container-name: main;   /* @container/main */
 }
-.navgroup button:hover { color: var(--fg); }
-.navgroup button.active { color: var(--fg); border-left-color: var(--info); background: var(--surface); }
-/* The digit doubles as documentation: press it anywhere outside an
-   input and you are on that view. */
-.navgroup button kbd { color: var(--faint); font: 400 10.5px var(--mono); }
+.stack { display: flex; flex-direction: column; gap: 1.5rem; padding: 1.5rem 0; }
+.px6 { padding-left: 1.5rem; padding-right: 1.5rem; }
 
-.content { padding: 1.1rem 1.4rem 3rem; min-width: 0; }
+/* ── cards ───────────────────────────────────────────────────── */
 
-/* Mobile keeps the old signature instead: one line out of
-   `journalctl -u max`, then a tab strip.  Glanced at, not read, so
-   it must not steal rows from the content — anything over the edge
-   scrolls rather than wrapping. */
-.logline { display: none; }
-
-@media (max-width: 64rem) {
-  .frame { display: block; }
-  .rail { display: none; }
-  .content { padding: 0 .55rem 2rem; }
-
-  .logline {
-    display: flex;
-    align-items: baseline;
-    gap: .55rem;
-    font: 400 11.5px/2.4 var(--mono);
-    color: var(--dim);
-    border-bottom: 1px solid var(--line);
-    flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none;
-  }
-  .logline::-webkit-scrollbar { display: none; }
-  .logline > * { flex: none; }
-  .logline .app { color: var(--fg); font-weight: 600; }
-  .logline .ver { color: var(--info); }
-  .logline b { color: var(--fg); font-weight: 600; }
-
-  .tabs {
-    display: flex; gap: .15rem;
-    overflow-x: auto; scrollbar-width: none;
-    padding: .45rem 0 0;
-  }
-  .tabs::-webkit-scrollbar { display: none; }
-  .tabs button {
-    flex: none;
-    background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0;
-    color: var(--dim); padding: .25rem .6rem; font: inherit; cursor: pointer;
-  }
-  .tabs button.active { color: var(--fg); border-bottom-color: var(--info); }
+.card {
+  display: flex; flex-direction: column; gap: 1.5rem;
+  padding: 1.5rem 0;
+  background: var(--card); color: var(--card-foreground);
+  border: 1px solid var(--border);
+  border-radius: .75rem;                 /* rounded-xl */
+  box-shadow: var(--shadow-sm);
+  container-type: inline-size; container-name: card;   /* @container/card */
 }
-@media (min-width: 64.01rem) {
-  .tabs { display: none; }
+.card-header { display: grid; align-items: start; gap: .35rem; padding: 0 1.5rem; grid-auto-rows: min-content; }
+/* minmax(0,1fr), not 1fr: a bare 1fr floors at min-content, so a
+   narrow card would push the action out past the card edge. */
+.card-header.has-action { grid-template-columns: minmax(0, 1fr) auto; }
+.card-title, .card-header h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 1.3; }
+.card-desc { margin: 0; font-size: 13px; color: var(--muted-foreground); }
+.card-action { grid-column: 2; grid-row: 1 / span 2; align-self: start; justify-self: end; }
+/* Placed explicitly, so a card whose action is hidden (no delta to
+   show) does not let the value flow up into the empty column. */
+.card-header.has-action > .card-desc { grid-column: 1; grid-row: 1; }
+.card-header.has-action > .stat-value { grid-column: 1; grid-row: 2; }
+.card-content { padding: 0 1.5rem; }
+.card-footer { display: flex; padding: 0 1.5rem; }
+/* Tables and log lists bleed to the card edge. */
+.card-content.flush { padding: 0; }
+.card-content.flush th:first-child, .card-content.flush td:first-child { padding-left: 1.5rem; }
+.card-content.flush th:last-child, .card-content.flush td:last-child { padding-right: 1.5rem; }
+.card-content.flush tbody tr:last-child td { border-bottom: 0; }
+.card-content.flush .empty { padding: .25rem 1.5rem .5rem; }
+.card-content.flush .logs { padding: 0 .75rem; }
+
+/* Stat cards: @xl/main → 2 up, @5xl/main → 4 up. */
+.stat-grid { display: grid; grid-template-columns: 1fr; gap: 1rem; padding: 0 1.5rem; }
+@container main (min-width: 36rem) { .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container main (min-width: 64rem) { .stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.stat-grid > .card {
+  background-image: linear-gradient(to top, color-mix(in oklab, var(--primary) 5%, transparent), var(--card));
+  box-shadow: var(--shadow-xs);
 }
-
-/* ── section grammar ─────────────────────────────────────────────
-   The h2 draws the same `── label ───────` divider the source files
-   use to section themselves; the rule is a border, not glyphs, so it
-   meets the right edge cleanly at any width. */
-
-section { padding-top: 1.2rem; }
-
-h2 {
-  display: flex; align-items: center; gap: .6rem;
-  font: 600 11px/1 var(--mono);
-  letter-spacing: .08em; text-transform: uppercase;
-  color: var(--dim); margin: 1.9rem 0 .65rem;
+@media (prefers-color-scheme: dark) {
+  .stat-grid > .card { background-image: none; }
 }
-h2::before { content: ''; width: 1.1rem; border-top: 1px solid var(--line); }
-h2::after { content: ''; flex: 1; border-top: 1px solid var(--line); }
-h2:first-child { margin-top: 0; }
-
-/* ── identity vs payload ─────────────────────────────────────────
-   Every opaque handle the bot uses — group, QQ, message, task —
-   wears the same `#nnnn` form it has in the transcript. */
-
-.id { font: 400 .9em var(--mono); color: var(--fg); overflow-wrap: anywhere; }
-.id::before { content: '#'; color: var(--faint); }
-.muted { color: var(--dim); }
-.stamp { font: 400 .85em var(--mono); color: var(--dim); }
-
-/* Allow/deny is a two-value fact; a dot and a word beats a pill. */
-.verdict::before {
-  content: ''; display: inline-block; width: .45rem; height: .45rem;
-  border-radius: 50%; margin-right: .4rem; vertical-align: .05em;
-  background: var(--ok);
-}
-.verdict.deny::before { background: var(--fail); }
-.verdict.hold::before { background: var(--warn); }
-.verdict { font: 400 .85em var(--mono); }
-
-.ok { color: var(--ok) !important; }
-.bad { color: var(--fail) !important; }
-
-/* ── token gate ──────────────────────────────────────────────── */
-
-.gate { display: flex; align-items: center; justify-content: center; min-height: 88dvh; }
-.gate form {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
-  padding: 1.5rem; width: min(21rem, calc(100% - 2rem));
-}
-.gate h1 { font: 600 15px/1 var(--mono); margin: 0 0 .35rem; }
-.gate p { margin: 0; font-size: .85rem; }
-.gate input { width: 100%; margin: 1rem 0 .6rem; }
-.gate button { width: 100%; }
+.stat-value { font-size: 24px; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+@container card (min-width: 250px) { .stat-value { font-size: 30px; } }
+.stat-foot { flex-direction: column; align-items: flex-start; gap: .375rem; font-size: 13px; }
+.stat-foot .line1 { display: flex; gap: .5rem; align-items: center; font-weight: 500; max-width: 100%; overflow: hidden; }
+.stat-foot .line1 > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stat-foot .line2 { color: var(--muted-foreground); }
 
 /* ── controls ────────────────────────────────────────────────── */
 
 button, input, select, textarea {
-  font: inherit; color: var(--fg);
-  background: var(--surface); border: 1px solid var(--line);
-  border-radius: 2px; padding: .3rem .55rem;
+  font: inherit; font-size: 13.5px; color: var(--foreground);
+  background: transparent;
+  border: 1px solid var(--input);
+  border-radius: calc(var(--radius) - 2px);
+  padding: 0 .75rem; height: 2.25rem;
+  box-shadow: var(--shadow-xs);
 }
-input, select, textarea { font-family: var(--mono); font-size: .9em; }
-input::placeholder, textarea::placeholder { color: var(--faint); opacity: 1; }
-button { cursor: pointer; font-size: .9em; }
-button:hover { border-color: var(--info); }
-button:active { transform: translateY(1px); }
-button:disabled { cursor: not-allowed; opacity: .45; border-color: var(--line); transform: none; }
-:focus-visible { outline: 2px solid var(--info); outline-offset: 1px; }
+input, select { min-width: 0; }
+input::placeholder, textarea::placeholder { color: var(--muted-foreground); opacity: .8; }
 
+button {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5rem;
+  padding: 0 1rem; font-weight: 500; white-space: nowrap;
+  background: var(--background);
+  cursor: pointer; transition: background .15s, border-color .15s, opacity .15s;
+}
+button:hover { background: var(--accent); }
+button:disabled { pointer-events: none; opacity: .5; }
 button[type='submit'], button.primary {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 45%, var(--line));
+  background: var(--primary); color: var(--primary-foreground); border-color: var(--primary);
 }
-button.danger { color: var(--fail); border-color: transparent; padding: .15rem .45rem; }
-button.danger:hover { border-color: var(--fail); }
-button.ghost { color: var(--dim); border-color: transparent; }
-button.ghost:hover { color: var(--fg); border-color: var(--line); }
+button[type='submit']:hover, button.primary:hover { opacity: .9; background: var(--primary); }
+button.ghost { background: none; border-color: transparent; box-shadow: none; color: var(--muted-foreground); }
+button.ghost:hover { background: var(--accent); color: var(--accent-foreground); }
+button.danger { background: none; border-color: transparent; box-shadow: none; color: var(--fail); }
+button.danger:hover { background: color-mix(in oklab, var(--fail) 10%, transparent); }
+button.sm { height: 2rem; padding: 0 .75rem; gap: .375rem; }
+button.size-8 { width: 2rem; height: 2rem; padding: 0; }
+button.icon-btn { width: 2.25rem; padding: 0; }
 
-textarea { width: 100%; min-height: 8rem; resize: vertical; line-height: 1.6; }
+:focus-visible {
+  outline: none; border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--ring) 50%, transparent);
+}
 
-.row { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.1rem; align-items: center; }
-.row input { min-width: 7rem; flex: 1 1 7rem; }
-.row .grow { flex: 1 1 12rem; }
-.check { display: flex; align-items: center; gap: .3rem; color: var(--dim); font-size: .9em; }
+textarea {
+  width: 100%; min-height: 8rem; height: auto;
+  padding: .5rem .75rem; resize: vertical; line-height: 1.6;
+  font-family: var(--mono); font-size: 12.5px;
+}
 
-.filters { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 1.1rem; }
+/* Native select styled as shadcn's trigger; the popover is the
+   platform's, which is the honest zero-build substitute for Radix. */
+select { appearance: none; padding-right: 2rem; background-color: var(--background); }
+@media (prefers-color-scheme: dark) { select { background-color: oklch(1 0 0 / 5%); } }
+.select-wrap { position: relative; display: inline-flex; }
+.select-wrap > svg { position: absolute; right: .5rem; top: 50%; transform: translateY(-50%); width: 1rem; height: 1rem; opacity: .5; pointer-events: none; }
+.select-wrap select { width: 100%; }
+
+.checkbox {
+  appearance: none; margin: 0; flex: none;
+  width: 1rem; height: 1rem; padding: 0;
+  border: 1px solid var(--input); border-radius: 4px;
+  background: transparent; box-shadow: var(--shadow-xs);
+  cursor: pointer; position: relative;
+}
+.checkbox:checked { background: var(--primary); border-color: var(--primary); }
+.checkbox:checked::after {
+  content: ''; position: absolute; inset: 0;
+  background: var(--primary-foreground);
+  clip-path: polygon(21% 47%, 15% 54%, 39% 78%, 85% 32%, 79% 25%, 39% 65%);
+}
+
+.row { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; align-items: center; }
+.row:last-child { margin-bottom: 0; }
+.row input, .row .select-wrap { min-width: 7rem; flex: 1 1 7rem; }
+.row .grow { flex: 1 1 14rem; }
+.check { display: flex; align-items: center; gap: .4rem; color: var(--muted-foreground); font-size: 13px; }
+
+.filters { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
 .filters .search { flex: 1 1 12rem; min-width: 8rem; }
 
-/* An error is a warning line, in the log's own grammar — because
-   that is what it is.  Click dismisses. */
-.err {
-  border-left: 2px solid var(--fail);
-  background: color-mix(in srgb, var(--fail) 8%, transparent);
-  padding: .45rem .7rem; margin: .9rem 0; cursor: pointer;
-  font: 400 12px/1.7 var(--mono);
+/* ── primitives ──────────────────────────────────────────────── */
+
+/* Every opaque handle the bot uses wears the transcript's #nnnn. */
+.id { font: 400 12.5px var(--mono); overflow-wrap: anywhere; }
+.id::before { content: '#'; color: var(--muted-foreground); }
+.muted { color: var(--muted-foreground); }
+.stamp { font: 400 12px var(--mono); color: var(--muted-foreground); }
+.num { font: 400 12.5px var(--mono); font-variant-numeric: tabular-nums; }
+
+/* Badge, outline variant: rounded-full px-2 py-0.5 text-xs. */
+.badge, .verdict {
+  display: inline-flex; align-items: center; gap: .25rem;
+  border: 1px solid var(--border); border-radius: 999px;
+  padding: .125rem .5rem;
+  font-size: 12px; font-weight: 500; line-height: 1.5;
+  white-space: nowrap;
 }
-.err::before { content: 'WARN '; color: var(--fail); }
+.verdict::before {
+  content: ''; width: .4rem; height: .4rem; border-radius: 50%;
+  background: var(--ok); flex: none;
+}
+.verdict.deny::before { background: var(--fail); }
+.verdict.hold::before { background: var(--warn); }
+.badge.muted-badge { color: var(--muted-foreground); padding: .125rem .375rem; }
 
-.empty { color: var(--dim); font: 400 .9em var(--mono); padding: .5rem 0; }
-.empty code { color: var(--info); font-family: var(--mono); }
+.ok { color: var(--ok) !important; }
+.bad { color: var(--fail) !important; }
 
-/* A fact strip: the header line of a view, key=value in mono, same
-   grammar as the rail vitals and the old log line. */
+.empty { color: var(--muted-foreground); font-size: 13px; padding: .5rem 0; }
+.empty code { font-family: var(--mono); font-size: 12px; }
+
+/* A destructive alert, click to dismiss. */
+.err {
+  border: 1px solid color-mix(in oklab, var(--fail) 35%, transparent);
+  background: color-mix(in oklab, var(--fail) 7%, transparent);
+  color: var(--fail);
+  border-radius: calc(var(--radius) - 2px);
+  padding: .55rem .8rem; margin: 1rem 1.5rem 0;
+  font-size: 13px; cursor: pointer;
+}
+
+/* key=value facts, the journalctl grammar in shadcn clothes. */
 .facts {
-  display: flex; flex-wrap: wrap; gap: .3rem 1rem;
-  font: 400 12px/1.8 var(--mono); color: var(--dim);
-  margin: .2rem 0 .9rem;
+  display: flex; flex-wrap: wrap; gap: .25rem 1rem;
+  font: 400 12px/1.9 var(--mono); color: var(--muted-foreground);
+  margin: 0 0 .75rem;
 }
 .facts i { font-style: normal; }
-.facts i::after { content: '='; color: var(--faint); }
-.facts b { color: var(--fg); font-weight: 400; }
+.facts i::after { content: '='; opacity: .6; }
+.facts b { color: var(--foreground); font-weight: 500; }
+.card-content > .facts:last-child { margin-bottom: 0; }
 
 /* ── charts ──────────────────────────────────────────────────── */
 
-.chart {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
-  padding: .6rem .4rem .2rem; overflow: hidden; margin-bottom: .5rem;
+.chart { width: 100%; position: relative; }
+.chart + .chart { margin-top: .75rem; }
+.chart .u-legend { display: none; }
+/* recharts passes cursor={false}: no rule follows the pointer. */
+.chart .u-cursor-x, .chart .u-cursor-y { display: none; }
+.chart-tooltip {
+  position: absolute; z-index: 20; pointer-events: none;
+  min-width: 9rem; padding: .375rem .5rem;
+  background: var(--background); border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px); box-shadow: var(--shadow-md);
+  font-size: 12px; line-height: 1.5; display: none;
 }
-.u-legend { font: 400 11px var(--mono); color: var(--dim); padding-top: .2rem; }
-/* uPlot underlines each legend label with the series stroke, which
-   reads as a mis-clicked link; the marker square already carries the
-   colour. */
-.u-legend .u-series > * { border-bottom: 0 !important; }
-.u-legend .u-marker { width: 8px; height: 8px; border-width: 2px; }
+.chart-tooltip .label { font-weight: 500; margin-bottom: .25rem; }
+.chart-tooltip .row { display: flex; align-items: center; gap: .5rem; margin: 0; }
+.chart-tooltip .row .dot { width: .625rem; height: .625rem; border-radius: 2px; }
+.chart-tooltip .row .name { color: var(--muted-foreground); }
+.chart-tooltip .row .val { margin-left: auto; font-weight: 500; font-variant-numeric: tabular-nums; font-family: var(--mono); }
 
 /* ── tables ──────────────────────────────────────────────────── */
 
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: .45rem .55rem; border-bottom: 1px solid var(--line); vertical-align: baseline; }
-th {
-  font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
-  color: var(--dim); padding-bottom: .5rem;
-}
-td { font-size: .95em; }
-tbody tr:hover { background: var(--surface); }
-td select { padding: .15rem .35rem; max-width: 100%; }
-.persona { color: var(--dim); font-size: .9em; cursor: pointer; }
-.persona:hover { color: var(--fg); }
-.num { font: 400 .9em var(--mono); }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+th, td { text-align: left; padding: .5rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
+th { height: 2.5rem; padding-block: 0; font-weight: 500; color: var(--muted-foreground); white-space: nowrap; }
+tbody tr:hover { background: color-mix(in oklab, var(--muted) 50%, transparent); }
+td select, td button { height: 2rem; }
+td select { font-size: 12.5px; padding: 0 1.75rem 0 .5rem; }
+.persona { color: var(--muted-foreground); cursor: pointer; }
+.persona:hover { color: var(--foreground); text-decoration: underline; text-underline-offset: 3px; }
+.act { text-align: right; }
 
-/* An editor that unfolds under its row — persona, a skill body —
-   belongs to the table, not to a dialog. */
-tr.editor > td { background: var(--inset); padding: .7rem .55rem .9rem; }
-.editor .row { margin-bottom: .5rem; }
-.editor .row:last-child { margin-bottom: 0; }
-
+/* Collapsible raw payloads. */
 .trace {
-  background: var(--surface); border: 1px solid var(--line); border-radius: 2px;
-  margin: .4rem 0; padding: .35rem .55rem;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: calc(var(--radius) - 2px);
+  margin: .4rem 0; padding: .4rem .65rem;
 }
 .trace > summary {
-  cursor: pointer; display: flex; flex-wrap: wrap; gap: .35rem 1rem;
-  align-items: baseline;
-  color: var(--dim); font: 400 11px/1.7 var(--mono);
+  cursor: pointer; display: flex; flex-wrap: wrap; gap: .3rem .9rem; align-items: baseline;
+  color: var(--muted-foreground); font-size: 12.5px; line-height: 1.8;
 }
-.trace > summary:hover { color: var(--fg); }
-.trace pre, .editor pre {
+.trace > summary:hover { color: var(--foreground); }
+.trace pre, pre.block {
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 26rem; overflow-y: auto;
-  background: var(--inset); border: 1px solid var(--line); border-radius: 2px;
-  padding: .5rem; font: 400 11px/1.55 var(--mono);
+  background: var(--muted); border: 0; border-radius: calc(var(--radius) - 4px);
+  padding: .6rem .7rem; font: 400 12px/1.55 var(--mono); margin: .4rem 0;
 }
 
-/* ── the ledger ──────────────────────────────────────────────────
-   The canonical timeline is the panel's centre, and it reads as the
-   ledger it is: a mono gutter of seq/time/id on the left, the
-   hydrated payload on the right, one hairline between entries.  The
-   gutter column is the spine the eye tracks. */
+/* ── the canonical ledger ────────────────────────────────────── */
 
-.ledger { border-top: 1px solid var(--line); }
+.ledger { padding: 0 1.5rem; }
 .entry {
-  display: grid; grid-template-columns: 6.5rem minmax(0, 1fr);
-  gap: 0 1rem;
-  padding: .55rem 0;
-  border-bottom: 1px solid var(--line);
+  display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); gap: 0 1.1rem;
+  padding: .75rem 0; border-bottom: 1px solid var(--border);
 }
+.entry:last-child { border-bottom: 0; }
 .entry > .gutter {
-  font: 400 11px/1.7 var(--mono); color: var(--dim);
-  text-align: right;
-  border-right: 2px solid var(--line);
-  padding-right: .7rem;
+  font: 400 11.5px/1.75 var(--mono); color: var(--muted-foreground);
+  text-align: right; border-right: 2px solid var(--border); padding-right: .8rem;
 }
-.gutter .seq { color: var(--fg); }
-.gutter .seq::before { content: 'seq '; color: var(--faint); }
+.gutter .seq { color: var(--foreground); font-weight: 500; }
+.gutter .seq::before { content: 'seq '; color: var(--muted-foreground); font-weight: 400; }
 .entry > .payload { min-width: 0; }
-.payload > header {
-  display: flex; flex-wrap: wrap; gap: .25rem .7rem; align-items: baseline;
-  margin-bottom: .25rem;
-}
-.payload > header .who { font-weight: 600; font-size: .95em; }
+.payload > header { display: flex; flex-wrap: wrap; gap: .25rem .7rem; align-items: baseline; margin-bottom: .3rem; }
+.payload > header .who { font-weight: 600; }
+.payload > header .muted { font-size: 12.5px; }
 
-.nodes { display: flex; flex-direction: column; gap: .15rem; }
-.node {
-  border-left: 2px solid var(--line);
-  padding: .1rem .45rem;
-  overflow-wrap: anywhere;
-  max-width: 60rem;
-}
-.node.node-mention { border-left-color: var(--info); }
+.nodes { display: flex; flex-direction: column; gap: .2rem; }
+.node { border-left: 2px solid var(--border); padding: .1rem .55rem; overflow-wrap: anywhere; max-width: 60rem; }
+.node.node-mention { border-left-color: var(--chart-1); }
 .node.node-media, .node.node-card, .node.node-forward { border-left-color: var(--warn); }
 .node.node-unsupported { border-left-color: var(--fail); }
 .node img {
-  display: block;
-  width: min(18rem, 70vw); max-height: 18rem;
-  object-fit: contain; background: var(--inset);
-  margin: .2rem 0 .35rem;
+  display: block; width: min(18rem, 70vw); max-height: 18rem;
+  object-fit: contain; background: var(--muted);
+  border-radius: calc(var(--radius) - 4px); margin: .25rem 0 .4rem;
 }
-.node details { font: 400 11px var(--mono); color: var(--dim); }
-.node details pre, .entry td pre {
-  white-space: pre-wrap; overflow-wrap: anywhere; margin: .2rem 0;
-  font: 400 11px/1.45 var(--mono);
-}
+.node details { font: 400 12px var(--mono); color: var(--muted-foreground); }
+.node details pre, .entry td pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: .2rem 0; font: 400 11.5px/1.5 var(--mono); }
 .entry .trace { margin-bottom: 0; }
 
-.endpoint-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-  gap: .45rem;
-}
+.endpoint-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: .6rem; }
 .endpoint-grid .trace { margin: 0; }
-.endpoint-grid pre { margin-bottom: 0; }
 
 /* ── logs ────────────────────────────────────────────────────────
    The same line the terminal prints: fixed-width time and level so
-   the eye can track a column, dim domain (the usual filter),
-   message, then key=value.  Wrapping rather than truncating — a log
-   line you have to scroll to finish is a log line you don't read. */
+   the eye can track a column, dim domain, message, then key=value.
+   Wrapping rather than truncating — a log line you have to scroll to
+   finish is a log line you don't read. */
 
-.logs { font: 400 12px/1.7 var(--mono); }
+.logs { font: 400 12.5px/1.75 var(--mono); }
 .line {
-  padding: .15rem 0 .15rem .5rem;
+  padding: .2rem .5rem;
   border-left: 2px solid transparent;
-  overflow-wrap: anywhere;
-  cursor: pointer;
+  border-radius: 0 calc(var(--radius) - 4px) calc(var(--radius) - 4px) 0;
+  overflow-wrap: anywhere; cursor: pointer;
 }
-.line:hover { background: var(--surface); }
+.line:hover { background: var(--muted); }
 .line.warn { border-left-color: var(--warn); }
-.line.open { background: var(--surface); }
-/* Expanding is a UI state; the level owns the rail's colour and must
-   keep it, or a warning stops looking like one the moment you open
-   it to read why.  Only lines with no colour of their own borrow the
-   accent to show they are expanded. */
-.line.open:not(.warn) { border-left-color: var(--info); }
-.line .lt { color: var(--dim); }
-.line .lv { text-transform: uppercase; font-size: .85em; margin: 0 .35rem; }
-.line.info .lv { color: var(--info); }
+.line.open { background: var(--muted); }
+/* Expanding is a UI state; the level keeps the rail's colour, or a
+   warning stops looking like one the moment you open it to read why. */
+.line.open:not(.warn) { border-left-color: var(--ring); }
+.line .lt { color: var(--muted-foreground); }
+.line .lv { text-transform: uppercase; font-size: .85em; font-weight: 500; margin: 0 .35rem; }
+.line.info .lv { color: var(--chart-1); }
 .line.warn .lv { color: var(--warn); }
-.line.trace .lv { color: var(--faint); }
-.line .ld { color: var(--dim); margin-right: .5rem; }
-.line .lm { color: var(--fg); }
+.line.trace .lv { color: var(--muted-foreground); }
+.line .ld { color: var(--muted-foreground); margin-right: .5rem; }
+.line .lm { color: var(--foreground); }
 .line .lf { margin-left: .6rem; white-space: nowrap; }
-.line .lf i { color: var(--dim); font-style: normal; }
+.line .lf i { color: var(--muted-foreground); font-style: normal; }
 .line .lf i::after { content: '='; }
-.line .lf b { font-weight: 400; color: var(--fg); }
-
-/* Expanded: every field on its own row, full value, wrapped.  This
-   is the desktop shape too — a long db_url is unreadable inline at
-   any width. */
+.line .lf b { font-weight: 400; color: var(--foreground); }
 .line.open .lf { display: block; margin: .1rem 0 0 1.2rem; white-space: normal; }
 .line.open .head { display: block; }
 
 /* ── call detail ─────────────────────────────────────────────────
-   The prompt is the thing you came to read, so it gets the room: one
-   block per message, role in the margin, text preserved as written.
-   The raw JSON is behind a <details> — it is the fallback, not the
-   view. */
+   The prompt is the thing you came to read, so it gets the room. */
 
-.detail { margin: .6rem 0 .3rem; cursor: auto; }
-.detail h3 {
-  font: 600 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase;
-  color: var(--dim); margin: 1rem 0 .4rem;
-}
-/* The byte count and model name ride along in the heading but are
-   identifiers, not labels — casing carries meaning there. */
-.detail h3 .muted { text-transform: none; letter-spacing: 0; }
+.detail { margin: .6rem 0 .3rem; cursor: auto; font-family: var(--sans); }
+.detail h3 { font-size: 12.5px; font-weight: 600; color: var(--muted-foreground); margin: 1rem 0 .4rem; }
+.detail h3 .muted { font-weight: 400; font-family: var(--mono); font-size: 11.5px; }
 .detail pre {
-  margin: 0; padding: .5rem .6rem;
-  background: var(--inset); border: 1px solid var(--line); border-radius: 2px;
+  margin: 0; padding: .6rem .7rem;
+  background: var(--muted); border-radius: calc(var(--radius) - 4px);
   white-space: pre-wrap; overflow-wrap: anywhere;
-  font: 400 11.5px/1.6 var(--mono); color: var(--fg);
+  font: 400 12px/1.6 var(--mono); color: var(--foreground);
   max-height: 22rem; overflow-y: auto;
 }
-.detail .msg { margin-bottom: .4rem; }
+.detail .msg { margin-bottom: .5rem; }
 .detail .role {
-  display: inline-block; margin-bottom: .2rem;
-  font: 600 10px var(--mono); letter-spacing: .06em; text-transform: uppercase;
-  color: var(--info);
+  display: inline-block; margin-bottom: .25rem;
+  font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted-foreground);
 }
 .detail details { margin-top: .5rem; }
-.detail summary { cursor: pointer; color: var(--dim); font: 400 11px var(--mono); padding: .2rem 0; }
-.detail summary:hover { color: var(--fg); }
+.detail summary { cursor: pointer; color: var(--muted-foreground); font-size: 12.5px; padding: .2rem 0; }
+.detail summary:hover { color: var(--foreground); }
 
-/* ── mobile ──────────────────────────────────────────────────────
-   Nothing scrolls sideways.  A table wide enough to need a swipe is
-   a table you stop reading, so each row becomes a card instead: the
-   first cell is its heading, the rest are labelled key/value rows.
-   The labels come from data-label, so there is one set of markup for
-   both layouts rather than a phone copy that drifts. */
+/* ── token gate ──────────────────────────────────────────────── */
 
+.gate { display: flex; align-items: center; justify-content: center; min-height: 100svh; background: var(--background); }
+.gate form {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: .75rem; box-shadow: var(--shadow-sm);
+  padding: 1.5rem; width: min(22rem, calc(100% - 2rem));
+}
+.gate h1 { font-size: 16px; font-weight: 600; margin: 0 0 .2rem; }
+.gate p { margin: 0; font-size: 13px; }
+.gate input { width: 100%; margin: 1rem 0 .6rem; }
+.gate button { width: 100%; }
+.gate .err { margin: .6rem 0 0; }
+
+/* ── responsive ──────────────────────────────────────────────────
+   Below md the sidebar is a Sheet; below lg the content padding
+   drops to 1rem, matching the block's `px-4 lg:px-6`. */
+
+@media (max-width: 48rem) {
+  .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 50;
+    width: var(--sidebar-width-mobile); height: 100%;
+    padding: 0;
+    background: var(--sidebar);
+    border-right: 1px solid var(--border);
+    box-shadow: var(--shadow-lg);
+    transform: translateX(-100%);
+    transition: transform .3s ease-in-out;
+  }
+  .sidebar.sheet-open { transform: none; transition-duration: .5s; }
+  .inset, .inset.collapsed { margin: 0; border-radius: 0; box-shadow: none; }
+}
+@media (min-width: 48.0625rem) { .sheet-overlay { display: none !important; } }
+@media (prefers-reduced-motion: reduce) { .sidebar { transition: none; } }
+
+@media (max-width: 64rem) {
+  .lg-up { display: none !important; }
+  .stat-grid, .px6, .ledger { padding-left: 1rem; padding-right: 1rem; }
+  .card-content.flush th:first-child, .card-content.flush td:first-child { padding-left: 1rem; }
+  .card-content.flush th:last-child, .card-content.flush td:last-child { padding-right: 1rem; }
+  .card-content.flush .empty { padding-left: 1rem; padding-right: 1rem; }
+  .err { margin-left: 1rem; margin-right: 1rem; }
+}
+
+/* Nothing scrolls sideways: each table row becomes a labelled card,
+   the labels coming from data-label so one set of markup serves both
+   layouts rather than a phone copy that drifts. */
 @media (max-width: 40rem) {
+  .stack { gap: 1rem; padding: 1rem 0; }
+  .card { gap: 1rem; padding: 1rem 0; }
+  .card-header, .card-content, .card-footer { padding-left: 1rem; padding-right: 1rem; }
+  .card-content.flush { padding: .5rem .75rem; }
+
   table, tbody, tr, td { display: block; width: auto; }
   thead { display: none; }
-  table { min-width: 0; }
-
   tbody tr {
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 2px;
-    padding: .3rem .6rem .45rem;
-    margin-bottom: .6rem;
     position: relative;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) - 2px);
+    padding: .35rem .7rem .5rem;
+    margin-bottom: .6rem;
   }
-  tbody tr:hover { background: var(--surface); }
-
+  tbody tr:hover { background: var(--card); }
   td {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: .75rem;
-    padding: .22rem 0;
-    border-bottom: 0;
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: .75rem; padding: .24rem 0; border-bottom: 0;
   }
   td::before {
     content: attr(data-label);
-    color: var(--dim);
-    font: 600 10px/1.6 var(--mono);
-    letter-spacing: .06em;
-    text-transform: uppercase;
-    flex: none;
+    color: var(--muted-foreground); font-size: 11.5px; font-weight: 500; flex: none;
   }
   td > * { text-align: right; }
   td select { max-width: 11rem; }
+  .card-content.flush th:first-child, .card-content.flush td:first-child,
+  .card-content.flush th:last-child, .card-content.flush td:last-child { padding-left: 0; padding-right: 0; }
 
-  /* The row's identity leads the card, so it gets no label and sits
-     on its own line above the fields. */
-  td.rowkey {
-    border-bottom: 1px solid var(--line);
-    margin-bottom: .2rem;
-    padding-bottom: .35rem;
-  }
+  /* The row's identity leads the card. */
+  td.rowkey { border-bottom: 1px solid var(--border); margin-bottom: .2rem; padding-bottom: .4rem; }
   td.rowkey::before { display: none; }
-  td.rowkey > * { text-align: left; font-size: 1.05em; }
+  td.rowkey > * { text-align: left; }
 
-  /* Prose (a memory, a persona, a skill body) reads badly
-     right-aligned in a narrow column; give it the full width under
-     its label. */
+  /* Prose reads badly right-aligned in a narrow column. */
   td.wide { display: block; }
   td.wide::before { display: block; margin-bottom: .15rem; }
   td.wide > *, td.wide { text-align: left; }
 
-  /* The delete/kill button belongs to the card, not to a field. */
-  td.act { position: absolute; top: .3rem; right: .5rem; padding: 0; }
+  td.act { position: absolute; top: .35rem; right: .5rem; padding: 0; }
   td.act::before { display: none; }
 
-  /* Unfolded editors are cards of their own already. */
-  tr.editor { padding: .6rem; }
-  tr.editor > td { display: block; }
-  tr.editor > td::before { display: none; }
-  tr.editor > td > * { text-align: left; }
-
-  /* The ledger gutter moves above its payload — a phone has no room
-     for a spine column. */
+  /* The ledger gutter moves above its payload. */
   .entry { display: block; }
-  .entry > .gutter {
-    text-align: left; border-right: 0; padding-right: 0;
-    display: flex; gap: .8rem;
-  }
+  .entry > .gutter { text-align: left; border-right: 0; padding-right: 0; display: flex; gap: .8rem; }
 
   .logs { font-size: 11.5px; line-height: 1.65; }
-  .line { padding-left: .4rem; }
-  .line .lf { margin-left: .5rem; }
   .line:not(.open) .lf b {
-    display: inline-block;
-    max-width: 11rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    vertical-align: bottom;
+    display: inline-block; max-width: 11rem;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
   }
 
-  /* Two selects share a row, the search box takes its own, and the
-     tail toggle sits beside it. */
-  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: .4rem; margin-bottom: .9rem; }
-  .filters .search { grid-column: 1 / -1; }
-  .filters .check { grid-column: 1 / -1; }
+  .filters { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
+  .filters .search, .filters .check { grid-column: 1 / -1; }
 }

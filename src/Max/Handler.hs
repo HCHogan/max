@@ -80,11 +80,12 @@ import Max.Platform.Store
     mentionPrincipalsFor,
     enqueueReaction,
     recordInternalMessage,
+    rememberConversationTitle,
   )
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId, ReactionAction (..))
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutput, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
-import Max.Roster (GroupMember (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
+import Max.Roster (GroupMember (..), GroupMeta (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession)
 import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
@@ -1361,7 +1362,7 @@ replyText gm body =
 -- and no longer a source of identity: the roster the model reads and the
 -- names the send path accepts both come from the ledger now.
 fetchGroupBrief ::
-  (PlatformApi :> es, Log :> es) =>
+  (PlatformApi :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   AdvertisedCaps ->
   GroupId ->
   Eff es [T.Text]
@@ -1370,6 +1371,10 @@ fetchGroupBrief outputCaps gid
   | otherwise = do
       members <- fetchGroupMembers gid
       meta <- fetchGroupMeta gid
+      -- The name we just fetched for the prompt is the only human
+      -- label this room has; write it through to the ledger so it
+      -- outlives the turn.
+      forM_ meta $ \m -> let GroupId raw = gid in rememberConversationTitle raw m.gmName
       pure (renderGroupBrief meta members)
 
 -- | QQ-ingress only: this path still holds the raw OneBot segments, where the

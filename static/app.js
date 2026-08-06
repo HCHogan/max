@@ -10,30 +10,39 @@
 function admin() {
   return {
     // The nav is the README's pipeline diagram folded into a list:
-    // the ledger and its projections in the middle, the machinery
-    // that runs them below, the knobs last.  The digit is a live
-    // keyboard accelerator, not decoration.
+    // the ledger and its projections first, the machinery that runs
+    // them below, the knobs last.  The digit is a live keyboard
+    // accelerator, not decoration.
     nav: [
-      { name: '状态', tabs: [{ id: 'overview', name: '概览', key: '1' }] },
+      { name: '状态', tabs: [{ id: 'overview', name: '概览', key: '1', icon: 'dashboard' }] },
       { name: '账本', tabs: [
-        { id: 'timeline', name: '消息账本', key: '2' },
-        { id: 'context', name: '上下文', key: '3' },
-        { id: 'memories', name: '记忆', key: '4' },
+        { id: 'timeline', name: '消息账本', key: '2', icon: 'book' },
+        { id: 'context', name: '上下文', key: '3', icon: 'stack-2' },
+        { id: 'memories', name: '记忆', key: '4', icon: 'brain' },
       ] },
       { name: '运行', tabs: [
-        { id: 'tasks', name: '任务', key: '5' },
-        { id: 'calls', name: '调用', key: '6' },
-        { id: 'logs', name: '日志', key: '7' },
+        { id: 'tasks', name: '任务', key: '5', icon: 'activity' },
+        { id: 'calls', name: '调用', key: '6', icon: 'api' },
+        { id: 'logs', name: '日志', key: '7', icon: 'terminal-2' },
       ] },
       { name: '配置', tabs: [
-        { id: 'groups', name: '群设置', key: '8' },
-        { id: 'skills', name: '技能', key: '9' },
+        { id: 'groups', name: '群设置', key: '8', icon: 'adjustments' },
+        { id: 'skills', name: '技能', key: '9', icon: 'sparkles' },
       ] },
     ],
     get tabsFlat() {
       return this.nav.flatMap((g) => g.tabs);
     },
     tab: 'overview',
+
+    // Desktop offcanvas and the mobile sheet are separate states, as
+    // in shadcn's useSidebar(): `open` vs `openMobile`.
+    sidebarOpen: localStorage.getItem('max-admin-sidebar') !== 'closed',
+    mobileOpen: false,
+    isMobile: false,
+
+    conversations: [],
+    convFilter: '',
     needToken: false,
     tokenInput: '',
     gateErr: '',
@@ -41,6 +50,10 @@ function admin() {
     clock: '',
 
     overview: { profiles: [], effort_levels: [] },
+    // Raw chart rows, kept so the stat cards can read the last two
+    // days without a second fetch.
+    usageRows: [],
+    msgRows: [],
     // The one conversation the ledger views share.  Set in the rail
     // (or any of the views), remembered across sessions.
     focus: localStorage.getItem('max-admin-focus') || '',
@@ -142,12 +155,22 @@ function admin() {
     async boot() {
       this.tick();
       setInterval(() => this.tick(), 1000);
+
+      // useIsMobile(): shadcn's MOBILE_BREAKPOINT is 768.
+      const mq = matchMedia('(max-width: 767px)');
+      this.isMobile = mq.matches;
+      mq.addEventListener('change', (e) => {
+        this.isMobile = e.matches;
+        this.closeMobile();
+      });
+
       try {
         await this.loadOverview();
       } catch (e) {
         if (e.message === 'unauthorized') return; // gate is showing
         this.err = String(e.message);
       }
+      this.loadConversations().catch(() => {});
       // Deep-link support: #groups etc., so a phone bookmark can land
       // straight on the page you actually check.
       const h = location.hash.slice(1);
@@ -175,9 +198,130 @@ function admin() {
       });
     },
 
+    // ── the shell ─────────────────────────────────────────────────
+
+    icon(name, cls) {
+      const i = window.ICONS[name];
+      if (!i) return '';
+      const paint = i.fill
+        ? 'fill="currentColor" stroke="none"'
+        : 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+      return '<svg class="icon ' + (cls || '') + '" viewBox="0 0 24 24" ' + paint + '>' + i.d + '</svg>';
+    },
+
+    currentTab() {
+      return this.tabsFlat.find((t) => t.id === this.tab) || { name: 'max' };
+    },
+
+    toggleSidebar() {
+      if (this.isMobile) {
+        this.mobileOpen = !this.mobileOpen;
+        document.body.style.overflow = this.mobileOpen ? 'hidden' : '';
+      } else {
+        this.sidebarOpen = !this.sidebarOpen;
+        localStorage.setItem('max-admin-sidebar', this.sidebarOpen ? 'open' : 'closed');
+      }
+    },
+
+    closeMobile() {
+      this.mobileOpen = false;
+      document.body.style.overflow = '';
+    },
+
+    // What a nav item is carrying that you might want to know before
+    // you click it: work in flight, and work that is stuck.
+    badge(id) {
+      const h = this.overview.health || {};
+      switch (id) {
+        case 'tasks':
+          return { n: this.overview.running_tasks || 0, tone: 'busy' };
+        case 'logs':
+          return { n: h.warn_logs || 0, tone: 'busy' };
+        case 'timeline':
+          return { n: (h.failed_deliveries || 0) + (h.media_parked || 0), tone: 'bad' };
+        case 'context':
+          return { n: h.failed_captures || 0, tone: 'bad' };
+        default:
+          return { n: 0, tone: '' };
+      }
+    },
+
+    accountName() {
+      const a = (this.overview.accounts || [])[0];
+      if (!a) return 'max';
+      return a.display_name || a.platform + ' ' + a.native_account_id;
+    },
+
+    refresh() {
+      this.loadOverview().catch((e) => (this.err = String(e.message)));
+      this.loadConversations().catch(() => {});
+      this.load(this.tab);
+    },
+
+    forgetToken() {
+      localStorage.removeItem('max-admin-token');
+      location.reload();
+    },
+
+    // ── the conversation switcher ─────────────────────────────────
+
+    async loadConversations() {
+      this.conversations = await this.api('/conversations');
+    },
+
+    // The switcher opens whether or not the endpoint answers: a bot
+    // still running a binary from before /api/conversations existed
+    // gets an empty list and the numeric fallback, not an error.
+    reloadConversations() {
+      this.loadConversations().catch(() => {});
+    },
+
+    convName(c) {
+      if (c.title) return c.title;
+      if (c.kind === 'direct' || (c.legacy_group_id != null && c.legacy_group_id < 0)) {
+        return '私聊 ' + Math.abs(c.legacy_group_id ?? c.conversation_id);
+      }
+      return '群 ' + (c.legacy_group_id ?? c.conversation_id);
+    },
+
+    focusTitle() {
+      if (!this.focus) return '选择会话';
+      const c = this.conversations.find((x) => String(x.legacy_group_id) === String(this.focus));
+      return c ? this.convName(c) : this.gname(this.focus);
+    },
+
+    filteredConversations() {
+      const q = this.convFilter.trim().toLowerCase();
+      if (!q) return this.conversations;
+      return this.conversations.filter(
+        (c) =>
+          this.convName(c).toLowerCase().includes(q) ||
+          String(c.legacy_group_id).includes(q)
+      );
+    },
+
+    pickConversation(c) {
+      this.focus = String(c.legacy_group_id ?? '');
+      this.convFilter = '';
+      if (this.$refs.switcher) this.$refs.switcher.open = false;
+      this.focusChanged();
+      // A picked conversation means you want to look at it.
+      if (!['timeline', 'context', 'memories'].includes(this.tab)) this.go('timeline');
+    },
+
     // Digits switch views, `/` lands in the visible view's filter,
     // Escape leaves an input.  Nothing fires while you type.
     keys(e) {
+      // SIDEBAR_KEYBOARD_SHORTCUT = "b".
+      if (e.key === 'b' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        this.toggleSidebar();
+        return;
+      }
+      if (e.key === 'Escape' && this.mobileOpen) {
+        this.closeMobile();
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const t = e.target;
       if (t && ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName)) {
@@ -739,6 +883,8 @@ function admin() {
         this.api('/usage?days=30'),
         this.api('/stats/messages?days=14'),
       ]);
+      this.usageRows = usage;
+      this.msgRows = msgs;
       const c = palette();
 
       // Token spend splits by what the tokens were, not by who spent
@@ -750,10 +896,10 @@ function admin() {
       // completion, the number you watch for runaway replies, keeps a
       // scale of its own and a floor of its own.
       this.plot('chart-prompt', 'prompt', sumByDay(usage, ['prompt_tokens']), [
-        { label: 'prompt', stroke: c.s1, fill: fade(c.s1) },
+        { label: 'prompt', stroke: c.s1, fill: wash(c.s1) },
       ], { height: 150, sync: 'usage' });
       this.plot('chart-completion', 'completion', sumByDay(usage, ['completion_tokens']), [
-        { label: 'completion', stroke: c.s2, fill: fade(c.s2) },
+        { label: 'completion', stroke: c.s2, fill: wash(c.s2) },
       ], { height: 150, sync: 'usage' });
 
       // Messages split the way the prompt itself splits them: only
@@ -761,9 +907,79 @@ function admin() {
       // talking, or just being operated" — command and debug fold
       // into one operations series.
       this.plot('chart-msgs', 'msgs', chatOps(msgs), [
-        { label: '对话', stroke: c.s1, fill: fade(c.s1) },
+        { label: '对话', stroke: c.s1, fill: wash(c.s1) },
         { label: '操作', stroke: c.s2 },
       ], { height: 190 });
+    },
+
+    // ── stat cards ────────────────────────────────────────────────
+    // "Today" is the newest day present in the rows (the server
+    // buckets in its own timezone; guessing the client's would lie
+    // at midnight edges).  Delta compares the two newest days.
+
+    statCards() {
+      const tokDays = byDay(this.usageRows, (r) => r.prompt_tokens + r.completion_tokens);
+      const tokLast = tokDays[tokDays.length - 1];
+      const tokPrev = tokDays[tokDays.length - 2];
+      const prompt = byDay(this.usageRows, (r) => r.prompt_tokens);
+      const completion = byDay(this.usageRows, (r) => r.completion_tokens);
+
+      const msgDays = byDay(this.msgRows, (r) => r.count);
+      const msgLast = msgDays[msgDays.length - 1];
+      const msgPrev = msgDays[msgDays.length - 2];
+      const chat = byDay(this.msgRows.filter((r) => r.kind === 'chat'), (r) => r.count);
+      const chatLast = msgLast && chat.find((d) => d.day === msgLast.day);
+
+      const h = this.overview.health || {};
+      const stuck = (h.failed_deliveries || 0) + (h.media_parked || 0) + (h.failed_captures || 0);
+
+      return [
+        {
+          label: '今日 token',
+          value: tokLast ? compact(tokLast.v) : '-',
+          delta: tokLast ? deltaPct(tokLast.v, tokPrev && tokPrev.v) : null,
+          up: tokLast && tokPrev ? tokLast.v >= tokPrev.v : null,
+          foot1: tokLast
+            ? 'prompt ' + compact(prompt[prompt.length - 1].v) +
+              ' · completion ' + compact(completion[completion.length - 1].v)
+            : '还没有数据',
+          foot2: '对比前一日',
+        },
+        {
+          label: '今日消息',
+          value: msgLast ? msgLast.v.toLocaleString() : '-',
+          delta: msgLast ? deltaPct(msgLast.v, msgPrev && msgPrev.v) : null,
+          up: msgLast && msgPrev ? msgLast.v >= msgPrev.v : null,
+          foot1: msgLast
+            ? '对话 ' + (chatLast ? chatLast.v : 0) +
+              ' · 操作 ' + (msgLast.v - (chatLast ? chatLast.v : 0))
+            : '还没有数据',
+          foot2: '对比前一日',
+        },
+        {
+          label: '在跑任务',
+          value: String(this.overview.running_tasks ?? 0),
+          delta: null,
+          up: null,
+          foot1: (this.overview.groups ?? 0) + ' 个会话有记录',
+          foot2: 'kill 在任务页',
+        },
+        {
+          // Work that is stuck, not work that is queued: a delivery
+          // that failed, media parked after too many attempts, a
+          // capture run that gave up.
+          label: '待处理',
+          value: String(stuck),
+          delta: null,
+          up: null,
+          foot1: stuck
+            ? '投递 ' + (h.failed_deliveries || 0) +
+              ' · 媒体 ' + (h.media_parked || 0) +
+              ' · capture ' + (h.failed_captures || 0)
+            : '没有卡住的工作',
+          foot2: (h.warn_logs || 0) + ' 条 warn 在缓冲区',
+        },
+      ];
     },
 
     // uPlot takes a pixel size, so the chart is rebuilt on resize (and
@@ -796,10 +1012,12 @@ function admin() {
         stroke: c.dim,
         grid: { stroke: c.line, width: 1 },
         ticks: { show: false },
-        font: '11px ' + monoStack(),
+        font: '11.5px ' + sansStack(),
       };
+      // shadcn charts draw a clean 2px line with a gradient wash and
+      // no resting point markers; the dot appears under the cursor.
       const series = seriesDefs.map((s) =>
-        Object.assign({ width: 1.75, points: { size: 5, width: 0 } }, s)
+        Object.assign({ width: 2, points: { show: false } }, s)
       );
       const axes = [
         // Just M/D.  uPlot's default stacks a year row underneath,
@@ -899,17 +1117,49 @@ function admin() {
 function palette() {
   const s = getComputedStyle(document.documentElement);
   const v = (n) => s.getPropertyValue(n).trim();
-  return { s1: v('--chart-1'), s2: v('--chart-2'), dim: v('--dim'), line: v('--line') };
+  return { s1: v('--chart-1'), s2: v('--chart-2'), dim: v('--muted-foreground'), line: v('--border') };
 }
 
-function monoStack() {
-  return getComputedStyle(document.documentElement).getPropertyValue('--mono').trim();
+function sansStack() {
+  return getComputedStyle(document.documentElement).getPropertyValue('--sans').trim();
 }
 
-// A wash under the primary line — enough to read the shape at a
-// glance, faint enough that a second series stays legible over it.
-function fade(colour) {
-  return 'color-mix(in srgb, ' + colour + ' 14%, transparent)';
+// #rrggbb + alpha → rgba(); canvas gradients want resolved colours.
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + (n >> 16) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+// The shadcn area look: a vertical wash from the line colour down to
+// nothing.  uPlot evaluates fill functions at draw time, so the
+// gradient tracks resizes and scheme flips for free — but it also
+// asks once for the legend marker before the first layout, when the
+// bbox is still NaN; that call gets a flat colour instead.
+function wash(colour) {
+  return (u) => {
+    const { top, height } = u.bbox;
+    if (!isFinite(top) || !isFinite(height) || height <= 0) return hexA(colour, 0.15);
+    const g = u.ctx.createLinearGradient(0, top, 0, top + height);
+    g.addColorStop(0, hexA(colour, 0.28));
+    g.addColorStop(1, hexA(colour, 0.02));
+    return g;
+  };
+}
+
+// Newest-last [{day, v}] with `f` summed per day.
+function byDay(rows, f) {
+  const days = new Map();
+  for (const r of rows) days.set(r.day, (days.get(r.day) || 0) + (f(r) || 0));
+  return [...days.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([day, v]) => ({ day, v }));
+}
+
+// "+12.5%" / "-3%" against the previous day, null when there is
+// nothing to compare against.
+function deltaPct(now, prev) {
+  if (prev == null || prev === 0) return null;
+  const d = ((now - prev) / prev) * 100;
+  const r = Math.abs(d) >= 10 ? Math.round(d) : d.toFixed(1);
+  return (d >= 0 ? '+' : '') + r + '%';
 }
 
 function fmtDay(d) {
