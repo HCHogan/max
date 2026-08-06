@@ -75,20 +75,52 @@ embedWorker owner = forever $ do
           Nothing -> liftIO (threadDelay idleMicros)
           Just () -> pure ()
 
+    -- Two questions with very different costs, joined by an OR that made
+    -- both pay the expensive one.  It was redundant as well: a row with no
+    -- embedding has no embedding_model either (the
+    -- messages_embedding_metadata_consistent CHECK enforces it), so
+    -- @embedding IS NULL@ was already contained in @embedding_model IS
+    -- DISTINCT FROM ?@.  The disjunction bought nothing and cost the index —
+    -- a parallel sequential scan of the whole table, 14,754 times in eleven
+    -- days, to answer "nothing to do".
+    pendingMessages modelId = do
+      fresh <-
+        query
+          ( "SELECT message_id, rendered_text FROM messages \
+            \ WHERE embedding IS NULL AND NOT is_synthetic \
+            \   AND char_length(rendered_text) >= 4 AND "
+              <> notForwardChild "messages"
+              <> " ORDER BY received_at DESC LIMIT 64"
+          )
+          ()
+      if not (null (fresh :: [(Int64, Text)]))
+        then pure fresh
+        else do
+          -- Re-embedding after a model change is a deploy-time backfill, not
+          -- something steady state ever needs.  min/max over the model btree
+          -- settles it in two index lookups, so the scan below only happens
+          -- on the day it is actually true.
+          spread <-
+            query
+              "SELECT min(embedding_model), max(embedding_model) FROM messages WHERE embedding IS NOT NULL"
+              ()
+          case spread :: [(Maybe Text, Maybe Text)] of
+            [(Just lo, Just hi)] | lo == modelId && hi == modelId -> pure []
+            _ ->
+              query
+                ( "SELECT message_id, rendered_text FROM messages \
+                  \ WHERE embedding IS NOT NULL AND embedding_model <> ? \
+                  \   AND NOT is_synthetic AND char_length(rendered_text) >= 4 AND "
+                    <> notForwardChild "messages"
+                    <> " ORDER BY received_at DESC LIMIT 64"
+                )
+                [modelId]
+
     tick space = do
       -- Recent-first so fresh messages become searchable immediately
       -- while the historical backfill trickles along behind.
       let modelId = space.esModelId
-      msgs <-
-        query
-          ( "SELECT message_id, rendered_text FROM messages \
-            \ WHERE (embedding IS NULL OR embedding_model IS DISTINCT FROM ?) \
-            \   AND NOT is_synthetic AND "
-              <> notForwardChild "messages"
-              <> " AND char_length(rendered_text) >= 4 \
-                 \ ORDER BY received_at DESC LIMIT 64"
-          )
-          [modelId]
+      msgs <- pendingMessages modelId
       mems <- listPendingMemoryEmbeddings modelId batchSize
       episodes <-
         query
