@@ -1098,6 +1098,12 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
       -- ones, and a row whose rendered_text is filled in later is a row that
       -- can be read blank in between.
       rendered <- metaProjection bodyProjection
+      -- @sender_nickname@ falls back to the identity the batch just ensured,
+      -- which the row is already joined against.  An event that carries no
+      -- name of its own is normal, not exceptional: a QQ recall or reaction
+      -- notice names only a user id.  Without the fallback those rows read
+      -- back as a bare principal id, and one of them being a speaker's newest
+      -- line is enough to put a number in the prompt roster.
       let replyLegacy = snd <$> replyTarget
           replyCanonical = fst <$> replyTarget
       inserted <-
@@ -1107,7 +1113,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
           \  segments, canonical_content, rendered_text, raw_message, sender_nickname, \
           \  reply_to_message_id, reply_to_canonical_message_id, kind, conversation_id, \
           \  author_principal_id, origin_endpoint_id, source_native_event_id, message_origin, source_platform, event_kind) \
-          \ SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+          \ SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, pi.display_name), ?, ?, ?, ?, \
           \        pi.principal_id, ?, ?, 'inbound', ?, ? \
           \ FROM principal_identities pi WHERE pi.principal_identity_id = ? \
           \ RETURNING canonical_message_id"
@@ -2328,7 +2334,12 @@ sanitizeInboundEnvelope envelope =
   envelope
     { nativeEventId = sanitizeNativeEventId envelope.nativeEventId,
       senderNativeId = sanitizeNativeUserId envelope.senderNativeId,
-      senderDisplayName = sanitizePostgresText <$> envelope.senderDisplayName,
+      -- A blank display name is an absent one, not a name.  Bridges that pass
+      -- one through (QQ's unset 群名片 is @""@, not a missing key) would
+      -- otherwise store it, and a stored blank outranks nothing: it is what
+      -- the identity row keeps and what the transcript reads back, so the
+      -- prompt roster degrades to a bare principal id.
+      senderDisplayName = nonBlank . sanitizePostgresText =<< envelope.senderDisplayName,
       content = Body (sanitizeIngestNode <$> envelope.content.nodes),
       relations = sanitizeRelation <$> envelope.relations,
       sourceCursor = sanitizeCursor <$> envelope.sourceCursor,

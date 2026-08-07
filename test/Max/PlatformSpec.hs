@@ -1,19 +1,25 @@
 module Max.PlatformSpec (spec) where
 
-import Data.Aeson (decodeStrict', object, (.=))
+import Data.Aeson (Value (Null), decodeStrict', object, (.=))
 import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
+import Data.Time (UTCTime (..), fromGregorian)
 import Max.IR
 import Max.IR.Lower (OutboundCaps (..), Tier (TierNative), textOnlyCaps)
 import Max.IR.Prompt (promptText)
 import Max.Platform
-import Max.Platform.QQ (qqIngestBody)
+import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.QQ (qqEnvelope, qqIngestBody)
+import Max.Platform.Store (RegisteredEndpoint (..))
 import Max.Platform.Types
-  ( MessageRelation (..),
+  ( ConversationId (..),
+    EndpointId (..),
+    MessageRelation (..),
     NativeEventId (..),
     NativeUserId (..),
+    PlatformAccountId (..),
   )
 import Max.WechatHook
   ( CallbackMsg (..),
@@ -31,6 +37,7 @@ import Max.WechatHook
   )
 import Max.Wechatpad (parseFrameIds, wechatInboundBody, wechatpadCapabilities)
 import OneBot.Action (Action (..))
+import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment
   ( FileSegInfo (..),
     ImageSegInfo (..),
@@ -233,6 +240,24 @@ spec = do
       actionAddress (SetMsgEmojiLike (MessageId 9) 1 True) `shouldBe` MessageAddress 9
       actionAddress (SetFriendAddRequest "flag" True) `shouldBe` AccountAddress
 
+  -- NapCat sends @"card": ""@ for every member who never set a 群名片, so the
+  -- card is present-but-empty far more often than it is a name.  Preferring it
+  -- with a plain @<|>@ stored that blank, and a blank name reads back as the
+  -- bare principal id — the roster line the model gets was showing half the
+  -- group as numbers.
+  describe "QQ sender naming" $ do
+    it "reads through an unset 群名片 to the nickname" $
+      (qqEnvelope endpointFixture epoch Null (groupMessage (Sender (UserId 2701137803) (Just "坎特洛特月亮公主") (Just "")))).senderDisplayName
+        `shouldBe` Just "坎特洛特月亮公主"
+
+    it "still prefers a card that is actually set" $
+      (qqEnvelope endpointFixture epoch Null (groupMessage (Sender (UserId 2701137803) (Just "坎特洛特月亮公主") (Just "月亮")))).senderDisplayName
+        `shouldBe` Just "月亮"
+
+    it "leaves a nameless sender nameless rather than blank" $
+      (qqEnvelope endpointFixture epoch Null (groupMessage (Sender (UserId 2701137803) (Just "   ") (Just "")))).senderDisplayName
+        `shouldBe` Nothing
+
   describe "QQ canonical image normalization" $ do
     it "turns NapCat's blank summary into a durable image marker" $ do
       let image = SegImage (ImageSegInfo (Just "https://qq.example/image.jpg") (Just 0) (Just ""))
@@ -280,6 +305,21 @@ spec = do
         (label, promptText (qqIngestBody segments))
           `shouldBe` (label, renderPlainText segments)
   where
+    endpointFixture = RegisteredEndpoint (EndpointId 1) (PlatformAccountId 1) (ConversationId 1) 1032949653
+
+    epoch = UTCTime (fromGregorian 2026 8 7) 0
+
+    groupMessage sender =
+      GroupMessage
+        { selfId = UserId 2107570581,
+          groupId = GroupId 1032949653,
+          userId = sender.userId,
+          messageId = MessageId 7,
+          message = [SegText "在吗"],
+          rawMessage = "在吗",
+          sender
+        }
+
     fake platform =
       PlatformBackend
         { pbPlatform = platform,

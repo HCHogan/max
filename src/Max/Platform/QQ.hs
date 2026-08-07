@@ -84,7 +84,11 @@ qqEnvelope endpoint received raw message =
     { endpointId = endpoint.endpointId,
       nativeEventId = NativeEventId (tshow messageId),
       senderNativeId = NativeUserId (tshow userId),
-      senderDisplayName = message.sender.card <|> message.sender.nickname,
+      -- QQ sends @""@ for an unset 群名片, so a plain @<|>@ lets the absent
+      -- card shadow a perfectly good nickname and the ledger stores a blank
+      -- name.  Downstream that blank falls all the way back to the bare
+      -- principal id, which is what the roster line then shows the model.
+      senderDisplayName = (nonBlank =<< message.sender.card) <|> (nonBlank =<< message.sender.nickname),
       occurredAt = fromMaybe received (eventTime raw),
       receivedAt = received,
       eventKind = EventMessage,

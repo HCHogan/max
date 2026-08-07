@@ -732,6 +732,30 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         persisted `shouldNotSatisfy` T.any (== '\NUL')
       _ -> expectationFailure "missing sanitized canonical event"
 
+  -- A recall or reaction notice names only a user id, and QQ spells an unset
+  -- 群名片 as @""@ rather than omitting it.  Either way the envelope arrives
+  -- without a name, and the row must still be readable: an unnamed row reads
+  -- back as a bare principal id, and one such row being a speaker's newest
+  -- line puts a number in the prompt roster.
+  it "names an event that carries no name from the sender's identity" $ do
+    (_, endpoint) <- mirrorPair pool
+    now <- getCurrentTime
+    named <- withDb pool (ingestEnvelope defaultIngestOptions (inbound endpoint.endpointId now "named-event" "hi"))
+    anonymous <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          (inbound endpoint.endpointId now "anonymous-event" "again")
+            { senderDisplayName = Nothing
+            }
+    let nameOf result = withConn pool $ \conn ->
+          query
+            conn
+            "SELECT coalesce(sender_nickname, '') FROM messages WHERE canonical_message_id = ?"
+            (Only (resultId result).unCanonicalMessageId)
+    nameOf named `shouldReturn` [Only ("Alice" :: Text)]
+    nameOf anonymous `shouldReturn` [Only ("Alice" :: Text)]
+
   it "repairs blank QQ image projections and recreates their fetch jobs" $ do
     endpoint <-
       withDb pool $
