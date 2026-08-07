@@ -68,8 +68,87 @@ the sender's filename never reaches here.
 
 `POST /fetch-image` — body is
 `{"md5", "origin_md5", "length", "hd_length", "after_unix"}`, taken from the
-`<img>` payload WeChat put in the message callback. Answers `200` with
-`image/jpeg`, or `404`.
+`<img>` payload WeChat put in the message callback. Answers `200` with the
+image, or `404`.
+
+`GET /scan` — lists what `/fetch-image` would examine, decrypting nothing.
+When a fetch misses, this answers the question underneath it: are the right
+files even in view?
+
+## One-time key setup
+
+Received images are stored encrypted, and the hook cannot help: its
+`/Decode_Pic` answers `{"ret":0,"retmsg":"success"}` on WeChat 4.x and writes
+no file at all — the same way its database module reports a plainly logged-in
+client as logged out. So the bridge decrypts them itself, which needs this
+installation's two keys.
+
+WeChat 4.x writes a `.dat` as a "V2" container: a 15-byte header, the first
+1024 plaintext bytes under AES-128-ECB, then the remainder under a single-byte
+XOR. Both keys are constants of the installation, not of the message — six
+different thumbnails from one account share a byte-identical first ciphertext
+block, which only happens when the same plaintext meets the same key.
+
+Send yourself an image, take `md5` and `originsourcemd5` from the message
+payload, and point the finder at the stored file:
+
+```powershell
+.\max-wechat-bridge.exe -find-key `
+    "C:\...\msg\attach\...\Img\<hash>.dat" `
+    <md5> <originsourcemd5>
+```
+
+It scans the running client's private memory for a printable 16-byte key,
+tries each candidate against that file's first ciphertext block, and only
+accepts one whose full decryption matches a digest WeChat itself published.
+On success it prints the two lines to add to the environment:
+
+```
+WECHAT_IMAGE_AES_KEY=................
+WECHAT_IMAGE_XOR=c0
+```
+
+`WECHAT_IMAGE_XOR` is optional — left out, the byte is rediscovered per file
+against the published digest, which is correct but 256 times the work. It is
+also derivable without touching the client at all: thumbnails stay JPEG even
+when the full image is HEVC, so an `_t.dat`'s last two bytes are `FF D9` under
+the XOR and name the byte twice over.
+
+Reading another process's memory needs the privilege to do so; run the finder
+from an elevated shell if it reports `OpenProcess` failing. The keys survive
+until WeChat is reinstalled, so this is done once.
+
+Hunt with a thumbnail (`*_t.dat`) and no digests. Thumbnails are JPEG, so the
+key that opens one is recognisable by shape alone, and their decryption can be
+checked at both ends — `FF D8 FF` at the start, `FF D9` at the end. A full
+image is neither, as the next section explains, which makes it a poor sample:
+a correct key would be discarded for producing something unrecognisable.
+
+## What a stored image actually is
+
+Decrypting is not the end of it. Verified against seven real messages:
+
+```
+.dat  →  AES-128-ECB(first 1024) + XOR 0xC0(rest)
+      →  "wxgf" container, 16-byte header
+      →  standard HEVC from the first Annex-B start code onward
+      →  ffmpeg  →  a full-resolution image
+```
+
+So a thumbnail decrypts straight to a usable JPEG, while a full image decrypts
+to WeChat's own `wxgf` wrapper around an HEVC still — `1280x1708` for one of
+the samples here. Anything that wants pixels has to run the last step too.
+
+**The published MD5 does not verify a full image.** Of seven, only two matched
+their message's `md5` — exactly the two whose payload carried no `hdlength`.
+Where an HD version exists, that digest describes something other than the
+mid-size file on disk. What does hold, on all seven, is the decrypted length
+matching the payload's `length` exactly, alongside the `wxgf` magic; that pair
+is the identity check to rely on. Thumbnails have no published digest at all
+and are verified as JPEGs.
+
+`/fetch-image` still verifies by digest and therefore answers `404` for most
+full images. Fixing that is the next change, not a mystery.
 
 ## Why the two directions are asymmetric
 

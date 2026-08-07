@@ -24,7 +24,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/md5"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -53,6 +52,11 @@ type server struct {
 	fetchWindow   time.Duration
 	maxCandidates int
 	client        *http.Client
+	// The two per-installation constants that open a stored image. The XOR
+	// byte is optional: left unset it is rediscovered per file against the
+	// digest WeChat published, which is correct but 256 times the work.
+	imageKey []byte
+	imageXOR *byte
 }
 
 func (s *server) authorized(next http.HandlerFunc) http.HandlerFunc {
@@ -99,10 +103,11 @@ func (s *server) hookCall(endpoint string, payload any) (map[string]any, error) 
 	return decoded, nil
 }
 
-// stage writes bytes to a fresh file under the staging root and returns its
-// path plus a remover. The file exists only across the send that reads it:
-// leaving user images on the host's disk is not this bridge's business.
-func (s *server) stage(data []byte, extension string) (string, func(), error) {
+// stagePath reserves an unused path under the staging root and returns it with
+// a remover. Nothing is created: an output path handed to the hook must not
+// exist yet, because a writer that opens its destination with CREATE_NEW fails
+// on a file this bridge helpfully pre-made.
+func (s *server) stagePath(extension string) (string, func(), error) {
 	if err := os.MkdirAll(s.stagingRoot, 0o700); err != nil {
 		return "", nil, err
 	}
@@ -111,10 +116,22 @@ func (s *server) stage(data []byte, extension string) (string, func(), error) {
 		return "", nil, err
 	}
 	path := filepath.Join(s.stagingRoot, "max-"+hex.EncodeToString(random)+extension)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	return path, func() { _ = os.Remove(path) }, nil
+}
+
+// stage writes bytes to a fresh file under the staging root and returns its
+// path plus a remover. The file exists only across the send that reads it:
+// leaving user images on the host's disk is not this bridge's business.
+func (s *server) stage(data []byte, extension string) (string, func(), error) {
+	path, remove, err := s.stagePath(extension)
+	if err != nil {
 		return "", nil, err
 	}
-	return path, func() { _ = os.Remove(path) }, nil
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		remove()
+		return "", nil, err
+	}
+	return path, remove, nil
 }
 
 func (s *server) sendImage(w http.ResponseWriter, request *http.Request) {
@@ -203,11 +220,18 @@ func (s *server) fetchImage(w http.ResponseWriter, request *http.Request) {
 	// A little slack before the announced time: the file is written as the
 	// message arrives, and the two clocks are not the same clock.
 	candidates := s.candidates(after.Add(-2*time.Minute), wanted.Length, wanted.HDLength)
+	// A miss has two very different causes — every decrypt failed, or they all
+	// succeeded and simply digest differently — and reporting only the count
+	// cannot tell them apart. Each outcome is named so one run settles it.
+	decoded, failed := 0, 0
 	for _, candidate := range candidates {
-		data, digest, err := s.decodeCandidate(candidate.path)
+		data, digest, err := s.decodeCandidate(candidate.path, digests)
 		if err != nil {
+			failed++
+			log.Printf("fetch-image:   %-44s %8d B  decode failed: %v", filepath.Base(candidate.path), candidate.size, err)
 			continue
 		}
+		decoded++
 		if digests[digest] {
 			w.Header().Set("Content-Type", "image/jpeg")
 			w.Header().Set("X-Image-MD5", digest)
@@ -215,8 +239,10 @@ func (s *server) fetchImage(w http.ResponseWriter, request *http.Request) {
 			_, _ = w.Write(data)
 			return
 		}
+		log.Printf("fetch-image:   %-44s %8d B  decoded %d B, md5=%s", filepath.Base(candidate.path), candidate.size, len(data), digest)
 	}
-	log.Printf("fetch-image: no candidate matched (%d examined)", len(candidates))
+	log.Printf("fetch-image: no match (%d examined: %d decoded, %d undecodable); wanted %v",
+		len(candidates), decoded, failed, keys(digests))
 	http.Error(w, "no matching image", http.StatusNotFound)
 }
 
@@ -283,26 +309,58 @@ func (s *server) candidates(after time.Time, lengths ...int64) []candidate {
 	return found
 }
 
-// decodeCandidate asks the hook to decrypt one stored image and returns the
-// plaintext bytes with their MD5. The decrypted copy never outlives the call.
-func (s *server) decodeCandidate(source string) ([]byte, string, error) {
-	destination, remove, err := s.stage(nil, ".jpg")
+// decodeCandidate decrypts one stored image in this process and returns the
+// plaintext with its MD5. Nothing is written to disk and the hook is not
+// involved: its /Decode_Pic answers {"ret":0,"retmsg":"success"} on WeChat 4.x
+// and produces no file at all, the same way its database module reports a
+// plainly logged-in client as logged out.
+func (s *server) decodeCandidate(source string, want map[string]bool) ([]byte, string, error) {
+	if len(s.imageKey) == 0 {
+		return nil, "", errors.New("no image key configured; run with -find-key")
+	}
+	raw, err := os.ReadFile(source)
 	if err != nil {
 		return nil, "", err
 	}
-	defer remove()
-	if _, err := s.hookCall("/Decode_Pic", map[string]any{"src_path": source, "dst_path": destination}); err != nil {
-		return nil, "", err
-	}
-	data, err := os.ReadFile(destination)
+	data, xorByte, digest, err := decryptDat(raw, s.imageKey, s.imageXOR, digestAccept(want))
 	if err != nil {
 		return nil, "", err
+	}
+	if s.imageXOR == nil {
+		log.Printf("fetch-image: XOR key is 0x%02X; set WECHAT_IMAGE_XOR to skip the search", xorByte)
 	}
 	if len(data) == 0 {
-		return nil, "", errors.New("decoded to an empty file")
+		return nil, "", errors.New("decrypted to nothing")
 	}
-	sum := md5.Sum(data)
-	return data, hex.EncodeToString(sum[:]), nil
+	return data, digest, nil
+}
+
+// scan reports what /fetch-image would examine, decrypting nothing. When a
+// match fails this answers the question underneath it: are the right files
+// even in view? A count of zero means the configured roots or the time window
+// are wrong, and no amount of digest work will help.
+func (s *server) scan(w http.ResponseWriter, request *http.Request) {
+	after := time.Now().Add(-s.fetchWindow)
+	if raw := request.URL.Query().Get("after_unix"); raw != "" {
+		if parsed, err := strconv.ParseInt(raw, 10, 64); err == nil && parsed > 0 {
+			after = time.Unix(parsed, 0)
+		}
+	}
+	found := s.candidates(after.Add(-2 * time.Minute))
+	rows := make([]map[string]any, 0, len(found))
+	for _, entry := range found {
+		rows = append(rows, map[string]any{
+			"path":     entry.path,
+			"size":     entry.size,
+			"modified": entry.modified.Format(time.RFC3339),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"roots":      s.attachRoots,
+		"since":      after.Format(time.RFC3339),
+		"count":      len(found),
+		"candidates": rows,
+	})
 }
 
 func (s *server) health(w http.ResponseWriter, request *http.Request) {
@@ -332,6 +390,15 @@ func writeJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+func keys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for key := range set {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func jsonInt(value any) (int64, bool) {
@@ -380,7 +447,64 @@ func splitList(raw string) []string {
 	return out
 }
 
+// runFindKey performs the one-time hunt for this installation's image keys.
+// It is a subcommand rather than a startup step because it reads another
+// process's memory, which is a thing to do deliberately and once — the keys it
+// prints stay valid until WeChat is reinstalled.
+func runFindKey(args []string) {
+	if len(args) < 1 {
+		log.Fatal("usage: max-wechat-bridge -find-key <sample.dat> [<md5> <originsourcemd5>]\n" +
+			"       a *_t.dat thumbnail needs no digests: it is verified as a JPEG")
+	}
+	sample, err := os.ReadFile(args[0])
+	if err != nil {
+		log.Fatal(err)
+	}
+	layout, err := parseDat(sample)
+	if err != nil {
+		log.Fatalf("%s: %v", filepath.Base(args[0]), err)
+	}
+	log.Printf("find-key: %s is a V2 container (aes=%d xor=%d plaintext=%d)",
+		filepath.Base(args[0]), layout.aesSize, layout.xorSize, layout.plainBytes)
+
+	want := map[string]bool{}
+	for _, digest := range args[1:] {
+		if normalized := strings.ToLower(strings.TrimSpace(digest)); len(normalized) == 32 {
+			want[normalized] = true
+		}
+	}
+	accept := digestAccept(want)
+	if accept != nil {
+		log.Printf("find-key: verifying against %d published digest(s)", len(want))
+	} else {
+		// A thumbnail is the better sample anyway: WeChat publishes no digest
+		// for one, but keeps it JPEG, and JPEG is a shape this can check. The
+		// full image is HEVC and may sit in a WeChat-only wrapper whose magic
+		// nothing here would recognise — a correct key would then be thrown
+		// away for producing something unrecognisable.
+		log.Printf("find-key: no digests given, verifying JPEG structure (use a *_t.dat thumbnail)")
+		accept = jpegAccept
+	}
+	// 16 first because that is what this client uses; 32 covers an AES-256
+	// build rather than assuming the one sample we have is the whole world.
+	for _, size := range []int{16, 32} {
+		key, xorByte, findErr := findImageKey(sample, accept, size)
+		if findErr != nil {
+			log.Printf("find-key: no %d-byte key: %v", size, findErr)
+			continue
+		}
+		log.Printf("find-key: verified against the digest WeChat published for this image")
+		fmt.Printf("\nWECHAT_IMAGE_AES_KEY=%s\nWECHAT_IMAGE_XOR=%02x\n\n", string(key), xorByte)
+		return
+	}
+	log.Fatal("find-key: no key found")
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "-find-key" {
+		runFindKey(os.Args[2:])
+		return
+	}
 	listen := os.Getenv("WECHAT_BRIDGE_LISTEN")
 	token := os.Getenv("WECHAT_BRIDGE_TOKEN")
 	targets := splitList(os.Getenv("WECHAT_ALLOWED_TARGETS"))
@@ -422,6 +546,23 @@ func main() {
 		}
 	}
 
+	var imageKey []byte
+	if configured := os.Getenv("WECHAT_IMAGE_AES_KEY"); configured != "" {
+		imageKey = []byte(configured)
+		if len(imageKey) != 16 && len(imageKey) != 32 {
+			log.Fatal("WECHAT_IMAGE_AES_KEY must be 16 or 32 characters (WeChat carries it as ASCII)")
+		}
+	}
+	var imageXOR *byte
+	if configured := os.Getenv("WECHAT_IMAGE_XOR"); configured != "" {
+		parsed, err := strconv.ParseUint(strings.TrimPrefix(strings.ToLower(configured), "0x"), 16, 8)
+		if err != nil {
+			log.Fatal("WECHAT_IMAGE_XOR must be one hex byte, e.g. c0")
+		}
+		value := byte(parsed)
+		imageXOR = &value
+	}
+
 	allowed := map[string]bool{}
 	for _, target := range targets {
 		allowed[target] = true
@@ -436,11 +577,14 @@ func main() {
 		fetchWindow:   fetchWindow,
 		maxCandidates: 60,
 		client:        &http.Client{Timeout: 30 * time.Second},
+		imageKey:      imageKey,
+		imageXOR:      imageXOR,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.authorized(s.health))
 	mux.HandleFunc("/send-image", s.authorized(s.sendImage))
 	mux.HandleFunc("/fetch-image", s.authorized(s.fetchImage))
+	mux.HandleFunc("/scan", s.authorized(s.scan))
 
 	if len(attachRoots) == 0 {
 		log.Print("WECHAT_ATTACH_ROOTS is unset: /send-image works, /fetch-image will match nothing")
