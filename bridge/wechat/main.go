@@ -52,6 +52,7 @@ type server struct {
 	maxBytes      int64
 	fetchWindow   time.Duration
 	fetchGrace    time.Duration
+	stagingTTL    time.Duration
 	maxCandidates int
 	client        *http.Client
 	// The two per-installation constants that open a stored image. The XOR
@@ -164,7 +165,17 @@ func (s *server) sendImage(w http.ResponseWriter, request *http.Request) {
 		http.Error(w, "staging unavailable", http.StatusInternalServerError)
 		return
 	}
-	defer remove()
+	// The hook answers before it has read the file, so deleting on return is a
+	// race — and one this loses. A probe that deleted in the same order from
+	// PowerShell landed every time; the same delete from Go, microseconds
+	// rather than milliseconds later, produced ret=0 and no picture. So the
+	// bytes outlive the call, and a sweeper takes them later.
+	sent := false
+	defer func() {
+		if !sent {
+			remove()
+		}
+	}()
 
 	decoded, err := s.hookCall("/SendImgMsg", map[string]any{"wxidorgid": target, "path": path})
 	if err != nil {
@@ -177,6 +188,15 @@ func (s *server) sendImage(w http.ResponseWriter, request *http.Request) {
 		http.Error(w, "hook refused the image", http.StatusBadGateway)
 		return
 	}
+	sent = true
+	go func() {
+		time.Sleep(s.stagingTTL)
+		remove()
+	}()
+	// Logged on success too, not only on failure. Silence here was read once as
+	// "the request never arrived" when it had arrived and been accepted, which
+	// sent a stretch of debugging to the wrong end of the wire.
+	log.Printf("send-image: %d B as %s to %s, hook said ret=0", len(data), filepath.Ext(path), target)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "byte_size": len(data)})
 }
 
@@ -639,6 +659,17 @@ func main() {
 		}
 		maxBytes = parsed
 	}
+	// How long a staged outbound image stays on disk after the hook has said it
+	// accepted it. Long enough that the hook's own asynchronous read cannot
+	// lose the file, short enough that user pictures are not left lying about.
+	stagingTTL := 2 * time.Minute
+	if configured := os.Getenv("WECHAT_STAGING_TTL_SECONDS"); configured != "" {
+		parsed, err := strconv.Atoi(configured)
+		if err != nil || parsed < 0 {
+			log.Fatal("WECHAT_STAGING_TTL_SECONDS must be a non-negative integer")
+		}
+		stagingTTL = time.Duration(parsed) * time.Second
+	}
 	// How long to keep re-looking for a file WeChat has not finished writing.
 	// The caller asks the instant the message lands, so the first look often
 	// precedes the bytes; this is the only reason a correct request misses.
@@ -711,6 +742,7 @@ func main() {
 		maxBytes:      maxBytes,
 		fetchWindow:   fetchWindow,
 		fetchGrace:    fetchGrace,
+		stagingTTL:    stagingTTL,
 		maxCandidates: 60,
 		client:        &http.Client{Timeout: 30 * time.Second},
 		imageKey:      imageKey,

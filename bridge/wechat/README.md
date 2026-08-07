@@ -62,9 +62,17 @@ obvious probe and is not one: on WeChat 4.x it answers `IsLogin: 0` while
 plainly logged in.
 
 `POST /send-image?to=<wxid|roomid>` — body is the raw image. Staged to a file
-that exists only across the send, then removed. The extension is chosen from
-the bytes, because WeChat decides how to treat an attachment by extension and
-the sender's filename never reaches here.
+the hook is then told to read. The extension is chosen from the bytes, because
+WeChat decides how to treat an attachment by extension and the sender's
+filename never reaches here.
+
+**The staged file outlives the call on purpose.** `/SendImgMsg` answers before
+it has read the file, so deleting on return is a race — and one Go loses:
+`ret: 0` came back and no picture ever arrived. The same delete in the same
+order from a PowerShell probe landed every time, because an interpreter takes
+milliseconds where a deferred call takes microseconds. That difference is what
+made it a race rather than a rule. Staged files are now swept after
+`WECHAT_STAGING_TTL_SECONDS` (default 120); only a failed send deletes at once.
 
 `POST /fetch-image` — body is
 `{"md5", "origin_md5", "length", "hd_length", "after_unix"}`, taken from the
