@@ -82,6 +82,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as BL
+import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -97,9 +98,9 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, concurrently_)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL (WithConnection, execute)
 import Max.DB.PlatformIds qualified as PlatformIds
-import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
+import Max.Effects.Blob (Blob, BlobRef, blobRefSha256, blobRefStoredPath, putBlob)
 import Max.HttpRuntime
   ( BufferedResponse (body),
     HttpPool (StandardPool),
@@ -123,7 +124,8 @@ import Max.Platform.Store
     ingestEnvelope,
   )
 import Max.Platform.Types
-  ( ConversationKind (ConversationGroup),
+  ( CanonicalMessageId (..),
+    ConversationKind (ConversationGroup),
     EndpointMode (EndpointStandalone),
     EventKind (EventMessage),
     MessageRelation (ReplyTo),
@@ -405,13 +407,14 @@ fetchBridgeImage runtime cfg payload occurredAt
   | not (bridgeConfigured cfg) = pure (Left "no bridge configured")
   | otherwise = do
       let url = T.dropWhileEnd (== '/') cfg.whBridgeUrl <> "/fetch-image"
-          request = object
-            [ "md5" .= payload.ipMd5,
-              "origin_md5" .= payload.ipOriginMd5,
-              "length" .= payload.ipLength,
-              "hd_length" .= payload.ipHdLength,
-              "after_unix" .= occurredAt
-            ]
+          request =
+            object
+              [ "md5" .= payload.ipMd5,
+                "origin_md5" .= payload.ipOriginMd5,
+                "length" .= payload.ipLength,
+                "hd_length" .= payload.ipHdLength,
+                "after_unix" .= occurredAt
+              ]
       parseRequestEither (T.unpack url) >>= \case
         Left failure -> pure (Left (renderTransportFailure failure))
         Right base -> do
@@ -559,7 +562,7 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
           let endpoint = endpoints Map.! cb.cbRoomId
               nativeEvent = T.pack (show cb.cbMsgId)
               selfAuthored = cb.cbSender == cfg.whSelfWxid
-          (body, relations) <- resolveContent cb
+          (body, relations, pendingImage) <- resolveContent cb
           let envelope =
                 InboundEnvelope
                   { endpointId = endpoint.endpointId,
@@ -586,7 +589,13 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
                   "create_time" .= cb.cbTimestamp
                 ]
           ingestEnvelope defaultIngestOptions envelope >>= \case
-            Ingested fresh ->
+            Ingested fresh -> do
+              -- The canonical id only exists once the ingest transaction has
+              -- committed, so the media tables are written here rather than
+              -- alongside the blob.  Without these rows the picture is in the
+              -- body and in the store, and 'view_image' still cannot find it:
+              -- that tool reads @message_images@, not the canonical body.
+              for_ pendingImage (recordInboundImage fresh.canonicalMessageId)
               logInfo "wechat event ingested" $
                 object
                   [ "native_event_id" .= nativeEvent,
@@ -619,7 +628,11 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
               ref <- putBlob bytes
               logInfo "wechat image stored" $
                 object ["bytes" .= BS.length bytes, "sha256" .= blobRefSha256 ref]
-              pure (imageBody ref (BS.length bytes), [])
+              pure
+                ( imageBody ref (BS.length bytes),
+                  [],
+                  Just (ref, BS.length bytes)
+                )
             Left err -> do
               -- The picture is lost; the message is not.  Falling back to the
               -- marker this adapter emitted before the bridge existed keeps
@@ -629,7 +642,9 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
               pure (plainContent cb)
       | otherwise = pure (plainContent cb)
 
-    plainContent cb = wechatHookContent cfg.whSelfWxid cfg.whBotName cb.cbType cb.cbContent
+    plainContent cb =
+      let (body, relations) = wechatHookContent cfg.whSelfWxid cfg.whBotName cb.cbType cb.cbContent
+       in (body, relations, Nothing)
 
     imageBody ref size =
       Body
@@ -670,6 +685,27 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
           logAttention "wechathook: no callback for a long time — check the WeChat session" $
             object ["quiet_seconds" .= (round quiet :: Int)]
           liftIO . atomically $ modifyTVar' health (\h -> h {hSilenceWarned = True})
+
+-- | Register a fetched picture in the media tables the image tools read.
+-- Both inserts are idempotent, so a redelivered callback costs nothing.
+recordInboundImage ::
+  (WithConnection :> es, IOE :> es) =>
+  CanonicalMessageId ->
+  (BlobRef, Int) ->
+  Eff es ()
+recordInboundImage canonical (ref, size) = do
+  let sha = blobRefSha256 ref
+  _ <-
+    execute
+      "INSERT INTO images (sha256, mime_type, bytes_size, local_path) \
+      \ VALUES (?,?,?,?) ON CONFLICT (sha256) DO NOTHING"
+      (sha, "image/jpeg" :: Text, fromIntegral size :: Int64, blobRefStoredPath ref)
+  _ <-
+    execute
+      "INSERT INTO message_images (canonical_message_id, sha256, seg_index) \
+      \ VALUES (?,?,0) ON CONFLICT DO NOTHING"
+      (unCanonicalMessageId canonical, sha)
+  pure ()
 
 watchdogIntervalMicros :: Int
 watchdogIntervalMicros = 60_000_000

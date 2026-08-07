@@ -51,6 +51,7 @@ type server struct {
 	attachRoots   []string
 	maxBytes      int64
 	fetchWindow   time.Duration
+	fetchGrace    time.Duration
 	maxCandidates int
 	client        *http.Client
 	// The two per-installation constants that open a stored image. The XOR
@@ -220,6 +221,42 @@ func (s *server) fetchImage(w http.ResponseWriter, request *http.Request) {
 			after = announced
 		}
 	}
+	// The caller asks the moment the callback lands, and WeChat is still
+	// writing the file around then — a half-written one has the wrong length
+	// and is correctly refused, so the first look can miss an image that
+	// arrives a second later. Retrying costs nothing but the wait: identity is
+	// verified on every attempt, so a later look cannot return a wrong
+	// picture, only a right one that was not there yet.
+	deadline := time.Now().Add(s.fetchGrace)
+	for attempt := 1; ; attempt++ {
+		image, contentType, digest, how, err := s.findImage(after, wanted, digests)
+		if err != nil {
+			http.Error(w, "image found but not convertible", http.StatusBadGateway)
+			return
+		}
+		if image != nil {
+			if attempt > 1 {
+				log.Printf("fetch-image: matched on attempt %d by %s", attempt, how)
+			}
+			w.Header().Set("Content-Type", contentType)
+			w.Header().Set("X-Image-MD5", digest)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(image)
+			return
+		}
+		if !time.Now().Before(deadline) {
+			log.Printf("fetch-image: gave up after %d attempts over %s", attempt, s.fetchGrace)
+			break
+		}
+		time.Sleep(fetchPollInterval)
+	}
+	http.Error(w, "no matching image", http.StatusNotFound)
+}
+
+// findImage runs one pass over the stored files. A nil image with a nil error
+// means nothing matched yet, which is a reason to look again rather than a
+// failure; an error means the match was right and the conversion was not.
+func (s *server) findImage(after time.Time, wanted fetchRequest, digests map[string]bool) ([]byte, string, string, string, error) {
 	// A little slack before the announced time: the file is written as the
 	// message arrives, and the two clocks are not the same clock.
 	candidates := s.candidates(after.Add(-2*time.Minute), wanted.Length, wanted.HDLength)
@@ -245,19 +282,14 @@ func (s *server) fetchImage(w http.ResponseWriter, request *http.Request) {
 			// Identified but unusable is worth shouting about: the match was
 			// right and the conversion is what let it down.
 			log.Printf("fetch-image: matched %s by %s but could not convert: %v", filepath.Base(candidate.path), how, err)
-			http.Error(w, "image found but not convertible", http.StatusBadGateway)
-			return
+			return nil, "", "", how, err
 		}
 		log.Printf("fetch-image: matched %s by %s, %d B -> %d B", filepath.Base(candidate.path), how, len(data), len(image))
-		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("X-Image-MD5", digest)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(image)
-		return
+		return image, contentType, digest, how, nil
 	}
-	log.Printf("fetch-image: no match (%d examined: %d decrypted, %d undecryptable); wanted digests=%v length=%d hd=%d",
+	log.Printf("fetch-image: no match yet (%d examined: %d decrypted, %d undecryptable); wanted digests=%v length=%d hd=%d",
 		len(candidates), decoded, failed, keys(digests), wanted.Length, wanted.HDLength)
-	http.Error(w, "no matching image", http.StatusNotFound)
+	return nil, "", "", "", nil
 }
 
 // identifies decides whether a decrypted file is the image that was asked for,
@@ -461,6 +493,10 @@ func (s *server) health(w http.ResponseWriter, request *http.Request) {
 	writeJSON(w, code, status)
 }
 
+// Short enough that a picture is not perceptibly late, long enough that each
+// pass is a real look rather than a spin.
+const fetchPollInterval = 750 * time.Millisecond
+
 func writeJSON(w http.ResponseWriter, code int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
@@ -603,6 +639,17 @@ func main() {
 		}
 		maxBytes = parsed
 	}
+	// How long to keep re-looking for a file WeChat has not finished writing.
+	// The caller asks the instant the message lands, so the first look often
+	// precedes the bytes; this is the only reason a correct request misses.
+	fetchGrace := 20 * time.Second
+	if configured := os.Getenv("WECHAT_FETCH_GRACE_SECONDS"); configured != "" {
+		parsed, err := strconv.Atoi(configured)
+		if err != nil || parsed < 0 {
+			log.Fatal("WECHAT_FETCH_GRACE_SECONDS must be a non-negative integer")
+		}
+		fetchGrace = time.Duration(parsed) * time.Second
+	}
 	fetchWindow := 10 * time.Minute
 	if configured := os.Getenv("WECHAT_FETCH_WINDOW_SECONDS"); configured != "" {
 		parsed, err := strconv.Atoi(configured)
@@ -663,6 +710,7 @@ func main() {
 		attachRoots:   attachRoots,
 		maxBytes:      maxBytes,
 		fetchWindow:   fetchWindow,
+		fetchGrace:    fetchGrace,
 		maxCandidates: 60,
 		client:        &http.Client{Timeout: 30 * time.Second},
 		imageKey:      imageKey,
