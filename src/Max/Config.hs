@@ -1002,6 +1002,28 @@ wechatHookParser = do
         conf "nicknames",
         valueWithShown (const "{}") Map.empty
       ]
+  bridgeUrl <-
+    setting
+      [ help "bridge/wechat base URL on the Windows host; absent means no image support",
+        reader str,
+        option,
+        long "wechathook-bridge-url",
+        env "MAX_WECHATHOOK_BRIDGE_URL",
+        conf "bridge_url",
+        metavar "URL",
+        value ""
+      ]
+  bridgeToken <-
+    setting
+      [ help "Bearer token the bridge requires",
+        reader str,
+        option,
+        long "wechathook-bridge-token",
+        env "MAX_WECHATHOOK_BRIDGE_TOKEN",
+        conf "bridge_token",
+        metavar "TOKEN",
+        value ""
+      ]
   silenceSeconds <-
     setting
       [ help "Warn when no callback has arrived for this many seconds (0 disables)",
@@ -1026,7 +1048,9 @@ wechatHookParser = do
           whBotName = botName,
           whChatrooms = chatrooms,
           whNicknames = nicknames,
-          whSilenceSeconds = silenceSeconds
+          whSilenceSeconds = silenceSeconds,
+          whBridgeUrl = bridgeUrl,
+          whBridgeToken = bridgeToken
         }
 
 intentParser :: Parser (Maybe IntentConfig)

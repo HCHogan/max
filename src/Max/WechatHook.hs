@@ -53,9 +53,12 @@ module Max.WechatHook
     wechatHookWorker,
     platformName,
     wechatHookCapabilities,
+    bridgeConfigured,
     wechatHookContent,
     wechatHookInboundBody,
     parseQuote,
+    parseImagePayload,
+    ImagePayload (..),
     Quote (..),
     CallbackMsg (..),
     parseCallback,
@@ -75,6 +78,9 @@ import Control.Concurrent.STM
 import Control.Monad (forM, forever, unless, when)
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseMaybe)
+import Data.ByteString (ByteString)
+import Data.ByteString qualified as BS
+import Data.ByteString.Base64 qualified as B64
 import Data.ByteString.Lazy qualified as BL
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
@@ -93,6 +99,7 @@ import Effectful.Concurrent.Async (Concurrent, concurrently_)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.PlatformIds qualified as PlatformIds
+import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.HttpRuntime
   ( BufferedResponse (body),
     HttpPool (StandardPool),
@@ -104,7 +111,7 @@ import Max.HttpRuntime
   )
 import Max.IR
 import Max.IR.Digest (digest)
-import Max.IR.Lower (OutboundCaps, textOnlyCaps)
+import Max.IR.Lower (OutboundCaps (..), Tier (TierNative), textOnlyCaps)
 import Max.Platform (PlatformBackend (..))
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
@@ -129,21 +136,31 @@ import Max.Platform.Types
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types (methodPost, status200, status404)
+import Network.HTTP.Types.URI (urlEncode)
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import OneBot.Action (Action (..), Response (..))
-import OneBot.Segment (Segment (..))
+import OneBot.Segment (ImageSegInfo (..), Segment (..))
 import OneBot.Types (GroupId (..), UserId (..))
 
 platformName :: Text
 platformName = "wechathook"
 
--- | The hook's outbound contract is deliberately text-only.  It can send
--- images and files, but only from a path on the Windows host's own disk —
--- which max, running elsewhere, has nothing to put there.  Every other
--- canonical node is folded by the shared lowerer before this backend sees it.
-wechatHookCapabilities :: OutboundCaps
-wechatHookCapabilities = textOnlyCaps
+-- | Images are native only when the bridge is deployed, because that is
+-- exactly when they are possible: the hook sends an image by reading a path on
+-- the Windows host's disk, which max has no way to write to on its own.
+-- Advertising the capability without the bridge would promise a send that
+-- always fails, where folding to text at least says something true.
+--
+-- Everything else stays text: the send API takes a target and a string, so
+-- there is no mention, no quote, no reaction and no recall to advertise.
+wechatHookCapabilities :: WechatHookConfig -> OutboundCaps
+wechatHookCapabilities cfg
+  | bridgeConfigured cfg = textOnlyCaps {image = TierNative}
+  | otherwise = textOnlyCaps
+
+bridgeConfigured :: WechatHookConfig -> Bool
+bridgeConfigured cfg = not (T.null (T.strip cfg.whBridgeUrl))
 
 data WechatHookConfig = WechatHookConfig
   { -- | WeChat-Hook HTTP base, as reachable from max, e.g.
@@ -173,7 +190,13 @@ data WechatHookConfig = WechatHookConfig
     -- rather than wearing a guessed identity.
     whNicknames :: !(Map Text Text),
     -- | Warn when no callback has arrived for this long.  @0@ disables it.
-    whSilenceSeconds :: !Int
+    whSilenceSeconds :: !Int,
+    -- | @bridge\/wechat@ on the Windows host, empty when not deployed.  The
+    -- hook moves images only through that host's own filesystem, so without
+    -- the bridge there is no way to put a file there or read one back, and
+    -- images stay degraded in both directions.
+    whBridgeUrl :: !Text,
+    whBridgeToken :: !Text
   }
   deriving stock (Show)
 
@@ -223,21 +246,60 @@ wechatHookBackend runtime runDb cfg =
       mNative <- runDb (PlatformIds.nativeId platformName kind mapped)
       case mNative of
         Nothing -> pure (Left ("wechathook: no native id for " <> T.pack (show mapped)))
-        Just to ->
-          case wireText segs of
-            Left err -> pure (Left err)
-            Right text
-              | T.null (T.strip text) -> pure (Right ())
-              | otherwise -> postText runtime cfg to text
+        Just to -> case splitWire segs of
+          Left err -> pure (Left err)
+          Right (text, images) -> do
+            -- WeChat carries no caption on an image, so words and picture are
+            -- two messages however this is arranged.  Words go first: they are
+            -- what the reply actually said, and an image that fails to send
+            -- then costs the picture rather than the answer.
+            sent <-
+              if T.null (T.strip text)
+                then pure (Right ())
+                else postText runtime cfg to text
+            case sent of
+              Left err -> pure (Left err)
+              Right () -> sendImages to images
 
--- | Protocol emission only.  Any non-text segment is a violated lowering
--- contract, never an invitation for an adapter-local fallback.
-wireText :: [Segment] -> Either Text Text
-wireText = fmap T.concat . traverse go
+    sendImages _ [] = pure (Right ())
+    sendImages to (payload : rest) =
+      resolveOutboundImage runtime payload >>= \case
+        Left err -> pure (Left err)
+        Right bytes ->
+          postImage runtime cfg to bytes >>= \case
+            Left err -> pure (Left err)
+            Right () -> sendImages to rest
+
+-- | Separate what this transport sends as words from what it sends as files.
+-- Anything else is a violated lowering contract, never an invitation for an
+-- adapter-local fallback.
+splitWire :: [Segment] -> Either Text (Text, [Text])
+splitWire = foldr step (Right ("", []))
   where
-    go = \case
-      SegText t -> Right t
-      other -> Left ("wechathook: lowering emitted non-text segment: " <> T.take 60 (T.pack (show other)))
+    step segment carry = do
+      (text, images) <- carry
+      case segment of
+        SegText t -> Right (t <> text, images)
+        SegImage info
+          | Just file <- info.isiUrl -> Right (text, file : images)
+          | otherwise -> Left "wechathook: lowering emitted an image with no payload"
+        other -> Left ("wechathook: lowering emitted unsupported segment: " <> T.take 60 (T.pack (show other)))
+
+-- | The lowerer hands over either inline bytes or somewhere to get them.
+resolveOutboundImage :: HttpRuntime -> Text -> IO (Either Text ByteString)
+resolveOutboundImage runtime payload
+  | Just encoded <- T.stripPrefix "base64://" payload =
+      pure $ case B64.decode (TE.encodeUtf8 encoded) of
+        Right bytes -> Right bytes
+        Left err -> Left ("wechathook: undecodable image payload: " <> T.pack err)
+  | any (`T.isPrefixOf` T.toLower payload) ["http://", "https://"] =
+      parseRequestEither (T.unpack payload) >>= \case
+        Left failure -> pure (Left ("wechathook: " <> renderTransportFailure failure))
+        Right request ->
+          runBuffered runtime StandardPool maxImageBytes statusPreviewBytes request >>= \case
+            Left failure -> pure (Left ("wechathook: " <> renderTransportFailure failure))
+            Right response -> pure (Right response.body)
+  | otherwise = pure (Left ("wechathook: unroutable image payload: " <> T.take 40 payload))
 
 postText :: HttpRuntime -> WechatHookConfig -> Text -> Text -> IO (Either Text ())
 postText runtime cfg to content =
@@ -296,8 +358,91 @@ postJson runtime url payload =
             Just value -> Right value
             Nothing -> Left "wechathook: unparseable API response"
 
+-- | POST raw image bytes to the bridge, which stages them on the Windows host
+-- and hands the hook a path to read.
+postImage :: HttpRuntime -> WechatHookConfig -> Text -> ByteString -> IO (Either Text ())
+postImage runtime cfg to bytes
+  | not (bridgeConfigured cfg) =
+      pure (Left "wechathook: no bridge configured, images cannot be sent")
+  | otherwise = do
+      let url = T.dropWhileEnd (== '/') cfg.whBridgeUrl <> "/send-image?to=" <> urlEncodeText to
+      parseRequestEither (T.unpack url) >>= \case
+        Left failure -> pure (Left ("wechathook: " <> renderTransportFailure failure))
+        Right request0 -> do
+          let request =
+                request0
+                  { HTTP.method = "POST",
+                    HTTP.requestBody = HTTP.RequestBodyBS bytes,
+                    HTTP.requestHeaders =
+                      [ ("Content-Type", "application/octet-stream"),
+                        ("Authorization", TE.encodeUtf8 ("Bearer " <> cfg.whBridgeToken))
+                      ]
+                  }
+          runBuffered runtime StandardPool maxResponseBytes statusPreviewBytes request >>= \case
+            Left (HttpStatusFailure code _ preview _) ->
+              pure . Left $
+                "wechathook: bridge send-image HTTP "
+                  <> T.pack (show code)
+                  <> ": "
+                  <> T.take 200 (TE.decodeUtf8Lenient preview)
+            Left failure -> pure (Left ("wechathook: " <> renderTransportFailure failure))
+            Right _ -> pure (Right ())
+
+urlEncodeText :: Text -> Text
+urlEncodeText = TE.decodeUtf8Lenient . urlEncode True . TE.encodeUtf8
+
+-- | Ask the bridge for the picture an image callback described.  It answers
+-- with JPEG bytes, having decrypted the stored file, verified it against these
+-- numbers, and converted WeChat's HEVC wrapper if that is what it found.
+fetchBridgeImage ::
+  HttpRuntime ->
+  WechatHookConfig ->
+  ImagePayload ->
+  -- | When the message arrived, bounding which stored files are candidates.
+  Int64 ->
+  IO (Either Text ByteString)
+fetchBridgeImage runtime cfg payload occurredAt
+  | not (bridgeConfigured cfg) = pure (Left "no bridge configured")
+  | otherwise = do
+      let url = T.dropWhileEnd (== '/') cfg.whBridgeUrl <> "/fetch-image"
+          request = object
+            [ "md5" .= payload.ipMd5,
+              "origin_md5" .= payload.ipOriginMd5,
+              "length" .= payload.ipLength,
+              "hd_length" .= payload.ipHdLength,
+              "after_unix" .= occurredAt
+            ]
+      parseRequestEither (T.unpack url) >>= \case
+        Left failure -> pure (Left (renderTransportFailure failure))
+        Right base -> do
+          let httpRequest =
+                base
+                  { HTTP.method = "POST",
+                    HTTP.requestBody = HTTP.RequestBodyLBS (encode request),
+                    HTTP.requestHeaders =
+                      [ ("Content-Type", "application/json"),
+                        ("Authorization", TE.encodeUtf8 ("Bearer " <> cfg.whBridgeToken))
+                      ]
+                  }
+          runBuffered runtime StandardPool maxImageBytes statusPreviewBytes httpRequest >>= \case
+            Left (HttpStatusFailure code _ preview _) ->
+              pure . Left $
+                "bridge HTTP "
+                  <> T.pack (show code)
+                  <> ": "
+                  <> T.take 200 (TE.decodeUtf8Lenient preview)
+            Left failure -> pure (Left (renderTransportFailure failure))
+            Right response
+              | BS.null response.body -> pure (Left "bridge returned no bytes")
+              | otherwise -> pure (Right response.body)
+
 maxResponseBytes :: Int
 maxResponseBytes = 1024 * 1024
+
+-- | Ceiling on one image in either direction.  The bridge enforces its own;
+-- this one keeps a runaway response from being read into memory here.
+maxImageBytes :: Int
+maxImageBytes = 32 * 1024 * 1024
 
 statusPreviewBytes :: Int
 statusPreviewBytes = 1024
@@ -321,7 +466,7 @@ data Health = Health
 -- The watchdog runs alongside the listener rather than as its own worker
 -- because it exists only to describe this listener's health.
 wechatHookWorker ::
-  (WithConnection :> es, Log :> es, Concurrent :> es, IOE :> es) =>
+  (WithConnection :> es, Blob :> es, Log :> es, Concurrent :> es, IOE :> es) =>
   HttpRuntime ->
   WechatHookConfig ->
   Eff es ()
@@ -351,7 +496,7 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
           ConversationGroup
           EndpointStandalone
           (Just legacy)
-          wechatHookCapabilities
+          (wechatHookCapabilities cfg)
       pure (room, endpoint)
 
     -- Doubles as the liveness probe: the DLL only answers while it is loaded
@@ -414,9 +559,8 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
           let endpoint = endpoints Map.! cb.cbRoomId
               nativeEvent = T.pack (show cb.cbMsgId)
               selfAuthored = cb.cbSender == cfg.whSelfWxid
-              (body, relations) =
-                wechatHookContent cfg.whSelfWxid cfg.whBotName cb.cbType cb.cbContent
-              envelope =
+          (body, relations) <- resolveContent cb
+          let envelope =
                 InboundEnvelope
                   { endpointId = endpoint.endpointId,
                     nativeEventId = NativeEventId nativeEvent,
@@ -460,6 +604,48 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
             EchoUnmatched ->
               logAttention "wechathook: unexpected unmatched echo" $
                 object ["native_event_id" .= nativeEvent]
+
+    -- An image callback names a picture it does not carry.  With a bridge
+    -- deployed the bytes are fetched here, at ingest, and stored as a blob:
+    -- the alternative is a URL in the canonical body, and that body is kept
+    -- forever, so it would mean a bridge credential persisted in the message
+    -- store to be read back by whoever reads messages.
+    resolveContent cb
+      | cb.cbType == imageMessageType,
+        bridgeConfigured cfg,
+        Just payload <- parseImagePayload cb.cbContent =
+          liftIO (fetchBridgeImage runtime cfg payload cb.cbTimestamp) >>= \case
+            Right bytes -> do
+              ref <- putBlob bytes
+              logInfo "wechat image stored" $
+                object ["bytes" .= BS.length bytes, "sha256" .= blobRefSha256 ref]
+              pure (imageBody ref (BS.length bytes), [])
+            Left err -> do
+              -- The picture is lost; the message is not.  Falling back to the
+              -- marker this adapter emitted before the bridge existed keeps
+              -- the event in the transcript instead of dropping it.
+              logAttention "wechathook: image fetch failed, degrading to a marker" $
+                object ["error" .= err, "native_event_id" .= T.pack (show cb.cbMsgId)]
+              pure (plainContent cb)
+      | otherwise = pure (plainContent cb)
+
+    plainContent cb = wechatHookContent cfg.whSelfWxid cfg.whBotName cb.cbType cb.cbContent
+
+    imageBody ref size =
+      Body
+        [ NMedia
+            (mediaBlobRef (blobRefSha256 ref))
+            MediaMeta
+              { kind = MImage,
+                -- The bridge converts whatever it found; JPEG is what comes
+                -- back either way.
+                mime = Just "image/jpeg",
+                sizeBytes = Just (fromIntegral size),
+                name = Nothing,
+                description = Nothing,
+                raw = Nothing
+              }
+        ]
 
     watchdog health = forever $ do
       liftIO (threadDelay watchdogIntervalMicros)
@@ -638,6 +824,57 @@ unescapeXml =
 -- arrive under it, separated only by the inner subtype.
 appMessageType :: Int
 appMessageType = 49
+
+imageMessageType :: Int
+imageMessageType = 3
+
+-- | What an image callback says about a picture it does not carry.  The bytes
+-- are on the Windows host, encrypted; these are the numbers that identify
+-- which stored file is the one.
+data ImagePayload = ImagePayload
+  { ipMd5 :: !Text,
+    ipOriginMd5 :: !Text,
+    ipLength :: !Int64,
+    ipHdLength :: !Int64
+  }
+  deriving stock (Eq, Show)
+
+parseImagePayload :: Text -> Maybe ImagePayload
+parseImagePayload xml
+  | T.null md5 && T.null originMd5 && len == 0 && hdLen == 0 = Nothing
+  | otherwise =
+      Just
+        ImagePayload
+          { ipMd5 = md5,
+            ipOriginMd5 = originMd5,
+            ipLength = len,
+            ipHdLength = hdLen
+          }
+  where
+    md5 = fromMaybe "" (attrText "md5" xml)
+    originMd5 = fromMaybe "" (attrText "originsourcemd5" xml)
+    len = attrInt "length" xml
+    hdLen = attrInt "hdlength" xml
+
+-- | Value of a top-level attribute.
+--
+-- The leading space is not decoration: searching for @length=@ alone also
+-- finds @cdnthumblength=@, and reading a thumbnail's size as the image's would
+-- send the bridge looking for a file that does not exist.
+attrText :: Text -> Text -> Maybe Text
+attrText name input =
+  let needle = " " <> name <> "=\""
+      (_, atNeedle) = T.breakOn needle input
+   in if T.null atNeedle
+        then Nothing
+        else
+          let (value, rest) = T.breakOn "\"" (T.drop (T.length needle) atNeedle)
+           in if T.null rest then Nothing else Just value
+
+attrInt :: Text -> Text -> Int64
+attrInt name input = case attrText name input of
+  Just value -> either (const 0) fst (TR.decimal (T.strip value))
+  Nothing -> 0
 
 quoteSubtype :: Text
 quoteSubtype = "57"

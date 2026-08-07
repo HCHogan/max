@@ -147,8 +147,13 @@ matching the payload's `length` exactly, alongside the `wxgf` magic; that pair
 is the identity check to rely on. Thumbnails have no published digest at all
 and are verified as JPEGs.
 
-`/fetch-image` still verifies by digest and therefore answers `404` for most
-full images. Fixing that is the next change, not a mystery.
+So `/fetch-image` identifies a file by the published digest when that works and
+by exact length plus magic when it does not, then converts before answering —
+callers get an image, never a container to figure out.
+
+The conversion needs **ffmpeg on this host**; without it only thumbnails can be
+served, and the bridge says so at startup. Point `WECHAT_FFMPEG` at it if it is
+not on `PATH`.
 
 ## Why the two directions are asymmetric
 

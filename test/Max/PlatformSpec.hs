@@ -6,7 +6,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
 import Max.IR
-import Max.IR.Lower (textOnlyCaps)
+import Max.IR.Lower (OutboundCaps (..), Tier (TierNative), textOnlyCaps)
 import Max.IR.Prompt (promptText)
 import Max.Platform
 import Max.Platform.QQ (qqIngestBody)
@@ -23,6 +23,8 @@ import Max.WechatHook
     displayNameFor,
     parseCallback,
     parseQuote,
+    parseImagePayload,
+    ImagePayload (..),
     wechatHookCapabilities,
     wechatHookContent,
     wechatHookInboundBody,
@@ -75,8 +77,16 @@ spec = do
           ]
 
   describe "wechathook callback" $ do
-    it "advertises exactly its emit-only text contract" $
-      wechatHookCapabilities `shouldBe` textOnlyCaps
+    -- Images are possible only through the bridge, because the hook reads them
+    -- off the Windows host's own disk.  Advertising the capability without one
+    -- would promise a send that always fails, where folding to text at least
+    -- says something true.
+    it "advertises images only when the bridge that carries them exists" $ do
+      wechatHookCapabilities hookConfig {whBridgeUrl = ""} `shouldBe` textOnlyCaps
+      -- And with a bridge, images are the only thing that changes: the send
+      -- API takes a target and a string, so there is still no mention, quote
+      -- or reaction to offer.
+      wechatHookCapabilities hookConfig `shouldBe` textOnlyCaps {image = TierNative}
 
     -- The frame shape a hooked WeChat 4.1.10.27 client really sends (captured
     -- 2026-08-07; every identifier here is synthetic).  Parsing it from UTF-8
@@ -187,6 +197,28 @@ spec = do
           \<refermsg><svrid>1</svrid></refermsg></appmsg></msg>"
         `shouldBe` Just "a &lt; b & c"
 
+  -- An image callback names a picture it does not carry; these four numbers
+  -- are how the bridge is told which stored file to go and decrypt.
+  describe "wechathook image payloads" $ do
+    it "reads the identifiers an image callback publishes" $
+      parseImagePayload imageXml
+        `shouldBe` Just
+          ImagePayload
+            { ipMd5 = "64fde48d714b83e236d7426c5ee710c1",
+              ipOriginMd5 = "ea01957566b982eeb1280b55b2452f6e",
+              ipLength = 172564,
+              ipHdLength = 2351220
+            }
+
+    -- The attribute scan must respect boundaries: "length" also occurs inside
+    -- "cdnthumblength", and reading the thumbnail's size as the image's would
+    -- send the bridge hunting a file that does not exist.
+    it "does not read cdnthumblength as length" $
+      (ipLength <$> parseImagePayload imageXml) `shouldBe` Just 172564
+
+    it "declines a payload that identifies nothing" $
+      parseImagePayload "<msg><img aeskey=\"deadbeef\" /></msg>" `shouldBe` Nothing
+
   describe "explicit platform backend registry" $ do
     it "selects only an exact declared platform" $ do
       (.pbPlatform) <$> backendForPlatform "matrix" [fake "qq", fake "matrix"]
@@ -292,6 +324,17 @@ spec = do
       \\t<fromusername>wxid_exampleuser01</fromusername>\n\
       \</msg>"
 
+    -- The attribute order and neighbours WeChat really emits, so the
+    -- cdnthumblength trap is present rather than described.
+    imageXml =
+      "<?xml version=\"1.0\"?>\n<msg>\n\t<img aeskey=\"62b1d1537315051cabcca2349d47499d\" \
+      \encryver=\"1\" cdnthumbaeskey=\"62b1d1537315051cabcca2349d47499d\" \
+      \cdnthumburl=\"305f0201\" cdnthumblength=\"17444\" cdnthumbheight=\"157\" \
+      \cdnthumbwidth=\"210\" cdnmidimgurl=\"305f0201\" length=\"172564\" \
+      \cdnbigimgurl=\"305f0201\" hdlength=\"2351220\" \
+      \md5=\"64fde48d714b83e236d7426c5ee710c1\" \
+      \originsourcemd5=\"ea01957566b982eeb1280b55b2452f6e\" />\n</msg>"
+
     hookConfig =
       WechatHookConfig
         { whApiUrl = "http://b650.example:30001",
@@ -307,5 +350,7 @@ spec = do
               [ ("wxid_exampleuser02", "小李"),
                 ("wxid_blank", "   ")
               ],
-          whSilenceSeconds = 21600
+          whSilenceSeconds = 21600,
+          whBridgeUrl = "http://b650.example:8788",
+          whBridgeToken = "bridge-token"
         }

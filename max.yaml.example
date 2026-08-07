@@ -362,11 +362,18 @@ llm:
 # WeChat via an aixed/WeChat-Hook DLL injected into a Windows PC client.
 #
 # Capabilities, as the hook actually exposes them: text in and out, inbound
-# @-mentions, and inbound quote-replies (the reply text plus which message it
-# answered).  Outbound has no @-mention, no quote, no reaction, no recall and
-# no poke — the send API takes only a target and a string, and plain "@name"
-# text notifies nobody on WeChat.  Images and files exist in the API but read
-# from a path on the Windows host's own disk, which max cannot write to.
+# @-mentions, inbound quote-replies (the reply text plus which message it
+# answered), and images in both directions once bridge/wechat is deployed.
+# Outbound has no @-mention, no quote, no reaction, no recall and no poke —
+# the send API takes only a target and a string, and plain "@name" text
+# notifies nobody on WeChat.
+#
+#   Images need the bridge because the hook moves them only through the
+#   Windows host's own filesystem: it sends one by reading a path there and
+#   stores a received one encrypted.  Without bridge_url the endpoint honestly
+#   advertises no image capability and outbound pictures fold to text.
+#   Received images are fetched at ingest and kept in max's blob store, so no
+#   bridge credential is ever written into the message store.
 #
 # Deployment: WeChat + version.dll run on a Windows host; max reaches its HTTP
 # API and it posts callbacks back.  No bridge process — both directions are
@@ -398,6 +405,8 @@ llm:
 #   bot_name: Max
 #   chatrooms: ["12345678901@chatroom"]
 #   silence_seconds: 21600                # warn after 6h of no callbacks; 0 = off
+#   bridge_url: http://b650.tailnet:8788  # bridge/wechat; absent = no images
+#   bridge_token: "same-long-random-token-the-bridge-was-given"
 #   nicknames:                            # wxid -> display name
 #     wxid_exampleuser01: 老王
 #     wxid_exampleuser02: 小李

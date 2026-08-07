@@ -35,6 +35,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -57,6 +58,7 @@ type server struct {
 	// digest WeChat published, which is correct but 256 times the work.
 	imageKey []byte
 	imageXOR *byte
+	ffmpeg   string
 }
 
 func (s *server) authorized(next http.HandlerFunc) http.HandlerFunc {
@@ -204,10 +206,11 @@ func (s *server) fetchImage(w http.ResponseWriter, request *http.Request) {
 			digests[normalized] = true
 		}
 	}
-	if len(digests) == 0 {
-		// Without a digest there is nothing to verify against, and an
-		// unverified match is the one outcome this endpoint exists to avoid.
-		http.Error(w, "md5 or origin_md5 is required", http.StatusBadRequest)
+	if len(digests) == 0 && wanted.Length <= 0 && wanted.HDLength <= 0 {
+		// Something must identify the image, or a match cannot be verified —
+		// and an unverified match is the one outcome this endpoint exists to
+		// avoid.
+		http.Error(w, "md5, origin_md5 or a byte length is required", http.StatusBadRequest)
 		return
 	}
 
@@ -225,25 +228,66 @@ func (s *server) fetchImage(w http.ResponseWriter, request *http.Request) {
 	// cannot tell them apart. Each outcome is named so one run settles it.
 	decoded, failed := 0, 0
 	for _, candidate := range candidates {
-		data, digest, err := s.decodeCandidate(candidate.path, digests)
+		data, digest, err := s.decodeCandidate(candidate.path)
 		if err != nil {
 			failed++
-			log.Printf("fetch-image:   %-44s %8d B  decode failed: %v", filepath.Base(candidate.path), candidate.size, err)
+			log.Printf("fetch-image:   %-44s %8d B  decrypt failed: %v", filepath.Base(candidate.path), candidate.size, err)
 			continue
 		}
 		decoded++
-		if digests[digest] {
-			w.Header().Set("Content-Type", "image/jpeg")
-			w.Header().Set("X-Image-MD5", digest)
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(data)
+		how, ok := identifies(data, digest, digests, wanted)
+		if !ok {
+			log.Printf("fetch-image:   %-44s %8d B  -> %d B md5=%s, not the one", filepath.Base(candidate.path), candidate.size, len(data), digest)
+			continue
+		}
+		image, contentType, err := toJPEG(s.ffmpeg, data)
+		if err != nil {
+			// Identified but unusable is worth shouting about: the match was
+			// right and the conversion is what let it down.
+			log.Printf("fetch-image: matched %s by %s but could not convert: %v", filepath.Base(candidate.path), how, err)
+			http.Error(w, "image found but not convertible", http.StatusBadGateway)
 			return
 		}
-		log.Printf("fetch-image:   %-44s %8d B  decoded %d B, md5=%s", filepath.Base(candidate.path), candidate.size, len(data), digest)
+		log.Printf("fetch-image: matched %s by %s, %d B -> %d B", filepath.Base(candidate.path), how, len(data), len(image))
+		w.Header().Set("Content-Type", contentType)
+		w.Header().Set("X-Image-MD5", digest)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(image)
+		return
 	}
-	log.Printf("fetch-image: no match (%d examined: %d decoded, %d undecodable); wanted %v",
-		len(candidates), decoded, failed, keys(digests))
+	log.Printf("fetch-image: no match (%d examined: %d decrypted, %d undecryptable); wanted digests=%v length=%d hd=%d",
+		len(candidates), decoded, failed, keys(digests), wanted.Length, wanted.HDLength)
 	http.Error(w, "no matching image", http.StatusNotFound)
+}
+
+// identifies decides whether a decrypted file is the image that was asked for,
+// and says which evidence settled it.
+//
+// The published digest is the strongest answer but not a sufficient one: of
+// seven real images only two matched theirs, exactly the two whose payload
+// carried no hdlength. Where an HD version exists that digest describes
+// something other than the mid-size file on disk. What held on all seven is
+// the decrypted length equalling an announced length, and byte lengths that
+// exact do not collide by accident within a few minutes of one chat.
+//
+// The magic check is what keeps that honest: a length alone could match a file
+// that merely happens to be the right size, so the content must also be an
+// image WeChat would have stored.
+func identifies(plain []byte, digest string, digests map[string]bool, wanted fetchRequest) (string, bool) {
+	if digests[digest] {
+		return "digest", true
+	}
+	size := int64(len(plain))
+	if size <= 0 {
+		return "", false
+	}
+	if size != wanted.Length && size != wanted.HDLength {
+		return "", false
+	}
+	if !isWXGF(plain) && !isJPEG(plain) {
+		return "", false
+	}
+	return "length+magic", true
 }
 
 type candidate struct {
@@ -314,25 +358,56 @@ func (s *server) candidates(after time.Time, lengths ...int64) []candidate {
 // involved: its /Decode_Pic answers {"ret":0,"retmsg":"success"} on WeChat 4.x
 // and produces no file at all, the same way its database module reports a
 // plainly logged-in client as logged out.
-func (s *server) decodeCandidate(source string, want map[string]bool) ([]byte, string, error) {
+func (s *server) decodeCandidate(source string) ([]byte, string, error) {
 	if len(s.imageKey) == 0 {
 		return nil, "", errors.New("no image key configured; run with -find-key")
+	}
+	if s.imageXOR == nil {
+		// Identity is now settled after decryption rather than during it, so
+		// there is no longer an oracle to search the XOR byte against here.
+		// It is derived at startup from any thumbnail, or pinned in config.
+		return nil, "", errors.New("no XOR byte known; set WECHAT_IMAGE_XOR")
 	}
 	raw, err := os.ReadFile(source)
 	if err != nil {
 		return nil, "", err
 	}
-	data, xorByte, digest, err := decryptDat(raw, s.imageKey, s.imageXOR, digestAccept(want))
+	data, _, digest, err := decryptDat(raw, s.imageKey, s.imageXOR, nil)
 	if err != nil {
 		return nil, "", err
-	}
-	if s.imageXOR == nil {
-		log.Printf("fetch-image: XOR key is 0x%02X; set WECHAT_IMAGE_XOR to skip the search", xorByte)
 	}
 	if len(data) == 0 {
 		return nil, "", errors.New("decrypted to nothing")
 	}
 	return data, digest, nil
+}
+
+// discoverXORKey reads any thumbnail under the configured roots and takes the
+// XOR byte from its JPEG ending, so an operator who ran -find-key once does not
+// have to carry the value around by hand.
+func discoverXORKey(roots []string) (byte, bool) {
+	for _, root := range roots {
+		var found byte
+		var ok bool
+		_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil || entry.IsDir() || !strings.HasSuffix(path, "_t.dat") {
+				return nil
+			}
+			raw, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return nil
+			}
+			if value, deriveErr := deriveXORKey(raw); deriveErr == nil {
+				found, ok = value, true
+				return filepath.SkipAll
+			}
+			return nil
+		})
+		if ok {
+			return found, true
+		}
+	}
+	return 0, false
 }
 
 // scan reports what /fetch-image would examine, decrypting nothing. When a
@@ -561,6 +636,19 @@ func main() {
 		}
 		value := byte(parsed)
 		imageXOR = &value
+	} else if value, ok := discoverXORKey(attachRoots); ok {
+		log.Printf("XOR key 0x%02X derived from a stored thumbnail", value)
+		imageXOR = &value
+	}
+	ffmpegPath := os.Getenv("WECHAT_FFMPEG")
+	if ffmpegPath == "" {
+		ffmpegPath = "ffmpeg"
+	}
+	// A full-size image is HEVC inside WeChat's own wrapper, so without this
+	// only thumbnails can be served. Saying so at startup beats discovering it
+	// on the first image that matters.
+	if _, err := exec.LookPath(ffmpegPath); err != nil {
+		log.Printf("%s not found: full-size images cannot be converted, only thumbnails", ffmpegPath)
 	}
 
 	allowed := map[string]bool{}
@@ -579,6 +667,7 @@ func main() {
 		client:        &http.Client{Timeout: 30 * time.Second},
 		imageKey:      imageKey,
 		imageXOR:      imageXOR,
+		ffmpeg:        ffmpegPath,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.authorized(s.health))
