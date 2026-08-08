@@ -8,7 +8,9 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query)
 import Helpers (resultId, truncateAll, withDb)
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool, withConn)
+import Max.DB.History (HistoryItem (..), fetchForwardChildrenInScope)
 import Max.IR
 import Max.IR.Lower
 import Max.Platform.Envelope (InboundEnvelope (..))
@@ -16,6 +18,7 @@ import Max.Util (tshow)
 import Max.Platform.Store
 import Max.Platform.Store qualified as PlatformStore
 import Max.Platform.Types
+import OneBot.Types (GroupId (..))
 import Test.Hspec
 
 spec :: DbPool -> Spec
@@ -731,6 +734,42 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         persisted `shouldSatisfy` T.isInfixOf "\xfffd"
         persisted `shouldNotSatisfy` T.any (== '\NUL')
       _ -> expectationFailure "missing sanitized canonical event"
+
+  -- A forward's children point at their container with a @contained_in@
+  -- relation, and a relation names its target /natively/.  The forward worker
+  -- holds the container only as a canonical id, so it has to translate before
+  -- it can parent onto it — spelling the canonical id into the native column
+  -- inserts a row that never resolves, and 'fetchForwardChildrenInScope' joins
+  -- on exactly the column that stays null.  The container then reads as an
+  -- unexpanded forward no matter how many children landed under it.
+  it "resolves a forward child onto its container through the native id" $ do
+    (qq, _) <- mirrorPair pool
+    now <- getCurrentTime
+    container <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "container-event" "[forward]"))
+    let containerId = (resultId container).unCanonicalMessageId
+    native <- withDb pool (nativeEventIdForCanonical (resultId container))
+    native `shouldBe` NativeEventId "container-event"
+    _ <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          (inbound qq.endpointId now "child-event" "quoted line")
+            { relations = [ContainedIn native 0]
+            }
+    children <- withDb pool (fetchForwardChildrenInScope (conversationScopeFor (GroupId 42)) containerId 10)
+    map (.renderedText) children `shouldBe` ["quoted line"]
+
+    -- The regression itself: parenting onto the canonical id inserts an
+    -- unresolved row, and the reader cannot see the child at all.
+    _ <-
+      withDb pool $
+        ingestEnvelope
+          defaultIngestOptions
+          (inbound qq.endpointId now "stray-event" "orphaned line")
+            { relations = [ContainedIn (NativeEventId (T.pack (show containerId))) 1]
+            }
+    stillOne <- withDb pool (fetchForwardChildrenInScope (conversationScopeFor (GroupId 42)) containerId 10)
+    map (.renderedText) stillOne `shouldBe` ["quoted line"]
 
   -- A recall or reaction notice names only a user id, and QQ spells an unset
   -- 群名片 as @""@ rather than omitting it.  Either way the envelope arrives

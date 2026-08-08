@@ -40,6 +40,7 @@ import Max.Platform.Store
     compatibilityMessageIdForCanonical,
     defaultIngestOptions,
     ingestEnvelope,
+    nativeEventIdForCanonical,
   )
 import Max.Platform.Types
   ( CanonicalMessageId (..),
@@ -161,9 +162,17 @@ ingestNodes ::
   ForwardJob ->
   [ForwardNode] ->
   Eff es ()
-ingestNodes sig endpoint received job nodes =
+ingestNodes sig endpoint received job nodes = do
+  -- A @contained_in@ relation names its parent /natively/, and the job carries
+  -- the container only as a canonical id.  Passing that canonical id straight
+  -- through spelled a native event id that matches nothing, so every
+  -- depth-1 relation stayed unresolved and the container read as an
+  -- unexpanded forward however many children had landed under it.  Deeper
+  -- levels were never affected: they parent onto 'childNative', which is
+  -- exactly the id their node was ingested under.
+  NativeEventId containerNative <- nativeEventIdForCanonical (CanonicalMessageId job.containerMessageId)
   for_ (zip [0 ..] nodes) $ \(i, node) ->
-    ingestNode sig endpoint received job (tshow job.containerMessageId) 1 [i] i node
+    ingestNode sig endpoint received job containerNative 1 [i] i node
 
 ingestNode ::
   (Log :> es, WithConnection :> es, IOE :> es) =>

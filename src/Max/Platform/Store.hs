@@ -16,6 +16,7 @@ module Max.Platform.Store
     platformForLegacyConversation,
     platformForLegacyMessage,
     compatibilityMessageIdForCanonical,
+    nativeEventIdForCanonical,
     RosterIdentity (..),
     ConversationRoster (..),
     conversationRoster,
@@ -613,6 +614,25 @@ compatibilityMessageIdForCanonical ::
 compatibilityMessageIdForCanonical (CanonicalMessageId canonical) = do
   rows <- query "SELECT message_id FROM messages WHERE canonical_message_id = ?" (Only canonical)
   pure (exactlyOne "compatibilityMessageIdForCanonical" rows)
+
+-- | The native event id a stored message was ingested under.
+--
+-- A relation names its target natively — 'resolveNativeTarget' looks the id up
+-- in @platform_events@ — so anything holding only a canonical id has to come
+-- back through here before it can point at that message.  Writing the
+-- canonical id into the native column instead silently produces an unresolved
+-- relation: the row exists, @target_canonical_message_id@ stays null, and
+-- every reader that joins on it sees nothing.
+nativeEventIdForCanonical ::
+  (WithConnection :> es, IOE :> es) =>
+  CanonicalMessageId ->
+  Eff es NativeEventId
+nativeEventIdForCanonical (CanonicalMessageId canonical) = do
+  rows <-
+    query
+      "SELECT source_native_event_id FROM messages WHERE canonical_message_id = ?"
+      (Only canonical)
+  pure (NativeEventId (exactlyOne "nativeEventIdForCanonical" rows))
 
 -- | Compatibility projection for the still-OneBot-shaped Handler boundary.
 -- It is never routing or authorization authority.
