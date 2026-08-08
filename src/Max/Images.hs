@@ -151,14 +151,20 @@ enqueueCanonicalMedia sig mid gid body = do
 
 -- | Enqueue images belonging to an arbitrary canonical message — used by the
 -- forward worker to feed the rows it just created for forwarded nodes.
+--
+-- Takes 'CanonicalMessageId' rather than a bare 'Int64' on purpose.  The job
+-- ends up in @message_images.canonical_message_id@, which has a foreign key
+-- to @messages@; the forward worker is the one caller that also holds a
+-- compatibility id for the same node, and passing that one instead type-checked
+-- perfectly and failed the constraint on every picture inside a forward.
 enqueueImagesFromNode ::
   (WithConnection :> es, IOE :> es) =>
   FetchSignal ->
-  Int64 ->
+  CanonicalMessageId ->
   Maybe Int64 ->
   [Segment] ->
   Eff es ()
-enqueueImagesFromNode sig mid gid segs = do
+enqueueImagesFromNode sig (CanonicalMessageId mid) gid segs = do
   let jobs = mapMaybe pick (zip [0 ..] segs)
       pick (i, s) = case imageUrl s of
         Just u -> Just (ImageJob mid i u gid (stickerMeta s) MediaImage)

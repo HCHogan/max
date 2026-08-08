@@ -229,7 +229,12 @@ ingestNode sig endpoint received job parentNative depth path pos node = do
   ingestResult <- ingestEnvelope options envelope
   let canonical = canonicalFromResult ingestResult
   compatibilityId <- compatibilityMessageIdForCanonical canonical
-  enqueueImagesFromNode sig compatibilityId (Just job.groupId) node.segments
+  -- Canonical, not the compatibility projection sitting right next to it:
+  -- 'message_images' keys on @messages.canonical_message_id@ and has the
+  -- foreign key to prove it.  A forward node's compatibility id is a negative
+  -- synthetic one, so handing that over failed the constraint on every single
+  -- picture inside a forward, retried, and parked the job.
+  enqueueImagesFromNode sig canonical (Just job.groupId) node.segments
   let inlineChildren = concatMap extractInlineNodes node.segments
   case ingestResult of
     Ingested fresh ->
