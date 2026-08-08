@@ -1770,6 +1770,13 @@ claimDispatchWhere ::
   NominalDiffTime ->
   Eff es [DispatchClaim]
 claimDispatchWhere workerId mCanonical limit leaseDuration = do
+  -- Before claiming, retire anything a dead worker still owns.  The lease
+  -- expiry test below cannot do it: it only ever sees 'pending' and 'failed',
+  -- so a row abandoned in 'claimed' is outside the candidate set no matter how
+  -- long ago its lease ran out.  Separate statement rather than another CTE,
+  -- for the reason the delivery sweep is one: data-modifying CTEs share a
+  -- snapshot, and the quarantined row would still read as 'claimed' here.
+  _ <- execute expiredClaimedDispatchSql ()
   rows <-
     query
       "WITH candidates AS ( \
@@ -1851,6 +1858,29 @@ claimDelivery ::
 claimDelivery workerId (DeliveryId delivery) leaseDuration = do
   claims <- claimDeliveriesWhere workerId (Just delivery) 1 leaseDuration
   pure (listToMaybe claims)
+
+-- | The dispatch half of 'expiredSendingDeliverySql'.  A worker can disappear
+-- after durably claiming a message but before recording that it finished, and
+-- an abandoned @claimed@ row is worse off than an abandoned @sending@ one: the
+-- claim query filters on @status IN ('pending', 'failed')@, so its lease
+-- expiry test never reaches this row and nothing retires it.
+--
+-- Quarantine rather than retry, for the reason the delivery side does.  A
+-- re-run costs another model turn and the abandoned attempt may already have
+-- answered; a duplicate reply in a group is worse than a missing one and
+-- cannot be withdrawn.  Deciding per row whether the reply actually happened
+-- needs the durable checkpoint ADR 002 is designing — until then this state
+-- exists so the rows can be counted rather than silently lost.
+expiredClaimedDispatchSql :: Query
+expiredClaimedDispatchSql =
+  "UPDATE message_dispatches \
+  \ SET status = 'outcome_unknown', \
+  \     lease_owner = NULL, lease_expires_at = NULL, \
+  \     last_error = COALESCE(last_error, \
+  \       'dispatch lease expired before the turn recorded an outcome'), \
+  \     updated_at = now() \
+  \ WHERE status = 'claimed' \
+  \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
 
 -- | A worker can disappear after durably claiming a non-idempotent send but
 -- before recording the transport outcome.  Retrying that row could duplicate

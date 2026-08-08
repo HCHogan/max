@@ -399,6 +399,38 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         completed `shouldBe` True
         withDb pool (claimDispatch "runtime-b" cid 30) `shouldReturn` Nothing
 
+  -- The claim query only ever selects 'pending' and 'failed', so its lease
+  -- expiry test cannot reach a row abandoned in 'claimed' — that row is
+  -- outside the candidate set however long ago the lease ran out.  Nothing
+  -- else looked at it either, which is how one sat stranded in production for
+  -- three days.  Quarantine, not retry: the abandoned turn may already have
+  -- replied, and a duplicate reply cannot be withdrawn.
+  it "quarantines an abandoned dispatch claim instead of stranding or retrying it" $ do
+    (_, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-abandoned" "answer me"))
+    let cid = resultId result
+    claimed <- withDb pool (claimDispatch "runtime-doomed" cid 30)
+    fmap (.canonicalMessageId) claimed `shouldBe` Just cid
+
+    -- The worker dies here: the lease lapses with the row still 'claimed'.
+    _ <- withConn pool $ \conn ->
+      execute
+        conn
+        "UPDATE message_dispatches SET lease_expires_at = now() - interval '1 minute' \
+        \ WHERE canonical_message_id = ?"
+        (Only cid.unCanonicalMessageId)
+
+    -- Any later claim attempt sweeps it, and does not hand it back out.
+    withDb pool (claimDispatch "runtime-next" cid 30) `shouldReturn` Nothing
+    status <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT status, lease_owner IS NULL, last_error IS NOT NULL \
+        \ FROM message_dispatches WHERE canonical_message_id = ?"
+        (Only cid.unCanonicalMessageId)
+    status `shouldBe` [("outcome_unknown" :: Text, True, True)]
+
   it "turns a unique self echo into delivery confirmation, not a second message" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
