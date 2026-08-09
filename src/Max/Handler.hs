@@ -19,8 +19,8 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
-import Control.Monad (forM_, join, unless, void, when)
-import Data.Aeson (Value, encode, toJSON)
+import Control.Monad (forM_, unless, void, when)
+import Data.Aeson (Value, eitherDecodeStrict', encode, toJSON)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
 import Data.List (find, partition, unsnoc)
@@ -42,7 +42,7 @@ import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Parser (parseCommand)
 import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
 import Max.Command.Types (Command (..))
-import Max.ConversationScope (conversationScopeFor)
+import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.AgentTurn
   ( AgentTurnRecovery (..),
     AgentTurnTerminal (..),
@@ -54,7 +54,7 @@ import Max.DB.AgentTurn
     recoveryViewForTurn,
     startAgentTurn,
   )
-import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
+import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchMessagesByIdsInScope, fetchRecentInGroup)
 import Max.DB.Monitor
   ( ElaboratedMonitorFire (..),
     admitElaboratedMonitorTurn,
@@ -65,6 +65,7 @@ import Max.DB.TurnContinuity
   ( ReplyTurnTarget (..),
     continuationDigest,
     recordForkFrom,
+    replayChain,
     replyTurnIsFinished,
     replyTurnIsInFlight,
     resolveReplyTurn,
@@ -74,7 +75,7 @@ import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
 import Max.Dispatch (DispatchMessage (..), dispatchMentionsSelf, dispatchTextWithoutSelf, stripDispatchVerb)
 import Max.Dispatch qualified as Dispatch
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
-import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
+import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), LLM)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded, wasDelivered)
 import Max.Effects.PlatformApi (PlatformApi, sendAction)
@@ -145,7 +146,21 @@ import Max.Tasks
   )
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import Max.Toolset (toolDefinitionsFor)
-import Max.Turn.Continuity (currentPromptMajor, renderContinuationDigest, toolCatalogFingerprint)
+import Max.Context.Types (ContinuationInput (..), digestOnlyContinuation, noContinuation)
+import Max.Turn.Continuity (currentPromptMajor, renderContinuationDigest, renderReplayDelta, toolCatalogFingerprint)
+import Max.Turn.Replay
+  ( ReplayCandidate (..),
+    ReplayEnvironment (..),
+    ReplayPlan (..),
+    ReplayReject (RejectArchiveUnreadable),
+    TurnArchive (..),
+    defaultChainDepth,
+    defaultChainTokenBudget,
+    planCoveredCanonicalIds,
+    planReplay,
+    planReplayMessages,
+    replayRejectText,
+  )
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..), TurnOutputContext, nextTurnOutputLink)
 import Max.Util (catchSync, readIntegral, trySync, tshow)
 import OneBot.Action (Action (..))
@@ -1481,7 +1496,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
           turnCapabilities = baseCapabilities {tcCatalogGrants = catalogGrants}
           catalogFingerprint = toolCatalogFingerprint currentDefinitions
       setAgentTurnEnvironment durable currentPromptMajor catalogFingerprint
-      replyContinuationView <- for continuationTarget $ \target -> do
+      replyContinuation <- for continuationTarget $ \target -> do
         _ <-
           recordForkFrom
             (conversationScopeFor gm.groupId)
@@ -1498,12 +1513,36 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
             currentPromptMajor
             catalogFingerprint
             target
-        pure (renderContinuationDigest env.beTimeZone <$> digestView)
+        -- The digest is computed first and unconditionally: it is the floor
+        -- the replay tier degrades to, so a validity failure costs nothing
+        -- already spent.  If replay does succeed it swaps the whole record
+        -- for the drift note alone — the record is about to be shown
+        -- verbatim, and stating it twice is what dedup exists to avoid.
+        let digestOnly = digestOnlyContinuation (renderContinuationDigest env.beTimeZone <$> digestView)
+            replayDelta = digestOnlyContinuation (renderReplayDelta env.beTimeZone <$> digestView)
+        replayContinuation
+          env
+          (conversationScopeFor gm.groupId)
+          ReplayEnvironment
+            { reNow = now,
+              reProfile = s.model,
+              rePromptMajor = currentPromptMajor,
+              reCatalogFingerprint = catalogFingerprint,
+              reChainTokenBudget = defaultChainTokenBudget
+            }
+          target.rttTurn
+          digestOnly
+          replayDelta
       liftIO (setTurnPhase turn "context")
-      let continuationView = monitorView <|> join replyContinuationView
+      let continuation = case monitorView of
+            -- A monitor fire is a world event, not a continuation of an
+            -- earlier turn: its host-authored view replaces the reply
+            -- continuation rather than joining it.
+            Just view -> digestOnlyContinuation (Just view)
+            Nothing -> fromMaybe noContinuation replyContinuation
       (ctx, roster) <-
         buildContextWithReadModeForOutputContinuation
-          continuationView
+          continuation
           limits
           (if env.beForceRawContext then RawLedgerEmergency else TieredContext)
           outputCaps
@@ -1717,6 +1756,86 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
               fromIntegral (BS.length bytes),
               addUTCTime (14 * 24 * 60 * 60) now
             )
+
+-- | Try ADR 005's verbatim tier for one resolved continuation target, and
+-- return the digest-only input unchanged when anything about the chain says
+-- no.  Replay is a cache over the digest floor: every failure here is a
+-- cheaper prompt, never a wrong one, so the whole path is wrapped against
+-- exceptions as well.
+--
+-- Per-provider filtering is deliberately absent: the segments are ordinary
+-- 'ChatMessage' values spliced into the same list an in-dispatch round trip
+-- builds, so whatever each protocol strips or round-trips it does to replayed
+-- items by exactly the same code — no second rule set to keep honest.
+replayContinuation ::
+  (Blob :> es, Log :> es, WithConnection :> es, IOE :> es) =>
+  BotEnv ->
+  ConversationScope ->
+  ReplayEnvironment ->
+  AgentTurnRef ->
+  -- | Digest tier: the whole record, and the floor every failure lands on.
+  ContinuationInput ->
+  -- | Replay tier companion: the drift note only, since the record itself
+  -- arrives as wire items.
+  ContinuationInput ->
+  Eff es ContinuationInput
+replayContinuation env scope replayEnv target digestOnly replayDelta =
+  attempt `catchSync` \e -> do
+    logAttention "continuation: replay attempt failed, using digest" $
+      object ["error" .= T.pack (show (e :: SomeException))]
+    pure digestOnly
+  where
+    attempt = do
+      chain <- replayChain scope target defaultChainDepth
+      triggers <-
+        fetchMessagesByIdsInScope
+          scope
+          [messageId | candidate <- chain, Just messageId <- [candidate.rcTriggerCanonicalId]]
+      let byId = Map.fromList [(item.canonicalId, item) | item <- triggers]
+          withTriggerLine candidate =
+            candidate
+              { rcTriggerLine =
+                  renderHistoryLine env.beTimeZone
+                    <$> (candidate.rcTriggerCanonicalId >>= \messageId -> Map.lookup messageId byId)
+              }
+      loaded <- traverse (loadSegment . withTriggerLine) chain
+      let plan = planReplay replayEnv loaded
+      if null plan.rpSegments
+        then do
+          logInfo "continuation: digest tier" $
+            object
+              [ "target_turn" .= target.atrTurnOrdinal.unTurnOrdinal,
+                "reason" .= (replayRejectText <$> plan.rpStoppedBecause)
+              ]
+          pure digestOnly
+        else do
+          logInfo "continuation: replay tier" $
+            object
+              [ "target_turn" .= target.atrTurnOrdinal.unTurnOrdinal,
+                "segments" .= length plan.rpSegments,
+                "estimated_tokens" .= plan.rpEstimatedTokens,
+                "chain_stopped" .= (replayRejectText <$> plan.rpStoppedBecause)
+              ]
+          pure
+            replayDelta
+              { ciSegments = planReplayMessages plan,
+                ciCovered = planCoveredCanonicalIds plan
+              }
+
+    -- Loading is the only job here: whether these bytes may be replayed, and
+    -- what the finished segment costs, is 'planReplay''s pure decision.
+    loadSegment candidate = case candidate.rcArchiveSha >>= blobRefFromSha256 of
+      Just ref -> do
+        bytes <- readBlob ref
+        pure (candidate, maybe (Left RejectArchiveUnreadable) (Right . (.taAppended)) (decodeArchive bytes))
+      Nothing -> pure (candidate, Left RejectArchiveUnreadable)
+
+    decodeArchive :: BS.ByteString -> Maybe TurnArchive
+    decodeArchive bytes = case eitherDecodeStrict' bytes of
+      Left _ -> Nothing
+      Right archive
+        | archive.taVersion == 1 -> Just archive
+        | otherwise -> Nothing
 
 -- | Keep the prompt's final role shape intact while appending the boot-only
 -- hole view to the current user turn.  Multimodal triggers retain their

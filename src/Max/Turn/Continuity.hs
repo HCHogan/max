@@ -12,6 +12,7 @@ module Max.Turn.Continuity
     toolCatalogFingerprint,
     renderRecentTurn,
     renderContinuationDigest,
+    renderReplayDelta,
   )
 where
 
@@ -149,7 +150,7 @@ renderContinuationDigest tz digest =
       ]
         <> journalLines
         <> ["环境变化（由 ledger/journal 确定生成）："]
-        <> ambientLines
+        <> ambientDeltaLines tz digest
     )
   where
     turn = digest.cdTurn
@@ -160,6 +161,36 @@ renderContinuationDigest tz digest =
     journalLines = case digest.cdJournal of
       [] -> ["- （无 journal 行）"]
       rows -> map renderJournal rows
+
+-- | The replay tier's companion note.
+--
+-- One projection, two windows: the digest tier states the whole record
+-- because nothing else carries it, while the replay tier has just shown that
+-- record verbatim and needs only what changed since — restating the journal
+-- underneath the wire items would show the same work twice in two registers,
+-- which is exactly what ledger dedup exists to prevent.
+renderReplayDelta :: TimeZone -> ContinuationDigest -> Text
+renderReplayDelta tz digest =
+  T.intercalate
+    "\n"
+    ( [ "[continuation — 以上是你之前完成 "
+          <> turnHandleText turn.tdTurnOrdinal
+          <> " 的工作过程（原样保留，含你当时的思考）。]",
+        "环境变化（由 ledger/journal 确定生成）："
+      ]
+        <> ambientDeltaLines tz digest
+    )
+  where
+    turn = digest.cdTurn
+
+-- | Drift since the continued turn finished: elapsed time and intervening
+-- chatter from the ledger, world-state drift from the sandbox observed
+-- manifests, and environment versions from the journal's own columns.  Shared
+-- by both tiers so drift is described identically however the work above it
+-- was rendered.
+ambientDeltaLines :: TimeZone -> ContinuationDigest -> [Text]
+ambientDeltaLines tz digest = ambientLines
+  where
     ambientLines =
       [ "- 距它结束已过 " <> renderDuration digest.cdElapsedSeconds <> "。",
         "- 期间新增 " <> tshow digest.cdInterveningCount <> " 条消息" <> messageSamples <> "。",

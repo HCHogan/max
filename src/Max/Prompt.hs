@@ -85,6 +85,7 @@ import Max.Context.Types
     ContextPlan (..),
     ContextReadMode (..),
     ContextSnapshot (..),
+    ContinuationInput (..),
     HistoryTokenWatermarks (..),
     PromptImage (..),
     PromptInputs (..),
@@ -92,6 +93,7 @@ import Max.Context.Types
     TriggerOrigin (..),
     cpInputs,
     csInputs,
+    noContinuation,
   )
 import Max.ContextMaterialization
   ( ContextMaterialization (..),
@@ -258,13 +260,15 @@ buildContextWithReadModeForOutput ::
   -- given: any other source of names is a second identity vocabulary, which
   -- is the thing ADR 004 removes.
   Eff es ([ChatMessage], [(Int64, Text)])
-buildContextWithReadModeForOutput = buildContextWithReadModeForOutputContinuation Nothing
+buildContextWithReadModeForOutput = buildContextWithReadModeForOutputContinuation noContinuation
 
--- | ADR 005 variant: an exact finished-turn reply supplies a host-authored
--- digest before collection so ContextPolicy accounts for its token cost.
+-- | ADR 005 variant: an exact finished-turn reply supplies its digest — and,
+-- at the replay tier, its verbatim segments — before collection, so
+-- ContextPolicy accounts for the whole continuation's token cost rather than
+-- discovering it after planning.
 buildContextWithReadModeForOutputContinuation ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  Maybe Text ->
+  ContinuationInput ->
   ContextLimits ->
   ContextReadMode ->
   AdvertisedCaps ->
@@ -348,7 +352,7 @@ collectContext ::
   Session ->
   DispatchMessage ->
   Eff es ContextSnapshot
-collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing Nothing qqAdvertisedCaps
+collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing noContinuation qqAdvertisedCaps
 
 -- | Read-only collection for admin previews and replay evaluation. It never
 -- publishes a materialization revision or a diagnostic row; callers may pass
@@ -366,7 +370,7 @@ collectContextPreview ::
   Session ->
   DispatchMessage ->
   Eff es ContextSnapshot
-collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing Nothing qqAdvertisedCaps
+collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing noContinuation qqAdvertisedCaps
 
 data ContextMutationMode
   = PublishMaterialization
@@ -378,7 +382,7 @@ collectContextWithWatermarks ::
   ContextMutationMode ->
   ContextReadMode ->
   Maybe HistoryTokenWatermarks ->
-  Maybe Text ->
+  ContinuationInput ->
   AdvertisedCaps ->
   Text ->
   Bool ->
@@ -391,7 +395,7 @@ collectContextWithWatermarks ::
   Session ->
   DispatchMessage ->
   Eff es ContextSnapshot
-collectContextWithWatermarks mutationMode readMode materializationWatermarks continuationView' outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+collectContextWithWatermarks mutationMode readMode materializationWatermarks continuation' outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       CanonicalMessageId mid = gm.canonicalId
       PrincipalId senderPrincipal = gm.authorPrincipalId
@@ -591,7 +595,9 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks con
               session = s,
               triggerMessage = gm,
               recentTurns = recentTurns',
-              continuationView = continuationView',
+              continuationView = continuation'.ciView,
+              replaySegments = continuation'.ciSegments,
+              replayCovered = continuation'.ciCovered,
               transcript = transcriptCtx,
               compartments = compartments',
               historyTurns = historyTurns',
@@ -1085,8 +1091,10 @@ renderContext pi' =
                | pi'.outputCapabilities.canMention
                ]
       -- Questions somebody else's turn is already handling never reach
-      -- the model, whichever shape we build.
-      visible = dropInFlight pi'.inFlight pi'.transcript
+      -- the model, whichever shape we build.  Rows a replayed segment
+      -- already carries verbatim drop for a different reason: they are
+      -- about to be shown, once, in their original wire form.
+      visible = dropReplayCovered pi'.replayCovered (dropInFlight pi'.inFlight pi'.transcript)
       -- Flat: everything goes in the user body.  Turns: everything up
       -- to the bot's last message becomes turns, the rest rejoins the
       -- user body so the turn list ends on an assistant.
@@ -1138,8 +1146,13 @@ renderContext pi' =
       -- for why the roles were a lie in a group, and note that this
       -- also removes the last way two consecutive same-role messages
       -- could reach a strict provider: there is exactly one of each.
+      -- ADR 005's request shape: the *current* system prompt (never the
+      -- archived one), then the fork-chain's verbatim segments oldest first,
+      -- then the ordinary window, and finally the user message carrying the
+      -- ambient delta and this turn's trigger.
       messages =
         [MsgSystem (systemPrompt pi'.multimodal (isPrivateChat pi'.triggerMessage.groupId) pi'.outputCapabilities effectivePersona pi'.skills)]
+          <> pi'.replaySegments
           <> historyTurnMessages pi'.tz turnRows
           <> [userMessage]
    in messages
@@ -1587,6 +1600,18 @@ compartmentTierFromStorageText = \case
 dropInFlight :: Set Int64 -> [HistoryItem] -> [HistoryItem]
 dropInFlight inFlight =
   filter (\h -> h.fromBot || h.canonicalId `Set.notMember` inFlight)
+
+-- | Cut rows a replayed verbatim segment already carries.
+--
+-- Unlike 'dropInFlight' this must drop the bot's own rows too — the old
+-- trigger and the old replies are exactly what the archive holds, and leaving
+-- them in the window would show the model the same exchange twice, once as
+-- wire messages and once as transcript lines.  An empty covered set (the
+-- digest tier, and every ordinary turn) leaves the window untouched.
+dropReplayCovered :: Set Int64 -> [HistoryItem] -> [HistoryItem]
+dropReplayCovered covered
+  | Set.null covered = id
+  | otherwise = filter (\h -> h.canonicalId `Set.notMember` covered)
 
 -- | History as real @user@\/@assistant@ turns
 -- ('PromptInputs.historyTurns').

@@ -25,7 +25,8 @@ import Max.IR (Body (..), Node (NText))
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Types
-import Max.Turn.Continuity (TurnDigest (..), currentPromptMajor, renderContinuationDigest)
+import Max.Turn.Continuity (TurnDigest (..), currentPromptMajor, renderContinuationDigest, renderReplayDelta)
+import Max.Turn.Replay (ReplayCandidate (..))
 import OneBot.Types (GroupId (..))
 import System.Directory
   ( createDirectory,
@@ -474,6 +475,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     rendered `shouldSatisfy` T.isInfixOf "sandbox_exec"
     rendered `shouldSatisfy` T.isInfixOf "工具目录 无变化"
 
+    -- One projection, two windows.  The replay tier keeps the drift note and
+    -- drops the record, because the wire items above it already are the
+    -- record; restating the journal there would show the same work twice.
+    let replayNote = maybe "" (renderReplayDelta utc) digestView
+    replayNote `shouldSatisfy` T.isInfixOf "工具目录 无变化"
+    replayNote `shouldSatisfy` T.isInfixOf "原样保留"
+    replayNote `shouldNotSatisfy` T.isInfixOf "sandbox_exec"
+    replayNote `shouldNotSatisfy` T.isInfixOf "之前的规范化执行记录"
+
   it "logically evicts expired archives and enforces the per-conversation LRU cap" $ do
     seed <- createSeed pool 42 1001
     turns <- forM [1 .. 52 :: Int] $ \_ ->
@@ -518,6 +528,61 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     remaining <- withConn pool $ \connection ->
       query connection "SELECT count(*) FROM agent_turns WHERE trace_archive_sha256 IS NOT NULL" ()
     (remaining :: [Only Int64]) `shouldBe` [Only 50]
+
+  it "walks the fork chain newest first, in scope, bounded by depth" $ do
+    now <- getCurrentTime
+    -- t#1 ← t#2 ← t#3: each forked from the one before it, so the chain read
+    -- from t#3 must come back [t#3, t#2, t#1].
+    seed <- createSeed pool 44 4001
+    chainTurns <- forM [1 .. 3 :: Int] $ \index -> do
+      turn <- withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal)
+      withDb pool $ do
+        markAgentTurnRunning turn "test-profile"
+        setAgentTurnEnvironment turn currentPromptMajor (T.replicate 64 "c")
+        finishAgentTurn
+          turn
+          TurnSucceeded
+          1
+          Nothing
+          (Just (T.replicate 64 "a", 10, addUTCTime (14 * 86400) now))
+      pure (index, turn)
+    let byIndex = [(index, turn) | (index, turn) <- chainTurns]
+        turnAt index = snd (head (filter ((== index) . fst) byIndex))
+    forM_ [(2, 1), (3, 2)] $ \(child, parent) -> do
+      linked <-
+        withDb pool $
+          recordForkFrom
+            (conversationScopeFor seed.fxGroup)
+            (turnAt child)
+            (turnAt parent)
+            seed.fxPrincipal
+      linked `shouldBe` True
+
+    chain <- withDb pool (replayChain (conversationScopeFor seed.fxGroup) (turnAt 3) 8)
+    map (.rcTurn) chain `shouldBe` [turnAt 3, turnAt 2, turnAt 1]
+    map (.rcProfile) chain `shouldBe` replicate 3 (Just ("test-profile" :: Text))
+    map (.rcPromptMajor) chain `shouldBe` replicate 3 currentPromptMajor
+    map (.rcCatalogFingerprint) chain `shouldBe` replicate 3 (Just (T.replicate 64 "c"))
+    map (.rcArchiveSha) chain `shouldBe` replicate 3 (Just (T.replicate 64 "a"))
+    map (.rcTriggerCanonicalId) chain
+      `shouldBe` replicate 3 (Just seed.fxTrigger.unCanonicalMessageId)
+
+    -- Depth is a fuse: the suffix nearest the target survives, the rest is
+    -- digest by construction.
+    shallow <- withDb pool (replayChain (conversationScopeFor seed.fxGroup) (turnAt 3) 2)
+    map (.rcTurn) shallow `shouldBe` [turnAt 3, turnAt 2]
+
+    -- Eviction is what the validity predicate reads, so it must show through.
+    evicted <- withDb pool (pruneTurnArchiveReferences (addUTCTime (30 * 86400) now))
+    evicted `shouldSatisfy` (>= 3)
+    afterPrune <- withDb pool (replayChain (conversationScopeFor seed.fxGroup) (turnAt 3) 8)
+    map (.rcArchiveSha) afterPrune `shouldBe` replicate 3 Nothing
+
+    -- Another conversation's turn is not addressable through this scope even
+    -- with a valid turn id in hand.
+    other <- createFixture pool 45 4501
+    denied <- withDb pool (replayChain (conversationScopeFor seed.fxGroup) other.fxTurn 8)
+    denied `shouldBe` []
 
 createSeed :: DbPool -> Int64 -> Int64 -> IO Fixture
 createSeed pool group messageId = do

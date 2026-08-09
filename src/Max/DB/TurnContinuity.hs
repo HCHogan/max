@@ -10,6 +10,7 @@ module Max.DB.TurnContinuity
     recordForkFrom,
     recentTurnDigests,
     continuationDigest,
+    replayChain,
     expandTurnTrace,
     pruneTurnArchiveReferences,
   )
@@ -23,11 +24,13 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
 import Database.PostgreSQL.Simple (In (..), Only (..), Query)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Continuity
+import Max.Turn.Replay (ReplayCandidate (..))
 import Max.Turn.Types
 
 data ReplyTurnTarget = ReplyTurnTarget
@@ -463,6 +466,80 @@ journalValue row =
       "started_at" .= row.jtrStartedAt,
       "finished_at" .= row.jtrFinishedAt
     ]
+
+-- | The fork-from chain behind a continuation target, newest first.
+--
+-- The walk is a recursive CTE over 'turn_edges' bounded by @depth@, and every
+-- hop stays inside the caller's 'ConversationScope' — the seed is scoped and
+-- the edge table's composite foreign keys make a cross-conversation hop
+-- unrepresentable, so a chain can never smuggle another group's archive into
+-- this prompt.  Only durable environment facts are returned; whether they
+-- permit replay is "Max.Turn.Replay"'s pure decision.
+--
+-- 'rcTriggerLine' is left empty here.  Rendering it needs the prompt's
+-- transcript grammar, so the caller fills it from the same scoped history
+-- rows the digest tier reads.
+replayChain ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  AgentTurnRef ->
+  Int ->
+  Eff es [ReplayCandidate]
+replayChain scope target depth = do
+  rows <-
+    query
+      "WITH RECURSIVE chain AS ( \
+      \  SELECT t.turn_id, 0 AS hop \
+      \  FROM conversations c JOIN agent_turns t USING (conversation_id) \
+      \  WHERE c.legacy_group_id = ? AND t.turn_id = ? \
+      \  UNION ALL \
+      \  SELECT e.to_turn_id, chain.hop + 1 \
+      \  FROM chain \
+      \  JOIN turn_edges e ON e.from_turn_id = chain.turn_id AND e.edge_kind = 'fork-from' \
+      \  JOIN conversations c ON c.conversation_id = e.conversation_id \
+      \  WHERE c.legacy_group_id = ? AND chain.hop + 1 < ? \
+      \) \
+      \SELECT t.turn_id, t.turn_ordinal, t.profile, t.prompt_major, t.tool_catalog_fingerprint, \
+      \       t.trace_archive_sha256, t.trace_archive_created_at, t.trace_archive_expires_at, \
+      \       t.trigger_canonical_message_id, \
+      \       COALESCE((SELECT array_agg(m.canonical_message_id ORDER BY m.turn_chunk_index) \
+      \                 FROM messages m WHERE m.agent_turn_id = t.turn_id), '{}') \
+      \FROM chain JOIN agent_turns t USING (turn_id) \
+      \ORDER BY chain.hop"
+      ( conversationStorageId scope,
+        target.atrTurnId,
+        conversationStorageId scope,
+        max 1 depth
+      )
+  pure (map candidateFromRow rows)
+
+type ReplayChainRow =
+  ( AgentTurnId,
+    TurnOrdinal,
+    Maybe Text,
+    Int,
+    Maybe Text,
+    Maybe Text,
+    Maybe UTCTime,
+    Maybe UTCTime,
+    Maybe Int64,
+    PGArray Int64
+  )
+
+candidateFromRow :: ReplayChainRow -> ReplayCandidate
+candidateFromRow (turnId, ordinal, profile, promptMajor, catalog, sha, created, expires, trigger, outputs) =
+  ReplayCandidate
+    { rcTurn = AgentTurnRef turnId ordinal,
+      rcProfile = profile,
+      rcPromptMajor = promptMajor,
+      rcCatalogFingerprint = catalog,
+      rcArchiveSha = sha,
+      rcArchiveCreatedAt = created,
+      rcArchiveExpiresAt = expires,
+      rcTriggerCanonicalId = trigger,
+      rcTriggerLine = Nothing,
+      rcOutputCanonicalIds = fromPGArray outputs
+    }
 
 -- | Logical eviction: only disposable archive references are removed.  The
 -- journal/digest floor and content-addressed blob store remain untouched.

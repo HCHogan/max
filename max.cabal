@@ -200,6 +200,7 @@ library
         Max.Tasks
         Max.Turn.Types
         Max.Turn.Continuity
+        Max.Turn.Replay
         Max.Time
         Max.Toolset
         Max.ToolContext
@@ -426,6 +427,7 @@ test-suite max-test
         Max.Tools.FilesSpec
         Max.ToolsSpec
         Max.Turn.TypesSpec
+        Max.TurnReplaySpec
         Max.UtilSpec
         Max.WorkerSpec
         Max.Http.JsonSpec
