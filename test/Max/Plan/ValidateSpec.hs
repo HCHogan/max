@@ -6,6 +6,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Effects.Tools (SchemaVersion (..), ToolRef (..))
 import Max.Effects.Tools qualified as Tools
+import Max.Plan.Parse (parseFailureText, parsePlan)
 import Max.Plan.Schema (PlanSchema (..), SchemaField (..))
 import Max.Plan.Types
 import Max.Plan.Validate
@@ -194,6 +195,30 @@ spec = do
 
     it "admits a resolvable, still-retained handle" $
       admitted (Done (EHandle "t#1:r1"))
+
+    it "admits what the DSL parser produces for the same program" $ do
+      -- The end-to-end claim of E5's front half: a model writes surface
+      -- syntax, the parser yields the IR, and the kernel admits it — with no
+      -- hand-built plan value anywhere in between.
+      let source =
+            T.unlines
+              [ "let hits = search_web@3({ query: \"prime agent\" })",
+                "done hits[0].title ?? \"没有结果\""
+              ]
+      case parsePlan source of
+        Left failure -> expectationFailure ("did not parse: " <> show (parseFailureText failure))
+        Right plan -> admitted plan
+
+    it "rejects a parsed plan that exceeds the budget it was written under" $ do
+      let source =
+            T.unlines
+              [ "let a = reply@1({ text: \"one\" })",
+                "let b = reply@1({ text: \"two\" })",
+                "done \"done\""
+              ]
+      case parsePlan source of
+        Left failure -> expectationFailure ("did not parse: " <> show (parseFailureText failure))
+        Right plan -> either (.rjReason) (const (UnknownVerifier "none")) (check plan) `shouldBe` SendBudgetExceeded 1 2
 
   describe "catalog and schema" $ do
     it "rejects a tool the catalog does not have" $

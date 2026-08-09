@@ -179,6 +179,7 @@ library
         Max.Platform.Store
         Max.Platform.QQ
         Max.Plan.Eval
+        Max.Plan.Parse
         Max.Plan.Schema
         Max.Plan.Types
         Max.Plan.Validate
@@ -421,6 +422,7 @@ test-suite max-test
         Max.PlatformSpec
         Max.Platform.DeliverySpec
         Max.Plan.EvalSpec
+        Max.Plan.ParseSpec
         Max.Plan.SchemaSpec
         Max.Plan.TypesSpec
         Max.Plan.ValidateSpec
