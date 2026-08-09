@@ -28,7 +28,7 @@ import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.MediaSpec qualified as MediaSpec
 import Max.DB.Migrations (runMigrations)
-import Max.DB.ReminderSpec qualified as ReminderSpec
+import Max.DB.MonitorSpec qualified as MonitorSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
@@ -71,7 +71,7 @@ main = do
         MemoryStoreSpec.spec pool
         MediaSpec.spec pool
         FetchQueueSpec.spec pool
-        ReminderSpec.spec pool
+        MonitorSpec.spec pool
         RecallSpec.spec pool
         PromptIntegrationSpec.spec pool
         PlatformStoreSpec.spec pool

@@ -570,7 +570,8 @@ outbound fixture link body =
       sourceCanonicalMessageId = Just fixture.fxTrigger.unCanonicalMessageId,
       canonicalBody = Body [NText body],
       replyToCanonicalMessageId = Nothing,
-      turnOutputLink = Just link
+      turnOutputLink = Just link,
+      monitorFireId = Nothing
     }
 
 withDbBlob :: DbPool -> FilePath -> Eff '[Blob, WithConnection, IOE] a -> IO a

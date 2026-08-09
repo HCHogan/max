@@ -117,6 +117,7 @@ import Max.IR.Lower
   )
 import Max.IR.Prompt (promptCanonicalText, systemEventText)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
+import Max.Monitor.Types (MonitorFireId)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Types
 import Max.Turn.Types (AgentTurnId (..), TurnOutputLink (..))
@@ -357,8 +358,11 @@ data OutboundDraft = OutboundDraft
     canonicalBody :: !(Body 'Canonical),
     replyToCanonicalMessageId :: !(Maybe Int64),
     -- | L3 provenance for agent-authored output; absent for commands,
-    -- reminders, mirroring and other non-turn publication.
-    turnOutputLink :: !(Maybe TurnOutputLink)
+    -- canned monitors, mirroring and other non-turn publication.
+    turnOutputLink :: !(Maybe TurnOutputLink),
+    -- | Durable scheduler provenance. At most one canonical message may name
+    -- a fire, so crash recovery can rediscover publication before ack.
+    monitorFireId :: !(Maybe MonitorFireId)
   }
   deriving stock (Eq, Show)
 
@@ -1338,6 +1342,17 @@ enqueueOutbound draft = withTransaction $ do
             erNativeAccountId = accountNative,
             erLegacyGroupId = legacyGroup
           }
+  forM_ draft.monitorFireId $ \fireId -> do
+    scoped <-
+      query
+        "SELECT 1 FROM monitor_fires f JOIN monitors m USING (monitor_id) \
+        \ WHERE f.fire_id=? AND m.conversation_id=? AND m.status='armed' \
+        \   AND f.admission_state='pending' AND f.cancelled_at IS NULL \
+        \ FOR UPDATE OF m"
+        (fireId, conversation)
+    case scoped :: [Only Int] of
+      [_] -> pure ()
+      _ -> error "enqueueOutbound: monitor fire outside conversation"
   -- An outbound body already names identities: the send path resolved every
   -- principal the model addressed against a real account before publishing.
   -- The only identity this transaction has to ensure is the bot's own.
@@ -1364,8 +1379,8 @@ enqueueOutbound draft = withTransaction $ do
       \ (canonical_message_id, message_id, group_id, user_id, self_id, segments, canonical_content, \
       \  rendered_text, raw_message, sender_nickname, reply_to_message_id, reply_to_canonical_message_id, \
       \  kind, conversation_id, author_principal_id, origin_endpoint_id, source_native_event_id, \
-      \  agent_turn_id, turn_chunk_index, occurred_at, message_origin, source_platform) \
-      \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'max', ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), 'outbound', ?)"
+      \  agent_turn_id, turn_chunk_index, monitor_fire_id, occurred_at, message_origin, source_platform) \
+      \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'max', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), 'outbound', ?)"
       ( canonical,
         compatibilityMessage,
         draft.legacyConversationId,
@@ -1383,6 +1398,7 @@ enqueueOutbound draft = withTransaction $ do
         "max:" <> T.pack (show canonical),
         agentTurnId,
         turnChunkIndex,
+        draft.monitorFireId,
         platformName
       )
   when (inserted /= 1) (error "enqueueOutbound: canonical insert did not affect one row")

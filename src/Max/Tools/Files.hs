@@ -253,7 +253,8 @@ sendImageFromSandboxTool outputCaps turnOutputContext gid sandboxes =
                           orBody = body,
                           orReplyTo = replyTo,
                           orDeliveryScope = DeliverConversation,
-                          orTurnOutput = turnOutput
+                          orTurnOutput = turnOutput,
+                          orMonitorFireId = Nothing
                         }
                   case outcome of
                     SendFailed err -> pure (Left ("图片发送失败: " <> err))

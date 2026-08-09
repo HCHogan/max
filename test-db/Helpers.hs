@@ -91,6 +91,8 @@ truncateAll pool = withConn pool $ \c -> do
       c
       "TRUNCATE \
       \  maintenance_leases, \
+      \  monitor_fires, \
+      \  monitors, \
       \  turn_edges, \
       \  execution_journal, \
       \  sandboxes, \
@@ -121,8 +123,7 @@ truncateAll pool = withConn pool $ \c -> do
       \  memories, \
       \  sessions, \
       \  group_files, \
-      \  fetch_jobs, \
-      \  reminders \
+      \  fetch_jobs \
       \  RESTART IDENTITY CASCADE"
   pure ()
 

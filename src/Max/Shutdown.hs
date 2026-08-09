@@ -118,7 +118,7 @@ inflightCount st = readTVarIO st.ssInflight
 -- | Block until nothing is in flight, or @seconds@ elapse.  Returns
 -- how many dispatches were still running when it gave up — @0@ is a
 -- clean drain.  Same @registerDelay@ + 'retry' idiom as
--- 'Max.Reminder.reminderWorker': the wait ends the instant the last
+-- 'Max.Monitor.monitorWorker': the wait ends the instant the last
 -- dispatch releases its slot, no polling.
 awaitQuiescent :: Int -> ShutdownState -> IO Int
 awaitQuiescent seconds st = do

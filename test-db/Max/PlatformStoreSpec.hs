@@ -458,7 +458,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               sourceCanonicalMessageId = Nothing,
               canonicalBody = Body [NText "hello both sides"],
               replyToCanonicalMessageId = Nothing,
-              turnOutputLink = Nothing
+              turnOutputLink = Nothing,
+              monitorFireId = Nothing
             }
     queued.deliveriesCreated `shouldBe` 2
     claims <- withDb pool (claimDeliveries "delivery-worker" 10 30)
@@ -510,7 +511,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               sourceCanonicalMessageId = Nothing,
               canonicalBody = Body [NText "reply"],
               replyToCanonicalMessageId = Just targetMessage,
-              turnOutputLink = Nothing
+              turnOutputLink = Nothing,
+              monitorFireId = Nothing
             }
     relations <- withConn pool $ \conn ->
       query
@@ -722,7 +724,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               sourceCanonicalMessageId = Just sourceMessage,
               canonicalBody = Body [NText "status"],
               replyToCanonicalMessageId = Nothing,
-              turnOutputLink = Nothing
+              turnOutputLink = Nothing,
+              monitorFireId = Nothing
             }
     queued.deliveriesCreated `shouldBe` 1
     claims <- withDb pool (claimDeliveries "local-command" 10 30)
@@ -1066,7 +1069,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
               sourceCanonicalMessageId = Nothing,
               canonicalBody = Body [NText "我在"],
               replyToCanonicalMessageId = Nothing,
-              turnOutputLink = Nothing
+              turnOutputLink = Nothing,
+              monitorFireId = Nothing
             }
     [claim] <- withDb pool (claimDeliveries "wechat-worker" 10 30)
     withDb pool (completeDelivery "wechat-worker" claim.deliveryId [] (DeliveryAccepted Nothing))

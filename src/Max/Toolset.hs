@@ -88,7 +88,7 @@ allToolsFor runtime env dc =
   where
     runners =
       builtinsFor env.beTimeZone dc
-        <> reminderToolsFor env.beTimeZone env.beReminders dc
+        <> reminderToolsFor env.beTimeZone env.beMonitors dc
         <> groupToolsFor dc
         <> imageToolsFor env.beTimeZone dc
         <> memoryToolsFor dc
@@ -155,9 +155,9 @@ toolInventory =
     always (readToolV 2 "context_expand" ["conversation.db"] [CurrentConversation]),
     always (readTool "view_forward" ["conversation.db"] [CurrentConversation]),
     always (sendTool "poke" "chat.endpoint"),
-    always (writeTool "set_reminder" ["reminder.db"] [CurrentConversation]),
-    always (readTool "list_reminders" ["reminder.db"] [CurrentConversation]),
-    always (writeTool "cancel_reminder" ["reminder.db"] [CurrentConversation]),
+    always (writeToolV 2 "set_reminder" ["monitor.db"] [CurrentConversation]),
+    always (readToolV 2 "list_reminders" ["monitor.db"] [CurrentConversation]),
+    always (writeToolV 2 "cancel_reminder" ["monitor.db"] [CurrentConversation]),
     gated GroupOnly (readTool "group_members" ["chat.roster"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_avatar" ["chat.avatar", "tool.media"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_image" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation]),
@@ -225,6 +225,10 @@ statefulReadTool name domains =
 writeTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
 writeTool name domains =
   definition name (map EffectWrite domains) SequentialOnly RetryUnsafe
+
+writeToolV :: Int -> Text -> [Text] -> [ToolAuthority] -> ToolDefinition
+writeToolV version name domains authorities =
+  (writeTool name domains authorities) {tdSchemaVersion = SchemaVersion version}
 
 llmReadTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
 llmReadTool name domains =

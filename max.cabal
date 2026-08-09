@@ -123,7 +123,7 @@ library
         Max.DB.Notify
         Max.DB.PlatformIds
         Max.DB.Migrations
-        Max.DB.Reminder
+        Max.DB.Monitor
         Max.DB.Session
         Max.DB.Stickers
         Max.DB.TurnContinuity
@@ -181,7 +181,8 @@ library
         Max.Prompt
         Max.Prompt.System
         Max.Recall
-        Max.Reminder
+        Max.Monitor
+        Max.Monitor.Types
         Max.Render
         Max.Reply
         Max.ReplySend
@@ -391,7 +392,7 @@ test-suite max-test
         OneBot.EventSpec
         OneBot.SegmentSpec
         Max.RenderSpec
-        Max.ReminderSpec
+        Max.MonitorSpec
         Max.ReplySpec
         Max.ReplySendSpec
         Max.ResourceSpec
@@ -476,7 +477,7 @@ test-suite max-test-db
         Max.DB.MediaSpec
         Max.MemoryStoreSpec
         Max.MaintenanceLeaseSpec
-        Max.DB.ReminderSpec
+        Max.DB.MonitorSpec
         Max.PromptIntegrationSpec
         Max.PlatformStoreSpec
         Max.RecallSpec

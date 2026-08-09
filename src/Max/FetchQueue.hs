@@ -2,8 +2,8 @@
 -- The in-memory half of the media fetch queue: a wakeup bell and the
 -- loop all three media workers run.  The @fetch_jobs@ table
 -- ("Max.DB.FetchQueue") is authoritative; this module holds no job
--- state at all, exactly like 'Max.Reminder.ReminderScheduler' next to
--- the @reminders@ table.
+-- state at all, exactly like 'Max.Monitor.MonitorScheduler' next to
+-- the @monitors@ / @monitor_fires@ tables.
 --
 -- __Why a signal and not a poll.__  Media has to land fast — the
 -- prompt builder blocks on the trigger's own images
@@ -93,7 +93,7 @@ runFetchLoop signal kind leaseSeconds batch process = loop
   where
     loop = do
       -- Snapshot the tick *before* claiming, same reasoning as
-      -- 'Max.Reminder.reminderWorker': an enqueue landing between the
+      -- 'Max.Monitor.monitorWorker': an enqueue landing between the
       -- claim and the sleep must still wake us, and it won't match.
       v0 <- liftIO (readTVarIO signal.fsTick)
       jobs <- claimJobs kind leaseSeconds batch

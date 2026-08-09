@@ -28,6 +28,7 @@ import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.AgentTurn (ReclaimedTurns (..), addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
+import Max.DB.Monitor (reclaimExpiredMonitorFireClaims)
 import Max.DB.TurnContinuity (pruneTurnArchiveReferences)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits, runDurableAgent)
@@ -56,9 +57,9 @@ import Max.Matrix (matrixDeliveryTransport, matrixWorker)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.MemoryExtract (dreamWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
+import Max.Monitor (monitorWorker, newMonitorScheduler)
 import Max.Platform.Delivery (DeliveryTransport, deliveryWorker, oneBotDeliveryTransport)
 import Max.Platform.Types (Platform (..))
-import Max.Reminder (newReminderScheduler, reminderWorker)
 import Max.Sandbox.Registry
   ( gcExpiredSandboxes,
     newDurableSandboxRegistry,
@@ -117,7 +118,7 @@ main = do
           sessions <- newSessionRegistry
           skillReg <- newSkillRegistry
           tasks <- newTaskRegistry
-          reminders <- newReminderScheduler
+          monitors <- newMonitorScheduler
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
           let mEmbed = newEmbedClient httpRuntime <$> cfg.embedding
@@ -141,7 +142,7 @@ main = do
                     beShutdown = shutdown,
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
-                    beReminders = reminders,
+                    beMonitors = monitors,
                     beSearch = cfg.search,
                     beCliProxy = cfg.cliproxy,
                     beMemoryExtract = cfg.memoryExtractProfile,
@@ -293,6 +294,10 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
     let maintenanceOwner = "max/" <> T.pack (show env.beStartedAt) <> "/" <> T.pack (show mainTid)
     reclaimed <- reclaimInterruptedTurns (maintenanceOwner <> "/turn-recovery")
     archivePruneAt <- liftIO getCurrentTime
+    reclaimedMonitorFires <- reclaimExpiredMonitorFireClaims archivePruneAt
+    when (reclaimedMonitorFires > 0) $
+      logAttention "monitor scheduler: expired claims reclaimed" $
+        object ["fires" .= reclaimedMonitorFires]
     prunedArchives <- pruneTurnArchiveReferences archivePruneAt
     when (prunedArchives > 0) $
       logInfo "turn archives: expired/LRU references pruned" $
@@ -317,7 +322,10 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
           [ worker "image-fetch" RequiredWorker (imageWorker cfg.imageWorkers fetchSig),
             worker "forward-fetch" RequiredWorker (forwardWorker fetchSig),
             worker "file-fetch" RequiredWorker (fileWorker fetchSig),
-            worker "reminders" RequiredWorker (reminderWorker cfg.timezone env.beReminders),
+            worker
+              "monitor-scheduler"
+              RequiredWorker
+              (monitorWorker cfg.timezone (maintenanceOwner <> "/monitors") env.beMonitors),
             worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig mIntentSt),
             worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (maintenanceOwner <> "/dispatch") fetchSig mIntentSt),
             worker "platform-delivery" RequiredWorker (deliveryWorker (maintenanceOwner <> "/delivery") deliveryTransports)

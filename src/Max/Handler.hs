@@ -815,7 +815,8 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               orBody = Body [NText (header <> reply)],
               orReplyTo = Nothing,
               orDeliveryScope = DeliverConversation,
-              orTurnOutput = Nothing
+              orTurnOutput = Nothing,
+              orMonitorFireId = Nothing
             }
       if wasDelivered outcome
         then queueQQReaction gm.groupId gm.canonicalId ackFaceId True
@@ -1467,7 +1468,8 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
                   sourceCanonicalMessageId = sourceMessage,
                   canonicalBody = Body [NText silenceText],
                   replyToCanonicalMessageId = declined,
-                  turnOutputLink = turnOutput
+                  turnOutputLink = turnOutput,
+                  monitorFireId = Nothing
                 }
           -- On the message being declined, which is only the trigger when the
           -- model did not say otherwise.  The two differ whenever it answers
@@ -1616,7 +1618,8 @@ sendAndRecord kind deliveryScope gid body replyTo =
           orBody = body,
           orReplyTo = replyTo,
           orDeliveryScope = deliveryScope,
-          orTurnOutput = Nothing
+          orTurnOutput = Nothing,
+          orMonitorFireId = Nothing
         }
 
 -- | Command output: plain text, no quote and no @ — in the moment

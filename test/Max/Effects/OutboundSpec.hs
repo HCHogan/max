@@ -24,7 +24,8 @@ request =
       orBody = Body [NText "surface"],
       orReplyTo = Nothing,
       orDeliveryScope = DeliverConversation,
-      orTurnOutput = Nothing
+      orTurnOutput = Nothing,
+      orMonitorFireId = Nothing
     }
 
 spec :: Spec

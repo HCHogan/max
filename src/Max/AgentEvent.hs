@@ -36,8 +36,8 @@ import Max.MessageKind (MessageKind (KindDebug))
 import Max.Effects.Blob (Blob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded)
 import Max.IR (Body (..), Node (NText))
-import Max.ReplySend (ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
 import Max.Platform.Types (CanonicalMessageId)
+import Max.ReplySend (ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
 import Max.Turn.Types (nextTurnOutputLink)
 
 -- | Debug facts emitted by the loop without deciding whether debug output is
@@ -102,7 +102,8 @@ handleAgentEvent ctx = \case
               orBody = Body [NText body],
               orReplyTo = Nothing,
               orDeliveryScope = DeliverSourceEndpoint ctx.aocSourceMessageId,
-              orTurnOutput = turnOutput
+              orTurnOutput = turnOutput,
+              orMonitorFireId = Nothing
             }
 
 -- | Render zero or one debug message.  Visible-output tools are silent here:

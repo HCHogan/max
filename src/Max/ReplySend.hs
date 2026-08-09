@@ -228,7 +228,8 @@ sendAndPersistReply rt budget rawBody
                 orBody = resolvedBody,
                 orReplyTo = replyTo,
                 orDeliveryScope = DeliverConversation,
-                orTurnOutput = turnOutput
+                orTurnOutput = turnOutput,
+                orMonitorFireId = Nothing
               }
             >>= \case
               SendFailed err ->

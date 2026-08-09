@@ -1,12 +1,6 @@
--- |
--- Agent-facing reminder tools: set a one-shot or recurring reminder,
--- list this conversation's pending reminders, and cancel one.  The
--- delivery/scheduling machinery lives in "Max.Reminder"; the persistence
--- in "Max.DB.Reminder".  These tools only parse arguments, resolve the
--- fire time, and poke the scheduler awake.
---
--- The conversation is implicit: group/user/self come from the
--- 'ToolContext', so the model never passes ids.
+-- | Compatibility reminder tools backed by ADR 006 monitors. The public tool
+-- names stay stable, while persistence and scheduling use @TimeCron + canned@
+-- and conversation-scoped @m#@ handles.
 module Max.Tools.Reminder
   ( reminderToolsFor,
   )
@@ -14,41 +8,45 @@ where
 
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
-import Data.Int (Int64)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone, UTCTime, addUTCTime, getCurrentTime)
 import Effectful
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Reminder
-  ( Reminder (..),
-    cancelReminder,
-    insertReminder,
-    listPending,
+import Max.DB.Monitor
+  ( TimeMonitor (..),
+    armCannedTimeMonitor,
+    cancelMonitor,
+    listCannedTimeMonitors,
   )
 import Max.Effects.Tools (Tool (..))
-import Max.Reminder (ReminderScheduler, nextCronFire, notifyReminderChange)
+import Max.Monitor (MonitorScheduler, nextCronFire, notifyMonitorChange)
+import Max.Monitor.Types (MonitorRef (..), monitorHandleText, parseMonitorHandle)
 import Max.Time (fmtDateHM)
+import Max.ToolContext
+  ( ToolContext,
+    toolAuthorPrincipalId,
+    toolConversationScope,
+    toolGroupId,
+    toolTurnOutputContext,
+  )
 import Max.Tools (parseTimeArg)
-import Max.ToolContext (ToolContext, toolAuthorPrincipalId, toolGroupId, toolSelfId)
 import Max.Tools.Schema (integerParam, noArguments, stringParam, toolObject)
+import Max.Turn.Types (turnOutputAgentTurn)
 import System.Cron.Parser (parseCronSchedule)
 
 reminderToolsFor ::
   (WithConnection :> es, IOE :> es) =>
   TimeZone ->
-  ReminderScheduler ->
+  MonitorScheduler ->
   ToolContext ->
   [Tool es]
-reminderToolsFor tz sched dc =
-  [ setReminderTool tz sched dc,
-    listRemindersTool tz dc,
-    cancelReminderTool sched dc
+reminderToolsFor tz scheduler context =
+  [ setReminderTool tz scheduler context,
+    listRemindersTool tz context,
+    cancelReminderTool scheduler context
   ]
-
---------------------------------------------------------------------------------
--- set_reminder
 
 data SetArgs = SetArgs
   { saText :: !Text,
@@ -60,10 +58,10 @@ data SetArgs = SetArgs
 setReminderTool ::
   (WithConnection :> es, IOE :> es) =>
   TimeZone ->
-  ReminderScheduler ->
+  MonitorScheduler ->
   ToolContext ->
   Tool es
-setReminderTool tz sched dc =
+setReminderTool tz scheduler context =
   Tool
     { toolName = "set_reminder",
       toolDescription =
@@ -90,115 +88,116 @@ setReminderTool tz sched dc =
           ]
           ["text"],
       toolRun = \args -> case parseEither (withObject "args" parseSet) args of
-        Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right sa -> do
-          now <- liftIO getCurrentTime
-          case resolveWhen tz sa now of
-            Left e -> pure $ Left e
-            Right (cron, fireAt) -> do
-              rid <-
-                insertReminder
-                  (toolGroupId dc)
-                  (toolAuthorPrincipalId dc)
-                  (toolSelfId dc)
-                  (T.strip sa.saText)
-                  cron
-                  fireAt
-              liftIO (notifyReminderChange sched)
-              pure $
-                Right $
-                  object
-                    [ "ok" .= True,
-                      "id" .= rid,
-                      "next_fire" .= fmtDateHM tz fireAt,
-                      "recurring" .= isJust cron,
-                      "cron" .= cron
-                    ]
+        Left err -> pure $ Left ("bad args: " <> T.pack err)
+        Right setArgs
+          | T.null (T.strip setArgs.saText) -> pure (Left "text 不能为空")
+          | otherwise -> do
+              now <- liftIO getCurrentTime
+              case resolveWhen tz setArgs now of
+                Left err -> pure (Left err)
+                Right (cron, fireAt) -> do
+                  ref <-
+                    armCannedTimeMonitor
+                      (toolGroupId context)
+                      (toolAuthorPrincipalId context)
+                      (turnOutputAgentTurn <$> toolTurnOutputContext context)
+                      (T.strip setArgs.saText)
+                      cron
+                      fireAt
+                  liftIO (notifyMonitorChange scheduler)
+                  pure $
+                    Right $
+                      object
+                        [ "ok" .= True,
+                          "handle" .= monitorHandleText ref.mrMonitorOrdinal,
+                          "next_fire" .= fmtDateHM tz fireAt,
+                          "recurring" .= isJust cron,
+                          "cron" .= cron
+                        ]
     }
   where
-    parseSet o =
+    parseSet objectValue =
       SetArgs
-        <$> o .: "text"
-        <*> o .:? "in_minutes"
-        <*> o .:? "at"
-        <*> o .:? "cron"
+        <$> objectValue .: "text"
+        <*> objectValue .:? "in_minutes"
+        <*> objectValue .:? "at"
+        <*> objectValue .:? "cron"
 
--- | Resolve the (cron, first-fire) pair from exactly one of the three
--- time specifiers.  Left is a model-facing error string.
 resolveWhen :: TimeZone -> SetArgs -> UTCTime -> Either Text (Maybe Text, UTCTime)
-resolveWhen tz sa now =
-  case (sa.saInMinutes, sa.saAt, sa.saCron) of
-    (Just m, Nothing, Nothing) -> oneShotIn m
-    (Nothing, Just s, Nothing) -> oneShotAt s
-    (Nothing, Nothing, Just c) -> recurring c
+resolveWhen tz setArgs now =
+  case (setArgs.saInMinutes, setArgs.saAt, setArgs.saCron) of
+    (Just minutes, Nothing, Nothing) -> oneShotIn minutes
+    (Nothing, Just absolute, Nothing) -> oneShotAt absolute
+    (Nothing, Nothing, Just cron) -> recurring cron
     (Nothing, Nothing, Nothing) -> Left "必须指定 in_minutes / at / cron 之一"
     _ -> Left "in_minutes / at / cron 只能给一个"
   where
-    oneShotIn m
-      | m <= 0 = Left "in_minutes 必须是正整数"
-      | m > 527040 = Left "in_minutes 太大了（上限约一年）"
-      | otherwise = Right (Nothing, addUTCTime (fromIntegral (m * 60)) now)
-    oneShotAt s = do
-      t <- parseTimeArg tz s
-      if t <= now then Left "指定的时间已经过去了" else Right (Nothing, t)
-    recurring c = case parseCronSchedule (T.strip c) of
-      Left e -> Left ("cron 表达式无效：" <> T.pack e)
-      Right sched -> case nextCronFire tz sched now of
+    oneShotIn minutes
+      | minutes <= 0 = Left "in_minutes 必须是正整数"
+      | minutes > 527040 = Left "in_minutes 太大了（上限约一年）"
+      | otherwise = Right (Nothing, addUTCTime (fromIntegral (minutes * 60)) now)
+    oneShotAt absolute = do
+      time <- parseTimeArg tz absolute
+      if time <= now then Left "指定的时间已经过去了" else Right (Nothing, time)
+    recurring expression = case parseCronSchedule (T.strip expression) of
+      Left err -> Left ("cron 表达式无效：" <> T.pack err)
+      Right schedule -> case nextCronFire tz schedule now of
         Nothing -> Left "这个 cron 表达式算不出下一次触发时间"
-        Just t -> Right (Just (T.strip c), t)
-
---------------------------------------------------------------------------------
--- list_reminders
+        Just time -> Right (Just (T.strip expression), time)
 
 listRemindersTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
-listRemindersTool tz dc =
+listRemindersTool tz context =
   Tool
     { toolName = "list_reminders",
       toolDescription = "列出本会话所有还没触发的提醒（含投递重试或已暂停状态）。",
       toolSchema = noArguments,
       toolRun = \_ -> do
-        rs <- listPending (toolGroupId dc)
-        pure $ Right $ toJSON (map summarize rs)
+        monitors <- listCannedTimeMonitors (toolConversationScope context)
+        pure $ Right $ toJSON (map summarize monitors)
     }
   where
-    summarize r =
+    summarize monitor =
       object
-        [ "id" .= r.rmId,
-          "next_fire" .= fmtDateHM tz r.rmFireAt,
-          "status" .= status r,
-          "next_attempt" .= fmap (fmtDateHM tz) r.rmNextAttemptAt,
-          "delivery_attempts" .= r.rmDeliveryAttempts,
-          "last_error" .= r.rmLastError,
-          "text" .= r.rmText,
-          "cron" .= r.rmCron
+        [ "handle" .= monitorHandleText monitor.tmRef.mrMonitorOrdinal,
+          "next_fire" .= fmtDateHM tz monitor.tmNextFireAt,
+          "status" .= status monitor,
+          "next_attempt" .= fmap (fmtDateHM tz) monitor.tmNextAttemptAt,
+          "delivery_attempts" .= monitor.tmDeliveryAttempts,
+          "last_error" .= monitor.tmLastError,
+          "text" .= monitor.tmText,
+          "cron" .= monitor.tmCron,
+          "fire_count" .= monitor.tmFireCount
         ]
-    status r
-      | isJust r.rmParkedAt = "parked" :: Text
-      | isJust r.rmNextAttemptAt = "retrying"
+    status monitor
+      | isJust monitor.tmParkedAt = "parked" :: Text
+      | isJust monitor.tmNextAttemptAt = "retrying"
       | otherwise = "scheduled"
 
---------------------------------------------------------------------------------
--- cancel_reminder
-
-cancelReminderTool :: (WithConnection :> es, IOE :> es) => ReminderScheduler -> ToolContext -> Tool es
-cancelReminderTool sched dc =
+cancelReminderTool ::
+  (WithConnection :> es, IOE :> es) =>
+  MonitorScheduler ->
+  ToolContext ->
+  Tool es
+cancelReminderTool scheduler context =
   Tool
     { toolName = "cancel_reminder",
-      toolDescription = "按 id 取消一个未触发的提醒（循环提醒会就此停止）。id 从 list_reminders 或 set_reminder 的返回里拿。",
-      toolSchema = toolObject [("id", integerParam "要取消的提醒 id。")] ["id"],
-      toolRun = \args -> case parseEither (withObject "args" (.: "id")) args of
-        Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (rid :: Int64) -> do
-          ok <- cancelReminder (toolGroupId dc) rid
-          if ok
-            then do
-              liftIO (notifyReminderChange sched)
-              pure $ Right $ object ["ok" .= True, "cancelled" .= rid]
-            else
-              pure $
-                Right $
-                  object
-                    [ "ok" .= False,
-                      "error" .= ("没有找到这个提醒（可能已触发，或不属于本会话）" :: Text)
-                    ]
+      toolDescription = "按 handle 取消一个未触发的提醒（循环提醒会就此停止）。handle 从 list_reminders 或 set_reminder 的返回里拿。",
+      toolSchema = toolObject [("handle", stringParam "要取消的提醒句柄，例如 m#3。")] ["handle"],
+      toolRun = \args -> case parseEither (withObject "args" (.: "handle")) args of
+        Left err -> pure $ Left ("bad args: " <> T.pack err)
+        Right rawHandle -> case parseMonitorHandle rawHandle of
+          Nothing -> pure (Left "handle 格式无效，应为 m#<正整数>")
+          Just ordinal -> do
+            ok <- cancelMonitor (toolConversationScope context) ordinal
+            if ok
+              then do
+                liftIO (notifyMonitorChange scheduler)
+                pure $ Right $ object ["ok" .= True, "cancelled" .= monitorHandleText ordinal]
+              else
+                pure $
+                  Right $
+                    object
+                      [ "ok" .= False,
+                        "error" .= ("没有找到这个提醒（可能已触发，或不属于本会话）" :: Text)
+                      ]
     }

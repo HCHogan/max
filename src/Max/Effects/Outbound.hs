@@ -38,6 +38,7 @@ import Effectful.Log (Log, logAttention)
 import Effectful.PostgreSQL (WithConnection)
 import Max.IR
 import Max.MessageKind (MessageKind (..), renderMessageKind)
+import Max.Monitor.Types (MonitorFireId)
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Turn.Types (TurnOutputLink)
@@ -59,7 +60,10 @@ data OutboundRequest = OutboundRequest
     orDeliveryScope :: !OutboundDeliveryScope,
     -- | Present only for visible output produced by an agent turn.  The
     -- canonical publish transaction commits this provenance with the message.
-    orTurnOutput :: !(Maybe TurnOutputLink)
+    orTurnOutput :: !(Maybe TurnOutputLink),
+    -- | Present only for a durable canned monitor fire. The database makes
+    -- this provenance unique, turning publication into an idempotent boundary.
+    orMonitorFireId :: !(Maybe MonitorFireId)
   }
   deriving stock (Show, Eq)
 
@@ -110,7 +114,8 @@ runOutbound = runOutboundWith deliver
                   DeliverSourceEndpoint (CanonicalMessageId source) -> Just source,
                 canonicalBody = req.orBody,
                 replyToCanonicalMessageId = (\(CanonicalMessageId reply) -> reply) <$> req.orReplyTo,
-                turnOutputLink = req.orTurnOutput
+                turnOutputLink = req.orTurnOutput,
+                monitorFireId = req.orMonitorFireId
               }
       trySync (enqueueOutbound draft) >>= \case
         Left e -> failed req ("canonical publish failed: " <> T.pack (show (e :: SomeException)))
