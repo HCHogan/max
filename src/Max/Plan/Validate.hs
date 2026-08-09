@@ -186,6 +186,8 @@ data RejectReason
   | VerifierNotAdmitted !Text
   | -- | A hole asking for more than the hole it sits inside.
     BudgetNotNarrowing !Text
+  | -- | A field only the host may write, written by the plan.
+    HostOnlyField !Text
   deriving stock (Show, Eq)
 
 rejectionText :: Rejection -> Text
@@ -220,6 +222,7 @@ reasonText = \case
     name <> " is at version " <> tshow registry <> ", plan named " <> tshow named
   VerifierNotAdmitted name -> name <> " is not admitted by the enclosing goal"
   BudgetNotNarrowing detail -> "child goal widens its parent: " <> detail
+  HostOnlyField name -> name <> " is written by the host, not by the plan"
 
 effectText :: PlanEffect -> Text
 effectText = \case
@@ -358,6 +361,11 @@ validatePlan env root plan = do
     narrows at goal = do
       let parent = env.venGoal.goalBudget
           child = goal.goalBudget
+      -- Evidence and the attempt counter are the host's record of what already
+      -- went wrong.  A plan that could write them could launder a failed
+      -- attempt into a fresh one.
+      failIf (not (null goal.goalEvidence)) (at (HostOnlyField "evidence"))
+      failIf (goal.goalAttempt /= 0) (at (HostOnlyField "attempt"))
       failIf
         (not (Set.isSubsetOf child.ebEffects parent.ebEffects))
         (at (BudgetNotNarrowing "effects"))

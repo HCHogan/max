@@ -58,6 +58,8 @@ module Max.Plan.Types
 
     -- * Goals, calls, plans
     VerifierRef (..),
+    Evidence (..),
+    EvidenceSource (..),
     Goal (..),
     CallNode (..),
     Plan (..),
@@ -353,8 +355,38 @@ data Goal = Goal
     goalAuthority :: !(Set ToolAuthority),
     -- | Taint the goal's result is permitted to carry.
     goalDeclassify :: !Taint,
-    goalDeps :: !DependencySet
+    goalDeps :: !DependencySet,
+    -- | Why a previous attempt at this goal did not complete.  Host-attached
+    -- only: see 'Evidence'.
+    goalEvidence :: ![Evidence],
+    -- | Which elaboration attempt this is.  Re-holing increments it, so the
+    -- fuel a goal has already burned travels with the goal instead of living
+    -- in a side table that a fork or a restart could lose.
+    goalAttempt :: !Int
   }
+  deriving stock (Show, Eq)
+
+-- | Why an attempt failed, carried back into the goal that will be retried.
+--
+-- Evidence is __host-attached, never authored__.  A verifier's output can
+-- quote content an attacker controls, so it arrives bounded, scoped, and
+-- carrying the taint of whatever it describes — and the validator rejects a
+-- model-supplied plan that tries to write any, because evidence a model wrote
+-- about itself is not evidence.
+data Evidence = Evidence
+  { evSource :: !EvidenceSource,
+    -- | Already truncated by the host.
+    evDetail :: !Text,
+    evTaint :: !Taint,
+    evScope :: !ResourceScope
+  }
+  deriving stock (Show, Eq)
+
+data EvidenceSource
+  = -- | The candidate value did not match the goal's expected schema.
+    FromResultSchema
+  | -- | The named acceptance verifier did not certify the value.
+    FromVerifier !Text
   deriving stock (Show, Eq)
 
 data CallNode = CallNode
@@ -729,7 +761,9 @@ instance ToJSON Goal where
         "budget" .= goal.goalBudget,
         "authority" .= map authorityJson (Set.toAscList goal.goalAuthority),
         "declassify" .= goal.goalDeclassify,
-        "deps" .= goal.goalDeps
+        "deps" .= goal.goalDeps,
+        "evidence" .= goal.goalEvidence,
+        "attempt" .= goal.goalAttempt
       ]
 
 instance FromJSON Goal where
@@ -743,6 +777,33 @@ instance FromJSON Goal where
       <*> pure (Set.fromList authority)
       <*> o .: "declassify"
       <*> o .: "deps"
+      <*> o .: "evidence"
+      <*> o .: "attempt"
+
+instance ToJSON Evidence where
+  toJSON evidence =
+    object
+      [ "source" .= evidence.evSource,
+        "detail" .= evidence.evDetail,
+        "taint" .= evidence.evTaint,
+        "scope" .= evidence.evScope
+      ]
+
+instance FromJSON Evidence where
+  parseJSON = withObject "Evidence" $ \o ->
+    Evidence <$> o .: "source" <*> o .: "detail" <*> o .: "taint" <*> o .: "scope"
+
+instance ToJSON EvidenceSource where
+  toJSON = \case
+    FromResultSchema -> tagged "result_schema" []
+    FromVerifier name -> tagged "verifier" ["name" .= name]
+
+instance FromJSON EvidenceSource where
+  parseJSON = withObject "EvidenceSource" $ \o ->
+    o .: "t" >>= \case
+      "result_schema" -> pure FromResultSchema
+      "verifier" -> FromVerifier <$> o .: "name"
+      other -> unknownTag "EvidenceSource" other
 
 instance ToJSON CallNode where
   toJSON call =

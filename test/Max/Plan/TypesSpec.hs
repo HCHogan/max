@@ -27,7 +27,9 @@ goal =
           },
       goalAuthority = Set.singleton Tools.CurrentConversation,
       goalDeclassify = Taint (Set.singleton TaintExternal),
-      goalDeps = observeDependency DepToolCatalog "cafe0000" noDependencies
+      goalDeps = observeDependency DepToolCatalog "cafe0000" noDependencies,
+      goalEvidence = [],
+      goalAttempt = 0
     }
 
 -- One plan exercising every node kind, both guard branches, and a hole.

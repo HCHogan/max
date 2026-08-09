@@ -72,7 +72,9 @@ env =
                 },
             goalAuthority = Set.singleton Tools.CurrentConversation,
             goalDeclassify = Taint (Set.singleton TaintExternal),
-            goalDeps = noDependencies
+            goalDeps = noDependencies,
+            goalEvidence = [],
+            goalAttempt = 0
           },
       venBindings = Map.empty,
       venCostCeiling = 100000

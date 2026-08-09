@@ -226,7 +226,13 @@ goalP = do
             goalBudget = emptyBudget,
             goalAuthority = Set.empty,
             goalDeclassify = untainted,
-            goalDeps = noDependencies
+            goalDeps = noDependencies,
+            -- Host-attached fields.  The grammar has no syntax for them on
+            -- purpose: a model that could write its own evidence, or reset its
+            -- own attempt counter, could elaborate the same failing goal
+            -- forever while claiming it was the first try.
+            goalEvidence = [],
+            goalAttempt = 0
           }
   either fail pure (foldGoalBlocks base blocks)
 

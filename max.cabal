@@ -178,6 +178,7 @@ library
         Max.Platform.Types
         Max.Platform.Store
         Max.Platform.QQ
+        Max.Plan.Accept
         Max.Plan.Eval
         Max.Plan.Interpret
         Max.Plan.Parse
@@ -422,6 +423,7 @@ test-suite max-test
         Max.MCP.ClientSpec
         Max.PlatformSpec
         Max.Platform.DeliverySpec
+        Max.Plan.AcceptSpec
         Max.Plan.EvalSpec
         Max.Plan.InterpretSpec
         Max.Plan.ParseSpec
