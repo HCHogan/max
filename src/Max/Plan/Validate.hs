@@ -46,6 +46,8 @@ module Max.Plan.Validate
 
     -- * Reusable judgements
     admits,
+    inferExpr,
+    TypeEnv,
     Usage (..),
   )
 where
@@ -269,6 +271,7 @@ worseOf left right =
       usSends = max left.usSends right.usSends
     }
 
+-- | What each name in scope is, and what it is allowed to reach.
 type TypeEnv = Map Binder (PlanSchema, Taint)
 
 -- | Admit or reject, with the first reason the plan was inadmissible.
@@ -479,7 +482,8 @@ check env bindings fanout expected expr = case (expected, expr) of
       already@(SchemaNullable _) -> already
       inner -> SchemaNullable inner
 
--- | Synthesis direction.
+-- | Synthesis direction.  Exported as 'inferExpr' for the interpreters, which
+-- need an expression's shape in exactly the cases where its value is unknown.
 infer :: ValidationEnv -> TypeEnv -> Int -> Expr -> Either RejectReason (PlanSchema, Taint)
 infer env bindings fanout = go
   where
@@ -635,3 +639,7 @@ fromSchemaError err = ExpressionType err.schExpected (schemaErrorText err)
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
+
+-- | See 'infer'.
+inferExpr :: ValidationEnv -> TypeEnv -> Int -> Expr -> Either RejectReason (PlanSchema, Taint)
+inferExpr = infer
