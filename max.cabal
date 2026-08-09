@@ -42,6 +42,8 @@ extra-source-files:
     docker-compose.yml
     eval/README.md
     eval/fixtures/*.jsonl
+    plan-eval/README.md
+    plan-eval/fixtures/*.jsonl
     flake.lock
     flake.nix
     max.yaml.example
@@ -518,3 +520,19 @@ test-suite max-test-db
         , text                 >= 2.1  && < 2.2
         , time                 >= 1.12 && < 1.17
     ghc-options:        -threaded -rtsopts -with-rtsopts=-N
+
+-- Offline evaluation for ADR 002's plan core: parse, validate, preview and
+-- price recorded candidate segments with no LLM, database or effects.  E5's
+-- exit gate; see plan-eval/README.md.
+executable max-plan-eval
+    import:           warnings, lang
+    hs-source-dirs:   plan-eval
+    main-is:          Main.hs
+    build-depends:
+        , aeson                >= 2.2  && < 2.4
+        , base                 >= 4.20 && < 5
+        , bytestring           >= 0.12 && < 0.13
+        , containers           >= 0.7  && < 0.9
+        , max
+        , text                 >= 2.1  && < 2.2
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N

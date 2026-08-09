@@ -1,0 +1,62 @@
+# plan-eval — ADR 002 计划核心的离线评测
+
+E5 的 exit gate。跑一遍:
+
+```
+cabal run max-plan-eval                       # 默认 plan-eval/fixtures/segments.jsonl
+cabal run max-plan-eval -- path/to/other.jsonl
+```
+
+退出码在每条 fixture 的实际结果都符合其 `expect` 时为 0,所以它可以当回归测试挂在 CI 上。
+
+## 它测什么
+
+不连 LLM、不连数据库、不产生任何效果。每条 fixture 是一段录下来的候选 DSL,依次过
+**parse**(`Max.Plan.Parse`)→ **kernel**(`Max.Plan.Validate`)→ **preview**
+(`Max.Plan.Interpret`),用的就是生产路径会用的同一批模块。
+
+输出的指标对应 ADR 002 step 8 点名的那几项:
+
+| 指标 | 含义 |
+|---|---|
+| parse rate | 候选里有多少能被整段解析 |
+| validation rate | 有多少通过内核;同时给出占已解析的比例 |
+| expectation agreement | 实际结果与 fixture 声明的期望是否一致 |
+| context occupancy | 候选表面的估算 token 对 horizon-1 基线的占比 |
+| total tree cost | 所有表达式的静态开销之和,也就是校验器拿去对上限的那个数 |
+| expected deoptimizations | 遗留的 hole 数 + 被拒数,每一个都是生产环路要额外付的一轮 |
+
+## 它测不了什么
+
+**答案质量。** 这里没有任何东西产生答案。"计划是否给出了结果、还是把活儿交回一个
+hole"只是结构代理,`holes` 一列就是它,不要当质量读。
+
+真正的质量要等 step 8 的在线回放集,那需要执行器,而执行器的前置条件正是这里的数字
+先看起来正常。顺序是故意的。
+
+## fixture 格式
+
+每行一个 JSON:
+
+```json
+{
+  "name": "search then answer",
+  "expect": "admitted",
+  "source": "let hits = search_web@3({ query: \"x\" })\ndone hits[0].title ?? \"\"",
+  "baseline_tokens": 420,
+  "note": "可选,说明这条为什么值得留着"
+}
+```
+
+- `expect`:`admitted` / `refused` / `unparsed`
+- `baseline_tokens`:可选。horizon-1 环路走到同一步花掉的 token。**没有它就没有
+  occupancy 可言**,所以汇总只对提供了基线的 fixture 求和,不会替其余的编分母。
+
+工具目录、goal 的预算与授权都写在 `Main.hs` 里,不在 fixture 中——fixture 记录的是
+模型写了什么,环境是宿主的事。
+
+## 加新 case
+
+值得加的是**会让人看走眼的**那种。例如现有的
+「a recalled note quietly widening its audience」:它没有读任何不该读的东西,每一项计数都在预算内,
+唯独信息流是错的——正是评审会挥手放过的那种计划。
