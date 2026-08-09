@@ -75,6 +75,16 @@ spec = do
         Right (MsgAssistant t) -> t `shouldBe` "hi back"
         other -> expectationFailure $ "bad round-trip: " <> show other
 
+    -- ADR 005 archives a turn's appended messages as this encoding and reads
+    -- them back to replay them.  A constructor that encodes but does not decode
+    -- makes the whole archive unreadable, which silently costs the verbatim
+    -- tier for every turn that ever showed the model an image.
+    it "MsgUserBlocks" $ do
+      let m = MsgUserBlocks [TextBlock "look", ImageDataUrl "data:image/png;base64,AAAA"]
+      case roundTrip m of
+        Right (MsgUserBlocks blocks) -> blocks `shouldBe` [TextBlock "look", ImageDataUrl "data:image/png;base64,AAAA"]
+        other -> expectationFailure $ "bad round-trip: " <> show other
+
     it "MsgTool keeps tool_call_id and content" $ do
       let m = MsgTool "call_abc" "{\"ok\":true}"
       case roundTrip m of

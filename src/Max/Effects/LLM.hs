@@ -282,6 +282,22 @@ instance ToJSON ContentBlock where
           "image_url" .= object ["url" .= url]
         ]
 
+-- | The inverse of the encoder above.
+--
+-- It exists because ADR 005 archives a turn's messages with 'ToJSON' and reads
+-- them back with 'FromJSON'; a constructor that only encodes makes the whole
+-- archive undecodable, and the verbatim replay tier silently degrades to
+-- digest for every turn that ever showed the model an image.
+instance FromJSON ContentBlock where
+  parseJSON = withObject "ContentBlock" $ \o ->
+    o .: "type" >>= \case
+      "text" -> TextBlock <$> o .: "text"
+      "video_url" -> VideoDataUrl <$> nestedUrl o "video_url"
+      "image_url" -> ImageDataUrl <$> nestedUrl o "image_url"
+      other -> fail ("unknown content block type: " <> T.unpack (other :: Text))
+    where
+      nestedUrl o key = o .: key >>= withObject "url wrapper" (.: "url")
+
 instance ToJSON ChatMessage where
   toJSON = \case
     MsgSystem c -> object ["role" .= ("system" :: Text), "content" .= c]
@@ -307,7 +323,12 @@ instance FromJSON ChatMessage where
     role <- o .: "role" :: Parser Text
     case role of
       "system" -> MsgSystem <$> o .: "content"
-      "user" -> MsgUser <$> o .: "content"
+      -- Text or blocks, dispatched on the shape the encoder produced.
+      "user" ->
+        o .: "content" >>= \case
+          String text -> pure (MsgUser text)
+          blocks@(Array _) -> MsgUserBlocks <$> parseJSON blocks
+          _ -> fail "user content must be a string or an array of content blocks"
       "tool" -> MsgTool <$> o .: "tool_call_id" <*> o .: "content"
       "assistant" -> do
         mTools <- o .:? "tool_calls"
