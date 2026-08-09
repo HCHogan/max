@@ -60,6 +60,60 @@ let
   # in a snippet rendered as tofu even though a CJK font was installed and
   # fc-match found it.  Naming the fallback is the fix; relying on
   # directory order is what broke.
+  # The ocean palette, and the config that makes codesnap able to find it.
+  # A .tmTheme is only resolvable when the config names the folder holding
+  # it (`themes_folders`); there is no CLI flag for that, which is why the
+  # rest of the appearance lives here too rather than split across flags.
+  codeThemes = pkgs.runCommand "max-code-themes" { } ''
+    mkdir -p $out
+    cp ${../assets/codesnap}/*.tmTheme $out/
+  '';
+  # Every nested field is spelled out even where the value is codesnap's own
+  # default: its deserializer rejects a partial object rather than filling
+  # gaps in, so an override-only config fails with `missing field`.
+  codeFontFamily = "RecMonoCasual Nerd Font Mono";
+  codeSnapConfig = pkgs.writeText "max-codesnap.json" (builtins.toJSON {
+    print_eggs = false;
+    snapshot_config = {
+      theme = "ocean";
+      themes_folders = [ "${codeThemes}" ];
+      code_config = {
+        font_family = codeFontFamily;
+        breadcrumbs = {
+          enable = false;
+          separator = "/";
+          color = "#80848b";
+          font_family = codeFontFamily;
+        };
+      };
+      # Decoration on something being read on a phone.  The shadow is killed
+      # by colour, not by radius: radius 0 removes the blur and leaves the
+      # default #00000040 as a hard-edged block the width of the window.
+      watermark = {
+        content = "";
+        font_family = codeFontFamily;
+        color = "#ffffff";
+      };
+      window = {
+        mac_window_bar = false;
+        margin = { x = 16; y = 16; };
+        shadow = { radius = 0; color = "#00000000"; };
+        radius = 12;
+        border = { width = 1; color = "#ffffff18"; };
+        title_config = { color = "#ffffff"; font_family = codeFontFamily; };
+      };
+      # Silver-blue, left to right: pale enough that the dark window keeps a
+      # visible edge against it in a chat thumbnail.
+      background = {
+        start = { x = 0; y = 0; };
+        end = { x = "max"; y = 0; };
+        stops = [
+          { position = 0; color = "#cfdce8"; }
+          { position = 1; color = "#f2f7fa"; }
+        ];
+      };
+    };
+  });
   codeFontsConf = pkgs.writeText "max-code-fonts.conf" ''
     <?xml version="1.0"?>
     <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
@@ -436,6 +490,10 @@ in
         # no CJK, so Sarasa Mono is what the alias sends the missing
         # characters to.
         FONTCONFIG_FILE = codeFontsConf;
+        # Appearance and the ocean theme registration; Max.Render passes this
+        # to codesnap as --config.  Unset would still render, just with
+        # codesnap's own defaults.
+        MAX_CODESNAP_CONFIG = codeSnapConfig;
         # codesnap writes a default config under $HOME on every run and
         # panics on the unwrap if it cannot (`--config` does not avoid
         # this).  The sandbox below would otherwise leave HOME unwritable

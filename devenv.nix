@@ -59,6 +59,75 @@
   env = {
     # Static CJK face for typst table rendering (matches nix/module.nix).
     TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
+    # Appearance and the ocean theme, same as nix/module.nix — without this a
+    # dev render silently differs from production (candy, mint background).
+    MAX_CODESNAP_CONFIG = let
+      f = "RecMonoCasual Nerd Font Mono";
+      themes = pkgs.runCommand "max-code-themes" {} ''
+        mkdir -p $out; cp ${./assets/codesnap}/*.tmTheme $out/
+      '';
+    in
+      pkgs.writeText "max-codesnap.json" (builtins.toJSON {
+        print_eggs = false;
+        snapshot_config = {
+          theme = "ocean";
+          themes_folders = ["${themes}"];
+          code_config = {
+            font_family = f;
+            breadcrumbs = {
+              enable = false;
+              separator = "/";
+              color = "#80848b";
+              font_family = f;
+            };
+          };
+          watermark = {
+            content = "";
+            font_family = f;
+            color = "#ffffff";
+          };
+          window = {
+            mac_window_bar = false;
+            margin = {
+              x = 16;
+              y = 16;
+            };
+            shadow = {
+              radius = 0;
+              color = "#00000000";
+            };
+            radius = 12;
+            border = {
+              width = 1;
+              color = "#ffffff18";
+            };
+            title_config = {
+              color = "#ffffff";
+              font_family = f;
+            };
+          };
+          background = {
+            start = {
+              x = 0;
+              y = 0;
+            };
+            end = {
+              x = "max";
+              y = 0;
+            };
+            stops = [
+              {
+                position = 0;
+                color = "#cfdce8";
+              }
+              {
+                position = 1;
+                color = "#f2f7fa";
+              }
+            ];
+          };
+        };
+      });
     # codesnap resolves "RecMonoCasual Nerd Font Mono" through fontconfig,
     # and Recursive covers no CJK, so the alias sends the missing characters
     # to Sarasa Mono (matches nix/module.nix).  Not makeFontsConf: it appends

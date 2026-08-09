@@ -21,6 +21,7 @@ extra-source-files:
     .github/workflows/*.yml
     LICENSE
     README.md
+    assets/codesnap/*.tmTheme
     browser-image/*
     bridge/imsg/*.go
     bridge/imsg/*.m

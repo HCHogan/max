@@ -17,6 +17,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Max.Util (withTempDirectory)
 import System.Directory (doesFileExist)
+import System.Environment (lookupEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
@@ -57,12 +58,13 @@ runCodesnap lang code = do
     Right res -> res
   where
     run = withTempDirectory "max-code-" $ \workspace -> do
+      mConfig <- lookupEnv "MAX_CODESNAP_CONFIG"
       let inPath = workspace </> "snippet.txt"
           outPath = workspace </> "snippet.png"
       BS.writeFile inPath (TE.encodeUtf8 code)
       result <-
         timeout 20_000_000 $
-          readProcessWithExitCode "codesnap" (codesnapArgs lang inPath outPath) ""
+          readProcessWithExitCode "codesnap" (codesnapArgs mConfig lang inPath outPath) ""
       case result of
         Nothing -> pure (Left "codesnap timed out")
         Just (ExitSuccess, _, _) -> do
@@ -80,35 +82,24 @@ runCodesnap lang code = do
               <> ": "
               <> T.pack (take 500 (err <> out))
 
--- | Everything visual is pinned here rather than left to codesnap's
--- defaults, which live in a config file it writes into @$HOME@ on first
--- run and may change between versions.
-codesnapArgs :: Maybe Text -> FilePath -> FilePath -> [String]
-codesnapArgs lang inPath outPath =
+-- | Appearance lives in the config file the deployment supplies through
+-- @MAX_CODESNAP_CONFIG@ — theme, palette, background, window, font — because
+-- the ocean theme has to be registered there anyway: a @.tmTheme@ is only
+-- found if the config names the folder holding it (@themes_folders@), and
+-- there is no flag for that.  So the visual settings all live in one file
+-- rather than half in a file and half in this list.
+--
+-- Unset is a working configuration, not a broken one: codesnap falls back to
+-- its own defaults, which is what a dev machine without the nix module gets.
+-- Only what the config cannot express stays here.
+codesnapArgs :: Maybe FilePath -> Maybe Text -> FilePath -> FilePath -> [String]
+codesnapArgs mConfig lang inPath outPath =
   [ "--from-file",
     inPath,
     "--output",
     outPath,
     "--silent",
-    -- Recursive covers no CJK, so the module installs Sarasa Mono beside it
-    -- and fontconfig supplies the missing glyphs per character: a Chinese
-    -- comment renders instead of turning into tofu, without the Latin
-    -- giving up its ligatures.
-    "--code-font-family",
-    "RecMonoCasual Nerd Font Mono",
     "--has-line-number",
-    -- A watermark and a fake title bar are decoration on something being
-    -- read on a phone.
-    "--watermark",
-    "",
-    "--mac-window-bar",
-    "false",
-    -- Transparent, not @--shadow-radius 0@.  Zero radius does not remove
-    -- the shadow, it removes its /blur/: the default \#00000040 then lands
-    -- as a hard-edged dark block under the window, the width of the window
-    -- and nothing like a shadow.  Killing the colour is what removes it.
-    "--shadow-color",
-    "#00000000",
     -- Scale buys nothing at a glance and everything on a second look.
     -- A chat client fits the picture to the bubble, so what decides
     -- unzoomed legibility is characters per line, not pixels: measured on
@@ -117,12 +108,9 @@ codesnapArgs lang inPath outPath =
     -- tap-to-zoom view — 23 real pixels per character against 15 — and a
     -- long line is exactly what gets tapped.  The cost is bytes alone.
     "--scale-factor",
-    "3",
-    "--margin-x",
-    "16",
-    "--margin-y",
-    "16"
+    "3"
   ]
+    <> maybe [] (\c -> ["--config", c]) mConfig
     <> maybe [] (\l -> ["--language", T.unpack l]) lang
 
 --------------------------------------------------------------------------------
