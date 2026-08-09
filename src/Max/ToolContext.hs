@@ -20,9 +20,14 @@ module Max.ToolContext
     toolOutputCapabilities,
     toolTurnOutputContext,
     toolClearedAt,
+    toolMonitorArmingAllowed,
+    toolCatalogGrants,
+    toolEffectCeiling,
   )
 where
 
+import Data.Map.Strict (Map)
+import Data.Text (Text)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
 import Data.Time (UTCTime)
@@ -51,7 +56,16 @@ data TurnCapabilities = TurnCapabilities
   { tcMultimodal :: !Bool,
     tcStickers :: !Bool,
     tcSkills :: !Bool,
-    tcOutput :: !AdvertisedCaps
+    tcOutput :: !AdvertisedCaps,
+    -- | Host-resolved role policy for standing bot-initiated activity.
+    tcMonitorArming :: !Bool,
+    -- | Exact current catalog exposed to this turn. Each name maps to a
+    -- stable schema/effect/authority fingerprint; an arming tool freezes the
+    -- map as the monitor's arm-time ceiling.
+    tcCatalogGrants :: !(Map Text Text),
+    -- | A fired monitor intersects its frozen grants with this turn's current
+    -- catalog. Ordinary turns carry Nothing.
+    tcEffectCeiling :: !(Maybe (Map Text Text))
   }
   deriving stock (Show, Eq)
 
@@ -104,3 +118,12 @@ toolTurnOutputContext = (.toolIdentity.tiTurnOutputContext)
 
 toolClearedAt :: ToolContext -> Maybe UTCTime
 toolClearedAt = (.toolIdentity.tiClearedAt)
+
+toolMonitorArmingAllowed :: ToolContext -> Bool
+toolMonitorArmingAllowed = (.toolCapabilities.tcMonitorArming)
+
+toolCatalogGrants :: ToolContext -> Map Text Text
+toolCatalogGrants = (.toolCapabilities.tcCatalogGrants)
+
+toolEffectCeiling :: ToolContext -> Maybe (Map Text Text)
+toolEffectCeiling = (.toolCapabilities.tcEffectCeiling)

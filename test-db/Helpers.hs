@@ -10,6 +10,7 @@ module Helpers
     withDbLog,
     truncateAll,
     insertRawMessage,
+    insertRawMessageWithClass,
     insertRawMessageAtSeq,
     insertRawKind,
     insertRawReply,
@@ -34,7 +35,7 @@ import Test.Hspec (expectationFailure)
 import Max.DB.Session qualified as SessionDB
 import Max.Effects.Blob (Blob, runBlob)
 import Max.IR (Body (..), Node (NText))
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.QQ (ensureQQEndpointFor)
 import Max.Platform.Store
   ( IngestOptions (..),
@@ -141,7 +142,24 @@ insertRawMessage ::
   Text -> -- rendered_text
   IO Int64 -- canonical_message_id
 insertRawMessage pool mid gid uid sid receivedAt nick body =
-  insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body Nothing
+  insertCanonicalFixture pool LiveDelivery "chat" mid gid uid sid receivedAt nick body Nothing
+
+-- | Insert through the real adapter-neutral ingest kernel while selecting the
+-- trusted provenance classification explicitly. Monitor tests use this to
+-- prove a matching history import cannot trigger a standing continuation.
+insertRawMessageWithClass ::
+  DbPool ->
+  IngestClass ->
+  Int64 ->
+  Int64 ->
+  Int64 ->
+  Int64 ->
+  UTCTime ->
+  Maybe Text ->
+  Text ->
+  IO Int64
+insertRawMessageWithClass pool ingestClass mid gid uid sid receivedAt nick body =
+  insertCanonicalFixture pool ingestClass "chat" mid gid uid sid receivedAt nick body Nothing
 
 -- | Like 'insertRawMessage' but with an explicit @ingest_seq@.  Simulates a
 -- commit-order skip: the row's sequence value was allocated before rows that
@@ -159,7 +177,7 @@ insertRawMessageAtSeq ::
   Text -> -- rendered_text
   IO Int64 -- canonical_message_id
 insertRawMessageAtSeq pool seq' mid gid uid sid receivedAt nick body = do
-  canonical <- insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body Nothing
+  canonical <- insertCanonicalFixture pool LiveDelivery "chat" mid gid uid sid receivedAt nick body Nothing
   withConn pool $ \c -> do
     _ <-
       execute
@@ -190,7 +208,7 @@ insertRawKind ::
   Text -> -- rendered_text
   IO Int64 -- canonical_message_id
 insertRawKind pool kind mid gid uid sid receivedAt nick body =
-  insertCanonicalFixture pool kind mid gid uid sid receivedAt nick body Nothing
+  insertCanonicalFixture pool LiveDelivery kind mid gid uid sid receivedAt nick body Nothing
 
 -- | Like 'insertRawMessage' but with a @reply_to_message_id@ link.
 insertRawReply ::
@@ -205,13 +223,14 @@ insertRawReply ::
   Int64 -> -- the native (QQ) id of the message being replied to
   IO Int64 -- canonical_message_id
 insertRawReply pool mid gid uid sid receivedAt nick body replyTo =
-  insertCanonicalFixture pool "chat" mid gid uid sid receivedAt nick body (Just replyTo)
+  insertCanonicalFixture pool LiveDelivery "chat" mid gid uid sid receivedAt nick body (Just replyTo)
 
 -- Test fixtures enter through the same final ingest kernel as production.
 -- Numeric QQ native ids preserve the exact compatibility ids expected by the
 -- older history/session assertions without reviving a legacy table writer.
 insertCanonicalFixture ::
   DbPool ->
+  IngestClass ->
   Text ->
   Int64 ->
   Int64 ->
@@ -222,7 +241,7 @@ insertCanonicalFixture ::
   Text ->
   Maybe Int64 ->
   IO Int64
-insertCanonicalFixture pool kind mid gid uid sid receivedAt nick body replyTo =
+insertCanonicalFixture pool ingestClass kind mid gid uid sid receivedAt nick body replyTo =
   withDb pool $ do
     endpoint <- ensureQQEndpointFor (UserId sid) (GroupId gid)
     let nativeMessage = NativeEventId (T.pack (show mid))
@@ -235,6 +254,7 @@ insertCanonicalFixture pool kind mid gid uid sid receivedAt nick body replyTo =
               occurredAt = receivedAt,
               receivedAt = receivedAt,
               eventKind = EventMessage,
+              ingestClass = ingestClass,
               content = Body [NText body],
               relations = maybe [] (\target -> [ReplyTo (NativeEventId (T.pack (show target)))]) replyTo,
               sourceCursor = Nothing,

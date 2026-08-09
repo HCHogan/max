@@ -14,6 +14,7 @@
 module Max.DB.Notify
   ( WorkChannel (..),
     claimOrWait,
+    claimOrWaitUntil,
     waitForTimeline,
   )
 where
@@ -30,7 +31,7 @@ import Effectful.PostgreSQL.Connection (WithConnection, withConnection)
 import Max.DB.Transaction (withPinnedConnection)
 import System.Timeout (timeout)
 
-data WorkChannel = DispatchWork | DeliveryWork
+data WorkChannel = DispatchWork | DeliveryWork | MonitorWork
   deriving stock (Eq, Show)
 
 claimOrWait ::
@@ -39,6 +40,15 @@ claimOrWait ::
   Eff es [a] ->
   Eff es [a]
 claimOrWait channel claim =
+  claimOrWaitUntil notificationFallbackMicros channel claim
+
+claimOrWaitUntil ::
+  (WithConnection :> es, IOE :> es) =>
+  Int ->
+  WorkChannel ->
+  Eff es [a] ->
+  Eff es [a]
+claimOrWaitUntil waitMicros channel claim =
   withConnection $ \listener ->
     bracket_
       (liftIO (void (PostgreSQL.execute_ listener (listenQuery channel))))
@@ -47,7 +57,7 @@ claimOrWait channel claim =
           ready <- withPinnedConnection listener claim
           if null ready
             then do
-              _ <- liftIO (timeout notificationFallbackMicros (getNotification listener))
+              _ <- liftIO (timeout (max 0 waitMicros) (getNotification listener))
               withPinnedConnection listener claim
             else pure ready
       )
@@ -56,11 +66,13 @@ listenQuery :: WorkChannel -> Query
 listenQuery = \case
   DispatchWork -> "LISTEN max_dispatch_work"
   DeliveryWork -> "LISTEN max_delivery_work"
+  MonitorWork -> "LISTEN max_monitor_work"
 
 unlistenQuery :: WorkChannel -> Query
 unlistenQuery = \case
   DispatchWork -> "UNLISTEN max_dispatch_work"
   DeliveryWork -> "UNLISTEN max_delivery_work"
+  MonitorWork -> "UNLISTEN max_monitor_work"
 
 notificationFallbackMicros :: Int
 notificationFallbackMicros = 30 * 1_000_000

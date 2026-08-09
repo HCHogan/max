@@ -10,6 +10,7 @@ import Control.Monad (when)
 import Data.Aeson (object, (.=))
 import Data.Foldable (for_)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -140,7 +141,7 @@ dispatchContext =
   AgentContext
     ( mkToolContext
         (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
-        (TurnCapabilities False True False qqAdvertisedCaps)
+        (TurnCapabilities False True False qqAdvertisedCaps True Map.empty Nothing)
     )
     Nothing
 

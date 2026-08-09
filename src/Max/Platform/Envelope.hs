@@ -10,7 +10,8 @@
 -- configured byte limit before persistence and it must never participate
 -- in routing or authorization.
 module Max.Platform.Envelope
-  ( InboundEnvelope (..),
+  ( IngestClass (..),
+    InboundEnvelope (..),
   )
 where
 
@@ -27,6 +28,14 @@ import Max.Platform.Types
     PlatformCursor,
   )
 
+-- | Host-authenticated provenance for one adapter delivery.  This value is
+-- supplied by adapter control flow, never inferred from content or clocks.
+-- Historical import is deliberately the fail-closed constructor.
+data IngestClass
+  = LiveDelivery
+  | Backfill
+  deriving stock (Eq, Show)
+
 data InboundEnvelope = InboundEnvelope
   { endpointId :: !EndpointId,
     nativeEventId :: !NativeEventId,
@@ -35,6 +44,7 @@ data InboundEnvelope = InboundEnvelope
     occurredAt :: !UTCTime,
     receivedAt :: !UTCTime,
     eventKind :: !EventKind,
+    ingestClass :: !IngestClass,
     content :: !(Body 'Ingest),
     relations :: ![MessageRelation],
     sourceCursor :: !(Maybe PlatformCursor),

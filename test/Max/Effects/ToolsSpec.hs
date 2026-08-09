@@ -2,10 +2,12 @@ module Max.Effects.ToolsSpec (spec) where
 
 import Data.Aeson (Value, object, (.=))
 import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Effectful (liftIO, runEff)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.Tools
+import Max.Toolset (toolAllowedByEffectCeiling)
 import Max.Turn.Continuity (toolCatalogFingerprint)
 import Test.Hspec
 
@@ -109,6 +111,14 @@ spec = describe "validated tool kernel" $ do
       `shouldBe` toolCatalogFingerprint [second, readDefinition]
     toolCatalogFingerprint [readDefinition]
       `shouldNotBe` toolCatalogFingerprint [upgraded]
+
+  it "lets a standing continuation use only an exact arm-time tool grant" $ do
+    let grant = Map.singleton "read" (toolCatalogFingerprint [readDefinition])
+        upgraded = readDefinition {tdEffects = Set.singleton (EffectWrite "test.db"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
+    toolAllowedByEffectCeiling (Just grant) readDefinition `shouldBe` True
+    toolAllowedByEffectCeiling (Just grant) upgraded `shouldBe` False
+    toolAllowedByEffectCeiling (Just Map.empty) readDefinition `shouldBe` False
+    toolAllowedByEffectCeiling Nothing upgraded `shouldBe` True
   where
     isDuplicateDefinition (Left DuplicateToolDefinition {}) = True
     isDuplicateDefinition _ = False

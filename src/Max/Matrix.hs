@@ -72,7 +72,7 @@ import Max.Platform.Delivery
     resolveDeliveryMedia,
   )
 import Max.MessageKind (MessageKind (..), renderMessageKind)
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Store
   ( CursorRecord (..),
     DeliveryClaim (..),
@@ -254,6 +254,7 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
                 occurredAt = event.occurredAt,
                 receivedAt = received,
                 eventKind = event.eventKind,
+                ingestClass = if live then LiveDelivery else Backfill,
                 content = Body hydratedContent,
                 relations = event.relations,
                 sourceCursor = Just (PlatformCursor (String next)),

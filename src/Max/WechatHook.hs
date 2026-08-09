@@ -114,7 +114,7 @@ import Max.IR
 import Max.IR.Digest (digest)
 import Max.IR.Lower (OutboundCaps (..), Tier (TierNative), textOnlyCaps)
 import Max.Platform (PlatformBackend (..))
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Platform.Store
   ( IngestResult (..),
     NewIngest (..),
@@ -575,6 +575,7 @@ wechatHookWorker runtime cfg = localDomain "wechathook" $ do
                         else now,
                     receivedAt = now,
                     eventKind = EventMessage,
+                    ingestClass = LiveDelivery,
                     content = body,
                     relations,
                     sourceCursor = Nothing,

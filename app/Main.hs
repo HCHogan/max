@@ -45,7 +45,7 @@ import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
-import Max.Handler (dispatchPendingWorker, dispatchProactive, handleEvents, resumeInterruptedTurn)
+import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, handleEvents, resumeInterruptedTurn)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.Images (imageWorker)
@@ -57,7 +57,7 @@ import Max.Matrix (matrixDeliveryTransport, matrixWorker)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.MemoryExtract (dreamWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
-import Max.Monitor (monitorWorker, newMonitorScheduler)
+import Max.Monitor (monitorWorker)
 import Max.Platform.Delivery (DeliveryTransport, deliveryWorker, oneBotDeliveryTransport)
 import Max.Platform.Types (Platform (..))
 import Max.Sandbox.Registry
@@ -118,7 +118,6 @@ main = do
           sessions <- newSessionRegistry
           skillReg <- newSkillRegistry
           tasks <- newTaskRegistry
-          monitors <- newMonitorScheduler
           clientRef <- newTVarIO (Nothing :: Maybe Client)
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
           let mEmbed = newEmbedClient httpRuntime <$> cfg.embedding
@@ -142,7 +141,6 @@ main = do
                     beShutdown = shutdown,
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
-                    beMonitors = monitors,
                     beSearch = cfg.search,
                     beCliProxy = cfg.cliproxy,
                     beMemoryExtract = cfg.memoryExtractProfile,
@@ -325,7 +323,7 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
             worker
               "monitor-scheduler"
               RequiredWorker
-              (monitorWorker cfg.timezone (maintenanceOwner <> "/monitors") env.beMonitors),
+              (monitorWorker cfg.timezone (maintenanceOwner <> "/monitors") dispatchMonitorFire),
             worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig mIntentSt),
             worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (maintenanceOwner <> "/dispatch") fetchSig mIntentSt),
             worker "platform-delivery" RequiredWorker (deliveryWorker (maintenanceOwner <> "/delivery") deliveryTransports)

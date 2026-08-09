@@ -24,7 +24,6 @@ import Max.Browser.Registry (BrowserRegistry)
 import Max.CliProxy (CliProxyConfig)
 import Max.EpisodeScheduler (EpisodeScheduler)
 import Max.Intent (IntentConfig)
-import Max.Monitor (MonitorScheduler)
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
 import Max.Shutdown (ShutdownState)
@@ -69,9 +68,6 @@ data BotEnv = BotEnv
     beAdminTarget :: !(TVar (Map Int64 Int64)),
     beSandboxes :: !SandboxRegistry,
     beBrowsers :: !BrowserRegistry,
-    -- | Write-through bell behind ADR 006 monitor-backed reminder tools and
-    -- the unified scheduler worker.
-    beMonitors :: !MonitorScheduler,
     -- | Web-search backend when configured ('Nothing' = the
     -- @web_search@ tool isn't registered).
     beSearch :: !(Maybe SearchConfig),

@@ -96,7 +96,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, UTCTime)
-import Database.PostgreSQL.Simple (Query)
+import Database.PostgreSQL.Simple (Query, (:.) (..))
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
@@ -104,6 +104,7 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import GHC.Generics (Generic)
 import Max.DB.Transaction (withTransaction)
+import Max.DB.Monitor (evaluateLedgerMatches)
 import Max.IR
 import Max.IR.Lower
   ( Attribution (..),
@@ -118,7 +119,7 @@ import Max.IR.Lower
 import Max.IR.Prompt (promptCanonicalText, systemEventText)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Monitor.Types (MonitorFireId)
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Types
 import Max.Turn.Types (AgentTurnId (..), TurnOutputLink (..))
 import Text.Read (readMaybe)
@@ -974,8 +975,8 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
         query
           "INSERT INTO platform_events \
           \ (endpoint_id, native_event_id, sender_identity_id, event_kind, occurred_at, \
-          \  received_at, source_cursor, raw_payload, raw_payload_truncated) \
-          \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) \
+          \  received_at, source_cursor, raw_payload, raw_payload_truncated, ingest_class) \
+          \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
           \ ON CONFLICT (endpoint_id, native_event_id) DO NOTHING \
           \ RETURNING platform_event_id"
           ( envelope.endpointId.unEndpointId,
@@ -986,7 +987,8 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             envelope.receivedAt,
             Jsonb . unPlatformCursor <$> envelope.sourceCursor,
             Jsonb <$> safeRaw,
-            rawTruncated
+            rawTruncated,
+            renderIngestClass envelope.ingestClass
           )
       case reserved :: [Only Int64] of
         [] -> do
@@ -1057,8 +1059,8 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
           execute
             "INSERT INTO platform_events \
             \ (endpoint_id, native_event_id, sender_identity_id, event_kind, occurred_at, received_at, \
-            \  source_cursor, raw_payload, raw_payload_truncated, canonical_message_id) \
-            \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
+            \  source_cursor, raw_payload, raw_payload_truncated, canonical_message_id, ingest_class) \
+            \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
             \ ON CONFLICT (endpoint_id, native_event_id) DO NOTHING"
             ( envelope.endpointId.unEndpointId,
               nativeEvent,
@@ -1069,7 +1071,8 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
               Jsonb . unPlatformCursor <$> envelope.sourceCursor,
               Jsonb <$> safeRaw,
               rawTruncated,
-              cid
+              cid,
+              renderIngestClass envelope.ingestClass
             )
         pure cid
 
@@ -1141,12 +1144,12 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
           \ (message_id, group_id, user_id, self_id, received_at, occurred_at, \
           \  segments, canonical_content, rendered_text, raw_message, sender_nickname, \
           \  reply_to_message_id, reply_to_canonical_message_id, kind, conversation_id, \
-          \  author_principal_id, origin_endpoint_id, source_native_event_id, message_origin, source_platform, event_kind) \
+          \  author_principal_id, origin_endpoint_id, source_native_event_id, message_origin, source_platform, event_kind, ingest_class) \
           \ SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, pi.display_name), ?, ?, ?, ?, \
-          \        pi.principal_id, ?, ?, 'inbound', ?, ? \
+          \        pi.principal_id, ?, ?, 'inbound', ?, ?, ? \
           \ FROM principal_identities pi WHERE pi.principal_identity_id = ? \
-          \ RETURNING canonical_message_id"
-          ( legacyMessage,
+          \ RETURNING canonical_message_id, ingest_seq"
+          ( ( legacyMessage,
             legacyGroup,
             legacyUser,
             legacySelf,
@@ -1165,9 +1168,13 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
             nativeEvent,
             platformName,
             renderEventKind envelope.eventKind,
-            identityId
+            renderIngestClass envelope.ingestClass
+            )
+            :. Only identityId
           )
-      let cid = exactlyOne "ingestEnvelope message" inserted
+      let (cid, ingestSeq) = case inserted :: [(Int64, Int64)] of
+            [row] -> row
+            _ -> error "ingestEnvelope message: expected exactly one row"
       _ <-
         execute
           "UPDATE platform_events SET canonical_message_id = ? \
@@ -1187,6 +1194,28 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
           \ VALUES (?, ?, CASE WHEN ?::boolean THEN NULL ELSE now() END)"
           (cid, if dispatchable then ("pending" :: Text) else "ignored", dispatchable)
       forM_ envelope.relations (insertRelation cid envelope.endpointId)
+      -- The identity batch above always carries both the sender and Max's own
+      -- account, so the lookups hold; resolving them totally keeps a monitor
+      -- from being the reason an ordinary message fails to ingest, and an
+      -- unresolvable principal simply declines to evaluate (fail closed).
+      let monitorPrincipals = do
+            (_, sender) <- Map.lookup envelope.senderNativeId identities
+            (_, self) <- Map.lookup (NativeUserId endpoint.erNativeAccountId) identities
+            pure (PrincipalId sender, PrincipalId self)
+      when (envelope.ingestClass == LiveDelivery && envelope.eventKind == EventMessage) $
+        forM_ monitorPrincipals $ \(senderPrincipal, selfPrincipal) -> do
+          _ <-
+            evaluateLedgerMatches
+              endpoint.erConversationId
+              ingestSeq
+              (CanonicalMessageId cid)
+              senderPrincipal
+              selfPrincipal
+              (identityPrincipals identities)
+              rendered
+              resolvedBody
+              envelope.receivedAt
+          pure ()
       mirrorCount <-
         if not options.createMirrorDeliveries
           then pure 0
@@ -2463,6 +2492,11 @@ sanitizeIngestOptions options =
     { transcriptKind = sanitizePostgresText options.transcriptKind,
       qqProvenanceSegments = sanitizePostgresValue <$> options.qqProvenanceSegments
     }
+
+renderIngestClass :: IngestClass -> Text
+renderIngestClass = \case
+  LiveDelivery -> "live_delivery"
+  Backfill -> "backfill"
 
 sanitizeNativeUserId :: NativeUserId -> NativeUserId
 sanitizeNativeUserId (NativeUserId native) = NativeUserId (sanitizePostgresText native)

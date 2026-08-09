@@ -124,7 +124,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
             [ AgentTurnRecovery
                 fixture.fxTurn
                 fixture.fxGroup
-                fixture.fxTrigger
+                (Just fixture.fxTrigger)
+                Nothing
             ]
         }
     second <- withDb pool (reclaimInterruptedTurns "boot-1")
@@ -183,7 +184,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
       `shouldBe` [("recovery-pending", "outcome-unknown", Just "turn_suspended")]
     reclaimed <- withDb pool (reclaimInterruptedTurns "next-process")
     reclaimed.rrRecoveries
-      `shouldBe` [AgentTurnRecovery fixture.fxTurn fixture.fxGroup fixture.fxTrigger]
+      `shouldBe` [AgentTurnRecovery fixture.fxTurn fixture.fxGroup (Just fixture.fxTrigger) Nothing]
     withDb pool (markAgentTurnRunning fixture.fxTurn "test-profile")
     status <- withConn pool $ \connection ->
       query connection "SELECT status FROM agent_turns WHERE turn_id = ?" (Only fixture.fxTurn.atrTurnId)
@@ -257,7 +258,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
 
       reclaimed <- withDb pool (reclaimInterruptedTurns "boot-after-archive-write")
       reclaimed.rrRecoveries
-        `shouldBe` [AgentTurnRecovery fixture.fxTurn fixture.fxGroup fixture.fxTrigger]
+        `shouldBe` [AgentTurnRecovery fixture.fxTurn fixture.fxGroup (Just fixture.fxTrigger) Nothing]
 
       now <- getCurrentTime
       withDb pool $

@@ -14,10 +14,12 @@ module Max.Toolset
   ( allToolsFor,
     toolCountFor,
     toolDefinitionsFor,
+    toolAllowedByEffectCeiling,
   )
 where
 
 import Data.Maybe (isJust)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful
@@ -34,6 +36,7 @@ import Max.Effects.Tools
     ToolAuthority (..),
     ToolCatalog,
     ToolCatalogError,
+    Tool (..),
     ToolDefinition (..),
     ToolEffect (..),
     ToolParallelism (..),
@@ -45,6 +48,7 @@ import Max.Env (BotEnv (..))
 import Max.HttpRuntime (HttpRuntime)
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolStickers)
+import Max.Turn.Continuity (toolCatalogFingerprint)
 import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
@@ -52,6 +56,7 @@ import Max.Tools.Files (fileToolsFor)
 import Max.Tools.Group (groupToolsFor)
 import Max.Tools.Images (imageToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
+import Max.Tools.Monitor (monitorToolsFor)
 import Max.Tools.Pins (pinToolsFor)
 import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
@@ -84,11 +89,15 @@ allToolsFor ::
   ToolContext ->
   Either ToolCatalogError (ToolCatalog es)
 allToolsFor runtime env dc =
-  buildToolCatalog (toolDefinitionsFor env (toolGroupId dc) (toolCapabilities dc)) runners
+  buildToolCatalog definitions runners
   where
-    runners =
+    definitions = toolDefinitionsFor env (toolGroupId dc) (toolCapabilities dc)
+    allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
+    runners = filter allowedRunner runners0
+    runners0 =
       builtinsFor env.beTimeZone dc
-        <> reminderToolsFor env.beTimeZone env.beMonitors dc
+        <> reminderToolsFor env.beTimeZone dc
+        <> monitorToolsFor env.beTimeZone dc
         <> groupToolsFor dc
         <> imageToolsFor env.beTimeZone dc
         <> memoryToolsFor dc
@@ -101,6 +110,7 @@ allToolsFor runtime env dc =
         <> maybe [] (searchToolsFor runtime) env.beSearch
         <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]
         <> [t | toolMultimodal dc, t <- videoToolsFor dc]
+    allowedRunner tool = tool.toolName `Set.member` allowedRefs
 
 -- | How many tools a dispatch with these gates would get — the
 -- @!version@ card's number.  This is intentionally a pure projection
@@ -114,7 +124,7 @@ toolCountFor ::
   Bool -> -- skills visible
   Int
 toolCountFor env gid multimodal stickers skills =
-  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps))
+  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing))
 
 -- | Product-level visibility and effect metadata live in one inventory.  The
 -- actual runners assembled above must match this filtered set exactly or
@@ -123,7 +133,8 @@ toolDefinitionsFor :: BotEnv -> GroupId -> TurnCapabilities -> [ToolDefinition]
 toolDefinitionsFor env gid caps =
   [ item.tiDefinition
   | item <- toolInventory,
-    gateOpen item.tiGate
+    gateOpen item.tiGate,
+    ceilingOpen item.tiDefinition
   ]
   where
     gateOpen = \case
@@ -133,6 +144,19 @@ toolDefinitionsFor env gid caps =
       StickersOnly -> caps.tcStickers && env.beEmbeddingEnabled
       SkillsOnly -> caps.tcSkills
       SearchOnly -> isJust env.beSearch
+      MonitorArmOnly -> caps.tcMonitorArming
+    ceilingOpen definition' =
+      toolAllowedByEffectCeiling caps.tcEffectCeiling definition'
+
+-- | Exact grant intersection for a standing continuation. A matching name is
+-- insufficient: schema, effects, retry class and authorities must retain the
+-- same fingerprint they had when the monitor was armed.
+toolAllowedByEffectCeiling :: Maybe (Map.Map Text Text) -> ToolDefinition -> Bool
+toolAllowedByEffectCeiling effectCeiling definition' =
+  maybe
+    True
+    (\grants -> Map.lookup definition'.tdRef.unToolRef grants == Just (toolCatalogFingerprint [definition']))
+    effectCeiling
 
 data ToolGate
   = Always
@@ -141,6 +165,7 @@ data ToolGate
   | StickersOnly
   | SkillsOnly
   | SearchOnly
+  | MonitorArmOnly
 
 data ToolInventoryItem = ToolInventoryItem
   { tiGate :: !ToolGate,
@@ -155,9 +180,16 @@ toolInventory =
     always (readToolV 2 "context_expand" ["conversation.db"] [CurrentConversation]),
     always (readTool "view_forward" ["conversation.db"] [CurrentConversation]),
     always (sendTool "poke" "chat.endpoint"),
+    -- An explicit reminder is the asker's own standing consent, not
+    -- bot-initiated activity: it stays open to every member.  Only
+    -- 'arm_monitor', which opens turns nobody asked for at that moment,
+    -- carries the role gate (ADR 006 "quietness is structural").
     always (writeToolV 2 "set_reminder" ["monitor.db"] [CurrentConversation]),
     always (readToolV 2 "list_reminders" ["monitor.db"] [CurrentConversation]),
     always (writeToolV 2 "cancel_reminder" ["monitor.db"] [CurrentConversation]),
+    gated MonitorArmOnly (writeToolV 1 "arm_monitor" ["monitor.db"] [CurrentConversation]),
+    always (readToolV 1 "list_monitors" ["monitor.db"] [CurrentConversation]),
+    always (writeToolV 1 "cancel_monitor" ["monitor.db"] [CurrentConversation]),
     gated GroupOnly (readTool "group_members" ["chat.roster"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_avatar" ["chat.avatar", "tool.media"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_image" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation]),

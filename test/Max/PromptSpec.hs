@@ -17,6 +17,7 @@ import Max.DispatchFixture (qqDispatch)
 import Max.Effects.Blob (blobRefFromSha256)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.EpisodeStore (EpisodeHandle, parseEpisodeHandle)
+import Max.IR (Body (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..))
 import Max.ModelCatalog (ContextLimits (..))
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), noAdvertisedCaps, qqAdvertisedCaps)
@@ -787,6 +788,27 @@ spec = do
       ub `shouldSatisfy` ("[current message — 戳一戳]" `T.isInfixOf`)
       ub `shouldSatisfy` ("Alice 戳了戳你" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("[#0]" `T.isInfixOf`))
+
+  describe "renderContext monitor turns" $ do
+    it "renders host trigger evidence as a world event, never as fresh user speech" $ do
+      let monitorTrigger =
+            (triggerMsg [])
+              { Dispatch.canonicalId = CanonicalMessageId 0,
+                Dispatch.body = Body []
+              }
+          view = "[monitor fire — m#3]\ngoal: inspect deployment\nevidence: TimeCron reached"
+          inp =
+            baseInputs
+              { origin = OriginMonitor,
+                triggerMessage = monitorTrigger,
+                continuationView = Just view
+              }
+          (_, ub) = splitMessages (renderContext inp)
+      ub `shouldSatisfy` T.isInfixOf "[current event — monitor fire]"
+      ub `shouldSatisfy` T.isInfixOf "[monitor fire — m#3]"
+      ub `shouldSatisfy` T.isInfixOf "也可以整条回复 [silence]"
+      ub `shouldSatisfy` (not . T.isInfixOf "[#0]")
+      ub `shouldSatisfy` (not . T.isInfixOf "Alice: hello")
 
   describe "ContextSnapshot → ContextPlan → renderer" $ do
     it "preserves the existing byte output under a generous budget" $ do

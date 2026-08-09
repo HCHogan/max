@@ -15,7 +15,7 @@ import Max.AdminTimeline (loadAdminTimeline, waitAdminTimeline)
 import Max.DB.Connection (DbPool, withConn)
 import Max.IR
 import Max.IR.Lower (textOnlyCaps)
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Platform.Store
 import Max.Platform.Types
 import Test.Hspec
@@ -141,6 +141,7 @@ baseEnvelope endpoint now native =
       occurredAt = now,
       receivedAt = now,
       eventKind = EventMessage,
+      ingestClass = LiveDelivery,
       content = Body [],
       relations = [],
       sourceCursor = Nothing,

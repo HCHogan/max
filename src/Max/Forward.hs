@@ -30,7 +30,7 @@ import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.Images (enqueueImagesFromNode)
 import Max.IR (Body (..), ForwardRef (..), Node (NForward))
 import Max.IR.Digest (digest)
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (Backfill))
 import Max.Platform.QQ (ensureQQEndpointFor, qqIngestBody)
 import Max.Platform.Store
   ( IngestOptions (..),
@@ -214,6 +214,7 @@ ingestNode sig endpoint received job parentNative depth path pos node = do
             occurredAt = occurred,
             receivedAt = received,
             eventKind = EventMessage,
+            ingestClass = Backfill,
             content = qqIngestBody node.segments,
             relations = [ContainedIn (NativeEventId parentNative) pos],
             sourceCursor = Nothing,

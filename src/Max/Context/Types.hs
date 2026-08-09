@@ -151,6 +151,10 @@ data TriggerOrigin
   | -- | Someone poked (戳一戳) the bot — a contentless nudge; the
     -- synthesized dispatch trigger has no message id or text.
     OriginPoke
+  | -- | A durable ADR 006 monitor fire opened a fresh ordinary turn.
+    -- Goal and trigger evidence live in the host-authored continuation view;
+    -- the world event is not presented as user speech.
+    OriginMonitor
   deriving stock (Show, Eq)
 
 -- | Process-wide release reader choice.  The emergency mode is deliberately

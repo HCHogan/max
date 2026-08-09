@@ -72,7 +72,7 @@ import Max.Platform.Delivery
     resolveDeliveryMedia,
   )
 import Max.MessageKind (MessageKind (..), renderMessageKind)
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Store
   ( CursorRecord (..),
     IngestOptions (..),
@@ -348,6 +348,7 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
                 occurredAt = message.createdAt,
                 receivedAt = received,
                 eventKind = kind,
+                ingestClass = if bootstrap then Backfill else LiveDelivery,
                 content = Body parts,
                 relations,
                 sourceCursor = Just (PlatformCursor (Number (fromIntegral next))),

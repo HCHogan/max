@@ -13,7 +13,7 @@ import Max.DB.Connection (DbPool, withConn)
 import Max.DB.History (HistoryItem (..), fetchForwardChildrenInScope)
 import Max.IR
 import Max.IR.Lower
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Util (tshow)
 import Max.Platform.Store
 import Max.Platform.Store qualified as PlatformStore
@@ -1154,6 +1154,7 @@ inboundBody endpoint now eventId body =
       occurredAt = addUTCTime (-1) now,
       receivedAt = now,
       eventKind = EventMessage,
+      ingestClass = LiveDelivery,
       content = body,
       relations = [],
       sourceCursor = Just (PlatformCursor (String "next")),

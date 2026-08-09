@@ -21,7 +21,7 @@ import Max.DB.Monitor
     listCannedTimeMonitors,
   )
 import Max.Effects.Tools (Tool (..))
-import Max.Monitor (MonitorScheduler, nextCronFire, notifyMonitorChange)
+import Max.Monitor (nextCronFire)
 import Max.Monitor.Types (MonitorRef (..), monitorHandleText, parseMonitorHandle)
 import Max.Time (fmtDateHM)
 import Max.ToolContext
@@ -39,13 +39,12 @@ import System.Cron.Parser (parseCronSchedule)
 reminderToolsFor ::
   (WithConnection :> es, IOE :> es) =>
   TimeZone ->
-  MonitorScheduler ->
   ToolContext ->
   [Tool es]
-reminderToolsFor tz scheduler context =
-  [ setReminderTool tz scheduler context,
+reminderToolsFor tz context =
+  [ setReminderTool tz context,
     listRemindersTool tz context,
-    cancelReminderTool scheduler context
+    cancelReminderTool context
   ]
 
 data SetArgs = SetArgs
@@ -58,10 +57,9 @@ data SetArgs = SetArgs
 setReminderTool ::
   (WithConnection :> es, IOE :> es) =>
   TimeZone ->
-  MonitorScheduler ->
   ToolContext ->
   Tool es
-setReminderTool tz scheduler context =
+setReminderTool tz context =
   Tool
     { toolName = "set_reminder",
       toolDescription =
@@ -104,7 +102,6 @@ setReminderTool tz scheduler context =
                       (T.strip setArgs.saText)
                       cron
                       fireAt
-                  liftIO (notifyMonitorChange scheduler)
                   pure $
                     Right $
                       object
@@ -175,10 +172,9 @@ listRemindersTool tz context =
 
 cancelReminderTool ::
   (WithConnection :> es, IOE :> es) =>
-  MonitorScheduler ->
   ToolContext ->
   Tool es
-cancelReminderTool scheduler context =
+cancelReminderTool context =
   Tool
     { toolName = "cancel_reminder",
       toolDescription = "按 handle 取消一个未触发的提醒（循环提醒会就此停止）。handle 从 list_reminders 或 set_reminder 的返回里拿。",
@@ -190,9 +186,7 @@ cancelReminderTool scheduler context =
           Just ordinal -> do
             ok <- cancelMonitor (toolConversationScope context) ordinal
             if ok
-              then do
-                liftIO (notifyMonitorChange scheduler)
-                pure $ Right $ object ["ok" .= True, "cancelled" .= monitorHandleText ordinal]
+              then pure $ Right $ object ["ok" .= True, "cancelled" .= monitorHandleText ordinal]
               else
                 pure $
                   Right $

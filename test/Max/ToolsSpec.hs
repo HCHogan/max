@@ -1,5 +1,6 @@
 module Max.ToolsSpec (spec) where
 
+import Data.Map.Strict qualified as Map
 import Data.Time (utc)
 import Effectful (IOE)
 import Effectful.Log (Log)
@@ -22,7 +23,7 @@ toolContext :: ToolContext
 toolContext =
   mkToolContext
     (TurnIdentity (GroupId 123) (CanonicalMessageId 456) (UserId 789) (UserId 999) (PrincipalId 789) Nothing Nothing)
-    (TurnCapabilities False False False qqAdvertisedCaps)
+    (TurnCapabilities False False False qqAdvertisedCaps True Map.empty Nothing)
 
 spec :: Spec
 spec = describe "model-visible builtins" $ do

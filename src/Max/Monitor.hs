@@ -1,11 +1,8 @@
--- | Event-driven ADR 006 monitor scheduler. E2 deliberately supports only
--- @TimeCron + canned@: schedule observation admits one durable fire, then a
--- leased dispatcher publishes it with message provenance and acknowledges it.
+-- | Event-driven ADR 006 monitor scheduler. Schedule and ledger observations
+-- admit durable fires; leased workers either publish canned text or admit one
+-- fresh ordinary elaborated turn with restart-safe provenance.
 module Max.Monitor
-  ( MonitorScheduler,
-    newMonitorScheduler,
-    notifyMonitorChange,
-    monitorWorker,
+  ( monitorWorker,
     nextCronFire,
     CannedRetry (..),
     maxCannedAttempts,
@@ -13,17 +10,7 @@ module Max.Monitor
   )
 where
 
-import Control.Concurrent.STM
-  ( TVar,
-    atomically,
-    modifyTVar',
-    newTVarIO,
-    readTVar,
-    readTVarIO,
-    registerDelay,
-    retry,
-  )
-import Control.Monad (unless, when)
+import Control.Monad (when)
 import Data.Aeson (object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
@@ -45,13 +32,16 @@ import Effectful.Log (Log, logAttention, logInfo)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Monitor
   ( CannedMonitorFire (..),
+    ElaboratedMonitorFire (..),
     admitDueTimeMonitors,
     claimCannedMonitorFires,
+    claimElaboratedMonitorFires,
     completeCannedMonitorFire,
     lookupMonitorFireOutput,
     nextMonitorDeadline,
     recordMonitorFireFailure,
   )
+import Max.DB.Notify (WorkChannel (MonitorWork), claimOrWaitUntil)
 import Max.Effects.Outbound
   ( Outbound,
     OutboundDeliveryScope (..),
@@ -69,16 +59,6 @@ import OneBot.Types (GroupId (..), isPrivateChat)
 import System.Cron (CronSchedule, nextMatch)
 import System.Cron.Parser (parseCronSchedule)
 
--- | In-memory write-through bell only. Durable schedule and fire state live in
--- PostgreSQL, so boot always resumes from the same facts.
-newtype MonitorScheduler = MonitorScheduler {msSignal :: TVar Int}
-
-newMonitorScheduler :: IO MonitorScheduler
-newMonitorScheduler = MonitorScheduler <$> newTVarIO 0
-
-notifyMonitorChange :: MonitorScheduler -> IO ()
-notifyMonitorChange scheduler = atomically (modifyTVar' scheduler.msSignal (+ 1))
-
 -- | The next UTC instant strictly after the supplied time whose wall clock in
 -- the configured display timezone matches the cron schedule.
 nextCronFire :: TimeZone -> CronSchedule -> UTCTime -> Maybe UTCTime
@@ -90,10 +70,18 @@ nextCronFire tz schedule after = do
 capMicros :: Int
 capMicros = 3600 * 1000000
 
+-- | The floor is load-bearing, not politeness.  'nextMonitorDeadline' and the
+-- claim queries are separate SQL: any row the first considers due and the
+-- second declines to hand out would otherwise spin this loop at zero delay
+-- against PostgreSQL.  Waiting only happens when nothing was claimable, so
+-- the floor costs no latency on the work path.
 delayMicrosFor :: UTCTime -> UTCTime -> Int
 delayMicrosFor now deadline =
   let micros = realToFrac (diffUTCTime deadline now) * 1e6 :: Double
-   in round (clamp (0, fromIntegral capMicros) micros)
+   in round (clamp (fromIntegral floorMicros, fromIntegral capMicros) micros)
+
+floorMicros :: Int
+floorMicros = 50 * 1000
 
 maxCannedAttempts :: Int
 maxCannedAttempts = 5
@@ -125,41 +113,35 @@ monitorWorker ::
   (WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) =>
   TimeZone ->
   Text ->
-  MonitorScheduler ->
+  (ElaboratedMonitorFire -> Eff es ()) ->
   Eff es ()
-monitorWorker tz owner scheduler = loop
+monitorWorker tz owner dispatchElaborated = loop
   where
     loop = do
-      -- Snapshot before observing the DB so a concurrent arm/cancel between
-      -- observation and sleep cannot be missed.
-      signalVersion <- liftIO (readTVarIO scheduler.msSignal)
       now <- liftIO getCurrentTime
-      _ <- admitDueTimeMonitors now
-      fires <-
-        claimCannedMonitorFires
-          owner
-          now
-          (addUTCTime (fromIntegral claimLeaseSeconds) now)
-          claimBatchSize
-      if null fires
-        then do
-          deadline <- nextMonitorDeadline now
-          liftIO $ case deadline of
-            Nothing -> waitSignal signalVersion
-            Just at -> waitUntil signalVersion (delayMicrosFor now at)
-        else mapM_ process fires
+      deadline <- nextMonitorDeadline now
+      let waitMicros = maybe capMicros (delayMicrosFor now) deadline
+      work <- claimOrWaitUntil waitMicros MonitorWork claimWork
+      mapM_ processWork work
       loop
 
-    waitSignal signalVersion = atomically $ do
-      current <- readTVar scheduler.msSignal
-      unless (current /= signalVersion) retry
+    claimWork = do
+      observedAt <- liftIO getCurrentTime
+      _ <- admitDueTimeMonitors observedAt
+      let leaseExpires = addUTCTime (fromIntegral claimLeaseSeconds) observedAt
+      canned <- claimCannedMonitorFires owner observedAt leaseExpires claimBatchSize
+      elaborated <- claimElaboratedMonitorFires owner observedAt leaseExpires claimBatchSize
+      pure (map WorkCanned canned <> map WorkElaborated elaborated)
 
-    waitUntil signalVersion micros = do
-      timer <- registerDelay micros
-      atomically $ do
-        fired <- readTVar timer
-        current <- readTVar scheduler.msSignal
-        unless (fired || current /= signalVersion) retry
+    processWork = \case
+      WorkCanned fire -> process fire
+      WorkElaborated fire ->
+        dispatchElaborated fire `catchSync` \e ->
+          logAttention "monitor: elaborated dispatch failed before turn admission" $
+            object
+              [ "fire_id" .= fire.emfFireId.unMonitorFireId,
+                "error" .= T.pack (show e)
+              ]
 
     process fire = do
       -- This lookup is the crash boundary. If canonical publication committed
@@ -244,6 +226,10 @@ monitorWorker tz owner scheduler = loop
             orTurnOutput = Nothing,
             orMonitorFireId = Just fire.cmfFireId
           }
+
+data MonitorWorkItem
+  = WorkCanned !CannedMonitorFire
+  | WorkElaborated !ElaboratedMonitorFire
 
 deliveryBody ::
   (WithConnection :> es, IOE :> es) =>

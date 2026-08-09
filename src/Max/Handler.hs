@@ -2,6 +2,7 @@ module Max.Handler
   ( handleEvents,
     dispatchPendingWorker,
     dispatchProactive,
+    dispatchMonitorFire,
     resumeInterruptedTurn,
     recordAs,
     IngestOutcome (..),
@@ -54,6 +55,12 @@ import Max.DB.AgentTurn
     startAgentTurn,
   )
 import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
+import Max.DB.Monitor
+  ( ElaboratedMonitorFire (..),
+    admitElaboratedMonitorTurn,
+    expireElaboratedMonitorFire,
+    loadAdmittedMonitorFire,
+  )
 import Max.DB.TurnContinuity
   ( ReplyTurnTarget (..),
     continuationDigest,
@@ -71,6 +78,7 @@ import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), LLM)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded, wasDelivered)
 import Max.Effects.PlatformApi (PlatformApi, sendAction)
+import Max.Effects.Tools (ToolDefinition (..), ToolRef (..))
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.Faces (faceIdByName)
@@ -83,6 +91,8 @@ import Max.IR
 import Max.IR.Digest (digest)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
+import Max.Monitor (nextCronFire)
+import Max.Monitor.Types (MonitorRef (..), monitorHandleText)
 import Max.Platform.QQ (ensureQQEndpoint, ensureQQEndpointFor, qqEnvelope, qqIngestBody, qqNoticeEnvelopes)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Store
@@ -142,6 +152,7 @@ import OneBot.Action (Action (..))
 import OneBot.Event (Event (..), GroupMessage (..), MessageNotice (..), PokeEvent (..))
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
+import System.Cron.Parser (parseCronSchedule)
 
 data IngestOutcome
   = IngestDurable !CanonicalMessageId
@@ -880,6 +891,125 @@ dispatchProactive mIntent batch = case unsnoc batch of
   Just (older, trigger) ->
     dispatchLLM mIntent OriginProactive MayAbsorb older trigger
 
+-- | Cross the durable monitor-fire boundary into one ordinary horizon-1
+-- turn.  Role and schedule are revalidated before the admission transaction;
+-- after that transaction succeeds, the linked turn is the only continuation
+-- and boot recovery resumes it instead of minting another.
+dispatchMonitorFire ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  ElaboratedMonitorFire ->
+  Eff es ()
+dispatchMonitorFire fire = case fire.emfClaimOwner of
+  Nothing -> pure ()
+  Just owner -> do
+    seedClaim <- maybe (pure Nothing) loadDispatchClaim fire.emfSeedCanonicalMessage
+    case seedClaim of
+      Nothing -> expire owner "arming principal no longer has an inbound dispatch seed"
+      Just claim -> do
+        principals <- mentionPrincipalsFor (mentionIdentities claim.body)
+        let seed = dispatchMessage principals claim
+        if seed.groupId /= GroupId fire.emfGroupId || seed.authorPrincipalId /= fire.emfArmedByPrincipal
+          then expire owner "arming principal provenance no longer resolves in this conversation"
+          else do
+            env :: BotEnv <- ask
+            tier <- effectiveTier env seed.groupId seed
+            if not (roleStillAllows fire.emfRequiredRole tier)
+              then expire owner "arming principal role no longer permits monitors"
+              else do
+                now <- liftIO getCurrentTime
+                nextAt <- case fire.emfCron of
+                  Nothing -> pure (Right Nothing)
+                  Just expression -> case parseCronSchedule expression of
+                    Left err -> pure (Left ("invalid persisted cron: " <> T.pack err))
+                    Right schedule -> pure (Right (nextCronFire env.beTimeZone schedule now))
+                case nextAt of
+                  Left err -> expire owner err
+                  Right maybeNext -> do
+                    admitted <- admitElaboratedMonitorTurn owner fire.emfFireId maybeNext
+                    for_ admitted $ \turn -> launchMonitorTurn Nothing turn fire
+  where
+    expire owner reason = do
+      expired <- expireElaboratedMonitorFire owner fire.emfFireId reason
+      when expired $
+        logAttention "monitor: elaborated fire expired at revalidation" $
+          object
+            [ "monitor" .= monitorHandleText fire.emfMonitor.mrMonitorOrdinal,
+              "reason" .= reason
+            ]
+
+roleStillAllows :: T.Text -> PermTier -> Bool
+roleStillAllows required actual = case required of
+  "owner" -> tierSatisfied TierOwner actual
+  "group_admin" -> tierSatisfied TierGroupAdmin actual
+  _ -> False
+
+renderMonitorFireView :: ElaboratedMonitorFire -> T.Text
+renderMonitorFireView fire =
+  T.intercalate
+    "\n"
+    [ "[monitor fire — " <> monitorHandleText fire.emfMonitor.mrMonitorOrdinal <> "]",
+      "goal: " <> T.take 4000 fire.emfGoal,
+      "trigger: " <> fire.emfTriggerKind <> " at " <> tshow fire.emfScheduledAt,
+      "evidence: " <> T.take 1600 fire.emfTriggerEvidence
+    ]
+
+launchMonitorTurn ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  Maybe T.Text ->
+  AgentTurnRef ->
+  ElaboratedMonitorFire ->
+  Eff es ()
+launchMonitorTurn recoveryView turn fire = do
+  seedClaim <- maybe (pure Nothing) loadDispatchClaim fire.emfSeedCanonicalMessage
+  case seedClaim of
+    Nothing -> ensureAgentTurnCrashed turn "monitor arming principal seed is missing"
+    Just claim -> do
+      principals <- mentionPrincipalsFor (mentionIdentities claim.body)
+      let seed = dispatchMessage principals claim
+      if seed.groupId /= GroupId fire.emfGroupId || seed.authorPrincipalId /= fire.emfArmedByPrincipal
+        then ensureAgentTurnCrashed turn "monitor arming principal seed changed scope"
+        else do
+          let triggerId = fromMaybe (CanonicalMessageId 0) fire.emfTriggerCanonicalMessage
+              trigger =
+                seed
+                  { canonicalId = triggerId,
+                    body = Body [],
+                    replyTo = Nothing,
+                    mentionPrincipals = Map.empty
+                  }
+          dispatchLLMWith
+            (Just turn)
+            recoveryView
+            (Just (renderMonitorFireView fire))
+            (Just fire.emfEffectToolGrants)
+            Nothing
+            OriginMonitor
+            NeverAbsorb
+            []
+            trigger
+
 -- | Spawn an async to build the prompt, call the LLM, post the reply,
 -- and append the (user, assistant) turn to the session history.
 -- The 'TriggerOrigin' says what woke the bot — see
@@ -913,7 +1043,7 @@ dispatchLLM ::
   [DispatchMessage] ->
   DispatchMessage ->
   Eff es ()
-dispatchLLM = dispatchLLMWith Nothing Nothing
+dispatchLLM = dispatchLLMWith Nothing Nothing Nothing Nothing
 
 -- | Resume one boot-claimed turn with the immutable original trigger and a
 -- bounded host-rendered journal view.  Missing or cross-conversation trigger
@@ -934,28 +1064,43 @@ resumeInterruptedTurn ::
   AgentTurnRecovery ->
   Eff es ()
 resumeInterruptedTurn recovery = do
-  mClaim <- loadDispatchClaim recovery.atrRecoveryTrigger
-  case mClaim of
-    Nothing ->
-      ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger is missing"
-    Just claim
-      | GroupId claim.compatibilityConversationId /= recovery.atrRecoveryGroupId ->
-          ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger changed conversation"
-      | otherwise -> do
-          principals <- mentionPrincipalsFor (mentionIdentities claim.body)
-          view <- recoveryViewForTurn recovery.atrRecoveryTurn
-          let message = dispatchMessage principals claim
-              origin
-                | isPrivateChat message.groupId || dispatchMentionsSelf message = OriginDirect
-                | otherwise = OriginProactive
-          dispatchLLMWith
-            (Just recovery.atrRecoveryTurn)
-            (Just view)
-            Nothing
-            origin
-            NeverAbsorb
-            []
-            message
+  case recovery.atrRecoveryMonitorFire of
+    Just fireId -> do
+      mFire <- loadAdmittedMonitorFire fireId
+      case mFire of
+        Just fire
+          | fire.emfAdmittedTurn == Just recovery.atrRecoveryTurn,
+            GroupId fire.emfGroupId == recovery.atrRecoveryGroupId -> do
+              view <- recoveryViewForTurn recovery.atrRecoveryTurn
+              launchMonitorTurn (Just view) recovery.atrRecoveryTurn fire
+        _ -> ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery monitor fire is missing or changed scope"
+    Nothing -> case recovery.atrRecoveryTrigger of
+      Nothing -> ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger is missing"
+      Just trigger -> do
+        mClaim <- loadDispatchClaim trigger
+        case mClaim of
+          Nothing ->
+            ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger is missing"
+          Just claim
+            | GroupId claim.compatibilityConversationId /= recovery.atrRecoveryGroupId ->
+                ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger changed conversation"
+            | otherwise -> do
+                principals <- mentionPrincipalsFor (mentionIdentities claim.body)
+                view <- recoveryViewForTurn recovery.atrRecoveryTurn
+                let message = dispatchMessage principals claim
+                    origin
+                      | isPrivateChat message.groupId || dispatchMentionsSelf message = OriginDirect
+                      | otherwise = OriginProactive
+                dispatchLLMWith
+                  (Just recovery.atrRecoveryTurn)
+                  (Just view)
+                  Nothing
+                  Nothing
+                  Nothing
+                  origin
+                  NeverAbsorb
+                  []
+                  message
 
 dispatchLLMWith ::
   ( Blob :> es,
@@ -972,13 +1117,17 @@ dispatchLLMWith ::
   ) =>
   Maybe AgentTurnRef ->
   Maybe T.Text ->
+  -- | Host-authored, budgeted monitor goal/evidence view.
+  Maybe T.Text ->
+  -- | Arm-time tool-name ceiling; intersected with the current catalog.
+  Maybe (Map.Map T.Text T.Text) ->
   Maybe IntentState ->
   TriggerOrigin ->
   Absorbable ->
   [DispatchMessage] ->
   DispatchMessage ->
   Eff es ()
-dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions gm = do
+dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent origin absorbable companions gm = do
   env :: BotEnv <- ask
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
@@ -991,7 +1140,7 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
             "origin" .= T.pack (show origin),
             "recovered" .= isJust existingTurn
           ]
-  outputCaps <- conversationAdvertisedCaps gidRaw (Just midRaw)
+  outputCaps <- conversationAdvertisedCaps gidRaw (if midRaw > 0 then Just midRaw else Nothing)
   -- Claim the shutdown slot out here rather than inside the async:
   -- 'Max.Effects.Agent.agentTurn' doesn't reach its 'registerTask'
   -- until after 'Max.Prompt.buildContext', which on its own can spend
@@ -1197,7 +1346,7 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
     -- no other trace: the 托腮 just vanishes, no reason face.  Pokes
     -- have no message to react to.
     withProcessingReaction outputCaps act
-      | origin == OriginPoke || not (outputCaps.canReaction && outputCaps.canFace) = act
+      | origin `elem` [OriginPoke, OriginMonitor] || not (outputCaps.canReaction && outputCaps.canFace) = act
       | otherwise =
           (queueQQReaction gm.groupId gm.canonicalId processingFaceId True >> act)
             `finally` queueQQReaction gm.groupId gm.canonicalId processingFaceId False
@@ -1309,14 +1458,30 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
       -- the index rendered into the system prompt and the tool-capability
       -- gate that registers the use_skill tool reading the bodies.
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
+      tier <- effectiveTier env gm.groupId gm
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
           debugEff = fromMaybe env.beDebugDefault s.debugOverride
           stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
           platformStickers = stickersEff && outputCaps.canMedia
-          turnCapabilities = TurnCapabilities multimodal platformStickers (not (null skills)) outputCaps
-          catalogFingerprint = toolCatalogFingerprint (toolDefinitionsFor env gm.groupId turnCapabilities)
+          baseCapabilities =
+            TurnCapabilities
+              multimodal
+              platformStickers
+              (not (null skills))
+              outputCaps
+              (tierSatisfied TierGroupAdmin tier)
+              Map.empty
+              effectCeiling
+          currentDefinitions = toolDefinitionsFor env gm.groupId baseCapabilities
+          catalogGrants =
+            Map.fromList
+              [ (definition.tdRef.unToolRef, toolCatalogFingerprint [definition])
+              | definition <- currentDefinitions
+              ]
+          turnCapabilities = baseCapabilities {tcCatalogGrants = catalogGrants}
+          catalogFingerprint = toolCatalogFingerprint currentDefinitions
       setAgentTurnEnvironment durable currentPromptMajor catalogFingerprint
-      continuationView <- for continuationTarget $ \target -> do
+      replyContinuationView <- for continuationTarget $ \target -> do
         _ <-
           recordForkFrom
             (conversationScopeFor gm.groupId)
@@ -1335,9 +1500,10 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
             target
         pure (renderContinuationDigest env.beTimeZone <$> digestView)
       liftIO (setTurnPhase turn "context")
+      let continuationView = monitorView <|> join replyContinuationView
       (ctx, roster) <-
         buildContextWithReadModeForOutputContinuation
-          (join continuationView)
+          continuationView
           limits
           (if env.beForceRawContext then RawLedgerEmergency else TieredContext)
           outputCaps

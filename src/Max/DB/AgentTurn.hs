@@ -50,6 +50,7 @@ import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
+import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Types
 import OneBot.Types (GroupId (..))
@@ -128,7 +129,8 @@ data ReclaimedTurns = ReclaimedTurns
 data AgentTurnRecovery = AgentTurnRecovery
   { atrRecoveryTurn :: !AgentTurnRef,
     atrRecoveryGroupId :: !GroupId,
-    atrRecoveryTrigger :: !CanonicalMessageId
+    atrRecoveryTrigger :: !(Maybe CanonicalMessageId),
+    atrRecoveryMonitorFire :: !(Maybe MonitorFireId)
   }
   deriving stock (Show, Eq)
 
@@ -354,19 +356,22 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
       \ SET status = 'recovery-pending', recovery_owner = ?, recovery_claimed_at = now() \
       \ FROM conversations c \
       \ WHERE t.conversation_id = c.conversation_id \
-      \   AND t.trigger_canonical_message_id IS NOT NULL \
+      \   AND (t.trigger_canonical_message_id IS NOT NULL OR EXISTS ( \
+      \     SELECT 1 FROM monitor_fires f WHERE f.admitted_turn_id=t.turn_id)) \
       \   AND (t.status = ANY (ARRAY['starting'::text, 'running'::text]) \
       \        OR (t.status = 'recovery-pending' AND t.recovery_owner IS DISTINCT FROM ?)) \
-      \ RETURNING t.turn_id, t.turn_ordinal, c.legacy_group_id, t.trigger_canonical_message_id"
+      \ RETURNING t.turn_id, t.turn_ordinal, c.legacy_group_id, t.trigger_canonical_message_id, \
+      \   (SELECT f.fire_id FROM monitor_fires f WHERE f.admitted_turn_id=t.turn_id)"
       (recoveryOwner, recoveryOwner)
   let recoveries =
         [ AgentTurnRecovery
             { atrRecoveryTurn = AgentTurnRef turnId (TurnOrdinal ordinal),
               atrRecoveryGroupId = GroupId groupId,
-              atrRecoveryTrigger = CanonicalMessageId trigger
+              atrRecoveryTrigger = CanonicalMessageId <$> trigger,
+              atrRecoveryMonitorFire = MonitorFireId <$> monitorFire
             }
-        | (turnId, ordinal, groupId, trigger) <-
-            (recoveryRows :: [(AgentTurnId, Int64, Int64, Int64)])
+        | (turnId, ordinal, groupId, trigger, monitorFire) <-
+            (recoveryRows :: [(AgentTurnId, Int64, Int64, Maybe Int64, Maybe Int64)])
         ]
   crashed <-
     execute
@@ -374,6 +379,7 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
       \ SET status = 'crashed', finished_at = now(), \
       \     abort_reason = COALESCE(abort_reason, 'process restarted while turn was in flight') \
       \ WHERE trigger_canonical_message_id IS NULL \
+      \   AND NOT EXISTS (SELECT 1 FROM monitor_fires f WHERE f.admitted_turn_id=agent_turns.turn_id) \
       \   AND (status = ANY (ARRAY['starting'::text, 'running'::text]) \
       \        OR (status = 'recovery-pending' AND recovery_owner IS DISTINCT FROM ?))"
       (Only recoveryOwner)

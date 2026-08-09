@@ -63,7 +63,7 @@ import Max.Platform (PlatformBackend (..))
 import Max.IR
 import Max.IR.Digest (digest)
 import Max.IR.Lower (OutboundCaps, textOnlyCaps)
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Platform.Store
   ( IngestOptions (..),
     IngestResult (..),
@@ -300,6 +300,7 @@ wechatpadWorker cfg = localDomain "wechatpad" $ do
                         else received,
                     receivedAt = received,
                     eventKind = EventMessage,
+                    ingestClass = LiveDelivery,
                     content,
                     relations = [],
                     sourceCursor = Nothing,

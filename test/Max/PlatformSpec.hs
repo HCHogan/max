@@ -10,7 +10,7 @@ import Max.IR
 import Max.IR.Lower (OutboundCaps (..), Tier (TierNative), textOnlyCaps)
 import Max.IR.Prompt (promptText)
 import Max.Platform
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Platform.QQ (qqEnvelope, qqIngestBody)
 import Max.Platform.Store (RegisteredEndpoint (..))
 import Max.Platform.Types

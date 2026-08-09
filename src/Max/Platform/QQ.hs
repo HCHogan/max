@@ -33,7 +33,7 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.IR
 import Max.IR.Lower (OutboundCaps (..), Tier (..), textOnlyCaps)
-import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
 import Max.Platform.Store (RegisteredEndpoint (..), ensureLegacyEndpoint)
 import Max.Platform.Types
 import Max.Util (tshow)
@@ -92,6 +92,7 @@ qqEnvelope endpoint received raw message =
       occurredAt = fromMaybe received (eventTime raw),
       receivedAt = received,
       eventKind = EventMessage,
+      ingestClass = LiveDelivery,
       content = qqIngestBody message.message,
       relations = concatMap relation message.message,
       sourceCursor = Nothing,
@@ -130,6 +131,7 @@ qqNoticeEnvelopes endpoint received raw notice = case notice.mnKind of
           occurredAt = fromMaybe received (eventTime raw),
           receivedAt = received,
           eventKind = kind,
+          ingestClass = LiveDelivery,
           content = Body [],
           relations,
           sourceCursor = Nothing,
