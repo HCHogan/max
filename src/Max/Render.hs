@@ -95,17 +95,27 @@ codesnapArgs lang inPath outPath =
     "--code-font-family",
     "Sarasa Mono SC",
     "--has-line-number",
-    -- A watermark, a fake title bar and a drop shadow are decoration on
-    -- something being read on a phone; the scale default of 3 makes a
-    -- seven-line snippet a 600KB image for no legibility gained.
+    -- A watermark and a fake title bar are decoration on something being
+    -- read on a phone.
     "--watermark",
     "",
     "--mac-window-bar",
     "false",
-    "--shadow-radius",
-    "0",
+    -- Transparent, not @--shadow-radius 0@.  Zero radius does not remove
+    -- the shadow, it removes its /blur/: the default \#00000040 then lands
+    -- as a hard-edged dark block under the window, the width of the window
+    -- and nothing like a shadow.  Killing the colour is what removes it.
+    "--shadow-color",
+    "#00000000",
+    -- Scale buys nothing at a glance and everything on a second look.
+    -- A chat client fits the picture to the bubble, so what decides
+    -- unzoomed legibility is characters per line, not pixels: measured on
+    -- a 300dp bubble, scale 2 and scale 3 give an identical ~4.2 dp per
+    -- character at 60 columns and ~2.5 at 100.  Where they differ is the
+    -- tap-to-zoom view — 23 real pixels per character against 15 — and a
+    -- long line is exactly what gets tapped.  The cost is bytes alone.
     "--scale-factor",
-    "2",
+    "3",
     "--margin-x",
     "16",
     "--margin-y",
