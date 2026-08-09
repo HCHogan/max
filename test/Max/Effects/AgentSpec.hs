@@ -133,7 +133,8 @@ echoDefinition =
       tdEffects = Set.singleton (EffectRead "test.echo"),
       tdParallelism = ParallelSafe,
       tdRetryClass = RetrySafe,
-      tdAuthorities = Set.singleton CurrentConversation
+      tdAuthorities = Set.singleton CurrentConversation,
+      tdFailuresPrecedeEffects = False
     }
 
 dispatchContext :: AgentContext
@@ -212,7 +213,8 @@ spec = describe "Agent full loop" $ do
               tdEffects = Set.singleton (EffectWrite "test.db"),
               tdParallelism = SequentialOnly,
               tdRetryClass = RetryUnsafe,
-              tdAuthorities = Set.singleton CurrentConversation
+              tdAuthorities = Set.singleton CurrentConversation,
+              tdFailuresPrecedeEffects = False
             }
         twoCallLLM =
           LLMInterpreter

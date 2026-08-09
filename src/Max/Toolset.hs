@@ -184,7 +184,9 @@ toolInventory =
     -- bot-initiated activity: it stays open to every member.  Only
     -- 'arm_monitor', which opens turns nobody asked for at that moment,
     -- carries the role gate (ADR 006 "quietness is structural").
-    always (writeToolV 2 "set_reminder" ["monitor.db"] [CurrentConversation]),
+    -- Audited: bad args, empty text and every resolveWhen rejection all return
+    -- before armCannedTimeMonitor is reached.
+    always (failsBeforeEffects (writeToolV 2 "set_reminder" ["monitor.db"] [CurrentConversation])),
     always (readToolV 2 "list_reminders" ["monitor.db"] [CurrentConversation]),
     always (writeToolV 2 "cancel_reminder" ["monitor.db"] [CurrentConversation]),
     gated MonitorArmOnly (writeToolV 1 "arm_monitor" ["monitor.db"] [CurrentConversation]),
@@ -239,8 +241,18 @@ definition name effects parallelism retry authorities =
       tdEffects = Set.fromList effects,
       tdParallelism = parallelism,
       tdRetryClass = retry,
-      tdAuthorities = Set.fromList authorities
+      tdAuthorities = Set.fromList authorities,
+      tdFailuresPrecedeEffects = False
     }
+
+-- | Record that a tool has been read and every error path in it precedes every
+-- effect, so a rejection can be reported as a plain failure the model may fix
+-- and retry rather than as an outcome it must not assume anything about.
+--
+-- Per-tool and opt-in on purpose: it is a claim about one implementation, and
+-- it stops being true the moment someone moves a write above a validation.
+failsBeforeEffects :: ToolDefinition -> ToolDefinition
+failsBeforeEffects definition' = definition' {tdFailuresPrecedeEffects = True}
 
 readTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
 readTool name domains =

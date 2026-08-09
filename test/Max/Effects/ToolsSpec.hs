@@ -1,5 +1,6 @@
 module Max.Effects.ToolsSpec (spec) where
 
+import Control.Exception (throwIO)
 import Data.Aeson (Value, object, (.=))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
@@ -30,7 +31,8 @@ definition ref effects parallelism retry =
       tdEffects = effects,
       tdParallelism = parallelism,
       tdRetryClass = retry,
-      tdAuthorities = Set.singleton CurrentConversation
+      tdAuthorities = Set.singleton CurrentConversation,
+      tdFailuresPrecedeEffects = False
     }
 
 readDefinition :: ToolDefinition
@@ -96,6 +98,42 @@ spec = describe "validated tool kernel" $ do
     readOutcome `shouldSatisfy` isFailedBeforeEffect
     writeOutcome `shouldSatisfy` isOutcomeUnknown
     outcomeResult writeOutcome `shouldBe` Left "boom (outcome unknown; not retried)"
+
+  it "lets an audited write report a returned error as a plain failure" $ do
+    -- Without this, a write tool cannot tell the model "your arguments were
+    -- wrong" — every rejection arrives as outcome-unknown, which the host
+    -- prompt tells the model not to retry, so it cannot correct itself.
+    let rejecting =
+          Tool
+            { toolName = "write",
+              toolDescription = "rejects its arguments",
+              toolSchema = schema,
+              toolRun = \_ -> pure (Left "bad args")
+            }
+        auditedWrite =
+          (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)
+            {tdFailuresPrecedeEffects = True}
+    catalog <- expectCatalog (buildToolCatalog [auditedWrite] [rejecting])
+    outcome <- runEff . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
+    outcome `shouldSatisfy` isFailedBeforeEffect
+    outcomeResult outcome `shouldBe` Left "bad args"
+
+  it "keeps a thrown exception unknown even for an audited write" $ do
+    -- The promise covers errors the tool chose to return.  A tool that died
+    -- may have died between issuing a write and hearing back about it.
+    let throwing =
+          Tool
+            { toolName = "write",
+              toolDescription = "dies",
+              toolSchema = schema,
+              toolRun = \_ -> liftIO (throwIO (userError "connection reset"))
+            }
+        auditedWrite =
+          (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)
+            {tdFailuresPrecedeEffects = True}
+    catalog <- expectCatalog (buildToolCatalog [auditedWrite] [throwing])
+    outcome <- runEff . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
+    outcome `shouldSatisfy` isOutcomeUnknown
 
   it "publishes the same validated catalog to model specs and inspection" $ do
     catalog <- expectCatalog (buildToolCatalog [readDefinition] [readTool])

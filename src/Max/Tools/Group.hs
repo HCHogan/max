@@ -11,8 +11,6 @@ where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
-import Data.ByteString (ByteString)
-import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Int (Int64)
 import Data.Function (on)

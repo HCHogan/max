@@ -116,7 +116,22 @@ data ToolDefinition = ToolDefinition
     tdEffects :: !(Set ToolEffect),
     tdParallelism :: !ToolParallelism,
     tdRetryClass :: !ToolRetryClass,
-    tdAuthorities :: !(Set ToolAuthority)
+    tdAuthorities :: !(Set ToolAuthority),
+    -- | An audited promise that this tool performs no effect on any path that
+    -- returns an error — argument checks, permission checks and lookups all
+    -- happen before the first write or send.
+    --
+    -- It exists because the default is necessarily pessimistic.  A tool that
+    -- writes or sends and then fails may have already done half of it, so its
+    -- failure is reported as outcome-unknown, and the host prompt tells the
+    -- model not to retry an outcome-unknown call.  That is right for a failure
+    -- mid-effect and badly wrong for a rejected argument: the model cannot
+    -- correct its own mistake, because it has been told it does not know
+    -- whether the mistake took effect.
+    --
+    -- 'False' is the safe answer and the default.  Set it only after reading
+    -- the tool and confirming every error path precedes every effect.
+    tdFailuresPrecedeEffects :: !Bool
   }
   deriving stock (Show, Eq)
 
@@ -391,16 +406,21 @@ runTools (ToolCatalog byRef) = interpret $ \_ -> \case
     execute args registered = do
       attempted <- trySync (registered.rtRun args)
       pure $ case attempted of
-        Left exception -> failure "exception" (T.pack (show exception))
-        Right (Left message) -> failure "tool_error" message
+        -- A thrown exception is never covered by the pre-effect promise: the
+        -- tool did not choose to stop, so it may have died between issuing a
+        -- write and hearing back about it.
+        Left exception -> failure False "exception" (T.pack (show exception))
+        -- A returned error is the tool deciding to stop, which is the case the
+        -- promise is about.
+        Right (Left message) -> failure definition.tdFailuresPrecedeEffects "tool_error" message
         Right (Right value)
           | hasCommitEffects definition -> ToolCommitted value
           | otherwise -> ToolSucceeded value
       where
         definition = registered.rtView.ctDefinition
-        failure code message =
+        failure precedesEffects code message =
           let fault = ToolFault code message definition.tdRetryClass
-           in if hasCommitEffects definition
+           in if hasCommitEffects definition && not precedesEffects
                 then ToolOutcomeUnknown fault
                 else ToolFailedBeforeEffect fault
 
