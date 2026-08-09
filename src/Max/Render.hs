@@ -90,10 +90,12 @@ codesnapArgs lang inPath outPath =
     "--output",
     outPath,
     "--silent",
-    -- Sarasa Mono SC is the face the module installs: monospace with real
-    -- CJK coverage, so a Chinese comment is glyphs instead of tofu.
+    -- Recursive covers no CJK, so the module installs Sarasa Mono beside it
+    -- and fontconfig supplies the missing glyphs per character: a Chinese
+    -- comment renders instead of turning into tofu, without the Latin
+    -- giving up its ligatures.
     "--code-font-family",
-    "Sarasa Mono SC",
+    "RecMonoCasual Nerd Font Mono",
     "--has-line-number",
     -- A watermark and a fake title bar are decoration on something being
     -- read on a phone.

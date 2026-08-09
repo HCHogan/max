@@ -59,9 +59,23 @@
   env = {
     # Static CJK face for typst table rendering (matches nix/module.nix).
     TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
-    # codesnap resolves "Sarasa Mono SC" through fontconfig (matches
-    # nix/module.nix); without this a snippet's CJK renders as tofu.
-    FONTCONFIG_FILE = pkgs.makeFontsConf {fontDirectories = [pkgs.sarasa-gothic];};
+    # codesnap resolves "RecMonoCasual Nerd Font Mono" through fontconfig,
+    # and Recursive covers no CJK, so the alias sends the missing characters
+    # to Sarasa Mono (matches nix/module.nix).  Not makeFontsConf: it appends
+    # dejavu-fonts, which then wins the fallback and renders CJK as tofu.
+    FONTCONFIG_FILE = pkgs.writeText "max-code-fonts.conf" ''
+      <?xml version="1.0"?>
+      <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+      <fontconfig>
+        <dir>${pkgs.nerd-fonts.recursive-mono}</dir>
+        <dir>${pkgs.sarasa-gothic}</dir>
+        <cachedir prefix="xdg">fontconfig</cachedir>
+        <alias>
+          <family>RecMonoCasual Nerd Font Mono</family>
+          <prefer><family>Sarasa Mono SC</family></prefer>
+        </alias>
+      </fontconfig>
+    '';
     MAX_DB_URL = "postgresql://127.0.0.1:5433/max";
     MAX_WS_HOST = "0.0.0.0";
     MAX_WS_PORT = "8080";

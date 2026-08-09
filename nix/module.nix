@@ -54,6 +54,25 @@ let
   drainSeconds = cfg.settings.shutdown_drain_seconds or 120;
   sandboxImageSrc = ../sandbox-image;
   browserImageSrc = ../browser-image;
+  # Hand-written rather than `makeFontsConf`, which appends dejavu-fonts
+  # unconditionally.  That lands DejaVu Sans *second* in the fallback
+  # chain, ahead of Sarasa, and codesnap takes it — so every CJK character
+  # in a snippet rendered as tofu even though a CJK font was installed and
+  # fc-match found it.  Naming the fallback is the fix; relying on
+  # directory order is what broke.
+  codeFontsConf = pkgs.writeText "max-code-fonts.conf" ''
+    <?xml version="1.0"?>
+    <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
+    <fontconfig>
+      <dir>${pkgs.nerd-fonts.recursive-mono}</dir>
+      <dir>${pkgs.sarasa-gothic}</dir>
+      <cachedir prefix="xdg">fontconfig</cachedir>
+      <alias>
+        <family>RecMonoCasual Nerd Font Mono</family>
+        <prefer><family>Sarasa Mono SC</family></prefer>
+      </alias>
+    </fontconfig>
+  '';
 
   # camoufox-js otherwise discovers and downloads the browser at image-build
   # time, then downloads uBlock Origin and a 66 MiB GeoIP database on the
@@ -412,12 +431,11 @@ in
         TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
         # codesnap goes through fontconfig rather than an env var, and
         # finds nothing without one: the sandbox gives this user no home
-        # and no system font path.  Sarasa Mono SC is the face
-        # Max.Render asks for by name — monospace with real CJK coverage,
-        # so a Chinese comment inside a snippet is glyphs and not tofu.
-        FONTCONFIG_FILE = pkgs.makeFontsConf {
-          fontDirectories = [ pkgs.sarasa-gothic ];
-        };
+        # and no system font path.  Both faces are load-bearing —
+        # Max.Render asks for RecMonoCasual by name, and Recursive covers
+        # no CJK, so Sarasa Mono is what the alias sends the missing
+        # characters to.
+        FONTCONFIG_FILE = codeFontsConf;
         # codesnap writes a default config under $HOME on every run and
         # panics on the unwrap if it cannot (`--config` does not avoid
         # this).  The sandbox below would otherwise leave HOME unwritable
