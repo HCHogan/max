@@ -183,6 +183,7 @@ library
         Max.Plan.Interpret
         Max.Plan.Parse
         Max.Plan.Schema
+        Max.Plan.Session
         Max.Plan.Types
         Max.Plan.Validate
         Max.Prompt
@@ -428,6 +429,7 @@ test-suite max-test
         Max.Plan.InterpretSpec
         Max.Plan.ParseSpec
         Max.Plan.SchemaSpec
+        Max.Plan.SessionSpec
         Max.Plan.TypesSpec
         Max.Plan.ValidateSpec
         Max.PromptFlowSpec
