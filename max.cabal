@@ -437,6 +437,7 @@ test-suite max-test
         Max.ModelCatalogSpec
         Max.PromptSpec
         Max.RecallSpec
+        Max.ReminderArgsSpec
         Max.Sandbox.DockerSpec
         Max.Tools.FilesSpec
         Max.ToolsSpec

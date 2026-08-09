@@ -3,6 +3,12 @@
 -- and conversation-scoped @m#@ handles.
 module Max.Tools.Reminder
   ( reminderToolsFor,
+
+    -- * Argument normalization, exported for "Max.ReminderArgsSpec"
+    SetArgs (..),
+    dropFiller,
+    dropZero,
+    resolveWhen,
   )
 where
 
@@ -116,9 +122,32 @@ setReminderTool tz context =
     parseSet objectValue =
       SetArgs
         <$> objectValue .: "text"
-        <*> objectValue .:? "in_minutes"
-        <*> objectValue .:? "at"
-        <*> objectValue .:? "cron"
+        <*> (dropZero <$> objectValue .:? "in_minutes")
+        <*> (dropFiller <$> objectValue .:? "at")
+        <*> (dropFiller <$> objectValue .:? "cron")
+
+-- | Read a placeholder as the absence it means.
+--
+-- Models routinely fill an unused optional parameter instead of omitting it —
+-- @"."@, an empty string, @0@.  None of those is a time or a cron expression,
+-- so reading one as "the user asked for this specifier" turns a perfectly
+-- well-formed request into a mutual-exclusion error.  That error is then
+-- unrecoverable in practice: the tool writes, so a failure is reported to the
+-- model as outcome-unknown, which the host prompt tells it not to retry — and
+-- it re-sends the identical arguments until the turn burns out.
+dropFiller :: Maybe Text -> Maybe Text
+dropFiller raw = do
+  value <- T.strip <$> raw
+  if T.toLower value `elem` fillers then Nothing else Just value
+  where
+    fillers = ["", ".", "-", "null", "none", "n/a", "无"]
+
+-- | Zero is the integer filler.  A negative stays, so it still earns the more
+-- precise "必须是正整数".
+dropZero :: Maybe Int -> Maybe Int
+dropZero = \case
+  Just 0 -> Nothing
+  other -> other
 
 resolveWhen :: TimeZone -> SetArgs -> UTCTime -> Either Text (Maybe Text, UTCTime)
 resolveWhen tz setArgs now =
@@ -126,8 +155,11 @@ resolveWhen tz setArgs now =
     (Just minutes, Nothing, Nothing) -> oneShotIn minutes
     (Nothing, Just absolute, Nothing) -> oneShotAt absolute
     (Nothing, Nothing, Just cron) -> recurring cron
-    (Nothing, Nothing, Nothing) -> Left "必须指定 in_minutes / at / cron 之一"
-    _ -> Left "in_minutes / at / cron 只能给一个"
+    (Nothing, Nothing, Nothing) -> Left "必须指定 in_minutes / at / cron 之一（只填要用的那个）"
+    -- Say what to do, not just what is wrong: the previous wording named the
+    -- rule and left the model to guess the remedy, and it guessed "keep the
+    -- placeholders, change their values".
+    _ -> Left "in_minutes / at / cron 只能给一个：不用的参数请整个省略，不要填 '.'、空字符串或 0"
   where
     oneShotIn minutes
       | minutes <= 0 = Left "in_minutes 必须是正整数"
