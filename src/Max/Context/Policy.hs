@@ -24,7 +24,8 @@ import Max.MemoryStore (MemoryId, MemoryItem (..))
 
 data ContextCostModel = ContextCostModel
   { ccmMemoryBlockTokens :: PromptInputs -> Int,
-    ccmCompartmentBlockTokens :: PromptInputs -> Int
+    ccmCompartmentBlockTokens :: PromptInputs -> Int,
+    ccmRecentTurnTokens :: Text -> Int
   }
 
 data PolicyDrop = PolicyDrop
@@ -41,6 +42,8 @@ selectContextTo costs tokenLimit initialTokens candidates =
       | estimated <= tokenLimit = (inputs, reverse dropped)
       | Just (memory, withoutMemory) <- dropOldestMemory (== "active") inputs =
           continue estimated (memoryDrop costs "memory.active" inputs withoutMemory memory) dropped withoutMemory
+      | Just (line, withoutTurn) <- dropOldestRecentTurn inputs =
+          continue estimated (PolicyDrop "turn.recent" (max 1 (costs.ccmRecentTurnTokens line))) dropped withoutTurn
       | Just (source, savedTokens, degraded) <- degradeOneCompartment costs inputs =
           continue estimated (PolicyDrop source savedTokens) dropped degraded
       | oldest : rest <- inputs.transcript =
@@ -113,6 +116,11 @@ data MemoryLane = GroupMemory | UserMemory
 
 removeMemory :: MemoryId -> [MemoryItem] -> [MemoryItem]
 removeMemory target = filter ((/= target) . (.memId))
+
+dropOldestRecentTurn :: PromptInputs -> Maybe (Text, PromptInputs)
+dropOldestRecentTurn inputs = case reverse inputs.recentTurns of
+  [] -> Nothing
+  oldest : rest -> Just (oldest, inputs {recentTurns = reverse rest})
 
 applyBaseCompartmentTiers :: UTCTime -> [ContextCompartment] -> [ContextCompartment]
 applyBaseCompartmentTiers now' compartments' =

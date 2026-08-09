@@ -19,11 +19,13 @@ module Max.ToolContext
     toolSkills,
     toolOutputCapabilities,
     toolTurnOutputContext,
+    toolClearedAt,
   )
 where
 
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
+import Data.Time (UTCTime)
 import Max.Turn.Types (TurnOutputContext)
 import OneBot.Types (GroupId, UserId)
 
@@ -36,6 +38,9 @@ data TurnIdentity = TurnIdentity
     -- user's behalf (a reminder, a memory) name them by principal, so what
     -- they store survives the account they happened to speak from.
     tiAuthorPrincipalId :: !PrincipalId,
+    -- | Current !clear visibility boundary.  Read tools must not resolve
+    -- durable handles across it.
+    tiClearedAt :: !(Maybe UTCTime),
     -- | Host-minted provenance for visible-output tools.  Model arguments
     -- cannot choose or widen it.
     tiTurnOutputContext :: !(Maybe TurnOutputContext)
@@ -96,3 +101,6 @@ toolOutputCapabilities = (.toolCapabilities.tcOutput)
 
 toolTurnOutputContext :: ToolContext -> Maybe TurnOutputContext
 toolTurnOutputContext = (.toolIdentity.tiTurnOutputContext)
+
+toolClearedAt :: ToolContext -> Maybe UTCTime
+toolClearedAt = (.toolIdentity.tiClearedAt)

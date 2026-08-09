@@ -121,6 +121,8 @@ baseInputs =
     { defaultPersona = "default-persona",
       session = emptySession,
       triggerMessage = triggerMsg [SegAt (UserId botId), SegText " hello"],
+      recentTurns = [],
+      continuationView = Nothing,
       transcript = [],
       compartments = [],
       historyTurns = False,
@@ -190,6 +192,27 @@ spec = do
       ub `shouldSatisfy` ("2026-06-05" `T.isInfixOf`)
       ub `shouldSatisfy` ("7777" `T.isInfixOf`)
       ub `shouldSatisfy` ("deepseek-flash" `T.isInfixOf`)
+
+    it "renders recent worked turns before the ambient transcript" $ do
+      let inputs =
+            baseInputs
+              { recentTurns = ["t#42 14:32 ✓「画了图」 · 5 tools ↦ #1234"]
+              }
+          (system, body) = splitMessages (renderContext inputs)
+      body `shouldSatisfy` ("[recent turns — 工作记录" `T.isInfixOf`)
+      body `shouldSatisfy` ("t#42 14:32" `T.isInfixOf`)
+      T.breakOn "[recent messages]" body
+        `shouldSatisfy` (\(prefix, _) -> "t#42" `T.isInfixOf` prefix)
+      system `shouldSatisfy` ("完整 t#<n> 传给 context_expand" `T.isInfixOf`)
+
+    it "accounts for a continuation digest and places it before the current message" $ do
+      let inputs = baseInputs {continuationView = Just "[continuation]\nold facts"}
+          plan = planContext generousLimits (snapshot inputs)
+          (_, body) = splitMessages (renderContextPlan plan)
+          (beforeCurrent, _) = T.breakOn "[current message]" body
+      beforeCurrent `shouldSatisfy` ("[continuation]\nold facts" `T.isInfixOf`)
+      plan.cpTrace
+        `shouldSatisfy` any (\trace -> trace.ctSource == "turn.continuation" && trace.ctEstimatedTokens > 0)
 
     it "renders timestamps in the configured display timezone" $ do
       -- 01:00 UTC on 2026-06-05 is 09:00 the same day at UTC+8; a
@@ -811,6 +834,26 @@ spec = do
       map (.canonicalId) (cpInputs pressured).transcript `shouldBe` [recent.canonicalId]
       (cpInputs pressured).groupMemories `shouldSatisfy` null
       pressured.cpWithinBudget `shouldBe` True
+
+    it "cuts oldest recent-turn lines under token pressure" $ do
+      let baseline = planContext generousLimits (snapshot baseInputs)
+          tightLimits = ContextLimits baseline.cpEstimatedPromptTokens 512 0 0
+          pressured =
+            planContext
+              tightLimits
+              ( snapshot
+                  baseInputs
+                    { recentTurns =
+                        [ "t#3 " <> T.replicate 500 "new ",
+                          "t#2 " <> T.replicate 500 "middle ",
+                          "t#1 " <> T.replicate 500 "old "
+                        ]
+                    }
+              )
+      (cpInputs pressured).recentTurns `shouldSatisfy` null
+      pressured.cpWithinBudget `shouldBe` True
+      pressured.cpTrace
+        `shouldSatisfy` any (\trace -> trace.ctSource == "turn.recent" && trace.ctDecision == ContextDropped)
 
     it "reports an over-budget plan when only protected sources remain" $ do
       let plan = planContext (ContextLimits 1 512 0 0) (snapshot baseInputs)

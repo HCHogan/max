@@ -64,6 +64,7 @@ module Max.Tasks
     drainInbox,
     requeueInbox,
     pushToTrigger,
+    pushToAgentTurn,
     pushToLatest,
     inFlightTriggers,
     absorbedTriggers,
@@ -151,6 +152,10 @@ data TaskEntry = TaskEntry
     -- 'Nothing' for a poke (no message) and for synthetic dispatches.
     -- This is what @!feedback@ resolves a reply against.
     teTrigger :: !(Maybe Int64),
+    -- | Durable identity, present on production dispatches.  Exact replies to
+    -- linked bot output use this to steer the producing turn without a
+    -- task-boundary classifier.
+    teAgentTurn :: !(Maybe AgentTurnRef),
     teStartedAt :: !UTCTime,
     teInbox :: !(TVar [Note]),
     -- | Messages this turn swallowed as supplements.  Reported by
@@ -268,6 +273,7 @@ beginTurnRuntimeWith reg durable output gid uid mTrigger = do
               teGroup = gid,
               teUser = uid,
               teTrigger = realTrigger mTrigger,
+              teAgentTurn = durable,
               teStartedAt = now,
               teInbox = inbox,
               teAbsorbed = absorbed,
@@ -497,6 +503,28 @@ pushToTrigger reg gid except absorb mid note = atomically $ do
     owns e
       | e.teTrigger == Just mid = pure True
       | otherwise = Set.member mid <$> readTVar e.teAbsorbed
+
+-- | Append directly to the live runtime carrying a durable agent turn.  This
+-- is the L3 reply path: the database resolves an output message to t# first,
+-- then the process-local registry performs the steer if that exact turn is
+-- still alive.  A race with finalization returns 'Nothing' and the caller
+-- falls back to a fresh dispatch.
+pushToAgentTurn :: TaskRegistry -> GroupId -> Maybe TaskId -> Maybe Int64 -> AgentTurnRef -> Note -> IO (Maybe TaskId)
+pushToAgentTurn reg gid except absorb durable note = atomically $ do
+  (_, entries) <- readTVar reg.trState
+  let matches =
+        [ entry
+        | entry <- Map.elems entries,
+          entry.teGroup == gid,
+          Just entry.teId /= except,
+          entry.teAgentTurn == Just durable
+        ]
+  case sortOn (Down . teStartedAt) matches of
+    [] -> pure Nothing
+    entry : _ -> do
+      modifyTVar' entry.teInbox (<> [note])
+      for_ absorb $ \messageId -> modifyTVar' entry.teAbsorbed (Set.insert messageId)
+      pure (Just entry.teId)
 
 -- | Append a note to the group's most recently started turn.
 --

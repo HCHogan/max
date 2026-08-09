@@ -126,6 +126,7 @@ library
         Max.DB.Reminder
         Max.DB.Session
         Max.DB.Stickers
+        Max.DB.TurnContinuity
         Max.DB.Transaction
         Max.DB.Usage
         Max.Dispatch
@@ -197,6 +198,7 @@ library
         Max.Stickers
         Max.Tasks
         Max.Turn.Types
+        Max.Turn.Continuity
         Max.Time
         Max.Toolset
         Max.ToolContext

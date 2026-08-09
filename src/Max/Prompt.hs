@@ -4,6 +4,7 @@ module Max.Prompt
     buildContextWithLimits,
     buildContextWithReadMode,
     buildContextWithReadModeForOutput,
+    buildContextWithReadModeForOutputContinuation,
     ContextReadMode (..),
     TriggerOrigin (..),
 
@@ -115,6 +116,7 @@ import Max.DB.History
     fetchMessagesByIdsInScope,
     fetchNewestPromptPageBefore,
   )
+import Max.DB.TurnContinuity (recentTurnDigests)
 import Max.Dispatch (DispatchMessage (..), dispatchText, dispatchTextWithoutSelf)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
@@ -128,6 +130,7 @@ import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), Princip
 import Max.Prompt.System (systemPrompt)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
+import Max.Turn.Continuity (renderRecentTurn)
 import Max.Util (trySync, tshow)
 import OneBot.Types (GroupId (..), isPrivateChat)
 
@@ -255,13 +258,35 @@ buildContextWithReadModeForOutput ::
   -- given: any other source of names is a second identity vocabulary, which
   -- is the thing ADR 004 removes.
   Eff es ([ChatMessage], [(Int64, Text)])
-buildContextWithReadModeForOutput limits readMode outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+buildContextWithReadModeForOutput = buildContextWithReadModeForOutputContinuation Nothing
+
+-- | ADR 005 variant: an exact finished-turn reply supplies a host-authored
+-- digest before collection so ContextPolicy accounts for its token cost.
+buildContextWithReadModeForOutputContinuation ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  Maybe Text ->
+  ContextLimits ->
+  ContextReadMode ->
+  AdvertisedCaps ->
+  Text ->
+  Bool ->
+  Bool ->
+  TriggerOrigin ->
+  TimeZone ->
+  [Text] ->
+  [(Text, Text)] ->
+  Set Int64 ->
+  Session ->
+  DispatchMessage ->
+  Eff es ([ChatMessage], [(Int64, Text)])
+buildContextWithReadModeForOutputContinuation continuationView' limits readMode outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let historyWatermarks = historyTokenWatermarks limits multimodal'
   snapshot <-
     collectContextWithWatermarks
       PublishMaterialization
       readMode
       (Just historyWatermarks)
+      continuationView'
       outputCaps
       defaultPersona
       multimodal'
@@ -323,7 +348,7 @@ collectContext ::
   Session ->
   DispatchMessage ->
   Eff es ContextSnapshot
-collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing qqAdvertisedCaps
+collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing Nothing qqAdvertisedCaps
 
 -- | Read-only collection for admin previews and replay evaluation. It never
 -- publishes a materialization revision or a diagnostic row; callers may pass
@@ -341,7 +366,7 @@ collectContextPreview ::
   Session ->
   DispatchMessage ->
   Eff es ContextSnapshot
-collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing qqAdvertisedCaps
+collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing Nothing qqAdvertisedCaps
 
 data ContextMutationMode
   = PublishMaterialization
@@ -353,6 +378,7 @@ collectContextWithWatermarks ::
   ContextMutationMode ->
   ContextReadMode ->
   Maybe HistoryTokenWatermarks ->
+  Maybe Text ->
   AdvertisedCaps ->
   Text ->
   Bool ->
@@ -365,12 +391,13 @@ collectContextWithWatermarks ::
   Session ->
   DispatchMessage ->
   Eff es ContextSnapshot
-collectContextWithWatermarks mutationMode readMode materializationWatermarks outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+collectContextWithWatermarks mutationMode readMode materializationWatermarks continuationView' outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
   let GroupId gid = gm.groupId
       CanonicalMessageId mid = gm.canonicalId
       PrincipalId senderPrincipal = gm.authorPrincipalId
       scope = conversationScopeFor gm.groupId
   now' <- liftIO getCurrentTime
+  recentTurns' <- map (renderRecentTurn tz') <$> recentTurnDigests scope s.clearedAt now'
   -- Every conversation uses one chronological stream.  The normal path is a
   -- gap-free active compartment suffix followed by its exact raw tail.  If no
   -- projection is ready, or its materialization is unavailable, the global
@@ -563,6 +590,8 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks out
             { defaultPersona = defaultPersona,
               session = s,
               triggerMessage = gm,
+              recentTurns = recentTurns',
+              continuationView = continuationView',
               transcript = transcriptCtx,
               compartments = compartments',
               historyTurns = historyTurns',
@@ -1073,6 +1102,8 @@ renderContext pi' =
           pi'.now
           pi'.origin
           pi'.compartments
+          pi'.recentTurns
+          pi'.continuationView
           mTranscript
           envText
           memBlock
@@ -1174,7 +1205,10 @@ contextCostModel =
       ccmCompartmentBlockTokens =
         estimateTextTokens
           . T.intercalate "\n"
-          . (\inputs -> renderCompartments inputs.tz inputs.compartments)
+          . (\inputs -> renderCompartments inputs.tz inputs.compartments),
+      -- Include a conservative share of the block header; when the final
+      -- line drops, the whole [recent turns] heading disappears too.
+      ccmRecentTurnTokens = (24 +) . estimateTextTokens
     }
 
 contextTrace :: ContextBudget -> PromptInputs -> [ChatMessage] -> [PolicyDrop] -> Bool -> [ContextTrace]
@@ -1204,6 +1238,16 @@ contextTrace budget inputs messages drops withinBudget =
       0
       (if any ((== TierP4) . (.contextTier)) inputs.compartments then ContextDropped else ContextIncluded)
       "P4 episodes remain searchable and expandable but are omitted from the default prompt",
+    ContextTrace
+      "turn.recent"
+      (sum (map estimateTextTokens inputs.recentTurns))
+      ContextIncluded
+      "recent tool-using durable turns with scoped t# handles",
+    ContextTrace
+      "turn.continuation"
+      (maybe 0 estimateTextTokens inputs.continuationView)
+      ContextIncluded
+      "protected digest for an exact reply to a finished durable turn",
     ContextTrace
       "reply"
       (replyContextTokens inputs.replyCtx)
@@ -1587,6 +1631,8 @@ renderUser ::
   UTCTime -> -- now; the current message carries no timestamp of its own
   TriggerOrigin ->
   [ContextCompartment] ->
+  [Text] -> -- recent durable turn lines, newest first
+  Maybe Text -> -- exact-reply continuation digest
   -- | The conversation transcript, chronological — or 'Nothing' when
   -- it is being emitted as separate turns and the @[recent messages]@
   -- block should not appear here at all.
@@ -1598,7 +1644,7 @@ renderUser ::
   [HistoryItem] -> -- trigger's own forward children (trigger IS a 转发)
   DispatchMessage ->
   Text
-renderUser tz' now' origin' compartments' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
+renderUser tz' now' origin' compartments' recentTurns' continuationView' mTranscript envText mMemBlock replyCtx' pinnedItems' triggerFwd' gm =
   T.intercalate "\n" $
     concat
       [ -- Pinned first so the model sees them as primary context
@@ -1610,6 +1656,12 @@ renderUser tz' now' origin' compartments' mTranscript envText mMemBlock replyCtx
               ""
             ],
         renderCompartments tz' compartments',
+        if null recentTurns'
+          then []
+          else
+            [ "[recent turns — 工作记录，细节用 t# 句柄调 context_expand]",
+              T.intercalate "\n" recentTurns'
+            ],
         case mTranscript of
           Nothing -> []
           Just [] -> ["[recent messages]", "(无历史消息)"]
@@ -1630,6 +1682,7 @@ renderUser tz' now' origin' compartments' mTranscript envText mMemBlock replyCtx
               : renderReplyFiles files
                 <> renderReplyForward tz' kids
                 <> [""],
+        maybe [] (\view -> [view, ""]) continuationView',
         case origin' of
           OriginProactive ->
             [ "[current message — 没人 @ 你，意图识别判断你可能想接话]",

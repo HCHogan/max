@@ -226,6 +226,21 @@ finishAgentTurn ref terminal llmTurns abortReason archive = do
     let (archiveSha, archiveSize, archiveExpiry) = case archive of
           Nothing -> (Nothing, Nothing, Nothing)
           Just (sha, size, expires) -> (Just sha, Just size, Just expires)
+    archiveConversation <- case archive of
+      Nothing -> pure Nothing
+      Just _ -> do
+        -- Serialize archive publication per conversation.  Without this,
+        -- two turns finishing together could each observe 49 live archives
+        -- and commit a 51st row despite the LRU cap.
+        rows <-
+          query
+            "SELECT c.conversation_id FROM conversations c \
+            \JOIN agent_turns t USING (conversation_id) \
+            \WHERE t.turn_id = ? FOR UPDATE OF c"
+            (Only ref.atrTurnId)
+        pure $ case rows :: [Only Int64] of
+          [Only conversationId] -> Just conversationId
+          _ -> error "finishAgentTurn: turn conversation not found"
     -- A cancellation can land after an effect returned but before its result
     -- update committed.  Close any such row in the same transaction as the
     -- terminal checkpoint so an aborted turn never strands state='started'.
@@ -256,6 +271,28 @@ finishAgentTurn ref terminal llmTurns abortReason archive = do
           archiveExpiry,
           ref.atrTurnId
         )
+    case archiveConversation of
+      Nothing -> pure ()
+      Just conversationId -> do
+        -- The stored expiry is the 14-day policy decided by the writer.  This
+        -- transaction enforces both that TTL and the exact 50-turn live LRU
+        -- cap continuously; boot maintenance remains a global safety sweep.
+        _ <-
+          execute
+            "WITH live_ranked AS ( \
+            \  SELECT turn_id, row_number() OVER (ORDER BY trace_archive_created_at DESC, turn_id DESC) AS recency \
+            \  FROM agent_turns WHERE conversation_id = ? \
+            \    AND trace_archive_sha256 IS NOT NULL AND trace_archive_expires_at > now() \
+            \), evicted AS ( \
+            \  SELECT turn_id FROM agent_turns WHERE conversation_id = ? \
+            \    AND trace_archive_sha256 IS NOT NULL AND trace_archive_expires_at <= now() \
+            \  UNION ALL SELECT turn_id FROM live_ranked WHERE recency > 50 \
+            \) \
+            \UPDATE agent_turns t SET trace_archive_sha256=NULL, trace_archive_size_bytes=NULL, \
+            \  trace_archive_created_at=NULL, trace_archive_expires_at=NULL \
+            \FROM evicted WHERE t.turn_id=evicted.turn_id"
+            (conversationId, conversationId)
+        pure ()
     pure ()
 
 ensureAgentTurnCrashed ::

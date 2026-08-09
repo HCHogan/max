@@ -6,6 +6,7 @@ import Data.Set qualified as Set
 import Effectful (liftIO, runEff)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.Tools
+import Max.Turn.Continuity (toolCatalogFingerprint)
 import Test.Hspec
 
 schema :: Value
@@ -100,6 +101,14 @@ spec = describe "validated tool kernel" $ do
     map (.specName) specs `shouldBe` ["read"]
     map (.ctDefinition.tdRef) views `shouldBe` [ToolRef "read"]
     map (.ctSchemaHash) views `shouldSatisfy` notElem (SchemaHash "")
+
+  it "fingerprints catalog metadata deterministically and notices schema versions" $ do
+    let second = readDefinition {tdRef = ToolRef "second"}
+        upgraded = readDefinition {tdSchemaVersion = SchemaVersion 2}
+    toolCatalogFingerprint [readDefinition, second]
+      `shouldBe` toolCatalogFingerprint [second, readDefinition]
+    toolCatalogFingerprint [readDefinition]
+      `shouldNotBe` toolCatalogFingerprint [upgraded]
   where
     isDuplicateDefinition (Left DuplicateToolDefinition {}) = True
     isDuplicateDefinition _ = False

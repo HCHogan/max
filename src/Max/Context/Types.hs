@@ -43,6 +43,13 @@ data PromptInputs = PromptInputs
     session :: !Session,
     -- | The @\@-bot@ message that triggered this turn.
     triggerMessage :: !DispatchMessage,
+    -- | Recent tool-using durable turns, newest first.  Lines carry scoped
+    -- t# handles and are independently removable by ContextPolicy.
+    recentTurns :: ![Text],
+    -- | Host-authored digest for an exact reply continuation.  It is part of
+    -- the selected prompt (rather than appended afterward) so token planning
+    -- and diagnostics account for it.
+    continuationView :: !(Maybe Text),
     -- | One chronological transcript of the conversation: ambient
     -- group chatter and the bot's own thread with people, interleaved
     -- and deduped by message id.

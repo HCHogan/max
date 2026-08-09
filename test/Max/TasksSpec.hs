@@ -22,6 +22,7 @@ import Max.Tasks
     absorbedTriggers,
     attachTask,
     beginDispatch,
+    beginDurableTurnRuntime,
     beginTurnRuntime,
     checkTurnCancellation,
     drainTurnInbox,
@@ -33,12 +34,14 @@ import Max.Tasks
     listTasks,
     newTaskRegistry,
     pushToLatest,
+    pushToAgentTurn,
     pushToTrigger,
     requeueInbox,
     setTurnPhase,
     turnRuntimeTaskId,
   )
 import Max.Platform.Types (CanonicalMessageId (..))
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
@@ -169,6 +172,29 @@ spec = describe "Max.Tasks" $ do
       _ <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
       landed <- pushToTrigger reg gid Nothing Nothing 9999 (Note "点错了" Nothing)
       landed `shouldBe` Nothing
+
+  describe "pushToAgentTurn" $ do
+    it "steers the exact durable producer instead of the newest runtime" $ do
+      reg <- newTaskRegistry
+      let first = AgentTurnRef (AgentTurnId 41) (TurnOrdinal 4)
+          second = AgentTurnRef (AgentTurnId 42) (TurnOrdinal 5)
+      firstRuntime <- beginDurableTurnRuntime reg first gid alice (Just (CanonicalMessageId 7001))
+      threadDelay 2000
+      secondRuntime <- beginDurableTurnRuntime reg second gid bob (Just (CanonicalMessageId 7002))
+      landed <- pushToAgentTurn reg gid Nothing (Just 7050) first (Note "续第一项" Nothing)
+      firstNotes <- drainTurnInbox firstRuntime
+      secondNotes <- drainTurnInbox secondRuntime
+      inflight <- inFlightTriggers reg gid
+      (landed, map (.noteLine) firstNotes, map (.noteLine) secondNotes)
+        `shouldBe` (Just (turnRuntimeTaskId firstRuntime), ["续第一项"], [])
+      inflight `shouldBe` Set.fromList [7001, 7002, 7050]
+
+    it "does not cross groups even when handed the same durable ref" $ do
+      reg <- newTaskRegistry
+      let durable = AgentTurnRef (AgentTurnId 41) (TurnOrdinal 4)
+      _ <- beginDurableTurnRuntime reg durable (GroupId 999) alice (Just (CanonicalMessageId 7001))
+      pushToAgentTurn reg gid Nothing Nothing durable (Note "wrong scope" Nothing)
+        `shouldReturn` Nothing
 
   describe "dispatch tracking" $ do
     it "reports a trigger from entry until release" $ do

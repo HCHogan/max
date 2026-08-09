@@ -18,7 +18,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
-import Control.Monad (forM_, unless, void, when)
+import Control.Monad (forM_, join, unless, void, when)
 import Data.Aeson (Value, encode, toJSON)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
@@ -28,6 +28,7 @@ import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime)
+import Data.Traversable (for)
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, async)
 import Effectful.Exception (SomeException, catch, finally)
@@ -53,6 +54,15 @@ import Max.DB.AgentTurn
     startAgentTurn,
   )
 import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
+import Max.DB.TurnContinuity
+  ( ReplyTurnTarget (..),
+    continuationDigest,
+    recordForkFrom,
+    replyTurnIsFinished,
+    replyTurnIsInFlight,
+    resolveReplyTurn,
+    setAgentTurnEnvironment,
+  )
 import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
 import Max.Dispatch (DispatchMessage (..), dispatchMentionsSelf, dispatchTextWithoutSelf, stripDispatchVerb)
 import Max.Dispatch qualified as Dispatch
@@ -99,7 +109,7 @@ import Max.Platform.Store
     rememberConversationTitle,
   )
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId, ReactionAction (..))
-import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutput, renderCurrentLine, renderHistoryLine)
+import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutputContinuation, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), GroupMeta (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.Session (Session (..), loadSession, readSession)
@@ -117,12 +127,15 @@ import Max.Tasks
     inFlightTriggers,
     listTasks,
     pushToLatest,
+    pushToAgentTurn,
     pushToTrigger,
     setTurnPhase,
     turnRuntimeTaskId,
     turnRuntimeOutputContext,
   )
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
+import Max.Toolset (toolDefinitionsFor)
+import Max.Turn.Continuity (currentPromptMajor, renderContinuationDigest, toolCatalogFingerprint)
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..), TurnOutputContext, nextTurnOutputLink)
 import Max.Util (catchSync, readIntegral, trySync, tshow)
 import OneBot.Action (Action (..))
@@ -1110,7 +1123,23 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
       markAgentTurnRunning durable s.model
-      injected <- tryInjectSupplement outputCaps env s tid
+      replyTarget0 <- case existingTurn of
+        Just _ -> pure Nothing
+        Nothing -> case gm.replyTo of
+          Nothing -> pure Nothing
+          Just target -> resolveReplyTurn (conversationScopeFor gm.groupId) s.clearedAt target
+      steered <- trySteerExactReply outputCaps env tid replyTarget0
+      -- The producer may finish between the durable lookup and the STM
+      -- delivery.  Re-read once so that race becomes a digest continuation,
+      -- not an unclassified ordinary reply.
+      replyTarget <- case (steered, replyTarget0, gm.replyTo) of
+        (False, Just target, Just replyMessage) | replyTurnIsInFlight target ->
+          resolveReplyTurn (conversationScopeFor gm.groupId) s.clearedAt replyMessage
+        _ -> pure replyTarget0
+      injected <-
+        if steered || isJust replyTarget
+          then pure steered
+          else tryInjectSupplement outputCaps env s tid
       if injected
         then do
           archive <- captureTurnArchiveFields durable s.model [] 0 (Just "absorbed into an in-flight turn")
@@ -1123,7 +1152,40 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
           -- trigger builds nothing, and the buffer must survive it) and
           -- not later (buildContext is about to read history).
           for_ mIntent $ \st -> liftIO (clearPendingIntent st gm.groupId)
-          withProcessingReaction outputCaps (dispatch outputCaps turn durable env s)
+          withProcessingReaction outputCaps (dispatch outputCaps turn durable env s (replyTarget >>= finishedTarget))
+      where
+        finishedTarget target
+          | replyTurnIsFinished target = Just target
+          | otherwise = Nothing
+
+    -- Replying to a linked output of a live t# is an exact steer.  No intent
+    -- classifier is allowed to redirect it to whichever task happened to
+    -- start most recently.
+    trySteerExactReply outputCaps env tid = \case
+      Just target | replyTurnIsInFlight target -> do
+        noteAt <- liftIO getCurrentTime
+        let CanonicalMessageId messageId = gm.canonicalId
+            note = Note (renderCurrentLine env.beTimeZone noteAt gm) (Just gm)
+        landed <-
+          liftIO $
+            pushToAgentTurn
+              env.beTasks
+              gm.groupId
+              (Just tid)
+              (Just messageId)
+              target.rttTurn
+              note
+        for_ landed $ \(TaskId into) -> do
+          logInfo "feedback: exact reply steer" $
+            object
+              [ "message_id" .= messageId,
+                "target_turn" .= target.rttTurn.atrTurnOrdinal.unTurnOrdinal,
+                "task" .= into
+              ]
+          when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
+            queueQQReaction gm.groupId gm.canonicalId processingFaceId True
+        pure (isJust landed)
+      _ -> pure False
 
     -- React [托腮] on the trigger while the dispatch runs — a quiet
     -- "seen, working on it" — and clear it once the reply (or
@@ -1231,7 +1293,7 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
                   pure (isJust landed)
         _ -> pure False
 
-    dispatch outputCaps turn durable env s = do
+    dispatch outputCaps turn durable env s continuationTarget = do
       catalog :: ModelCatalog <- ask
       let capabilities = lookupModelCapabilities s.model catalog
           multimodal = maybe False supportsMultimodal capabilities
@@ -1247,9 +1309,34 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
       -- gate that registers the use_skill tool reading the bodies.
       skills <- liftIO (skillsForGroup env.beSkills gm.groupId)
       let skillIndex = [(sk.skillName, sk.skillDescription) | sk <- skills]
+          debugEff = fromMaybe env.beDebugDefault s.debugOverride
+          stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
+          platformStickers = stickersEff && outputCaps.canMedia
+          turnCapabilities = TurnCapabilities multimodal platformStickers (not (null skills)) outputCaps
+          catalogFingerprint = toolCatalogFingerprint (toolDefinitionsFor env gm.groupId turnCapabilities)
+      setAgentTurnEnvironment durable currentPromptMajor catalogFingerprint
+      continuationView <- for continuationTarget $ \target -> do
+        _ <-
+          recordForkFrom
+            (conversationScopeFor gm.groupId)
+            durable
+            target.rttTurn
+            gm.authorPrincipalId
+        now <- liftIO getCurrentTime
+        digestView <-
+          continuationDigest
+            (conversationScopeFor gm.groupId)
+            s.clearedAt
+            gm.canonicalId
+            now
+            currentPromptMajor
+            catalogFingerprint
+            target
+        pure (renderContinuationDigest env.beTimeZone <$> digestView)
       liftIO (setTurnPhase turn "context")
       (ctx, roster) <-
-        buildContextWithReadModeForOutput
+        buildContextWithReadModeForOutputContinuation
+          (join continuationView)
           limits
           (if env.beForceRawContext then RawLedgerEmergency else TieredContext)
           outputCaps
@@ -1264,13 +1351,10 @@ dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions g
           s
           gm
       let recoveredCtx = maybe ctx (`injectRecoveryView` ctx) recoveryView
-          debugEff = fromMaybe env.beDebugDefault s.debugOverride
-          stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
-          platformStickers = stickersEff && outputCaps.canMedia
           toolCtx =
             mkToolContext
-              (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId (turnRuntimeOutputContext turn))
-              (TurnCapabilities multimodal platformStickers (not (null skills)) outputCaps)
+              (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId s.clearedAt (turnRuntimeOutputContext turn))
+              turnCapabilities
           agentCtx = AgentContext toolCtx s.effortOverride
           -- The name→principal map the send path rescues "@显示名" against is
           -- the roster the prompt just showed the model, so the names it may

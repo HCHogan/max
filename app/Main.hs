@@ -28,6 +28,7 @@ import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.AgentTurn (ReclaimedTurns (..), addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
+import Max.DB.TurnContinuity (pruneTurnArchiveReferences)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits, runDurableAgent)
 import Max.Effects.Blob (Blob, runBlob)
@@ -291,6 +292,11 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
     env :: BotEnv <- ask
     let maintenanceOwner = "max/" <> T.pack (show env.beStartedAt) <> "/" <> T.pack (show mainTid)
     reclaimed <- reclaimInterruptedTurns (maintenanceOwner <> "/turn-recovery")
+    archivePruneAt <- liftIO getCurrentTime
+    prunedArchives <- pruneTurnArchiveReferences archivePruneAt
+    when (prunedArchives > 0) $
+      logInfo "turn archives: expired/LRU references pruned" $
+        object ["turns" .= prunedArchives]
     when (reclaimed.rrTurnsPendingResume > 0 || reclaimed.rrTurnsCrashed > 0 || reclaimed.rrExecutionsUnknown > 0) $
       logAttention "durable turn recovery: reclaimed interrupted work" $
         object

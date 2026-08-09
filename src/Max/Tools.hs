@@ -29,6 +29,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (currentConversationRecall)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..), bestName, fetchForwardChildrenInScope, fetchMessageInScope)
+import Max.DB.TurnContinuity (expandTurnTrace)
 import Max.Effects.Embedding (Embedding, embedBatch, renderEmbeddingFault)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.Effects.Tools (Tool (..))
@@ -39,8 +40,9 @@ import Max.DB.Media (MessageMedia, fetchMediaSegments)
 import Max.Prompt (tagMediaMarkers, withMediaHandles)
 import Max.Recall (RecallHit (..), searchRecall)
 import Max.Time (fmtDateHM)
-import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId)
-import Max.Tools.Schema (boundedIntegerParam, integerParam, stringParam, toolObject, withKeys)
+import Max.ToolContext (ToolContext, toolClearedAt, toolConversationScope, toolGroupId)
+import Max.Turn.Types (ParsedTurnHandle (..), parseTurnHandle)
+import Max.Tools.Schema (boundedIntegerParam, integerParam, stringParam, toolObject)
 import Max.Tools.SelfSource (selfSourceTools)
 import OneBot.Action (Action (..), Response (..))
 import OneBot.Types (UserId (..))
@@ -185,13 +187,14 @@ contextExpandTool tz dc =
       toolDescription =
         T.unwords
           [ "展开上下文中的 [episode#<handle>]，读取该摘要对应的原始聊天记录。",
+            "也可展开 [recent turns] 中的 t#<n>，读取该工作回合的规范化执行记录。",
             "handle 只用于定位；每次调用都会按当前会话重新检查权限。",
-            "长 episode 会分页，按返回的 next_after_cursor 继续读取。"
+            "长 episode 或 turn trace 会分页，按返回的 next_after_cursor 继续读取。"
           ],
       toolSchema =
         toolObject
           [ ( "handle",
-              withKeys ["format" .= ("uuid" :: Text)] (stringParam "[episode#<handle>] 标记中的 opaque handle")
+              stringParam "[episode#<uuid>] 或 t#<n> 标记中的 handle"
             ),
             ("after_cursor", integerParam "继续读取时使用上页返回的 next_after_cursor"),
             ("limit", boundedIntegerParam 1 100 40)
@@ -199,9 +202,8 @@ contextExpandTool tz dc =
           ["handle"],
       toolRun = \args -> case parseEither (withObject "args" parseExpandArgs) args of
         Left err -> pure $ Left ("bad args: " <> T.pack err)
-        Right (rawHandle, after, limit) -> case parseEpisodeHandle rawHandle of
-          Nothing -> pure (Left "bad args: handle must be the UUID from an [episode#...] marker")
-          Just handle -> do
+        Right (rawHandle, after, limit) -> case (parseEpisodeHandle rawHandle, parseTurnHandle rawHandle) of
+          (Just handle, _) -> do
             let scope = toolConversationScope dc
             expanded0 <-
               expandEpisode
@@ -213,6 +215,18 @@ contextExpandTool tz dc =
             pure $ case expanded of
               Nothing -> Left "episode not found or not visible in this conversation"
               Just episode -> Right episode
+          (Nothing, Just (ParsedTurn ordinal)) -> do
+            expanded <-
+              expandTurnTrace
+                (toolConversationScope dc)
+                (toolClearedAt dc)
+                ordinal
+                after
+                limit
+            pure $ maybe (Left "turn not found or not visible in this conversation") Right expanded
+          (Nothing, Just ParsedTurnResult {}) ->
+            pure (Left "bad args: pass the t#<n> turn handle, not a t#<n>:r<m> result handle")
+          _ -> pure (Left "bad args: handle must be an episode UUID or t#<n>")
     }
   where
     parseExpandArgs o =

@@ -2,13 +2,15 @@ module Max.DB.AgentTurnSpec (spec) where
 
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (bracket, try)
+import Control.Monad (forM, forM_)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int64)
 import Data.List (sort)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (addUTCTime)
+import Data.Time (addUTCTime, getCurrentTime, utc)
 import Database.PostgreSQL.Simple (Only (..), SqlError, execute, query)
 import Effectful (Eff, IOE, runEff)
 import Effectful.PostgreSQL (WithConnection)
@@ -16,12 +18,14 @@ import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
+import Max.DB.TurnContinuity
 import Max.DB.Connection (DbPool, withConn)
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob, runBlob)
 import Max.IR (Body (..), Node (NText))
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Types
+import Max.Turn.Continuity (TurnDigest (..), currentPromptMajor, renderContinuationDigest)
 import OneBot.Types (GroupId (..))
 import System.Directory
   ( createDirectory,
@@ -255,13 +259,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
       reclaimed.rrRecoveries
         `shouldBe` [AgentTurnRecovery fixture.fxTurn fixture.fxGroup fixture.fxTrigger]
 
+      now <- getCurrentTime
       withDb pool $
         finishAgentTurn
           fixture.fxTurn
           TurnSucceeded
           2
           Nothing
-          (Just (blobRefSha256 blob, 30, addUTCTime 3600 testTime))
+          (Just (blobRefSha256 blob, 30, addUTCTime 3600 now))
       archiveAfter <- withConn pool $ \connection ->
         query
           connection
@@ -272,6 +277,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
 
   it "publishes usage, terminal status, and trace archive metadata idempotently" $ do
     fixture <- createFixture pool 42 1001
+    now <- getCurrentTime
     withDb pool $ do
       recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
       recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
@@ -282,7 +288,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         TurnSucceeded
         1
         Nothing
-        (Just (T.replicate 64 "a", 1234, addUTCTime 3600 testTime))
+        (Just (T.replicate 64 "a", 1234, addUTCTime 3600 now))
       ensureAgentTurnCrashed fixture.fxTurn "late finalizer"
     rows <- withConn pool $ \connection ->
       query
@@ -363,6 +369,154 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     view <- withDb pool (recoveryViewForTurn fixture.fxTurn)
     view `shouldSatisfy` T.isInfixOf "observation="
     view `shouldSatisfy` T.isInfixOf "file_count"
+
+  it "projects worked turns, expands t# in scope, and obeys !clear" $ do
+    fixture <- createFixture pool 42 1001
+    execution <-
+      withDb pool $
+        startJournalExecution fixture.fxTurn (journalStart "call-expand" "sandbox_exec")
+    withTemporaryBlobRoot $ \blobRoot ->
+      withDbBlob pool blobRoot $
+        finishJournalExecution execution (JournalCommitted (object ["ok" .= True, "path" .= ("/work/out.png" :: Text)]))
+    sent <- withDb pool (enqueueOutbound (outbound fixture (TurnOutputLink fixture.fxTurn.atrTurnId 0) "画了销量周环比图\n已保存"))
+    withDb pool $ do
+      setAgentTurnEnvironment fixture.fxTurn currentPromptMajor (T.replicate 64 "c")
+      finishAgentTurn fixture.fxTurn TurnSucceeded 2 Nothing Nothing
+    now <- getCurrentTime
+    recent <- withDb pool (recentTurnDigests (conversationScopeFor fixture.fxGroup) Nothing now)
+    map (.tdTurnOrdinal) recent `shouldBe` [fixture.fxTurn.atrTurnOrdinal]
+    map (.tdLastOutputId) recent `shouldBe` [Just sent.canonicalMessageId.unCanonicalMessageId]
+
+    expanded <-
+      withDb pool $
+        expandTurnTrace (conversationScopeFor fixture.fxGroup) Nothing fixture.fxTurn.atrTurnOrdinal Nothing 40
+    expanded `shouldSatisfy` isJust
+
+    otherSeed <- createSeed pool 43 2001
+    crossConversation <-
+      withDb pool $
+        expandTurnTrace (conversationScopeFor otherSeed.fxGroup) Nothing fixture.fxTurn.atrTurnOrdinal Nothing 40
+    crossConversation `shouldBe` Nothing
+
+    clearedAt <- getCurrentTime
+    hiddenRecent <- withDb pool (recentTurnDigests (conversationScopeFor fixture.fxGroup) (Just clearedAt) now)
+    hiddenExpand <-
+      withDb pool $
+        expandTurnTrace (conversationScopeFor fixture.fxGroup) (Just clearedAt) fixture.fxTurn.atrTurnOrdinal Nothing 40
+    hiddenReply <-
+      withDb pool $
+        resolveReplyTurn (conversationScopeFor fixture.fxGroup) (Just clearedAt) sent.canonicalMessageId
+    (hiddenRecent, hiddenExpand, hiddenReply) `shouldBe` ([], Nothing, Nothing)
+
+  it "resolves reply linkage, writes scoped U -> T provenance, and builds a deterministic digest delta" $ do
+    source <- createFixture pool 42 1001
+    execution <-
+      withDb pool $
+        startJournalExecution source.fxTurn (journalStart "call-source" "sandbox_exec")
+    withTemporaryBlobRoot $ \blobRoot ->
+      withDbBlob pool blobRoot $
+        finishJournalExecution execution (JournalCommitted (object ["ok" .= True]))
+    sent <- withDb pool (enqueueOutbound (outbound source (TurnOutputLink source.fxTurn.atrTurnId 0) "初版完成"))
+    withDb pool $ do
+      setAgentTurnEnvironment source.fxTurn currentPromptMajor (T.replicate 64 "d")
+      finishAgentTurn source.fxTurn TurnSucceeded 1 Nothing Nothing
+
+    currentAt <- getCurrentTime
+    currentCanonical <- insertRawMessage pool 1002 42 1042 9 currentAt (Just "Alice") "继续把图改成深色"
+    [Only currentPrincipal] <- withConn pool $ \connection ->
+      query connection "SELECT author_principal_id FROM messages WHERE canonical_message_id=?" (Only currentCanonical)
+    fresh <- withDb pool (startAgentTurn source.fxGroup (CanonicalMessageId currentCanonical) (PrincipalId currentPrincipal))
+    resolved <-
+      withDb pool $
+        resolveReplyTurn (conversationScopeFor source.fxGroup) Nothing sent.canonicalMessageId
+    target <- maybe (expectationFailure "linked output did not resolve" >> error "unreachable") pure resolved
+    target.rttTurn `shouldBe` source.fxTurn
+    target `shouldSatisfy` replyTurnIsFinished
+
+    inserted <-
+      withDb pool $
+        recordForkFrom (conversationScopeFor source.fxGroup) fresh source.fxTurn (PrincipalId currentPrincipal)
+    inserted `shouldBe` True
+    edgeRows <- withConn pool $ \connection ->
+      query
+        connection
+        "SELECT from_turn_id, to_turn_id, edge_kind FROM turn_edges"
+        ()
+    (edgeRows :: [(AgentTurnId, AgentTurnId, Text)])
+      `shouldBe` [(fresh.atrTurnId, source.fxTurn.atrTurnId, "fork-from")]
+
+    other <- createFixture pool 43 2001
+    denied <-
+      withDb pool $
+        recordForkFrom (conversationScopeFor source.fxGroup) fresh other.fxTurn (PrincipalId currentPrincipal)
+    denied `shouldBe` False
+
+    live <- createFixture pool 42 1003
+    liveDenied <-
+      withDb pool $
+        recordForkFrom (conversationScopeFor source.fxGroup) fresh live.fxTurn (PrincipalId currentPrincipal)
+    liveDenied `shouldBe` False
+
+    now <- getCurrentTime
+    digestView <-
+      withDb pool $
+        continuationDigest
+          (conversationScopeFor source.fxGroup)
+          Nothing
+          (CanonicalMessageId currentCanonical)
+          now
+          currentPromptMajor
+          (T.replicate 64 "d")
+          target
+    rendered <- maybe (expectationFailure "continuation digest missing" >> pure "") (pure . renderContinuationDigest utc) digestView
+    rendered `shouldSatisfy` T.isInfixOf "host digest; no archived provider-wire replay"
+    rendered `shouldSatisfy` T.isInfixOf "sandbox_exec"
+    rendered `shouldSatisfy` T.isInfixOf "工具目录 无变化"
+
+  it "logically evicts expired archives and enforces the per-conversation LRU cap" $ do
+    seed <- createSeed pool 42 1001
+    turns <- forM [1 .. 52 :: Int] $ \_ ->
+      withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal)
+    let base = testTime
+        pruneAt = addUTCTime 1000 base
+    forM_ (zip [1 ..] turns) $ \(index :: Int, turn) -> do
+      let created = addUTCTime (fromIntegral index) base
+          expires
+            | index == 52 = addUTCTime (-1) pruneAt
+            | otherwise = addUTCTime (30 * 86400) pruneAt
+      _ <- withConn pool $ \connection ->
+        execute
+          connection
+          "UPDATE agent_turns SET trace_archive_sha256=?, trace_archive_size_bytes=1, \
+          \ trace_archive_created_at=?, trace_archive_expires_at=? WHERE turn_id=?"
+          (T.replicate 64 "e", created, expires, turn.atrTurnId)
+      pure ()
+    pruned <- withDb pool (pruneTurnArchiveReferences pruneAt)
+    remaining <- withConn pool $ \connection ->
+      query connection "SELECT count(*) FROM agent_turns WHERE trace_archive_sha256 IS NOT NULL" ()
+    pruned `shouldBe` 2
+    (remaining :: [Only Int64]) `shouldBe` [Only 50]
+
+  it "enforces the live archive cap as terminal checkpoints commit" $ do
+    seed <- createSeed pool 42 1001
+    turns <- forM [1 .. 51 :: Int] $ \_ ->
+      withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal)
+    now <- getCurrentTime
+    _ <-
+      mapConcurrently
+        ( \turn ->
+            withDb pool $
+              finishAgentTurn
+                turn
+                TurnSucceeded
+                1
+                Nothing
+                (Just (T.replicate 64 "f", 1, addUTCTime (14 * 86400) now))
+        )
+        turns
+    remaining <- withConn pool $ \connection ->
+      query connection "SELECT count(*) FROM agent_turns WHERE trace_archive_sha256 IS NOT NULL" ()
+    (remaining :: [Only Int64]) `shouldBe` [Only 50]
 
 createSeed :: DbPool -> Int64 -> Int64 -> IO Fixture
 createSeed pool group messageId = do

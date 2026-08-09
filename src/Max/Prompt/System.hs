@@ -142,6 +142,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
                \你自己以前说的话也在这份记录里，名字是 Max——那是记录格式，不是说话方式：\
                \你的回复正文直接写内容，绝对不要带这个行首前缀。",
            "  [episode#<uuid> 日期..日期 P1/P2/P3] — 更早聊天的可重建摘要；需要原话时把 uuid 传给 context_expand。",
+           "  t#<n>                              — 最近完成的工作回合；需要工具轨迹、结果或失败信息时把完整 t#<n> 传给 context_expand。",
            "  [reply quoted ...]               — 用户引用的那条消息（内容已展开；也可用 get_message_by_id 展开任意 id）",
            "  [card: 来源 | 标题 | 链接]     — 分享卡片；B站卡用 view_bilibili、知乎卡用 view_zhihu，传链接看内容",
            "  [file:<name>]                — 群文件；用 import_file_to_sandbox 处理",

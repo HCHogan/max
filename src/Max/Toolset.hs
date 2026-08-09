@@ -152,7 +152,7 @@ toolInventory =
   [ always (readTool "inspect_source" ["self.source"] [ProcessResource "self-source"]),
     always (readTool "get_message_by_id" ["conversation.db"] [CurrentConversation]),
     always (llmReadTool "context_search" ["conversation.db"] [CurrentConversation]),
-    always (readTool "context_expand" ["conversation.db"] [CurrentConversation]),
+    always (readToolV 2 "context_expand" ["conversation.db"] [CurrentConversation]),
     always (readTool "view_forward" ["conversation.db"] [CurrentConversation]),
     always (sendTool "poke" "chat.endpoint"),
     always (writeTool "set_reminder" ["reminder.db"] [CurrentConversation]),
@@ -213,6 +213,10 @@ definition name effects parallelism retry authorities =
 readTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
 readTool name domains =
   definition name (map EffectRead domains) ParallelSafe RetrySafe
+
+readToolV :: Int -> Text -> [Text] -> [ToolAuthority] -> ToolDefinition
+readToolV version name domains authorities =
+  (readTool name domains authorities) {tdSchemaVersion = SchemaVersion version}
 
 statefulReadTool :: Text -> [Text] -> [ToolAuthority] -> ToolDefinition
 statefulReadTool name domains =
