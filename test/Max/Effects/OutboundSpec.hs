@@ -23,7 +23,8 @@ request =
       orGroupId = GroupId 7777,
       orBody = Body [NText "surface"],
       orReplyTo = Nothing,
-      orDeliveryScope = DeliverConversation
+      orDeliveryScope = DeliverConversation,
+      orTurnOutput = Nothing
     }
 
 spec :: Spec

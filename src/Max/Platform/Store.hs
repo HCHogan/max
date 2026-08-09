@@ -35,6 +35,7 @@ module Max.Platform.Store
     DispatchCompletion (..),
     claimDispatches,
     claimDispatch,
+    loadDispatchClaim,
     completeDispatch,
     OutboundDraft (..),
     EnqueuedOutbound (..),
@@ -118,6 +119,7 @@ import Max.IR.Prompt (promptCanonicalText, systemEventText)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.Types
+import Max.Turn.Types (AgentTurnId (..), TurnOutputLink (..))
 import Text.Read (readMaybe)
 
 newtype Jsonb = Jsonb Value
@@ -353,7 +355,10 @@ data OutboundDraft = OutboundDraft
     -- addressed to a real account before publishing, so publication never
     -- mints an identity for a number a model invented.
     canonicalBody :: !(Body 'Canonical),
-    replyToCanonicalMessageId :: !(Maybe Int64)
+    replyToCanonicalMessageId :: !(Maybe Int64),
+    -- | L3 provenance for agent-authored output; absent for commands,
+    -- reminders, mirroring and other non-turn publication.
+    turnOutputLink :: !(Maybe TurnOutputLink)
   }
   deriving stock (Eq, Show)
 
@@ -1352,14 +1357,15 @@ enqueueOutbound draft = withTransaction $ do
   replyTarget <- resolveReplyProjections conversation draft.replyToCanonicalMessageId
   let replyCanonical = fst <$> replyTarget
       replyCompatibility = snd <$> replyTarget
+      (agentTurnId, turnChunkIndex) = turnOutputColumns draft.turnOutputLink
   inserted <-
     execute
       "INSERT INTO messages \
       \ (canonical_message_id, message_id, group_id, user_id, self_id, segments, canonical_content, \
       \  rendered_text, raw_message, sender_nickname, reply_to_message_id, reply_to_canonical_message_id, \
       \  kind, conversation_id, author_principal_id, origin_endpoint_id, source_native_event_id, \
-      \  occurred_at, message_origin, source_platform) \
-      \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'max', ?, ?, ?, ?, ?, ?, ?, now(), 'outbound', ?)"
+      \  agent_turn_id, turn_chunk_index, occurred_at, message_origin, source_platform) \
+      \ VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 'max', ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), 'outbound', ?)"
       ( canonical,
         compatibilityMessage,
         draft.legacyConversationId,
@@ -1375,6 +1381,8 @@ enqueueOutbound draft = withTransaction $ do
         principal,
         primaryEndpoint,
         "max:" <> T.pack (show canonical),
+        agentTurnId,
+        turnChunkIndex,
         platformName
       )
   when (inserted /= 1) (error "enqueueOutbound: canonical insert did not affect one row")
@@ -1499,14 +1507,15 @@ recordInternalMessage draft = withTransaction $ do
       replyTarget <- resolveReplyProjections conversation draft.replyToCanonicalMessageId
       let replyCanonical = fst <$> replyTarget
           replyCompatibility = snd <$> replyTarget
+          (agentTurnId, turnChunkIndex) = turnOutputColumns draft.turnOutputLink
       inserted <-
         execute
           "INSERT INTO messages \
           \ (canonical_message_id, message_id, group_id, user_id, self_id, segments, canonical_content, \
           \  rendered_text, raw_message, sender_nickname, reply_to_message_id, reply_to_canonical_message_id, \
           \  kind, conversation_id, author_principal_id, origin_endpoint_id, source_native_event_id, \
-          \  occurred_at, message_origin, source_platform) \
-          \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, ?, '', 'max', ?, ?, ?, ?, ?, ?, ?, now(), 'internal', ?)"
+          \  agent_turn_id, turn_chunk_index, occurred_at, message_origin, source_platform) \
+          \ VALUES (?, ?, ?, ?, ?, '[]'::jsonb, ?, ?, '', 'max', ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), 'internal', ?)"
           ( canonical,
             compatibilityMessage,
             draft.legacyConversationId,
@@ -1521,6 +1530,8 @@ recordInternalMessage draft = withTransaction $ do
             principal,
             primaryEndpoint,
             sourceKey,
+            agentTurnId,
+            turnChunkIndex,
             platformName
           )
       when (inserted /= 1) (error "recordInternalMessage: canonical insert did not affect one row")
@@ -1539,6 +1550,11 @@ recordInternalMessage draft = withTransaction $ do
           (Only canonical)
       pure (CanonicalMessageId canonical)
     _ -> error "recordInternalMessage: duplicate source key invariant violated"
+
+turnOutputColumns :: Maybe TurnOutputLink -> (Maybe AgentTurnId, Maybe Int)
+turnOutputColumns = \case
+  Nothing -> (Nothing, Nothing)
+  Just link -> (Just link.tolTurnId, Just link.tolChunkIndex)
 
 -- | Publish a reaction action and its capable endpoint copies atomically.
 -- Unsupported platforms and targets with no native copy are intentionally a
@@ -1761,6 +1777,33 @@ claimDispatch workerId (CanonicalMessageId canonical) leaseDuration = do
   claims <-
     claimDispatchWhere workerId (Just canonical) 1 leaseDuration
   pure (listToMaybe claims)
+
+-- | Rehydrate the immutable canonical trigger for an already-admitted durable
+-- agent turn.  This does not touch message_dispatches: the original dispatch
+-- eligibility was committed before the turn began, and restart recovery owns
+-- the existing turn rather than admitting the message a second time.
+loadDispatchClaim ::
+  (WithConnection :> es, IOE :> es) =>
+  CanonicalMessageId ->
+  Eff es (Maybe DispatchClaim)
+loadDispatchClaim (CanonicalMessageId canonical) = do
+  rows <-
+    query
+      "SELECT m.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
+      \       m.author_principal_id, self_identity.principal_id, \
+      \       m.canonical_content, m.origin_endpoint_id, m.reply_to_canonical_message_id, \
+      \       m.source_platform, m.sender_nickname, 0 \
+      \ FROM messages m \
+      \ JOIN conversation_endpoints origin_endpoint \
+      \   ON origin_endpoint.endpoint_id = m.origin_endpoint_id \
+      \ JOIN platform_accounts origin_account \
+      \   ON origin_account.platform_account_id = origin_endpoint.platform_account_id \
+      \ JOIN principal_identities self_identity \
+      \   ON self_identity.platform_account_id = origin_endpoint.platform_account_id \
+      \  AND self_identity.native_user_id = origin_account.native_account_id \
+      \ WHERE m.canonical_message_id = ?"
+      (Only canonical)
+  pure (toDispatchClaim <$> listToMaybe (rows :: [DispatchClaimRow]))
 
 claimDispatchWhere ::
   (WithConnection :> es, IOE :> es) =>

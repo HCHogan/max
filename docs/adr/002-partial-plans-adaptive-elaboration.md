@@ -8,7 +8,9 @@
   machine's front.
 - Date: 2026-08-03; journal contract and post-cutover revisions 2026-08-05;
   sandbox observability, narrator, and continuity (ADR 005)
-  cross-references 2026-08-06.
+  cross-references 2026-08-06; elaboration surface, pull-based hole
+  views, harness-write effects, and monitor trigger provenance (ADR 006)
+  2026-08-09.
 
 ## Context
 
@@ -72,6 +74,7 @@ The following types are illustrative rather than a committed Haskell API:
 data Goal env a = Goal
   { objective      :: Text
   , expected       :: Schema a
+  , acceptance     :: [VerifierRef a]
   , allowedEffects :: EffectBudget
   , authority      :: AuthorityClass
   , contextDeps    :: DependencySet
@@ -92,6 +95,34 @@ must not collapse every binding to an unchecked JSON `Value`, even if its first
 implementation uses reified JSON schemas internally. An elaborated replacement
 must type-check against the exact environment and result expected by its hole.
 
+`Expr` and `Predicate` are not escape hatches. They form a versioned, total,
+pure expression language with no I/O, recursion, unbounded iteration, or host
+calls. Its initial vocabulary is deliberately boring: constructors, field and
+index projection, comparison, boolean composition, and bounded collection
+combinators with a static cost model. General computation remains an explicit
+coarse sandbox `Call` (or a future `Compute` node) whose limits and effects the
+validator can see; it is never smuggled through an expression evaluator.
+
+Likewise, `Done` produces a candidate result, not proof that the objective was
+met. A goal completes only when the value matches `expected` and its
+host-resolved acceptance verifiers pass. Exhausted elaboration, execution,
+token, or wall-clock fuel suspends or budget-exhausts the goal; it never turns
+an unfinished value into success. The first short-plan slice may use an empty
+verifier list, but the distinction is part of the IR before durable goals or
+monitors depend on it.
+
+`VerifierRef` names a host-registered, versioned verifier with its own
+schema, dependency fingerprint, effect declaration, timeout, and output
+limit. The model may select only verifiers admitted by the enclosing
+goal; emitting shell text does not create a quality gate. Pure verifiers
+run in the host's completion checker, while an effectful gate uses the ordinary
+journaled tool boundary. An unavailable, stale, failed, or outcome-unknown
+verifier cannot certify completion. A failed verifier re-holes the goal
+with its bounded output as scoped, taint-carrying evidence and consumes the
+ordinary elaboration-attempt fuel. This is the general deoptimization path for
+an invalid postcondition, not the `Guard False` path: a valid false predicate
+merely selects the Plan's alternate branch.
+
 Plans contain stable `ToolRef`s, expressions, bindings, and node ids—not the
 current `Tool es` runner closure. Real execution resolves a reference through a
 dedicated plan-tool execution boundary backed by the existing `Tools` effect.
@@ -103,6 +134,19 @@ remain one deliberately coarse capability boundary, but hidden effects inside
 an opaque script cannot be advertised as statically inferred fine-grained
 effects. That conservatism binds only the declaration layer; what an exec
 *did* touch is separately observable after the fact (its own section below).
+
+The executable form and the authoring surface are separate decisions,
+and only the first is fixed above. The concrete syntax in which a model
+*emits* an elaboration should be a small, restricted, pseudo-code DSL
+whose total parser returns either the whole IR or a rejection — never a
+partially interpreted plan. RLM-style harnesses of mid-2026 show that
+frontier models can use a native programmatic register effectively, but
+they do not by themselves prove that this restricted dialect is more
+reliable than a schema-shaped AST. That is an implementation hypothesis
+the recorded replay set must test. Nothing in the conservatism above
+moves: the DSL admits exactly the IR's constructs, the validator sees
+only the parsed plan, and a failed parse is an ordinary elaboration
+failure, not a license for looser interpretation.
 
 ### Existing tool calling is the fallback policy
 
@@ -150,6 +194,42 @@ The initial policy mapping is:
 | Current tool loop | after each result-dependent step | full capped turn trace |
 | Dynamic partial plan | next semantic/authority frontier | compact trace plus selected evidence |
 | Code-style segment | farthest verified frontier | schema, request, and explicit dependencies |
+
+`renderView` is a push-pull contract, not a host-side guess. The pushed
+half is a bounded digest: the goal, selected evidence, an aggregate of
+older completed work, and a fixed-size recent-node suffix. The pulled
+half is addressable: a journal result or turn record that is both in
+scope and useful to the model may render as a canonical handle under an
+extended ADR 004 grammar. The current `context_expand` implements only
+the episode namespace; `t#` (ADR 005) and a result namespace are future
+members of the same scoped expansion surface, not present capabilities.
+
+A result handle is syntax, never authority and never the Plan's typed
+binding. It resolves under the current conversation, structured resource,
+and information-flow scopes to a `ValueRef a` carrying at least the
+producing journal row (and Plan node when one exists), output schema,
+provenance/taint, owning scope, content digest and length, representation
+metadata, and retention state. The handle is turn-qualified rather than a
+bare plan-local `node_id` or a
+content digest: the same template node can run in more than one turn,
+and the same bytes can occur in more than one conversation, but
+`t#<n>:r<execution_ordinal>` names exactly one result-bearing journal row
+within its group.
+The physical `BlobRef` stays internal. When parsed into a candidate
+Plan, a result handle becomes a `ValueRef` only after the validator
+proves its scope and exact schema against the receiving binding.
+
+Pulls are read-only and grant zero new authority, but they are not
+zero-cost: they consume I/O, context tokens, and usually an LLM round.
+One `↝λ` therefore runs as a bounded elaboration session: render the
+digest, service a limited number of scoped inspect/expand requests, then
+parse and validate one candidate segment. The session has separate
+round, byte, token, and wall-clock fuel, and the host records the actual
+read-set as the hole's `contextDeps`. A dependency that changes during
+the session invalidates the candidate before execution. The host still
+chooses and prices the bounded digest; pull removes the need to predict
+the exact evidence set, not the host's responsibility for scope or
+budget.
 
 “Infinite horizon” is not a configuration value. It means that validation found
 no earlier frontier. Different horizons may produce different model decisions
@@ -236,20 +316,44 @@ arbitrary external effect the outbound ledger never sees. Recording the
 network mode makes the exposure visible per row; closing it (default
 `none`, per-sandbox egress grants, or an egress proxy) is authority work
 deferred post-1.0. Until then the effect vocabulary's send story is
-honest only for ledger sends.
+honest only for ledger sends. The deferral is dated, not open-ended: the
+code-mode evidence (see the rejected alternatives) pushes more work into
+the sandbox over time, so this hole should be first in line once v1.0
+converges. ADR 006's `ExternalPoll` is a distinct host-managed network
+effect: it must record its target, redirect/credential policy, response
+digest, and outcome through the journal and need not reuse sandbox
+mechanics. Holding that feature until ungoverned sandbox egress is closed
+may still be a deliberate defense-in-depth release policy; it is not a
+claim that a scoped host probe and an ambient sandbox `curl` are
+semantically indistinguishable.
 
 ### The journal contract (v1.0 slice)
 
 The execution journal is shared infrastructure, not part of the deferred
-machine. It has six consumers: the horizon-1 production loop (durability
+machine. Its consumers include the horizon-1 production loop (durability
 roadmap L2–L4, issue #14), crash-resume replay, the tool-trace digest,
 the narrator (its own section below), the continuation view (ADR 005),
-and — later — this ADR's executor. **It ships with v1.0; the machine does
-not.** At horizon 1 the plan is absorbed into the trace, so the loop needs
-no `Plan` type to write conforming rows; it needs only this schema.
+monitor arm/fire audit (ADR 006), and — later — this ADR's executor. **It
+ships with v1.0; the machine does not.** At horizon 1 the plan is absorbed
+into the trace, so the loop needs no `Plan` type to write conforming rows;
+it needs only this schema. A monitor's mutable current state remains in
+its own table; the journal records its effects and history rather than
+becoming the scheduler's state store.
 
 Rows are normalized execution events, never provider wire messages:
 
+- `journal_id` is the canonical row key and stays internal. Each turn-owned
+  execution or input instance also receives a persisted, per-turn
+  `execution_ordinal`, immutable across that row's state updates, with `UNIQUE
+  (turn_id, execution_ordinal)`. A retry or repeated Plan node that creates a
+  new row receives a new ordinal; `node_id` remains the logical identity.
+  Under ADR 004's scoped-runtime amendment, the model-visible result handle is the
+  alternate key `t#<turn_ordinal>:r<execution_ordinal>`. Resolution supplies
+  the current conversation, resolves the persisted turn ordinal, then the
+  execution ordinal, and rechecks resource and information-flow scope. Rows
+  without results do not render a result handle. This scoped form is an
+  ownership/provenance choice, not a claim that ADR 004 forbids dense global
+  ids.
 - `node_id` is stable text identity. The horizon-1 loop writes
   `turn:<turn_id>:<step>`; a future plan executor writes Plan-hash-derived
   ids into the same column, with `plan_hash` nullable and empty at horizon
@@ -261,6 +365,17 @@ Rows are normalized execution events, never provider wire messages:
 - conservative host-assigned effect labels from the `PlanEffect`
   vocabulary;
 - guard/validation decisions and the elaboration or deoptimization reason.
+
+Large results spill uniformly, not only for the sandbox: a result
+exceeding its inline cap lands as a scoped artifact. The journal row
+retains its `ValueRef` metadata and internal blob reference, while the
+model sees only the result handle described above. The resolver reads
+through the producing row, rechecks current scope, and returns a bounded
+typed view; it never treats possession of a blob digest as authority.
+Artifacts required by a live turn or durable Plan are retained for that
+lifetime. A missing or expired artifact is a stale dependency that
+re-holes the Plan, not an invitation to execute with an empty value. The
+journal remains the durable audit/index; the artifact store owns bytes.
 
 Alongside effect nodes the journal carries zero-authority fact rows:
 `model_note` records the model's in-band tool-round narration as evidence
@@ -319,21 +434,22 @@ Process death is a Fault like any other. Recovery re-holes the plan at the
 crash point with the journal's facts in the hole's view: completed
 results, committed sends, and outcome-unknown tool states — whose view
 text is exactly the durability roadmap's
-`[工具执行状态未知：服务重启]` injection. Guard failure, operator
-feedback, and crash therefore share one deopt path, and the horizon-1 loop
-exercises that path in production before the machine ever raises the
-horizon.
+`[工具执行状态未知：服务重启]` injection. An invalid guard evaluation or
+failed validated postcondition, operator feedback, and crash therefore share
+one deopt path; a valid `Guard False` still takes its ordinary alternate branch.
+The horizon-1 loop exercises the deopt path in production before the machine
+ever raises the horizon.
 
 Resume granularity is the turn, by construction: "continue exactly where
 the model was" is a false concept for a nondeterministic elaborator. What
 must be exact is the effect state, and that lives in the journal and the
 ledger.
 
-A generic fault must not become `reHole` and replay. Only a guard failure,
-pre-effect rejection, invalid result shape, process death, or other
-known-safe suspension may deopt directly. Committed and outcome-unknown
-effects resume after the recorded node; compensation is explicit workflow
-logic rather than an implicit retry.
+A generic fault must not become `reHole` and replay. Only an invalid guard
+evaluation, a failed validated postcondition, pre-effect rejection, invalid
+result shape, process death, or other known-safe suspension may deopt directly.
+Committed and outcome-unknown effects resume after the recorded node;
+compensation is explicit workflow logic rather than an implicit retry.
 
 Elaboration and execution have separate fuel. Elaboration fuel prevents a
 `deopt → elaborate → fail` loop; execution budgets bound nodes, loops, fan-out,
@@ -394,7 +510,9 @@ this section describes its executor-side mechanics.)
 
 Other deoptimization triggers include:
 
-- guard or result-schema failure;
+- a guard that cannot be evaluated within its validated schema/cost contract
+  (a valid false predicate merely selects its branch), result-schema failure,
+  or acceptance-verifier failure;
 - tool catalog, skill, policy, or prompt version change;
 - stale context dependencies;
 - a newly discovered capability;
@@ -444,11 +562,25 @@ addressable journal value, so a depend edge is one row in the same
 journal — cross-turn dependencies are crash-safe by construction. A failed
 or timed-out dependency needs no new mechanism: it is one more attributed
 fact in the dependent hole's view, and the model decides whether to
-abandon or reroute — the same deopt path as guard failure, crash, and
-feedback. Cycle detection runs at edge creation and fails closed. Parent
-`Spawn` edges and sibling depend/fork edges are two kinds in one
+abandon or reroute — the same deopt path as an invalid guard/postcondition,
+crash, and feedback. Cycle detection runs at edge creation and fails closed.
+Parent `Spawn` edges and sibling depend/fork edges are two kinds in one
 `turn_edges` table; the child-plan section below becomes a special case of
 the turn graph.
+
+A monitor (ADR 006) is a deferred continuation, but a world event is not
+smuggled into `turn_edges`: that table continues to relate turns only.
+Arming persists the intent (goal, typed trigger spec, effect ceiling).
+On fire, the durable `monitor_fire` row names the triggering ledger row,
+clock tick, or polled observation and links the fresh turn it admitted;
+the fresh turn writes `fork-from` to the arming turn when one exists.
+The fire record supplies trigger evidence to the initial view while the
+turn edge supplies task provenance. Execution and deoptimization after
+admission reuse the ordinary machinery; durable trigger evaluation,
+deduplication, and admission remain ADR 006's explicit responsibility.
+For `ExternalPoll`, ADR 006 materializes the admitted observation as an
+immutable, turn-owned `trigger_input` result row; its result handle therefore
+still names a producer inside the fresh turn rather than the pre-turn poll.
 
 **Authority and arbitration split.** The host decides *who may create
 which edge* to whose turn, through the existing role layers (abort
@@ -486,6 +618,32 @@ authority, effect budget, cancellation scope, and tool catalog. It returns a
 typed value plus provenance to the parent; hidden child context does not become
 ambient parent context.
 
+Turns and children are host-owned actor endpoints, not social
+principals. A child has no independent human authority: its host-minted
+`AgentRef` carries an explicit subset of the parent's conversation
+scope, tool catalog, information-flow clearance, and effect ceiling.
+Attribution always names the human principal whose delegated authority
+the actor is consuming.
+
+Four events stay distinct. `Spawn` admits a child and creates the parent
+edge; `depend` subscribes a consumer to a producer's typed future; a
+completion event fulfills that future with a value plus provenance; and
+`steer`/`annotate` delivers an attributed fact through the target's own
+inbox abstraction. Completion is not a new dependency edge, and actors
+never share an inbox object. A short structured `Fork`/`Join` inside one
+Plan is likewise separate from a durable child turn: waiting on the
+latter suspends the consumer and resumes it from the fulfillment fact
+instead of keeping a worker blocked.
+
+The family registry makes parent, child, and sibling addresses
+discoverable; it grants no communication authority by itself. Parent ↔
+child messaging may follow capabilities minted at spawn. A sibling edge
+requires an explicit parent-granted recipient capability plus the same
+scope, taint, rate, and effect checks as every other cross-context flow;
+otherwise it could bypass the narrowed views that justified child plans
+in the first place. Cross-family and cross-conversation edges remain
+refused at the host boundary.
+
 Parallel execution is an additional policy layered on that boundary. It
 requires explicit resource ownership, fan-out limits, deterministic result
 collection, and cancellation semantics. `Spawn` and unbounded `Foreach` are not
@@ -499,40 +657,91 @@ templates. Its key must include at least:
 
 - normalized goal and expected schema;
 - tool catalog/schema hash;
-- policy, validator, prompt, and model-family versions;
+- policy, validator, prompt, elaboration-surface, and model capability
+  profile versions;
 - effect ceiling and authority class;
-- declared context dependency fingerprint.
+- declared template dependencies plus the instantiated, host-observed
+  context read-set fingerprint.
 
 A template is instantiated with current scoped values and revalidated on every
 use. A context-bearing plan instance is never reused across conversations.
 Natural-language Goal text alone is not a safe or useful cache identity.
+
+### Self-refinement is a journaled effect
+
+Skills, prompt notes, plan templates, and (later) child-agent specs form
+the harness state: durable objects that shape every future elaboration.
+The continual-harness line of mid-2026 agents (Prime Agent's `/refine`)
+shows both the value and the failure mode of letting the agent edit that
+state. In [Prime Intellect's own Factorio
+run](https://www.primeintellect.ai/blog/prime-agent), ambient RCON access
+let the agent bypass the game despite an explicit instruction not to
+cheat; the refinement loop then turned the exploit into increasingly
+efficient cheating skills. The capability boundary provides containment;
+versioning and a journal provide review and recovery after the fact.
+Neither a prompt prohibition nor an audit row substitutes for removing
+authority the actor should never have held.
+
+Concretely, when Max adds self-refinement:
+
+- the base system prompt, validator, authority policy, and effect kernel
+  are immutable to model-authored refinement;
+- harness writes get their own resource scope (`HarnessScope`) under
+  `EffWrite`, subject to ceilings, validation, and role policy like any
+  other write; session/turn or conversation scope is the default, while
+  global promotion requires explicit administrator approval or an
+  offline evaluation gate;
+- harness objects use an append-only version store plus a CAS current
+  pointer. The journal records the motivating trace, candidate version,
+  validation decision, activation, and later outcome — trace-linked by
+  construction, not thereby proven beneficial;
+- rollback is a CAS activation of a prior immutable version plus a new
+  journal event. Replaying audit rows is never the mechanism that
+  reconstructs current harness state;
+- refinement is an explicit verb, never an ambient background loop, and
+  applies only at a turn or hole boundary. A successful activation bumps
+  the relevant prompt/skill/template version and forces every affected
+  residual Plan to re-hole and revalidate; a cache-key change merely
+  prevents reuse and is not itself validation;
+- a refined skill or template re-enters through the same validation as a
+  fresh one. A proposal that adds executable code or widens tools has a
+  stronger promotion gate than a supplemental prompt note.
 
 ## Max integration sequence
 
 Step 0 ships with v1.0, independent of everything below: the journal
 contract above, written by the current loop under the durability roadmap
 (issue #14). Every later step consumes it unchanged. The sandbox effect
-class and the narrator both attach to this step — they consume horizon-1
-rows and need nothing from the machine.
+class, the narrator, and ADR 006's monitors all attach to this step —
+they consume horizon-1 rows and need nothing from the machine.
 
 1. Define a small pure `Max.Plan` IR with `Done`, typed/schema-checked `Call`,
-   `Guard`, and `Hole`, plus deterministic codecs and stable node ids.
-2. Add tool schema versions, result schemas, and conservative effect metadata
-   without changing the model-visible current tool loop.
-3. Add `Max.Plan.Validate` and pure tests for binding, schema, effect,
-   authority, cardinality, and budget rejection.
-4. Add a plan-tool executor seam. The real interpreter calls existing `Tools`;
+   `Guard`, and `Hole`; the total `Expr`/`Predicate` language; acceptance
+   verifiers; deterministic codecs; and stable node ids.
+2. Complete the tool catalog with result schemas, structured resource scopes,
+   and effect multiplicity without changing the model-visible current loop.
+   Schema versions, coarse effects, parallelism, retry classes, authority, and
+   normalized outcomes already exist and are the starting substrate.
+3. Add the scoped result envelope and `ValueRef`/artifact resolver, including
+   bounded expansion, retention, taint, and observed read-set tracking.
+4. Add `Max.Plan.Validate` and pure tests for binding, schema, effect,
+   authority, information flow, cardinality, acceptance, and budget rejection.
+5. Add the restricted pseudo-code parser and bounded elaboration session.
+   Fuzz parse-or-reject behavior; a malformed surface must never produce a
+   partial Plan or acquire a looser fallback interpreter.
+6. Add a plan-tool executor seam. The real interpreter calls existing `Tools`;
    preview records calls without executing; symbolic interpretation propagates
    result shapes and stops or forks on unknown values.
-5. Integrate short, read-only plan segments behind an explicit feature flag.
+7. Integrate short, read-only plan segments behind an explicit feature flag.
    `EffSend`, external writes, reflection, dynamic targets, and feedback remain
    mandatory frontiers.
-6. Emit normalized plan events through the current Agent event/trace surfaces,
-   and measure LLM calls, tokens, latency, deopts, duplicate effects, and answer
-   quality with recorded conversation replay.
-7. Expand the allowed frontier only after validator and journal evidence shows
+8. Emit normalized plan events through the current Agent event/trace surfaces.
+   Recorded replay measures main-model context occupancy, total tree tokens and
+   cost, critical-path latency, artifact pulls/bytes, verifier pass rate, deopts,
+   duplicate effects, outcome-unknown effects, and answer quality.
+9. Expand the allowed frontier only after validator and journal evidence shows
    that the previous class fails closed and deoptimizes safely.
-8. Consider approval UI, durable plans, bounded iteration, or child plans as
+10. Consider approval UI, durable plans, bounded iteration, or child plans as
    separate follow-up decisions.
 
 The production cutover criterion is not fewer LLM calls alone. A plan-enabled
@@ -556,6 +765,11 @@ duplicate or outcome-unknown effects than the current loop.
   tasks, cross-task feedback, and task dependencies are edges over the
   same journal, with authority host-checked and conflict arbitration
   model-judged over attributed facts.
+- Waiting becomes a first-class durable state: ADR 006's monitors arm
+  typed triggers whose fire record admits a fresh turn and whose arming
+  turn supplies `fork-from` provenance; reminders collapse into their
+  degenerate case. Monitor audit is a third pre-machine tenant of the
+  journal beside the narrator and the sandbox.
 - Tool metadata, a validator, a journal, and new replay evaluation add
   substantial complexity before large horizons are safe. The journal, the
   send commit point, and the crash-deopt path are shared with (and paid
@@ -578,6 +792,21 @@ Rejected because opaque code defeats precise effect inference, schema
 validation, scoped approval, symbolic interpretation, and safe residual replay.
 Sandboxing remains useful, but it is a coarse capability boundary rather than
 the orchestration IR.
+
+This rejection has acquired stronger opposition since it was written:
+[Prime Agent reports](https://www.primeintellect.ai/blog/prime-agent)
+95.5% RHAE Best@1 on ARC-AGI-3 with Opus 5 and, in those ARC comparisons,
+lower overall token usage than the compared native harnesses. The
+opaque-code extreme, paired with a frontier model, is plainly capable;
+for a single-principal coding sandbox that trade is plausibly right.
+Max's answer is its surface: a multi-principal social deployment with
+visible sends, per-principal authority, and standing prompt-injection
+exposure. Prime Agent's Factorio run shows the concrete cost of ambient
+RCON authority plus a prompt-only prohibition; its refinement loop then
+made the discovered exploit reusable. The sandbox tool remains where Max
+buys the code-mode wins at a declared coarse boundary. The rejection is
+of opaque code as the *orchestration* layer, and it stands on authority
+grounds, not capability grounds.
 
 ### Build a separate workflow engine beside the agent loop
 

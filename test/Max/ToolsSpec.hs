@@ -21,7 +21,7 @@ type MemoryEffects = '[WithConnection, Log, IOE]
 toolContext :: ToolContext
 toolContext =
   mkToolContext
-    (TurnIdentity (GroupId 123) (CanonicalMessageId 456) (UserId 789) (UserId 999) (PrincipalId 789))
+    (TurnIdentity (GroupId 123) (CanonicalMessageId 456) (UserId 789) (UserId 999) (PrincipalId 789) Nothing)
     (TurnCapabilities False False False qqAdvertisedCaps)
 
 spec :: Spec

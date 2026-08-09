@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2000" height="1250" viewBox="0 0 2000 1250">
+  <defs>
+    <marker id="aGray" markerWidth="7" markerHeight="7" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse" viewBox="0 0 10 10">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6a6a70"/>
+    </marker>
+    <marker id="aGreen" markerWidth="7" markerHeight="7" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse" viewBox="0 0 10 10">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b6e04d"/>
+    </marker>
+    <marker id="aBlue" markerWidth="7" markerHeight="7" refX="8" refY="5" orient="auto" markerUnits="userSpaceOnUse" viewBox="0 0 10 10">
+      <path d="M0,0 L10,5 L0,10 z" fill="#4a90e2"/>
+    </marker>
+    <style>
+      text { font-family: 'Rec Mono Casual','JetBrains Mono','Fira Code','Cascadia Code','SF Mono',Menlo,Consolas,'DejaVu Sans Mono',monospace; }
+      .t1 { fill:#f2f2f2; font-weight:700; letter-spacing:6px; }
+      .t2 { fill:#f2f2f2; font-weight:700; letter-spacing:3px; }
+      .t3 { fill:#f2f2f2; font-weight:700; letter-spacing:1px; }
+      .sub { fill:#909096; letter-spacing:1.5px; }
+      .dim { fill:#64646a; letter-spacing:1.5px; }
+      .grn { fill:#b6e04d; letter-spacing:1.5px; }
+      .blu { fill:#4a90e2; letter-spacing:1.5px; }
+      .box { fill:none; stroke:#3d3d42; stroke-width:1.5; }
+      .ibox { fill:none; stroke:#333338; stroke-width:1.2; }
+      .gbox { fill:none; stroke:#b6e04d; stroke-width:1.5; }
+      .bbox { fill:none; stroke:#4a90e2; stroke-width:1.5; }
+      .arr { stroke:#6a6a70; stroke-width:1.5; fill:none; }
+      .arrg { stroke:#b6e04d; stroke-width:1.5; fill:none; }
+      .arrb { stroke:#4a90e2; stroke-width:1.5; fill:none; }
+    </style>
+  </defs>
+
+  <rect width="2000" height="1250" fill="#0b0b0d"/>
+
+  <text x="60" y="48" font-size="15" class="dim" letter-spacing="4">MAX — THE SHAPE AFTER ADR 001–006</text>
+
+  <!-- ======================= TRIGGERS ======================= -->
+  <rect x="60" y="160" width="250" height="490" class="box"/>
+  <text x="85" y="215" font-size="22" class="t1">TRIGGERS</text>
+  <text x="85" y="245" font-size="13" class="sub">every utterance routes</text>
+
+  <rect x="85" y="280" width="200" height="95" class="ibox"/>
+  <text x="103" y="315" font-size="15" class="t3">MESSAGE</text>
+  <text x="103" y="340" font-size="11" class="sub">group chat,</text>
+  <text x="103" y="358" font-size="11" class="sub">multi-principal</text>
+
+  <rect x="85" y="390" width="200" height="95" class="ibox"/>
+  <text x="103" y="425" font-size="15" class="t3">REPLY → t#</text>
+  <text x="103" y="450" font-size="11" class="sub">steer in-flight,</text>
+  <text x="103" y="468" font-size="11" class="sub">continue finished</text>
+
+  <rect x="85" y="500" width="200" height="95" class="ibox"/>
+  <text x="103" y="535" font-size="15" class="t3">MONITOR · m#</text>
+  <text x="103" y="560" font-size="11" class="sub">monitor_fire admits turn</text>
+  <text x="103" y="578" font-size="11" class="sub">fork-from = provenance</text>
+
+  <!-- trigger -> dispatch -->
+  <line x1="310" y1="400" x2="400" y2="400" class="arr" marker-end="url(#aGray)"/>
+  <text x="355" y="386" font-size="12" class="sub" text-anchor="middle">dispatch</text>
+
+  <!-- ======================= ONE DISPATCH ======================= -->
+  <rect x="360" y="70" width="1240" height="640" fill="none" stroke="#4b4b52" stroke-width="1.5" stroke-dasharray="8 8"/>
+  <text x="400" y="118" font-size="15" class="sub" letter-spacing="3">ONE DISPATCH — HORIZON 1 TODAY · THE PARTIAL-PLAN MACHINE LATER · ADR 002</text>
+
+  <!-- MODEL -->
+  <rect x="410" y="160" width="280" height="490" class="gbox"/>
+  <text x="440" y="215" font-size="26" class="t1">MODEL</text>
+  <text x="440" y="245" font-size="13" class="sub">the n+1th platform</text>
+  <text x="440" y="320" font-size="18" class="t2">writes ↝λ plans</text>
+  <text x="440" y="348" font-size="13" class="sub">fills one typed Hole</text>
+  <text x="440" y="370" font-size="13" class="sub">restricted DSL,</text>
+  <text x="440" y="392" font-size="13" class="sub">parse-or-reject</text>
+  <text x="440" y="470" font-size="18" class="t2">reads hole views</text>
+  <text x="440" y="498" font-size="13" class="sub">push digest ·</text>
+  <text x="440" y="520" font-size="13" class="sub">pull handles</text>
+  <text x="440" y="585" font-size="13" class="dim">its output creates</text>
+  <text x="440" y="605" font-size="13" class="dim">no authority</text>
+
+  <!-- KERNEL -->
+  <rect x="760" y="160" width="250" height="300" class="box"/>
+  <text x="785" y="215" font-size="24" class="t1">KERNEL</text>
+  <text x="785" y="243" font-size="13" class="sub">deterministic validator</text>
+  <text x="785" y="280" font-size="13.5" class="sub">schemas · bindings</text>
+  <text x="785" y="307" font-size="13.5" class="sub">effects · authority</text>
+  <text x="785" y="334" font-size="13.5" class="sub">scopes · info flow</text>
+  <text x="785" y="361" font-size="13.5" class="sub">acceptance verifiers</text>
+  <text x="785" y="388" font-size="13.5" class="sub">budgets · fuel</text>
+  <text x="785" y="428" font-size="13" class="grn">rejects before execution</text>
+
+  <!-- model -> kernel -> executor -->
+  <line x1="690" y1="300" x2="753" y2="300" class="arr" marker-end="url(#aGray)"/>
+  <text x="722" y="284" font-size="12" class="sub" text-anchor="middle">segment</text>
+  <line x1="1010" y1="300" x2="1073" y2="300" class="arr" marker-end="url(#aGray)"/>
+  <text x="1042" y="284" font-size="12" class="sub" text-anchor="middle">validated</text>
+
+  <!-- executor -> model (return) -->
+  <line x1="1080" y1="580" x2="700" y2="580" class="arr" marker-end="url(#aGray)"/>
+  <text x="888" y="563" font-size="12" class="sub" text-anchor="middle">next hole view · deopt reason</text>
+  <text x="888" y="602" font-size="12" class="dim" text-anchor="middle">digest + handles</text>
+
+  <!-- EXECUTOR -->
+  <rect x="1080" y="160" width="470" height="490" class="box"/>
+  <text x="1110" y="215" font-size="26" class="t1">EXECUTOR</text>
+  <text x="1110" y="245" font-size="13" class="sub">↝ε · advances without a model round</text>
+
+  <rect x="1110" y="280" width="125" height="95" class="ibox"/>
+  <text x="1125" y="315" font-size="15" class="t3">TOOLS</text>
+  <text x="1125" y="340" font-size="10.5" class="sub">host-checked,</text>
+  <text x="1125" y="357" font-size="10.5" class="sub">scoped</text>
+
+  <rect x="1252" y="280" width="150" height="95" class="ibox"/>
+  <text x="1267" y="315" font-size="15" class="t3">SANDBOX</text>
+  <text x="1267" y="340" font-size="10.5" class="sub">coarse boundary,</text>
+  <text x="1267" y="357" font-size="10.5" class="sub">observed manifest</text>
+
+  <rect x="1419" y="280" width="112" height="95" class="ibox"/>
+  <text x="1433" y="315" font-size="13.5" class="t3">PURE GUARD</text>
+  <text x="1433" y="340" font-size="10.5" class="sub">false picks</text>
+  <text x="1433" y="357" font-size="10.5" class="sub">a branch</text>
+
+  <rect x="1110" y="430" width="421" height="180" class="bbox"/>
+  <text x="1135" y="472" font-size="17" class="t3">journaled effects</text>
+  <text x="1135" y="502" font-size="13" class="sub">started → committed /</text>
+  <text x="1135" y="524" font-size="13" class="sub">outcome-unknown</text>
+  <text x="1135" y="546" font-size="13" class="sub">sends commit in the ledger</text>
+  <text x="1135" y="568" font-size="13" class="sub">crash = deoptimization</text>
+  <text x="1135" y="590" font-size="13" class="sub">resume re-runs the kernel</text>
+
+  <!-- executor -> turn graph -->
+  <line x1="1550" y1="330" x2="1653" y2="330" class="arrg" marker-end="url(#aGreen)"/>
+  <text x="1602" y="314" font-size="12" class="grn" text-anchor="middle">edges</text>
+
+  <!-- ======================= TURN GRAPH ======================= -->
+  <rect x="1660" y="160" width="280" height="490" class="gbox"/>
+  <text x="1685" y="215" font-size="24" class="t1">TURN GRAPH</text>
+  <text x="1685" y="245" font-size="13" class="sub">dispatches are nodes</text>
+
+  <rect x="1685" y="280" width="230" height="88" class="ibox"/>
+  <text x="1703" y="312" font-size="15" class="t3">FORK-FROM</text>
+  <text x="1703" y="336" font-size="11" class="sub">continuation · replay</text>
+  <text x="1703" y="353" font-size="11" class="dim">adr 005</text>
+
+  <rect x="1685" y="383" width="230" height="88" class="ibox"/>
+  <text x="1703" y="415" font-size="15" class="t3">DEPEND</text>
+  <text x="1703" y="439" font-size="11" class="sub">journaled typed future,</text>
+  <text x="1703" y="456" font-size="11" class="sub">crash-safe by rows</text>
+
+  <rect x="1685" y="486" width="230" height="88" class="ibox"/>
+  <text x="1703" y="518" font-size="15" class="t3">SPAWN</text>
+  <text x="1703" y="542" font-size="11" class="sub">child · narrowed</text>
+  <text x="1703" y="559" font-size="11" class="sub">authority · post-1.0</text>
+
+  <text x="1685" y="614" font-size="12" class="dim">verbs: steer · annotate ·</text>
+  <text x="1685" y="634" font-size="12" class="dim">abort · observe</text>
+
+  <!-- ======================= vertical flows ======================= -->
+  <line x1="850" y1="715" x2="850" y2="852" class="arrb" marker-end="url(#aBlue)"/>
+  <text x="835" y="790" font-size="13" class="sub" text-anchor="end">effect rows · sends</text>
+
+  <line x1="1120" y1="855" x2="1120" y2="718" class="arrb" marker-end="url(#aBlue)"/>
+  <text x="1135" y="790" font-size="13" class="sub">views · handles · replay</text>
+
+  <!-- monitor fire loop -->
+  <path d="M 270 855 L 270 750 L 185 750 L 185 662" class="arrg" marker-end="url(#aGreen)"/>
+  <text x="228" y="736" font-size="10.5" class="grn" text-anchor="middle">monitor_fire committed</text>
+  <text x="228" y="772" font-size="10.5" class="dim" text-anchor="middle">new turn + trigger_input</text>
+
+  <!-- ======================= POSTGRES ======================= -->
+  <rect x="60" y="860" width="1880" height="350" class="bbox"/>
+  <text x="100" y="928" font-size="26" class="t1">POSTGRES — THE SINGLE SOURCE OF TRUTH</text>
+  <text x="100" y="962" font-size="14" class="sub">state lives in rows; memory is a write-through cache; boot reconciles, never trusts itself</text>
+
+  <rect x="100" y="995" width="340" height="130" class="ibox"/>
+  <text x="420" y="1020" font-size="11" class="dim" text-anchor="end">ADR 006</text>
+  <text x="125" y="1032" font-size="19" class="t2">MONITORS</text>
+  <text x="125" y="1060" font-size="12.5" class="sub">armed · TTL'd · fire leases</text>
+  <text x="125" y="1080" font-size="12.5" class="sub">LiveDelivery LedgerMatch ·</text>
+  <text x="125" y="1100" font-size="12.5" class="sub">TimeCron · ExternalPoll</text>
+
+  <rect x="465" y="995" width="340" height="130" class="ibox"/>
+  <text x="785" y="1020" font-size="11" class="dim" text-anchor="end">ADR 003</text>
+  <text x="490" y="1032" font-size="19" class="t2">LEDGER</text>
+  <text x="490" y="1060" font-size="12.5" class="sub">canonical IR · IngestClass</text>
+  <text x="490" y="1080" font-size="12.5" class="sub">every send commits here</text>
+  <text x="490" y="1100" font-size="12.5" class="sub">outbox → qq · wechat · …</text>
+
+  <rect x="830" y="995" width="340" height="130" class="ibox"/>
+  <text x="1150" y="1020" font-size="11" class="dim" text-anchor="end">ADR 002</text>
+  <text x="855" y="1032" font-size="19" class="t2">JOURNAL</text>
+  <text x="855" y="1060" font-size="12.5" class="sub">effects · notes · monitor_fire</text>
+  <text x="855" y="1080" font-size="12.5" class="sub">trigger_input · result rows</text>
+  <text x="855" y="1100" font-size="12.5" class="sub">wire is never truth</text>
+
+  <rect x="1195" y="995" width="340" height="130" class="ibox"/>
+  <text x="1515" y="1020" font-size="11" class="dim" text-anchor="end">ADR 005</text>
+  <text x="1220" y="1032" font-size="19" class="t2">TURNS</text>
+  <text x="1220" y="1060" font-size="12.5" class="sub">agent_turns · turn_ordinal</text>
+  <text x="1220" y="1080" font-size="12.5" class="sub">turn_edges · replay cache</text>
+  <text x="1220" y="1100" font-size="12.5" class="sub">digests are permanent</text>
+
+  <rect x="1560" y="995" width="340" height="130" class="ibox"/>
+  <text x="1880" y="1020" font-size="11" class="dim" text-anchor="end">ADR 001</text>
+  <text x="1585" y="1032" font-size="19" class="t2">MEMORY</text>
+  <text x="1585" y="1060" font-size="12.5" class="sub">episodes · compartments</text>
+  <text x="1585" y="1080" font-size="12.5" class="sub">token-planned views</text>
+  <text x="1585" y="1100" font-size="12.5" class="sub">retrieval expansion</text>
+
+  <text x="100" y="1160" font-size="13.5" class="sub">one address grammar — #&lt;msg&gt; · s&lt;n&gt; sandbox · t#&lt;n&gt; turn · t#&lt;n&gt;:r&lt;k&gt; result · m#&lt;n&gt; monitor · episode#&lt;uuid&gt;  (k = execution ordinal · adr 004)</text>
+  <text x="100" y="1188" font-size="13.5" class="dim">read-side projections — prompt lowering · narrator · crash-resume view · continuation view · admin console — consume rows, never wire</text>
+</svg>

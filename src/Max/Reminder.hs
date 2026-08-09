@@ -239,7 +239,8 @@ reminderWorker tz sched = loop
               orGroupId = gid,
               orBody = body,
               orReplyTo = Nothing,
-              orDeliveryScope = DeliverConversation
+              orDeliveryScope = DeliverConversation,
+              orTurnOutput = Nothing
             }
       case outcome of
         SendFailed err -> pure (Left err)

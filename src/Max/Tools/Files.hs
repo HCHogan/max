@@ -53,11 +53,12 @@ import Max.Reply (chunkSource, planReply)
 import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
-import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities)
+import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities, toolTurnOutputContext)
+import Max.Turn.Types (TurnOutputContext, nextTurnOutputLink)
 import Max.Tools.Schema (integerParam, stringParam, toolObject, withKeys)
 import Max.Util (withTempDirectory)
 import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..))
-import OneBot.Types (GroupId (..), MessageId (..), isPrivateChat, privateChatUserId)
+import OneBot.Types (GroupId (..), isPrivateChat, privateChatUserId)
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath (takeFileName, (</>))
 
@@ -83,7 +84,7 @@ fileToolsFor ::
 fileToolsFor tz dc sandboxes =
   [ listRecentFilesTool tz gid,
     importFileToSandboxTool (toolConversationScope dc) gid sandboxes,
-    sendImageFromSandboxTool (toolOutputCapabilities dc) gid sandboxes,
+    sendImageFromSandboxTool (toolOutputCapabilities dc) (toolTurnOutputContext dc) gid sandboxes,
     sendFileFromSandboxTool gid sandboxes
   ]
   where
@@ -210,10 +211,11 @@ sendImageFromSandboxTool ::
     IOE :> es
   ) =>
   AdvertisedCaps ->
+  Maybe TurnOutputContext ->
   GroupId ->
   SandboxRegistry ->
   Tool es
-sendImageFromSandboxTool outputCaps gid sandboxes =
+sendImageFromSandboxTool outputCaps turnOutputContext gid sandboxes =
   Tool
     { toolName = "send_image_from_sandbox",
       toolDescription =
@@ -242,6 +244,7 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
                   let source = mediaBlobRef (blobRefSha256 blob)
                       (replyTo, caption) = captionBody outputCaps gid mCaption
                       body = Body (caption.nodes <> [NMedia source (imageMeta bytes)])
+                  turnOutput <- traverse (liftIO . nextTurnOutputLink) turnOutputContext
                   outcome <-
                     sendRecorded
                       OutboundRequest
@@ -249,12 +252,13 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
                           orGroupId = gid,
                           orBody = body,
                           orReplyTo = replyTo,
-                          orDeliveryScope = DeliverConversation
+                          orDeliveryScope = DeliverConversation,
+                          orTurnOutput = turnOutput
                         }
                   case outcome of
                     SendFailed err -> pure (Left ("图片发送失败: " <> err))
-                    SentUnrecorded {} -> sent sid bytes
-                    SentRecorded {} -> sent sid bytes
+                    SentUnrecorded {} -> sent sid bytes (Nothing :: Maybe CanonicalMessageId)
+                    SentRecorded canonical -> sent sid bytes (Just canonical)
     }
   where
     imageMeta bytes =
@@ -267,7 +271,7 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
           raw = Nothing
         }
 
-    sent sid bytes = do
+    sent sid bytes canonical = do
       logInfo "image sent from sandbox" $
         object
           [ "sandbox_id" .= sid,
@@ -275,10 +279,13 @@ sendImageFromSandboxTool outputCaps gid sandboxes =
           ]
       pure $
         Right $
-          object
+          object $
             [ "ok" .= True,
               "bytes" .= BS.length bytes
             ]
+              <> [ "_max_journal_canonical_message_id" .= message.unCanonicalMessageId
+                 | Just message <- [canonical]
+                 ]
 
     parseArgs :: Object -> Parser (Text, Text, Maybe Text)
     parseArgs o = (,,) <$> o .: "sandbox_id" <*> o .: "path" <*> o .:? "caption"

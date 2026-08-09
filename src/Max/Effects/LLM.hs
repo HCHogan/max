@@ -92,6 +92,7 @@ import Max.Http.Stream (StreamOutcome (..), streamPost)
 import Max.HttpRuntime (HttpRuntime)
 import Max.LLM.Stream (PartialCall (..), StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, stepResponses)
 import Max.ModelCatalog (ModelCatalog)
+import Max.Turn.Types (AgentTurnId)
 import Max.ModelCatalog.Internal
   ( LLMProfile (..),
     Protocol (..),
@@ -216,7 +217,10 @@ data ChatCtx = ChatCtx
     -- the normal shallow transport retries; @Just []@ makes exactly one HTTP
     -- attempt.  Durable workers use the latter because their persisted queue,
     -- not an invisible transport loop, owns retry timing and fairness.
-    ccBufferedRetryDelaysSeconds :: !(Maybe [Int])
+    ccBufferedRetryDelaysSeconds :: !(Maybe [Int]),
+    -- | Durable agent attribution.  Background/model-router calls leave it
+    -- empty; every call inside a production turn carries it.
+    ccAgentTurnId :: !(Maybe AgentTurnId)
   }
   deriving stock (Show, Eq)
 

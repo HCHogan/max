@@ -4,6 +4,7 @@ import Control.Concurrent (ThreadId, myThreadId)
 import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
 import Control.Exception (AsyncException (UserInterrupt), bracket, finally, throwTo)
 import Control.Monad (forever, unless, when)
+import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, maybeToList)
@@ -24,10 +25,11 @@ import Max.Browser.Registry
   )
 import Max.Config (AppConfig (..), loadConfig)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
+import Max.DB.AgentTurn (ReclaimedTurns (..), addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
 import Max.DB.Usage (insertUsage)
-import Max.Effects.Agent (Agent, defaultLimits, runAgent)
+import Max.Effects.Agent (Agent, defaultLimits, runDurableAgent)
 import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.Embedding (Embedding, runEmbedding)
 import Max.Effects.Http (Http, runHttp)
@@ -41,7 +43,7 @@ import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
-import Max.Handler (dispatchPendingWorker, dispatchProactive, handleEvents)
+import Max.Handler (dispatchPendingWorker, dispatchProactive, handleEvents, resumeInterruptedTurn)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.Images (imageWorker)
@@ -57,9 +59,9 @@ import Max.Platform.Delivery (DeliveryTransport, deliveryWorker, oneBotDeliveryT
 import Max.Platform.Types (Platform (..))
 import Max.Reminder (newReminderScheduler, reminderWorker)
 import Max.Sandbox.Registry
-  ( destroyAllSandboxes,
-    newSandboxRegistry,
-    reapStaleSandboxes,
+  ( gcExpiredSandboxes,
+    newDurableSandboxRegistry,
+    reconcileSandboxes,
   )
 import Max.Session (newSessionRegistry)
 import Max.Shutdown (ShutdownState, beginDrain, drainWorker, newShutdownState)
@@ -94,15 +96,11 @@ main = do
   httpRuntime <- newHttpRuntime
   bracket (newDbPool cfg.db) closeDbPool $ \pool -> do
     applied <- runMigrations pool cfg.migrationsDir
-    -- Container lifecycle, both ends.  Reaping first kills any
-    -- 'max-sb-*' / browser containers left over from a prior unclean
-    -- exit — we are the only writer of that namespace, so anything
-    -- still standing is orphaned.  Destroying on the way out covers
-    -- everything the registries know about, and fires on
-    -- UserInterrupt (Ctrl+C / SIGTERM) too.
-    reapStaleSandboxes
+    -- Browser containers remain ephemeral.  Sandboxes are different: their
+    -- named volumes are durable E0 state, so boot reconciles/adopts them and
+    -- process exit deliberately leaves them intact.
     reapStaleBrowsers
-    sandboxes <- newSandboxRegistry
+    sandboxes <- newDurableSandboxRegistry pool
     browsers <- newBrowserRegistry httpRuntime cfg.browserProxy
     ( do
         -- The panel's log view reads this ring; it fills only when
@@ -190,8 +188,10 @@ main = do
             . runLLM
               httpRuntime
               ( \ctx profile u ->
-                  runEff . runWithConnectionPool pool $
+                  runEff . runWithConnectionPool pool $ do
                     insertUsage ctx.ccGroup ctx.ccSource profile u.usagePrompt u.usageCompletion u.usageCachedPrompt
+                    for_ ctx.ccAgentTurnId $ \turnId ->
+                      addAgentTurnUsage turnId u.usagePrompt u.usageCompletion u.usageCachedPrompt
               )
               -- The full-body log only exists when the panel does:
               -- without somewhere to read it, it would be disk spent
@@ -215,10 +215,10 @@ main = do
               cfg.llm
             . runReader cfg.llm
             . runReader env
-            . runAgent defaultLimits (allToolsFor httpRuntime env)
+            . runDurableAgent defaultLimits (allToolsFor httpRuntime env)
             $ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef deliveryTransports mainTid
       )
-      `finally` (destroyAllSandboxes sandboxes `finally` destroyAllBrowsers browsers)
+      `finally` destroyAllBrowsers browsers
 
 -- | SIGTERM handler.  Deliberately does no waiting itself: it flips the
 -- drain flag and returns, leaving the wait (and its logging) to
@@ -290,11 +290,20 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
         object ["files" .= applied]
     env :: BotEnv <- ask
     let maintenanceOwner = "max/" <> T.pack (show env.beStartedAt) <> "/" <> T.pack (show mainTid)
+    reclaimed <- reclaimInterruptedTurns (maintenanceOwner <> "/turn-recovery")
+    when (reclaimed.rrTurnsPendingResume > 0 || reclaimed.rrTurnsCrashed > 0 || reclaimed.rrExecutionsUnknown > 0) $
+      logAttention "durable turn recovery: reclaimed interrupted work" $
+        object
+          [ "turns_pending_resume" .= reclaimed.rrTurnsPendingResume,
+            "turns_crashed" .= reclaimed.rrTurnsCrashed,
+            "executions_outcome_unknown" .= reclaimed.rrExecutionsUnknown
+          ]
     -- The skill cache is authoritative once loaded (write-through, same
     -- rule as sessions), so it has to fill before the first dispatch or
     -- the admin server can consult it.
     nSkills <- loadSkills env.beSkills
     logInfo "skills loaded" $ object ["count" .= nSkills]
+    for_ reclaimed.rrRecoveries resumeInterruptedTurn
     -- Long-lived siblings, then the server.  Config-disabled optional
     -- workers are omitted entirely; enabled optional features remain linked,
     -- while a clean exit is fatal only for the process's required services.
@@ -313,6 +322,17 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
             -- UserInterrupt on main to start graceful unwinding.
             worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
           ]
+            <> [ worker
+                   "sandbox-gc"
+                   OptionalWorker
+                   ( forever $ do
+                       threadDelay (60 * 60 * 1_000_000)
+                       liftIO (reconcileSandboxes env.beSandboxes)
+                       removed <- liftIO (gcExpiredSandboxes env.beSandboxes)
+                       when (removed > 0) $
+                         logInfo "sandbox TTL GC" (object ["removed" .= removed])
+                   )
+               ]
             <> [ worker "embeddings" OptionalWorker (embedWorker maintenanceOwner)
                | env.beEmbeddingEnabled
                ]

@@ -38,6 +38,7 @@ import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundReque
 import Max.IR (Body (..), Node (NText))
 import Max.ReplySend (ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
 import Max.Platform.Types (CanonicalMessageId)
+import Max.Turn.Types (nextTurnOutputLink)
 
 -- | Debug facts emitted by the loop without deciding whether debug output is
 -- enabled or how the values should be formatted for chat.
@@ -91,7 +92,8 @@ handleAgentEvent ctx = \case
         pure True
   where
     sendDebug :: Text -> Eff es ()
-    sendDebug body =
+    sendDebug body = do
+      turnOutput <- traverse (liftIO . nextTurnOutputLink) ctx.aocReplyTarget.rtTurnOutputContext
       void $
         sendRecorded
           OutboundRequest
@@ -99,7 +101,8 @@ handleAgentEvent ctx = \case
               orGroupId = ctx.aocReplyTarget.rtGroupId,
               orBody = Body [NText body],
               orReplyTo = Nothing,
-              orDeliveryScope = DeliverSourceEndpoint ctx.aocSourceMessageId
+              orDeliveryScope = DeliverSourceEndpoint ctx.aocSourceMessageId,
+              orTurnOutput = turnOutput
             }
 
 -- | Render zero or one debug message.  Visible-output tools are silent here:

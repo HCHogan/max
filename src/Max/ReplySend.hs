@@ -88,6 +88,7 @@ import Max.Reply
     stripHallucinatedTokens,
   )
 import Max.Sticker (ResolvedSticker (..), resolveSticker)
+import Max.Turn.Types (TurnOutputContext, nextTurnOutputLink)
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 import System.Random (randomRIO)
 
@@ -112,7 +113,9 @@ data ReplyTarget = ReplyTarget
     rtCanReply :: !Bool,
     rtCanMention :: !Bool,
     rtCanFace :: !Bool,
-    rtCanImage :: !Bool
+    rtCanImage :: !Bool,
+    -- | Shared by every visible output path in this durable turn.
+    rtTurnOutputContext :: !(Maybe TurnOutputContext)
   }
 
 -- | What one logical reply has spent so far.  Threaded across calls so
@@ -217,13 +220,15 @@ sendAndPersistReply rt budget rawBody
           -- streaming) the wait for the paragraph to complete was.
           when (i > 0) $
             liftIO (threadDelay =<< chunkDelayMicros (T.length pacingText))
+          turnOutput <- traverse (liftIO . nextTurnOutputLink) rt.rtTurnOutputContext
           sendRecorded
             OutboundRequest
               { orKind = KindChat,
                 orGroupId = rt.rtGroupId,
                 orBody = resolvedBody,
                 orReplyTo = replyTo,
-                orDeliveryScope = DeliverConversation
+                orDeliveryScope = DeliverConversation,
+                orTurnOutput = turnOutput
               }
             >>= \case
               SendFailed err ->

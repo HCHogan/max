@@ -1,7 +1,10 @@
 # ADR 004: Canonical Handles and the Identity the Model Addresses
 
-- Status: Implemented
-- Date: 2026-08-05 (implemented 2026-08-05, migration `066`)
+- Status: Implemented for the original message, media, person, and episode
+  handles. Scoped turn, result, and monitor extensions are proposed by
+  ADR 005, ADR 002, and ADR 006 respectively.
+- Date: 2026-08-05 (implemented 2026-08-05, migration `066`; scoped-runtime
+  handle amendment 2026-08-09)
 
 ## Context
 
@@ -100,11 +103,14 @@ field that never differs from its single identity's.
 
 ## Decision
 
-### 1. Everything the model can point at is named by its canonical key, verbatim
+### 1. Every handle is backed by a persisted unique key
 
-No mapping table, no minting, no translation layer for the LLM. The name the
-model utters is the key in the database, so an id in a prompt, a log line,
-the admin panel, and `psql` are the same value.
+For globally named entities, there is no mapping table, minting, or translation
+layer for the LLM. The name the model utters is the key in the database, so an
+id in a prompt, a log line, the admin panel, and `psql` are the same value.
+Later ADRs add scoped runtime entities whose conversation or owning turn is an
+implicit component of a persisted composite alternate key. Their visible
+ordinals are stored, never assigned while rendering.
 
 | entity | model handle | backing key |
 | --- | --- | --- |
@@ -112,11 +118,23 @@ the admin panel, and `psql` are the same value.
 | media | `[image#<canonical_message_id>.<seg_index>]` | `message_images` / `message_videos` PK |
 | person | `[@#<principal_id>]` | `principals.principal_id` |
 | episode | `[episode#<uuid>]` — unchanged | `conversation_compartments.expand_handle` |
+| turn (proposed, ADR 005) | `t#<turn_ordinal>` | `agent_turns UNIQUE (conversation_id, turn_ordinal)` |
+| result (proposed, ADR 002) | `t#<turn_ordinal>:r<execution_ordinal>` | journal `UNIQUE (turn_id, execution_ordinal)` |
+| monitor (proposed, ADR 006) | `m#<monitor_ordinal>` | `monitors UNIQUE (conversation_id, monitor_ordinal)` |
 
 `seg_index` is rendered **verbatim, 0-based**, as stored. A `+1` for
-readability would be a mapping, and the invariant this ADR exists to
-establish is that there is none: any handle in a prompt can be pasted into a
-query. Handles are machine tokens the model copies, not prose it counts.
+readability would be an ephemeral mapping, and the invariant this ADR exists
+to establish is that there is no render-only identity: the visible component
+of any handle is persisted and can be pasted into a scoped query. Handles are
+machine tokens the model copies, not prose it counts.
+
+The scoped forms are a narrow amendment to the original verbatim-global-key
+rule, not a relaxation of scope checks. Resolving `t#<n>` supplies the current
+conversation to its composite key; resolving `:r<m>` then supplies the resolved
+turn. The host still rechecks current conversation, resource, and
+information-flow scope. A dense global id would also be safe under the rule
+below; the scoped form is chosen because it composes with turn continuity and
+makes the result's owning execution explicit.
 
 Episode handles stay opaque UUIDs. Their opacity is not what makes them
 safe — `expandEpisode` re-applies the recall policy on every call — but they

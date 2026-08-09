@@ -113,6 +113,7 @@ library
         Max.ConversationScope
         Max.MCP.Client
         Max.DB.Calls
+        Max.DB.AgentTurn
         Max.DB.Connection
         Max.DB.ConversationCursor
         Max.DB.FetchQueue
@@ -195,6 +196,7 @@ library
         Max.Sticker
         Max.Stickers
         Max.Tasks
+        Max.Turn.Types
         Max.Time
         Max.Toolset
         Max.ToolContext
@@ -419,6 +421,7 @@ test-suite max-test
         Max.Sandbox.DockerSpec
         Max.Tools.FilesSpec
         Max.ToolsSpec
+        Max.Turn.TypesSpec
         Max.UtilSpec
         Max.WorkerSpec
         Max.Http.JsonSpec
@@ -458,6 +461,7 @@ test-suite max-test-db
         Helpers
         Max.AdminTimelineSpec
         Max.DB.ConversationCursorSpec
+        Max.DB.AgentTurnSpec
         Max.DB.FilesSpec
         Max.DB.FetchQueueSpec
         Max.DB.SessionSpec
@@ -480,6 +484,7 @@ test-suite max-test-db
         , base                 >= 4.20 && < 5
         , bytestring           >= 0.12 && < 0.13
         , containers           >= 0.7  && < 0.9
+        , directory            >= 1.3  && < 1.4
         , hspec                >= 2.11 && < 2.12
         , log-base             >= 0.12 && < 0.13
         , log-effectful        >= 1.0  && < 1.1

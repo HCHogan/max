@@ -139,7 +139,7 @@ dispatchContext :: AgentContext
 dispatchContext =
   AgentContext
     ( mkToolContext
-        (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001))
+        (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing)
         (TurnCapabilities False True False qqAdvertisedCaps)
     )
     Nothing

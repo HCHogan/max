@@ -58,6 +58,7 @@ module Max.Effects.Agent
     assembleToolRound,
     toolResultMessage,
     runAgent,
+    runDurableAgent,
     agentTurn,
     defaultLimits,
   )
@@ -66,18 +67,33 @@ where
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, writeTVar)
 import Control.Monad (unless, when)
-import Data.Aeson (Value, encode)
+import Data.Aeson (Value (..), encode, toJSON)
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
+import Data.List (find)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
-import Effectful.Exception (throwIO)
+import Effectful.Exception (SomeException, catch, throwIO)
 import Effectful.Log
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
+import Max.DB.AgentTurn
+  ( JournalExecution,
+    JournalFinish (..),
+    JournalStart (..),
+    enrichSandboxJournalStart,
+    finishJournalExecution,
+    markJournalOutcomeUnknown,
+    recordModelNote,
+    recordAgentTurnLlmRound,
+    startJournalExecution,
+  )
+import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, defaultInlineMediaLimit, drainInlineMedia, runToolOutput)
 import Max.Effects.Tools
@@ -85,9 +101,14 @@ import Max.Effects.Tools
     ToolCatalog,
     ToolCatalogError,
     ToolDefinition (..),
+    ToolEffect (..),
+    ToolFault (..),
     ToolOutcome (..),
     ToolParallelism (..),
     ToolRef (..),
+    ToolRetryClass (..),
+    SchemaHash (..),
+    SchemaVersion (..),
     Tools,
     invokeTool,
     listCatalogTools,
@@ -105,8 +126,11 @@ import Max.Tasks
     drainTurnInbox,
     requeueTurnInbox,
     setTurnPhase,
+    turnRuntimeAgentTurn,
   )
-import Max.ToolContext (ToolContext, toolGroupId)
+import Max.ToolContext (ToolContext, toolGroupId, toolTurnOutputContext)
+import Max.Turn.Types (AgentTurnRef (..), turnOutputAgentTurn)
+import Effectful.PostgreSQL (WithConnection)
 import OneBot.Types (GroupId (..))
 
 -- | Agent-only data around the neutral context handed to tools.
@@ -124,7 +148,8 @@ data AgentContext = AgentContext
 turnCtx :: AgentContext -> Text -> ChatCtx
 turnCtx ctx source =
   let GroupId gid = toolGroupId ctx.acTools
-   in ChatCtx source (Just gid) ctx.acEffort Nothing Nothing
+      durable = (.atrTurnId) . turnOutputAgentTurn <$> toolTurnOutputContext ctx.acTools
+   in ChatCtx source (Just gid) ctx.acEffort Nothing Nothing durable
 
 -- | Caps on a single agent invocation.  Per-tool and per-call HTTP
 -- timeouts are configured at the 'LLM' layer; these are loop-level.
@@ -210,7 +235,67 @@ runAgent ::
   (ToolContext -> Either ToolCatalogError (ToolCatalog (ToolOutput : es))) ->
   Eff (Agent : es) a ->
   Eff es a
-runAgent lims toolFactory = interpret $ \localEnv -> \case
+runAgent lims toolFactory = runAgentWithJournal noAgentJournal lims toolFactory
+
+-- | Production interpreter.  Keeping the journal callbacks outside the
+-- generic loop preserves the existing in-memory Agent seam while ensuring the
+-- real stack always writes E0 rows.
+runDurableAgent ::
+  forall es a.
+  ( LLM :> es,
+    Concurrent :> es,
+    Blob :> es,
+    WithConnection :> es,
+    Log :> es,
+    IOE :> es
+  ) =>
+  AgentLimits ->
+  (ToolContext -> Either ToolCatalogError (ToolCatalog (ToolOutput : es))) ->
+  Eff (Agent : es) a ->
+  Eff es a
+runDurableAgent = runAgentWithJournal durableAgentJournal
+
+data AgentJournal es = AgentJournal
+  { ajRecordLlmRound :: AgentTurnRef -> Eff es (),
+    ajRecordNote :: AgentTurnRef -> Text -> Eff es (),
+    ajStart :: GroupId -> AgentTurnRef -> JournalStart -> Eff es (Maybe JournalExecution),
+    ajFinish :: JournalExecution -> JournalFinish -> Eff es (),
+    ajUnknown :: JournalExecution -> Text -> Eff es ()
+  }
+
+noAgentJournal :: AgentJournal es
+noAgentJournal =
+  AgentJournal
+    { ajRecordLlmRound = \_ -> pure (),
+      ajRecordNote = \_ _ -> pure (),
+      ajStart = \_ _ _ -> pure Nothing,
+      ajFinish = \_ _ -> pure (),
+      ajUnknown = \_ _ -> pure ()
+    }
+
+durableAgentJournal ::
+  (Blob :> es, WithConnection :> es, IOE :> es) =>
+  AgentJournal es
+durableAgentJournal =
+  AgentJournal
+    { ajRecordLlmRound = recordAgentTurnLlmRound . (.atrTurnId),
+      ajRecordNote = recordModelNote,
+      ajStart = \gid turn start -> do
+        enriched <- enrichSandboxJournalStart gid start
+        Just <$> startJournalExecution turn enriched,
+      ajFinish = finishJournalExecution,
+      ajUnknown = markJournalOutcomeUnknown
+    }
+
+runAgentWithJournal ::
+  forall es a.
+  (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
+  AgentJournal es ->
+  AgentLimits ->
+  (ToolContext -> Either ToolCatalogError (ToolCatalog (ToolOutput : es))) ->
+  Eff (Agent : es) a ->
+  Eff es a
+runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
   AgentTurn turn ctx profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
     catalog <- either throwIO pure (toolFactory ctx.acTools)
@@ -263,6 +348,8 @@ runAgent lims toolFactory = interpret $ \localEnv -> \case
           -- Reset per call: one chat call is one utterance (a progress
           -- narration, or the final answer), and each gets its own
           -- prefix bookkeeping.
+          for_ (turnRuntimeAgentTurn h) $ \durable ->
+            raise (raise (journal.ajRecordLlmRound durable))
           sentRef <- liftIO (newTVarIO "")
           eres <- chatStreaming (turnCtx ctx "turn") profile msgs'' specs (releaseParagraphs emit sentRef)
           sent <- liftIO (readTVarIO sentRef)
@@ -325,6 +412,8 @@ runAgent lims toolFactory = interpret $ \localEnv -> \case
               -- Whatever streaming already released of this narration is
               -- in the group; only the tail is left to post.  Rendering and
               -- visibility are output-boundary decisions.
+              for_ (turnRuntimeAgentTurn h) $ \durable ->
+                raise (raise (journal.ajRecordNote durable narration))
               emit (AgentProgressText (T.drop (T.length sent) narration))
               emit $
                 AgentToolDebug $
@@ -338,6 +427,7 @@ runAgent lims toolFactory = interpret $ \localEnv -> \case
               -- results keep call order so each tool_call id is
               -- answered in sequence.
               registered <- listCatalogTools
+              journalRows <- traverse (prepareJournal (toolGroupId ctx.acTools) h registered) tcs
               let canParallel tc =
                     any
                       (\view ->
@@ -345,11 +435,12 @@ runAgent lims toolFactory = interpret $ \localEnv -> \case
                            && view.ctDefinition.tdParallelism == ParallelSafe
                       )
                       registered
-              executed <- case tcs of
-                [tc] -> (: []) <$> executeOne h tc
+              let journaledCalls = zip tcs journalRows
+              executed <- case journaledCalls of
+                [call] -> (: []) <$> executeOne h call
                 _
-                  | all canParallel tcs -> mapConcurrently (executeOne h) tcs
-                  | otherwise -> traverse (executeOne h) tcs
+                  | all canParallel tcs -> mapConcurrently (executeOne h) journaledCalls
+                  | otherwise -> traverse (executeOne h) journaledCalls
               -- Emit result facts after the concurrent round rejoins.  This
               -- keeps the higher-rank callback on its sequential unlift and
               -- gives debug output a deterministic call order.
@@ -440,8 +531,21 @@ runAgent lims toolFactory = interpret $ \localEnv -> \case
     drainToolMedia :: Eff (Tools : ToolOutput : es) [InlineMedia]
     drainToolMedia = drainInlineMedia
 
-    executeOne :: TurnRuntime -> ToolCall -> Eff (Tools : ToolOutput : es) (ChatMessage, ToolDebugEvent)
-    executeOne turn tc = do
+    prepareJournal ::
+      GroupId ->
+      TurnRuntime ->
+      [CatalogTool] ->
+      ToolCall ->
+      Eff (Tools : ToolOutput : es) (Maybe JournalExecution)
+    prepareJournal gid turn registered tc = case turnRuntimeAgentTurn turn of
+      Nothing -> pure Nothing
+      Just durable -> do
+        let mView = find ((== ToolRef tc.callName) . (.ctDefinition.tdRef)) registered
+            start = maybe (unknownJournalStart tc) (catalogJournalStart tc) mView
+        raise (raise (journal.ajStart gid durable start))
+
+    executeOne :: TurnRuntime -> (ToolCall, Maybe JournalExecution) -> Eff (Tools : ToolOutput : es) (ChatMessage, ToolDebugEvent)
+    executeOne turn (tc, journalRow) = do
       liftIO (checkTurnCancellation turn)
       logInfo "agent: tool call" $
         object
@@ -449,9 +553,19 @@ runAgent lims toolFactory = interpret $ \localEnv -> \case
             "name" .= tc.callName,
             "args" .= previewJson 200 tc.callArguments
           ]
-      outcome <- invokeTool tc.callName tc.callArguments
+      outcome <-
+        invokeTool tc.callName tc.callArguments
+          `catch` \e -> do
+            for_ journalRow $ \row ->
+              raise (raise (journal.ajUnknown row (T.pack (show (e :: SomeException)))))
+            throwIO e
+      for_ journalRow $ \row ->
+        raise (raise (journal.ajFinish row (journalFinish outcome)))
       liftIO (checkTurnCancellation turn)
-      let result = outcomeResult outcome
+      -- Host-only observation fields are journal evidence.  Remove them from
+      -- the value returned to the model so E0 changes durability without
+      -- changing the tool protocol or influencing the answer.
+      let result = outcomeResult (stripJournalMetadata outcome)
       case result of
         Right v -> do
           let full = TE.decodeUtf8 (LBS.toStrict (encode v))
@@ -476,6 +590,57 @@ runAgent lims toolFactory = interpret $ \localEnv -> \case
       ToolSucceeded {} -> "succeeded"
       ToolCommitted {} -> "committed"
       ToolOutcomeUnknown {} -> "outcome-unknown"
+
+    catalogJournalStart :: ToolCall -> CatalogTool -> JournalStart
+    catalogJournalStart tc view =
+      JournalStart
+        { jsCallId = tc.callId,
+          jsToolRef = tc.callName,
+          jsSchemaVersion = view.ctDefinition.tdSchemaVersion.unSchemaVersion,
+          jsSchemaHash = view.ctSchemaHash.unSchemaHash,
+          jsInput = tc.callArguments,
+          jsEffectLabels = toJSON (map effectLabel (Set.toList view.ctDefinition.tdEffects)),
+          jsRetryClass = retryClassText view.ctDefinition.tdRetryClass
+        }
+
+    unknownJournalStart :: ToolCall -> JournalStart
+    unknownJournalStart tc =
+      JournalStart tc.callId tc.callName 0 "unknown" tc.callArguments (toJSON ([] :: [Value])) "safe"
+
+    effectLabel :: ToolEffect -> Value
+    effectLabel = \case
+      EffectRead domain -> object ["kind" .= ("read" :: Text), "domain" .= domain]
+      EffectWrite domain -> object ["kind" .= ("write" :: Text), "domain" .= domain]
+      EffectSend domain -> object ["kind" .= ("send" :: Text), "domain" .= domain]
+      EffectLLM -> object ["kind" .= ("llm" :: Text)]
+      EffectReflect -> object ["kind" .= ("reflect" :: Text)]
+
+    retryClassText :: ToolRetryClass -> Text
+    retryClassText = \case
+      RetrySafe -> "safe"
+      RetryIdempotent -> "idempotent"
+      RetryUnsafe -> "unsafe"
+
+    journalFinish :: ToolOutcome -> JournalFinish
+    journalFinish = \case
+      ToolRejected fault -> JournalRejected fault.tfCode fault.tfMessage
+      ToolFailedBeforeEffect fault -> JournalFailed fault.tfCode fault.tfMessage
+      ToolSucceeded value -> JournalSucceeded value
+      ToolCommitted value -> JournalCommitted value
+      ToolOutcomeUnknown fault -> JournalOutcomeUnknown fault.tfCode fault.tfMessage
+
+    stripJournalMetadata :: ToolOutcome -> ToolOutcome
+    stripJournalMetadata = \case
+      ToolSucceeded value -> ToolSucceeded (stripValue value)
+      ToolCommitted value -> ToolCommitted (stripValue value)
+      other -> other
+      where
+        stripValue (Object fields) =
+          Object
+            ( KeyMap.delete "_max_journal_canonical_message_id" $
+                KeyMap.delete "_max_journal_observed_manifest" fields
+            )
+        stripValue value = value
 
 -- | Build the messages appended after one tool-call response.  This is
 -- deliberately a pure seam between the effectful pieces of the loop:

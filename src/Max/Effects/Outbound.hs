@@ -40,6 +40,7 @@ import Max.IR
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..))
+import Max.Turn.Types (TurnOutputLink)
 import Max.Util (trySync)
 import OneBot.Types (GroupId (..), MessageId (..))
 
@@ -55,7 +56,10 @@ data OutboundRequest = OutboundRequest
     orReplyTo :: !(Maybe CanonicalMessageId),
     -- | Conversation replies fan out; command/debug output can stay on the
     -- exact endpoint that supplied its durable source message.
-    orDeliveryScope :: !OutboundDeliveryScope
+    orDeliveryScope :: !OutboundDeliveryScope,
+    -- | Present only for visible output produced by an agent turn.  The
+    -- canonical publish transaction commits this provenance with the message.
+    orTurnOutput :: !(Maybe TurnOutputLink)
   }
   deriving stock (Show, Eq)
 
@@ -105,7 +109,8 @@ runOutbound = runOutboundWith deliver
                   DeliverConversation -> Nothing
                   DeliverSourceEndpoint (CanonicalMessageId source) -> Just source,
                 canonicalBody = req.orBody,
-                replyToCanonicalMessageId = (\(CanonicalMessageId reply) -> reply) <$> req.orReplyTo
+                replyToCanonicalMessageId = (\(CanonicalMessageId reply) -> reply) <$> req.orReplyTo,
+                turnOutputLink = req.orTurnOutput
               }
       trySync (enqueueOutbound draft) >>= \case
         Left e -> failed req ("canonical publish failed: " <> T.pack (show (e :: SomeException)))

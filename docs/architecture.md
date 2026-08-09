@@ -4,7 +4,10 @@ Cross-cutting decisions are recorded in:
 
 - [`ADR 001: Context and Memory Foundations`](adr/001-context-memory-foundations.md)
 - [`ADR 002: Partial Plans and Adaptive Elaboration`](adr/002-partial-plans-adaptive-elaboration.md)
+- [`ADR 003: Message IR and Capability-Tiered Rendering`](adr/003-message-ir-capability-rendering.md)
 - [`ADR 004: Canonical Handles and the Identity the Model Addresses`](adr/004-canonical-handles-for-the-model.md)
+- [`ADR 005: Turn Continuity — Journal Projections and Verbatim Replay`](adr/005-turn-continuity.md)
+- [`ADR 006: Monitors — Typed Triggers and the Unified Scheduler`](adr/006-monitors-typed-triggers.md)
 
 Layout, runtime data flow, effect stack, and phase status. For behaviour see
 [features.md](features.md); for tests and debugging see
@@ -290,14 +293,16 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
 | Maintenance ownership | independently fenced PostgreSQL leases serialize embedding, memory-dream, and context-rebuild domains without making unrelated maintenance jobs block one another |
+| Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown`, claims the same turn for recovery, injects its committed sends/results/unknowns into a fresh LLM round, and never silently retries it; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
+| Sandbox workspaces | `sandboxes` persists lifecycle metadata and the named Docker volume holds current state. Boot adopts a running container or rebuilds a missing/stopped shell around the surviving volume; only a positively absent volume marks the workspace destroyed, and TTL GC replaces shutdown/boot reaping |
 
 | Lost on restart | Why |
 |---|---|
-| In-flight agent turns | ephemeral by design (`Max.Tasks`). SIGTERM drains them first — `shutdown_drain_seconds`, default 120 — but a crash, or a drain that times out, abandons them |
+| Exact in-memory instruction pointer/provider call of an in-flight agent turn | `Max.Tasks` and the provider call stack are process-local. SIGTERM drains first; after a crash Max resumes at turn granularity with a fresh model round over the persisted hole view, not by replaying the interrupted model call or tool instruction |
 | Triggers arriving mid-drain | persisted to `messages` and logged, but not dispatched |
 | Anything NapCat sends while we're down | it dials in over reverse-WS and doesn't buffer; closing this needs history backfill on reconnect |
 | `!use` admin targets | deliberate — just `!use` again |
-| Sandbox / browser containers | destroyed on exit, reaped on boot |
+| Browser containers | ephemeral: destroyed on exit and reaped on boot |
 
 Effect stack at the top of `runApp`:
 `IOE → Concurrent → Log → Http → Embedding → Blob → WithConnection → PlatformApi → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.

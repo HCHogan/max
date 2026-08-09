@@ -552,6 +552,7 @@ generateHistorianCapture timeoutSeconds profile conversationId messages = do
         Nothing
         (Just (max 1 timeoutSeconds))
         (Just [])
+        Nothing
     decodeResponse = \case
       Left err -> Left ("", "provider: " <> err, False)
       Right ToolCallsResp {} -> Left ("", "historian returned unexpected tool calls", False)

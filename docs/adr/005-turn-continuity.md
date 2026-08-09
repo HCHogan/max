@@ -4,7 +4,7 @@
   ADR 002's step-0 substrate and the L3 send linkage); the replay tier
   and rendered digests follow. Defaults below (TTLs, budgets) are knobs,
   recorded so the first implementation has numbers.
-- Date: 2026-08-06.
+- Date: 2026-08-06; persisted turn-ordinal handle contract 2026-08-09.
 
 ## Context
 
@@ -61,11 +61,13 @@ turn graph carries real data before any concurrency lands on it.
 ### The write path: turns, fact rows, segment archives
 
 **`agent_turns`** is the durable turn identity (also the L2 checkpoint
-substrate of issue #14): turn id, group, trigger canonical message id,
-status (running / succeeded / silence / aborted / crashed), profile,
-started/finished timestamps, token usage. The model-visible handle is a
-group-scoped ordinal `t#<n>`, joining `#<nnnn>` and `s<n>` in the
-ADR 004 handle grammar.
+substrate of issue #14): turn id, group, persisted group-scoped
+`turn_ordinal`, trigger canonical message id, status (running / succeeded /
+silence / aborted / crashed), profile, started/finished timestamps, token
+usage. `UNIQUE (conversation_id, turn_ordinal)` backs the model-visible
+`t#<n>` handle; the ordinal is allocated at turn creation, never while
+rendering. It joins `#<nnnn>` and `s<n>` in the amended ADR 004 handle
+grammar.
 
 **Journal rows** follow the ADR 002 contract unchanged — effect rows
 plus zero-authority fact rows (`model_note`). Nothing here relaxes the

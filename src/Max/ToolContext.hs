@@ -18,11 +18,13 @@ module Max.ToolContext
     toolStickers,
     toolSkills,
     toolOutputCapabilities,
+    toolTurnOutputContext,
   )
 where
 
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
+import Max.Turn.Types (TurnOutputContext)
 import OneBot.Types (GroupId, UserId)
 
 data TurnIdentity = TurnIdentity
@@ -33,7 +35,10 @@ data TurnIdentity = TurnIdentity
     -- | Who is asking, as a person.  Tools that record something on the
     -- user's behalf (a reminder, a memory) name them by principal, so what
     -- they store survives the account they happened to speak from.
-    tiAuthorPrincipalId :: !PrincipalId
+    tiAuthorPrincipalId :: !PrincipalId,
+    -- | Host-minted provenance for visible-output tools.  Model arguments
+    -- cannot choose or widen it.
+    tiTurnOutputContext :: !(Maybe TurnOutputContext)
   }
   deriving stock (Show, Eq)
 
@@ -88,3 +93,6 @@ toolSkills = (.toolCapabilities.tcSkills)
 
 toolOutputCapabilities :: ToolContext -> AdvertisedCaps
 toolOutputCapabilities = (.toolCapabilities.tcOutput)
+
+toolTurnOutputContext :: ToolContext -> Maybe TurnOutputContext
+toolTurnOutputContext = (.toolIdentity.tiTurnOutputContext)

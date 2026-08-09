@@ -20,10 +20,15 @@ module Max.Sandbox.Docker
     runRun,
     runRm,
     runVolumeRm,
+    DockerPresence (..),
+    DockerContainerStatus (..),
+    inspectContainerStatus,
+    inspectVolumePresence,
     listContainersByPrefix,
     listVolumesByPrefix,
     -- * Exec
     ExecResult (..),
+    SandboxManifest (..),
     runExec,
     runRead,
     runWrite,
@@ -41,9 +46,15 @@ module Max.Sandbox.Docker
 where
 
 import Control.Exception (IOException, try)
+import Crypto.Hash.SHA256 qualified as SHA256
+import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as Base16
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time.Clock.POSIX (getPOSIXTime)
+import Text.Read (readMaybe)
 import System.Exit (ExitCode (..))
 import System.Process
   ( CreateProcess (..),
@@ -74,9 +85,47 @@ data ExecResult = ExecResult
     erTruncated :: !Bool,
     -- | When truncated: container-side path holding the full
     -- stdout+stderr, for the model to grep/head on demand.
-    erSpillPath :: !(Maybe Text)
+    erSpillPath :: !(Maybe Text),
+    erDurationMillis :: !Int,
+    erActualCommand :: !Text,
+    erNetworkMode :: !Text,
+    erStdoutSha256 :: !Text,
+    erStdoutBytes :: !Int,
+    erStderrSha256 :: !Text,
+    erStderrBytes :: !Int,
+    -- | Post-effect observation of /work.  This is journal evidence, not a
+    -- reconstruction mechanism; the named volume remains the durable state.
+    erObservedManifest :: !(Maybe SandboxManifest)
   }
   deriving stock (Show)
+
+data SandboxManifest = SandboxManifest
+  { smSha256 :: !Text,
+    smFileCount :: !Int,
+    smPreview :: !Text,
+    smTruncated :: !Bool,
+    smChangedPaths :: ![Text],
+    smChangedPathsTruncated :: !Bool,
+    smContainerDiff :: ![Text],
+    smContainerDiffTruncated :: !Bool
+  }
+  deriving stock (Show)
+
+-- | A negative Docker inspection is useful only when the daemon positively
+-- reports that the resource is absent.  Treating CLI/daemon failure as
+-- absence would let a transient outage turn durable metadata into data loss.
+data DockerPresence
+  = DockerPresent
+  | DockerAbsent
+  | DockerUnavailable !Text
+  deriving stock (Show, Eq)
+
+data DockerContainerStatus
+  = DockerContainerRunning
+  | DockerContainerStopped
+  | DockerContainerMissing
+  | DockerContainerUnavailable !Text
+  deriving stock (Show, Eq)
 
 --------------------------------------------------------------------------------
 -- Lifecycle.
@@ -142,19 +191,38 @@ runVolumeRm name = do
       readProcessWithExitCode "docker" ["volume", "rm", T.unpack name] ""
   pure ()
 
--- | @docker ps -aq --filter "name=^PREFIX"@.
+-- | Names (not opaque container ids) in Max's owned namespace.
 listContainersByPrefix :: Text -> IO [Text]
 listContainersByPrefix prefix = do
   res <-
     try @IOException $
       readProcessWithExitCode
         "docker"
-        ["ps", "-aq", "--filter", "name=^" <> T.unpack prefix]
+        ["ps", "-a", "--format", "{{.Names}}", "--filter", "name=^" <> T.unpack prefix]
         ""
   pure $ case res of
     Right (ExitSuccess, out, _) ->
       filter (not . T.null) (T.lines (T.pack out))
     _ -> []
+
+inspectContainerStatus :: Text -> IO DockerContainerStatus
+inspectContainerStatus name = do
+  result <-
+    try @IOException $
+      readProcessWithExitCode
+        "docker"
+        ["container", "inspect", "--format", "{{.State.Running}}", T.unpack name]
+        ""
+  pure $ case result of
+    Left err -> DockerContainerUnavailable (dockerIOException err)
+    Right (ExitSuccess, out, _)
+      | T.strip (T.pack out) == "true" -> DockerContainerRunning
+      | otherwise -> DockerContainerStopped
+    Right (ExitFailure code, out, err)
+      | isMissingContainerError detail -> DockerContainerMissing
+      | otherwise -> DockerContainerUnavailable (dockerFailure code detail)
+      where
+        detail = T.strip (T.pack (out <> "\n" <> err))
 
 -- | @docker volume ls -q --filter "name=^PREFIX"@.
 listVolumesByPrefix :: Text -> IO [Text]
@@ -170,6 +238,35 @@ listVolumesByPrefix prefix = do
       filter (not . T.null) (T.lines (T.pack out))
     _ -> []
 
+inspectVolumePresence :: Text -> IO DockerPresence
+inspectVolumePresence name = do
+  result <- try @IOException $ readProcessWithExitCode "docker" ["volume", "inspect", T.unpack name] ""
+  pure $ case result of
+    Left err -> DockerUnavailable (dockerIOException err)
+    Right (ExitSuccess, _, _) -> DockerPresent
+    Right (ExitFailure code, out, err)
+      | isMissingVolumeError detail -> DockerAbsent
+      | otherwise -> DockerUnavailable (dockerFailure code detail)
+      where
+        detail = T.strip (T.pack (out <> "\n" <> err))
+
+isMissingContainerError :: Text -> Bool
+isMissingContainerError detail =
+  let lowered = T.toLower detail
+   in "no such container" `T.isInfixOf` lowered
+        || "no such object" `T.isInfixOf` lowered
+
+isMissingVolumeError :: Text -> Bool
+isMissingVolumeError detail =
+  "no such volume" `T.isInfixOf` T.toLower detail
+
+dockerIOException :: IOException -> Text
+dockerIOException err = "docker inspection failed: " <> T.take 1000 (T.pack (show err))
+
+dockerFailure :: Int -> Text -> Text
+dockerFailure code detail =
+  "docker inspection exited " <> T.pack (show code) <> ": " <> T.take 1000 detail
+
 --------------------------------------------------------------------------------
 -- Exec.
 
@@ -180,12 +277,24 @@ listVolumesByPrefix prefix = do
 runExec ::
   -- | container name
   Text ->
+  -- | host-observed network mode
+  Text ->
   -- | shell command (passed to @sh -c@)
   Text ->
   -- | timeout seconds
   Int ->
   IO ExecResult
-runExec container cmd timeoutSecs = do
+runExec container networkMode cmd timeoutSecs = do
+  started <- getPOSIXTime
+  let stamp = (show :: Int -> String) (round (started * 1000000))
+      marker = "/tmp/max-observe-" <> T.pack stamp
+  beforeDiff <- dockerDiff container
+  _ <-
+    try @IOException $
+      readProcessWithExitCode
+        "docker"
+        ["exec", T.unpack container, "sh", "-c", T.unpack ("touch " <> shellQuote marker)]
+        ""
   let wrapped =
         "timeout --preserve-status "
           <> T.pack (show timeoutSecs)
@@ -201,7 +310,7 @@ runExec container cmd timeoutSecs = do
           T.unpack wrapped
         ]
   res <- try @IOException $ readProcessWithExitCode "docker" args ""
-  case res of
+  base <- case res of
     Left e ->
       pure
         ExecResult
@@ -209,7 +318,15 @@ runExec container cmd timeoutSecs = do
             erStdout = "",
             erStderr = "docker exec failed: " <> T.pack (show e),
             erTruncated = False,
-            erSpillPath = Nothing
+            erSpillPath = Nothing,
+            erDurationMillis = 0,
+            erActualCommand = cmd,
+            erNetworkMode = networkMode,
+            erStdoutSha256 = digestText "",
+            erStdoutBytes = 0,
+            erStderrSha256 = digestText ("docker exec failed: " <> T.pack (show e)),
+            erStderrBytes = textBytes ("docker exec failed: " <> T.pack (show e)),
+            erObservedManifest = Nothing
           }
     Right (code, out, err) -> do
       let fullOut = stripAnsi (T.pack out)
@@ -226,8 +343,101 @@ runExec container cmd timeoutSecs = do
             erStdout = truncatedOut,
             erStderr = truncatedErr,
             erTruncated = t1 || t2,
-            erSpillPath = spill
+            erSpillPath = spill,
+            erDurationMillis = 0,
+            erActualCommand = cmd,
+            erNetworkMode = networkMode,
+            erStdoutSha256 = digestText fullOut,
+            erStdoutBytes = textBytes fullOut,
+            erStderrSha256 = digestText fullErr,
+            erStderrBytes = textBytes fullErr,
+            erObservedManifest = Nothing
           }
+  finished <- getPOSIXTime
+  manifest <- observeManifest container marker beforeDiff
+  pure
+    base
+      { erDurationMillis = max 0 (round ((finished - started) * 1000)),
+        erObservedManifest = manifest
+      }
+
+-- | Hash and preview the observed /work manifest without streaming an
+-- unbounded directory listing through the host process.  The temporary file
+-- lives outside /work, so the observation does not change the state it names.
+observeManifest :: Text -> Text -> [Text] -> IO (Maybe SandboxManifest)
+observeManifest container marker beforeDiff = do
+  let script =
+        "tmp=$(mktemp /tmp/max-manifest.XXXXXX) || exit 1; "
+          <> "find /work -xdev -type f -printf '%P\\t%s\\t%T@\\n' 2>/dev/null | LC_ALL=C sort >\"$tmp\"; "
+          <> "sha256sum \"$tmp\" | cut -d' ' -f1; "
+          <> "wc -l <\"$tmp\"; head -n 200 \"$tmp\"; rm -f \"$tmp\""
+  result <-
+    try @IOException $
+      readProcessWithExitCode
+        "docker"
+        ["exec", "--workdir", "/work", T.unpack container, "sh", "-c", T.unpack script]
+        ""
+  changed <- observeChangedPaths container marker
+  afterDiff <- dockerDiff container
+  _ <-
+    try @IOException $
+      readProcessWithExitCode
+        "docker"
+        ["exec", T.unpack container, "sh", "-c", T.unpack ("rm -f " <> shellQuote marker)]
+        ""
+  let beforeSet = Set.fromList beforeDiff
+      diffAll = filter (not . T.isInfixOf marker) (filter (`Set.notMember` beforeSet) afterDiff)
+      (diffPreview, diffTruncated) = boundedLines 200 diffAll
+  pure $ case result of
+    Right (ExitSuccess, out, _) -> case T.lines (T.pack out) of
+      sha : countText : previewLines
+        | T.length (T.strip sha) == 64,
+          Just count <- readMaybe (T.unpack (T.strip countText)) ->
+            Just
+              SandboxManifest
+                { smSha256 = T.strip sha,
+                  smFileCount = count,
+                  smPreview = T.intercalate "\n" previewLines,
+                  smTruncated = count > length previewLines,
+                  smChangedPaths = fst changed,
+                  smChangedPathsTruncated = snd changed,
+                  smContainerDiff = diffPreview,
+                  smContainerDiffTruncated = diffTruncated
+                }
+      _ -> Nothing
+    _ -> Nothing
+
+observeChangedPaths :: Text -> Text -> IO ([Text], Bool)
+observeChangedPaths container marker = do
+  let script =
+        "find /work -xdev -newer "
+          <> shellQuote marker
+          <> " -printf '%P\\t%y\\t%s\\t%T@\\n' 2>/dev/null | LC_ALL=C sort | head -n 201"
+  result <-
+    try @IOException $
+      readProcessWithExitCode
+        "docker"
+        ["exec", "--workdir", "/work", T.unpack container, "sh", "-c", T.unpack script]
+        ""
+  pure $ case result of
+    Right (ExitSuccess, out, _) -> boundedLines 200 (T.lines (T.pack out))
+    _ -> ([], False)
+
+dockerDiff :: Text -> IO [Text]
+dockerDiff container = do
+  result <- try @IOException $ readProcessWithExitCode "docker" ["diff", T.unpack container] ""
+  pure $ case result of
+    Right (ExitSuccess, out, _) -> filter (not . T.null) (T.lines (T.pack out))
+    _ -> []
+
+boundedLines :: Int -> [a] -> ([a], Bool)
+boundedLines limit values = (take limit values, length values > limit)
+
+digestText :: Text -> Text
+digestText = TE.decodeUtf8 . Base16.encode . SHA256.hash . TE.encodeUtf8
+
+textBytes :: Text -> Int
+textBytes = BS.length . TE.encodeUtf8
 
 -- | Save an over-cap exec's full output to a file inside the
 -- container, so truncation stops being lossy.  Best-effort: any

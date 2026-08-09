@@ -46,7 +46,7 @@ import Max.Tools.Schema
     toolObject,
     withKeys,
   )
-import Max.Sandbox.Docker (ExecResult (..), maxOutputBytes, shellQuote, wrapPackages)
+import Max.Sandbox.Docker (ExecResult (..), SandboxManifest (..), maxOutputBytes, shellQuote, wrapPackages)
 import Max.Sandbox.Registry
   ( SandboxCreateOpts (..),
     SandboxEntry (..),
@@ -169,6 +169,7 @@ execTool gid reg =
                     "truncated" .= er.erTruncated
                   ]
                     <> ["full_output_file" .= p | Just p <- [er.erSpillPath]]
+                    <> ["_max_journal_observed_manifest" .= journalObservation er]
     }
   where
     parseArgs :: Object -> Parser (Text, Text, [Text], Int)
@@ -178,6 +179,39 @@ execTool gid reg =
       pkgs <- o .:? "packages" .!= []
       mTo <- o .:? "timeout_seconds"
       pure (sid, cmd, pkgs, fromMaybe 30 mTo)
+
+journalObservation :: ExecResult -> Value
+journalObservation er =
+  object
+    [ "command" .= er.erActualCommand,
+      "exit_code" .= er.erExitCode,
+      "duration_ms" .= er.erDurationMillis,
+      "network_mode" .= er.erNetworkMode,
+      "stdout"
+        .= object
+          [ "sha256" .= er.erStdoutSha256,
+            "bytes" .= er.erStdoutBytes,
+            "spill_path" .= er.erSpillPath
+          ],
+      "stderr"
+        .= object
+          [ "sha256" .= er.erStderrSha256,
+            "bytes" .= er.erStderrBytes
+          ],
+      "filesystem" .= fmap filesystemObservation er.erObservedManifest
+    ]
+  where
+    filesystemObservation manifest =
+      object
+        [ "manifest_sha256" .= manifest.smSha256,
+          "file_count" .= manifest.smFileCount,
+          "manifest_preview" .= manifest.smPreview,
+          "manifest_truncated" .= manifest.smTruncated,
+          "changed_paths" .= manifest.smChangedPaths,
+          "changed_paths_truncated" .= manifest.smChangedPathsTruncated,
+          "container_diff" .= manifest.smContainerDiff,
+          "container_diff_truncated" .= manifest.smContainerDiffTruncated
+        ]
 
 --------------------------------------------------------------------------------
 -- nix_search

@@ -39,9 +39,13 @@ module Max.Tasks
     TurnRuntime,
     TurnCompletion (..),
     beginTurnRuntime,
+    beginDurableTurnRuntime,
+    beginDurableTurnRuntimeAt,
     activateTurnRuntime,
     finishTurnRuntime,
     turnRuntimeTaskId,
+    turnRuntimeAgentTurn,
+    turnRuntimeOutputContext,
     setTurnPhase,
     checkTurnCancellation,
     drainTurnInbox,
@@ -86,6 +90,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Max.Dispatch (DispatchMessage)
 import Max.Platform.Types (CanonicalMessageId (..))
+import Max.Turn.Types (AgentTurnRef, TurnOutputContext, newTurnOutputContext, newTurnOutputContextAt)
 import OneBot.Types (GroupId (..), UserId (..))
 
 -- | Short, human-typeable id like @t17@ — easy to !kill from the
@@ -119,10 +124,15 @@ data TaskHandle = TaskHandle
     thOwned :: !Bool
   }
 
--- | The explicit lifecycle object for one dispatch.  It is created before the
--- worker is spawned, passed directly to the Agent, and finalized by the
--- dispatch root.  No trigger-id lookup is needed on the production path.
-newtype TurnRuntime = TurnRuntime TaskEntry
+-- | The explicit lifecycle object for one dispatch.  The task entry remains
+-- process-local, while production turns also carry their durable identity and
+-- one shared visible-output ordinal allocator.  Tests and legacy helpers can
+-- still create an in-memory-only runtime with 'beginTurnRuntime'.
+data TurnRuntime = TurnRuntime
+  { trEntry :: !TaskEntry,
+    trAgentTurn :: !(Maybe AgentTurnRef),
+    trOutputContext :: !(Maybe TurnOutputContext)
+  }
 
 data TurnCompletion = TurnCompletion
   { tcAbsorbedTriggers :: !(Set Int64),
@@ -202,7 +212,47 @@ instance Exception TaskCancelled where
 -- Visibility begins in the same STM transaction that allocates its task id,
 -- before context/media collection or any LLM call.
 beginTurnRuntime :: TaskRegistry -> GroupId -> UserId -> Maybe CanonicalMessageId -> IO TurnRuntime
-beginTurnRuntime reg gid uid mTrigger = do
+beginTurnRuntime reg gid uid mTrigger =
+  beginTurnRuntimeWith reg Nothing Nothing gid uid mTrigger
+
+-- | Production constructor.  The caller has already committed the
+-- @agent_turns@ row, so the in-memory registry can never advertise a turn
+-- whose durable identity does not exist.
+beginDurableTurnRuntime ::
+  TaskRegistry ->
+  AgentTurnRef ->
+  GroupId ->
+  UserId ->
+  Maybe CanonicalMessageId ->
+  IO TurnRuntime
+beginDurableTurnRuntime reg durable gid uid mTrigger = do
+  output <- newTurnOutputContext durable
+  beginTurnRuntimeWith reg (Just durable) (Just output) gid uid mTrigger
+
+-- | Recovery constructor.  Visible-output indices already committed before
+-- process death remain occupied; continuation starts after the ledger's
+-- current maximum rather than resetting the process-local allocator to zero.
+beginDurableTurnRuntimeAt ::
+  TaskRegistry ->
+  AgentTurnRef ->
+  Int ->
+  GroupId ->
+  UserId ->
+  Maybe CanonicalMessageId ->
+  IO TurnRuntime
+beginDurableTurnRuntimeAt reg durable firstChunk gid uid mTrigger = do
+  output <- newTurnOutputContextAt durable firstChunk
+  beginTurnRuntimeWith reg (Just durable) (Just output) gid uid mTrigger
+
+beginTurnRuntimeWith ::
+  TaskRegistry ->
+  Maybe AgentTurnRef ->
+  Maybe TurnOutputContext ->
+  GroupId ->
+  UserId ->
+  Maybe CanonicalMessageId ->
+  IO TurnRuntime
+beginTurnRuntimeWith reg durable output gid uid mTrigger = do
   now <- getCurrentTime
   inbox <- newTVarIO []
   absorbed <- newTVarIO Set.empty
@@ -226,47 +276,62 @@ beginTurnRuntime reg gid uid mTrigger = do
               teKilled = killed
             }
     writeTVar reg.trState (n + 1, Map.insert tid entry m)
-    pure (TurnRuntime entry)
+    pure
+      TurnRuntime
+        { trEntry = entry,
+          trAgentTurn = durable,
+          trOutputContext = output
+        }
   where
     realTrigger = \case
       Just (CanonicalMessageId message) | message /= 0 -> Just message
       _ -> Nothing
 
 turnRuntimeTaskId :: TurnRuntime -> TaskId
-turnRuntimeTaskId (TurnRuntime entry) = entry.teId
+turnRuntimeTaskId turn = turn.trEntry.teId
+
+turnRuntimeAgentTurn :: TurnRuntime -> Maybe AgentTurnRef
+turnRuntimeAgentTurn = (.trAgentTurn)
+
+turnRuntimeOutputContext :: TurnRuntime -> Maybe TurnOutputContext
+turnRuntimeOutputContext = (.trOutputContext)
 
 -- | Attach the worker's cancellation action and enter its first executable
 -- phase.  A kill accepted during context collection is returned explicitly so
 -- the caller can stop before spending an LLM turn.
 activateTurnRuntime :: TurnRuntime -> Text -> IO () -> IO Bool
-activateTurnRuntime (TurnRuntime entry) phase cancel = atomically $ do
+activateTurnRuntime turn phase cancel = atomically $ do
+  let entry = turn.trEntry
   writeTVar entry.teKind phase
   writeTVar entry.teCancel (Just cancel)
   readTVar entry.teKilled
 
 setTurnPhase :: TurnRuntime -> Text -> IO ()
-setTurnPhase (TurnRuntime entry) phase = atomically (writeTVar entry.teKind phase)
+setTurnPhase turn phase = atomically (writeTVar turn.trEntry.teKind phase)
 
 checkTurnCancellation :: TurnRuntime -> IO ()
-checkTurnCancellation (TurnRuntime entry) = do
+checkTurnCancellation turn = do
+  let entry = turn.trEntry
   killed <- readTVarIO entry.teKilled
   when killed (throwIO TaskCancelled)
 
 drainTurnInbox :: TurnRuntime -> IO [Note]
-drainTurnInbox (TurnRuntime entry) = atomically $ do
+drainTurnInbox turn = atomically $ do
+  let entry = turn.trEntry
   notes <- readTVar entry.teInbox
   writeTVar entry.teInbox []
   pure notes
 
 requeueTurnInbox :: TurnRuntime -> [Note] -> IO ()
-requeueTurnInbox (TurnRuntime entry) notes =
-  atomically (modifyTVar' entry.teInbox (notes <>))
+requeueTurnInbox turn notes =
+  atomically (modifyTVar' turn.trEntry.teInbox (notes <>))
 
 -- | The dispatch root is the sole finalizer.  It atomically removes the task
 -- and returns everything its epilogue needs, so cleanup cannot observe a
 -- half-removed entry.  Killed turns deliberately drop pending notes.
 finishTurnRuntime :: TaskRegistry -> TurnRuntime -> IO TurnCompletion
-finishTurnRuntime reg (TurnRuntime entry) = atomically $ do
+finishTurnRuntime reg turn = atomically $ do
+  let entry = turn.trEntry
   (n, entries) <- readTVar reg.trState
   absorbed <- readTVar entry.teAbsorbed
   killed <- readTVar entry.teKilled

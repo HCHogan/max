@@ -2,6 +2,7 @@ module Max.Handler
   ( handleEvents,
     dispatchPendingWorker,
     dispatchProactive,
+    resumeInterruptedTurn,
     recordAs,
     IngestOutcome (..),
     ingestAllowsDownstream,
@@ -12,10 +13,13 @@ module Max.Handler
 where
 
 import Control.Applicative ((<|>))
+import Control.Exception qualified as Exception
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (forM_, unless, void, when)
-import Data.Aeson (Value, toJSON)
+import Data.Aeson (Value, encode, toJSON)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
 import Data.List (find, partition, unsnoc)
@@ -37,13 +41,24 @@ import Max.Command.Parser (parseCommand)
 import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
 import Max.Command.Types (Command (..))
 import Max.ConversationScope (conversationScopeFor)
+import Max.DB.AgentTurn
+  ( AgentTurnRecovery (..),
+    AgentTurnTerminal (..),
+    ensureAgentTurnCrashed,
+    ensureAgentTurnRecoveryPending,
+    finishAgentTurn,
+    markAgentTurnRunning,
+    nextAgentTurnOutputChunk,
+    recoveryViewForTurn,
+    startAgentTurn,
+  )
 import Max.DB.History (HistoryItem (..), fetchMessageInScope, fetchRecentInGroup)
 import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
 import Max.Dispatch (DispatchMessage (..), dispatchMentionsSelf, dispatchTextWithoutSelf, stripDispatchVerb)
 import Max.Dispatch qualified as Dispatch
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
-import Max.Effects.Blob (Blob)
-import Max.Effects.LLM (LLM)
+import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
+import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), LLM)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded, wasDelivered)
 import Max.Effects.PlatformApi (PlatformApi, sendAction)
 import Max.Env (BotEnv (..))
@@ -76,6 +91,7 @@ import Max.Platform.Store
     defaultIngestOptions,
     ensureEndpointPrincipals,
     ingestEnvelope,
+    loadDispatchClaim,
     resolveMentionIdentities,
     mentionPrincipalsFor,
     enqueueReaction,
@@ -95,7 +111,8 @@ import Max.Tasks
     TaskId (..),
     TaskInfo (..),
     TurnCompletion (..),
-    beginTurnRuntime,
+    beginDurableTurnRuntime,
+    beginDurableTurnRuntimeAt,
     finishTurnRuntime,
     inFlightTriggers,
     listTasks,
@@ -103,8 +120,10 @@ import Max.Tasks
     pushToTrigger,
     setTurnPhase,
     turnRuntimeTaskId,
+    turnRuntimeOutputContext,
   )
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..), TurnOutputContext, nextTurnOutputLink)
 import Max.Util (catchSync, readIntegral, trySync, tshow)
 import OneBot.Action (Action (..))
 import OneBot.Event (Event (..), GroupMessage (..), MessageNotice (..), PokeEvent (..))
@@ -782,7 +801,8 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               orGroupId = GroupId (negate uidRaw),
               orBody = Body [NText (header <> reply)],
               orReplyTo = Nothing,
-              orDeliveryScope = DeliverConversation
+              orDeliveryScope = DeliverConversation,
+              orTurnOutput = Nothing
             }
       if wasDelivered outcome
         then queueQQReaction gm.groupId gm.canonicalId ackFaceId True
@@ -879,7 +899,72 @@ dispatchLLM ::
   [DispatchMessage] ->
   DispatchMessage ->
   Eff es ()
-dispatchLLM mIntent origin absorbable companions gm = do
+dispatchLLM = dispatchLLMWith Nothing Nothing
+
+-- | Resume one boot-claimed turn with the immutable original trigger and a
+-- bounded host-rendered journal view.  Missing or cross-conversation trigger
+-- state fails closed and terminally; it never admits a replacement turn.
+resumeInterruptedTurn ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  AgentTurnRecovery ->
+  Eff es ()
+resumeInterruptedTurn recovery = do
+  mClaim <- loadDispatchClaim recovery.atrRecoveryTrigger
+  case mClaim of
+    Nothing ->
+      ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger is missing"
+    Just claim
+      | GroupId claim.compatibilityConversationId /= recovery.atrRecoveryGroupId ->
+          ensureAgentTurnCrashed recovery.atrRecoveryTurn "restart recovery trigger changed conversation"
+      | otherwise -> do
+          principals <- mentionPrincipalsFor (mentionIdentities claim.body)
+          view <- recoveryViewForTurn recovery.atrRecoveryTurn
+          let message = dispatchMessage principals claim
+              origin
+                | isPrivateChat message.groupId || dispatchMentionsSelf message = OriginDirect
+                | otherwise = OriginProactive
+          dispatchLLMWith
+            (Just recovery.atrRecoveryTurn)
+            (Just view)
+            Nothing
+            origin
+            NeverAbsorb
+            []
+            message
+
+dispatchLLMWith ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  Maybe AgentTurnRef ->
+  Maybe T.Text ->
+  Maybe IntentState ->
+  TriggerOrigin ->
+  Absorbable ->
+  [DispatchMessage] ->
+  DispatchMessage ->
+  Eff es ()
+dispatchLLMWith existingTurn recoveryView mIntent origin absorbable companions gm = do
   env :: BotEnv <- ask
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
@@ -889,7 +974,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
           [ "group_id" .= gidRaw,
             "user_id" .= fromRaw,
             "message_id" .= midRaw,
-            "origin" .= T.pack (show origin)
+            "origin" .= T.pack (show origin),
+            "recovered" .= isJust existingTurn
           ]
   outputCaps <- conversationAdvertisedCaps gidRaw (Just midRaw)
   -- Claim the shutdown slot out here rather than inside the async:
@@ -906,10 +992,34 @@ dispatchLLM mIntent origin absorbable companions gm = do
   -- and !kill.  The registry entry opens now and the loop adopts it.
   mTurn <-
     if started
-      then Just <$> liftIO (beginTurnRuntime env.beTasks gm.groupId gm.userId (Just gm.canonicalId))
+      then
+        ( do
+            durable <-
+              maybe
+                (startAgentTurn gm.groupId gm.canonicalId gm.authorPrincipalId)
+                pure
+                existingTurn
+            ( do
+                runtime <- case existingTurn of
+                  Nothing ->
+                    liftIO (beginDurableTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
+                  Just _ -> do
+                    firstChunk <- nextAgentTurnOutputChunk durable.atrTurnId
+                    liftIO (beginDurableTurnRuntimeAt env.beTasks durable firstChunk gm.groupId gm.userId (Just gm.canonicalId))
+                pure (Just (runtime, durable))
+              )
+              `catchSync` \e -> do
+                ensureAgentTurnCrashed durable "failed to create the in-memory turn runtime"
+                liftIO (Exception.throwIO (e :: SomeException))
+        )
+          `catchSync` \e -> do
+            liftIO (leaveDispatch env.beShutdown)
+            liftIO (Exception.throwIO (e :: SomeException))
       else pure Nothing
   case mTurn of
     Nothing -> do
+      for_ existingTurn $ \durable ->
+        ensureAgentTurnCrashed durable "restart recovery declined during shutdown drain"
       logInfo "llm dispatch declined: draining" ident
       -- The drain can run for a couple of minutes behind a long turn,
       -- and every @ landing in that window would otherwise get total
@@ -920,16 +1030,17 @@ dispatchLLM mIntent origin absorbable companions gm = do
       -- react to.
       when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
         queueQQReaction gm.groupId gm.canonicalId failureFaceId True
-    Just turn ->
+    Just (turn, durable) ->
       void . async $
         ( localDomain "llm" $ do
             logInfo "llm dispatch" ident
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
             -- (and every trySyncIO on the way up) — the outer 'catch' is the
             -- one place a user-initiated @!kill@ comes to rest.
-            ( work outputCaps turn `catchSync` \e -> do
+            ( work outputCaps turn durable `catchSync` \e -> do
+                finishAgentTurn durable TurnCrashed 0 (Just (T.pack (show (e :: SomeException)))) Nothing
                 logAttention "llm dispatch crashed" $
-                  object ["error" .= T.pack (show (e :: SomeException))]
+                  object ["error" .= T.pack (show e)]
                 -- The processing reaction is already gone (its 'finally' ran
                 -- while the exception unwound), which without this looked
                 -- exactly like a silent success: 托腮 vanished, no reply, no
@@ -941,10 +1052,21 @@ dispatchLLM mIntent origin absorbable companions gm = do
               )
               `catch` \TaskCancelled ->
                 -- User-initiated !kill — quieter log, not an error.
-                logInfo "llm dispatch cancelled" $
-                  object ["group_id" .= gidRaw]
+                do
+                  finishAgentTurn durable TurnAborted 0 (Just "cancelled by !kill") Nothing
+                  logInfo "llm dispatch cancelled" $
+                    object ["group_id" .= gidRaw]
         )
           `finally` do
+            -- Any asynchronous exit other than !kill, including forced
+            -- shutdown after the drain deadline, reaches here.  Keep a
+            -- non-terminal row reclaimable for the next boot; normal, killed,
+            -- and synchronously failed rows are already terminal and this is
+            -- therefore a no-op.
+            ensureAgentTurnRecoveryPending durable "dispatch unwound before a terminal checkpoint"
+              `catchSync` \e ->
+                logAttention "durable turn finalizer failed" $
+                  object ["error" .= T.pack (show (e :: SomeException))]
             -- Take the 托腮 back off everything this turn absorbed —
             -- implicit supplements and explicit !feedback notes both
             -- wear it from the moment they land in the inbox.  Read
@@ -982,21 +1104,26 @@ dispatchLLM mIntent origin absorbable companions gm = do
                 object ["message_id" .= srcMid]
               dispatchLLM mIntent orig NeverAbsorb [] src
   where
-    work outputCaps turn = do
+    work outputCaps turn durable = do
       env :: BotEnv <- ask
       let tid = turnRuntimeTaskId turn
       t <- loadSession env.beSessions env.beDefaultModel gm.groupId
       s <- liftIO (readSession t)
+      markAgentTurnRunning durable s.model
       injected <- tryInjectSupplement outputCaps env s tid
-      unless injected $ do
-        -- Commit point: this turn is going to build context, and the
-        -- group's pending intent buffer reaches the model as ambient
-        -- text of it — clear the buffer so the same messages can't
-        -- also produce a proactive reply.  Not earlier (an absorbed
-        -- trigger builds nothing, and the buffer must survive it) and
-        -- not later (buildContext is about to read history).
-        for_ mIntent $ \st -> liftIO (clearPendingIntent st gm.groupId)
-        withProcessingReaction outputCaps (dispatch outputCaps turn env s)
+      if injected
+        then do
+          archive <- captureTurnArchiveFields durable s.model [] 0 (Just "absorbed into an in-flight turn")
+          finishAgentTurn durable TurnAborted 0 (Just "absorbed into an in-flight turn") archive
+        else do
+          -- Commit point: this turn is going to build context, and the
+          -- group's pending intent buffer reaches the model as ambient
+          -- text of it — clear the buffer so the same messages can't
+          -- also produce a proactive reply.  Not earlier (an absorbed
+          -- trigger builds nothing, and the buffer must survive it) and
+          -- not later (buildContext is about to read history).
+          for_ mIntent $ \st -> liftIO (clearPendingIntent st gm.groupId)
+          withProcessingReaction outputCaps (dispatch outputCaps turn durable env s)
 
     -- React [托腮] on the trigger while the dispatch runs — a quiet
     -- "seen, working on it" — and clear it once the reply (or
@@ -1104,7 +1231,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
                   pure (isJust landed)
         _ -> pure False
 
-    dispatch outputCaps turn env s = do
+    dispatch outputCaps turn durable env s = do
       catalog :: ModelCatalog <- ask
       let capabilities = lookupModelCapabilities s.model catalog
           multimodal = maybe False supportsMultimodal capabilities
@@ -1136,12 +1263,13 @@ dispatchLLM mIntent origin absorbable companions gm = do
           inFlight
           s
           gm
-      let debugEff = fromMaybe env.beDebugDefault s.debugOverride
+      let recoveredCtx = maybe ctx (`injectRecoveryView` ctx) recoveryView
+          debugEff = fromMaybe env.beDebugDefault s.debugOverride
           stickersEff = fromMaybe env.beStickerDefault s.stickerOverride
           platformStickers = stickersEff && outputCaps.canMedia
           toolCtx =
             mkToolContext
-              (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId)
+              (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId (turnRuntimeOutputContext turn))
               (TurnCapabilities multimodal platformStickers (not (null skills)) outputCaps)
           agentCtx = AgentContext toolCtx s.effortOverride
           -- The name→principal map the send path rescues "@显示名" against is
@@ -1149,15 +1277,21 @@ dispatchLLM mIntent origin absorbable companions gm = do
           -- write are exactly the names it read.  Before ADR 004 this was a
           -- separate QQ member-list fetch, in a different id space.
           rosterNames = [(name, PrincipalId principal) | (principal, name) <- roster]
-          target = sendTarget outputCaps gm rosterNames platformStickers
+          target =
+            sendTarget
+              outputCaps
+              gm
+              rosterNames
+              platformStickers
+              (turnRuntimeOutputContext turn)
       -- The streaming sink.  It sends whole paragraphs the model has
       -- finished with, down the same path the final reply takes — the
       -- budget TVar is what keeps the two halves of one split reply
       -- bounded together (see "Max.ReplySend").
       streamBudget <- liftIO (newTVarIO freshBudget)
       let output = AgentOutputContext target gm.canonicalId debugEff streamBudget
-      result <- agentTurn turn agentCtx s.model ctx (handleAgentEvent output)
-      case result.reply of
+      result <- agentTurn turn agentCtx s.model recoveredCtx (handleAgentEvent output)
+      terminal <- case result.reply of
         -- The loop produced no model-authored reply — upstream API
         -- down, or the turn-cap fallback call failed too.  Error text
         -- in the group would just be noise; swap the processing
@@ -1173,9 +1307,12 @@ dispatchLLM mIntent origin absorbable companions gm = do
           when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $ do
             queueQQReaction gm.groupId gm.canonicalId processingFaceId False
             queueQQReaction gm.groupId gm.canonicalId failureFaceId True
-        Just replyRaw -> handleReply outputCaps env s rosterNames streamBudget result replyRaw
+          pure TurnFailed
+        Just replyRaw -> handleReply outputCaps env s target streamBudget result replyRaw
+      archive <- captureTurnArchive durable s.model result
+      finishAgentTurn durable terminal result.turnsUsed result.aborted archive
 
-    handleReply outputCaps env s rosterNames streamBudget result replyRaw = do
+    handleReply outputCaps env s target streamBudget result replyRaw = do
       -- Real stickers/images are the [sticker#<id>] / [image#<id>]
       -- tokens, resolved when the reply is sent.  The captionless
       -- "[表情包: …]" and bare "[image]"/"[动画表情]"/"[face]"/…
@@ -1237,6 +1374,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
               -- target for either the link or the face.
               quotedTarget = listToMaybe [q | q <- quoted, q > 0]
               declined = quotedTarget <|> sourceMessage
+          turnOutput <- traverse (liftIO . nextTurnOutputLink) target.rtTurnOutputContext
           void $
             recordInternalMessage
               OutboundDraft
@@ -1244,7 +1382,8 @@ dispatchLLM mIntent origin absorbable companions gm = do
                   transcriptKind = renderMessageKind KindChat,
                   sourceCanonicalMessageId = sourceMessage,
                   canonicalBody = Body [NText silenceText],
-                  replyToCanonicalMessageId = declined
+                  replyToCanonicalMessageId = declined,
+                  turnOutputLink = turnOutput
                 }
           -- On the message being declined, which is only the trigger when the
           -- model did not say otherwise.  The two differ whenever it answers
@@ -1256,6 +1395,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
               (maybe gm.canonicalId CanonicalMessageId quotedTarget)
               (fromMaybe defaultSilenceFace mFace)
               True
+          pure TurnSilence
         Nothing -> do
           -- Outbound gets the platform message_id and persists this
           -- message into the messages table.  That's where
@@ -1267,7 +1407,7 @@ dispatchLLM mIntent origin absorbable companions gm = do
           budget <- liftIO (readTVarIO streamBudget)
           _ <-
             sendAndPersistReply
-              (sendTarget outputCaps gm rosterNames stickersEff)
+              target {rtStickers = stickersEff}
               budget
               stripped
           logInfo "llm replied" $
@@ -1283,6 +1423,58 @@ dispatchLLM mIntent origin absorbable companions gm = do
           -- settled capture later produces both chronological summaries and
           -- scoped memory proposals from the same exact source range.
           for_ env.beEpisodeScheduler $ \scheduler -> liftIO (armEpisode scheduler gm.groupId)
+          pure TurnSucceeded
+
+    captureTurnArchive durable profile result = do
+      captureTurnArchiveFields durable profile result.appended result.turnsUsed result.aborted
+
+    captureTurnArchiveFields durable profile appended turnsUsed aborted = do
+      (Just <$> writeArchive)
+        `catchSync` \e -> do
+          -- The wire archive is disposable replay cache, never turn truth.
+          -- A cache write failure after a visible reply must not turn that
+          -- successfully completed reply into a user-visible crash.
+          logAttention "turn trace archive capture failed" $
+            object
+              [ "turn_id" .= durable.atrTurnId.unAgentTurnId,
+                "error" .= T.pack (show (e :: SomeException))
+              ]
+          pure Nothing
+      where
+        writeArchive = do
+          now <- liftIO getCurrentTime
+          let payload =
+                object
+                  [ "version" .= (1 :: Int),
+                    "turn_id" .= durable.atrTurnId.unAgentTurnId,
+                    "turn_ordinal" .= durable.atrTurnOrdinal.unTurnOrdinal,
+                    "profile" .= profile,
+                    "trigger"
+                      .= object
+                        [ "canonical_message_id" .= gm.canonicalId,
+                          "body" .= gm.body
+                        ],
+                    "appended" .= appended,
+                    "turns_used" .= turnsUsed,
+                    "aborted" .= aborted
+                  ]
+              bytes = LBS.toStrict (encode payload)
+          blob <- putBlob bytes
+          pure
+            ( blobRefSha256 blob,
+              fromIntegral (BS.length bytes),
+              addUTCTime (14 * 24 * 60 * 60) now
+            )
+
+-- | Keep the prompt's final role shape intact while appending the boot-only
+-- hole view to the current user turn.  Multimodal triggers retain their
+-- existing blocks and receive one final host-authored text block.
+injectRecoveryView :: T.Text -> [ChatMessage] -> [ChatMessage]
+injectRecoveryView view messages = case unsnoc messages of
+  Just (prefix, MsgUser body) -> prefix <> [MsgUser (body <> "\n\n" <> view)]
+  Just (prefix, MsgUserBlocks blocks) ->
+    prefix <> [MsgUserBlocks (blocks <> [TextBlock ("\n\n" <> view)])]
+  _ -> messages <> [MsgUser view]
 
 --------------------------------------------------------------------------------
 -- Reply helper.
@@ -1296,8 +1488,9 @@ sendTarget ::
   DispatchMessage ->
   [(T.Text, PrincipalId)] ->
   Bool ->
+  Maybe TurnOutputContext ->
   ReplyTarget
-sendTarget outputCaps gm rosterNames stickersOn =
+sendTarget outputCaps gm rosterNames stickersOn turnOutput =
   ReplyTarget
     { rtGroupId = gm.groupId,
       rtSelfId = gm.selfId,
@@ -1307,7 +1500,8 @@ sendTarget outputCaps gm rosterNames stickersOn =
       rtCanReply = outputCaps.canReply,
       rtCanMention = outputCaps.canMention,
       rtCanFace = outputCaps.canFace,
-      rtCanImage = outputCaps.canMedia
+      rtCanImage = outputCaps.canMedia,
+      rtTurnOutputContext = turnOutput
     }
 
 -- | Send a message and write it down, so the messages table mirrors
@@ -1337,7 +1531,8 @@ sendAndRecord kind deliveryScope gid body replyTo =
           orGroupId = gid,
           orBody = body,
           orReplyTo = replyTo,
-          orDeliveryScope = deliveryScope
+          orDeliveryScope = deliveryScope,
+          orTurnOutput = Nothing
         }
 
 -- | Command output: plain text, no quote and no @ — in the moment

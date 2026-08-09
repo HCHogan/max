@@ -91,6 +91,9 @@ truncateAll pool = withConn pool $ \c -> do
       c
       "TRUNCATE \
       \  maintenance_leases, \
+      \  execution_journal, \
+      \  sandboxes, \
+      \  agent_turns, \
       \  platform_ingest_cursors, \
       \  message_relations, \
       \  message_deliveries, \
