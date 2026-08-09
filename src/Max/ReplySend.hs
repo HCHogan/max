@@ -78,9 +78,10 @@ import Data.Map.Strict qualified as Map
 import Max.IR.Prompt (MentionRoster (..), parseModelChunk)
 import Max.Platform.Store (resolveMentionIdentities)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId)
-import Max.Render (renderTableImage)
+import Max.Render (renderCodeImage, renderTableImage)
 import Max.Reply
   ( Chunk (..),
+    CodeBlock (..),
     chunkSource,
     maxChunks,
     planReply,
@@ -234,38 +235,15 @@ sendAndPersistReply rt budget rawBody
     -- One chunk becomes one ingest-phase body plus an envelope reply.
     -- Model-only handles are resolved before publication, and image handles
     -- are deduplicated across the complete streamed reply.
-    planChunk b (TableChunk src) = do
-      rendered <- liftIO (renderTableImage src)
-      case rendered of
-        Right png -> do
-          blob <- putBlob png
-          case mediaBlobRef (blobRefSha256 blob) of
-            Nothing -> do
-              logAttention "table render produced an invalid blob reference" $ object []
-              pure (b, Just (Body [NText src], Nothing, src))
-            Just source ->
-              pure
-                ( b,
-                  Just
-                    ( Body
-                        [ NMedia
-                            (Just source)
-                            MediaMeta
-                              { kind = MImage,
-                                mime = Just "image/png",
-                                sizeBytes = Just (fromIntegral (BS.length png)),
-                                name = Just "table.png",
-                                description = Nothing,
-                                raw = Just (object ["prompt_text" .= src])
-                              }
-                        ],
-                      Nothing,
-                      src
-                    )
-                )
-        Left err -> do
-          logAttention "table render failed, sending source" $ object ["error" .= err]
-          pure (b, Just (Body [NText src], Nothing, src))
+    planChunk b (TableChunk src) =
+      renderedChunk b "table" "table.png" src src (renderTableImage src)
+    planChunk b (CodeChunk cb) =
+      -- The picture is what an image endpoint gets; @cbBody@ is what one
+      -- without gets, and the fences come off on the way — they are
+      -- markdown, and a platform that cannot render the image cannot
+      -- render them either.
+      renderedChunk b "code" "code.png" cb.cbSource cb.cbBody (renderCodeImage cb.cbLang cb.cbBody)
+
     planChunk b (TextChunk t) = do
       let (mReplyId, parsed0) = parseModelChunk mentionRoster t
           (seen', parsed) = dedupeModelImages b.sbSentImages parsed0
@@ -293,6 +271,50 @@ sendAndPersistReply rt budget rawBody
             then Nothing
             else Just (Body content, CanonicalMessageId <$> mReplyId', t)
         )
+
+    -- Render source to a picture and carry both texts on the node: the
+    -- source so the model reads back what it wrote, and the fold text so a
+    -- text-only endpoint — or one whose media budget is already spent —
+    -- receives the content rather than "[图片: code.png]".
+    renderedChunk b subject fileName promptText foldText render = do
+      rendered <- liftIO render
+      let asText = pure (b, Just (Body [NText foldText], Nothing, foldText))
+      case rendered of
+        Right png -> do
+          blob <- putBlob png
+          case mediaBlobRef (blobRefSha256 blob) of
+            Nothing -> do
+              logAttention (subject <> " render produced an invalid blob reference") $ object []
+              asText
+            Just source ->
+              pure
+                ( b,
+                  Just
+                    ( Body
+                        [ NMedia
+                            (Just source)
+                            MediaMeta
+                              { kind = MImage,
+                                mime = Just "image/png",
+                                sizeBytes = Just (fromIntegral (BS.length png)),
+                                name = Just fileName,
+                                description = Nothing,
+                                raw =
+                                  Just
+                                    ( object
+                                        [ "prompt_text" .= promptText,
+                                          "fold_text" .= foldText
+                                        ]
+                                    )
+                              }
+                        ],
+                      Nothing,
+                      promptText
+                    )
+                )
+        Left err -> do
+          logAttention (subject <> " render failed, sending text") $ object ["error" .= err]
+          asText
 
     mentionRoster = MentionRoster {names = rt.rtRosterNames, selfPrincipal = Just rt.rtSelfPrincipal}
 

@@ -19,6 +19,7 @@
 -- sending) lives with the caller.
 module Max.Reply
   ( Chunk (..),
+    CodeBlock (..),
     chunkSource,
     planReply,
     maxChunks,
@@ -33,7 +34,7 @@ where
 
 import Control.Applicative ((<|>))
 import Data.Char (isAlpha, isAscii, isDigit, isSpace)
-import Data.List (unsnoc)
+import Data.List (dropWhileEnd, unsnoc)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -44,12 +45,25 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Util (readIntegral)
 
--- | One outgoing message.  'TableChunk' carries the markdown table
--- source — the caller renders it to an image and falls back to
--- sending the source verbatim if rendering fails.
+-- | One outgoing message.  'TableChunk' and 'CodeChunk' carry source the
+-- caller renders to an image, falling back to text if rendering fails.
 data Chunk
   = TextChunk !Text
   | TableChunk !Text
+  | CodeChunk !CodeBlock
+  deriving stock (Show, Eq)
+
+-- | A fenced code block, kept in all three forms the pipeline needs at
+-- once because each consumer wants a different one and none can recover
+-- the others: the info string picks the highlighter, the body is what a
+-- text-only endpoint should receive (QQ has no monospace, but bare
+-- backticks there are just noise), and the source is what the model must
+-- read back as its own words.
+data CodeBlock = CodeBlock
+  { cbLang :: !(Maybe Text),
+    cbBody :: !Text,
+    cbSource :: !Text
+  }
   deriving stock (Show, Eq)
 
 -- | The text a chunk was planned from — what should go into the
@@ -59,6 +73,7 @@ chunkSource :: Chunk -> Text
 chunkSource = \case
   TextChunk t -> t
   TableChunk t -> t
+  CodeChunk cb -> cb.cbSource
 
 -- | Plan one blob of model-authored text into outgoing messages.
 --
@@ -76,9 +91,12 @@ chunkSource = \case
 -- "Nothing to send" is a real answer, and both callers already read
 -- @[]@ that way.
 planReply :: Text -> [Chunk]
-planReply body = capChunks (concatMap explode (splitTables body))
+planReply body = capChunks (concatMap explode (splitBlocks body))
   where
     explode (TableChunk t) = [TableChunk t]
+    -- Deliberately not through 'latexToUnicode': inside a fence, @\alpha@
+    -- is somebody's identifier, not a symbol waiting to be prettified.
+    explode c@(CodeChunk _) = [c]
     explode (TextChunk t) = map TextChunk (splitChunks (latexToUnicode t))
 
 -- | Ceiling on how many messages one reply may become.
@@ -344,27 +362,67 @@ dedupeImagePieces = go
        in (seen', p : rest')
 
 --------------------------------------------------------------------------------
--- Stage 1: carve out markdown tables.
+-- Stage 1: carve out markdown tables and fenced code.
 
--- | Split on GFM tables: a line starting with @|@ immediately
--- followed by a separator row (only @| - : space@, at least one
--- dash), plus any following @|@-lines.  Conservative on purpose —
--- a lone @|@-prefixed line stays text.  Fence-aware: table syntax
--- inside ``` is code.
-splitTables :: Text -> [Chunk]
-splitTables body = go False [] (T.lines body)
+-- | Split on GFM tables and ``` fences: a line starting with @|@
+-- immediately followed by a separator row (only @| - : space@, at least
+-- one dash), plus any following @|@-lines.  Conservative on purpose —
+-- a lone @|@-prefixed line stays text.  Table syntax inside a fence is
+-- code, not a table.
+--
+-- An /unterminated/ fence stays text, fences and all.  Streaming releases
+-- a reply up to its last blank line, so a half-written block reaches here
+-- routinely and its closing fence is simply still being generated; the
+-- rest of it is not lost, it just has not arrived.  Rendering that as an
+-- image would publish half a snippet as a picture nobody can complete,
+-- and the text form remains legible when the tail lands in a later chunk.
+splitBlocks :: Text -> [Chunk]
+splitBlocks body = go [] (T.lines body)
   where
-    go _ acc []
-      = flushText acc []
-    go inFence acc (l : rest)
-      | isFence l = go (not inFence) (l : acc) rest
-      | inFence = go True (l : acc) rest
+    go acc [] = flushText acc []
+    go acc (l : rest)
+      | Just lang <- fenceInfo l,
+        Just (block, rest') <- takeFence l lang rest =
+          flushText acc (CodeChunk block : go [] rest')
+      | isFence l = flushText acc [TextChunk (T.intercalate "\n" (l : rest))]
       | Just (tbl, rest') <- takeTable (l : rest) =
-          flushText acc (TableChunk (T.intercalate "\n" tbl) : go False [] rest')
-      | otherwise = go False (l : acc) rest
+          flushText acc (TableChunk (T.intercalate "\n" tbl) : go [] rest')
+      | otherwise = go (l : acc) rest
     flushText acc more =
       let t = T.strip (T.intercalate "\n" (reverse acc))
        in if T.null t then more else TextChunk t : more
+
+-- | Consume up to and including the closing fence.  'Nothing' when the
+-- block never closes, which leaves the opener to be treated as text.
+takeFence :: Text -> Maybe Text -> [Text] -> Maybe (CodeBlock, [Text])
+takeFence opener lang rest = case break isFence rest of
+  (_, []) -> Nothing
+  (bodyLines, closer : rest') ->
+    Just
+      ( CodeBlock
+          { cbLang = lang,
+            cbBody = T.intercalate "\n" (trimBlankEdges bodyLines),
+            cbSource = T.intercalate "\n" ((opener : bodyLines) <> [closer])
+          },
+        rest'
+      )
+  where
+    trimBlankEdges = dropWhileEnd isBlankLine . dropWhile isBlankLine
+
+isBlankLine :: Text -> Bool
+isBlankLine = T.null . T.strip
+
+-- | The info string of a fence opener — @Just "haskell"@ for
+-- @\`\`\`haskell@, @Just ""@ becoming 'Nothing' for a bare fence.  A
+-- language is a hint to the highlighter, never a gate: an untagged block
+-- is still a code block and still becomes a picture, it just renders
+-- unhighlighted.
+fenceInfo :: Text -> Maybe (Maybe Text)
+fenceInfo l
+  | isFence l = Just (nonBlankText (T.takeWhile (not . isSpace) (T.dropWhile (== '`') (T.stripStart l))))
+  | otherwise = Nothing
+  where
+    nonBlankText t = if T.null (T.strip t) then Nothing else Just (T.toLower (T.strip t))
 
 takeTable :: [Text] -> Maybe ([Text], [Text])
 takeTable (header : sep : rest)

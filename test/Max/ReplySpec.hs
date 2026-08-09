@@ -5,6 +5,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Max.Reply
   ( Chunk (..),
+    CodeBlock (..),
     ReplyPiece (..),
     chunkSource,
     dedupeImagePieces,
@@ -139,13 +140,65 @@ spec = do
       planReply "| not a table |"
         `shouldBe` [TextChunk "| not a table |"]
 
-    it "table syntax inside a code fence stays code" $
+    it "table syntax inside a code fence is code, not a table" $
       planReply "```\n| a | b |\n|---|---|\n```"
-        `shouldBe` [TextChunk "```\n| a | b |\n|---|---|\n```"]
+        `shouldBe` [ CodeChunk
+                       CodeBlock
+                         { cbLang = Nothing,
+                           cbBody = "| a | b |\n|---|---|",
+                           cbSource = "```\n| a | b |\n|---|---|\n```"
+                         }
+                   ]
 
     it "reply that is only a table yields just the TableChunk" $
       planReply "| a |\n|---|\n| 1 |"
         `shouldBe` [TableChunk "| a |\n|---|\n| 1 |"]
+
+  describe "planReply / code carving" $ do
+    it "carves a tagged fence into its own chunk, keeping source and stripped body apart" $
+      planReply "看这个\n\n```haskell\nf :: Int -> Int\nf = (+ 1)\n```\n\n就这样"
+        `shouldBe` [ TextChunk "看这个",
+                     CodeChunk
+                       CodeBlock
+                         { cbLang = Just "haskell",
+                           cbBody = "f :: Int -> Int\nf = (+ 1)",
+                           cbSource = "```haskell\nf :: Int -> Int\nf = (+ 1)\n```"
+                         },
+                     TextChunk "就这样"
+                   ]
+
+    -- The tag picks a highlighter; it is never a gate.  Every fence becomes
+    -- a picture, an untagged one just renders unhighlighted.
+    it "carves an untagged fence too" $
+      planReply "```\nls -la\n```"
+        `shouldBe` [ CodeChunk
+                       CodeBlock
+                         { cbLang = Nothing,
+                           cbBody = "ls -la",
+                           cbSource = "```\nls -la\n```"
+                         }
+                   ]
+
+    it "lowercases the info string so ```Haskell picks the same highlighter" $
+      (cbLang <$> [cb | CodeChunk cb <- planReply "```Haskell\nf = id\n```"])
+        `shouldBe` [Just "haskell"]
+
+    -- Streaming releases a reply up to its last blank line, so a fence whose
+    -- closer has not been generated yet arrives here routinely.  Rendering
+    -- half a snippet as a picture would publish something nobody can finish.
+    it "leaves an unterminated fence as text, fences intact" $
+      planReply "```haskell\nf = id"
+        `shouldBe` [TextChunk "```haskell\nf = id"]
+
+    -- Inside a fence, \alpha is an identifier somebody wrote, not a symbol
+    -- waiting to be prettified.
+    it "does not run latexToUnicode over fenced content" $
+      (cbBody <$> [cb | CodeChunk cb <- planReply "```tex\n\\alpha\n```"])
+        `shouldBe` ["\\alpha"]
+
+    it "keeps a blank line inside a fence instead of splitting on it" $
+      (cbBody <$> [cb | CodeChunk cb <- planReply "```py\na = 1\n\nb = 2\n```"])
+        `shouldBe` ["a = 1\n\nb = 2"]
 
   describe "parseReplyTokens" $ do
     it "hoists a leading [reply#id] and strips it from the text" $

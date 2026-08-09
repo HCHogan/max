@@ -1,10 +1,11 @@
 -- |
--- Render a markdown table to a PNG via the @typst@ CLI.  QQ has no
--- markdown and no monospace guarantee, so tables go out as images;
--- the caller falls back to sending the markdown source when this
--- fails (typst missing, weird input, timeout).
+-- Render a markdown table to a PNG via the @typst@ CLI, and a fenced code
+-- block to a PNG via the @codesnap@ CLI.  QQ has no markdown and no
+-- monospace guarantee, so both go out as images; the caller falls back to
+-- sending text when this fails (binary missing, weird input, timeout).
 module Max.Render
   ( renderTableImage,
+    renderCodeImage,
   )
 where
 
@@ -15,6 +16,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Max.Util (withTempDirectory)
+import System.Directory (doesFileExist)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.Process (readProcessWithExitCode)
@@ -26,6 +28,90 @@ renderTableImage :: Text -> IO (Either Text ByteString)
 renderTableImage src = case parseTable src of
   Nothing -> pure (Left "not a parseable markdown table")
   Just tbl -> compileTypst (tableToTypst tbl)
+
+--------------------------------------------------------------------------------
+-- Fenced code -> PNG, via codesnap.
+
+-- | A code block's body (fences already stripped) and its info string to
+-- PNG bytes.  Never throws; every failure mode comes back 'Left'.
+--
+-- The language is a hint only.  codesnap rejects an unknown one, and the
+-- model writes whatever it likes after the backticks, so an unrecognised
+-- tag must not cost the whole picture: the render is retried once with no
+-- language, which loses highlighting and keeps the snippet.
+renderCodeImage :: Maybe Text -> Text -> IO (Either Text ByteString)
+renderCodeImage lang code
+  | T.null (T.strip code) = pure (Left "empty code block")
+  | otherwise =
+      runCodesnap lang code >>= \case
+        Right png -> pure (Right png)
+        Left err -> case lang of
+          Nothing -> pure (Left err)
+          Just _ -> runCodesnap Nothing code
+
+runCodesnap :: Maybe Text -> Text -> IO (Either Text ByteString)
+runCodesnap lang code = do
+  r <- try @IOException run
+  pure $ case r of
+    Left e -> Left ("codesnap spawn failed: " <> T.pack (show e))
+    Right res -> res
+  where
+    run = withTempDirectory "max-code-" $ \workspace -> do
+      let inPath = workspace </> "snippet.txt"
+          outPath = workspace </> "snippet.png"
+      BS.writeFile inPath (TE.encodeUtf8 code)
+      result <-
+        timeout 20_000_000 $
+          readProcessWithExitCode "codesnap" (codesnapArgs lang inPath outPath) ""
+      case result of
+        Nothing -> pure (Left "codesnap timed out")
+        Just (ExitSuccess, _, _) -> do
+          -- codesnap reports a failed render on stdout and still exits 0
+          -- (an unknown --language does exactly this), so the artefact is
+          -- the only trustworthy success signal.
+          wrote <- doesFileExist outPath
+          if wrote
+            then Right <$> BS.readFile outPath
+            else pure (Left "codesnap wrote no image")
+        Just (ExitFailure c, out, err) ->
+          pure . Left $
+            "codesnap exited "
+              <> T.pack (show c)
+              <> ": "
+              <> T.pack (take 500 (err <> out))
+
+-- | Everything visual is pinned here rather than left to codesnap's
+-- defaults, which live in a config file it writes into @$HOME@ on first
+-- run and may change between versions.
+codesnapArgs :: Maybe Text -> FilePath -> FilePath -> [String]
+codesnapArgs lang inPath outPath =
+  [ "--from-file",
+    inPath,
+    "--output",
+    outPath,
+    "--silent",
+    -- Sarasa Mono SC is the face the module installs: monospace with real
+    -- CJK coverage, so a Chinese comment is glyphs instead of tofu.
+    "--code-font-family",
+    "Sarasa Mono SC",
+    "--has-line-number",
+    -- A watermark, a fake title bar and a drop shadow are decoration on
+    -- something being read on a phone; the scale default of 3 makes a
+    -- seven-line snippet a 600KB image for no legibility gained.
+    "--watermark",
+    "",
+    "--mac-window-bar",
+    "false",
+    "--shadow-radius",
+    "0",
+    "--scale-factor",
+    "2",
+    "--margin-x",
+    "16",
+    "--margin-y",
+    "16"
+  ]
+    <> maybe [] (\l -> ["--language", T.unpack l]) lang
 
 --------------------------------------------------------------------------------
 -- Markdown table -> typst source.

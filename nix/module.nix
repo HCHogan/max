@@ -397,10 +397,12 @@ in
       wants = [ "network-online.target" ];
       wantedBy = [ "multi-user.target" ];
       # Sandbox lifecycle shells out to the docker CLI; table replies
-      # shell out to typst; sticker captioning to ffmpeg (GIF frames).
+      # shell out to typst and code blocks to codesnap; sticker captioning
+      # to ffmpeg (GIF frames).
       path = [
         config.virtualisation.docker.package
         pkgs.typst
+        pkgs.codesnap
         pkgs.ffmpeg
       ];
       environment = {
@@ -408,6 +410,19 @@ in
         # nixpkgs noto CJK ships variable fonts, which typst cannot
         # render), and the service user has no fontconfig of its own.
         TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
+        # codesnap goes through fontconfig rather than an env var, and
+        # finds nothing without one: the sandbox gives this user no home
+        # and no system font path.  Sarasa Mono SC is the face
+        # Max.Render asks for by name — monospace with real CJK coverage,
+        # so a Chinese comment inside a snippet is glyphs and not tofu.
+        FONTCONFIG_FILE = pkgs.makeFontsConf {
+          fontDirectories = [ pkgs.sarasa-gothic ];
+        };
+        # codesnap writes a default config under $HOME on every run and
+        # panics on the unwrap if it cannot (`--config` does not avoid
+        # this).  The sandbox below would otherwise leave HOME unwritable
+        # and every code block would fail to render.
+        HOME = stateDir;
         # Env (not settings) so they hold for hand-managed configFile
         # setups too — opt-env-conf gives env precedence over the file.
         MAX_DB_URL = lib.mkDefault "postgresql:///max-bot?host=/run/postgresql";

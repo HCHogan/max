@@ -35,6 +35,9 @@
     # table replies render through the typst CLI
     typst
 
+    # fenced code blocks render through the codesnap CLI
+    codesnap
+
     # sticker captioning extracts a GIF frame via ffmpeg
     ffmpeg
   ];
@@ -56,6 +59,9 @@
   env = {
     # Static CJK face for typst table rendering (matches nix/module.nix).
     TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
+    # codesnap resolves "Sarasa Mono SC" through fontconfig (matches
+    # nix/module.nix); without this a snippet's CJK renders as tofu.
+    FONTCONFIG_FILE = pkgs.makeFontsConf {fontDirectories = [pkgs.sarasa-gothic];};
     MAX_DB_URL = "postgresql://127.0.0.1:5433/max";
     MAX_WS_HOST = "0.0.0.0";
     MAX_WS_PORT = "8080";

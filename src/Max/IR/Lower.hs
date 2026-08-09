@@ -32,7 +32,7 @@ module Max.IR.Lower
   )
 where
 
-import Data.Aeson (ToJSON (..), Value, object, withObject, (.!=), (.:?), (.=))
+import Data.Aeson (ToJSON (..), Value, object, withObject, (.!=), (.:), (.:?), (.=))
 import Data.Aeson.Types (parseMaybe)
 import Data.List (mapAccumL)
 import Data.Maybe (fromMaybe, isJust)
@@ -335,9 +335,26 @@ mediaTier caps = \case
 
 -- | A folded remote attachment keeps its URL — readable AND clickable;
 -- blob references are internal and never leak.
+-- | What a picture becomes on an endpoint that will not carry it.
+--
+-- A media node max /generated/ from text — a rendered table or code block —
+-- knows the text it was made from and says so in @fold_text@.  Folding that
+-- to @[图片: code.png]@ throws the content away at the last step, and it is
+-- reachable without any text-only endpoint in the room: matrix, iMessage and
+-- the WeChat hook all advertise @max_native_media: 1@, so the second picture
+-- in one reply folds even though the first went native.
+--
+-- Only for nodes that carry the key.  A picture that arrived as a picture has
+-- no text form, and inventing one is worse than naming it.
 mediaFoldText :: Maybe MediaRef -> MediaMeta -> Text
-mediaFoldText src meta =
-  fallbackText (NMedia src meta) <> maybe "" (" " <>) (src >>= mediaRefRemoteUrl)
+mediaFoldText src meta = case rawFoldText meta.raw of
+  Just text -> text
+  Nothing -> fallbackText (NMedia src meta) <> maybe "" (" " <>) (src >>= mediaRefRemoteUrl)
+
+rawFoldText :: Maybe Value -> Maybe Text
+rawFoldText raw =
+  nonBlank
+    =<< (raw >>= parseMaybe (withObject "generated media" (.: "fold_text")))
 
 lowerReply :: LowerEnv -> (Maybe NativeEventId, [Node 'Lowered], [LowerNote])
 lowerReply env = case env.replyTarget of

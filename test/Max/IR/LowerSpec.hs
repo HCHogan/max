@@ -146,6 +146,30 @@ mediaSpec = describe "media lowering" $ do
                  ]
     out.notes `shouldBe` [LowerNote "image" NoteFolded (Just "media budget")]
 
+  -- A picture max rendered *from* text can fold back to that text; one that
+  -- arrived as a picture cannot, and naming it beats inventing a caption.
+  --
+  -- Reachable without any text-only endpoint in the room: matrix, iMessage
+  -- and the WeChat hook all advertise max_native_media = 1, so a reply
+  -- holding a table and a code block folds the second one.  Before
+  -- fold_text that fold shipped "[图片: code.png]" and dropped the snippet.
+  it "folds generated media back to the text it was rendered from" $ do
+    let snippet = mkMeta MImage Nothing
+        code =
+          NMedia
+            (Just (blob "d"))
+            snippet {name = Just "code.png", raw = Just (object ["fold_text" .= ("f = id" :: Text)])}
+        out = lower baseEnv {caps = nativeImages} (Body [img (Just (blob "a")), code])
+    flat out
+      `shouldBe` [ NMedia (ResolvedUrl ("blob:" <> T.replicate 64 "a")) (mkMeta MImage (Just "两只猫")),
+                   NText "f = id"
+                 ]
+    out.notes `shouldBe` [LowerNote "image" NoteFolded (Just "media budget")]
+
+  it "still names a picture that has no text form" $ do
+    let out = lower baseEnv {caps = textOnlyCaps} (Body [img (Just (blob "a"))])
+    flat out `shouldBe` [NText "[图片: 两只猫]"]
+
   it "folds sourceless and unresolvable media with distinct reasons" $ do
     let env = baseEnv {caps = nativeImages, mediaResolve = const Nothing}
         out = lower env (Body [img Nothing, img (Just (blob "c"))])
