@@ -178,6 +178,10 @@ library
         Max.Platform.Types
         Max.Platform.Store
         Max.Platform.QQ
+        Max.Plan.Eval
+        Max.Plan.Schema
+        Max.Plan.Types
+        Max.Plan.Validate
         Max.Prompt
         Max.Prompt.System
         Max.Recall
@@ -416,6 +420,10 @@ test-suite max-test
         Max.MCP.ClientSpec
         Max.PlatformSpec
         Max.Platform.DeliverySpec
+        Max.Plan.EvalSpec
+        Max.Plan.SchemaSpec
+        Max.Plan.TypesSpec
+        Max.Plan.ValidateSpec
         Max.PromptFlowSpec
         PromptFlow
         Max.MemoryExtractSpec
