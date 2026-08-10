@@ -576,6 +576,41 @@ orchestration layer.
    attached the one admitted verifier, which accepts `text`. The kernel is
    right to refuse a gate that cannot read what it gates — the prompt is at
    fault for listing admitted verifiers without saying what each accepts.
+
+   **Acted on, then re-measured against the same tasks and configuration.**
+   `Bind`, `goalInputs`, a shorter reserved list, and verifier types in the
+   prompt:
+
+   | | before | after |
+   |---|---|---|
+   | parsed | 44/48 (92%) | **47/48 (98%)** |
+   | admitted | 42/48 (88%) | **46/48 (96%)** |
+   | models at 100% admitted | 0 | **2** |
+   | typed subgoals | 6/17 (35%) | **7/13 (54%)** |
+   | punted joins | 0 | 0 |
+   | `let x = hole …` | unparseable | **23 uses** |
+   | `inputs { … }` | did not exist | **21 uses** |
+
+   Both new forms were adopted immediately and heavily, and the workaround
+   that motivated one of them is gone: on the dependent-halves task all three
+   models now compute the framework once and pass it by name, where the same
+   model previously inlined the whole string into both objectives.
+
+   The interesting number is that **forks went down**, 9 to 6, and that is the
+   change working rather than failing. The three-cities task went from forked
+   by about half the replies to forked by none: given a cheaper way to defer,
+   every model wrote three searches inline and deferred only the writing.
+   Forking it had meant three isolated child elaborations to make three tool
+   calls. A hole that binds is the construct that was missing, and its absence
+   was being paid for in fan-out.
+
+   The two remaining failures are both worth having. One is a plan that ends
+   in `let x = hole …` with nothing after it — a plan must still produce a
+   result, and the new form made it possible to forget that. The other is
+   structurally the best plan in any run — zero-call bind for the unknown
+   topic, three searches, a summarising bind taking all four bindings through
+   `inputs`, a send — and it spends four calls against a ceiling of three.
+   That is arithmetic, not a misunderstanding.
 8. **Concurrency and child context projection**, only once 7 says the shape
    holds.
 
