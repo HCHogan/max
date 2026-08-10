@@ -228,6 +228,7 @@ library
         Max.Tools.Memory
         Max.Tools.Monitor
         Max.Tools.Pins
+        Max.Tools.Plan
         Max.Tools.Reminder
         Max.Tools.Sandbox
         Max.Tools.Schema
@@ -453,6 +454,7 @@ test-suite max-test
         Max.ReminderArgsSpec
         Max.Sandbox.DockerSpec
         Max.Tools.FilesSpec
+        Max.Tools.PlanSpec
         Max.ToolsSpec
         Max.Turn.TypesSpec
         Max.TurnReplaySpec

@@ -58,6 +58,7 @@ import Max.Tools.Images (imageToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Monitor (monitorToolsFor)
 import Max.Tools.Pins (pinToolsFor)
+import Max.Tools.Plan (planToolsFor)
 import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
@@ -93,7 +94,12 @@ allToolsFor runtime env dc =
   where
     definitions = toolDefinitionsFor env (toolGroupId dc) (toolCapabilities dc)
     allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
-    runners = filter allowedRunner runners0
+    -- The plan runners are built from the tools this dispatch already resolved
+    -- — a plan calls them through a sub-catalog of exactly these — so they can
+    -- only be assembled after the gate has run, and then get filtered by the
+    -- same gate themselves.
+    runners = base <> filter allowedRunner (planToolsFor definitions base)
+    base = filter allowedRunner runners0
     runners0 =
       builtinsFor env.beTimeZone dc
         <> reminderToolsFor env.beTimeZone dc
@@ -202,6 +208,13 @@ toolInventory =
     always (writeTool "pin_message" ["session.db"] [CurrentConversation]),
     always (writeTool "unpin_message" ["session.db"] [CurrentConversation]),
     gated SkillsOnly (reflectTool "use_skill"),
+    always (reflectTool "plan_guide"),
+    -- The union of what 'Max.Plan.Catalog' declares plannable, stated
+    -- statically because the inventory cannot vary with it.  Over-declaring
+    -- when search is unconfigured is the conservative direction: an effect
+    -- ceiling that would refuse the search a plan might make should refuse the
+    -- plan tool too, rather than let it through and find out inside.
+    always (definition "plan_run" [EffectRead "network.search", EffectRead "conversation.db"] SequentialOnly RetryUnsafe [CurrentConversation]),
     always (readTool "view_bilibili" ["network.bilibili"] [CurrentConversation]),
     always (writeTool "sandbox_create" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
     always (writeTool "sandbox_exec" ["sandbox.process", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),

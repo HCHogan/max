@@ -1,0 +1,243 @@
+-- | The front model's way into the plan kernel: state an objective, read the
+-- dialect, submit a plan, get its result.
+--
+-- ADR 007 §9 and §10.  Two commitments show up in the shape of this module.
+--
+-- __Nobody decides for the model whether a turn deserves a plan.__  There is no
+-- host heuristic and no classifier; there is a tool, and the model calls it when
+-- it judges the work worth planning.  Models already write plans unprompted
+-- before hard tasks, so the signal exists — asking something cheap to guess at
+-- what the expensive model already knows is the mistake §8 deleted, and it does
+-- not improve by being made about plans instead of about messages.  Never
+-- calling these is exactly today's behaviour, which is what makes them safe to
+-- ship.
+--
+-- __The guide arrives on demand.__  It is roughly four thousand tokens and
+-- cannot ride in every turn's tool list; @plan_guide@ costs one round trip, paid
+-- only by turns that plan.  The same progressive disclosure @use_skill@ uses,
+-- for the same reason.
+--
+-- __A plan runs in a catalog containing only plannable tools.__  Not a
+-- restriction bolted on: 'runTools' is re-interpreted over the plannable subset,
+-- so a plan calling anything else fails at the same place an invented tool name
+-- would.  It also makes @plan_run@ structurally unable to invoke itself, since
+-- the subset never contains it — no recursion guard needed, because there is no
+-- recursion to guard.
+--
+-- What is deliberately not here yet: holes are reported rather than elaborated,
+-- and forks are reported rather than dispatched.  Both need the wake loop and
+-- the scheduler (§10–11).  Reporting them keeps the interpreter honest about
+-- being an interpreter, and it is the same exit the executor already takes.
+module Max.Tools.Plan
+  ( planToolsFor,
+    planGoalFor,
+    planValidationEnv,
+  )
+where
+
+import Data.Aeson
+import Data.Aeson.Types (parseEither)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
+import Data.Set qualified as Set
+import Data.Text (Text)
+import Data.Text qualified as T
+import Effectful
+import Effectful.Log (Log, logInfo)
+import Max.Effects.Tools
+  ( Tool (..),
+    ToolCatalog,
+    ToolDefinition (..),
+    ToolRef (..),
+    buildToolCatalog,
+    runTools,
+  )
+import Max.Effects.Tools qualified as Tools
+import Max.Plan.Catalog (planCatalog)
+import Max.Plan.Execute
+  ( ExecutionEnd (..),
+    ExecutionEnv (..),
+    ExecutionResult (..),
+    StepRecord (..),
+    deoptText,
+    executePlan,
+  )
+import Max.Plan.Parse (parseFailureText, parsePlan)
+import Max.Plan.Prompt (frontPrompt)
+import Max.Plan.Schema (PlanSchema (..))
+import Max.Plan.Types
+import Max.Plan.Validate (CatalogEntry (..), ValidationEnv (..), rejectionText, validatePlan)
+import Max.Tools.Schema (stringParam, toolObject)
+
+-- | Both runners, built against the tools this dispatch actually got.
+--
+-- Visibility is not decided here: @plan_guide@ and @plan_run@ sit in
+-- "Max.Toolset"'s inventory like every other tool, so the same gates and the
+-- same 'toolAllowedByEffectCeiling' narrowing apply to them.  Deciding it here
+-- as well would put the two in a position to disagree, and the failure mode of
+-- disagreeing is a catalog that refuses the whole dispatch.
+--
+-- The sub-catalog is the plannable subset of what the caller already built.  A
+-- plan therefore reaches exactly the tools the host resolved for this turn, at
+-- the same effect row, through the same 'runTools' — and cannot reach
+-- @plan_run@, because the subset never contains it.
+planToolsFor ::
+  Log :> es =>
+  [ToolDefinition] ->
+  [Tool es] ->
+  [Tool es]
+planToolsFor definitions runners =
+  case subCatalog of
+    -- Unreachable in practice: the subset is a filter of an already-valid
+    -- catalog.  Dropping both tools is still the right answer to it — better a
+    -- turn with no planning than a turn whose plan tool holds a broken catalog.
+    Left _ -> []
+    Right built -> [guideTool catalog, runTool catalog built]
+  where
+    catalog = planCatalog definitions
+    plannable = Map.keysSet catalog
+    subCatalog =
+      buildToolCatalog
+        [d | d <- definitions, Set.member d.tdRef plannable]
+        [r | r <- runners, Set.member (ToolRef r.toolName) plannable]
+
+-- | The ceiling a front-of-house plan runs under.
+--
+-- Host-set, as every budget in this design is.  @sends: 0@ is not caution about
+-- what a plan might say — no plannable tool can send at all — but it keeps the
+-- kernel's arithmetic agreeing with that fact instead of merely coinciding with
+-- it, so the day a sending tool becomes plannable the ceiling has to be raised
+-- deliberately.
+--
+-- Effects are the union of what the plannable catalog declares, because a
+-- ceiling narrower than the tools it admits would reject plans for calling
+-- exactly the tools it advertised.
+planGoalFor :: Map ToolRef CatalogEntry -> Text -> Goal
+planGoalFor catalog objective =
+  Goal
+    { goalObjective = objective,
+      -- Text, because the plan's result comes back to a model that is about to
+      -- write a reply.  A richer type would only be projected into prose here.
+      goalExpected = SchemaText,
+      goalAcceptance = [],
+      goalBudget =
+        EffectBudget
+          { ebEffects = Set.unions [entry.ceEffects | entry <- Map.elems catalog],
+            ebMaxCalls = 4,
+            ebMaxSends = 0,
+            ebMaxFanout = 16,
+            ebMaxTokens = 8000,
+            ebMaxWallClockMs = 60000
+          },
+      goalAuthority = Set.singleton Tools.CurrentConversation,
+      goalResources = [],
+      goalInputs = [],
+      goalDeps = noDependencies,
+      goalEvidence = [],
+      goalAttempt = 0
+    }
+
+-- | What the model is shown and what the kernel checks against, from one value.
+planValidationEnv :: Map ToolRef CatalogEntry -> Text -> ValidationEnv
+planValidationEnv catalog objective =
+  ValidationEnv
+    { venCatalog = catalog,
+      -- No verifiers are admitted yet, so the goal section says "shape check
+      -- only" and an @accept@ block is a rejection.  Honest: a verifier
+      -- registry exists in the kernel and has no entries in production.
+      venVerifiers = Map.empty,
+      venHandles = Map.empty,
+      venAdmittedVerifiers = Set.empty,
+      venGoal = planGoalFor catalog objective,
+      venBindings = Map.empty,
+      venCostCeiling = 100000
+    }
+
+guideTool :: Map ToolRef CatalogEntry -> Tool es
+guideTool catalog =
+  Tool
+    { toolName = "plan_guide",
+      toolDescription =
+        T.unwords
+          [ "取「计划」这门小语言的完整说明。",
+            "手上的事需要好几步、几次查询才能答，且步骤之间的依赖你已经想清楚时，先用它拿说明，再用 plan_run 提交。",
+            "简单一问一答不需要计划，直接答或直接调工具就行。"
+          ],
+      toolSchema =
+        toolObject
+          [("objective", stringParam "这一轮你打算用计划完成什么，一句话。说明会按它给出额度和可用工具。")]
+          ["objective"],
+      toolRun = \args -> case parseEither (withObject "args" (.: "objective")) args of
+        Left e -> pure (Left ("bad args: " <> T.pack e))
+        Right (objective :: Text) ->
+          pure . Right $
+            object
+              [ "guide" .= frontPrompt (planValidationEnv catalog objective),
+                "next" .= ("照说明写好计划，用 plan_run 提交，objective 写同一句。" :: Text)
+              ]
+    }
+
+runTool :: Log :> es => Map ToolRef CatalogEntry -> ToolCatalog es -> Tool es
+runTool catalog sub =
+  Tool
+    { toolName = "plan_run",
+      toolDescription =
+        T.unwords
+          [ "提交并执行一段计划（先用 plan_guide 拿语法说明）。",
+            "整段计划一次跑完，中间的工具结果不会进你的上下文——只有 done 的那个值会回来。",
+            "解析或校验没过会原样告诉你哪儿不对，可以改了重交。"
+          ],
+      toolSchema =
+        toolObject
+          [ ("objective", stringParam "跟 plan_guide 用的同一句。"),
+            ("plan", stringParam "计划正文，从第一个 let / done / if / hole / fork 开始。不要加 ``` 代码块。")
+          ]
+          ["objective", "plan"],
+      toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
+        Left e -> pure (Left ("bad args: " <> T.pack e))
+        Right (objective, source) -> do
+          let env = planValidationEnv catalog objective
+              root = "plan:" <> T.take 12 (T.filter (/= ' ') objective)
+          case parsePlan source of
+            Left failure -> pure (Left ("计划没解析通过：" <> parseFailureText failure))
+            Right parsed -> case validatePlan env root parsed of
+              Left rejection -> pure (Left ("计划没通过校验：" <> rejectionText rejection))
+              Right valid -> do
+                logInfo "plan: admitted" $
+                  object
+                    [ "objective" .= objective,
+                      "hash" .= planHash parsed,
+                      "holes" .= length (planHoles root parsed),
+                      "children" .= length (planChildren root parsed)
+                    ]
+                result <-
+                  runTools sub $
+                    executePlan
+                      ExecutionEnv {exValidation = env, exHandles = Map.empty, exRoot = root}
+                      valid
+                pure (report result)
+    }
+  where
+    parseArgs o = (,) <$> o .: "objective" <*> o .: "plan"
+
+-- | Turn an execution into something a model can act on.
+--
+-- A stopped plan is reported as a value rather than as an error, and the
+-- distinction is deliberate: nothing went wrong, the plan simply asked for
+-- something this slice cannot supply, and the steps it did take are real work
+-- the model should not repeat.  An error string would invite a retry of the
+-- whole thing.
+report :: ExecutionResult -> Either Text Value
+report result =
+  Right $
+    object
+      ( [ "calls_used" .= result.erCallsUsed,
+          "tools_run" .= [record.srTool.unToolRef | record <- result.erSteps]
+        ]
+          <> case result.erEnd of
+            Produced value -> ["done" .= value]
+            Deoptimized deopt ->
+              [ "stopped" .= deoptText deopt,
+                "advice" .= ("计划停在这里了。上面 tools_run 里的工具已经跑过，不用重来；剩下的这一轮自己接着做。" :: Text)
+              ]
+      )
