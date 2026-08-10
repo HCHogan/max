@@ -1,6 +1,6 @@
 module Max.Plan.ExecuteSpec (spec) where
 
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson (Value (..), decode, encode, object, (.=))
 import Data.Aeson.Key qualified as Key
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
@@ -167,8 +167,100 @@ run answers plan = do
   invoked <- readIORef seen
   pure (result, invoked)
 
+-- | Drive a plan by hand, forcing the checkpoint through JSON at every
+-- suspension.
+--
+-- This is what a host that journals and authorizes between calls does, and it
+-- is also what a restart between two calls lands on: nothing but the encoded
+-- state crosses from one call to the next.
+driveAcrossRestarts ::
+  (PendingCall -> StepOutcome) ->
+  ValidPlan ->
+  Either Text ExecutionEnd
+driveAcrossRestarts answer plan = go initialState
+  where
+    go state = case stepPlan executionEnv plan state of
+      Completes end -> Right end
+      Suspends suspension -> case answer suspension.suCall of
+        outcome -> case resumeWith executionEnv suspension outcome of
+          Left deopt -> Right (Deoptimized deopt)
+          Right next -> case reencode next of
+            Nothing -> Left "execution state did not survive a round trip"
+            Just revived -> go revived
+
+    reencode = decode . encode
+
 spec :: Spec
 spec = do
+  describe "suspension" $ do
+    let searchThenAnswer = valid "let hits = search_web@3({ query: \"q\" })\ndone hits[0].title ?? \"\""
+
+    it "stops before the effect, holding the arguments it is about to use" $ do
+      -- A declared ceiling says a plan may search.  Only this says what it is
+      -- about to search for, which is the difference between a budget and an
+      -- approval.
+      case stepPlan executionEnv searchThenAnswer initialState of
+        Suspends suspension -> do
+          suspension.suCall.pnTool `shouldBe` ToolRef "search_web"
+          suspension.suCall.pnArguments `shouldBe` object ["query" .= ("q" :: Text)]
+          suspension.suCall.pnNode.unNodeId `shouldBe` "turn:1:0"
+          suspension.suBind `shouldBe` Binder "hits"
+        other -> expectationFailure ("expected a suspension, got " <> show other)
+
+    it "reports the sends one call would spend, without the caller re-deriving it" $ do
+      case stepPlan executionEnv (valid "let sent = reply@1({ text: \"hi\" })\ndone \"ok\"") initialState of
+        Suspends suspension -> suspension.suCall.pnSends `shouldBe` 1
+        other -> expectationFailure ("expected a suspension, got " <> show other)
+
+    it "charges the call only on the state that resumes past it" $ do
+      -- A refused call is never resumed, so the charge never applies to work
+      -- that did not happen.
+      case stepPlan executionEnv searchThenAnswer initialState of
+        Suspends suspension -> do
+          suspension.suNext.esCalls `shouldBe` 1
+          -- and the state it was reached from is still unspent
+          initialState.esCalls `shouldBe` 0
+        other -> expectationFailure ("expected a suspension, got " <> show other)
+
+    it "produces the same answer when every checkpoint crosses a restart" $ do
+      -- The property the whole split exists for: a crash between two calls
+      -- loses the call in flight and nothing else.
+      let plan =
+            valid
+              "let hits = search_web@3({ query: \"q\" })\n\
+              \let best = hits[0].title ?? \"\"\n\
+              \if length(hits) > 0 { done best } else { done \"无\" }"
+      driveAcrossRestarts (const (StepSucceeded hits)) plan
+        `shouldBe` Right (Produced (String "第一条"))
+
+    it "carries the bindings a later step needs across that restart" $ do
+      -- The binding, not just the position: a resumed walk that had forgotten
+      -- `hits` would fail on an expression the kernel proved was well typed.
+      let plan =
+            valid
+              "let hits = search_web@3({ query: \"q\" })\n\
+              \let echo = reply@1({ text: hits[0].title ?? \"\" })\n\
+              \done \"ok\""
+          answered call
+            | call.pnTool == ToolRef "search_web" = StepSucceeded hits
+            | otherwise = StepCommitted (object [])
+      driveAcrossRestarts answered plan `shouldBe` Right (Produced (String "ok"))
+
+    it "round-trips a whole suspension, not only the state" $ do
+      case stepPlan executionEnv searchThenAnswer initialState of
+        Suspends suspension -> decode (encode suspension) `shouldBe` Just suspension
+        other -> expectationFailure ("expected a suspension, got " <> show other)
+
+    it "refuses to reinterpret a checkpoint taken against a different plan" $ do
+      -- What a steer produces: the plan was rewritten while this state was in
+      -- flight, and the node it stood on is gone.  Guessing a nearby node would
+      -- run something nobody asked for.
+      let stale = initialState {esPath = PlanPath [StepThen, StepContinue]}
+      case stepPlan executionEnv searchThenAnswer stale of
+        Completes (Deoptimized (PathNotInPlan node)) ->
+          node.unNodeId `shouldBe` "turn:1:0/t/c"
+        other -> expectationFailure ("expected a stale-path stop, got " <> show other)
+
   describe "execution" $ do
     let searchThenAnswer = valid "let hits = search_web@3({ query: \"q\" })\ndone hits[0].title ?? \"\""
 

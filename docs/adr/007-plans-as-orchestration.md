@@ -492,8 +492,15 @@ orchestration layer.
    multiset, because two byte-identical subgoals in one fork are a legitimate
    request for two independent answers. No cancellation semantics yet: the
    reconciler decides, and step 5's scheduler acts.
-5. **Executor suspends at effect boundaries.** Journal, authorize, resume. This
-   is also the durability work — checkpoint-resume for the roadmap's L1.
+5. **Executor suspends at effect boundaries.** Done. Execution is a pure step
+   function over a serializable `ExecState`: it walks to a call, hands back the
+   concrete arguments, and stops. The caller journals, authorizes, invokes, and
+   resumes. This is also the durability work — a crash between two calls loses
+   the call in flight and nothing else — and it is what makes an approval
+   boundary possible at all, since a ceiling bounds what a plan *may* ask for
+   and only a suspension shows what it is *actually* asking. A checkpoint whose
+   path no longer exists in the plan reports rather than guesses, which is the
+   ordinary outcome of a steer landing mid-walk.
 6. **Split the prompts, and land the verbs.** A front-of-house prompt and a
    child prompt generated from the `Goal` alone. `!feedback` retargets from the
    round-boundary injection to a wake; `annotate` becomes expressible;

@@ -105,6 +105,7 @@ import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Read qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Vector qualified as V
 -- Constructors stay qualified: 'ToolAuthority' spells its conversation case
@@ -602,6 +603,33 @@ instance ToJSON Binder where
 
 instance FromJSON Binder where
   parseJSON = fmap Binder . parseJSON
+
+-- A path encodes as the string a 'NodeId' would show, minus the root: it is
+-- the one part of an execution checkpoint a human reads, and two spellings for
+-- one thing is how a checkpoint and a journal row stop lining up.
+instance ToJSON PlanStep where
+  toJSON =
+    toJSON @Text . \case
+      StepContinue -> "c"
+      StepThen -> "t"
+      StepElse -> "e"
+      StepChild index -> "k" <> T.pack (show index)
+
+instance FromJSON PlanStep where
+  parseJSON = withText "PlanStep" $ \case
+    "c" -> pure StepContinue
+    "t" -> pure StepThen
+    "e" -> pure StepElse
+    other -> case T.stripPrefix "k" other of
+      Just digits
+        | Right (index, "") <- T.decimal digits -> pure (StepChild index)
+      _ -> unknownTag "PlanStep" other
+
+instance ToJSON PlanPath where
+  toJSON = toJSON . (.unPlanPath)
+
+instance FromJSON PlanPath where
+  parseJSON = fmap PlanPath . parseJSON
 
 instance ToJSON PlanLit where
   toJSON = \case
