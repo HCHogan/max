@@ -4,10 +4,12 @@ Cross-cutting decisions are recorded in:
 
 - [`ADR 001: Context and Memory Foundations`](adr/001-context-memory-foundations.md)
 - [`ADR 002: Partial Plans and Adaptive Elaboration`](adr/002-partial-plans-adaptive-elaboration.md)
+  — partially superseded by ADR 007
 - [`ADR 003: Message IR and Capability-Tiered Rendering`](adr/003-message-ir-capability-rendering.md)
 - [`ADR 004: Canonical Handles and the Identity the Model Addresses`](adr/004-canonical-handles-for-the-model.md)
 - [`ADR 005: Turn Continuity — Journal Projections and Verbatim Replay`](adr/005-turn-continuity.md)
 - [`ADR 006: Monitors — Typed Triggers and the Unified Scheduler`](adr/006-monitors-typed-triggers.md)
+- [`ADR 007: Plans as Orchestration — Fork, Steering, and What the Kernel Is Actually For`](adr/007-plans-as-orchestration.md)
 
 Layout, runtime data flow, effect stack, and phase status. For behaviour see
 [features.md](features.md); for tests and debugging see

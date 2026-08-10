@@ -1,16 +1,23 @@
 # ADR 002: Partial Plans and Adaptive Elaboration
 
-- Status: Proposed — split scope. **The journal contract (its own section
-  below) ships with v1.0** as the substrate of the durability roadmap
+- Status: Proposed — split scope, **partially superseded by
+  [ADR 007](007-plans-as-orchestration.md)**. The journal contract (its own
+  section below) ships with v1.0 as the substrate of the durability roadmap
   (issue #14); the elaboration machine itself — validator, frontiers,
   horizon above 1 — remains post-1.0. v1.0 is a convergence release; this
   split lets it converge onto the machine's substrate without opening the
   machine's front.
+
+  ADR 007 retires this ADR's information-flow programme, narrows the
+  validator's claim, inverts the motivation for child plans, and replaces
+  integration steps 7–10. Sections affected are marked inline; ADR 007's
+  "What this retires" table is the authoritative list. Everything not marked
+  stands.
 - Date: 2026-08-03; journal contract and post-cutover revisions 2026-08-05;
   sandbox observability, narrator, and continuity (ADR 005)
   cross-references 2026-08-06; elaboration surface, pull-based hole
   views, harness-write effects, and monitor trigger provenance (ADR 006)
-  2026-08-09.
+  2026-08-09; partial supersession by ADR 007 marked 2026-08-10.
 
 ## Context
 
@@ -118,7 +125,8 @@ goal; emitting shell text does not create a quality gate. Pure verifiers
 run in the host's completion checker, while an effectful gate uses the ordinary
 journaled tool boundary. An unavailable, stale, failed, or outcome-unknown
 verifier cannot certify completion. A failed verifier re-holes the goal
-with its bounded output as scoped, taint-carrying evidence and consumes the
+with its bounded output as scoped evidence (taint-carrying as written;
+scope-only since ADR 007) and consumes the
 ordinary elaboration-attempt fuel. This is the general deoptimization path for
 an invalid postcondition, not the `Guard False` path: a valid false predicate
 merely selects the Plan's alternate branch.
@@ -208,8 +216,8 @@ A result handle is syntax, never authority and never the Plan's typed
 binding. It resolves under the current conversation, structured resource,
 and information-flow scopes to a `ValueRef a` carrying at least the
 producing journal row (and Plan node when one exists), output schema,
-provenance/taint, owning scope, content digest and length, representation
-metadata, and retention state. The handle is turn-qualified rather than a
+owning scope, content digest and length, representation metadata, and
+retention state. (Provenance/taint as written; dropped by ADR 007.) The handle is turn-qualified rather than a
 bare plan-local `node_id` or a
 content digest: the same template node can run in more than one turn,
 and the same bytes can occur in more than one conversation, but
@@ -237,6 +245,11 @@ and answers; changing policy is not a semantics-preserving optimization like a
 compiler optimization level.
 
 ### Validate plans before execution and authorize every effect at execution
+
+> **Partially superseded by ADR 007.** The list of checks below is narrowed to
+> types, budget arithmetic (including the sibling summation `Fork` introduces),
+> and handle resolution. Authorization at `invokeTool` stands unchanged — it
+> was always the real boundary. The two paragraphs marked below are retired.
 
 LLM elaboration is untrusted generation. Max will add a deterministic validator
 which acts as the kernel boundary missing from the Lean elaborator analogy. It
@@ -269,6 +282,14 @@ Static validation does not replace runtime authorization. Every actual tool
 invocation still passes through the same scoped host checks as the current
 agent loop. Model-produced importance, effect annotations, ids, or claims never
 create authority.
+
+> **Retired (ADR 007).** Both paragraphs below. Ceilings are a budget, not a
+> defense: what contains a poisoned page is not seeing it while holding a
+> capability — a narrowed catalog handed to a quarantined child at spawn. And
+> the information-flow prerequisite guards a capability max does not have:
+> `Recall` scopes every memory read by `conversation_id` in SQL, so there is
+> no cross-conversation read for a label to catch. Taint is deleted from the
+> IR.
 
 Effect ceilings are also the substantive prompt-injection defense at this
 layer: an injected instruction can make the model elaborate an arbitrary
@@ -612,6 +633,15 @@ the sequential single-principal case.
 
 ### Child plans narrow view and authority
 
+> **Superseded by ADR 007**, which inverts this section's premise. Orchestration
+> is the primary motivation for child plans; narrowing is what makes delegating
+> safe, not the reason to delegate. `Fork` is the first implementation slice
+> rather than a deferred one. Narrowing is enforced by intersection at spawn
+> (`child = parent ∩ declared`) rather than by validating a declared subset.
+> Sibling communication is refused outright, not permitted under a minted
+> capability. Information-flow clearance leaves the minted `AgentRef` with the
+> rest of taint; scope, catalog and ceiling remain.
+
 A future `Spawn` is primarily an elaboration-scope construct, not merely a
 parallelism primitive. A child receives its own trace, context projection,
 authority, effect budget, cancellation scope, and tool catalog. It returns a
@@ -708,6 +738,14 @@ Concretely, when Max adds self-refinement:
   stronger promotion gate than a supplemental prompt note.
 
 ## Max integration sequence
+
+> **Steps 1–6 shipped as written. Steps 7–10 are replaced by ADR 007's
+> sequence**, which puts a durable, steerable plan and a reconciler ahead of
+> the executor rather than after it. Step 7's "short, read-only plan segments
+> behind a feature flag" assumed the payoff was validated execution of small
+> plans; it is fan-out, context isolation, and steering. Step 3's result
+> envelope ships without the taint field; step 4's information-flow tests are
+> deleted.
 
 Step 0 ships with v1.0, independent of everything below: the journal
 contract above, written by the current loop under the durability roadmap
