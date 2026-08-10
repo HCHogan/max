@@ -349,6 +349,18 @@ report profiles candidates = do
     ("errors" :: String)
   mapM_ profileRow profiles
   putStrLn ""
+  -- ADR 007 step 7.  Whether models decompose was never the open question;
+  -- these are the parts a todo list does not contain.
+  putStrLn "── decomposition, per task ───────────────────────────"
+  printf
+    "%-32s %6s %8s %8s %8s\n"
+    ("task" :: String)
+    ("forked" :: String)
+    ("children" :: String)
+    ("typed" :: String)
+    ("punted" :: String)
+  mapM_ taskRow (uniqueTasks candidates)
+  putStrLn ""
   putStrLn "── rejection classes, all profiles ───────────────────"
   let classes =
         Map.toList $
@@ -368,6 +380,30 @@ report profiles candidates = do
     isAdmitted reply = case reply.rpJudged.jOutcome of
       Admitted {} -> True
       _ -> False
+
+    uniqueTasks = foldr keepFirst [] . map (.cdTask.tkName)
+      where
+        keepFirst task seen = if task `elem` seen then seen else task : seen
+
+    -- Counted over every reply that parsed, admitted or not: a plan that split
+    -- the work correctly and then blew its budget still answers the question
+    -- this table asks.
+    taskRow task = do
+      let shapes =
+            [ shape
+              | candidate <- candidates,
+                candidate.cdTask.tkName == task,
+                Answered reply <- [candidate.cdAttemptOutcome],
+                Just shape <- [reply.rpJudged.jFork]
+            ]
+          forked = length [() | shape <- shapes, shape.fsForks > 0]
+      printf
+        "%-32s %6s %8d %8d %8d\n"
+        (T.unpack task)
+        (show forked <> "/" <> show (length shapes))
+        (sum (map (.fsChildren) shapes))
+        (sum (map (.fsTyped) shapes))
+        (sum (map (.fsJoinPunted) shapes))
 
     profileRow profile = do
       let mine = [c | c <- candidates, c.cdProfile == profile]
