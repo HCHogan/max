@@ -239,6 +239,8 @@ submit env root session source =
       Hole goal -> Hole goal {goalDeps = session.seReadSet}
       Call call continuation -> Call call (withDeps continuation)
       Let binder expr continuation -> Let binder expr (withDeps continuation)
+      Bind binder goal continuation ->
+        Bind binder goal {goalDeps = session.seReadSet} (withDeps continuation)
       Fork fork continuation ->
         Fork
           fork {fnChildren = [(binder, goal {goalDeps = session.seReadSet}) | (binder, goal) <- fork.fnChildren]}

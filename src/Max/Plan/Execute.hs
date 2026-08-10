@@ -174,6 +174,8 @@ data StepOutcome
 data Deopt
   = -- | An unelaborated obligation, which is the ordinary case.
     AtHole !NodeId !Goal
+  | -- | An unelaborated obligation whose result binds and whose plan continues.
+    AtBind !NodeId !Binder !Goal
   | -- | A set of subgoals to dispatch, each with the name its result binds to.
     --
     -- Reported rather than run.  Dispatching a child means starting a separate
@@ -202,6 +204,8 @@ data Deopt
 deoptText :: Deopt -> Text
 deoptText = \case
   AtHole node goal -> node.unNodeId <> ": hole — " <> goal.goalObjective
+  AtBind node binder goal ->
+    node.unNodeId <> ": hole " <> binder.unBinder <> " — " <> goal.goalObjective
   AtFork node _ _ children ->
     node.unNodeId
       <> ": fork — "
@@ -263,6 +267,10 @@ stepPlan env valid state = case subplanAt (validPlan valid) state.esPath of
               Left err -> stop (ExpressionFailed this err)
               Right produced -> Completes (Produced produced)
             Hole hole -> stop (AtHole this hole)
+            -- Stops like a hole, and says where the answer goes.  Whoever
+            -- fills it produces a value rather than a continuation, so the
+            -- plan after this point survives unchanged.
+            Bind binder goal _ -> stop (AtBind this binder goal)
             Fork fork _ ->
               stop
                 ( AtFork
@@ -402,6 +410,7 @@ subplanAt plan path = foldl descend (Just plan) path.unPlanPath
       (Call _ continuation, StepContinue) -> Just continuation
       (Let _ _ continuation, StepContinue) -> Just continuation
       (Fork _ continuation, StepContinue) -> Just continuation
+      (Bind _ _ continuation, StepContinue) -> Just continuation
       (Guard _ consequent _, StepThen) -> Just consequent
       (Guard _ _ alternative, StepElse) -> Just alternative
       _ -> Nothing

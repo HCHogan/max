@@ -79,6 +79,7 @@ dialectGuide =
       -- real syntax, and those are the ones the tests parse.
       "  let 名字 = 工具@版本(参数)              调一次工具，把结果绑到名字上，然后接着往下写",
       "  let 名字 = 表达式                       给一个值起名字，不调用任何东西",
+      "  let 名字 = hole \"...\" : 类型 ...          这个值现在写不出来，留个空，下一轮填上再往下走",
       "  fork { 名字: hole ... }                同时开几个子任务，各自派给一个子 agent",
       "  done 表达式                            这就是答案，计划到此为止",
       "  if 条件 { 计划 } else { 计划 }           分支；两边都必须写，各自是一个完整计划",
@@ -115,13 +116,25 @@ dialectGuide =
            "",
            "== hole ==",
            "",
-           "写不出来就写 hole，别硬凑。hole 是正当出口，编一个不存在的工具不是。"
+           "写不出来就写 hole，别硬凑。hole 是正当出口，编一个不存在的工具不是。",
+           "",
+           "hole 有三种位置，区别是谁来填、以及填完之后计划还走不走：",
+           "",
+           "  let x = hole \"...\" : 类型 ...    我下一轮自己填出这个值，然后计划接着往下走",
+           "  hole \"...\" : 类型 ...            剩下的整段我下一轮再写，计划到此为止",
+           "  fork { x: hole ... }           派给子 agent 填（它只看得见你写在 hole 里的东西）",
+           "",
+           "不知道某个参数该填什么，就用第一种，额度写 calls: 0：",
+           "",
+           "  let 话题 = hole \"用户说的具体话题\" : text budget { calls: 0, sends: 0, fanout: 0, tokens: 500, ms: 5000 }",
+           "  let 结果 = search_web@3({ query: 话题 })"
          ]
       <> example handBackTheHardPart
       <> [ "",
-           "五个块都能省，省掉是「什么都不给」，不是「随便用」。每个块最多写一次。",
+           "六个块都能省，省掉是「什么都不给」，不是「随便用」。每个块最多写一次。",
            "hole 要的每一项都不能超过你当前的额度（见下面的「本轮目标」）。",
            "resources 里只能写「可用句柄」中列出的，写别的会被拒绝。",
+           "inputs 里写前面 let 绑过的名字——填这个 hole 的人看得见它们的值。",
            "",
            "== fork ==",
            "",
@@ -134,8 +147,9 @@ dialectGuide =
       <> [ "",
            "几条要点：",
            "",
-           "  · 同一个 fork 里的子任务互相看不见。B 要用 A 的结果，就写成前后两个 fork，",
-           "    后一个 fork 的目标里可以引用前一个绑的名字。",
+           "  · 同一个 fork 里的子任务互相看不见。B 要用 A 的结果，就写成前后两个 fork。",
+           "  · 子任务要用到你前面算出来的值，写进它的 inputs 块，不要把值抄进目标文字里：",
+           "    inputs { 框架 } 就够了，抄一遍既长又会跟着改。",
            "  · 产出类型必须写准。合并那一步是在结果出来之前写的，写成 text 等于没写。",
            "  · 额度是加起来算的：三个子任务各要 2 次调用就是 6 次，不是 2 次。",
            "  · join / watch 可以省。默认 join all（等齐了再往下走）、watch on-failure",
@@ -150,7 +164,7 @@ dialectGuide =
            "    工具会当真。不用就整个不写这个字段。",
            "  · 调用次数、发送次数超额。按最坏分支算：if 两边各调一次工具，就是两次。",
            "  · 用了「允许的效果」里没有的效果。",
-           "  · 同一个名字 let 两次，或拿 let、done、map、text 这类词当名字。",
+           "  · 同一个名字 let 两次，或拿 let、done、if、hole、fork、map、concat 这类词当名字。",
            "  · 工具调用不绑名字。发送类工具的结果没什么用，但也要写成 let sent = reply@1(...)。",
            "  · map 套很多层：表达式的静态开销有上限。",
            "",
@@ -414,8 +428,16 @@ renderAuthority = \case
 renderVerifierRef :: VerifierRef -> Text
 renderVerifierRef ref = ref.verName <> "@" <> tshow ref.verVersion
 
+-- | A verifier with the type it can read.
+--
+-- Stated because omitting it punishes the models doing the right thing: one
+-- declared both its subgoals as objects, attached the only admitted verifier,
+-- and was rejected because that verifier accepts @text@. A gate that cannot
+-- read the value it gates is not a gate — but the plan's author has to be able
+-- to see which is which.
 renderVerifier :: VerifierEntry -> Text
-renderVerifier entry = entry.veName <> "@" <> tshow entry.veVersion
+renderVerifier entry =
+  entry.veName <> "@" <> tshow entry.veVersion <> "（只能验 " <> renderSchema entry.veAccepts <> "）"
 
 renderEvidenceSource :: EvidenceSource -> Text
 renderEvidenceSource = \case

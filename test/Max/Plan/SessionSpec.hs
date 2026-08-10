@@ -60,6 +60,7 @@ env =
                 },
             goalAuthority = Set.empty,
             goalResources = [],
+            goalInputs = [],
             goalDeps = noDependencies,
             goalEvidence = [],
             goalAttempt = 0

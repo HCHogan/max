@@ -100,6 +100,7 @@ goal =
           },
       goalAuthority = Set.singleton Tools.CurrentConversation,
       goalResources = [],
+      goalInputs = [],
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0
@@ -176,6 +177,7 @@ forkShapeOf = go
       Hole _ -> mempty
       Call _ continuation -> go continuation
       Let _ _ continuation -> go continuation
+      Bind _ _ continuation -> go continuation
       Guard _ consequent alternative -> go consequent <> go alternative
       Fork fork continuation ->
         ForkShape
@@ -191,6 +193,9 @@ forkShapeOf = go
       Done _ -> False
       Call _ continuation -> hasHole continuation
       Let _ _ continuation -> hasHole continuation
+      -- A bind is unfinished work after the fork, which is what the count is
+      -- asking about: it costs another elaboration round before the join runs.
+      Bind {} -> True
       Fork _ continuation -> hasHole continuation
       Guard _ consequent alternative -> hasHole consequent || hasHole alternative
 
@@ -237,6 +242,7 @@ judge source = case parsePlan source of
       NodeDone expr -> [expr]
       NodeCall call -> [call.cnInput]
       NodeLet _ expr -> [expr]
+      NodeBind _ _ -> []
       NodeGuard _ -> []
       -- A fork and its children carry no expression: what they cost is an
       -- elaboration each, which the hole count already reports.

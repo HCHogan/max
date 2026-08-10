@@ -162,6 +162,13 @@ previewPlan env root valid =
               let (a, aCalls, aSends) = go (path `into` StepThen) Conditional consequent
                   (b, bCalls, bSends) = go (path `into` StepElse) Conditional alternative
                in (a <> b, max aCalls bCalls, max aSends bSends)
+            -- Same price as a hole, and then the plan continues, so both count.
+            Bind _ goal continuation ->
+              let (rest, restCalls, restSends) = go (path `into` StepContinue) reach continuation
+               in ( rest,
+                    goal.goalBudget.ebMaxCalls + restCalls,
+                    goal.goalBudget.ebMaxSends + restSends
+                  )
             Hole goal -> ([], goal.goalBudget.ebMaxCalls, goal.goalBudget.ebMaxSends)
 
 into :: PlanPath -> PlanStep -> PlanPath
@@ -289,6 +296,15 @@ symbolicPlan env root handles known valid =
                 branches
                 (foldr (Map.delete . fst) values fork.fnChildren)
                 (foldr (\(binder, goal) -> Map.insert binder goal.goalExpected) types fork.fnChildren)
+                continuation
+            -- Like a fork child and unlike a tail hole: the declared type is
+            -- the shape the binder will hold, so the walk carries on.
+            Bind binder goal continuation ->
+              go
+                (path `into` StepContinue)
+                branches
+                (Map.delete binder values)
+                (Map.insert binder goal.goalExpected types)
                 continuation
             Hole goal -> finish (StopsAtHole here goal.goalObjective)
 

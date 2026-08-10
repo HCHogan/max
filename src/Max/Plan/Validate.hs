@@ -348,6 +348,12 @@ validatePlan env root plan = do
                   ( \scope (index, (binder, goal)) -> do
                       let childAt = Rejection (nodeIdIn root (extend path (StepChild index)))
                       narrows childAt goal
+                      -- Against the scope at the fork, deliberately not the
+                      -- accumulating one: a child asking for a sibling's name
+                      -- is asking for a value that will not exist when it
+                      -- starts, and independence is only structural if it is
+                      -- also inexpressible.
+                      inputsInScope childAt bindings goal
                       mapM_ (verifier childAt goal) goal.goalAcceptance
                       -- Against the accumulating scope, so one sibling cannot
                       -- take a name another sibling or an outer binding holds.
@@ -378,17 +384,29 @@ validatePlan env root plan = do
               taken <- walk (extend path StepThen) bindings consequent
               other <- walk (extend path StepElse) bindings alternative
               pure (worseOf taken other)
+            -- A goal named mid-plan.  Priced exactly as a hole is — its whole
+            -- budget counts against this one — and then the plan carries on,
+            -- so the continuation is checked against the type it declared.
+            -- That declared type is the only thing making the rest of the plan
+            -- checkable before this goal has been filled.
+            Bind binder goal continuation -> do
+              narrows at goal
+              inputsInScope at bindings goal
+              mapM_ (verifier at goal) goal.goalAcceptance
+              failIf (Map.member binder bindings) (at (ShadowedBinding binder))
+              rest <-
+                walk
+                  (extend path StepContinue)
+                  (Map.insert binder goal.goalExpected bindings)
+                  continuation
+              pure (budgetUsage goal <> rest)
             Hole goal -> do
               narrows at goal
+              inputsInScope at bindings goal
               mapM_ (verifier at goal) goal.goalAcceptance
               -- A hole's own budget is what its later elaboration may spend,
               -- so it counts against this one in full.
-              pure
-                Usage
-                  { usEffects = goal.goalBudget.ebEffects,
-                    usCalls = goal.goalBudget.ebMaxCalls,
-                    usSends = goal.goalBudget.ebMaxSends
-                  }
+              pure (budgetUsage goal)
 
     priceExpr at expr =
       let cost = exprCost fanout expr
@@ -429,6 +447,15 @@ validatePlan env root plan = do
       Nothing -> Left (at (UnresolvableHandle handle))
       Just ref -> failIf (not ref.vrRetained) (at (ReleasedHandle handle))
 
+    -- A goal may ask for bindings the enclosing plan actually holds, and for
+    -- no others.  The host resolves each to its value when it dispatches; a
+    -- name that is not in scope here would have nothing to resolve to, which
+    -- is an unbound name however far away it is eventually read.
+    inputsInScope at bindings goal =
+      mapM_
+        (\binder -> failIf (not (Map.member binder bindings)) (at (UnboundName binder)))
+        goal.goalInputs
+
     verifier at goal ref = do
       failIf (not (Set.member ref.verName env.venAdmittedVerifiers)) (at (VerifierNotAdmitted ref.verName))
       entry <- maybe (Left (at (UnknownVerifier ref.verName))) Right (Map.lookup ref.verName env.venVerifiers)
@@ -441,6 +468,17 @@ validatePlan env root plan = do
       failIf
         (not (admits entry.veAccepts goal.goalExpected))
         (at (VerifierSchemaMismatch ref.verName (renderSchema entry.veAccepts) (renderSchema goal.goalExpected)))
+
+-- | What a goal's later elaboration is allowed to spend, charged to the plan
+-- that opened it.  A hole and a mid-plan binding are priced identically: both
+-- are one elaboration this plan has already committed to paying for.
+budgetUsage :: Goal -> Usage
+budgetUsage goal =
+  Usage
+    { usEffects = goal.goalBudget.ebEffects,
+      usCalls = goal.goalBudget.ebMaxCalls,
+      usSends = goal.goalBudget.ebMaxSends
+    }
 
 extend :: PlanPath -> PlanStep -> PlanPath
 extend path step = PlanPath (path.unPlanPath <> [step])

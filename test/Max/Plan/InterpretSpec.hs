@@ -70,6 +70,7 @@ env =
                 },
             goalAuthority = Set.singleton Tools.CurrentConversation,
             goalResources = [],
+            goalInputs = [],
             goalDeps = noDependencies,
             goalEvidence = [],
             goalAttempt = 0
@@ -154,6 +155,15 @@ spec = do
 
     it "propagates a shape where a call result is not yet known" $ do
       let plan = valid "let hits = search_web@3({ query: \"q\" })\ndone hits[0].title ?? \"\""
+      map (.soEnd) (symbolicPlan env "turn:41:0" Map.empty Map.empty plan)
+        `shouldBe` [Produces (Unknown SchemaText)]
+
+    it "walks past a mid-plan goal on the type it declared" $ do
+      -- A tail hole ends the walk because everything after it is undecided.
+      -- This one decides only a value, so the rest stays interpretable.
+      let plan =
+            valid
+              "let 话题 = hole \"用户说的话题\" : text budget { calls: 0, fanout: 8, tokens: 10, ms: 10 }\ndone concat(\"查：\", 话题)"
       map (.soEnd) (symbolicPlan env "turn:41:0" Map.empty Map.empty plan)
         `shouldBe` [Produces (Unknown SchemaText)]
 

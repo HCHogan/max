@@ -126,8 +126,9 @@ import Max.Plan.Schema (PlanSchema)
 -- something, which is precisely the silent reinterpretation the envelope check
 -- exists to prevent.
 -- 4: 'Fork', and 'goalResources'.
+-- 5: 'Bind', and 'goalInputs'.
 planIRVersion :: Int
-planIRVersion = 4
+planIRVersion = 5
 
 -- | A node's stable identity within one turn.  Derived from the plan root the
 -- host supplies (the horizon-1 @turn:\<turn_id\>:\<step\>@ id) plus the node's
@@ -310,6 +311,11 @@ data DependencyKey
     DepTurnRecord !Text
   | DepToolCatalog
   | DepPromptContract
+  | -- | A binding named in 'goalInputs', paired with the digest its value had
+    -- when the goal was dispatched.  Host-stamped: it is what makes a goal
+    -- whose input changed hash differently, and therefore reconcile as new
+    -- work rather than as work already running.
+    DepBinding !Text
   deriving stock (Show, Eq, Ord)
 
 -- | The observed read-set of one elaboration session, each key paired with the
@@ -352,6 +358,20 @@ data Goal = Goal
     -- has decided to read into a prompt.  A handle is thirty tokens and a
     -- schema; whatever fills the goal decides whether to pull it.
     goalResources :: ![Text],
+    -- | Bindings from the enclosing plan this goal needs to see.
+    --
+    -- A fork child sees only its 'Goal', so before this existed there was no
+    -- way to hand it a value the parent had computed. A live model found the
+    -- gap and worked around it exactly as one would: it inlined an entire
+    -- itinerary string into both subgoals' objectives, twice. Fine for a
+    -- sentence, and precisely the context bloat a fork exists to avoid for
+    -- anything larger.
+    --
+    -- Names only. The host resolves each to the parent's bound value at
+    -- dispatch and stamps its digest into 'goalDeps' — which is what keeps
+    -- 'goalHash' honest, since a goal reading a changed input is different
+    -- work and must not reconcile as the same.
+    goalInputs :: ![Binder],
     goalDeps :: !DependencySet,
     -- | Why a previous attempt at this goal did not complete.  Host-attached
     -- only: see 'Evidence'.
@@ -466,6 +486,23 @@ data Plan
     -- under: a child that could read the conversation would not need them.
     Fork !ForkNode !Plan
   | Guard !Predicate !Plan !Plan
+  | -- | Name a value this plan cannot write yet, and carry on.
+    --
+    -- 'Hole' defers the /rest/ of the plan; this defers one value inside it.
+    -- The identity @Hole g ≡ Bind x g (Done (EVar x))@ holds, and the two stay
+    -- separate because a tail hole is the honest exit models already write
+    -- well, while this is the thing they kept reaching for and could not
+    -- spell: five of six parse failures across every live run were
+    -- @let x = hole …@, from two of three models.
+    --
+    -- It is filled in place by whoever is writing this plan, which is what
+    -- distinguishes it from a fork child. That matters most for the smallest
+    -- use, which is not delegation at all: a model wrote
+    -- @let topic = hole "…" : text budget { calls: 0, sends: 0, … }@ and then
+    -- searched twice with it. Nothing there wants a child turn — only a
+    -- filled-in blank — and routing it through a fork would have bought an
+    -- isolated context, a journal row and a spawn edge to produce one string.
+    Bind !Binder !Goal !Plan
   | Hole !Goal
   deriving stock (Show, Eq)
 
@@ -479,6 +516,7 @@ data PlanNode
   | -- | One subgoal of the enclosing fork.
     NodeChild !Binder !Goal
   | NodeGuard !Predicate
+  | NodeBind !Binder !Goal
   | NodeHole !Goal
   deriving stock (Show, Eq)
 
@@ -504,13 +542,22 @@ planNodes root = go []
               (here, NodeGuard predicate)
                 : go (StepThen : path) consequent
                 <> go (StepElse : path) alternative
+            Bind binder goal continuation ->
+              (here, NodeBind binder goal) : go (StepContinue : path) continuation
             Hole goal -> [(here, NodeHole goal)]
 
--- | Goals to elaborate in place.  Deliberately does not include fork children:
--- see 'planChildren', and 'Fork' for why the two are not one list.
+-- | Goals to elaborate in place, whether they end the plan or sit inside it.
+-- Deliberately does not include fork children: see 'planChildren', and 'Fork'
+-- for why the two are not one list.
 planHoles :: Text -> Plan -> [(NodeId, Goal)]
 planHoles root plan =
-  [(nodeId, goal) | (nodeId, NodeHole goal) <- planNodes root plan]
+  [ (nodeId, goal)
+    | (nodeId, node) <- planNodes root plan,
+      goal <- case node of
+        NodeHole goal -> [goal]
+        NodeBind _ goal -> [goal]
+        _ -> []
+  ]
 
 -- | Goals to dispatch to a separate elaboration, each with the name its result
 -- binds to in the enclosing plan.
@@ -812,6 +859,7 @@ instance ToJSON DependencyKey where
     DepTurnRecord handle -> tagged "turn" ["handle" .= handle]
     DepToolCatalog -> tagged "tool_catalog" []
     DepPromptContract -> tagged "prompt_contract" []
+    DepBinding name -> tagged "binding" ["name" .= name]
 
 instance FromJSON DependencyKey where
   parseJSON = withObject "DependencyKey" $ \o ->
@@ -820,6 +868,7 @@ instance FromJSON DependencyKey where
       "turn" -> DepTurnRecord <$> o .: "handle"
       "tool_catalog" -> pure DepToolCatalog
       "prompt_contract" -> pure DepPromptContract
+      "binding" -> DepBinding <$> o .: "name"
       other -> unknownTag "DependencyKey" other
 
 -- A JSON object cannot key on a sum, so dependencies encode as a list of
@@ -867,6 +916,7 @@ instance ToJSON Goal where
         "budget" .= goal.goalBudget,
         "authority" .= map authorityJson (Set.toAscList goal.goalAuthority),
         "resources" .= goal.goalResources,
+        "inputs" .= goal.goalInputs,
         "deps" .= goal.goalDeps,
         "evidence" .= goal.goalEvidence,
         "attempt" .= goal.goalAttempt
@@ -882,6 +932,7 @@ instance FromJSON Goal where
       <*> o .: "budget"
       <*> pure (Set.fromList authority)
       <*> o .: "resources"
+      <*> o .: "inputs"
       <*> o .: "deps"
       <*> o .: "evidence"
       <*> o .: "attempt"
@@ -973,6 +1024,8 @@ instance ToJSON Plan where
     Fork fork continuation -> tagged "fork" ["fork" .= fork, "then" .= continuation]
     Guard predicate consequent alternative ->
       tagged "guard" ["cond" .= predicate, "then" .= consequent, "else" .= alternative]
+    Bind binder goal continuation ->
+      tagged "bind" ["as" .= binder, "goal" .= goal, "then" .= continuation]
     Hole goal -> tagged "hole" ["goal" .= goal]
 
 instance FromJSON Plan where
@@ -983,6 +1036,7 @@ instance FromJSON Plan where
       "let" -> Let <$> o .: "as" <*> o .: "value" <*> o .: "then"
       "fork" -> Fork <$> o .: "fork" <*> o .: "then"
       "guard" -> Guard <$> o .: "cond" <*> o .: "then" <*> o .: "else"
+      "bind" -> Bind <$> o .: "as" <*> o .: "goal" <*> o .: "then"
       "hole" -> Hole <$> o .: "goal"
       other -> unknownTag "Plan" other
 

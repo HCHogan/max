@@ -1,7 +1,7 @@
 module Max.Plan.ParseSpec (spec) where
 
 import Control.Exception (evaluate)
-import Data.Either (isLeft)
+import Data.Either (isLeft, isRight)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -72,6 +72,37 @@ spec = do
       -- would be the only line whose result nothing can refer to.
       parsePlan "let hits = search_web@3({ query: \"q\" })\nreply@1({ text: \"hi\" })\ndone \"ok\""
         `shouldSatisfy` isLeft
+
+    it "names a goal mid-plan and carries on" $
+      -- Five of the six parse failures across every live run were this, from
+      -- two of three models.  The third form of `let`, told apart by the same
+      -- backtracking that separates a call from a value.
+      case parsePlan "let 话题 = hole \"用户说的话题\" : text budget { calls: 0 }\nlet hits = search_web@3({ query: 话题 })\ndone \"ok\"" of
+        Right (Bind binder goal (Call _ (Done _))) -> do
+          binder `shouldBe` Binder "话题"
+          goal.goalObjective `shouldBe` "用户说的话题"
+          goal.goalExpected `shouldBe` SchemaText
+          goal.goalBudget.ebMaxCalls `shouldBe` 0
+        other -> expectationFailure ("expected a bind, got: " <> show other)
+
+    it "still tells the three `let` forms apart" $ do
+      let shapeOf source = case parsePlan (source <> "\ndone \"ok\"") of
+            Right (Call {}) -> "call"
+            Right (Bind {}) -> "bind"
+            Right (Let {}) -> "let"
+            other -> "unexpected: " <> T.pack (show other)
+      map
+        shapeOf
+        [ "let x = t@1({ q: \"y\" })",
+          "let x = hole \"什么\" : text",
+          "let x = hits"
+        ]
+        `shouldBe` ["call", "bind", "let"]
+
+    it "reads the bindings a goal asks to see" $
+      case parsePlan "let 框架 = \"甲\"\nlet 住宿 = hole \"按框架找\" : text inputs { 框架 }\ndone 住宿" of
+        Right (Let _ _ (Bind _ goal _)) -> goal.goalInputs `shouldBe` [Binder "框架"]
+        other -> expectationFailure ("unexpected parse: " <> show other)
 
     it "reads a fork's subgoals, its policies and its continuation" $
       case parsePlan "fork {\n  a: hole \"查甲\" : text budget { calls: 1 }\n  b: hole \"查乙\" : text budget { calls: 1 }\n}\ndone concat(a, b)" of
@@ -147,7 +178,21 @@ spec = do
 
     it "refuses a grammar word as a binder" $ do
       parsePlan "let done = tool@1({}) done done" `shouldSatisfy` isLeft
+      -- `map` is tried before a bare name in expression position, so a binder
+      -- sharing it would fail where it is read rather than where it is bound.
       parsePlan "let map = tool@1({}) done map" `shouldSatisfy` isLeft
+
+    it "allows a name that is only a keyword where no name can stand" $ do
+      -- A live model lost an otherwise correct plan to `let text = "我在"`.
+      -- Nothing but a type follows a hole's `:`, and nothing but an effect
+      -- appears inside `effects { }`, so reserving those words bought nothing
+      -- and cost the obvious names.
+      case parsePlan "let text = \"我在\"\ndone text" of
+        Right (Let binder _ (Done _)) -> binder `shouldBe` Binder "text"
+        other -> expectationFailure ("expected a pure binding, got: " <> show other)
+      mapM_
+        (\name -> parsePlan ("let " <> name <> " = \"x\"\ndone " <> name) `shouldSatisfy` isRight)
+        ["text", "int", "number", "bool", "budget", "effects", "accept", "read", "send", "conversation", "external", "each"]
 
     it "refuses source past the length cap without parsing it" $ do
       let huge = T.replicate (maxSourceBytes + 1) "x"

@@ -27,6 +27,7 @@ goal =
           },
       goalAuthority = Set.singleton Tools.CurrentConversation,
       goalResources = [],
+      goalInputs = [],
       goalDeps = observeDependency DepToolCatalog "cafe0000" noDependencies,
       goalEvidence = [],
       goalAttempt = 0
@@ -66,6 +67,14 @@ spec = do
   describe "codecs" $ do
     it "round-trips a plan through JSON unchanged" $
       roundTrip plan `shouldBe` Just plan
+
+    it "round-trips a goal named mid-plan" $ do
+      let midPlan = Bind (Binder "answer") goal (Done (EVar (Binder "answer")))
+      roundTrip midPlan `shouldBe` Just midPlan
+      -- It is elaborated in place, so it belongs to the holes and not to the
+      -- children: nothing dispatches it.
+      map fst (planHoles "turn:41:0" midPlan) `shouldBe` [NodeId "turn:41:0"]
+      planChildren "turn:41:0" midPlan `shouldBe` []
 
     it "round-trips a fork, keeping its subgoals in order" $
       -- Order is identity here: a child's node id is its position, so a codec
@@ -186,6 +195,7 @@ kindOf = \case
   NodeDone _ -> "done"
   NodeCall _ -> "call"
   NodeLet _ _ -> "let"
+  NodeBind _ _ -> "bind"
   NodeFork _ _ -> "fork"
   NodeChild _ _ -> "child"
   NodeGuard _ -> "guard"

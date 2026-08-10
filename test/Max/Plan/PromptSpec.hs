@@ -59,6 +59,7 @@ goal =
       goalBudget = budget,
       goalAuthority = Set.singleton Tools.CurrentConversation,
       goalResources = [],
+      goalInputs = [],
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0

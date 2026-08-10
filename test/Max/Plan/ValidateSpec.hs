@@ -103,6 +103,7 @@ goal =
       goalBudget = budget,
       goalAuthority = Set.singleton Tools.CurrentConversation,
       goalResources = [],
+      goalInputs = [],
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0
@@ -401,6 +402,83 @@ spec = do
 
     it "admits a goal handed a resource this plan holds" $
       admitted (Hole childGoal {goalResources = ["t#1:r1"]})
+
+  describe "a goal named mid-plan" $ do
+    let named binder calls =
+          Bind
+            (Binder binder)
+            goal {goalObjective = "填这个", goalBudget = budget {ebMaxCalls = calls, ebMaxSends = 0}}
+
+    it "binds its declared type, so the rest of the plan is checkable now" $ do
+      -- The whole reason a mid-plan goal declares a type: nothing after it can
+      -- be validated until something says what it will hold.
+      admitted (named "answer" 1 (Done (EVar (Binder "answer"))))
+      reasonOf (named "answer" 1 (Done (ELength (EVar (Binder "answer")))))
+        `shouldBe` Just (ExpressionType "text" "int")
+
+    it "counts its whole budget, and the plan carries on spending" $
+      -- Priced as a hole is — one elaboration this plan has committed to — and
+      -- then the call after it adds on top.
+      reasonOf (named "answer" 3 (Call search (Done (EVar (Binder "answer")))))
+        `shouldBe` Just (CallBudgetExceeded 3 4)
+
+    it "rejects a name already in scope" $
+      reasonOf (Call search (named "hits" 1 (Done (EVar (Binder "hits")))))
+        `shouldBe` Just (ShadowedBinding (Binder "hits"))
+
+    it "holds it to its parent like any other goal" $
+      reasonOf (named "answer" 99 (Done (EVar (Binder "answer"))))
+        `shouldBe` Just (BudgetNotNarrowing "calls")
+
+  describe "the bindings a goal asks to see" $ do
+    let asking names =
+          goal
+            { goalObjective = "按框架找",
+              goalBudget = budget {ebMaxCalls = 1, ebMaxSends = 0},
+              goalInputs = map Binder names
+            }
+
+    it "admits a name the enclosing plan holds" $
+      -- A live model inlined an entire itinerary into two subgoals because
+      -- there was no way to say this.
+      admitted (Call search (Bind (Binder "found") (asking ["hits"]) (Done (EVar (Binder "found")))))
+
+    it "rejects a name nothing bound" $
+      reasonOf (Bind (Binder "found") (asking ["框架"]) (Done (EVar (Binder "found"))))
+        `shouldBe` Just (UnboundName (Binder "框架"))
+
+    it "checks a fork child's inputs against the scope at the fork" $
+      reasonOf
+        ( Fork
+            ForkNode
+              { fnChildren = [(Binder "a", asking ["hits"])],
+                fnJoin = JoinAll,
+                fnWatch = WatchOnFailure
+              }
+            (Done (EVar (Binder "a")))
+        )
+        `shouldBe` Just (UnboundName (Binder "hits"))
+
+    it "refuses a subgoal that asks for a sibling's result" $
+      -- Independence is structural, and this is where it becomes
+      -- inexpressible rather than merely discouraged: when the second child
+      -- starts, the first has not finished, so there is nothing to hand it.
+      reasonOf
+        ( Call
+            search
+            ( Fork
+                ForkNode
+                  { fnChildren =
+                      [ (Binder "first", asking ["hits"]),
+                        (Binder "second", asking ["first"])
+                      ],
+                    fnJoin = JoinAll,
+                    fnWatch = WatchOnFailure
+                  }
+                (Done (EVar (Binder "second")))
+            )
+        )
+        `shouldBe` Just (UnboundName (Binder "first"))
 
   describe "forks" $ do
     let child name calls =

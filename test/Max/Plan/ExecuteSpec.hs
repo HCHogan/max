@@ -112,6 +112,7 @@ validation =
                 },
             goalAuthority = Set.singleton Tools.CurrentConversation,
             goalResources = [],
+            goalInputs = [],
             goalDeps = noDependencies,
             goalEvidence = [],
             goalAttempt = 0
@@ -328,6 +329,21 @@ spec = do
           map (\(node, binder, goal) -> (node.unNodeId, binder, goal.goalObjective)) children
             `shouldBe` [("turn:1:0/k0", Binder "a", "查甲"), ("turn:1:0/k1", Binder "b", "查乙")]
         other -> expectationFailure ("expected a fork, got " <> show other)
+
+    it "stops at a mid-plan goal and says where the answer goes" $ do
+      -- Unlike a hole, whoever fills this produces a value rather than a
+      -- continuation, so the caller needs the binder to put it anywhere.
+      (result, invoked) <-
+        run
+          []
+          (valid "let 话题 = hole \"用户说的话题\" : text budget { calls: 0, fanout: 8, tokens: 10, ms: 10 }\ndone 话题")
+      invoked `shouldBe` []
+      case result.erEnd of
+        Deoptimized (AtBind node binder goal) -> do
+          node.unNodeId `shouldBe` "turn:1:0"
+          binder `shouldBe` Binder "话题"
+          goal.goalObjective `shouldBe` "用户说的话题"
+        other -> expectationFailure ("expected a mid-plan goal, got " <> show other)
 
     it "stops on a failure instead of retrying it" $ do
       (result, invoked) <- run [("search_web", Left "upstream down")] searchThenAnswer

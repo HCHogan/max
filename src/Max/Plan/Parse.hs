@@ -116,9 +116,21 @@ brackets = between (symbol "[") (symbol "]")
 commaSep :: P a -> P [a]
 commaSep parser = parser `sepBy` symbol ","
 
--- | Words that may not be used as a binder or a tool name.  Field names are
--- exempt: a field called @text@ is unambiguous in field position, and refusing
--- it would make ordinary tool schemas unwritable.
+-- | Words that may not be used as a binder or a tool name.
+--
+-- Exactly the ones that can begin a plan, an expression or a predicate — the
+-- positions where a name and a keyword genuinely compete. A type name, a
+-- declaration block, an effect and a scope are all unambiguous where they
+-- appear: nothing but a type follows a hole's @:@, and nothing but an effect
+-- appears inside @effects { }@. Reserving those bought no safety and cost the
+-- obvious names.
+--
+-- @text@ is the case that made the point. It is reserved nowhere a binder can
+-- stand, and it is also what anyone would call a string; a live model wrote
+-- @let text = "我在"@ and lost an otherwise correct plan to it.
+--
+-- Field names were always exempt, for the same reason one step further on: a
+-- tool schema with a field called @text@ has to be writable.
 reservedWords :: [Text]
 reservedWords =
   [ "let", "done", "if", "then", "else", "hole", "in",
@@ -130,11 +142,10 @@ reservedWords =
     "true", "false", "null",
     "not", "and", "or", "all", "any", "isnull",
     "contains", "startswith", "endswith",
-    "map", "filter", "concat", "length", "take",
-    "budget", "effects", "authority", "resources", "accept",
-    "text", "int", "number", "bool", "enum",
-    "read", "write", "send", "llm", "reflect",
-    "conversation", "sender", "endpoint", "sandbox", "process", "external"
+    -- Each of these is tried before a bare name in 'atomP' and then demands
+    -- its parentheses, so a binder sharing one would fail where it is used
+    -- rather than where it is bound.
+    "map", "filter", "concat", "length", "take"
   ]
 
 keyword :: Text -> P ()
@@ -190,15 +201,26 @@ planP =
 -- for and neither should have to be spelled differently to help the parser.
 -- 'try' backtracks over the tool form: everything up to the @\@@ also parses as
 -- the beginning of an ordinary expression.
+-- | The three things @let x = …@ can name.
+data Bound
+  = BoundCall !Text !Int !Expr
+  | BoundGoal !Goal
+  | BoundExpr !Expr
+
 bindP :: P Plan
 bindP = do
   keyword "let"
   name <- identifier
   _ <- symbol "="
-  bound <- (Left <$> try toolCall) <|> (Right <$> exprP)
+  bound <-
+    choice
+      [ (\(tool, version, input) -> BoundCall tool version input) <$> try toolCall,
+        keyword "hole" *> (BoundGoal <$> goalP),
+        BoundExpr <$> exprP
+      ]
   continuation <- planP
   pure $ case bound of
-    Left (tool, version, input) ->
+    BoundCall tool version input ->
       Call
         CallNode
           { cnBind = Binder name,
@@ -207,7 +229,8 @@ bindP = do
             cnInput = input
           }
         continuation
-    Right expr -> Let (Binder name) expr continuation
+    BoundGoal goal -> Bind (Binder name) goal continuation
+    BoundExpr expr -> Let (Binder name) expr continuation
   where
     toolCall = do
       tool <- identifier
@@ -271,6 +294,7 @@ data GoalBlock
   | EffectsBlock ![PlanEffect]
   | AuthorityBlock ![Tools.ToolAuthority]
   | ResourcesBlock ![Text]
+  | InputsBlock ![Binder]
   | AcceptBlock ![VerifierRef]
 
 goalP :: P Goal
@@ -287,6 +311,7 @@ goalP = do
             goalBudget = emptyBudget,
             goalAuthority = Set.empty,
             goalResources = [],
+            goalInputs = [],
             goalDeps = noDependencies,
             -- Host-attached fields.  The grammar has no syntax for them on
             -- purpose: a model that could write its own evidence, or reset its
@@ -325,6 +350,7 @@ foldGoalBlocks = go Set.empty
         goal {goalBudget = goal.goalBudget {ebEffects = Set.fromList effects}}
       AuthorityBlock authorities -> goal {goalAuthority = Set.fromList authorities}
       ResourcesBlock handles -> goal {goalResources = handles}
+      InputsBlock names -> goal {goalInputs = names}
       AcceptBlock verifiers -> goal {goalAcceptance = verifiers}
 
     blockName = \case
@@ -332,6 +358,7 @@ foldGoalBlocks = go Set.empty
       EffectsBlock {} -> "effects"
       AuthorityBlock {} -> "authority"
       ResourcesBlock {} -> "resources"
+      InputsBlock {} -> "inputs"
       AcceptBlock {} -> "accept"
 
 goalBlockP :: P GoalBlock
@@ -341,6 +368,7 @@ goalBlockP =
       keyword "effects" *> (EffectsBlock <$> braces (commaSep effectP)),
       keyword "authority" *> (AuthorityBlock <$> braces (commaSep authorityP)),
       keyword "resources" *> (ResourcesBlock <$> braces (commaSep handleLiteral)),
+      keyword "inputs" *> (InputsBlock <$> braces (commaSep (Binder <$> identifier))),
       keyword "accept" *> (AcceptBlock <$> braces (commaSep verifierP))
     ]
 
@@ -563,6 +591,7 @@ planDepth = \case
   Let _ expr continuation -> 1 + max (exprDepth expr) (planDepth continuation)
   Fork fork continuation ->
     1 + maximum0 (planDepth continuation : map (goalDepth . snd) fork.fnChildren)
+  Bind _ goal continuation -> 1 + max (goalDepth goal) (planDepth continuation)
   Guard condition consequent alternative ->
     1 + maximum [predicateDepth condition, planDepth consequent, planDepth alternative]
   Hole goal -> 1 + goalDepth goal
