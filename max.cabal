@@ -191,6 +191,7 @@ library
         Max.Plan.Schema
         Max.Plan.Session
         Max.Plan.Types
+        Max.Plan.Catalog
         Max.Plan.Validate
         Max.Prompt
         Max.Prompt.System
@@ -440,6 +441,7 @@ test-suite max-test
         Max.Plan.SchemaSpec
         Max.Plan.SessionSpec
         Max.Plan.TypesSpec
+        Max.Plan.CatalogSpec
         Max.Plan.ValidateSpec
         Max.PromptFlowSpec
         PromptFlow
