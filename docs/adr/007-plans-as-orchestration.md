@@ -506,13 +506,30 @@ orchestration layer.
    round-boundary injection to a wake; `annotate` becomes expressible;
    `classifySupplement`'s codomain grows from `Bool` to the verb lattice; the
    `requeueTurnInbox` race is deleted rather than ported.
-7. **Measure.** Done, and thinner than intended: `deepseek-flash` failed all 16
-   requests on transport, so this is a two-model run. 16 tasks, six of them
-   fork-shaped and three of those deliberately wanting no fork.
+7. **Measure.** Done. Three models × 16 tasks, six of them fork-shaped and
+   three of those deliberately wanting no fork.
 
-   Admission held up — gpt-5.6-luna 15/16, minimax-m3 11/12 (four silent) —
-   which says the dialect survived taint's removal and `Fork`'s arrival. On
-   the two open questions:
+   | profile | asked | answered | silent | admitted | forks |
+   |---|---|---|---|---|---|
+   | gpt-5.6-luna | 16 | 16 | 0 | 15 (93%) | 4 |
+   | minimax-m3 | 16 | 12 | 4 | 11 (91%) | 0 |
+   | deepseek-flash | 16 | 8 | 8 | 7 (87%) | 0 |
+
+   **The headline is the silence column, not the admitted column.** A silent
+   reply is a 200 with no content — a model that spent its whole `max_tokens`
+   thinking — and the harness excludes those from every rate, which is right
+   for measuring a dialect and wrong to read as a summary. Both models with a
+   4096-token ceiling went quiet on precisely the tasks that needed splitting:
+   five of deepseek's eight silences and three of minimax's four are
+   fork-shaped. They did not decompose badly. They emitted nothing.
+
+   So the admission rates below are measured over the tasks each model
+   managed to answer at all, and for two of the three that excludes most of
+   the hard half. The actionable form of this is a configuration question
+   before it is a model question — `max_tokens: 4096` is what production
+   gives them — but it does mean fan-out is, today, a one-model capability.
+
+   On the two open questions, over the forks that happened:
 
    - **The join was never punted.** Every fork that happened wrote its
      combining expression rather than leaving a hole after the join. That is
@@ -523,11 +540,11 @@ orchestration layer.
      three weather subgoals as bare `text`. The example is being copied, not
      the type generalised. Reported, not scored: a weather blurb genuinely is
      text.
-   - **Forking is rare.** Four forks across 27 judged replies, all from
-     gpt-5.6-luna; minimax-m3 never forked. The tasks that clearly wanted one
-     got it about half the time. No model forked a task that did not want one,
-     but with fork this rare that is weak evidence of judgement rather than of
-     reticence.
+   - **Forking is rare.** Four forks across 36 answered replies, all from
+     gpt-5.6-luna. The tasks that clearly wanted one got it about half the
+     time. No model forked a task that did not want one, but with fork this
+     rare that is weak evidence of judgement rather than of reticence — and
+     the other two models mostly never reached the question.
 
    Two findings nobody asked for, both recorded as fixtures:
 
