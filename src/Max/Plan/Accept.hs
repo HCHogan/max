@@ -83,21 +83,19 @@ maxAttempts = 3
 
 -- | Decide whether a candidate value completes its goal.
 --
--- The scope and taint of the candidate are passed in and inherited by any
--- evidence produced, because evidence /describes/ that value: a note about a
--- privately scoped result is itself privately scoped.
+-- The scope of the candidate is passed in and inherited by any evidence
+-- produced, because evidence /describes/ that value: a note about a value read
+-- from a sandbox belongs to that sandbox.
 acceptGoal ::
   -- | Scope the candidate value was produced under.
   ResourceScope ->
-  -- | Taint the candidate value carries.
-  Taint ->
   Goal ->
   Value ->
   -- | Verdicts by verifier name.  A verifier the goal names but this map omits
   -- counts as 'Unavailable' — silence is not consent.
   Map Text Verdict ->
   Acceptance
-acceptGoal scope taint goal candidate verdicts =
+acceptGoal scope goal candidate verdicts =
   case shapeEvidence <> gateEvidence of
     [] -> Accepted
     problems -> rehole problems
@@ -122,7 +120,6 @@ acceptGoal scope taint goal candidate verdicts =
       Evidence
         { evSource = source,
           evDetail = truncateTo maxEvidenceChars detail,
-          evTaint = taint,
           evScope = scope
         }
 

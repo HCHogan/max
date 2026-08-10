@@ -28,8 +28,7 @@ searchTool =
       ceInput = SchemaObject [field "query" SchemaText],
       ceResult = SchemaArray hitSchema,
       ceEffects = Set.singleton (EffRead (ExternalScope "web")),
-      ceAuthorities = Set.empty,
-      ceIntroduces = Taint (Set.singleton TaintExternal)
+      ceAuthorities = Set.empty
     }
 
 replyTool :: CatalogEntry
@@ -40,8 +39,7 @@ replyTool =
       ceInput = SchemaObject [field "text" SchemaText],
       ceResult = SchemaObject [],
       ceEffects = Set.singleton (EffSend AudienceConversation),
-      ceAuthorities = Set.singleton Tools.CurrentConversation,
-      ceIntroduces = untainted
+      ceAuthorities = Set.singleton Tools.CurrentConversation
     }
 
 env :: ValidationEnv
@@ -71,7 +69,6 @@ env =
                   ebMaxWallClockMs = 30000
                 },
             goalAuthority = Set.singleton Tools.CurrentConversation,
-            goalDeclassify = Taint (Set.singleton TaintExternal),
             goalDeps = noDependencies,
             goalEvidence = [],
             goalAttempt = 0
@@ -182,7 +179,7 @@ spec = do
       length (symbolicPlan env "turn:41:0" Map.empty known plan) `shouldBe` 2
 
     it "uses a supplied binding that no call overwrites" $ do
-      let inner = env {venBindings = Map.singleton (Binder "n") (SchemaInt, untainted)}
+      let inner = env {venBindings = Map.singleton (Binder "n") SchemaInt}
           plan = case parsePlan "if n > 1 { done \"big\" } else { done \"small\" }" of
             Left failure -> error (show (parseFailureText failure))
             Right parsed -> case validatePlan inner "turn:41:0" parsed of

@@ -45,10 +45,6 @@ module Max.Plan.Types
     PlanEffect (..),
     EffectBudget (..),
     emptyBudget,
-    TaintLabel (..),
-    Taint (..),
-    untainted,
-    taintUnion,
 
     -- * Dependencies
     DependencyKey (..),
@@ -119,8 +115,12 @@ import Max.Plan.Schema (PlanSchema)
 -- 2: 'Let'.  An older host would otherwise meet it as an unknown node tag deep
 -- inside a document it had already accepted; failing at the envelope says the
 -- true thing — this plan is from a language you do not speak.
+-- 3: taint removed.  Dropping a field is as much a language change as adding a
+-- node: an older host would read a goal with no @declassify@ and default it to
+-- something, which is precisely the silent reinterpretation the envelope check
+-- exists to prevent.
 planIRVersion :: Int
-planIRVersion = 2
+planIRVersion = 3
 
 -- | A node's stable identity within one turn.  Derived from the plan root the
 -- host supplies (the horizon-1 @turn:\<turn_id\>:\<step\>@ id) plus the node's
@@ -291,28 +291,6 @@ emptyBudget =
       ebMaxWallClockMs = 0
     }
 
--- | Provenance labels that constrain where a value may flow.  Deliberately
--- coarse: these are the two distinctions max can actually make today.
-data TaintLabel
-  = -- | Bytes that entered from outside the conversation — a fetch, a browser
-    -- page, sandbox output.  The prompt-injection carrier.
-    TaintExternal
-  | -- | Read under a scope narrower than the turn's own audience, so it may not
-    -- flow into a wider send.
-    TaintPrivate
-  deriving stock (Show, Eq, Ord)
-
-newtype Taint = Taint {unTaint :: Set TaintLabel}
-  deriving stock (Show, Eq, Ord)
-
-untainted :: Taint
-untainted = Taint Set.empty
-
--- | Taint propagates by union: an expression is at least as restricted as
--- everything it reads.
-taintUnion :: [Taint] -> Taint
-taintUnion = Taint . Set.unions . map (.unTaint)
-
 -- | Something an elaboration read while deciding.  Recorded by the host from
 -- the actual pull traffic, never authored by the model.
 data DependencyKey
@@ -356,8 +334,6 @@ data Goal = Goal
     goalBudget :: !EffectBudget,
     -- | Authority the elaboration may consume, as catalog authority classes.
     goalAuthority :: !(Set ToolAuthority),
-    -- | Taint the goal's result is permitted to carry.
-    goalDeclassify :: !Taint,
     goalDeps :: !DependencySet,
     -- | Why a previous attempt at this goal did not complete.  Host-attached
     -- only: see 'Evidence'.
@@ -372,15 +348,13 @@ data Goal = Goal
 -- | Why an attempt failed, carried back into the goal that will be retried.
 --
 -- Evidence is __host-attached, never authored__.  A verifier's output can
--- quote content an attacker controls, so it arrives bounded, scoped, and
--- carrying the taint of whatever it describes — and the validator rejects a
--- model-supplied plan that tries to write any, because evidence a model wrote
--- about itself is not evidence.
+-- quote content an attacker controls, so it arrives bounded and scoped — and
+-- the validator rejects a model-supplied plan that tries to write any, because
+-- evidence a model wrote about itself is not evidence.
 data Evidence = Evidence
   { evSource :: !EvidenceSource,
     -- | Already truncated by the host.
     evDetail :: !Text,
-    evTaint :: !Taint,
     evScope :: !ResourceScope
   }
   deriving stock (Show, Eq)
@@ -474,7 +448,6 @@ data PlanDocument = PlanDocument
 data ValueRef = ValueRef
   { vrHandle :: !Text,
     vrSchema :: !PlanSchema,
-    vrTaint :: !Taint,
     vrScope :: !ResourceScope,
     -- | Content digest and byte length, so a pull can be priced and a change
     -- can be detected without re-reading the body.
@@ -700,24 +673,6 @@ instance FromJSON EffectBudget where
       <*> o .: "max_tokens"
       <*> o .: "max_wall_clock_ms"
 
-instance ToJSON TaintLabel where
-  toJSON =
-    toJSON @Text . \case
-      TaintExternal -> "external"
-      TaintPrivate -> "private"
-
-instance FromJSON TaintLabel where
-  parseJSON = withText "TaintLabel" $ \case
-    "external" -> pure TaintExternal
-    "private" -> pure TaintPrivate
-    other -> unknownTag "TaintLabel" other
-
-instance ToJSON Taint where
-  toJSON = toJSON . Set.toAscList . (.unTaint)
-
-instance FromJSON Taint where
-  parseJSON = fmap (Taint . Set.fromList) . parseJSON
-
 instance ToJSON DependencyKey where
   toJSON = \case
     DepResult handle -> tagged "result" ["handle" .= handle]
@@ -778,7 +733,6 @@ instance ToJSON Goal where
         "acceptance" .= goal.goalAcceptance,
         "budget" .= goal.goalBudget,
         "authority" .= map authorityJson (Set.toAscList goal.goalAuthority),
-        "declassify" .= goal.goalDeclassify,
         "deps" .= goal.goalDeps,
         "evidence" .= goal.goalEvidence,
         "attempt" .= goal.goalAttempt
@@ -793,7 +747,6 @@ instance FromJSON Goal where
       <*> o .: "acceptance"
       <*> o .: "budget"
       <*> pure (Set.fromList authority)
-      <*> o .: "declassify"
       <*> o .: "deps"
       <*> o .: "evidence"
       <*> o .: "attempt"
@@ -803,13 +756,12 @@ instance ToJSON Evidence where
     object
       [ "source" .= evidence.evSource,
         "detail" .= evidence.evDetail,
-        "taint" .= evidence.evTaint,
         "scope" .= evidence.evScope
       ]
 
 instance FromJSON Evidence where
   parseJSON = withObject "Evidence" $ \o ->
-    Evidence <$> o .: "source" <*> o .: "detail" <*> o .: "taint" <*> o .: "scope"
+    Evidence <$> o .: "source" <*> o .: "detail" <*> o .: "scope"
 
 instance ToJSON EvidenceSource where
   toJSON = \case
@@ -880,7 +832,6 @@ instance ToJSON ValueRef where
     object
       [ "handle" .= ref.vrHandle,
         "schema" .= ref.vrSchema,
-        "taint" .= ref.vrTaint,
         "scope" .= ref.vrScope,
         "digest" .= ref.vrDigest,
         "length" .= ref.vrLength,
@@ -892,7 +843,6 @@ instance FromJSON ValueRef where
     ValueRef
       <$> o .: "handle"
       <*> o .: "schema"
-      <*> o .: "taint"
       <*> o .: "scope"
       <*> o .: "digest"
       <*> o .: "length"

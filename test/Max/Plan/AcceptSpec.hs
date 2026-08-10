@@ -17,18 +17,14 @@ goal =
       goalAcceptance = [VerifierRef {verName = "answers-question", verVersion = 1}],
       goalBudget = emptyBudget,
       goalAuthority = Set.empty,
-      goalDeclassify = Taint (Set.singleton TaintExternal),
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0
     }
 
-external :: Taint
-external = Taint (Set.singleton TaintExternal)
-
 accept :: Goal -> Value -> [(T.Text, Verdict)] -> Acceptance
 accept g value verdicts =
-  acceptGoal (ExternalScope "web") external g value (Map.fromList verdicts)
+  acceptGoal (ExternalScope "web") g value (Map.fromList verdicts)
 
 reholed :: Acceptance -> Maybe Goal
 reholed = \case
@@ -72,10 +68,9 @@ spec = do
         `shouldBe` ["stale: moved"]
 
   describe "evidence" $ do
-    it "inherits the scope and taint of the value it describes" $ do
+    it "inherits the scope of the value it describes" $ do
       let evidence = maybe [] (.goalEvidence) (reholed (accept goal (Number 1) []))
       map (.evScope) evidence `shouldBe` [ExternalScope "web"]
-      map (.evTaint) evidence `shouldBe` [external]
 
     it "bounds verifier output, which can quote content an attacker wrote" $ do
       let flood = T.replicate (maxEvidenceChars * 3) "x"

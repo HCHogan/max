@@ -82,20 +82,17 @@ validPlan (ValidPlan plan) = plan
 
 -- | Everything the kernel needs to know about one tool.
 --
--- Result schemas, plan-level effects and introduced taint are host-owned
--- declarations rather than anything inferred from the tool's name or its
--- description.  ADR 002 step 2 moves them into the catalog proper; until then
--- the caller assembles them, which keeps the decision with the host either way.
+-- Result schemas and plan-level effects are host-owned declarations rather than
+-- anything inferred from the tool's name or its description.  ADR 002 step 2
+-- moves them into the catalog proper; until then the caller assembles them,
+-- which keeps the decision with the host either way.
 data CatalogEntry = CatalogEntry
   { ceRef :: !ToolRef,
     ceSchemaVersion :: !SchemaVersion,
     ceInput :: !PlanSchema,
     ceResult :: !PlanSchema,
     ceEffects :: !(Set PlanEffect),
-    ceAuthorities :: !(Set ToolAuthority),
-    -- | Taint every result of this tool carries regardless of its arguments —
-    -- a fetch introduces 'TaintExternal' whatever it was asked to fetch.
-    ceIntroduces :: !Taint
+    ceAuthorities :: !(Set ToolAuthority)
   }
   deriving stock (Show, Eq)
 
@@ -106,17 +103,15 @@ entryFromDefinition ::
   PlanSchema ->
   PlanSchema ->
   Set PlanEffect ->
-  Taint ->
   CatalogEntry
-entryFromDefinition definition input result effects introduces =
+entryFromDefinition definition input result effects =
   CatalogEntry
     { ceRef = definition.tdRef,
       ceSchemaVersion = definition.tdSchemaVersion,
       ceInput = input,
       ceResult = result,
       ceEffects = effects,
-      ceAuthorities = definition.tdAuthorities,
-      ceIntroduces = introduces
+      ceAuthorities = definition.tdAuthorities
     }
 
 -- | A host-registered acceptance verifier.  A plan names one; it cannot define
@@ -137,11 +132,11 @@ data ValidationEnv = ValidationEnv
     venHandles :: !(Map Text ValueRef),
     -- | Verifier names the enclosing hole permits.
     venAdmittedVerifiers :: !(Set Text),
-    -- | The hole this plan fills.  Its budget, authority, declassification set
-    -- and expected schema are the ceilings every check compares against.
+    -- | The hole this plan fills.  Its budget, authority and expected schema
+    -- are the ceilings every check compares against.
     venGoal :: !Goal,
     -- | Bindings already in scope from the enclosing plan.
-    venBindings :: !(Map Binder (PlanSchema, Taint)),
+    venBindings :: !(Map Binder PlanSchema),
     venCostCeiling :: !Int
   }
   deriving stock (Show, Eq)
@@ -170,8 +165,6 @@ data RejectReason
     AmbiguousEmptyCollection
   | EffectNotPermitted !PlanEffect
   | AuthorityNotPermitted !ToolAuthority
-  | -- | A value carrying this label reached a position not allowed to carry it.
-    TaintNotDeclassified !TaintLabel
   | -- | Ceiling, then what the plan would spend.
     CallBudgetExceeded !Int !Int
   | SendBudgetExceeded !Int !Int
@@ -208,7 +201,6 @@ reasonText = \case
   AmbiguousEmptyCollection -> "an empty collection needs an expected type here"
   EffectNotPermitted effect -> "effect " <> effectText effect <> " is outside this goal's budget"
   AuthorityNotPermitted authority -> "authority " <> tshow authority <> " is outside this goal's grant"
-  TaintNotDeclassified label -> "a " <> taintText label <> " value cannot leave this goal"
   CallBudgetExceeded limit spend ->
     "plan makes " <> tshow spend <> " calls, budget allows " <> tshow limit
   SendBudgetExceeded limit spend ->
@@ -240,38 +232,6 @@ scopeText = \case
   ProcessScope name -> "process " <> name
   ExternalScope origin -> "external " <> origin
 
--- | Whether a tool's effects can carry its arguments out of the goal's own
--- conversation.
---
--- A send reaches an audience; a sandbox, a process or an external origin is a
--- different trust domain, and an argument travels there whether the effect is
--- nominally a read or a write — a search query containing someone's address
--- has left the building regardless of what comes back.  Reflection discovers
--- capability and carries no payload.
---
--- Only work confined to the current conversation leaves a value where it
--- already was.  Everything else fails closed, in keeping with the rest of this
--- module: an effect nobody has thought about yet counts as escaping.
-leavesConversation :: CatalogEntry -> Bool
-leavesConversation entry = any escapes (Set.toList entry.ceEffects)
-  where
-    escapes = \case
-      EffSend _ -> True
-      EffRead scope -> not (confined scope)
-      EffWrite scope -> not (confined scope)
-      -- The provider is a third party even when the tool is ours.
-      EffLLM -> True
-      EffReflect _ -> False
-
-    confined = \case
-      CurrentConversation -> True
-      _ -> False
-
-taintText :: TaintLabel -> Text
-taintText = \case
-  TaintExternal -> "externally sourced"
-  TaintPrivate -> "privately scoped"
-
 -- | What one execution path through a plan may consume.  Sequential
 -- composition sums; alternatives take the worse of the two, because a ceiling
 -- must cover whichever branch actually runs.
@@ -301,8 +261,8 @@ worseOf left right =
       usSends = max left.usSends right.usSends
     }
 
--- | What each name in scope is, and what it is allowed to reach.
-type TypeEnv = Map Binder (PlanSchema, Taint)
+-- | What each name in scope is.
+type TypeEnv = Map Binder PlanSchema
 
 -- | Admit or reject, with the first reason the plan was inadmissible.
 validatePlan :: ValidationEnv -> Text -> Plan -> Either Rejection ValidPlan
@@ -324,57 +284,31 @@ validatePlan env root plan = do
           at = Rejection here
        in case node of
             Done expr -> do
-              taint <- first at (check env bindings fanout env.venGoal.goalExpected expr)
+              first at (check env bindings fanout env.venGoal.goalExpected expr)
               priceExpr at expr
-              -- Information flow: a result may only carry what its goal is
-              -- allowed to declassify.
-              mapM_
-                (\label -> failIf (not (Set.member label env.venGoal.goalDeclassify.unTaint)) (at (TaintNotDeclassified label)))
-                (Set.toList taint.unTaint)
               pure mempty
             -- A pure binding.  No effect, no call, no send — so nothing is
             -- checked here beyond what any expression is checked for: that it
-            -- types, that it prices, and that it does not reuse a name.  There
-            -- is deliberately no declassification check: naming a value moves
-            -- it nowhere, and the taint travels with the binding to whatever
-            -- boundary it eventually reaches.
+            -- types, that it prices, and that it does not reuse a name.
             Let binder expr continuation -> do
-              (schema, taint) <- first at (infer env bindings fanout expr)
+              schema <- first at (infer env bindings fanout expr)
               priceExpr at expr
               failIf (Map.member binder bindings) (at (ShadowedBinding binder))
-              walk (extend path StepContinue) (Map.insert binder (schema, taint) bindings) continuation
+              walk (extend path StepContinue) (Map.insert binder schema bindings) continuation
             Call call continuation -> do
               entry <- maybe (Left (at (UnknownTool call.cnTool))) Right (Map.lookup call.cnTool env.venCatalog)
               failIf
                 (entry.ceSchemaVersion /= call.cnSchemaVersion)
                 (at (ToolSchemaDrift call.cnTool entry.ceSchemaVersion.unSchemaVersion call.cnSchemaVersion.unSchemaVersion))
-              inputTaint <-
-                first
-                  (\reason -> at (ArgumentSchema call.cnTool (reasonText reason)))
-                  (check env bindings fanout entry.ceInput call.cnInput)
+              first
+                (\reason -> at (ArgumentSchema call.cnTool (reasonText reason)))
+                (check env bindings fanout entry.ceInput call.cnInput)
               priceExpr at call.cnInput
-              -- Information flow at the boundary, not only at the result.
-              -- Checking declassification at 'Done' alone guards what the goal
-              -- returns and nothing else, so a plan could read a private value,
-              -- hand it to a tool that sends, and return an innocuous string —
-              -- passing the check while leaking everything it was about.  A
-              -- live model wrote exactly that plan the first day this was
-              -- measured; see the recorded fixture in plan-eval.
-              mapM_
-                ( \label ->
-                    failIf
-                      ( leavesConversation entry
-                          && not (Set.member label env.venGoal.goalDeclassify.unTaint)
-                      )
-                      (at (TaintNotDeclassified label))
-                )
-                (Set.toList inputTaint.unTaint)
               mapM_
                 (\authority -> failIf (not (Set.member authority env.venGoal.goalAuthority)) (at (AuthorityNotPermitted authority)))
                 (Set.toList entry.ceAuthorities)
               failIf (Map.member call.cnBind bindings) (at (ShadowedBinding call.cnBind))
-              let resultTaint = taintUnion [inputTaint, entry.ceIntroduces]
-                  bound = Map.insert call.cnBind (entry.ceResult, resultTaint) bindings
+              let bound = Map.insert call.cnBind entry.ceResult bindings
                   here' =
                     Usage
                       { usEffects = entry.ceEffects,
@@ -431,9 +365,6 @@ validatePlan env root plan = do
       failIf
         (not (Set.isSubsetOf goal.goalAuthority env.venGoal.goalAuthority))
         (at (BudgetNotNarrowing "authority"))
-      failIf
-        (not (Set.isSubsetOf goal.goalDeclassify.unTaint env.venGoal.goalDeclassify.unTaint))
-        (at (BudgetNotNarrowing "declassification"))
 
     verifier at goal ref = do
       failIf (not (Set.member ref.verName env.venAdmittedVerifiers)) (at (VerifierNotAdmitted ref.verName))
@@ -490,14 +421,14 @@ admits expected actual = case (expected, actual) of
 -- | Checking direction: an expected schema is pushed into the expression.
 -- Only the forms that genuinely need it consume the expectation; everything
 -- else synthesizes and is compared with 'admits'.
-check :: ValidationEnv -> TypeEnv -> Int -> PlanSchema -> Expr -> Either RejectReason Taint
+check :: ValidationEnv -> TypeEnv -> Int -> PlanSchema -> Expr -> Either RejectReason ()
 check env bindings fanout expected expr = case (expected, expr) of
   (_, ELit LitNull) ->
     case expected of
-      SchemaNullable _ -> Right untainted
+      SchemaNullable _ -> Right ()
       _ -> Left (ExpressionType (renderSchema expected) "null")
   (SchemaArray element, EArray items) ->
-    taintUnion <$> traverse (check env bindings fanout element) items
+    mapM_ (check env bindings fanout element) items
   (SchemaObject fields, EObject members) -> do
     let declared = map (.sfName) fields
         supplied = map fst members
@@ -515,29 +446,25 @@ check env bindings fanout expected expr = case (expected, expr) of
             else Left (ExpressionType (renderSchema expected) ("object with unknown field " <> name))
       )
       supplied
-    taints <-
-      traverse
-        ( \(name, value) -> case filter ((== name) . (.sfName)) fields of
-            field : _ -> check env bindings fanout field.sfSchema value
-            [] -> Left (ExpressionType (renderSchema expected) ("object with unknown field " <> name))
-        )
-        members
-    pure (taintUnion taints)
+    mapM_
+      ( \(name, value) -> case filter ((== name) . (.sfName)) fields of
+          field : _ -> check env bindings fanout field.sfSchema value
+          [] -> Left (ExpressionType (renderSchema expected) ("object with unknown field " <> name))
+      )
+      members
   (_, EIf condition consequent alternative) -> do
     checkPredicate env bindings fanout condition
-    taken <- check env bindings fanout expected consequent
-    other <- check env bindings fanout expected alternative
-    pure (taintUnion [taken, other])
+    check env bindings fanout expected consequent
+    check env bindings fanout expected alternative
   (_, ECoalesce primary fallback) -> do
     -- The primary may be null; the fallback must satisfy the expectation on
     -- its own, which is what makes the whole expression non-nullable.
-    primaryTaint <- check env bindings fanout (nullableOf expected) primary
-    fallbackTaint <- check env bindings fanout expected fallback
-    pure (taintUnion [primaryTaint, fallbackTaint])
+    check env bindings fanout (nullableOf expected) primary
+    check env bindings fanout expected fallback
   _ -> do
-    (actual, taint) <- infer env bindings fanout expr
+    actual <- infer env bindings fanout expr
     if admits expected actual
-      then Right taint
+      then Right ()
       else Left (ExpressionType (renderSchema expected) (renderSchema actual))
   where
     nullableOf = \case
@@ -546,91 +473,85 @@ check env bindings fanout expected expr = case (expected, expr) of
 
 -- | Synthesis direction.  Exported as 'inferExpr' for the interpreters, which
 -- need an expression's shape in exactly the cases where its value is unknown.
-infer :: ValidationEnv -> TypeEnv -> Int -> Expr -> Either RejectReason (PlanSchema, Taint)
+infer :: ValidationEnv -> TypeEnv -> Int -> Expr -> Either RejectReason PlanSchema
 infer env bindings fanout = go
   where
     go = \case
       ELit lit -> case lit of
-        LitText _ -> Right (SchemaText, untainted)
-        LitInt _ -> Right (SchemaInt, untainted)
-        LitNumber _ -> Right (SchemaNumber, untainted)
-        LitBool _ -> Right (SchemaBool, untainted)
+        LitText _ -> Right SchemaText
+        LitInt _ -> Right SchemaInt
+        LitNumber _ -> Right SchemaNumber
+        LitBool _ -> Right SchemaBool
         LitNull -> Left AmbiguousEmptyCollection
       EVar binder -> maybe (Left (UnboundName binder)) Right (Map.lookup binder bindings)
       EHandle handle -> case Map.lookup handle env.venHandles of
         Nothing -> Left (UnresolvableHandle handle)
         Just ref
           | not ref.vrRetained -> Left (ReleasedHandle handle)
-          | otherwise -> Right (ref.vrSchema, ref.vrTaint)
+          | otherwise -> Right ref.vrSchema
       EField source name -> do
-        (schema, taint) <- go source
-        projected <- schemaStep (projectField name schema)
-        pure (projected, taint)
+        schema <- go source
+        schemaStep (projectField name schema)
       EIndex source index -> do
         _ <- if index < 0 then Left (ExpressionType "a non-negative index" (tshow index)) else Right ()
-        (schema, taint) <- go source
-        projected <- schemaStep (projectIndex schema)
-        pure (projected, taint)
+        schema <- go source
+        schemaStep (projectIndex schema)
       EArray [] -> Left AmbiguousEmptyCollection
       EArray (first' : rest) -> do
-        (element, taint) <- go first'
-        taints <- traverse (check env bindings fanout element) rest
-        pure (SchemaArray element, taintUnion (taint : taints))
+        element <- go first'
+        mapM_ (check env bindings fanout element) rest
+        pure (SchemaArray element)
       EObject members -> do
         typed <- traverse (\(name, value) -> (name,) <$> go value) members
         pure
           ( SchemaObject
               [ SchemaField {sfName = name, sfSchema = schema, sfRequired = True}
-                | (name, (schema, _)) <- typed
-              ],
-            taintUnion [taint | (_, (_, taint)) <- typed]
+                | (name, schema) <- typed
+              ]
           )
       EConcat parts -> do
-        taints <- traverse (check env bindings fanout SchemaText) parts
-        pure (SchemaText, taintUnion taints)
-      ELength source -> do
-        (schema, taint) <- go source
-        case schema of
-          SchemaArray _ -> Right (SchemaInt, taint)
-          SchemaText -> Right (SchemaInt, taint)
-          SchemaEnum _ -> Right (SchemaInt, taint)
+        mapM_ (check env bindings fanout SchemaText) parts
+        pure SchemaText
+      ELength source ->
+        go source >>= \case
+          SchemaArray _ -> Right SchemaInt
+          SchemaText -> Right SchemaInt
+          SchemaEnum _ -> Right SchemaInt
           other -> Left (ExpressionType "array or text" (renderSchema other))
       ETake count source -> do
         _ <- if count < 0 then Left (ExpressionType "a non-negative count" (tshow count)) else Right ()
-        (schema, taint) <- go source
-        case schema of
-          SchemaArray _ -> Right (schema, taint)
+        go source >>= \case
+          array@(SchemaArray _) -> Right array
           other -> Left (ExpressionType "array" (renderSchema other))
       EMap binder source body -> do
-        (element, sourceTaint) <- elementOf =<< go source
-        inner <- bindOne binder element sourceTaint
-        (result, bodyTaint) <- infer env inner fanout body
-        pure (SchemaArray result, taintUnion [sourceTaint, bodyTaint])
+        element <- elementOf =<< go source
+        inner <- bindOne binder element
+        SchemaArray <$> infer env inner fanout body
       EFilter binder source keep -> do
-        (element, sourceTaint) <- elementOf =<< go source
-        inner <- bindOne binder element sourceTaint
+        element <- elementOf =<< go source
+        inner <- bindOne binder element
         checkPredicate env inner fanout keep
-        pure (SchemaArray element, sourceTaint)
+        pure (SchemaArray element)
       EIf condition consequent alternative -> do
         checkPredicate env bindings fanout condition
-        (schema, taken) <- go consequent
-        other <- check env bindings fanout schema alternative
-        pure (schema, taintUnion [taken, other])
+        schema <- go consequent
+        check env bindings fanout schema alternative
+        pure schema
       ECoalesce primary fallback -> do
-        (schema, primaryTaint) <- go primary
+        schema <- go primary
         let stripped = case schema of
               SchemaNullable inner -> inner
               inner -> inner
-        fallbackTaint <- check env bindings fanout stripped fallback
-        pure (stripped, taintUnion [primaryTaint, fallbackTaint])
+        check env bindings fanout stripped fallback
+        pure stripped
 
-    elementOf (schema, taint) = case schema of
-      SchemaArray element -> Right (element, taint)
+    elementOf = \case
+      SchemaArray element -> Right element
       other -> Left (ExpressionType "array" (renderSchema other))
 
-    bindOne binder schema taint
+    bindOne binder schema
       | Map.member binder bindings = Left (ShadowedBinding binder)
-      | otherwise = Right (Map.insert binder (schema, taint) bindings)
+      | otherwise = Right (Map.insert binder schema bindings)
 
     schemaStep = either (Left . fromSchemaError) Right
 
@@ -644,20 +565,20 @@ checkPredicate env bindings fanout = go bindings
       POr parts -> mapM_ (go scope) parts
       PIsNull source -> () <$ infer env scope fanout source
       PCompare op left right -> do
-        (leftSchema, _) <- infer env scope fanout left
-        (rightSchema, _) <- infer env scope fanout right
+        leftSchema <- infer env scope fanout left
+        rightSchema <- infer env scope fanout right
         comparable op leftSchema rightSchema
       PAll binder source body -> quantify scope binder source body
       PAny binder source body -> quantify scope binder source body
 
     quantify scope binder source body = do
-      (schema, taint) <- infer env scope fanout source
-      element <- case schema of
-        SchemaArray inner -> Right inner
-        other -> Left (ExpressionType "array" (renderSchema other))
+      element <-
+        infer env scope fanout source >>= \case
+          SchemaArray inner -> Right inner
+          other -> Left (ExpressionType "array" (renderSchema other))
       if Map.member binder scope
         then Left (ShadowedBinding binder)
-        else go (Map.insert binder (element, taint) scope) body
+        else go (Map.insert binder element scope) body
 
     -- Comparison is where a loose type system usually leaks: @"3" < 4@ has to
     -- be a rejection, not a coincidence about how two values happen to encode.
@@ -703,5 +624,5 @@ tshow :: Show a => a -> Text
 tshow = T.pack . show
 
 -- | See 'infer'.
-inferExpr :: ValidationEnv -> TypeEnv -> Int -> Expr -> Either RejectReason (PlanSchema, Taint)
+inferExpr :: ValidationEnv -> TypeEnv -> Int -> Expr -> Either RejectReason PlanSchema
 inferExpr = infer

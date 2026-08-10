@@ -39,8 +39,7 @@ searchEntry =
       ceInput = SchemaObject [field "query" SchemaText],
       ceResult = SchemaArray (SchemaObject [field "title" SchemaText]),
       ceEffects = Set.singleton (EffRead (ExternalScope "web")),
-      ceAuthorities = Set.empty,
-      ceIntroduces = Taint (Set.singleton TaintExternal)
+      ceAuthorities = Set.empty
     }
 
 replyEntry :: CatalogEntry
@@ -51,8 +50,7 @@ replyEntry =
       ceInput = SchemaObject [field "text" SchemaText],
       ceResult = SchemaObject [],
       ceEffects = Set.singleton (EffSend AudienceConversation),
-      ceAuthorities = Set.singleton Tools.CurrentConversation,
-      ceIntroduces = untainted
+      ceAuthorities = Set.singleton Tools.CurrentConversation
     }
 
 -- The runtime's view of the same two.  Deliberately the real catalog rather
@@ -113,7 +111,6 @@ validation =
                   ebMaxWallClockMs = 30000
                 },
             goalAuthority = Set.singleton Tools.CurrentConversation,
-            goalDeclassify = Taint (Set.singleton TaintExternal),
             goalDeps = noDependencies,
             goalEvidence = [],
             goalAttempt = 0

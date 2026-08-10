@@ -21,8 +21,7 @@ searchTool =
       ceInput = SchemaObject [field "query" SchemaText],
       ceResult = SchemaArray (SchemaObject [field "title" SchemaText]),
       ceEffects = Set.singleton (EffRead (ExternalScope "web")),
-      ceAuthorities = Set.empty,
-      ceIntroduces = Taint (Set.singleton TaintExternal)
+      ceAuthorities = Set.empty
     }
 
 handle :: Text -> (Text, ValueRef)
@@ -31,7 +30,6 @@ handle name =
     ValueRef
       { vrHandle = name,
         vrSchema = SchemaText,
-        vrTaint = untainted,
         vrScope = CurrentConversation,
         vrDigest = "abc",
         vrLength = 10,
@@ -61,7 +59,6 @@ env =
                   ebMaxWallClockMs = 30000
                 },
             goalAuthority = Set.empty,
-            goalDeclassify = Taint (Set.singleton TaintExternal),
             goalDeps = noDependencies,
             goalEvidence = [],
             goalAttempt = 0
@@ -167,7 +164,7 @@ spec = do
       let session = either (error . show) id (pull env session0 (PullResult "t#1:r1") (grant "sha-1"))
           withHole =
             "let hits = search_web@3({ query: \"q\" })\n\
-            \hole \"接着做什么\" : text budget { calls: 1, fanout: 8, tokens: 10, ms: 10 } effects { read(external \"web\") } declassify { external }"
+            \hole \"接着做什么\" : text budget { calls: 1, fanout: 8, tokens: 10, ms: 10 } effects { read(external \"web\") }"
       case submit env "turn:1:0" session withHole of
         Admitted valid _ ->
           map (\(_, goal) -> goal.goalDeps.unDependencySet) (planHoles "turn:1:0" (validPlan valid))

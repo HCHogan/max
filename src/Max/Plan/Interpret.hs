@@ -232,7 +232,7 @@ symbolicPlan env root handles known valid =
                     (path `into` StepContinue)
                     branches
                     (Map.delete call.cnBind values)
-                    (Map.insert call.cnBind (entry.ceResult, entry.ceIntroduces) types)
+                    (Map.insert call.cnBind entry.ceResult types)
                     continuation
             -- A pure binding is the one place symbolic interpretation gets to
             -- keep knowing things: if everything the expression reads is known,
@@ -291,7 +291,7 @@ symbolicPlan env root handles known valid =
 
     shapeOf types expr =
       case inferExpr env types fanout expr of
-        Right (schema, _) -> Right (Unknown schema)
+        Right schema -> Right (Unknown schema)
         Left reason -> Left (SymbolicType reason)
 
     evalEnv values =

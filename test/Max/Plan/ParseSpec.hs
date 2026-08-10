@@ -25,7 +25,6 @@ program =
       "    budget { calls: 1, sends: 1, fanout: 8, tokens: 2000, ms: 10000 }",
       "    effects { read(conversation), send(conversation) }",
       "    authority { conversation }",
-      "    declassify { external }",
       "    accept { answers-question@1 }",
       "}"
     ]
@@ -84,7 +83,6 @@ spec = do
           goal.goalBudget.ebEffects
             `shouldBe` Set.fromList [EffRead CurrentConversation, EffSend AudienceConversation]
           goal.goalAuthority `shouldBe` Set.singleton Tools.CurrentConversation
-          goal.goalDeclassify `shouldBe` Taint (Set.singleton TaintExternal)
           goal.goalAcceptance `shouldBe` [VerifierRef {verName = "answers-question", verVersion = 1}]
         other -> expectationFailure ("unexpected plan shape: " <> show other)
 
@@ -93,7 +91,6 @@ spec = do
         Right (Hole goal) -> do
           goal.goalBudget `shouldBe` emptyBudget
           goal.goalAuthority `shouldBe` Set.empty
-          goal.goalDeclassify `shouldBe` untainted
           goal.goalAcceptance `shouldBe` []
         other -> expectationFailure ("unexpected parse: " <> show other)
 

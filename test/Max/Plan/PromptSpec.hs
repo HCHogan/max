@@ -25,8 +25,7 @@ searchEntry =
       ceInput = SchemaObject [field "query" SchemaText, SchemaField {sfName = "limit", sfSchema = SchemaInt, sfRequired = False}],
       ceResult = SchemaArray (SchemaObject [field "title" SchemaText]),
       ceEffects = Set.singleton (EffRead (ExternalScope "web")),
-      ceAuthorities = Set.empty,
-      ceIntroduces = Taint (Set.singleton TaintExternal)
+      ceAuthorities = Set.empty
     }
 
 replyEntry :: CatalogEntry
@@ -37,8 +36,7 @@ replyEntry =
       ceInput = SchemaObject [field "text" SchemaText],
       ceResult = SchemaObject [],
       ceEffects = Set.singleton (EffSend AudienceConversation),
-      ceAuthorities = Set.singleton Tools.CurrentConversation,
-      ceIntroduces = untainted
+      ceAuthorities = Set.singleton Tools.CurrentConversation
     }
 
 budget :: EffectBudget
@@ -60,7 +58,6 @@ goal =
       goalAcceptance = [],
       goalBudget = budget,
       goalAuthority = Set.singleton Tools.CurrentConversation,
-      goalDeclassify = Taint (Set.singleton TaintExternal),
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0
@@ -86,7 +83,6 @@ handle name retained =
   ValueRef
     { vrHandle = name,
       vrSchema = SchemaText,
-      vrTaint = Taint (Set.singleton TaintExternal),
       vrScope = CurrentConversation,
       vrDigest = "sha256:0",
       vrLength = 12,
@@ -140,9 +136,6 @@ spec = do
     it "shows an optional parameter as optional rather than as required" $
       catalogSection env `shouldSatisfy` T.isInfixOf "{query: text, limit?: int}"
 
-    it "says a result is tainted, which is the one fact the plan cannot infer" $
-      catalogSection env `shouldSatisfy` T.isInfixOf "结果带污点 external"
-
     it "says so plainly when there are no tools at all" $
       catalogSection env {venCatalog = Map.empty}
         `shouldSatisfy` T.isInfixOf "没有工具可用"
@@ -153,10 +146,6 @@ spec = do
       rendered `shouldSatisfy` T.isInfixOf "调用 ≤ 2 次，其中发送 ≤ 1 次"
       rendered `shouldSatisfy` T.isInfixOf "send(conversation)"
       rendered `shouldSatisfy` T.isInfixOf "read(external \"web\")"
-
-    it "is explicit when nothing may be declassified" $
-      goalSection env {venGoal = goal {goalDeclassify = untainted}}
-        `shouldSatisfy` T.isInfixOf "带污点的值不能进 done"
 
     it "offers a retained handle" $
       goalSection env {venHandles = Map.singleton "t#12:r0" (handle "t#12:r0" True)}
@@ -174,7 +163,6 @@ spec = do
                   [ Evidence
                       { evSource = FromResultSchema,
                         evDetail = "expected text, got [text]",
-                        evTaint = untainted,
                         evScope = CurrentConversation
                       }
                   ]

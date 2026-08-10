@@ -118,7 +118,7 @@ dialectGuide =
          ]
       <> example handBackTheHardPart
       <> [ "",
-           "五个块都能省，省掉是「什么都不给」，不是「随便用」。每个块最多写一次。",
+           "四个块都能省，省掉是「什么都不给」，不是「随便用」。每个块最多写一次。",
            "hole 要的每一项都不能超过你当前的额度（见下面的「本轮目标」）。",
            "",
            "== 会被拒绝的写法 ==",
@@ -129,7 +129,6 @@ dialectGuide =
            "    工具会当真。不用就整个不写这个字段。",
            "  · 调用次数、发送次数超额。按最坏分支算：if 两边各调一次工具，就是两次。",
            "  · 用了「允许的效果」里没有的效果。",
-           "  · 把带 external / private 污点的值送进 done，而目标不允许解密它。",
            "  · 同一个名字 let 两次，或拿 let、done、map、text 这类词当名字。",
            "  · 工具调用不绑名字。发送类工具的结果没什么用，但也要写成 let sent = reply@1(...)。",
            "  · map 套很多层：表达式的静态开销有上限。",
@@ -181,7 +180,6 @@ handBackTheHardPart =
       "  budget { calls: 1, sends: 1, fanout: 8, tokens: 2000, ms: 10000 }",
       "  effects { send(conversation) }",
       "  authority { conversation }",
-      "  declassify { external }",
       "  accept { answers-question@1 }"
     ]
 
@@ -256,11 +254,7 @@ catalogSection env =
         : ("  结果 " <> renderSchema entry.ceResult)
         : concat
           [ ["  效果 " <> commas (map renderEffect (Set.toList entry.ceEffects)) | not (Set.null entry.ceEffects)],
-            ["  需要授权 " <> commas (map renderAuthority (Set.toList entry.ceAuthorities)) | not (Set.null entry.ceAuthorities)],
-            -- Stated because it is the one fact the plan's author cannot infer:
-            -- the result looks like ordinary text either way, and the taint is
-            -- what decides whether it may reach a send.
-            ["  结果带污点 " <> commas (map renderTaint (Set.toList entry.ceIntroduces.unTaint)) | not (Set.null entry.ceIntroduces.unTaint)]
+            ["  需要授权 " <> commas (map renderAuthority (Set.toList entry.ceAuthorities)) | not (Set.null entry.ceAuthorities)]
           ]
 
 -- | This turn's obligation: what to produce, out of what, within what.
@@ -296,11 +290,6 @@ goalSection env =
                then "无"
                else commas (map renderAuthority (Set.toList goal.goalAuthority))
          ]
-      <> [ "可以解密的污点："
-             <> if Set.null goal.goalDeclassify.unTaint
-               then "无（带污点的值不能进 done）"
-               else commas (map renderTaint (Set.toList goal.goalDeclassify.unTaint))
-         ]
       <> acceptance
       <> bindings
       <> handles
@@ -328,15 +317,15 @@ goalSection env =
       | Map.null env.venBindings = []
       | otherwise =
           "已经在作用域里的名字（可以直接用，不要再 let 一次）："
-            : [ "  " <> binder.unBinder <> " : " <> renderSchema schema <> taintNote taint
-                | (binder, (schema, taint)) <- Map.toAscList env.venBindings
+            : [ "  " <> binder.unBinder <> " : " <> renderSchema schema
+                | (binder, schema) <- Map.toAscList env.venBindings
               ]
 
     handles
       | null usable = []
       | otherwise =
           "可用句柄："
-            : [ "  " <> ref.vrHandle <> " : " <> renderSchema ref.vrSchema <> taintNote ref.vrTaint
+            : [ "  " <> ref.vrHandle <> " : " <> renderSchema ref.vrSchema
                 | ref <- usable
               ]
       where
@@ -380,16 +369,6 @@ renderAuthority = \case
   Tools.CurrentConversation -> "conversation"
   Tools.CurrentEndpoint -> "endpoint"
   Tools.ProcessResource name -> "process(" <> quoted name <> ")"
-
-renderTaint :: TaintLabel -> Text
-renderTaint = \case
-  TaintExternal -> "external"
-  TaintPrivate -> "private"
-
-taintNote :: Taint -> Text
-taintNote (Taint labels)
-  | Set.null labels = ""
-  | otherwise = "（污点：" <> commas (map renderTaint (Set.toList labels)) <> "）"
 
 renderVerifierRef :: VerifierRef -> Text
 renderVerifierRef ref = ref.verName <> "@" <> tshow ref.verVersion

@@ -56,8 +56,7 @@ catalog =
         ceInput = SchemaObject [field "query" SchemaText, optional' "limit" SchemaInt],
         ceResult = SchemaArray (SchemaObject [field "title" SchemaText, field "url" SchemaText]),
         ceEffects = Set.singleton (EffRead (ExternalScope "web")),
-        ceAuthorities = Set.empty,
-        ceIntroduces = Taint (Set.singleton TaintExternal)
+        ceAuthorities = Set.empty
       },
     CatalogEntry
       { ceRef = ToolRef "recall_memory",
@@ -65,8 +64,7 @@ catalog =
         ceInput = SchemaObject [field "topic" SchemaText],
         ceResult = SchemaText,
         ceEffects = Set.singleton (EffRead CurrentConversation),
-        ceAuthorities = Set.singleton Tools.CurrentConversation,
-        ceIntroduces = Taint (Set.singleton TaintPrivate)
+        ceAuthorities = Set.singleton Tools.CurrentConversation
       },
     CatalogEntry
       { ceRef = ToolRef "reply",
@@ -74,8 +72,7 @@ catalog =
         ceInput = SchemaObject [field "text" SchemaText],
         ceResult = SchemaObject [],
         ceEffects = Set.singleton (EffSend AudienceConversation),
-        ceAuthorities = Set.singleton Tools.CurrentConversation,
-        ceIntroduces = untainted
+        ceAuthorities = Set.singleton Tools.CurrentConversation
       }
   ]
 
@@ -100,7 +97,6 @@ goal =
             ebMaxWallClockMs = 30000
           },
       goalAuthority = Set.singleton Tools.CurrentConversation,
-      goalDeclassify = Taint (Set.singleton TaintExternal),
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0

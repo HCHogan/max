@@ -27,8 +27,7 @@ searchTool =
       ceInput = SchemaObject [field "query" SchemaText],
       ceResult = SchemaArray hitSchema,
       ceEffects = Set.singleton (EffRead (ExternalScope "web")),
-      ceAuthorities = Set.empty,
-      ceIntroduces = Taint (Set.singleton TaintExternal)
+      ceAuthorities = Set.empty
     }
 
 -- A visible send, which needs conversation authority.
@@ -40,8 +39,7 @@ replyTool =
       ceInput = SchemaObject [field "text" SchemaText],
       ceResult = SchemaObject [],
       ceEffects = Set.singleton (EffSend AudienceConversation),
-      ceAuthorities = Set.singleton Tools.CurrentConversation,
-      ceIntroduces = untainted
+      ceAuthorities = Set.singleton Tools.CurrentConversation
     }
 
 -- Reads a narrower scope than the turn's audience, so its results are private.
@@ -53,8 +51,7 @@ memoryTool =
       ceInput = SchemaObject [],
       ceResult = SchemaText,
       ceEffects = Set.singleton (EffRead CurrentConversation),
-      ceAuthorities = Set.singleton Tools.CurrentConversation,
-      ceIntroduces = Taint (Set.singleton TaintPrivate)
+      ceAuthorities = Set.singleton Tools.CurrentConversation
     }
 
 -- Wants an authority the goal never granted.
@@ -66,8 +63,7 @@ browserTool =
       ceInput = SchemaObject [],
       ceResult = SchemaText,
       ceEffects = Set.singleton (EffRead (ExternalScope "web")),
-      ceAuthorities = Set.singleton (Tools.ProcessResource "browser"),
-      ceIntroduces = untainted
+      ceAuthorities = Set.singleton (Tools.ProcessResource "browser")
     }
 
 -- Writes a sandbox, an effect the goal's budget does not list.
@@ -79,8 +75,7 @@ sandboxTool =
       ceInput = SchemaObject [],
       ceResult = SchemaText,
       ceEffects = Set.singleton (EffWrite (SandboxScope "work")),
-      ceAuthorities = Set.empty,
-      ceIntroduces = untainted
+      ceAuthorities = Set.empty
     }
 
 budget :: EffectBudget
@@ -107,7 +102,6 @@ goal =
       goalAcceptance = [],
       goalBudget = budget,
       goalAuthority = Set.singleton Tools.CurrentConversation,
-      goalDeclassify = Taint (Set.singleton TaintExternal),
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0
@@ -131,7 +125,6 @@ env =
               ValueRef
                 { vrHandle = "t#1:r1",
                   vrSchema = SchemaText,
-                  vrTaint = untainted,
                   vrScope = CurrentConversation,
                   vrDigest = "abc",
                   vrLength = 12,
@@ -142,7 +135,6 @@ env =
               ValueRef
                 { vrHandle = "t#1:r2",
                   vrSchema = SchemaText,
-                  vrTaint = untainted,
                   vrScope = CurrentConversation,
                   vrDigest = "def",
                   vrLength = 12,
@@ -272,7 +264,7 @@ spec = do
     it "rejects a handle whose body retention already released" $
       reasonOf (Done (EHandle "t#1:r2")) `shouldBe` Just (ReleasedHandle "t#1:r2")
 
-  describe "effects, authority and information flow" $ do
+  describe "effects and authority" $ do
     it "rejects an effect the goal's budget does not list" $ do
       let exec = search {cnBind = Binder "out", cnTool = ToolRef "sandbox_exec", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
       reasonOf (Call exec (Done (EVar (Binder "out"))))
@@ -282,59 +274,6 @@ spec = do
       let browse = search {cnBind = Binder "page", cnTool = ToolRef "browse", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
       reasonOf (Call browse (Done (EVar (Binder "page"))))
         `shouldBe` Just (AuthorityNotPermitted (Tools.ProcessResource "browser"))
-
-    it "lets an externally tainted value out, because this goal declassifies it" $
-      admitted (Call search (Done firstTitle))
-
-    it "refuses to let a privately scoped value out of a goal that cannot declassify it" $ do
-      let readMemory = search {cnBind = Binder "note", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
-      reasonOf (Call readMemory (Done (EVar (Binder "note"))))
-        `shouldBe` Just (TaintNotDeclassified TaintPrivate)
-
-    it "propagates taint through an expression rather than losing it" $ do
-      let readMemory = search {cnBind = Binder "note", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
-      reasonOf (Call readMemory (Done (EConcat [ELit (LitText "备注："), EVar (Binder "note")])))
-        `shouldBe` Just (TaintNotDeclassified TaintPrivate)
-
-    it "carries taint through a pure binding to wherever it is finally used" $ do
-      -- The binding itself is fine — naming a value moves it nowhere.  What
-      -- must not happen is the taint being laundered by the intermediate name.
-      let readMemory = search {cnBind = Binder "note", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
-      reasonOf
-        ( Call
-            readMemory
-            (Let (Binder "copy") (EVar (Binder "note")) (Done (EVar (Binder "copy"))))
-        )
-        `shouldBe` Just (TaintNotDeclassified TaintPrivate)
-
-    it "refuses to hand a private value to a tool that sends, not just to done" $ do
-      -- The leak a check at Done alone cannot see: nothing private is
-      -- returned, so the result is clean — it was sent instead.  A live model
-      -- wrote this plan on the first day the dialect was measured, which is
-      -- how the gap was found; the hand-written fixtures had all tested Done.
-      let readMemory = search {cnBind = Binder "note", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
-          leak =
-            search
-              { cnBind = Binder "sent",
-                cnTool = ToolRef "reply",
-                cnSchemaVersion = SchemaVersion 1,
-                cnInput = EObject [("text", EVar (Binder "note"))]
-              }
-      reasonOf (Call readMemory (Call leak (Done (ELit (LitText "已发送")))))
-        `shouldBe` Just (TaintNotDeclassified TaintPrivate)
-
-    it "still allows a private value into a tool that stays in the conversation" $
-      -- read_memory reads the current conversation and nothing else, so
-      -- feeding it something private moves nothing anywhere.  Refusing here
-      -- would make taint mean "unusable" rather than "cannot leave".
-      admitted
-        ( Call
-            search {cnBind = Binder "note", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
-            ( Call
-                search {cnBind = Binder "again", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
-                (Done (ELit (LitText "ok")))
-            )
-        )
 
   describe "pure bindings" $ do
     it "admits naming a value" $
@@ -432,10 +371,6 @@ spec = do
       reasonOf (Hole childGoal {goalBudget = budget {ebEffects = Set.insert (EffReflect "tools") budget.ebEffects}})
         `shouldBe` Just (BudgetNotNarrowing "effects")
 
-    it "rejects a hole that widens its own declassification" $
-      reasonOf (Hole childGoal {goalDeclassify = Taint (Set.fromList [TaintExternal, TaintPrivate])})
-        `shouldBe` Just (BudgetNotNarrowing "declassification")
-
     it "refuses a plan that writes its own evidence or attempt count" $ do
       -- Only the host attaches these, on re-hole.  A plan that could write them
       -- could launder a failed attempt into a fresh one, or fabricate an
@@ -444,7 +379,6 @@ spec = do
             Evidence
               { evSource = FromVerifier "answers-question",
                 evDetail = "trust me, it passed",
-                evTaint = untainted,
                 evScope = CurrentConversation
               }
       reasonOf (Hole childGoal {goalEvidence = [forged]})

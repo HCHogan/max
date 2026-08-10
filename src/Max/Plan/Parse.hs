@@ -126,11 +126,10 @@ reservedWords =
     "not", "and", "or", "all", "any", "isnull",
     "contains", "startswith", "endswith",
     "map", "filter", "concat", "length", "take",
-    "budget", "effects", "authority", "declassify", "accept",
+    "budget", "effects", "authority", "accept",
     "text", "int", "number", "bool", "enum",
     "read", "write", "send", "llm", "reflect",
-    "conversation", "sender", "endpoint", "sandbox", "process", "external",
-    "private"
+    "conversation", "sender", "endpoint", "sandbox", "process", "external"
   ]
 
 keyword :: Text -> P ()
@@ -228,7 +227,6 @@ data GoalBlock
   = BudgetBlock !Int !Int !Int !Int !Int
   | EffectsBlock ![PlanEffect]
   | AuthorityBlock ![Tools.ToolAuthority]
-  | DeclassifyBlock ![TaintLabel]
   | AcceptBlock ![VerifierRef]
 
 goalP :: P Goal
@@ -244,7 +242,6 @@ goalP = do
             goalAcceptance = [],
             goalBudget = emptyBudget,
             goalAuthority = Set.empty,
-            goalDeclassify = untainted,
             goalDeps = noDependencies,
             -- Host-attached fields.  The grammar has no syntax for them on
             -- purpose: a model that could write its own evidence, or reset its
@@ -282,14 +279,12 @@ foldGoalBlocks = go Set.empty
       EffectsBlock effects ->
         goal {goalBudget = goal.goalBudget {ebEffects = Set.fromList effects}}
       AuthorityBlock authorities -> goal {goalAuthority = Set.fromList authorities}
-      DeclassifyBlock labels -> goal {goalDeclassify = Taint (Set.fromList labels)}
       AcceptBlock verifiers -> goal {goalAcceptance = verifiers}
 
     blockName = \case
       BudgetBlock {} -> "budget"
       EffectsBlock {} -> "effects"
       AuthorityBlock {} -> "authority"
-      DeclassifyBlock {} -> "declassify"
       AcceptBlock {} -> "accept"
 
 goalBlockP :: P GoalBlock
@@ -298,7 +293,6 @@ goalBlockP =
     [ keyword "budget" *> braces budgetFields,
       keyword "effects" *> (EffectsBlock <$> braces (commaSep effectP)),
       keyword "authority" *> (AuthorityBlock <$> braces (commaSep authorityP)),
-      keyword "declassify" *> (DeclassifyBlock <$> braces (commaSep taintP)),
       keyword "accept" *> (AcceptBlock <$> braces (commaSep verifierP))
     ]
 
@@ -340,13 +334,6 @@ authorityP =
     [ Tools.CurrentConversation <$ keyword "conversation",
       Tools.CurrentEndpoint <$ keyword "endpoint",
       keyword "process" *> (Tools.ProcessResource <$> parens stringLiteral)
-    ]
-
-taintP :: P TaintLabel
-taintP =
-  choice
-    [ TaintExternal <$ keyword "external",
-      TaintPrivate <$ keyword "private"
     ]
 
 verifierP :: P VerifierRef

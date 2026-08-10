@@ -26,7 +26,6 @@ goal =
             ebMaxWallClockMs = 30000
           },
       goalAuthority = Set.singleton Tools.CurrentConversation,
-      goalDeclassify = Taint (Set.singleton TaintExternal),
       goalDeps = observeDependency DepToolCatalog "cafe0000" noDependencies,
       goalEvidence = [],
       goalAttempt = 0
@@ -135,12 +134,6 @@ spec = do
       emptyBudget.ebMaxCalls `shouldBe` 0
       emptyBudget.ebMaxSends `shouldBe` 0
 
-    it "unions taint rather than replacing it" $
-      taintUnion [Taint (Set.singleton TaintExternal), Taint (Set.singleton TaintPrivate)]
-        `shouldBe` Taint (Set.fromList [TaintExternal, TaintPrivate])
-
-    it "starts from no taint at all" $
-      untainted `shouldBe` Taint Set.empty
 
 kindOf :: PlanNode -> Text
 kindOf = \case
