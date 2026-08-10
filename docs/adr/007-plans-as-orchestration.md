@@ -506,10 +506,47 @@ orchestration layer.
    round-boundary injection to a wake; `annotate` becomes expressible;
    `classifySupplement`'s codomain grows from `Bool` to the verb lattice; the
    `requeueTurnInbox` race is deleted rather than ported.
-7. **Measure.** Fork-shaped tasks against the live multi-model harness. The
-   open questions are not "will it decompose" — that is established — but
-   whether the combining expression can be written before the results exist,
-   and whether declared return types are tight enough to be worth anything.
+7. **Measure.** Done, and thinner than intended: `deepseek-flash` failed all 16
+   requests on transport, so this is a two-model run. 16 tasks, six of them
+   fork-shaped and three of those deliberately wanting no fork.
+
+   Admission held up — gpt-5.6-luna 15/16, minimax-m3 11/12 (four silent) —
+   which says the dialect survived taint's removal and `Fork`'s arrival. On
+   the two open questions:
+
+   - **The join was never punted.** Every fork that happened wrote its
+     combining expression rather than leaving a hole after the join. That is
+     the favourable answer, on n=4 and from one model.
+   - **Types were mostly skipped.** Two of seven subgoals declared anything
+     narrower than `text`, and those two reproduced the guide's
+     `{name: text, bio: text}` almost verbatim while the same model declared
+     three weather subgoals as bare `text`. The example is being copied, not
+     the type generalised. Reported, not scored: a weather blurb genuinely is
+     text.
+   - **Forking is rare.** Four forks across 27 judged replies, all from
+     gpt-5.6-luna; minimax-m3 never forked. The tasks that clearly wanted one
+     got it about half the time. No model forked a task that did not want one,
+     but with fork this rare that is weak evidence of judgement rather than of
+     reticence.
+
+   Two findings nobody asked for, both recorded as fixtures:
+
+   - **A child cannot be handed a parent's binding.** On the dependent-halves
+     task the model inlined an entire framework string into both subgoal
+     objectives, because a `Goal` carries text, a schema and handles — and a
+     parent binding is none of those. Correct behaviour, and fine for a short
+     string; for a large value it is exactly the context bloat forks exist to
+     avoid.
+   - **Both models reached for `let x = hole …`.** Asked the same task,
+     minimax-m3 wrote it and failed to parse, and gpt-5.6-luna wrote a
+     one-child `fork { summary: hole … }`. Both wanted to delegate a single
+     subgoal and name its result. This is the same shape of finding that
+     produced `Let`, and the same remedy is available: admit it as a one-child
+     fork.
+
+   A third, smaller one: `text` is reserved because it names a type, and it is
+   also the most obvious name for a string. One otherwise-correct plan died on
+   it.
 8. **Concurrency and child context projection**, only once 7 says the shape
    holds.
 
