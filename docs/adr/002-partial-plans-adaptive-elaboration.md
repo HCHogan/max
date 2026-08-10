@@ -552,8 +552,13 @@ segments or a future dispatch; already observed effects are never regenerated.
 > inside one plan the tree is the dependency edge, and the fail-closed cycle
 > check narrows with it — and the `Fork`/`Join` this section separates from a
 > durable child turn stays unbuilt, because 007's `Fork` is the durable kind.
+>
 > The verb lattice, targeting, and the authority/arbitration split are
-> unchanged.
+> unchanged — but `annotate`, the middle this section identifies as missing,
+> becomes buildable: a plan supplies a next decision point that is not the next
+> round, so "wait for a natural pause" and "interrupt now" stop being the same
+> act. See 007's "The group's verbs land on the plan". Targeting remains the
+> present-tense gap this section names.
 
 A group chat is several principals submitting, steering, and observing
 work through one conversation. The machine does not change; what multiple

@@ -347,6 +347,67 @@ store read and written through a tool, if and when a real case appears. Shared
 data, not shared context; it creates no implicit ordering edge and enters no
 prompt.
 
+### The group's verbs land on the plan, and the missing middle appears
+
+ADR 002 gives multi-principal input a six-verb lattice: steer, annotate,
+depend, fork-from, abort, observe. Three are implemented — `!feedback` is
+steer, `!btw` is observe, `!kill` is abort — and `annotate` is described there
+as the one that matters most for quietness: *"most supplements are not worth a
+forced elaboration round."*
+
+It cannot be built in a horizon-1 loop, and the reason is structural rather
+than incidental. `Max.Effects.Agent` drains the task inbox at the top of each
+round and appends `[feedback]: …` as a synthetic `MsgUser`. That round boundary
+is the *only* injection point, so "wait for the next natural pause" and
+"interrupt now" name the same act. There is no third thing to mean.
+
+A plan supplies the missing referent. There is now a next decision point that
+is not the next round — and it is exactly the schedule `watch on-failure`
+already defines:
+
+- **steer** forces a wake: the front model reads the note, rewrites the plan,
+  and the reconciler stops the children whose goal hash moved.
+- **annotate** attaches the note to the plan and waits: the front model reads
+  it at the next decision point it was going to reach anyway.
+
+That is the quietness philosophy expressed as a schedule rather than as a
+prompt instruction, which is what ADR 002 asked for and could not spend.
+
+| verb | today | on a plan |
+|---|---|---|
+| observe (`!btw`) | ledger ingest, no task effect | unchanged — already the degenerate case |
+| steer (`!feedback`) | inject text at the next round boundary | wake → rewrite → reconcile |
+| annotate | *inexpressible* | attach; read at the next decision point |
+| abort (`!kill`) | cancel the dispatch | unchanged for the plan root |
+
+Two things get deleted, both already promised: the drain-and-inject-synthetic-
+`MsgUser` path, and with it the `requeueTurnInbox` race — 002's consequence
+list already commits to "the sent-prefix watermark and the feedback-raced-
+stream requeue path" being *"deleted rather than maintained"*. A note stops
+racing a stream because it no longer has to enter the conversation to be
+consumed; it enters the plan.
+
+Two things get better without new design. **Durability**: `TaskHandle.thInbox`
+is a `TVar [Note]`, so a steer landing during a restart is gone today, and a
+plan-scoped row survives. **Granularity**: a steer targets a *task* today; with
+path ids it targets a *subgoal* — "查乙那个改成查丙" moves one child's goal
+hash and leaves its siblings running, which the horizon-1 loop has no
+vocabulary for because it has no subgoals.
+
+`Max.Intent.classifySupplement` is the implicit half of the split and today
+returns `Bool` — push into the running task's inbox, or spawn a parallel
+dispatch. Those are two of the six verbs, and its codomain grows to the lattice
+rather than its call sites multiplying. `Note` already carries
+`noteSource :: Maybe DispatchMessage`, which is the attribution the model needs
+to weigh "the initiator said stop" against "a bystander disagreed" — social
+judgment ADR 002 correctly refuses to hardcode.
+
+What does **not** improve is targeting. Which task an utterance means is still
+resolved by reply linkage and intent classification, exactly as before; ADR 002
+calls it "a present-tense correctness gap, not a future feature", and more
+concurrent plans make it worse rather than better. Finer targets do not help a
+system that cannot tell which target was meant.
+
 ### A goal is handed addresses, never bodies
 
 `goalResources` lists result handles (ADR 004's `t#<n>:r<n>`) that whoever
@@ -430,8 +491,11 @@ orchestration layer.
    only. No cancellation semantics yet.
 5. **Executor suspends at effect boundaries.** Journal, authorize, resume. This
    is also the durability work — checkpoint-resume for the roadmap's L1.
-6. **Split the prompts.** A front-of-house prompt and a child prompt generated
-   from the `Goal` alone.
+6. **Split the prompts, and land the verbs.** A front-of-house prompt and a
+   child prompt generated from the `Goal` alone. `!feedback` retargets from the
+   round-boundary injection to a wake; `annotate` becomes expressible;
+   `classifySupplement`'s codomain grows from `Bool` to the verb lattice; the
+   `requeueTurnInbox` race is deleted rather than ported.
 7. **Measure.** Fork-shaped tasks against the live multi-model harness. The
    open questions are not "will it decompose" — that is established — but
    whether the combining expression can be written before the results exist,
@@ -458,6 +522,10 @@ which is the right order for a machine nobody edits.
   log with rebuildable current-state projections, and the plan head as a value
   beside it. ADR 002's `turn_edges` becomes load-bearing for the first time,
   as the reconciler's actual side.
+- `annotate` becomes buildable and the feedback-raced-stream requeue path
+  becomes deletable, both because a plan supplies a decision point that is not
+  a round boundary. Targeting — which task an utterance meant — is untouched
+  and gets harder as concurrent plans multiply.
 - Fan-out multiplies cost. `n` children are `n` contexts, and the budget
   arithmetic is the only thing standing between a decomposition and an
   n-times bill.
