@@ -172,24 +172,29 @@ integer = lexeme (L.signed (pure ()) L.decimal)
 planP :: P Plan
 planP =
   choice
-    [ callP,
+    [ bindP,
       keyword "done" *> (Done <$> exprP),
       guardP,
       keyword "hole" *> (Hole <$> goalP)
     ]
 
-callP :: P Plan
-callP = do
+-- | @let x = …@, which binds either a tool result or a plain value.
+--
+-- The two forms are told apart by lookahead rather than by a keyword, because
+-- @let x = search_web\@3(…)@ and @let x = hits[0]@ are what a writer reaches
+-- for and neither should have to be spelled differently to help the parser.
+-- 'try' backtracks over the tool form: everything up to the @\@@ also parses as
+-- the beginning of an ordinary expression.
+bindP :: P Plan
+bindP = do
   keyword "let"
   name <- identifier
   _ <- symbol "="
-  tool <- identifier
-  _ <- symbol "@"
-  version <- lexeme L.decimal
-  input <- parens exprP
+  bound <- (Left <$> try toolCall) <|> (Right <$> exprP)
   continuation <- planP
-  pure
-    ( Call
+  pure $ case bound of
+    Left (tool, version, input) ->
+      Call
         CallNode
           { cnBind = Binder name,
             cnTool = ToolRef tool,
@@ -197,7 +202,14 @@ callP = do
             cnInput = input
           }
         continuation
-    )
+    Right expr -> Let (Binder name) expr continuation
+  where
+    toolCall = do
+      tool <- identifier
+      _ <- symbol "@"
+      version <- lexeme L.decimal
+      input <- parens exprP
+      pure (tool, version, input)
 
 guardP :: P Plan
 guardP = do
@@ -513,6 +525,7 @@ planDepth :: Plan -> Int
 planDepth = \case
   Done expr -> 1 + exprDepth expr
   Call call continuation -> 1 + max (exprDepth call.cnInput) (planDepth continuation)
+  Let _ expr continuation -> 1 + max (exprDepth expr) (planDepth continuation)
   Guard condition consequent alternative ->
     1 + maximum [predicateDepth condition, planDepth consequent, planDepth alternative]
   Hole _ -> 1

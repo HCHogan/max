@@ -146,5 +146,6 @@ kindOf :: PlanNode -> Text
 kindOf = \case
   NodeDone _ -> "done"
   NodeCall _ -> "call"
+  NodeLet _ _ -> "let"
   NodeGuard _ -> "guard"
   NodeHole _ -> "hole"

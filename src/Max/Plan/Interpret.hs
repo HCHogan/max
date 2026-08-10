@@ -137,6 +137,9 @@ previewPlan env root valid =
                     1 + restCalls,
                     length [() | EffSend _ <- Set.toList effects] + restSends
                   )
+            -- A pure binding is invisible to a preview: it invokes nothing, so
+            -- there is no step to show and nothing to count.
+            Let _ _ continuation -> go (path `into` StepContinue) reach continuation
             -- Both branches are reported; the counts take the worse one,
             -- because a ceiling must cover whichever branch actually runs.
             Guard _ consequent alternative ->
@@ -230,6 +233,24 @@ symbolicPlan env root handles known valid =
                     branches
                     (Map.delete call.cnBind values)
                     (Map.insert call.cnBind (entry.ceResult, entry.ceIntroduces) types)
+                    continuation
+            -- A pure binding is the one place symbolic interpretation gets to
+            -- keep knowing things: if everything the expression reads is known,
+            -- so is the result.  It degrades to a shape only when it reads
+            -- something a call has already made opaque.
+            Let binder expr continuation -> case inferExpr env types fanout expr of
+              Left reason -> finish (Fails here (SymbolicType reason))
+              Right typed -> case evaluate values types expr of
+                Left err -> finish (Fails here err)
+                Right resolved ->
+                  go
+                    (path `into` StepContinue)
+                    branches
+                    ( case resolved of
+                        Known value -> Map.insert binder value values
+                        Unknown _ -> Map.delete binder values
+                    )
+                    (Map.insert binder typed types)
                     continuation
             Guard predicate consequent alternative ->
               case decide values predicate of

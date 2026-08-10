@@ -116,8 +116,11 @@ import Max.Plan.Schema (PlanSchema)
 -- | Bump when an existing construct changes meaning.  Adding a constructor is
 -- also a bump: a plan encoded by a newer host must not silently lose a node
 -- when decoded by an older one.
+-- 2: 'Let'.  An older host would otherwise meet it as an unknown node tag deep
+-- inside a document it had already accepted; failing at the envelope says the
+-- true thing — this plan is from a language you do not speak.
 planIRVersion :: Int
-planIRVersion = 1
+planIRVersion = 2
 
 -- | A node's stable identity within one turn.  Derived from the plan root the
 -- host supplies (the horizon-1 @turn:\<turn_id\>:\<step\>@ id) plus the node's
@@ -403,6 +406,18 @@ data Plan
   = -- | A candidate result, not proof the objective was met.
     Done !Expr
   | Call !CallNode !Plan
+  | -- | Name a value.  Nothing is invoked and nothing happens: this is the
+    -- @let@ of a language with no side effects, and it exists because every
+    -- model measured against the dialect reached for it unprompted.  Eight of
+    -- the ten real parse failures in the first live run were this and nothing
+    -- else.
+    --
+    -- It costs the kernel nothing to allow.  A pure binding introduces no
+    -- effect, spends no call and no send, and its expression is priced by the
+    -- same 'exprCost' as any other — so every ceiling still holds, and the
+    -- language stays total.  Refusing it bought no safety, only plans that
+    -- said the same thing less legibly.
+    Let !Binder !Expr !Plan
   | Guard !Predicate !Plan !Plan
   | Hole !Goal
   deriving stock (Show, Eq)
@@ -412,6 +427,7 @@ data Plan
 data PlanNode
   = NodeDone !Expr
   | NodeCall !CallNode
+  | NodeLet !Binder !Expr
   | NodeGuard !Predicate
   | NodeHole !Goal
   deriving stock (Show, Eq)
@@ -426,6 +442,8 @@ planNodes root = go []
             Done expr -> [(here, NodeDone expr)]
             Call call continuation ->
               (here, NodeCall call) : go (StepContinue : path) continuation
+            Let binder expr continuation ->
+              (here, NodeLet binder expr) : go (StepContinue : path) continuation
             Guard predicate consequent alternative ->
               (here, NodeGuard predicate)
                 : go (StepThen : path) consequent
@@ -826,6 +844,8 @@ instance ToJSON Plan where
   toJSON = \case
     Done expr -> tagged "done" ["value" .= expr]
     Call call continuation -> tagged "call" ["call" .= call, "then" .= continuation]
+    Let binder expr continuation ->
+      tagged "let" ["as" .= binder, "value" .= expr, "then" .= continuation]
     Guard predicate consequent alternative ->
       tagged "guard" ["cond" .= predicate, "then" .= consequent, "else" .= alternative]
     Hole goal -> tagged "hole" ["goal" .= goal]
@@ -835,6 +855,7 @@ instance FromJSON Plan where
     o .: "t" >>= \case
       "done" -> Done <$> o .: "value"
       "call" -> Call <$> o .: "call" <*> o .: "then"
+      "let" -> Let <$> o .: "as" <*> o .: "value" <*> o .: "then"
       "guard" -> Guard <$> o .: "cond" <*> o .: "then" <*> o .: "else"
       "hole" -> Hole <$> o .: "goal"
       other -> unknownTag "Plan" other

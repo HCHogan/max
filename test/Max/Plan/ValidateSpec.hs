@@ -296,6 +296,17 @@ spec = do
       reasonOf (Call readMemory (Done (EConcat [ELit (LitText "备注："), EVar (Binder "note")])))
         `shouldBe` Just (TaintNotDeclassified TaintPrivate)
 
+    it "carries taint through a pure binding to wherever it is finally used" $ do
+      -- The binding itself is fine — naming a value moves it nowhere.  What
+      -- must not happen is the taint being laundered by the intermediate name.
+      let readMemory = search {cnBind = Binder "note", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
+      reasonOf
+        ( Call
+            readMemory
+            (Let (Binder "copy") (EVar (Binder "note")) (Done (EVar (Binder "copy"))))
+        )
+        `shouldBe` Just (TaintNotDeclassified TaintPrivate)
+
     it "refuses to hand a private value to a tool that sends, not just to done" $ do
       -- The leak a check at Done alone cannot see: nothing private is
       -- returned, so the result is clean — it was sent instead.  A live model
@@ -324,6 +335,36 @@ spec = do
                 (Done (ELit (LitText "ok")))
             )
         )
+
+  describe "pure bindings" $ do
+    it "admits naming a value" $
+      admitted (Let (Binder "greeting") (ELit (LitText "hi")) (Done (EVar (Binder "greeting"))))
+
+    it "types the binding from its expression, and holds the use to that type" $
+      reasonOf (Let (Binder "n") (ELit (LitInt 1)) (Done (EVar (Binder "n"))))
+        `shouldBe` Just (ExpressionType "text" "int")
+
+    it "rejects a name already in scope, exactly as a call would" $
+      reasonOf
+        ( Call
+            search
+            (Let (Binder "hits") (ELit (LitText "x")) (Done (ELit (LitText "y"))))
+        )
+        `shouldBe` Just (ShadowedBinding (Binder "hits"))
+
+    it "rejects an expression that does not typecheck" $
+      reasonOf (Let (Binder "bad") (ELength (ELit (LitBool True))) (Done (ELit (LitText "x"))))
+        `shouldSatisfy` \case
+          Just (ExpressionType _ _) -> True
+          _ -> False
+
+    it "spends no call and no send, however many bindings there are" $ do
+      -- The point of the whole construct: it buys legibility and nothing else.
+      -- If a pure binding could move any ceiling, adding it would have been a
+      -- change to the kernel's guarantees rather than to its ergonomics.
+      let names = [Binder ("v" <> tshow n) | n <- [1 .. 20 :: Int]]
+          nest = foldr (\binder rest -> Let binder (ELit (LitText "x")) rest) (Done (ELit (LitText "x"))) names
+      admitted nest
 
   describe "budgets" $ do
     it "rejects a plan that makes more calls than the budget allows" $ do

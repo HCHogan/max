@@ -190,6 +190,17 @@ spec = do
       (none, _) <- run [("search_web", Right (Array mempty))] plan
       none.erEnd `shouldBe` Produced (String "无")
 
+    it "binds a pure value without touching a tool or a budget" $ do
+      let plan =
+            valid
+              "let hits = search_web@3({ query: \"q\" })\nlet best = hits[0].title ?? \"\"\ndone best"
+      (result, invoked) <- run [("search_web", Right hits)] plan
+      result.erEnd `shouldBe` Produced (String "第一条")
+      -- One call, not two: the binding is not a step.
+      result.erCallsUsed `shouldBe` 1
+      length invoked `shouldBe` 1
+      map (.srTool) result.erSteps `shouldBe` [ToolRef "search_web"]
+
     it "records every step for the journal" $ do
       (result, _) <- run [("search_web", Right hits)] searchThenAnswer
       map (\step -> (step.srNode.unNodeId, step.srTool)) result.erSteps

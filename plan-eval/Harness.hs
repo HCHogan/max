@@ -160,6 +160,7 @@ judge source = case parsePlan source of
     exprsOf = \case
       NodeDone expr -> [expr]
       NodeCall call -> [call.cnInput]
+      NodeLet _ expr -> [expr]
       NodeGuard _ -> []
       NodeHole _ -> []
 

@@ -156,6 +156,19 @@ executePlan env valid = go (PlanPath []) Map.empty 0 0 [] (validPlan valid)
               Left err -> finish steps (Deoptimized (ExpressionFailed here err)) calls sends
               Right produced -> finish steps (Produced produced) calls sends
             Hole hole -> finish steps (Deoptimized (AtHole here hole)) calls sends
+            -- A pure binding: no tool, no budget, nothing to journal.  It fails
+            -- only the way any expression can, which for a validated plan means
+            -- the kernel and the evaluator have disagreed.
+            Let binder expr continuation -> case evalExpr evalEnv budget.ebMaxTokens expr of
+              Left err -> finish steps (Deoptimized (ExpressionFailed here err)) calls sends
+              Right bound ->
+                go
+                  (path `into` StepContinue)
+                  (Map.insert binder bound bindings)
+                  calls
+                  sends
+                  steps
+                  continuation
             Guard predicate consequent alternative ->
               case evalPredicate evalEnv budget.ebMaxTokens predicate of
                 Left err -> finish steps (Deoptimized (ExpressionFailed here err)) calls sends

@@ -49,6 +49,31 @@ spec = do
           call.cnSchemaVersion `shouldBe` SchemaVersion 3
         other -> expectationFailure ("unexpected plan shape: " <> show other)
 
+    it "tells a tool call apart from a plain value after the same `let x =`" $ do
+      -- Both forms start identically, so the tool form is tried with
+      -- backtracking.  A regression here would silently reinterpret one as
+      -- the other, which is the worst kind: it still parses.
+      case parsePlan "let x = hits\ndone \"ok\"" of
+        Right (Let binder (EVar source) (Done _)) -> do
+          binder `shouldBe` Binder "x"
+          source `shouldBe` Binder "hits"
+        other -> expectationFailure ("expected a pure binding, got: " <> show other)
+      case parsePlan "let x = hits@3({ q: \"y\" })\ndone \"ok\"" of
+        Right (Call call (Done _)) -> call.cnTool `shouldBe` ToolRef "hits"
+        other -> expectationFailure ("expected a call, got: " <> show other)
+
+    it "binds an expression that looks nothing like a call" $
+      case parsePlan "let n = length(hits)\nlet best = hits[0].title ?? \"\"\ndone best" of
+        Right (Let _ (ELength _) (Let _ (ECoalesce _ _) (Done _))) -> pure ()
+        other -> expectationFailure ("unexpected plan shape: " <> show other)
+
+    it "still refuses a bare call with no name to bind it to" $
+      -- Two models wrote this.  It stays a rejection: a plan reads top to
+      -- bottom as a chain of named steps, and one anonymous step in the middle
+      -- would be the only line whose result nothing can refer to.
+      parsePlan "let hits = search_web@3({ query: \"q\" })\nreply@1({ text: \"hi\" })\ndone \"ok\""
+        `shouldSatisfy` isLeft
+
     it "reads every declaration on the hole" $
       case parsed of
         Call _ (Guard _ _ (Hole goal)) -> do

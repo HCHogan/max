@@ -78,6 +78,7 @@ dialectGuide =
       -- standing in for the parts you fill.  The worked examples below are the
       -- real syntax, and those are the ones the tests parse.
       "  let 名字 = 工具@版本(参数)              调一次工具，把结果绑到名字上，然后接着往下写",
+      "  let 名字 = 表达式                       给一个值起名字，不调用任何东西",
       "  done 表达式                            这就是答案，计划到此为止",
       "  if 条件 { 计划 } else { 计划 }           分支；两边都必须写，各自是一个完整计划",
       "  hole \"还差什么\" : 类型 ...               写不出来的部分交回去，下一轮再细化",
@@ -130,6 +131,7 @@ dialectGuide =
            "  · 用了「允许的效果」里没有的效果。",
            "  · 把带 external / private 污点的值送进 done，而目标不允许解密它。",
            "  · 同一个名字 let 两次，或拿 let、done、map、text 这类词当名字。",
+           "  · 工具调用不绑名字。发送类工具的结果没什么用，但也要写成 let sent = reply@1(...)。",
            "  · map 套很多层：表达式的静态开销有上限。",
            "",
            "== 输出 ==",
@@ -164,8 +166,9 @@ searchThenAnswer :: Text
 searchThenAnswer =
   T.unlines
     [ "let hits = search_web@3({ query: \"燕山大学 教务处\" })",
+      "let title = hits[0].title ?? \"\"",
       "if length(hits) > 0 {",
-      "  done concat(\"找到了：\", hits[0].title ?? \"\")",
+      "  done concat(\"找到了：\", title)",
       "} else {",
       "  done \"没搜到\"",
       "}"

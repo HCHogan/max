@@ -332,6 +332,17 @@ validatePlan env root plan = do
                 (\label -> failIf (not (Set.member label env.venGoal.goalDeclassify.unTaint)) (at (TaintNotDeclassified label)))
                 (Set.toList taint.unTaint)
               pure mempty
+            -- A pure binding.  No effect, no call, no send — so nothing is
+            -- checked here beyond what any expression is checked for: that it
+            -- types, that it prices, and that it does not reuse a name.  There
+            -- is deliberately no declassification check: naming a value moves
+            -- it nowhere, and the taint travels with the binding to whatever
+            -- boundary it eventually reaches.
+            Let binder expr continuation -> do
+              (schema, taint) <- first at (infer env bindings fanout expr)
+              priceExpr at expr
+              failIf (Map.member binder bindings) (at (ShadowedBinding binder))
+              walk (extend path StepContinue) (Map.insert binder (schema, taint) bindings) continuation
             Call call continuation -> do
               entry <- maybe (Left (at (UnknownTool call.cnTool))) Right (Map.lookup call.cnTool env.venCatalog)
               failIf

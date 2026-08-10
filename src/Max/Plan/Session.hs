@@ -238,6 +238,7 @@ submit env root session source =
     withDeps = \case
       Hole goal -> Hole goal {goalDeps = session.seReadSet}
       Call call continuation -> Call call (withDeps continuation)
+      Let binder expr continuation -> Let binder expr (withDeps continuation)
       Guard condition consequent alternative ->
         Guard condition (withDeps consequent) (withDeps alternative)
       done@(Done _) -> done
