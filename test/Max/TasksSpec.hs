@@ -297,6 +297,19 @@ spec = describe "Max.Tasks" $ do
       notes <- endDispatch reg tid
       map (.noteLine) notes `shouldBe` []
 
+    it "surrenders an annotation to the epilogue exactly as it does a steer" $ do
+      -- The verb changes how a note is announced and labelled; it must not
+      -- change whether the note survives.  A router that could end a message
+      -- would be deciding what somebody meant — against a conversation it
+      -- cannot see, on a model picked for being cheap — and the turn that
+      -- would answer it can already choose [silence] instead.
+      reg <- newTaskRegistry
+      tid <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
+      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing NoteSteer)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "顺便说一句" Nothing NoteAnnotate)
+      notes <- endDispatch reg tid
+      map (.noteLine) notes `shouldBe` ["改成 B", "顺便说一句"]
+
     it "requeued notes keep their order, ahead of later arrivals" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))

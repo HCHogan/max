@@ -406,6 +406,24 @@ rather than its call sites multiplying. `Note` already carries
 to weigh "the initiator said stop" against "a bystander disagreed" — social
 judgment ADR 002 correctly refuses to hardcode.
 
+**The router decides when, the front model decides what.** This division is
+load-bearing and easy to lose, because the verbs are named after intentions and
+intentions are exactly what a cheap classifier reading four lines of history is
+worst at. What genuinely has to be settled at ingest is scheduling — the front
+model is either not running yet or is mid-round, and a reaction that arrives
+twenty seconds late has already failed. What must not be settled at ingest is
+meaning: whether a note changes the plan, which subgoal it moves, whether it
+deserves an answer at all. Those need the conversation, the memory and the plan,
+and the front model is the only thing holding all three.
+
+The invariant that keeps the line where it belongs: **the router may delay a
+note or attach it quietly; it may never end one.** It reports its reading as a
+label the front model can disregard, and every note that reaches an inbox
+survives to a model that can answer it — or say `[silence]`, which is the same
+restraint arrived at by whoever is qualified to exercise it. Quietness bought by
+letting the router discard is quietness bought against the one thing this design
+is for.
+
 What does **not** improve is targeting. Which task an utterance means is still
 resolved by reply linkage and intent classification, exactly as before; ADR 002
 calls it "a present-tense correctness gap, not a future feature", and more
@@ -531,14 +549,27 @@ orchestration layer.
    classifier silently ignored a message addressed to the bot" that is safer
    than keeping the note. It stays what it has been — a verb the user types.
 
-   Annotate is a real verb today, with three consequences rather than a rename:
-   it does not wear the 托腮 that promises a note was acted on; it reaches the
+   Annotate is a real verb today, with two consequences rather than a rename: it
+   does not wear the 托腮 that promises a note was acted on, and it reaches the
    model as `[fyi]` rather than `[feedback]`, because one tag for both tells the
-   model that 「顺便说一句我明天休假」 is an instruction; and if the turn it was
-   riding on dies without serving it, it dies with that turn instead of becoming
-   a reply nobody asked for. Pokes were reclassified as annotations while the
-   distinction was being made: a poke says somebody is there, not what to do
-   differently.
+   model that 「顺便说一句我明天休假」 is an instruction. Pokes were reclassified
+   as annotations while the distinction was being made: a poke says somebody is
+   there, not what to do differently.
+
+   **It was three consequences for one commit, and the third was wrong.** An
+   annotation the running turn never got to was being dropped instead of
+   re-dispatched, on the grounds that reviving 「顺便说一句」 as a turn of its own
+   is the sound of a bot that talks too much. It is — but the router was the
+   wrong actor to prevent it. That is the router ending a message: deciding,
+   from four lines of history and a model chosen for being cheap, that something
+   somebody said to the bot will never be read by anything that could answer it.
+   The revived turn can already say `[silence]`. Restored, and the invariant is
+   now pinned by a test rather than by an argument.
+
+   The general shape of the mistake is worth naming, because the next two steps
+   can make it again: with no plan running, the verb's real job — *when does the
+   front model look* — has nowhere to land, so it drifts toward the jobs that do
+   have somewhere to land, which are the front model's.
 
    **Two parts do not land, and the reason is the same for both.** `!feedback`
    cannot retarget to a wake and the `requeueTurnInbox` race cannot be deleted,

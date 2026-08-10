@@ -1280,31 +1280,28 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
                 queueQQReaction gm.groupId (CanonicalMessageId m) processingFaceId False
             -- Notes this turn accepted but never answered ('endDispatch'
             -- returns none for a killed turn — !kill drops them by
-            -- contract).  Ones that ARE a message and that asked for
-            -- something get a turn of their own: the streamed answer
-            -- they raced is in the transcript by now, so the fresh turn
-            -- sees both it and them.  NeverAbsorb — absorption already
-            -- failed this note once.  Origin re-derived from the message
-            -- itself, because an un-@'d supplement still deserves the
-            -- option of [silence].
+            -- contract).  Ones that ARE a message get a turn of their
+            -- own: the streamed answer they raced is in the transcript
+            -- by now, so the fresh turn sees both it and them.
+            -- NeverAbsorb — absorption already failed this note once.
+            -- Origin re-derived from the message itself, because an
+            -- un-@'d supplement still deserves the option of [silence];
+            -- sourceless notes (pokes) have nothing left to say.
             --
-            -- Two kinds never come back.  Sourceless notes (pokes) have
-            -- nothing left to say.  Annotations have something to say
-            -- and no claim on saying it: nobody was promised an answer
-            -- to 「顺便说一句」, and answering it late, alone, out of the
-            -- turn it was riding on is worse than not answering it.
-            let (steers, annotations) = partition ((== NoteSteer) . (.noteVerb)) unserved
-                revivable = [src | note <- steers, Just src <- [note.noteSource]]
-            unless (null annotations) $
-              logInfo "dispatch: unserved annotations dropped" $
-                object ["count" .= length annotations]
-            -- A steer with nowhere to go back to — a !feedback redirected out
-            -- of the chat it was typed in.  Kept at attention because unlike
-            -- an annotation it asked for something and nobody will do it.
-            let orphaned = length steers - length revivable
-            when (orphaned > 0) $
-              logAttention "dispatch: unserved steers dropped" $
-                object ["count" .= orphaned]
+            -- The verb deliberately does /not/ filter this list, and that
+            -- is the whole rule the supplement router works under: it may
+            -- delay a note or attach it quietly, and it may never end one.
+            -- Deciding an annotation is not worth answering is a judgement
+            -- about what somebody meant, made against a conversation the
+            -- router cannot see, by a model chosen for being cheap — and
+            -- the turn that would answer it can already say [silence],
+            -- which is the same restraint reached by whoever is qualified
+            -- to exercise it.
+            let revivable = [src | note <- unserved, Just src <- [note.noteSource]]
+                dropped = length unserved - length revivable
+            unless (dropped == 0) $
+              logAttention "dispatch: unserved notes dropped" $
+                object ["count" .= dropped]
             for_ revivable $ \src -> do
               let orig
                     | isPrivateChat src.groupId || dispatchMentionsSelf src = OriginDirect
