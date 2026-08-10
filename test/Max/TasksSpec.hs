@@ -306,7 +306,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       tid <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
       _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing NoteSteer)
-      _ <- pushToLatest reg gid Nothing Nothing (Note "顺便说一句" Nothing NoteAnnotate)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "顺便说一句" Nothing NoteAmbient)
       notes <- endDispatch reg tid
       map (.noteLine) notes `shouldBe` ["改成 B", "顺便说一句"]
 

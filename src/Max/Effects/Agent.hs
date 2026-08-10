@@ -518,19 +518,22 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
         when taken $
           liftIO (atomically (writeTVar sentRef (sent <> ready)))
 
-    -- Notes that arrived mid-turn, from !feedback or from a message the
-    -- classifier routed here.  Marked so the model can tell them from the
-    -- original request without being told twice — and split by verb, because
-    -- one tag for both says every note is an instruction.  A model reading
-    -- "[feedback]: 明天我休假" under one label has been told to act on it, and
-    -- the cheapest way to stop that is to stop calling it feedback.
+    -- Whatever was said while this turn was working.  Two labels, and they
+    -- report provenance rather than meaning: [feedback] is a claim its speaker
+    -- made — they typed the verb, or replied to this turn's own output —
+    -- whereas the other says only that a line arrived after work started.
+    --
+    -- Nothing upstream reads either one for intent any more (ADR 007 §8), so
+    -- the labels must not pretend to: a single [feedback] tag over everything
+    -- told the model that 明天我休假 was an instruction, and that was a
+    -- classifier's guess wearing a tag's authority.
     feedbackMsg :: [Note] -> ChatMessage
     feedbackMsg xs =
       MsgUser . T.intercalate "\n" $
         [ label <> T.intercalate " | " (map (.noteLine) group)
           | (verb, label) <-
               [ (NoteSteer, "[feedback]: "),
-                (NoteAnnotate, "[fyi]（补充信息，不要求你因此改变正在做的事）: ")
+                (NoteAmbient, "[群里新消息]（你开始做事之后进来的）: ")
               ],
             let group = filter ((== verb) . (.noteVerb)) xs,
             not (null group)

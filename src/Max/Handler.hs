@@ -23,7 +23,7 @@ import Control.Monad (forM_, unless, void, when)
 import Data.Aeson (Value, eitherDecodeStrict', encode, toJSON)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
-import Data.List (find, partition, unsnoc)
+import Data.List (find, unsnoc)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Set qualified as Set
@@ -87,7 +87,7 @@ import Max.FetchQueue (FetchSignal)
 import Max.Files (enqueueFiles)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
-import Max.Intent (IntentConfig (..), IntentState, SupplementVerb (..), classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
+import Max.Intent (IntentState, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.IR
 import Max.IR.Digest (digest)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
@@ -648,7 +648,7 @@ onPoke mIntent pk
             pk.pkGroupId
             Nothing
             Nothing
-            (Note (pokerName <> " 戳了戳你") Nothing NoteAnnotate)
+            (Note (pokerName <> " 戳了戳你") Nothing NoteAmbient)
       case landed of
         Just (TaskId into) ->
           logInfo "poke: injected into running task" $
@@ -1333,7 +1333,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
       injected <-
         if steered || isJust replyTarget
           then pure steered
-          else tryInjectSupplement outputCaps env s tid
+          else tryAbsorbIntoRunningTurn outputCaps env s tid
       if injected
         then do
           archive <- captureTurnArchiveFields durable s.model [] 0 (Just "absorbed into an in-flight turn")
@@ -1397,30 +1397,39 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
           (queueQQReaction gm.groupId gm.canonicalId processingFaceId True >> act)
             `finally` queueQQReaction gm.groupId gm.canonicalId processingFaceId False
 
-    -- The implicit half of the feedback split: when the group already
-    -- has another turn running, a fresh trigger is often steering
-    -- that turn（追加要求、修正方向、催进度）rather than starting
-    -- something new.  Ask the intent profile which it is; a supplement
-    -- goes into a running turn's inbox — that turn's eventual reply
-    -- addresses it — instead of spawning a parallel dispatch.  Anyone
-    -- may steer, not just whoever started the turn: the note carries
-    -- the speaker's name, so the model can address them.
+    -- When the group already has a turn running, whatever gets said next goes
+    -- into that turn's inbox and the front model decides what it is.  There is
+    -- no classifier here any more, and removing it is the point rather than a
+    -- saving: "is this steering the running task or starting a new one" is a
+    -- question about what somebody meant, and it was being answered from four
+    -- lines of history by a model chosen for being cheap.  The model that has
+    -- the conversation, the memory and the work in progress can answer it, and
+    -- can also decline to choose — one reply addressing both things is a
+    -- perfectly good outcome that a router has no way to express.
+    --
+    -- So the targeting problem ADR 002 called "a present-tense correctness gap"
+    -- is dissolved rather than narrowed.  Mis-aiming stops being a failure and
+    -- becomes extra context.
+    --
+    -- Two things are given up on purpose.  A second, unrelated question no
+    -- longer gets a concurrent turn of its own — two turns in one group cannot
+    -- see each other, may both speak, and interleave; parallelism belongs
+    -- inside a plan where it has structure.  And that question now waits for
+    -- the running turn's next decision point, bounded by one model round.
     --
     -- Aiming mirrors @!feedback@: a trigger that replies to a running
     -- turn's trigger (or to a message that turn already absorbed) is
     -- steering THAT turn, not whichever started last — 'pushToTrigger'
     -- first, newest turn as the fallback.
     --
-    -- Gated on intent being configured; turns that declared themselves
-    -- un-absorbable never reroute — @!btw@ said so outright, and a
-    -- poke has no message for the classifier to read.  Direct and
-    -- proactive triggers both may: the same "不对，改成X" steers the
-    -- running turn whether or not it carried an @.  Any doubt
-    -- (classifier says no, errors out, or the turn finished while we
-    -- were classifying) falls back to a normal dispatch.
-    tryInjectSupplement outputCaps env s tid =
-      case env.beIntent of
-        Just icfg | absorbable == MayAbsorb -> do
+    -- Turns that declared themselves un-absorbable never reroute — @!btw@ said
+    -- so outright.  Direct and proactive triggers both may: the same "不对，改成
+    -- X" steers the running turn whether or not it carried an @.  No longer
+    -- gated on the intent profile being configured, because nothing here needs
+    -- a model any more.
+    tryAbsorbIntoRunningTurn outputCaps env s tid =
+      case absorbable of
+        MayAbsorb -> do
           -- Our own entry has been in the registry since dispatch
           -- entry, so "is anybody working?" has to discount it.
           running <- liftIO (listTasks env.beTasks (Just gm.groupId))
@@ -1429,82 +1438,67 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
             else do
               let GroupId gidRaw = gm.groupId
                   CanonicalMessageId midRaw = gm.canonicalId
-              rows <- fetchRecentInGroup gidRaw 0 s.clearedAt (icfg.icContextLines + length companions)
+              -- Only the trigger and its companions; the history around them
+              -- was context for a classifier that no longer exists, and the
+              -- turn absorbing this note already has its own.
+              rows <- fetchRecentInGroup gidRaw 0 s.clearedAt (length companions + 1)
               noteAt <- liftIO getCurrentTime
               -- Companions (the earlier messages of a proactive batch)
-              -- count as new alongside the trigger, not as context:
-              -- the classifier judges the batch it was fired for, and
-              -- if the turn absorbs, the whole batch is the note — the
-              -- running turn never re-reads history, so a line left
-              -- behind here is a line it never sees.  Rendered from
-              -- their DB rows for real timestamps; a row missing in a
-              -- pathological flood just drops its line, same call the
-              -- intent worker already makes.
+              -- go in alongside the trigger: if the turn absorbs, the whole
+              -- batch is the note — the running turn never re-reads history,
+              -- so a line left behind here is a line it never sees.  Rendered
+              -- from their DB rows for real timestamps; a row missing in a
+              -- pathological flood just drops its line, same call the intent
+              -- worker already makes.
               let render = renderHistoryLine env.beTimeZone
                   companionMids =
                     Set.fromList [m | c <- companions, let CanonicalMessageId m = c.canonicalId]
-                  rest = filter (\h -> h.canonicalId /= midRaw) rows
-                  (companionRows, ctxRows) =
-                    partition (\h -> h.canonicalId `Set.member` companionMids) rest
-                  ctxLines = map render ctxRows
+                  companionRows =
+                    [ h
+                      | h <- rows,
+                        h.canonicalId /= midRaw,
+                        h.canonicalId `Set.member` companionMids
+                    ]
                   newLine =
                     T.intercalate "\n" $
                       map render companionRows <> [renderCurrentLine env.beTimeZone noteAt gm]
-              verb <- classifySupplement icfg gidRaw ctxLines newLine
-              case verb of
-                NotASupplement -> pure False
-                _ -> do
-                  let steering = verb == SteerRunning
-                  -- Record the trigger as absorbed by whichever turn
-                  -- takes it: ours is about to exit and unmark it, and
-                  -- a question that looks unanswered gets answered
-                  -- again by the next dispatch.  Both verbs absorb —
-                  -- what they disagree about is how loudly, not whether
-                  -- the message has been dealt with.
-                  --
-                  -- The note carries the swallowed message itself: if
-                  -- the absorbing turn dies without serving it, the
-                  -- dispatch epilogue re-dispatches it as the turn it
-                  -- would have been — but for a steer only, and that
-                  -- decision is the epilogue's rather than made here by
-                  -- withholding the source.
-                  let note = Note newLine (Just gm) (verbOf verb)
-                  aimed <- case (\(CanonicalMessageId target) -> target) <$> gm.replyTo of
-                    Just tgt ->
-                      liftIO (pushToTrigger env.beTasks gm.groupId (Just tid) (Just midRaw) tgt note)
-                    Nothing -> pure Nothing
-                  landed <- case aimed of
-                    Just _ -> pure aimed
-                    Nothing ->
-                      liftIO (pushToLatest env.beTasks gm.groupId (Just tid) (Just midRaw) note)
-                  for_ landed $ \(TaskId into) -> do
-                    logInfo "feedback: implicit injection" $
-                      object
-                        [ "group_id" .= gidRaw,
-                          "message_id" .= midRaw,
-                          "aimed" .= isJust aimed,
-                          "verb" .= (if steering then "steer" :: T.Text else "fyi"),
-                          "task" .= into
-                        ]
-                    -- Same 托腮 an explicit !feedback gets, cleared by
-                    -- the absorbing turn's epilogue.  Direct triggers
-                    -- only: an absorbed proactive candidate was never
-                    -- addressed to the bot, and reacting would break
-                    -- the "traceless until it speaks" rule.
-                    --
-                    -- A steer only.  The 托腮 is a promise that the note
-                    -- will be acted on, and an annotation is exactly the
-                    -- note nobody promised that about; wearing the face
-                    -- anyway would make it a lie in the one case the
-                    -- verb exists to name.
-                    when (steering && origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-                      queueQQReaction gm.groupId gm.canonicalId processingFaceId True
-                  pure (isJust landed)
+              -- Record the trigger as absorbed by whichever turn takes it:
+              -- ours is about to exit and unmark it, and a question that looks
+              -- unanswered gets answered again by the next dispatch.
+              --
+              -- Ambient rather than steer, and that is a structural fact rather
+              -- than a reading: nobody claimed this message is about the work.
+              -- What it means is the front model's to decide, and the label
+              -- only tells it where the line came from.
+              let note = Note newLine (Just gm) NoteAmbient
+              aimed <- case (\(CanonicalMessageId target) -> target) <$> gm.replyTo of
+                Just tgt ->
+                  liftIO (pushToTrigger env.beTasks gm.groupId (Just tid) (Just midRaw) tgt note)
+                Nothing -> pure Nothing
+              landed <- case aimed of
+                Just _ -> pure aimed
+                Nothing ->
+                  liftIO (pushToLatest env.beTasks gm.groupId (Just tid) (Just midRaw) note)
+              for_ landed $ \(TaskId into) -> do
+                logInfo "absorbed into a running turn" $
+                  object
+                    [ "group_id" .= gidRaw,
+                      "message_id" .= midRaw,
+                      "aimed" .= isJust aimed,
+                      "task" .= into
+                    ]
+                -- Same 托腮 an explicit !feedback gets, cleared by the
+                -- absorbing turn's epilogue.  Unconditional now: the face
+                -- promises the message will be read, and since the router
+                -- stopped deciding which ones deserve reading, that promise is
+                -- true of every note that lands.  Direct triggers only — an
+                -- absorbed proactive candidate was never addressed to the bot,
+                -- and reacting would break the "traceless until it speaks"
+                -- rule.
+                when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
+                  queueQQReaction gm.groupId gm.canonicalId processingFaceId True
+              pure (isJust landed)
         _ -> pure False
-
-    verbOf = \case
-      SteerRunning -> NoteSteer
-      _ -> NoteAnnotate
 
     dispatch outputCaps turn durable env s continuationTarget = do
       catalog :: ModelCatalog <- ask

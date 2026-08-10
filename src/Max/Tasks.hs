@@ -109,23 +109,26 @@ newtype TaskId = TaskId {unTaskId :: Text}
 data Note = Note
   { noteLine :: !Text,
     noteSource :: !(Maybe DispatchMessage),
-    -- | Which of ADR 002's verbs put it here.  The registry only carries it;
-    -- what it changes lives at the two ends — how "Max.Effects.Agent" labels the
-    -- note for the model, and whether "Max.Handler"'s epilogue revives it.
+    -- | Where the note came from.  The registry only carries it; the one place
+    -- it is read is "Max.Effects.Agent", which uses it to label the line for
+    -- the model.
     noteVerb :: !NoteVerb
   }
 
--- | A note that asks for a change, or one that merely informs.
+-- | Whether somebody /said/ this note is about the running work.
 --
--- The distinction is only meaningful because there is somewhere for an
--- unanswered note to go: an annotation the running turn never got to is
--- discarded, where a steer becomes a turn of its own.  Under the horizon-1 loop
--- the two land at the same place — the next round boundary — and differ in what
--- is promised about them rather than in when they arrive.  ADR 007 is where the
--- schedule diverges too.
+-- Attribution, not interpretation — which is the whole reason it is safe to
+-- attach at ingest.  'NoteSteer' records a fact the speaker asserted (they
+-- typed @!feedback@, or replied to this turn's own output); 'NoteAmbient'
+-- records a fact about timing and nothing else. What either one /means/ is
+-- decided downstream by the model holding the conversation, which may treat an
+-- ambient line as a course correction or a steer as beside the point.
+--
+-- ADR 007 §8: no classifier assigns these, because "is this about the running
+-- task" is a question about meaning and was being answered by the wrong actor.
 data NoteVerb
   = NoteSteer
-  | NoteAnnotate
+  | NoteAmbient
   deriving stock (Show, Eq)
 
 -- | The handle the agent loop keeps once it has 'attachTask'ed.  Used

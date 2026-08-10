@@ -274,16 +274,18 @@ spec = describe "Agent full loop" $ do
     length completion.tcUnservedNotes `shouldBe` 0
     (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True
 
-  it "labels an annotation as background rather than as an instruction" $ do
-    -- Both verbs reach the model at the same place; only the label differs.
-    -- One tag for both would tell the model to act on 「顺便说一句」, and the
-    -- model would be right to, because that is what [feedback] means.
+  it "labels an ambient line by where it came from, not by what it means" $ do
+    -- Both verbs reach the model at the same place; only the label differs,
+    -- and it reports provenance.  One tag for both would tell the model to act
+    -- on 「顺便说一句」, and the model would be right to, because that is what
+    -- [feedback] means — nothing upstream classifies these any more, so the
+    -- label must not claim a reading nobody made.
     seenMessages <- newIORef ([] :: [[ChatMessage]])
     events <- newIORef []
     tasks <- newTaskRegistry
     turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
     _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "改成方案 B" Nothing NoteSteer)
-    _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "顺便说一句我明天休假" Nothing NoteAnnotate)
+    _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "顺便说一句我明天休假" Nothing NoteAmbient)
     let llm =
           LLMInterpreter
             { liChat = \_ _ messages _ _ -> do
@@ -306,7 +308,7 @@ spec = describe "Agent full loop" $ do
     map show result.appended
       `shouldBe` map
         show
-        [ MsgUser "[feedback]: 改成方案 B\n[fyi]（补充信息，不要求你因此改变正在做的事）: 顺便说一句我明天休假",
+        [ MsgUser "[feedback]: 改成方案 B\n[群里新消息]（你开始做事之后进来的）: 顺便说一句我明天休假",
           MsgAssistant "done"
         ]
 

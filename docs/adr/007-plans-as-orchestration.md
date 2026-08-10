@@ -466,6 +466,105 @@ work silently. The mitigation is to make it loud: a child that finds itself
 short of context escalates rather than guessing, and the child prompt must say
 so, because the default failure mode of a model is to press on and invent.
 
+### What wakes the front model, and what merely continues
+
+A plan runs without a model. `stepPlan` walks to a call, the host invokes it,
+`resumeWith` continues; no LLM is involved and nothing enters anyone's context.
+That is where "the front model does not get filled up by long tool results"
+actually comes from — not from summarisation, but from the model not being on
+the path at all.
+
+So the interesting question is the complement: what *does* wake it.
+
+| trigger | who raises it | how often |
+|---|---|---|
+| A hole or bind the plan reached | the plan | **most** |
+| A message — anyone, about anything | outside | some |
+| A child finishing | the scheduler | **only if `watch` says so** |
+| A monitor firing (ADR 006) | time or condition | rare |
+| A deopt — budget spent, path gone, tool refused | the executor | exceptional |
+
+The third row is the one worth reading twice. Under `join all` + `watch
+on-failure`, children completing *successfully* do not wake anybody: the join
+expression is evaluated and the plan continues. Only a failure does. Which
+child-completion is a wake and which is not was decided by whoever wrote the
+fork, before any child ran — and that is what the combining expression was
+bought with.
+
+### A revision is a whole plan, not a patch
+
+The front model changes a plan by writing a new one, in the same dialect it
+wrote the first one in. There is no patch language, no diff format, no
+node-addressing edit vocabulary.
+
+Three reasons, in order of weight. A patch grammar is a second language to
+write, validate, and get subtly wrong, and it would be exercised on exactly the
+paths that matter most. Models are measured at writing whole plans — 47/48 — and
+not at patching them; the ability we have evidence for is the one to use.
+And most decisively, **the diff is derived rather than authored**: `goalHash`
+already makes "which subgoal actually moved" a byte comparison, so the
+reconciler computes the consequences — stop this child, dispatch that one, leave
+the third alone — from two plans, without anyone having to describe the change.
+An authored patch would be a second, redundant, disagreeable account of
+something already computable.
+
+`plan_revisions.cause` was built with the values `initial`, `elaboration`,
+`steer`, `child`, `rehole`. Those are the wake reasons from the table above.
+Concurrency is `plans.head_revision` as a compare-and-set token: a steer landing
+while a child completes means one revision wins and the other re-reads and
+retries, which `revisePlan` already reports as `Left (RevisionConflict head)`.
+
+### Waking is elaboration; there is no second prompt
+
+The strongest structural claim here, and the one that keeps the surface small.
+
+A woken front model is in the same position as an agent filling a hole. Its
+environment is what has already run — bindings in scope, handles resolved. Its
+objective is what remains. Its output is a plan. That is `frontPrompt` against a
+populated `venBindings`/`venHandles`, which is the same projection `childEnv`
+performs for a subgoal, pointed at the parent instead.
+
+Two awkward cases fall out rather than needing handling:
+
+- **A steer arriving after work has been done.** Someone says 改成后天的 and a
+  search has already run with the wrong date. Nothing rolls back; the completed
+  search is simply a binding in scope, and the revision is a plan for the
+  remainder that may use it or ignore it. There is no undo because there is
+  nothing to undo — only a next plan to write.
+- **A child that failed.** Its binder never got a value, so it is not in the
+  environment. A revision cannot reference it, not by policy but because the
+  name does not exist.
+
+`PathNotInPlan` is the backstop: a checkpoint pointing into a plan that has
+since been replaced reports rather than guesses.
+
+### A waiting plan is an armed suspension, not a row to poll
+
+Nothing scans the `plans` table looking for work. A plan waiting on children is
+the thing ADR 006 already named — an armed suspension with typed triggers — and
+a child finishing fires one at its parent. Recovery after a restart is the
+reconciler reading spawn edges against unfinished child turns, which is the same
+comparison it makes when nothing has crashed.
+
+*Recorded as a direction rather than a verified fit:* whether ADR 006's trigger
+types can carry a plan wake without widening needs checking against that ADR
+before this is built, not after.
+
+### The front model keeps the fast tools; slow work is what delegation is for
+
+`Fork` has a better justification than "two things at once finish sooner". The
+front model is the one that has to stay able to answer, and every slow tool it
+holds is a stretch of time the group is talking to something deaf.
+
+So the split is by **latency, not by capability**: `Browser`, `Sandbox`,
+`Video`, image generation — the seconds-to-minutes tools — belong in children,
+where blocking costs nothing because nobody is waiting on that context to
+speak. The front model keeps `plan`, search, memory, reply.
+
+A tendency rather than a gate. One browser fetch that *is* the whole task should
+not be forced through a child, and fork's budget arithmetic already prices the
+alternative honestly.
+
 ### Capability narrowing is intersection at spawn, not a declaration to check
 
 ADR 002 required a child's budget to be a declared subset and had the validator
@@ -690,8 +789,57 @@ orchestration layer.
    topic, three searches, a summarising bind taking all four bindings through
    `inputs`, a send — and it spends four calls against a ceiling of three.
    That is arithmetic, not a misunderstanding.
-8. **Concurrency and child context projection**, only once 7 says the shape
-   holds.
+   **Steps 1–7 built a complete plan core that nothing calls.** Worth stating
+   plainly, because the original step 8 assumed otherwise: `frontPrompt` has no
+   caller in `src/`, `executePlan` is invoked only by tests, `Reconcile` is a
+   pure function nobody consults, and `recordChildSpawn` writes a table with no
+   writer. The sequence below is the wiring, and it is ordered so that each step
+   ships dark — doing nothing at all until the step after it arrives.
+
+8. **Everything said about a running turn goes to the front model.** Delete
+   `classifySupplement`. When a turn is running and a message is absorbable, it
+   lands in that turn's inbox; the front model reads it and decides whether to
+   answer it, ignore it, or change what it is doing. The verbs stop being a
+   router's codomain and become the front model's action space, which is where
+   ADR 002 always described them living.
+
+   This dissolves rather than improves the targeting problem ADR 002 called "a
+   present-tense correctness gap": if the front model can address two things in
+   one reply, mis-routing stops being a failure mode and becomes extra context.
+   It also removes the last place a cheap classifier could speak for an
+   expensive one.
+
+   Two costs, both accepted deliberately. **Parallel dispatch disappears** — a
+   second question no longer gets its own concurrent turn. That is a repair, not
+   a regression: two turns in one group cannot see each other, may both speak,
+   and interleave their output; parallelism belongs inside a plan where it is
+   structured. **Latency** — an unrelated question waits for the next decision
+   point. Bounded by one front-model round, and shrinking as steps 9–11 make
+   decision points denser and move slow tools into children.
+
+   Ships dark in the sense that matters: no plan is required for it, and the
+   behaviour it removes was itself an inference.
+
+9. **`plan` becomes a tool the front model may call.** Not a host heuristic
+   deciding which turns deserve a plan — models already write plans unprompted
+   before hard work, and asking a cheap classifier to guess what the expensive
+   model already knows is the same mistake step 8 deletes. The front model does
+   two searches, sees the shape of the problem, and calls `plan`. Never calling
+   it is today's behaviour exactly, which is what makes this shippable.
+
+   The dialect guide is ~4k tokens and cannot ride in every turn's system
+   prompt; it arrives through the progressive disclosure the skills system
+   already implements. One extra round trip, paid only by turns that plan.
+
+10. **Execute plans for real.** The suspension loop against live `Tools`, each
+    suspension journalled, each elaboration a revision through `Max.DB.Plan`.
+    Step 5 built the machine; this connects it to the world.
+
+11. **Dispatch fork children.** `Reconcile` gets a caller and a scheduler that
+    acts on it. `goalInputs` and `goalResources` resolve from schemas to actual
+    values and handles at spawn — `childEnv` already does the static half.
+
+12. **Concurrency and child context projection**, only once the shape holds.
 
 Steps 3–4 are ordered ahead of 5 deliberately; ADR 002 had execution first,
 which is the right order for a machine nobody edits.
