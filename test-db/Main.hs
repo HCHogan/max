@@ -29,6 +29,7 @@ import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.MediaSpec qualified as MediaSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.MonitorSpec qualified as MonitorSpec
+import Max.DB.PlanSpec qualified as PlanSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
@@ -72,6 +73,7 @@ main = do
         MediaSpec.spec pool
         FetchQueueSpec.spec pool
         MonitorSpec.spec pool
+        PlanSpec.spec pool
         RecallSpec.spec pool
         PromptIntegrationSpec.spec pool
         PlatformStoreSpec.spec pool

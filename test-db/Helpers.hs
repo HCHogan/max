@@ -94,6 +94,8 @@ truncateAll pool = withConn pool $ \c -> do
       \  maintenance_leases, \
       \  monitor_fires, \
       \  monitors, \
+      \  plan_revisions, \
+      \  plans, \
       \  turn_edges, \
       \  execution_journal, \
       \  sandboxes, \

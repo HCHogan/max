@@ -126,6 +126,7 @@ library
         Max.DB.PlatformIds
         Max.DB.Migrations
         Max.DB.Monitor
+        Max.DB.Plan
         Max.DB.Session
         Max.DB.Stickers
         Max.DB.TurnContinuity
@@ -504,6 +505,7 @@ test-suite max-test-db
         Max.MemoryStoreSpec
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
+        Max.DB.PlanSpec
         Max.PromptIntegrationSpec
         Max.PlatformStoreSpec
         Max.RecallSpec
