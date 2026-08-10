@@ -97,6 +97,7 @@ goal =
             ebMaxWallClockMs = 30000
           },
       goalAuthority = Set.singleton Tools.CurrentConversation,
+      goalResources = [],
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0
@@ -140,7 +141,10 @@ judge :: Text -> Judged
 judge source = case parsePlan source of
   Left failure -> Judged {jOutcome = Unparsed failure, jTreeCost = 0, jHoles = 0}
   Right plan ->
-    let holes = length (planHoles root plan)
+    let -- Both kinds of unfinished work.  Counting only the holes would score a
+        -- fan-out as if it were already decided, and the number is here to say
+        -- how many further elaborations an answer still costs.
+        holes = length (planHoles root plan) + length (planChildren root plan)
         cost =
           sum
             [ exprCost goal.goalBudget.ebMaxFanout expr
@@ -158,6 +162,10 @@ judge source = case parsePlan source of
       NodeCall call -> [call.cnInput]
       NodeLet _ expr -> [expr]
       NodeGuard _ -> []
+      -- A fork and its children carry no expression: what they cost is an
+      -- elaboration each, which the hole count already reports.
+      NodeFork _ _ -> []
+      NodeChild _ _ -> []
       NodeHole _ -> []
 
 outcomeLabel :: Outcome -> Text

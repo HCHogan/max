@@ -58,11 +58,15 @@ module Max.Plan.Types
     EvidenceSource (..),
     Goal (..),
     CallNode (..),
+    ForkNode (..),
+    JoinPolicy (..),
+    WatchPolicy (..),
     Plan (..),
     PlanNode (..),
     PlanDocument (..),
     planNodes,
     planHoles,
+    planChildren,
 
     -- * Resolved handles
     ValueRef (..),
@@ -70,6 +74,7 @@ module Max.Plan.Types
     -- * Deterministic encoding
     canonicalBytes,
     planHash,
+    goalHash,
   )
 where
 
@@ -119,8 +124,9 @@ import Max.Plan.Schema (PlanSchema)
 -- node: an older host would read a goal with no @declassify@ and default it to
 -- something, which is precisely the silent reinterpretation the envelope check
 -- exists to prevent.
+-- 4: 'Fork', and 'goalResources'.
 planIRVersion :: Int
-planIRVersion = 3
+planIRVersion = 4
 
 -- | A node's stable identity within one turn.  Derived from the plan root the
 -- host supplies (the horizon-1 @turn:\<turn_id\>:\<step\>@ id) plus the node's
@@ -136,6 +142,8 @@ data PlanStep
     StepThen
   | -- | Into a 'Guard' alternative.
     StepElse
+  | -- | Into the n-th subgoal of a 'Fork', counted from zero.
+    StepChild !Int
   deriving stock (Show, Eq, Ord)
 
 -- | Root first.
@@ -150,6 +158,7 @@ nodeIdIn root path =
       StepContinue -> "c"
       StepThen -> "t"
       StepElse -> "e"
+      StepChild index -> "k" <> T.pack (show index)
 
 -- | A name bound by a 'Call'.  Lexically scoped; the validator rejects
 -- shadowing and forward references.
@@ -334,6 +343,14 @@ data Goal = Goal
     goalBudget :: !EffectBudget,
     -- | Authority the elaboration may consume, as catalog authority classes.
     goalAuthority :: !(Set ToolAuthority),
+    -- | Result handles whoever fills this goal may resolve, by name.
+    --
+    -- An address, never a body.  A goal that carried the bytes would grow with
+    -- whatever it points at and its hash would move with the content, which
+    -- would defeat 'goalHash' as an identity — and it would put a page nobody
+    -- has decided to read into a prompt.  A handle is thirty tokens and a
+    -- schema; whatever fills the goal decides whether to pull it.
+    goalResources :: ![Text],
     goalDeps :: !DependencySet,
     -- | Why a previous attempt at this goal did not complete.  Host-attached
     -- only: see 'Evidence'.
@@ -376,6 +393,50 @@ data CallNode = CallNode
   }
   deriving stock (Show, Eq)
 
+-- | When a fork's continuation becomes runnable.
+--
+-- One constructor on purpose.  @any@ — first child to succeed wins, the rest
+-- are cancelled — has a real use (racing a fast, rough route against a slow,
+-- good one) and no implementation here, because cancellation is a scheduler
+-- concern this module does not yet have one of.  The syntax position exists so
+-- that adding it later is a new word rather than a new shape.
+data JoinPolicy
+  = -- | Every child completes before the continuation runs.
+    JoinAll
+  deriving stock (Show, Eq, Ord)
+
+-- | When whoever owns the plan is woken to look at it.
+--
+-- Distinct from 'JoinPolicy', and the distinction is the point.  In an @async@
+-- runtime the awaiting task is also the consumer, so @join_all@ versus a
+-- completion stream is one choice.  Here the consumer is the continuation —
+-- pure, free to run — and the observer is a language model, which is neither.
+-- Collapsing them would price every observation at a join, or every join at a
+-- model call.
+data WatchPolicy
+  = -- | Only a child that failed is worth interrupting for.  The quiet default:
+    -- a fork whose children all succeed costs no model call at all.
+    WatchOnFailure
+  | -- | Wake on every completion.  The continuation still waits for the join;
+    -- what this buys is the chance to rewrite the plan partway through.
+    WatchEach
+  deriving stock (Show, Eq, Ord)
+
+-- | A set of subgoals opened at once, and how their completion is handled.
+--
+-- Every child shares one binding environment — the scope at the fork — so no
+-- child can read another's result and the set is independent by construction.
+-- Dependent work is two forks, not a flag: what the second one may read is
+-- exactly what the first one bound.  Sequencing is therefore derived from the
+-- bindings rather than declared, which means a model that got the ordering
+-- wrong costs latency and never correctness.
+data ForkNode = ForkNode
+  { fnChildren :: ![(Binder, Goal)],
+    fnJoin :: !JoinPolicy,
+    fnWatch :: !WatchPolicy
+  }
+  deriving stock (Show, Eq)
+
 data Plan
   = -- | A candidate result, not proof the objective was met.
     Done !Expr
@@ -392,6 +453,17 @@ data Plan
     -- language stays total.  Refusing it bought no safety, only plans that
     -- said the same thing less legibly.
     Let !Binder !Expr !Plan
+  | -- | Open several subgoals at once and name each result, then continue with
+    -- all of them in scope.
+    --
+    -- 'Hole' and 'Fork' are both unfinished work, and they are deliberately
+    -- separate nodes rather than one with a count.  A hole is filled by
+    -- whoever is already writing this plan, with everything it can see; a
+    -- fork's child is filled by a separate elaboration that sees only its own
+    -- 'Goal'.  That is the difference between thinking further and delegating,
+    -- and it is the difference the declarations on the goal only mean anything
+    -- under: a child that could read the conversation would not need them.
+    Fork !ForkNode !Plan
   | Guard !Predicate !Plan !Plan
   | Hole !Goal
   deriving stock (Show, Eq)
@@ -402,6 +474,9 @@ data PlanNode
   = NodeDone !Expr
   | NodeCall !CallNode
   | NodeLet !Binder !Expr
+  | NodeFork !JoinPolicy !WatchPolicy
+  | -- | One subgoal of the enclosing fork.
+    NodeChild !Binder !Goal
   | NodeGuard !Predicate
   | NodeHole !Goal
   deriving stock (Show, Eq)
@@ -418,15 +493,29 @@ planNodes root = go []
               (here, NodeCall call) : go (StepContinue : path) continuation
             Let binder expr continuation ->
               (here, NodeLet binder expr) : go (StepContinue : path) continuation
+            Fork fork continuation ->
+              (here, NodeFork fork.fnJoin fork.fnWatch)
+                : [ (nodeIdIn root (PlanPath (reverse (StepChild index : path))), NodeChild binder goal)
+                    | (index, (binder, goal)) <- zip [0 ..] fork.fnChildren
+                  ]
+                <> go (StepContinue : path) continuation
             Guard predicate consequent alternative ->
               (here, NodeGuard predicate)
                 : go (StepThen : path) consequent
                 <> go (StepElse : path) alternative
             Hole goal -> [(here, NodeHole goal)]
 
+-- | Goals to elaborate in place.  Deliberately does not include fork children:
+-- see 'planChildren', and 'Fork' for why the two are not one list.
 planHoles :: Text -> Plan -> [(NodeId, Goal)]
 planHoles root plan =
   [(nodeId, goal) | (nodeId, NodeHole goal) <- planNodes root plan]
+
+-- | Goals to dispatch to a separate elaboration, each with the name its result
+-- binds to in the enclosing plan.
+planChildren :: Text -> Plan -> [(NodeId, Binder, Goal)]
+planChildren root plan =
+  [(nodeId, binder, goal) | (nodeId, NodeChild binder goal) <- planNodes root plan]
 
 -- | The transmitted form of a plan.
 --
@@ -482,6 +571,22 @@ canonicalBytes = BL.toStrict . BB.toLazyByteString . canonical . toJSON
 -- | Binds an approval, a cache entry, or a revalidation to exactly one plan.
 planHash :: Plan -> Text
 planHash = TE.decodeUtf8 . B16.encode . SHA256.hash . canonicalBytes
+
+-- | A goal's identity, for deciding what an edited plan changed.
+--
+-- Whatever fills a goal is handed the goal and nothing else, so two goals with
+-- these bytes are two requests for the same work.  That is what makes an edit
+-- cheap to reconcile: diff the open goals of the old plan against the new one
+-- by hash, dispatch what appeared, stop what vanished, and leave the rest
+-- running.  Wrapping a goal in a larger one — "do that, then this" — moves it
+-- in the tree without touching its bytes, so the work already under way is
+-- undisturbed.
+--
+-- Every field counts, including the host-attached ones: a re-holed goal
+-- carrying evidence of a failed attempt is a different request, and a moved
+-- dependency fingerprint means the world it was written against moved.
+goalHash :: Goal -> Text
+goalHash = TE.decodeUtf8 . B16.encode . SHA256.hash . canonicalBytes
 
 -- Codecs.  Every sum is externally tagged under "t" so an unknown tag is a
 -- decode failure rather than a silently dropped field.
@@ -733,6 +838,7 @@ instance ToJSON Goal where
         "acceptance" .= goal.goalAcceptance,
         "budget" .= goal.goalBudget,
         "authority" .= map authorityJson (Set.toAscList goal.goalAuthority),
+        "resources" .= goal.goalResources,
         "deps" .= goal.goalDeps,
         "evidence" .= goal.goalEvidence,
         "attempt" .= goal.goalAttempt
@@ -747,6 +853,7 @@ instance FromJSON Goal where
       <*> o .: "acceptance"
       <*> o .: "budget"
       <*> pure (Set.fromList authority)
+      <*> o .: "resources"
       <*> o .: "deps"
       <*> o .: "evidence"
       <*> o .: "attempt"
@@ -792,12 +899,50 @@ instance FromJSON CallNode where
       <*> (SchemaVersion <$> o .: "schema_version")
       <*> o .: "input"
 
+instance ToJSON JoinPolicy where
+  toJSON = toJSON @Text . \case JoinAll -> "all"
+
+instance FromJSON JoinPolicy where
+  parseJSON = withText "JoinPolicy" $ \case
+    "all" -> pure JoinAll
+    other -> unknownTag "JoinPolicy" other
+
+instance ToJSON WatchPolicy where
+  toJSON =
+    toJSON @Text . \case
+      WatchOnFailure -> "on_failure"
+      WatchEach -> "each"
+
+instance FromJSON WatchPolicy where
+  parseJSON = withText "WatchPolicy" $ \case
+    "on_failure" -> pure WatchOnFailure
+    "each" -> pure WatchEach
+    other -> unknownTag "WatchPolicy" other
+
+-- Children encode as an ordered list rather than an object keyed by binder:
+-- the order is a node id ('StepChild'), so a codec that let a key map reorder
+-- them would rename every child that moved.
+instance ToJSON ForkNode where
+  toJSON fork =
+    object
+      [ "children"
+          .= [object ["as" .= binder, "goal" .= goal] | (binder, goal) <- fork.fnChildren],
+        "join" .= fork.fnJoin,
+        "watch" .= fork.fnWatch
+      ]
+
+instance FromJSON ForkNode where
+  parseJSON = withObject "ForkNode" $ \o -> do
+    children <- traverse (withObject "child" (\c -> (,) <$> c .: "as" <*> c .: "goal")) =<< o .: "children"
+    ForkNode children <$> o .: "join" <*> o .: "watch"
+
 instance ToJSON Plan where
   toJSON = \case
     Done expr -> tagged "done" ["value" .= expr]
     Call call continuation -> tagged "call" ["call" .= call, "then" .= continuation]
     Let binder expr continuation ->
       tagged "let" ["as" .= binder, "value" .= expr, "then" .= continuation]
+    Fork fork continuation -> tagged "fork" ["fork" .= fork, "then" .= continuation]
     Guard predicate consequent alternative ->
       tagged "guard" ["cond" .= predicate, "then" .= consequent, "else" .= alternative]
     Hole goal -> tagged "hole" ["goal" .= goal]
@@ -808,6 +953,7 @@ instance FromJSON Plan where
       "done" -> Done <$> o .: "value"
       "call" -> Call <$> o .: "call" <*> o .: "then"
       "let" -> Let <$> o .: "as" <*> o .: "value" <*> o .: "then"
+      "fork" -> Fork <$> o .: "fork" <*> o .: "then"
       "guard" -> Guard <$> o .: "cond" <*> o .: "then" <*> o .: "else"
       "hole" -> Hole <$> o .: "goal"
       other -> unknownTag "Plan" other

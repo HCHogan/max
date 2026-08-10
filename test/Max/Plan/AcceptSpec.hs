@@ -17,6 +17,7 @@ goal =
       goalAcceptance = [VerifierRef {verName = "answers-question", verVersion = 1}],
       goalBudget = emptyBudget,
       goalAuthority = Set.empty,
+      goalResources = [],
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0

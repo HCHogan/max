@@ -39,6 +39,7 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import Effectful (Eff, (:>))
 import Max.Effects.Tools
   ( ToolFault (..),
@@ -85,6 +86,14 @@ data StepOutcome
 data Deopt
   = -- | An unelaborated obligation, which is the ordinary case.
     AtHole !NodeId !Goal
+  | -- | A set of subgoals to dispatch, each with the name its result binds to.
+    --
+    -- Reported rather than run.  Dispatching a child means starting a separate
+    -- elaboration, waiting on it, and reconciling the plan against whatever the
+    -- conversation did meanwhile — a scheduler's job, and this module is an
+    -- interpreter.  Stopping here keeps the two apart, and it is the same exit
+    -- a hole takes, so the caller already has to handle it.
+    AtFork !NodeId !JoinPolicy !WatchPolicy ![(NodeId, Binder, Goal)]
   | -- | A tool did not succeed.
     ToolStopped !NodeId !ToolRef !StepOutcome
   | -- | A tool succeeded and returned something its catalog schema does not
@@ -101,6 +110,10 @@ data Deopt
 deoptText :: Deopt -> Text
 deoptText = \case
   AtHole node goal -> node.unNodeId <> ": hole — " <> goal.goalObjective
+  AtFork node _ _ children ->
+    node.unNodeId
+      <> ": fork — "
+      <> T.intercalate "; " [binder.unBinder <> ": " <> goal.goalObjective | (_, binder, goal) <- children]
   ToolStopped node ref outcome -> node.unNodeId <> ": " <> ref.unToolRef <> " " <> outcomeText outcome
   ResultOffSchema node ref detail ->
     node.unNodeId <> ": " <> ref.unToolRef <> " returned off-schema — " <> detail
@@ -156,6 +169,21 @@ executePlan env valid = go (PlanPath []) Map.empty 0 0 [] (validPlan valid)
               Left err -> finish steps (Deoptimized (ExpressionFailed here err)) calls sends
               Right produced -> finish steps (Produced produced) calls sends
             Hole hole -> finish steps (Deoptimized (AtHole here hole)) calls sends
+            Fork fork _ ->
+              finish
+                steps
+                ( Deoptimized
+                    ( AtFork
+                        here
+                        fork.fnJoin
+                        fork.fnWatch
+                        [ (nodeIdIn env.exRoot (path `into` StepChild index), binder, child)
+                          | (index, (binder, child)) <- zip [0 ..] fork.fnChildren
+                        ]
+                    )
+                )
+                calls
+                sends
             -- A pure binding: no tool, no budget, nothing to journal.  It fails
             -- only the way any expression can, which for a validated plan means
             -- the kernel and the evaluator have disagreed.

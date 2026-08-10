@@ -73,6 +73,41 @@ spec = do
       parsePlan "let hits = search_web@3({ query: \"q\" })\nreply@1({ text: \"hi\" })\ndone \"ok\""
         `shouldSatisfy` isLeft
 
+    it "reads a fork's subgoals, its policies and its continuation" $
+      case parsePlan "fork {\n  a: hole \"查甲\" : text budget { calls: 1 }\n  b: hole \"查乙\" : text budget { calls: 1 }\n}\ndone concat(a, b)" of
+        Right (Fork fork (Done _)) -> do
+          map (fst) fork.fnChildren `shouldBe` [Binder "a", Binder "b"]
+          map (\(_, goal) -> goal.goalObjective) fork.fnChildren `shouldBe` ["查甲", "查乙"]
+          fork.fnJoin `shouldBe` JoinAll
+          fork.fnWatch `shouldBe` WatchOnFailure
+        other -> expectationFailure ("unexpected plan shape: " <> show other)
+
+    it "defaults both policies to the quiet reading, and reads them when written" $ do
+      let withPolicies suffix =
+            parsePlan ("fork { a: hole \"x\" : text }" <> suffix <> "\ndone a")
+      case withPolicies "" of
+        Right (Fork fork _) -> (fork.fnJoin, fork.fnWatch) `shouldBe` (JoinAll, WatchOnFailure)
+        other -> expectationFailure ("unexpected plan shape: " <> show other)
+      case withPolicies " join all watch each" of
+        Right (Fork fork _) -> (fork.fnJoin, fork.fnWatch) `shouldBe` (JoinAll, WatchEach)
+        other -> expectationFailure ("unexpected plan shape: " <> show other)
+
+    it "reads a subgoal list with or without commas between its entries" $
+      -- Entries already end in a brace, so separators are noise; a model that
+      -- writes them anyway is not wrong about anything, and refusing would be
+      -- a rejection about punctuation.
+      parsePlan "fork { a: hole \"x\" : text, b: hole \"y\" : text }\ndone concat(a, b)"
+        `shouldBe` parsePlan "fork { a: hole \"x\" : text b: hole \"y\" : text }\ndone concat(a, b)"
+
+    it "refuses a fork with no subgoals at the grammar, not only at the kernel" $
+      parsePlan "fork { }\ndone \"ok\"" `shouldSatisfy` isLeft
+
+    it "reads the handles a goal is handed, and never a bare number as one" $ do
+      case parsePlan "hole \"x\" : text resources { t#3:r2, t#5:r1 }" of
+        Right (Hole goal) -> goal.goalResources `shouldBe` ["t#3:r2", "t#5:r1"]
+        other -> expectationFailure ("unexpected parse: " <> show other)
+      parsePlan "hole \"x\" : text resources { 3 }" `shouldSatisfy` isLeft
+
     it "reads every declaration on the hole" $
       case parsed of
         Call _ (Guard _ _ (Hole goal)) -> do
@@ -91,6 +126,7 @@ spec = do
         Right (Hole goal) -> do
           goal.goalBudget `shouldBe` emptyBudget
           goal.goalAuthority `shouldBe` Set.empty
+          goal.goalResources `shouldBe` []
           goal.goalAcceptance `shouldBe` []
         other -> expectationFailure ("unexpected parse: " <> show other)
 
@@ -197,6 +233,13 @@ spec = do
           "hole \"\" :",
           "if",
           "map(x in",
+          "fork",
+          "fork {",
+          "fork { a",
+          "fork { a: }",
+          "fork { a: hole } done a",
+          "fork { a: hole \"x\" : text } join",
+          "fork { a: hole \"x\" : text } watch",
           "\"unterminated",
           "t#",
           "t#0:r",

@@ -72,13 +72,14 @@ dialectGuide =
       "",
       "== 计划 ==",
       "",
-      "一个计划是若干条 let，后面接恰好一个结尾。四种写法：",
+      "一个计划是若干条 let 或 fork，后面接恰好一个结尾。六种写法：",
       "",
       -- Schematic rather than runnable: these are the shapes, with Chinese
       -- standing in for the parts you fill.  The worked examples below are the
       -- real syntax, and those are the ones the tests parse.
       "  let 名字 = 工具@版本(参数)              调一次工具，把结果绑到名字上，然后接着往下写",
       "  let 名字 = 表达式                       给一个值起名字，不调用任何东西",
+      "  fork { 名字: hole ... }                同时开几个子任务，各自派给一个子 agent",
       "  done 表达式                            这就是答案，计划到此为止",
       "  if 条件 { 计划 } else { 计划 }           分支；两边都必须写，各自是一个完整计划",
       "  hole \"还差什么\" : 类型 ...               写不出来的部分交回去，下一轮再细化",
@@ -118,8 +119,28 @@ dialectGuide =
          ]
       <> example handBackTheHardPart
       <> [ "",
-           "四个块都能省，省掉是「什么都不给」，不是「随便用」。每个块最多写一次。",
+           "五个块都能省，省掉是「什么都不给」，不是「随便用」。每个块最多写一次。",
            "hole 要的每一项都不能超过你当前的额度（见下面的「本轮目标」）。",
+           "resources 里只能写「可用句柄」中列出的，写别的会被拒绝。",
+           "",
+           "== fork ==",
+           "",
+           "一件事能拆成几块互不相干的，就写 fork：每块派给一个子 agent，同时做。",
+           "",
+           "子 agent 只看得见你写在它 hole 里的东西——看不到聊天记录，看不到别的子任务，",
+           "也看不到你现在读的这段。所以目标要写全，需要的句柄要写进 resources。"
+         ]
+      <> example forkTwoLookups
+      <> [ "",
+           "几条要点：",
+           "",
+           "  · 同一个 fork 里的子任务互相看不见。B 要用 A 的结果，就写成前后两个 fork，",
+           "    后一个 fork 的目标里可以引用前一个绑的名字。",
+           "  · 产出类型必须写准。合并那一步是在结果出来之前写的，写成 text 等于没写。",
+           "  · 额度是加起来算的：三个子任务各要 2 次调用就是 6 次，不是 2 次。",
+           "  · join / watch 可以省。默认 join all（等齐了再往下走）、watch on-failure",
+           "    （只有子任务失败才叫醒我）。写 watch each 是每完成一个就来看一眼。",
+           "  · 合并式写不出来就别硬拆。fork 后面再挂一个 hole，等于白拆一次。",
            "",
            "== 会被拒绝的写法 ==",
            "",
@@ -159,7 +180,7 @@ dialectGuide =
 
 -- | The complete plans the guide shows.
 guidePlans :: [Text]
-guidePlans = [searchThenAnswer, handBackTheHardPart]
+guidePlans = [searchThenAnswer, handBackTheHardPart, forkTwoLookups]
 
 searchThenAnswer :: Text
 searchThenAnswer =
@@ -181,6 +202,26 @@ handBackTheHardPart =
       "  effects { send(conversation) }",
       "  authority { conversation }",
       "  accept { answers-question@1 }"
+    ]
+
+-- | Two independent lookups and a join written before either has run.
+--
+-- Deliberately a case where the join is cheap — pick two fields, concatenate.
+-- That is the shape a fork pays for; the guide says so in prose and shows it
+-- here, because a model copies the example far more reliably than the rule.
+forkTwoLookups :: Text
+forkTwoLookups =
+  T.unlines
+    [ "fork {",
+      "  jia: hole \"查甲的资料\" : {name: text, bio: text}",
+      "    budget { calls: 1, sends: 0, fanout: 8, tokens: 4000, ms: 20000 }",
+      "    effects { read(external \"web\") }",
+      "  yi: hole \"查乙的资料\" : {name: text, bio: text}",
+      "    budget { calls: 1, sends: 0, fanout: 8, tokens: 4000, ms: 20000 }",
+      "    effects { read(external \"web\") }",
+      "}",
+      "let 对比 = concat(jia.name, \"：\", jia.bio, \"｜\", yi.name, \"：\", yi.bio)",
+      "done 对比"
     ]
 
 -- | Every expression fragment the guide displays.

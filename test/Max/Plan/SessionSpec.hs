@@ -59,6 +59,7 @@ env =
                   ebMaxWallClockMs = 30000
                 },
             goalAuthority = Set.empty,
+            goalResources = [],
             goalDeps = noDependencies,
             goalEvidence = [],
             goalAttempt = 0

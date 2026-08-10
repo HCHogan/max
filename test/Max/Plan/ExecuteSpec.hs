@@ -111,6 +111,7 @@ validation =
                   ebMaxWallClockMs = 30000
                 },
             goalAuthority = Set.singleton Tools.CurrentConversation,
+            goalResources = [],
             goalDeps = noDependencies,
             goalEvidence = [],
             goalAttempt = 0
@@ -213,6 +214,28 @@ spec = do
       case result.erEnd of
         Deoptimized (AtHole _ goal) -> goal.goalObjective `shouldBe` "接着做什么"
         other -> expectationFailure ("expected a hole, got " <> show other)
+
+    it "reports a fork's subgoals rather than dispatching them itself" $ do
+      -- Same exit a hole takes.  Running a child means starting an elaboration,
+      -- waiting on it, and reconciling the plan against whatever happened in
+      -- the conversation meanwhile; none of that belongs in an interpreter.
+      (result, invoked) <-
+        run
+          []
+          ( valid
+              "fork {\n\
+              \  a: hole \"查甲\" : text budget { calls: 1, fanout: 8, tokens: 10, ms: 10 }\n\
+              \  b: hole \"查乙\" : text budget { calls: 1, fanout: 8, tokens: 10, ms: 10 }\n\
+              \}\n\
+              \done concat(a, b)"
+          )
+      invoked `shouldBe` []
+      case result.erEnd of
+        Deoptimized (AtFork _ joinPolicy watchPolicy children) -> do
+          (joinPolicy, watchPolicy) `shouldBe` (JoinAll, WatchOnFailure)
+          map (\(node, binder, goal) -> (node.unNodeId, binder, goal.goalObjective)) children
+            `shouldBe` [("turn:1:0/k0", Binder "a", "查甲"), ("turn:1:0/k1", Binder "b", "查乙")]
+        other -> expectationFailure ("expected a fork, got " <> show other)
 
     it "stops on a failure instead of retrying it" $ do
       (result, invoked) <- run [("search_web", Left "upstream down")] searchThenAnswer

@@ -26,6 +26,7 @@ goal =
             ebMaxWallClockMs = 30000
           },
       goalAuthority = Set.singleton Tools.CurrentConversation,
+      goalResources = [],
       goalDeps = observeDependency DepToolCatalog "cafe0000" noDependencies,
       goalEvidence = [],
       goalAttempt = 0
@@ -47,6 +48,16 @@ plan =
         (Hole goal)
     )
 
+fanOut :: Plan
+fanOut =
+  Fork
+    ForkNode
+      { fnChildren = [(Binder "jia", goal), (Binder "yi", goal {goalObjective = "查乙"})],
+        fnJoin = JoinAll,
+        fnWatch = WatchEach
+      }
+    (Done (EConcat [EVar (Binder "jia"), EVar (Binder "yi")]))
+
 roundTrip :: Plan -> Maybe Plan
 roundTrip = decode . encode
 
@@ -55,6 +66,11 @@ spec = do
   describe "codecs" $ do
     it "round-trips a plan through JSON unchanged" $
       roundTrip plan `shouldBe` Just plan
+
+    it "round-trips a fork, keeping its subgoals in order" $
+      -- Order is identity here: a child's node id is its position, so a codec
+      -- that let a key map reorder them would rename every child that moved.
+      roundTrip fanOut `shouldBe` Just fanOut
 
     it "round-trips every expression form" $ do
       let forms =
@@ -128,6 +144,36 @@ spec = do
       map (kindOf . snd) (planNodes "turn:41:0" plan)
         `shouldBe` ["call", "guard", "done", "hole"]
 
+    it "names each subgoal by its position under the fork" $ do
+      map ((.unNodeId) . fst) (planNodes "turn:41:0" fanOut)
+        `shouldBe` ["turn:41:0", "turn:41:0/k0", "turn:41:0/k1", "turn:41:0/c"]
+      map (kindOf . snd) (planNodes "turn:41:0" fanOut)
+        `shouldBe` ["fork", "child", "child", "done"]
+
+    it "keeps subgoals out of the hole list and holes out of the subgoal list" $ do
+      -- Two lists because they are two different jobs: a hole is filled by
+      -- whoever is writing this plan, a subgoal is dispatched to someone who
+      -- will see only the goal.  Collapsing them would lose that distinction
+      -- at exactly the point a scheduler needs it.
+      planHoles "turn:41:0" fanOut `shouldBe` []
+      map (\(_, binder, _) -> binder) (planChildren "turn:41:0" fanOut)
+        `shouldBe` [Binder "jia", Binder "yi"]
+      planChildren "turn:41:0" plan `shouldBe` []
+
+  describe "goal identity" $ do
+    it "gives the same bytes to the same request, so an unchanged goal is not re-dispatched" $
+      goalHash goal `shouldBe` goalHash goal {goalObjective = "总结搜索结果"}
+
+    it "moves when the work asked for moves" $ do
+      goalHash goal `shouldNotBe` goalHash goal {goalObjective = "别的事"}
+      goalHash goal `shouldNotBe` goalHash goal {goalResources = ["t#1:r0"]}
+
+    it "moves when a retry carries an account of what went wrong" $
+      -- A re-holed goal is a different request even though the objective reads
+      -- the same: whoever fills it is handed the evidence too.
+      goalHash goal
+        `shouldNotBe` goalHash goal {goalAttempt = 1, goalEvidence = [Evidence FromResultSchema "no" CurrentConversation]}
+
   describe "budgets" $ do
     it "starts a narrowing from a budget that forbids everything" $ do
       Set.null emptyBudget.ebEffects `shouldBe` True
@@ -140,5 +186,7 @@ kindOf = \case
   NodeDone _ -> "done"
   NodeCall _ -> "call"
   NodeLet _ _ -> "let"
+  NodeFork _ _ -> "fork"
+  NodeChild _ _ -> "child"
   NodeGuard _ -> "guard"
   NodeHole _ -> "hole"

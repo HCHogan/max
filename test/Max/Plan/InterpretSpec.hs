@@ -69,6 +69,7 @@ env =
                   ebMaxWallClockMs = 30000
                 },
             goalAuthority = Set.singleton Tools.CurrentConversation,
+            goalResources = [],
             goalDeps = noDependencies,
             goalEvidence = [],
             goalAttempt = 0
@@ -153,6 +154,21 @@ spec = do
 
     it "propagates a shape where a call result is not yet known" $ do
       let plan = valid "let hits = search_web@3({ query: \"q\" })\ndone hits[0].title ?? \"\""
+      map (.soEnd) (symbolicPlan env "turn:41:0" Map.empty Map.empty plan)
+        `shouldBe` [Produces (Unknown SchemaText)]
+
+    it "walks past a fork on its subgoals' declared types" $ do
+      -- Unlike a hole, a fork does not end the walk.  Each child's declared
+      -- result type is the shape its binder will hold, so the join and
+      -- everything after it stay interpretable — which is the return type
+      -- paying for the burden of writing it.
+      let plan =
+            valid
+              "fork {\n\
+              \  a: hole \"查甲\" : text budget { calls: 1, fanout: 8, tokens: 10, ms: 10 }\n\
+              \  b: hole \"查乙\" : text budget { calls: 1, fanout: 8, tokens: 10, ms: 10 }\n\
+              \}\n\
+              \done concat(a, b)"
       map (.soEnd) (symbolicPlan env "turn:41:0" Map.empty Map.empty plan)
         `shouldBe` [Produces (Unknown SchemaText)]
 

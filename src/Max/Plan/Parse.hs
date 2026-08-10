@@ -122,11 +122,16 @@ commaSep parser = parser `sepBy` symbol ","
 reservedWords :: [Text]
 reservedWords =
   [ "let", "done", "if", "then", "else", "hole", "in",
+    -- @join@ and @watch@ follow a fork's closing brace, where a continuation
+    -- could otherwise begin; a binder with either name would be genuinely
+    -- ambiguous.  @each@ needs no such protection — it only ever appears after
+    -- @watch@ — so it stays usable as a name.
+    "fork", "join", "watch",
     "true", "false", "null",
     "not", "and", "or", "all", "any", "isnull",
     "contains", "startswith", "endswith",
     "map", "filter", "concat", "length", "take",
-    "budget", "effects", "authority", "accept",
+    "budget", "effects", "authority", "resources", "accept",
     "text", "int", "number", "bool", "enum",
     "read", "write", "send", "llm", "reflect",
     "conversation", "sender", "endpoint", "sandbox", "process", "external"
@@ -174,6 +179,7 @@ planP =
     [ bindP,
       keyword "done" *> (Done <$> exprP),
       guardP,
+      forkP,
       keyword "hole" *> (Hole <$> goalP)
     ]
 
@@ -210,6 +216,43 @@ bindP = do
       input <- parens exprP
       pure (tool, version, input)
 
+-- | @fork { a: hole … b: hole … } join all watch on-failure@, then a
+-- continuation with @a@ and @b@ in scope.
+--
+-- Each child is spelled as a @hole@ because that is what it is — an
+-- unelaborated goal — and reusing the word means one goal grammar rather than
+-- two that drift.  Separators are optional: a block whose entries already end
+-- in a closing brace does not need commas, and a model that writes them anyway
+-- is not wrong about anything that matters.
+--
+-- Both policy clauses are optional and default to the quiet reading: wait for
+-- everyone, and do not wake anybody unless something failed.
+forkP :: P Plan
+forkP = do
+  keyword "fork"
+  children <- braces (some childP)
+  joinPolicy <- option JoinAll (keyword "join" *> joinPolicyP)
+  watchPolicy <- option WatchOnFailure (keyword "watch" *> watchPolicyP)
+  Fork ForkNode {fnChildren = children, fnJoin = joinPolicy, fnWatch = watchPolicy} <$> planP
+  where
+    childP = do
+      name <- identifier
+      _ <- symbol ":"
+      keyword "hole"
+      goal <- goalP
+      _ <- optional (symbol ",")
+      pure (Binder name, goal)
+
+joinPolicyP :: P JoinPolicy
+joinPolicyP = JoinAll <$ keyword "all"
+
+watchPolicyP :: P WatchPolicy
+watchPolicyP =
+  choice
+    [ WatchOnFailure <$ keyword "on-failure",
+      WatchEach <$ keyword "each"
+    ]
+
 guardP :: P Plan
 guardP = do
   keyword "if"
@@ -227,6 +270,7 @@ data GoalBlock
   = BudgetBlock !Int !Int !Int !Int !Int
   | EffectsBlock ![PlanEffect]
   | AuthorityBlock ![Tools.ToolAuthority]
+  | ResourcesBlock ![Text]
   | AcceptBlock ![VerifierRef]
 
 goalP :: P Goal
@@ -242,6 +286,7 @@ goalP = do
             goalAcceptance = [],
             goalBudget = emptyBudget,
             goalAuthority = Set.empty,
+            goalResources = [],
             goalDeps = noDependencies,
             -- Host-attached fields.  The grammar has no syntax for them on
             -- purpose: a model that could write its own evidence, or reset its
@@ -279,12 +324,14 @@ foldGoalBlocks = go Set.empty
       EffectsBlock effects ->
         goal {goalBudget = goal.goalBudget {ebEffects = Set.fromList effects}}
       AuthorityBlock authorities -> goal {goalAuthority = Set.fromList authorities}
+      ResourcesBlock handles -> goal {goalResources = handles}
       AcceptBlock verifiers -> goal {goalAcceptance = verifiers}
 
     blockName = \case
       BudgetBlock {} -> "budget"
       EffectsBlock {} -> "effects"
       AuthorityBlock {} -> "authority"
+      ResourcesBlock {} -> "resources"
       AcceptBlock {} -> "accept"
 
 goalBlockP :: P GoalBlock
@@ -293,6 +340,7 @@ goalBlockP =
     [ keyword "budget" *> braces budgetFields,
       keyword "effects" *> (EffectsBlock <$> braces (commaSep effectP)),
       keyword "authority" *> (AuthorityBlock <$> braces (commaSep authorityP)),
+      keyword "resources" *> (ResourcesBlock <$> braces (commaSep handleLiteral)),
       keyword "accept" *> (AcceptBlock <$> braces (commaSep verifierP))
     ]
 
@@ -513,9 +561,17 @@ planDepth = \case
   Done expr -> 1 + exprDepth expr
   Call call continuation -> 1 + max (exprDepth call.cnInput) (planDepth continuation)
   Let _ expr continuation -> 1 + max (exprDepth expr) (planDepth continuation)
+  Fork fork continuation ->
+    1 + maximum0 (planDepth continuation : map (goalDepth . snd) fork.fnChildren)
   Guard condition consequent alternative ->
     1 + maximum [predicateDepth condition, planDepth consequent, planDepth alternative]
-  Hole _ -> 1
+  Hole goal -> 1 + goalDepth goal
+
+-- | A goal is a leaf of the plan tree, but its declared result type is not: a
+-- hole asking for a deeply nested object would otherwise slip past the ceiling
+-- that exists so nothing walks an unbounded tree.
+goalDepth :: Goal -> Int
+goalDepth goal = schemaDepth goal.goalExpected
 
 exprDepth :: Expr -> Int
 exprDepth = \case

@@ -102,6 +102,7 @@ goal =
       goalAcceptance = [],
       goalBudget = budget,
       goalAuthority = Set.singleton Tools.CurrentConversation,
+      goalResources = [],
       goalDeps = noDependencies,
       goalEvidence = [],
       goalAttempt = 0
@@ -389,6 +390,69 @@ spec = do
     it "counts a hole's whole budget against the enclosing one" $
       reasonOf (Call search (Hole childGoal {goalBudget = budget {ebMaxCalls = 3, ebMaxSends = 0}}))
         `shouldBe` Just (CallBudgetExceeded 3 4)
+
+    it "rejects a goal handed a resource this plan cannot resolve" $
+      reasonOf (Hole childGoal {goalResources = ["t#9:r9"]})
+        `shouldBe` Just (UnresolvableHandle "t#9:r9")
+
+    it "rejects a goal handed a resource whose body retention released" $
+      reasonOf (Hole childGoal {goalResources = ["t#1:r2"]})
+        `shouldBe` Just (ReleasedHandle "t#1:r2")
+
+    it "admits a goal handed a resource this plan holds" $
+      admitted (Hole childGoal {goalResources = ["t#1:r1"]})
+
+  describe "forks" $ do
+    let child name calls =
+          ( Binder name,
+            goal
+              { goalObjective = "查 " <> name,
+                goalExpected = SchemaText,
+                goalBudget = budget {ebMaxCalls = calls, ebMaxSends = 0}
+              }
+          )
+        forkOf children = Fork ForkNode {fnChildren = children, fnJoin = JoinAll, fnWatch = WatchOnFailure}
+
+    it "admits two subgoals whose grants add up to what the plan has" $
+      admitted (forkOf [child "a" 1, child "b" 2] (Done (EConcat [EVar (Binder "a"), EVar (Binder "b")])))
+
+    it "adds sibling budgets rather than taking the largest" $
+      -- The whole arithmetic point.  Each child narrows its parent on its own —
+      -- 2 ≤ 3 twice over — and together they are over.  A check that only
+      -- compared each child against the ceiling would admit this, and admitting
+      -- it means a plan can have any budget it likes by asking n times.
+      reasonOf (forkOf [child "a" 2, child "b" 2] (Done (EVar (Binder "a"))))
+        `shouldBe` Just (ForkBudgetExceeded "calls" 3 4)
+
+    it "counts a fork alongside the calls around it, not only against itself" $
+      -- Fits on its own (2 ≤ 3); does not fit after a search has spent one.
+      reasonOf (Call search (forkOf [child "a" 1, child "b" 2] (Done (EVar (Binder "a")))))
+        `shouldBe` Just (CallBudgetExceeded 3 4)
+
+    it "still holds each subgoal to its parent on its own" $
+      reasonOf (forkOf [child "a" 99] (Done (EVar (Binder "a"))))
+        `shouldBe` Just (BudgetNotNarrowing "calls")
+
+    it "binds each subgoal's declared type, so the join is checked before it runs" $
+      -- The continuation is written before any child has produced anything.
+      -- What makes that checkable is the declared result type and nothing else.
+      reasonOf (forkOf [child "a" 1] (Done (ELength (EVar (Binder "a")))))
+        `shouldBe` Just (ExpressionType "text" "int")
+
+    it "rejects a subgoal naming something already in scope" $
+      reasonOf (Call search (forkOf [child "hits" 1] (Done (EVar (Binder "hits")))))
+        `shouldBe` Just (ShadowedBinding (Binder "hits"))
+
+    it "rejects two siblings claiming the same name" $
+      reasonOf (forkOf [child "a" 1, child "a" 1] (Done (EVar (Binder "a"))))
+        `shouldBe` Just (ShadowedBinding (Binder "a"))
+
+    it "rejects a fork that opens nothing" $
+      reasonOf (forkOf [] (Done (ELit (LitText "ok")))) `shouldBe` Just EmptyFork
+
+    it "points at the subgoal that failed, not at the fork" $
+      nodeOf (forkOf [child "a" 1, child "b" 99] (Done (EVar (Binder "a"))))
+        `shouldBe` Just "turn:41:0/k1"
 
   describe "acceptance verifiers" $ do
     let withVerifier ref = goal {goalObjective = "子目标", goalAcceptance = [ref], goalBudget = budget {ebMaxCalls = 1, ebMaxSends = 0}}

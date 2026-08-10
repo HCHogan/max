@@ -52,6 +52,7 @@ module Max.Plan.Validate
   )
 where
 
+import Control.Monad (foldM)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -179,6 +180,11 @@ data RejectReason
   | VerifierNotAdmitted !Text
   | -- | A hole asking for more than the hole it sits inside.
     BudgetNotNarrowing !Text
+  | -- | A fork whose children, added up, ask for more than the plan has.  What
+    -- is spent, then the ceiling, then the sum.
+    ForkBudgetExceeded !Text !Int !Int
+  | -- | A fork that opens no subgoals: nothing to elaborate, nothing bound.
+    EmptyFork
   | -- | A field only the host may write, written by the plan.
     HostOnlyField !Text
   deriving stock (Show, Eq)
@@ -214,6 +220,14 @@ reasonText = \case
     name <> " is at version " <> tshow registry <> ", plan named " <> tshow named
   VerifierNotAdmitted name -> name <> " is not admitted by the enclosing goal"
   BudgetNotNarrowing detail -> "child goal widens its parent: " <> detail
+  ForkBudgetExceeded what limit total ->
+    "the subgoals of one fork ask for "
+      <> tshow total
+      <> " "
+      <> what
+      <> " between them, budget allows "
+      <> tshow limit
+  EmptyFork -> "a fork with no subgoals"
   HostOnlyField name -> name <> " is written by the host, not by the plan"
 
 effectText :: PlanEffect -> Text
@@ -317,6 +331,47 @@ validatePlan env root plan = do
                       }
               rest <- walk (extend path StepContinue) bound continuation
               pure (here' <> rest)
+            -- A fork is where the one arithmetic fact a static kernel can
+            -- usefully know about this language lives: a set of subgoals opened
+            -- together spends the sum of what they were each granted, not the
+            -- maximum.  Alternatives take the worse branch because only one
+            -- runs; siblings all run.  Without this a plan could hand itself
+            -- three times its budget by asking for it three times.
+            --
+            -- The sum lands in 'Usage' as well, so the root check catches a
+            -- fork that fits on its own but not alongside the calls around it.
+            -- The check here is the local, legible one: it names the fork.
+            Fork fork continuation -> do
+              failIf (null fork.fnChildren) (at EmptyFork)
+              bound <-
+                foldM
+                  ( \scope (index, (binder, goal)) -> do
+                      let childAt = Rejection (nodeIdIn root (extend path (StepChild index)))
+                      narrows childAt goal
+                      mapM_ (verifier childAt goal) goal.goalAcceptance
+                      -- Against the accumulating scope, so one sibling cannot
+                      -- take a name another sibling or an outer binding holds.
+                      failIf (Map.member binder scope) (childAt (ShadowedBinding binder))
+                      pure (Map.insert binder goal.goalExpected scope)
+                  )
+                  bindings
+                  (zip [0 :: Int ..] fork.fnChildren)
+              let budgets = [goal.goalBudget | (_, goal) <- fork.fnChildren]
+                  parent = env.venGoal.goalBudget
+                  spent =
+                    Usage
+                      { usEffects = Set.unions (map (.ebEffects) budgets),
+                        usCalls = sum (map (.ebMaxCalls) budgets),
+                        usSends = sum (map (.ebMaxSends) budgets)
+                      }
+              failIf
+                (spent.usCalls > parent.ebMaxCalls)
+                (at (ForkBudgetExceeded "calls" parent.ebMaxCalls spent.usCalls))
+              failIf
+                (spent.usSends > parent.ebMaxSends)
+                (at (ForkBudgetExceeded "sends" parent.ebMaxSends spent.usSends))
+              rest <- walk (extend path StepContinue) bound continuation
+              pure (spent <> rest)
             Guard predicate consequent alternative -> do
               first at (checkPredicate env bindings fanout predicate)
               pricePredicate at predicate
@@ -365,6 +420,14 @@ validatePlan env root plan = do
       failIf
         (not (Set.isSubsetOf goal.goalAuthority env.venGoal.goalAuthority))
         (at (BudgetNotNarrowing "authority"))
+      -- A child is handed addresses, and only ones this plan can already
+      -- resolve.  Nothing widens: a handle absent from 'venHandles' is out of
+      -- scope here, so passing it on is inexpressible rather than forbidden.
+      mapM_ (resource at) goal.goalResources
+
+    resource at handle = case Map.lookup handle env.venHandles of
+      Nothing -> Left (at (UnresolvableHandle handle))
+      Just ref -> failIf (not ref.vrRetained) (at (ReleasedHandle handle))
 
     verifier at goal ref = do
       failIf (not (Set.member ref.verName env.venAdmittedVerifiers)) (at (VerifierNotAdmitted ref.verName))

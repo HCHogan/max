@@ -103,18 +103,24 @@ previewPlan env root valid =
     { emSteps = steps,
       emEffects =
         Set.unions
-          (map (.psEffects) steps <> [goal.goalBudget.ebEffects | (_, goal) <- holes']),
+          (map (.psEffects) steps <> [goal.goalBudget.ebEffects | (_, goal) <- pending]),
       emAuthorities =
         Set.unions
-          (map (.psAuthorities) steps <> [goal.goalAuthority | (_, goal) <- holes']),
+          (map (.psAuthorities) steps <> [goal.goalAuthority | (_, goal) <- pending]),
       emMaxCalls = calls,
       emMaxSends = sends,
-      emHoles = [(nodeId, goal.goalObjective) | (nodeId, goal) <- holes'],
+      emHoles = [(nodeId, goal.goalObjective) | (nodeId, goal) <- pending],
       emPlanHash = planHash plan
     }
   where
     plan = validPlan valid
-    holes' = planHoles root plan
+    -- Both kinds of unfinished work.  A manifest that listed only the holes
+    -- would describe a fan-out as if it were already decided, which is the
+    -- opposite of what a preview is for; who will fill each one is a
+    -- distinction for the scheduler, not for a statement of what is still open.
+    pending =
+      planHoles root plan
+        <> [(nodeId, goal) | (nodeId, _, goal) <- planChildren root plan]
     (steps, calls, sends) = go (PlanPath []) Certain plan
 
     go path reach node =
@@ -140,6 +146,16 @@ previewPlan env root valid =
             -- A pure binding is invisible to a preview: it invokes nothing, so
             -- there is no step to show and nothing to count.
             Let _ _ continuation -> go (path `into` StepContinue) reach continuation
+            -- Siblings all run, so their grants add.  Same rule the validator
+            -- checks; a preview that took the maximum here would under-report
+            -- a fan-out by a factor of its width.
+            Fork fork continuation ->
+              let (rest, restCalls, restSends) = go (path `into` StepContinue) reach continuation
+                  budgets = [goal.goalBudget | (_, goal) <- fork.fnChildren]
+               in ( rest,
+                    sum (map (.ebMaxCalls) budgets) + restCalls,
+                    sum (map (.ebMaxSends) budgets) + restSends
+                  )
             -- Both branches are reported; the counts take the worse one,
             -- because a ceiling must cover whichever branch actually runs.
             Guard _ consequent alternative ->
@@ -262,6 +278,18 @@ symbolicPlan env root handles known valid =
                 Right Nothing ->
                   go (path `into` StepThen) (Branch here True False : branches) values types consequent
                     <> go (path `into` StepElse) (Branch here False False : branches) values types alternative
+            -- Unlike a hole, a fork does not stop the walk.  Each child's
+            -- declared result type is exactly the shape its binder will hold,
+            -- so everything after the join stays interpretable — which is the
+            -- return type earning its keep: without it the continuation would
+            -- be as opaque as if the plan had ended here.
+            Fork fork continuation ->
+              go
+                (path `into` StepContinue)
+                branches
+                (foldr (Map.delete . fst) values fork.fnChildren)
+                (foldr (\(binder, goal) -> Map.insert binder goal.goalExpected) types fork.fnChildren)
+                continuation
             Hole goal -> finish (StopsAtHole here goal.goalObjective)
 
     -- Try the concrete evaluator first; fall back to the shape when it runs
