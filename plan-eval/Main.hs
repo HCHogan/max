@@ -2,18 +2,21 @@
 --
 -- ADR 002 step 8 says a recorded replay set must measure a plan-enabled loop
 -- before any of it runs in production.  This is the offline half of that: no
--- LLM, no database, no effects.  It takes recorded candidate segments, runs
--- them through exactly the modules the production path would use — parse,
--- kernel, preview, symbolic interpretation — and reports the numbers E5's exit
--- gate names.
+-- LLM, no database, no network, no effects.  It runs candidate segments
+-- through exactly the modules the production path would use — parse, kernel,
+-- preview — and reports the numbers E5's exit gate names.
 --
--- What it can and cannot tell you is worth being blunt about.  It measures
--- whether a candidate is /admissible/ and what it would cost.  It cannot
--- measure answer quality, because nothing here produces an answer; the
--- "quality" column is a structural proxy (did the plan commit to a result, or
--- hand the work back as a hole) and is labelled as such.  Real quality needs
--- the live replay set from step 8, which needs an executor, which is gated on
--- these numbers looking sane first.
+-- __Read the rates as properties of the fixtures, not of any model.__  The
+-- starter set is hand-authored: written against the kernel's behaviour, so of
+-- course it agrees with the kernel.  A parse rate of 81% means 19% of the
+-- fixtures were written to be malformed, and nothing more.  That makes this a
+-- regression gate — break the parser or the validator and it goes red — and
+-- emphatically not evidence that a model can produce admissible plans.  That
+-- evidence requires candidates max actually wrote, which requires an
+-- elaboration path, which is gated on this harness existing first.
+--
+-- It also cannot measure answer quality, because nothing here produces an
+-- answer; the hole count is a structural proxy and is labelled as one.
 module Main (main) where
 
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
@@ -37,10 +40,12 @@ import Max.Plan.Validate
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
 
--- | One recorded candidate.
+-- | One candidate segment.  Either something max wrote and we kept, or — for
+-- the starter set — something hand-authored to pin one kernel behaviour.  The
+-- harness cannot tell the difference, so the provenance has to be remembered
+-- when reading the rates.
 data Fixture = Fixture
   { fxName :: !Text,
-    -- | The DSL surface a model produced, or that we want held to a contract.
     fxSource :: !Text,
     -- | @admitted@, @unparsed@ or @refused@.
     fxExpect :: !Text,

@@ -11,9 +11,16 @@ cabal run max-plan-eval -- path/to/other.jsonl
 
 ## 它测什么
 
-不连 LLM、不连数据库、不产生任何效果。每条 fixture 是一段录下来的候选 DSL,依次过
+不连 LLM、不连数据库、不发网络请求、不产生任何效果。每条 fixture 是一段候选 DSL,依次过
 **parse**(`Max.Plan.Parse`)→ **kernel**(`Max.Plan.Validate`)→ **preview**
 (`Max.Plan.Interpret`),用的就是生产路径会用的同一批模块。
+
+> **当前这批 fixture 是手写的,不是录的。**
+>
+> 它们是照着内核的行为反向编出来的,所以当然全中。`parse rate 81%` 的意思是「我写了
+> 19% 的畸形样本」,仅此而已。这让它成为一个**回归门**——改坏解析器或校验器会立刻红——
+> 但它**不是**「模型能写出合法计划」的证据。那种证据需要 max 自己产出的候选,而那需要
+> 打通 elaboration 路径,后者的前置条件正是这个 harness 先存在。顺序是故意的,别把两件事读混。
 
 输出的指标对应 ADR 002 step 8 点名的那几项:
 
