@@ -185,6 +185,7 @@ library
         Max.Plan.Execute
         Max.Plan.Interpret
         Max.Plan.Parse
+        Max.Plan.Prompt
         Max.Plan.Schema
         Max.Plan.Session
         Max.Plan.Types
@@ -432,6 +433,7 @@ test-suite max-test
         Max.Plan.ExecuteSpec
         Max.Plan.InterpretSpec
         Max.Plan.ParseSpec
+        Max.Plan.PromptSpec
         Max.Plan.SchemaSpec
         Max.Plan.SessionSpec
         Max.Plan.TypesSpec

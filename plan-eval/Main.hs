@@ -34,6 +34,7 @@ import Max.Effects.Tools qualified as Tools
 import Max.Plan.Eval (exprCost)
 import Max.Plan.Interpret (EffectManifest (..), PreviewStep (..), Reachability (..), previewPlan)
 import Max.Plan.Parse (parseFailureText, parsePlan)
+import Max.Plan.Prompt (elaborationPrompt, renderEffect)
 import Max.Plan.Schema (PlanSchema (..), SchemaField (..))
 import Max.Plan.Types
 import Max.Plan.Validate
@@ -196,6 +197,15 @@ evaluate fixture =
 main :: IO ()
 main = do
   args <- getArgs
+  case args of
+    -- The bytes a model would be handed, printed from the same environment the
+    -- fixtures are judged against.  Worth being able to read directly: this is
+    -- the artifact under test as much as the kernel is.
+    ["--prompt"] -> putStrLn (T.unpack (elaborationPrompt env))
+    _ -> runFixtures args
+
+runFixtures :: [String] -> IO ()
+runFixtures args = do
   let path = case args of
         [] -> "plan-eval/fixtures/segments.jsonl"
         (given : _) -> given
@@ -263,22 +273,6 @@ report row = do
 percent :: Int -> Int -> Int
 percent _ 0 = 0
 percent value baseline = (value * 100) `div` baseline
-
-renderEffect :: PlanEffect -> Text
-renderEffect = \case
-  EffRead scope -> "read " <> renderScope scope
-  EffWrite scope -> "write " <> renderScope scope
-  EffSend AudienceConversation -> "send conversation"
-  EffSend AudienceSender -> "send sender"
-  EffLLM -> "llm"
-  EffReflect namespace -> "reflect " <> namespace
-
-renderScope :: ResourceScope -> Text
-renderScope = \case
-  CurrentConversation -> "conversation"
-  SandboxScope handle -> "sandbox:" <> handle
-  ProcessScope name -> "process:" <> name
-  ExternalScope origin -> "external:" <> origin
 
 summarize :: [Row] -> IO ()
 summarize rows = do

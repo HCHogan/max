@@ -48,7 +48,9 @@ spec = do
     it "holds an enum to its closed vocabulary" $ do
       checkValue (SchemaEnum ["a", "b"]) (String "a") `shouldBe` Right ()
       expected (checkValue (SchemaEnum ["a", "b"]) (String "c"))
-        `shouldBe` Just "enum(a|b)"
+        -- Spelled the way a plan would have to spell it, so the rejection
+        -- quotes something writable rather than a second notation.
+        `shouldBe` Just "enum(\"a\", \"b\")"
 
     it "admits null only where the type says so" $ do
       checkValue (SchemaNullable SchemaText) Null `shouldBe` Right ()

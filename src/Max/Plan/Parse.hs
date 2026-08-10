@@ -25,6 +25,7 @@
 module Max.Plan.Parse
   ( parsePlan,
     parseExpr,
+    parseSchema,
     ParseFailure (..),
     parseFailureText,
     maxSourceBytes,
@@ -79,6 +80,12 @@ parsePlan = whole planP planDepth
 
 parseExpr :: Text -> Either ParseFailure Expr
 parseExpr = whole exprP exprDepth
+
+-- | Read a type back from the spelling 'Max.Plan.Schema.renderSchema' produces.
+-- Nothing in the pipeline needs this, but it is what lets a test assert that
+-- every type the elaboration prompt displays is one the grammar accepts.
+parseSchema :: Text -> Either ParseFailure PlanSchema
+parseSchema = whole schemaP schemaDepth
 
 whole :: P a -> (a -> Int) -> Text -> Either ParseFailure a
 whole parser depth source
@@ -538,6 +545,13 @@ predicateDepth = \case
   PIsNull source -> 1 + exprDepth source
   PAll _ source body -> 1 + max (exprDepth source) (predicateDepth body)
   PAny _ source body -> 1 + max (exprDepth source) (predicateDepth body)
+
+schemaDepth :: PlanSchema -> Int
+schemaDepth = \case
+  SchemaArray element -> 1 + schemaDepth element
+  SchemaObject fields -> 1 + maximum0 (map (schemaDepth . (.sfSchema)) fields)
+  SchemaNullable inner -> 1 + schemaDepth inner
+  _ -> 1
 
 maximum0 :: [Int] -> Int
 maximum0 = foldr max 0

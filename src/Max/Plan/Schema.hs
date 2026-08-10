@@ -23,6 +23,7 @@ module Max.Plan.Schema
     SchemaError (..),
     schemaErrorText,
     renderSchema,
+    quoted,
     checkValue,
     nullable,
     projectField,
@@ -90,13 +91,19 @@ schemaErrorText err =
       steps -> T.concat steps
 
 -- | A compact one-line spelling, for error text and model-facing prose.
+-- | Render a schema in the dialect's own syntax.
+--
+-- Round-tripping matters beyond tidiness: this is the spelling the elaboration
+-- prompt shows a model in the tool catalog, and the spelling a rejection quotes
+-- back at it.  A second notation would be one the model has to translate from
+-- before it could write anything, and translation is where it invents.
 renderSchema :: PlanSchema -> Text
 renderSchema = \case
   SchemaText -> "text"
   SchemaInt -> "int"
   SchemaNumber -> "number"
   SchemaBool -> "bool"
-  SchemaEnum options -> "enum(" <> T.intercalate "|" options <> ")"
+  SchemaEnum options -> "enum(" <> T.intercalate ", " (map quoted options) <> ")"
   SchemaArray element -> "[" <> renderSchema element <> "]"
   SchemaObject fields ->
     "{" <> T.intercalate ", " (map renderField fields) <> "}"
@@ -107,6 +114,18 @@ renderSchema = \case
         <> (if field.sfRequired then "" else "?")
         <> ": "
         <> renderSchema field.sfSchema
+
+-- | A text literal in the dialect's syntax, escaped so the result parses back
+-- to the input.  The parser reads string literals with Haskell's own escape
+-- rules, so only the two characters that would end or continue a literal need
+-- handling.
+quoted :: Text -> Text
+quoted text = "\"" <> T.concatMap escape text <> "\""
+  where
+    escape = \case
+      '"' -> "\\\""
+      '\\' -> "\\\\"
+      character -> T.singleton character
 
 -- | Wrap without stacking: @text??@ and @text?@ admit the same values, and a
 -- normalized spelling keeps schema equality usable as a typecheck.

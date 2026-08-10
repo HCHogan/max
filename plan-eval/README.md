@@ -5,6 +5,7 @@ E5 的 exit gate。跑一遍:
 ```
 cabal run max-plan-eval                       # 默认 plan-eval/fixtures/segments.jsonl
 cabal run max-plan-eval -- path/to/other.jsonl
+cabal run max-plan-eval -- --prompt           # 打印模型会看到的那份 elaboration prompt
 ```
 
 退出码在每条 fixture 的实际结果都符合其 `expect` 时为 0,所以它可以当回归测试挂在 CI 上。
@@ -61,6 +62,13 @@ hole"只是结构代理,`holes` 一列就是它,不要当质量读。
 
 工具目录、goal 的预算与授权都写在 `Main.hs` 里,不在 fixture 中——fixture 记录的是
 模型写了什么,环境是宿主的事。
+
+## `--prompt`
+
+`Max.Plan.Prompt` 从同一个 `ValidationEnv` 渲染模型看到的那份指令,所以「告诉模型的」和
+「内核会检查的」是同一个值,不会各自漂移:目录里没有的工具不会出现在提示里,提示里出现的
+类型也一定是解析器收得下的写法(有测试盯着)。`--prompt` 把那份文本原样打出来——多模型
+实测要发的就是它,现在先能读。
 
 ## 加新 case
 
