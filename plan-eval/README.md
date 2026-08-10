@@ -16,7 +16,8 @@ cabal run max-plan-eval -- --prompt           # 打印模型会看到的那份 e
 **parse**(`Max.Plan.Parse`)→ **kernel**(`Max.Plan.Validate`)→ **preview**
 (`Max.Plan.Interpret`),用的就是生产路径会用的同一批模块。
 
-> **当前这批 fixture 是手写的,不是录的。**
+> **这批 fixture 绝大多数是手写的,不是录的。**(例外已在该行 `note` 里标明
+> RECORDED——第一条录进来的是 deepseek-flash 写的私密值外泄计划,当时内核放行了。)
 >
 > 它们是照着内核的行为反向编出来的,所以当然全中。`parse rate 81%` 的意思是「我写了
 > 19% 的畸形样本」,仅此而已。这让它成为一个**回归门**——改坏解析器或校验器会立刻红——

@@ -240,6 +240,33 @@ scopeText = \case
   ProcessScope name -> "process " <> name
   ExternalScope origin -> "external " <> origin
 
+-- | Whether a tool's effects can carry its arguments out of the goal's own
+-- conversation.
+--
+-- A send reaches an audience; a sandbox, a process or an external origin is a
+-- different trust domain, and an argument travels there whether the effect is
+-- nominally a read or a write — a search query containing someone's address
+-- has left the building regardless of what comes back.  Reflection discovers
+-- capability and carries no payload.
+--
+-- Only work confined to the current conversation leaves a value where it
+-- already was.  Everything else fails closed, in keeping with the rest of this
+-- module: an effect nobody has thought about yet counts as escaping.
+leavesConversation :: CatalogEntry -> Bool
+leavesConversation entry = any escapes (Set.toList entry.ceEffects)
+  where
+    escapes = \case
+      EffSend _ -> True
+      EffRead scope -> not (confined scope)
+      EffWrite scope -> not (confined scope)
+      -- The provider is a third party even when the tool is ours.
+      EffLLM -> True
+      EffReflect _ -> False
+
+    confined = \case
+      CurrentConversation -> True
+      _ -> False
+
 taintText :: TaintLabel -> Text
 taintText = \case
   TaintExternal -> "externally sourced"
@@ -315,6 +342,22 @@ validatePlan env root plan = do
                   (\reason -> at (ArgumentSchema call.cnTool (reasonText reason)))
                   (check env bindings fanout entry.ceInput call.cnInput)
               priceExpr at call.cnInput
+              -- Information flow at the boundary, not only at the result.
+              -- Checking declassification at 'Done' alone guards what the goal
+              -- returns and nothing else, so a plan could read a private value,
+              -- hand it to a tool that sends, and return an innocuous string —
+              -- passing the check while leaking everything it was about.  A
+              -- live model wrote exactly that plan the first day this was
+              -- measured; see the recorded fixture in plan-eval.
+              mapM_
+                ( \label ->
+                    failIf
+                      ( leavesConversation entry
+                          && not (Set.member label env.venGoal.goalDeclassify.unTaint)
+                      )
+                      (at (TaintNotDeclassified label))
+                )
+                (Set.toList inputTaint.unTaint)
               mapM_
                 (\authority -> failIf (not (Set.member authority env.venGoal.goalAuthority)) (at (AuthorityNotPermitted authority)))
                 (Set.toList entry.ceAuthorities)

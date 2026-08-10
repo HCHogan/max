@@ -296,6 +296,35 @@ spec = do
       reasonOf (Call readMemory (Done (EConcat [ELit (LitText "备注："), EVar (Binder "note")])))
         `shouldBe` Just (TaintNotDeclassified TaintPrivate)
 
+    it "refuses to hand a private value to a tool that sends, not just to done" $ do
+      -- The leak a check at Done alone cannot see: nothing private is
+      -- returned, so the result is clean — it was sent instead.  A live model
+      -- wrote this plan on the first day the dialect was measured, which is
+      -- how the gap was found; the hand-written fixtures had all tested Done.
+      let readMemory = search {cnBind = Binder "note", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
+          leak =
+            search
+              { cnBind = Binder "sent",
+                cnTool = ToolRef "reply",
+                cnSchemaVersion = SchemaVersion 1,
+                cnInput = EObject [("text", EVar (Binder "note"))]
+              }
+      reasonOf (Call readMemory (Call leak (Done (ELit (LitText "已发送")))))
+        `shouldBe` Just (TaintNotDeclassified TaintPrivate)
+
+    it "still allows a private value into a tool that stays in the conversation" $
+      -- read_memory reads the current conversation and nothing else, so
+      -- feeding it something private moves nothing anywhere.  Refusing here
+      -- would make taint mean "unusable" rather than "cannot leave".
+      admitted
+        ( Call
+            search {cnBind = Binder "note", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
+            ( Call
+                search {cnBind = Binder "again", cnTool = ToolRef "read_memory", cnSchemaVersion = SchemaVersion 1, cnInput = EObject []}
+                (Done (ELit (LitText "ok")))
+            )
+        )
+
   describe "budgets" $ do
     it "rejects a plan that makes more calls than the budget allows" $ do
       let chain n

@@ -15,8 +15,12 @@
 -- Three things are counted separately on purpose, because collapsing them
 -- would hide which one is worth fixing:
 --
---   * __Transport failures__ are excluded from every rate.  A timed-out request
---     says nothing about a model's grasp of the grammar.
+--   * __Transport failures and empty replies__ are excluded from every rate.
+--     A timed-out request says nothing about a model's grasp of the grammar,
+--     and neither does a 200 with no content — which in practice means a
+--     reasoning model spent its whole @max_tokens@ thinking.  Counting those
+--     as unparsed understates a model by exactly the tasks it found hardest,
+--     which is the worst possible direction for the bias to run.
 --   * __A code fence, or a tool call, is an instruction-following failure__,
 --     not a dialect failure.  The prompt asks for a bare plan.  The fence is
 --     counted, then stripped, and the body judged on its own merits — silently
@@ -136,9 +140,18 @@ data Candidate = Candidate
   { cdProfile :: !Text,
     cdTask :: !Task,
     cdAttempt :: !Int,
-    -- | 'Nothing' when the request itself failed; excluded from every rate.
-    cdReply :: !(Either Text Reply)
+    cdAttemptOutcome :: !Attempt
   }
+
+-- | Three genuinely different things, kept apart so a rate cannot silently
+-- average them together.
+data Attempt
+  = -- | The request failed.  Says nothing about the model.
+    Failed !Text
+  | -- | A reply arrived with nothing usable in it.  Also says nothing about
+    -- the model's grasp of the dialect — only that it never got to writing any.
+    Silent
+  | Answered !Reply
 
 data Reply = Reply
   { rpRaw :: !Text,
@@ -253,10 +266,10 @@ ask profile task attempt = do
       { cdProfile = profile,
         cdTask = task,
         cdAttempt = attempt,
-        cdReply = case result of
-          Left err -> Left err
-          Right (ContentResp text) -> Right (readReply text False)
-          Right (ToolCallsResp _ text _) -> Right (readReply text True)
+        cdAttemptOutcome = case result of
+          Left err -> Failed err
+          Right (ContentResp text) -> readReply text False
+          Right (ToolCallsResp _ text _) -> readReply text True
       }
   where
     ctx =
@@ -269,17 +282,20 @@ ask profile task attempt = do
           ccAgentTurnId = Nothing
         }
 
-readReply :: Text -> Bool -> Reply
-readReply raw toolCalled =
-  Reply
-    { rpRaw = raw,
-      rpSource = source,
-      rpFenced = isFenced raw,
-      rpToolCalled = toolCalled,
-      rpJudged = judge source
-    }
+readReply :: Text -> Bool -> Attempt
+readReply raw toolCalled
+  | T.null (T.strip raw) = Silent
+  | otherwise = Answered reply
   where
     source = unfence raw
+    reply =
+      Reply
+        { rpRaw = raw,
+          rpSource = source,
+          rpFenced = isFenced raw,
+          rpToolCalled = toolCalled,
+          rpJudged = judge source
+        }
 
 candidateJson :: Candidate -> Value
 candidateJson candidate =
@@ -288,9 +304,10 @@ candidateJson candidate =
       "task" .= candidate.cdTask.tkName,
       "attempt" .= candidate.cdAttempt
     ]
-      <> case candidate.cdReply of
-        Left err -> ["error" .= err]
-        Right reply ->
+      <> case candidate.cdAttemptOutcome of
+        Failed err -> ["error" .= err]
+        Silent -> ["silent" .= True]
+        Answered reply ->
           [ "raw" .= reply.rpRaw,
             "source" .= reply.rpSource,
             "fenced" .= reply.rpFenced,
@@ -302,8 +319,11 @@ candidateJson candidate =
             "tree_cost" .= reply.rpJudged.jTreeCost
           ]
 
+-- | Only the attempts that produced something to judge.  Transport failures
+-- and silences are not evidence about a model's grasp of the dialect, so they
+-- are not in the denominator of any rate about it.
 replies :: [Candidate] -> [Reply]
-replies candidates = [reply | candidate <- candidates, Right reply <- [candidate.cdReply]]
+replies candidates = [reply | candidate <- candidates, Answered reply <- [candidate.cdAttemptOutcome]]
 
 admitRate :: [Candidate] -> Double
 admitRate candidates
@@ -317,7 +337,16 @@ admitRate candidates
 report :: [Text] -> [Candidate] -> IO ()
 report profiles candidates = do
   putStrLn "── per profile ───────────────────────────────────────"
-  printf "%-24s %5s %12s %12s %8s %8s %8s\n" ("profile" :: String) ("n" :: String) ("parsed" :: String) ("admitted" :: String) ("fenced" :: String) ("tools" :: String) ("errors" :: String)
+  printf
+    "%-24s %5s %12s %12s %8s %8s %8s %8s\n"
+    ("profile" :: String)
+    ("judged" :: String)
+    ("parsed" :: String)
+    ("admitted" :: String)
+    ("fenced" :: String)
+    ("tools" :: String)
+    ("silent" :: String)
+    ("errors" :: String)
   mapM_ profileRow profiles
   putStrLn ""
   putStrLn "── rejection classes, all profiles ───────────────────"
@@ -343,19 +372,21 @@ report profiles candidates = do
     profileRow profile = do
       let mine = [c | c <- candidates, c.cdProfile == profile]
           judged = replies mine
-          errors = length [() | c <- mine, Left _ <- [c.cdReply]]
+          errors = length [() | c <- mine, Failed _ <- [c.cdAttemptOutcome]]
+          silent = length [() | c <- mine, Silent <- [c.cdAttemptOutcome]]
           parsed = length [() | reply <- judged, outcomeLabel reply.rpJudged.jOutcome /= "unparsed"]
           admitted = length [() | reply <- judged, isAdmitted reply]
           fenced = length [() | reply <- judged, reply.rpFenced]
           tools = length [() | reply <- judged, reply.rpToolCalled]
       printf
-        "%-24s %5d %12s %12s %8d %8d %8d\n"
+        "%-24s %5d %12s %12s %8d %8d %8d %8d\n"
         (T.unpack profile)
         (length judged)
         (rateOf parsed (length judged))
         (rateOf admitted (length judged))
         fenced
         tools
+        silent
         errors
 
     rateOf :: Int -> Int -> String
