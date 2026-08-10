@@ -182,6 +182,7 @@ library
         Max.Platform.QQ
         Max.Plan.Accept
         Max.Plan.Eval
+        Max.Plan.Execute
         Max.Plan.Interpret
         Max.Plan.Parse
         Max.Plan.Schema
@@ -428,6 +429,7 @@ test-suite max-test
         Max.Platform.DeliverySpec
         Max.Plan.AcceptSpec
         Max.Plan.EvalSpec
+        Max.Plan.ExecuteSpec
         Max.Plan.InterpretSpec
         Max.Plan.ParseSpec
         Max.Plan.SchemaSpec
