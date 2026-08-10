@@ -138,6 +138,41 @@ spec = do
           field "done" value `shouldBe` Just (String "燕大教务处")
           field "calls_used" value `shouldBe` Just (Number 1)
 
+    it "accepts a string literal where the catalog declares an enum" $ do
+      -- Found by asking a real model to plan against the real catalog: it wrote
+      -- memory_list@1({ scope: "group" }) and the kernel refused it, because
+      -- synthesis gives a literal the type text and text does not satisfy an
+      -- enum.  There is no other spelling — the grammar has enum as a type and
+      -- no literal form for one — so every enum-typed parameter max has was
+      -- uncallable from a plan, and the model was being told its only option
+      -- was wrong.
+      (out, calls) <-
+        invoke
+          "plan_run"
+          ( object
+              [ "objective" .= ("看看群记忆" :: Text),
+                "plan"
+                  .= ( "let mems = memory_list@1({ scope: \"group\" })\n\
+                       \done concat(\"记了 \", \"若干\", \" 条\")"
+                       :: Text
+                     )
+              ]
+          )
+      calls `shouldBe` ["memory_list"]
+      fmap (field "done") out `shouldBe` Right (Just (String "记了 若干 条"))
+
+    it "still refuses a string that is not one of the enum's members" $ do
+      (out, calls) <-
+        invoke
+          "plan_run"
+          ( object
+              [ "objective" .= ("看看群记忆" :: Text),
+                "plan" .= ("let mems = memory_list@1({ scope: \"everyone\" })\ndone \"x\"" :: Text)
+              ]
+          )
+      calls `shouldBe` []
+      out `shouldSatisfy` isLeftContaining "everyone"
+
     it "refuses a plan naming a tool that exists but is not plannable" $ do
       (out, calls) <-
         invoke

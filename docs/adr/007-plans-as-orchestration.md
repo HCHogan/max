@@ -853,9 +853,48 @@ orchestration layer.
     of max plannable to be worth executing* is the part that scales with the
     tool count.
 
-10. **Execute plans for real.** The suspension loop against live `Tools`, each
-    suspension journalled, each elaboration a revision through `Max.DB.Plan`.
-    Step 5 built the machine; this connects it to the world.
+10. **Execute plans for real.** Done for the front-of-house path, together with
+    step 9, because the two do not separate: a plan tool whose plans do not run
+    is either theatre or a data-collection instrument, and the model would still
+    have to do the work by hand.
+
+    `plan_guide` returns the dialect with this turn's real catalog and ceilings
+    in it; `plan_run` parses, validates and executes, and only the `done` value
+    comes back. The seam was the interesting part — a tool's `toolRun` sits one
+    effect layer *below* `Tools`, so `executePlan` cannot run inside an ordinary
+    tool; but `runTools` nests, so a plan runs in a sub-catalog built from the
+    plannable subset of what this dispatch already resolved. Same effect row,
+    same authorization, same journal — and the subset never contains `plan_run`,
+    so recursion is impossible by construction rather than by a guard.
+
+    **Measured against a real model, and the answer is sharply conditional.**
+    Two prompt shapes, five runs each, deepseek on the production tool schemas:
+
+    | task shape | reached for `plan_guide` |
+    |---|---|
+    | three independent lookups | **0/5** |
+    | explicitly multi-step, with a dependency | **5/5** |
+
+    The zero is right, not a failure. Three independent searches are already
+    parallel as native tool calls, and a plan would buy nothing but an extra
+    round trip for the guide. What a plan buys is *dependency* and *projection*
+    — and on that shape the model took it every time, batching `plan_guide`
+    alongside the `memory_list` call it knew it would need.
+
+    The plan it then wrote reads memory, projects a preference out of it,
+    synthesises three queries with `concat`, and formats six projected fields
+    into one string: four calls against a ceiling of four, zero holes. Twelve
+    search results passed through it and none entered the model's context.
+
+    **It was refused on the first attempt, and the kernel was wrong.** The model
+    wrote `memory_list@1({ scope: "group" })`; synthesis gives a text literal the
+    type `text`, `admits` rightly refuses text where an enum is expected, and
+    the grammar has `enum(…)` as a type with *no literal form for one*. So there
+    was no correct spelling: every enum-typed parameter max has was uncallable
+    from a plan, and the model was being told its only option was wrong.
+    Literal membership is decidable in the checking direction and unknowable in
+    the synthesising one, which is the ordinary reason a bidirectional checker
+    keeps them apart. Fixed there; the same plan is now admitted.
 
 11. **Dispatch fork children.** `Reconcile` gets a caller and a scheduler that
     acts on it. `goalInputs` and `goalResources` resolve from schemas to actual

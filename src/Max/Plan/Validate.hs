@@ -68,6 +68,7 @@ import Max.Plan.Schema
     SchemaField (..),
     projectField,
     projectIndex,
+    quoted,
     renderSchema,
     schemaErrorText,
   )
@@ -592,6 +593,20 @@ check env bindings fanout expected expr = case (expected, expr) of
           [] -> Left (ExpressionType (renderSchema expected) ("object with unknown field " <> name))
       )
       members
+  -- A text literal is the only way to write a value of an enum type: the
+  -- grammar has @enum("a", "b")@ as a type and no corresponding literal form.
+  -- Synthesis gives a literal the type 'SchemaText', losing which text it was,
+  -- and 'admits' rightly refuses text where an enum is expected — so without
+  -- this case every enum-typed parameter in the catalog is uncallable, and the
+  -- model gets told its only available spelling is wrong.
+  --
+  -- Checking direction is where this belongs. The literal's membership is known
+  -- here and unknowable one level up, which is the ordinary reason a
+  -- bidirectional checker keeps the two directions apart.
+  (SchemaEnum members, ELit (LitText value)) ->
+    if value `elem` members
+      then Right ()
+      else Left (ExpressionType (renderSchema expected) (quoted value))
   (_, EIf condition consequent alternative) -> do
     checkPredicate env bindings fanout condition
     check env bindings fanout expected consequent

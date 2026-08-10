@@ -31,11 +31,23 @@ import Data.Text qualified as T
 import Harness
 import Max.Context (estimateMessagesTokens)
 import Max.Effects.LLM (ChatMessage (..))
-import Max.Plan.Interpret (EffectManifest (..), PreviewStep (..), Reachability (..))
-import Max.Plan.Parse (parsePlan)
+import Data.Text.IO qualified as TIO
+import Max.Plan.Interpret (EffectManifest (..), PreviewStep (..), Reachability (..), previewPlan)
+import Max.Plan.Parse (parseFailureText, parsePlan)
+import Data.Map.Strict (Map)
+import Max.Effects.Tools
+  ( SchemaVersion (..),
+    ToolAuthority (..),
+    ToolDefinition (..),
+    ToolParallelism (..),
+    ToolRef (..),
+    ToolRetryClass (..),
+  )
+import Max.Plan.Catalog (PlannableTool (..), planCatalog, plannableTools)
 import Max.Plan.Prompt (childPrompt, frontPrompt, guidePlans, renderEffect)
 import Max.Plan.Types (Goal, planChildren)
-import Max.Plan.Validate (childEnv)
+import Max.Plan.Validate (CatalogEntry, childEnv, rejectionText, validatePlan)
+import Max.Tools.Plan (planValidationEnv)
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
 
@@ -90,6 +102,28 @@ main = do
     -- 'childEnv' has taken away everything the goal did not ask for.  Built
     -- from a subgoal the guide itself shows, so this cannot drift into
     -- printing a prompt no example would ever produce.
+    -- What production actually hands a model that calls @plan_guide@, as
+    -- opposed to the harness environment the fixtures are judged against.  The
+    -- two differ in the way that matters most — the fixture catalog is generous
+    -- and the real plannable set is two tools — so being able to read the real
+    -- one is what keeps the fixtures from measuring a world that does not
+    -- exist.
+    ["--production-guide", objective] ->
+      putStrLn . T.unpack . frontPrompt . planValidationEnv productionPlanCatalog $ T.pack objective
+    -- Judge one candidate against the production plannable catalog rather than
+    -- the fixture one.  The difference is the whole point: a plan can be
+    -- admissible in the harness and inadmissible in the world.
+    ["--production-check", path] -> do
+      source <- TIO.readFile path
+      let env = planValidationEnv productionPlanCatalog "production check"
+      case parsePlan source of
+        Left failure -> putStrLn ("unparsed: " <> T.unpack (parseFailureText failure)) >> exitFailure
+        Right parsed -> case validatePlan env "plan:check" parsed of
+          Left rejection -> putStrLn ("refused: " <> T.unpack (rejectionText rejection)) >> exitFailure
+          Right valid -> do
+            let manifest = previewPlan env "plan:check" valid
+            putStrLn ("admitted: " <> show manifest.emMaxCalls <> " calls, " <> show manifest.emMaxSends <> " sends, " <> show (length manifest.emHoles) <> " holes")
+            exitSuccess
     ["--child-prompt"] -> case guideSubgoal of
       Nothing -> fail "no guide plan forks — nothing to render a child prompt from"
       Just child -> putStrLn (T.unpack (childPrompt (childEnv planEnv child)))
@@ -221,3 +255,24 @@ summarize rows = do
 
 oneLine :: Text -> Text
 oneLine = T.take 160
+
+-- | The plannable catalog as a live dispatch with search configured would see
+-- it.  Definitions come from the real inventory rather than being invented
+-- here, so a tool that gets gated off or renamed shows up as an absence.
+productionPlanCatalog :: Map ToolRef CatalogEntry
+productionPlanCatalog =
+  planCatalog
+    [ definition ref
+      | ref <- map (.ptRef) plannableTools
+    ]
+  where
+    definition ref =
+      ToolDefinition
+        { tdRef = ref,
+          tdSchemaVersion = SchemaVersion 1,
+          tdEffects = Set.empty,
+          tdParallelism = SequentialOnly,
+          tdRetryClass = RetrySafe,
+          tdAuthorities = Set.singleton CurrentConversation,
+          tdFailuresPrecedeEffects = False
+        }
