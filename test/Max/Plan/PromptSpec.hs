@@ -80,6 +80,22 @@ env =
       venCostCeiling = 100000
     }
 
+-- | A fork child's goal: read-only, no authority, and narrower than the goal
+-- above it in every dimension the kernel checks.
+subgoal :: Goal
+subgoal =
+  goal
+    { goalObjective = "查甲的资料",
+      goalExpected = SchemaObject [field "name" SchemaText, field "bio" SchemaText],
+      goalBudget =
+        budget
+          { ebEffects = Set.singleton (EffRead (ExternalScope "web")),
+            ebMaxCalls = 1,
+            ebMaxSends = 0
+          },
+      goalAuthority = Set.empty
+    }
+
 handle :: Text -> Bool -> ValueRef
 handle name retained =
   ValueRef
@@ -177,9 +193,60 @@ spec = do
       goalSection env {venAdmittedVerifiers = Set.empty}
         `shouldSatisfy` T.isInfixOf "无验收器"
 
-  describe "assembly" $
+  describe "assembly" $ do
     it "puts the constant guide first, so a prefix cache survives a new goal" $
-      elaborationPrompt env `shouldSatisfy` T.isPrefixOf dialectGuide
+      frontPrompt env `shouldSatisfy` T.isPrefixOf dialectGuide
+
+    it "starts a child with the same bytes, so both roles share one cache" $
+      childPrompt (childEnv env subgoal) `shouldSatisfy` T.isPrefixOf dialectGuide
+
+    it "briefs the child and does not brief the front model" $ do
+      childPrompt (childEnv env subgoal) `shouldSatisfy` T.isInfixOf childBriefing
+      frontPrompt env `shouldSatisfy` not . T.isInfixOf childBriefing
+
+  describe "what a child can see" $ do
+    it "keeps the goal it was dispatched for" $
+      (childEnv env subgoal).venGoal.goalObjective `shouldBe` "查甲的资料"
+
+    it "hands over the named inputs and nothing else in scope" $ do
+      -- The parent holds two names; the subgoal asked for one.  The other is
+      -- not withheld as a policy — it was never resolved to a value for this
+      -- child, so naming it would be naming nothing.
+      let parent = env {venBindings = Map.fromList [(Binder "框架", SchemaText), (Binder "别的", SchemaInt)]}
+          seen = (childEnv parent subgoal {goalInputs = [Binder "框架"]}).venBindings
+      Map.keys seen `shouldBe` [Binder "框架"]
+      goalSection (childEnv parent subgoal {goalInputs = [Binder "框架"]})
+        `shouldSatisfy` T.isInfixOf "框架 : text"
+
+    it "hands over the named handles and nothing else in scope" $ do
+      let parent =
+            env
+              { venHandles =
+                  Map.fromList [("t#12:r0", handle "t#12:r0" True), ("t#12:r1", handle "t#12:r1" True)]
+              }
+          seen = (childEnv parent subgoal {goalResources = ["t#12:r0"]}).venHandles
+      Map.keys seen `shouldBe` ["t#12:r0"]
+
+    it "hides a tool its budget could never pay for" $ do
+      -- reply@1 sends, and this subgoal may only read.  The kernel would
+      -- reject the call anyway; showing it in the catalog would be offering
+      -- a guaranteed rejection as an option.
+      let rendered = catalogSection (childEnv env subgoal)
+      rendered `shouldSatisfy` T.isInfixOf "search_web@3"
+      rendered `shouldSatisfy` not . T.isInfixOf "reply@1"
+
+    it "hides a tool it lacks the authority for, separately from the effect" $ do
+      let gated = replyEntry {ceRef = ToolRef "gated", ceEffects = Set.empty}
+          parent = env {venCatalog = Map.insert (ToolRef "gated") gated env.venCatalog}
+      catalogSection (childEnv parent subgoal)
+        `shouldSatisfy` not . T.isInfixOf "gated@1"
+
+    it "narrows and never widens, so a child of a child cannot regain anything" $ do
+      -- Idempotence is the property that makes depth uninteresting: applying
+      -- the projection twice with the same goal is applying it once.
+      let parent = env {venBindings = Map.singleton (Binder "框架") SchemaText}
+          once = childEnv parent subgoal
+      childEnv once subgoal `shouldBe` once
 
 -- | Report what the parser actually said.  When the guide rots, the failure
 -- has to name the fragment and the reason, or the test is just a red light.

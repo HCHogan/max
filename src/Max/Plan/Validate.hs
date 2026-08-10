@@ -38,6 +38,7 @@ module Max.Plan.Validate
     entryFromDefinition,
     VerifierEntry (..),
     ValidationEnv (..),
+    childEnv,
 
     -- * Rejections
     Rejection (..),
@@ -141,6 +142,44 @@ data ValidationEnv = ValidationEnv
     venCostCeiling :: !Int
   }
   deriving stock (Show, Eq)
+
+-- | The world as one subgoal's elaboration sees it.
+--
+-- A fork child is dispatched with the 'Goal' and nothing else — no conversation,
+-- no memory, no sibling.  That isolation is the reason a fork is worth paying
+-- for, and it has to be built somewhere; this is where.  Everything narrows and
+-- nothing widens, which makes the projection idempotent and makes a child of a
+-- child strictly poorer than its parent without anyone tracking depth.
+--
+-- Three narrowings, each for a different reason:
+--
+--   * __Bindings to 'goalInputs'.__  The parent holds many names; the child asked
+--     for some.  The host resolves exactly those to values when it dispatches, so
+--     anything else would name a value the child was never handed.
+--   * __Handles to 'goalResources'.__  Same argument one level out: the front
+--     model chose what is relevant, and choosing is what having the conversation
+--     is for.
+--   * __Catalog to what this goal's budget and authority admit.__  Unlike the
+--     other two this is not a correctness requirement — 'validatePlan' rejects an
+--     over-effectful call anyway.  It is the same courtesy 'Max.Plan.Prompt'
+--     already extends to released handles: a tool listed here would be a
+--     guaranteed rejection advertised as an option, and a model that reaches for
+--     it has been misled rather than caught.
+--
+-- The cost ceiling, the verifier registry and the admitted set carry over
+-- unchanged: those are host policy, not the parent's to spend.
+childEnv :: ValidationEnv -> Goal -> ValidationEnv
+childEnv parent goal =
+  parent
+    { venGoal = goal,
+      venBindings = Map.restrictKeys parent.venBindings (Set.fromList goal.goalInputs),
+      venHandles = Map.restrictKeys parent.venHandles (Set.fromList goal.goalResources),
+      venCatalog = Map.filter reachable parent.venCatalog
+    }
+  where
+    reachable entry =
+      Set.isSubsetOf entry.ceEffects goal.goalBudget.ebEffects
+        && Set.isSubsetOf entry.ceAuthorities goal.goalAuthority
 
 data Rejection = Rejection
   { rjNode :: !NodeId,

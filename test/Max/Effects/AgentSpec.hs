@@ -44,6 +44,7 @@ import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.Tasks
   ( Note (..),
+    NoteVerb (..),
     TaskCancelled,
     TaskRegistry,
     TurnCompletion (..),
@@ -89,7 +90,7 @@ lateFeedbackSink tasks injected events event = do
   when (case event of AgentFinalStreamText _ -> True; _ -> False) $ do
     first <- liftIO $ atomicModifyIORef' injected (\seen -> (True, not seen))
     when first $ do
-      _ <- liftIO $ pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "流式期间补充" Nothing)
+      _ <- liftIO $ pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "流式期间补充" Nothing NoteSteer)
       pure ()
   eventSink events event
 
@@ -250,7 +251,7 @@ spec = describe "Agent full loop" $ do
     events <- newIORef []
     tasks <- newTaskRegistry
     turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-    _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "改成方案 B" Nothing)
+    _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "改成方案 B" Nothing NoteSteer)
     let llm =
           LLMInterpreter
             { liChat = \_ _ messages _ _ -> do
@@ -272,6 +273,42 @@ spec = describe "Agent full loop" $ do
       `shouldReturn` [map show [MsgUser "question", MsgUser "[feedback]: 改成方案 B"]]
     length completion.tcUnservedNotes `shouldBe` 0
     (null <$> listTasks tasks (Just (GroupId 7777))) `shouldReturn` True
+
+  it "labels an annotation as background rather than as an instruction" $ do
+    -- Both verbs reach the model at the same place; only the label differs.
+    -- One tag for both would tell the model to act on 「顺便说一句」, and the
+    -- model would be right to, because that is what [feedback] means.
+    seenMessages <- newIORef ([] :: [[ChatMessage]])
+    events <- newIORef []
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "改成方案 B" Nothing NoteSteer)
+    _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "顺便说一句我明天休假" Nothing NoteAnnotate)
+    let llm =
+          LLMInterpreter
+            { liChat = \_ _ messages _ _ -> do
+                liftIO (appendRef seenMessages messages)
+                pure (Right (ContentResp "done"))
+            }
+    result <-
+      withCompactLogger ColorNever Nothing $ \logger ->
+        runEff
+          . runConcurrent
+          . runLog "agent-test" logger LogAttention
+          . runLLMWith llm
+          . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolCatalog [] []))
+          $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+
+    -- One message, two labelled lines, steer first: they arrived together and
+    -- splitting them into two turns would double the round the notes were
+    -- meant to ride along with.
+    map show result.appended
+      `shouldBe` map
+        show
+        [ MsgUser "[feedback]: 改成方案 B\n[fyi]（补充信息，不要求你因此改变正在做的事）: 顺便说一句我明天休假",
+          MsgAssistant "done"
+        ]
 
   it "propagates !kill as asynchronous cancellation and still permits root cleanup" $ do
     entered <- newEmptyMVar

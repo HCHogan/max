@@ -14,6 +14,7 @@ import Control.Concurrent (threadDelay)
 import Data.Set qualified as Set
 import Max.Tasks
   ( Note (..),
+    NoteVerb (..),
     TaskCancelled (..),
     TaskHandle (..),
     TaskInfo (..),
@@ -65,7 +66,7 @@ spec = describe "Max.Tasks" $ do
       setTurnPhase turn "tools"
       running <- listTasks reg (Just gid)
       map tiKind running `shouldBe` ["tools"]
-      _ <- pushToLatest reg gid Nothing (Just 7002) (Note "改成 B" Nothing)
+      _ <- pushToLatest reg gid Nothing (Just 7002) (Note "改成 B" Nothing NoteSteer)
       notes <- drainTurnInbox turn
       map (.noteLine) notes `shouldBe` ["改成 B"]
       completion <- finishTurnRuntime reg turn
@@ -88,13 +89,13 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
       h <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
-      landed <- pushToLatest reg gid Nothing Nothing (Note "我也问一句" Nothing)
+      landed <- pushToLatest reg gid Nothing Nothing (Note "我也问一句" Nothing NoteSteer)
       notes <- drainInbox h
       (landed, map (.noteLine) notes) `shouldBe` (Just h.thId, ["我也问一句"])
 
     it "returns Nothing when the group has nothing running" $ do
       reg <- newTaskRegistry
-      landed <- pushToLatest reg gid Nothing Nothing (Note "喂" Nothing)
+      landed <- pushToLatest reg gid Nothing Nothing (Note "喂" Nothing NoteSteer)
       landed `shouldBe` Nothing
 
     it "picks the newest turn when several are running" $ do
@@ -106,7 +107,7 @@ spec = describe "Max.Tasks" $ do
       threadDelay 2000
       _ <- beginDispatch reg gid bob (Just (CanonicalMessageId 7002))
       h2 <- attachTask reg gid bob (Just (CanonicalMessageId 7002)) "llm" (pure ())
-      _ <- pushToLatest reg gid Nothing Nothing (Note "给第二个" Nothing)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "给第二个" Nothing NoteSteer)
       n1 <- drainInbox h1
       n2 <- drainInbox h2
       (map (.noteLine) n1, map (.noteLine) n2) `shouldBe` ([], ["给第二个"])
@@ -117,13 +118,13 @@ spec = describe "Max.Tasks" $ do
     it "skips the caller's own entry" $ do
       reg <- newTaskRegistry
       mine <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
-      landed <- pushToLatest reg gid (Just mine) Nothing (Note "别给我自己" Nothing)
+      landed <- pushToLatest reg gid (Just mine) Nothing (Note "别给我自己" Nothing NoteSteer)
       landed `shouldBe` Nothing
 
     it "keeps groups apart" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg (GroupId 999) alice (Just (CanonicalMessageId 7001))
-      landed <- pushToLatest reg gid Nothing Nothing (Note "喂" Nothing)
+      landed <- pushToLatest reg gid Nothing Nothing (Note "喂" Nothing NoteSteer)
       landed `shouldBe` Nothing
 
   describe "pushToTrigger" $ do
@@ -134,7 +135,7 @@ spec = describe "Max.Tasks" $ do
       threadDelay 2000
       _ <- beginDispatch reg gid bob (Just (CanonicalMessageId 7002))
       h2 <- attachTask reg gid bob (Just (CanonicalMessageId 7002)) "llm" (pure ())
-      landed <- pushToTrigger reg gid Nothing Nothing 7001 (Note "给第一个" Nothing)
+      landed <- pushToTrigger reg gid Nothing Nothing 7001 (Note "给第一个" Nothing NoteSteer)
       n1 <- drainInbox h1
       n2 <- drainInbox h2
       (landed, map (.noteLine) n1, map (.noteLine) n2) `shouldBe` (Just h1.thId, ["给第一个"], [])
@@ -145,9 +146,9 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
       h <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
-      _ <- pushToLatest reg gid Nothing (Just 7002) (Note "[#7002] bob: 顺便" Nothing)
+      _ <- pushToLatest reg gid Nothing (Just 7002) (Note "[#7002] bob: 顺便" Nothing NoteSteer)
       _ <- drainInbox h
-      landed <- pushToTrigger reg gid Nothing Nothing 7002 (Note "再补一句" Nothing)
+      landed <- pushToTrigger reg gid Nothing Nothing 7002 (Note "再补一句" Nothing NoteSteer)
       notes <- drainInbox h
       (landed, map (.noteLine) notes) `shouldBe` (Just h.thId, ["再补一句"])
 
@@ -159,7 +160,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
       _ <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
-      landed <- pushToTrigger reg gid Nothing (Just 7050) 7001 (Note "改成 B 方案" Nothing)
+      landed <- pushToTrigger reg gid Nothing (Just 7050) 7001 (Note "改成 B 方案" Nothing NoteSteer)
       inflight <- inFlightTriggers reg gid
       landed `shouldSatisfy` (/= Nothing)
       inflight `shouldBe` Set.fromList [7001, 7050]
@@ -170,7 +171,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
       _ <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
-      landed <- pushToTrigger reg gid Nothing Nothing 9999 (Note "点错了" Nothing)
+      landed <- pushToTrigger reg gid Nothing Nothing 9999 (Note "点错了" Nothing NoteSteer)
       landed `shouldBe` Nothing
 
   describe "pushToAgentTurn" $ do
@@ -181,7 +182,7 @@ spec = describe "Max.Tasks" $ do
       firstRuntime <- beginDurableTurnRuntime reg first gid alice (Just (CanonicalMessageId 7001))
       threadDelay 2000
       secondRuntime <- beginDurableTurnRuntime reg second gid bob (Just (CanonicalMessageId 7002))
-      landed <- pushToAgentTurn reg gid Nothing (Just 7050) first (Note "续第一项" Nothing)
+      landed <- pushToAgentTurn reg gid Nothing (Just 7050) first (Note "续第一项" Nothing NoteSteer)
       firstNotes <- drainTurnInbox firstRuntime
       secondNotes <- drainTurnInbox secondRuntime
       inflight <- inFlightTriggers reg gid
@@ -193,7 +194,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       let durable = AgentTurnRef (AgentTurnId 41) (TurnOrdinal 4)
       _ <- beginDurableTurnRuntime reg durable (GroupId 999) alice (Just (CanonicalMessageId 7001))
-      pushToAgentTurn reg gid Nothing Nothing durable (Note "wrong scope" Nothing)
+      pushToAgentTurn reg gid Nothing Nothing durable (Note "wrong scope" Nothing NoteSteer)
         `shouldReturn` Nothing
 
   describe "dispatch tracking" $ do
@@ -250,7 +251,7 @@ spec = describe "Max.Tasks" $ do
     it "lists a turn's absorbed messages until the turn ends" $ do
       reg <- newTaskRegistry
       tid <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
-      _ <- pushToLatest reg gid Nothing (Just 7002) (Note "[#7002] bob: 顺便" Nothing)
+      _ <- pushToLatest reg gid Nothing (Just 7002) (Note "[#7002] bob: 顺便" Nothing NoteSteer)
       beforeMids <- absorbedTriggers reg tid
       _ <- endDispatch reg tid
       afterMids <- absorbedTriggers reg tid
@@ -261,7 +262,7 @@ spec = describe "Max.Tasks" $ do
       _ <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
       _ <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
       absorbed <- beginDispatch reg gid bob (Just (CanonicalMessageId 7002))
-      _ <- pushToLatest reg gid (Just absorbed) (Just 7002) (Note "[#7002] bob: 顺便" Nothing)
+      _ <- pushToLatest reg gid (Just absorbed) (Just 7002) (Note "[#7002] bob: 顺便" Nothing NoteSteer)
       _ <- endDispatch reg absorbed
       inflight <- inFlightTriggers reg gid
       inflight `shouldBe` Set.fromList [7001, 7002]
@@ -274,7 +275,7 @@ spec = describe "Max.Tasks" $ do
     it "endDispatch returns what nobody drained" $ do
       reg <- newTaskRegistry
       tid <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
-      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing NoteSteer)
       notes <- endDispatch reg tid
       map (.noteLine) notes `shouldBe` ["改成 B"]
 
@@ -282,7 +283,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       tid <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
       h <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
-      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing NoteSteer)
       _ <- drainInbox h
       notes <- endDispatch reg tid
       map (.noteLine) notes `shouldBe` []
@@ -291,7 +292,7 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       tid <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
       _ <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
-      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "改成 B" Nothing NoteSteer)
       _ <- cancelTask reg tid
       notes <- endDispatch reg tid
       map (.noteLine) notes `shouldBe` []
@@ -300,10 +301,10 @@ spec = describe "Max.Tasks" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
       h <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
-      _ <- pushToLatest reg gid Nothing Nothing (Note "一" Nothing)
-      _ <- pushToLatest reg gid Nothing Nothing (Note "二" Nothing)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "一" Nothing NoteSteer)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "二" Nothing NoteSteer)
       drained <- drainInbox h
-      _ <- pushToLatest reg gid Nothing Nothing (Note "三" Nothing)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "三" Nothing NoteSteer)
       requeueInbox h drained
       notes <- drainInbox h
       map (.noteLine) notes `shouldBe` ["一", "二", "三"]
@@ -323,7 +324,7 @@ spec = describe "Max.Tasks" $ do
     it "inherits notes pushed before the loop existed" $ do
       reg <- newTaskRegistry
       _ <- beginDispatch reg gid alice (Just (CanonicalMessageId 7001))
-      _ <- pushToLatest reg gid Nothing Nothing (Note "等一下，改成 B" Nothing)
+      _ <- pushToLatest reg gid Nothing Nothing (Note "等一下，改成 B" Nothing NoteSteer)
       h <- attachTask reg gid alice (Just (CanonicalMessageId 7001)) "llm" (pure ())
       notes <- drainInbox h
       map (.noteLine) notes `shouldBe` ["等一下，改成 B"]

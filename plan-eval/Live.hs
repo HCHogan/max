@@ -52,7 +52,7 @@ import Max.Config (AppConfig (..), appConfigParser)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat, runLLM)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Log (withCompactLogger)
-import Max.Plan.Prompt (elaborationPrompt)
+import Max.Plan.Prompt (frontPrompt)
 import Max.Plan.Types (Goal (..))
 import Max.Plan.Validate (ValidationEnv (..))
 import OptEnvConf
@@ -253,14 +253,14 @@ dryRun profiles tasks repeat' = do
     [] -> pure ()
     first' : _ -> do
       putStrLn "\n── the prompt, as the first task would receive it ────"
-      putStrLn (T.unpack (elaborationPrompt (envFor first')))
+      putStrLn (T.unpack (frontPrompt (envFor first')))
       putStrLn ("\n[user] " <> T.unpack userTurn)
 
 -- | One request.  No tools are offered: a plan is written, not executed, and a
 -- model that reaches for a tool anyway has told us something worth counting.
 ask :: LLM :> es => Text -> Task -> Int -> Eff es Candidate
 ask profile task attempt = do
-  result <- chat ctx profile [MsgSystem (elaborationPrompt (envFor task)), MsgUser userTurn] []
+  result <- chat ctx profile [MsgSystem (frontPrompt (envFor task)), MsgUser userTurn] []
   pure
     Candidate
       { cdProfile = profile,

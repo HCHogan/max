@@ -380,6 +380,10 @@ prompt instruction, which is what ADR 002 asked for and could not spend.
 | annotate | *inexpressible* | attach; read at the next decision point |
 | abort (`!kill`) | cancel the dispatch | unchanged for the plan root |
 
+Step 6 below moved the annotate row's `today` column: it now lands in the inbox
+unannounced and dies with the turn rather than reviving. What it still shares
+with steer is *when* it arrives, and that is the half a plan pays for.
+
 Two things get deleted, both already promised: the drain-and-inject-synthetic-
 `MsgUser` path, and with it the `requeueTurnInbox` race — 002's consequence
 list already commits to "the sent-prefix watermark and the feedback-raced-
@@ -501,11 +505,55 @@ orchestration layer.
    and only a suspension shows what it is *actually* asking. A checkpoint whose
    path no longer exists in the plan reports rather than guesses, which is the
    ordinary outcome of a steer landing mid-walk.
-6. **Split the prompts, and land the verbs.** A front-of-house prompt and a
-   child prompt generated from the `Goal` alone. `!feedback` retargets from the
-   round-boundary injection to a wake; `annotate` becomes expressible;
-   `classifySupplement`'s codomain grows from `Bool` to the verb lattice; the
-   `requeueTurnInbox` race is deleted rather than ported.
+6. **Split the prompts, and land the verbs.** Partly done, and the step splits
+   cleanly along one line: *does this need a plan to be running?*
+
+   **The prompts are split.** `frontPrompt` is today's bytes unchanged — worth
+   saying, because that is what step 7's 46/48 measured, and churning it would
+   have invalidated the number to no purpose. `childPrompt` is new, and the
+   substance is not the briefing paragraph but `Max.Plan.Validate.childEnv`: the
+   projection that takes a parent environment and a subgoal and returns the
+   world as that subgoal sees it. Bindings restrict to `goalInputs`, handles to
+   `goalResources`, and the catalog to the tools this goal's budget and
+   authority could actually pay for. The last of those is not a correctness
+   requirement — the kernel rejects an over-effectful call anyway — but listing
+   a tool a child can never call advertises a guaranteed rejection as an option,
+   which is the same argument the goal section already makes for released
+   handles. Everything narrows and nothing widens, so the projection is
+   idempotent and a child of a child is strictly poorer than its parent without
+   anyone tracking depth. The guide comes first in both prompts, byte-identical,
+   so the two roles share one prefix cache.
+
+   **The verb lattice is landed, three-valued rather than six.**
+   `classifySupplement` returns `steer` / `fyi` / `new`, and `Note` carries
+   which one put it there. *Observe is deliberately not inferrable*: it is
+   `annotate` with the note thrown away, and there is no reading of "a
+   classifier silently ignored a message addressed to the bot" that is safer
+   than keeping the note. It stays what it has been — a verb the user types.
+
+   Annotate is a real verb today, with three consequences rather than a rename:
+   it does not wear the 托腮 that promises a note was acted on; it reaches the
+   model as `[fyi]` rather than `[feedback]`, because one tag for both tells the
+   model that 「顺便说一句我明天休假」 is an instruction; and if the turn it was
+   riding on dies without serving it, it dies with that turn instead of becoming
+   a reply nobody asked for. Pokes were reclassified as annotations while the
+   distinction was being made: a poke says somebody is there, not what to do
+   differently.
+
+   **Two parts do not land, and the reason is the same for both.** `!feedback`
+   cannot retarget to a wake and the `requeueTurnInbox` race cannot be deleted,
+   because there is no plan to wake and the drain-and-inject-synthetic-`MsgUser`
+   path is still the only path a note has into a turn. Deleting the requeue
+   today would not remove a race; it would drop steers that arrive during a
+   streamed answer. This is exactly the argument this ADR makes above — the
+   round boundary is the only injection point, so *"wait for the next natural
+   pause"* and *"interrupt now"* name the same act — arriving as a scheduling
+   fact rather than as prose. What annotate has today is the *promise* half of
+   the distinction; it gets the *schedule* half when a plan supplies a next
+   decision point that is not the next round.
+
+   So the honest state of the table above: the `today` column moved for
+   annotate, and the `on a plan` column is still ahead for steer.
 7. **Measure.** Done. Three models × 16 tasks, six of them fork-shaped and
    three of those deliberately wanting no fork.
 

@@ -4,13 +4,21 @@
 -- contract — the text that tells a language model what it may say, in the same
 -- terms the kernel will judge it by.
 --
--- 'elaborationPrompt' takes a 'ValidationEnv' rather than a bag of catalog
--- fragments, and that is the point: what the model is shown is the same value
+-- Both prompts take a 'ValidationEnv' rather than a bag of catalog fragments,
+-- and that is the point: what the model is shown is the same value
 -- 'Max.Plan.Validate.validatePlan' will check against, so the prompt cannot
 -- drift from the kernel by advertising a tool that is not admissible or hiding
 -- one that is.  A prompt assembled from a second, parallel description of the
 -- world would be wrong the first time either side changed, and wrong in the
 -- direction that produces confident invalid plans.
+--
+-- __There are two authors, and one language.__  The front model writes the
+-- turn's plan with the conversation in view; a fork child writes a plan for one
+-- subgoal with nothing in view but that subgoal.  They differ only in a briefing
+-- paragraph, because the difference between them is not what they may /say/ but
+-- what they can /see/ — and what they can see is 'Max.Plan.Validate.childEnv',
+-- not prose.  The guide comes first in both, byte-identical, so the two roles
+-- share one provider prefix cache.
 --
 -- Two smaller commitments:
 --
@@ -30,8 +38,10 @@
 -- dialect /from these instructions/, which is what production would ask of
 -- them, not at writing it in the abstract.
 module Max.Plan.Prompt
-  ( elaborationPrompt,
+  ( frontPrompt,
+    childPrompt,
     dialectGuide,
+    childBriefing,
     catalogSection,
     goalSection,
     renderEffect,
@@ -58,10 +68,48 @@ import Max.Plan.Types
 import Max.Plan.Validate (CatalogEntry (..), ValidationEnv (..), VerifierEntry (..))
 import Max.Util (tshow)
 
--- | The whole instruction: language, then tools, then this turn's obligation.
-elaborationPrompt :: ValidationEnv -> Text
-elaborationPrompt env =
+-- | What the front model reads: language, then tools, then this turn's
+-- obligation.  It is concatenated into a context that already has the
+-- conversation, the persona and the memory in it, so this text says nothing
+-- about who is being talked to — that is already answered above it.
+frontPrompt :: ValidationEnv -> Text
+frontPrompt env =
   T.intercalate "\n\n" [dialectGuide, catalogSection env, goalSection env]
+
+-- | What a fork child reads.  Pass the environment 'Max.Plan.Validate.childEnv'
+-- projected for its goal: the briefing describes an isolation the environment
+-- has to actually impose, and a child handed its parent's environment would be
+-- told it cannot see the conversation while holding every handle in it.
+childPrompt :: ValidationEnv -> Text
+childPrompt env =
+  T.intercalate "\n\n" [dialectGuide, childBriefing, catalogSection env, goalSection env]
+
+-- | The only thing a child is told that the front model is not.
+--
+-- Deliberately short, and deliberately about /consequences/ rather than about
+-- architecture.  A child does not benefit from knowing it is a child; it
+-- benefits from knowing that asking a question is a dead end, that a courteous
+-- sentence is corrupt data, and that a vague objective will be exactly as vague
+-- next round, so guessing well beats handing it back.
+childBriefing :: Text
+childBriefing =
+  T.intercalate
+    "\n"
+    [ "== 你在填的这个空 ==",
+      "",
+      "下面「本轮目标」是别人写好交给你的，你只看得见它：看不到聊天记录，看不到谁在说话，",
+      "看不到跟你并行的其他子任务，也看不到派你出来的那段计划。要用的东西都列在下面了，",
+      "没列的就是没有——问也不会有人回答你，这一轮没有人在读你写的字。",
+      "",
+      "  · 「已经在作用域里的名字」是派你的人算好交过来的值，直接用，不要再 let 一次。",
+      "  · 「可用句柄」是它挑给你的原始数据，用 t#n:rn 取，也可以先 map / filter 再用。",
+      "  · 目标写得含糊，就挑一种最合理的理解做完，顺带在产出里交代你是怎么理解的。",
+      "    留个 hole 交回去不会让它变清楚：下一轮的你看到的还是这段。",
+      "",
+      "你的产出会被接着你的那段计划当成一个值用，不是给人看的答复。所以类型要严格对上：",
+      "要 {name: text, bio: text} 就不能 done 一段话；「好的，我来查一下」这种话写进去",
+      "就是脏数据。除非下面「允许的效果」里给了 send，否则你根本没有对外说话的手段。"
+    ]
 
 -- | The language itself.  Constant, and deliberately so.
 dialectGuide :: Text

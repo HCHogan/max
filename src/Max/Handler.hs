@@ -87,7 +87,7 @@ import Max.FetchQueue (FetchSignal)
 import Max.Files (enqueueFiles)
 import Max.Forward (enqueueForwards)
 import Max.Images (enqueueImages)
-import Max.Intent (IntentConfig (..), IntentState, classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
+import Max.Intent (IntentConfig (..), IntentState, SupplementVerb (..), classifySupplement, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.IR
 import Max.IR.Digest (digest)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
@@ -128,6 +128,7 @@ import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
 import Max.Tasks
   ( Note (..),
+    NoteVerb (..),
     TaskCancelled (..),
     TaskId (..),
     TaskInfo (..),
@@ -635,9 +636,19 @@ onPoke mIntent pk
       -- the same route an explicit !feedback does: into whatever turn
       -- the group has running, whoever started it.  Nothing running →
       -- a dispatch of its own.
+      --
+      -- It goes in as an annotation rather than a steer: a poke says
+      -- somebody is there, not what to do differently, and reading it
+      -- as an instruction can only make the turn change course toward
+      -- nothing in particular.
       landed <-
         liftIO $
-          pushToLatest env.beTasks pk.pkGroupId Nothing Nothing (Note (pokerName <> " 戳了戳你") Nothing)
+          pushToLatest
+            env.beTasks
+            pk.pkGroupId
+            Nothing
+            Nothing
+            (Note (pokerName <> " 戳了戳你") Nothing NoteAnnotate)
       case landed of
         Just (TaskId into) ->
           logInfo "poke: injected into running task" $
@@ -795,9 +806,16 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               -- that dies without serving the note falls back to
               -- exactly that.  Not under a redirect: a DM turn isn't
               -- the group task that was being steered.
+              -- A steer by construction: the user typed the verb.  The
+              -- classifier is never consulted here and never should be —
+              -- an explicit instruction that gets demoted to background
+              -- because a router disagreed is the one failure that would
+              -- make the explicit half untrustworthy.
               note =
-                Note line $
-                  if redirected then Nothing else Just (stripDispatchVerb gm)
+                Note
+                  line
+                  (if redirected then Nothing else Just (stripDispatchVerb gm))
+                  NoteSteer
           aimed <- case replyTarget of
             Just tgt | not redirected -> liftIO (pushToTrigger env.beTasks targetGid Nothing absorb tgt note)
             _ -> pure Nothing
@@ -1262,18 +1280,32 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
                 queueQQReaction gm.groupId (CanonicalMessageId m) processingFaceId False
             -- Notes this turn accepted but never answered ('endDispatch'
             -- returns none for a killed turn — !kill drops them by
-            -- contract).  Ones that ARE a message get a turn of their
-            -- own: the streamed answer they raced is in the transcript
-            -- by now, so the fresh turn sees both it and them.
-            -- NeverAbsorb — absorption already failed this note once.
-            -- Origin re-derived from the message itself, because an
-            -- un-@'d supplement still deserves the option of [silence];
-            -- sourceless notes (pokes) have nothing left to say.
-            let (revivable, dead) = partition (isJust . (.noteSource)) unserved
-            unless (null dead) $
-              logAttention "dispatch: unserved notes dropped" $
-                object ["count" .= length dead]
-            for_ [src | n <- revivable, Just src <- [n.noteSource]] $ \src -> do
+            -- contract).  Ones that ARE a message and that asked for
+            -- something get a turn of their own: the streamed answer
+            -- they raced is in the transcript by now, so the fresh turn
+            -- sees both it and them.  NeverAbsorb — absorption already
+            -- failed this note once.  Origin re-derived from the message
+            -- itself, because an un-@'d supplement still deserves the
+            -- option of [silence].
+            --
+            -- Two kinds never come back.  Sourceless notes (pokes) have
+            -- nothing left to say.  Annotations have something to say
+            -- and no claim on saying it: nobody was promised an answer
+            -- to 「顺便说一句」, and answering it late, alone, out of the
+            -- turn it was riding on is worse than not answering it.
+            let (steers, annotations) = partition ((== NoteSteer) . (.noteVerb)) unserved
+                revivable = [src | note <- steers, Just src <- [note.noteSource]]
+            unless (null annotations) $
+              logInfo "dispatch: unserved annotations dropped" $
+                object ["count" .= length annotations]
+            -- A steer with nowhere to go back to — a !feedback redirected out
+            -- of the chat it was typed in.  Kept at attention because unlike
+            -- an annotation it asked for something and nobody will do it.
+            let orphaned = length steers - length revivable
+            when (orphaned > 0) $
+              logAttention "dispatch: unserved steers dropped" $
+                object ["count" .= orphaned]
+            for_ revivable $ \src -> do
               let orig
                     | isPrivateChat src.groupId || dispatchMentionsSelf src = OriginDirect
                     | otherwise = OriginProactive
@@ -1330,7 +1362,9 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
       Just target | replyTurnIsInFlight target -> do
         noteAt <- liftIO getCurrentTime
         let CanonicalMessageId messageId = gm.canonicalId
-            note = Note (renderCurrentLine env.beTimeZone noteAt gm) (Just gm)
+            -- Replying to a live turn's own output is as explicit as
+            -- typing the verb, so it is a steer for the same reason.
+            note = Note (renderCurrentLine env.beTimeZone noteAt gm) (Just gm) NoteSteer
         landed <-
           liftIO $
             pushToAgentTurn
@@ -1419,19 +1453,25 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
                   newLine =
                     T.intercalate "\n" $
                       map render companionRows <> [renderCurrentLine env.beTimeZone noteAt gm]
-              isSupp <- classifySupplement icfg gidRaw ctxLines newLine
-              if not isSupp
-                then pure False
-                else do
+              verb <- classifySupplement icfg gidRaw ctxLines newLine
+              case verb of
+                NotASupplement -> pure False
+                _ -> do
+                  let steering = verb == SteerRunning
                   -- Record the trigger as absorbed by whichever turn
                   -- takes it: ours is about to exit and unmark it, and
                   -- a question that looks unanswered gets answered
-                  -- again by the next dispatch.
+                  -- again by the next dispatch.  Both verbs absorb —
+                  -- what they disagree about is how loudly, not whether
+                  -- the message has been dealt with.
+                  --
                   -- The note carries the swallowed message itself: if
                   -- the absorbing turn dies without serving it, the
                   -- dispatch epilogue re-dispatches it as the turn it
-                  -- would have been.
-                  let note = Note newLine (Just gm)
+                  -- would have been — but for a steer only, and that
+                  -- decision is the epilogue's rather than made here by
+                  -- withholding the source.
+                  let note = Note newLine (Just gm) (verbOf verb)
                   aimed <- case (\(CanonicalMessageId target) -> target) <$> gm.replyTo of
                     Just tgt ->
                       liftIO (pushToTrigger env.beTasks gm.groupId (Just tid) (Just midRaw) tgt note)
@@ -1446,6 +1486,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
                         [ "group_id" .= gidRaw,
                           "message_id" .= midRaw,
                           "aimed" .= isJust aimed,
+                          "verb" .= (if steering then "steer" :: T.Text else "fyi"),
                           "task" .= into
                         ]
                     -- Same 托腮 an explicit !feedback gets, cleared by
@@ -1453,10 +1494,20 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
                     -- only: an absorbed proactive candidate was never
                     -- addressed to the bot, and reacting would break
                     -- the "traceless until it speaks" rule.
-                    when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
+                    --
+                    -- A steer only.  The 托腮 is a promise that the note
+                    -- will be acted on, and an annotation is exactly the
+                    -- note nobody promised that about; wearing the face
+                    -- anyway would make it a lie in the one case the
+                    -- verb exists to name.
+                    when (steering && origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
                       queueQQReaction gm.groupId gm.canonicalId processingFaceId True
                   pure (isJust landed)
         _ -> pure False
+
+    verbOf = \case
+      SteerRunning -> NoteSteer
+      _ -> NoteAnnotate
 
     dispatch outputCaps turn durable env s continuationTarget = do
       catalog :: ModelCatalog <- ask

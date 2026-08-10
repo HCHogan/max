@@ -32,6 +32,7 @@ module Max.Intent
     intentWorker,
     classifyOnce,
     classifySupplement,
+    SupplementVerb (..),
     -- * Exposed for tests
     IntentVerdict (..),
     IntentKind (..),
@@ -605,20 +606,50 @@ extractObject t =
 --------------------------------------------------------------------------------
 -- Supplement routing (the implicit half of the !feedback / !btw split).
 
--- | The group already has a running agent task and someone @-ed the
--- bot again: is the new message steering that task (追加要求、修正
--- 方向、催进度) or an independent new request?  'True' means the
--- caller should push it into the running task's inbox instead of
--- spawning a parallel dispatch.  Any failure (LLM error, unparseable
--- verdict) means 'False' — falling back to today's behaviour is
--- always safe.
+-- | What a new message does to the turn already running.
+--
+-- ADR 002 gives multi-principal input a six-verb lattice and ADR 007 lands the
+-- middle of it: the router used to answer @Bool@ — inbox, or a parallel
+-- dispatch — which made "change what you are doing" and "here is something you
+-- might want to know" the same act.  They are not, and the difference is
+-- entirely about how loud the reply may be.
+--
+-- Three, not four: /observe/ is @annotate@ with the note thrown away, and there
+-- is no reading of "the classifier decided to silently ignore a message
+-- addressed to the bot" that is safer than keeping the note.  It stays what it
+-- has always been — a verb the user types (@!btw@), never one that is inferred.
+data SupplementVerb
+  = -- | 追加要求、修正方向、催进度.  Lands in the inbox, wears the 托腮 that
+    -- promises it landed, and gets a turn of its own if the turn it was aimed
+    -- at dies before serving it.
+    SteerRunning
+  | -- | 背景、补充信息、闲聊.  Lands in the inbox unannounced: the running turn
+    -- may use it, nobody is promised it will, and if that turn dies the note
+    -- dies with it rather than becoming a reply nobody asked for.
+    AnnotateRunning
+  | -- | An independent request.  A dispatch of its own, exactly as before.
+    NotASupplement
+  deriving stock (Show, Eq)
+
+supplementVerbText :: SupplementVerb -> Text
+supplementVerbText = \case
+  SteerRunning -> "steer"
+  AnnotateRunning -> "fyi"
+  NotASupplement -> "new"
+
+-- | The group already has a running agent task and someone @-ed the bot again:
+-- is the new message steering that task, adding to it, or starting something
+-- new?  Any failure (LLM error, unparseable verdict) means 'NotASupplement' —
+-- falling back to an ordinary dispatch is always safe, because the worst it
+-- costs is one extra turn, whereas the worst a wrong absorption costs is an
+-- unanswered question.
 classifySupplement ::
   (LLM :> es, Log :> es) =>
   IntentConfig ->
   Int64 -> -- group being served (usage attribution)
   [Text] -> -- recent history lines, chronological (trigger excluded)
   Text -> -- the new trigger message, rendered
-  Eff es Bool
+  Eff es SupplementVerb
 classifySupplement cfg gid ctxLines newLine = do
   let userBody =
         T.intercalate "\n" $
@@ -629,14 +660,16 @@ classifySupplement cfg gid ctxLines newLine = do
   case r of
     Left err -> do
       logAttention "intent: supplement classify failed" $ object ["error" .= err]
-      pure False
-    Right (ToolCallsResp {}) -> pure False
+      pure NotASupplement
+    Right (ToolCallsResp {}) -> pure NotASupplement
     Right (ContentResp txt) -> case parseSupplement txt of
       Nothing -> do
         logAttention "intent: unparseable supplement verdict" $
           object ["raw" .= T.take 200 txt]
-        pure False
-      Just v -> pure v
+        pure NotASupplement
+      Just v -> do
+        logInfo "intent: supplement verdict" $ object ["verb" .= supplementVerbText v]
+        pure v
 
 supplementSystem :: Text
 supplementSystem =
@@ -644,25 +677,40 @@ supplementSystem =
     "\n"
     [ "你是多人群聊 agent「Max」的消息路由器。Max 此刻正在执行一个任务（由上下文末尾的对话触发，还没跑完），这时群里又来了一条（或紧挨着的几条）它准备回应的消息（@ 它的，或没 @ 但判定是在跟它说话的）。",
       "",
-      "判断这些新消息是不是对进行中任务的补充：追加要求、修正方向、催进度、回答任务需要的信息。",
-      "是补充（supplement=true）→ 它会被直接塞进正在运行的任务，让任务顺带处理。",
-      "是独立的新问题/新请求，跟正在跑的任务无关 → false，会正常另开一轮。",
-      "拿不准的一律 false —— 错把新问题塞进旧任务，比多开一轮更糟。",
+      "判断这些新消息跟进行中的那个任务是什么关系，三选一：",
+      "",
+      "steer —— 要求它改变正在做的事：追加要求、修正方向、纠错、催进度、回答任务正等着的信息。",
+      "        会塞进正在跑的任务，并且给发言人一个「收到」的表情回应。",
+      "fyi   —— 相关但不要求它改什么：补充背景、随口一提、道谢、评论、闲聊。",
+      "        也会塞进正在跑的任务（它可能用得上），但不作任何回应承诺，也不会为此单开一轮。",
+      "new   —— 独立的新问题/新请求，跟正在跑的任务无关。会正常另开一轮回答。",
+      "",
+      "两条判准：",
+      "· 拿不准是 steer 还是 new，选 new —— 错把新问题塞进旧任务，比多开一轮更糟。",
+      "· 拿不准是 steer 还是 fyi，选 fyi —— 少答一句比乱改方向好；说话人真要它改，会再说一遍。",
       "",
       "只输出一行 JSON，不要其他内容：",
-      "{\"supplement\": true/false, \"reason\": \"不超过20字\"}"
+      "{\"verb\": \"steer\"/\"fyi\"/\"new\", \"reason\": \"不超过20字\"}"
     ]
 
 -- | Parse the supplement verdict; same fence/prose tolerance as
 -- 'parseVerdict'.
-parseSupplement :: Text -> Maybe Bool
+--
+-- An unrecognised verb is 'Nothing' rather than a guess.  The caller already
+-- treats "no answer" as 'NotASupplement', and a router that silently rounded
+-- @"maybe"@ to a verb would be inventing the one decision it exists to make.
+parseSupplement :: Text -> Maybe SupplementVerb
 parseSupplement txt = do
   obj <- extractObject txt
   v :: SupplementVerdict <-
     either (const Nothing) Just (eitherDecodeStrict' (TE.encodeUtf8 obj))
-  pure v.svSupplement
+  case T.toLower (T.strip v.svVerb) of
+    "steer" -> Just SteerRunning
+    "fyi" -> Just AnnotateRunning
+    "new" -> Just NotASupplement
+    _ -> Nothing
 
-newtype SupplementVerdict = SupplementVerdict {svSupplement :: Bool}
+newtype SupplementVerdict = SupplementVerdict {svVerb :: Text}
 
 instance FromJSON SupplementVerdict where
-  parseJSON = withObject "verdict" $ \o -> SupplementVerdict <$> o .: "supplement"
+  parseJSON = withObject "verdict" $ \o -> SupplementVerdict <$> o .: "verb"

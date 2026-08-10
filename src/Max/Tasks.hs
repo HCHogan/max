@@ -57,6 +57,7 @@ module Max.Tasks
 
     -- * Operations
     Note (..),
+    NoteVerb (..),
     TaskInfo (..),
     listTasks,
     cancelTask,
@@ -107,8 +108,25 @@ newtype TaskId = TaskId {unTaskId :: Text}
 -- carries it, 'Max.Handler''s dispatch epilogue owns the decision.
 data Note = Note
   { noteLine :: !Text,
-    noteSource :: !(Maybe DispatchMessage)
+    noteSource :: !(Maybe DispatchMessage),
+    -- | Which of ADR 002's verbs put it here.  The registry only carries it;
+    -- what it changes lives at the two ends — how "Max.Effects.Agent" labels the
+    -- note for the model, and whether "Max.Handler"'s epilogue revives it.
+    noteVerb :: !NoteVerb
   }
+
+-- | A note that asks for a change, or one that merely informs.
+--
+-- The distinction is only meaningful because there is somewhere for an
+-- unanswered note to go: an annotation the running turn never got to is
+-- discarded, where a steer becomes a turn of its own.  Under the horizon-1 loop
+-- the two land at the same place — the next round boundary — and differ in what
+-- is promised about them rather than in when they arrive.  ADR 007 is where the
+-- schedule diverges too.
+data NoteVerb
+  = NoteSteer
+  | NoteAnnotate
+  deriving stock (Show, Eq)
 
 -- | The handle the agent loop keeps once it has 'attachTask'ed.  Used
 -- to drain its own inbox and (via 'releaseTask') to release the slot.

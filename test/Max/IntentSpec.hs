@@ -10,6 +10,7 @@ import Max.Intent
     IntentKind (..),
     IntentRetry (..),
     IntentVerdict (..),
+    SupplementVerb (..),
     Throttle (..),
     claimIntentBatchAt,
     enqueueIntent,
@@ -115,19 +116,37 @@ spec = do
       msgSignal "[image]" `shouldBe` False
 
   describe "parseSupplement" $ do
-    it "parses both verdicts" $ do
-      parseSupplement "{\"supplement\": true, \"reason\": \"追加要求\"}"
-        `shouldBe` Just True
-      parseSupplement "{\"supplement\": false, \"reason\": \"新问题\"}"
-        `shouldBe` Just False
+    it "parses all three verbs" $ do
+      parseSupplement "{\"verb\": \"steer\", \"reason\": \"追加要求\"}"
+        `shouldBe` Just SteerRunning
+      parseSupplement "{\"verb\": \"fyi\", \"reason\": \"随口一提\"}"
+        `shouldBe` Just AnnotateRunning
+      parseSupplement "{\"verb\": \"new\", \"reason\": \"新问题\"}"
+        `shouldBe` Just NotASupplement
 
     it "tolerates fences and prose around the object" $ do
-      parseSupplement "```json\n{\"supplement\": true}\n```" `shouldBe` Just True
-      parseSupplement "判断：{\"supplement\": false} 完毕" `shouldBe` Just False
+      parseSupplement "```json\n{\"verb\": \"steer\"}\n```" `shouldBe` Just SteerRunning
+      parseSupplement "判断：{\"verb\": \"new\"} 完毕" `shouldBe` Just NotASupplement
+
+    it "tolerates case and stray whitespace, which cost nothing to accept" $ do
+      parseSupplement "{\"verb\": \" STEER \"}" `shouldBe` Just SteerRunning
+      parseSupplement "{\"verb\": \"FYI\"}" `shouldBe` Just AnnotateRunning
 
     it "rejects garbage and missing field" $ do
       parseSupplement "true" `shouldBe` Nothing
       parseSupplement "{\"reason\": \"x\"}" `shouldBe` Nothing
+
+    it "refuses a verb it does not know rather than rounding it to one" $ do
+      -- The caller reads Nothing as 'NotASupplement' — an ordinary dispatch,
+      -- which is the loud-but-safe answer.  A parser that guessed would be
+      -- making the routing decision silently and without the evidence.
+      parseSupplement "{\"verb\": \"maybe\"}" `shouldBe` Nothing
+      parseSupplement "{\"verb\": \"\"}" `shouldBe` Nothing
+
+    it "does not still answer the question it used to be asked" $
+      -- The old shape was {"supplement": true/false}.  A model or a fixture
+      -- left on the old contract must fail loudly, not read as a steer.
+      parseSupplement "{\"supplement\": true}" `shouldBe` Nothing
 
   describe "throttleAllows" $ do
     it "allows a group with no history" $

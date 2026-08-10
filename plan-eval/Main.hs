@@ -24,6 +24,7 @@ import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.ByteString.Char8 qualified as BS8
 import Data.Foldable (for_)
 import Data.List (intercalate)
+import Data.Maybe (listToMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -31,7 +32,10 @@ import Harness
 import Max.Context (estimateMessagesTokens)
 import Max.Effects.LLM (ChatMessage (..))
 import Max.Plan.Interpret (EffectManifest (..), PreviewStep (..), Reachability (..))
-import Max.Plan.Prompt (elaborationPrompt, renderEffect)
+import Max.Plan.Parse (parsePlan)
+import Max.Plan.Prompt (childPrompt, frontPrompt, guidePlans, renderEffect)
+import Max.Plan.Types (Goal, planChildren)
+import Max.Plan.Validate (childEnv)
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
 
@@ -81,8 +85,25 @@ main = do
     -- The bytes a model would be handed, printed from the same environment the
     -- fixtures are judged against.  Worth being able to read directly: this is
     -- the artifact under test as much as the kernel is.
-    ["--prompt"] -> putStrLn (T.unpack (elaborationPrompt planEnv))
+    ["--prompt"] -> putStrLn (T.unpack (frontPrompt planEnv))
+    -- The other half of the same artifact: what a fork child is handed once
+    -- 'childEnv' has taken away everything the goal did not ask for.  Built
+    -- from a subgoal the guide itself shows, so this cannot drift into
+    -- printing a prompt no example would ever produce.
+    ["--child-prompt"] -> case guideSubgoal of
+      Nothing -> fail "no guide plan forks — nothing to render a child prompt from"
+      Just child -> putStrLn (T.unpack (childPrompt (childEnv planEnv child)))
     _ -> runFixtures args
+
+-- | The first subgoal any of the guide's worked examples dispatches.
+guideSubgoal :: Maybe Goal
+guideSubgoal =
+  listToMaybe
+    [ child
+      | source <- guidePlans,
+        Right plan <- [parsePlan source],
+        (_, _, child) <- planChildren "turn:0:0" plan
+    ]
 
 runFixtures :: [String] -> IO ()
 runFixtures args = do
