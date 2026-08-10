@@ -831,6 +831,28 @@ orchestration layer.
    prompt; it arrives through the progressive disclosure the skills system
    already implements. One extra round trip, paid only by turns that plan.
 
+    **The catalog bridge landed first, and it found the real bottleneck.**
+    `Max.Plan.Catalog` joins hand-written plan schemas against the live tool
+    registry. Writing them is the work, and it is per-tool: a tool returns
+    `Value` and *nothing in max says what shape*. The argument side is declared,
+    because the model needs a JSON Schema to call anything; the result side
+    never had to exist, because a result went into a context as text and a model
+    reads whatever arrives. A plan cannot — `hits[0].title` must type-check
+    before anything runs — so each plannable tool's result is read off its
+    implementation by hand.
+
+    So the plannable set is a list, not a filter over the registry, and it
+    starts at two. A tool absent from it is one nobody has read closely enough
+    to say what it returns, and guessing is worse than omitting: a wrong result
+    schema type-checks plans against a lie and surfaces as a null at runtime,
+    which is precisely what the kernel exists to prevent. Inputs are declared
+    twice — here and as the tool's JSON Schema — so the derivation nobody wants
+    in production sits in `Max.Plan.CatalogSpec`, making drift a build break.
+
+    This resizes step 10: connecting the executor is small, and *making enough
+    of max plannable to be worth executing* is the part that scales with the
+    tool count.
+
 10. **Execute plans for real.** The suspension loop against live `Tools`, each
     suspension journalled, each elaboration a revision through `Max.DB.Plan`.
     Step 5 built the machine; this connects it to the world.
