@@ -7,12 +7,14 @@ import Data.List (sort)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (Only (..), execute, query)
+import Control.Exception (try)
+import Database.PostgreSQL.Simple (Only (..), SqlError, execute, query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb)
-import Max.DB.AgentTurn (markAgentTurnRunning, startAgentTurn)
+import Max.DB.AgentTurn (AgentTurnTerminal (..), finishAgentTurn, markAgentTurnRunning, startAgentTurn)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.Plan
 import Max.Effects.Tools (SchemaVersion (..), ToolRef (..))
+import Max.Plan.Reconcile
 import Max.Plan.Schema (PlanSchema (..))
 import Max.Plan.Types
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
@@ -185,10 +187,94 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       loaded <- withDb pool (loadPlanHead ref)
       loaded `shouldBe` Just (Left (IRVersionUnsupported (planIRVersion + 1) planIRVersion))
 
+  describe "children" $ do
+    it "records a spawn and reads it back as the reconciler's actual side" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
+      running <- withDb pool (listRunningChildren ref)
+      map (.pcChildTurn) running `shouldBe` [childTurn.atrTurnId]
+      map (.pcGoalHash) running `shouldBe` [goalHash (goalNamed "查甲")]
+      map (.pcDispatchedNode) running `shouldBe` ["turn:1:0/k0"]
+
+    it "drops a child from the actual side once it has finished, however it finished" $ do
+      -- A decided child is the front model's business, not the reconciler's:
+      -- stopping one would be stopping nothing.
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      succeeded <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
+      failed <- spawnChild pool fixture ref "查乙" "turn:1:0/k1"
+      _ <- spawnChild pool fixture ref "查丙" "turn:1:0/k2"
+      withDb pool (finishAgentTurn succeeded TurnSucceeded 1 Nothing Nothing)
+      withDb pool (finishAgentTurn failed TurnAborted 1 (Just "killed") Nothing)
+      running <- withDb pool (listRunningChildren ref)
+      map (.pcGoalHash) running `shouldBe` [goalHash (goalNamed "查丙")]
+
+    it "refuses to record a second parent for one child" $ do
+      -- A retry that re-recorded an edge would double-count a running child,
+      -- and the reconciler would then stop one of a pair at random.
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
+      again <-
+        try . withDb pool $
+          recordChildSpawn ref fixture.fxTurn childTurn (goalHash (goalNamed "查甲")) "turn:1:0/k0"
+      case again of
+        Left (_ :: SqlError) -> pure ()
+        Right () -> expectationFailure "a child was given two parents"
+
+    it "scopes the actual side to one plan" $ do
+      fixture <- createFixture pool 42 1001
+      here <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      elsewhere <- withDb pool (openPlan fixture.fxTurn (document "二"))
+      _ <- spawnChild pool fixture here "查甲" "turn:1:0/k0"
+      _ <- spawnChild pool fixture elsewhere "查乙" "turn:1:0/k0"
+      running <- withDb pool (listRunningChildren here)
+      map (.pcGoalHash) running `shouldBe` [goalHash (goalNamed "查甲")]
+
+    it "feeds a diff that leaves an unchanged subgoal alone and starts the rest" $ do
+      -- The two halves meeting: goals out of the stored head, children out of
+      -- the spawn edges, and the pure diff over both.
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
+      let edited =
+            PlanDocument
+              { pdRoot = "turn:1:0",
+                pdPlan =
+                  Fork
+                    ForkNode
+                      { fnChildren = [(Binder "a", goalNamed "查甲"), (Binder "b", goalNamed "查乙")],
+                        fnJoin = JoinAll,
+                        fnWatch = WatchOnFailure
+                      }
+                    (Done (EVar (Binder "a")))
+              }
+      _ <- withDb pool (revisePlan ref (Revision 1) CauseSteer (Just fixture.fxPrincipal) Nothing edited)
+      head' <- withDb pool (loadPlanHead ref) >>= requireHead
+      running <- withDb pool (listRunningChildren ref)
+      let outcome =
+            reconcile
+              (desiredChildren head'.stDocument.pdRoot head'.stDocument.pdPlan)
+              [Running {rnHash = c.pcGoalHash, rnChild = c.pcChildTurn} | c <- running]
+      map (.dsBinder) outcome.rcDispatch `shouldBe` [Binder "b"]
+      outcome.rcStop `shouldBe` []
+      map (.rnHash) outcome.rcKeep `shouldBe` [goalHash (goalNamed "查甲")]
+
   it "reports nothing for a plan that does not exist" $ do
     _ <- createFixture pool 42 1001
     loaded <- withDb pool (loadPlanHead (PlanRef (PlanId 999) (PlanOrdinal 999)))
     loaded `shouldBe` Nothing
+
+-- | Open a turn for a subgoal and record the spawn edge, as a scheduler would.
+spawnChild :: DbPool -> Fixture -> PlanRef -> Text -> Text -> IO AgentTurnRef
+spawnChild pool fixture ref objective node = do
+  child <-
+    withDb pool $
+      startAgentTurn fixture.fxGroup (CanonicalMessageId 0) fixture.fxPrincipal
+  withDb pool (markAgentTurnRunning child "child")
+  withDb pool (recordChildSpawn ref fixture.fxTurn child (goalHash (goalNamed objective)) node)
+  pure child
 
 requireHead :: Maybe (Either PlanLoadError StoredPlan) -> IO StoredPlan
 requireHead = \case

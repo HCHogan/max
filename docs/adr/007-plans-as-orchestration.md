@@ -481,14 +481,17 @@ orchestration layer.
 2. **`Fork`, `join`/`watch` syntax slots, `goalResources`, `goalHash`.** Done
    (`6eb90fa`).
 3. **Persist plans as revisions in the causal log, with a materialized head.**
-   Ahead of the executor rather than after it: a plan the user can steer and
-   suspend cannot live only in memory. Optimistic concurrency on the head's
-   version; a completing child CASes and re-reconciles if the plan moved. The
-   feedback inbox moves with it — `TaskHandle.thInbox` is a `TVar [Note]`
-   today, so a steer that lands during a restart is lost.
-4. **Reconciler.** Desired (the head's open goals) against actual (turns with
-   no completion, via `turn_edges`), diffed by goal hash; dispatch and stop
-   only. No cancellation semantics yet.
+   Done (`20fe52a`). Ahead of the executor rather than after it: a plan the
+   user can steer and suspend cannot live only in memory. `plan_revisions` is
+   the append-only half and `plans.head_revision` is both the pointer and the
+   compare-and-set token. The feedback inbox stays a `TVar` until step 6 lands
+   its reader; moving it sooner would leave a table nobody queries.
+4. **Reconciler.** Done (`Max.Plan.Reconcile` + the `spawn` edge kind). Desired
+   (the head's fork children) against actual (spawn edges whose child turn has
+   not finished), diffed by goal hash; dispatch and stop only. Matching is by
+   multiset, because two byte-identical subgoals in one fork are a legitimate
+   request for two independent answers. No cancellation semantics yet: the
+   reconciler decides, and step 5's scheduler acts.
 5. **Executor suspends at effect boundaries.** Journal, authorize, resume. This
    is also the durability work — checkpoint-resume for the roadmap's L1.
 6. **Split the prompts, and land the verbs.** A front-of-house prompt and a

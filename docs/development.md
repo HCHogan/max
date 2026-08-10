@@ -129,8 +129,10 @@ advisory transaction locks, and atomic cursor/publication boundaries against
 connection-pool drift.
 `Max.DB.PlanSpec` covers ADR 007's durable plans: ordinal allocation under
 concurrent opens, the compare-and-set that stops a stale writer from erasing a
-head it did not read, and the append-only revision log that answers "what did
-this plan look like when that child was dispatched".
+head it did not read, the append-only revision log that answers "what did this
+plan look like when that child was dispatched", and the `spawn` edges the
+reconciler reads as its actual side. The diff itself is pure and lives in
+`Max.Plan.ReconcileSpec` under `max-test`.
 The prompt integration cases also publish real active compartments, assert
 gap annotations for partial backfill, and exercise the all-conversation
 compartment-to-raw-tail reader end to end. EpisodeStore cases additionally

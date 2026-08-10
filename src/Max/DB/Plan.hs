@@ -52,6 +52,11 @@ module Max.DB.Plan
     loadPlanHead,
     listOpenPlans,
     planHistory,
+
+    -- * Children
+    PlanChild (..),
+    recordChildSpawn,
+    listRunningChildren,
   )
 where
 
@@ -357,6 +362,68 @@ planHistory ref = do
     entry (revision, cause, hash, principal, turn, created) =
       (\parsed -> PlanHistoryEntry revision parsed hash (fmap PrincipalId principal) turn created)
         <$> parseCause cause
+
+-- | A child turn opened by one of this plan's forks.
+data PlanChild = PlanChild
+  { pcChildTurn :: !AgentTurnId,
+    -- | The subgoal it is serving, by content. The reconciler's key.
+    pcGoalHash :: !Text,
+    -- | Where that subgoal sat when the child was dispatched. Provenance for
+    -- the journal, deliberately not the identity: an edit that moves a goal
+    -- must not orphan the child already working on it.
+    pcDispatchedNode :: !Text
+  }
+  deriving stock (Show, Eq)
+
+-- | Record that a fork opened a child.
+--
+-- The unique index on the child turn makes this once-only: a retry that
+-- re-recorded an edge would double-count a running child, and the reconciler
+-- would then stop one of a pair at random.
+recordChildSpawn ::
+  (WithConnection :> es, IOE :> es) =>
+  PlanRef ->
+  -- | The turn whose plan contains the fork. Not necessarily the plan's root:
+  -- a nested fork's parent is itself a child.
+  AgentTurnRef ->
+  -- | The turn opened for the subgoal.
+  AgentTurnRef ->
+  -- | 'Max.Plan.Types.goalHash' of the subgoal.
+  Text ->
+  -- | The node id the subgoal was dispatched under.
+  Text ->
+  Eff es ()
+recordChildSpawn ref parent child hash node = do
+  _ <-
+    execute
+      "INSERT INTO turn_edges \
+      \ (conversation_id, from_turn_id, to_turn_id, edge_kind, plan_id, goal_hash, dispatched_node_id) \
+      \ SELECT p.conversation_id, ?, ?, 'spawn', p.plan_id, ?, ? \
+      \ FROM plans p WHERE p.plan_id = ?"
+      (parent.atrTurnId, child.atrTurnId, hash, node, ref.prPlanId)
+  pure ()
+
+-- | The reconciler's actual side: children of this plan that have not
+-- finished.
+--
+-- A finished child is not "actual" whatever it finished as. Succeeded, failed
+-- and aborted are all decided, and a decided child is the front model's
+-- business rather than the reconciler's — stopping one would be stopping
+-- nothing.
+listRunningChildren ::
+  (WithConnection :> es, IOE :> es) =>
+  PlanRef ->
+  Eff es [PlanChild]
+listRunningChildren ref = do
+  rows <-
+    query
+      "SELECT e.to_turn_id, e.goal_hash, e.dispatched_node_id \
+      \ FROM turn_edges e JOIN agent_turns t ON t.turn_id = e.to_turn_id \
+      \ WHERE e.edge_kind = 'spawn' AND e.plan_id = ? \
+      \   AND t.status = ANY (ARRAY['starting', 'running', 'recovery-pending']) \
+      \ ORDER BY e.edge_id"
+      (Only ref.prPlanId)
+  pure [PlanChild turn hash node | (turn, hash, node) <- rows]
 
 -- The head is a join: `plans` holds no document, so that a revision and the
 -- pointer to it cannot disagree.
