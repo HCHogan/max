@@ -1,0 +1,363 @@
+{-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE RecordWildCards #-}
+
+-- | Ask real models to write the plan dialect, and judge what comes back.
+--
+-- The offline gate (@max-plan-eval@) measures the kernel against fixtures a
+-- human wrote.  This measures models against the kernel, which is the question
+-- ADR 002 step 7 actually turns on: not "is the dialect sound" but "can the
+-- models we would ship with produce admissible plans in it".
+--
+-- Every candidate goes through "Harness", the same environment the offline gate
+-- judges in, so a difference between the two runs is a difference in the
+-- candidates and not in the setup.
+--
+-- Three things are counted separately on purpose, because collapsing them
+-- would hide which one is worth fixing:
+--
+--   * __Transport failures__ are excluded from every rate.  A timed-out request
+--     says nothing about a model's grasp of the grammar.
+--   * __A code fence, or a tool call, is an instruction-following failure__,
+--     not a dialect failure.  The prompt asks for a bare plan.  The fence is
+--     counted, then stripped, and the body judged on its own merits — silently
+--     stripping it first would merge two very different problems.
+--   * __Rejection classes are reported per model.__  "Which frontier does this
+--     model keep walking into" is the actionable number; a single pass rate is
+--     not.
+--
+-- Config (LLM profiles) loads exactly like max-bot: same yaml/env/flags, so run
+-- it next to the bot's max.yaml.
+module Main (main) where
+
+import Control.Monad (unless, when)
+import Data.Aeson (FromJSON (..), Value, eitherDecodeStrict', encode, object, withObject, (.:), (.=))
+import Data.ByteString.Char8 qualified as BS8
+import Data.ByteString.Lazy.Char8 qualified as BL8
+import Data.Char (isSpace)
+import Data.IORef (newIORef)
+import Data.List (sortOn)
+import Data.Map.Strict qualified as Map
+import Data.Ord (Down (..))
+import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Version (makeVersion)
+import Effectful
+import Effectful.Log (LogLevel (LogAttention), runLog)
+import Harness
+import Max.Config (AppConfig (..), appConfigParser)
+import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat, runLLM)
+import Max.HttpRuntime (newHttpRuntime)
+import Max.Log (withCompactLogger)
+import Max.Plan.Prompt (elaborationPrompt)
+import Max.Plan.Types (Goal (..))
+import Max.Plan.Validate (ValidationEnv (..))
+import OptEnvConf
+import System.Exit (die, exitFailure)
+import Text.Printf (printf)
+
+data LiveOpts = LiveOpts
+  { loProfiles :: !Text,
+    loTasks :: !FilePath,
+    loRepeat :: !Int,
+    loOut :: !(Maybe FilePath),
+    loMinAdmit :: !Double,
+    loDryRun :: !Bool
+  }
+
+liveOptsParser :: Parser LiveOpts
+liveOptsParser = do
+  loProfiles <-
+    setting
+      [ help "Comma-separated LLM profiles to compare",
+        reader str,
+        option,
+        long "profiles",
+        env "MAX_PLAN_LIVE_PROFILES",
+        metavar "A,B,C"
+      ]
+  loTasks <-
+    setting
+      [ help "JSONL of tasks to elaborate (see plan-eval/README.md)",
+        reader str,
+        option,
+        long "tasks",
+        metavar "FILE",
+        value "plan-eval/fixtures/tasks.jsonl"
+      ]
+  loRepeat <-
+    setting
+      [ help "Attempts per (profile, task).  A success rate from one sample is noise",
+        reader auto,
+        option,
+        long "repeat",
+        metavar "N",
+        value 1
+      ]
+  loOut <-
+    optional $
+      setting
+        [ help "Write every candidate as JSONL — the raw material for new fixtures",
+          reader str,
+          option,
+          long "out",
+          metavar "FILE"
+        ]
+  loMinAdmit <-
+    setting
+      [ help "Exit non-zero when the best profile's admission rate falls below this (0..1)",
+        reader auto,
+        option,
+        long "min-admit",
+        metavar "F",
+        value 0
+      ]
+  loDryRun <-
+    setting
+      [ help "Print the prompt and the task list, then stop.  Makes no requests",
+        switch True,
+        long "dry-run",
+        value False
+      ]
+  pure LiveOpts {..}
+
+-- | One thing to ask for.  The name is for the report; the task becomes the
+-- goal's objective, so the model reads it in the same place the kernel will
+-- check against.
+data Task = Task
+  { tkName :: !Text,
+    tkTask :: !Text
+  }
+
+instance FromJSON Task where
+  parseJSON = withObject "task" $ \o -> Task <$> o .: "name" <*> o .: "task"
+
+-- | What one attempt produced.
+data Candidate = Candidate
+  { cdProfile :: !Text,
+    cdTask :: !Task,
+    cdAttempt :: !Int,
+    -- | 'Nothing' when the request itself failed; excluded from every rate.
+    cdReply :: !(Either Text Reply)
+  }
+
+data Reply = Reply
+  { rpRaw :: !Text,
+    -- | The text actually judged: the fence body, or the reply unchanged.
+    rpSource :: !Text,
+    rpFenced :: !Bool,
+    -- | The model reached for a tool instead of writing a plan.
+    rpToolCalled :: !Bool,
+    rpJudged :: !Judged
+  }
+
+-- | The goal a model is handed, with the task as its objective.
+envFor :: Task -> ValidationEnv
+envFor task = planEnv {venGoal = planEnv.venGoal {goalObjective = task.tkTask}}
+
+-- | A fixed, short user turn.  The task itself lives in the goal, so it is
+-- stated once; a second copy here would let the two drift apart.
+userTurn :: Text
+userTurn = "按上面的「本轮目标」写出计划。"
+
+main :: IO ()
+main = do
+  usedRef <- newIORef Nothing
+  (cfg, opts) <-
+    runParser
+      (makeVersion [0, 1, 0])
+      "max-plan-live — ask real models to write the plan dialect"
+      ((,) <$> appConfigParser usedRef <*> liveOptsParser)
+
+  let profiles = [T.strip p | p <- T.splitOn "," opts.loProfiles, not (T.null (T.strip p))]
+  when (null profiles) $ die "no profiles: pass --profiles a,b,c"
+  when (opts.loRepeat < 1) $ die "--repeat must be at least 1"
+
+  raw <- BS8.readFile opts.loTasks
+  let numbered =
+        [ (i, eitherDecodeStrict' ln :: Either String Task)
+          | (i :: Int, ln) <- zip [1 ..] (BS8.lines raw),
+            not (BS8.all isSpace ln)
+        ]
+      bad = [(i, e) | (i, Left e) <- numbered]
+      tasks = [t | (_, Right t) <- numbered]
+  unless (null bad) $
+    die $
+      unlines $
+        "task file has unparseable lines:"
+          : [printf "  line %d: %s" i e | (i, e) <- bad]
+  when (null tasks) $ die "task file is empty"
+
+  if opts.loDryRun
+    then dryRun profiles tasks opts.loRepeat
+    else do
+      httpRuntime <- newHttpRuntime
+      let plan =
+            [ (profile, task, attempt)
+              | profile <- profiles,
+                task <- tasks,
+                attempt <- [1 .. opts.loRepeat]
+            ]
+      printf
+        "asking %d profile(s) × %d task(s) × %d attempt(s) = %d requests\n\n"
+        (length profiles)
+        (length tasks)
+        opts.loRepeat
+        (length plan)
+
+      candidates <- withCompactLogger cfg.logColor Nothing $ \logger ->
+        -- No database in this stack, so token usage is deliberately
+        -- unaccounted, as in the other eval harnesses.
+        runEff . runLog "max-plan-live" logger LogAttention . runLLM httpRuntime (\_ _ _ -> pure ()) (\_ -> pure ()) cfg.llm $
+          traverse (\(p, t, a) -> ask p t a) plan
+
+      report profiles candidates
+      case opts.loOut of
+        Nothing -> pure ()
+        Just path -> do
+          BL8.writeFile path (BL8.unlines (map (encode . candidateJson) candidates))
+          printf "\nwrote %d candidates to %s\n" (length candidates) path
+
+      let best =
+            maximum
+              (0 : [admitRate [c | c <- candidates, c.cdProfile == p] | p <- profiles])
+      unless (best >= opts.loMinAdmit) $ do
+        printf "\nFAIL: best admission rate %.3f below --min-admit %.3f\n" best opts.loMinAdmit
+        exitFailure
+
+dryRun :: [Text] -> [Task] -> Int -> IO ()
+dryRun profiles tasks repeat' = do
+  printf
+    "would ask %d profile(s) × %d task(s) × %d attempt(s) = %d requests\n"
+    (length profiles)
+    (length tasks)
+    repeat'
+    (length profiles * length tasks * repeat')
+  putStrLn "\nprofiles:"
+  mapM_ (\p -> putStrLn ("  " <> T.unpack p)) profiles
+  putStrLn "\ntasks:"
+  mapM_ (\t -> putStrLn ("  " <> T.unpack t.tkName <> " — " <> T.unpack t.tkTask)) tasks
+  case tasks of
+    [] -> pure ()
+    first' : _ -> do
+      putStrLn "\n── the prompt, as the first task would receive it ────"
+      putStrLn (T.unpack (elaborationPrompt (envFor first')))
+      putStrLn ("\n[user] " <> T.unpack userTurn)
+
+-- | One request.  No tools are offered: a plan is written, not executed, and a
+-- model that reaches for a tool anyway has told us something worth counting.
+ask :: LLM :> es => Text -> Task -> Int -> Eff es Candidate
+ask profile task attempt = do
+  result <- chat ctx profile [MsgSystem (elaborationPrompt (envFor task)), MsgUser userTurn] []
+  pure
+    Candidate
+      { cdProfile = profile,
+        cdTask = task,
+        cdAttempt = attempt,
+        cdReply = case result of
+          Left err -> Left err
+          Right (ContentResp text) -> Right (readReply text False)
+          Right (ToolCallsResp _ text _) -> Right (readReply text True)
+      }
+  where
+    ctx =
+      ChatCtx
+        { ccSource = "plan-live",
+          ccGroup = Nothing,
+          ccEffort = Nothing,
+          ccTimeoutSeconds = Nothing,
+          ccBufferedRetryDelaysSeconds = Nothing,
+          ccAgentTurnId = Nothing
+        }
+
+readReply :: Text -> Bool -> Reply
+readReply raw toolCalled =
+  Reply
+    { rpRaw = raw,
+      rpSource = source,
+      rpFenced = isFenced raw,
+      rpToolCalled = toolCalled,
+      rpJudged = judge source
+    }
+  where
+    source = unfence raw
+
+candidateJson :: Candidate -> Value
+candidateJson candidate =
+  object $
+    [ "profile" .= candidate.cdProfile,
+      "task" .= candidate.cdTask.tkName,
+      "attempt" .= candidate.cdAttempt
+    ]
+      <> case candidate.cdReply of
+        Left err -> ["error" .= err]
+        Right reply ->
+          [ "raw" .= reply.rpRaw,
+            "source" .= reply.rpSource,
+            "fenced" .= reply.rpFenced,
+            "tool_called" .= reply.rpToolCalled,
+            "outcome" .= outcomeLabel reply.rpJudged.jOutcome,
+            "class" .= outcomeClass reply.rpJudged.jOutcome,
+            "detail" .= outcomeDetail reply.rpJudged.jOutcome,
+            "holes" .= reply.rpJudged.jHoles,
+            "tree_cost" .= reply.rpJudged.jTreeCost
+          ]
+
+replies :: [Candidate] -> [Reply]
+replies candidates = [reply | candidate <- candidates, Right reply <- [candidate.cdReply]]
+
+admitRate :: [Candidate] -> Double
+admitRate candidates
+  | null judged = 0
+  | otherwise =
+      fromIntegral (length [() | reply <- judged, Admitted {} <- [reply.rpJudged.jOutcome]])
+        / fromIntegral (length judged)
+  where
+    judged = replies candidates
+
+report :: [Text] -> [Candidate] -> IO ()
+report profiles candidates = do
+  putStrLn "── per profile ───────────────────────────────────────"
+  printf "%-24s %5s %12s %12s %8s %8s %8s\n" ("profile" :: String) ("n" :: String) ("parsed" :: String) ("admitted" :: String) ("fenced" :: String) ("tools" :: String) ("errors" :: String)
+  mapM_ profileRow profiles
+  putStrLn ""
+  putStrLn "── rejection classes, all profiles ───────────────────"
+  let classes =
+        Map.toList $
+          Map.fromListWith
+            (+)
+            [ (outcomeClass reply.rpJudged.jOutcome, 1 :: Int)
+              | reply <- replies candidates,
+                not (isAdmitted reply)
+            ]
+  if null classes
+    then putStrLn "  (none)"
+    else
+      mapM_
+        (\(cls, n) -> printf "  %-28s %d\n" (T.unpack cls) n)
+        (sortOn (Down . snd) classes)
+  where
+    isAdmitted reply = case reply.rpJudged.jOutcome of
+      Admitted {} -> True
+      _ -> False
+
+    profileRow profile = do
+      let mine = [c | c <- candidates, c.cdProfile == profile]
+          judged = replies mine
+          errors = length [() | c <- mine, Left _ <- [c.cdReply]]
+          parsed = length [() | reply <- judged, outcomeLabel reply.rpJudged.jOutcome /= "unparsed"]
+          admitted = length [() | reply <- judged, isAdmitted reply]
+          fenced = length [() | reply <- judged, reply.rpFenced]
+          tools = length [() | reply <- judged, reply.rpToolCalled]
+      printf
+        "%-24s %5d %12s %12s %8d %8d %8d\n"
+        (T.unpack profile)
+        (length judged)
+        (rateOf parsed (length judged))
+        (rateOf admitted (length judged))
+        fenced
+        tools
+        errors
+
+    rateOf :: Int -> Int -> String
+    rateOf _ 0 = "n/a"
+    rateOf n outOf = printf "%d (%d%%)" n ((n * 100) `div` outOf)

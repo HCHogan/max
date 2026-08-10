@@ -11,9 +11,10 @@
 -- course it agrees with the kernel.  A parse rate of 81% means 19% of the
 -- fixtures were written to be malformed, and nothing more.  That makes this a
 -- regression gate — break the parser or the validator and it goes red — and
--- emphatically not evidence that a model can produce admissible plans.  That
--- evidence requires candidates max actually wrote, which requires an
--- elaboration path, which is gated on this harness existing first.
+-- emphatically not evidence that a model can produce admissible plans.
+--
+-- For that evidence, see @max-plan-live@, which asks real models the same
+-- questions and judges their answers in this same environment.
 --
 -- It also cannot measure answer quality, because nothing here produces an
 -- answer; the hole count is a structural proxy and is labelled as one.
@@ -21,30 +22,23 @@ module Main (main) where
 
 import Data.Aeson (FromJSON (..), eitherDecodeStrict', withObject, (.:), (.:?))
 import Data.ByteString.Char8 qualified as BS8
-import Data.List (intercalate)
-import Data.Map.Strict qualified as Map
 import Data.Foldable (for_)
+import Data.List (intercalate)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Harness
 import Max.Context (estimateMessagesTokens)
 import Max.Effects.LLM (ChatMessage (..))
-import Max.Effects.Tools (SchemaVersion (..), ToolRef (..))
-import Max.Effects.Tools qualified as Tools
-import Max.Plan.Eval (exprCost)
-import Max.Plan.Interpret (EffectManifest (..), PreviewStep (..), Reachability (..), previewPlan)
-import Max.Plan.Parse (parseFailureText, parsePlan)
+import Max.Plan.Interpret (EffectManifest (..), PreviewStep (..), Reachability (..))
 import Max.Plan.Prompt (elaborationPrompt, renderEffect)
-import Max.Plan.Schema (PlanSchema (..), SchemaField (..))
-import Max.Plan.Types
-import Max.Plan.Validate
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
 
--- | One candidate segment.  Either something max wrote and we kept, or — for
--- the starter set — something hand-authored to pin one kernel behaviour.  The
--- harness cannot tell the difference, so the provenance has to be remembered
--- when reading the rates.
+-- | One candidate segment.  Either something a model wrote and we kept, or —
+-- for the starter set — something hand-authored to pin one kernel behaviour.
+-- The harness cannot tell the difference, so the provenance has to be
+-- remembered when reading the rates.
 data Fixture = Fixture
   { fxName :: !Text,
     fxSource :: !Text,
@@ -65,134 +59,20 @@ instance FromJSON Fixture where
       <*> o .:? "baseline_tokens"
       <*> o .:? "note"
 
-data Outcome = Unparsed !Text | Refused !Text | Admitted !EffectManifest !Plan
-
-outcomeLabel :: Outcome -> Text
-outcomeLabel = \case
-  Unparsed _ -> "unparsed"
-  Refused _ -> "refused"
-  Admitted _ _ -> "admitted"
-
 data Row = Row
   { rowFixture :: !Fixture,
-    rowOutcome :: !Outcome,
+    rowJudged :: !Judged,
     -- | Estimated tokens the candidate surface occupies.
-    rowTokens :: !Int,
-    -- | Static cost of every expression in the plan, the number the validator
-    -- prices against its ceiling.
-    rowTreeCost :: !Integer,
-    -- | Holes left behind: each one is a further elaboration round, which is a
-    -- deoptimization the production loop would have to pay for.
-    rowHoles :: !Int
+    rowTokens :: !Int
   }
-
-field :: Text -> PlanSchema -> SchemaField
-field name schema = SchemaField {sfName = name, sfSchema = schema, sfRequired = True}
-
-optional' :: Text -> PlanSchema -> SchemaField
-optional' name schema = SchemaField {sfName = name, sfSchema = schema, sfRequired = False}
-
--- | A catalog shaped like max's real one, so the numbers mean something.  Kept
--- here rather than in the fixtures: the fixtures record what a model wrote, and
--- the environment is the host's business.
-catalog :: [CatalogEntry]
-catalog =
-  [ CatalogEntry
-      { ceRef = ToolRef "search_web",
-        ceSchemaVersion = SchemaVersion 3,
-        ceInput = SchemaObject [field "query" SchemaText, optional' "limit" SchemaInt],
-        ceResult = SchemaArray (SchemaObject [field "title" SchemaText, field "url" SchemaText]),
-        ceEffects = Set.singleton (EffRead (ExternalScope "web")),
-        ceAuthorities = Set.empty,
-        ceIntroduces = Taint (Set.singleton TaintExternal)
-      },
-    CatalogEntry
-      { ceRef = ToolRef "recall_memory",
-        ceSchemaVersion = SchemaVersion 1,
-        ceInput = SchemaObject [field "topic" SchemaText],
-        ceResult = SchemaText,
-        ceEffects = Set.singleton (EffRead CurrentConversation),
-        ceAuthorities = Set.singleton Tools.CurrentConversation,
-        ceIntroduces = Taint (Set.singleton TaintPrivate)
-      },
-    CatalogEntry
-      { ceRef = ToolRef "reply",
-        ceSchemaVersion = SchemaVersion 1,
-        ceInput = SchemaObject [field "text" SchemaText],
-        ceResult = SchemaObject [],
-        ceEffects = Set.singleton (EffSend AudienceConversation),
-        ceAuthorities = Set.singleton Tools.CurrentConversation,
-        ceIntroduces = untainted
-      }
-  ]
-
-goal :: Goal
-goal =
-  Goal
-    { goalObjective = "回答当前问题",
-      goalExpected = SchemaText,
-      goalAcceptance = [],
-      goalBudget =
-        EffectBudget
-          { ebEffects =
-              Set.fromList
-                [ EffRead (ExternalScope "web"),
-                  EffRead CurrentConversation,
-                  EffSend AudienceConversation
-                ],
-            ebMaxCalls = 3,
-            ebMaxSends = 1,
-            ebMaxFanout = 16,
-            ebMaxTokens = 8000,
-            ebMaxWallClockMs = 30000
-          },
-      goalAuthority = Set.singleton Tools.CurrentConversation,
-      goalDeclassify = Taint (Set.singleton TaintExternal),
-      goalDeps = noDependencies,
-      goalEvidence = [],
-      goalAttempt = 0
-    }
-
-env :: ValidationEnv
-env =
-  ValidationEnv
-    { venCatalog = Map.fromList [(entry.ceRef, entry) | entry <- catalog],
-      venVerifiers =
-        Map.singleton
-          "answers-question"
-          VerifierEntry {veName = "answers-question", veVersion = 1, veAccepts = SchemaText},
-      venHandles = Map.empty,
-      venAdmittedVerifiers = Set.singleton "answers-question",
-      venGoal = goal,
-      venBindings = Map.empty,
-      venCostCeiling = 100000
-    }
 
 evaluate :: Fixture -> Row
 evaluate fixture =
-  case parsePlan fixture.fxSource of
-    Left failure -> row (Unparsed (oneLine (parseFailureText failure))) 0 0
-    Right plan ->
-      let holes = length (planHoles root plan)
-          cost = sum [exprCost goal.goalBudget.ebMaxFanout expr | (_, node) <- planNodes root plan, expr <- exprsOf node]
-       in case validatePlan env root plan of
-            Left rejection -> row (Refused (oneLine (rejectionText rejection))) cost holes
-            Right valid -> row (Admitted (previewPlan env root valid) plan) cost holes
-  where
-    root = "eval:0"
-    row outcome cost holes =
-      Row
-        { rowFixture = fixture,
-          rowOutcome = outcome,
-          rowTokens = estimateMessagesTokens [MsgUser fixture.fxSource],
-          rowTreeCost = cost,
-          rowHoles = holes
-        }
-    exprsOf = \case
-      NodeDone expr -> [expr]
-      NodeCall call -> [call.cnInput]
-      NodeGuard _ -> []
-      NodeHole _ -> []
+  Row
+    { rowFixture = fixture,
+      rowJudged = judge fixture.fxSource,
+      rowTokens = estimateMessagesTokens [MsgUser fixture.fxSource]
+    }
 
 main :: IO ()
 main = do
@@ -201,7 +81,7 @@ main = do
     -- The bytes a model would be handed, printed from the same environment the
     -- fixtures are judged against.  Worth being able to read directly: this is
     -- the artifact under test as much as the kernel is.
-    ["--prompt"] -> putStrLn (T.unpack (elaborationPrompt env))
+    ["--prompt"] -> putStrLn (T.unpack (elaborationPrompt planEnv))
     _ -> runFixtures args
 
 runFixtures :: [String] -> IO ()
@@ -223,15 +103,13 @@ runFixtures args = do
       Right fixture -> pure fixture
 
 agrees :: Row -> Bool
-agrees row = outcomeLabel row.rowOutcome == row.rowFixture.fxExpect
+agrees row = outcomeLabel row.rowJudged.jOutcome == row.rowFixture.fxExpect
 
 report :: Row -> IO ()
 report row = do
   putStrLn (mark <> " " <> T.unpack row.rowFixture.fxName)
-  putStrLn ("    outcome    " <> T.unpack (outcomeLabel row.rowOutcome) <> expected)
-  case row.rowOutcome of
-    Unparsed detail -> putStrLn ("    reason     " <> T.unpack detail)
-    Refused detail -> putStrLn ("    reason     " <> T.unpack detail)
+  putStrLn ("    outcome    " <> T.unpack (outcomeLabel outcome) <> expected)
+  case outcome of
     Admitted manifest _ -> do
       putStrLn
         ( "    effects    "
@@ -248,15 +126,17 @@ report row = do
         )
       putStrLn ("    sends      " <> show manifest.emMaxSends)
       putStrLn ("    plan hash  " <> T.unpack (T.take 16 manifest.emPlanHash))
+    _ -> putStrLn ("    reason     " <> T.unpack (oneLine (outcomeDetail outcome)))
   putStrLn
     ( "    tokens     "
         <> show row.rowTokens
         <> occupancy
     )
-  putStrLn ("    tree cost  " <> show row.rowTreeCost)
-  putStrLn ("    holes      " <> show row.rowHoles <> " (expected further elaborations)")
+  putStrLn ("    tree cost  " <> show row.rowJudged.jTreeCost)
+  putStrLn ("    holes      " <> show row.rowJudged.jHoles <> " (expected further elaborations)")
   for_ row.rowFixture.fxNote $ \note -> putStrLn ("    note       " <> T.unpack note)
   where
+    outcome = row.rowJudged.jOutcome
     mark = if agrees row then "ok  " else "MISS"
     expected
       | agrees row = ""
@@ -282,14 +162,14 @@ summarize rows = do
   stat "validation rate" (rate admitted <> " of all, " <> rateOf admitted parsed <> " of parsed")
   stat "expectation agreement" (rate (length (filter agrees rows)))
   stat "context occupancy" occupancyLine
-  stat "total tree cost" (show (sum (map (.rowTreeCost) rows)))
+  stat "total tree cost" (show (sum [row.rowJudged.jTreeCost | row <- rows]))
   stat "expected deoptimizations" (show deopts <> " (" <> show holes <> " holes + " <> show refused <> " refusals)")
   where
     total = length rows
-    parsed = length [() | row <- rows, not (isUnparsed row.rowOutcome)]
-    admitted = length [() | row <- rows, Admitted {} <- [row.rowOutcome]]
-    refused = length [() | row <- rows, Refused {} <- [row.rowOutcome]]
-    holes = sum (map (.rowHoles) rows)
+    parsed = length [() | row <- rows, not (isUnparsed row.rowJudged.jOutcome)]
+    admitted = length [() | row <- rows, Admitted {} <- [row.rowJudged.jOutcome]]
+    refused = length [() | row <- rows, Refused {} <- [row.rowJudged.jOutcome]]
+    holes = sum [row.rowJudged.jHoles | row <- rows]
     deopts = holes + refused
 
     isUnparsed = \case
@@ -319,4 +199,4 @@ summarize rows = do
     pad label = label <> replicate (max 1 (26 - length label)) ' '
 
 oneLine :: Text -> Text
-oneLine = T.take 160 . T.unwords . T.words
+oneLine = T.take 160

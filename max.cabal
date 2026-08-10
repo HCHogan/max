@@ -532,11 +532,32 @@ executable max-plan-eval
     import:           warnings, lang
     hs-source-dirs:   plan-eval
     main-is:          Main.hs
+    other-modules:    Harness
     build-depends:
         , aeson                >= 2.2  && < 2.4
         , base                 >= 4.20 && < 5
         , bytestring           >= 0.12 && < 0.13
         , containers           >= 0.7  && < 0.9
         , max
+        , text                 >= 2.1  && < 2.2
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+
+-- The other half of ADR 002 step 8: ask real models to write the dialect and
+-- judge what comes back in the same environment the offline gate uses.  A
+-- separate binary so the gate above stays config-free and runnable in CI.
+executable max-plan-live
+    import:           warnings, lang
+    hs-source-dirs:   plan-eval
+    main-is:          Live.hs
+    other-modules:    Harness
+    build-depends:
+        , aeson                >= 2.2  && < 2.4
+        , base                 >= 4.20 && < 5
+        , bytestring           >= 0.12 && < 0.13
+        , containers           >= 0.7  && < 0.9
+        , effectful            >= 2.5  && < 2.7
+        , log-effectful        >= 1.0  && < 1.1
+        , max
+        , opt-env-conf         >= 0.15 && < 0.17
         , text                 >= 2.1  && < 2.2
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
