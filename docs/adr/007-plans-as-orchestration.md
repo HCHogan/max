@@ -509,42 +509,44 @@ orchestration layer.
 7. **Measure.** Done. Three models × 16 tasks, six of them fork-shaped and
    three of those deliberately wanting no fork.
 
-   | profile | asked | answered | silent | admitted | forks |
-   |---|---|---|---|---|---|
-   | gpt-5.6-luna | 16 | 16 | 0 | 15 (93%) | 4 |
-   | minimax-m3 | 16 | 12 | 4 | 11 (91%) | 0 |
-   | deepseek-flash | 16 | 8 | 8 | 7 (87%) | 0 |
+   **The first finding was a configuration bug wearing a capability's
+   clothes.** At production's `max_tokens: 4096`, two of the three models
+   returned a 200 with no content on the tasks that needed splitting — five
+   of deepseek's eight silences and three of minimax's four were fork-shaped.
+   They were not decomposing badly; they were spending the whole ceiling
+   thinking and never reaching the writing. Raised to 32768, **silence went to
+   zero for both**.
 
-   **The headline is the silence column, not the admitted column.** A silent
-   reply is a 200 with no content — a model that spent its whole `max_tokens`
-   thinking — and the harness excludes those from every rate, which is right
-   for measuring a dialect and wrong to read as a summary. Both models with a
-   4096-token ceiling went quiet on precisely the tasks that needed splitting:
-   five of deepseek's eight silences and three of minimax's four are
-   fork-shaped. They did not decompose badly. They emitted nothing.
+   | profile | silent @4096 | silent @32768 | admitted @4096 | admitted @32768 |
+   |---|---|---|---|---|
+   | gpt-5.6-luna | 0 | — | 15/16 (93%) | — |
+   | minimax-m3 | 4 | **0** | 11/12 (91%) | 12/16 (75%) |
+   | deepseek-flash | 8 | **0** | 7/8 (87%) | 15/16 (93%) |
 
-   So the admission rates below are measured over the tasks each model
-   managed to answer at all, and for two of the three that excludes most of
-   the hard half. The actionable form of this is a configuration question
-   before it is a model question — `max_tokens: 4096` is what production
-   gives them — but it does mean fan-out is, today, a one-model capability.
+   Minimax's rate *falling* when the silences disappear is the exclusion bias
+   made visible: the harness leaves silent replies out of every rate, which is
+   correct for measuring a dialect and means a headline rate is computed over
+   whatever a model managed to reach. Worth keeping, worth never quoting
+   alone.
 
-   On the two open questions, over the forks that happened:
+   With the ceiling raised, fan-out is not a one-model capability: all three
+   forked, and the dependent-halves task was forked by all three.
 
-   - **The join was never punted.** Every fork that happened wrote its
-     combining expression rather than leaving a hole after the join. That is
-     the favourable answer, on n=4 and from one model.
-   - **Types were mostly skipped.** Two of seven subgoals declared anything
-     narrower than `text`, and those two reproduced the guide's
-     `{name: text, bio: text}` almost verbatim while the same model declared
-     three weather subgoals as bare `text`. The example is being copied, not
-     the type generalised. Reported, not scored: a weather blurb genuinely is
-     text.
-   - **Forking is rare.** Four forks across 36 answered replies, all from
-     gpt-5.6-luna. The tasks that clearly wanted one got it about half the
-     time. No model forked a task that did not want one, but with fork this
-     rare that is weak evidence of judgement rather than of reticence — and
-     the other two models mostly never reached the question.
+   On the two open questions, over the nine forks across both runs:
+
+   - **The join was never punted. Nine forks, zero holes after a join.** Every
+     model that forked wrote its combining expression before any child had
+     run. This was the question the step existed to answer and the answer is
+     clean.
+   - **Types are still mostly skipped**: six of seventeen subgoals asked for
+     anything narrower than `text`. Reported rather than scored — a weather
+     blurb genuinely is text — but the two clearest wins reproduced the
+     guide's `{name: text, bio: text}` closely, so the example is doing more
+     of the work than the rule is.
+   - **Nobody forked a task that did not want one.** Strictly-sequential,
+     single-lookup and judgement-heavy joins drew zero forks across all three
+     models. Weak evidence — forking is still uncommon overall — but it is
+     evidence in the right direction.
 
    Two findings nobody asked for, both recorded as fixtures:
 
@@ -554,16 +556,26 @@ orchestration layer.
      parent binding is none of those. Correct behaviour, and fine for a short
      string; for a large value it is exactly the context bloat forks exist to
      avoid.
-   - **Both models reached for `let x = hole …`.** Asked the same task,
-     minimax-m3 wrote it and failed to parse, and gpt-5.6-luna wrote a
-     one-child `fork { summary: hole … }`. Both wanted to delegate a single
-     subgoal and name its result. This is the same shape of finding that
-     produced `Let`, and the same remedy is available: admit it as a one-child
-     fork.
+   - **`let x = hole …` is now the dominant parse failure**: five of the six
+     across every run, from two of the three models, and all four in the
+     raised-ceiling run. gpt-5.6-luna wrote the legal spelling of the same
+     intent — a one-child `fork { summary: hole … }`. This is the same shape
+     of finding, at the same magnitude, that produced `Let`.
 
-   A third, smaller one: `text` is reserved because it names a type, and it is
-   also the most obvious name for a string. One otherwise-correct plan died on
-   it.
+     It covers two distinct motivations, and only one of them is delegation.
+     Minimax wrote `let topic = hole "需要搜索的具体话题" : text budget
+     { calls: 0, sends: 0, … }` and then used `topic` in two searches: not
+     work to hand to a child, but **a value it does not know yet**. A
+     one-child fork models that badly — nothing wants a child turn, only a
+     filled-in blank.
+
+   Two smaller ones. `text` is reserved because it names a type and is also
+   the most obvious name for a string; one otherwise-correct plan died on it.
+   And a `VerifierSchemaMismatch` arrived as the price of doing the right
+   thing: minimax typed both subgoals `{hotel: text}` / `{food: text}` and
+   attached the one admitted verifier, which accepts `text`. The kernel is
+   right to refuse a gate that cannot read what it gates — the prompt is at
+   fault for listing admitted verifiers without saying what each accepts.
 8. **Concurrency and child context projection**, only once 7 says the shape
    holds.
 
