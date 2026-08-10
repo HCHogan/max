@@ -237,6 +237,88 @@ mechanically, and a model call happens only at a decision point: a user
 message, a child failure, a child result that fails acceptance, a join whose
 combining step was left as a hole, an exhausted budget, or a child escalation.
 
+### A fork child is a turn, and the turn graph is the reconciler's other half
+
+ADR 002's `turn_edges` — spawn, depend, fork-from — is not superseded by any of
+this. It is the **actual** side of the reconciliation above, which that section
+specified without naming where it lives. The plan is mutable intent; the turn
+graph is append-only fact. A steer that stops a child rewrites the plan and
+leaves the child's turn, its edge, and its journal rows exactly where they are,
+because they record what happened rather than what is wanted.
+
+**A fork child is a turn.** This is forced rather than chosen: ADR 004's handle
+grammar is turn-qualified, so a child's result is addressable — by the join, by
+a later fork, by a monitor trigger, by a user replying to it — only if the child
+has a turn number, and its tool calls need journal rows attributable to
+something. Each child therefore carries two ids, the same shape as node id
+versus goal hash one level up:
+
+| | answers |
+|---|---|
+| path `NodeId` (`…/k0`) | where it sits in this plan |
+| its own turn id | who it is in the journal and the handle space |
+| the `turn_edges` spawn row | ties the two together |
+
+**`Fork` compiles to a spawn edge, and is the durable kind.** ADR 002 drew a
+line — "a short structured `Fork`/`Join` inside one Plan is likewise separate
+from a durable child turn" — and this `Fork` is on the durable side: children
+run elaborations, make LLM calls, journal, suspend, and can be steered. The
+light reading, concurrent work with no model round in between, is unbuilt, and
+`ToolParallelism` already covers the part of it that pays. Recorded because a
+reader who assumed the light reading would badly under-price a fork.
+
+The edge kinds fare differently under this. **spawn** is what `Fork` emits and
+is load-bearing. **depend** narrows to cross-plan use only: inside one plan the
+tree *is* the dependency edge, so there is no row to write and no cycle to
+detect — 002's fail-closed cycle check narrows with it. **fork-from** is
+untouched; ADR 005 continuations and ADR 006 monitor fires use it as written.
+
+So 002's "the child-plan section becomes a special case of the turn graph"
+holds, with the relationship now division of labour rather than containment:
+
+- **Within one owner and one budget**, the plan tree is the dependency
+  structure — typed, checked (budget conservation, join schemas, binding
+  scope), editable, reconciled by hash.
+- **Across owners**, the turn graph is the only structure there is. No shared
+  budget, no join, no typing across the boundary. Two principals' tasks are two
+  root plans, not two children of one fork; putting them in one fork would let
+  one principal's steer move the other's work.
+
+### Unify the history; keep the plan a value
+
+Everything that happened belongs in one append-only causal log: messages,
+turns, spawn/depend/fork-from edges, journal effects, monitor fires — and plan
+revisions. Current-state tables (open goals, armed monitors, the plan head) are
+rebuildable projections of it. This is not a new principle; max has adopted it
+twice already, in ADR 002's "journal rows record events, not state" with a
+monitor's mutable state kept in its own table, and in ADR 003's "one tree, five
+projections, each implemented once".
+
+Putting plan revisions in that log buys the question a steer's debugging
+actually asks — *what did the plan look like when this child was dispatched* —
+which a mutable row cannot answer.
+
+The plan itself does not dissolve into the graph. Three costs, of which the
+third decides it:
+
+- **Query.** "Which goals are open now" becomes a fold over history. It gets
+  materialized anyway, so the result is a graph *and* a projection — not one
+  thing instead of two.
+- **Typing.** Budget conservation, join schemas and binding scope are checks
+  over the tree's shape. A generic node/edge store does not remove the tree; it
+  makes the validator rebuild it first.
+- **Identity.** `goalHash` is cheap because a `Goal` is a self-contained value,
+  so "the same goal" is a byte comparison. As a node with edges out to its
+  context, "the same goal" becomes subgraph isomorphism — and that comparison
+  runs every time anyone in the group says anything. **History may be a graph;
+  intent must be a value.**
+
+The four id schemes (conversation, turn, journal row, plan node) are a real
+cost, and flattening them into one would not reduce it: they are different
+granularities, and the hierarchical spellings — `t#3:r2`, `turn:41:0/c/k0` —
+already *are* the compression of exactly that. What reduces the count is
+pinning two schemes together, which is what making a fork child a turn does.
+
 ### Children speak to the parent; children do not speak to each other
 
 A child may terminate by escalating a message instead of returning a value —
@@ -321,7 +403,7 @@ redundant once a scheduler mints child environments by intersection.
 | "Effect ceilings are also the substantive prompt-injection defense at this layer" | **Reframed.** Containment is a narrowed catalog handed to a quarantined child at spawn. Ceilings remain a budget, not a defense. |
 | Validator checks "effect ceiling and resource-scope constraints", "host permission policy", "information flow" (§ Validate plans…, step 4) | **Narrowed** to types, budget arithmetic including fan-out summation, and handle resolution. Authorization stays at `invokeTool`, where it always was. |
 | "A future `Spawn` is primarily an elaboration-scope construct, not merely a parallelism primitive" (§ Child plans narrow view and authority) | **Inverted.** Orchestration is the primary motivation; narrowing is what makes delegation safe, not the reason to delegate. |
-| "`Spawn` and unbounded `Foreach` are not part of the first implementation slice" | **Superseded.** `Fork` is the first slice. Unbounded `Foreach` stays out. |
+| "`Spawn` and unbounded `Foreach` are not part of the first implementation slice" | **Superseded.** `Fork` is the first slice, on the *durable child turn* side of 002's own distinction. Unbounded `Foreach`, and the light in-plan `Fork`/`Join` 002 separated it from, both stay out. |
 | Sibling edges permitted under "an explicit parent-granted recipient capability" | **Retired.** Siblings do not communicate; see above. |
 | "information-flow clearance" as a component of a minted `AgentRef` | **Retired** with taint. Scope, catalog and ceiling remain. |
 | Integration steps 7–10 | **Replaced** by the sequence below. Step 7's "short, read-only plan segments behind a feature flag" assumed the value was in validated execution of small plans; it is not. |
@@ -337,11 +419,14 @@ orchestration layer.
 1. **Delete taint.** Done (`3f805ab`).
 2. **`Fork`, `join`/`watch` syntax slots, `goalResources`, `goalHash`.** Done
    (`6eb90fa`).
-3. **Persist plans with a version number.** Ahead of the executor rather than
-   after it: a plan the user can steer and suspend cannot live only in memory.
-   Optimistic concurrency on the version; a completing child CASes and
-   re-reconciles if the plan moved.
-4. **Reconciler.** Desired-versus-actual over goal hashes; dispatch and stop
+3. **Persist plans as revisions in the causal log, with a materialized head.**
+   Ahead of the executor rather than after it: a plan the user can steer and
+   suspend cannot live only in memory. Optimistic concurrency on the head's
+   version; a completing child CASes and re-reconciles if the plan moved. The
+   feedback inbox moves with it — `TaskHandle.thInbox` is a `TVar [Note]`
+   today, so a steer that lands during a restart is lost.
+4. **Reconciler.** Desired (the head's open goals) against actual (turns with
+   no completion, via `turn_edges`), diffed by goal hash; dispatch and stop
    only. No cancellation semantics yet.
 5. **Executor suspends at effect boundaries.** Journal, authorize, resume. This
    is also the durability work — checkpoint-resume for the roadmap's L1.
@@ -366,6 +451,13 @@ which is the right order for a machine nobody edits.
   tiering.
 - The IR gains a second identity scheme. Path ids and content hashes answer
   different questions and confusing them silently breaks reconciliation.
+- A fork child costs a turn. Fan-out is priced in turns, journal rows and
+  handle space, not only in tokens — which is the correct price, since that is
+  what makes a child's result addressable and its work steerable.
+- Storage settles before step 3 rather than during it: one append-only causal
+  log with rebuildable current-state projections, and the plan head as a value
+  beside it. ADR 002's `turn_edges` becomes load-bearing for the first time,
+  as the reconciler's actual side.
 - Fan-out multiplies cost. `n` children are `n` contexts, and the budget
   arithmetic is the only thing standing between a decomposition and an
   n-times bill.

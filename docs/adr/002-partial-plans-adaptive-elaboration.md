@@ -546,6 +546,15 @@ segments or a future dispatch; already observed effects are never regenerated.
 
 ### Multi-principal concurrency: the group is a scheduler
 
+> **Stands. ADR 007 gives it a landing.** `Fork` compiles to this section's
+> `Spawn` edge, so `turn_edges` becomes load-bearing as the actual side of
+> 007's reconciler. Two consequences: `depend` narrows to cross-plan use —
+> inside one plan the tree is the dependency edge, and the fail-closed cycle
+> check narrows with it — and the `Fork`/`Join` this section separates from a
+> durable child turn stays unbuilt, because 007's `Fork` is the durable kind.
+> The verb lattice, targeting, and the authority/arbitration split are
+> unchanged.
+
 A group chat is several principals submitting, steering, and observing
 work through one conversation. The machine does not change; what multiple
 humans add is **edges between turns**. Concurrent turns are concurrent
