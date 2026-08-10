@@ -28,6 +28,8 @@ import Max.Effects.Tools
     ToolRetryClass (..),
   )
 import Max.Log (ColorMode (..), withCompactLogger)
+import Max.Plan.Parse (parsePlan)
+import Max.Plan.Types (PlanDocument (..), planHash)
 import Max.Tools.Plan (planToolsFor)
 import Max.Tools.Schema (stringParam, toolObject)
 import Test.Hspec
@@ -83,7 +85,7 @@ definitions =
 invoke :: Text -> Value -> IO (Either Text Value, [Text])
 invoke name args = do
   calls <- newIORef []
-  let tools = planToolsFor definitions (fakeTools calls)
+  let tools = planToolsFor (const (pure Nothing)) definitions (fakeTools calls)
   case [t | t <- tools, t.toolName == name] of
     [] -> expectationFailure ("no such plan tool: " <> show name) >> error "unreachable"
     tool : _ -> do
@@ -172,6 +174,36 @@ spec = do
           )
       calls `shouldBe` []
       out `shouldSatisfy` isLeftContaining "everyone"
+
+    it "records the admitted plan before running it, and only when admitted" $ do
+      -- The recorder is the seam the durable half hangs off, and the ordering
+      -- is the claim: a plan that was admitted and then died mid-execution is
+      -- exactly the one worth having on disk, so the write cannot wait for a
+      -- result.  A rejected plan is not a plan and leaves no row.
+      recorded <- newIORef ([] :: [PlanDocument])
+      calls <- newIORef []
+      let tools =
+            planToolsFor
+              (\document -> liftIO (modifyIORef' recorded (<> [document])) >> pure Nothing)
+              definitions
+              (fakeTools calls)
+          run args = case [t | t <- tools, t.toolName == "plan_run"] of
+            tool : _ ->
+              withCompactLogger ColorNever Nothing $ \logger ->
+                runEff . runLog "plan-test" logger LogAttention $ tool.toolRun args
+            [] -> error "no plan_run"
+      _ <-
+        run
+          ( object
+              [ "objective" .= ("查一下" :: Text),
+                "plan" .= ("let hits = web_search@1({ query: \"q\" })\ndone \"ok\"" :: Text)
+              ]
+          )
+      _ <- run (object ["objective" .= ("坏的" :: Text), "plan" .= ("这不是计划" :: Text)])
+      documents <- readIORef recorded
+      map (.pdRoot) documents `shouldBe` ["plan:查一下"]
+      map (planHash . (.pdPlan)) documents
+        `shouldBe` [planHash plan | Right plan <- [parsePlan "let hits = web_search@1({ query: \"q\" })\ndone \"ok\""]]
 
     it "refuses a plan naming a tool that exists but is not plannable" $ do
       (out, calls) <-

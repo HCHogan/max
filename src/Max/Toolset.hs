@@ -58,7 +58,7 @@ import Max.Tools.Images (imageToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Monitor (monitorToolsFor)
 import Max.Tools.Pins (pinToolsFor)
-import Max.Tools.Plan (planToolsFor)
+import Max.Tools.Plan (durablePlanRecorder, planToolsFor)
 import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
@@ -98,7 +98,7 @@ allToolsFor runtime env dc =
     -- — a plan calls them through a sub-catalog of exactly these — so they can
     -- only be assembled after the gate has run, and then get filtered by the
     -- same gate themselves.
-    runners = base <> filter allowedRunner (planToolsFor definitions base)
+    runners = base <> filter allowedRunner (planToolsFor (durablePlanRecorder dc) definitions base)
     base = filter allowedRunner runners0
     runners0 =
       builtinsFor env.beTimeZone dc

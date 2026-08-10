@@ -30,6 +30,8 @@
 -- being an interpreter, and it is the same exit the executor already takes.
 module Max.Tools.Plan
   ( planToolsFor,
+    PlanRecorder,
+    durablePlanRecorder,
     planGoalFor,
     planValidationEnv,
   )
@@ -42,8 +44,11 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Control.Exception (SomeException)
 import Effectful
-import Effectful.Log (Log, logInfo)
+import Effectful.Log (Log, logAttention, logInfo)
+import Effectful.PostgreSQL (WithConnection)
+import Max.DB.Plan (PlanId (..), PlanRef (..), openPlan)
 import Max.Effects.Tools
   ( Tool (..),
     ToolCatalog,
@@ -67,7 +72,10 @@ import Max.Plan.Prompt (frontPrompt)
 import Max.Plan.Schema (PlanSchema (..))
 import Max.Plan.Types
 import Max.Plan.Validate (CatalogEntry (..), ValidationEnv (..), rejectionText, validatePlan)
+import Max.ToolContext (ToolContext, toolTurnOutputContext)
 import Max.Tools.Schema (stringParam, toolObject)
+import Max.Turn.Types (turnOutputAgentTurn)
+import Max.Util (catchSync)
 
 -- | Both runners, built against the tools this dispatch actually got.
 --
@@ -83,16 +91,17 @@ import Max.Tools.Schema (stringParam, toolObject)
 -- @plan_run@, because the subset never contains it.
 planToolsFor ::
   Log :> es =>
+  PlanRecorder es ->
   [ToolDefinition] ->
   [Tool es] ->
   [Tool es]
-planToolsFor definitions runners =
+planToolsFor record definitions runners =
   case subCatalog of
     -- Unreachable in practice: the subset is a filter of an already-valid
     -- catalog.  Dropping both tools is still the right answer to it — better a
     -- turn with no planning than a turn whose plan tool holds a broken catalog.
     Left _ -> []
-    Right built -> [guideTool catalog, runTool catalog built]
+    Right built -> [guideTool catalog, runTool record catalog built]
   where
     catalog = planCatalog definitions
     plannable = Map.keysSet catalog
@@ -177,8 +186,45 @@ guideTool catalog =
               ]
     }
 
-runTool :: Log :> es => Map ToolRef CatalogEntry -> ToolCatalog es -> Tool es
-runTool catalog sub =
+-- | How an admitted plan gets written down, if at all.
+--
+-- Injected rather than reached for, and not only to keep a database out of the
+-- tool's specs.  What a plan /is/ — parsed, admissible, executable — is settled
+-- entirely by this module and the kernel; where a copy of it lives is somebody
+-- else's decision, and the two have no business being one type.
+type PlanRecorder es = PlanDocument -> Eff es (Maybe PlanRef)
+
+-- | Record revision 1 against the turn that produced it.
+--
+-- Best-effort, and that asymmetry is the point.  The plan is admissible
+-- whatever the database says, and refusing to run it because a row would not go
+-- in would let bookkeeping veto work the kernel already approved.  Losing the
+-- row costs a record; losing the turn costs an answer.
+--
+-- A dispatch with no durable turn records nothing, which is the honest answer
+-- rather than a degraded one: 'openPlan' derives the conversation /from/ the
+-- turn precisely so the two cannot disagree, and there is nothing to derive it
+-- from here.
+durablePlanRecorder ::
+  (Log :> es, WithConnection :> es, IOE :> es) =>
+  ToolContext ->
+  PlanRecorder es
+durablePlanRecorder dc document = case toolTurnOutputContext dc of
+  Nothing -> pure Nothing
+  Just output ->
+    (Just <$> openPlan (turnOutputAgentTurn output) document)
+      `catchSync` \e -> do
+        logAttention "plan: not persisted" $
+          object ["root" .= document.pdRoot, "error" .= T.pack (show (e :: SomeException))]
+        pure Nothing
+
+runTool ::
+  Log :> es =>
+  PlanRecorder es ->
+  Map ToolRef CatalogEntry ->
+  ToolCatalog es ->
+  Tool es
+runTool record catalog sub =
   Tool
     { toolName = "plan_run",
       toolDescription =
@@ -203,12 +249,22 @@ runTool catalog sub =
             Right parsed -> case validatePlan env root parsed of
               Left rejection -> pure (Left ("计划没通过校验：" <> rejectionText rejection))
               Right valid -> do
+                -- Written before execution rather than after it: the row
+                -- records what was *admitted*, and an admitted plan that then
+                -- crashed is exactly the case worth having on disk.  It is also
+                -- the identity later work hangs off — a fork's spawn edges
+                -- reference a plan id, a steer replaces a head revision, and
+                -- neither exists until somebody writes the first one.  Step 3
+                -- built these tables deliberately ahead of the executor and
+                -- left them with no writer; this is the writer.
+                stored <- record PlanDocument {pdRoot = root, pdPlan = parsed}
                 logInfo "plan: admitted" $
                   object
                     [ "objective" .= objective,
                       "hash" .= planHash parsed,
                       "holes" .= length (planHoles root parsed),
-                      "children" .= length (planChildren root parsed)
+                      "children" .= length (planChildren root parsed),
+                      "plan_id" .= fmap (.prPlanId.unPlanId) stored
                     ]
                 result <-
                   runTools sub $

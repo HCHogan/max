@@ -896,9 +896,44 @@ orchestration layer.
     the synthesising one, which is the ordinary reason a bidirectional checker
     keeps them apart. Fixed there; the same plan is now admitted.
 
+    **An admitted plan is now written down.** `plan_run` opens revision 1
+    against the turn that produced it, before executing rather than after: the
+    row records what was *admitted*, and an admitted plan that then died is
+    exactly the one worth having. It is also the identity later work hangs off —
+    spawn edges reference a plan id, a steer replaces a head revision, and
+    neither exists until somebody writes the first one. Step 3 built these
+    tables deliberately ahead of the executor and left them with no writer; this
+    is the writer. Best-effort and injected as a `PlanRecorder`: the plan is
+    admissible whatever the database says, and letting bookkeeping veto work the
+    kernel approved would trade an answer for a record.
+
 11. **Dispatch fork children.** `Reconcile` gets a caller and a scheduler that
     acts on it. `goalInputs` and `goalResources` resolve from schemas to actual
     values and handles at spawn — `childEnv` already does the static half.
+
+    **Not a small increment on step 10, and the reason is structural.** A tool's
+    `toolRun` has no `LLM` in its effect row, so a child cannot be elaborated
+    from inside `plan_run` — and it should not be even if it could. ADR 002
+    separated durable child turns from a light in-plan `Fork`/`Join` and this
+    ADR kept that separation; a child elaborated synchronously inside a tool
+    call has no spawn edge, cannot be stopped, does not survive a restart, and
+    cannot be reconciled when the plan it belongs to is revised. It would be the
+    light version wearing the durable one's name.
+
+    So step 11 is the move this ADR has been describing all along: plan
+    execution stops living inside one tool call and becomes a durable object the
+    dispatch loop drives — `AtFork` suspends instead of ending, the scheduler
+    dispatches, and the plan resumes on a wake. Everything §"waking is
+    elaboration" and §"a waiting plan is an armed suspension" describe is that
+    step, and revision 1 having a writer is its precondition.
+
+    **One measurement should come first.** Against the production catalog — two
+    read-only, fast tools — native parallel tool calls already cover independent
+    lookups, and the 0/5 above says models correctly prefer them. Fork earns its
+    scheduler when a child can do something a plan cannot: iterate, judge, or
+    block on something slow. That argues for widening the plannable set toward
+    `Browser` and `Sandbox` before building the scheduler, rather than after —
+    the ordering falls out of §"the front model keeps the fast tools".
 
 12. **Concurrency and child context projection**, only once the shape holds.
 
