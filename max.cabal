@@ -516,6 +516,7 @@ test-suite max-test-db
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
         Max.DB.PlanSpec
+        Max.Plan.WorkerSpec
         Max.PromptIntegrationSpec
         Max.PlatformStoreSpec
         Max.RecallSpec

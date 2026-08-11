@@ -958,7 +958,69 @@ orchestration layer.
     written for a consumer that reads whatever arrives, so having one shape was
     never a requirement. Now it is, for any tool a plan may call.
 
+    **Built.** Execution left the tool call. A fork now writes `ExecState`
+    against the plan it was walking and hands the fork to a worker; the turn
+    goes on and the model replies; the plan wakes later in a turn of its own.
+    Five pieces, each with its own reason to exist:
+
+    | | |
+    |---|---|
+    | migration 077 | the checkpoint on `plans`, the child's result on the spawn edge, `max_plan_work` |
+    | `Max.Plan.Drive` | the decision — pure, and the whole of what is interesting |
+    | `plan_run` | parks instead of stopping, and tells the model *not* to do the work |
+    | `Max.Plan.Worker` | the loop, with everything effectful injected |
+    | `Max.Handler.planDriverFor` | the four acts that need the dispatch row |
+
+    **The reconciler needed a third column, and this is not a detail.**
+    Desired-versus-running is the right diff for a React tree and the wrong one
+    for work that finishes: a returned child is neither desired-and-missing nor
+    running, so a two-column diff dispatches it again — and it finishes again,
+    forever. `Drive` adds *settled*, and that is all it takes to terminate. Two
+    smaller corrections came with it: the desired set is the children of the
+    fork the checkpoint is parked at, not `planChildren` over the whole plan (a
+    later fork's subgoals read bindings that do not exist yet), and results are
+    consumed from a pool keyed by goal hash in plan order, so two byte-identical
+    subgoals get one answer each rather than sharing one.
+
+    **The kernel needed one change.** `Step`'s `Completes` carried only the
+    ending value, and `walk` descends through `let` and `if` without returning —
+    so the state a driver hands in names a node several steps back, and
+    checkpointing it would redo every call before the fork. `Completes` now
+    carries where the walk actually stood, and `executePlan` is `resumePlan`
+    from `initialState`. That is the whole of what a resume is: a checkpoint is
+    a value, and picking one up is indistinguishable from never having put it
+    down.
+
+    **A child returns a value, not prose.** Its return tool's argument schema
+    *is* the subgoal's `goalExpected`, rendered by `jsonSchemaOf` — so the shape
+    asked for cannot drift from the shape the plan will read, and there is
+    nothing to parse. Whatever the child says in words goes nowhere. Its ceiling
+    is the plannable set plus that one tool, deliberately rather than a
+    translation of the subgoal's declared effects: `Max.Plan.Catalog` refuses to
+    map plan scopes onto tool effect domains in general because a uniform guess
+    is the worst way to be wrong. A consequence worth stating — **a child cannot
+    delegate**, since `plan_run` is not in its ceiling. Nested forks wait.
+
+    **A resumed walk that hits another fork parks again**, which is not a
+    special case anywhere: the same suspension written by a different writer. So
+    *do these three, then those two* costs nothing to support.
+
+    **Two limitations, both structural rather than unfinished.** The claim gate
+    is *no running child*, which both ends of a fork's life look like — nothing
+    dispatched yet, everything settled — and in between there is nothing for a
+    driver to decide. The cost: **a steer landing while children run takes
+    effect when they settle, not immediately.** The reconciler then stops what
+    the edited plan no longer wants, having let it finish first. And the wake is
+    crash-visible but not crash-safe: a process dying between closing a plan and
+    dispatching the turn that reports it loses the telling, not the plan's
+    integrity. Both are step 12's, where concurrency lives.
+
 12. **Concurrency and child context projection**, only once the shape holds.
+    Three things are waiting here, and step 11 named all of them: reconciling
+    the moment a steer lands rather than when the running children settle;
+    making the wake crash-safe by admitting its turn before the plan closes; and
+    letting a child delegate, which means `plan_run` inside a child's ceiling
+    and therefore a fork whose parent is itself a child.
 
 Steps 3–4 are ordered ahead of 5 deliberately; ADR 002 had execution first,
 which is the right order for a machine nobody edits.
