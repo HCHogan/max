@@ -53,10 +53,23 @@ module Max.DB.Plan
     listOpenPlans,
     planHistory,
 
+    -- * Suspension
+    PlanCheckpoint (..),
+    suspendPlan,
+    clearPlanCheckpoint,
+
+    -- * Waking
+    WakeablePlan (..),
+    claimWakeablePlans,
+    releasePlanClaim,
+
     -- * Children
     PlanChild (..),
     recordChildSpawn,
     listRunningChildren,
+    SettledChild (..),
+    listSettledChildren,
+    recordChildResult,
   )
 where
 
@@ -302,6 +315,11 @@ revisePlan ref based cause principal turn document = withTransaction $ do
 -- | Take a plan out of the reconciler's view. Idempotent, and refuses to
 -- reopen: a closed plan going back to open would resurrect children the
 -- reconciler already stopped.
+--
+-- Closing drops the checkpoint in the same statement, which the schema also
+-- insists on. Abandoning a plan and ceasing to drive it are one act: a
+-- checkpoint outliving its plan is a suspension that would wake into a
+-- conversation which has moved on.
 closePlan ::
   (WithConnection :> es, IOE :> es) =>
   PlanRef ->
@@ -311,9 +329,169 @@ closePlan ::
 closePlan ref status = do
   _ <-
     execute
-      "UPDATE plans SET status = ?, closed_at = now(), updated_at = now() \
+      "UPDATE plans SET status = ?, closed_at = now(), updated_at = now(), \
+      \                 exec_state = NULL, exec_node_id = NULL, exec_revision = NULL, \
+      \                 wake_owner = NULL, wake_claim_expires_at = NULL \
       \ WHERE plan_id = ? AND status = 'open'"
       (statusText status, ref.prPlanId)
+  pure ()
+
+--------------------------------------------------------------------------------
+-- Suspension
+
+-- | Where a plan's execution stands, and which plan it was standing in.
+--
+-- The state itself is carried as a 'Value' rather than as
+-- 'Max.Plan.Execute.ExecState'. This module stores documents and moves
+-- pointers; it does not interpret plans, and a checkpoint is exactly as much
+-- the interpreter's private business as the plan's node types are.
+data PlanCheckpoint = PlanCheckpoint
+  { -- | The fork node the walk stopped on. Provenance, and the name a resume
+    -- reports when the path no longer resolves.
+    pkNode :: !Text,
+    -- | The revision the checkpoint was taken against. A steer moves the head
+    -- underneath a suspension, so this being behind 'stRevision' is ordinary.
+    pkRevision :: !Revision,
+    pkState :: !Value
+  }
+  deriving stock (Show, Eq)
+
+-- | Park a plan's execution at a fork.
+--
+-- Compare-and-set against the revision the executing turn actually ran, for
+-- the same reason 'revisePlan' is: between admitting a plan and reaching its
+-- fork there is a model round and several tool calls, and a steer landing in
+-- that window produced a different plan than the one this state walked.
+-- 'False' means the head moved (or the plan closed) and the caller's checkpoint
+-- describes a plan that is no longer current — which is information, not an
+-- error.
+suspendPlan ::
+  (WithConnection :> es, IOE :> es) =>
+  PlanRef ->
+  -- | The revision this execution was walking.
+  Revision ->
+  -- | The fork node it stopped on.
+  Text ->
+  Value ->
+  Eff es Bool
+suspendPlan ref based node state = do
+  moved <-
+    execute
+      "UPDATE plans \
+      \ SET exec_state = ?, exec_node_id = ?, exec_revision = ?, updated_at = now() \
+      \ WHERE plan_id = ? AND head_revision = ? AND status = 'open'"
+      (Jsonb state, node, based, ref.prPlanId, based)
+  pure (moved > 0)
+
+-- | Drop the checkpoint and the wake claim together.
+--
+-- Called when a resume produced a result or gave up. Unconditional on the
+-- head: whatever the plan says now, this execution is no longer parked, and
+-- leaving a stale checkpoint behind would have the worker resume a walk whose
+-- driver has already returned.
+clearPlanCheckpoint ::
+  (WithConnection :> es, IOE :> es) =>
+  PlanRef ->
+  Eff es ()
+clearPlanCheckpoint ref = do
+  _ <-
+    execute
+      "UPDATE plans \
+      \ SET exec_state = NULL, exec_node_id = NULL, exec_revision = NULL, \
+      \     wake_owner = NULL, wake_claim_expires_at = NULL, updated_at = now() \
+      \ WHERE plan_id = ?"
+      (Only ref.prPlanId)
+  pure ()
+
+--------------------------------------------------------------------------------
+-- Waking
+
+-- | A suspended plan with something to do, leased to one worker.
+data WakeablePlan = WakeablePlan
+  { wpPlan :: !StoredPlan,
+    -- | The conversation, in the id space a dispatch takes.
+    wpGroup :: !GroupId,
+    -- | The root turn's trigger, when it had one. A child turn is dispatched
+    -- against the same seed message its plan was, so it lands in the right
+    -- conversation with a real provenance rather than a synthetic one.
+    wpSeedMessage :: !(Maybe Int64),
+    wpInitiator :: !(Maybe PrincipalId),
+    wpCheckpoint :: !PlanCheckpoint
+  }
+  deriving stock (Show, Eq)
+
+-- | Lease every suspended plan that currently has work to do.
+--
+-- __Having work means having no running child.__ Both ends of a fork's life
+-- look like that: a plan that has just suspended has not dispatched anything
+-- yet, and a plan whose last child settled is ready to resume. In between —
+-- children in flight — there is nothing for a driver to decide, and the settle
+-- trigger will notify when that changes.
+--
+-- The consequence is worth stating, because it is a real limitation rather
+-- than an accident: __a steer landing while children run takes effect when they
+-- settle, not immediately.__ The reconciler will then stop the children the
+-- edited plan no longer wants, having let them finish first. Stopping them the
+-- moment the head moves is step 12's business, where concurrency lives.
+claimWakeablePlans ::
+  (WithConnection :> es, IOE :> es) =>
+  -- | Worker identity.
+  Text ->
+  UTCTime ->
+  -- | When this claim lapses, so a worker that dies mid-drive frees its plans.
+  UTCTime ->
+  Int ->
+  Eff es [Either PlanLoadError WakeablePlan]
+claimWakeablePlans owner now expires limit = do
+  rows <-
+    query
+      "WITH claimed AS ( \
+      \  UPDATE plans p SET wake_owner = ?, wake_claim_expires_at = ? \
+      \  WHERE p.plan_id IN ( \
+      \    SELECT c.plan_id FROM plans c \
+      \    WHERE c.status = 'open' AND c.exec_state IS NOT NULL \
+      \      AND (c.wake_owner IS NULL OR c.wake_claim_expires_at <= ?) \
+      \      AND NOT EXISTS ( \
+      \        SELECT 1 FROM turn_edges e JOIN agent_turns t ON t.turn_id = e.to_turn_id \
+      \        WHERE e.edge_kind = 'spawn' AND e.plan_id = c.plan_id \
+      \          AND t.status = ANY (ARRAY['starting', 'running', 'recovery-pending']) \
+      \      ) \
+      \    ORDER BY c.plan_id \
+      \    LIMIT ? \
+      \    FOR UPDATE SKIP LOCKED \
+      \  ) \
+      \  RETURNING p.plan_id, p.plan_ordinal, p.head_revision, p.status, p.root_turn_id, \
+      \            p.updated_at, p.exec_node_id, p.exec_revision, p.exec_state, p.conversation_id \
+      \ ) \
+      \ SELECT claimed.plan_id, claimed.plan_ordinal, claimed.head_revision, claimed.status, \
+      \        claimed.root_turn_id, r.ir_version, r.document, claimed.updated_at, \
+      \        claimed.exec_node_id, claimed.exec_revision, claimed.exec_state, \
+      \        conversations.legacy_group_id, root.trigger_canonical_message_id, \
+      \        root.initiator_principal_id \
+      \ FROM claimed \
+      \ JOIN plan_revisions r ON r.plan_id = claimed.plan_id AND r.revision = claimed.head_revision \
+      \ JOIN conversations ON conversations.conversation_id = claimed.conversation_id \
+      \ JOIN agent_turns root ON root.turn_id = claimed.root_turn_id \
+      \ ORDER BY claimed.plan_id"
+      (owner, expires, now, limit)
+  pure (map decodeWakeable (rows :: [WakeableFields]))
+
+-- | Give a lease back without touching the checkpoint.
+--
+-- The driver's ordinary exit when it dispatched children and has nothing more
+-- to do: the plan stays suspended, and the next notification is a child
+-- settling rather than this lease expiring.
+releasePlanClaim ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  PlanRef ->
+  Eff es ()
+releasePlanClaim owner ref = do
+  _ <-
+    execute
+      "UPDATE plans SET wake_owner = NULL, wake_claim_expires_at = NULL \
+      \ WHERE plan_id = ? AND wake_owner = ?"
+      (ref.prPlanId, owner)
   pure ()
 
 -- | The current plan, or the reason it cannot be read.
@@ -425,6 +603,58 @@ listRunningChildren ref = do
       (Only ref.prPlanId)
   pure [PlanChild turn hash node | (turn, hash, node) <- rows]
 
+-- | A child that has finished, however it finished.
+data SettledChild = SettledChild
+  { scChildTurn :: !AgentTurnId,
+    scGoalHash :: !Text,
+    scDispatchedNode :: !Text,
+    -- | The turn's terminal status, verbatim. Kept as text because what the
+    -- driver does with it is decide between "there is a value" and "there is
+    -- not", and every distinction finer than that belongs to whoever renders
+    -- the failure.
+    scStatus :: !Text,
+    -- | What the child returned, when it returned anything. A settled child
+    -- with no result is one that crashed, was killed, or chose to say nothing
+    -- — all of which are the plan's problem rather than this module's.
+    scResult :: !(Maybe Value)
+  }
+  deriving stock (Show, Eq)
+
+-- | Children of this plan that are decided, oldest edge first.
+listSettledChildren ::
+  (WithConnection :> es, IOE :> es) =>
+  PlanRef ->
+  Eff es [SettledChild]
+listSettledChildren ref = do
+  rows <-
+    query
+      "SELECT e.to_turn_id, e.goal_hash, e.dispatched_node_id, t.status, e.child_result \
+      \ FROM turn_edges e JOIN agent_turns t ON t.turn_id = e.to_turn_id \
+      \ WHERE e.edge_kind = 'spawn' AND e.plan_id = ? \
+      \   AND t.status <> ALL (ARRAY['starting', 'running', 'recovery-pending']) \
+      \ ORDER BY e.edge_id"
+      (Only ref.prPlanId)
+  pure [SettledChild turn hash node status result | (turn, hash, node, status, result) <- rows]
+
+-- | Record what a child produced, on the edge that spawned it.
+--
+-- Keyed by the child turn, which the unique spawn index makes single-valued —
+-- a child cannot serve two plans, so there is no ambiguity about whose result
+-- this is. 'False' means the turn is not a spawn child, which is what a
+-- non-child turn calling the return tool would look like.
+recordChildResult ::
+  (WithConnection :> es, IOE :> es) =>
+  AgentTurnRef ->
+  Value ->
+  Eff es Bool
+recordChildResult child result = do
+  written <-
+    execute
+      "UPDATE turn_edges SET child_result = ? \
+      \ WHERE to_turn_id = ? AND edge_kind = 'spawn'"
+      (Jsonb result, child.atrTurnId)
+  pure (written > 0)
+
 -- The head is a join: `plans` holds no document, so that a revision and the
 -- pointer to it cannot disagree.
 headSelect :: Query
@@ -475,6 +705,52 @@ decodeHead row
             stDocument = document,
             stUpdatedAt = row.hfUpdatedAt
           }
+
+-- A claimed row is a head row plus the checkpoint and the dispatch coordinates
+-- a child turn needs. Spelled out rather than composed from 'HeadFields'
+-- because postgresql-simple's 'FromRow' is positional, and a nested instance
+-- would silently re-order under an edit to either query.
+data WakeableFields = WakeableFields
+  { wfHead :: !HeadFields,
+    wfNode :: !Text,
+    wfRevision :: !Revision,
+    wfState :: !Value,
+    wfGroup :: !(Maybe Int64),
+    wfSeedMessage :: !(Maybe Int64),
+    wfInitiator :: !(Maybe Int64)
+  }
+
+instance FromRow WakeableFields where
+  fromRow =
+    WakeableFields
+      <$> fromRow
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+
+decodeWakeable :: WakeableFields -> Either PlanLoadError WakeablePlan
+decodeWakeable row = do
+  stored <- decodeHead row.wfHead
+  -- A conversation with no legacy group id cannot be dispatched into, and a
+  -- plan is only ever opened from a turn that was. Reported as an undecodable
+  -- row rather than crashed on: the worker skips it and says so.
+  group <- maybe (Left (DocumentUndecodable "plan conversation has no group id")) Right row.wfGroup
+  pure
+    WakeablePlan
+      { wpPlan = stored,
+        wpGroup = GroupId group,
+        wpSeedMessage = row.wfSeedMessage,
+        wpInitiator = PrincipalId <$> row.wfInitiator,
+        wpCheckpoint =
+          PlanCheckpoint
+            { pkNode = row.wfNode,
+              pkRevision = row.wfRevision,
+              pkState = row.wfState
+            }
+      }
 
 listToMaybe' :: [a] -> Maybe a
 listToMaybe' = \case

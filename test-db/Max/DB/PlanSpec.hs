@@ -1,12 +1,14 @@
 module Max.DB.PlanSpec (spec) where
 
 import Control.Concurrent.Async (mapConcurrently)
+import Data.Aeson (Value (..), object, (.=))
 import Data.Either (rights)
 import Data.Int (Int64)
 import Data.List (sort)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (UTCTime, addUTCTime)
 import Control.Exception (try)
 import Database.PostgreSQL.Simple (Only (..), SqlError, execute, query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb)
@@ -262,10 +264,173 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       outcome.rcStop `shouldBe` []
       map (.rnHash) outcome.rcKeep `shouldBe` [goalHash (goalNamed "查甲")]
 
+  describe "suspension" $ do
+    it "parks a checkpoint against the revision the execution was walking" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      parked <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      parked `shouldBe` True
+      claimed <- claimOne pool ref
+      claimed.wpCheckpoint
+        `shouldBe` PlanCheckpoint
+          {pkNode = "turn:1:0/k", pkRevision = Revision 1, pkState = checkpointState}
+
+    it "refuses a checkpoint whose plan moved while the execution ran" $ do
+      -- Between admitting a plan and reaching its fork there is a model round
+      -- and several tool calls.  A steer landing in that window produced a
+      -- different plan than the one this state walked, and parking against it
+      -- would resume a path that describes somebody else's plan.
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (revisePlan ref (Revision 1) CauseSteer (Just fixture.fxPrincipal) Nothing (document "二"))
+      parked <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      parked `shouldBe` False
+      wakeable <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      wakeable `shouldBe` []
+
+    it "drops the checkpoint when the plan closes, in the same act" $ do
+      -- A checkpoint outliving its plan is a suspension that would wake into a
+      -- conversation which has moved on.  The schema says so too; this is the
+      -- writer agreeing with it rather than relying on it.
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      withDb pool (closePlan ref PlanAbandoned)
+      wakeable <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      wakeable `shouldBe` []
+
+  describe "waking" $ do
+    it "leases a plan that has suspended and dispatched nothing yet" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      claimed <- claimOne pool ref
+      claimed.wpPlan.stRevision `shouldBe` Revision 1
+      claimed.wpGroup `shouldBe` fixture.fxGroup
+      claimed.wpInitiator `shouldBe` Just fixture.fxPrincipal
+      claimed.wpSeedMessage `shouldSatisfy` (/= Nothing)
+
+    it "holds a lease against a second worker, and hands it over once it lapses" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      _ <- claimOne pool ref
+      contended <- withDb pool (claimWakeablePlans "other" testTime laterTime 10)
+      contended `shouldBe` []
+      -- The point of the lease being a deadline rather than a flag: a worker
+      -- that died mid-drive must not park a plan forever.
+      expired <- withDb pool (claimWakeablePlans "other" muchLaterTime muchLaterTime 10)
+      map (fmap (.wpPlan.stRef)) expired `shouldBe` [Right ref]
+
+    it "leaves a plan alone while any of its children is still running" $ do
+      -- Both ends of a fork's life look like "no running child" — nothing
+      -- dispatched yet, and everything settled.  In between there is nothing
+      -- for a driver to decide.
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      done' <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
+      _ <- spawnChild pool fixture ref "查乙" "turn:1:0/k1"
+      withDb pool (finishAgentTurn done' TurnSucceeded 1 Nothing Nothing)
+      midway <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      midway `shouldBe` []
+
+    it "leases it again the moment the last child settles" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      _ <- claimOne pool ref
+      childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
+      withDb pool (releasePlanClaim "w" ref)
+      blocked <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      blocked `shouldBe` []
+      withDb pool (finishAgentTurn childTurn TurnSucceeded 1 Nothing Nothing)
+      woken <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      map (fmap (.wpPlan.stRef)) woken `shouldBe` [Right ref]
+
+    it "clearing the checkpoint takes the plan out of the wakeable set" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      withDb pool (clearPlanCheckpoint ref)
+      wakeable <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      wakeable `shouldBe` []
+
+    it "wakes with the head as it is now, not as the checkpoint left it" $ do
+      -- The steer case the whole revision field exists for: the driver is
+      -- entitled to notice that the plan it is resuming is not the one that
+      -- parked.
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      _ <- withDb pool (revisePlan ref (Revision 1) CauseSteer (Just fixture.fxPrincipal) Nothing (document "二"))
+      claimed <- claimOne pool ref
+      claimed.wpPlan.stRevision `shouldBe` Revision 2
+      claimed.wpPlan.stDocument `shouldBe` document "二"
+      claimed.wpCheckpoint.pkRevision `shouldBe` Revision 1
+
+  describe "child results" $ do
+    it "records what a child produced and reads it back beside its status" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
+      written <- withDb pool (recordChildResult childTurn (String "甲的答案"))
+      written `shouldBe` True
+      -- Still running, so still nobody's result to read.
+      withDb pool (listSettledChildren ref) `shouldReturn` []
+      withDb pool (finishAgentTurn childTurn TurnSucceeded 1 Nothing Nothing)
+      settled <- withDb pool (listSettledChildren ref)
+      map (.scResult) settled `shouldBe` [Just (String "甲的答案")]
+      map (.scGoalHash) settled `shouldBe` [goalHash (goalNamed "查甲")]
+      map (.scStatus) settled `shouldBe` ["succeeded"]
+
+    it "leaves a settled child with no result when it never returned one" $ do
+      -- A crash, a !kill, or a child that simply said nothing.  All the same
+      -- fact to this layer: there is no value, and the plan has to decide what
+      -- that means.
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
+      withDb pool (finishAgentTurn childTurn TurnCrashed 1 (Just "boom") Nothing)
+      settled <- withDb pool (listSettledChildren ref)
+      map (.scResult) settled `shouldBe` [Nothing]
+      map (.scStatus) settled `shouldBe` ["crashed"]
+
+    it "refuses a result for a turn nobody spawned" $ do
+      fixture <- createFixture pool 42 1001
+      written <- withDb pool (recordChildResult fixture.fxTurn (String "x"))
+      written `shouldBe` False
+
   it "reports nothing for a plan that does not exist" $ do
     _ <- createFixture pool 42 1001
     loaded <- withDb pool (loadPlanHead (PlanRef (PlanId 999) (PlanOrdinal 999)))
     loaded `shouldBe` Nothing
+
+-- | A stand-in for a serialized 'Max.Plan.Execute.ExecState'.  Opaque here on
+-- purpose: this layer stores the checkpoint and does not read it, and a test
+-- that used the real encoding would be asserting the interpreter's business.
+checkpointState :: Value
+checkpointState =
+  object
+    [ "path" .= ([] :: [Value]),
+      "bindings" .= [object ["name" .= ("hits" :: Text), "value" .= (1 :: Int)]],
+      "calls" .= (1 :: Int),
+      "sends" .= (0 :: Int)
+    ]
+
+laterTime :: UTCTime
+laterTime = addUTCTime 60 testTime
+
+muchLaterTime :: UTCTime
+muchLaterTime = addUTCTime 3600 testTime
+
+-- | Claim exactly one plan and insist it is the one asked for.
+claimOne :: DbPool -> PlanRef -> IO WakeablePlan
+claimOne pool ref = do
+  claimed <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+  case claimed of
+    [Right plan] | plan.wpPlan.stRef == ref -> pure plan
+    other -> fail ("expected exactly this plan to be wakeable, got " <> show (length other))
 
 -- | Open a turn for a subgoal and record the spawn edge, as a scheduler would.
 spawnChild :: DbPool -> Fixture -> PlanRef -> Text -> Text -> IO AgentTurnRef
