@@ -554,14 +554,21 @@ dbParser = do
       ]
   maxConns <-
     setting
-      [ help "Connection-pool size",
+      [ -- Sized against the connections that are held rather than the ones
+        -- that are used.  Every 'Max.DB.Notify' waiter pins one for as long as
+        -- it is asleep, and there are now four work channels — dispatch,
+        -- delivery, monitors, plans — plus one per in-flight admin long-poll.
+        -- At the old default of 8 that left four for every turn, worker and
+        -- query in the process, and 'Data.Pool' blocks on acquire with no
+        -- timeout: exhaustion does not error, it hangs the bot.
+        help "Connection-pool size.  Four are permanently held by LISTEN waiters",
         reader auto,
         option,
         long "db-max-conns",
         env "MAX_DB_MAX_CONNS",
         conf "max_conns",
         metavar "N",
-        value 8
+        value 24
       ]
   pure DbConfig {..}
 
