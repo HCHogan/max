@@ -186,6 +186,11 @@ data TriggerOrigin
     -- Goal and trigger evidence live in the host-authored continuation view;
     -- the world event is not presented as user speech.
     OriginMonitor
+  | -- | An ADR 007 plan opened this turn: either a fork child serving one
+    -- subgoal, or the plan itself coming back with a result. Same reason
+    -- monitors have their own origin — nobody said anything, and the host has
+    -- written what happened into the continuation view.
+    OriginPlan
   deriving stock (Show, Eq)
 
 -- | Process-wide release reader choice.  The emergency mode is deliberately

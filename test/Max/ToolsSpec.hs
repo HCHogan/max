@@ -23,7 +23,7 @@ toolContext :: ToolContext
 toolContext =
   mkToolContext
     (TurnIdentity (GroupId 123) (CanonicalMessageId 456) (UserId 789) (UserId 999) (PrincipalId 789) Nothing Nothing)
-    (TurnCapabilities False False False qqAdvertisedCaps True Map.empty Nothing)
+    (TurnCapabilities False False False qqAdvertisedCaps True Map.empty Nothing Nothing)
 
 spec :: Spec
 spec = describe "model-visible builtins" $ do

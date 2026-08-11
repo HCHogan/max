@@ -12,6 +12,7 @@
 -- so assembling the full set there would close a cycle.
 module Max.Toolset
   ( allToolsFor,
+    plannableToolsFor,
     toolCountFor,
     toolDefinitionsFor,
     toolAllowedByEffectCeiling,
@@ -58,12 +59,13 @@ import Max.Tools.Images (imageToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Monitor (monitorToolsFor)
 import Max.Tools.Pins (pinToolsFor)
-import Max.Tools.Plan (durablePlanJournal, planToolsFor)
+import Max.Tools.Plan (durablePlanJournal, plannableSubCatalog, planToolsFor)
 import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Skills (skillToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
+import Max.Tools.Subgoal (subgoalToolsFor)
 import Max.Tools.Video (videoToolsFor)
 import OneBot.Types (GroupId, isPrivateChat)
 
@@ -92,14 +94,63 @@ allToolsFor ::
 allToolsFor runtime env dc =
   buildToolCatalog definitions runners
   where
-    definitions = toolDefinitionsFor env (toolGroupId dc) (toolCapabilities dc)
+    (definitions, base) = resolvedToolsFor runtime env dc
     allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
     -- The plan runners are built from the tools this dispatch already resolved
     -- — a plan calls them through a sub-catalog of exactly these — so they can
     -- only be assembled after the gate has run, and then get filtered by the
     -- same gate themselves.
     runners = base <> filter allowedRunner (planToolsFor (durablePlanJournal dc) definitions base)
-    base = filter allowedRunner runners0
+    allowedRunner tool = tool.toolName `Set.member` allowedRefs
+
+-- | The sub-catalog a suspended plan resumes into.
+--
+-- ADR 007 §11. A plan that parked at a fork continues in a worker rather than
+-- in the turn that wrote it, and it has to reach the same tools it would have
+-- reached inline — same gates, same effect ceiling, same subset — or a plan
+-- admitted against one catalog would execute against another.
+--
+-- It is the plannable subset and nothing else, which also means a resumed plan
+-- cannot speak: no tool in that subset sends.
+plannableToolsFor ::
+  ( Blob :> es,
+    Http :> es,
+    Embedding :> es,
+    Log :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    ToolOutput :> es,
+    WithConnection :> es,
+    IOE :> es
+  ) =>
+  HttpRuntime ->
+  BotEnv ->
+  ToolContext ->
+  Either ToolCatalogError (ToolCatalog es)
+plannableToolsFor runtime env dc = uncurry plannableSubCatalog (resolvedToolsFor runtime env dc)
+
+-- | The gated definitions and the gated runners, which every catalog in this
+-- module is a selection of.
+resolvedToolsFor ::
+  ( Blob :> es,
+    Http :> es,
+    Embedding :> es,
+    Log :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    ToolOutput :> es,
+    WithConnection :> es,
+    IOE :> es
+  ) =>
+  HttpRuntime ->
+  BotEnv ->
+  ToolContext ->
+  ([ToolDefinition], [Tool es])
+resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
+  where
+    definitions = toolDefinitionsFor env (toolGroupId dc) (toolCapabilities dc)
+    allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
+    allowedRunner tool = tool.toolName `Set.member` allowedRefs
     runners0 =
       builtinsFor env.beTimeZone dc
         <> reminderToolsFor env.beTimeZone dc
@@ -108,6 +159,7 @@ allToolsFor runtime env dc =
         <> imageToolsFor env.beTimeZone dc
         <> memoryToolsFor dc
         <> pinToolsFor env.beSessions env.beDefaultModel dc
+        <> subgoalToolsFor dc
         <> skillToolsFor env.beSkills dc
         <> bilibiliToolsFor env.beTimeZone dc
         <> sandboxToolsFor env.beTimeZone (toolGroupId dc) env.beSandboxes
@@ -116,7 +168,6 @@ allToolsFor runtime env dc =
         <> maybe [] (searchToolsFor runtime) env.beSearch
         <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]
         <> [t | toolMultimodal dc, t <- videoToolsFor dc]
-    allowedRunner tool = tool.toolName `Set.member` allowedRefs
 
 -- | How many tools a dispatch with these gates would get — the
 -- @!version@ card's number.  This is intentionally a pure projection
@@ -130,7 +181,7 @@ toolCountFor ::
   Bool -> -- skills visible
   Int
 toolCountFor env gid multimodal stickers skills =
-  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing))
+  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing Nothing))
 
 -- | Product-level visibility and effect metadata live in one inventory.  The
 -- actual runners assembled above must match this filtered set exactly or
@@ -151,6 +202,7 @@ toolDefinitionsFor env gid caps =
       SkillsOnly -> caps.tcSkills
       SearchOnly -> isJust env.beSearch
       MonitorArmOnly -> caps.tcMonitorArming
+      SubgoalOnly -> isJust caps.tcSubgoal
     ceilingOpen definition' =
       toolAllowedByEffectCeiling caps.tcEffectCeiling definition'
 
@@ -172,6 +224,9 @@ data ToolGate
   | SkillsOnly
   | SearchOnly
   | MonitorArmOnly
+  | -- | Only a fork child, which is the only turn that has somewhere to
+    -- return a value to.
+    SubgoalOnly
 
 data ToolInventoryItem = ToolInventoryItem
   { tiGate :: !ToolGate,
@@ -180,7 +235,10 @@ data ToolInventoryItem = ToolInventoryItem
 
 toolInventory :: [ToolInventoryItem]
 toolInventory =
-  [ always (readTool "inspect_source" ["self.source"] [ProcessResource "self-source"]),
+  [ -- The one act a fork child performs that an ordinary turn cannot, and the
+    -- only way a child can succeed at all.
+    gated SubgoalOnly (writeTool "subgoal_return" ["plan.children"] [CurrentConversation]),
+    always (readTool "inspect_source" ["self.source"] [ProcessResource "self-source"]),
     always (readTool "get_message_by_id" ["conversation.db"] [CurrentConversation]),
     always (llmReadTool "context_search" ["conversation.db"] [CurrentConversation]),
     always (readToolV 2 "context_expand" ["conversation.db"] [CurrentConversation]),

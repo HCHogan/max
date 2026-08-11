@@ -61,6 +61,7 @@ module Max.Tasks
     TaskInfo (..),
     listTasks,
     cancelTask,
+    cancelAgentTurnTask,
     cancelAllTasks,
     drainInbox,
     requeueInbox,
@@ -92,7 +93,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
 import Max.Dispatch (DispatchMessage)
 import Max.Platform.Types (CanonicalMessageId (..))
-import Max.Turn.Types (AgentTurnRef, TurnOutputContext, newTurnOutputContext, newTurnOutputContextAt)
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOutputContext, newTurnOutputContext, newTurnOutputContextAt)
 import OneBot.Types (GroupId (..), UserId (..))
 
 -- | Short, human-typeable id like @t17@ — easy to !kill from the
@@ -640,6 +641,19 @@ cancelTask reg tid = do
   case mAct of
     Nothing -> pure False
     Just act -> sequence_ act >> pure True
+
+-- | Stop the turn carrying this durable identity, if it is running here.
+--
+-- The reconciler's side of ADR 007: a plan that was steered no longer wants
+-- some child, and the way to stop a turn is the way @!kill@ already stops one.
+-- 'False' means no live turn in this process is that one — it finished, or it
+-- is running on another node — and the caller can only say so.
+cancelAgentTurnTask :: TaskRegistry -> AgentTurnId -> IO Bool
+cancelAgentTurnTask reg turnId = do
+  (_, entries) <- readTVarIO reg.trState
+  let matches =
+        [entry.teId | entry <- Map.elems entries, fmap (.atrTurnId) entry.teAgentTurn == Just turnId]
+  or <$> traverse (cancelTask reg) matches
 
 -- | Trigger the cancel action for every registered task (all groups —
 -- same scope as @!ps --all@).  Returns how many were signalled.

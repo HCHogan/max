@@ -5,6 +5,7 @@
 module Max.ToolContext
   ( TurnIdentity (..),
     TurnCapabilities (..),
+    SubgoalReturn (..),
     ToolContext,
     mkToolContext,
     toolCapabilities,
@@ -23,15 +24,17 @@ module Max.ToolContext
     toolMonitorArmingAllowed,
     toolCatalogGrants,
     toolEffectCeiling,
+    toolSubgoal,
   )
 where
 
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
+import Max.Plan.Schema (PlanSchema)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
 import Data.Time (UTCTime)
-import Max.Turn.Types (TurnOutputContext)
+import Max.Turn.Types (AgentTurnRef, TurnOutputContext)
 import OneBot.Types (GroupId, UserId)
 
 data TurnIdentity = TurnIdentity
@@ -65,7 +68,26 @@ data TurnCapabilities = TurnCapabilities
     tcCatalogGrants :: !(Map Text Text),
     -- | A fired monitor intersects its frozen grants with this turn's current
     -- catalog. Ordinary turns carry Nothing.
-    tcEffectCeiling :: !(Maybe (Map Text Text))
+    tcEffectCeiling :: !(Maybe (Map Text Text)),
+    -- | This turn is a fork child. Ordinary turns carry Nothing.
+    tcSubgoal :: !(Maybe SubgoalReturn)
+  }
+  deriving stock (Show, Eq)
+
+-- | What a fork child is for, and the one way it can succeed.
+--
+-- ADR 007 §11. A child turn produces a /value/, not a continuation — that is
+-- the whole difference between delegating a subgoal and starting a
+-- conversation about it. So it gets a tool whose argument type is the
+-- subgoal's own declared result type, and its prose goes nowhere.
+data SubgoalReturn = SubgoalReturn
+  { -- | The child's own turn, which is what the spawn edge is keyed by.
+    sgTurn :: !AgentTurnRef,
+    sgObjective :: !Text,
+    -- | 'Max.Plan.Types.goalExpected'. Rendered into the tool's JSON Schema,
+    -- so the shape asked for and the shape the parent plan was validated
+    -- against are one fact rather than two kept in step by hand.
+    sgExpected :: !PlanSchema
   }
   deriving stock (Show, Eq)
 
@@ -127,3 +149,6 @@ toolCatalogGrants = (.toolCapabilities.tcCatalogGrants)
 
 toolEffectCeiling :: ToolContext -> Maybe (Map Text Text)
 toolEffectCeiling = (.toolCapabilities.tcEffectCeiling)
+
+toolSubgoal :: ToolContext -> Maybe SubgoalReturn
+toolSubgoal = (.toolCapabilities.tcSubgoal)

@@ -1731,6 +1731,11 @@ renderUser tz' now' origin' compartments' recentTurns' continuationView' mTransc
               \上下文里如果找不到 TA 在等你回应的东西（比如就是逗你、\
               \打个招呼）时，才用 poke 工具戳回去，然后回复 [silence]。"
             ]
+          OriginPlan ->
+            [ "[current event — plan]",
+              "这是一个计划开的一轮，不是谁刚说了什么。上面那个块写清了是什么事。",
+              "照它说的做；该发言就发言，没什么可说就整条回 [silence]。"
+            ]
           OriginMonitor ->
             [ "[current event — monitor fire]",
               "这是已持久化 monitor 的触发，不是任何用户刚说的一句话。目标与可信触发证据在上面的 [monitor fire] 块。",

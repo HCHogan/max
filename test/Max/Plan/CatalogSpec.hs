@@ -94,7 +94,8 @@ liveSchemas =
             tcOutput = noAdvertisedCaps,
             tcMonitorArming = False,
             tcCatalogGrants = Map.empty,
-            tcEffectCeiling = Nothing
+            tcEffectCeiling = Nothing,
+            tcSubgoal = Nothing
           }
 
 definitionOf :: Text -> ToolDefinition

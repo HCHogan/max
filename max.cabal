@@ -188,6 +188,7 @@ library
         Max.Plan.Parse
         Max.Plan.Prompt
         Max.Plan.Drive
+        Max.Plan.Worker
         Max.Plan.Reconcile
         Max.Plan.Schema
         Max.Plan.Session
@@ -237,6 +238,7 @@ library
         Max.Tools.SelfSource
         Max.Tools.Skills
         Max.Tools.Stickers
+        Max.Tools.Subgoal
         Max.Tools.Video
         Max.Util
         Max.WechatHook

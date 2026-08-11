@@ -41,6 +41,7 @@
 -- already the front model's turn.
 module Max.Tools.Plan
   ( planToolsFor,
+    plannableSubCatalog,
     PlanJournal (..),
     durablePlanJournal,
     planGoalFor,
@@ -116,11 +117,28 @@ planToolsFor journal definitions runners =
     Right built -> [guideTool catalog, runTool journal catalog built]
   where
     catalog = planCatalog definitions
-    plannable = Map.keysSet catalog
-    subCatalog =
-      buildToolCatalog
-        [d | d <- definitions, Set.member d.tdRef plannable]
-        [r | r <- runners, Set.member (ToolRef r.toolName) plannable]
+    subCatalog = plannableSubCatalog definitions runners
+
+-- | The tools a plan may call, out of what this dispatch resolved.
+--
+-- Two callers, and they must agree or a plan would resume into a different
+-- world than it started in: 'planToolsFor' builds it for an inline run, and the
+-- worker that resumes a suspended plan builds it again from the same
+-- definitions. Sharing the construction is what makes "the same catalog" a
+-- fact rather than a convention.
+--
+-- @plan_run@ is never in it, which is why recursion is impossible by
+-- construction rather than by a guard.
+plannableSubCatalog ::
+  [ToolDefinition] ->
+  [Tool es] ->
+  Either Tools.ToolCatalogError (ToolCatalog es)
+plannableSubCatalog definitions runners =
+  buildToolCatalog
+    [d | d <- definitions, Set.member d.tdRef plannable]
+    [r | r <- runners, Set.member (ToolRef r.toolName) plannable]
+  where
+    plannable = Map.keysSet (planCatalog definitions)
 
 -- | The ceiling a front-of-house plan runs under.
 --

@@ -67,8 +67,8 @@ module Max.DB.Plan
     PlanChild (..),
     recordChildSpawn,
     listRunningChildren,
-    SettledChild (..),
-    listSettledChildren,
+    ChildOutcome (..),
+    listChildOutcomes,
     recordChildResult,
   )
 where
@@ -562,8 +562,9 @@ recordChildSpawn ::
   (WithConnection :> es, IOE :> es) =>
   PlanRef ->
   -- | The turn whose plan contains the fork. Not necessarily the plan's root:
-  -- a nested fork's parent is itself a child.
-  AgentTurnRef ->
+  -- a nested fork's parent is itself a child.  An id rather than a ref, because
+  -- the ordinal is the model-facing handle and nothing here writes one.
+  AgentTurnId ->
   -- | The turn opened for the subgoal.
   AgentTurnRef ->
   -- | 'Max.Plan.Types.goalHash' of the subgoal.
@@ -578,7 +579,7 @@ recordChildSpawn ref parent child hash node = do
       \ (conversation_id, from_turn_id, to_turn_id, edge_kind, plan_id, goal_hash, dispatched_node_id) \
       \ SELECT p.conversation_id, ?, ?, 'spawn', p.plan_id, ?, ? \
       \ FROM plans p WHERE p.plan_id = ?"
-      (parent.atrTurnId, child.atrTurnId, hash, node, ref.prPlanId)
+      (parent, child.atrTurnId, hash, node, ref.prPlanId)
   pure ()
 
 -- | The reconciler's actual side: children of this plan that have not
@@ -604,28 +605,28 @@ listRunningChildren ref = do
   pure [PlanChild turn hash node | (turn, hash, node) <- rows]
 
 -- | A child that has finished, however it finished.
-data SettledChild = SettledChild
-  { scChildTurn :: !AgentTurnId,
-    scGoalHash :: !Text,
-    scDispatchedNode :: !Text,
+data ChildOutcome = ChildOutcome
+  { coChildTurn :: !AgentTurnId,
+    coGoalHash :: !Text,
+    coDispatchedNode :: !Text,
     -- | The turn's terminal status, verbatim. Kept as text because what the
     -- driver does with it is decide between "there is a value" and "there is
     -- not", and every distinction finer than that belongs to whoever renders
     -- the failure.
-    scStatus :: !Text,
+    coStatus :: !Text,
     -- | What the child returned, when it returned anything. A settled child
     -- with no result is one that crashed, was killed, or chose to say nothing
     -- — all of which are the plan's problem rather than this module's.
-    scResult :: !(Maybe Value)
+    coResult :: !(Maybe Value)
   }
   deriving stock (Show, Eq)
 
 -- | Children of this plan that are decided, oldest edge first.
-listSettledChildren ::
+listChildOutcomes ::
   (WithConnection :> es, IOE :> es) =>
   PlanRef ->
-  Eff es [SettledChild]
-listSettledChildren ref = do
+  Eff es [ChildOutcome]
+listChildOutcomes ref = do
   rows <-
     query
       "SELECT e.to_turn_id, e.goal_hash, e.dispatched_node_id, t.status, e.child_result \
@@ -634,7 +635,7 @@ listSettledChildren ref = do
       \   AND t.status <> ALL (ARRAY['starting', 'running', 'recovery-pending']) \
       \ ORDER BY e.edge_id"
       (Only ref.prPlanId)
-  pure [SettledChild turn hash node status result | (turn, hash, node, status, result) <- rows]
+  pure [ChildOutcome turn hash node status result | (turn, hash, node, status, result) <- rows]
 
 -- | Record what a child produced, on the edge that spawned it.
 --

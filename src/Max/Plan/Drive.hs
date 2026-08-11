@@ -44,7 +44,6 @@ module Max.Plan.Drive
 where
 
 import Data.Aeson (Value)
-import Data.List (foldl')
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -158,7 +157,7 @@ driveFork document state settled running =
     resumed bound =
       state
         { esPath = PlanPath (state.esPath.unPlanPath <> [StepContinue]),
-          esBindings = foldl' (\into' (binder, value) -> Map.insert binder value into') state.esBindings bound
+          esBindings = foldl (\into' (binder, value) -> Map.insert binder value into') state.esBindings bound
         }
 
     -- Walk the subgoals in plan order, taking from the pool of settled children

@@ -29,6 +29,7 @@ module Max.Plan.Schema
     projectField,
     projectIndex,
     schemaFromJson,
+    jsonSchemaOf,
   )
 where
 
@@ -75,6 +76,45 @@ data SchemaField = SchemaField
 
 -- | Where a value stopped matching, and what was wanted there.  The path is
 -- outermost first and empty at the root.
+-- | The same type, in the JSON Schema dialect a model is shown when it is
+-- offered a tool.
+--
+-- ADR 007 §11 needs exactly one of these: a fork child hands its answer back
+-- through a tool whose argument /is/ the subgoal's declared result type, so
+-- the shape the child is asked for and the shape the parent plan was validated
+-- against are one thing rather than two that must be kept in step.
+--
+-- Null is spelled as a type union rather than as an omitted key: a nullable
+-- field is required and may be null, which is a different fact from an
+-- optional one, and the distinction is load-bearing everywhere else in this
+-- module.
+jsonSchemaOf :: PlanSchema -> Value
+jsonSchemaOf = \case
+  SchemaText -> object ["type" .= ("string" :: Text)]
+  SchemaInt -> object ["type" .= ("integer" :: Text)]
+  SchemaNumber -> object ["type" .= ("number" :: Text)]
+  SchemaBool -> object ["type" .= ("boolean" :: Text)]
+  SchemaEnum members -> object ["type" .= ("string" :: Text), "enum" .= members]
+  SchemaArray inner -> object ["type" .= ("array" :: Text), "items" .= jsonSchemaOf inner]
+  SchemaObject fields ->
+    object
+      [ "type" .= ("object" :: Text),
+        "properties"
+          .= Object (KeyMap.fromList [(Key.fromText f.sfName, jsonSchemaOf f.sfSchema) | f <- fields]),
+        "required" .= [f.sfName | f <- fields, f.sfRequired],
+        -- Objects are closed here as they are everywhere else in this module,
+        -- and saying so in the schema is what stops a model padding its answer
+        -- with a field the plan cannot read.
+        "additionalProperties" .= False
+      ]
+  SchemaNullable inner -> case jsonSchemaOf inner of
+    Object o -> Object (KeyMap.insert "type" (typeUnion (KeyMap.lookup "type" o)) o)
+    other -> other
+  where
+    typeUnion = \case
+      Just (String t) -> toJSON [t, "null" :: Text]
+      _ -> toJSON ["null" :: Text]
+
 data SchemaError = SchemaError
   { schPath :: ![Text],
     schExpected :: !Text,

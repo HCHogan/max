@@ -3,6 +3,7 @@ module Max.Handler
     dispatchPendingWorker,
     dispatchProactive,
     dispatchMonitorFire,
+    planDriverFor,
     resumeInterruptedTurn,
     recordAs,
     IngestOutcome (..),
@@ -20,7 +21,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (forM_, unless, void, when)
-import Data.Aeson (Value, eitherDecodeStrict', encode, toJSON)
+import Data.Aeson (Value (String), eitherDecodeStrict', encode, toJSON)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
 import Data.List (find, unsnoc)
@@ -28,6 +29,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Set qualified as Set
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime)
 import Data.Traversable (for)
 import Effectful
@@ -119,7 +121,7 @@ import Max.Platform.Store
     recordInternalMessage,
     rememberConversationTitle,
   )
-import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId, ReactionAction (..))
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), noAdvertisedCaps, NativeUserId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId, ReactionAction (..))
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutputContinuation, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), GroupMeta (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
@@ -128,6 +130,7 @@ import Max.Shutdown (enterDispatch, leaveDispatch)
 import Max.Skills (Skill (..), skillsForGroup)
 import Max.Tasks
   ( Note (..),
+    cancelAgentTurnTask,
     NoteVerb (..),
     TaskCancelled (..),
     TaskId (..),
@@ -145,8 +148,38 @@ import Max.Tasks
     turnRuntimeTaskId,
     turnRuntimeOutputContext,
   )
-import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
-import Max.Toolset (toolDefinitionsFor)
+import Max.ToolContext (SubgoalReturn (..), TurnCapabilities (..), TurnIdentity (..), mkToolContext)
+import Max.Effects.Http (Http)
+import Max.Effects.Embedding (Embedding)
+import Max.Effects.ToolOutput (defaultInlineMediaLimit, runToolOutput)
+import Max.Effects.Tools (runTools)
+import Max.HttpRuntime (HttpRuntime)
+import Max.DB.Plan
+  ( WakeablePlan (..),
+    PlanOrdinal (..),
+    PlanId (..),
+    PlanRef (..),
+    StoredPlan (..),
+    recordChildSpawn,
+  )
+import Max.Plan.Catalog (planCatalog)
+import Max.Plan.Execute
+  ( Deopt (..),
+    ExecState,
+    ExecutionEnd (..),
+    ExecutionEnv (..),
+    ExecutionResult (..),
+    deoptText,
+    resumePlan,
+  )
+import Max.Plan.Reconcile (Desired (..))
+import Max.Plan.Schema (renderSchema)
+import Max.Plan.Types (EffectBudget (..), Goal (..), NodeId (..), PlanDocument (..))
+import Max.Plan.Validate (rejectionText, validatePlan)
+import Max.Plan.Worker (PlanDriver (..), Resumption)
+import Max.Plan.Worker qualified as Worker
+import Max.Tools.Plan (planValidationEnv)
+import Max.Toolset (plannableToolsFor, toolDefinitionsFor)
 import Max.Context.Types (ContinuationInput (..), digestOnlyContinuation, noContinuation)
 import Max.Turn.Continuity (currentPromptMajor, renderContinuationDigest, renderReplayDelta, toolCatalogFingerprint)
 import Max.Turn.Replay
@@ -1038,10 +1071,320 @@ launchMonitorTurn recoveryView turn fire = do
             (Just (renderMonitorFireView fire))
             (Just fire.emfEffectToolGrants)
             Nothing
+            Nothing
             OriginMonitor
             NeverAbsorb
             []
             trigger
+
+--------------------------------------------------------------------------------
+-- ADR 007 step 11: driving a suspended plan
+
+-- | The effectful half of "Max.Plan.Worker".
+--
+-- Everything here needs the dispatch row, which is why the worker takes it as
+-- an argument rather than doing any of it: the decision about a parked plan is
+-- pure and lives in "Max.Plan.Drive", and this is the four things acting on
+-- that decision requires the whole bot for.
+planDriverFor ::
+  ( Blob :> es,
+    Http :> es,
+    Embedding :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  HttpRuntime ->
+  PlanDriver es
+planDriverFor runtime =
+  PlanDriver
+    { pdSpawn = spawnChild,
+      pdStop = stopChild,
+      pdResume = resumeSuspended runtime,
+      pdWake = wakeOwner
+    }
+
+-- | The trigger a plan's turns are dispatched against.
+--
+-- The plan's own seed message, re-read rather than remembered: it is the same
+-- construction 'launchMonitorTurn' uses, and for the same reason — a turn needs
+-- real provenance in a real conversation, and the only honest source of one is
+-- the message that started all this.  Body emptied, because nothing the seed
+-- said is what this turn is about; the host-authored view is.
+planSeedTrigger ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  Eff es (Maybe DispatchMessage)
+planSeedTrigger plan = case plan.wpSeedMessage of
+  Nothing -> pure Nothing
+  Just messageId -> do
+    mClaim <- loadDispatchClaim (CanonicalMessageId messageId)
+    case mClaim of
+      Nothing -> pure Nothing
+      Just claim -> do
+        principals <- mentionPrincipalsFor (mentionIdentities claim.body)
+        let seed = dispatchMessage principals claim
+        pure $
+          if seed.groupId /= plan.wpGroup
+            then Nothing
+            else Just seed {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
+
+-- | Open a turn for one subgoal, record the spawn edge, and let it run.
+--
+-- The order is the durability: the edge exists before the turn is dispatched,
+-- so a crash between them leaves a child the reconciler can see rather than a
+-- turn nobody owns.  It also takes the plan out of the wakeable set
+-- immediately, which is what stops a second claim dispatching the same subgoal.
+spawnChild ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  WakeablePlan ->
+  Desired ->
+  Eff es (Maybe AgentTurnId)
+spawnChild plan desired = do
+  env :: BotEnv <- ask
+  mTrigger <- planSeedTrigger plan
+  case mTrigger of
+    Nothing -> do
+      logAttention "plan: cannot open a child without the plan's seed message" $
+        object ["plan_id" .= plan.wpPlan.stRef.prPlanId.unPlanId, "node" .= desired.dsNode.unNodeId]
+      pure Nothing
+    Just trigger -> do
+      child <- startAgentTurn plan.wpGroup trigger.canonicalId trigger.authorPrincipalId
+      recordChildSpawn
+        plan.wpPlan.stRef
+        plan.wpPlan.stRootTurn
+        child
+        desired.dsHash
+        desired.dsNode.unNodeId
+      logInfo "plan: child opened" $
+        object
+          [ "plan_id" .= plan.wpPlan.stRef.prPlanId.unPlanId,
+            "node" .= desired.dsNode.unNodeId,
+            "child_turn" .= child.atrTurnOrdinal.unTurnOrdinal
+          ]
+      dispatchLLMWith
+        (Just child)
+        Nothing
+        (Just (renderSubgoalView plan desired))
+        (Just (childGrants env plan.wpGroup child desired.dsGoal))
+        (Just desired.dsGoal)
+        Nothing
+        OriginPlan
+        NeverAbsorb
+        []
+        trigger
+      pure (Just child.atrTurnId)
+
+-- | What a fork child may touch: the tools a plan itself may call, plus the one
+-- way it hands its answer back.
+--
+-- Deliberately the plannable set rather than a translation of the subgoal's
+-- declared effects.  "Max.Plan.Catalog" refuses to map plan scopes onto tool
+-- effect domains in general, because a uniform guess is the worst way to be
+-- wrong; the set the kernel already vouches for is the honest ceiling until
+-- somebody reads the rest of the tools closely enough to widen it.  It also
+-- means a child cannot speak: nothing in that set sends.
+childGrants :: BotEnv -> GroupId -> AgentTurnRef -> Goal -> Map.Map T.Text T.Text
+childGrants env gid child goal =
+  Map.fromList
+    [ (definition.tdRef.unToolRef, toolCatalogFingerprint [definition])
+    | definition <- definitions,
+      Set.member definition.tdRef allowed
+    ]
+  where
+    caps =
+      TurnCapabilities
+        True
+        False
+        False
+        noAdvertisedCaps
+        False
+        Map.empty
+        Nothing
+        (Just (SubgoalReturn child goal.goalObjective goal.goalExpected))
+    definitions = toolDefinitionsFor env gid caps
+    allowed = Set.insert (ToolRef "subgoal_return") (Map.keysSet (planCatalog definitions))
+
+-- | What a child is told, and the whole of what it is told.
+--
+-- ADR 002's isolation rule, rendered: a child sees its 'Goal' and the
+-- conversation it lives in, and nothing about the plan that forked it — not its
+-- siblings, not the objective above it, not what will be done with its answer.
+-- Anything more would make the fan-out an accumulation of context, which is the
+-- thing it exists to avoid.
+renderSubgoalView :: WakeablePlan -> Desired -> T.Text
+renderSubgoalView plan desired =
+  T.intercalate
+    "\n"
+    [ "[子任务 — 计划 #" <> tshow plan.wpPlan.stRef.prOrdinal.unPlanOrdinal <> "]",
+      "要做的事：" <> T.take 4000 desired.dsGoal.goalObjective,
+      "要交回的结果类型：" <> renderSchema desired.dsGoal.goalExpected,
+      "额度：最多 "
+        <> tshow desired.dsGoal.goalBudget.ebMaxCalls
+        <> " 次工具调用。",
+      "",
+      "这一轮是别人派给你的一小块活，你看不到上面在做什么，也不需要看到。",
+      "做完用 subgoal_return 把结果交回去——那是唯一会被读到的东西，你说的话没有人看得见。",
+      "做不出来也交：交一个说明情况的值，比什么都不交强。"
+    ]
+
+stopChild ::
+  (Log :> es, Reader BotEnv :> es, IOE :> es) =>
+  WakeablePlan ->
+  AgentTurnId ->
+  Eff es ()
+stopChild plan child = do
+  env :: BotEnv <- ask
+  stopped <- liftIO (cancelAgentTurnTask env.beTasks child)
+  logInfo "plan: child no longer wanted" $
+    object
+      [ "plan_id" .= plan.wpPlan.stRef.prPlanId.unPlanId,
+        "child_turn" .= child.unAgentTurnId,
+        -- False is not a failure: the child may have finished a moment ago, or
+        -- be running on another process.  Saying which is all this can do.
+        "killed_here" .= stopped
+      ]
+
+-- | Continue a parked walk with the tools it would have had inline.
+--
+-- The turn identity is synthesized, and the honest description of it is that a
+-- resume has no author: nobody said anything, and the conversation is the only
+-- part of "who is asking" that still means something.  The plannable set is
+-- read-only conversation tools, so what is left blank here is what none of them
+-- consult.
+resumeSuspended ::
+  ( Blob :> es,
+    Http :> es,
+    Embedding :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    Reader BotEnv :> es,
+    IOE :> es
+  ) =>
+  HttpRuntime ->
+  WakeablePlan ->
+  ExecState ->
+  Eff es Resumption
+resumeSuspended runtime plan state = do
+  env :: BotEnv <- ask
+  handle <- loadSession env.beSessions env.beDefaultModel plan.wpGroup
+  s <- liftIO (readSession handle)
+  let caps = TurnCapabilities False False False noAdvertisedCaps False Map.empty Nothing Nothing
+      identity =
+        TurnIdentity
+          plan.wpGroup
+          (CanonicalMessageId (fromMaybe 0 plan.wpSeedMessage))
+          (UserId 0)
+          (UserId 0)
+          (fromMaybe (PrincipalId 0) plan.wpInitiator)
+          s.clearedAt
+          Nothing
+      toolCtx = mkToolContext identity caps
+      definitions = toolDefinitionsFor env plan.wpGroup caps
+      document = plan.wpPlan.stDocument
+      -- Cosmetic: the objective only reaches prompt text, and on this path
+      -- there is no prompt.  What the environment actually decides — the
+      -- ceiling, the expected result type, the plannable catalog — does not
+      -- depend on it.
+      venv = planValidationEnv (planCatalog definitions) document.pdRoot
+  case plannableToolsFor runtime env toolCtx of
+    Left err ->
+      pure (Worker.Stopped ("这一轮拿不到工具：" <> T.pack (show err)))
+    Right catalog -> case validatePlan venv document.pdRoot document.pdPlan of
+      -- The plan was admissible when it was written and is not now: a tool it
+      -- names has been gated off, or the ceiling moved.  A real answer, and the
+      -- only one that does not run a plan nobody admitted.
+      Left rejection -> pure (Worker.Stopped ("计划现在过不了校验了：" <> rejectionText rejection))
+      Right valid -> do
+        result <-
+          runToolOutput defaultInlineMediaLimit . runTools catalog $
+            resumePlan
+              ExecutionEnv {exValidation = venv, exHandles = Map.empty, exRoot = document.pdRoot}
+              valid
+              state
+        pure $ case result.erEnd of
+          Produced value -> Worker.Produced (renderPlanValue value)
+          Deoptimized (AtFork node _ _ _) -> Worker.Parked node.unNodeId (toJSON result.erState)
+          Deoptimized deopt -> Worker.Stopped (deoptText deopt)
+
+-- | A plan's result as one line of prose for the model that will speak.
+renderPlanValue :: Value -> T.Text
+renderPlanValue = \case
+  String text -> text
+  other -> TE.decodeUtf8Lenient (LBS.toStrict (encode other))
+
+-- | Tell whoever owns the plan how it came out, in a turn of their own.
+--
+-- The plan does not speak; a model does.  What arrives here is a value or a
+-- reason, and the turn this opens is an ordinary one that happens to start with
+-- the host saying what happened — the same construction a monitor fire uses,
+-- because it is the same situation: nobody said anything, and something in the
+-- world is worth a reply.
+wakeOwner ::
+  ( Blob :> es,
+    Log :> es,
+    WithConnection :> es,
+    PlatformApi :> es,
+    Outbound :> es,
+    LLM :> es,
+    Agent :> es,
+    Concurrent :> es,
+    Reader BotEnv :> es,
+    Reader ModelCatalog :> es,
+    IOE :> es
+  ) =>
+  WakeablePlan ->
+  T.Text ->
+  Eff es ()
+wakeOwner plan outcome = do
+  mTrigger <- planSeedTrigger plan
+  case mTrigger of
+    Nothing ->
+      logAttention "plan: finished with nobody to tell" $
+        object ["plan_id" .= plan.wpPlan.stRef.prPlanId.unPlanId]
+    Just trigger ->
+      dispatchLLMWith
+        Nothing
+        Nothing
+        (Just (renderPlanWakeView plan outcome))
+        Nothing
+        Nothing
+        Nothing
+        OriginPlan
+        NeverAbsorb
+        []
+        trigger
+
+renderPlanWakeView :: WakeablePlan -> T.Text -> T.Text
+renderPlanWakeView plan outcome =
+  T.intercalate
+    "\n"
+    [ "[计划回来了 — 计划 #" <> tshow plan.wpPlan.stRef.prOrdinal.unPlanOrdinal <> "]",
+      "你之前挂起的那个计划跑完了。结果：",
+      T.take 8000 outcome,
+      "",
+      "这是原始结果，不是给人看的话。照上面的东西回一句就行；没什么值得说的就 [silence]。"
+    ]
 
 -- | Spawn an async to build the prompt, call the LLM, post the reply,
 -- and append the (user, assistant) turn to the session history.
@@ -1076,7 +1419,7 @@ dispatchLLM ::
   [DispatchMessage] ->
   DispatchMessage ->
   Eff es ()
-dispatchLLM = dispatchLLMWith Nothing Nothing Nothing Nothing
+dispatchLLM = dispatchLLMWith Nothing Nothing Nothing Nothing Nothing
 
 -- | Resume one boot-claimed turn with the immutable original trigger and a
 -- bounded host-rendered journal view.  Missing or cross-conversation trigger
@@ -1130,6 +1473,7 @@ resumeInterruptedTurn recovery = do
                   Nothing
                   Nothing
                   Nothing
+                  Nothing
                   origin
                   NeverAbsorb
                   []
@@ -1154,13 +1498,17 @@ dispatchLLMWith ::
   Maybe T.Text ->
   -- | Arm-time tool-name ceiling; intersected with the current catalog.
   Maybe (Map.Map T.Text T.Text) ->
+  -- | The subgoal this turn is a fork child for. Ordinary dispatches carry
+  -- Nothing; a child carries the Goal its parent plan declared, which is what
+  -- types its return tool.
+  Maybe Goal ->
   Maybe IntentState ->
   TriggerOrigin ->
   Absorbable ->
   [DispatchMessage] ->
   DispatchMessage ->
   Eff es ()
-dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent origin absorbable companions gm = do
+dispatchLLMWith existingTurn recoveryView monitorView effectCeiling subgoal mIntent origin absorbable companions gm = do
   env :: BotEnv <- ask
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
@@ -1392,7 +1740,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
     -- no other trace: the 托腮 just vanishes, no reason face.  Pokes
     -- have no message to react to.
     withProcessingReaction outputCaps act
-      | origin `elem` [OriginPoke, OriginMonitor] || not (outputCaps.canReaction && outputCaps.canFace) = act
+      | origin `elem` [OriginPoke, OriginMonitor, OriginPlan] || not (outputCaps.canReaction && outputCaps.canFace) = act
       | otherwise =
           (queueQQReaction gm.groupId gm.canonicalId processingFaceId True >> act)
             `finally` queueQQReaction gm.groupId gm.canonicalId processingFaceId False
@@ -1529,6 +1877,12 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling mIntent orig
               (tierSatisfied TierGroupAdmin tier)
               Map.empty
               effectCeiling
+              -- The turn naming itself: a fork child's return tool is keyed by
+              -- the turn the spawn edge points at, and taking that from the
+              -- caller would create a way to name the wrong one.
+              ( (\goal -> SubgoalReturn durable goal.goalObjective goal.goalExpected)
+                  <$> subgoal
+              )
           currentDefinitions = toolDefinitionsFor env gm.groupId baseCapabilities
           catalogGrants =
             Map.fromList

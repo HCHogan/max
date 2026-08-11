@@ -221,7 +221,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
       again <-
         try . withDb pool $
-          recordChildSpawn ref fixture.fxTurn childTurn (goalHash (goalNamed "查甲")) "turn:1:0/k0"
+          recordChildSpawn ref fixture.fxTurn.atrTurnId childTurn (goalHash (goalNamed "查甲")) "turn:1:0/k0"
       case again of
         Left (_ :: SqlError) -> pure ()
         Right () -> expectationFailure "a child was given two parents"
@@ -377,12 +377,12 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       written <- withDb pool (recordChildResult childTurn (String "甲的答案"))
       written `shouldBe` True
       -- Still running, so still nobody's result to read.
-      withDb pool (listSettledChildren ref) `shouldReturn` []
+      withDb pool (listChildOutcomes ref) `shouldReturn` []
       withDb pool (finishAgentTurn childTurn TurnSucceeded 1 Nothing Nothing)
-      settled <- withDb pool (listSettledChildren ref)
-      map (.scResult) settled `shouldBe` [Just (String "甲的答案")]
-      map (.scGoalHash) settled `shouldBe` [goalHash (goalNamed "查甲")]
-      map (.scStatus) settled `shouldBe` ["succeeded"]
+      settled <- withDb pool (listChildOutcomes ref)
+      map (.coResult) settled `shouldBe` [Just (String "甲的答案")]
+      map (.coGoalHash) settled `shouldBe` [goalHash (goalNamed "查甲")]
+      map (.coStatus) settled `shouldBe` ["succeeded"]
 
     it "leaves a settled child with no result when it never returned one" $ do
       -- A crash, a !kill, or a child that simply said nothing.  All the same
@@ -392,9 +392,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
       withDb pool (finishAgentTurn childTurn TurnCrashed 1 (Just "boom") Nothing)
-      settled <- withDb pool (listSettledChildren ref)
-      map (.scResult) settled `shouldBe` [Nothing]
-      map (.scStatus) settled `shouldBe` ["crashed"]
+      settled <- withDb pool (listChildOutcomes ref)
+      map (.coResult) settled `shouldBe` [Nothing]
+      map (.coStatus) settled `shouldBe` ["crashed"]
 
     it "refuses a result for a turn nobody spawned" $ do
       fixture <- createFixture pool 42 1001
@@ -439,7 +439,7 @@ spawnChild pool fixture ref objective node = do
     withDb pool $
       startAgentTurn fixture.fxGroup (CanonicalMessageId 0) fixture.fxPrincipal
   withDb pool (markAgentTurnRunning child "child")
-  withDb pool (recordChildSpawn ref fixture.fxTurn child (goalHash (goalNamed objective)) node)
+  withDb pool (recordChildSpawn ref fixture.fxTurn.atrTurnId child (goalHash (goalNamed objective)) node)
   pure child
 
 requireHead :: Maybe (Either PlanLoadError StoredPlan) -> IO StoredPlan
