@@ -34,9 +34,10 @@
 module Main (main) where
 
 import Control.Monad (unless, when)
-import Data.Aeson (FromJSON (..), Value, eitherDecodeStrict', encode, object, withObject, (.:), (.=))
+import Data.Aeson (FromJSON (..), Value (..), eitherDecodeStrict', encode, object, withObject, (.:), (.=))
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy.Char8 qualified as BL8
+import Data.Text.Encoding qualified as TE
 import Data.Char (isSpace)
 import Data.IORef (newIORef)
 import Data.List (sortOn)
@@ -49,11 +50,17 @@ import Effectful
 import Effectful.Log (LogLevel (LogAttention), runLog)
 import Harness
 import Max.Config (AppConfig (..), appConfigParser)
-import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat, runLLM)
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Foldable (for_)
+import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, ToolCall (..), ToolSpec (..), chat, runLLM)
+import Max.Plan.Brief (subgoalBrief)
+import Max.Plan.Drive (Dispatchable (..))
+import Max.Plan.Reconcile (Desired (..))
+import Max.Plan.Schema (PlanSchema (..), SchemaField (..), checkValue, jsonSchemaOf, schemaErrorText)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Log (withCompactLogger)
 import Max.Plan.Prompt (frontPrompt)
-import Max.Plan.Types (Goal (..))
+import Max.Plan.Types (Binder (..), Goal (..), NodeId (..))
 import Max.Plan.Validate (ValidationEnv (..))
 import OptEnvConf
 import System.Exit (die, exitFailure)
@@ -65,7 +72,11 @@ data LiveOpts = LiveOpts
     loRepeat :: !Int,
     loOut :: !(Maybe FilePath),
     loMinAdmit :: !Double,
-    loDryRun :: !Bool
+    loDryRun :: !Bool,
+    -- | Ask the other half of the question: not "can a model write a fork" but
+    -- "can the child a fork opens hand a value back". ADR 007 §11's return
+    -- tool is the newest surface in the design and the one with no evidence.
+    loChildren :: !Bool
   }
 
 liveOptsParser :: Parser LiveOpts
@@ -120,6 +131,13 @@ liveOptsParser = do
       [ help "Print the prompt and the task list, then stop.  Makes no requests",
         switch True,
         long "dry-run",
+        value False
+      ]
+  loChildren <-
+    setting
+      [ help "Ask the child half instead: hand over one subgoal and see whether a value comes back",
+        switch True,
+        long "children",
         value False
       ]
   pure LiveOpts {..}
@@ -200,7 +218,16 @@ main = do
           : [printf "  line %d: %s" i e | (i, e) <- bad]
   when (null tasks) $ die "task file is empty"
 
-  if opts.loDryRun
+  if opts.loChildren
+    then do
+      httpRuntime <- newHttpRuntime
+      let work = [(p, probe, a) | p <- profiles, probe <- childProbes, a <- [1 .. opts.loRepeat]]
+      printf "asking %d child request(s)\n\n" (length work)
+      results <- withCompactLogger cfg.logColor Nothing $ \logger ->
+        runEff . runLog "max-plan-live" logger LogAttention . runLLM httpRuntime (\_ _ _ -> pure ()) (\_ -> pure ()) cfg.llm $
+          traverse (\(p, probe, a) -> askChild p probe a) work
+      childReport profiles results
+    else if opts.loDryRun
     then dryRun profiles tasks opts.loRepeat
     else do
       httpRuntime <- newHttpRuntime
@@ -255,6 +282,194 @@ dryRun profiles tasks repeat' = do
       putStrLn "\n── the prompt, as the first task would receive it ────"
       putStrLn (T.unpack (frontPrompt (envFor first')))
       putStrLn ("\n[user] " <> T.unpack userTurn)
+
+--------------------------------------------------------------------------------
+-- The child half
+
+-- | One subgoal, as a fork would hand it over.
+--
+-- Written here rather than in a fixture file because each one needs a
+-- 'PlanSchema', and a text encoding of the type language would be a second
+-- parser to keep in step with the first for no gain.
+data ChildProbe = ChildProbe
+  { cpName :: !Text,
+    cpObjective :: !Text,
+    -- | What the subgoal declared it would return, which is also — via
+    -- 'jsonSchemaOf' — the argument schema of the tool it hands it back with.
+    cpExpected :: !PlanSchema,
+    -- | Values the subgoal named in its @inputs@ block. The projection ADR 007
+    -- §12 added, exercised: a child that ignores what it was handed and
+    -- answers about something else has failed in a way a schema check cannot
+    -- see.
+    cpInputs :: ![(Binder, Value)]
+  }
+
+-- | Three shapes, chosen for what each can fail at.
+--
+-- @text@ is the baseline: nothing to get wrong but the tool call itself.  The
+-- object is the first shape where a model can return something plausible that
+-- does not type.  The array-of-objects with an input is the real case — the
+-- child must use what it was handed and produce a homogeneous list, which is
+-- where a model that is narrating rather than answering shows up.
+childProbes :: [ChildProbe]
+childProbes =
+  [ ChildProbe
+      { cpName = "text",
+        cpObjective = "用一句话说明 Haskell 里 newtype 和 data 的区别。",
+        cpExpected = SchemaText,
+        cpInputs = []
+      },
+    ChildProbe
+      { cpName = "object",
+        cpObjective = "介绍一下 PostgreSQL 这个数据库：名字和一段话的简介。",
+        cpExpected =
+          SchemaObject
+            [ SchemaField {sfName = "name", sfSchema = SchemaText, sfRequired = True},
+              SchemaField {sfName = "bio", sfSchema = SchemaText, sfRequired = True}
+            ],
+        cpInputs = []
+      },
+    ChildProbe
+      { cpName = "array of objects, with an input",
+        cpObjective = "按上面给的语言，列三个它最常用的 web 框架，每个给名字和一句话说明。",
+        cpExpected =
+          SchemaArray
+            ( SchemaObject
+                [ SchemaField {sfName = "framework", sfSchema = SchemaText, sfRequired = True},
+                  SchemaField {sfName = "note", sfSchema = SchemaText, sfRequired = True}
+                ]
+            ),
+        cpInputs = [(Binder "语言", String "Haskell")]
+      }
+  ]
+
+-- | What one child attempt did.
+data ChildOutcome
+  = ChildFailed !Text
+  | -- | Talked instead of returning.  The failure the brief exists to prevent:
+    -- a child's prose goes nowhere, so this is an answer nobody will ever read.
+    ChildTalked !Text
+  | -- | Called the tool with something its own declared type does not describe.
+    ChildOffSchema !Text !Value
+  | ChildReturned !Value
+
+data ChildCandidate = ChildCandidate
+  { ccProfile :: !Text,
+    ccProbe :: !Text,
+    ccAttempt :: !Int,
+    ccOutcome :: !ChildOutcome
+  }
+
+-- | The tool a fork child hands its answer back with, built exactly as
+-- "Max.Tools.Subgoal" builds it: the argument schema /is/ the subgoal's
+-- declared result type.
+returnSpec :: ChildProbe -> ToolSpec
+returnSpec probe =
+  ToolSpec
+    { specName = "subgoal_return",
+      specDescription =
+        "把这个子任务的结果交回去。你这一轮说的话没有人看得见，只有这里交的值会回到上层计划里。",
+      specSchema =
+        object
+          [ "type" .= ("object" :: Text),
+            "properties" .= object ["result" .= jsonSchemaOf probe.cpExpected],
+            "required" .= (["result"] :: [Text]),
+            "additionalProperties" .= False
+          ]
+    }
+
+askChild :: LLM :> es => Text -> ChildProbe -> Int -> Eff es ChildCandidate
+askChild profile probe attempt = do
+  result <-
+    chat
+      ctx
+      profile
+      [MsgSystem brief, MsgUser "开始吧。"]
+      [returnSpec probe]
+  pure
+    ChildCandidate
+      { ccProfile = profile,
+        ccProbe = probe.cpName,
+        ccAttempt = attempt,
+        ccOutcome = case result of
+          Left err -> ChildFailed err
+          Right (ContentResp text) -> ChildTalked text
+          Right (ToolCallsResp _ text calls) -> case [c | c <- calls, c.callName == "subgoal_return"] of
+            [] -> ChildTalked text
+            call : _ -> judgeReturn probe call.callArguments
+      }
+  where
+    -- The production renderer, not a paraphrase of it: the words are the
+    -- artifact under test.
+    brief =
+      subgoalBrief
+        1
+        Dispatchable
+          { dpDesired =
+              Desired
+                { dsNode = NodeId "turn:0:0/k0",
+                  dsBinder = Binder "child",
+                  dsGoal = childGoal probe,
+                  dsHash = ""
+                },
+            dpInputs = probe.cpInputs
+          }
+    ctx =
+      ChatCtx
+        { ccSource = "plan-live-child",
+          ccGroup = Nothing,
+          ccEffort = Nothing,
+          ccTimeoutSeconds = Nothing,
+          ccBufferedRetryDelaysSeconds = Nothing,
+          ccAgentTurnId = Nothing
+        }
+
+childGoal :: ChildProbe -> Goal
+childGoal probe =
+  planEnv.venGoal
+    { goalObjective = probe.cpObjective,
+      goalExpected = probe.cpExpected,
+      goalInputs = map fst probe.cpInputs
+    }
+
+-- | The same check "Max.Tools.Subgoal" applies before writing anything down.
+judgeReturn :: ChildProbe -> Value -> ChildOutcome
+judgeReturn probe args = case args of
+  Object o -> case KeyMap.lookup "result" o of
+    Nothing -> ChildOffSchema "少了 result 这个参数" args
+    Just returned -> case checkValue probe.cpExpected returned of
+      Left mismatch -> ChildOffSchema (schemaErrorText mismatch) returned
+      Right () -> ChildReturned returned
+  _ -> ChildOffSchema "参数不是对象" args
+
+childReport :: [Text] -> [ChildCandidate] -> IO ()
+childReport profiles candidates = do
+  putStrLn "── children ──────────────────────────────────────────"
+  printf "  %-18s %8s %8s %10s %8s\n" ("profile" :: String) ("returned" :: String) ("talked" :: String) ("off-schema" :: String) ("failed" :: String)
+  for_ profiles $ \profile -> do
+    let mine = [c | c <- candidates, c.ccProfile == profile]
+        count f = length [() | c <- mine, f c.ccOutcome]
+    printf
+      "  %-18s %8d %8d %10d %8d\n"
+      (T.unpack profile)
+      (count (\case ChildReturned {} -> True; _ -> False))
+      (count (\case ChildTalked {} -> True; _ -> False))
+      (count (\case ChildOffSchema {} -> True; _ -> False))
+      (count (\case ChildFailed {} -> True; _ -> False))
+  putStrLn ""
+  for_ candidates $ \candidate -> do
+    printf
+      "  %-18s %-28s #%d  %s\n"
+      (T.unpack candidate.ccProfile)
+      (T.unpack candidate.ccProbe)
+      candidate.ccAttempt
+      ( case candidate.ccOutcome of
+          ChildReturned returned -> "returned " <> clip 140 (shown returned)
+          ChildOffSchema detail returned ->
+            "OFF-SCHEMA " <> T.unpack detail <> " — " <> clip 100 (shown returned)
+          ChildTalked text -> "TALKED " <> clip 100 (T.strip text)
+          ChildFailed err -> "FAILED " <> clip 100 err
+      )
 
 -- | One request.  No tools are offered: a plan is written, not executed, and a
 -- model that reaches for a tool anyway has told us something worth counting.
@@ -428,3 +643,14 @@ report profiles candidates = do
     rateOf :: Int -> Int -> String
     rateOf _ 0 = "n/a"
     rateOf n outOf = printf "%d (%d%%)" n ((n * 100) `div` outOf)
+
+-- | JSON as characters rather than as bytes.  BL8.unpack would hand a terminal
+-- one Latin-1 char per UTF-8 byte, which turns every Chinese answer in the
+-- report into mojibake and makes a passing run look broken.
+shown :: Value -> Text
+shown = TE.decodeUtf8Lenient . BS8.toStrict . encode
+
+clip :: Int -> Text -> String
+clip n text
+  | T.length text <= n = T.unpack text
+  | otherwise = T.unpack (T.take n text) <> "…"

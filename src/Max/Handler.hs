@@ -21,7 +21,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
 import Control.Monad (forM_, unless, void, when)
-import Data.Aeson (Value (String), eitherDecodeStrict', encode, toJSON)
+import Data.Aeson (Value, eitherDecodeStrict', encode, toJSON)
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
 import Data.List (find, unsnoc)
@@ -29,7 +29,6 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust, listToMaybe, mapMaybe)
 import Data.Set qualified as Set
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime)
 import Data.Traversable (for)
 import Effectful
@@ -164,6 +163,7 @@ import Max.DB.Plan
     loadPlanWake,
     recordChildSpawn,
   )
+import Max.Plan.Brief (renderPlanValue, subgoalBrief)
 import Max.Plan.Catalog (planCatalog)
 import Max.Plan.Execute
   ( Deopt (..),
@@ -176,8 +176,7 @@ import Max.Plan.Execute
   )
 import Max.Plan.Drive (Dispatchable (..))
 import Max.Plan.Reconcile (Desired (..))
-import Max.Plan.Schema (renderSchema)
-import Max.Plan.Types (Binder (..), EffectBudget (..), Goal (..), NodeId (..), PlanDocument (..))
+import Max.Plan.Types (Binder (..), Goal (..), NodeId (..), PlanDocument (..))
 import Max.Plan.Validate (rejectionText, validatePlan)
 import Max.Plan.Worker (PlanDriver (..), Resumption)
 import Max.Plan.Worker qualified as Worker
@@ -1239,43 +1238,12 @@ childGrants env gid child goal =
       Set.fromList [ToolRef "subgoal_return", ToolRef "plan_guide", ToolRef "plan_run"]
         <> Map.keysSet (planCatalog definitions)
 
--- | What a child is told, and the whole of what it is told.
---
--- ADR 002's isolation rule, rendered: a child sees its 'Goal' and the
--- conversation it lives in, and nothing about the plan that forked it — not its
--- siblings, not the objective above it, not what will be done with its answer.
--- Anything more would make the fan-out an accumulation of context, which is the
--- thing it exists to avoid.
+-- | What a child is told, which is "Max.Plan.Brief"'s business rather than this
+-- module's: the words are the artifact under test, and answering what a real
+-- model does with them should not require standing up a bot.
 renderSubgoalView :: WakeablePlan -> Dispatchable -> T.Text
-renderSubgoalView plan item =
-  T.intercalate
-    "\n"
-    ( [ "[子任务 — 计划 #" <> tshow plan.wpPlan.stRef.prOrdinal.unPlanOrdinal <> "]",
-        "要做的事：" <> T.take 4000 goal.goalObjective,
-        "要交回的结果类型：" <> renderSchema goal.goalExpected,
-        "额度：最多 " <> tshow goal.goalBudget.ebMaxCalls <> " 次工具调用。"
-      ]
-        -- The inputs block: exactly the names the subgoal asked for, resolved
-        -- to what they actually are.  This is the only thing a child knows
-        -- about the plan above it, and it knows it because it said it needed
-        -- it.  Absent entirely when it asked for nothing, rather than an empty
-        -- heading that reads like something went missing.
-        <> ( if null item.dpInputs
-               then []
-               else
-                 ["", "上面算好交给你的东西："]
-                   <> [ "  " <> binder.unBinder <> " = " <> T.take 4000 (renderPlanValue value)
-                      | (binder, value) <- item.dpInputs
-                      ]
-           )
-        <> [ "",
-             "这一轮是别人派给你的一小块活，你看不到上面在做什么，也不需要看到。",
-             "做完用 subgoal_return 把结果交回去——那是唯一会被读到的东西，你说的话没有人看得见。",
-             "做不出来也交：交一个说明情况的值，比什么都不交强。"
-           ]
-    )
-  where
-    goal = item.dpDesired.dsGoal
+renderSubgoalView plan =
+  subgoalBrief (fromIntegral plan.wpPlan.stRef.prOrdinal.unPlanOrdinal)
 
 stopChild ::
   (Log :> es, Reader BotEnv :> es, IOE :> es) =>
@@ -1357,12 +1325,6 @@ resumeSuspended runtime plan state = do
           Produced value -> Worker.Produced (renderPlanValue value)
           Deoptimized (AtFork node _ _ _) -> Worker.Parked node.unNodeId (toJSON result.erState)
           Deoptimized deopt -> Worker.Stopped (deoptText deopt)
-
--- | A plan's result as one line of prose for the model that will speak.
-renderPlanValue :: Value -> T.Text
-renderPlanValue = \case
-  String text -> text
-  other -> TE.decodeUtf8Lenient (LBS.toStrict (encode other))
 
 -- | Tell whoever owns the plan how it came out, in a turn of their own.
 --
