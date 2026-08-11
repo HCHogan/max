@@ -927,13 +927,36 @@ orchestration layer.
     elaboration" and §"a waiting plan is an armed suspension" describe is that
     step, and revision 1 having a writer is its precondition.
 
-    **One measurement should come first.** Against the production catalog — two
-    read-only, fast tools — native parallel tool calls already cover independent
-    lookups, and the 0/5 above says models correctly prefer them. Fork earns its
-    scheduler when a child can do something a plan cannot: iterate, judge, or
-    block on something slow. That argues for widening the plannable set toward
-    `Browser` and `Sandbox` before building the scheduler, rather than after —
-    the ordering falls out of §"the front model keeps the fast tools".
+    **Widening the plannable set does not substitute for it, and the reason
+    corrects an earlier reading of the 0/5.** Fork earns its scheduler when a
+    child can do what a plan cannot — iterate, judge, or block on something slow
+    — which suggested making the slow tools plannable first. That is backwards.
+    Until there are children, a slow tool in the plannable set only lets the
+    *front* model's own inline plan block for thirty seconds, which is the thing
+    §"the front model keeps the fast tools" exists to prevent. Slow tools arrive
+    *with* step 11 or after it, never before.
+
+    So the set widened along the axis that helps today: fast conversation reads.
+    `get_message_by_id` and `context_search` join it, and both were declarable
+    because each has exactly one success shape — `contextSearchSummary` already
+    calls itself the stable model-facing shape and is kept pure to stay that
+    way. Four tools, all drift-checked against the live JSON Schema, all
+    agreeing.
+
+    **Two tools were looked at and refused, which is the more useful result.**
+    `browser_navigate` and `browser_snapshot` return whatever the browser
+    container handed back; max does not constrain it, so there is no shape to
+    declare. `view_zhihu` has a clean `{url, text, note}` *and* a fallback
+    branch returning the raw payload when it does not recognise one. Declaring
+    either would type-check plans against a shape the tool does not always
+    produce, and the failure would land at runtime on a projection — the exact
+    error the kernel exists to prevent, reintroduced by its own catalog.
+
+    Which sharpens what "make a tool plannable" costs. It is not *read the
+    implementation and write the schema down*; it is **give the success path one
+    total shape**, and that is a change to the tool. Most of max's tools were
+    written for a consumer that reads whatever arrives, so having one shape was
+    never a requirement. Now it is, for any tool a plan may call.
 
 12. **Concurrency and child context projection**, only once the shape holds.
 

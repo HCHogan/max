@@ -34,8 +34,21 @@ import Max.Plan.Catalog
 import Max.Plan.Schema (PlanSchema (..), SchemaField (..))
 import Max.Plan.Types (PlanEffect (..))
 import Max.Plan.Validate (CatalogEntry (..))
+import Max.Effects.Embedding (Embedding)
+import Max.Effects.PlatformApi (PlatformApi)
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
+import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
+import Max.Tools (builtinsFor)
+import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Search (SearchConfig (..), searchToolsFor)
+import Effectful.PostgreSQL (WithConnection)
+import OneBot.Types (GroupId (..), UserId (..))
+import Data.Time (utc)
 import Test.Hspec
+
+-- | One effect row wide enough for every tool constructor this spec touches.
+-- Never interpreted: only 'toolSchema' is forced, and that is a pure field.
+type Row = '[Embedding, WithConnection, PlatformApi, Log, IOE]
 
 -- | Every tool whose live JSON Schema this spec can reach without standing up
 -- the world.
@@ -48,7 +61,10 @@ import Test.Hspec
 liveSchemas :: [(Text, Value)]
 liveSchemas =
   [ (tool.toolName, tool.toolSchema)
-    | tool <- searchToolsFor @'[Log, IOE] (error "HttpRuntime forced by a tool schema") searchConfig
+    | tool <-
+        searchToolsFor @Row (error "HttpRuntime forced by a tool schema") searchConfig
+          <> builtinsFor @Row utc turnContext
+          <> memoryToolsFor @Row turnContext
   ]
   where
     searchConfig =
@@ -57,6 +73,29 @@ liveSchemas =
           scDefaultMaxResults = 5,
           scTimeoutSeconds = 10
         }
+    -- Only the schema is forced, and a schema does not read the turn.  A
+    -- context whose fields start mattering to one is a context this spec should
+    -- stop pretending it can fabricate — it would crash rather than pass.
+    turnContext =
+      mkToolContext
+        TurnIdentity
+          { tiGroupId = GroupId 1,
+            tiCanonicalId = CanonicalMessageId 1,
+            tiUserId = UserId 1,
+            tiSelfId = UserId 2,
+            tiAuthorPrincipalId = PrincipalId 1,
+            tiClearedAt = Nothing,
+            tiTurnOutputContext = Nothing
+          }
+        TurnCapabilities
+          { tcMultimodal = False,
+            tcStickers = False,
+            tcSkills = False,
+            tcOutput = noAdvertisedCaps,
+            tcMonitorArming = False,
+            tcCatalogGrants = Map.empty,
+            tcEffectCeiling = Nothing
+          }
 
 definitionOf :: Text -> ToolDefinition
 definitionOf name =
@@ -78,7 +117,8 @@ spec = do
       -- A guard rather than decoration: if the reachable set went empty the
       -- comparison below would vacuously pass and the drift check would be
       -- silently doing nothing.
-      map ((.unToolRef) . (.ptRef)) reachable `shouldBe` ["web_search"]
+      map ((.unToolRef) . (.ptRef)) reachable
+        `shouldBe` ["web_search", "get_message_by_id", "context_search", "memory_list"]
       sequence_
         [ (name, fromJsonSchema schema) `shouldBe` (name, Just (normalise tool.ptInput))
           | tool <- reachable,
