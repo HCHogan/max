@@ -2,12 +2,12 @@ module Max.DB.AgentTurnSpec (spec) where
 
 import Control.Concurrent.Async (mapConcurrently)
 import Control.Exception (bracket, try)
-import Control.Monad (forM, forM_)
+import Control.Monad (forM, forM_, replicateM)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int64)
 import Data.List (sort)
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime, utc)
@@ -486,8 +486,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
 
   it "logically evicts expired archives and enforces the per-conversation LRU cap" $ do
     seed <- createSeed pool 42 1001
-    turns <- forM [1 .. 52 :: Int] $ \_ ->
-      withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal)
+    turns <-
+      replicateM (52 :: Int) (withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal))
     let base = testTime
         pruneAt = addUTCTime 1000 base
     forM_ (zip [1 ..] turns) $ \(index :: Int, turn) -> do
@@ -510,8 +510,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
 
   it "enforces the live archive cap as terminal checkpoints commit" $ do
     seed <- createSeed pool 42 1001
-    turns <- forM [1 .. 51 :: Int] $ \_ ->
-      withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal)
+    turns <-
+      replicateM (51 :: Int) (withDb pool (startAgentTurn seed.fxGroup seed.fxTrigger seed.fxPrincipal))
     now <- getCurrentTime
     _ <-
       mapConcurrently
@@ -547,7 +547,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
           (Just (T.replicate 64 "a", 10, addUTCTime (14 * 86400) now))
       pure (index, turn)
     let byIndex = [(index, turn) | (index, turn) <- chainTurns]
-        turnAt index = snd (head (filter ((== index) . fst) byIndex))
+        turnAt index =
+          fromMaybe (error ("no turn at index " <> show index)) (lookup index byIndex)
     forM_ [(2, 1), (3, 2)] $ \(child, parent) -> do
       linked <-
         withDb pool $

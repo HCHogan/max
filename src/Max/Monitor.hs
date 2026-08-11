@@ -13,7 +13,7 @@ where
 import Control.Monad (when)
 import Data.Aeson (object, (.=))
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing)
 import Data.Ord (clamp)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -169,7 +169,7 @@ monitorWorker tz owner dispatchElaborated = loop
         Just expression -> case parseCronSchedule expression of
           Right schedule -> pure (nextCronFire tz schedule completedAt)
           Left _ -> pure Nothing
-      when (isJust fire.cmfCron && nextAt == Nothing) $
+      when (isJust fire.cmfCron && isNothing nextAt) $
         logAttention "monitor: cannot advance cron; closing" $
           object
             [ "fire_id" .= fire.cmfFireId.unMonitorFireId,

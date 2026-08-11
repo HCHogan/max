@@ -88,7 +88,7 @@ definitions =
 invoke :: Text -> Value -> IO (Either Text Value, [Text])
 invoke name args = do
   calls <- newIORef []
-  out <- runToolWith (nothingJournal) calls name args
+  out <- runToolWith nothingJournal calls name args
   (out,) <$> readIORef calls
 
 -- | A journal that writes nothing, which is what a dispatch with no durable
@@ -296,7 +296,7 @@ spec = do
                   pjSuspend = \_ based node state ->
                     liftIO (modifyIORef' parked (<> [(based, node, state)])) >> pure True
                 }
-        out <- runToolWith journal calls "plan_run" (forkArgs)
+        out <- runToolWith journal calls "plan_run" forkArgs
         readIORef calls `shouldReturn` ["web_search"]
         case out of
           Left e -> expectationFailure (show e)

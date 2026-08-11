@@ -17,6 +17,7 @@ where
 
 import Data.Aeson (Value, object, withObject, (.:?), (.=))
 import Data.Aeson.Types (parseEither)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -98,7 +99,7 @@ parseLedgerMatchSpec value = case parseEither parser value of
         (Just "LedgerMatch", Just 1) -> pure ()
         _ -> fail "unsupported LedgerMatch kind/version"
       parsedMedia <- traverse parseMediaKind (media :: Maybe Text)
-      pure (LedgerMatchSpec sender (T.strip <$> contains) parsedMedia (maybe False id mentionSelf))
+      pure (LedgerMatchSpec sender (T.strip <$> contains) parsedMedia (fromMaybe False mentionSelf))
 
     parseMediaKind = \case
       "image" -> pure MImage
@@ -109,9 +110,9 @@ parseLedgerMatchSpec value = case parseEither parser value of
       _ -> fail "media_kind must be image/sticker/video/audio/file"
 
     noPredicate spec =
-      spec.lmsSenderPrincipal == Nothing
-        && spec.lmsTextContains == Nothing
-        && spec.lmsMediaKind == Nothing
+      isNothing spec.lmsSenderPrincipal
+        && isNothing spec.lmsTextContains
+        && isNothing spec.lmsMediaKind
         && not spec.lmsMentionSelf
 
 ledgerSpecMatches ::

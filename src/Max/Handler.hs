@@ -80,7 +80,7 @@ import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBl
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), LLM)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded, wasDelivered)
 import Max.Effects.PlatformApi (PlatformApi, sendAction)
-import Max.Effects.Tools (ToolDefinition (..), ToolRef (..))
+import Max.Effects.Tools (ToolDefinition (..), ToolRef (..), runTools)
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.Faces (faceIdByName)
@@ -151,7 +151,6 @@ import Max.ToolContext (SubgoalReturn (..), TurnCapabilities (..), TurnIdentity 
 import Max.Effects.Http (Http)
 import Max.Effects.Embedding (Embedding)
 import Max.Effects.ToolOutput (defaultInlineMediaLimit, runToolOutput)
-import Max.Effects.Tools (runTools)
 import Max.HttpRuntime (HttpRuntime)
 import Max.DB.Plan
   ( WakeablePlan (..),

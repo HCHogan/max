@@ -107,7 +107,7 @@ spec = do
     it "reads a fork's subgoals, its policies and its continuation" $
       case parsePlan "fork {\n  a: hole \"查甲\" : text budget { calls: 1 }\n  b: hole \"查乙\" : text budget { calls: 1 }\n}\ndone concat(a, b)" of
         Right (Fork fork (Done _)) -> do
-          map (fst) fork.fnChildren `shouldBe` [Binder "a", Binder "b"]
+          map fst fork.fnChildren `shouldBe` [Binder "a", Binder "b"]
           map (\(_, goal) -> goal.goalObjective) fork.fnChildren `shouldBe` ["查甲", "查乙"]
           fork.fnJoin `shouldBe` JoinAll
           fork.fnWatch `shouldBe` WatchOnFailure

@@ -63,7 +63,7 @@ spec = do
     it "refuses to complete on unavailable, stale, or unknown outcomes" $ do
       let verdicts = [Unavailable, Stale "fingerprint moved", OutcomeUnknown "timeout"]
       map (\verdict -> accept goal (String "答案") [("answers-question", verdict)]) verdicts
-        `shouldSatisfy` all (/= Accepted)
+        `shouldSatisfy` notElem Accepted
 
     it "says which way the gate broke" $
       map (.evDetail) (maybe [] (.goalEvidence) (reholed (accept goal (String "答案") [("answers-question", Stale "moved")])))

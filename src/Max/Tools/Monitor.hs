@@ -91,7 +91,7 @@ armMonitorTool tz context =
                   armingTurn = turnOutputAgentTurn outputContext
                   effectCeiling = toolCatalogGrants context
               now <- liftIO getCurrentTime
-              result <- case args.aaTrigger of
+              case args.aaTrigger of
                 "time" -> case resolveTime tz args now of
                   Left err -> pure (Left err)
                   Right (cron, fireAt) -> do
@@ -134,7 +134,6 @@ armMonitorTool tz context =
                                 "cooldown_seconds" .= args.aaCooldownSeconds
                               ]
                 _ -> pure (Left "trigger 必须是 time 或 ledger")
-              pure result
     }
   where
     parseArm o =

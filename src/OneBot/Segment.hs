@@ -17,7 +17,6 @@ import Control.Applicative ((<|>))
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser, typeMismatch)
-import Data.Char (isAlphaNum, isAscii, isDigit)
 import Data.Foldable (asum)
 import Data.Int (Int64)
 import Data.List (sortOn, unsnoc)

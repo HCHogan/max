@@ -395,7 +395,12 @@ platformDisplayLabel = \case
   PlatformQQ -> "QQ"
   PlatformMatrix -> "Matrix"
   PlatformIMessage -> "iMessage"
+  -- Both spellings of WeChat read the same to a person, and that is the whole
+  -- job of this function.  They are separate platforms because their endpoints,
+  -- capabilities and delivery evidence differ — none of which is visible in a
+  -- transcript line.
   PlatformWeChatPad -> "WeChat"
+  PlatformWeChatHook -> "WeChat"
   PlatformCustom name -> name
 
 --------------------------------------------------------------------------------

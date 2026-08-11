@@ -385,7 +385,7 @@ spec = do
               }
       reasonOf (Hole childGoal {goalEvidence = [forged]})
         `shouldBe` Just (HostOnlyField "evidence")
-      reasonOf (Hole childGoal {goalAttempt = 0 - 5})
+      reasonOf (Hole childGoal {goalAttempt = negate 5})
         `shouldBe` Just (HostOnlyField "attempt")
 
     it "counts a hole's whole budget against the enclosing one" $

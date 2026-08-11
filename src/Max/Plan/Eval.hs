@@ -33,7 +33,7 @@ module Max.Plan.Eval
   )
 where
 
-import Control.Monad (filterM, when)
+import Control.Monad (filterM, when, (<=<))
 import Data.Aeson (Value (..))
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
@@ -166,7 +166,7 @@ expression env = go
         pure (Object (KeyMap.fromList members))
       EConcat parts -> do
         burn
-        pieces <- traverse (\part -> asText =<< go part) parts
+        pieces <- traverse (asText <=< go) parts
         pure (String (T.concat pieces))
       ELength source -> do
         burn

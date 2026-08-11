@@ -1,5 +1,6 @@
 module Max.Plan.SchemaSpec (spec) where
 
+import Control.Monad (void)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Text (Text)
 import Data.Vector qualified as V
@@ -69,10 +70,10 @@ spec = do
       projectField "age" person `shouldBe` Right (SchemaNullable SchemaInt)
 
     it "refuses a field that was never declared" $
-      expected (() <$ projectField "sudo" person) `shouldBe` Just "a declared field"
+      expected (void (projectField "sudo" person)) `shouldBe` Just "a declared field"
 
     it "refuses to project through a non-object" $
-      expected (() <$ projectField "name" SchemaText) `shouldBe` Just "object"
+      expected (void (projectField "name" SchemaText)) `shouldBe` Just "object"
 
     it "types an index as nullable, since no schema carries a length" $
       projectIndex (SchemaArray SchemaText) `shouldBe` Right (SchemaNullable SchemaText)
@@ -84,7 +85,7 @@ spec = do
         `shouldBe` Right (SchemaNullable SchemaText)
 
     it "still reports the underlying mismatch through a nullable source" $
-      expected (() <$ projectField "name" (SchemaNullable SchemaText)) `shouldBe` Just "object"
+      expected (void (projectField "name" (SchemaNullable SchemaText))) `shouldBe` Just "object"
 
     it "does not stack nullability" $
       nullable (nullable SchemaText) `shouldBe` SchemaNullable SchemaText

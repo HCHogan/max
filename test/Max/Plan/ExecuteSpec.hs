@@ -1,6 +1,7 @@
 module Max.Plan.ExecuteSpec (spec) where
 
 import Data.Aeson (Value (..), decode, encode, object, (.=))
+import Data.Maybe (fromMaybe)
 import Data.Aeson.Key qualified as Key
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
@@ -153,7 +154,7 @@ run answers plan = do
               toolSchema = wireSchema "query",
               toolRun = \args -> do
                 liftIO (modifyIORef' seen (<> [("search_web", args)]))
-                pure (maybe (Right Null) id (lookup "search_web" answers))
+                pure (fromMaybe (Right Null) (lookup "search_web" answers))
             },
           Tool
             { toolName = "reply",
@@ -161,7 +162,7 @@ run answers plan = do
               toolSchema = wireSchema "text",
               toolRun = \args -> do
                 liftIO (modifyIORef' seen (<> [("reply", args)]))
-                pure (maybe (Right Null) id (lookup "reply" answers))
+                pure (fromMaybe (Right Null) (lookup "reply" answers))
             }
         ]
   result <- runEff . runTools catalog $ executePlan executionEnv plan

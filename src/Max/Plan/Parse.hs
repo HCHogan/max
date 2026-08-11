@@ -34,7 +34,8 @@ module Max.Plan.Parse
   )
 where
 
-import Data.Maybe (isNothing)
+import Control.Monad (void)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Scientific (fromFloatDigits)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -149,7 +150,7 @@ reservedWords =
   ]
 
 keyword :: Text -> P ()
-keyword word = lexeme (try (() <$ string word <* notFollowedBy identChar))
+keyword word = lexeme (try (void (string word) <* notFollowedBy identChar))
 
 identChar :: P Char
 identChar = alphaNumChar <|> char '_'
@@ -375,7 +376,7 @@ goalBlockP =
 budgetFields :: P GoalBlock
 budgetFields = do
   fields <- commaSep ((,) <$> fieldName <*> (symbol ":" *> integer))
-  let pick name = maybe 0 id (lookup name fields)
+  let pick name = fromMaybe 0 (lookup name fields)
   pure (BudgetBlock (pick "calls") (pick "sends") (pick "fanout") (pick "tokens") (pick "ms"))
 
 effectP :: P PlanEffect

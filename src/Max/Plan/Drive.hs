@@ -137,7 +137,7 @@ driveFork document state settled running =
     atFork fork =
       let desired =
             [ Desired
-                { dsNode = nodeIdIn document.pdRoot (child (state.esPath) index),
+                { dsNode = nodeIdIn document.pdRoot (child state.esPath index),
                   dsBinder = binder,
                   dsGoal = goal,
                   dsHash = goalHash goal

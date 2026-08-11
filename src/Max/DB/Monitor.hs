@@ -29,12 +29,13 @@ module Max.DB.Monitor
   )
 where
 
-import Control.Monad (forM, forM_, when)
+import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Either (fromRight)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -148,7 +149,7 @@ instance FromRow ElaboratedMonitorFire where
           emfTriggerCanonicalMessage = trigger,
           emfTriggerEvidence = evidence,
           emfEffectToolGrants =
-            either (const Map.empty) id (eitherDecodeStrict' (TE.encodeUtf8 encodedToolGrants)),
+            fromRight Map.empty (eitherDecodeStrict' (TE.encodeUtf8 encodedToolGrants)),
           emfRequiredRole = requiredRole,
           emfClaimOwner = claimOwner,
           emfAdmittedTurn = AgentTurnRef <$> admittedTurnId <*> admittedTurnOrdinal
@@ -571,7 +572,7 @@ admitDueTimeMonitors now = withTransaction $ do
   let expiredIds =
         [monitorId | Only monitorId <- (expiredByTtl :: [Only MonitorId])]
           <> [monitorId | Only monitorId <- (missingOwners :: [Only MonitorId])]
-  when (not (null expiredIds)) $ do
+  unless (null expiredIds) $ do
     _ <-
       execute
         "UPDATE monitor_fires SET cancelled_at=now(), claim_owner=NULL, claim_expires_at=NULL \
@@ -620,7 +621,7 @@ evaluateLedgerMatches conversation ingestSeq canonical sender self mentionPrinci
       \ RETURNING monitor_id"
       (Only conversation)
   let ttlIds = [monitorId | Only monitorId <- (ttlRows :: [Only MonitorId])]
-  when (not (null ttlIds)) $ do
+  unless (null ttlIds) $ do
     _ <-
       execute
         "UPDATE monitor_fires SET cancelled_at=now(), claim_owner=NULL, claim_expires_at=NULL \
@@ -832,7 +833,7 @@ admitElaboratedMonitorTurn owner fireId nextFire = withTransaction $ do
               \   AND recent.dispatched_at>now() - interval '1 hour'"
               (Only conversation)
           let recentCount = exactlyOne "admitElaboratedMonitorTurn budget" (recentRows :: [Only Int64])
-              bypassBudget = triggerKind == "time_cron" && scheduleCron == Nothing
+              bypassBudget = triggerKind == "time_cron" && isNothing scheduleCron
           if not bypassBudget && recentCount >= 4
             then do
               _ <-

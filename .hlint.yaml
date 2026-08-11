@@ -35,7 +35,18 @@
 
 # A `concat` of several optional line groups reads as a list of sections;
 # spelling five of them as `<>` chains does not.
-- ignore: {name: Use ++, within: Max.Roster}
+- ignore: {name: Use ++, within: [Max.Roster, Max.Plan.Prompt]}
+
+# Suggested as `Data.Bifunctor.first f`, and hlint says outright that it
+# "increases laziness".  Max.Plan.Eval carries a fuel counter through every
+# step; a change to when the pair's halves are forced is a change to when fuel
+# is spent, which is not a style question.
+- ignore: {name: Use first, within: Max.Plan.Eval}
+
+# `foldr (keepFirst . (.field)) []` is the fused form, and it is harder to read
+# than the composition it replaces for a list of a few dozen candidates.  The
+# hint is a performance one wearing a style one's clothes.
+- ignore: {name: Fuse foldr/map}
 
 # The parentheses hlint wants removed are what make the scope of `finally`
 # obvious, and that scope is the whole point of the dispatch cleanup block.

@@ -53,7 +53,7 @@ module Max.Plan.Validate
   )
 where
 
-import Control.Monad (foldM)
+import Control.Monad (foldM, void)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set (Set)
@@ -718,7 +718,7 @@ checkPredicate env bindings fanout = go bindings
       PNot inner -> go scope inner
       PAnd parts -> mapM_ (go scope) parts
       POr parts -> mapM_ (go scope) parts
-      PIsNull source -> () <$ infer env scope fanout source
+      PIsNull source -> void (infer env scope fanout source)
       PCompare op left right -> do
         leftSchema <- infer env scope fanout left
         rightSchema <- infer env scope fanout right

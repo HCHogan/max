@@ -2,7 +2,7 @@ module Max.DB.MonitorSpec (spec) where
 
 import Control.Concurrent (newEmptyMVar, takeMVar, tryPutMVar)
 import Control.Concurrent.Async (async, concurrently, wait)
-import Control.Monad (forM)
+import Control.Monad (forM, forM_, (>=>))
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, isJust)
@@ -98,7 +98,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     map (.mrMonitorOrdinal) [left, right]
       `shouldMatchList` [MonitorOrdinal 1, MonitorOrdinal 2]
     deadline <- requireJustIO "monitor deadline" =<< withDb pool (nextMonitorDeadline now)
-    deadline `shouldBeWithinMicros` (addUTCTime 60 now)
+    deadline `shouldBeWithinMicros` addUTCTime 60 now
 
     otherAsker <- seedConversation pool 5002 43 8
     other <- withDb pool (arm otherAsker 43 "other" (addUTCTime 180 now))
@@ -448,7 +448,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
                 20
                 (Map.singleton "context_search" "grant-a")
             )
-    armedConditions <- forM [1 .. 5 :: Int] $ \index -> armLedger index >>= requireRight "arm condition"
+    armedConditions <- forM [1 .. 5 :: Int] (armLedger >=> requireRight "arm condition")
     map (.mrMonitorOrdinal) armedConditions
       `shouldBe` map MonitorOrdinal [1 .. 5]
     armLedger (6 :: Int) `shouldReturn` Left ConditionMonitorCapReached
@@ -466,7 +466,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
                 fireAt
                 (Map.singleton "context_search" "grant-a")
             )
-    _ <- forM [1 .. 15 :: Int] $ \index -> armTime index future >>= requireRight "arm time"
+    forM_ [1 .. 15 :: Int] $ \index -> armTime index future >>= requireRight "arm time"
     armTime (16 :: Int) future `shouldReturn` Left ArmedMonitorCapReached
     length <$> withDb pool (listArmedMonitors (conversationScopeFor (GroupId 64)))
       `shouldReturn` 20
@@ -491,7 +491,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
               (Map.singleton "context_search" "grant-a")
           )
     withDb pool (finishAgentTurn budgetArming TurnSucceeded 1 Nothing Nothing)
-    _ <- forM [6302 .. 6306] $ \messageId ->
+    forM_ [6302 .. 6306] $ \messageId ->
       insertRawMessage pool messageId 65 705 99 now Nothing "budget-hit"
     fireCount pool budgetMonitor `shouldReturn` 5
     claimed <- withDb pool (claimElaboratedMonitorFires "budget-worker" now (addUTCTime 60 now) 10)
