@@ -1064,6 +1064,40 @@ orchestration layer.
     whose every spawn failed left a plan nothing would ever wake — a stall under
     the old gate, and a spin under the new one.
 
+    **Measured against three real models, both halves.** deepseek-v4-flash,
+    gpt-5.6-luna, minimax-m3.
+
+    | | |
+    |---|---|
+    | children returning a value (3 shapes × 3 attempts × 3 models) | **27/27**, 0 narrated instead, 0 off-schema |
+    | front models writing a plan (16 tasks) | luna 16/16 admitted; deepseek 7/8; minimax 9/11 |
+    | plans that used `fork` | 3 of 35 judged, on 2 of 16 tasks |
+
+    The fork rate is low and is the right shape: nobody forked *three cities,
+    cheap join* — native parallel tool calls already cover that — and everybody
+    who answered forked *two people, cheap join* and *dependent halves*, which
+    are the two where the join is written before the children run.
+
+    **One of them wrote `inputs { 框架 }`, which is the whole of §12's
+    projection.** Unprompted, in a plan that recalls a preference, holes out a
+    framework, forks two searches that each read that framework, and joins. Had
+    it been written yesterday the children would have been told *"根据 inputs 中的
+    行程框架"* while being handed no framework at all. The projection was not a
+    speculative completeness item; models were already relying on it.
+
+    **And it found a defect in the child brief.** Two of the first nine children
+    answered a Chinese objective in English, because the brief never said. That
+    value goes straight into a plan whose result a group reads, so the language
+    is part of the answer's shape; one line fixed it and the re-run leaked none.
+
+    The rejections are all ordinary model errors against a documented grammar —
+    an object where `text` was declared, an `int` where `text` was, and a tool
+    call inside `done` where the grammar only allows one in a `let`. None is a
+    kernel fault. The one operational finding is that **a reasoning model can
+    spend its entire `max_tokens` on the guide**: deepseek went silent on 8 of
+    16, which is a budget fact rather than a comprehension one, since the 8 it
+    finished parsed 100%.
+
     What is still open, and named rather than left implicit: `JoinAll` is the
     only join policy, `WatchEach` is parsed and never acted on, and a child's
     tool ceiling is the plannable set rather than a translation of its declared
