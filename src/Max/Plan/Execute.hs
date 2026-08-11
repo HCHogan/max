@@ -60,6 +60,8 @@ module Max.Plan.Execute
 
     -- * Driver
     executePlan,
+    subplanAt,
+    into,
   )
 where
 
@@ -402,6 +404,11 @@ sendsOf entry = length [() | EffSend _ <- Set.toList entry.ceEffects]
 
 -- | Descend to the node a path names, or nothing when this plan has no such
 -- node.
+--
+-- Exported because a checkpoint is only meaningful against a plan, and the one
+-- thing every reader of a checkpoint has to do first is ask whether the plan it
+-- is holding still has that node — which is the same question 'stepPlan' asks
+-- and answers with 'PathNotInPlan'.
 subplanAt :: Plan -> PlanPath -> Maybe Plan
 subplanAt plan path = foldl descend (Just plan) path.unPlanPath
   where
@@ -415,6 +422,7 @@ subplanAt plan path = foldl descend (Just plan) path.unPlanPath
       (Guard _ _ alternative, StepElse) -> Just alternative
       _ -> Nothing
 
+-- | Extend a path by one step.
 into :: PlanPath -> PlanStep -> PlanPath
 into path step = PlanPath (path.unPlanPath <> [step])
 

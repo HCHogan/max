@@ -187,6 +187,7 @@ library
         Max.Plan.Interpret
         Max.Plan.Parse
         Max.Plan.Prompt
+        Max.Plan.Drive
         Max.Plan.Reconcile
         Max.Plan.Schema
         Max.Plan.Session
@@ -438,6 +439,7 @@ test-suite max-test
         Max.Plan.InterpretSpec
         Max.Plan.ParseSpec
         Max.Plan.PromptSpec
+        Max.Plan.DriveSpec
         Max.Plan.ReconcileSpec
         Max.Plan.SchemaSpec
         Max.Plan.SessionSpec
