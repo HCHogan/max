@@ -12,11 +12,14 @@ import Data.Aeson
 import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.IORef
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log (Log, LogLevel (LogAttention), runLog)
+import Max.DB.Plan (PlanId (..), PlanOrdinal (..), PlanRef (..), Revision (..))
+import Max.Plan.Execute (ExecState (..))
 import Max.Effects.Tools
   ( SchemaVersion (..),
     Tool (..),
@@ -29,8 +32,8 @@ import Max.Effects.Tools
   )
 import Max.Log (ColorMode (..), withCompactLogger)
 import Max.Plan.Parse (parsePlan)
-import Max.Plan.Types (PlanDocument (..), planHash)
-import Max.Tools.Plan (planToolsFor)
+import Max.Plan.Types (Binder (..), PlanDocument (..), PlanPath (..), PlanStep (..), planHash)
+import Max.Tools.Plan (PlanJournal (..), planToolsFor)
 import Max.Tools.Schema (stringParam, toolObject)
 import Test.Hspec
 
@@ -85,18 +88,53 @@ definitions =
 invoke :: Text -> Value -> IO (Either Text Value, [Text])
 invoke name args = do
   calls <- newIORef []
-  let tools = planToolsFor (const (pure Nothing)) definitions (fakeTools calls)
+  out <- runToolWith (nothingJournal) calls name args
+  (out,) <$> readIORef calls
+
+-- | A journal that writes nothing, which is what a dispatch with no durable
+-- turn gets.
+nothingJournal :: PlanJournal '[Log, IOE]
+nothingJournal =
+  PlanJournal {pjRecord = \_ -> pure Nothing, pjSuspend = \_ _ _ _ -> pure False}
+
+runToolWith :: PlanJournal '[Log, IOE] -> IORef [Text] -> Text -> Value -> IO (Either Text Value)
+runToolWith journal calls name args = do
+  let tools = planToolsFor journal definitions (fakeTools calls)
   case [t | t <- tools, t.toolName == name] of
     [] -> expectationFailure ("no such plan tool: " <> show name) >> error "unreachable"
-    tool : _ -> do
-      out <-
-        withCompactLogger ColorNever Nothing $ \logger ->
-          runEff . runLog "plan-test" logger LogAttention $ tool.toolRun args
-      (out,) <$> readIORef calls
+    tool : _ ->
+      withCompactLogger ColorNever Nothing $ \logger ->
+        runEff . runLog "plan-test" logger LogAttention $ tool.toolRun args
 
 field :: Text -> Value -> Maybe Value
 field key (Object o) = KeyMap.lookup (Key.fromText key) o
 field _ _ = Nothing
+
+-- | Any plan identity; nothing under test reads it.
+planRef :: PlanRef
+planRef = PlanRef {prPlanId = PlanId 7, prOrdinal = PlanOrdinal 1}
+
+-- | A call, then a fork of two subgoals, then a join that combines them.
+-- Shaped after the guide's own fork example, so what is exercised here is what
+-- a model is shown.
+forkArgs :: Value
+forkArgs =
+  object
+    [ "objective" .= ("查甲和乙" :: Text),
+      "plan"
+        .= T.unlines
+          [ "let hits = web_search@1({ query: \"先看看\" })",
+            "fork {",
+            "  jia: hole \"查甲的资料\" : text",
+            "    budget { calls: 1, sends: 0, fanout: 8, tokens: 4000, ms: 20000 }",
+            "    effects { read(external \"web\") }",
+            "  yi: hole \"查乙的资料\" : text",
+            "    budget { calls: 1, sends: 0, fanout: 8, tokens: 4000, ms: 20000 }",
+            "    effects { read(external \"web\") }",
+            "}",
+            "done concat(jia, \"｜\", yi)"
+          ]
+    ]
 
 spec :: Spec
 spec = do
@@ -182,16 +220,10 @@ spec = do
       -- result.  A rejected plan is not a plan and leaves no row.
       recorded <- newIORef ([] :: [PlanDocument])
       calls <- newIORef []
-      let tools =
-            planToolsFor
-              (\document -> liftIO (modifyIORef' recorded (<> [document])) >> pure Nothing)
-              definitions
-              (fakeTools calls)
-          run args = case [t | t <- tools, t.toolName == "plan_run"] of
-            tool : _ ->
-              withCompactLogger ColorNever Nothing $ \logger ->
-                runEff . runLog "plan-test" logger LogAttention $ tool.toolRun args
-            [] -> error "no plan_run"
+      let journal =
+            nothingJournal
+              {pjRecord = \document -> liftIO (modifyIORef' recorded (<> [document])) >> pure Nothing}
+          run = runToolWith journal calls "plan_run"
       _ <-
         run
           ( object
@@ -249,6 +281,84 @@ spec = do
           case field "stopped" value of
             Just (String t) -> t `shouldSatisfy` textContains "怎么总结"
             other -> expectationFailure ("expected a stop reason, got " <> show other)
+
+    describe "a fork" $ do
+      it "parks the walk and tells the model not to do the work itself" $ do
+        parked <- newIORef ([] :: [(Revision, Text, Value)])
+        calls <- newIORef []
+        let journal =
+              nothingJournal
+                { pjRecord = \_ -> pure (Just planRef),
+                  pjSuspend = \_ based node state ->
+                    liftIO (modifyIORef' parked (<> [(based, node, state)])) >> pure True
+                }
+        out <- runToolWith journal calls "plan_run" (forkArgs)
+        readIORef calls `shouldReturn` ["web_search"]
+        case out of
+          Left e -> expectationFailure (show e)
+          Right value -> do
+            -- Not a stop.  Nothing went wrong, nothing is waiting on this
+            -- turn, and picking the work up by hand here would race the
+            -- children about to do it.
+            field "stopped" value `shouldBe` Nothing
+            field "suspended" value
+              `shouldBe` Just
+                ( toJSON
+                    [ object ["binder" .= ("jia" :: Text), "objective" .= ("查甲的资料" :: Text)],
+                      object ["binder" .= ("yi" :: Text), "objective" .= ("查乙的资料" :: Text)]
+                    ]
+                )
+            field "tools_run" value `shouldBe` Just (toJSON ["web_search" :: Text])
+
+      it "checkpoints where the walk actually stood, not where it started" $ do
+        -- The reason Step carries the state at all: walk descends through let
+        -- and if without returning, so the state the driver handed in names a
+        -- node several steps back, and resuming from it would redo the search.
+        parked <- newIORef ([] :: [(Revision, Text, Value)])
+        calls <- newIORef []
+        let journal =
+              nothingJournal
+                { pjRecord = \_ -> pure (Just planRef),
+                  pjSuspend = \_ based node state ->
+                    liftIO (modifyIORef' parked (<> [(based, node, state)])) >> pure True
+                }
+        _ <- runToolWith journal calls "plan_run" forkArgs
+        readIORef parked >>= \case
+          [(based, node, state)] -> do
+            based `shouldBe` Revision 1
+            node `shouldSatisfy` textContains "/c"
+            case fromJSON state of
+              Error e -> expectationFailure ("checkpoint did not decode: " <> e)
+              Success (decoded :: ExecState) -> do
+                decoded.esPath `shouldBe` PlanPath [StepContinue]
+                Map.keys decoded.esBindings `shouldBe` [Binder "hits"]
+                decoded.esCalls `shouldBe` 1
+          other -> expectationFailure ("expected exactly one suspension, got " <> show (length other))
+
+      it "falls back to reporting a stop when the plan moved underneath it" $ do
+        -- A steer landed between admitting this plan and reaching its fork.
+        -- The work already done still counts, and the model is the one who can
+        -- say what the change meant.
+        calls <- newIORef []
+        let journal = nothingJournal {pjRecord = \_ -> pure (Just planRef)}
+        out <- runToolWith journal calls "plan_run" forkArgs
+        case out of
+          Left e -> expectationFailure (show e)
+          Right value -> do
+            field "suspended" value `shouldBe` Nothing
+            case field "stopped" value of
+              Just (String t) -> t `shouldSatisfy` textContains "fork"
+              other -> expectationFailure ("expected a stop reason, got " <> show other)
+
+      it "reports a stop when there is no durable plan to park against" $ do
+        -- A dispatch with no turn has nothing to hang a suspension off.  The
+        -- honest answer is the old one, not a promise nobody will keep.
+        (out, _) <- invoke "plan_run" forkArgs
+        case out of
+          Left e -> expectationFailure (show e)
+          Right value -> do
+            field "suspended" value `shouldBe` Nothing
+            field "stopped" value `shouldSatisfy` (/= Nothing)
 
     it "refuses a plan over its call budget before running any of it" $ do
       (out, calls) <-

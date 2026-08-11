@@ -181,7 +181,7 @@ driveAcrossRestarts ::
 driveAcrossRestarts answer plan = go initialState
   where
     go state = case stepPlan executionEnv plan state of
-      Completes end -> Right end
+      Completes end _ -> Right end
       Suspends suspension -> case answer suspension.suCall of
         outcome -> case resumeWith executionEnv suspension outcome of
           Left deopt -> Right (Deoptimized deopt)
@@ -258,7 +258,7 @@ spec = do
       -- run something nobody asked for.
       let stale = initialState {esPath = PlanPath [StepThen, StepContinue]}
       case stepPlan executionEnv searchThenAnswer stale of
-        Completes (Deoptimized (PathNotInPlan node)) ->
+        Completes (Deoptimized (PathNotInPlan node)) _ ->
           node.unNodeId `shouldBe` "turn:1:0/t/c"
         other -> expectationFailure ("expected a stale-path stop, got " <> show other)
 

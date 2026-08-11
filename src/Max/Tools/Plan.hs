@@ -24,21 +24,32 @@
 -- the subset never contains it — no recursion guard needed, because there is no
 -- recursion to guard.
 --
--- What is deliberately not here yet: holes are reported rather than elaborated,
--- and forks are reported rather than dispatched.  Both need the wake loop and
--- the scheduler (§10–11).  Reporting them keeps the interpreter honest about
--- being an interpreter, and it is the same exit the executor already takes.
+-- __A fork parks the plan rather than ending it.__  §11.  The walk stops at the
+-- fork either way — an interpreter cannot start a turn — but where it used to
+-- report a stop and lose everything it had computed, it now writes the
+-- execution state down against the plan it was walking and hands the fork to
+-- whoever drives suspended plans.  The turn goes on and the model replies; the
+-- plan wakes later, in a turn of its own.
+--
+-- Without a durable plan there is nothing to park against, and a fork degrades
+-- to exactly the old behaviour: reported as a stop, work already done reported
+-- with it.  That is the honest answer for a dispatch that has no turn rather
+-- than a degraded one.
+--
+-- What is still deliberately not here: holes are reported rather than
+-- elaborated.  Filling one is the front model's own next step, and it is
+-- already the front model's turn.
 module Max.Tools.Plan
   ( planToolsFor,
-    PlanRecorder,
-    durablePlanRecorder,
+    PlanJournal (..),
+    durablePlanJournal,
     planGoalFor,
     planValidationEnv,
   )
 where
 
 import Data.Aeson
-import Data.Aeson.Types (parseEither)
+import Data.Aeson.Types (Pair, parseEither)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -48,7 +59,7 @@ import Control.Exception (SomeException)
 import Effectful
 import Effectful.Log (Log, logAttention, logInfo)
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Plan (PlanId (..), PlanRef (..), openPlan)
+import Max.DB.Plan (PlanId (..), PlanRef (..), Revision (..), openPlan, suspendPlan)
 import Max.Effects.Tools
   ( Tool (..),
     ToolCatalog,
@@ -60,7 +71,8 @@ import Max.Effects.Tools
 import Max.Effects.Tools qualified as Tools
 import Max.Plan.Catalog (planCatalog)
 import Max.Plan.Execute
-  ( ExecutionEnd (..),
+  ( Deopt (..),
+    ExecutionEnd (..),
     ExecutionEnv (..),
     ExecutionResult (..),
     StepRecord (..),
@@ -91,17 +103,17 @@ import Max.Util (catchSync)
 -- @plan_run@, because the subset never contains it.
 planToolsFor ::
   Log :> es =>
-  PlanRecorder es ->
+  PlanJournal es ->
   [ToolDefinition] ->
   [Tool es] ->
   [Tool es]
-planToolsFor record definitions runners =
+planToolsFor journal definitions runners =
   case subCatalog of
     -- Unreachable in practice: the subset is a filter of an already-valid
     -- catalog.  Dropping both tools is still the right answer to it — better a
     -- turn with no planning than a turn whose plan tool holds a broken catalog.
     Left _ -> []
-    Right built -> [guideTool catalog, runTool record catalog built]
+    Right built -> [guideTool catalog, runTool journal catalog built]
   where
     catalog = planCatalog definitions
     plannable = Map.keysSet catalog
@@ -186,15 +198,31 @@ guideTool catalog =
               ]
     }
 
--- | How an admitted plan gets written down, if at all.
+-- | How an admitted plan and its suspension get written down, if at all.
 --
 -- Injected rather than reached for, and not only to keep a database out of the
 -- tool's specs.  What a plan /is/ — parsed, admissible, executable — is settled
 -- entirely by this module and the kernel; where a copy of it lives is somebody
 -- else's decision, and the two have no business being one type.
-type PlanRecorder es = PlanDocument -> Eff es (Maybe PlanRef)
+--
+-- The two writes travel together because the second is meaningless without the
+-- first: a checkpoint identifies itself by the plan it belongs to, and a
+-- dispatch that could not open a plan has nothing to park against.
+data PlanJournal es = PlanJournal
+  { pjRecord :: PlanDocument -> Eff es (Maybe PlanRef),
+    -- | Park the execution state at a fork, against the revision it walked.
+    -- 'False' means the plan moved underneath and this state describes a plan
+    -- that is no longer current.
+    pjSuspend :: PlanRef -> Revision -> Text -> Value -> Eff es Bool
+  }
 
--- | Record revision 1 against the turn that produced it.
+-- | Neither half. What a dispatch with no durable turn gets, and what the
+-- specs use to talk about the kernel without talking about Postgres.
+noPlanJournal :: PlanJournal es
+noPlanJournal =
+  PlanJournal {pjRecord = \_ -> pure Nothing, pjSuspend = \_ _ _ _ -> pure False}
+
+-- | Record revision 1 against the turn that produced it, and park against it.
 --
 -- Best-effort, and that asymmetry is the point.  The plan is admissible
 -- whatever the database says, and refusing to run it because a row would not go
@@ -205,26 +233,35 @@ type PlanRecorder es = PlanDocument -> Eff es (Maybe PlanRef)
 -- rather than a degraded one: 'openPlan' derives the conversation /from/ the
 -- turn precisely so the two cannot disagree, and there is nothing to derive it
 -- from here.
-durablePlanRecorder ::
+durablePlanJournal ::
   (Log :> es, WithConnection :> es, IOE :> es) =>
   ToolContext ->
-  PlanRecorder es
-durablePlanRecorder dc document = case toolTurnOutputContext dc of
-  Nothing -> pure Nothing
+  PlanJournal es
+durablePlanJournal dc = case toolTurnOutputContext dc of
+  Nothing -> noPlanJournal
   Just output ->
-    (Just <$> openPlan (turnOutputAgentTurn output) document)
-      `catchSync` \e -> do
-        logAttention "plan: not persisted" $
-          object ["root" .= document.pdRoot, "error" .= T.pack (show (e :: SomeException))]
-        pure Nothing
+    PlanJournal
+      { pjRecord = \document ->
+          (Just <$> openPlan (turnOutputAgentTurn output) document)
+            `catchSync` \e -> do
+              logAttention "plan: not persisted" $
+                object ["root" .= document.pdRoot, "error" .= T.pack (show (e :: SomeException))]
+              pure Nothing,
+        pjSuspend = \ref based node state ->
+          suspendPlan ref based node state
+            `catchSync` \e -> do
+              logAttention "plan: not suspended" $
+                object ["plan_id" .= ref.prPlanId.unPlanId, "error" .= T.pack (show (e :: SomeException))]
+              pure False
+      }
 
 runTool ::
   Log :> es =>
-  PlanRecorder es ->
+  PlanJournal es ->
   Map ToolRef CatalogEntry ->
   ToolCatalog es ->
   Tool es
-runTool record catalog sub =
+runTool journal catalog sub =
   Tool
     { toolName = "plan_run",
       toolDescription =
@@ -257,7 +294,7 @@ runTool record catalog sub =
                 -- neither exists until somebody writes the first one.  Step 3
                 -- built these tables deliberately ahead of the executor and
                 -- left them with no writer; this is the writer.
-                stored <- record PlanDocument {pdRoot = root, pdPlan = parsed}
+                stored <- journal.pjRecord PlanDocument {pdRoot = root, pdPlan = parsed}
                 logInfo "plan: admitted" $
                   object
                     [ "objective" .= objective,
@@ -271,7 +308,32 @@ runTool record catalog sub =
                     executePlan
                       ExecutionEnv {exValidation = env, exHandles = Map.empty, exRoot = root}
                       valid
-                pure (report result)
+                case (result.erEnd, stored) of
+                  (Deoptimized (AtFork node _ _ children), Just ref) -> do
+                    -- Revision 1 by construction: this tool opens the plan a
+                    -- few lines above and nothing else has had the chance to
+                    -- move it.  Passed rather than assumed inside the journal
+                    -- so that the day a plan arrives here already revised, the
+                    -- compiler asks which revision it walked.
+                    parked <- journal.pjSuspend ref (Revision 1) node.unNodeId (toJSON result.erState)
+                    if parked
+                      then do
+                        logInfo "plan: suspended at a fork" $
+                          object
+                            [ "plan_id" .= ref.prPlanId.unPlanId,
+                              "node" .= node.unNodeId,
+                              "children" .= length children
+                            ]
+                        pure (reportSuspension result children)
+                      else do
+                        -- The head moved between admitting this plan and
+                        -- reaching its fork.  Reported as an ordinary stop:
+                        -- the work already done still counts, and the model is
+                        -- the one who can say what the change meant.
+                        logAttention "plan: fork not parked; plan moved" $
+                          object ["plan_id" .= ref.prPlanId.unPlanId, "node" .= node.unNodeId]
+                        pure (report result)
+                  _ -> pure (report result)
     }
   where
     parseArgs o = (,) <$> o .: "objective" <*> o .: "plan"
@@ -287,9 +349,7 @@ report :: ExecutionResult -> Either Text Value
 report result =
   Right $
     object
-      ( [ "calls_used" .= result.erCallsUsed,
-          "tools_run" .= [record.srTool.unToolRef | record <- result.erSteps]
-        ]
+      ( ran result
           <> case result.erEnd of
             Produced value -> ["done" .= value]
             Deoptimized deopt ->
@@ -297,3 +357,35 @@ report result =
                 "advice" .= ("计划停在这里了。上面 tools_run 里的工具已经跑过，不用重来；剩下的这一轮自己接着做。" :: Text)
               ]
       )
+
+-- | A fork that was parked: not a stop, and the difference matters to what the
+-- model does next.
+--
+-- Nothing went wrong and nothing is waiting on this turn.  The subgoals will
+-- each get a turn of their own, and the plan continues when they are back —
+-- in a turn this one has no part in.  So the advice is the opposite of the
+-- stop's: /do not/ pick the work up by hand, because doing it here would race
+-- the children that are about to do it.
+reportSuspension :: ExecutionResult -> [(NodeId, Binder, Goal)] -> Either Text Value
+reportSuspension result children =
+  Right $
+    object
+      ( ran result
+          <> [ "suspended"
+                 .= [ object ["binder" .= binder.unBinder, "objective" .= goal.goalObjective]
+                    | (_, binder, goal) <- children
+                    ],
+               "advice"
+                 .= T.unwords
+                   [ "计划挂起了，上面这些子任务会各自开一轮去做，做完计划自己接着往下走，到时候会来叫你看结果。",
+                     "所以现在别自己再查一遍，也别等在这儿。",
+                     "这一轮你要么先说一句在办了，要么直接 [silence]。"
+                   ]
+             ]
+      )
+
+ran :: ExecutionResult -> [Pair]
+ran result =
+  [ "calls_used" .= result.erCallsUsed,
+    "tools_run" .= [record.srTool.unToolRef | record <- result.erSteps]
+  ]

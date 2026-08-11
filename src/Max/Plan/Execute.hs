@@ -60,6 +60,7 @@ module Max.Plan.Execute
 
     -- * Driver
     executePlan,
+    resumePlan,
     subplanAt,
     into,
   )
@@ -149,7 +150,14 @@ data Suspension = Suspension
 
 data Step
   = Suspends !Suspension
-  | Completes !ExecutionEnd
+  | -- | The walk ended, and where it was standing when it did.
+    --
+    -- The state rides along because a stop is not always the end of the story:
+    -- a fork suspends, and resuming it later needs the path and bindings the
+    -- walk had reached by then. No caller can recompute those from outside —
+    -- @walk@ descends through @let@ and @if@ without returning, so the state
+    -- the caller handed in names a node several steps back.
+    Completes !ExecutionEnd !ExecState
   deriving stock (Show, Eq)
 
 -- | What one step did, for the journal.
@@ -237,6 +245,10 @@ data ExecutionEnd
 data ExecutionResult = ExecutionResult
   { erSteps :: ![StepRecord],
     erEnd :: !ExecutionEnd,
+    -- | Where the walk was standing when it ended. A caller that intends to
+    -- resume — which is what a fork is — checkpoints this; one that does not
+    -- ignores it.
+    erState :: !ExecState,
     erCallsUsed :: !Int,
     erSendsUsed :: !Int
   }
@@ -250,7 +262,7 @@ data ExecutionResult = ExecutionResult
 -- re-evaluating a predicate over bindings that may have been rebuilt.
 stepPlan :: ExecutionEnv -> ValidPlan -> ExecState -> Step
 stepPlan env valid state = case subplanAt (validPlan valid) state.esPath of
-  Nothing -> Completes (Deoptimized (PathNotInPlan (at state.esPath)))
+  Nothing -> Completes (Deoptimized (PathNotInPlan (at state.esPath))) state
   Just node -> walk state node
   where
     validation = env.exValidation
@@ -263,11 +275,11 @@ stepPlan env valid state = case subplanAt (validPlan valid) state.esPath of
       let this = at here.esPath
           evalEnv =
             EvalEnv {eeBindings = here.esBindings, eeHandles = env.exHandles, eeFanout = fanout}
-          stop = Completes . Deoptimized
+          stop deopt = Completes (Deoptimized deopt) here
        in case node of
             Done expr -> case evalExpr evalEnv budget.ebMaxTokens expr of
               Left err -> stop (ExpressionFailed this err)
-              Right produced -> Completes (Produced produced)
+              Right produced -> Completes (Produced produced) here
             Hole hole -> stop (AtHole this hole)
             -- Stops like a hole, and says where the answer goes.  Whoever
             -- fills it produces a value rather than a continuation, so the
@@ -365,10 +377,18 @@ resumeWith env suspension outcome = case value outcome of
 -- to journal, authorize, or persist between those does not use this — it uses
 -- the three pieces directly, which is the reason they are separate.
 executePlan :: Tools :> es => ExecutionEnv -> ValidPlan -> Eff es ExecutionResult
-executePlan env valid = go [] initialState
+executePlan env valid = resumePlan env valid initialState
+
+-- | The same loop, from a state somebody else was holding.
+--
+-- The whole of what a resume is: the interpreter has no notion of having been
+-- away, because a checkpoint is a value and picking one up is indistinguishable
+-- from never having put it down.
+resumePlan :: Tools :> es => ExecutionEnv -> ValidPlan -> ExecState -> Eff es ExecutionResult
+resumePlan env valid = go []
   where
     go steps state = case stepPlan env valid state of
-      Completes end -> finish steps end state
+      Completes end stopped -> finish steps end stopped
       Suspends suspension -> do
         outcome <- classify <$> invokeTool suspension.suCall.pnTool.unToolRef suspension.suCall.pnArguments
         let record =
@@ -387,6 +407,7 @@ executePlan env valid = go [] initialState
         ExecutionResult
           { erSteps = reverse steps,
             erEnd = end,
+            erState = state,
             erCallsUsed = state.esCalls,
             erSendsUsed = state.esSends
           }
