@@ -39,7 +39,7 @@ module Max.Plan.Worker
 where
 
 import Control.Monad (unless)
-import Data.Aeson (Result (..), Value, fromJSON, object, (.=))
+import Data.Aeson (Result (..), Value, fromJSON, object, toJSON, (.=))
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
@@ -50,7 +50,7 @@ import Max.DB.Notify (WorkChannel (..), claimOrWait)
 import Max.DB.Plan
 import Max.Plan.Drive
 import Max.Plan.Execute (ExecState)
-import Max.Plan.Reconcile (Desired, Running (..))
+import Max.Plan.Reconcile (Running (..))
 import Max.Turn.Types (AgentTurnId (..))
 import Max.Util (catchSync)
 import Control.Exception (SomeException)
@@ -80,7 +80,7 @@ data PlanDriver es = PlanDriver
     -- it could not be started, which leaves the subgoal uncovered — the next
     -- wake tries again, because an unstarted child is indistinguishable from
     -- one that was never dispatched.
-    pdSpawn :: WakeablePlan -> Desired -> Eff es (Maybe AgentTurnId),
+    pdSpawn :: WakeablePlan -> Dispatchable -> Eff es (Maybe AgentTurnId),
     -- | Stop a child the plan no longer wants.
     pdStop :: WakeablePlan -> AgentTurnId -> Eff es (),
     -- | Continue the walk with real tools.
@@ -155,24 +155,38 @@ drivePlan owner driver plan = case fromJSON plan.wpCheckpoint.pkState of
     case decision.drNext of
       WaitForChildren -> do
         spawned <- traverse (driver.pdSpawn plan) decision.drDispatch
+        let started = length [() | Just _ <- spawned]
         logInfo "plan: children dispatched" $
           object
             [ "plan_id" .= ref.prPlanId.unPlanId,
-              "dispatched" .= length [() | Just _ <- spawned],
+              "dispatched" .= started,
               "failed" .= length [() | Nothing <- spawned],
               "stopped" .= length decision.drStop
             ]
-        -- Every subgoal that started is a running child, so this plan drops
-        -- out of the wakeable set on its own; the claim is only in the way.
-        releasePlanClaim owner ref
+        if started == 0 && null running && not (null decision.drDispatch)
+          then -- Nothing started and nothing was already running, so nothing
+          -- will ever wake this plan again.  Releasing the claim here would
+          -- re-offer the same decision immediately and spin at whatever rate
+          -- the notification storm allows.
+            giveUp "子任务一个都开不起来"
+          else do
+            -- Every subgoal that started is a running child, so this plan drops
+            -- out of the wakeable set on its own; the claim is only in the way.
+            markPlanReconciled ref plan.wpPlan.stRevision
+            releasePlanClaim owner ref
       Abandon reason -> giveUp reason
       Resume resumed -> do
         outcome <- driver.pdResume plan resumed
         case outcome of
           Produced value -> do
+            -- Answer before closing, so a process that dies between them leaves
+            -- a plan that still has its result on the edge rather than one that
+            -- closed having told nobody.
+            answered <- answerSubgoal value
             finish PlanDone
-            logInfo "plan: resumed to a result" $ object ["plan_id" .= ref.prPlanId.unPlanId]
-            driver.pdWake plan value
+            logInfo "plan: resumed to a result" $
+              object ["plan_id" .= ref.prPlanId.unPlanId, "served_subgoal" .= answered]
+            unless answered (driver.pdWake plan value)
           Stopped reason -> giveUp reason
           Parked node next -> do
             -- Another fork. Not a special case: the same suspension, written
@@ -181,18 +195,39 @@ drivePlan owner driver plan = case fromJSON plan.wpCheckpoint.pkState of
             unless parked $
               logAttention "plan: re-park refused; plan moved during the resume" $
                 object ["plan_id" .= ref.prPlanId.unPlanId]
+            markPlanReconciled ref plan.wpPlan.stRevision
             releasePlanClaim owner ref
   where
     ref = plan.wpPlan.stRef
 
+    -- A plan whose root turn is itself somebody's fork child does not speak: it
+    -- /is/ that subgoal, and its result is the answer.  What makes fan-out
+    -- recursive, and the only place the two cases differ at all.
+    --
+    -- The child's turn ended when it submitted the plan that forked, so nothing
+    -- about its status will notify the parent; the write to the edge is what
+    -- does, which is why the schema has a trigger on that column.
+    answerSubgoal value
+      | not plan.wpServesSubgoal = pure False
+      | otherwise = do
+          written <- recordChildResult plan.wpPlan.stRootTurn (toJSON value)
+          unless written $
+            logAttention "plan: served a subgoal whose spawn edge is gone" $
+              object ["plan_id" .= ref.prPlanId.unPlanId]
+          pure written
+
     -- The checkpoint goes before the wake, and the wake before nothing: a
     -- process that dies in between loses the telling, not the plan's integrity.
     -- The other order would leave a plan that can be woken twice.
+    --
+    -- A nested plan tells nobody either way.  Its parent will see a settled
+    -- child with no value, which is exactly what happened.
     giveUp reason = do
       finish PlanAbandoned
       logAttention "plan: abandoned" $
         object ["plan_id" .= ref.prPlanId.unPlanId, "reason" .= reason]
-      driver.pdWake plan ("这个计划没能走完：" <> reason)
+      unless plan.wpServesSubgoal $
+        driver.pdWake plan ("这个计划没能走完：" <> reason)
 
     finish status = do
       clearPlanCheckpoint ref

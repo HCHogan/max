@@ -37,6 +37,7 @@
 -- a database and a scheduler.
 module Max.Plan.Drive
   ( SettledChild (..),
+    Dispatchable (..),
     Drive (..),
     DriveNext (..),
     driveFork,
@@ -64,10 +65,27 @@ data SettledChild a = SettledChild
   }
   deriving stock (Show, Eq)
 
+-- | A subgoal to start, and the whole of what its child will be able to see.
+--
+-- ADR 002's isolation rule made concrete. 'Max.Plan.Validate.childEnv' says the
+-- child's bindings are its 'Max.Plan.Types.goalInputs' and no more; that is the
+-- static half, and this is the other one — the same restriction applied to
+-- actual values, computed here because here is where the parked bindings are.
+-- A host that received the whole environment and was trusted to narrow it would
+-- be a second place the rule has to be got right.
+data Dispatchable = Dispatchable
+  { dpDesired :: !Desired,
+    -- | The values the subgoal named, in the order it named them. Anything the
+    -- parent knows and the subgoal did not ask for is absent, which is what
+    -- keeps a fan-out from becoming an accumulation of context.
+    dpInputs :: ![(Binder, Value)]
+  }
+  deriving stock (Show, Eq)
+
 -- | What the driver should do, in the order it should do it.
 data Drive a = Drive
   { -- | Subgoals with nobody working on them.
-    drDispatch :: ![Desired],
+    drDispatch :: ![Dispatchable],
     -- | Children the plan no longer wants. A steer produced these, or a
     -- duplicate dispatch did.
     drStop :: ![Running a],
@@ -141,7 +159,7 @@ driveFork document state settled running =
             [] ->
               let outcome = reconcile uncovered running
                in Drive
-                    { drDispatch = outcome.rcDispatch,
+                    { drDispatch = map dispatchable outcome.rcDispatch,
                       drStop = outcome.rcStop,
                       drNext =
                         if null uncovered
@@ -150,6 +168,20 @@ driveFork document state settled running =
                     }
 
     child path index = PlanPath (path.unPlanPath <> [StepChild index])
+
+    -- A binder the goal named but the parked state does not hold cannot happen
+    -- for a validated plan — 'validatePlan' rejects it as an unbound name — and
+    -- is dropped rather than faked, because a child handed a fabricated value
+    -- is worse than one told it has nothing.
+    dispatchable item =
+      Dispatchable
+        { dpDesired = item,
+          dpInputs =
+            [ (binder, value)
+            | binder <- item.dsGoal.goalInputs,
+              Just value <- [Map.lookup binder state.esBindings]
+            ]
+        }
 
     -- Past the fork, with every child's result in scope.  The fork node itself
     -- is never stepped through: 'stepPlan' stops on it by construction, so the

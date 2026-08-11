@@ -60,7 +60,8 @@ import Control.Exception (SomeException)
 import Effectful
 import Effectful.Log (Log, logAttention, logInfo)
 import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Plan (PlanId (..), PlanRef (..), Revision (..), openPlan, suspendPlan)
+import Data.Foldable (for_)
+import Max.DB.Plan (PlanId (..), PlanRef (..), PlanStatus (..), Revision (..), closePlan, openPlan, suspendPlan)
 import Max.Effects.Tools
   ( Tool (..),
     ToolCatalog,
@@ -231,14 +232,24 @@ data PlanJournal es = PlanJournal
     -- | Park the execution state at a fork, against the revision it walked.
     -- 'False' means the plan moved underneath and this state describes a plan
     -- that is no longer current.
-    pjSuspend :: PlanRef -> Revision -> Text -> Value -> Eff es Bool
+    pjSuspend :: PlanRef -> Revision -> Text -> Value -> Eff es Bool,
+    -- | Close a plan that ended inside this call.
+    --
+    -- Only a fork outlives the tool, so every other ending is the end of the
+    -- plan and leaving it open would put a finished plan in the steerable set —
+    -- where a steer would land on something nobody is running.
+    pjSettle :: PlanRef -> PlanStatus -> Eff es ()
   }
 
 -- | Neither half. What a dispatch with no durable turn gets, and what the
 -- specs use to talk about the kernel without talking about Postgres.
 noPlanJournal :: PlanJournal es
 noPlanJournal =
-  PlanJournal {pjRecord = \_ -> pure Nothing, pjSuspend = \_ _ _ _ -> pure False}
+  PlanJournal
+    { pjRecord = \_ -> pure Nothing,
+      pjSuspend = \_ _ _ _ -> pure False,
+      pjSettle = \_ _ -> pure ()
+    }
 
 -- | Record revision 1 against the turn that produced it, and park against it.
 --
@@ -270,7 +281,12 @@ durablePlanJournal dc = case toolTurnOutputContext dc of
             `catchSync` \e -> do
               logAttention "plan: not suspended" $
                 object ["plan_id" .= ref.prPlanId.unPlanId, "error" .= T.pack (show (e :: SomeException))]
-              pure False
+              pure False,
+        pjSettle = \ref status ->
+          closePlan ref status
+            `catchSync` \e ->
+              logAttention "plan: not closed" $
+                object ["plan_id" .= ref.prPlanId.unPlanId, "error" .= T.pack (show (e :: SomeException))]
       }
 
 runTool ::
@@ -350,11 +366,26 @@ runTool journal catalog sub =
                         -- the one who can say what the change meant.
                         logAttention "plan: fork not parked; plan moved" $
                           object ["plan_id" .= ref.prPlanId.unPlanId, "node" .= node.unNodeId]
+                        settle stored result
                         pure (report result)
-                  _ -> pure (report result)
+                  _ -> do
+                    settle stored result
+                    pure (report result)
     }
   where
     parseArgs o = (,) <$> o .: "objective" <*> o .: "plan"
+
+    -- Everything except a parked fork ends here and now.  A plan left open
+    -- would sit in the steerable set forever, so a later steer would land on
+    -- work nobody is doing.
+    settle stored result =
+      for_ stored $ \ref ->
+        journal.pjSettle ref $ case result.erEnd of
+          Produced _ -> PlanDone
+          -- A hole is a stop in this slice: nothing resumes from one, and the
+          -- model was told to finish by hand.  Recording that as abandoned is
+          -- what happened, not a judgement about the plan's quality.
+          Deoptimized _ -> PlanAbandoned
 
 -- | Turn an execution into something a model can act on.
 --

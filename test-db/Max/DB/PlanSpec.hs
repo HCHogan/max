@@ -325,12 +325,14 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
     it "leaves a plan alone while any of its children is still running" $ do
       -- Both ends of a fork's life look like "no running child" — nothing
       -- dispatched yet, and everything settled.  In between there is nothing
-      -- for a driver to decide.
+      -- for a driver to decide, so long as nobody has moved the plan: the
+      -- watermark is what says this driver already dispatched these.
       fixture <- createFixture pool 42 1001
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       done' <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
       _ <- spawnChild pool fixture ref "查乙" "turn:1:0/k1"
+      withDb pool (markPlanReconciled ref (Revision 1))
       withDb pool (finishAgentTurn done' TurnSucceeded 1 Nothing Nothing)
       midway <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
       midway `shouldBe` []
@@ -341,6 +343,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       _ <- claimOne pool ref
       childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
+      withDb pool (markPlanReconciled ref (Revision 1))
       withDb pool (releasePlanClaim "w" ref)
       blocked <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
       blocked `shouldBe` []
@@ -374,7 +377,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       fixture <- createFixture pool 42 1001
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
-      written <- withDb pool (recordChildResult childTurn (String "甲的答案"))
+      written <- withDb pool (recordChildResult childTurn.atrTurnId (String "甲的答案"))
       written `shouldBe` True
       -- Still running, so still nobody's result to read.
       withDb pool (listChildOutcomes ref) `shouldReturn` []
@@ -398,7 +401,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
 
     it "refuses a result for a turn nobody spawned" $ do
       fixture <- createFixture pool 42 1001
-      written <- withDb pool (recordChildResult fixture.fxTurn (String "x"))
+      written <- withDb pool (recordChildResult fixture.fxTurn.atrTurnId (String "x"))
       written `shouldBe` False
 
   it "reports nothing for a plan that does not exist" $ do

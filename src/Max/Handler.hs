@@ -172,9 +172,10 @@ import Max.Plan.Execute
     deoptText,
     resumePlan,
   )
+import Max.Plan.Drive (Dispatchable (..))
 import Max.Plan.Reconcile (Desired (..))
 import Max.Plan.Schema (renderSchema)
-import Max.Plan.Types (EffectBudget (..), Goal (..), NodeId (..), PlanDocument (..))
+import Max.Plan.Types (Binder (..), EffectBudget (..), Goal (..), NodeId (..), PlanDocument (..))
 import Max.Plan.Validate (rejectionText, validatePlan)
 import Max.Plan.Worker (PlanDriver (..), Resumption)
 import Max.Plan.Worker qualified as Worker
@@ -1156,9 +1157,9 @@ spawnChild ::
     IOE :> es
   ) =>
   WakeablePlan ->
-  Desired ->
+  Dispatchable ->
   Eff es (Maybe AgentTurnId)
-spawnChild plan desired = do
+spawnChild plan item = do
   env :: BotEnv <- ask
   mTrigger <- planSeedTrigger plan
   case mTrigger of
@@ -1178,12 +1179,13 @@ spawnChild plan desired = do
         object
           [ "plan_id" .= plan.wpPlan.stRef.prPlanId.unPlanId,
             "node" .= desired.dsNode.unNodeId,
-            "child_turn" .= child.atrTurnOrdinal.unTurnOrdinal
+            "child_turn" .= child.atrTurnOrdinal.unTurnOrdinal,
+            "inputs" .= [binder.unBinder | (binder, _) <- item.dpInputs]
           ]
       dispatchLLMWith
         (Just child)
         Nothing
-        (Just (renderSubgoalView plan desired))
+        (Just (renderSubgoalView plan item))
         (Just (childGrants env plan.wpGroup child desired.dsGoal))
         (Just desired.dsGoal)
         Nothing
@@ -1192,9 +1194,11 @@ spawnChild plan desired = do
         []
         trigger
       pure (Just child.atrTurnId)
+  where
+    desired = item.dpDesired
 
--- | What a fork child may touch: the tools a plan itself may call, plus the one
--- way it hands its answer back.
+-- | What a fork child may touch: the tools a plan itself may call, the one way
+-- it hands its answer back, and the two that let it delegate in turn.
 --
 -- Deliberately the plannable set rather than a translation of the subgoal's
 -- declared effects.  "Max.Plan.Catalog" refuses to map plan scopes onto tool
@@ -1202,6 +1206,14 @@ spawnChild plan desired = do
 -- wrong; the set the kernel already vouches for is the honest ceiling until
 -- somebody reads the rest of the tools closely enough to widen it.  It also
 -- means a child cannot speak: nothing in that set sends.
+--
+-- __A child may plan, and therefore may fork.__  ADR 007 §12.  Nothing in the
+-- machinery distinguishes a plan opened by a child from one opened by the front
+-- model — 'openPlan' takes its conversation from the turn either way, and the
+-- spawn edge from a grandchild names the child's turn as its parent.  The one
+-- thing that has to be true is that a child which parked a plan is not counted
+-- as decided, which is a property of the query that finds running children
+-- rather than of anything here.
 childGrants :: BotEnv -> GroupId -> AgentTurnRef -> Goal -> Map.Map T.Text T.Text
 childGrants env gid child goal =
   Map.fromList
@@ -1219,9 +1231,11 @@ childGrants env gid child goal =
         False
         Map.empty
         Nothing
-        (Just (SubgoalReturn child goal.goalObjective goal.goalExpected))
+        (Just (SubgoalReturn child.atrTurnId goal.goalObjective goal.goalExpected))
     definitions = toolDefinitionsFor env gid caps
-    allowed = Set.insert (ToolRef "subgoal_return") (Map.keysSet (planCatalog definitions))
+    allowed =
+      Set.fromList [ToolRef "subgoal_return", ToolRef "plan_guide", ToolRef "plan_run"]
+        <> Map.keysSet (planCatalog definitions)
 
 -- | What a child is told, and the whole of what it is told.
 --
@@ -1230,21 +1244,36 @@ childGrants env gid child goal =
 -- siblings, not the objective above it, not what will be done with its answer.
 -- Anything more would make the fan-out an accumulation of context, which is the
 -- thing it exists to avoid.
-renderSubgoalView :: WakeablePlan -> Desired -> T.Text
-renderSubgoalView plan desired =
+renderSubgoalView :: WakeablePlan -> Dispatchable -> T.Text
+renderSubgoalView plan item =
   T.intercalate
     "\n"
-    [ "[子任务 — 计划 #" <> tshow plan.wpPlan.stRef.prOrdinal.unPlanOrdinal <> "]",
-      "要做的事：" <> T.take 4000 desired.dsGoal.goalObjective,
-      "要交回的结果类型：" <> renderSchema desired.dsGoal.goalExpected,
-      "额度：最多 "
-        <> tshow desired.dsGoal.goalBudget.ebMaxCalls
-        <> " 次工具调用。",
-      "",
-      "这一轮是别人派给你的一小块活，你看不到上面在做什么，也不需要看到。",
-      "做完用 subgoal_return 把结果交回去——那是唯一会被读到的东西，你说的话没有人看得见。",
-      "做不出来也交：交一个说明情况的值，比什么都不交强。"
-    ]
+    ( [ "[子任务 — 计划 #" <> tshow plan.wpPlan.stRef.prOrdinal.unPlanOrdinal <> "]",
+        "要做的事：" <> T.take 4000 goal.goalObjective,
+        "要交回的结果类型：" <> renderSchema goal.goalExpected,
+        "额度：最多 " <> tshow goal.goalBudget.ebMaxCalls <> " 次工具调用。"
+      ]
+        -- The inputs block: exactly the names the subgoal asked for, resolved
+        -- to what they actually are.  This is the only thing a child knows
+        -- about the plan above it, and it knows it because it said it needed
+        -- it.  Absent entirely when it asked for nothing, rather than an empty
+        -- heading that reads like something went missing.
+        <> ( if null item.dpInputs
+               then []
+               else
+                 ["", "上面算好交给你的东西："]
+                   <> [ "  " <> binder.unBinder <> " = " <> T.take 4000 (renderPlanValue value)
+                      | (binder, value) <- item.dpInputs
+                      ]
+           )
+        <> [ "",
+             "这一轮是别人派给你的一小块活，你看不到上面在做什么，也不需要看到。",
+             "做完用 subgoal_return 把结果交回去——那是唯一会被读到的东西，你说的话没有人看得见。",
+             "做不出来也交：交一个说明情况的值，比什么都不交强。"
+           ]
+    )
+  where
+    goal = item.dpDesired.dsGoal
 
 stopChild ::
   (Log :> es, Reader BotEnv :> es, IOE :> es) =>
@@ -1880,7 +1909,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling subgoal mInt
               -- The turn naming itself: a fork child's return tool is keyed by
               -- the turn the spawn edge points at, and taking that from the
               -- caller would create a way to name the wrong one.
-              ( (\goal -> SubgoalReturn durable goal.goalObjective goal.goalExpected)
+              ( (\goal -> SubgoalReturn durable.atrTurnId goal.goalObjective goal.goalExpected)
                   <$> subgoal
               )
           currentDefinitions = toolDefinitionsFor env gm.groupId baseCapabilities

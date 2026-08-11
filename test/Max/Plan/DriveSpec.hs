@@ -57,6 +57,17 @@ forkOf children =
 parked :: ExecState
 parked = initialState
 
+-- | Give every subgoal of the fork an @inputs@ block.
+wanting :: [Text] -> PlanDocument -> PlanDocument
+wanting names document = document {pdPlan = go document.pdPlan}
+  where
+    go = \case
+      Fork fork continuation ->
+        Fork
+          fork {fnChildren = [(binder, goal {goalInputs = map Binder names}) | (binder, goal) <- fork.fnChildren]}
+          continuation
+      other -> other
+
 settledWith :: Text -> Text -> Int -> SettledChild Int
 settledWith objective answer child =
   SettledChild {scHash = goalHash (goalNamed objective), scValue = Just (String answer), scChild = child}
@@ -72,8 +83,8 @@ spec :: Spec
 spec = describe "driving a plan parked at a fork" $ do
   it "dispatches every subgoal when nothing has been started" $ do
     let outcome = driveFork (forkOf [("a", "查甲"), ("b", "查乙")]) parked [] ([] :: [Running Int])
-    map (.dsBinder) outcome.drDispatch `shouldBe` [Binder "a", Binder "b"]
-    map (.dsNode) outcome.drDispatch `shouldBe` [NodeId "turn:1:0/k0", NodeId "turn:1:0/k1"]
+    map (.dpDesired.dsBinder) outcome.drDispatch `shouldBe` [Binder "a", Binder "b"]
+    map (.dpDesired.dsNode) outcome.drDispatch `shouldBe` [NodeId "turn:1:0/k0", NodeId "turn:1:0/k1"]
     outcome.drStop `shouldBe` []
     outcome.drNext `shouldBe` WaitForChildren
 
@@ -145,7 +156,7 @@ spec = describe "driving a plan parked at a fork" $ do
             parked
             [settledWith "查甲" "甲的答案" 1]
             ([] :: [Running Int])
-    map (.dsBinder) outcome.drDispatch `shouldBe` [Binder "b"]
+    map (.dpDesired.dsBinder) outcome.drDispatch `shouldBe` [Binder "b"]
     outcome.drNext `shouldBe` WaitForChildren
 
   it "binds both when two identical subgoals both came back" $ do
@@ -160,6 +171,36 @@ spec = describe "driving a plan parked at a fork" $ do
         state.esBindings
           `shouldBe` Map.fromList [(Binder "a", String "第一版"), (Binder "b", String "第二版")]
       other -> expectationFailure ("expected a resume, got " <> show other)
+
+  describe "what a child will be able to see" $ do
+    it "resolves the names the subgoal asked for to their values" $ do
+      -- ADR 002's isolation rule with actual values in it.  childEnv does the
+      -- static half; this is the other one, computed here because here is where
+      -- the parked bindings are.
+      let held =
+            parked
+              { esBindings =
+                  Map.fromList
+                    [ (Binder "框架", String "effectful"),
+                      (Binder "无关", String "别看")
+                    ]
+              }
+          asking = wanting ["框架"] (forkOf [("a", "查甲")])
+          outcome = driveFork asking held [] ([] :: [Running Int])
+      map (.dpInputs) outcome.drDispatch `shouldBe` [[(Binder "框架", String "effectful")]]
+
+    it "hands over nothing when the subgoal asked for nothing" $ do
+      let held = parked {esBindings = Map.fromList [(Binder "无关", String "别看")]}
+          outcome = driveFork (forkOf [("a", "查甲")]) held [] ([] :: [Running Int])
+      map (.dpInputs) outcome.drDispatch `shouldBe` [[]]
+
+    it "drops a name the parked state does not hold rather than faking one" $ do
+      -- validatePlan rejects this as an unbound name, so it cannot arise for a
+      -- plan that ran.  A child handed a fabricated value would be worse than
+      -- one told it has nothing.
+      let asking = wanting ["从未绑过"] (forkOf [("a", "查甲")])
+          outcome = driveFork asking parked [] ([] :: [Running Int])
+      map (.dpInputs) outcome.drDispatch `shouldBe` [[]]
 
   it "stops a child the edited plan no longer wants" $ do
     let outcome =

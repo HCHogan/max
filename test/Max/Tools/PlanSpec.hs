@@ -18,7 +18,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log (Log, LogLevel (LogAttention), runLog)
-import Max.DB.Plan (PlanId (..), PlanOrdinal (..), PlanRef (..), Revision (..))
+import Max.DB.Plan (PlanId (..), PlanOrdinal (..), PlanRef (..), PlanStatus (..), Revision (..))
 import Max.Plan.Execute (ExecState (..))
 import Max.Effects.Tools
   ( SchemaVersion (..),
@@ -95,7 +95,11 @@ invoke name args = do
 -- turn gets.
 nothingJournal :: PlanJournal '[Log, IOE]
 nothingJournal =
-  PlanJournal {pjRecord = \_ -> pure Nothing, pjSuspend = \_ _ _ _ -> pure False}
+  PlanJournal
+    { pjRecord = \_ -> pure Nothing,
+      pjSuspend = \_ _ _ _ -> pure False,
+      pjSettle = \_ _ -> pure ()
+    }
 
 runToolWith :: PlanJournal '[Log, IOE] -> IORef [Text] -> Text -> Value -> IO (Either Text Value)
 runToolWith journal calls name args = do
@@ -334,6 +338,32 @@ spec = do
                 Map.keys decoded.esBindings `shouldBe` [Binder "hits"]
                 decoded.esCalls `shouldBe` 1
           other -> expectationFailure ("expected exactly one suspension, got " <> show (length other))
+
+      it "closes a plan that ended inside the call, and only that one" $ do
+        -- A plan left open sits in the steerable set forever, so a later steer
+        -- would land on work nobody is doing.  A parked fork is the one ending
+        -- that outlives the call and must stay open.
+        settled <- newIORef ([] :: [PlanStatus])
+        calls <- newIORef []
+        let journal =
+              nothingJournal
+                { pjRecord = \_ -> pure (Just planRef),
+                  pjSuspend = \_ _ _ _ -> pure True,
+                  pjSettle = \_ status -> liftIO (modifyIORef' settled (<> [status]))
+                }
+        _ <- runToolWith journal calls "plan_run" forkArgs
+        readIORef settled `shouldReturn` []
+        _ <-
+          runToolWith
+            journal
+            calls
+            "plan_run"
+            ( object
+                [ "objective" .= ("查一下" :: Text),
+                  "plan" .= ("let hits = web_search@1({ query: \"q\" })\ndone \"ok\"" :: Text)
+                ]
+            )
+        readIORef settled `shouldReturn` [PlanDone]
 
       it "falls back to reporting a stop when the plan moved underneath it" $ do
         -- A steer landed between admitting this plan and reaching its fork.

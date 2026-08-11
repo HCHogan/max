@@ -34,7 +34,7 @@ import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.Plan.Schema (PlanSchema)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
 import Data.Time (UTCTime)
-import Max.Turn.Types (AgentTurnRef, TurnOutputContext)
+import Max.Turn.Types (AgentTurnId, TurnOutputContext)
 import OneBot.Types (GroupId, UserId)
 
 data TurnIdentity = TurnIdentity
@@ -82,7 +82,7 @@ data TurnCapabilities = TurnCapabilities
 -- subgoal's own declared result type, and its prose goes nowhere.
 data SubgoalReturn = SubgoalReturn
   { -- | The child's own turn, which is what the spawn edge is keyed by.
-    sgTurn :: !AgentTurnRef,
+    sgTurn :: !AgentTurnId,
     sgObjective :: !Text,
     -- | 'Max.Plan.Types.goalExpected'. Rendered into the tool's JSON Schema,
     -- so the shape asked for and the shape the parent plan was validated

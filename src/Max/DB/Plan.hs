@@ -61,6 +61,7 @@ module Max.DB.Plan
     -- * Waking
     WakeablePlan (..),
     claimWakeablePlans,
+    markPlanReconciled,
     releasePlanClaim,
 
     -- * Children
@@ -416,23 +417,34 @@ data WakeablePlan = WakeablePlan
     -- conversation with a real provenance rather than a synthetic one.
     wpSeedMessage :: !(Maybe Int64),
     wpInitiator :: !(Maybe PrincipalId),
+    -- | This plan's root turn is itself somebody's fork child, so whatever the
+    -- plan produces is that subgoal's answer rather than something to tell a
+    -- model about. What makes fan-out recursive.
+    wpServesSubgoal :: !Bool,
     wpCheckpoint :: !PlanCheckpoint
   }
   deriving stock (Show, Eq)
 
 -- | Lease every suspended plan that currently has work to do.
 --
--- __Having work means having no running child.__ Both ends of a fork's life
--- look like that: a plan that has just suspended has not dispatched anything
--- yet, and a plan whose last child settled is ready to resume. In between —
--- children in flight — there is nothing for a driver to decide, and the settle
--- trigger will notify when that changes.
+-- Two ways to have work, and they are different questions:
 --
--- The consequence is worth stating, because it is a real limitation rather
--- than an accident: __a steer landing while children run takes effect when they
--- settle, not immediately.__ The reconciler will then stop the children the
--- edited plan no longer wants, having let them finish first. Stopping them the
--- moment the head moves is step 12's business, where concurrency lives.
+--   * __No running child.__ Both ends of a fork's life look like this — nothing
+--     dispatched yet, or everything settled — and they are when a driver
+--     dispatches and when it resumes.
+--   * __A head this driver has not reconciled against.__ A steer rewrote the
+--     plan while children run: some of them are now working on something the
+--     plan no longer asks for, and waiting for them to finish first would let
+--     an edit sit behind the work it was meant to cancel.
+--
+-- The watermark is what keeps the second from spinning. Without it a released
+-- lease is immediately re-claimable and the driver reconciles the same
+-- revision forever; with it, a claim is only re-offered when somebody moved
+-- the head again.
+--
+-- __A child is not decided while a plan it opened is still suspended.__ Its
+-- turn ended, but the work moved from the turn to the plan, and a parent that
+-- counted it as settled would read a missing result as a failure.
 claimWakeablePlans ::
   (WithConnection :> es, IOE :> es) =>
   -- | Worker identity.
@@ -445,36 +457,75 @@ claimWakeablePlans ::
 claimWakeablePlans owner now expires limit = do
   rows <-
     query
-      "WITH claimed AS ( \
-      \  UPDATE plans p SET wake_owner = ?, wake_claim_expires_at = ? \
-      \  WHERE p.plan_id IN ( \
-      \    SELECT c.plan_id FROM plans c \
-      \    WHERE c.status = 'open' AND c.exec_state IS NOT NULL \
-      \      AND (c.wake_owner IS NULL OR c.wake_claim_expires_at <= ?) \
-      \      AND NOT EXISTS ( \
-      \        SELECT 1 FROM turn_edges e JOIN agent_turns t ON t.turn_id = e.to_turn_id \
-      \        WHERE e.edge_kind = 'spawn' AND e.plan_id = c.plan_id \
-      \          AND t.status = ANY (ARRAY['starting', 'running', 'recovery-pending']) \
-      \      ) \
-      \    ORDER BY c.plan_id \
-      \    LIMIT ? \
-      \    FOR UPDATE SKIP LOCKED \
-      \  ) \
-      \  RETURNING p.plan_id, p.plan_ordinal, p.head_revision, p.status, p.root_turn_id, \
-      \            p.updated_at, p.exec_node_id, p.exec_revision, p.exec_state, p.conversation_id \
-      \ ) \
-      \ SELECT claimed.plan_id, claimed.plan_ordinal, claimed.head_revision, claimed.status, \
-      \        claimed.root_turn_id, r.ir_version, r.document, claimed.updated_at, \
-      \        claimed.exec_node_id, claimed.exec_revision, claimed.exec_state, \
-      \        conversations.legacy_group_id, root.trigger_canonical_message_id, \
-      \        root.initiator_principal_id \
-      \ FROM claimed \
-      \ JOIN plan_revisions r ON r.plan_id = claimed.plan_id AND r.revision = claimed.head_revision \
-      \ JOIN conversations ON conversations.conversation_id = claimed.conversation_id \
-      \ JOIN agent_turns root ON root.turn_id = claimed.root_turn_id \
-      \ ORDER BY claimed.plan_id"
+      ( "WITH claimed AS ( \
+        \  UPDATE plans p SET wake_owner = ?, wake_claim_expires_at = ? \
+        \  WHERE p.plan_id IN ( \
+        \    SELECT c.plan_id FROM plans c \
+        \    WHERE c.status = 'open' AND c.exec_state IS NOT NULL \
+        \      AND (c.wake_owner IS NULL OR c.wake_claim_expires_at <= ?) \
+        \      AND ( c.head_revision IS DISTINCT FROM c.reconciled_revision \
+        \            OR NOT EXISTS (SELECT 1 FROM turn_edges e "
+          <> runningChildJoin
+          <> "                       WHERE e.edge_kind = 'spawn' AND e.plan_id = c.plan_id \
+             \                         AND "
+          <> childStillWorking
+          <> "                     ) ) \
+             \    ORDER BY c.plan_id \
+             \    LIMIT ? \
+             \    FOR UPDATE SKIP LOCKED \
+             \  ) \
+             \  RETURNING p.plan_id, p.plan_ordinal, p.head_revision, p.status, p.root_turn_id, \
+             \            p.updated_at, p.exec_node_id, p.exec_revision, p.exec_state, p.conversation_id \
+             \ ) \
+             \ SELECT claimed.plan_id, claimed.plan_ordinal, claimed.head_revision, claimed.status, \
+             \        claimed.root_turn_id, r.ir_version, r.document, claimed.updated_at, \
+             \        claimed.exec_node_id, claimed.exec_revision, claimed.exec_state, \
+             \        conversations.legacy_group_id, root.trigger_canonical_message_id, \
+             \        root.initiator_principal_id, \
+             \        EXISTS (SELECT 1 FROM turn_edges parent \
+             \                WHERE parent.to_turn_id = claimed.root_turn_id \
+             \                  AND parent.edge_kind = 'spawn') \
+             \ FROM claimed \
+             \ JOIN plan_revisions r ON r.plan_id = claimed.plan_id AND r.revision = claimed.head_revision \
+             \ JOIN conversations ON conversations.conversation_id = claimed.conversation_id \
+             \ JOIN agent_turns root ON root.turn_id = claimed.root_turn_id \
+             \ ORDER BY claimed.plan_id"
+      )
       (owner, expires, now, limit)
   pure (map decodeWakeable (rows :: [WakeableFields]))
+
+-- | Record that this driver has acted on a revision, so releasing the lease
+-- does not immediately re-offer the same decision.
+markPlanReconciled ::
+  (WithConnection :> es, IOE :> es) =>
+  PlanRef ->
+  -- | The revision that was actually driven — not the head as it is now, which
+  -- may already have moved again and would then never be reconciled.
+  Revision ->
+  Eff es ()
+markPlanReconciled ref revision = do
+  _ <-
+    execute
+      "UPDATE plans SET reconciled_revision = ? WHERE plan_id = ?"
+      (revision, ref.prPlanId)
+  pure ()
+
+-- | The join every "is this child still working" test needs.
+runningChildJoin :: Query
+runningChildJoin = " JOIN agent_turns t ON t.turn_id = e.to_turn_id "
+
+-- | Whether a spawn edge's child is still working.
+--
+-- Two ways to be, and the second is what makes a child able to delegate: its
+-- turn ended the moment it submitted a plan that forked, and the work is now in
+-- that plan.  A parent counting it as decided would read the missing result as
+-- a failure and abandon over work that is going fine.
+childStillWorking :: Query
+childStillWorking =
+  " ( t.status = ANY (ARRAY['starting', 'running', 'recovery-pending']) \
+  \   OR EXISTS (SELECT 1 FROM plans nested \
+  \              WHERE nested.root_turn_id = t.turn_id \
+  \                AND nested.status = 'open' AND nested.exec_state IS NOT NULL) ) "
 
 -- | Give a lease back without touching the checkpoint.
 --
@@ -596,11 +647,12 @@ listRunningChildren ::
 listRunningChildren ref = do
   rows <-
     query
-      "SELECT e.to_turn_id, e.goal_hash, e.dispatched_node_id \
-      \ FROM turn_edges e JOIN agent_turns t ON t.turn_id = e.to_turn_id \
-      \ WHERE e.edge_kind = 'spawn' AND e.plan_id = ? \
-      \   AND t.status = ANY (ARRAY['starting', 'running', 'recovery-pending']) \
-      \ ORDER BY e.edge_id"
+      ( "SELECT e.to_turn_id, e.goal_hash, e.dispatched_node_id FROM turn_edges e "
+          <> runningChildJoin
+          <> " WHERE e.edge_kind = 'spawn' AND e.plan_id = ? AND "
+          <> childStillWorking
+          <> " ORDER BY e.edge_id"
+      )
       (Only ref.prPlanId)
   pure [PlanChild turn hash node | (turn, hash, node) <- rows]
 
@@ -629,11 +681,12 @@ listChildOutcomes ::
 listChildOutcomes ref = do
   rows <-
     query
-      "SELECT e.to_turn_id, e.goal_hash, e.dispatched_node_id, t.status, e.child_result \
-      \ FROM turn_edges e JOIN agent_turns t ON t.turn_id = e.to_turn_id \
-      \ WHERE e.edge_kind = 'spawn' AND e.plan_id = ? \
-      \   AND t.status <> ALL (ARRAY['starting', 'running', 'recovery-pending']) \
-      \ ORDER BY e.edge_id"
+      ( "SELECT e.to_turn_id, e.goal_hash, e.dispatched_node_id, t.status, e.child_result FROM turn_edges e "
+          <> runningChildJoin
+          <> " WHERE e.edge_kind = 'spawn' AND e.plan_id = ? AND NOT "
+          <> childStillWorking
+          <> " ORDER BY e.edge_id"
+      )
       (Only ref.prPlanId)
   pure [ChildOutcome turn hash node status result | (turn, hash, node, status, result) <- rows]
 
@@ -645,7 +698,7 @@ listChildOutcomes ref = do
 -- non-child turn calling the return tool would look like.
 recordChildResult ::
   (WithConnection :> es, IOE :> es) =>
-  AgentTurnRef ->
+  AgentTurnId ->
   Value ->
   Eff es Bool
 recordChildResult child result = do
@@ -653,7 +706,7 @@ recordChildResult child result = do
     execute
       "UPDATE turn_edges SET child_result = ? \
       \ WHERE to_turn_id = ? AND edge_kind = 'spawn'"
-      (Jsonb result, child.atrTurnId)
+      (Jsonb result, child)
   pure (written > 0)
 
 -- The head is a join: `plans` holds no document, so that a revision and the
@@ -718,13 +771,15 @@ data WakeableFields = WakeableFields
     wfState :: !Value,
     wfGroup :: !(Maybe Int64),
     wfSeedMessage :: !(Maybe Int64),
-    wfInitiator :: !(Maybe Int64)
+    wfInitiator :: !(Maybe Int64),
+    wfServesSubgoal :: !Bool
   }
 
 instance FromRow WakeableFields where
   fromRow =
     WakeableFields
       <$> fromRow
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -745,6 +800,7 @@ decodeWakeable row = do
         wpGroup = GroupId group,
         wpSeedMessage = row.wfSeedMessage,
         wpInitiator = PrincipalId <$> row.wfInitiator,
+        wpServesSubgoal = row.wfServesSubgoal,
         wpCheckpoint =
           PlanCheckpoint
             { pkNode = row.wfNode,
