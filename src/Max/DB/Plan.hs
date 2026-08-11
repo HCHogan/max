@@ -63,6 +63,8 @@ module Max.DB.Plan
     claimWakeablePlans,
     markPlanReconciled,
     releasePlanClaim,
+    admitPlanWake,
+    loadPlanWake,
 
     -- * Children
     PlanChild (..),
@@ -509,6 +511,38 @@ markPlanReconciled ref revision = do
       "UPDATE plans SET reconciled_revision = ? WHERE plan_id = ?"
       (revision, ref.prPlanId)
   pure ()
+
+-- | Claim the right to report this plan's outcome, once and only once.
+--
+-- The idempotency point of the whole wake, and the reason it is here rather
+-- than at the close: a driver that dies after admitting is recovered by the
+-- turn machinery, and one that dies before it drives the plan again and reaches
+-- the same result. 'False' means somebody already admitted a wake — the caller
+-- has minted a turn it must now dispose of, and must not dispatch it.
+admitPlanWake ::
+  (WithConnection :> es, IOE :> es) =>
+  PlanRef ->
+  AgentTurnRef ->
+  -- | The view that turn opens with, stored so a recovered turn gets the same
+  -- words rather than a re-derivation that would mean re-running the plan.
+  Text ->
+  Eff es Bool
+admitPlanWake ref turn view = do
+  admitted <-
+    execute
+      "UPDATE plans SET wake_turn_id = ?, wake_view = ? \
+      \ WHERE plan_id = ? AND wake_turn_id IS NULL"
+      (turn.atrTurnId, view, ref.prPlanId)
+  pure (admitted > 0)
+
+-- | The wake a recovered turn belongs to, if it is one.
+loadPlanWake ::
+  (WithConnection :> es, IOE :> es) =>
+  AgentTurnId ->
+  Eff es (Maybe Text)
+loadPlanWake turnId = do
+  rows <- query "SELECT wake_view FROM plans WHERE wake_turn_id = ?" (Only turnId)
+  pure (fromOnly <$> listToMaybe' (rows :: [Only Text]))
 
 -- | The join every "is this child still working" test needs.
 runningChildJoin :: Query

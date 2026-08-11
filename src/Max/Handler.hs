@@ -160,6 +160,8 @@ import Max.DB.Plan
     PlanId (..),
     PlanRef (..),
     StoredPlan (..),
+    admitPlanWake,
+    loadPlanWake,
     recordChildSpawn,
   )
 import Max.Plan.Catalog (planCatalog)
@@ -1391,18 +1393,23 @@ wakeOwner plan outcome = do
     Nothing ->
       logAttention "plan: finished with nobody to tell" $
         object ["plan_id" .= plan.wpPlan.stRef.prPlanId.unPlanId]
-    Just trigger ->
-      dispatchLLMWith
-        Nothing
-        Nothing
-        (Just (renderPlanWakeView plan outcome))
-        Nothing
-        Nothing
-        Nothing
-        OriginPlan
-        NeverAbsorb
-        []
-        trigger
+    Just trigger -> do
+      -- Admission before dispatch, and admission rather than closing as the
+      -- idempotency point.  A process dying after this line is recovered by the
+      -- turn machinery; one dying before it drives the plan again, reaches the
+      -- same result, and finds the wake already taken.
+      turn <- startAgentTurn plan.wpGroup trigger.canonicalId trigger.authorPrincipalId
+      let view = renderPlanWakeView plan outcome
+      admitted <- admitPlanWake plan.wpPlan.stRef turn view
+      if admitted
+        then dispatchLLMWith (Just turn) Nothing (Just view) Nothing Nothing Nothing OriginPlan NeverAbsorb [] trigger
+        else do
+          -- Somebody already reported this plan.  The turn just minted is
+          -- surplus and is retired rather than left to boot recovery, which
+          -- would relaunch it as an ordinary reply to a message nobody sent.
+          finishAgentTurn turn TurnAborted 0 (Just "plan wake already admitted") Nothing
+          logInfo "plan: wake already reported" $
+            object ["plan_id" .= plan.wpPlan.stRef.prPlanId.unPlanId]
 
 renderPlanWakeView :: WakeablePlan -> T.Text -> T.Text
 renderPlanWakeView plan outcome =
@@ -1492,21 +1499,30 @@ resumeInterruptedTurn recovery = do
             | otherwise -> do
                 principals <- mentionPrincipalsFor (mentionIdentities claim.body)
                 view <- recoveryViewForTurn recovery.atrRecoveryTurn
+                -- An admitted plan wake is not a reply to the seed message it
+                -- was dispatched against; it happens to share its provenance.
+                -- Relaunching it as an ordinary reply would answer a question
+                -- that was answered turns ago and say nothing about the plan.
+                planWake <- loadPlanWake recovery.atrRecoveryTurn.atrTurnId
                 let message = dispatchMessage principals claim
                     origin
+                      | isJust planWake = OriginPlan
                       | isPrivateChat message.groupId || dispatchMentionsSelf message = OriginDirect
                       | otherwise = OriginProactive
+                    trigger'
+                      | isJust planWake = message {body = Body [], replyTo = Nothing, mentionPrincipals = Map.empty}
+                      | otherwise = message
                 dispatchLLMWith
                   (Just recovery.atrRecoveryTurn)
                   (Just view)
-                  Nothing
+                  planWake
                   Nothing
                   Nothing
                   Nothing
                   origin
                   NeverAbsorb
                   []
-                  message
+                  trigger'
 
 dispatchLLMWith ::
   ( Blob :> es,

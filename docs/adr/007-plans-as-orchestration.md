@@ -1015,12 +1015,59 @@ orchestration layer.
     dispatching the turn that reports it loses the telling, not the plan's
     integrity. Both are step 12's, where concurrency lives.
 
-12. **Concurrency and child context projection**, only once the shape holds.
-    Three things are waiting here, and step 11 named all of them: reconciling
-    the moment a steer lands rather than when the running children settle;
-    making the wake crash-safe by admitting its turn before the plan closes; and
-    letting a child delegate, which means `plan_run` inside a child's ceiling
-    and therefore a fork whose parent is itself a child.
+12. **Concurrency and child context projection.** Step 11 named three things
+    waiting here and its own title named a fourth, which turned out to be the
+    one that was already half-built and unfinished.
+
+    **A steer lands when it lands.** The claim gate was *no running child*,
+    which is enough to dispatch and to resume and not enough to reconcile: an
+    edited plan wants some children stopped and others started while the first
+    set is still running, and under that gate the edit sat behind the very work
+    it was meant to cancel. Widening it to *or a head this driver has not
+    reconciled against* needs a watermark, and the watermark is the whole
+    difficulty — without it a released lease is immediately re-claimable and the
+    driver reconciles the same revision forever. `Reconcile`'s stop list, which
+    step 11 computed and could never populate, now has real cases.
+
+    **A child may delegate, and almost nothing had to change.** `openPlan` takes
+    its conversation from the turn either way, and a grandchild's spawn edge
+    names the child's turn as its parent. The one thing that had to become true
+    is that **a child which parked a plan is not decided** — its turn ended when
+    it submitted the plan, and the work moved from the turn to the plan, so a
+    parent counting it as settled would read the missing result as a failure and
+    abandon over work that is going fine. That is a property of the query that
+    finds running children. Two consequences follow: the parent is no longer
+    woken by the child's turn settling but by the result landing on the edge, so
+    the schema grew a trigger for that column; and a nested plan **answers its
+    subgoal rather than telling a model**, which is the only place the two cases
+    differ at all.
+
+    **Child context projection was real, not speculative.** The dialect has had
+    an `inputs { … }` block since step 7 and the guide teaches models to use it —
+    *"子任务要用到你前面算出来的值，写进它的 inputs 块"* — and nothing resolved
+    those names to values. `childEnv` even says the host does it. Now `Drive`
+    does, where the parked bindings are: a host handed the whole environment and
+    trusted to narrow it would be a second place ADR 002's isolation rule has to
+    be got right.
+
+    **The wake is crash-safe.** Admission before dispatch, and admission rather
+    than closing as the idempotency point — the construction monitor fires
+    already use. A driver that dies after admitting is recovered by the turn
+    machinery, with the stored view rather than a re-derivation; one that dies
+    before it drives the plan again, reaches the same result, and finds the wake
+    taken. The cost is re-running the plan's tail on that path, which is
+    tolerable precisely because nothing in the plannable set writes.
+
+    **Two bugs fell out of the work.** A plan that ended inside `plan_run` was
+    never closed, so every finished inline plan sat in the steerable set forever
+    and a later steer would have landed on work nobody was doing. And a fork
+    whose every spawn failed left a plan nothing would ever wake — a stall under
+    the old gate, and a spin under the new one.
+
+    What is still open, and named rather than left implicit: `JoinAll` is the
+    only join policy, `WatchEach` is parsed and never acted on, and a child's
+    tool ceiling is the plannable set rather than a translation of its declared
+    effects. All three are widenings, not corrections.
 
 Steps 3–4 are ordered ahead of 5 deliberately; ADR 002 had execution first,
 which is the right order for a machine nobody edits.

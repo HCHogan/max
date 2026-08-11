@@ -372,6 +372,32 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       claimed.wpPlan.stDocument `shouldBe` document "二"
       claimed.wpCheckpoint.pkRevision `shouldBe` Revision 1
 
+  describe "reporting the outcome" $ do
+    it "admits exactly one wake and hands the view back to a recovered turn" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      wake <- withDb pool (startAgentTurn fixture.fxGroup (CanonicalMessageId 0) fixture.fxPrincipal)
+      admitted <- withDb pool (admitPlanWake ref wake "计划回来了：甲")
+      admitted `shouldBe` True
+      withDb pool (loadPlanWake wake.atrTurnId) `shouldReturn` Just "计划回来了：甲"
+
+    it "refuses a second wake, which is what makes the retry safe" $ do
+      -- A driver that died after admitting and before closing drives the plan
+      -- again, reaches the same result, and must not report it twice: two
+      -- answers to one question, and the group cannot tell which is current.
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      first' <- withDb pool (startAgentTurn fixture.fxGroup (CanonicalMessageId 0) fixture.fxPrincipal)
+      again <- withDb pool (startAgentTurn fixture.fxGroup (CanonicalMessageId 0) fixture.fxPrincipal)
+      withDb pool (admitPlanWake ref first' "第一次") `shouldReturn` True
+      withDb pool (admitPlanWake ref again "第二次") `shouldReturn` False
+      withDb pool (loadPlanWake first'.atrTurnId) `shouldReturn` Just "第一次"
+      withDb pool (loadPlanWake again.atrTurnId) `shouldReturn` Nothing
+
+    it "knows an ordinary turn is not a wake" $ do
+      fixture <- createFixture pool 42 1001
+      withDb pool (loadPlanWake fixture.fxTurn.atrTurnId) `shouldReturn` Nothing
+
   describe "child results" $ do
     it "records what a child produced and reads it back beside its status" $ do
       fixture <- createFixture pool 42 1001
