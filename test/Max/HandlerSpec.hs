@@ -41,8 +41,26 @@ spec = do
     it "is silence-without-face for an unknown reason name" $
       parseSilence "[silence:量子纠缠]" `shouldBe` Just Nothing
 
+    it "reads a marker that lost its closing bracket" $ do
+      -- Taken from production: eleven replies in three days ended in an
+      -- unclosed token, eight of them exactly this.  Every one was sent to the
+      -- group as chat, because a near-miss opt-out was not a malformed opt-out
+      -- — it was ordinary text.
+      parseSilence "[silence" `shouldBe` Just Nothing
+      parseSilence "[沉默" `shouldBe` Just Nothing
+      parseSilence "[silence:NO" `shouldBe` Just (Just 123)
+      -- The quote handle a silence carries is stripped first either way.
+      parseSilence "[reply#6] [silence" `shouldBe` Just Nothing
+
     it "does not mute a reply that merely contains the marker" $ do
       parseSilence "[silence] 算了还是说一句" `shouldBe` Nothing
+      -- The repair must not widen this: the exact-match property is what lets
+      -- max talk *about* the marker, which it has really done.
+      parseSilence "连发三条 [silence] 都是有节奏的。" `shouldBe` Nothing
+      parseSilence "[silence 算了还是说一句" `shouldBe` Nothing
+      -- The repair keys on there being no bracket anywhere, so a reply that
+      -- has one is read exactly as it was before.
+      parseSilence "[silence:吃瓜] 再说一句" `shouldBe` Nothing
       parseSilence "[silence:吃瓜] 再说一句" `shouldBe` Nothing
       isSilentReply "我为什么要回 [silence]" `shouldBe` False
 

@@ -2668,13 +2668,34 @@ defaultSilenceFace = 7
 -- and send the marker as literal text.
 parseSilence :: T.Text -> Maybe (Maybe Int)
 parseSilence t0
-  | T.null t || t == "[silence]" || t == "[沉默]" = Just Nothing
+  | T.null t || closed == "[silence]" || closed == "[沉默]" = Just Nothing
   | Just inner <- withReason = Just (faceIdByName (T.strip inner))
   | otherwise = Nothing
   where
     t = dropQuoteHandles t0
+    -- A reply that is a marker missing its closing bracket is repaired before
+    -- it is read.  Streamed replies lose that last character often enough to
+    -- matter: eleven production replies in three days ended in an unclosed
+    -- token, and every one of them came back from the same profile.  What made
+    -- it worth handling here rather than shrugging at the provider is the
+    -- direction the near-miss falls — an opt-out that does not quite parse is
+    -- not treated as a malformed opt-out, it is treated as ordinary text, so
+    -- the bot answers a message it had decided to stay out of by shouting
+    -- "[silence" at the group.
+    --
+    -- The repair applies only when there is no @]@ anywhere, which is both the
+    -- narrow rule and the true one: a marker that lost its bracket has no
+    -- bracket left to find.  Anything carrying one is read exactly as before,
+    -- so @[silence:吃瓜] 再说一句@ stays a reply with a marker in it rather than
+    -- becoming a silence with an unreadable reason, and prose that mentions
+    -- [silence] in passing still fails every comparison below.  That property
+    -- is what the exact match was protecting and is worth keeping: max has
+    -- already sent a good message joking about how it sends three in a row.
+    closed
+      | T.any (== ']') t = t
+      | otherwise = T.stripEnd t <> "]"
     withReason =
-      (T.stripPrefix "[silence:" t <|> T.stripPrefix "[silence：" t)
+      (T.stripPrefix "[silence:" closed <|> T.stripPrefix "[silence：" closed)
         >>= T.stripSuffix "]"
 
 -- | Leading @[reply#id]@ handles and the text after them.  Only the prefix:
