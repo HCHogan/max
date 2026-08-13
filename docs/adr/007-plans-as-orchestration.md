@@ -1,10 +1,10 @@
 # ADR 007: Plans as Orchestration — Fork, Steering, and What the Kernel Is Actually For
 
-- Status: Accepted for the plan core; supersedes the parts of ADR 002 listed
-  under "What this retires" below. The IR changes (taint removal, `Fork`,
-  `goalResources`, `goalHash`) have landed. The scheduler, the durable plan,
-  and the reconciler have not.
-- Date: 2026-08-10.
+- Status: Accepted and implemented through the production runtime contracts in
+  step 13; supersedes the parts of ADR 002 listed under "What this retires"
+  below. `JoinAll` remains the only join policy and `WatchEach` remains parsed
+  but inactive.
+- Date: 2026-08-10; production runtime contracts 2026-08-11.
 
 ## Context
 
@@ -865,7 +865,9 @@ orchestration layer.
     tool; but `runTools` nests, so a plan runs in a sub-catalog built from the
     plannable subset of what this dispatch already resolved. Same effect row,
     same authorization, same journal — and the subset never contains `plan_run`,
-    so recursion is impossible by construction rather than by a guard.
+    so one executor cannot invoke itself. Step 12 later permits nested
+    delegation only across a separately journaled child-turn/durable-plan
+    boundary.
 
     **Measured against a real model, and the answer is sharply conditional.**
     Two prompt shapes, five runs each, deepseek on the production tool schemas:
@@ -1099,9 +1101,49 @@ orchestration layer.
     finished parsed 100%.
 
     What is still open, and named rather than left implicit: `JoinAll` is the
-    only join policy, `WatchEach` is parsed and never acted on, and a child's
-    tool ceiling is the plannable set rather than a translation of its declared
-    effects. All three are widenings, not corrections.
+    only join policy and `WatchEach` is parsed and never acted on. Child tools
+    are now the exact parent/current catalog intersection, further narrowed by
+    the subgoal's declared effects and authorities; broadening the plannable
+    catalog remains an explicit per-tool schema decision.
+
+13. **Make the runtime contract match the design under crash, recovery, and
+    concurrent steering.** The first scheduler proved the state machine and
+    left several facts in process memory. Production makes those facts durable
+    before it lets any actor use them:
+
+    - Opening a plan stores its exact tool-name/fingerprint grants and root
+      `Goal`. A resumed walk reconstructs the same effect ceiling instead of
+      inheriting whatever this binary or session happens to expose later.
+    - Allocating a child turn, writing its spawn edge, and storing its immutable
+      `Goal`, rendered view, narrowed grants, projected inputs, and cancellation
+      state is one transaction. Boot recovery reads that contract and fails
+      closed for a historical edge that does not have one.
+    - A child dispatch contains only a fixed isolation system instruction, its
+      stored goal view, projected inputs, and explicitly granted result handles.
+      It receives no persona, roster, history, memory, sibling state, output
+      capability, or ordinary-turn recovery context; after a restart only its
+      own bounded execution-journal view is appended. Result handles resolve
+      through the conversation and `!clear` boundary; their blob addresses
+      never enter a model context.
+    - The host intersects parent grants, current fingerprints, goal effects,
+      and goal authorities. It derives remaining direct tool-call fuel from the
+      journal and wall-clock fuel from the durable turn's start time, so restart
+      does not refill either budget. `subgoal_return` is schema-derived,
+      first-write-wins, ends the agent loop, and suppresses sibling calls in the
+      same model round, so prose and post-return effects cannot become a second
+      result.
+    - Cancellation first marks the edge and durable turn, closes any delegated
+      descendant plans/turns, then interrupts a local task if this process owns
+      one. A cancelled child cannot publish a late result or start another model
+      round, and boot recovery cannot revive it.
+    - Every worker mutation carries the claim owner and monotonic epoch. A
+      heartbeat renews only a still-live lease; an expired worker cannot revive
+      its token, spawn or stop children, publish a nested result, move the
+      checkpoint, admit a wake, or close the plan. Wake turn allocation and
+      admission are one transaction and happen before closure.
+    - `plan_list` exposes current open heads and `plan_revise` performs a
+      validated compare-and-set revision, giving the front model the same
+      steering primitive the reconciler already gives a user-originated edit.
 
 Steps 3–4 are ordered ahead of 5 deliberately; ADR 002 had execution first,
 which is the right order for a machine nobody edits.

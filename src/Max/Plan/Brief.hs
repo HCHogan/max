@@ -21,9 +21,11 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Set qualified as Set
 import Max.Plan.Drive (Dispatchable (..))
 import Max.Plan.Reconcile (Desired (..))
 import Max.Plan.Schema (renderSchema)
+import Max.Plan.Prompt (renderAuthority, renderEffect)
 import Max.Plan.Types (Binder (..), EffectBudget (..), Goal (..))
 
 -- | What one child opens with.
@@ -38,7 +40,12 @@ subgoalBrief ordinal item =
     ( [ "[子任务 — 计划 #" <> tshow ordinal <> "]",
         "要做的事：" <> T.take 4000 goal.goalObjective,
         "要交回的结果类型：" <> renderSchema goal.goalExpected,
-        "额度：最多 " <> tshow goal.goalBudget.ebMaxCalls <> " 次工具调用。"
+        "额度：最多 " <> tshow goal.goalBudget.ebMaxCalls <> " 次工具调用，最多 "
+          <> tshow goal.goalBudget.ebMaxSends <> " 次发送，fanout "
+          <> tshow goal.goalBudget.ebMaxFanout <> "，" <> tshow goal.goalBudget.ebMaxTokens
+          <> " tokens，" <> tshow goal.goalBudget.ebMaxWallClockMs <> "ms。",
+        "允许的效果：" <> comma (map renderEffect (Set.toList goal.goalBudget.ebEffects)),
+        "允许的权限：" <> comma (map renderAuthority (Set.toList goal.goalAuthority))
       ]
         -- The inputs block: exactly the names the subgoal asked for, resolved
         -- to what they actually are.  This is the only thing a child knows
@@ -54,6 +61,8 @@ subgoalBrief ordinal item =
                       ]
            )
         <> [ "",
+             "可解析资源句柄：" <> if null goal.goalResources then "（无）" else comma goal.goalResources,
+             "",
              "这一轮是别人派给你的一小块活，你看不到上面在做什么，也不需要看到。",
              "做完用 subgoal_return 把结果交回去——那是唯一会被读到的东西，你说的话没有人看得见。",
              "做不出来也交：交一个说明情况的值，比什么都不交强。",
@@ -66,6 +75,8 @@ subgoalBrief ordinal item =
     )
   where
     goal = item.dpDesired.dsGoal
+    comma [] = "（无）"
+    comma xs = T.intercalate "、" xs
 
 -- | A plan value as one line of prose.
 --

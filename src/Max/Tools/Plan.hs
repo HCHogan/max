@@ -20,9 +20,10 @@
 -- __A plan runs in a catalog containing only plannable tools.__  Not a
 -- restriction bolted on: 'runTools' is re-interpreted over the plannable subset,
 -- so a plan calling anything else fails at the same place an invented tool name
--- would.  It also makes @plan_run@ structurally unable to invoke itself, since
--- the subset never contains it — no recursion guard needed, because there is no
--- recursion to guard.
+-- would. It also makes @plan_run@ structurally unable to invoke itself, since
+-- the subset never contains it. A child can still delegate by opening a new
+-- durable plan through its outer agent loop; recursion crosses that journaled
+-- turn/plan boundary rather than occurring inside one executor.
 --
 -- __A fork parks the plan rather than ending it.__  §11.  The walk stops at the
 -- fork either way — an interpreter cannot start a turn — but where it used to
@@ -46,6 +47,8 @@ module Max.Tools.Plan
     durablePlanJournal,
     planGoalFor,
     planValidationEnv,
+    planResourceHandles,
+    validationEnvForContract,
   )
 where
 
@@ -53,15 +56,44 @@ import Data.Aeson
 import Data.Aeson.Types (Pair, parseEither)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (catMaybes, isJust)
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.ByteString qualified as BS
+import Data.ByteString.Base16 qualified as Base16
+import Data.List (sortOn)
+import Data.Scientific qualified as Scientific
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
+import Data.Vector qualified as Vector
+import Crypto.Hash.SHA256 qualified as SHA256
 import Control.Exception (SomeException)
+import Control.Monad (foldM)
 import Effectful
 import Effectful.Log (Log, logAttention, logInfo)
 import Effectful.PostgreSQL (WithConnection)
 import Data.Foldable (for_)
-import Max.DB.Plan (PlanId (..), PlanRef (..), PlanStatus (..), Revision (..), closePlan, openPlan, suspendPlan)
+import Max.DB.Plan
+  ( PlanId (..),
+    PlanLoadError,
+    PlanOrdinal (..),
+    PlanRef (..),
+    PlanStatus (..),
+    Revision (..),
+    RevisionConflict (..),
+    RevisionCause (CauseSteer),
+    StoredPlan (..),
+    closePlan,
+    listOpenPlans,
+    openPlanWithGrants,
+    planLoadErrorText,
+    revisePlan,
+    suspendPlan,
+  )
+import Max.DB.AgentTurn (resolveJournalResultValue)
+import Max.Effects.Blob (Blob)
 import Max.Effects.Tools
   ( Tool (..),
     ToolCatalog,
@@ -74,22 +106,25 @@ import Max.Effects.Tools qualified as Tools
 import Max.Plan.Catalog (planCatalog)
 import Max.Plan.Execute
   ( Deopt (..),
+    ExecState (..),
     ExecutionEnd (..),
     ExecutionEnv (..),
     ExecutionResult (..),
     StepRecord (..),
     deoptText,
-    executePlan,
+    initialState,
+    resumePlan,
   )
 import Max.Plan.Parse (parseFailureText, parsePlan)
-import Max.Plan.Prompt (frontPrompt)
-import Max.Plan.Schema (PlanSchema (..))
+import Max.Plan.Prompt (childPrompt, frontPrompt)
+import Max.Plan.Schema (PlanSchema (..), SchemaField (..))
 import Max.Plan.Types
-import Max.Plan.Validate (CatalogEntry (..), ValidationEnv (..), rejectionText, validatePlan)
-import Max.ToolContext (ToolContext, toolTurnOutputContext)
-import Max.Tools.Schema (stringParam, toolObject)
-import Max.Turn.Types (turnOutputAgentTurn)
-import Max.Util (catchSync)
+import Max.Plan.Validate (CatalogEntry (..), ValidationEnv (..), childEnv, rejectionText, validatePlan)
+import Max.ToolContext (SubgoalReturn (..), ToolContext, toolAuthorPrincipalId, toolCatalogGrants, toolClearedAt, toolConversationScope, toolGroupId, toolSubgoal, toolTurnOutputContext)
+import Max.Tools.Schema (integerParam, noArguments, stringParam, toolObject)
+import Max.Turn.Continuity (toolCatalogFingerprint)
+import Max.Turn.Types (parseTurnHandle, turnOutputAgentTurn)
+import Max.Util (catchSync, tshow)
 
 -- | Both runners, built against the tools this dispatch actually got.
 --
@@ -115,9 +150,14 @@ planToolsFor journal definitions runners =
     -- catalog.  Dropping both tools is still the right answer to it — better a
     -- turn with no planning than a turn whose plan tool holds a broken catalog.
     Left _ -> []
-    Right built -> [guideTool catalog, runTool journal catalog built]
+    Right built -> [guideTool journal catalog, runTool journal catalog built, listTool journal, reviseTool journal currentGrants catalog]
   where
     catalog = planCatalog definitions
+    currentGrants =
+      Map.fromList
+        [ (definition.tdRef.unToolRef, toolCatalogFingerprint [definition])
+        | definition <- definitions
+        ]
     subCatalog = plannableSubCatalog definitions runners
 
 -- | The tools a plan may call, out of what this dispatch resolved.
@@ -128,8 +168,9 @@ planToolsFor journal definitions runners =
 -- definitions. Sharing the construction is what makes "the same catalog" a
 -- fact rather than a convention.
 --
--- @plan_run@ is never in it, which is why recursion is impossible by
--- construction rather than by a guard.
+-- @plan_run@ is never in it, so one executor cannot recursively invoke itself.
+-- Nested delegation remains possible through a child turn opening another
+-- durable plan.
 plannableSubCatalog ::
   [ToolDefinition] ->
   [Tool es] ->
@@ -193,8 +234,8 @@ planValidationEnv catalog objective =
       venCostCeiling = 100000
     }
 
-guideTool :: Map ToolRef CatalogEntry -> Tool es
-guideTool catalog =
+guideTool :: PlanJournal es -> Map ToolRef CatalogEntry -> Tool es
+guideTool journal catalog =
   Tool
     { toolName = "plan_guide",
       toolDescription =
@@ -209,10 +250,13 @@ guideTool catalog =
           ["objective"],
       toolRun = \args -> case parseEither (withObject "args" (.: "objective")) args of
         Left e -> pure (Left ("bad args: " <> T.pack e))
-        Right (objective :: Text) ->
+        Right (objective :: Text) -> do
+          bodies <- journal.pjResolve (maybe [] (.sgGoal.goalResources) journal.pjSubgoal)
+          let env = validationEnvForContract catalog objective journal.pjSubgoal bodies
+              prompt = if isJust journal.pjSubgoal then childPrompt env else frontPrompt env
           pure . Right $
             object
-              [ "guide" .= frontPrompt (planValidationEnv catalog objective),
+              [ "guide" .= prompt,
                 "next" .= ("照说明写好计划，用 plan_run 提交，objective 写同一句。" :: Text)
               ]
     }
@@ -228,7 +272,15 @@ guideTool catalog =
 -- first: a checkpoint identifies itself by the plan it belongs to, and a
 -- dispatch that could not open a plan has nothing to park against.
 data PlanJournal es = PlanJournal
-  { pjRecord :: PlanDocument -> Eff es (Maybe PlanRef),
+  { pjRecord :: Goal -> PlanDocument -> Eff es (Maybe PlanRef),
+    -- | A child plans against the complete goal and explicit input values it
+    -- was dispatched with. Ordinary turns carry no enclosing goal.
+    pjSubgoal :: !(Maybe SubgoalReturn),
+    -- | Conversation-scoped steering surface. Child turns get no steering
+    -- grants, but keeping the callbacks here preserves a pure tool seam.
+    pjList :: Eff es [Either PlanLoadError StoredPlan],
+    pjRevise :: PlanRef -> Revision -> PlanDocument -> Eff es (Either Text Revision),
+    pjResolve :: [Text] -> Eff es (Map Text Value),
     -- | Park the execution state at a fork, against the revision it walked.
     -- 'False' means the plan moved underneath and this state describes a plan
     -- that is no longer current.
@@ -246,7 +298,11 @@ data PlanJournal es = PlanJournal
 noPlanJournal :: PlanJournal es
 noPlanJournal =
   PlanJournal
-    { pjRecord = \_ -> pure Nothing,
+    { pjRecord = \_ _ -> pure Nothing,
+      pjSubgoal = Nothing,
+      pjList = pure [],
+      pjRevise = \_ _ _ -> pure (Left "这一轮没有持久化计划上下文"),
+      pjResolve = \_ -> pure Map.empty,
       pjSuspend = \_ _ _ _ -> pure False,
       pjSettle = \_ _ -> pure ()
     }
@@ -263,19 +319,38 @@ noPlanJournal =
 -- turn precisely so the two cannot disagree, and there is nothing to derive it
 -- from here.
 durablePlanJournal ::
-  (Log :> es, WithConnection :> es, IOE :> es) =>
+  (Blob :> es, Log :> es, WithConnection :> es, IOE :> es) =>
   ToolContext ->
   PlanJournal es
 durablePlanJournal dc = case toolTurnOutputContext dc of
   Nothing -> noPlanJournal
   Just output ->
     PlanJournal
-      { pjRecord = \document ->
-          (Just <$> openPlan (turnOutputAgentTurn output) document)
+      { pjRecord = \goal document ->
+          (Just <$> openPlanWithGrants (turnOutputAgentTurn output) (toolCatalogGrants dc) goal document)
             `catchSync` \e -> do
               logAttention "plan: not persisted" $
                 object ["root" .= document.pdRoot, "error" .= T.pack (show (e :: SomeException))]
               pure Nothing,
+        pjSubgoal = toolSubgoal dc,
+        pjList = listOpenPlans (toolGroupId dc),
+        pjRevise = \ref based document -> do
+          outcome <-
+            revisePlan
+              ref
+              based
+              CauseSteer
+              (Just (toolAuthorPrincipalId dc))
+              (Just (turnOutputAgentTurn output))
+              document
+          pure $ case outcome of
+            Left conflict -> Left ("计划已经变成 revision " <> tshow conflict.rcHead.unRevision <> "，先重新 plan_list")
+            Right revision -> Right revision,
+        pjResolve = \handles ->
+          Map.fromList . catMaybes
+            <$> traverse
+              (\handle -> fmap ((handle,) <$>) (resolveJournalResultValue (toolConversationScope dc) (toolClearedAt dc) handle))
+              handles,
         pjSuspend = \ref based node state ->
           suspendPlan ref based node state
             `catchSync` \e -> do
@@ -288,6 +363,158 @@ durablePlanJournal dc = case toolTurnOutputContext dc of
               logAttention "plan: not closed" $
                 object ["plan_id" .= ref.prPlanId.unPlanId, "error" .= T.pack (show (e :: SomeException))]
       }
+
+listTool :: PlanJournal es -> Tool es
+listTool journal =
+  Tool
+    { toolName = "plan_list",
+      toolDescription = "列出当前会话里仍可 steering 的计划、revision 和完整 AST。要修改计划时先读它。",
+      toolSchema = noArguments,
+      toolRun = \_ -> do
+        plans <- journal.pjList
+        pure . Right . toJSON $
+          [ case row of
+              Left err -> object ["error" .= planLoadErrorText err]
+              Right plan ->
+                object
+                  [ "plan" .= plan.stRef.prOrdinal.unPlanOrdinal,
+                    "revision" .= plan.stRevision.unRevision,
+                    "root" .= plan.stDocument.pdRoot,
+                    "document" .= plan.stDocument,
+                    "goal" .= plan.stRootGoal
+                  ]
+          | row <- plans
+          ]
+    }
+
+reviseTool :: PlanJournal es -> Map Text Text -> Map ToolRef CatalogEntry -> Tool es
+reviseTool journal currentGrants catalog =
+  Tool
+    { toolName = "plan_revise",
+      toolDescription = "用 compare-and-set 修改一个仍在运行的计划。必须使用刚从 plan_list 读到的 plan/revision；冲突后重新读取，不得盲重试。",
+      toolSchema =
+        toolObject
+          [ ("plan", integerParam "plan_list 返回的计划号"),
+            ("revision", integerParam "plan_list 返回的当前 revision"),
+            ("objective", stringParam "修改后计划要完成的目标"),
+            ("source", stringParam "新的完整计划源码，不加代码块")
+          ]
+          ["plan", "revision", "objective", "source"],
+      toolRun = \args -> case parseEither (withObject "args" parseRevise) args of
+        Left err -> pure (Left ("bad args: " <> T.pack err))
+        Right (ordinal, revision, objective, source) -> do
+          heads <- journal.pjList
+          case [stored | Right stored <- heads, stored.stRef.prOrdinal == PlanOrdinal ordinal] of
+            [] -> pure (Left "这个会话里没有仍在运行的这个计划")
+            stored : _
+              | stored.stRevision /= Revision revision ->
+                  pure (Left ("revision 已经过期；现在是 " <> tshow stored.stRevision.unRevision <> "，先重新 plan_list"))
+              | otherwise -> case parsePlan source of
+                  Left failure -> pure (Left ("计划没解析通过：" <> parseFailureText failure))
+                  Right parsed -> do
+                    let resourceContract = if stored.stServesSubgoal then stored.stRootGoal else Nothing
+                        admittedCatalog =
+                          Map.filterWithKey
+                            (\ref _ ->
+                               Map.lookup ref.unToolRef stored.stToolGrants
+                                 == Map.lookup ref.unToolRef currentGrants
+                            )
+                            catalog
+                    bodies <- journal.pjResolve (planResourceHandles resourceContract parsed)
+                    let base = validationEnvForContract admittedCatalog objective Nothing bodies
+                        env = maybe base (\goal -> base {venGoal = goal}) stored.stRootGoal
+                        document = PlanDocument stored.stDocument.pdRoot parsed
+                    case validatePlan env document.pdRoot document.pdPlan of
+                      Left rejection -> pure (Left ("计划没通过校验：" <> rejectionText rejection))
+                      Right _ -> do
+                        changed <- journal.pjRevise stored.stRef stored.stRevision document
+                        pure $ case changed of
+                          Left detail -> Left detail
+                          Right next -> Right (object ["plan" .= ordinal, "revision" .= next.unRevision, "updated" .= True])
+    }
+  where
+    parseRevise o = (,,,) <$> o .: "plan" <*> o .: "revision" <*> o .: "objective" <*> o .: "source"
+
+validationEnvForContract ::
+  Map ToolRef CatalogEntry ->
+  Text ->
+  Maybe SubgoalReturn ->
+  Map Text Value ->
+  ValidationEnv
+validationEnvForContract available objective contract bodies = case contract of
+  Nothing -> parent
+  Just subgoal ->
+    childEnv
+      parent
+        { venBindings =
+            Map.fromList
+              [ (binder, schema)
+              | (binder, value) <- subgoal.sgInputs,
+                Just schema <- [schemaOfValue value]
+              ]
+        }
+      subgoal.sgGoal
+  where
+    parent =
+      (planValidationEnv available objective)
+        { venHandles = Map.mapMaybeWithKey valueRef bodies
+        }
+    valueRef handle value = do
+      schema <- schemaOfValue value
+      let bytes = canonicalBytes value
+      pure
+        ValueRef
+          { vrHandle = handle,
+            vrSchema = schema,
+            vrScope = CurrentConversation,
+            vrDigest = TE.decodeUtf8 (Base16.encode (SHA256.hash bytes)),
+            vrLength = BS.length bytes,
+            vrRetained = True
+          }
+
+-- | Handles an authored plan asks to read. A child is additionally intersected
+-- with its root Goal's explicit resource list, so guessing another t# handle
+-- cannot widen its authority.
+planResourceHandles :: Maybe Goal -> Plan -> [Text]
+planResourceHandles rootGoal plan =
+  Set.toList $ case rootGoal of
+    Nothing -> authored
+    Just goal -> Set.intersection authored (Set.fromList goal.goalResources)
+  where
+    authored = Set.fromList (collect (toJSON plan))
+    collect = \case
+      String text | isJust (parseTurnHandle text) -> [text]
+      Array values -> concatMap collect (Vector.toList values)
+      Object fields -> concatMap collect (KeyMap.elems fields)
+      _ -> []
+
+-- | Derive the narrow structural type of a host-supplied input value. Empty
+-- or heterogeneous collections and null have no honest element/base type in
+-- the plan language, so they remain unavailable to authored expressions
+-- rather than being advertised under a guessed type.
+schemaOfValue :: Value -> Maybe PlanSchema
+schemaOfValue = \case
+  String _ -> Just SchemaText
+  Number n
+    | Scientific.isInteger n -> Just SchemaInt
+    | otherwise -> Just SchemaNumber
+  Bool _ -> Just SchemaBool
+  Null -> Nothing
+  Array values -> do
+    first : rest <- traverse schemaOfValue (Vector.toList values)
+    element <- foldM mergeSchema first rest
+    pure (SchemaArray element)
+  Object fields ->
+    SchemaObject
+      <$> traverse
+        (\(name, value) -> SchemaField (Key.toText name) <$> schemaOfValue value <*> pure True)
+        (sortOn (Key.toText . fst) (KeyMap.toList fields))
+  where
+    mergeSchema left right
+      | left == right = Just left
+    mergeSchema SchemaInt SchemaNumber = Just SchemaNumber
+    mergeSchema SchemaNumber SchemaInt = Just SchemaNumber
+    mergeSchema _ _ = Nothing
 
 runTool ::
   Log :> es =>
@@ -313,64 +540,67 @@ runTool journal catalog sub =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure (Left ("bad args: " <> T.pack e))
         Right (objective, source) -> do
-          let env = planValidationEnv catalog objective
-              root = "plan:" <> T.take 12 (T.filter (/= ' ') objective)
+          let root = "plan:" <> T.take 12 (T.filter (/= ' ') objective)
           case parsePlan source of
             Left failure -> pure (Left ("计划没解析通过：" <> parseFailureText failure))
-            Right parsed -> case validatePlan env root parsed of
-              Left rejection -> pure (Left ("计划没通过校验：" <> rejectionText rejection))
-              Right valid -> do
-                -- Written before execution rather than after it: the row
-                -- records what was *admitted*, and an admitted plan that then
-                -- crashed is exactly the case worth having on disk.  It is also
-                -- the identity later work hangs off — a fork's spawn edges
-                -- reference a plan id, a steer replaces a head revision, and
-                -- neither exists until somebody writes the first one.  Step 3
-                -- built these tables deliberately ahead of the executor and
-                -- left them with no writer; this is the writer.
-                stored <- journal.pjRecord PlanDocument {pdRoot = root, pdPlan = parsed}
-                logInfo "plan: admitted" $
-                  object
-                    [ "objective" .= objective,
-                      "hash" .= planHash parsed,
-                      "holes" .= length (planHoles root parsed),
-                      "children" .= length (planChildren root parsed),
-                      "plan_id" .= fmap (.prPlanId.unPlanId) stored
-                    ]
-                result <-
-                  runTools sub $
-                    executePlan
-                      ExecutionEnv {exValidation = env, exHandles = Map.empty, exRoot = root}
-                      valid
-                case (result.erEnd, stored) of
-                  (Deoptimized (AtFork node _ _ children), Just ref) -> do
-                    -- Revision 1 by construction: this tool opens the plan a
-                    -- few lines above and nothing else has had the chance to
-                    -- move it.  Passed rather than assumed inside the journal
-                    -- so that the day a plan arrives here already revised, the
-                    -- compiler asks which revision it walked.
-                    parked <- journal.pjSuspend ref (Revision 1) node.unNodeId (toJSON result.erState)
-                    if parked
-                      then do
-                        logInfo "plan: suspended at a fork" $
-                          object
-                            [ "plan_id" .= ref.prPlanId.unPlanId,
-                              "node" .= node.unNodeId,
-                              "children" .= length children
-                            ]
-                        pure (reportSuspension result children)
-                      else do
-                        -- The head moved between admitting this plan and
-                        -- reaching its fork.  Reported as an ordinary stop:
-                        -- the work already done still counts, and the model is
-                        -- the one who can say what the change meant.
-                        logAttention "plan: fork not parked; plan moved" $
-                          object ["plan_id" .= ref.prPlanId.unPlanId, "node" .= node.unNodeId]
-                        settle stored result
-                        pure (report result)
-                  _ -> do
-                    settle stored result
-                    pure (report result)
+            Right parsed -> do
+              bodies <- journal.pjResolve (planResourceHandles ((.sgGoal) <$> journal.pjSubgoal) parsed)
+              let env = validationEnvForContract catalog objective journal.pjSubgoal bodies
+              case validatePlan env root parsed of
+                Left rejection -> pure (Left ("计划没通过校验：" <> rejectionText rejection))
+                Right valid -> do
+                  -- Written before execution rather than after it: the row
+                  -- records what was *admitted*, and an admitted plan that then
+                  -- crashed is exactly the case worth having on disk.  It is also
+                  -- the identity later work hangs off — a fork's spawn edges
+                  -- reference a plan id, a steer replaces a head revision, and
+                  -- neither exists until somebody writes the first one.  Step 3
+                  -- built these tables deliberately ahead of the executor and
+                  -- left them with no writer; this is the writer.
+                  stored <- journal.pjRecord env.venGoal PlanDocument {pdRoot = root, pdPlan = parsed}
+                  logInfo "plan: admitted" $
+                    object
+                      [ "objective" .= objective,
+                        "hash" .= planHash parsed,
+                        "holes" .= length (planHoles root parsed),
+                        "children" .= length (planChildren root parsed),
+                        "plan_id" .= fmap (.prPlanId.unPlanId) stored
+                      ]
+                  result <-
+                    runTools sub $
+                      resumePlan
+                        ExecutionEnv {exValidation = env, exHandles = Map.restrictKeys bodies (Map.keysSet env.venHandles), exRoot = root}
+                        valid
+                        initialState {esBindings = Map.fromList (maybe [] (.sgInputs) journal.pjSubgoal)}
+                  case (result.erEnd, stored) of
+                    (Deoptimized (AtFork node _ _ children), Just ref) -> do
+                      -- Revision 1 by construction: this tool opens the plan a
+                      -- few lines above and nothing else has had the chance to
+                      -- move it.  Passed rather than assumed inside the journal
+                      -- so that the day a plan arrives here already revised, the
+                      -- compiler asks which revision it walked.
+                      parked <- journal.pjSuspend ref (Revision 1) node.unNodeId (toJSON result.erState)
+                      if parked
+                        then do
+                          logInfo "plan: suspended at a fork" $
+                            object
+                              [ "plan_id" .= ref.prPlanId.unPlanId,
+                                "node" .= node.unNodeId,
+                                "children" .= length children
+                              ]
+                          pure (reportSuspension result children)
+                        else do
+                          -- The head moved between admitting this plan and
+                          -- reaching its fork.  Reported as an ordinary stop:
+                          -- the work already done still counts, and the model is
+                          -- the one who can say what the change meant.
+                          logAttention "plan: fork not parked; plan moved" $
+                            object ["plan_id" .= ref.prPlanId.unPlanId, "node" .= node.unNodeId]
+                          settle stored result
+                          pure (report result)
+                    _ -> do
+                      settle stored result
+                      pure (report result)
     }
   where
     parseArgs o = (,) <$> o .: "objective" <*> o .: "plan"

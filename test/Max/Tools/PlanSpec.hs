@@ -18,7 +18,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log (Log, LogLevel (LogAttention), runLog)
-import Max.DB.Plan (PlanId (..), PlanOrdinal (..), PlanRef (..), PlanStatus (..), Revision (..))
+import Max.DB.Plan (PlanId (..), PlanOrdinal (..), PlanRef (..), PlanStatus (..), Revision (..), StoredPlan (..))
 import Max.Plan.Execute (ExecState (..))
 import Max.Effects.Tools
   ( SchemaVersion (..),
@@ -35,6 +35,8 @@ import Max.Plan.Parse (parsePlan)
 import Max.Plan.Types (Binder (..), PlanDocument (..), PlanPath (..), PlanStep (..), planHash)
 import Max.Tools.Plan (PlanJournal (..), planToolsFor)
 import Max.Tools.Schema (stringParam, toolObject)
+import Max.Turn.Continuity (toolCatalogFingerprint)
+import Max.Turn.Types (AgentTurnId (..))
 import Test.Hspec
 
 -- | Stand-ins for the two tools 'Max.Plan.Catalog' declares plannable, plus one
@@ -96,7 +98,11 @@ invoke name args = do
 nothingJournal :: PlanJournal '[Log, IOE]
 nothingJournal =
   PlanJournal
-    { pjRecord = \_ -> pure Nothing,
+    { pjRecord = \_ _ -> pure Nothing,
+      pjSubgoal = Nothing,
+      pjList = pure [],
+      pjRevise = \_ _ _ -> pure (Left "not durable"),
+      pjResolve = \_ -> pure Map.empty,
       pjSuspend = \_ _ _ _ -> pure False,
       pjSettle = \_ _ -> pure ()
     }
@@ -161,6 +167,24 @@ spec = do
           guide `shouldSatisfy` (not . textContains "plan_run@")
 
   describe "plan_run" $ do
+    it "resolves an explicitly authored result handle through the journal" $ do
+      requested <- newIORef ([] :: [Text])
+      calls <- newIORef []
+      let journal =
+            nothingJournal
+              { pjResolve = \handles -> do
+                  liftIO (writeIORef requested handles)
+                  pure (Map.fromList [("t#1:r1", object ["answer" .= ("甲" :: Text)])])
+              }
+      out <-
+        runToolWith
+          journal
+          calls
+          "plan_run"
+          (object ["objective" .= ("复用结果" :: Text), "plan" .= ("done t#1:r1.answer" :: Text)])
+      readIORef requested `shouldReturn` ["t#1:r1"]
+      fmap (field "done") out `shouldBe` Right (Just (String "甲"))
+
     it "runs a plan end to end and returns only its done value" $ do
       (out, calls) <-
         invoke
@@ -226,7 +250,7 @@ spec = do
       calls <- newIORef []
       let journal =
             nothingJournal
-              {pjRecord = \document -> liftIO (modifyIORef' recorded (<> [document])) >> pure Nothing}
+              {pjRecord = \_ document -> liftIO (modifyIORef' recorded (<> [document])) >> pure Nothing}
           run = runToolWith journal calls "plan_run"
       _ <-
         run
@@ -292,7 +316,7 @@ spec = do
         calls <- newIORef []
         let journal =
               nothingJournal
-                { pjRecord = \_ -> pure (Just planRef),
+                { pjRecord = \_ _ -> pure (Just planRef),
                   pjSuspend = \_ based node state ->
                     liftIO (modifyIORef' parked (<> [(based, node, state)])) >> pure True
                 }
@@ -322,7 +346,7 @@ spec = do
         calls <- newIORef []
         let journal =
               nothingJournal
-                { pjRecord = \_ -> pure (Just planRef),
+                { pjRecord = \_ _ -> pure (Just planRef),
                   pjSuspend = \_ based node state ->
                     liftIO (modifyIORef' parked (<> [(based, node, state)])) >> pure True
                 }
@@ -347,7 +371,7 @@ spec = do
         calls <- newIORef []
         let journal =
               nothingJournal
-                { pjRecord = \_ -> pure (Just planRef),
+                { pjRecord = \_ _ -> pure (Just planRef),
                   pjSuspend = \_ _ _ _ -> pure True,
                   pjSettle = \_ status -> liftIO (modifyIORef' settled (<> [status]))
                 }
@@ -370,7 +394,7 @@ spec = do
         -- The work already done still counts, and the model is the one who can
         -- say what the change meant.
         calls <- newIORef []
-        let journal = nothingJournal {pjRecord = \_ -> pure (Just planRef)}
+        let journal = nothingJournal {pjRecord = \_ _ -> pure (Just planRef)}
         out <- runToolWith journal calls "plan_run" forkArgs
         case out of
           Left e -> expectationFailure (show e)
@@ -409,6 +433,52 @@ spec = do
           )
       calls `shouldBe` []
       out `shouldSatisfy` isLeftContaining "没通过校验"
+
+  describe "plan_revise" $
+    it "rejects a tool whose current definition no longer matches the plan's frozen grant" $ do
+      calls <- newIORef []
+      revisions <- newIORef ([] :: [PlanDocument])
+      original <- case parsePlan "done \"old\"" of
+        Left failure -> expectationFailure (show failure) >> error "unreachable"
+        Right plan -> pure plan
+      webDefinition <- case [definition | definition <- definitions, definition.tdRef == ToolRef "web_search"] of
+        [definition] -> pure definition
+        found -> expectationFailure ("expected one web_search definition, got " <> show (length found)) >> error "unreachable"
+      let stored =
+            StoredPlan
+              { stRef = planRef,
+                stRevision = Revision 1,
+                stStatus = PlanOpen,
+                stRootTurn = AgentTurnId 1,
+                stDocument = PlanDocument "plan:old" original,
+                stRootGoal = Nothing,
+                stServesSubgoal = False,
+                -- Same name, different definition. Name-only validation would
+                -- silently widen the old plan at this steering boundary.
+                stToolGrants = Map.singleton "web_search" (toolCatalogFingerprint [webDefinition] <> "-drifted"),
+                stUpdatedAt = read "2026-08-11 00:00:00 UTC"
+              }
+          journal =
+            nothingJournal
+              { pjList = pure [Right stored],
+                pjRevise = \_ _ document -> do
+                  liftIO (modifyIORef' revisions (<> [document]))
+                  pure (Right (Revision 2))
+              }
+      out <-
+        runToolWith
+          journal
+          calls
+          "plan_revise"
+          ( object
+              [ "plan" .= (1 :: Int),
+                "revision" .= (1 :: Int),
+                "objective" .= ("查一下" :: Text),
+                "source" .= ("let hits = web_search@1({ query: \"q\" })\ndone \"ok\"" :: Text)
+              ]
+          )
+      out `shouldSatisfy` isLeftContaining "web_search"
+      readIORef revisions `shouldReturn` []
 
 textContains :: Text -> Text -> Bool
 textContains = T.isInfixOf

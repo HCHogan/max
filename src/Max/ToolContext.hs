@@ -28,10 +28,11 @@ module Max.ToolContext
   )
 where
 
+import Data.Aeson (Value)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
-import Max.Plan.Schema (PlanSchema)
+import Max.Plan.Types (Binder, Goal)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
 import Data.Time (UTCTime)
 import Max.Turn.Types (AgentTurnId, TurnOutputContext)
@@ -83,11 +84,11 @@ data TurnCapabilities = TurnCapabilities
 data SubgoalReturn = SubgoalReturn
   { -- | The child's own turn, which is what the spawn edge is keyed by.
     sgTurn :: !AgentTurnId,
-    sgObjective :: !Text,
-    -- | 'Max.Plan.Types.goalExpected'. Rendered into the tool's JSON Schema,
-    -- so the shape asked for and the shape the parent plan was validated
-    -- against are one fact rather than two kept in step by hand.
-    sgExpected :: !PlanSchema
+    -- | The complete durable contract, not only its result schema. Planning,
+    -- tool budgets, effects, authority and recovery all read this same value.
+    sgGoal :: !Goal,
+    -- | Values explicitly named by 'goalInputs'; no ambient parent bindings.
+    sgInputs :: ![(Binder, Value)]
   }
   deriving stock (Show, Eq)
 

@@ -1,10 +1,11 @@
 module Max.DB.PlanSpec (spec) where
 
 import Control.Concurrent.Async (mapConcurrently)
-import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Either (rights)
 import Data.Int (Int64)
 import Data.List (sort)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -12,7 +13,7 @@ import Data.Time (UTCTime, addUTCTime)
 import Control.Exception (try)
 import Database.PostgreSQL.Simple (Only (..), SqlError, execute, query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb)
-import Max.DB.AgentTurn (AgentTurnTerminal (..), finishAgentTurn, markAgentTurnRunning, startAgentTurn)
+import Max.DB.AgentTurn (AgentTurnTerminal (..), JournalStart (..), finishAgentTurn, markAgentTurnRunning, recordAgentTurnLlmRound, startAgentTurn, startJournalExecution)
 import Max.DB.Connection (DbPool, withConn)
 import Max.DB.Plan
 import Max.Effects.Tools (SchemaVersion (..), ToolRef (..))
@@ -73,6 +74,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
     head'.stStatus `shouldBe` PlanOpen
     head'.stRootTurn `shouldBe` fixture.fxTurn.atrTurnId
     head'.stDocument `shouldBe` document "查一下"
+
+  it "persists the root Goal and exact opening tool grants" $ do
+    fixture <- createFixture pool 42 1001
+    let goal = goalNamed "严格目标"
+        grants = Map.fromList [("web_search", "schema-fingerprint")]
+    ref <- withDb pool (openPlanWithGrants fixture.fxTurn grants goal (document "查一下"))
+    head' <- withDb pool (loadPlanHead ref) >>= requireHead
+    head'.stRootGoal `shouldBe` Just goal
+    head'.stToolGrants `shouldBe` grants
 
   it "serializes concurrent opens into a stable conversation ordinal" $ do
     fixture <- createFixture pool 42 1001
@@ -322,6 +332,33 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       expired <- withDb pool (claimWakeablePlans "other" muchLaterTime muchLaterTime 10)
       map (fmap (.wpPlan.stRef)) expired `shouldBe` [Right ref]
 
+    it "renews a live lease but never revives an expired fencing token" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      claimed <- claimOne pool ref
+      let heartbeatAt = addUTCTime 30 testTime
+          renewedUntil = addUTCTime 150 testTime
+      withDb pool (renewClaimedPlan claimed heartbeatAt renewedUntil) `shouldReturn` True
+      blocked <- withDb pool (claimWakeablePlans "other" (addUTCTime 90 testTime) muchLaterTime 10)
+      blocked `shouldBe` []
+      [Right fresh] <- withDb pool (claimWakeablePlans "other" (addUTCTime 180 testTime) muchLaterTime 10)
+      withDb pool (renewClaimedPlan claimed (addUTCTime 181 testTime) muchLaterTime) `shouldReturn` False
+      withDb pool (releaseClaimedPlan fresh) `shouldReturn` True
+
+    it "fences every substantive write from an expired lease" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      stale <- claimOne pool ref
+      [Right fresh] <- withDb pool (claimWakeablePlans "fresh" muchLaterTime (addUTCTime 60 muchLaterTime) 1)
+      fresh.wpClaim.pcEpoch `shouldSatisfy` (> stale.wpClaim.pcEpoch)
+      withDb pool (markClaimedPlanReconciled stale (Revision 1)) `shouldReturn` False
+      withDb pool (suspendClaimedPlan stale (Revision 1) "stale" checkpointState) `shouldReturn` False
+      withDb pool (finishClaimedPlan stale PlanDone) `shouldReturn` False
+      withDb pool (releaseClaimedPlan stale) `shouldReturn` False
+      withDb pool (releaseClaimedPlan fresh) `shouldReturn` True
+
     it "leaves a plan alone while any of its children is still running" $ do
       -- Both ends of a fork's life look like "no running child" — nothing
       -- dispatched yet, and everything settled.  In between there is nothing
@@ -373,6 +410,19 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       claimed.wpCheckpoint.pkRevision `shouldBe` Revision 1
 
   describe "reporting the outcome" $ do
+    it "allocates and admits the wake atomically under the claim fence" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      claimed <- claimOne pool ref
+      let trigger = CanonicalMessageId (maybe 0 id claimed.wpSeedMessage)
+      admitted <- withDb pool (admitClaimedPlanWake claimed trigger fixture.fxPrincipal "原子 wake")
+      admitted `shouldSatisfy` (/= Nothing)
+      case admitted of
+        Just turn -> withDb pool (loadPlanWake turn.atrTurnId) `shouldReturn` Just "原子 wake"
+        Nothing -> expectationFailure "wake was not admitted"
+      withDb pool (admitClaimedPlanWake claimed trigger fixture.fxPrincipal "重复") `shouldReturn` Nothing
+
     it "admits exactly one wake and hands the view back to a recovered turn" $ do
       fixture <- createFixture pool 42 1001
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
@@ -399,6 +449,77 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       withDb pool (loadPlanWake fixture.fxTurn.atrTurnId) `shouldReturn` Nothing
 
   describe "child results" $ do
+    it "keeps child call and wall-clock fuel durable across recovery" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      claimed <- claimOne pool ref
+      let goal = goalNamed "查甲"
+          trigger = CanonicalMessageId (maybe 0 id claimed.wpSeedMessage)
+      Just child <-
+        withDb pool
+          ( startClaimedPlanChild
+              claimed fixture.fxTurn.atrTurnId trigger fixture.fxPrincipal
+              (goalHash goal) "turn:1:0/k0" goal "isolated view" Map.empty []
+          )
+      (initialCalls, initialWall) <- withDb pool (remainingChildBudget child.atrTurnId 3 60000)
+      initialCalls `shouldBe` 3
+      initialWall `shouldSatisfy` (> 0)
+      _ <- withDb pool (startJournalExecution child (childJournalStart "work-1" "search_web"))
+      _ <- withDb pool (startJournalExecution child (childJournalStart "guide-1" "plan_guide"))
+      fmap fst (withDb pool (remainingChildBudget child.atrTurnId 3 60000)) `shouldReturn` 2
+      _ <- withDb pool (startJournalExecution child (childJournalStart "plan-1" "plan_run"))
+      fmap fst (withDb pool (remainingChildBudget child.atrTurnId 3 60000)) `shouldReturn` 0
+
+    it "atomically stores a recoverable child contract and keeps the first typed result" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      claimed <- claimOne pool ref
+      let goal = (goalNamed "查甲") {goalInputs = [Binder "seed"]}
+          grants = Map.fromList [("web_search", "exact")]
+          inputs = [(Binder "seed", String "甲")]
+          trigger = CanonicalMessageId (maybe 0 id claimed.wpSeedMessage)
+      child <-
+        withDb pool
+          ( startClaimedPlanChild
+              claimed fixture.fxTurn.atrTurnId trigger fixture.fxPrincipal
+              (goalHash goal) "turn:1:0/k0" goal "isolated view" grants inputs
+          )
+      case child of
+        Nothing -> expectationFailure "child was not admitted"
+        Just turn -> do
+          withDb pool (loadChildDispatch turn.atrTurnId)
+            `shouldReturn` Just (Right (ChildDispatch goal "isolated view" grants inputs False))
+          withDb pool (recordChildResult turn.atrTurnId (object ["n" .= (1 :: Int)])) `shouldReturn` True
+          withDb pool (recordChildResult turn.atrTurnId (object ["n" .= (2 :: Int)])) `shouldReturn` False
+          withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing Nothing)
+          outcomes <- withDb pool (listChildOutcomes ref)
+          map (.coResult) outcomes `shouldBe` [Just (object ["n" .= (1 :: Int)])]
+
+    it "persists cancellation, blocks late results, and stops later model rounds" $ do
+      fixture <- createFixture pool 42 1001
+      ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
+      _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
+      claimed <- claimOne pool ref
+      let goal = goalNamed "查甲"
+          trigger = CanonicalMessageId (maybe 0 id claimed.wpSeedMessage)
+      Just child <-
+        withDb pool
+          ( startClaimedPlanChild
+              claimed fixture.fxTurn.atrTurnId trigger fixture.fxPrincipal
+              (goalHash goal) "turn:1:0/k0" goal "isolated view" Map.empty []
+          )
+      nested <- withDb pool (openPlan child (document "孙辈"))
+      _ <- withDb pool (suspendPlan nested (Revision 1) "turn:2:0/k" checkpointState)
+      withDb pool (requestClaimedChildCancellation claimed child.atrTurnId) `shouldReturn` True
+      withDb pool (recordChildResult child.atrTurnId (String "too late")) `shouldReturn` False
+      withDb pool (recordAgentTurnLlmRound child.atrTurnId) `shouldReturn` False
+      withDb pool (loadChildDispatch child.atrTurnId)
+        `shouldReturn` Just (Right (ChildDispatch goal "isolated view" Map.empty [] True))
+      Just (Right nestedHead) <- withDb pool (loadPlanHead nested)
+      nestedHead.stStatus `shouldBe` PlanAbandoned
+
     it "records what a child produced and reads it back beside its status" $ do
       fixture <- createFixture pool 42 1001
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
@@ -452,6 +573,18 @@ laterTime = addUTCTime 60 testTime
 
 muchLaterTime :: UTCTime
 muchLaterTime = addUTCTime 3600 testTime
+
+childJournalStart :: Text -> Text -> JournalStart
+childJournalStart callId toolRef =
+  JournalStart
+    { jsCallId = callId,
+      jsToolRef = toolRef,
+      jsSchemaVersion = 1,
+      jsSchemaHash = T.replicate 64 "b",
+      jsInput = object [],
+      jsEffectLabels = toJSON ([] :: [Text]),
+      jsRetryClass = "safe"
+    }
 
 -- | Claim exactly one plan and insist it is the one asked for.
 claimOne :: DbPool -> PlanRef -> IO WakeablePlan

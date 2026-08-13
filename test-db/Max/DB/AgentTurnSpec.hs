@@ -102,6 +102,22 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
             noteAndFirst.jeExecutionOrdinal
       crossConversation `shouldBe` Nothing
 
+      let largeHandle = resultHandleText fixture.fxTurn.atrTurnOrdinal noteAndFirst.jeExecutionOrdinal
+          inlineHandle = resultHandleText fixture.fxTurn.atrTurnOrdinal second.jeExecutionOrdinal
+      withDbBlob pool blobRoot
+        (resolveJournalResultValue (conversationScopeFor fixture.fxGroup) Nothing largeHandle)
+        `shouldReturn` Just largeValue
+      withDbBlob pool blobRoot
+        (resolveJournalResultValue (conversationScopeFor fixture.fxGroup) Nothing inlineHandle)
+        `shouldReturn` Just (object ["ok" .= True])
+      withDbBlob pool blobRoot
+        (resolveJournalResultValue (conversationScopeFor other.fxGroup) Nothing largeHandle)
+        `shouldReturn` Nothing
+      future <- addUTCTime 1 <$> getCurrentTime
+      withDbBlob pool blobRoot
+        (resolveJournalResultValue (conversationScopeFor fixture.fxGroup) (Just future) largeHandle)
+        `shouldReturn` Nothing
+
       storageRows <- withConn pool $ \connection ->
         query
           connection
@@ -281,8 +297,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     fixture <- createFixture pool 42 1001
     now <- getCurrentTime
     withDb pool $ do
-      recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
-      recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
+      _ <- recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
+      _ <- recordAgentTurnLlmRound fixture.fxTurn.atrTurnId
       addAgentTurnUsage fixture.fxTurn.atrTurnId 100 20 (Just 40)
       addAgentTurnUsage fixture.fxTurn.atrTurnId 25 5 Nothing
       finishAgentTurn

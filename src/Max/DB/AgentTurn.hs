@@ -28,11 +28,12 @@ module Max.DB.AgentTurn
     finishJournalExecution,
     markJournalOutcomeUnknown,
     lookupJournalResultEnvelope,
+    resolveJournalResultValue,
   )
 where
 
 import Control.Monad (when)
-import Data.Aeson (Value (..), encode)
+import Data.Aeson (Value (..), eitherDecodeStrict', encode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -49,7 +50,7 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.DB.Transaction (withTransaction)
-import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
+import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Types
@@ -184,15 +185,15 @@ markAgentTurnRunning ref profile = do
 recordAgentTurnLlmRound ::
   (WithConnection :> es, IOE :> es) =>
   AgentTurnId ->
-  Eff es ()
+  Eff es Bool
 recordAgentTurnLlmRound turnId = do
-  _ <-
+  moved <-
     execute
       "UPDATE agent_turns SET llm_turns = llm_turns + 1 \
       \ WHERE turn_id = ? \
       \   AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text])"
       (Only turnId)
-  pure ()
+  pure (moved > 0)
 
 addAgentTurnUsage ::
   (WithConnection :> es, IOE :> es) =>
@@ -723,6 +724,37 @@ lookupJournalResultEnvelope scope turnOrdinal executionOrdinal = do
             jreArtifactSpilled = spilled
           }
     _ -> Nothing
+
+-- | Resolve a model-facing result handle through conversation scope and the
+-- current !clear boundary. The blob digest never leaves this function.
+resolveJournalResultValue ::
+  (Blob :> es, WithConnection :> es, IOE :> es) =>
+  ConversationScope ->
+  Maybe UTCTime ->
+  Text ->
+  Eff es (Maybe Value)
+resolveJournalResultValue scope cleared raw = case parseTurnHandle raw of
+  Just (ParsedTurnResult turnOrdinal executionOrdinal) -> do
+    rows <-
+      query
+        "SELECT j.result_inline, j.result_blob_sha256 \
+        \ FROM conversations c \
+        \ JOIN agent_turns t USING (conversation_id) \
+        \ JOIN execution_journal j ON j.turn_id = t.turn_id \
+        \ WHERE c.legacy_group_id = ? AND t.turn_ordinal = ? AND j.execution_ordinal = ? \
+        \   AND j.event_kind = 'tool_call' \
+        \   AND j.state = ANY (ARRAY['succeeded'::text, 'committed'::text]) \
+        \   AND (?::timestamptz IS NULL OR t.started_at >= ?)"
+        (conversationStorageId scope, turnOrdinal, executionOrdinal, cleared, cleared)
+    case rows :: [(Maybe Value, Maybe Text)] of
+      [(Just value, Nothing)] -> pure (Just value)
+      [(Nothing, Just sha)] -> case blobRefFromSha256 sha of
+        Nothing -> pure Nothing
+        Just ref -> do
+          bytes <- readBlob ref
+          pure (either (const Nothing) Just (eitherDecodeStrict' bytes))
+      _ -> pure Nothing
+  _ -> pure Nothing
 
 exactlyOne :: Text -> [Only a] -> a
 exactlyOne _ [Only value] = value

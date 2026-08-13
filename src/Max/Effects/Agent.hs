@@ -140,7 +140,12 @@ data AgentContext = AgentContext
     -- | The session's @!effort@ override, threaded into every LLM
     -- call this turn makes ('turnCtx').  'Nothing' = the profile's
     -- configured effort.
-    acEffort :: !(Maybe Text)
+    acEffort :: !(Maybe Text),
+    -- | Host-enforced tool-call budget for a delegated child. Ordinary turns
+    -- use 'Nothing'. Administrative return/guide calls are free; a child
+    -- plan_run conservatively reserves its whole call budget, so direct calls
+    -- and an inner plan cannot each spend the same allowance.
+    acMaxToolCalls :: !(Maybe Int)
   }
 
 -- | Usage attribution for a dispatch's own LLM calls.  Private chats
@@ -257,7 +262,7 @@ runDurableAgent ::
 runDurableAgent = runAgentWithJournal durableAgentJournal
 
 data AgentJournal es = AgentJournal
-  { ajRecordLlmRound :: AgentTurnRef -> Eff es (),
+  { ajRecordLlmRound :: AgentTurnRef -> Eff es Bool,
     ajRecordNote :: AgentTurnRef -> Text -> Eff es (),
     ajStart :: GroupId -> AgentTurnRef -> JournalStart -> Eff es (Maybe JournalExecution),
     ajFinish :: JournalExecution -> JournalFinish -> Eff es (),
@@ -267,7 +272,7 @@ data AgentJournal es = AgentJournal
 noAgentJournal :: AgentJournal es
 noAgentJournal =
   AgentJournal
-    { ajRecordLlmRound = \_ -> pure (),
+    { ajRecordLlmRound = \_ -> pure True,
       ajRecordNote = \_ _ -> pure (),
       ajStart = \_ _ _ -> pure Nothing,
       ajFinish = \_ _ -> pure (),
@@ -318,18 +323,19 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolOutput : es) AgentResult
-    loop emit ctx h profile = go emit ctx h 0 [] profile
+    loop emit ctx h profile = go emit ctx h 0 0 [] profile
 
     go ::
       AgentEventSink (Eff (Tools : ToolOutput : es)) ->
       AgentContext ->
       TurnRuntime ->
       Int ->
+      Int ->
       [ChatMessage] ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolOutput : es) AgentResult
-    go emit ctx h n appended profile msgs = do
+    go emit ctx h n callsUsed appended profile msgs = do
       -- Drain any feedback notes that arrived since the previous turn.
       liftIO (checkTurnCancellation h)
       notes <- liftIO (drainTurnInbox h)
@@ -337,7 +343,7 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
             [] -> (msgs, appended)
             xs -> (msgs <> [feedbackMsg xs], appended <> [feedbackMsg xs])
       if n >= lims.maxTurns
-        then finalAnswer ctx n appended' profile msgs'
+        then finalAnswer ctx h n appended' profile msgs'
         else do
           liftIO (setTurnPhase h "llm")
           specs <- listToolSpecs
@@ -350,7 +356,9 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
           -- narration, or the final answer), and each gets its own
           -- prefix bookkeeping.
           for_ (turnRuntimeAgentTurn h) $ \durable ->
-            raise (raise (journal.ajRecordLlmRound durable))
+            do
+              active <- raise (raise (journal.ajRecordLlmRound durable))
+              unless active (throwIO TaskCancelled)
           sentRef <- liftIO (newTVarIO "")
           eres <- chatStreaming (turnCtx ctx "turn") profile msgs'' specs (releaseParagraphs emit sentRef)
           sent <- liftIO (readTVarIO sentRef)
@@ -401,7 +409,7 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                       logInfo "agent: btw notes raced final answer, continuing" $
                         object ["count" .= length xs]
                       let newMsgs = [MsgAssistant text, feedbackMsg xs]
-                      go emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                      go emit ctx h (n + 1) callsUsed (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -428,7 +436,22 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
               -- results keep call order so each tool_call id is
               -- answered in sequence.
               registered <- listCatalogTools
-              journalRows <- traverse (prepareJournal (toolGroupId ctx.acTools) h registered) tcs
+              let returnRound = any ((== "subgoal_return") . (.callName)) tcs
+                  suppressed tc = returnRound && tc.callName /= "subgoal_return"
+                  remaining = maybe maxBound (\limit -> max 0 (limit - callsUsed)) ctx.acMaxToolCalls
+                  callCost tc
+                    | tc.callName `elem` ["subgoal_return", "plan_guide"] = 0
+                    | tc.callName == "plan_run" = maybe 1 (max 1) ctx.acMaxToolCalls
+                    | otherwise = 1
+                  roundCost = sum [callCost tc | tc <- tcs, not (suppressed tc)]
+                  overBudget = roundCost > remaining
+              journalRows <-
+                if overBudget
+                  then pure (replicate (length tcs) Nothing)
+                  else
+                    traverse
+                      (\tc -> if suppressed tc then pure Nothing else prepareJournal (toolGroupId ctx.acTools) h registered tc)
+                      tcs
               let canParallel tc =
                     any
                       (\view ->
@@ -437,11 +460,33 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                       )
                       registered
               let journaledCalls = zip tcs journalRows
-              executed <- case journaledCalls of
-                [call] -> (: []) <$> executeOne h call
-                _
-                  | all canParallel tcs -> mapConcurrently (executeOne h) journaledCalls
-                  | otherwise -> traverse (executeOne h) journaledCalls
+              executed <-
+                if overBudget
+                  then
+                    pure
+                      [ ( toolResultMessage tc (Left "这个子任务的工具调用额度已经用满，不能再执行这个调用"),
+                          ToolCallFinished tc.callName (Left "child tool-call budget exhausted")
+                        )
+                      | tc <- tcs
+                      ]
+                  else case journaledCalls of
+                    [call] -> (: []) <$> executeOne h call
+                    _
+                      | returnRound ->
+                          traverse
+                            (\call@(tc, _) ->
+                               if suppressed tc
+                                 then
+                                   pure
+                                     ( toolResultMessage tc (Left "subgoal_return 必须单独提交；同一轮的其他工具调用已拒绝"),
+                                       ToolCallFinished tc.callName (Left "tool suppressed after child return")
+                                     )
+                                 else executeOne h call
+                            )
+                            journaledCalls
+                    _
+                      | all canParallel tcs -> mapConcurrently (executeOne h) journaledCalls
+                      | otherwise -> traverse (executeOne h) journaledCalls
               -- Emit result facts after the concurrent round rejoins.  This
               -- keeps the higher-rank callback on its sequential unlift and
               -- gives debug output a deterministic call order.
@@ -449,7 +494,23 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
               let toolMsgs = map fst executed
               imgs <- drainToolMedia
               let newMsgs = assembleToolRound raw tcs toolMsgs imgs
-              go emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                  returned =
+                    or
+                      [ tc.callName == "subgoal_return" && not ("error:" `T.isPrefixOf` content)
+                      | (tc, MsgTool _ content) <- zip tcs toolMsgs
+                      ]
+              if returned
+                then
+                  pure
+                    AgentResult
+                      { reply = Nothing,
+                        appended = appended' <> newMsgs,
+                        turnsUsed = n + 1,
+                        aborted = Nothing,
+                        sentPrefix = sent
+                      }
+                else
+                  go emit ctx h (n + 1) (callsUsed + if overBudget then 0 else roundCost) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
     -- gets a real answer built from whatever the loop already gathered,
@@ -457,14 +518,19 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
     -- content response; a synthetic note tells the model to wrap up.
     finalAnswer ::
       AgentContext ->
+      TurnRuntime ->
       Int ->
       [ChatMessage] ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolOutput : es) AgentResult
-    finalAnswer ctx n appended profile msgs = do
+    finalAnswer ctx h n appended profile msgs = do
       logInfo "agent: max turns reached, forcing final answer" $
         object ["turns" .= n]
+      liftIO (checkTurnCancellation h)
+      for_ (turnRuntimeAgentTurn h) $ \durable -> do
+        active <- raise (raise (journal.ajRecordLlmRound durable))
+        unless active (throwIO TaskCancelled)
       let capNote =
             MsgUser
               "[system] 工具调用轮次已用满，别再调用任何工具了。\

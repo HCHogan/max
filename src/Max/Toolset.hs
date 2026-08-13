@@ -267,6 +267,8 @@ toolInventory =
     always (writeTool "unpin_message" ["session.db"] [CurrentConversation]),
     gated SkillsOnly (reflectTool "use_skill"),
     always (reflectTool "plan_guide"),
+    always (readTool "plan_list" ["plan.db"] [CurrentConversation]),
+    always (writeTool "plan_revise" ["plan.db"] [CurrentConversation]),
     -- The union of what 'Max.Plan.Catalog' declares plannable, stated
     -- statically because the inventory cannot vary with it.  Over-declaring
     -- when search is unconfigured is the conservative direction: an effect

@@ -37,6 +37,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Plan (recordChildResult)
 import Max.Effects.Tools (Tool (..))
 import Max.Plan.Schema (checkValue, jsonSchemaOf, renderSchema, schemaErrorText)
+import Max.Plan.Types (Goal (..))
 import Max.ToolContext (SubgoalReturn (..), ToolContext, toolSubgoal)
 
 -- | The one tool a fork child has that an ordinary turn does not, and only
@@ -53,19 +54,19 @@ returnTool subgoal =
       toolDescription =
         T.unwords
           [ "把这个子任务的结果交回去。你这一轮说的话没有人看得见，只有这里交的值会回到上层计划里。",
-            "结果类型必须是：" <> renderSchema subgoal.sgExpected <> "。",
+            "结果类型必须是：" <> renderSchema subgoal.sgGoal.goalExpected <> "。",
             "查完就交，别等到最后一句话。"
           ],
       toolSchema =
         object
           [ "type" .= ("object" :: Text),
-            "properties" .= Object (KeyMap.fromList [(Key.fromText "result", jsonSchemaOf subgoal.sgExpected)]),
+            "properties" .= Object (KeyMap.fromList [(Key.fromText "result", jsonSchemaOf subgoal.sgGoal.goalExpected)]),
             "required" .= (["result"] :: [Text]),
             "additionalProperties" .= False
           ],
       toolRun = \args -> case KeyMap.lookup "result" =<< asObject args of
         Nothing -> pure (Left "少了 result 这个参数")
-        Just result -> case checkValue subgoal.sgExpected result of
+        Just result -> case checkValue subgoal.sgGoal.goalExpected result of
           -- Refused rather than stored.  A value the plan cannot read is not a
           -- partial success, and the model is the one who can fix it — it is
           -- still holding everything it learned.
@@ -86,4 +87,3 @@ returnTool subgoal =
     asObject = \case
       Object o -> Just o
       _ -> Nothing
-

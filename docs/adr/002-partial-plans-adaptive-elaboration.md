@@ -1,12 +1,10 @@
 # ADR 002: Partial Plans and Adaptive Elaboration
 
-- Status: Proposed — split scope, **partially superseded by
-  [ADR 007](007-plans-as-orchestration.md)**. The journal contract (its own
-  section below) ships with v1.0 as the substrate of the durability roadmap
-  (issue #14); the elaboration machine itself — validator, frontiers,
-  horizon above 1 — remains post-1.0. v1.0 is a convergence release; this
-  split lets it converge onto the machine's substrate without opening the
-  machine's front.
+- Status: Accepted for the surviving substrate and plan core, **partially
+  superseded by [ADR 007](007-plans-as-orchestration.md)**. The journal, IR,
+  parser, validator, executor, durable plan, and fork scheduler are implemented.
+  Model-driven filling of ordinary `Hole`s and adaptive horizon policies above
+  the shipped orchestration path remain proposed post-1.0 work.
 
   ADR 007 retires this ADR's information-flow programme, narrows the
   validator's claim, inverts the motivation for child plans, and replaces
@@ -17,7 +15,8 @@
   sandbox observability, narrator, and continuity (ADR 005)
   cross-references 2026-08-06; elaboration surface, pull-based hole
   views, harness-write effects, and monitor trigger provenance (ADR 006)
-  2026-08-09; partial supersession by ADR 007 marked 2026-08-10.
+  2026-08-09; partial supersession by ADR 007 marked 2026-08-10; implementation
+  status reconciled with the production path 2026-08-11.
 
 ## Context
 

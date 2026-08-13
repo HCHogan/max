@@ -45,6 +45,7 @@ module Max.DB.Plan
 
     -- * Writing
     openPlan,
+    openPlanWithGrants,
     revisePlan,
     closePlan,
 
@@ -56,28 +57,46 @@ module Max.DB.Plan
     -- * Suspension
     PlanCheckpoint (..),
     suspendPlan,
+    suspendClaimedPlan,
     clearPlanCheckpoint,
+    finishClaimedPlan,
 
     -- * Waking
     WakeablePlan (..),
+    PlanClaim (..),
     claimWakeablePlans,
     markPlanReconciled,
+    markClaimedPlanReconciled,
+    renewClaimedPlan,
     releasePlanClaim,
+    releaseClaimedPlan,
     admitPlanWake,
+    admitClaimedPlanWake,
     loadPlanWake,
 
     -- * Children
     PlanChild (..),
+    ChildDispatch (..),
     recordChildSpawn,
+    startClaimedPlanChild,
+    loadChildDispatch,
+    requestChildCancellation,
+    requestClaimedChildCancellation,
+    remainingChildBudget,
+    childHasResult,
     listRunningChildren,
     ChildOutcome (..),
     listChildOutcomes,
     recordChildResult,
+    recordClaimedChildResult,
   )
 where
 
-import Data.Aeson (Result (..), Value, fromJSON, toJSON)
+import Control.Monad (when)
+import Data.Aeson (FromJSON, Result (..), Value, fromJSON, toJSON)
+import Data.Foldable (for_)
 import Data.Int (Int64)
+import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
@@ -88,9 +107,9 @@ import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Transaction (withTransaction)
-import Max.Plan.Types (PlanDocument (..), planHash, planIRVersion)
-import Max.Platform.Types (PrincipalId (..))
-import Max.Turn.Types (AgentTurnId, AgentTurnRef (..))
+import Max.Plan.Types (Binder, Goal, PlanDocument (..), planHash, planIRVersion)
+import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Turn.Types (AgentTurnId, AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..))
 
 newtype PlanId = PlanId {unPlanId :: Int64}
@@ -175,6 +194,12 @@ data StoredPlan = StoredPlan
     stStatus :: !PlanStatus,
     stRootTurn :: !AgentTurnId,
     stDocument :: !PlanDocument,
+    stRootGoal :: !(Maybe Goal),
+    -- | Whether the root turn is itself a spawn child. Resource narrowing and
+    -- outcome delivery differ at this one boundary.
+    stServesSubgoal :: !Bool,
+    -- | Exact tool-name/fingerprint ceiling admitted with revision one.
+    stToolGrants :: !(Map Text Text),
     stUpdatedAt :: !UTCTime
   }
   deriving stock (Show, Eq)
@@ -230,7 +255,26 @@ openPlan ::
   AgentTurnRef ->
   PlanDocument ->
   Eff es PlanRef
-openPlan turn document = withTransaction $ do
+openPlan turn document = openPlanInternal turn mempty Nothing document
+
+-- | Open a plan while freezing the opening turn's exact tool catalog.
+openPlanWithGrants ::
+  (WithConnection :> es, IOE :> es) =>
+  AgentTurnRef ->
+  Map Text Text ->
+  Goal ->
+  PlanDocument ->
+  Eff es PlanRef
+openPlanWithGrants turn grants goal = openPlanInternal turn grants (Just goal)
+
+openPlanInternal ::
+  (WithConnection :> es, IOE :> es) =>
+  AgentTurnRef ->
+  Map Text Text ->
+  Maybe Goal ->
+  PlanDocument ->
+  Eff es PlanRef
+openPlanInternal turn grants rootGoal document = withTransaction $ do
   conversationRows <-
     query
       "SELECT c.conversation_id FROM conversations c \
@@ -245,9 +289,9 @@ openPlan turn document = withTransaction $ do
   let ordinal = exactlyOne "openPlan ordinal" (ordinalRows :: [Only Int64])
   inserted <-
     query
-      "INSERT INTO plans (conversation_id, plan_ordinal, root_turn_id) \
-      \ VALUES (?, ?, ?) RETURNING plan_id"
-      (conversation, ordinal, turn.atrTurnId)
+      "INSERT INTO plans (conversation_id, plan_ordinal, root_turn_id, tool_grants, root_goal) \
+      \ VALUES (?, ?, ?, ?, ?) RETURNING plan_id"
+      (conversation, ordinal, turn.atrTurnId, Jsonb (toJSON grants), Jsonb . toJSON <$> rootGoal)
   let planId = exactlyOne "openPlan id" (inserted :: [Only PlanId])
   _ <-
     execute
@@ -386,6 +430,31 @@ suspendPlan ref based node state = do
       (Jsonb state, node, based, ref.prPlanId, based)
   pure (moved > 0)
 
+-- | Park only while the exact worker lease that read the state still owns it.
+suspendClaimedPlan ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  Revision ->
+  Text ->
+  Value ->
+  Eff es Bool
+suspendClaimedPlan plan based node state = do
+  moved <-
+    execute
+      "UPDATE plans \
+      \ SET exec_state = ?, exec_node_id = ?, exec_revision = ?, updated_at = now() \
+      \ WHERE plan_id = ? AND head_revision = ? AND status = 'open' \
+      \   AND wake_owner = ? AND wake_epoch = ?"
+      ( Jsonb state,
+        node,
+        based,
+        plan.wpPlan.stRef.prPlanId,
+        based,
+        plan.wpClaim.pcOwner,
+        plan.wpClaim.pcEpoch
+      )
+  pure (moved > 0)
+
 -- | Drop the checkpoint and the wake claim together.
 --
 -- Called when a resume produced a result or gave up. Unconditional on the
@@ -406,12 +475,35 @@ clearPlanCheckpoint ref = do
       (Only ref.prPlanId)
   pure ()
 
+-- | Close and clear a plan in one fenced statement.  A stale worker cannot
+-- erase the checkpoint or close work already claimed by a successor.
+finishClaimedPlan ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  PlanStatus ->
+  Eff es Bool
+finishClaimedPlan plan status = do
+  moved <-
+    execute
+      "UPDATE plans SET status = ?, closed_at = now(), updated_at = now(), \
+      \ exec_state = NULL, exec_node_id = NULL, exec_revision = NULL, \
+      \ wake_owner = NULL, wake_claim_expires_at = NULL \
+      \ WHERE plan_id = ? AND status = 'open' AND wake_owner = ? AND wake_epoch = ?"
+      ( statusText status,
+        plan.wpPlan.stRef.prPlanId,
+        plan.wpClaim.pcOwner,
+        plan.wpClaim.pcEpoch
+      )
+  pure (moved > 0)
+
 --------------------------------------------------------------------------------
 -- Waking
 
 -- | A suspended plan with something to do, leased to one worker.
 data WakeablePlan = WakeablePlan
   { wpPlan :: !StoredPlan,
+    -- | Lease identity and fencing token attached by the claim transaction.
+    wpClaim :: !PlanClaim,
     -- | The conversation, in the id space a dispatch takes.
     wpGroup :: !GroupId,
     -- | The root turn's trigger, when it had one. A child turn is dispatched
@@ -424,6 +516,12 @@ data WakeablePlan = WakeablePlan
     -- model about. What makes fan-out recursive.
     wpServesSubgoal :: !Bool,
     wpCheckpoint :: !PlanCheckpoint
+  }
+  deriving stock (Show, Eq)
+
+data PlanClaim = PlanClaim
+  { pcOwner :: !Text,
+    pcEpoch :: !Int64
   }
   deriving stock (Show, Eq)
 
@@ -460,7 +558,8 @@ claimWakeablePlans owner now expires limit = do
   rows <-
     query
       ( "WITH claimed AS ( \
-        \  UPDATE plans p SET wake_owner = ?, wake_claim_expires_at = ? \
+        \  UPDATE plans p SET wake_owner = ?, wake_claim_expires_at = ?, \
+        \                     wake_epoch = p.wake_epoch + 1 \
         \  WHERE p.plan_id IN ( \
         \    SELECT c.plan_id FROM plans c \
         \    WHERE c.status = 'open' AND c.exec_state IS NOT NULL \
@@ -477,16 +576,19 @@ claimWakeablePlans owner now expires limit = do
              \    FOR UPDATE SKIP LOCKED \
              \  ) \
              \  RETURNING p.plan_id, p.plan_ordinal, p.head_revision, p.status, p.root_turn_id, \
-             \            p.updated_at, p.exec_node_id, p.exec_revision, p.exec_state, p.conversation_id \
+             \            p.updated_at, p.tool_grants, p.root_goal, p.exec_node_id, p.exec_revision, p.exec_state, \
+             \            p.conversation_id, p.wake_owner, p.wake_epoch \
              \ ) \
              \ SELECT claimed.plan_id, claimed.plan_ordinal, claimed.head_revision, claimed.status, \
              \        claimed.root_turn_id, r.ir_version, r.document, claimed.updated_at, \
+             \        claimed.tool_grants, claimed.root_goal, \
+             \        EXISTS (SELECT 1 FROM turn_edges parent \
+             \                WHERE parent.to_turn_id = claimed.root_turn_id \
+             \                  AND parent.edge_kind = 'spawn'), \
              \        claimed.exec_node_id, claimed.exec_revision, claimed.exec_state, \
              \        conversations.legacy_group_id, root.trigger_canonical_message_id, \
              \        root.initiator_principal_id, \
-             \        EXISTS (SELECT 1 FROM turn_edges parent \
-             \                WHERE parent.to_turn_id = claimed.root_turn_id \
-             \                  AND parent.edge_kind = 'spawn') \
+             \        claimed.wake_owner, claimed.wake_epoch \
              \ FROM claimed \
              \ JOIN plan_revisions r ON r.plan_id = claimed.plan_id AND r.revision = claimed.head_revision \
              \ JOIN conversations ON conversations.conversation_id = claimed.conversation_id \
@@ -512,6 +614,47 @@ markPlanReconciled ref revision = do
       (revision, ref.prPlanId)
   pure ()
 
+markClaimedPlanReconciled ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  Revision ->
+  Eff es Bool
+markClaimedPlanReconciled plan revision = do
+  moved <-
+    execute
+      "UPDATE plans SET reconciled_revision = ? \
+      \ WHERE plan_id = ? AND wake_owner = ? AND wake_epoch = ?"
+      ( revision,
+        plan.wpPlan.stRef.prPlanId,
+        plan.wpClaim.pcOwner,
+        plan.wpClaim.pcEpoch
+      )
+  pure (moved > 0)
+
+-- | Extend a live lease without allowing an already-expired owner to revive
+-- itself. Once the deadline passes, the worker must stop and let a fresh claim
+-- acquire a new fencing token.
+renewClaimedPlan ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  UTCTime ->
+  UTCTime ->
+  Eff es Bool
+renewClaimedPlan plan now expires = do
+  moved <-
+    execute
+      "UPDATE plans SET wake_claim_expires_at = ? \
+      \ WHERE plan_id = ? AND status = 'open' \
+      \   AND wake_owner = ? AND wake_epoch = ? \
+      \   AND wake_claim_expires_at > ?"
+      ( expires,
+        plan.wpPlan.stRef.prPlanId,
+        plan.wpClaim.pcOwner,
+        plan.wpClaim.pcEpoch,
+        now
+      )
+  pure (moved > 0)
+
 -- | Claim the right to report this plan's outcome, once and only once.
 --
 -- The idempotency point of the whole wake, and the reason it is here rather
@@ -534,6 +677,48 @@ admitPlanWake ref turn view = do
       \ WHERE plan_id = ? AND wake_turn_id IS NULL"
       (turn.atrTurnId, view, ref.prPlanId)
   pure (admitted > 0)
+
+-- | Atomically allocate and admit the single turn that reports a claimed
+-- plan's result.  Returning 'Nothing' means the lease is stale or a wake was
+-- already admitted; in either case no surplus turn is created.
+admitClaimedPlanWake ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  CanonicalMessageId ->
+  PrincipalId ->
+  Text ->
+  Eff es (Maybe AgentTurnRef)
+admitClaimedPlanWake plan (CanonicalMessageId trigger) (PrincipalId initiator) view =
+  withTransaction $ do
+    rows <-
+      query
+        "SELECT p.conversation_id, p.wake_turn_id \
+        \ FROM plans p JOIN conversations c USING (conversation_id) \
+        \ WHERE p.plan_id = ? AND p.status = 'open' \
+        \   AND p.wake_owner = ? AND p.wake_epoch = ? \
+        \ FOR UPDATE OF p, c"
+        (plan.wpPlan.stRef.prPlanId, plan.wpClaim.pcOwner, plan.wpClaim.pcEpoch)
+    case rows :: [(Int64, Maybe AgentTurnId)] of
+      [(conversation, Nothing)] -> do
+        ordinalRows <-
+          query
+            "SELECT COALESCE(max(turn_ordinal), 0) + 1 FROM agent_turns WHERE conversation_id = ?"
+            (Only conversation)
+        let ordinal = exactlyOne "admitClaimedPlanWake ordinal" (ordinalRows :: [Only Int64])
+        inserted <-
+          query
+            "INSERT INTO agent_turns \
+            \ (conversation_id, turn_ordinal, trigger_canonical_message_id, initiator_principal_id, status) \
+            \ VALUES (?, ?, ?, ?, 'starting') RETURNING turn_id"
+            (conversation, ordinal, if trigger > 0 then Just trigger else Nothing, initiator)
+        let turnId = exactlyOne "admitClaimedPlanWake turn" (inserted :: [Only AgentTurnId])
+        _ <-
+          execute
+            "UPDATE plans SET wake_turn_id = ?, wake_view = ? \
+            \ WHERE plan_id = ? AND wake_owner = ? AND wake_epoch = ?"
+            (turnId, view, plan.wpPlan.stRef.prPlanId, plan.wpClaim.pcOwner, plan.wpClaim.pcEpoch)
+        pure (Just (AgentTurnRef turnId (TurnOrdinal ordinal)))
+      _ -> pure Nothing
 
 -- | The wake a recovered turn belongs to, if it is one.
 loadPlanWake ::
@@ -578,6 +763,18 @@ releasePlanClaim owner ref = do
       \ WHERE plan_id = ? AND wake_owner = ?"
       (ref.prPlanId, owner)
   pure ()
+
+releaseClaimedPlan ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  Eff es Bool
+releaseClaimedPlan plan = do
+  moved <-
+    execute
+      "UPDATE plans SET wake_owner = NULL, wake_claim_expires_at = NULL \
+      \ WHERE plan_id = ? AND wake_owner = ? AND wake_epoch = ?"
+      (plan.wpPlan.stRef.prPlanId, plan.wpClaim.pcOwner, plan.wpClaim.pcEpoch)
+  pure (moved > 0)
 
 -- | The current plan, or the reason it cannot be read.
 loadPlanHead ::
@@ -638,6 +835,17 @@ data PlanChild = PlanChild
   }
   deriving stock (Show, Eq)
 
+-- | The immutable contract required to dispatch or recover a child.  It is
+-- stored on the spawn edge before the child can run.
+data ChildDispatch = ChildDispatch
+  { cdGoal :: !Goal,
+    cdView :: !Text,
+    cdToolGrants :: !(Map Text Text),
+    cdInputs :: ![(Binder, Value)],
+    cdCancelRequested :: !Bool
+  }
+  deriving stock (Show, Eq)
+
 -- | Record that a fork opened a child.
 --
 -- The unique index on the child turn makes this once-only: a retry that
@@ -666,6 +874,212 @@ recordChildSpawn ref parent child hash node = do
       \ FROM plans p WHERE p.plan_id = ?"
       (parent, child.atrTurnId, hash, node, ref.prPlanId)
   pure ()
+
+-- | Allocate a child turn and its spawn edge/contract in one transaction,
+-- fenced by the worker lease.  A crash can leave both facts or neither.
+startClaimedPlanChild ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  AgentTurnId ->
+  CanonicalMessageId ->
+  PrincipalId ->
+  Text ->
+  Text ->
+  Goal ->
+  Text ->
+  Map Text Text ->
+  [(Binder, Value)] ->
+  Eff es (Maybe AgentTurnRef)
+startClaimedPlanChild plan parent (CanonicalMessageId trigger) (PrincipalId initiator) hash node goal view grants inputs =
+  withTransaction $ do
+    rows <-
+      query
+        "SELECT p.conversation_id FROM plans p JOIN conversations c USING (conversation_id) \
+        \ WHERE p.plan_id = ? AND p.status = 'open' \
+        \   AND p.wake_owner = ? AND p.wake_epoch = ? \
+        \ FOR UPDATE OF p, c"
+        (plan.wpPlan.stRef.prPlanId, plan.wpClaim.pcOwner, plan.wpClaim.pcEpoch)
+    case rows :: [Only Int64] of
+      [Only conversation] -> do
+        ordinalRows <-
+          query
+            "SELECT COALESCE(max(turn_ordinal), 0) + 1 FROM agent_turns WHERE conversation_id = ?"
+            (Only conversation)
+        let ordinal = exactlyOne "startClaimedPlanChild ordinal" (ordinalRows :: [Only Int64])
+        inserted <-
+          query
+            "INSERT INTO agent_turns \
+            \ (conversation_id, turn_ordinal, trigger_canonical_message_id, initiator_principal_id, status) \
+            \ VALUES (?, ?, ?, ?, 'starting') RETURNING turn_id"
+            (conversation, ordinal, if trigger > 0 then Just trigger else Nothing, initiator)
+        let childId = exactlyOne "startClaimedPlanChild turn" (inserted :: [Only AgentTurnId])
+        _ <-
+          execute
+            "INSERT INTO turn_edges \
+            \ (conversation_id, from_turn_id, to_turn_id, edge_kind, plan_id, goal_hash, \
+            \  dispatched_node_id, child_goal, child_view, child_tool_grants, child_inputs) \
+            \ VALUES (?, ?, ?, 'spawn', ?, ?, ?, ?, ?, ?, ?)"
+            ( conversation,
+              parent,
+              childId,
+              plan.wpPlan.stRef.prPlanId,
+              hash,
+              node,
+              Jsonb (toJSON goal),
+              view,
+              Jsonb (toJSON grants),
+              Jsonb (toJSON inputs)
+            )
+        pure (Just (AgentTurnRef childId (TurnOrdinal ordinal)))
+      _ -> pure Nothing
+
+loadChildDispatch ::
+  (WithConnection :> es, IOE :> es) =>
+  AgentTurnId ->
+  Eff es (Maybe (Either Text ChildDispatch))
+loadChildDispatch child = do
+  rows <-
+    query
+      "SELECT child_goal, child_view, child_tool_grants, child_inputs, child_cancel_requested_at IS NOT NULL \
+      \ FROM turn_edges WHERE to_turn_id = ? AND edge_kind = 'spawn'"
+      (Only child)
+  pure $ case rows :: [(Maybe Value, Maybe Text, Maybe Value, Maybe Value, Bool)] of
+    [] -> Nothing
+    (Just goalValue, Just view, Just grantsValue, Just inputsValue, cancelled) : _ ->
+      Just $ do
+        goal <- decodeContract "goal" goalValue
+        grants <- decodeContract "tool grants" grantsValue
+        inputs <- decodeContract "inputs" inputsValue
+        pure (ChildDispatch goal view grants inputs cancelled)
+    _ -> Just (Left "child spawn edge has no durable dispatch contract")
+  where
+    decodeContract :: FromJSON a => Text -> Value -> Either Text a
+    decodeContract label value = case fromJSON value of
+      Error detail -> Left ("child " <> label <> " did not decode: " <> T.pack detail)
+      Success decoded -> Right decoded
+
+-- | Persist cancellation and retire the durable child so neither another
+-- process nor boot recovery can keep it alive.  The local task is interrupted
+-- separately by the caller for prompt responsiveness.
+requestChildCancellation ::
+  (WithConnection :> es, IOE :> es) =>
+  AgentTurnId ->
+  Eff es Bool
+requestChildCancellation child = withTransaction (cancelChildTree child)
+
+-- The caller holds the transaction (and, on the production path, the parent
+-- plan/edge locks). A delegated child may itself own a suspended plan, so
+-- cancellation is a tree operation: leaving that plan open would make the
+-- parent continue to classify the cancelled child as working forever.
+cancelChildTree ::
+  (WithConnection :> es, IOE :> es) =>
+  AgentTurnId ->
+  Eff es Bool
+cancelChildTree child = do
+  requested <-
+    execute
+      "UPDATE turn_edges SET child_cancel_requested_at = COALESCE(child_cancel_requested_at, now()) \
+      \ WHERE to_turn_id = ? AND edge_kind = 'spawn' AND child_result IS NULL"
+      (Only child)
+  when (requested > 0) $ do
+    descendants <-
+      query
+        "WITH RECURSIVE child_tree(turn_id) AS ( \
+        \  SELECT ?::bigint \
+        \  UNION \
+        \  SELECT e.to_turn_id FROM turn_edges e \
+        \  JOIN child_tree parent ON parent.turn_id = e.from_turn_id \
+        \  WHERE e.edge_kind = 'spawn' \
+        \ ) SELECT turn_id FROM child_tree"
+        (Only child)
+    for_ (descendants :: [Only AgentTurnId]) $ \(Only turnId) -> do
+      _ <-
+        execute
+          "UPDATE turn_edges SET child_cancel_requested_at = COALESCE(child_cancel_requested_at, now()) \
+          \ WHERE to_turn_id = ? AND edge_kind = 'spawn' AND child_result IS NULL"
+          (Only turnId)
+      _ <-
+        execute
+          "UPDATE plans SET status = 'abandoned', closed_at = now(), updated_at = now(), \
+          \ exec_state = NULL, exec_node_id = NULL, exec_revision = NULL, \
+          \ wake_owner = NULL, wake_claim_expires_at = NULL \
+          \ WHERE root_turn_id = ? AND status = 'open'"
+          (Only turnId)
+      _ <-
+        execute
+          "UPDATE agent_turns SET status = 'aborted', finished_at = now(), \
+          \ abort_reason = COALESCE(abort_reason, 'parent plan no longer wants this child') \
+          \ WHERE turn_id = ? \
+          \   AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text])"
+          (Only turnId)
+      pure ()
+  pure (requested > 0)
+
+-- | Cancel a child only while the exact worker that computed the reconcile
+-- diff still owns the plan. This prevents an expired worker from stopping a
+-- child retained or newly dispatched by its successor.
+requestClaimedChildCancellation ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  AgentTurnId ->
+  Eff es Bool
+requestClaimedChildCancellation plan child = withTransaction $ do
+  claimRows <-
+    query
+      "SELECT e.edge_id FROM plans p \
+      \ JOIN turn_edges e ON e.plan_id = p.plan_id \
+      \ WHERE p.plan_id = ? AND p.status = 'open' \
+      \   AND p.wake_owner = ? AND p.wake_epoch = ? \
+      \   AND e.to_turn_id = ? AND e.edge_kind = 'spawn' \
+      \ FOR UPDATE OF p, e"
+      ( plan.wpPlan.stRef.prPlanId,
+        plan.wpClaim.pcOwner,
+        plan.wpClaim.pcEpoch,
+        child
+      )
+  case claimRows :: [Only Int64] of
+    [] -> pure False
+    _ -> cancelChildTree child
+
+-- | Remaining child fuel across process incarnations. Every admitted working
+-- tool call has a journal row before it runs; plan_run reserves the whole call
+-- allowance because its inner calls are validated and executed below that one
+-- outer row. Wall clock is an elapsed deadline from durable turn admission, so
+-- a restart cannot mint a fresh budget.
+remainingChildBudget ::
+  (WithConnection :> es, IOE :> es) =>
+  AgentTurnId ->
+  Int ->
+  Int ->
+  Eff es (Int, Int)
+remainingChildBudget child maxCalls maxWallClockMs = do
+  rows <-
+    query
+      "SELECT \
+      \ GREATEST(0::bigint, ?::bigint - COALESCE(SUM( \
+      \   CASE WHEN j.event_kind = 'tool_call' AND j.tool_ref = 'plan_run' THEN ?::bigint \
+      \        WHEN j.event_kind = 'tool_call' \
+      \         AND j.tool_ref <> ALL (ARRAY['plan_guide'::text, 'subgoal_return'::text]) THEN 1::bigint \
+      \        ELSE 0::bigint END), 0::bigint))::bigint, \
+      \ GREATEST(0::bigint, ?::bigint - FLOOR(EXTRACT(EPOCH FROM (clock_timestamp() - t.started_at)) * 1000)::bigint)::bigint \
+      \ FROM agent_turns t LEFT JOIN execution_journal j ON j.turn_id = t.turn_id \
+      \ WHERE t.turn_id = ? GROUP BY t.started_at"
+      (max 0 maxCalls, max 0 maxCalls, max 0 maxWallClockMs, child)
+  pure $ case rows :: [(Int64, Int64)] of
+    [(calls, wallClock)] -> (fromIntegral calls, fromIntegral wallClock)
+    _ -> (0, 0)
+
+childHasResult ::
+  (WithConnection :> es, IOE :> es) =>
+  AgentTurnId ->
+  Eff es Bool
+childHasResult child = do
+  rows <-
+    query
+      "SELECT child_result IS NOT NULL FROM turn_edges \
+      \ WHERE to_turn_id = ? AND edge_kind = 'spawn'"
+      (Only child)
+  pure (maybe False fromOnly (listToMaybe' (rows :: [Only Bool])))
 
 -- | The reconciler's actual side: children of this plan that have not
 -- finished.
@@ -738,9 +1152,34 @@ recordChildResult ::
 recordChildResult child result = do
   written <-
     execute
-      "UPDATE turn_edges SET child_result = ? \
-      \ WHERE to_turn_id = ? AND edge_kind = 'spawn'"
+      "UPDATE turn_edges SET child_result = ?, child_result_written_at = now() \
+      \ WHERE to_turn_id = ? AND edge_kind = 'spawn' AND child_result IS NULL \
+      \   AND child_cancel_requested_at IS NULL"
       (Jsonb result, child)
+  pure (written > 0)
+
+-- | The nested-plan form of 'recordChildResult'. Its value was computed while
+-- holding a plan lease, so publishing it is fenced by that same lease.
+recordClaimedChildResult ::
+  (WithConnection :> es, IOE :> es) =>
+  WakeablePlan ->
+  Value ->
+  Eff es Bool
+recordClaimedChildResult plan result = do
+  written <-
+    execute
+      "UPDATE turn_edges e SET child_result = ?, child_result_written_at = now() \
+      \ FROM plans p \
+      \ WHERE e.to_turn_id = ? AND e.edge_kind = 'spawn' \
+      \   AND e.child_result IS NULL AND e.child_cancel_requested_at IS NULL \
+      \   AND p.plan_id = ? AND p.status = 'open' \
+      \   AND p.wake_owner = ? AND p.wake_epoch = ?"
+      ( Jsonb result,
+        plan.wpPlan.stRootTurn,
+        plan.wpPlan.stRef.prPlanId,
+        plan.wpClaim.pcOwner,
+        plan.wpClaim.pcEpoch
+      )
   pure (written > 0)
 
 -- The head is a join: `plans` holds no document, so that a revision and the
@@ -748,7 +1187,10 @@ recordChildResult child result = do
 headSelect :: Query
 headSelect =
   "SELECT p.plan_id, p.plan_ordinal, p.head_revision, p.status, p.root_turn_id, \
-    \       r.ir_version, r.document, p.updated_at \
+    \       r.ir_version, r.document, p.updated_at, p.tool_grants, p.root_goal, \
+    \       EXISTS (SELECT 1 FROM turn_edges parent \
+    \               WHERE parent.to_turn_id = p.root_turn_id \
+    \                 AND parent.edge_kind = 'spawn') \
     \ FROM plans p JOIN plan_revisions r \
     \   ON r.plan_id = p.plan_id AND r.revision = p.head_revision"
 
@@ -760,13 +1202,19 @@ data HeadFields = HeadFields
     hfRootTurn :: !AgentTurnId,
     hfIRVersion :: !Int,
     hfDocument :: !Value,
-    hfUpdatedAt :: !UTCTime
+    hfUpdatedAt :: !UTCTime,
+    hfToolGrants :: !Value,
+    hfRootGoal :: !(Maybe Value),
+    hfServesSubgoal :: !Bool
   }
 
 instance FromRow HeadFields where
   fromRow =
     HeadFields
       <$> field
+      <*> field
+      <*> field
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -784,6 +1232,10 @@ decodeHead row
       document <- case fromJSON row.hfDocument of
         Error detail -> Left (DocumentUndecodable (T.pack detail))
         Success value -> Right value
+      grants <- case fromJSON row.hfToolGrants of
+        Error detail -> Left (DocumentUndecodable ("plan tool grants did not decode: " <> T.pack detail))
+        Success value -> Right value
+      rootGoal <- traverse decodeGoal row.hfRootGoal
       pure
         StoredPlan
           { stRef = PlanRef {prPlanId = row.hfPlanId, prOrdinal = row.hfOrdinal},
@@ -791,8 +1243,15 @@ decodeHead row
             stStatus = status,
             stRootTurn = row.hfRootTurn,
             stDocument = document,
+            stRootGoal = rootGoal,
+            stServesSubgoal = row.hfServesSubgoal,
+            stToolGrants = grants,
             stUpdatedAt = row.hfUpdatedAt
           }
+  where
+    decodeGoal value = case fromJSON value of
+      Error detail -> Left (DocumentUndecodable ("plan root goal did not decode: " <> T.pack detail))
+      Success decoded -> Right decoded
 
 -- A claimed row is a head row plus the checkpoint and the dispatch coordinates
 -- a child turn needs. Spelled out rather than composed from 'HeadFields'
@@ -806,13 +1265,15 @@ data WakeableFields = WakeableFields
     wfGroup :: !(Maybe Int64),
     wfSeedMessage :: !(Maybe Int64),
     wfInitiator :: !(Maybe Int64),
-    wfServesSubgoal :: !Bool
+    wfClaimOwner :: !Text,
+    wfClaimEpoch :: !Int64
   }
 
 instance FromRow WakeableFields where
   fromRow =
     WakeableFields
       <$> fromRow
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -831,10 +1292,11 @@ decodeWakeable row = do
   pure
     WakeablePlan
       { wpPlan = stored,
+        wpClaim = PlanClaim row.wfClaimOwner row.wfClaimEpoch,
         wpGroup = GroupId group,
         wpSeedMessage = row.wfSeedMessage,
         wpInitiator = PrincipalId <$> row.wfInitiator,
-        wpServesSubgoal = row.wfServesSubgoal,
+        wpServesSubgoal = stored.stServesSubgoal,
         wpCheckpoint =
           PlanCheckpoint
             { pkNode = row.wfNode,

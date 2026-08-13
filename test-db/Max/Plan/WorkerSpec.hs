@@ -44,7 +44,7 @@ data Recorded = Recorded
   { rcSpawned :: !(IORef [Text]),
     rcStopped :: !(IORef [Int64]),
     rcResumed :: !(IORef [ExecState]),
-    rcWoken :: !(IORef [Text])
+    rcWoken :: !(IORef [Value])
   }
 
 newRecorded :: IO Recorded
@@ -66,11 +66,13 @@ fakeDriver recorded resume =
       pdResume = \plan state -> do
         liftIO (modifyIORef' recorded.rcResumed (<> [state]))
         resume plan state,
-      pdWake = \_ outcome -> liftIO (modifyIORef' recorded.rcWoken (<> [outcome]))
+      pdWake = \_ outcome -> do
+        liftIO (modifyIORef' recorded.rcWoken (<> [outcome]))
+        pure True
     }
 
 producing :: Text -> WakeablePlan -> ExecState -> Eff es Resumption
-producing value _ _ = pure (Produced value)
+producing value _ _ = pure (Produced (String value))
 
 goalNamed :: Text -> Goal
 goalNamed objective =
@@ -152,7 +154,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
         state.esPath `shouldBe` PlanPath [StepContinue]
         Map.keys state.esBindings `shouldBe` [Binder "jia", Binder "yi"]
       other -> expectationFailure ("expected one resume, got " <> show (length other))
-    readIORef recorded.rcWoken `shouldReturn` ["甲的答案"]
+    readIORef recorded.rcWoken `shouldReturn` [String "甲的答案"]
     head' <- withDb pool (loadPlanHead ref) >>= requireHead
     head'.stStatus `shouldBe` PlanDone
     withDb pool (claimWakeablePlans "w" testTime testTime 10) `shouldReturn` []
@@ -181,7 +183,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
     withDbLog pool (drivePlan "w" (fakeDriver recorded (producing "x")) plan)
     readIORef recorded.rcResumed `shouldReturn` []
     readIORef recorded.rcWoken >>= \case
-      [told] -> told `shouldSatisfy` T.isInfixOf "yi"
+      [String told] -> told `shouldSatisfy` T.isInfixOf "yi"
       other -> expectationFailure ("expected one wake, got " <> show (length other))
     head' <- withDb pool (loadPlanHead ref) >>= requireHead
     head'.stStatus `shouldBe` PlanAbandoned
