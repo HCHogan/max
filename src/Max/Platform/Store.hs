@@ -37,6 +37,7 @@ module Max.Platform.Store
     claimDispatch,
     loadDispatchClaim,
     completeDispatch,
+    releaseDeferredDispatches,
     OutboundDraft (..),
     EnqueuedOutbound (..),
     enqueueOutbound,
@@ -347,6 +348,13 @@ data DispatchCompletion
   = DispatchCompleted
   | DispatchIgnored
   | DispatchRetry !Text !UTCTime
+  | -- | Not now: the conversation already had a turn running and this message
+    -- was not about it (issue #17.C).  Distinct from 'DispatchRetry' because
+    -- nothing went wrong — an operator reading @failed@ rows should not have
+    -- to sort out which of them were merely waiting — and distinct from
+    -- leaving the row pending with a future attempt time because the reason is
+    -- what 'releaseDeferredDispatches' matches on.
+    DispatchDeferred !UTCTime
   deriving stock (Eq, Show, Generic)
 
 data OutboundDraft = OutboundDraft
@@ -1869,7 +1877,7 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
     query
       "WITH candidates AS ( \
       \ SELECT md.canonical_message_id FROM message_dispatches md \
-      \ WHERE md.status IN ('pending', 'failed') \
+      \ WHERE md.status IN ('pending', 'failed', 'deferred') \
       \   AND md.next_attempt_at <= now() \
       \   AND max_lease_free(md.lease_owner, md.lease_expires_at) \
       \   AND (?::bigint IS NULL OR md.canonical_message_id = ?) \
@@ -1916,6 +1924,7 @@ completeDispatch workerId (CanonicalMessageId canonical) completion = do
     DispatchCompleted -> finish "completed" Nothing Nothing True
     DispatchIgnored -> finish "ignored" Nothing Nothing True
     DispatchRetry err next -> finish "failed" (Just err) (Just next) False
+    DispatchDeferred next -> finish "deferred" Nothing (Just next) False
   pure (changed == 1)
   where
     finish status lastError next completed =
@@ -1926,6 +1935,32 @@ completeDispatch workerId (CanonicalMessageId canonical) completion = do
         \     lease_owner = NULL, lease_expires_at = NULL, updated_at = now() \
         \ WHERE canonical_message_id = ? AND status = 'claimed' AND lease_owner = ?"
         (status :: Text, lastError, next, completed, canonical, workerId)
+
+-- | Re-offer every message this conversation deferred while it was busy.
+--
+-- Called when a turn ends, which is the moment the reason for deferring
+-- stopped being true.  Writing the row back to @pending@ is what fires
+-- @max_notify_dispatch_work@, so the waiting worker is woken precisely rather
+-- than discovering the change on its next fallback scan.
+--
+-- Returns how many were released, for the log: a conversation that keeps
+-- releasing the same count is one where deferral is not converging, which is
+-- the failure mode worth seeing.
+releaseDeferredDispatches ::
+  (WithConnection :> es, IOE :> es) =>
+  -- | Legacy group id, the same column the dispatch claim reads.  Int64 rather
+  -- than 'GroupId' because this module deliberately holds no OneBot vocabulary.
+  Int64 ->
+  Eff es Int
+releaseDeferredDispatches gid =
+  fromIntegral
+    <$> execute
+      "UPDATE message_dispatches md \
+      \ SET status = 'pending', next_attempt_at = now(), updated_at = now() \
+      \ FROM messages m \
+      \ WHERE m.canonical_message_id = md.canonical_message_id \
+      \   AND m.group_id = ? AND md.status = 'deferred'"
+      (Only gid)
 
 claimDeliveries ::
   (WithConnection :> es, IOE :> es) =>

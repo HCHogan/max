@@ -431,6 +431,62 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         (Only cid.unCanonicalMessageId)
     status `shouldBe` [("outcome_unknown" :: Text, True, True)]
 
+  -- Issue #17.C.  A message that arrives while its conversation is busy used
+  -- to be folded into whatever turn happened to be running — production had
+  -- one person's unrelated question absorbed into a stranger's turn and never
+  -- separately answered.  It now waits, which needs a state that is neither
+  -- "answered" nor "failed".
+  it "defers a dispatch instead of completing it, and releases it per conversation" $ do
+    (_, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-defer" "answer me later"))
+    let cid = resultId result
+    claimed <- withDb pool (claimDispatch "runtime-busy" cid 30)
+    fmap (.canonicalMessageId) claimed `shouldBe` Just cid
+    withDb pool (completeDispatch "runtime-busy" cid (DispatchDeferred (addUTCTime 30 now)))
+      `shouldReturn` True
+    -- Nothing went wrong and nothing was answered: an operator reading either
+    -- the failed rows or the completed ones must not find this one in them.
+    row <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT status, completed_at IS NULL, last_error IS NULL \
+        \ FROM message_dispatches WHERE canonical_message_id = ?"
+        (Only cid.unCanonicalMessageId)
+    (row :: [(Text, Bool, Bool)]) `shouldBe` [("deferred", True, True)]
+    -- The dispatch epilogue writes DispatchCompleted unconditionally on every
+    -- exit.  That it cannot undo the deferral is the whole ordering argument:
+    -- the owner guard only matches a row still claimed by this worker.
+    withDb pool (completeDispatch "runtime-busy" cid DispatchCompleted) `shouldReturn` False
+    gid <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT group_id FROM messages WHERE canonical_message_id = ?"
+        (Only cid.unCanonicalMessageId)
+    case (gid :: [Only Int64]) of
+      [Only raw] -> do
+        -- Scoped to the conversation whose turn just ended, not to every
+        -- conversation that happens to be waiting.
+        withDb pool (releaseDeferredDispatches (raw + 1)) `shouldReturn` 0
+        withDb pool (releaseDeferredDispatches raw) `shouldReturn` 1
+        reclaimed <- withDb pool (claimDispatch "runtime-free" cid 30)
+        fmap (.canonicalMessageId) reclaimed `shouldBe` Just cid
+      other -> expectationFailure ("expected one group id, got " <> show other)
+
+  -- The release is the precise wakeup, not the only one.  A row whose
+  -- releasing turn died has to come back through the ordinary scan or a busy
+  -- conversation could strand a question permanently.
+  it "hands back a deferred dispatch nobody released once its wait is over" $ do
+    (_, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-stranded" "still waiting"))
+    let cid = resultId result
+    _ <- withDb pool (claimDispatch "runtime-gone" cid 30)
+    withDb pool (completeDispatch "runtime-gone" cid (DispatchDeferred (addUTCTime (-1) now)))
+      `shouldReturn` True
+    reclaimed <- withDb pool (claimDispatch "runtime-next" cid 30)
+    fmap (.canonicalMessageId) reclaimed `shouldBe` Just cid
+
   it "turns a unique self echo into delivery confirmation, not a second message" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime

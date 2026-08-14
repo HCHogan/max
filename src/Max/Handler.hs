@@ -111,6 +111,7 @@ import Max.Platform.Store
     claimDispatch,
     claimDispatches,
     completeDispatch,
+    releaseDeferredDispatches,
     conversationAdvertisedCaps,
     defaultIngestOptions,
     ensureEndpointPrincipals,
@@ -518,12 +519,19 @@ runDispatchClaim workerId fetchSig mIntent claim =
         enqueueImages fetchSig message
         enqueueForwards fetchSig message
         enqueueFiles fetchSig message
-        onDispatchMessage mIntent message
+        onDispatchMessage (Just owner) mIntent message
     )
     >>= \case
-      Right () -> void (completeDispatch workerId claim.canonicalMessageId DispatchCompleted)
+      -- Only the paths that finished the work here settle the row.  A turn
+      -- takes the row with it (issue #17.D): this used to mark the message
+      -- answered the moment the dispatch async was forked, so a turn that
+      -- crashed, was killed, or lost a drain took the question with it, and a
+      -- message deferred behind a running turn had nowhere to be recorded.
+      Right ClaimSettledHere -> void (completeDispatch workerId claim.canonicalMessageId DispatchCompleted)
+      Right ClaimHandedToTurn -> pure ()
       Left e -> failClaim (T.pack (show (e :: SomeException)))
   where
+    owner = DispatchOwner workerId claim.canonicalMessageId
     failClaim err = do
       now <- liftIO getCurrentTime
       let retryAt = addUTCTime (dispatchRetrySeconds claim.attemptCount) now
@@ -575,10 +583,12 @@ onDispatchMessage ::
     Reader ModelCatalog :> es,
     IOE :> es
   ) =>
+  -- | The dispatch row behind this message, when the caller holds its claim.
+  Maybe DispatchOwner ->
   Maybe IntentState ->
   DispatchMessage ->
-  Eff es ()
-onDispatchMessage mIntent gm = do
+  Eff es ClaimDisposition
+onDispatchMessage owner mIntent gm = do
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
   logInfo "group message" $
@@ -609,11 +619,18 @@ onDispatchMessage mIntent gm = do
   case trig of
     -- Not addressed: hand the message to the intent classifier —
     -- maybe the bot wants to join in anyway.
-    TriggerNone -> for_ mIntent $ \st -> liftIO (enqueueIntent st gm)
-    TriggerPong -> noteActivity >> sendPong gm
-    TriggerCommand body -> noteActivity >> dispatchCommand mIntent gm body
-    TriggerCommandError err -> replyText gm ("命令解析失败:\n" <> err)
-    TriggerLLM _ -> noteActivity >> dispatchLLM mIntent OriginDirect MayAbsorb [] gm
+    TriggerNone -> settledHere (for_ mIntent $ \st -> liftIO (enqueueIntent st gm))
+    TriggerPong -> settledHere (noteActivity >> sendPong gm)
+    TriggerCommand body -> settledHere (noteActivity >> dispatchCommand mIntent gm body)
+    TriggerCommandError err -> settledHere (replyText gm ("命令解析失败:\n" <> err))
+    -- The one path that outlives this call: the turn it starts owns the row
+    -- from here, and settles it when it knows what happened.
+    TriggerLLM _ -> do
+      noteActivity
+      dispatchLLM owner mIntent OriginDirect MayAbsorb [] gm
+      pure ClaimHandedToTurn
+  where
+    settledHere act = act >> pure ClaimSettledHere
 
 classifyDispatch :: Bool -> DispatchMessage -> Trigger
 classifyDispatch repliesToBot gm =
@@ -712,7 +729,7 @@ onPoke mIntent pk
                  Map.lookup (NativeUserId (tshow pokerRaw)) principals
                ) of
             (Just selfPrincipal, Just pokerPrincipal) ->
-              dispatchLLM mIntent OriginPoke NeverAbsorb [] $
+              dispatchLLM Nothing mIntent OriginPoke NeverAbsorb [] $
                 pokeTrigger pk selfPrincipal pokerPrincipal mName
             _ ->
               logAttention "poke: could not resolve principals" $
@@ -814,7 +831,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
           -- target out of the segments), and attached images keep
           -- their markers.  An earlier version rebuilt the segment
           -- list from the parsed body and silently dropped both.
-          dispatchLLM mIntent OriginDirect NeverAbsorb [] (stripDispatchVerb gm)
+          dispatchLLM Nothing mIntent OriginDirect NeverAbsorb [] (stripDispatchVerb gm)
         -- !feedback: aim the note at the turn whose trigger the user
         -- replied to, and at the newest running turn otherwise — a
         -- reply to something that isn't a live turn (mis-click, a turn
@@ -884,7 +901,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               | otherwise -> do
                   logInfo "feedback: nothing running, answering as a turn" $
                     object ["len" .= T.length noteBody]
-                  dispatchLLM mIntent OriginDirect MayAbsorb [] (stripDispatchVerb gm)
+                  dispatchLLM Nothing mIntent OriginDirect MayAbsorb [] (stripDispatchVerb gm)
 
     -- Recorded against the DM's pseudo-group rather than the group the
     -- command came from: that is the conversation it actually appeared
@@ -964,7 +981,7 @@ dispatchProactive ::
 dispatchProactive mIntent batch = case unsnoc batch of
   Nothing -> pure ()
   Just (older, trigger) ->
-    dispatchLLM mIntent OriginProactive MayAbsorb older trigger
+    dispatchLLM Nothing mIntent OriginProactive MayAbsorb older trigger
 
 -- | Cross the durable monitor-fire boundary into one ordinary horizon-1
 -- turn.  Role and schedule are revalidated before the admission transaction;
@@ -1079,6 +1096,7 @@ launchMonitorTurn recoveryView turn fire = do
             recoveryView
             (Just (renderMonitorFireView fire))
             (Just fire.emfEffectToolGrants)
+            Nothing
             Nothing
             Nothing
             OriginMonitor
@@ -1204,6 +1222,7 @@ spawnChild plan item = do
           (Just view)
           (Just grants)
           (Just (ChildDispatch desired.dsGoal view grants item.dpInputs False))
+          Nothing
           Nothing
           OriginPlan
           NeverAbsorb
@@ -1433,7 +1452,7 @@ wakeOwner plan outcome = do
       let view = renderPlanWakeView plan outcome
       admitted <- admitClaimedPlanWake plan trigger.canonicalId trigger.authorPrincipalId view
       for_ admitted $ \turn ->
-        dispatchLLMWith (Just turn) Nothing (Just view) Nothing Nothing Nothing OriginPlan NeverAbsorb [] trigger
+        dispatchLLMWith (Just turn) Nothing (Just view) Nothing Nothing Nothing Nothing OriginPlan NeverAbsorb [] trigger
       when (not (isJust admitted)) $
         logInfo "plan: wake already reported or lease became stale" $
           object ["plan_id" .= plan.wpPlan.stRef.prPlanId.unPlanId]
@@ -1460,6 +1479,45 @@ renderPlanWakeView plan outcome =
 -- it is also where graceful shutdown gates: once draining,
 -- new triggers are logged and dropped rather than started.  See
 -- "Max.Shutdown".
+-- | Who is responsible for the dispatch row once 'onDispatchMessage' returns.
+--
+-- Only the LLM path hands it on: everything else — a command, a pong, a
+-- message the classifier merely buffered — finished its work inside the call,
+-- so the claim loop settles it there and then.
+data ClaimDisposition
+  = ClaimSettledHere
+  | ClaimHandedToTurn
+  deriving stock (Eq, Show)
+
+-- | The durable dispatch row a turn is answering for, and the worker identity
+-- that holds its lease.  Both are needed to settle it: 'completeDispatch' only
+-- matches a row still claimed by this exact owner, which is what stops a
+-- worker that lost its lease from marking somebody else's work answered.
+data DispatchOwner = DispatchOwner
+  { doWorker :: !T.Text,
+    doMessage :: !CanonicalMessageId
+  }
+
+-- | What a message arriving into a busy conversation did instead of taking a
+-- turn of its own.
+data BusyOutcome
+  = -- | Nothing else was running; go ahead.
+    BusyNoOne
+  | -- | Folded into the turn already in flight, which will read it.
+    BusyAbsorbed
+  | -- | Not about that turn's work, so it waits for one of its own.
+    BusyDeferred
+  deriving stock (Eq, Show)
+
+-- | How long a deferred message waits if nothing releases it.
+--
+-- A bound, not a schedule.  The turn ahead releases its deferred rows when it
+-- ends, which is the precise wakeup; this only catches the row that deferred
+-- itself in the window between that release and the turn leaving the registry,
+-- so it wants to be short enough not to be felt and long enough not to spin.
+deferredRetrySeconds :: NominalDiffTime
+deferredRetrySeconds = 30
+
 dispatchLLM ::
   ( Blob :> es,
     Log :> es,
@@ -1473,6 +1531,8 @@ dispatchLLM ::
     Reader ModelCatalog :> es,
     IOE :> es
   ) =>
+  -- | The dispatch row being answered, when the caller holds one.
+  Maybe DispatchOwner ->
   Maybe IntentState ->
   TriggerOrigin ->
   Absorbable ->
@@ -1555,6 +1615,7 @@ resumeInterruptedTurn recovery = do
                           (Just contract.cdToolGrants)
                           (Just contract)
                           Nothing
+                          Nothing
                           OriginPlan
                           NeverAbsorb
                           []
@@ -1564,6 +1625,7 @@ resumeInterruptedTurn recovery = do
                       (Just recovery.atrRecoveryTurn)
                       (Just view)
                       planWake
+                      Nothing
                       Nothing
                       Nothing
                       Nothing
@@ -1593,13 +1655,18 @@ dispatchLLMWith ::
   Maybe (Map.Map T.Text T.Text) ->
   -- | Durable fork-child contract. Ordinary dispatches carry Nothing.
   Maybe ChildDispatch ->
+  -- | The dispatch row this turn is answering for, when there is one.  The
+  -- turn settles it rather than the claim loop, so a message is only marked
+  -- answered once something actually answered it (issue #17.D).  Proactive,
+  -- poke, monitor and plan-child dispatches carry Nothing: no row exists.
+  Maybe DispatchOwner ->
   Maybe IntentState ->
   TriggerOrigin ->
   Absorbable ->
   [DispatchMessage] ->
   DispatchMessage ->
   Eff es ()
-dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatch mIntent origin absorbable companions gm = do
+dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatch owner mIntent origin absorbable companions gm = do
   env :: BotEnv <- ask
   let UserId fromRaw = gm.userId
       GroupId gidRaw = gm.groupId
@@ -1665,6 +1732,11 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
       -- react to.
       when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
         queueQQReaction gm.groupId gm.canonicalId failureFaceId True
+      -- No async will run, so nothing downstream will settle this row.  A
+      -- drain is a restart, and the next boot should answer the question
+      -- rather than find it marked done — so it is deferred, not completed.
+      declinedAt <- addUTCTime deferredRetrySeconds <$> liftIO getCurrentTime
+      settleOwner (DispatchDeferred declinedAt)
     Just (turn, durable) ->
       void . async $
         ( localDomain "llm" $ do
@@ -1701,6 +1773,16 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
             ensureAgentTurnRecoveryPending durable "dispatch unwound before a terminal checkpoint"
               `catchSync` \e ->
                 logAttention "durable turn finalizer failed" $
+                  object ["error" .= T.pack (show (e :: SomeException))]
+            -- The dispatch row is settled here rather than by the claim loop,
+            -- which used to mark it answered the instant this async was
+            -- forked — before a token had been spent, so a turn that then
+            -- crashed took the question with it (issue #17.D).  Every exit
+            -- reaches this finally, and a row already written as deferred is
+            -- left alone by the owner guard.
+            settleOwner DispatchCompleted
+              `catchSync` \e ->
+                logAttention "dispatch settle failed" $
                   object ["error" .= T.pack (show (e :: SomeException))]
             -- Take the 托腮 back off everything this turn absorbed —
             -- implicit supplements and explicit !feedback notes both
@@ -1748,8 +1830,16 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
                   CanonicalMessageId srcMid = src.canonicalId
               logInfo "dispatch: unserved note re-dispatched" $
                 object ["message_id" .= srcMid]
-              dispatchLLM mIntent orig NeverAbsorb [] src
+              dispatchLLM Nothing mIntent orig NeverAbsorb [] src
   where
+    -- Settling is idempotent by the same guard that makes it safe: the row has
+    -- to still be claimed by this worker, so whichever of these runs first
+    -- decides and the rest are no-ops.  That is what lets the deferral be
+    -- written where it is known and the completion unconditionally in the
+    -- finally, without either having to know about the other.
+    settleOwner completion =
+      for_ owner $ \o -> void (completeDispatch o.doWorker o.doMessage completion)
+
     work outputCaps turn durable = do
       env :: BotEnv <- ask
       let tid = turnRuntimeTaskId turn
@@ -1771,13 +1861,25 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
         _ -> pure replyTarget0
       injected <-
         if steered || isJust replyTarget
-          then pure steered
+          then pure (if steered then BusyAbsorbed else BusyNoOne)
           else tryAbsorbIntoRunningTurn outputCaps env s tid
-      if injected
-        then do
+      case injected of
+        BusyAbsorbed -> do
           archive <- captureTurnArchiveFields durable s.model [] 0 (Just "absorbed into an in-flight turn")
           finishAgentTurn durable TurnAborted 0 (Just "absorbed into an in-flight turn") archive
-        else do
+        BusyDeferred -> do
+          -- Written before the epilogue's DispatchCompleted, in this same
+          -- thread, which is what makes the ordering a fact rather than a
+          -- hope: 'completeDispatch' only matches a row still @claimed@ by
+          -- this worker, so once it reads @deferred@ the later write is a
+          -- no-op.  The retry time is a bound, not the plan — the plan is
+          -- 'releaseDeferredDispatches' when the turn ahead finishes, and this
+          -- is what catches the row whose releaser raced past it.
+          deferAt <- addUTCTime deferredRetrySeconds <$> liftIO getCurrentTime
+          settleOwner (DispatchDeferred deferAt)
+          archive <- captureTurnArchiveFields durable s.model [] 0 (Just "deferred behind an in-flight turn")
+          finishAgentTurn durable TurnAborted 0 (Just "deferred behind an in-flight turn") archive
+        BusyNoOne -> do
           -- Commit point: this turn is going to build context, and the
           -- group's pending intent buffer reaches the model as ambient
           -- text of it — clear the buffer so the same messages can't
@@ -1786,6 +1888,14 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
           -- not later (buildContext is about to read history).
           for_ mIntent $ \st -> liftIO (clearPendingIntent st gm.groupId)
           withProcessingReaction outputCaps (dispatch outputCaps turn durable env s (replyTarget >>= finishedTarget))
+          -- The reason anything was deferred behind this conversation just
+          -- stopped being true.  Writing those rows back to pending is what
+          -- fires max_notify_dispatch_work, so the waiting worker is woken
+          -- precisely rather than on its next fallback scan.
+          released <- releaseDeferredDispatches (let GroupId g = gm.groupId in g)
+          when (released > 0) $
+            logInfo "released messages deferred behind this turn" $
+              object ["group_id" .= (let GroupId g = gm.groupId in g), "released" .= released]
       where
         finishedTarget target
           | replyTurnIsFinished target = Just target
@@ -1872,9 +1982,13 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
           -- Our own entry has been in the registry since dispatch
           -- entry, so "is anybody working?" has to discount it.
           running <- liftIO (listTasks env.beTasks (Just gm.groupId))
-          if all (\ti -> ti.tiId == tid) running
-            then pure False
-            else do
+          -- 'listTasks' sorts by start time, so the last of the others is the
+          -- newest — the same one 'pushToLatest' would choose, which is what
+          -- makes "is this the same person's work?" a question about the turn
+          -- that would actually take the note.
+          case reverse (filter (\ti -> ti.tiId /= tid) running) of
+            [] -> pure BusyNoOne
+            newest : _ -> do
               let GroupId gidRaw = gm.groupId
                   CanonicalMessageId midRaw = gm.canonicalId
               -- Only the trigger and its companions; the history around them
@@ -1914,10 +2028,26 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
                 Just tgt ->
                   liftIO (pushToTrigger env.beTasks gm.groupId (Just tid) (Just midRaw) tgt note)
                 Nothing -> pure Nothing
+              -- __Reentrancy, not merging__ (issue #17.C).  Folding every
+              -- message into whatever turn happened to be running is what made
+              -- one conversation's busy turn swallow a second person's
+              -- unrelated question and never answer it.  Two things say this
+              -- message belongs to the work already in flight, and only they:
+              -- it replies into that turn (or into something the turn already
+              -- swallowed), or its author is the person whose question the
+              -- turn is answering.  Anything else waits.
+              --
+              -- Non-direct origins keep the old behaviour outright: a
+              -- proactive impulse or a poke has no dispatch row to defer and
+              -- nothing to come back to, so folding it in is the only place it
+              -- can go.
+              let reentrant = newest.tiUser == gm.userId || origin /= OriginDirect
               landed <- case aimed of
                 Just _ -> pure aimed
-                Nothing ->
-                  liftIO (pushToLatest env.beTasks gm.groupId (Just tid) (Just midRaw) note)
+                Nothing
+                  | reentrant ->
+                      liftIO (pushToLatest env.beTasks gm.groupId (Just tid) (Just midRaw) note)
+                  | otherwise -> pure Nothing
               for_ landed $ \(TaskId into) -> do
                 logInfo "absorbed into a running turn" $
                   object
@@ -1936,8 +2066,23 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
                 -- rule.
                 when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
                   queueQQReaction gm.groupId gm.canonicalId processingFaceId True
-              pure (isJust landed)
-        _ -> pure False
+              case (landed, reentrant) of
+                (Just _, _) -> pure BusyAbsorbed
+                -- Both pushes missed although this message belonged to that
+                -- turn: it finished between the registry read and the push.
+                -- Nothing is running now, so take our own turn rather than
+                -- wait for something that has already ended.
+                (Nothing, True) -> pure BusyNoOne
+                (Nothing, False) -> do
+                  logInfo "deferred behind a running turn" $
+                    object
+                      [ "group_id" .= gidRaw,
+                        "message_id" .= midRaw,
+                        "behind_task" .= newest.tiId.unTaskId,
+                        "behind_user" .= (let UserId u = newest.tiUser in u)
+                      ]
+                  pure BusyDeferred
+        _ -> pure BusyNoOne
 
     dispatch outputCaps turn durable env s continuationTarget = case childDispatch of
       Just child -> dispatchChild turn durable env s child
