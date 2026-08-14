@@ -101,6 +101,17 @@ data AppConfig = AppConfig
     -- sit comfortably under systemd's @TimeoutStopSec@, or systemd
     -- SIGKILLs us mid-drain and the wait bought nothing.
     shutdownDrainSeconds :: !Int,
+    -- | How long a front-model turn may go without changing phase before it
+    -- is cut off (issue #17).  Silence rather than total age, so a turn doing
+    -- honest multi-round work is never killed for taking a while — only one
+    -- that has stopped moving is.
+    --
+    -- The floor is set by the longest legitimate single phase, which is a
+    -- tool round: @sandbox_exec@ accepts up to 300s of its own, and an LLM
+    -- call up to 300s on the slower profiles.  Anything under that would
+    -- reap working turns.  Tightening it means stamping the heartbeat per
+    -- tool call rather than per round, which is a separate change.
+    turnSilenceSeconds :: !Int,
     llm :: !ModelCatalog,
     -- | Global release escape hatch: bypass compartments/materialization and
     -- build every prompt from the immutable ledger under the normal token
@@ -276,6 +287,17 @@ appConfigParser usedRef =
           conf "shutdown_drain_seconds",
           metavar "SECS",
           value 120
+        ]
+    turnSilenceSeconds <-
+      setting
+        [ help "Seconds a turn may go without changing phase before it is cut off",
+          reader auto,
+          option,
+          long "turn-silence-seconds",
+          env "MAX_TURN_SILENCE_SECONDS",
+          conf "turn_silence_seconds",
+          metavar "SECS",
+          value 600
         ]
     llm <- llmParser
     forceRawContext <-

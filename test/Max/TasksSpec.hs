@@ -1,3 +1,5 @@
+{-# LANGUAGE NumericUnderscores #-}
+
 -- |
 -- Four things worth pinning down, none of them visible in a type:
 -- that anyone may feed a running turn (the owner gate is gone), that
@@ -11,6 +13,9 @@
 module Max.TasksSpec (spec) where
 
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (race)
+import Control.Monad (replicateM_)
+import Data.Either (isLeft, isRight)
 import Data.Set qualified as Set
 import Max.Tasks
   ( Note (..),
@@ -21,6 +26,7 @@ import Max.Tasks
     TurnCompletion (..),
     activateTurnRuntime,
     absorbedTriggers,
+    awaitTurnSilence,
     attachTask,
     beginDispatch,
     beginDurableTurnRuntime,
@@ -96,6 +102,23 @@ spec = describe "Max.Tasks" $ do
       -- registry again must not look like progress.
       [reread] <- listTasks reg (Just gid)
       tiProgressAt reread `shouldBe` tiProgressAt moved
+      _ <- finishTurnRuntime reg turn
+      pure ()
+
+    -- The front turn's ceiling is silence, not age, so the waiter has to be
+    -- wrong in neither direction: it must not fire on a turn that is working,
+    -- and it must fire on one that has stopped.  Margins are 10x the limit —
+    -- this is a scheduling test, not a benchmark.
+    it "waits out silence without firing on a turn that keeps moving" $ do
+      reg <- newTaskRegistry
+      turn <- beginTurnRuntime reg gid alice (Just (CanonicalMessageId 7001))
+      working <-
+        race
+          (awaitTurnSilence turn 200_000)
+          (replicateM_ 20 (threadDelay 20_000 >> setTurnPhase turn "tools"))
+      working `shouldSatisfy` isRight
+      stalled <- race (awaitTurnSilence turn 50_000) (threadDelay 3_000_000)
+      stalled `shouldSatisfy` isLeft
       _ <- finishTurnRuntime reg turn
       pure ()
 

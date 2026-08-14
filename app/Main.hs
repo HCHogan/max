@@ -133,6 +133,7 @@ main = do
                     beStickerDefault = cfg.stickersEnabled,
                     beDefaultModel = defaultModelName cfg.llm,
                     beTimeZone = cfg.timezone,
+                    beTurnSilenceSeconds = cfg.turnSilenceSeconds,
                     beStartedAt = startedAt,
                     beSessions = sessions,
                     beSkills = skillReg,

@@ -47,6 +47,7 @@ module Max.Tasks
     turnRuntimeAgentTurn,
     turnRuntimeOutputContext,
     setTurnPhase,
+    awaitTurnSilence,
     checkTurnCancellation,
     drainTurnInbox,
     requeueTurnInbox,
@@ -78,7 +79,7 @@ where
 
 import Control.Concurrent.STM
 import Control.Exception (Exception (..), asyncExceptionFromException, asyncExceptionToException, throwIO)
-import Control.Monad (filterM, void, when)
+import Control.Monad (filterM, unless, void, when)
 import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.List (sortOn)
@@ -371,6 +372,36 @@ writePhase :: TaskEntry -> UTCTime -> Text -> STM ()
 writePhase entry now phase = do
   writeTVar entry.teKind phase
   writeTVar entry.teProgressAt now
+
+-- | Block until this turn has gone @limit@ microseconds without changing
+-- phase, then return.  Never returns while the turn is still moving.
+--
+-- Event-driven rather than a poll, which is also what makes it exact: the
+-- heartbeat itself restarts the wait, so a turn that keeps working keeps
+-- pushing its deadline out for free, and a turn that stops is noticed once, at
+-- the deadline, rather than up to one poll interval late.
+--
+-- What it measures is silence, not age (issue #17).  A turn legitimately
+-- spending ten minutes across many rounds resets this on every one of them;
+-- only a turn wedged inside a single round runs it down.
+awaitTurnSilence :: TurnRuntime -> Int -> IO ()
+awaitTurnSilence turn limitMicros = go
+  where
+    progress = turn.trEntry.teProgressAt
+    go = do
+      seen <- readTVarIO progress
+      timer <- registerDelay limitMicros
+      stalled <-
+        atomically $
+          ( do
+              expired <- readTVar timer
+              if expired then pure True else retry
+          )
+            `orElse` ( do
+                         current <- readTVar progress
+                         if current == seen then retry else pure False
+                     )
+      unless stalled go
 
 checkTurnCancellation :: TurnRuntime -> IO ()
 checkTurnCancellation turn = do

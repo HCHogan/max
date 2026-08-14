@@ -137,6 +137,7 @@ import Max.Tasks
     TaskId (..),
     TaskInfo (..),
     TurnCompletion (..),
+    awaitTurnSilence,
     beginDurableTurnRuntime,
     beginDurableTurnRuntimeAt,
     finishTurnRuntime,
@@ -2145,7 +2146,42 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
       -- bounded together (see "Max.ReplySend").
       streamBudget <- liftIO (newTVarIO freshBudget)
       let output = AgentOutputContext target gm.canonicalId debugEff streamBudget
-      result <- agentTurn turn agentCtx s.model recoveredCtx (handleAgentEvent output)
+      -- The front turn's ceiling, and issue #17's second half.  A fork child
+      -- races a total wall-clock budget it declared; a front turn cannot, both
+      -- because nobody declared one and because killing a turn for taking a
+      -- while is wrong when taking a while is the job.  What it races instead
+      -- is /silence/: 'awaitTurnSilence' only fires once this turn has stopped
+      -- changing phase, so honest multi-round work pushes its own deadline out
+      -- and only a turn wedged inside one round runs it down.
+      --
+      -- Racing rather than a deadline checked at round boundaries, because the
+      -- failure this exists for is a tool call that never returns — a boundary
+      -- check is never reached from inside one.  The cost is that the loop's
+      -- own bookkeeping is lost, which is why the timeout branch settles the
+      -- turn the same way the no-reply branch does rather than pretending to
+      -- have an 'AgentResult'.
+      raced <-
+        race
+          (agentTurn turn agentCtx s.model recoveredCtx (handleAgentEvent output))
+          (liftIO (awaitTurnSilence turn (env.beTurnSilenceSeconds * 1_000_000)))
+      case raced of
+        Right () -> do
+          logAttention "llm dispatch cut off: turn stopped making progress" $
+            object
+              [ "to" .= (let UserId u = gm.userId in u),
+                "silent_seconds" .= env.beTurnSilenceSeconds
+              ]
+          -- Whatever streamed already reached the group as it was written, so
+          -- the room sees a truncated answer; the face is what tells them it
+          -- was cut off rather than finished.  Nothing is drained: the btw
+          -- notes and the inbox belong to a turn that delivers.
+          when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $ do
+            queueQQReaction gm.groupId gm.canonicalId processingFaceId False
+            queueQQReaction gm.groupId gm.canonicalId failureFaceId True
+          finishAgentTurn durable TurnFailed 0 (Just "turn stopped making progress") Nothing
+        Left result -> settleTurn outputCaps env s target streamBudget durable result
+
+    settleTurn outputCaps env s target streamBudget durable result = do
       terminal <- case result.reply of
         -- The loop produced no model-authored reply — upstream API
         -- down, or the turn-cap fallback call failed too.  Error text

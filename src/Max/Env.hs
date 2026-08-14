@@ -45,6 +45,9 @@ data BotEnv = BotEnv
     beDefaultModel :: !Text,
     -- | Display timezone for model/user-facing timestamps ('AppConfig.timezone').
     beTimeZone :: !TimeZone,
+    -- | Seconds a turn may go without changing phase before it is cut off
+    -- ('AppConfig.turnSilenceSeconds', issue #17).
+    beTurnSilenceSeconds :: !Int,
     -- | When this process started (for @!version@'s bot uptime).
     beStartedAt :: !UTCTime,
     beSessions :: !SessionRegistry,
