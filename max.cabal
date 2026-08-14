@@ -407,6 +407,7 @@ test-suite max-test
         Max.IntentSpec
         Max.IRSpec
         Max.IR.DigestSpec
+        Max.IR.LawSpec
         Max.IR.LowerSpec
         Max.IR.PromptSpec
         Max.LLM.StreamSpec
