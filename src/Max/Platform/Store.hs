@@ -1871,7 +1871,7 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
       \ SELECT md.canonical_message_id FROM message_dispatches md \
       \ WHERE md.status IN ('pending', 'failed') \
       \   AND md.next_attempt_at <= now() \
-      \   AND (md.lease_expires_at IS NULL OR md.lease_expires_at < now()) \
+      \   AND max_lease_free(md.lease_owner, md.lease_expires_at) \
       \   AND (?::bigint IS NULL OR md.canonical_message_id = ?) \
       \ ORDER BY md.next_attempt_at, md.canonical_message_id \
       \ FOR UPDATE OF md SKIP LOCKED LIMIT ? \
@@ -2042,7 +2042,7 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \ JOIN messages candidate_message ON candidate_message.canonical_message_id = d.canonical_message_id \
       \ WHERE d.status IN ('pending', 'failed') \
       \   AND d.next_attempt_at <= now() \
-      \   AND (d.lease_expires_at IS NULL OR d.lease_expires_at < now()) \
+      \   AND max_lease_free(d.lease_owner, d.lease_expires_at) \
       \   AND (?::bigint IS NULL OR d.delivery_id = ?) \
       \   AND NOT EXISTS ( \
       \     SELECT 1 FROM message_deliveries earlier \

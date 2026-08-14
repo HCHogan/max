@@ -9,7 +9,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (addUTCTime, getCurrentTime)
 import Control.Exception (try)
 import Database.PostgreSQL.Simple (Only (..), SqlError, execute, query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb)
@@ -295,7 +295,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       _ <- withDb pool (revisePlan ref (Revision 1) CauseSteer (Just fixture.fxPrincipal) Nothing (document "二"))
       parked <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       parked `shouldBe` False
-      wakeable <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      wakeable <- claimLive pool "w" 10
       wakeable `shouldBe` []
 
     it "drops the checkpoint when the plan closes, in the same act" $ do
@@ -306,7 +306,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       withDb pool (closePlan ref PlanAbandoned)
-      wakeable <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      wakeable <- claimLive pool "w" 10
       wakeable `shouldBe` []
 
   describe "waking" $ do
@@ -325,11 +325,12 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       _ <- claimOne pool ref
-      contended <- withDb pool (claimWakeablePlans "other" testTime laterTime 10)
+      contended <- claimLive pool "other" 10
       contended `shouldBe` []
       -- The point of the lease being a deadline rather than a flag: a worker
       -- that died mid-drive must not park a plan forever.
-      expired <- withDb pool (claimWakeablePlans "other" muchLaterTime muchLaterTime 10)
+      lapseClaim pool ref
+      expired <- claimLive pool "other" 10
       map (fmap (.wpPlan.stRef)) expired `shouldBe` [Right ref]
 
     it "renews a live lease but never revives an expired fencing token" $ do
@@ -337,13 +338,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       claimed <- claimOne pool ref
-      let heartbeatAt = addUTCTime 30 testTime
-          renewedUntil = addUTCTime 150 testTime
+      heartbeatAt <- getCurrentTime
+      let renewedUntil = addUTCTime 300 heartbeatAt
       withDb pool (renewClaimedPlan claimed heartbeatAt renewedUntil) `shouldReturn` True
-      blocked <- withDb pool (claimWakeablePlans "other" (addUTCTime 90 testTime) muchLaterTime 10)
+      blocked <- claimLive pool "other" 10
       blocked `shouldBe` []
-      [Right fresh] <- withDb pool (claimWakeablePlans "other" (addUTCTime 180 testTime) muchLaterTime 10)
-      withDb pool (renewClaimedPlan claimed (addUTCTime 181 testTime) muchLaterTime) `shouldReturn` False
+      -- Renewal moved the deadline, so only time passing hands it over.
+      lapseClaim pool ref
+      [Right fresh] <- claimLive pool "other" 10
+      withDb pool (renewClaimedPlan claimed heartbeatAt renewedUntil) `shouldReturn` False
       withDb pool (releaseClaimedPlan fresh) `shouldReturn` True
 
     it "fences every substantive write from an expired lease" $ do
@@ -351,7 +354,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       stale <- claimOne pool ref
-      [Right fresh] <- withDb pool (claimWakeablePlans "fresh" muchLaterTime (addUTCTime 60 muchLaterTime) 1)
+      lapseClaim pool ref
+      [Right fresh] <- claimLive pool "fresh" 1
       fresh.wpClaim.pcEpoch `shouldSatisfy` (> stale.wpClaim.pcEpoch)
       withDb pool (markClaimedPlanReconciled stale (Revision 1)) `shouldReturn` False
       withDb pool (suspendClaimedPlan stale (Revision 1) "stale" checkpointState) `shouldReturn` False
@@ -371,7 +375,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       _ <- spawnChild pool fixture ref "查乙" "turn:1:0/k1"
       withDb pool (markPlanReconciled ref (Revision 1))
       withDb pool (finishAgentTurn done' TurnSucceeded 1 Nothing Nothing)
-      midway <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      midway <- claimLive pool "w" 10
       midway `shouldBe` []
 
     it "leases it again the moment the last child settles" $ do
@@ -382,10 +386,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       childTurn <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
       withDb pool (markPlanReconciled ref (Revision 1))
       withDb pool (releasePlanClaim "w" ref)
-      blocked <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      blocked <- claimLive pool "w" 10
       blocked `shouldBe` []
       withDb pool (finishAgentTurn childTurn TurnSucceeded 1 Nothing Nothing)
-      woken <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      woken <- claimLive pool "w" 10
       map (fmap (.wpPlan.stRef)) woken `shouldBe` [Right ref]
 
     it "clearing the checkpoint takes the plan out of the wakeable set" $ do
@@ -393,7 +397,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       withDb pool (clearPlanCheckpoint ref)
-      wakeable <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      wakeable <- claimLive pool "w" 10
       wakeable `shouldBe` []
 
     it "wakes with the head as it is now, not as the checkpoint left it" $ do
@@ -568,11 +572,30 @@ checkpointState =
       "sends" .= (0 :: Int)
     ]
 
-laterTime :: UTCTime
-laterTime = addUTCTime 60 testTime
+-- | Claim with a lease the database's own clock will still call live.
+--
+-- Fixture times are fixed in 2026-08-02, which was serviceable while the
+-- caller's clock decided whether a lease had lapsed.  Since issue #17 the
+-- database decides ('max_lease_free'), so an expiry has to be in the future
+-- /now/ — and a test that wants a lapsed lease has to say so out loud rather
+-- than hand the next claimer a clock set to next year.
+claimLive :: DbPool -> Text -> Int -> IO [Either PlanLoadError WakeablePlan]
+claimLive pool owner limit = do
+  expires <- addUTCTime 300 <$> getCurrentTime
+  withDb pool (claimWakeablePlans owner expires limit)
 
-muchLaterTime :: UTCTime
-muchLaterTime = addUTCTime 3600 testTime
+-- | What waiting out a lease would do, without waiting.  Writing the expiry
+-- into the past is the honest simulation: it is the state a worker that died
+-- mid-drive actually leaves behind.
+lapseClaim :: DbPool -> PlanRef -> IO ()
+lapseClaim pool ref =
+  withConn pool $ \connection -> do
+    _ <-
+      execute
+        connection
+        "UPDATE plans SET wake_claim_expires_at = now() - interval '1 second' WHERE plan_id = ?"
+        (Only ref.prPlanId.unPlanId)
+    pure ()
 
 childJournalStart :: Text -> Text -> JournalStart
 childJournalStart callId toolRef =
@@ -589,7 +612,7 @@ childJournalStart callId toolRef =
 -- | Claim exactly one plan and insist it is the one asked for.
 claimOne :: DbPool -> PlanRef -> IO WakeablePlan
 claimOne pool ref = do
-  claimed <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+  claimed <- claimLive pool "w" 10
   case claimed of
     [Right plan] | plan.wpPlan.stRef == ref -> pure plan
     other -> fail ("expected exactly this plan to be wakeable, got " <> show (length other))

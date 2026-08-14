@@ -549,12 +549,15 @@ claimWakeablePlans ::
   (WithConnection :> es, IOE :> es) =>
   -- | Worker identity.
   Text ->
-  UTCTime ->
   -- | When this claim lapses, so a worker that dies mid-drive frees its plans.
+  -- Whether an /existing/ lease has lapsed is the database's judgement
+  -- (@max_lease_free@, issue #17), never this caller's clock: a worker running
+  -- fast used to reclaim a lease that had not expired, and both owners then
+  -- drove the same plan.
   UTCTime ->
   Int ->
   Eff es [Either PlanLoadError WakeablePlan]
-claimWakeablePlans owner now expires limit = do
+claimWakeablePlans owner expires limit = do
   rows <-
     query
       ( "WITH claimed AS ( \
@@ -563,7 +566,7 @@ claimWakeablePlans owner now expires limit = do
         \  WHERE p.plan_id IN ( \
         \    SELECT c.plan_id FROM plans c \
         \    WHERE c.status = 'open' AND c.exec_state IS NOT NULL \
-        \      AND (c.wake_owner IS NULL OR c.wake_claim_expires_at <= ?) \
+        \      AND max_lease_free(c.wake_owner, c.wake_claim_expires_at) \
         \      AND ( c.head_revision IS DISTINCT FROM c.reconciled_revision \
         \            OR NOT EXISTS (SELECT 1 FROM turn_edges e "
           <> runningChildJoin
@@ -595,7 +598,7 @@ claimWakeablePlans owner now expires limit = do
              \ JOIN agent_turns root ON root.turn_id = claimed.root_turn_id \
              \ ORDER BY claimed.plan_id"
       )
-      (owner, expires, now, limit)
+      (owner, expires, limit)
   pure (map decodeWakeable (rows :: [WakeableFields]))
 
 -- | Record that this driver has acted on a revision, so releasing the lease

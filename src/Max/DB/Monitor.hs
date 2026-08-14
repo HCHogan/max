@@ -707,7 +707,7 @@ claimCannedMonitorFires owner now leaseExpires limit =
     \    AND f.admission_state='pending' AND f.cancelled_at IS NULL \
     \    AND f.parked_at IS NULL \
     \    AND COALESCE(f.next_attempt_at, f.created_at)<=? \
-    \    AND (f.claim_owner IS NULL OR f.claim_expires_at<=?) \
+    \    AND max_lease_free(f.claim_owner, f.claim_expires_at) \
     \  ORDER BY COALESCE(f.next_attempt_at, f.created_at), f.fire_id \
     \  FOR UPDATE OF f SKIP LOCKED LIMIT ? \
     \), claimed AS ( \
@@ -720,7 +720,7 @@ claimCannedMonitorFires owner now leaseExpires limit =
     \       claimed.scheduled_at, claimed.delivery_attempts, claimed.claim_owner \
     \FROM claimed JOIN monitors m USING (monitor_id) JOIN conversations c USING (conversation_id) \
     \ORDER BY claimed.scheduled_at, claimed.fire_id"
-    (now, now, max 1 (min 100 limit), owner, leaseExpires)
+    (now, max 1 (min 100 limit), owner, leaseExpires)
 
 claimElaboratedMonitorFires ::
   (WithConnection :> es, IOE :> es) =>
@@ -738,7 +738,7 @@ claimElaboratedMonitorFires owner now leaseExpires limit =
       \    AND m.armed_by_principal_id IS NOT NULL \
       \    AND (m.status='armed' OR (m.status='expired' AND m.status_reason='max_fire_count')) \
       \    AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-      \    AND (f.claim_owner IS NULL OR f.claim_expires_at<=?) \
+      \    AND max_lease_free(f.claim_owner, f.claim_expires_at) \
       \    AND ( \
       \      (m.trigger_kind='time_cron' AND m.schedule_cron IS NULL) OR \
       \      (SELECT count(*) FROM monitor_fires recent \
@@ -759,7 +759,7 @@ claimElaboratedMonitorFires owner now leaseExpires limit =
         <> elaboratedFireSelect
         <> " JOIN claimed ON claimed.fire_id=f.fire_id ORDER BY f.created_at, f.fire_id"
     )
-    (now, now, max 1 (min 100 limit), owner, leaseExpires)
+    (now, max 1 (min 100 limit), owner, leaseExpires)
 
 loadAdmittedMonitorFire ::
   (WithConnection :> es, IOE :> es) =>

@@ -109,7 +109,7 @@ planWorker owner driver = loop
 
     claim = do
       now <- liftIO getCurrentTime
-      claimWakeablePlans owner now (addUTCTime (fromIntegral claimLeaseSeconds) now) claimBatchSize
+      claimWakeablePlans owner (addUTCTime (fromIntegral claimLeaseSeconds) now) claimBatchSize
 
     run = \case
       Left err -> do

@@ -157,7 +157,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
     readIORef recorded.rcWoken `shouldReturn` [String "甲的答案"]
     head' <- withDb pool (loadPlanHead ref) >>= requireHead
     head'.stStatus `shouldBe` PlanDone
-    withDb pool (claimWakeablePlans "w" testTime testTime 10) `shouldReturn` []
+    withDb pool (claimWakeablePlans "w" testTime 10) `shouldReturn` []
 
   it "parks again when the resumed walk hits another fork" $ do
     fixture <- createFixture pool 42 1001
@@ -213,7 +213,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
       _ <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
       -- Nothing moved, so nothing to do: the watermark is what stops the
       -- released lease being re-offered forever.
-      withDb pool (claimWakeablePlans "w" testTime laterTime 10) `shouldReturn` []
+      withDb pool (claimWakeablePlans "w" laterTime 10) `shouldReturn` []
       _ <-
         withDb pool $
           revisePlan ref (Revision 1) CauseSteer (Just fixture.fxPrincipal) Nothing (forkOfNames ["查丙"])
@@ -244,7 +244,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
       recorded <- newRecorded
       withDbLog pool (drivePlan "w" (fakeDriver recorded (producing "x")) plan)
       _ <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
-      withDb pool (claimWakeablePlans "w" testTime laterTime 10) `shouldReturn` []
+      withDb pool (claimWakeablePlans "w" laterTime 10) `shouldReturn` []
 
   describe "a child that delegates" $ do
     it "is still working while the plan it opened is suspended" $ do
@@ -260,7 +260,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
       _ <- withDb pool (suspendPlan nested (Revision 1) "turn:1:0" (toJSON initialState))
       withDb pool (finishAgentTurn child TurnSucceeded 1 Nothing Nothing)
       -- The parent is not wakeable; only the nested plan is.
-      claimed <- withDb pool (claimWakeablePlans "w" testTime laterTime 10)
+      claimed <- withDb pool (claimWakeablePlans "w" laterTime 10)
       map (fmap (.wpPlan.stRef)) claimed `shouldBe` [Right nested]
 
     it "answers its subgoal with its plan's result instead of telling a model" $ do
@@ -346,7 +346,7 @@ spawnChild pool fixture ref objective node = do
 
 claimOne :: DbPool -> PlanRef -> IO WakeablePlan
 claimOne pool ref = do
-  claimed <- withDb pool (claimWakeablePlans "w" testTime testTime 10)
+  claimed <- withDb pool (claimWakeablePlans "w" testTime 10)
   case claimed of
     [Right plan] | plan.wpPlan.stRef == ref -> pure plan
     other -> fail ("expected exactly this plan to be wakeable, got " <> show (length other))
