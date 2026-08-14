@@ -618,6 +618,7 @@ formatOne now callerGid ti =
       <> [triggerTag | Just _ <- [ti.tiTrigger]]
       <> [groupTag | Just _ <- [callerGid]]
       <> [pendingTag | ti.tiPending > 0]
+      <> [idleTag | idleSeconds >= idleWorthSaying]
   where
     GroupId raw = ti.tiGroup
     UserId uidRaw = ti.tiUser
@@ -627,6 +628,15 @@ formatOne now callerGid ti =
     triggerTag = "on=#" <> maybe "" (T.pack . show) ti.tiTrigger
     groupTag = "group=" <> tshow raw
     pendingTag = "fb=" <> tshow ti.tiPending
+    -- Silence rather than age: a turn ten minutes into honest work reads the
+    -- same as a wedged one under 'ageText', and only this tells them apart.
+    idleTag = "idle=" <> ageText now ti.tiProgressAt
+    idleSeconds = round (realToFrac (diffUTCTime now ti.tiProgressAt) :: Double) :: Int
+
+-- | Below this a turn is simply between rounds, and a row that says so on
+-- every line stops being read.
+idleWorthSaying :: Int
+idleWorthSaying = 30
 
 ageText :: UTCTime -> UTCTime -> Text
 ageText now started =

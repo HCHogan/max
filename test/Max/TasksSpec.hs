@@ -74,6 +74,31 @@ spec = describe "Max.Tasks" $ do
       map (.noteLine) completion.tcUnservedNotes `shouldBe` []
       (null <$> listTasks reg (Just gid)) `shouldReturn` True
 
+    -- Issue #17: age says how long a turn has been running, which a healthy
+    -- long turn also says.  The heartbeat is what distinguishes it from one
+    -- wedged inside a tool call, so the two must not be the same number.
+    it "stamps a heartbeat on every phase change, and only on a phase change" $ do
+      reg <- newTaskRegistry
+      turn <- beginTurnRuntime reg gid alice (Just (CanonicalMessageId 7001))
+      -- Seeded at entry, so a turn that has not reached its first phase is
+      -- silent since it began rather than silent since never.
+      [begun] <- listTasks reg (Just gid)
+      tiProgressAt begun `shouldBe` tiStartedAt begun
+      threadDelay 2000
+      _ <- activateTurnRuntime turn "llm" (pure ())
+      [activated] <- listTasks reg (Just gid)
+      tiProgressAt activated `shouldSatisfy` (> tiStartedAt activated)
+      threadDelay 2000
+      setTurnPhase turn "tools"
+      [moved] <- listTasks reg (Just gid)
+      tiProgressAt moved `shouldSatisfy` (> tiProgressAt activated)
+      -- Nothing happening is the case the watchdog exists for: reading the
+      -- registry again must not look like progress.
+      [reread] <- listTasks reg (Just gid)
+      tiProgressAt reread `shouldBe` tiProgressAt moved
+      _ <- finishTurnRuntime reg turn
+      pure ()
+
     it "carries a pre-activation kill and exposes a cancellation checkpoint" $ do
       reg <- newTaskRegistry
       turn <- beginTurnRuntime reg gid alice (Just (CanonicalMessageId 7001))

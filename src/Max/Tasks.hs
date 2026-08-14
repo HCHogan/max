@@ -187,6 +187,19 @@ data TaskEntry = TaskEntry
     teAbsorbed :: !(TVar (Set Int64)),
     -- | Label shown in @!ps@: @"starting"@ until the loop attaches.
     teKind :: !(TVar Text),
+    -- | When the phase last changed — this turn's heartbeat (issue #17).
+    --
+    -- 'setTurnPhase' fires at every round boundary in "Max.Effects.Agent", so
+    -- a turn that is making rounds keeps stamping and one wedged inside a
+    -- single tool call stops.  The granularity is therefore the /round/, not
+    -- the tool call: a round carrying three slow tools stamps once, at its
+    -- start.  That is the right coarseness for "is anybody home?" and the
+    -- wrong one for pricing an individual tool, which is a separate ceiling.
+    --
+    -- Distinct from 'teStartedAt' for the reason a watchdog exists at all: age
+    -- says how long a turn has been running, which a legitimately long turn
+    -- also reports, and only silence distinguishes the two.
+    teProgressAt :: !(TVar UTCTime),
     -- | What to run when @!kill@ targets this task.  'Nothing' until
     -- 'attachTask' supplies it.
     teCancel :: !(TVar (Maybe (IO ()))),
@@ -204,6 +217,10 @@ data TaskInfo = TaskInfo
     tiTrigger :: !(Maybe Int64),
     tiKind :: !Text,
     tiStartedAt :: !UTCTime,
+    -- | When this turn last changed phase.  Age answers "how long has this
+    -- been running", which a healthy long turn also answers; this answers
+    -- "when was it last seen moving", which only a wedged one answers badly.
+    tiProgressAt :: !UTCTime,
     -- | Notes pending in the inbox — useful for seeing whether your
     -- @!feedback@ landed.
     tiPending :: !Int
@@ -284,6 +301,10 @@ beginTurnRuntimeWith reg durable output gid uid mTrigger = do
   inbox <- newTVarIO []
   absorbed <- newTVarIO Set.empty
   kind <- newTVarIO "starting"
+  -- Seeded with the start time rather than left empty: a turn that has not
+  -- reached its first phase yet has still only been silent since it began, and
+  -- a Maybe here would make every reader answer that question again.
+  progressAt <- newTVarIO now
   cancel <- newTVarIO Nothing
   killed <- newTVarIO False
   atomically $ do
@@ -300,6 +321,7 @@ beginTurnRuntimeWith reg durable output gid uid mTrigger = do
               teInbox = inbox,
               teAbsorbed = absorbed,
               teKind = kind,
+              teProgressAt = progressAt,
               teCancel = cancel,
               teKilled = killed
             }
@@ -328,14 +350,27 @@ turnRuntimeOutputContext = (.trOutputContext)
 -- phase.  A kill accepted during context collection is returned explicitly so
 -- the caller can stop before spending an LLM turn.
 activateTurnRuntime :: TurnRuntime -> Text -> IO () -> IO Bool
-activateTurnRuntime turn phase cancel = atomically $ do
-  let entry = turn.trEntry
-  writeTVar entry.teKind phase
-  writeTVar entry.teCancel (Just cancel)
-  readTVar entry.teKilled
+activateTurnRuntime turn phase cancel = do
+  now <- getCurrentTime
+  atomically $ do
+    let entry = turn.trEntry
+    writePhase entry now phase
+    writeTVar entry.teCancel (Just cancel)
+    readTVar entry.teKilled
 
 setTurnPhase :: TurnRuntime -> Text -> IO ()
-setTurnPhase turn phase = atomically (writeTVar turn.trEntry.teKind phase)
+setTurnPhase turn phase = do
+  now <- getCurrentTime
+  atomically (writePhase turn.trEntry now phase)
+
+-- | Enter a phase and stamp the heartbeat, which are the same event: a turn is
+-- observably alive exactly when it moves.  Every writer of 'teKind' goes
+-- through here so the two cannot drift into disagreeing about when this turn
+-- was last seen.
+writePhase :: TaskEntry -> UTCTime -> Text -> STM ()
+writePhase entry now phase = do
+  writeTVar entry.teKind phase
+  writeTVar entry.teProgressAt now
 
 checkTurnCancellation :: TurnRuntime -> IO ()
 checkTurnCancellation turn = do
@@ -422,13 +457,14 @@ attachTask ::
   IO () ->
   IO TaskHandle
 attachTask reg gid uid mTrigger kind cancel = do
+  now <- getCurrentTime
   mAdopted <- atomically $ do
     (_, m) <- readTVar reg.trState
     candidates <- filterM adoptable (Map.elems m)
     case candidates of
       [] -> pure Nothing
       (e : _) -> do
-        writeTVar e.teKind kind
+        writePhase e now kind
         writeTVar e.teCancel (Just cancel)
         killed <- readTVar e.teKilled
         pure (Just (e, killed))
@@ -451,7 +487,7 @@ attachTask reg gid uid mTrigger kind cancel = do
           -- crashing a turn over registry bookkeeping.
           Nothing -> newTVar []
           Just e -> do
-            writeTVar e.teKind kind
+            writePhase e now kind
             writeTVar e.teCancel (Just cancel)
             pure e.teInbox
       pure
@@ -611,6 +647,7 @@ listTasks reg mGid = atomically $ do
     toInfo e = do
       pending <- length <$> readTVar e.teInbox
       kind <- readTVar e.teKind
+      progressAt <- readTVar e.teProgressAt
       pure
         TaskInfo
           { tiId = e.teId,
@@ -619,6 +656,7 @@ listTasks reg mGid = atomically $ do
             tiTrigger = e.teTrigger,
             tiKind = kind,
             tiStartedAt = e.teStartedAt,
+            tiProgressAt = progressAt,
             tiPending = pending
           }
 
