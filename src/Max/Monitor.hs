@@ -128,9 +128,9 @@ monitorWorker tz owner dispatchElaborated = loop
     claimWork = do
       observedAt <- liftIO getCurrentTime
       _ <- admitDueTimeMonitors observedAt
-      let leaseExpires = addUTCTime (fromIntegral claimLeaseSeconds) observedAt
-      canned <- claimCannedMonitorFires owner observedAt leaseExpires claimBatchSize
-      elaborated <- claimElaboratedMonitorFires owner observedAt leaseExpires claimBatchSize
+      let leaseSeconds = fromIntegral claimLeaseSeconds :: Double
+      canned <- claimCannedMonitorFires owner observedAt leaseSeconds claimBatchSize
+      elaborated <- claimElaboratedMonitorFires owner observedAt leaseSeconds claimBatchSize
       pure (map WorkCanned canned <> map WorkElaborated elaborated)
 
     processWork = \case

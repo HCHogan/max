@@ -137,7 +137,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     claimAt <- getCurrentTime
     [claimed] <-
       withDb pool $
-        claimCannedMonitorFires "scheduler-a" claimAt (addUTCTime 60 claimAt) 10
+        claimCannedMonitorFires "scheduler-a" claimAt 60 10
     claimed.cmfMonitor `shouldBe` monitor
     withDb pool (lookupMonitorFireOutput claimed.cmfFireId) `shouldReturn` Nothing
 
@@ -166,13 +166,13 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
 
     -- Simulate process death before fire ack. A live lease blocks takeover;
     -- boot after expiry releases it and a new owner rediscovers the same row.
-    withDb pool (claimCannedMonitorFires "scheduler-b" claimAt (addUTCTime 60 claimAt) 10)
+    withDb pool (claimCannedMonitorFires "scheduler-b" claimAt 60 10)
       `shouldReturn` []
     let restartedAt = addUTCTime 61 claimAt
     withDb pool (reclaimExpiredMonitorFireClaims restartedAt) `shouldReturn` 1
     [resumed] <-
       withDb pool $
-        claimCannedMonitorFires "scheduler-b" restartedAt (addUTCTime 60 restartedAt) 10
+        claimCannedMonitorFires "scheduler-b" restartedAt 60 10
     resumed.cmfFireId `shouldBe` claimed.cmfFireId
     withDb
       pool
@@ -356,7 +356,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
 
     [claimed] <-
       withDb pool $
-        claimElaboratedMonitorFires "ledger-worker" now (addUTCTime 60 now) 10
+        claimElaboratedMonitorFires "ledger-worker" now 60 10
     claimed.emfTriggerCanonicalMessage `shouldBe` Just (CanonicalMessageId liveCanonical)
     claimed.emfTriggerEvidence `shouldSatisfy` T.isInfixOf "LAUNCH is ready"
     claimed.emfEffectToolGrants
@@ -391,8 +391,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     fireCount pool monitor `shouldReturn` 1
     [claimed] <-
       withDb pool $
-        claimElaboratedMonitorFires "admitter-a" now (addUTCTime 60 now) 10
-    withDb pool (claimElaboratedMonitorFires "admitter-b" now (addUTCTime 60 now) 10)
+        claimElaboratedMonitorFires "admitter-a" now 60 10
+    withDb pool (claimElaboratedMonitorFires "admitter-b" now 60 10)
       `shouldReturn` []
     admitted <- requireJustIO "admitted monitor turn" =<< withDb pool (admitElaboratedMonitorTurn "admitter-a" claimed.emfFireId Nothing)
     withDb pool (admitElaboratedMonitorTurn "admitter-a" claimed.emfFireId Nothing)
@@ -494,14 +494,14 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     forM_ [6302 .. 6306] $ \messageId ->
       insertRawMessage pool messageId 65 705 99 now Nothing "budget-hit"
     fireCount pool budgetMonitor `shouldReturn` 5
-    claimed <- withDb pool (claimElaboratedMonitorFires "budget-worker" now (addUTCTime 60 now) 10)
+    claimed <- withDb pool (claimElaboratedMonitorFires "budget-worker" now 60 10)
     admitted <- catMaybes <$> mapM (\fire -> withDb pool (admitElaboratedMonitorTurn "budget-worker" fire.emfFireId Nothing)) claimed
     length admitted `shouldBe` 4
     budgetStates pool budgetMonitor `shouldReturn` [(4, 1)]
 
     oneShot <- requireRight "arm one-shot" =<< armTimeFor pool budgetPrincipal budgetArming now
     withDb pool (admitDueTimeMonitors now) `shouldReturn` 1
-    [clockFire] <- withDb pool (claimElaboratedMonitorFires "clock-worker" now (addUTCTime 60 now) 10)
+    [clockFire] <- withDb pool (claimElaboratedMonitorFires "clock-worker" now 60 10)
     clockFire.emfMonitor `shouldBe` oneShot
     clockTurn <- withDb pool (admitElaboratedMonitorTurn "clock-worker" clockFire.emfFireId Nothing)
     clockTurn `shouldSatisfy` isJust
@@ -513,7 +513,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
           "UPDATE monitor_fires SET dispatched_at=now() - interval '61 minutes' \
           \ WHERE monitor_id=? AND admission_state='dispatched'"
           (Only budgetMonitor.mrMonitorId)
-    [released] <- withDb pool (claimElaboratedMonitorFires "budget-worker-2" now (addUTCTime 60 now) 10)
+    [released] <- withDb pool (claimElaboratedMonitorFires "budget-worker-2" now 60 10)
     finalTurn <- withDb pool (admitElaboratedMonitorTurn "budget-worker-2" released.emfFireId Nothing)
     finalTurn `shouldSatisfy` isJust
     budgetStates pool budgetMonitor `shouldReturn` [(5, 0)]
@@ -540,7 +540,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
           )
     _ <- insertRawMessage pool 6402 66 706 99 now Nothing "one-hit"
     monitorReason pool maxOne `shouldReturn` [("expired", Just "max_fire_count", 1)]
-    length <$> withDb pool (claimElaboratedMonitorFires "max-one-worker" now (addUTCTime 60 now) 10)
+    length <$> withDb pool (claimElaboratedMonitorFires "max-one-worker" now 60 10)
       `shouldReturn` 1
 
     ttlMonitor <-
@@ -591,7 +591,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
         fireAt
 
     claimAtTime owner now =
-      claimCannedMonitorFires owner now (addUTCTime 60 now) 10
+      claimCannedMonitorFires owner now 60 10
 
 parkThroughFive :: DbPool -> Text -> MonitorFireId -> UTCTime -> Int -> IO ()
 parkThroughFive pool owner fireId now failedAttempt = do
@@ -604,7 +604,7 @@ parkThroughFive pool owner fireId now failedAttempt = do
       let next = addUTCTime 1 now
       [claimed] <-
         withDb pool $
-          claimCannedMonitorFires owner next (addUTCTime 60 next) 10
+          claimCannedMonitorFires owner next 60 10
       claimed.cmfDeliveryAttempts `shouldBe` failedAttempt
       parkThroughFive pool owner fireId next (failedAttempt + 1)
 

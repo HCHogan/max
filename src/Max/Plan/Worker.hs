@@ -107,9 +107,7 @@ planWorker owner driver = loop
       mapM_ run work
       loop
 
-    claim = do
-      now <- liftIO getCurrentTime
-      claimWakeablePlans owner (addUTCTime (fromIntegral claimLeaseSeconds) now) claimBatchSize
+    claim = claimWakeablePlans owner (fromIntegral claimLeaseSeconds) claimBatchSize
 
     run = \case
       Left err -> do
@@ -141,12 +139,7 @@ planWorker owner driver = loop
 
     heartbeat plan = do
       threadDelay (max 1 (claimLeaseSeconds `div` 3) * 1000000)
-      now <- liftIO getCurrentTime
-      renewed <-
-        renewClaimedPlan
-          plan
-          now
-          (addUTCTime (fromIntegral claimLeaseSeconds) now)
+      renewed <- renewClaimedPlan plan (fromIntegral claimLeaseSeconds)
       when renewed (heartbeat plan)
 
 -- | One plan, one decision, acted on.

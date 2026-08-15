@@ -141,7 +141,11 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
 
   it "resumes past the fork once every child has returned a value, then closes" $ do
     fixture <- createFixture pool 42 1001
-    (ref, _) <- parkedPlan pool fixture
+    (ref, held) <- parkedPlan pool fixture
+    -- Hand the lease back, which is what a worker does when a drive ends.
+    -- Until issue #17.A the fixture wrote a lease that was already expired, so
+    -- re-claiming worked by accident; now it has to be given up on purpose.
+    withDb pool (releaseClaimedPlan held) `shouldReturn` True
     settle pool fixture ref [("查甲", Just "甲的答案"), ("查乙", Just "乙的答案")]
     plan <- claimOne pool ref
     recorded <- newRecorded
@@ -157,11 +161,15 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
     readIORef recorded.rcWoken `shouldReturn` [String "甲的答案"]
     head' <- withDb pool (loadPlanHead ref) >>= requireHead
     head'.stStatus `shouldBe` PlanDone
-    withDb pool (claimWakeablePlans "w" testTime 10) `shouldReturn` []
+    withDb pool (claimWakeablePlans "w" 300 10) `shouldReturn` []
 
   it "parks again when the resumed walk hits another fork" $ do
     fixture <- createFixture pool 42 1001
-    (ref, _) <- parkedPlan pool fixture
+    (ref, held) <- parkedPlan pool fixture
+    -- Hand the lease back, which is what a worker does when a drive ends.
+    -- Until issue #17.A the fixture wrote a lease that was already expired, so
+    -- re-claiming worked by accident; now it has to be given up on purpose.
+    withDb pool (releaseClaimedPlan held) `shouldReturn` True
     settle pool fixture ref [("查甲", Just "一"), ("查乙", Just "二")]
     plan <- claimOne pool ref
     recorded <- newRecorded
@@ -176,7 +184,11 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
 
   it "abandons the plan and says so when a child came back with nothing" $ do
     fixture <- createFixture pool 42 1001
-    (ref, _) <- parkedPlan pool fixture
+    (ref, held) <- parkedPlan pool fixture
+    -- Hand the lease back, which is what a worker does when a drive ends.
+    -- Until issue #17.A the fixture wrote a lease that was already expired, so
+    -- re-claiming worked by accident; now it has to be given up on purpose.
+    withDb pool (releaseClaimedPlan held) `shouldReturn` True
     settle pool fixture ref [("查甲", Just "甲的答案"), ("查乙", Nothing)]
     plan <- claimOne pool ref
     recorded <- newRecorded
@@ -213,7 +225,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
       _ <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
       -- Nothing moved, so nothing to do: the watermark is what stops the
       -- released lease being re-offered forever.
-      withDb pool (claimWakeablePlans "w" laterTime 10) `shouldReturn` []
+      withDb pool (claimWakeablePlans "w" 300 10) `shouldReturn` []
       _ <-
         withDb pool $
           revisePlan ref (Revision 1) CauseSteer (Just fixture.fxPrincipal) Nothing (forkOfNames ["查丙"])
@@ -244,7 +256,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
       recorded <- newRecorded
       withDbLog pool (drivePlan "w" (fakeDriver recorded (producing "x")) plan)
       _ <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
-      withDb pool (claimWakeablePlans "w" laterTime 10) `shouldReturn` []
+      withDb pool (claimWakeablePlans "w" 300 10) `shouldReturn` []
 
   describe "a child that delegates" $ do
     it "is still working while the plan it opened is suspended" $ do
@@ -260,7 +272,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
       _ <- withDb pool (suspendPlan nested (Revision 1) "turn:1:0" (toJSON initialState))
       withDb pool (finishAgentTurn child TurnSucceeded 1 Nothing Nothing)
       -- The parent is not wakeable; only the nested plan is.
-      claimed <- withDb pool (claimWakeablePlans "w" laterTime 10)
+      claimed <- withDb pool (claimWakeablePlans "w" 300 10)
       map (fmap (.wpPlan.stRef)) claimed `shouldBe` [Right nested]
 
     it "answers its subgoal with its plan's result instead of telling a model" $ do
@@ -275,6 +287,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
       -- Drive the nested plan all the way to a value.
       nestedPlan <- claimOne pool nested
       nestedPlan.wpServesSubgoal `shouldBe` True
+      -- That claim only asked a question; give the lease back before the
+      -- children settle, or the drive below has nothing to take.
+      withDb pool (releaseClaimedPlan nestedPlan) `shouldReturn` True
       settle pool fixture nested [("查甲", Just "孙一"), ("查乙", Just "孙二")]
       ready <- claimOne pool nested
       recorded <- newRecorded
@@ -289,7 +304,11 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
     -- A steer rewrote the plan out from under a running child.  The fork is
     -- gone, so the child's work is not wanted and the plan is over.
     fixture <- createFixture pool 42 1001
-    (ref, _) <- parkedPlan pool fixture
+    (ref, held) <- parkedPlan pool fixture
+    -- Hand the lease back, which is what a worker does when a drive ends.
+    -- Until issue #17.A the fixture wrote a lease that was already expired, so
+    -- re-claiming worked by accident; now it has to be given up on purpose.
+    withDb pool (releaseClaimedPlan held) `shouldReturn` True
     stray <- spawnChild pool fixture ref "查甲" "turn:1:0/k0"
     _ <-
       withDb pool $
@@ -346,7 +365,7 @@ spawnChild pool fixture ref objective node = do
 
 claimOne :: DbPool -> PlanRef -> IO WakeablePlan
 claimOne pool ref = do
-  claimed <- withDb pool (claimWakeablePlans "w" testTime 10)
+  claimed <- withDb pool (claimWakeablePlans "w" 300 10)
   case claimed of
     [Right plan] | plan.wpPlan.stRef == ref -> pure plan
     other -> fail ("expected exactly this plan to be wakeable, got " <> show (length other))

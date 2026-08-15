@@ -9,7 +9,6 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
 import Control.Exception (try)
 import Database.PostgreSQL.Simple (Only (..), SqlError, execute, query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb)
@@ -338,15 +337,13 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       claimed <- claimOne pool ref
-      heartbeatAt <- getCurrentTime
-      let renewedUntil = addUTCTime 300 heartbeatAt
-      withDb pool (renewClaimedPlan claimed heartbeatAt renewedUntil) `shouldReturn` True
+      withDb pool (renewClaimedPlan claimed 300) `shouldReturn` True
       blocked <- claimLive pool "other" 10
       blocked `shouldBe` []
       -- Renewal moved the deadline, so only time passing hands it over.
       lapseClaim pool ref
       [Right fresh] <- claimLive pool "other" 10
-      withDb pool (renewClaimedPlan claimed heartbeatAt renewedUntil) `shouldReturn` False
+      withDb pool (renewClaimedPlan claimed 300) `shouldReturn` False
       withDb pool (releaseClaimedPlan fresh) `shouldReturn` True
 
     it "fences every substantive write from an expired lease" $ do
@@ -572,17 +569,15 @@ checkpointState =
       "sends" .= (0 :: Int)
     ]
 
--- | Claim with a lease the database's own clock will still call live.
+-- | Claim with a lease long enough that the database will still call it live.
 --
--- Fixture times are fixed in 2026-08-02, which was serviceable while the
--- caller's clock decided whether a lease had lapsed.  Since issue #17 the
--- database decides ('max_lease_free'), so an expiry has to be in the future
--- /now/ — and a test that wants a lapsed lease has to say so out loud rather
--- than hand the next claimer a clock set to next year.
+-- Neither end of a lease is the caller's to decide any more (issue #17.A): the
+-- claim asks for a duration and 'max_lease_until' turns it into a deadline on
+-- the same clock 'max_lease_free' reads.  So a test that wants a /lapsed/
+-- lease has to say so out loud — see 'lapseClaim' — rather than hand the next
+-- claimer a clock set to next year, which is the bug this replaced.
 claimLive :: DbPool -> Text -> Int -> IO [Either PlanLoadError WakeablePlan]
-claimLive pool owner limit = do
-  expires <- addUTCTime 300 <$> getCurrentTime
-  withDb pool (claimWakeablePlans owner expires limit)
+claimLive pool owner limit = withDb pool (claimWakeablePlans owner 300 limit)
 
 -- | What waiting out a lease would do, without waiting.  Writing the expiry
 -- into the past is the honest simulation: it is the state a worker that died

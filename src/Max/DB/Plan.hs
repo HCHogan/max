@@ -549,19 +549,20 @@ claimWakeablePlans ::
   (WithConnection :> es, IOE :> es) =>
   -- | Worker identity.
   Text ->
-  -- | When this claim lapses, so a worker that dies mid-drive frees its plans.
-  -- Whether an /existing/ lease has lapsed is the database's judgement
-  -- (@max_lease_free@, issue #17), never this caller's clock: a worker running
-  -- fast used to reclaim a lease that had not expired, and both owners then
-  -- drove the same plan.
-  UTCTime ->
+  -- | How long the claim should last, in seconds.  Both ends of a lease now
+  -- read the database's clock (issue #17.A): @max_lease_free@ decides whether
+  -- an existing one has lapsed and @max_lease_until@ sets when this one does.
+  -- A worker running fast used to reclaim a lease that had not expired, and a
+  -- worker running slow used to write one that was already in the past —
+  -- either way two owners drove the same plan.
+  Double ->
   Int ->
   Eff es [Either PlanLoadError WakeablePlan]
-claimWakeablePlans owner expires limit = do
+claimWakeablePlans owner seconds limit = do
   rows <-
     query
       ( "WITH claimed AS ( \
-        \  UPDATE plans p SET wake_owner = ?, wake_claim_expires_at = ?, \
+        \  UPDATE plans p SET wake_owner = ?, wake_claim_expires_at = max_lease_until(?), \
         \                     wake_epoch = p.wake_epoch + 1 \
         \  WHERE p.plan_id IN ( \
         \    SELECT c.plan_id FROM plans c \
@@ -598,7 +599,7 @@ claimWakeablePlans owner expires limit = do
              \ JOIN agent_turns root ON root.turn_id = claimed.root_turn_id \
              \ ORDER BY claimed.plan_id"
       )
-      (owner, expires, limit)
+      (owner, seconds, limit)
   pure (map decodeWakeable (rows :: [WakeableFields]))
 
 -- | Record that this driver has acted on a revision, so releasing the lease
@@ -640,21 +641,23 @@ markClaimedPlanReconciled plan revision = do
 renewClaimedPlan ::
   (WithConnection :> es, IOE :> es) =>
   WakeablePlan ->
-  UTCTime ->
-  UTCTime ->
+  -- | How much longer this driver wants the lease, in seconds.  Seconds rather
+  -- than a deadline, and @> now()@ rather than a caller-supplied instant: both
+  -- ends of a renewal now read the database's clock (issue #17.A), so a driver
+  -- whose clock drifts cannot renew a lease it has in fact already lost.
+  Double ->
   Eff es Bool
-renewClaimedPlan plan now expires = do
+renewClaimedPlan plan seconds = do
   moved <-
     execute
-      "UPDATE plans SET wake_claim_expires_at = ? \
+      "UPDATE plans SET wake_claim_expires_at = max_lease_until(?) \
       \ WHERE plan_id = ? AND status = 'open' \
       \   AND wake_owner = ? AND wake_epoch = ? \
-      \   AND wake_claim_expires_at > ?"
-      ( expires,
+      \   AND wake_claim_expires_at > now()"
+      ( seconds,
         plan.wpPlan.stRef.prPlanId,
         plan.wpClaim.pcOwner,
-        plan.wpClaim.pcEpoch,
-        now
+        plan.wpClaim.pcEpoch
       )
   pure (moved > 0)
 

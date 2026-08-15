@@ -696,10 +696,13 @@ claimCannedMonitorFires ::
   (WithConnection :> es, IOE :> es) =>
   Text ->
   UTCTime ->
-  UTCTime ->
+  -- | How long the claim should last, in seconds; the deadline itself is the
+  -- database's (issue #17.A).  A worker whose clock ran slow used to write a
+  -- lease that had already expired, freeing the fire it had just taken.
+  Double ->
   Int ->
   Eff es [CannedMonitorFire]
-claimCannedMonitorFires owner now leaseExpires limit =
+claimCannedMonitorFires owner now leaseSeconds limit =
   query
     "WITH candidates AS ( \
     \  SELECT f.fire_id FROM monitor_fires f JOIN monitors m USING (monitor_id) \
@@ -711,7 +714,7 @@ claimCannedMonitorFires owner now leaseExpires limit =
     \  ORDER BY COALESCE(f.next_attempt_at, f.created_at), f.fire_id \
     \  FOR UPDATE OF f SKIP LOCKED LIMIT ? \
     \), claimed AS ( \
-    \  UPDATE monitor_fires f SET claim_owner=?, claim_expires_at=? \
+    \  UPDATE monitor_fires f SET claim_owner=?, claim_expires_at=max_lease_until(?) \
     \  FROM candidates c WHERE f.fire_id=c.fire_id \
     \  RETURNING f.fire_id, f.monitor_id, f.scheduled_at, f.delivery_attempts, f.claim_owner \
     \) \
@@ -720,16 +723,17 @@ claimCannedMonitorFires owner now leaseExpires limit =
     \       claimed.scheduled_at, claimed.delivery_attempts, claimed.claim_owner \
     \FROM claimed JOIN monitors m USING (monitor_id) JOIN conversations c USING (conversation_id) \
     \ORDER BY claimed.scheduled_at, claimed.fire_id"
-    (now, max 1 (min 100 limit), owner, leaseExpires)
+    (now, max 1 (min 100 limit), owner, leaseSeconds)
 
 claimElaboratedMonitorFires ::
   (WithConnection :> es, IOE :> es) =>
   Text ->
   UTCTime ->
-  UTCTime ->
+  -- | Lease length in seconds; see 'claimCannedMonitorFires'.
+  Double ->
   Int ->
   Eff es [ElaboratedMonitorFire]
-claimElaboratedMonitorFires owner now leaseExpires limit =
+claimElaboratedMonitorFires owner now leaseSeconds limit =
   query
     ( "WITH candidates AS ( \
       \  SELECT f.fire_id FROM monitor_fires f \
@@ -752,14 +756,14 @@ claimElaboratedMonitorFires owner now leaseExpires limit =
       \  ORDER BY f.created_at, f.fire_id \
       \  FOR UPDATE OF f SKIP LOCKED LIMIT ? \
       \), claimed AS ( \
-      \  UPDATE monitor_fires f SET claim_owner=?, claim_expires_at=? \
+      \  UPDATE monitor_fires f SET claim_owner=?, claim_expires_at=max_lease_until(?) \
       \  FROM candidates c WHERE f.fire_id=c.fire_id \
       \  RETURNING f.fire_id \
       \) "
         <> elaboratedFireSelect
         <> " JOIN claimed ON claimed.fire_id=f.fire_id ORDER BY f.created_at, f.fire_id"
     )
-    (now, max 1 (min 100 limit), owner, leaseExpires)
+    (now, max 1 (min 100 limit), owner, leaseSeconds)
 
 loadAdmittedMonitorFire ::
   (WithConnection :> es, IOE :> es) =>
