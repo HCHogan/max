@@ -7,7 +7,7 @@ import Max.Handler (IngestOutcome (..), ingestAllowsDownstream, isSilentReply, p
 import Max.IR.Prompt (promptText)
 import Max.Platform.QQ (qqIngestBody)
 import Max.Platform.Types (CanonicalMessageId (..))
-import Max.ReplySend (stripBareMarkers, stripStickerText)
+import Max.ReplySend (cleanModelText, stripBareMarkers, stripStickerText, stripThinkSpans)
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
@@ -132,6 +132,31 @@ spec = do
     it "strips a caption span but keeps a token in the same text" $
       stripStickerText "[sticker: 幻觉] 和 [sticker#7]"
         `shouldBe` " 和 [sticker#7]"
+
+  -- Production leaked a full chain of thought to a group twice, with the
+  -- source-side strip present, deployed and green.  This is the backstop at
+  -- the last step before text becomes a message.
+  describe "stripThinkSpans" $ do
+    it "removes a complete block wherever it sits" $ do
+      stripThinkSpans "<think>先想想</think>答案" `shouldBe` "答案"
+      stripThinkSpans "开头<think>中间</think>结尾" `shouldBe` "开头结尾"
+      stripThinkSpans "a<think>x</think>b<think>y</think>c" `shouldBe` "abc"
+
+    it "drops everything after a block that never closes" $ do
+      stripThinkSpans "<think>还没想完" `shouldBe` ""
+      stripThinkSpans "说了半句<think>然后开始自言自语" `shouldBe` "说了半句"
+
+    it "leaves text without a block alone" $ do
+      stripThinkSpans "今天天气不错" `shouldBe` "今天天气不错"
+      stripThinkSpans "我觉得 <thinking> 这个词没问题" `shouldBe` "我觉得 <thinking> 这个词没问题"
+
+    -- The 2026-08-15 leak, verbatim in shape: minimax-m3 wrote the opening
+    -- bracket of its reply token *before* closing the block, so the token is
+    -- split across the tag.  The [ is inside the block and goes with it —
+    -- that half is the model's doing, and no repair here can invent it back.
+    it "handles the production shape, token straddle and all" $
+      cleanModelText "<think>想玩巨剑狮子斩\n\n语气要自然\n\n我来插一句。[</think>\n\n↩#102541] 无赖专属"
+        `shouldBe` "↩#102541] 无赖专属"
 
   describe "stripBareMarkers" $ do
     it "removes a bare [image] marker the model echoed" $

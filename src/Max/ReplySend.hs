@@ -45,6 +45,7 @@ module Max.ReplySend
     cleanModelText,
     stripStickerText,
     stripBareMarkers,
+    stripThinkSpans,
     messageImageNodes,
     chunkDelayMicros,
 
@@ -378,7 +379,34 @@ dedupeModelImages seen0 body =
 -- the same module as sending so streamed final text, progress narration, and
 -- the final remainder cannot drift into subtly different grammars.
 cleanModelText :: T.Text -> T.Text
-cleanModelText = T.strip . stripBareMarkers . stripStickerText . stripHallucinatedTokens
+cleanModelText = T.strip . stripBareMarkers . stripStickerText . stripHallucinatedTokens . stripThinkSpans
+
+-- | Drop inline reasoning.  Models that inline their chain of thought
+-- (MiniMax, GLM, …) open with @\<think\>@ instead of filling a reasoning
+-- field; 'Max.Effects.LLM.stripLeadingThink' removes it at the source.
+--
+-- This is here /as well/ because the source-side strip was present, deployed
+-- and passing its own tests when production leaked a full monologue to a group
+-- twice — 2026-08-13 and 2026-08-15, both minimax-m3, both streamed, four
+-- paragraphs of reasoning sent as chat while the block was still open.  The
+-- interior was audited line by line and the leak was not found in it.  So the
+-- guarantee is moved to where it cannot be bypassed: this function is the last
+-- thing model text passes through before it becomes a message, and its own
+-- contract already says so.
+--
+-- An unclosed block takes everything after it.  A half-arrived monologue is
+-- never the answer, and the two failure directions are not symmetric: holding
+-- text costs latency, releasing it cannot be undone.
+stripThinkSpans :: T.Text -> T.Text
+stripThinkSpans t = case T.breakOn opener t of
+  (_, rest) | T.null rest -> t
+  (before, rest) -> case T.breakOn closer (T.drop (T.length opener) rest) of
+    (_, after)
+      | Just remainder <- T.stripPrefix closer after -> before <> stripThinkSpans remainder
+      | otherwise -> before
+  where
+    opener = "<think>"
+    closer = "</think>"
 
 -- | Drop bare display markers echoed from transcript context.  Id-carrying
 -- send tokens remain intact for 'sendAndPersistReply' to resolve.

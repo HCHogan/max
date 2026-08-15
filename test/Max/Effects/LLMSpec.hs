@@ -636,6 +636,15 @@ streamingSpec = do
     it "yields only what follows once the block closes" $
       stripLeadingThink "<think>想好了</think>\n\n上升沿圆角" `shouldBe` "上升沿圆角"
 
+    -- Production, 2026-08-15: minimax-m3 inlined a think block whose
+    -- reasoning ran to several paragraphs, and four of them reached the group
+    -- while the block was still open.  A paragraph break inside an unclosed
+    -- block is what 'readyPrefix' would release, so this is the exact state
+    -- the sink was in when it leaked.
+    it "holds an unclosed block even once it contains paragraph breaks" $ do
+      stripLeadingThink "<think>第一段推理。\n\n第二段推理。\n\n" `shouldBe` ""
+      stripLeadingThink "<think>想玩巨剑狮子斩\n\n这种游戏闲聊\n\n语气要自然\n\n" `shouldBe` ""
+
     -- Monotone: what the sink released earlier stays a prefix of what
     -- it sees later, which is what makes 'sentPrefix' arithmetic valid.
     it "grows by appending as more text arrives" $ do
