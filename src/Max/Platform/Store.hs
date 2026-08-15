@@ -37,6 +37,7 @@ module Max.Platform.Store
     claimDispatch,
     loadDispatchClaim,
     completeDispatch,
+    renewDispatchLease,
     releaseDeferredDispatches,
     OutboundDraft (..),
     EnqueuedOutbound (..),
@@ -1886,7 +1887,7 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
       \), claimed AS ( \
       \ UPDATE message_dispatches md \
       \ SET status = 'claimed', lease_owner = ?, \
-      \     lease_expires_at = now() + (?::double precision * interval '1 second'), \
+      \     lease_expires_at = max_lease_until(?), \
       \     attempt_count = attempt_count + 1, last_attempt_at = now(), updated_at = now() \
       \ FROM candidates c WHERE md.canonical_message_id = c.canonical_message_id \
       \ RETURNING md.canonical_message_id, md.attempt_count \
@@ -1935,6 +1936,39 @@ completeDispatch workerId (CanonicalMessageId canonical) completion = do
         \     lease_owner = NULL, lease_expires_at = NULL, updated_at = now() \
         \ WHERE canonical_message_id = ? AND status = 'claimed' AND lease_owner = ?"
         (status :: Text, lastError, next, completed, canonical, workerId)
+
+-- | Push this row's lease out, because the turn holding it is still alive.
+--
+-- Since issue #17.D the claim is handed to the turn and settled when the turn
+-- ends, which made the lease measure the wrong thing: it was sized for the few
+-- milliseconds the old code needed to fork an async, and a turn outlives that
+-- by minutes.  Left alone, 'expiredClaimedDispatchSql' quarantines a perfectly
+-- healthy turn's row as @outcome_unknown@ and the settle at the end of the
+-- turn silently matches nothing.
+--
+-- Renewing splits the two failures the lease was being asked to detect at
+-- once.  A process that dies still stops renewing, so the row is still
+-- quarantined — that is what the lease is for.  A turn that merely /wedges/ is
+-- not this column's business: 'Max.Tasks.awaitTurnSilence' ends it, and its
+-- ordinary exit settles the row like any other.
+--
+-- 'False' means the row is no longer ours to hold, which the caller cannot fix
+-- and must not treat as a reason to end the turn — whatever has been said to
+-- the user has already been said.
+renewDispatchLease ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  CanonicalMessageId ->
+  NominalDiffTime ->
+  Eff es Bool
+renewDispatchLease workerId (CanonicalMessageId canonical) leaseDuration = do
+  changed <-
+    execute
+      "UPDATE message_dispatches \
+      \ SET lease_expires_at = max_lease_until(?), updated_at = now() \
+      \ WHERE canonical_message_id = ? AND status = 'claimed' AND lease_owner = ?"
+      (realToFrac leaseDuration :: Double, canonical, workerId)
+  pure (changed == 1)
 
 -- | Re-offer every message this conversation deferred while it was busy.
 --
@@ -2093,7 +2127,7 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \), claimed AS ( \
       \ UPDATE message_deliveries d \
       \ SET status = 'sending', lease_owner = ?, \
-      \     lease_expires_at = now() + (?::double precision * interval '1 second'), \
+      \     lease_expires_at = max_lease_until(?), \
       \     attempt_count = attempt_count + 1, last_attempt_at = now(), updated_at = now() \
       \ FROM candidates c WHERE d.delivery_id = c.delivery_id \
       \ RETURNING d.* \

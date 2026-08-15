@@ -33,7 +33,7 @@ import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime)
 import Data.Traversable (for)
 import Effectful
 import Effectful.Concurrent (threadDelay)
-import Effectful.Concurrent.Async (Concurrent, async, race)
+import Effectful.Concurrent.Async (Concurrent, async, race, withAsync)
 import Effectful.Exception (SomeException, catch, finally)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
@@ -111,6 +111,7 @@ import Max.Platform.Store
     claimDispatch,
     claimDispatches,
     completeDispatch,
+    renewDispatchLease,
     releaseDeferredDispatches,
     conversationAdvertisedCaps,
     defaultIngestOptions,
@@ -1739,7 +1740,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
       settleOwner (DispatchDeferred declinedAt)
     Just (turn, durable) ->
       void . async $
-        ( localDomain "llm" $ do
+        ( localDomain "llm" . holdingDispatchLease $ do
             logInfo "llm dispatch" ident
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
             -- (and every trySyncIO on the way up) — the outer 'catch' is the
@@ -1839,6 +1840,39 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
     -- finally, without either having to know about the other.
     settleOwner completion =
       for_ owner $ \o -> void (completeDispatch o.doWorker o.doMessage completion)
+
+    -- The lease was sized for the milliseconds the claim loop used to hold a
+    -- row; since issue #17.D the turn holds it instead, and 3.6% of turns run
+    -- longer than the whole lease.  Renewing while the turn is alive is what
+    -- keeps 'expiredClaimedDispatchSql' aimed at dead processes rather than
+    -- slow ones.
+    --
+    -- 'withAsync' rather than 'race': a lost lease is not a reason to end a
+    -- turn that has already said something to somebody.  The renewer gives up
+    -- and says so; the turn runs to its own ending and settles as usual, which
+    -- is a no-op against a row that has moved on.
+    holdingDispatchLease act = case owner of
+      Nothing -> act
+      Just o -> withAsync (renewDispatchLeaseLoop o) (const act)
+
+    renewDispatchLeaseLoop o = do
+      threadDelay (max 1 (floor dispatchLeaseSeconds `div` 3) * 1_000_000)
+      -- A blip reaching the database is not evidence the row was taken away,
+      -- so it costs a renewal and not the lease.
+      held <-
+        renewDispatchLease o.doWorker o.doMessage dispatchLeaseSeconds
+          `catchSync` \e -> do
+            logAttention "dispatch lease renewal failed" $
+              object ["error" .= T.pack (show (e :: SomeException))]
+            pure True
+      if held
+        then renewDispatchLeaseLoop o
+        else
+          logAttention "dispatch lease lost while the turn was still running" $
+            object
+              [ "canonical_message_id" .= o.doMessage,
+                "worker" .= o.doWorker
+              ]
 
     work outputCaps turn durable = do
       env :: BotEnv <- ask

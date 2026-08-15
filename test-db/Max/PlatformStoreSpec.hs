@@ -431,6 +431,47 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         (Only cid.unCanonicalMessageId)
     status `shouldBe` [("outcome_unknown" :: Text, True, True)]
 
+  -- The other half of that sweep.  Issue #17.D handed the row to the turn, so
+  -- the lease stopped measuring "the claim loop is between two statements" and
+  -- started measuring "a turn is running" — and 3.6% of production turns run
+  -- longer than the entire lease.  Without renewal the sweep above would fire
+  -- on healthy turns, quarantine their rows, and make the settle at the end of
+  -- the turn match nothing: the message answered, the row saying otherwise.
+  it "keeps a claim a running turn is still holding, and the sweep passes it by" $ do
+    (_, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-longturn" "this will take a while"))
+    let cid = resultId result
+    claimed <- withDb pool (claimDispatch "runtime-slow" cid 30)
+    fmap (.canonicalMessageId) claimed `shouldBe` Just cid
+
+    -- The turn outlives its lease.  Renewal deliberately does not test the
+    -- expiry it is replacing: a heartbeat that arrives a second late should
+    -- still save the row, because the alternative is losing a turn that is
+    -- demonstrably alive — it just wrote to this row.
+    _ <- withConn pool $ \conn ->
+      execute
+        conn
+        "UPDATE message_dispatches SET lease_expires_at = now() - interval '1 minute' \
+        \ WHERE canonical_message_id = ?"
+        (Only cid.unCanonicalMessageId)
+    withDb pool (renewDispatchLease "runtime-slow" cid 30) `shouldReturn` True
+
+    withDb pool (claimDispatch "runtime-other" cid 30) `shouldReturn` Nothing
+    held <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT status, lease_owner, COALESCE(lease_expires_at > now(), false) \
+        \ FROM message_dispatches WHERE canonical_message_id = ?"
+        (Only cid.unCanonicalMessageId)
+    (held :: [(Text, Maybe Text, Bool)]) `shouldBe` [("claimed", Just "runtime-slow", True)]
+
+    -- And the turn's own ending still lands, which is the point of holding it.
+    withDb pool (completeDispatch "runtime-slow" cid DispatchCompleted) `shouldReturn` True
+    -- Settled is settled: a renewal racing the epilogue finds nothing to hold
+    -- and says so rather than resurrecting the lease on a finished row.
+    withDb pool (renewDispatchLease "runtime-slow" cid 30) `shouldReturn` False
+
   -- Issue #17.C.  A message that arrives while its conversation is busy used
   -- to be folded into whatever turn happened to be running — production had
   -- one person's unrelated question absorbed into a stranger's turn and never
