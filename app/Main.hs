@@ -294,7 +294,7 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
     let maintenanceOwner = "max/" <> T.pack (show env.beStartedAt) <> "/" <> T.pack (show mainTid)
     reclaimed <- reclaimInterruptedTurns (maintenanceOwner <> "/turn-recovery")
     archivePruneAt <- liftIO getCurrentTime
-    reclaimedMonitorFires <- reclaimExpiredMonitorFireClaims archivePruneAt
+    reclaimedMonitorFires <- reclaimExpiredMonitorFireClaims
     when (reclaimedMonitorFires > 0) $
       logAttention "monitor scheduler: expired claims reclaimed" $
         object ["fires" .= reclaimedMonitorFires]

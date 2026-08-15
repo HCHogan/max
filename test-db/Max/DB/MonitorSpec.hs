@@ -168,8 +168,17 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     -- boot after expiry releases it and a new owner rediscovers the same row.
     withDb pool (claimCannedMonitorFires "scheduler-b" claimAt 60 10)
       `shouldReturn` []
+    -- The lease is aged in the row rather than by handing the sweep a future
+    -- instant: since issue #17.A both ends read the server's clock, so a
+    -- caller's idea of "later" is no longer something either end will believe.
+    _ <-
+      withDb pool $
+        execute
+          "UPDATE monitor_fires SET claim_expires_at = now() - interval '1 second' \
+          \ WHERE fire_id = ?"
+          (Only claimed.cmfFireId)
     let restartedAt = addUTCTime 61 claimAt
-    withDb pool (reclaimExpiredMonitorFireClaims restartedAt) `shouldReturn` 1
+    withDb pool reclaimExpiredMonitorFireClaims `shouldReturn` 1
     [resumed] <-
       withDb pool $
         claimCannedMonitorFires "scheduler-b" restartedAt 60 10
