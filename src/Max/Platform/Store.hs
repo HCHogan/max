@@ -1914,13 +1914,22 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
       )
   pure (toDispatchClaim <$> (rows :: [DispatchClaimRow]))
 
+-- | Settle a claimed row, if this is still the claim that owns it.
+--
+-- Fenced on 'attemptCount', the value the claim returned.  A worker identity
+-- is per process, not per claim, so owner alone cannot tell one of this
+-- worker's claims of a row from the next one — and the two can overlap, since
+-- a turn's epilogue settles unconditionally and may unwind after the row has
+-- been deferred, released, and taken again.  The attempt does tell them apart.
 completeDispatch ::
   (WithConnection :> es, IOE :> es) =>
   Text ->
   CanonicalMessageId ->
+  -- | The claim's attempt, as returned by 'claimDispatch'.
+  Int ->
   DispatchCompletion ->
   Eff es Bool
-completeDispatch workerId (CanonicalMessageId canonical) completion = do
+completeDispatch workerId (CanonicalMessageId canonical) attempt completion = do
   changed <- case completion of
     DispatchCompleted -> finish "completed" Nothing Nothing True
     DispatchIgnored -> finish "ignored" Nothing Nothing True
@@ -1934,8 +1943,9 @@ completeDispatch workerId (CanonicalMessageId canonical) completion = do
         \ SET status = ?, last_error = ?, next_attempt_at = COALESCE(?, next_attempt_at), \
         \     completed_at = CASE WHEN ? THEN now() ELSE completed_at END, \
         \     lease_owner = NULL, lease_expires_at = NULL, updated_at = now() \
-        \ WHERE canonical_message_id = ? AND status = 'claimed' AND lease_owner = ?"
-        (status :: Text, lastError, next, completed, canonical, workerId)
+        \ WHERE canonical_message_id = ? AND status = 'claimed' \
+        \   AND lease_owner = ? AND attempt_count = ?"
+        (status :: Text, lastError, next, completed, canonical, workerId, attempt)
 
 -- | Push this row's lease out, because the turn holding it is still alive.
 --
@@ -1959,15 +1969,19 @@ renewDispatchLease ::
   (WithConnection :> es, IOE :> es) =>
   Text ->
   CanonicalMessageId ->
+  -- | The claim's attempt.  Fenced for the same reason the settle is: a
+  -- heartbeat must not hold a lease open on a claim that is no longer its own.
+  Int ->
   NominalDiffTime ->
   Eff es Bool
-renewDispatchLease workerId (CanonicalMessageId canonical) leaseDuration = do
+renewDispatchLease workerId (CanonicalMessageId canonical) attempt leaseDuration = do
   changed <-
     execute
       "UPDATE message_dispatches \
       \ SET lease_expires_at = max_lease_until(?), updated_at = now() \
-      \ WHERE canonical_message_id = ? AND status = 'claimed' AND lease_owner = ?"
-      (realToFrac leaseDuration :: Double, canonical, workerId)
+      \ WHERE canonical_message_id = ? AND status = 'claimed' \
+      \   AND lease_owner = ? AND attempt_count = ?"
+      (realToFrac leaseDuration :: Double, canonical, workerId, attempt)
   pure (changed == 1)
 
 -- | Re-offer every message this conversation deferred while it was busy.

@@ -394,8 +394,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     withDb pool (claimDispatch "runtime-b" cid 30) `shouldReturn` Nothing
     case first of
       Nothing -> expectationFailure "expected dispatch claim"
-      Just _ -> do
-        completed <- withDb pool (completeDispatch "runtime-a" cid DispatchCompleted)
+      Just claim -> do
+        completed <- withDb pool (completeDispatch "runtime-a" cid claim.attemptCount DispatchCompleted)
         completed `shouldBe` True
         withDb pool (claimDispatch "runtime-b" cid 30) `shouldReturn` Nothing
 
@@ -444,6 +444,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     let cid = resultId result
     claimed <- withDb pool (claimDispatch "runtime-slow" cid 30)
     fmap (.canonicalMessageId) claimed `shouldBe` Just cid
+    attempt <- claimAttempt claimed
 
     -- The turn outlives its lease.  Renewal deliberately does not test the
     -- expiry it is replacing: a heartbeat that arrives a second late should
@@ -455,7 +456,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         "UPDATE message_dispatches SET lease_expires_at = now() - interval '1 minute' \
         \ WHERE canonical_message_id = ?"
         (Only cid.unCanonicalMessageId)
-    withDb pool (renewDispatchLease "runtime-slow" cid 30) `shouldReturn` True
+    withDb pool (renewDispatchLease "runtime-slow" cid attempt 30) `shouldReturn` True
 
     withDb pool (claimDispatch "runtime-other" cid 30) `shouldReturn` Nothing
     held <- withConn pool $ \conn ->
@@ -467,10 +468,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     (held :: [(Text, Maybe Text, Bool)]) `shouldBe` [("claimed", Just "runtime-slow", True)]
 
     -- And the turn's own ending still lands, which is the point of holding it.
-    withDb pool (completeDispatch "runtime-slow" cid DispatchCompleted) `shouldReturn` True
+    withDb pool (completeDispatch "runtime-slow" cid attempt DispatchCompleted) `shouldReturn` True
     -- Settled is settled: a renewal racing the epilogue finds nothing to hold
     -- and says so rather than resurrecting the lease on a finished row.
-    withDb pool (renewDispatchLease "runtime-slow" cid 30) `shouldReturn` False
+    withDb pool (renewDispatchLease "runtime-slow" cid attempt 30) `shouldReturn` False
 
   -- Issue #17.C.  A message that arrives while its conversation is busy used
   -- to be folded into whatever turn happened to be running — production had
@@ -484,7 +485,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     let cid = resultId result
     claimed <- withDb pool (claimDispatch "runtime-busy" cid 30)
     fmap (.canonicalMessageId) claimed `shouldBe` Just cid
-    withDb pool (completeDispatch "runtime-busy" cid (DispatchDeferred (addUTCTime 30 now)))
+    attempt <- claimAttempt claimed
+    withDb pool (completeDispatch "runtime-busy" cid attempt (DispatchDeferred (addUTCTime 30 now)))
       `shouldReturn` True
     -- Nothing went wrong and nothing was answered: an operator reading either
     -- the failed rows or the completed ones must not find this one in them.
@@ -497,8 +499,8 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     (row :: [(Text, Bool, Bool)]) `shouldBe` [("deferred", True, True)]
     -- The dispatch epilogue writes DispatchCompleted unconditionally on every
     -- exit.  That it cannot undo the deferral is the whole ordering argument:
-    -- the owner guard only matches a row still claimed by this worker.
-    withDb pool (completeDispatch "runtime-busy" cid DispatchCompleted) `shouldReturn` False
+    -- the status guard only matches a row still claimed.
+    withDb pool (completeDispatch "runtime-busy" cid attempt DispatchCompleted) `shouldReturn` False
     gid <- withConn pool $ \conn ->
       query
         conn
@@ -510,8 +512,29 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         -- conversation that happens to be waiting.
         withDb pool (releaseDeferredDispatches (raw + 1)) `shouldReturn` 0
         withDb pool (releaseDeferredDispatches raw) `shouldReturn` 1
-        reclaimed <- withDb pool (claimDispatch "runtime-free" cid 30)
+        -- Same worker: a worker identity is per process, so the row this
+        -- process deferred comes back to the same name it left under.
+        reclaimed <- withDb pool (claimDispatch "runtime-busy" cid 30)
         fmap (.canonicalMessageId) reclaimed `shouldBe` Just cid
+        retried <- claimAttempt reclaimed
+        retried `shouldNotBe` attempt
+
+        -- And here is the window the fence exists for.  The deferring turn's
+        -- epilogue is still unwinding, and by the time it reaches its
+        -- unconditional DispatchCompleted the row is claimed again, by the
+        -- same worker, for a turn that has not answered anything yet.  Owner
+        -- and status both match; only the attempt does not.
+        withDb pool (completeDispatch "runtime-busy" cid attempt DispatchCompleted)
+          `shouldReturn` False
+        stillOurs <- withConn pool $ \conn ->
+          query
+            conn
+            "SELECT status FROM message_dispatches WHERE canonical_message_id = ?"
+            (Only cid.unCanonicalMessageId)
+        (stillOurs :: [Only Text]) `shouldBe` [Only "claimed"]
+        -- The live claim settles it, as it always could.
+        withDb pool (completeDispatch "runtime-busy" cid retried DispatchCompleted)
+          `shouldReturn` True
       other -> expectationFailure ("expected one group id, got " <> show other)
 
   -- The release is the precise wakeup, not the only one.  A row whose
@@ -522,8 +545,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     now <- getCurrentTime
     result <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-stranded" "still waiting"))
     let cid = resultId result
-    _ <- withDb pool (claimDispatch "runtime-gone" cid 30)
-    withDb pool (completeDispatch "runtime-gone" cid (DispatchDeferred (addUTCTime (-1) now)))
+    stale <- withDb pool (claimDispatch "runtime-gone" cid 30)
+    staleAttempt <- claimAttempt stale
+    withDb pool (completeDispatch "runtime-gone" cid staleAttempt (DispatchDeferred (addUTCTime (-1) now)))
       `shouldReturn` True
     reclaimed <- withDb pool (claimDispatch "runtime-next" cid 30)
     fmap (.canonicalMessageId) reclaimed `shouldBe` Just cid
@@ -1265,6 +1289,12 @@ isNew _ = False
 isDuplicate :: IngestResult -> Bool
 isDuplicate (AlreadyIngested _) = True
 isDuplicate _ = False
+
+-- | The attempt a claim came back with, which is the fence every settle and
+-- every renewal of that claim has to present.
+claimAttempt :: Maybe DispatchClaim -> IO Int
+claimAttempt (Just claim) = pure claim.attemptCount
+claimAttempt Nothing = expectationFailure "expected a dispatch claim" >> pure 0
 
 tuple8ToList :: (a, a, a, a, a, a, a, a) -> [a]
 tuple8ToList (a, b, c, d, e, f, g, h) = [a, b, c, d, e, f, g, h]

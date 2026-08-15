@@ -528,11 +528,11 @@ runDispatchClaim workerId fetchSig mIntent claim =
       -- answered the moment the dispatch async was forked, so a turn that
       -- crashed, was killed, or lost a drain took the question with it, and a
       -- message deferred behind a running turn had nowhere to be recorded.
-      Right ClaimSettledHere -> void (completeDispatch workerId claim.canonicalMessageId DispatchCompleted)
+      Right ClaimSettledHere -> void (completeDispatch workerId claim.canonicalMessageId claim.attemptCount DispatchCompleted)
       Right ClaimHandedToTurn -> pure ()
       Left e -> failClaim (T.pack (show (e :: SomeException)))
   where
-    owner = DispatchOwner workerId claim.canonicalMessageId
+    owner = DispatchOwner workerId claim.canonicalMessageId claim.attemptCount
     failClaim err = do
       now <- liftIO getCurrentTime
       let retryAt = addUTCTime (dispatchRetrySeconds claim.attemptCount) now
@@ -542,7 +542,7 @@ runDispatchClaim workerId fetchSig mIntent claim =
             "attempt" .= claim.attemptCount,
             "error" .= err
           ]
-      void (completeDispatch workerId claim.canonicalMessageId (DispatchRetry err retryAt))
+      void (completeDispatch workerId claim.canonicalMessageId claim.attemptCount (DispatchRetry err retryAt))
 
 -- | Runtime view of the canonical claim. No transport event or legacy
 -- segment projection exists beyond the QQ ingress boundary.
@@ -1490,13 +1490,26 @@ data ClaimDisposition
   | ClaimHandedToTurn
   deriving stock (Eq, Show)
 
--- | The durable dispatch row a turn is answering for, and the worker identity
--- that holds its lease.  Both are needed to settle it: 'completeDispatch' only
--- matches a row still claimed by this exact owner, which is what stops a
--- worker that lost its lease from marking somebody else's work answered.
+-- | The durable dispatch row a turn is answering for, the worker identity that
+-- holds its lease, and which claim of that row this is.
+--
+-- All three are needed to settle it.  Owner alone is not enough, because a
+-- worker identity is per process and per subsystem — one string for the whole
+-- life of the dispatch loop — so a row this process claimed, gave up, and
+-- claimed again is owned by the same name both times.  The gap is real and
+-- narrow: a message deferred behind a busy conversation writes @deferred@ from
+-- inside its own turn's body, and the turn ahead can release it and this
+-- worker re-claim it before that first turn's epilogue unwinds.  Its
+-- unconditional @DispatchCompleted@ would then land on the /new/ claim and
+-- mark a question answered that nothing had yet answered — precisely the bug
+-- issue #17.D set out to fix.
+--
+-- 'attemptCount' is the fencing token, and it costs nothing: the claim already
+-- increments it and already hands it back.
 data DispatchOwner = DispatchOwner
   { doWorker :: !T.Text,
-    doMessage :: !CanonicalMessageId
+    doMessage :: !CanonicalMessageId,
+    doAttempt :: !Int
   }
 
 -- | What a message arriving into a busy conversation did instead of taking a
@@ -1839,7 +1852,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
     -- written where it is known and the completion unconditionally in the
     -- finally, without either having to know about the other.
     settleOwner completion =
-      for_ owner $ \o -> void (completeDispatch o.doWorker o.doMessage completion)
+      for_ owner $ \o -> void (completeDispatch o.doWorker o.doMessage o.doAttempt completion)
 
     -- The lease was sized for the milliseconds the claim loop used to hold a
     -- row; since issue #17.D the turn holds it instead, and 3.6% of turns run
@@ -1860,7 +1873,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
       -- A blip reaching the database is not evidence the row was taken away,
       -- so it costs a renewal and not the lease.
       held <-
-        renewDispatchLease o.doWorker o.doMessage dispatchLeaseSeconds
+        renewDispatchLease o.doWorker o.doMessage o.doAttempt dispatchLeaseSeconds
           `catchSync` \e -> do
             logAttention "dispatch lease renewal failed" $
               object ["error" .= T.pack (show (e :: SomeException))]
