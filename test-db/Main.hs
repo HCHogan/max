@@ -21,6 +21,7 @@ import Max.AdminTimelineSpec qualified as AdminTimelineSpec
 import Max.ContextAdminSpec qualified as ContextAdminSpec
 import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
+import Max.DB.ConnectionSpec qualified as ConnectionSpec
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
 import Max.DB.AgentTurnSpec qualified as AgentTurnSpec
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
@@ -63,6 +64,7 @@ main = do
         SessionSpec.spec pool
         TransactionSpec.spec pool
         AgentTurnSpec.spec pool
+        ConnectionSpec.spec pool
         ConversationCursorSpec.spec pool
         ContextMaterializationSpec.spec pool
         ContextAdminSpec.spec pool

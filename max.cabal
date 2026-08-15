@@ -503,6 +503,7 @@ test-suite max-test-db
     other-modules:
         Helpers
         Max.AdminTimelineSpec
+        Max.DB.ConnectionSpec
         Max.DB.ConversationCursorSpec
         Max.DB.AgentTurnSpec
         Max.DB.FilesSpec
