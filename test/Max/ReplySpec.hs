@@ -253,6 +253,31 @@ spec = do
       parseReplyTokens "这是 [image] 标记"
         `shouldBe` (Nothing, [PieceText "这是 [image] 标记"])
 
+    -- Verbatim from production, all four of the last thirty days.  minimax-m3
+    -- drops the closing bracket on a streamed reply; 0cd74bb established that
+    -- for [silence and left these because a bare token mid-prose can be
+    -- deliberate.  At the end of the text there is no prose for it to be
+    -- deliberate in, and two of these were the entire message.
+    it "reads a send token that ran out of text before its bracket" $ do
+      parseReplyTokens "清者自清呢，这就绷不住了？[face#270"
+        `shouldBe` (Nothing, [PieceText "清者自清呢，这就绷不住了？", PieceFace 270])
+      parseReplyTokens "[sticker#2855" `shouldBe` (Nothing, [PieceSticker 2855])
+      parseReplyTokens "[sticker#244" `shouldBe` (Nothing, [PieceSticker 244])
+      parseReplyTokens "看这张 [image#123.2"
+        `shouldBe` (Nothing, [PieceText "看这张 ", PieceImage 123 (Just 2)])
+
+    -- The other half of the same rule, and the reason it is only the end.
+    it "leaves an unclosed token with text after it exactly as written" $ do
+      parseReplyTokens "看 [face#270 和别的"
+        `shouldBe` (Nothing, [PieceText "看 [face#270 和别的"])
+      -- Still a whole token plus prose about brackets, not two repairs.
+      parseReplyTokens "[face#270] 后面还有 ["
+        `shouldBe` (Nothing, [PieceFace 270, PieceText " 后面还有 ["])
+
+    it "does not invent an id for an opener that ran out before its digits" $ do
+      parseReplyTokens "话说到一半 [face#" `shouldBe` (Nothing, [PieceText "话说到一半 [face#"])
+      parseReplyTokens "[sticker#" `shouldBe` (Nothing, [PieceText "[sticker#"])
+
     it "keeps the first reply id when several appear" $
       parseReplyTokens "[reply#1] a [reply#2] b"
         `shouldBe` (Just 1, [PieceText " a  b"])

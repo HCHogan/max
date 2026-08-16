@@ -282,6 +282,25 @@ matchToken t =
       Just (':', r') -> case T.breakOn "]" r' of
         (_, close) | not (T.null close) -> Just (T.drop 1 close)
         _ -> Nothing
+      -- Running out of text closes the token.  Streamed replies lose that
+      -- last character often enough to matter, and 'Max.Handler.parseSilence'
+      -- already repairs it for the opt-out marker ('0cd74bb'); that commit
+      -- left the send tokens alone because "a bare token mid-prose can be
+      -- deliberate in a way a bare silence marker cannot".  It can — which is
+      -- why this is only the end of the text, where there is no prose for it
+      -- to be deliberate in.  Every production case had that shape: four in
+      -- thirty days, two of them a whole message that was nothing but a
+      -- broken token, and the id was complete in all four.
+      --
+      -- Nothing arrives after this to change the reading.  A chunk mid-stream
+      -- ends at a blank line by construction ('readyPrefix' emits only up to
+      -- one), so a token still being streamed is in the held remainder rather
+      -- than at this boundary, and cannot be closed early on a partial id.
+      --
+      -- Deliberately not extended to 'descClose': the id slot holding prose
+      -- is the one variant where the closing bracket is doing real work, and
+      -- there is no evidence of it losing one.
+      Nothing -> Just ""
       _ -> Nothing
     -- Caption text in the id slot: short, single-line, no nested
     -- bracket.  Deliberately narrow — anything wider risks eating a

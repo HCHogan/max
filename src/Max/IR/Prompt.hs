@@ -150,6 +150,13 @@ parseModelChunk roster t0 =
                in if T.null close
                     then Nothing
                     else Just (principal, fromMaybe rosterDisplay (nonBlank caption), T.drop 1 close)
+            -- Running out of text closes it, for the reason and under the
+            -- narrowness argued at 'Max.Reply.matchToken'.  A mention has not
+            -- been seen to lose its bracket in production the way a face and a
+            -- sticker have, but it is written by the same models through the
+            -- same stream, and the leak it would make is worse: an @ that
+            -- reaches nobody, rendered as the literal id of a person.
+            Nothing -> Just (principal, rosterDisplay, "")
             _ -> Nothing
 
     flipped = [(principal, label) | (label, principal) <- roster.names]
