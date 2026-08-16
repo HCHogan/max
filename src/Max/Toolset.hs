@@ -24,6 +24,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Blob (Blob)
@@ -37,6 +38,7 @@ import Max.Effects.Tools
     ToolAuthority (..),
     ToolCatalog,
     ToolCatalogError,
+    ToolDeadline (..),
     Tool (..),
     ToolDefinition (..),
     ToolEffect (..),
@@ -81,6 +83,7 @@ allToolsFor ::
     Http :> es,
     Embedding :> es,
     Log :> es,
+    Concurrent :> es,
     PlatformApi :> es,
     Outbound :> es,
     ToolOutput :> es,
@@ -277,8 +280,17 @@ toolInventory =
     always (definition "plan_run" [EffectRead "network.search", EffectRead "conversation.db"] SequentialOnly RetryUnsafe [CurrentConversation]),
     always (readTool "view_bilibili" ["network.bilibili"] [CurrentConversation]),
     always (writeTool "sandbox_create" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
-    always (writeTool "sandbox_exec" ["sandbox.process", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
-    always (statefulReadTool "nix_search" ["sandbox.process", "network.nix"] [CurrentConversation, ProcessResource "sandbox"]),
+    -- The model picks this one's timeout itself, clamped to ten minutes, and
+    -- 'timeout --preserve-status' enforces it inside the container.  What that
+    -- cannot bound is the host side: 'docker exec' wedging leaves the call
+    -- hanging with the command already finished or never started.  So this is
+    -- the container's own ceiling plus enough slack to be sure the difference
+    -- is docker's and not the command's.  It sits above the turn watchdog on
+    -- purpose — for a front-model turn that watchdog fires first, and this is
+    -- here for the plan executor, which has no such thing over it.
+    always (withDeadline 660 (writeTool "sandbox_exec" ["sandbox.process", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"])),
+    -- Same container mechanism, fixed 120s inside; the slack is the same idea.
+    always (withDeadline 180 (statefulReadTool "nix_search" ["sandbox.process", "network.nix"] [CurrentConversation, ProcessResource "sandbox"])),
     always (statefulReadTool "sandbox_list" ["sandbox.registry"] [CurrentConversation, ProcessResource "sandbox"]),
     always (writeTool "sandbox_destroy" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
     always (statefulReadTool "sandbox_read_file" ["sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"]),
@@ -315,8 +327,26 @@ definition name effects parallelism retry authorities =
       tdParallelism = parallelism,
       tdRetryClass = retry,
       tdAuthorities = Set.fromList authorities,
+      tdDeadline = defaultToolDeadline,
       tdFailuresPrecedeEffects = False
     }
+
+-- | What a tool gets unless it says otherwise.
+--
+-- Sized off what the catalog actually does rather than off a round number.
+-- Over thirty days of production every tool but three finished inside ten
+-- seconds at its worst; the three that did not say so below.  So this is not
+-- a performance budget — it is the point past which a tool is not slow, it is
+-- stuck, and the alternatives to noticing that are all worse: the caller waits
+-- on the unbounded HTTP paths (browser RPC, and the byte fetches behind
+-- @view_image@ and friends) until the turn's own watchdog kills the whole
+-- turn, several minutes later, with nothing to show the model.
+defaultToolDeadline :: ToolDeadline
+defaultToolDeadline = ToolDeadline 120
+
+-- | Override for the tools whose work is legitimately long.
+withDeadline :: Int -> ToolDefinition -> ToolDefinition
+withDeadline seconds definition' = definition' {tdDeadline = ToolDeadline seconds}
 
 -- | Record that a tool has been read and every error path in it precedes every
 -- effect, so a rejection can be reported as a plain failure the model may fix
@@ -368,11 +398,18 @@ reflectTool :: Text -> ToolDefinition
 reflectTool name =
   definition name [EffectReflect] SequentialOnly RetryUnsafe [CurrentConversation]
 
+-- | Browser calls carry the catalog's only genuinely unbounded wait: the MCP
+-- client sets no response timeout and inherits none from the manager, so a
+-- browser container that stops answering never returns.  The bound is set off
+-- the worst real navigation observed (193s, a page that took three minutes to
+-- settle) rather than the median (7s), because a slow page is the normal case
+-- this must not interrupt.
 browserTool :: Text -> ToolDefinition
 browserTool name =
-  definition
-    name
-    [EffectWrite "browser.session", EffectRead "network.web"]
-    SequentialOnly
-    RetryUnsafe
-    [CurrentConversation, ProcessResource "browser"]
+  withDeadline 240 $
+    definition
+      name
+      [EffectWrite "browser.session", EffectRead "network.web"]
+      SequentialOnly
+      RetryUnsafe
+      [CurrentConversation, ProcessResource "browser"]

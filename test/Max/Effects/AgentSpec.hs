@@ -33,6 +33,7 @@ import Max.Effects.Tools
   ( SchemaVersion (..),
     Tool (..),
     ToolAuthority (..),
+    ToolDeadline (..),
     ToolDefinition (..),
     ToolEffect (..),
     ToolParallelism (..),
@@ -135,6 +136,7 @@ echoDefinition =
       tdParallelism = ParallelSafe,
       tdRetryClass = RetrySafe,
       tdAuthorities = Set.singleton CurrentConversation,
+      tdDeadline = ToolDeadline 30,
       tdFailuresPrecedeEffects = False
     }
 
@@ -307,6 +309,7 @@ spec = describe "Agent full loop" $ do
               tdParallelism = SequentialOnly,
               tdRetryClass = RetryUnsafe,
               tdAuthorities = Set.singleton CurrentConversation,
+              tdDeadline = ToolDeadline 30,
               tdFailuresPrecedeEffects = False
             }
         twoCallLLM =

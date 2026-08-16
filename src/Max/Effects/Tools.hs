@@ -21,6 +21,7 @@ module Max.Effects.Tools
     ToolParallelism (..),
     ToolRetryClass (..),
     ToolAuthority (..),
+    ToolDeadline (..),
     ToolDefinition (..),
     CatalogTool (..),
     ToolCatalog,
@@ -54,6 +55,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
+import Effectful.Concurrent (Concurrent, threadDelay)
+import Effectful.Concurrent.Async (race)
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Util (trySync)
@@ -100,6 +103,23 @@ data ToolRetryClass
   | RetryUnsafe
   deriving stock (Show, Eq, Ord)
 
+-- | Start-to-close: how long one call of this tool may run before the kernel
+-- stops waiting for it.
+--
+-- Declared per tool because there is no one number.  Production spans four
+-- orders of magnitude in the same catalog — @set_reminder@ finishes in
+-- milliseconds, @sandbox_exec@ is allowed to ask for ten minutes — so a single
+-- global bound would either be under the legitimate maximum or so far above it
+-- that it bounds nothing.
+--
+-- Temporal's word for this is start-to-close, and its reasoning applies
+-- unchanged: the layer above cannot detect a silently wedged worker, so it
+-- depends on this to force the call to end.  The turn's silence watchdog is
+-- the layer above here, and it can only kill the whole turn; this ends one
+-- call and hands the model something it can act on.
+newtype ToolDeadline = ToolDeadline {toolDeadlineSeconds :: Int}
+  deriving stock (Show, Eq, Ord)
+
 -- | Authority the tool runner may consume.  Conversation authority is minted
 -- from the current turn; it is never reconstructed from model arguments.
 data ToolAuthority
@@ -117,6 +137,8 @@ data ToolDefinition = ToolDefinition
     tdParallelism :: !ToolParallelism,
     tdRetryClass :: !ToolRetryClass,
     tdAuthorities :: !(Set ToolAuthority),
+    -- | How long this tool may run before the kernel stops waiting.
+    tdDeadline :: !ToolDeadline,
     -- | An audited promise that this tool performs no effect on any path that
     -- returns an error — argument checks, permission checks and lookups all
     -- happen before the first write or send.
@@ -243,6 +265,7 @@ validateDefinition :: ToolDefinition -> Either ToolCatalogError ()
 validateDefinition definition
   | T.null (T.strip definition.tdRef.unToolRef) = bad "tool ref is blank"
   | definition.tdSchemaVersion.unSchemaVersion <= 0 = bad "schema version must be positive"
+  | definition.tdDeadline.toolDeadlineSeconds <= 0 = bad "start-to-close deadline must be positive"
   | definition.tdParallelism == ParallelSafe && any isMutating definition.tdEffects =
       bad "mutating, sending, LLM, or reflective tools cannot declare ParallelSafe"
   | definition.tdRetryClass == RetrySafe && any isMutating definition.tdEffects =
@@ -391,6 +414,7 @@ type instance DispatchOf Tools = Dynamic
 
 runTools ::
   forall es a.
+  Concurrent :> es =>
   ToolCatalog es ->
   Eff (Tools : es) a ->
   Eff es a
@@ -404,20 +428,28 @@ runTools (ToolCatalog byRef) = interpret $ \_ -> \case
       Right () -> execute args registered
   where
     execute args registered = do
-      attempted <- trySync (registered.rtRun args)
+      attempted <- trySync (race (threadDelay deadlineMicros) (registered.rtRun args))
       pure $ case attempted of
         -- A thrown exception is never covered by the pre-effect promise: the
         -- tool did not choose to stop, so it may have died between issuing a
         -- write and hearing back about it.
         Left exception -> failure False "exception" (T.pack (show exception))
-        -- A returned error is the tool deciding to stop, which is the case the
-        -- promise is about.
-        Right (Left message) -> failure definition.tdFailuresPrecedeEffects "tool_error" message
-        Right (Right value)
+        -- Neither is running out of time, and for the same reason twice over:
+        -- the tool did not choose to stop, and it was cut off at a moment
+        -- nobody picked.  Even a tool that has been audited as failing before
+        -- its effects gets no credit here, because this is not one of its
+        -- failure paths.
+        Right (Left ()) ->
+          failure False "timeout" ("工具执行超时（" <> T.pack (show seconds) <> " 秒）")
+        Right (Right (Left message)) ->
+          failure definition.tdFailuresPrecedeEffects "tool_error" message
+        Right (Right (Right value))
           | hasCommitEffects definition -> ToolCommitted value
           | otherwise -> ToolSucceeded value
       where
         definition = registered.rtView.ctDefinition
+        seconds = definition.tdDeadline.toolDeadlineSeconds
+        deadlineMicros = seconds * 1_000_000
         failure precedesEffects code message =
           let fault = ToolFault code message definition.tdRetryClass
            in if hasCommitEffects definition && not precedesEffects

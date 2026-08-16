@@ -17,6 +17,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
+import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Log (Log, LogLevel (LogAttention), runLog)
 import Max.DB.Plan (PlanId (..), PlanOrdinal (..), PlanRef (..), PlanStatus (..), Revision (..), StoredPlan (..))
 import Max.Plan.Execute (ExecState (..))
@@ -24,6 +25,7 @@ import Max.Effects.Tools
   ( SchemaVersion (..),
     Tool (..),
     ToolAuthority (..),
+    ToolDeadline (..),
     ToolDefinition (..),
     ToolEffect (..),
     ToolParallelism (..),
@@ -41,7 +43,7 @@ import Test.Hspec
 
 -- | Stand-ins for the two tools 'Max.Plan.Catalog' declares plannable, plus one
 -- that is not, so "only plannable tools are reachable" has something to fail on.
-fakeTools :: IORef [Text] -> [Tool '[Log, IOE]]
+fakeTools :: IORef [Text] -> [Tool '[Log, Concurrent, IOE]]
 fakeTools calls =
   [ recorded
       "web_search"
@@ -82,6 +84,7 @@ definitions =
           tdParallelism = SequentialOnly,
           tdRetryClass = RetrySafe,
           tdAuthorities = Set.singleton CurrentConversation,
+          tdDeadline = ToolDeadline 30,
           tdFailuresPrecedeEffects = False
         }
 
@@ -95,7 +98,7 @@ invoke name args = do
 
 -- | A journal that writes nothing, which is what a dispatch with no durable
 -- turn gets.
-nothingJournal :: PlanJournal '[Log, IOE]
+nothingJournal :: PlanJournal '[Log, Concurrent, IOE]
 nothingJournal =
   PlanJournal
     { pjRecord = \_ _ -> pure Nothing,
@@ -107,14 +110,14 @@ nothingJournal =
       pjSettle = \_ _ -> pure ()
     }
 
-runToolWith :: PlanJournal '[Log, IOE] -> IORef [Text] -> Text -> Value -> IO (Either Text Value)
+runToolWith :: PlanJournal '[Log, Concurrent, IOE] -> IORef [Text] -> Text -> Value -> IO (Either Text Value)
 runToolWith journal calls name args = do
   let tools = planToolsFor journal definitions (fakeTools calls)
   case [t | t <- tools, t.toolName == name] of
     [] -> expectationFailure ("no such plan tool: " <> show name) >> error "unreachable"
     tool : _ ->
       withCompactLogger ColorNever Nothing $ \logger ->
-        runEff . runLog "plan-test" logger LogAttention $ tool.toolRun args
+        runEff . runConcurrent . runLog "plan-test" logger LogAttention $ tool.toolRun args
 
 field :: Text -> Value -> Maybe Value
 field key (Object o) = KeyMap.lookup (Key.fromText key) o

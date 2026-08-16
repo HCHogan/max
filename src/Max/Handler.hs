@@ -1337,6 +1337,7 @@ resumeSuspended ::
     Http :> es,
     Embedding :> es,
     Log :> es,
+    Concurrent :> es,
     WithConnection :> es,
     PlatformApi :> es,
     Outbound :> es,

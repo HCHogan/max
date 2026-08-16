@@ -6,6 +6,7 @@ import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Effectful (liftIO, runEff)
+import Effectful.Concurrent (runConcurrent, threadDelay)
 import Max.Effects.LLM (ToolSpec (..))
 import Max.Effects.Tools
 import Max.Toolset (toolAllowedByEffectCeiling)
@@ -32,6 +33,7 @@ definition ref effects parallelism retry =
       tdParallelism = parallelism,
       tdRetryClass = retry,
       tdAuthorities = Set.singleton CurrentConversation,
+      tdDeadline = ToolDeadline 30,
       tdFailuresPrecedeEffects = False
     }
 
@@ -74,7 +76,7 @@ spec = describe "validated tool kernel" $ do
     called <- newIORef False
     let runner = readTool {toolRun = \_ -> liftIO (writeIORef called True) >> pure (Right (object []))}
     catalog <- expectCatalog (buildToolCatalog [readDefinition] [runner])
-    outcome <- runEff . runTools catalog $ invokeTool "read" (object ["value" .= (0 :: Int)])
+    outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (0 :: Int)])
     outcome `shouldSatisfy` isRejected
     readIORef called `shouldReturn` False
 
@@ -93,8 +95,8 @@ spec = describe "validated tool kernel" $ do
             SequentialOnly
             RetryUnsafe
     catalog <- expectCatalog (buildToolCatalog [readDefinition, writeDefinition] [failing "read", failing "write"])
-    readOutcome <- runEff . runTools catalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
-    writeOutcome <- runEff . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
+    readOutcome <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
+    writeOutcome <- runEff . runConcurrent . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
     readOutcome `shouldSatisfy` isFailedBeforeEffect
     writeOutcome `shouldSatisfy` isOutcomeUnknown
     outcomeResult writeOutcome `shouldBe` Left "boom (outcome unknown; not retried)"
@@ -114,7 +116,7 @@ spec = describe "validated tool kernel" $ do
           (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)
             {tdFailuresPrecedeEffects = True}
     catalog <- expectCatalog (buildToolCatalog [auditedWrite] [rejecting])
-    outcome <- runEff . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
+    outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
     outcome `shouldSatisfy` isFailedBeforeEffect
     outcomeResult outcome `shouldBe` Left "bad args"
 
@@ -132,12 +134,62 @@ spec = describe "validated tool kernel" $ do
           (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)
             {tdFailuresPrecedeEffects = True}
     catalog <- expectCatalog (buildToolCatalog [auditedWrite] [throwing])
-    outcome <- runEff . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
+    outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
     outcome `shouldSatisfy` isOutcomeUnknown
+
+  it "stops waiting for a tool that overran its declared deadline" $ do
+    -- Issue #17.B.  The catalog's slowest legitimate paths — browser RPC, the
+    -- byte fetches behind view_image — carry no timeout of their own, so a
+    -- container that stops answering used to be waited on until the turn's own
+    -- watchdog killed the whole turn several minutes later, with nothing to
+    -- hand the model.
+    finished <- newIORef False
+    let wedged =
+          Tool
+            { toolName = "read",
+              toolDescription = "never answers",
+              toolSchema = schema,
+              toolRun = \_ -> do
+                threadDelay 60_000_000
+                liftIO (writeIORef finished True)
+                pure (Right (object []))
+            }
+        impatient = readDefinition {tdDeadline = ToolDeadline 1}
+    catalog <- expectCatalog (buildToolCatalog [impatient] [wedged])
+    outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
+    -- Read-only, so there is nothing it could have half-done: a plain failure
+    -- the model may act on.
+    outcome `shouldSatisfy` isFailedBeforeEffect
+    -- And the runner really was cut off rather than left running behind it.
+    readIORef finished `shouldReturn` False
+
+  it "keeps an overrun write unknown however well audited it is" $ do
+    -- Running out of time is not one of the tool's failure paths, so the
+    -- pre-effect audit says nothing about it: the call was cut off at a moment
+    -- nobody chose, and it may have been mid-write.
+    let wedged =
+          Tool
+            { toolName = "write",
+              toolDescription = "never answers",
+              toolSchema = schema,
+              toolRun = \_ -> threadDelay 60_000_000 >> pure (Right (object []))
+            }
+        auditedWrite =
+          (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)
+            { tdFailuresPrecedeEffects = True,
+              tdDeadline = ToolDeadline 1
+            }
+    catalog <- expectCatalog (buildToolCatalog [auditedWrite] [wedged])
+    outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
+    outcome `shouldSatisfy` isOutcomeUnknown
+
+  it "refuses a definition whose deadline is not a positive number of seconds" $
+    buildToolCatalog [readDefinition {tdDeadline = ToolDeadline 0}] [readTool]
+      `shouldSatisfy` isInvalidMetadata
 
   it "publishes the same validated catalog to model specs and inspection" $ do
     catalog <- expectCatalog (buildToolCatalog [readDefinition] [readTool])
-    (specs, views) <- runEff . runTools catalog $ (,) <$> listToolSpecs <*> listCatalogTools
+    (specs, views) <- runEff . runConcurrent . runTools catalog $ (,) <$> listToolSpecs <*> listCatalogTools
     map (.specName) specs `shouldBe` ["read"]
     map (.ctDefinition.tdRef) views `shouldBe` [ToolRef "read"]
     map (.ctSchemaHash) views `shouldSatisfy` notElem (SchemaHash "")

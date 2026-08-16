@@ -72,6 +72,7 @@ import Crypto.Hash.SHA256 qualified as SHA256
 import Control.Exception (SomeException)
 import Control.Monad (foldM)
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Log (Log, logAttention, logInfo)
 import Effectful.PostgreSQL (WithConnection)
 import Data.Foldable (for_)
@@ -139,7 +140,7 @@ import Max.Util (catchSync, tshow)
 -- the same effect row, through the same 'runTools' — and cannot reach
 -- @plan_run@, because the subset never contains it.
 planToolsFor ::
-  Log :> es =>
+  (Log :> es, Concurrent :> es) =>
   PlanJournal es ->
   [ToolDefinition] ->
   [Tool es] ->
@@ -517,7 +518,7 @@ schemaOfValue = \case
     mergeSchema _ _ = Nothing
 
 runTool ::
-  Log :> es =>
+  (Log :> es, Concurrent :> es) =>
   PlanJournal es ->
   Map ToolRef CatalogEntry ->
   ToolCatalog es ->

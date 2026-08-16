@@ -25,6 +25,7 @@ import Max.Effects.Tools
   ( SchemaVersion (..),
     Tool (..),
     ToolAuthority (..),
+    ToolDeadline (..),
     ToolDefinition (..),
     ToolParallelism (..),
     ToolRef (..),
@@ -107,6 +108,7 @@ definitionOf name =
       tdParallelism = ParallelSafe,
       tdRetryClass = RetrySafe,
       tdAuthorities = Set.singleton CurrentConversation,
+      tdDeadline = ToolDeadline 30,
       tdFailuresPrecedeEffects = False
     }
 

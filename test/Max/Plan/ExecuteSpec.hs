@@ -9,6 +9,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Vector qualified as V
 import Effectful (liftIO, runEff)
+import Effectful.Concurrent (runConcurrent)
 import Max.Effects.Tools
   ( SchemaVersion (..),
     Tool (..),
@@ -74,6 +75,7 @@ searchDefinition =
       tdParallelism = ParallelSafe,
       tdRetryClass = RetrySafe,
       tdAuthorities = Set.empty,
+      tdDeadline = Tools.ToolDeadline 30,
       tdFailuresPrecedeEffects = False
     }
 
@@ -86,6 +88,7 @@ replyDefinition =
       tdParallelism = SequentialOnly,
       tdRetryClass = RetryUnsafe,
       tdAuthorities = Set.singleton Tools.CurrentConversation,
+      tdDeadline = Tools.ToolDeadline 30,
       tdFailuresPrecedeEffects = False
     }
 
@@ -165,7 +168,7 @@ run answers plan = do
                 pure (fromMaybe (Right Null) (lookup "reply" answers))
             }
         ]
-  result <- runEff . runTools catalog $ executePlan executionEnv plan
+  result <- runEff . runConcurrent . runTools catalog $ executePlan executionEnv plan
   invoked <- readIORef seen
   pure (result, invoked)
 
@@ -397,7 +400,7 @@ spec = do
                 }
             ]
       result <-
-        runEff . runTools catalog $
+        runEff . runConcurrent . runTools catalog $
           executePlan noSends (valid "let sent = reply@1({ text: \"hi\" })\ndone \"ok\"")
       invoked <- readIORef seen
       -- Nothing was sent: the ceiling is checked before the call, not after.
