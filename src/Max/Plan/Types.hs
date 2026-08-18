@@ -434,13 +434,24 @@ data JoinPolicy
 -- pure, free to run — and the observer is a language model, which is neither.
 -- Collapsing them would price every observation at a join, or every join at a
 -- model call.
+-- One constructor, for the same reason 'JoinPolicy' has one — and it did not
+-- start that way.  @each@ (wake on every completion, so the plan can be
+-- rewritten partway through) was parsed, stored, rendered, and then never acted
+-- on, while the guide handed to the model said in as many words that writing it
+-- would get the model woken for each child.  A grammar that accepts a word and
+-- ignores it is worse than one that has never heard of it: the model cannot see
+-- that it did not happen.
+--
+-- Implementing it is not wiring: the wake is exactly-once by schema —
+-- @plans.wake_turn_id@ is one nullable column and admission only matches while
+-- it is NULL — so @each@ needs that single column to become a ledger keyed by
+-- child, keeping admission as the idempotency point.  Worth doing when
+-- something wants it.  Nothing did: in production the plan machinery has opened
+-- one plan, ever.
 data WatchPolicy
   = -- | Only a child that failed is worth interrupting for.  The quiet default:
     -- a fork whose children all succeed costs no model call at all.
     WatchOnFailure
-  | -- | Wake on every completion.  The continuation still waits for the join;
-    -- what this buys is the chance to rewrite the plan partway through.
-    WatchEach
   deriving stock (Show, Eq, Ord)
 
 -- | A set of subgoals opened at once, and how their completion is handled.
@@ -987,15 +998,16 @@ instance FromJSON JoinPolicy where
     other -> unknownTag "JoinPolicy" other
 
 instance ToJSON WatchPolicy where
-  toJSON =
-    toJSON @Text . \case
-      WatchOnFailure -> "on_failure"
-      WatchEach -> "each"
+  toJSON = toJSON @Text . \case WatchOnFailure -> "on_failure"
 
+-- @each@ is refused rather than read as @on_failure@.  A checkpoint carrying it
+-- was written by a binary that promised something this one does not do, and
+-- quietly downgrading it is the same silent divergence that made the word worth
+-- removing.  Refusing means the plan worker leaves it claimed and says so,
+-- which is what it already does for anything it cannot read.
 instance FromJSON WatchPolicy where
   parseJSON = withText "WatchPolicy" $ \case
     "on_failure" -> pure WatchOnFailure
-    "each" -> pure WatchEach
     other -> unknownTag "WatchPolicy" other
 
 -- Children encode as an ordered list rather than an object keyed by binder:

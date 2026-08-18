@@ -271,11 +271,7 @@ joinPolicyP :: P JoinPolicy
 joinPolicyP = JoinAll <$ keyword "all"
 
 watchPolicyP :: P WatchPolicy
-watchPolicyP =
-  choice
-    [ WatchOnFailure <$ keyword "on-failure",
-      WatchEach <$ keyword "each"
-    ]
+watchPolicyP = WatchOnFailure <$ keyword "on-failure"
 
 guardP :: P Plan
 guardP = do

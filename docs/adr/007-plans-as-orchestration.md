@@ -2,9 +2,18 @@
 
 - Status: Accepted and implemented through the production runtime contracts in
   step 13; supersedes the parts of ADR 002 listed under "What this retires"
-  below. `JoinAll` remains the only join policy and `WatchEach` remains parsed
-  but inactive.
-- Date: 2026-08-10; production runtime contracts 2026-08-11.
+  below. `JoinAll` remains the only join policy. `WatchEach` was removed from
+  the grammar on 2026-08-16: it had been parsed, stored and rendered while the
+  guide told the model that writing it would get the model woken per child, and
+  a word accepted and ignored is worse than one the grammar has never heard of.
+  The `watch` position survives with `on-failure` alone, for the reason the
+  `join` position survives with `all` alone — adding the other value later is a
+  new word rather than a new shape. The two-policy argument below stands and is
+  what the position is being held open for; §553's split by latency is true as
+  of 2026-08-16, when a fork child stopped being limited to the plannable
+  catalog.
+- Date: 2026-08-10; production runtime contracts 2026-08-11; issue #17
+  follow-through 2026-08-16.
 
 ## Context
 

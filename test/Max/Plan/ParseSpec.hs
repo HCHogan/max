@@ -119,9 +119,16 @@ spec = do
       case withPolicies "" of
         Right (Fork fork _) -> (fork.fnJoin, fork.fnWatch) `shouldBe` (JoinAll, WatchOnFailure)
         other -> expectationFailure ("unexpected plan shape: " <> show other)
-      case withPolicies " join all watch each" of
-        Right (Fork fork _) -> (fork.fnJoin, fork.fnWatch) `shouldBe` (JoinAll, WatchEach)
+      case withPolicies " join all watch on-failure" of
+        Right (Fork fork _) -> (fork.fnJoin, fork.fnWatch) `shouldBe` (JoinAll, WatchOnFailure)
         other -> expectationFailure ("unexpected plan shape: " <> show other)
+      -- @watch each@ was accepted, stored, rendered and never acted on, while
+      -- the guide told the model it would be woken for each child.  Refusing it
+      -- is what makes the grammar and the guide say the same thing: the model
+      -- can see that it did not get what it asked for.
+      withPolicies " watch each" `shouldSatisfy` \case
+        Left _ -> True
+        Right _ -> False
 
     it "reads a subgoal list with or without commas between its entries" $
       -- Entries already end in a brace, so separators are noise; a model that

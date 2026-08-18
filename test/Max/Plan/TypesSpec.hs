@@ -55,7 +55,7 @@ fanOut =
     ForkNode
       { fnChildren = [(Binder "jia", goal), (Binder "yi", goal {goalObjective = "查乙"})],
         fnJoin = JoinAll,
-        fnWatch = WatchEach
+        fnWatch = WatchOnFailure
       }
     (Done (EConcat [EVar (Binder "jia"), EVar (Binder "yi")]))
 
