@@ -192,7 +192,15 @@ spec = do
       -- The default has to stay refusal: an undeclared tool is one nobody has
       -- said anything about, and Nothing is that, rather than an empty effect
       -- set every budget would admit.
-      childReachableEffects (definitionOf "sandbox_exec") `shouldBe` Nothing
+      childReachableEffects (definitionOf "find_stickers") `shouldBe` Nothing
+
+    it "makes running arbitrary code cost the open network in the budget" $
+      -- A sandbox with a network can reach anything from inside a shell
+      -- command, and the network mode is per-sandbox configuration this static
+      -- table cannot see.  A budget that granted only the process resource
+      -- would be admitting more than it said.
+      childReachableEffects (definitionOf "sandbox_exec")
+        `shouldBe` Just (Set.fromList [EffWrite (ProcessScope "sandbox"), EffRead (ExternalScope "network")])
 
     it "refuses anything that sends, whatever else is declared about it" $ do
       -- Structural rather than by leaving it out of the table: the invariant is

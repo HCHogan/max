@@ -257,7 +257,44 @@ toolPlanEffects =
       ( ToolRef "view_avatar",
         Set.fromList [EffRead CurrentConversation, EffRead (ExternalScope "platform")]
       ),
-      (ToolRef "view_bilibili", Set.singleton (EffRead (ExternalScope "bilibili")))
+      (ToolRef "view_bilibili", Set.singleton (EffRead (ExternalScope "bilibili"))),
+      -- The sandbox set, on the same argument as the browser one below: these
+      -- tools already declare @ProcessResource "sandbox"@ as their authority,
+      -- so @ProcessScope "sandbox"@ restates a hand-made declaration rather
+      -- than inventing a second opinion about what a sandbox is.
+      --
+      -- Not 'SandboxScope', which was the first answer and the wrong one.  Its
+      -- 'Text' names /which/ sandbox, and a child picks one at runtime by
+      -- argument, so nothing static can fill it in — but the question was never
+      -- this layer's to answer.  'Max.Sandbox.Registry.listSandbox' already
+      -- refuses a handle belonging to another conversation, and says so:
+      -- /"Wrong-group requests get 'Nothing' (so we don't leak cross-group
+      -- sandbox ids)"/.  What a budget needs to express is whether this child
+      -- may use the conversation's sandboxes at all, and that is a process
+      -- resource.  'SandboxScope' keeps its meaning for a plan expression that
+      -- has bound a specific handle.
+      (ToolRef "sandbox_list", Set.singleton (EffRead (ProcessScope "sandbox"))),
+      (ToolRef "sandbox_read_file", Set.singleton (EffRead (ProcessScope "sandbox"))),
+      (ToolRef "sandbox_create", Set.singleton (EffWrite (ProcessScope "sandbox"))),
+      (ToolRef "sandbox_destroy", Set.singleton (EffWrite (ProcessScope "sandbox"))),
+      (ToolRef "sandbox_write_file", Set.singleton (EffWrite (ProcessScope "sandbox"))),
+      -- Reads a blob this conversation produced and writes it into a sandbox.
+      ( ToolRef "import_file_to_sandbox",
+        Set.fromList [EffRead CurrentConversation, EffWrite (ProcessScope "sandbox")]
+      ),
+      -- Runs in the container, so it is also whatever the container can reach.
+      ( ToolRef "nix_search",
+        Set.fromList [EffRead (ProcessScope "sandbox"), EffRead (ExternalScope "nix")]
+      ),
+      -- The widest thing in the catalog, and declared that way on purpose.  A
+      -- sandbox with a network can reach anything from inside a shell command,
+      -- and the network mode is per-sandbox configuration rather than anything
+      -- this static declaration can see.  So a budget has to grant the open
+      -- network before a child may run arbitrary code — which is the
+      -- conservative reading and the one a reader would expect to be true.
+      ( ToolRef "sandbox_exec",
+        Set.fromList [EffWrite (ProcessScope "sandbox"), EffRead (ExternalScope "network")]
+      )
     ]
       <> [(ToolRef name, browserEffects) | name <- browserRefs]
 
@@ -299,14 +336,9 @@ browserRefs =
 -- back through @subgoal_return@ and reaches nobody directly, and it should not
 -- rest on a list staying correct.
 --
--- __The sandbox tools are absent, and not by oversight.__  They would need
--- 'SandboxScope', whose 'Text' names /which/ sandbox — and nothing static can
--- fill that in, because a child picks one at runtime by argument.  No
--- production code constructs that constructor today; the parser and one test
--- fixture are its only users.  Giving a child @sandbox_exec@ therefore needs a
--- way to say "the sandboxes of this conversation", which is a change to the
--- scope vocabulary and a decision worth making on its own rather than as a
--- string invented here.
+-- Together with the structural rules, this is what makes ADR 007 §553 true:
+-- Browser, Sandbox and Video are the three it names as belonging in children,
+-- and a goal that admits their effects can now have them.
 childReachableEffects :: ToolDefinition -> Maybe (Set PlanEffect)
 childReachableEffects definition
   | any isSend definition.tdEffects = Nothing
