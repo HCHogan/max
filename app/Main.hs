@@ -74,7 +74,6 @@ import Max.Tasks (newTaskRegistry)
 import Max.Toolset (allToolsFor)
 import Max.Util (trySync)
 import Max.WechatHook (wechatHookBackend, wechatHookWorker)
-import Max.Wechatpad (wechatpadBackend, wechatpadWorker)
 import Max.Worker (WorkerCriticality (..), withWorkers, worker)
 import OneBot.Event (Event)
 import OneBot.Server (Client, ServerConfig (..), runServer)
@@ -151,10 +150,6 @@ main = do
                     beEmbeddingEnabled = isJust mEmbed
                   }
               qqEdge = qqBackend clientRef
-              wechatEdges =
-                [ wechatpadBackend httpRuntime (runEff . runWithConnectionPool pool) wc
-                | Just wc <- [cfg.wechatpad]
-                ]
               wechatHookEdges =
                 [ wechatHookBackend httpRuntime (runEff . runWithConnectionPool pool) wh
                 | Just wh <- [cfg.wechathook]
@@ -162,14 +157,11 @@ main = do
               -- Every non-QQ backend the action router may resolve a target
               -- to.  Ownership stays canonical database state; this list only
               -- says which platforms this process can actually reach.
-              foreignEdges = wechatEdges <> wechatHookEdges
+              foreignEdges = wechatHookEdges
               deliveryTransports =
                 [oneBotDeliveryTransport PlatformQQ qqEdge]
                   <> [matrixDeliveryTransport httpRuntime matrixCfg | matrixCfg <- maybeToList cfg.matrix]
                   <> [iMessageDeliveryTransport httpRuntime iMessageCfg | iMessageCfg <- maybeToList cfg.imessage]
-                  <> [ oneBotDeliveryTransport PlatformWeChatPad backend
-                     | backend <- wechatEdges
-                     ]
                   <> [ oneBotDeliveryTransport PlatformWeChatHook backend
                      | backend <- wechatHookEdges
                      ]
@@ -394,9 +386,6 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
                ]
             <> [ worker "call-pruner" RestartableWorker (callPruner cfg.adminCallRetentionDays)
                | _ <- maybeToList cfg.admin
-               ]
-            <> [ worker "wechatpad" RestartableWorker (wechatpadWorker wc)
-               | wc <- maybeToList cfg.wechatpad
                ]
             <> [ worker "wechathook" RestartableWorker (wechatHookWorker httpRuntime wh)
                | wh <- maybeToList cfg.wechathook

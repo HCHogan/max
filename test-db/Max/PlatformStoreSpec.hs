@@ -1163,7 +1163,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         registerEndpoint
           EndpointRegistration
             { conversationId = conversation,
-              platform = PlatformWeChatPad,
+              platform = PlatformWeChatHook,
               nativeAccountId = NativeAccountId "wxid_max",
               accountDisplayName = Just "max",
               nativeConversationId = NativeConversationId "room@chatroom",

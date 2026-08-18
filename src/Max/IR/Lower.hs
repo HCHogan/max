@@ -399,7 +399,6 @@ platformDisplayLabel = \case
   -- job of this function.  They are separate platforms because their endpoints,
   -- capabilities and delivery evidence differ — none of which is visible in a
   -- transcript line.
-  PlatformWeChatPad -> "WeChat"
   PlatformWeChatHook -> "WeChat"
   PlatformCustom name -> name
 

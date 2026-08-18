@@ -211,7 +211,7 @@ codecCorpus =
           mention "张三",
           NText " ",
           NMedia (Just (blob "d")) (mkMeta MImage Nothing Nothing Nothing),
-          NEmote (Emote PlatformWeChatPad "wx:doge" Nothing Nothing)
+          NEmote (Emote PlatformWeChatHook "wx:doge" Nothing Nothing)
         ]
     )
   ]

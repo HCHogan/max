@@ -353,7 +353,7 @@ schedule (normally 2/8 seconds; Historian selects none), while streamed reply
 calls retry only before text or tool-call output becomes observable, using the
 longer 2/8/20/45/90-second schedule.
 
-The OneBot reverse WebSocket, WeChatPad inbound WebSocket, and browser page
+The OneBot reverse WebSocket and browser page
 traffic inside the camoufox container are not outbound HTTP clients and remain
 outside this runtime. Matrix and iMessage use `StandardPool`; future HTTP
 adapters must do the same. Any long-lived WebSocket transport remains a

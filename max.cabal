@@ -243,7 +243,6 @@ library
         Max.Tools.Video
         Max.Util
         Max.WechatHook
-        Max.Wechatpad
         Max.Worker
     other-modules:
         Max.ModelCatalog.Internal

@@ -35,7 +35,6 @@ import Max.WechatHook
     wechatHookContent,
     wechatHookInboundBody,
   )
-import Max.Wechatpad (parseFrameIds, wechatInboundBody, wechatpadCapabilities)
 import OneBot.Action (Action (..))
 import OneBot.Event (GroupMessage (..), Sender (..))
 import OneBot.Segment
@@ -51,38 +50,6 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
-  describe "wechatpad frame ids" $ do
-    it "advertises exactly its emit-only text contract" $
-      wechatpadCapabilities `shouldBe` textOnlyCaps
-
-    it "accepts numeric and wrapped ids without silently erasing them" $ do
-      parseFrameIds
-        ( object
-            [ "from_user_name" .= object ["str" .= ("room@chatroom" :: Text)],
-              "content" .= object ["str" .= ("wxid:\nhello" :: Text)],
-              "msg_id" .= (12345 :: Int),
-              "new_msg_id" .= object ["str" .= ("67890" :: Text)]
-            ]
-        )
-        `shouldBe` Just ("12345", 67890)
-
-    it "keeps non-text room events in canonical ingest instead of dropping them" $ do
-      wechatInboundBody "wxid_max" "Max" 3 "<img encrypted payload>"
-        `shouldBe` Body
-          [ NUnsupported
-              Unsupported
-                { source = "wechatpad:3",
-                  description = "微信图片消息",
-                  raw =
-                    Just
-                      ( object
-                          [ "msg_type" .= (3 :: Int),
-                            "content_preview" .= ("<img encrypted payload>" :: Text)
-                          ]
-                      )
-                }
-          ]
-
   describe "wechathook callback" $ do
     -- Images are possible only through the bridge, because the hook reads them
     -- off the Windows host's own disk.  Advertising the capability without one

@@ -77,7 +77,6 @@ import Max.ModelCatalog (ContextLimits (..), ModelCatalog, defaultContextLimits)
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
 import Max.Tools.Search (SearchConfig (..))
 import Max.WechatHook (WechatHookConfig (..))
-import Max.Wechatpad (WechatpadConfig (..))
 import OneBot.Server (ServerConfig (..))
 import OptEnvConf
 import Path (Abs, File, Path, toFilePath)
@@ -159,11 +158,7 @@ data AppConfig = AppConfig
     matrix :: !(Maybe MatrixConfig),
     -- | Standalone iMessage group through an authenticated Tailscale bridge.
     imessage :: !(Maybe IMessageConfig),
-    -- | WeChat backend over a WeChatPadPro relay; 'Nothing' = QQ
-    -- only.  Demo scope: whitelisted chatrooms, text in/out.
-    wechatpad :: !(Maybe WechatpadConfig),
-    -- | WeChat backend over a hooked Windows PC client.  Independent of
-    -- 'wechatpad': both may be configured, and each owns its own endpoints.
+    -- | WeChat backend over a hooked Windows PC client.
     wechathook :: !(Maybe WechatHookConfig),
     -- | Proactive-trigger intent classification; 'Nothing' disables
     -- it (the bot only answers @-mentions/quotes, as before).
@@ -404,7 +399,6 @@ appConfigParser usedRef =
         ]
     matrix <- subConfig "matrix" matrixParser
     imessage <- subConfig "imessage" iMessageParser
-    wechatpad <- subConfig "wechatpad" wechatpadParser
     wechathook <- subConfig "wechathook" wechatHookParser
     intent <- subConfig "intent" intentParser
     admin <- subConfig "admin" adminParser
@@ -853,76 +847,6 @@ iMessageParser = do
 
 -- | Enabled iff @intent.profile@ names an LLM profile; the numeric
 -- knobs have defaults so a one-line config turns the feature on.
--- | @wechatpad@ block: presence of @api_url@ enables the WeChat
--- backend.  已知风险：iPad 协议逆向，封号自担（跑小号）。
-wechatpadParser :: Parser (Maybe WechatpadConfig)
-wechatpadParser = do
-  mUrl <-
-    optional $
-      setting
-        [ help "WeChatPadPro base URL (presence enables the WeChat backend)",
-          reader str,
-          option,
-          long "wechatpad-api-url",
-          env "MAX_WECHATPAD_API_URL",
-          conf "api_url",
-          metavar "URL"
-        ]
-  authKey <-
-    setting
-      [ help "WeChatPadPro auth key",
-        reader str,
-        option,
-        long "wechatpad-auth-key",
-        env "MAX_WECHATPAD_AUTH_KEY",
-        conf "auth_key",
-        metavar "KEY",
-        value ""
-      ]
-  selfWxid <-
-    setting
-      [ help "The bot WeChat account's own wxid",
-        reader str,
-        option,
-        long "wechatpad-self-wxid",
-        env "MAX_WECHATPAD_SELF_WXID",
-        conf "self_wxid",
-        metavar "WXID",
-        value ""
-      ]
-  botName <-
-    setting
-      [ help "Display name used for @-detection in chatroom texts",
-        reader str,
-        option,
-        long "wechatpad-bot-name",
-        env "MAX_WECHATPAD_BOT_NAME",
-        conf "bot_name",
-        metavar "NAME",
-        value "Max"
-      ]
-  chatrooms <-
-    setting
-      [ help "Chatroom whitelist (xxx@chatroom ids, comma separated)",
-        reader (commaSeparatedList str),
-        option,
-        long "wechatpad-chatrooms",
-        env "MAX_WECHATPAD_CHATROOMS",
-        conf "chatrooms",
-        metavar "ID[,ID..]",
-        value []
-      ]
-  pure $ do
-    url <- mUrl
-    pure
-      WechatpadConfig
-        { wpApiUrl = url,
-          wpAuthKey = authKey,
-          wpSelfWxid = selfWxid,
-          wpBotName = botName,
-          wpChatrooms = chatrooms
-        }
-
 -- | @wechathook@ block: presence of @api_url@ enables the WeChat backend over
 -- a hooked Windows PC client.
 --
