@@ -334,15 +334,23 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
               (planWorker (maintenanceOwner <> "/plans") (planDriverFor httpRuntime)),
             worker "platform-delivery" RequiredWorker (deliveryWorker (maintenanceOwner <> "/delivery") deliveryTransports)
           ]
+        -- Restartable, not merely optional (issue #17.F).  Everything below is
+        -- an edge max can be without for a while: a homeserver, a bridge, a
+        -- caption backlog, the admin panel.  Their failures used to be fatal to
+        -- the process because every worker is linked, so each one had to
+        -- remember never to throw — and "Max.IMessage" records what forgetting
+        -- once cost.  The one exception is the drain, whose clean return is the
+        -- point of it.
         optionalWorkers =
           [ -- This one is always enabled, but unlike a permanent worker its
             -- clean return is intentional: it has already raised
-            -- UserInterrupt on main to start graceful unwinding.
+            -- UserInterrupt on main to start graceful unwinding.  Restarting it
+            -- would re-interrupt a process that is already on its way out.
             worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
           ]
             <> [ worker
                    "sandbox-gc"
-                   OptionalWorker
+                   RestartableWorker
                    ( forever $ do
                        threadDelay (60 * 60 * 1_000_000)
                        liftIO (reconcileSandboxes env.beSandboxes)
@@ -351,12 +359,12 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
                          logInfo "sandbox TTL GC" (object ["removed" .= removed])
                    )
                ]
-            <> [ worker "embeddings" OptionalWorker (embedWorker maintenanceOwner)
+            <> [ worker "embeddings" RestartableWorker (embedWorker maintenanceOwner)
                | env.beEmbeddingEnabled
                ]
             <> [ worker
                    "media-captions"
-                   OptionalWorker
+                   RestartableWorker
                    -- Two caption loops under one worker: stickers and
                    -- ordinary photos/videos poll separately, so a deep
                    -- sticker backlog cannot starve fresh chat media.
@@ -368,35 +376,35 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
                ]
             <> [ worker
                    "historian"
-                   OptionalWorker
+                   RestartableWorker
                    (historianWorker profile cfg.historianTimeoutSeconds cfg.llm cfg.timezone env.beTasks (defaultModelName cfg.llm) scheduler)
                | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beEpisodeScheduler)
                ]
-            <> [ worker "memory-dream" OptionalWorker (dreamWorker maintenanceOwner profile cfg.timezone)
+            <> [ worker "memory-dream" RestartableWorker (dreamWorker maintenanceOwner profile cfg.timezone)
                | profile <- maybeToList cfg.memoryExtractProfile
                ]
             <> [ worker
                    "intent"
-                   OptionalWorker
+                   RestartableWorker
                    (intentWorker intentCfg cfg.persona (defaultModelName cfg.llm) cfg.timezone env.beSessions (dispatchProactive (Just intentState)) intentState)
                | (intentCfg, intentState) <- maybeToList ((,) <$> cfg.intent <*> mIntentSt)
                ]
-            <> [ worker "admin-server" OptionalWorker (adminServer adminCfg env (modelProfileNames cfg.llm) buffer)
+            <> [ worker "admin-server" RestartableWorker (adminServer adminCfg env (modelProfileNames cfg.llm) buffer)
                | (adminCfg, buffer) <- maybeToList ((,) <$> cfg.admin <*> logBuf)
                ]
-            <> [ worker "call-pruner" OptionalWorker (callPruner cfg.adminCallRetentionDays)
+            <> [ worker "call-pruner" RestartableWorker (callPruner cfg.adminCallRetentionDays)
                | _ <- maybeToList cfg.admin
                ]
-            <> [ worker "wechatpad" OptionalWorker (wechatpadWorker wc)
+            <> [ worker "wechatpad" RestartableWorker (wechatpadWorker wc)
                | wc <- maybeToList cfg.wechatpad
                ]
-            <> [ worker "wechathook" OptionalWorker (wechatHookWorker httpRuntime wh)
+            <> [ worker "wechathook" RestartableWorker (wechatHookWorker httpRuntime wh)
                | wh <- maybeToList cfg.wechathook
                ]
-            <> [ worker "matrix" OptionalWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler)
+            <> [ worker "matrix" RestartableWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler)
                | matrixCfg <- maybeToList cfg.matrix
                ]
-            <> [ worker "imessage" OptionalWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler)
+            <> [ worker "imessage" RestartableWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler)
                | iMessageCfg <- maybeToList cfg.imessage
                ]
     withWorkers
