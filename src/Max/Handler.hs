@@ -173,7 +173,7 @@ import Max.DB.Plan
     startClaimedPlanChild,
   )
 import Max.Plan.Brief (renderPlanValue, subgoalBrief)
-import Max.Plan.Catalog (planCatalog)
+import Max.Plan.Catalog (childReachableEffects, planCatalog)
 import Max.Plan.Execute
   ( Deopt (..),
     ExecState,
@@ -1270,18 +1270,20 @@ childGrants env plan item =
         (Just plan.wpPlan.stToolGrants)
         (Just (SubgoalReturn (AgentTurnId 0) goal item.dpInputs))
     definitions = toolDefinitionsFor env plan.wpGroup caps
-    catalog = planCatalog definitions
     parentAllows definition =
       Map.lookup definition.tdRef.unToolRef plan.wpPlan.stToolGrants
         == Just (toolCatalogFingerprint [definition])
-    reachable entry =
-      Set.isSubsetOf entry.ceEffects goal.goalBudget.ebEffects
-        && Set.isSubsetOf entry.ceAuthorities goal.goalAuthority
+    -- Authorities come off the definition either way; only the effects needed
+    -- a judgement, and it is now one a tool can receive without anybody having
+    -- written down what it returns (issue #17.E).
+    reachable definition effects =
+      Set.isSubsetOf effects goal.goalBudget.ebEffects
+        && Set.isSubsetOf definition.tdAuthorities goal.goalAuthority
     allowed definition
       | definition.tdRef == ToolRef "subgoal_return" = True
       | not (parentAllows definition) = False
       | definition.tdRef `elem` [ToolRef "plan_guide", ToolRef "plan_run"] = True
-      | otherwise = maybe False reachable (Map.lookup definition.tdRef catalog)
+      | otherwise = maybe False (reachable definition) (childReachableEffects definition)
 
 -- | What a child is told, which is "Max.Plan.Brief"'s business rather than this
 -- module's: the words are the artifact under test, and answering what a real

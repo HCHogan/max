@@ -27,13 +27,14 @@ import Max.Effects.Tools
     ToolAuthority (..),
     ToolDeadline (..),
     ToolDefinition (..),
+    ToolEffect (..),
     ToolParallelism (..),
     ToolRef (..),
     ToolRetryClass (..),
   )
 import Max.Plan.Catalog
 import Max.Plan.Schema (PlanSchema (..), SchemaField (..))
-import Max.Plan.Types (PlanEffect (..))
+import Max.Plan.Types (PlanEffect (..), ResourceScope (ExternalScope, ProcessScope))
 import Max.Plan.Validate (CatalogEntry (..))
 import Max.Effects.Embedding (Embedding)
 import Max.Effects.PlatformApi (PlatformApi)
@@ -150,14 +151,59 @@ spec = do
       -- most worth pinning, because adding a sending tool to it is a one-line
       -- change whose consequence is that a plan can speak on its own.
       sequence_
-        [ (tool.ptRef.unToolRef, filter escapes (Set.toList tool.ptEffects))
-            `shouldBe` (tool.ptRef.unToolRef, [])
-          | tool <- plannableTools
+        [ (name, filter escapes (Set.toList (Map.findWithDefault Set.empty tool.ptRef toolPlanEffects)))
+            `shouldBe` (name, [])
+          | tool <- plannableTools,
+            let name = tool.ptRef.unToolRef
         ]
 
     it "names each tool once" $ do
       let names = map ((.unToolRef) . (.ptRef)) plannableTools
       length (Set.fromList names) `shouldBe` length names
+
+    it "has effects declared for every plannable tool" $
+      -- 'planCatalog' drops an entry whose effects are missing rather than
+      -- guessing an empty set, and an empty set would be admitted by every
+      -- budget there is.  Dropping is the safe direction and this is what
+      -- makes it a build break rather than a tool that silently stops being
+      -- plannable.
+      sequence_
+        [ (name, Map.member tool.ptRef toolPlanEffects) `shouldBe` (name, True)
+          | tool <- plannableTools,
+            let name = tool.ptRef.unToolRef
+        ]
+
+  -- Issue #17.E.  A child's ceiling used to be "somebody hand-wrote a result
+  -- schema for this tool", which is a question about the plan expression
+  -- language and not about the child — so a fork bought parallel web_search and
+  -- nothing else, against ADR 007 §553 naming Browser and Video as exactly the
+  -- things that belong in children.
+  describe "what a fork child may be granted" $ do
+    it "reaches the slow tools the plan expression language cannot type" $ do
+      -- browser_navigate returns whatever the container handed back, so it has
+      -- no result schema and never will have one — and it never needed one to
+      -- be safe for a child, which returns through subgoal_return.
+      childReachableEffects (definitionOf "browser_navigate")
+        `shouldBe` Just (Set.fromList [EffWrite (ProcessScope "browser"), EffRead (ExternalScope "web")])
+      Map.lookup (ToolRef "browser_navigate") (planCatalog [definitionOf "browser_navigate"])
+        `shouldBe` Nothing
+
+    it "refuses a tool nobody placed in the authorization vocabulary" $
+      -- The default has to stay refusal: an undeclared tool is one nobody has
+      -- said anything about, and Nothing is that, rather than an empty effect
+      -- set every budget would admit.
+      childReachableEffects (definitionOf "sandbox_exec") `shouldBe` Nothing
+
+    it "refuses anything that sends, whatever else is declared about it" $ do
+      -- Structural rather than by leaving it out of the table: the invariant is
+      -- that a child hands its answer back through subgoal_return and reaches
+      -- nobody directly, and it must not rest on a list staying correct.
+      let speaking =
+            (definitionOf "web_search")
+              {tdEffects = Set.insert (EffectSend "chat.endpoint") (Set.singleton (EffectRead "network.search"))}
+      childReachableEffects (definitionOf "web_search")
+        `shouldBe` Just (Set.singleton (EffRead (ExternalScope "web")))
+      childReachableEffects speaking `shouldBe` Nothing
 
 escapes :: PlanEffect -> Bool
 escapes = \case

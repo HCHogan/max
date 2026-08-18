@@ -32,6 +32,8 @@ module Max.Plan.Catalog
   ( PlannableTool (..),
     plannableTools,
     planCatalog,
+    toolPlanEffects,
+    childReachableEffects,
   )
 where
 
@@ -40,7 +42,7 @@ import Data.Map.Strict qualified as Map
 import Data.Set (Set)
 import Data.Set qualified as Set
 import Data.Text (Text)
-import Max.Effects.Tools (ToolDefinition (..), ToolRef (..))
+import Max.Effects.Tools (ToolDefinition (..), ToolEffect (..), ToolRef (..))
 import Max.Plan.Schema (PlanSchema (..), SchemaField (..))
 import Max.Plan.Types (PlanEffect (..), ResourceScope (..))
 import Max.Plan.Validate (CatalogEntry, entryFromDefinition)
@@ -54,13 +56,7 @@ data PlannableTool = PlannableTool
     ptInput :: !PlanSchema,
     -- | What @toolRun@ actually returns on success.  Read off the
     -- implementation, not off the description.
-    ptResult :: !PlanSchema,
-    -- | Effects as a /plan/ sees them.  Deliberately re-stated rather than
-    -- mapped from 'tdEffects': the tool registry's domains are scheduling
-    -- identifiers (@network.search@, @conversation.db@) and a plan's scopes are
-    -- an authorization vocabulary.  A general mapping between them would be a
-    -- guess applied uniformly, which is the worst way to be wrong.
-    ptEffects :: !(Set PlanEffect)
+    ptResult :: !PlanSchema
   }
 
 field :: Text -> PlanSchema -> SchemaField
@@ -91,10 +87,14 @@ messageSummary =
 --
 -- __Fast reads, deliberately.__  The front model is the one that has to stay
 -- able to answer, so a plan it runs inline should not block on anything slow;
--- slow work is what a fork child is for, and a child is a durable turn this
--- module has no part in.  So @browser_*@ and @sandbox_exec@ are absent by
--- design rather than by omission, and they stay absent until there is somebody
--- else to run them.
+-- slow work is what a fork child is for.  So @browser_*@ and @sandbox_exec@ are
+-- absent by design rather than by omission.
+--
+-- They are no longer absent from a /child/, which is what issue #17.E fixed:
+-- see 'toolPlanEffects'.  This list stayed the child's ceiling long after it
+-- stopped being the right one, because a result schema and an authorization
+-- scope were written in the same record and only one of them is a child's
+-- business.
 --
 -- __Not every tool can be declared at all.__  A result schema is only writable
 -- when a tool has one success shape. @browser_navigate@ and @browser_snapshot@
@@ -132,8 +132,7 @@ plannableTools =
                         ]
                     )
                 )
-            ],
-        ptEffects = Set.singleton (EffRead (ExternalScope "web"))
+            ]
       },
     PlannableTool
       { ptRef = ToolRef "get_message_by_id",
@@ -142,8 +141,7 @@ plannableTools =
         -- @reply_to@ is emitted only when there is one, so it is optional and
         -- projects to @int?@ — which is what makes walking a quote chain
         -- expressible: @m[0].reply_to ?? 0@ terminates instead of crashing.
-        ptResult = SchemaArray messageSummary,
-        ptEffects = Set.singleton (EffRead CurrentConversation)
+        ptResult = SchemaArray messageSummary
       },
     PlannableTool
       { ptRef = ToolRef "context_search",
@@ -184,8 +182,7 @@ plannableTools =
                         ]
                     )
                 )
-            ],
-        ptEffects = Set.singleton (EffRead CurrentConversation)
+            ]
       },
     PlannableTool
       { ptRef = ToolRef "memory_list",
@@ -202,10 +199,122 @@ plannableTools =
                   field "lifecycle" SchemaText,
                   field "content" SchemaText
                 ]
-            ),
-        ptEffects = Set.singleton (EffRead CurrentConversation)
+            )
       }
   ]
+
+-- | What a tool does, in the vocabulary a @Goal@'s budget is written in.
+--
+-- Split out of 'PlannableTool' for issue #17.E.  The two questions a plan asks
+-- about a tool are not the same question, and binding them together is what
+-- made @Fork@ mean almost nothing:
+--
+--   * /May a plan expression call it?/ — needs 'ptResult', because
+--     @hits[0].title@ has to type-check before anything runs.
+--   * /May a fork child call it?/ — does not.  A child's typed boundary is
+--     @subgoal_return@, whose schema is the goal's expected type; what the
+--     child does on the way there never crosses a plan expression at all.
+--
+-- Because both lived in one record, a child's ceiling was "somebody hand-wrote
+-- a result schema", so a fork bought parallel @web_search@ and nothing else —
+-- the exact opposite of ADR 007 §553, which says the split is by latency and
+-- names Browser, Sandbox and Video as belonging in children.
+--
+-- __Still hand-written per tool.__  The warning this module used to carry on
+-- 'ptEffects' was right and is kept: registry domains are scheduling
+-- identifiers and plan scopes are an authorization vocabulary, so a general
+-- @domain -> scope@ function would be a guess applied uniformly.  It fails
+-- concretely, not just in principle — @sandbox.fs@ cannot say /which/ sandbox
+-- and @network.search@ cannot name the origin an approval binds, because
+-- neither is in the domain.  What changed is only that a judgement about a
+-- tool's authority no longer costs a judgement about its result shape.
+--
+-- __When unsure, declare more.__  Effects are checked by
+-- @isSubsetOf effects budget@, so a declaration that is too narrow lets a
+-- budget admit a tool it did not mean to and a declaration that is too wide
+-- only makes the tool unreachable.  The failure directions are not symmetric,
+-- and 'view_avatar' below is where that shows.
+toolPlanEffects :: Map ToolRef (Set PlanEffect)
+toolPlanEffects =
+  Map.fromList $
+    [ -- The four that were already plannable, unchanged.
+      (ToolRef "web_search", Set.singleton (EffRead (ExternalScope "web"))),
+      (ToolRef "get_message_by_id", Set.singleton (EffRead CurrentConversation)),
+      (ToolRef "context_search", Set.singleton (EffRead CurrentConversation)),
+      (ToolRef "memory_list", Set.singleton (EffRead CurrentConversation)),
+      -- Reading media the conversation already holds.  @blob.store@ is a
+      -- host-wide store, but the only way into it here is a handle this
+      -- conversation produced, so what is reached is still this conversation.
+      -- @tool.media@ is not a resource at all; it marks that the result lands
+      -- in the turn's own output, which is why these are SequentialOnly.
+      (ToolRef "view_image", Set.singleton (EffRead CurrentConversation)),
+      (ToolRef "view_video", Set.singleton (EffRead CurrentConversation)),
+      -- Two effects, not one.  Whose avatar is a fact about this conversation's
+      -- membership, and fetching it leaves the host for the platform's CDN —
+      -- both are true, so a budget has to admit both.  Declaring only the first
+      -- would let a conversation-only budget reach off-host, which is the
+      -- narrow-side mistake this table is written to avoid.
+      ( ToolRef "view_avatar",
+        Set.fromList [EffRead CurrentConversation, EffRead (ExternalScope "platform")]
+      ),
+      (ToolRef "view_bilibili", Set.singleton (EffRead (ExternalScope "bilibili")))
+    ]
+      <> [(ToolRef name, browserEffects) | name <- browserRefs]
+
+-- | @browser.session@ is a host process resource, and the tools already say so
+-- themselves: every one of them declares @ProcessResource "browser"@ as its
+-- authority.  Naming it @ProcessScope "browser"@ restates an existing hand-made
+-- declaration in the scope vocabulary rather than inventing a second opinion
+-- about what a browser is.
+--
+-- The read is the same @external "web"@ that @web_search@ carries, on purpose:
+-- searching the open web and navigating it are one authorization class, and a
+-- budget that admits reading the web should not have to enumerate the two ways
+-- of doing it.
+browserEffects :: Set PlanEffect
+browserEffects =
+  Set.fromList [EffWrite (ProcessScope "browser"), EffRead (ExternalScope "web")]
+
+browserRefs :: [Text]
+browserRefs =
+  [ "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_press_key",
+    "browser_wait_for",
+    "browser_scroll",
+    "view_zhihu"
+  ]
+
+-- | The effects a fork child's goal must admit before it may call this tool,
+-- or 'Nothing' if no judgement has been made about it.
+--
+-- 'Nothing' is a refusal, not a default: a tool nobody has placed in the
+-- authorization vocabulary is one a child cannot have.
+--
+-- __A child still cannot speak.__  Any tool that sends is refused here whatever
+-- else is declared about it, and structurally rather than by remembering to
+-- leave it out of the table — the invariant is that a child hands its answer
+-- back through @subgoal_return@ and reaches nobody directly, and it should not
+-- rest on a list staying correct.
+--
+-- __The sandbox tools are absent, and not by oversight.__  They would need
+-- 'SandboxScope', whose 'Text' names /which/ sandbox — and nothing static can
+-- fill that in, because a child picks one at runtime by argument.  No
+-- production code constructs that constructor today; the parser and one test
+-- fixture are its only users.  Giving a child @sandbox_exec@ therefore needs a
+-- way to say "the sandboxes of this conversation", which is a change to the
+-- scope vocabulary and a decision worth making on its own rather than as a
+-- string invented here.
+childReachableEffects :: ToolDefinition -> Maybe (Set PlanEffect)
+childReachableEffects definition
+  | any isSend definition.tdEffects = Nothing
+  | otherwise = Map.lookup definition.tdRef toolPlanEffects
+  where
+    isSend = \case
+      EffectSend {} -> True
+      _ -> False
 
 -- | Join the declarations against what the host actually registered for this
 -- dispatch.
@@ -215,12 +324,17 @@ plannableTools =
 -- absent from the model's own tool list, and a plan catalog advertising it
 -- would promise a call that cannot be made.  The reverse — a registered tool
 -- with no declaration — is simply not plannable, which is the default.
+-- Effects come from 'toolPlanEffects' rather than from the entry, so a tool's
+-- authorization story is written in exactly one place whichever of the two
+-- questions is being asked about it.  A plannable tool missing from that table
+-- is dropped, and "Max.Plan.CatalogSpec" fails the build if one ever is.
 planCatalog :: [ToolDefinition] -> Map ToolRef CatalogEntry
 planCatalog registered =
   Map.fromList
-    [ (tool.ptRef, entryFromDefinition definition tool.ptInput tool.ptResult tool.ptEffects)
+    [ (tool.ptRef, entryFromDefinition definition tool.ptInput tool.ptResult effects)
       | tool <- plannableTools,
-        Just definition <- [Map.lookup tool.ptRef byRef]
+        Just definition <- [Map.lookup tool.ptRef byRef],
+        Just effects <- [Map.lookup tool.ptRef toolPlanEffects]
     ]
   where
     byRef = Map.fromList [(definition.tdRef, definition) | definition <- registered]
