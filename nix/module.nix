@@ -292,47 +292,6 @@ in
       '';
     };
 
-    wechatpad = {
-      enable = lib.mkEnableOption ''
-        the WeChatPadPro relay stack (WeChat via the reverse-engineered
-        iPad protocol — ban risk is yours; run a spare account).
-        Serves the API on port 8848 (container 8080) and the login web
-        UI on 1238; point the bot's wechatpad.api_url at
-        http://127.0.0.1:8848
-      '';
-
-      adminKey = lib.mkOption {
-        type = lib.types.str;
-        default = "changeme-wechatpad-admin";
-        description = ''
-          WeChatPadPro ADMIN_KEY (also the API auth key the bot's
-          wechatpad.auth_key must match).  Lands in the nix store —
-          fine for a LAN-only home box, change it from the default
-          regardless.
-        '';
-      };
-
-      mysqlPassword = lib.mkOption {
-        type = lib.types.str;
-        default = "weixin123";
-        description = "Password for the stack-internal MySQL (never exposed beyond the docker network).";
-      };
-
-      webBindAddress = lib.mkOption {
-        type = lib.types.str;
-        default = "127.0.0.1";
-        example = "100.64.0.3";
-        description = ''
-          Address the login web UI (port 1238) binds to.  Loopback by
-          default; set your tailscale IP to reach it from the tailnet.
-          NB: docker-published ports bypass the NixOS firewall, so
-          bind to a specific interface address rather than 0.0.0.0.
-          The API port (8848) always stays on loopback — the bot runs
-          on this host.
-        '';
-      };
-    };
-
     napcat = {
       enable = lib.mkEnableOption "the NapCat container (QQ client) alongside the bot";
 
@@ -605,94 +564,11 @@ in
 
     # NixOS defaults oci-containers to podman; the bot's images, the
     # max-nix volume and the host-gateway extra_host all live on the
-    # docker side, so keep NapCat/WeChatPadPro there too.
+    # docker side, so keep NapCat there too.
     virtualisation.oci-containers.backend =
-      lib.mkIf (cfg.napcat.enable || cfg.wechatpad.enable) "docker";
-
-    # WeChatPadPro stack: app + its private MySQL/Redis on an isolated
-    # bridge network (mirrors upstream deploy/docker-compose.yml).
-    # The app reads /app/.env, so we generate one from the options and
-    # mount it — same dual env-file + environment channel as upstream.
-    systemd.services.init-wechatpad-network = lib.mkIf cfg.wechatpad.enable {
-      description = "Create the wechatpad docker network";
-      after = [ "docker.service" ];
-      requires = [ "docker.service" ];
-      wantedBy = [ "multi-user.target" ];
-      serviceConfig.Type = "oneshot";
-      path = [ config.virtualisation.docker.package ];
-      script = ''
-        docker network inspect wechatpad >/dev/null 2>&1 \
-          || docker network create wechatpad
-      '';
-    };
+      lib.mkIf cfg.napcat.enable "docker";
 
     virtualisation.oci-containers.containers = lib.mkMerge [
-      (lib.mkIf cfg.wechatpad.enable {
-        wechatpad-mysql = {
-          image = "mysql:8.0";
-          environment = {
-            MYSQL_ROOT_PASSWORD = cfg.wechatpad.mysqlPassword;
-            MYSQL_DATABASE = "weixin";
-            MYSQL_USER = "weixin";
-            MYSQL_PASSWORD = cfg.wechatpad.mysqlPassword;
-          };
-          volumes = [ "${stateDir}/wechatpad/mysql:/var/lib/mysql" ];
-          extraOptions = [ "--network=wechatpad" ];
-        };
-
-        wechatpad-redis = {
-          image = "redis:6";
-          cmd = [ "redis-server" "--appendonly" "yes" ];
-          volumes = [ "${stateDir}/wechatpad/redis:/data" ];
-          extraOptions = [ "--network=wechatpad" ];
-        };
-
-        wechatpad =
-          let
-            envFile = pkgs.writeText "wechatpad.env" ''
-              WECHAT_PORT=8080
-              PORT=1238
-              TZ=Asia/Shanghai
-              ADMIN_KEY=${cfg.wechatpad.adminKey}
-              WORKER_POOL_SIZE=500
-              MAX_WORKER_TASK_LEN=1000
-              WEB_DOMAIN=localhost:1238
-              NEWS_SYN_WXID=true
-              DT=true
-              TOPIC=wx_sync_msg_topic
-              ROCKET_MQ_ENABLED=false
-              RABBIT_MQ_ENABLED=false
-              KAFKA_ENABLED=false
-              DB_HOST=wechatpad-mysql
-              DB_PORT=3306
-              DB_DATABASE=weixin
-              DB_USERNAME=weixin
-              DB_PASSWORD=${cfg.wechatpad.mysqlPassword}
-              MYSQL_CONNECT_STR=weixin:${cfg.wechatpad.mysqlPassword}@tcp(wechatpad-mysql:3306)/weixin?charset=utf8mb4&parseTime=true&loc=Local
-              REDIS_HOST=wechatpad-redis
-              REDIS_PORT=6379
-              REDIS_DB=0
-            '';
-          in
-          {
-            image = "wechatpadpro/wechatpadpro:latest";
-            environment = {
-              DB_HOST = "wechatpad-mysql";
-              REDIS_HOST = "wechatpad-redis";
-              ADMIN_KEY = cfg.wechatpad.adminKey;
-              TZ = "Asia/Shanghai";
-              MYSQL_CONNECT_STR = "weixin:${cfg.wechatpad.mysqlPassword}@tcp(wechatpad-mysql:3306)/weixin?charset=utf8mb4&parseTime=true&loc=Local";
-            };
-            # Bot's own WS server owns host 8080 → API rides on 8848.
-            ports = [
-              "127.0.0.1:8848:8080"
-              "${cfg.wechatpad.webBindAddress}:1238:1238"
-            ];
-            volumes = [ "${envFile}:/app/.env" ];
-            dependsOn = [ "wechatpad-mysql" "wechatpad-redis" ];
-            extraOptions = [ "--network=wechatpad" ];
-          };
-      })
       (lib.mkIf cfg.napcat.enable {
         napcat = {
           image = "mlikiowa/napcat-docker:latest";
@@ -724,11 +600,6 @@ in
         "d ${stateDir}/napcat 0755 root root -"
         "d ${stateDir}/napcat/QQ 0755 root root -"
         "d ${stateDir}/napcat/config 0755 root root -"
-      ]
-      ++ lib.optionals cfg.wechatpad.enable [
-        "d ${stateDir}/wechatpad 0755 root root -"
-        "d ${stateDir}/wechatpad/mysql 0755 root root -"
-        "d ${stateDir}/wechatpad/redis 0755 root root -"
       ];
   };
 }

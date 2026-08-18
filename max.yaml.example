@@ -346,19 +346,6 @@ llm:
 # admin_call_retention_days: 7
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WeChat via a WeChatPadPro relay (demo scope: whitelisted chatrooms, text
-# in and out).  Absent = QQ only.  The three big QQ affordances degrade:
-# no reactions, no quote-replies, no pokes.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# wechatpad:
-#   api_url: http://127.0.0.1:8059
-#   auth_key: your-pad-key
-#   self_wxid: wxid_xxxxxxxx     # the bot's own wxid
-#   bot_name: Max                # name members @ it by
-#   chatrooms: ["12345678@chatroom"]
-
-# ─────────────────────────────────────────────────────────────────────────────
 # WeChat via an aixed/WeChat-Hook DLL injected into a Windows PC client.
 #
 # Capabilities, as the hook actually exposes them: text in and out, inbound
