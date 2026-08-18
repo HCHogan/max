@@ -6,6 +6,7 @@ import Data.Either (rights)
 import Data.Int (Int64)
 import Data.List (sort)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -416,7 +417,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       ref <- withDb pool (openPlan fixture.fxTurn (document "一"))
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       claimed <- claimOne pool ref
-      let trigger = CanonicalMessageId (maybe 0 id claimed.wpSeedMessage)
+      let trigger = CanonicalMessageId (fromMaybe 0 claimed.wpSeedMessage)
       admitted <- withDb pool (admitClaimedPlanWake claimed trigger fixture.fxPrincipal "原子 wake")
       admitted `shouldSatisfy` (/= Nothing)
       case admitted of
@@ -456,7 +457,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       claimed <- claimOne pool ref
       let goal = goalNamed "查甲"
-          trigger = CanonicalMessageId (maybe 0 id claimed.wpSeedMessage)
+          trigger = CanonicalMessageId (fromMaybe 0 claimed.wpSeedMessage)
       Just child <-
         withDb pool
           ( startClaimedPlanChild
@@ -480,7 +481,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       let goal = (goalNamed "查甲") {goalInputs = [Binder "seed"]}
           grants = Map.fromList [("web_search", "exact")]
           inputs = [(Binder "seed", String "甲")]
-          trigger = CanonicalMessageId (maybe 0 id claimed.wpSeedMessage)
+          trigger = CanonicalMessageId (fromMaybe 0 claimed.wpSeedMessage)
       child <-
         withDb pool
           ( startClaimedPlanChild
@@ -504,7 +505,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.Plan" $ do
       _ <- withDb pool (suspendPlan ref (Revision 1) "turn:1:0/k" checkpointState)
       claimed <- claimOne pool ref
       let goal = goalNamed "查甲"
-          trigger = CanonicalMessageId (maybe 0 id claimed.wpSeedMessage)
+          trigger = CanonicalMessageId (fromMaybe 0 claimed.wpSeedMessage)
       Just child <-
         withDb pool
           ( startClaimedPlanChild

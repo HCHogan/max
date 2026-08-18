@@ -1457,7 +1457,7 @@ wakeOwner plan outcome = do
       admitted <- admitClaimedPlanWake plan trigger.canonicalId trigger.authorPrincipalId view
       for_ admitted $ \turn ->
         dispatchLLMWith (Just turn) Nothing (Just view) Nothing Nothing Nothing Nothing OriginPlan NeverAbsorb [] trigger
-      when (not (isJust admitted)) $
+      unless (isJust admitted) $
         logInfo "plan: wake already reported or lease became stale" $
           object ["plan_id" .= plan.wpPlan.stRef.prPlanId.unPlanId]
       pure (isJust admitted)

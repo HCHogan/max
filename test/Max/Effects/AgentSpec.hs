@@ -220,12 +220,11 @@ spec = describe "Agent full loop" $ do
     _ <- finishTurnRuntime tasks turn
     readIORef toolCalls `shouldReturn` 0
     result.appended
-      `shouldSatisfy` ( any
-                          (\case
-                             MsgTool _ body -> "工具调用额度已经用满" `T.isInfixOf` body
-                             _ -> False
-                          )
-                      )
+      `shouldSatisfy` any
+        ( \case
+            MsgTool _ body -> "工具调用额度已经用满" `T.isInfixOf` body
+            _ -> False
+        )
 
   it "treats subgoal_return as a terminal round and suppresses sibling calls" $ do
     events <- newIORef []

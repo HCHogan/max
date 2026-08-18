@@ -23,6 +23,12 @@
 # names something.
 - ignore: {name: Eta reduce}
 
+# The same rule under a second name.  `\handles -> f <$> traverse g handles`
+# becomes `fmap f . traverse g`, which is an eta reduction that hlint reports as
+# a functor hint because the binding happens to end in a map.  `handles` names
+# something, and its siblings in the same record are all lambdas.
+- ignore: {name: Use fmap, within: Max.Tools.Plan}
+
 # `\x -> x `op` y` reads left to right; the backtick section it becomes does
 # not.  Explicitness wins in the cases hlint finds here.
 - ignore: {name: Avoid lambda using `infix`}
