@@ -38,6 +38,7 @@ import Data.Map.Strict (Map)
 import Max.Effects.Tools
   ( SchemaVersion (..),
     ToolAuthority (..),
+    ToolDeadline (..),
     ToolDefinition (..),
     ToolParallelism (..),
     ToolRef (..),
@@ -271,6 +272,7 @@ productionPlanCatalog =
         { tdRef = ref,
           tdSchemaVersion = SchemaVersion 1,
           tdEffects = Set.empty,
+          tdDeadline = ToolDeadline 120,
           tdParallelism = SequentialOnly,
           tdRetryClass = RetrySafe,
           tdAuthorities = Set.singleton CurrentConversation,
