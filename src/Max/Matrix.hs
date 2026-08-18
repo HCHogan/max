@@ -24,7 +24,6 @@ module Max.Matrix
   )
 where
 
-import Control.Concurrent qualified as Concurrent
 import Control.Applicative ((<|>))
 import Control.Monad (forM_, when)
 import Data.Aeson
@@ -88,7 +87,7 @@ import Max.Platform.Store
     readIngestCursor,
   )
 import Max.Platform.Types
-import Max.Util (catchSync)
+import Max.Worker (retryingWith)
 import Network.HTTP.Client qualified as HTTP
 import Network.HTTP.Types.URI (urlDecode, urlEncode)
 import OneBot.Types (GroupId (..))
@@ -187,17 +186,12 @@ matrixWorker runtime cfg episodeScheduler = localDomain "matrix" $ do
         object ["error" .= err]
     Right members ->
       logInfo "matrix roster loaded" $ object ["members" .= Map.size members]
-  loop registered (fromRight Map.empty seed)
+  -- The roster is the carried state, and carrying it is the whole reason this
+  -- is a retry rather than a worker restart: a homeserver that refused one
+  -- connection has not invalidated who is in the room.  The cursor is durable
+  -- either way, which is what the old log line here was promising.
+  retryingWith "matrix sync" (fromRight Map.empty seed) (syncOnce registered)
   where
-    loop registered members = do
-      next <-
-        syncOnce registered members `catchSync` \e -> do
-          logAttention "matrix sync failed; cursor retained" $
-            object ["error" .= T.pack (show e)]
-          liftIO (Concurrent.threadDelay matrixFailureBackoffMicros)
-          pure members
-      loop registered next
-
     syncOnce registered members = do
       current <- readIngestCursor registered.platformAccountId matrixStreamKey
       page <- liftIO (fetchSync runtime cfg (cursorText =<< current)) >>= either (error . T.unpack) pure
@@ -1057,8 +1051,6 @@ nonEmpty value
 matrixStreamKey :: Text
 matrixStreamKey = "sync"
 
-matrixFailureBackoffMicros :: Int
-matrixFailureBackoffMicros = 2_000_000
 
 matrixHttpTimeoutMicros :: Int
 matrixHttpTimeoutMicros = 150_000_000

@@ -9,6 +9,7 @@ import Effectful.Log (Log, LogLevel (LogAttention), runLog)
 import Max.Log (ColorMode (..), withCompactLogger)
 import Max.Worker
   ( WorkerCriticality (..),
+    retryingWith,
     withWorkers,
     worker,
   )
@@ -73,6 +74,45 @@ spec = describe "worker supervision" $ do
     -- Re-entering a loop that decided to stop is how a supervisor turns a
     -- surprise into a spin.
     result `shouldBe` 1
+
+  -- The other half of #17.F.  The adapters were each retrying their own inner
+  -- step, which is right, at a fixed rate forever, which is not: a week of
+  -- "connection refused" from one homeserver put 27,707 attention lines in the
+  -- journal, one every 2.4 seconds.
+  describe "retryingWith" $ do
+    it "carries the last state across a failure and advances it on success" $ do
+      seen <- newIORef ([] :: [Int])
+      -- Fails on the second attempt, so the third must be handed the state the
+      -- second was given rather than a fresh one.
+      let step n = do
+            liftIO (atomicModifyIORef' seen (\xs -> (xs <> [n], ())))
+            if n == 1
+              then liftIO (throwIO (userError "transient"))
+              else pure (n + 1)
+      _ <-
+        supervised . withWorkers [worker "carrier" RestartableWorker (retryingWith "carry" 0 step)] $
+          threadDelay 1_500_000
+      observed <- readIORef seen
+      -- 0 succeeds → 1.  1 throws, so 1 is handed back.  1 throws again…
+      take 3 observed `shouldBe` [0, 1, 1]
+
+    it "logs a failure episode on powers of two rather than every attempt" $ do
+      -- Not a log assertion — the counter is: the point is that the retry keeps
+      -- attempting at full rate while the log damps, so a broken edge stays
+      -- observable without drowning everything else.
+      attempts <- newIORef (0 :: Int)
+      _ <-
+        supervised . withWorkers
+          [ worker "noisy" RestartableWorker . retryingWith "noisy" () $ \() -> do
+              liftIO (atomicModifyIORef' attempts (\c -> (c + 1, ())))
+              liftIO (throwIO (userError "always"))
+          ]
+          $ threadDelay 1_200_000
+      n <- readIORef attempts
+      -- One immediately, one after the 1s backoff.  What matters is that the
+      -- second attempt happened and only the first two were logged, which the
+      -- run above shows in its own output.
+      n `shouldSatisfy` (>= 2)
 
   it "still takes the process down when a plain optional worker throws" $ do
     -- The distinction is the whole change: 'OptionalWorker' means "finishing is

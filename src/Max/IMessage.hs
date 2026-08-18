@@ -90,6 +90,7 @@ import Max.Platform.Store
     retryUnconfirmedDelivery,
   )
 import Max.Platform.Types
+import Max.Worker (retryingWith)
 import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
 import OneBot.Types (GroupId (..))
@@ -229,10 +230,14 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
         "endpoint_id" .= registered.endpointId,
         "native_replies" .= health.nativeReplies
       ]
-  loop registered health.nativeReplies
+  -- What the endpoint advertises is the carried state: a bridge that failed one
+  -- cycle has not changed whether this Mac can send native replies, and
+  -- re-probing for that on every blip is what the old hand-written loop was
+  -- avoiding.
+  retryingWith "imessage cycle" health.nativeReplies (runCycle registered)
   where
-    -- The startup probe is the one bridge call that ran outside 'loop', and
-    -- therefore outside its catchSync.  A Mac asleep behind the bridge is an
+    -- The startup probe is the one bridge call that runs before the retry
+    -- above, and therefore outside it.  A Mac asleep behind the bridge is an
     -- ordinary fact about an optional platform, but as a fatal error it
     -- reached the linked thread and took QQ, Matrix, the historian and every
     -- other worker down with it — then again ninety seconds later, for as
@@ -246,15 +251,6 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
             object ["error" .= bridgeFailureText failure]
           liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
           awaitBridgeHealth
-
-    loop registered advertisedNativeReplies = do
-      nextNativeReplies <-
-        runCycle registered advertisedNativeReplies `catchSync` \e -> do
-          logAttention "iMessage cycle failed; cursor retained" $
-            object ["error" .= T.pack (show e)]
-          liftIO (Concurrent.threadDelay (cfg.pollIntervalMs * 1000))
-          pure advertisedNativeReplies
-      loop registered nextNativeReplies
 
     runCycle registered advertisedNativeReplies = do
       health <-

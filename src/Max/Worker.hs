@@ -20,18 +20,22 @@ module Max.Worker
     WorkerExited (..),
     worker,
     withWorkers,
+    retryingWith,
   )
 where
 
+import Control.Concurrent qualified as Concurrent
 import Control.Exception (Exception (..), SomeException)
+import Control.Monad (when)
 import Data.Aeson (object, (.=))
+import Data.Bits (popCount)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful (Eff, IOE, liftIO, (:>))
 import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Concurrent.Async (link, withAsync)
 import Effectful.Exception (throwIO)
-import Effectful.Log (Log, logAttention)
+import Effectful.Log (Log, logAttention, logInfo)
 import GHC.Clock (getMonotonicTime)
 import Max.Util (trySync)
 
@@ -133,3 +137,64 @@ withWorkers workers act = foldr supervise act workers
               ]
           threadDelay (wait * 1_000_000)
           restarting spec (min maxBackoffSeconds (wait * 2))
+
+-- | Repeat a step forever, carrying its state across failures.
+--
+-- The inner half of the same idea 'RestartableWorker' is the outer half of, and
+-- the two are different jobs rather than one written twice.  A restart is total
+-- — it re-registers the endpoint, refetches the roster, and starts the poll
+-- from a cold cache — which is the right answer to a worker that has stopped
+-- making sense and much too heavy an answer to a homeserver that refused one
+-- connection.  So the step keeps whatever it had: on failure the /previous/
+-- state is handed to the next attempt, which is exactly what each adapter's
+-- own loop was doing by hand.
+--
+-- What they were not doing is the two things below, and the second is why this
+-- exists at all.
+--
+-- __It backs off, and success resets it.__  Every adapter retried at a fixed
+-- rate forever: two seconds for Matrix, the poll interval for iMessage.  Here
+-- the wait doubles to a ceiling and drops back the moment a step returns — a
+-- step returning /is/ the recovery signal, which the supervisor cannot see and
+-- has to approximate with a clock.
+--
+-- __It logs an episode, not an attempt.__  A week of @Connection refused@ from
+-- one homeserver put 27,707 attention lines in the journal, one every 2.4
+-- seconds, which is not a report of an outage so much as a denial of service
+-- against everything else in the log.  A failure is logged on the first
+-- attempt and then only when the count reaches a power of two, so a sustained
+-- outage costs about a dozen lines a week and still says "yes, still broken"
+-- often enough to be believed.  Recovery is one more line, with the count.
+retryingWith ::
+  (Log :> es, IOE :> es) =>
+  -- | What is being retried, for the log.
+  Text ->
+  -- | Starting state.
+  s ->
+  -- | One attempt.  Its result becomes the next attempt's state; a throw
+  -- leaves the state untouched.
+  (s -> Eff es s) ->
+  Eff es ()
+retryingWith label start step = go (0 :: Int) initialBackoffSeconds start
+  where
+    go failures delay state =
+      trySync (step state) >>= \case
+        Right next -> do
+          when (failures > 0) $
+            logInfo (label <> ": recovered") $
+              object ["after_consecutive_failures" .= failures]
+          go 0 initialBackoffSeconds next
+        Left e -> do
+          let n = failures + 1
+          -- 1, 2, 4, 8, … — dense enough at the start to catch a real
+          -- incident, sparse enough afterwards that a broken edge cannot
+          -- bury everything else.
+          when (popCount n == 1) $
+            logAttention (label <> ": failed; retrying") $
+              object
+                [ "consecutive_failures" .= n,
+                  "retry_in_seconds" .= delay,
+                  "error" .= T.pack (show (e :: SomeException))
+                ]
+          liftIO (Concurrent.threadDelay (delay * 1_000_000))
+          go n (min maxBackoffSeconds (delay * 2)) state
