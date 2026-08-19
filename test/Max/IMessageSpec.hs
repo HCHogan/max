@@ -230,6 +230,49 @@ spec = describe "iMessage adapter" $ do
         message.mentionedHandles `shouldBe` ["1578034713"]
       _ -> expectationFailure "expected one mentioned message"
 
+  -- The bridge in production has never sent attributed ranges, only
+  -- @mentioned_handles@.  'iMessageIsAddressed' judged those correctly and had
+  -- no caller, so the nodes said "plain text" and every @ went unanswered.
+  -- These assert the wiring, not the predicate: they read the node list.
+  it "recovers a rangeless mention and binds it to the registered account" $ do
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" 1000
+        page :: Int -> String -> [String] -> String -> Value
+        page row guid handles text =
+          object
+            [ "messages"
+                .= [ object
+                       [ "id" .= row,
+                         "chat_id" .= (7 :: Int),
+                         "guid" .= guid,
+                         "sender" .= ("person@example.com" :: String),
+                         "text" .= text,
+                         "mentioned_handles" .= handles,
+                         "created_at" .= ("2026-08-19T06:04:06Z" :: String)
+                       ]
+                   ],
+              "next_rowid" .= row,
+              "has_more" .= False
+            ]
+        nodesOf value = do
+          parsed <- parseIMessagePage value `shouldSatisfyRight` const True
+          case parsed.messages of
+            [message] -> pure (iMessageTextNodes cfg message)
+            _ -> expectationFailure "expected one message" >> pure []
+
+    -- Messages puts the mention's display name inline; the node replaces it,
+    -- and carries 'accountKey' because that is the identity with a principal.
+    confirmed <- nodesOf (page 48 "GUID-HANDLE" ["hnkhgn@icloud.com"] "Maxwell 走远了")
+    confirmed `shouldBe` [NMention (NativeUserId "mac-account") "Maxwell", NText " 走远了"]
+
+    -- A typed @ carries no metadata at all.  The @ belongs to the mention, so
+    -- it must not survive as a stray text node.
+    typed <- nodesOf (page 49 "GUID-TYPED" [] "@Maxwell 在吗")
+    typed `shouldBe` [NMention (NativeUserId "mac-account") "Maxwell", NText " 在吗"]
+
+    -- Someone else's name in the text is not an address.
+    plain <- nodesOf (page 50 "GUID-PLAIN" [] "走远了")
+    plain `shouldBe` [NText "走远了"]
+
   it "advertises bounded outbound attachment delivery" $ do
     iMessageCapabilities.text `shouldBe` True
     iMessageCapabilities.image `shouldBe` TierNative
