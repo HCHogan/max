@@ -824,6 +824,17 @@ iMessageParser = do
         metavar "HANDLE[,HANDLE..]",
         value []
       ]
+  mirrorQQGroup <-
+    optional $
+      setting
+        [ help "Explicit QQ group to mirror; omit for a standalone iMessage chat",
+          reader auto,
+          option,
+          long "imessage-mirror-qq-group",
+          env "MAX_IMESSAGE_MIRROR_QQ_GROUP",
+          conf "mirror_qq_group",
+          metavar "QQ_GROUP"
+        ]
   pollIntervalMs <-
     setting
       [ help "Backoff between iMessage bridge reconnect attempts",

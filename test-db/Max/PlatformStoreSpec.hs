@@ -48,6 +48,49 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     claims <- withDb pool (claimDeliveries "mirror-cutover" 10 30)
     fmap (.endpointId) claims `shouldBe` [qq.endpointId]
 
+  -- Both cases above configure the mirror at first registration.  An endpoint
+  -- that ran standalone for weeks and is only later named as a mirror keeps
+  -- its own conversation unless the rebind is explicit, and the fan-out pairs
+  -- endpoints by conversation — so without it the config parses, the log says
+  -- "mirror", and nothing is ever relayed.
+  it "rebinds an endpoint that ran standalone before it was named as a mirror" $ do
+    standalone <-
+      withDb pool $
+        ensureConfiguredEndpoint
+          PlatformIMessage
+          (NativeAccountId "mac-account")
+          (NativeConversationId "iMessage;+;chat")
+          ConversationGroup
+          EndpointStandalone
+          Nothing
+          textCapabilities
+    qq <-
+      withDb pool $
+        ensureLegacyEndpoint
+          PlatformQQ
+          (NativeAccountId "9")
+          (NativeConversationId "42")
+          ConversationGroup
+          42
+          textCapabilities
+    rebound <-
+      withDb pool $
+        ensureConfiguredEndpoint
+          PlatformIMessage
+          (NativeAccountId "mac-account")
+          (NativeConversationId "iMessage;+;chat")
+          ConversationGroup
+          EndpointMirror
+          (Just 42)
+          textCapabilities
+    -- Same endpoint row, moved: a rebind must not orphan the cursor and the
+    -- deliveries that already name this endpoint.
+    rebound.endpointId `shouldBe` standalone.endpointId
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound rebound.endpointId now "imsg-after-rebind" "relay me"))
+    claims <- withDb pool (claimDeliveries "mirror-cutover" 10 30)
+    fmap (.endpointId) claims `shouldBe` [qq.endpointId]
+
   it "promotes a QQ endpoint first observed after its Matrix mirror" $ do
     matrix <-
       withDb pool $

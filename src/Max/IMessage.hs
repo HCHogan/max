@@ -105,6 +105,9 @@ data IMessageConfig = IMessageConfig
     mentionHandles :: ![Text],
     -- Backwards-compatible literal @alias fallback for manually typed text.
     botName :: !Text,
+    -- Explicit QQ group this chat mirrors, or Nothing for a standalone
+    -- endpoint.  Same knob and same meaning as the Matrix adapter's.
+    mirrorQQGroup :: !(Maybe Int64),
     pollIntervalMs :: !Int
   }
   deriving stock (Eq, Generic)
@@ -122,6 +125,8 @@ instance Show IMessageConfig where
       <> " configured>"
       <> ", botName = "
       <> show cfg.botName
+      <> ", mirrorQQGroup = "
+      <> show cfg.mirrorQQGroup
       <> ", pollIntervalMs = "
       <> show cfg.pollIntervalMs
       <> "}"
@@ -221,13 +226,14 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
       (NativeAccountId cfg.accountKey)
       (NativeConversationId cfg.chatGuid)
       ConversationGroup
-      EndpointStandalone
-      Nothing
+      (maybe EndpointStandalone (const EndpointMirror) cfg.mirrorQQGroup)
+      cfg.mirrorQQGroup
       (iMessageCapabilitiesFor health.nativeReplies)
   logInfo "iMessage worker started" $
     object
       [ "chat_guid" .= cfg.chatGuid,
         "endpoint_id" .= registered.endpointId,
+        "mode" .= maybe ("standalone" :: Text) (const "mirror") cfg.mirrorQQGroup,
         "native_replies" .= health.nativeReplies
       ]
   -- What the endpoint advertises is the carried state: a bridge that failed one
@@ -263,8 +269,8 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
             (NativeAccountId cfg.accountKey)
             (NativeConversationId cfg.chatGuid)
             ConversationGroup
-            EndpointStandalone
-            Nothing
+            (maybe EndpointStandalone (const EndpointMirror) cfg.mirrorQQGroup)
+            cfg.mirrorQQGroup
             (iMessageCapabilitiesFor health.nativeReplies)
         logAttention "iMessage native reply capability changed" $
           object ["native_replies" .= health.nativeReplies]

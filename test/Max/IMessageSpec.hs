@@ -19,7 +19,7 @@ spec = describe "iMessage adapter" $ do
     iMessageAuthoritativeSendGuid replyTarget (Just "stale-guid") `shouldBe` Nothing
 
   it "emits native iMessage reply and attachment contracts" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" [] "Maxwell" 1000
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" [] "Maxwell" Nothing 1000
         target = Just (NativeEventId "parent-guid")
     iMessageSendParams cfg target "caption" (Just "upload:attachment-id")
       `shouldBe` object
@@ -144,7 +144,7 @@ spec = describe "iMessage adapter" $ do
               "next_rowid" .= (43 :: Int),
               "has_more" .= False
             ]
-        cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" 1000
+        cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" Nothing 1000
     page <- parseIMessagePage value `shouldSatisfyRight` const True
     case page.messages of
       [message] -> do
@@ -162,11 +162,11 @@ spec = describe "iMessage adapter" $ do
       `shouldBe` Right IMessageSendFailed
 
   it "redacts the bridge token from Show" $ do
-    let cfg = IMessageConfig "http://100.64.0.25:8787" "secret-token" "m1pro" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" 1000
+    let cfg = IMessageConfig "http://100.64.0.25:8787" "secret-token" "m1pro" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" Nothing 1000
     show cfg `shouldNotContain` "secret-token"
 
   it "binds a confirmed mention to the Apple handle, not the local display name" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" 1000
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" Nothing 1000
         confirmed = mentionPage 45 "GUID-MENTION" (["hnkhgn@icloud.com"] :: [String])
         plain = mentionPage 46 "GUID-PLAIN" ([] :: [String])
         mentionPage :: Int -> String -> [String] -> Value
@@ -196,7 +196,7 @@ spec = describe "iMessage adapter" $ do
       _ -> expectationFailure "expected one confirmed and one plain message"
 
   it "maps attributed UTF-16 ranges to semantic mentions without QQ-id guessing" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["1578034713"] "Maxwell" 1000
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["1578034713"] "Maxwell" Nothing 1000
         value =
           object
             [ "messages"
@@ -235,7 +235,7 @@ spec = describe "iMessage adapter" $ do
   -- no caller, so the nodes said "plain text" and every @ went unanswered.
   -- These assert the wiring, not the predicate: they read the node list.
   it "recovers a rangeless mention and binds it to the registered account" $ do
-    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" 1000
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" Nothing 1000
         page :: Int -> String -> [String] -> String -> Value
         page row guid handles text =
           object
