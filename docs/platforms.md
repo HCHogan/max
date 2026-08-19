@@ -1,9 +1,10 @@
 # Platform operations
 
 Max stores one canonical message per semantic event and treats QQ, Matrix, and
-iMessage copies as endpoint deliveries. A QQ group and Matrix room are one
-conversation only when `matrix.mirror_qq_group` explicitly names that QQ
-group. The configured iMessage chat is always a separate conversation.
+iMessage copies as endpoint deliveries. Two endpoints are one conversation
+only when the non-QQ side's `mirror_qq_group` explicitly names that QQ group —
+`matrix.mirror_qq_group` and `imessage.mirror_qq_group` are the same operation.
+Omit it and the endpoint stands alone.
 
 ## Runtime invariants
 
@@ -80,11 +81,18 @@ message's canonical text rather than losing the whole delivery. The current
 adapter sends the first attachment from one canonical delivery;
 multi-attachment fan-out is not implemented yet.
 
-## Standalone iMessage
+## iMessage
 
 Install the companion service using [bridge/imsg/README.md](../bridge/imsg/README.md),
 then configure the same exact chat GUID under `imessage`. The bridge binds only
 to the Mac's Tailscale address and independently enforces the chat allowlist.
+
+`imessage.mirror_qq_group` links the chat to a QQ group on the same terms as
+the Matrix mirror. Adding it to an endpoint that has been running standalone
+rebinds that endpoint to the named conversation on the next start; messages
+already received keep the conversation they arrived in, so the chat's own past
+does not move into the QQ group's history and the QQ group's past does not
+appear in iMessage. Only traffic from the rebind onward is shared.
 
 Max pages `messages.after` in batches of 500 and persists the authoritative
 `next_rowid`, even for a page whose visible events were filtered. Watch is only
