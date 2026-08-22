@@ -111,10 +111,11 @@ persona: |
 #   mirror_qq_group: 123456789
 #   sync_timeout_ms: 30000
 
-# Optional standalone iMessage group.  `bridge_url` must be the authenticated
-# bridge in bridge/imsg on the Mac's Tailscale address.  The same chat GUID is
+# Optional iMessage group.  `bridge_url` must be the authenticated bridge in
+# bridge/imsg on the Mac's Tailscale address.  The same chat GUID is
 # allowlisted on both sides; no other Messages chat is reachable through the
-# bridge.  This conversation is never linked to QQ/Matrix implicitly.
+# bridge.  This conversation is never linked to QQ/Matrix implicitly — set
+# `mirror_qq_group` to link it, exactly as under `matrix:`.
 # imessage:
 #   bridge_url: "http://100.64.0.25:8787"
 #   bridge_token: "replace-with-a-long-random-token"
@@ -122,6 +123,7 @@ persona: |
 #   chat_guid: "iMessage;+;chat000000000000000000"
 #   mention_handles: ["max-bot@example.com"] # stable IDs in confirmed mentions
 #   bot_name: "Maxwell"                     # literal @Maxwell fallback only
+#   mirror_qq_group: 123456789              # omit for a standalone chat
 #   poll_interval_ms: 1000
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -344,19 +346,6 @@ llm:
 # Only those are pruned — the token counters behind the usage chart are
 # never deleted.  Top level, not under `admin:`.
 # admin_call_retention_days: 7
-
-# ─────────────────────────────────────────────────────────────────────────────
-# WeChat via a WeChatPadPro relay (demo scope: whitelisted chatrooms, text
-# in and out).  Absent = QQ only.  The three big QQ affordances degrade:
-# no reactions, no quote-replies, no pokes.
-# ─────────────────────────────────────────────────────────────────────────────
-
-# wechatpad:
-#   api_url: http://127.0.0.1:8059
-#   auth_key: your-pad-key
-#   self_wxid: wxid_xxxxxxxx     # the bot's own wxid
-#   bot_name: Max                # name members @ it by
-#   chatrooms: ["12345678@chatroom"]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # WeChat via an aixed/WeChat-Hook DLL injected into a Windows PC client.

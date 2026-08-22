@@ -12,8 +12,8 @@
 --     through @{base}\/set_callback@.  One JSON object per message:
 --     @{event_type:1001, msgid, type, timestamp, wxid, sender, roomid,
 --     content}@.  @roomid@ is non-empty exactly for chatroom messages and
---     @sender@ is a first-class field, so unlike the WeChatPadPro relay
---     there is no sender folded into the content to unpick.
+--     @sender@ is a first-class field, so there is no sender folded into
+--     the content to unpick.
 --
 -- Three facts about this transport shape the module:
 --
@@ -21,8 +21,8 @@
 --      @\/SendTextMsg@ produces no callback, and the send response carries no
 --      identifier.  So there is no echo to reconcile a delivery against and
 --      no risk of minting a second copy of a message max authored — the
---      'selfEventsAreEchoes' machinery the WeChatPadPro adapter needs has no
---      counterpart here.  The cost is that a delivery parks at
+--      'selfEventsAreEchoes' machinery an echoing transport would need has
+--      no counterpart here.  The cost is that a delivery parks at
 --      accepted-unconfirmed permanently; that is the honest state, because
 --      nothing downstream of the send ever confirms it.
 --      Messages a /human/ types from the bot's own account on a phone /do/

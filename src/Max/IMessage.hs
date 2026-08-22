@@ -37,7 +37,7 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.Int (Int64)
 import Data.List (find, sortOn)
-import Data.Maybe (catMaybes, fromMaybe, isNothing)
+import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -105,6 +105,9 @@ data IMessageConfig = IMessageConfig
     mentionHandles :: ![Text],
     -- Backwards-compatible literal @alias fallback for manually typed text.
     botName :: !Text,
+    -- Explicit QQ group this chat mirrors, or Nothing for a standalone
+    -- endpoint.  Same knob and same meaning as the Matrix adapter's.
+    mirrorQQGroup :: !(Maybe Int64),
     pollIntervalMs :: !Int
   }
   deriving stock (Eq, Generic)
@@ -122,6 +125,8 @@ instance Show IMessageConfig where
       <> " configured>"
       <> ", botName = "
       <> show cfg.botName
+      <> ", mirrorQQGroup = "
+      <> show cfg.mirrorQQGroup
       <> ", pollIntervalMs = "
       <> show cfg.pollIntervalMs
       <> "}"
@@ -221,13 +226,14 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
       (NativeAccountId cfg.accountKey)
       (NativeConversationId cfg.chatGuid)
       ConversationGroup
-      EndpointStandalone
-      Nothing
+      (maybe EndpointStandalone (const EndpointMirror) cfg.mirrorQQGroup)
+      cfg.mirrorQQGroup
       (iMessageCapabilitiesFor health.nativeReplies)
   logInfo "iMessage worker started" $
     object
       [ "chat_guid" .= cfg.chatGuid,
         "endpoint_id" .= registered.endpointId,
+        "mode" .= maybe ("standalone" :: Text) (const "mirror") cfg.mirrorQQGroup,
         "native_replies" .= health.nativeReplies
       ]
   -- What the endpoint advertises is the carried state: a bridge that failed one
@@ -263,8 +269,8 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
             (NativeAccountId cfg.accountKey)
             (NativeConversationId cfg.chatGuid)
             ConversationGroup
-            EndpointStandalone
-            Nothing
+            (maybe EndpointStandalone (const EndpointMirror) cfg.mirrorQQGroup)
+            cfg.mirrorQQGroup
             (iMessageCapabilitiesFor health.nativeReplies)
         logAttention "iMessage native reply capability changed" $
           object ["native_replies" .= health.nativeReplies]
@@ -419,8 +425,12 @@ iMessageIsAddressed cfg message =
     (\mentioned -> any (sameHandle mentioned) cfg.mentionHandles)
     message.mentionedHandles
     || ("@" <> T.toCaseFold (T.strip cfg.botName)) `T.isInfixOf` T.toCaseFold message.text
-  where
-    sameHandle left right = T.toCaseFold (T.strip left) == T.toCaseFold (T.strip right)
+
+-- Apple handles differ in case and stray whitespace between the mention
+-- metadata, the chat roster and the configured list; none of those differences
+-- mean a different person.
+sameHandle :: Text -> Text -> Bool
+sameHandle left right = T.toCaseFold (T.strip left) == T.toCaseFold (T.strip right)
 
 isUnattributedSystemEvent :: IMessageMessage -> Bool
 isUnattributedSystemEvent message =
@@ -718,9 +728,26 @@ messageContent runtime cfg message = do
 -- Messages stores attributed-string ranges in UTF-16 code units.  Preserve
 -- those exact ranges as semantic mentions; malformed or stale metadata is
 -- ignored without sacrificing the authoritative plain text.
+--
+-- The bridge in front of this module does not decode @attributedBody@, so it
+-- has never sent those ranges: it reports @mentioned_handles@, which says who
+-- was mentioned and nothing about where.  A mention that arrives as plain text
+-- is not a mention — 'Max.Dispatch.dispatchMentionsSelf' reads nodes — so
+-- every @ on iMessage read as unaddressed.  'iMessageIsAddressed' already knew
+-- better and had no caller; it is the gate here, which also covers the
+-- manually typed @\@Maxwell it recognises in text.
+--
+-- Only the bot's own mention is recoverable: a display name is needed to
+-- anchor the node, and config names exactly one.  Other participants' mentions
+-- stay as text, which is what they already were.
 iMessageTextNodes :: IMessageConfig -> IMessageMessage -> [Node 'Ingest]
-iMessageTextNodes _ message = mergeText (go 0 message.text (sortOn (.utf16Location) message.mentions))
+iMessageTextNodes cfg message
+  | not (iMessageIsAddressed cfg message) = mergeText ranged
+  | any isSelfMention ranged = mergeText ranged
+  | otherwise = mergeText (anchorSelf ranged)
   where
+    ranged = go 0 message.text (sortOn (.utf16Location) message.mentions)
+
     go _ remaining [] = [NText remaining | not (T.null remaining)]
     go consumed remaining (mention : rest)
       | mention.utf16Location < consumed = go consumed remaining rest
@@ -733,6 +760,41 @@ iMessageTextNodes _ message = mergeText (go 0 message.text (sortOn (.utf16Locati
                     <> [NMention (NativeUserId mention.handle) display]
                     <> go (mention.utf16Location + mention.utf16Length) after rest
             _ -> go consumed remaining rest
+
+    -- The node has to carry the identity the bot is *registered* under, which
+    -- is the bridge account key.  'mentionHandles' are Apple handles that mean
+    -- "me"; they address the bot but have no principal of their own, so a node
+    -- built from one resolves to a stranger.
+    selfTarget = NativeUserId cfg.accountKey
+
+    isSelfMention = \case
+      NMention (NativeUserId handle) _ ->
+        sameHandle handle cfg.accountKey || any (sameHandle handle) cfg.mentionHandles
+      _ -> False
+
+    -- Messages writes the mention's display name inline, so that name is the
+    -- position.  When it is absent — a rename since, or an @ the sender edited
+    -- away — the node lands at the end rather than at an invented offset: the
+    -- message was addressed either way, and that is what the node asserts.
+    anchorSelf [] = [NMention selfTarget cfg.botName]
+    anchorSelf (NText text : rest) = case firstAnchor text of
+      Just (before, after) ->
+        [NText before | not (T.null before)]
+          <> [NMention selfTarget cfg.botName]
+          <> [NText after | not (T.null after)]
+          <> rest
+      Nothing -> NText text : anchorSelf rest
+    anchorSelf (node : rest) = node : anchorSelf rest
+
+    -- Longest first: anchoring "Maxwell" inside a typed "@Maxwell" would leave
+    -- the @ behind as its own text node.
+    firstAnchor text =
+      listToMaybe
+        [ (before, T.drop (T.length anchor) match)
+          | anchor <- ["@" <> cfg.botName, cfg.botName],
+            let (before, match) = T.breakOn anchor text,
+            not (T.null match)
+        ]
 
 splitAtUtf16 :: Int -> Text -> Maybe (Text, Text)
 splitAtUtf16 target input

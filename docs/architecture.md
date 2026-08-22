@@ -342,7 +342,7 @@ app/Main
               ├─ MCP.Client ────── bounded browser MCP JSON/SSE response
               ├─ Matrix ────────── sync/backfill + idempotent send/media upload
               ├─ iMessage ──────── authenticated bridge catch-up/send/media
-              └─ Wechatpad ─────── bounded outbound relay POST
+              └─ WechatHook ────── bounded outbound hook POST
 ```
 
 The runtime boundary owns request execution, connection reuse, response-body

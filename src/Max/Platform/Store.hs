@@ -834,7 +834,32 @@ ensureConfiguredEndpoint platform nativeAccount nativeConversation kind mode mLe
         \ WHERE platform_account_id = ? AND native_conversation_id = ? FOR UPDATE"
         (account, conversationNative)
     (endpoint, conversation) <- case existing :: [(Int64, Int64)] of
-      [(endpointId', conversationId')] -> pure (endpointId', conversationId')
+      -- "A mirror binds to the explicitly named legacy conversation" has to
+      -- hold for an endpoint that already exists, not only for one being
+      -- created: an endpoint that ran standalone first and is named as a
+      -- mirror later would otherwise keep its own conversation forever, and
+      -- the fan-out — which pairs endpoints by conversation — would never see
+      -- a peer.  Rebinding moves the endpoint, not its history: past messages
+      -- are keyed by @group_id@ and stay in the conversation that received
+      -- them.
+      [(endpointId', conversationId')] -> case mLegacy of
+        Nothing -> pure (endpointId', conversationId')
+        Just legacy -> do
+          targetRows <-
+            query
+              "INSERT INTO conversations (conversation_kind, legacy_group_id) VALUES (?, ?) \
+              \ ON CONFLICT (legacy_group_id) DO UPDATE \
+              \ SET conversation_kind = EXCLUDED.conversation_kind \
+              \ RETURNING conversation_id"
+              (renderConversationKind kind, legacy)
+          let target = exactlyOne "ensureConfiguredEndpoint rebind" targetRows
+          when (target /= conversationId') $
+            void $
+              execute
+                "UPDATE conversation_endpoints SET conversation_id = ?, updated_at = now() \
+                \ WHERE endpoint_id = ?"
+                (target, endpointId')
+          pure (endpointId', target)
       [] -> do
         conversationRows <- case mLegacy of
           Just legacy ->
