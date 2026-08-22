@@ -63,7 +63,6 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone, minutesToTimeZone)
-import Data.Version (makeVersion)
 import Log (LogLevel (..))
 import Max.Admin (AdminConfig (..))
 import Max.CliProxy (CliProxyConfig (..))
@@ -81,6 +80,7 @@ import OneBot.Server (ServerConfig (..))
 import OptEnvConf
 import Path (Abs, File, Path, toFilePath)
 import Path.IO (resolveFile')
+import Paths_max (version)
 import System.Directory (doesFileExist)
 
 -- | Final, fully-resolved application config.
@@ -228,7 +228,7 @@ loadConfig = do
   usedRef <- newIORef Nothing
   cfg <-
     runParser
-      (makeVersion [0, 1, 0])
+      version
       "max — QQ group-chat agent over OneBot 11 / NapCatQQ"
       (appConfigParser usedRef)
   used <- readIORef usedRef

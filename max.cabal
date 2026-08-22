@@ -565,7 +565,10 @@ executable max-plan-live
     import:           warnings, lang
     hs-source-dirs:   plan-eval
     main-is:          Live.hs
-    other-modules:    Harness
+    other-modules:
+        Harness
+        Paths_max
+    autogen-modules:  Paths_max
     build-depends:
         , aeson                >= 2.2  && < 2.4
         , base                 >= 4.20 && < 5

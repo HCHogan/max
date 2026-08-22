@@ -45,7 +45,7 @@ import Data.Map.Strict qualified as Map
 import Data.Ord (Down (..))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Version (makeVersion)
+import Paths_max (version)
 import Effectful
 import Effectful.Log (LogLevel (LogAttention), runLog)
 import Harness
@@ -195,7 +195,7 @@ main = do
   usedRef <- newIORef Nothing
   (cfg, opts) <-
     runParser
-      (makeVersion [0, 1, 0])
+      version
       "max-plan-live — ask real models to write the plan dialect"
       ((,) <$> appConfigParser usedRef <*> liveOptsParser)
 
