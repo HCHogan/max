@@ -1,7 +1,7 @@
 -- |
--- Browser tools exposed to the agent, proxied to a per-group
--- camoufox-MCP server (see "Max.Browser.Registry").  The container is
--- started lazily on the first call and reused across dispatches.
+-- Browser tools exposed to the agent.  A group reuses one lightweight Docker
+-- host, while every turn/subagent receives an isolated MCP client and camoufox
+-- browse session (see "Max.Browser.Registry").
 --
 -- == The snapshot → selector → act loop
 --
@@ -17,7 +17,7 @@
 -- == Sessions
 --
 -- All page state lives in a camoufox /browse session/.  The registry
--- records the group's live @sessionId@; every tool here injects it, so
+-- records the turn's live @sessionId@; every tool here injects it, so
 -- the model never sees session plumbing.  @browser_navigate@ starts a
 -- session on demand and transparently restarts one when camoufox
 -- expired it (idle TTL, capped upstream at 15 min); the other tools
@@ -45,51 +45,61 @@ import Max.Browser.Error
   )
 import Max.Browser.Registry
   ( BrowserRegistry,
+    BrowserScope,
     brProxy,
+    browserScopeForDispatch,
+    browserScopeForTurn,
     callBrowserTool,
     getCamoSession,
     setCamoSession,
     withBrowserSession,
   )
 import Max.Effects.Tools (Tool (..))
-import Max.Tools.Schema (boolParam, enumParam, numberParam, stringParam, toolObject)
 import Max.MCP.Client (mcpTextContent)
-import OneBot.Types (GroupId)
+import Max.ToolContext (ToolContext, toolCanonicalId, toolGroupId, toolTurnOutputContext)
+import Max.Tools.Schema (boolParam, enumParam, numberParam, stringParam, toolObject)
+import Max.Turn.Types (AgentTurnRef (atrTurnId), turnOutputAgentTurn)
 
-browserToolsFor :: (IOE :> es) => GroupId -> BrowserRegistry -> [Tool es]
-browserToolsFor gid reg =
-  [ navigateTool gid reg,
-    viewZhihuTool gid reg,
-    snapshotTool gid reg,
-    clickTool gid reg,
-    typeTool gid reg,
-    pressKeyTool gid reg,
-    waitForTool gid reg,
-    scrollTool gid reg
+browserToolsFor :: (IOE :> es) => ToolContext -> BrowserRegistry -> [Tool es]
+browserToolsFor context reg =
+  [ navigateTool scope reg,
+    viewZhihuTool scope reg,
+    snapshotTool scope reg,
+    clickTool scope reg,
+    typeTool scope reg,
+    pressKeyTool scope reg,
+    waitForTool scope reg,
+    scrollTool scope reg
   ]
+  where
+    scope =
+      maybe
+        (browserScopeForDispatch (toolGroupId context) (toolCanonicalId context))
+        (browserScopeForTurn (toolGroupId context) . (.atrTurnId) . turnOutputAgentTurn)
+        (toolTurnOutputContext context)
 
 --------------------------------------------------------------------------------
 -- Session plumbing.
 
--- | Forget the group's session; when it is wedged-but-alive, also
+-- | Forget the turn's session; when it is wedged-but-alive, also
 -- close it server-side to free the slot (best-effort).
-dropSession :: BrowserRegistry -> GroupId -> Text -> Bool -> IO ()
-dropSession reg gid sid closeIt = do
-  setCamoSession reg gid Nothing
+dropSession :: BrowserRegistry -> BrowserScope -> Text -> Bool -> IO ()
+dropSession reg scope sid closeIt = do
+  setCamoSession reg scope Nothing
   when closeIt . void $
-    callBrowserTool reg gid "browse_session_close" (object ["sessionId" .= sid])
+    callBrowserTool reg scope "browse_session_close" (object ["sessionId" .= sid])
 
 -- | Start a fresh camoufox browse session and record its id.
-startSession :: BrowserRegistry -> GroupId -> IO (Either Text Text)
-startSession reg gid = do
-  setCamoSession reg gid Nothing
+startSession :: BrowserRegistry -> BrowserScope -> IO (Either Text Text)
+startSession reg scope = do
+  setCamoSession reg scope Nothing
   let startArgs = object (("humanize" .= True) : foldMap (\p -> ["proxy" .= p]) reg.brProxy)
-  callBrowserTool reg gid "browse_session_start" startArgs >>= \case
+  callBrowserTool reg scope "browse_session_start" startArgs >>= \case
     Left e -> pure (Left (renderBrowserError e))
     Right v -> case sessionIdOf v of
       Nothing ->
         pure (Left ("browse_session_start returned no sessionId: " <> T.take 200 (mcpTextContent v)))
-      Just sid -> Right sid <$ setCamoSession reg gid (Just sid)
+      Just sid -> Right sid <$ setCamoSession reg scope (Just sid)
 
 -- | Pull the @sessionId@ out of a @browse_session_start@ result:
 -- prefer the MCP @structuredContent@, fall back to the JSON text block.
@@ -102,31 +112,31 @@ sessionIdOf v =
     fromPayload :: Value -> Parser Text
     fromPayload = withObject "payload" (.: "sessionId")
 
--- | Run one @browse_session_*@ tool against the group's session,
+-- | Run one @browse_session_*@ tool against the turn's session,
 -- injecting @sessionId@.  Requires an existing session; on a
 -- session-death error the stored id is dropped and the model is told
 -- to re-navigate.
 withSession ::
   BrowserRegistry ->
-  GroupId ->
+  BrowserScope ->
   Text ->
   [(Key, Value)] ->
   IO (Either Text Value)
-withSession reg gid mcpTool fields =
-  withBrowserSession reg gid $
-    getCamoSession reg gid >>= \case
+withSession reg scope mcpTool fields =
+  withBrowserSession reg scope $
+    getCamoSession reg scope >>= \case
       Nothing -> pure (Left "no page is open — call browser_navigate first")
       Just sid ->
-        callBrowserTool reg gid mcpTool (withSid sid fields) >>= \case
+        callBrowserTool reg scope mcpTool (withSid sid fields) >>= \case
           Left err -> case browserErrorKind err of
             BrowserSessionBlocked -> do
-              dropSession reg gid sid True
+              dropSession reg scope sid True
               pure . Left $
                 "the browser blocked a request and the session was reset — call browser_navigate to reopen ("
                   <> renderBrowserError err
                   <> ")"
             BrowserSessionGone -> do
-              dropSession reg gid sid False
+              dropSession reg scope sid False
               pure (Left "the browser session expired — call browser_navigate to reopen the page")
             BrowserCallFailed -> pure (Left (renderBrowserError err))
           Right value -> pure (Right value)
@@ -156,42 +166,42 @@ passThrough _ _ = []
 --------------------------------------------------------------------------------
 -- Tools.
 
-navigateTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
-navigateTool gid reg =
+navigateTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
+navigateTool scope reg =
   Tool
     { toolName = "browser_navigate",
       toolDescription =
-        "Open a URL in the group's stealth browser (camoufox). Starts the browser on \
+        "Open a URL in this turn's isolated stealth browser (camoufox). Starts it on \
         \first use and reopens it transparently if the session expired. Returns the \
         \page's visible text; call browser_snapshot for interactive elements.",
       toolSchema = toolObject [("url", stringParam "Absolute URL to open, e.g. https://example.com")] ["url"],
       toolRun = \args -> liftIO $ do
         case argText args "url" of
           Nothing -> pure (Left "missing required argument: url")
-          Just url -> asResult <$> navigateUrl reg gid url
+          Just url -> asResult <$> navigateUrl reg scope url
     }
 
--- | Navigate the group's browser to a URL, starting (or transparently
+-- | Navigate the turn's browser to a URL, starting (or transparently
 -- replacing) the camoufox session as needed — the machinery behind
 -- @browser_navigate@, shared with @view_zhihu@.
-navigateUrl :: BrowserRegistry -> GroupId -> Text -> IO (Either Text Value)
-navigateUrl reg gid url =
-  withBrowserSession reg gid $
-    getCamoSession reg gid >>= \case
+navigateUrl :: BrowserRegistry -> BrowserScope -> Text -> IO (Either Text Value)
+navigateUrl reg scope url =
+  withBrowserSession reg scope $
+    getCamoSession reg scope >>= \case
       Nothing -> freshNavigate
       Just sid ->
-        callBrowserTool reg gid "browse_session_navigate" (navArgs sid) >>= \case
+        callBrowserTool reg scope "browse_session_navigate" (navArgs sid) >>= \case
           Left err -> case browserErrorKind err of
-            BrowserSessionBlocked -> dropSession reg gid sid True >> freshNavigate
-            BrowserSessionGone -> dropSession reg gid sid False >> freshNavigate
+            BrowserSessionBlocked -> dropSession reg scope sid True >> freshNavigate
+            BrowserSessionGone -> dropSession reg scope sid False >> freshNavigate
             BrowserCallFailed -> pure (Left (renderBrowserError err))
           Right value -> pure (Right value)
   where
     freshNavigate =
-      startSession reg gid
+      startSession reg scope
         >>= either
           (pure . Left)
-          (\sid -> first renderBrowserError <$> callBrowserTool reg gid "browse_session_navigate" (navArgs sid))
+          (\sid -> first renderBrowserError <$> callBrowserTool reg scope "browse_session_navigate" (navArgs sid))
     navArgs sid = withSid sid ["url" .= url]
 
 --------------------------------------------------------------------------------
@@ -205,8 +215,8 @@ navigateUrl reg gid url =
 -- navigate, and when the response smells like the challenge
 -- (non-200, or the slogan-only interstitial), wait and renavigate,
 -- up to 'zhihuRetries' times.
-viewZhihuTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
-viewZhihuTool gid reg =
+viewZhihuTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
+viewZhihuTool scope reg =
   Tool
     { toolName = "view_zhihu",
       toolDescription =
@@ -227,7 +237,7 @@ viewZhihuTool gid reg =
     }
   where
     go retries url =
-      navigateUrl reg gid url >>= \case
+      navigateUrl reg scope url >>= \case
         Left e -> pure (Left e)
         Right v -> case navPayload v of
           Just (status, txt)
@@ -268,8 +278,8 @@ navPayload v =
     fromPayload :: Value -> Parser (Int, Text)
     fromPayload = withObject "payload" $ \o -> (,) <$> o .: "status" <*> o .: "text"
 
-snapshotTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
-snapshotTool gid reg =
+snapshotTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
+snapshotTool scope reg =
   Tool
     { toolName = "browser_snapshot",
       toolDescription =
@@ -286,16 +296,16 @@ snapshotTool gid reg =
       toolRun = \args ->
         liftIO $
           asResult
-            <$> withSession reg gid "browse_session_snapshot" (passThrough args ["selector", "maxElements"])
+            <$> withSession reg scope "browse_session_snapshot" (passThrough args ["selector", "maxElements"])
     }
 
 -- | Wrap one camoufox sequence action as a @browse_session_action@ call.
-runAction :: BrowserRegistry -> GroupId -> [(Key, Value)] -> IO (Either Text Value)
-runAction reg gid actionFields =
-  withSession reg gid "browse_session_action" ["action" .= object actionFields]
+runAction :: BrowserRegistry -> BrowserScope -> [(Key, Value)] -> IO (Either Text Value)
+runAction reg scope actionFields =
+  withSession reg scope "browse_session_action" ["action" .= object actionFields]
 
-clickTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
-clickTool gid reg =
+clickTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
+clickTool scope reg =
   Tool
     { toolName = "browser_click",
       toolDescription =
@@ -307,11 +317,11 @@ clickTool gid reg =
         Nothing -> pure (Left "missing required argument: selector")
         Just sel ->
           asResult
-            <$> runAction reg gid ["type" .= ("click" :: Text), "selector" .= sel, "clickMode" .= ("auto" :: Text)]
+            <$> runAction reg scope ["type" .= ("click" :: Text), "selector" .= sel, "clickMode" .= ("auto" :: Text)]
     }
 
-typeTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
-typeTool gid reg =
+typeTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
+typeTool scope reg =
   Tool
     { toolName = "browser_type",
       toolDescription =
@@ -326,16 +336,16 @@ typeTool gid reg =
           ["selector", "text"],
       toolRun = \args -> liftIO $ case (argText args "selector", argText args "text") of
         (Just sel, Just txt) -> do
-          filled <- runAction reg gid ["type" .= ("fill" :: Text), "selector" .= sel, "value" .= txt]
+          filled <- runAction reg scope ["type" .= ("fill" :: Text), "selector" .= sel, "value" .= txt]
           asResult <$> case (filled, argBool args "submit") of
             (Right _, Just True) ->
-              runAction reg gid ["type" .= ("press" :: Text), "selector" .= sel, "key" .= ("Enter" :: Text)]
+              runAction reg scope ["type" .= ("press" :: Text), "selector" .= sel, "key" .= ("Enter" :: Text)]
             _ -> pure filled
         _ -> pure (Left "missing required arguments: selector, text")
     }
 
-pressKeyTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
-pressKeyTool gid reg =
+pressKeyTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
+pressKeyTool scope reg =
   Tool
     { toolName = "browser_press_key",
       toolDescription =
@@ -353,14 +363,14 @@ pressKeyTool gid reg =
           asResult
             <$> runAction
               reg
-              gid
+              scope
               ( ["type" .= ("press" :: Text), "key" .= key]
                   <> maybe [] (\s -> ["selector" .= s]) (argText args "selector")
               )
     }
 
-waitForTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
-waitForTool gid reg =
+waitForTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
+waitForTool scope reg =
   Tool
     { toolName = "browser_wait_for",
       toolDescription =
@@ -380,12 +390,12 @@ waitForTool gid reg =
           asResult
             <$> runAction
               reg
-              gid
+              scope
               (("type" .= ("waitFor" :: Text)) : passThrough args ["selector", "state", "loadState", "timeout"])
     }
 
-scrollTool :: (IOE :> es) => GroupId -> BrowserRegistry -> Tool es
-scrollTool gid reg =
+scrollTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
+scrollTool scope reg =
   Tool
     { toolName = "browser_scroll",
       toolDescription =
@@ -403,6 +413,6 @@ scrollTool gid reg =
           asResult
             <$> runAction
               reg
-              gid
+              scope
               (("type" .= ("scroll" :: Text)) : passThrough args ["deltaY", "deltaX", "selector"])
     }

@@ -4,6 +4,7 @@
 -- 'truncateAll' (wipes every test-touched table between cases).
 module Helpers
   ( withDb,
+    withDbConcurrent,
     requireJust,
     resultId,
     testTime,
@@ -19,19 +20,19 @@ module Helpers
   )
 where
 
+import Control.Monad (unless)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Control.Monad (unless)
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), execute, execute_, query)
 import Effectful (Eff, IOE, runEff)
+import Effectful.Concurrent (Concurrent, runConcurrent)
 import Effectful.Log (Log, LogLevel (LogTrace), runLog)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Log.Logger (Logger, mkLogger)
 import Max.DB.Connection (DbPool, withConn)
-import Test.Hspec (expectationFailure)
 import Max.DB.Session qualified as SessionDB
 import Max.Effects.Blob (Blob, runBlob)
 import Max.IR (Body (..), Node (NText))
@@ -55,12 +56,16 @@ import Max.Platform.Types
 import Max.Session.Types (Session)
 import OneBot.Types (GroupId (..), UserId (..))
 import System.IO.Unsafe (unsafePerformIO)
+import Test.Hspec (expectationFailure)
 
 -- | Run an effectful, DB-touching action in plain 'IO'.  The set of
 -- effects is fixed to @['WithConnection', 'IOE']@ — most functions
 -- under test don't ask for 'Log'.  Use 'withDbLog' when they do.
 withDb :: DbPool -> Eff '[WithConnection, IOE] a -> IO a
 withDb pool = runEff . runWithConnectionPool pool
+
+withDbConcurrent :: DbPool -> Eff '[WithConnection, Concurrent, IOE] a -> IO a
+withDbConcurrent pool = runEff . runConcurrent . runWithConnectionPool pool
 
 -- | Variant that includes a local 'Blob' store and a (silent) 'Log' effect for
 -- 'Max.Prompt.buildContext'.  Log messages are dropped.

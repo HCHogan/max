@@ -37,8 +37,19 @@ data TimelineRow = TimelineRow
 instance FromRow TimelineRow where
   fromRow =
     TimelineRow
-      <$> field <*> field <*> field <*> field <*> field <*> field <*> field
-      <*> field <*> field <*> field <*> field <*> field <*> field
+      <$> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
+      <*> field
 
 loadAdminTimeline ::
   (WithConnection :> es, IOE :> es) =>
@@ -126,7 +137,7 @@ endpointValues conversation = do
       \ 'enabled', endpoint.enabled AND account.enabled, \
       \ 'delivery_pending', (SELECT count(*) FROM message_deliveries delivery \
       \                      WHERE delivery.endpoint_id = endpoint.endpoint_id \
-      \                        AND delivery.status IN ('pending', 'sending')), \
+      \                        AND delivery.status IN ('pending', 'reserved', 'sending')), \
       \ 'delivery_failed', (SELECT count(*) FROM message_deliveries delivery \
       \                     WHERE delivery.endpoint_id = endpoint.endpoint_id \
       \                       AND delivery.status = 'failed'), \

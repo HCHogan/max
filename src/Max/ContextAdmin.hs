@@ -24,11 +24,11 @@ import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ContextTraceStore (ContextPlanTraceRow (..), listContextPlanTraces)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.History (notForwardChild)
-import Max.DB.Transaction (withTransaction)
 import Max.EpisodeStore
   ( ActiveCompartment (..),
     CaptureReason (CaptureRebuild),
@@ -41,6 +41,8 @@ import Max.EpisodeStore
 import Max.Historian (historianPromptVersion, historianSchemaVersion)
 import Max.MaintenanceLease
   ( MaintenanceDomain (EmbeddingMaintenance),
+    MaintenanceRun (..),
+    withMaintenanceFence,
     withMaintenanceLease,
   )
 import Max.MemoryStore (MemoryId (..), invalidateMemoryEmbeddingsInConversation)
@@ -614,29 +616,29 @@ loadEmbeddingStatus targetModel conversationId = do
         \  FROM messages AS message WHERE NOT message.is_synthetic AND "
           <> notForwardChild "message"
           <> " \
-      \    AND char_length(message.rendered_text) >= 4 \
-      \  UNION ALL \
-      \  SELECT 'memory', COALESCE(memory.source_group_id, memory.scope_id), memory.content, \
-      \         memory.embedding IS NOT NULL, memory.embedding_model, memory.embedding_dimensions, memory.embedding_content_hash \
-      \  FROM memories AS memory WHERE memory.lifecycle IN ('active', 'permanent') \
-      \  UNION ALL \
-      \  SELECT 'episode', episode.conversation_id, episode.summary_p1, \
-      \         episode.embedding IS NOT NULL, episode.embedding_model, episode.embedding_dimensions, episode.embedding_content_hash \
-      \  FROM conversation_compartments AS episode WHERE episode.state = 'active' \
-      \  UNION ALL \
-      \  SELECT 'sticker', NULL::bigint, sticker.description, \
-      \         sticker.embedding IS NOT NULL, sticker.embedding_model, sticker.embedding_dimensions, sticker.embedding_content_hash \
-      \  FROM stickers AS sticker WHERE sticker.description IS NOT NULL AND NOT sticker.banned \
-      \), classified AS ( \
-      \  SELECT corpus.*, encode(digest(convert_to(corpus.content, 'UTF8'), 'sha256'), 'hex') AS expected_hash \
-      \  FROM corpus WHERE (?::bigint IS NULL OR corpus.conversation_id = ?) \
-      \) \
-      \ SELECT corpus, count(*) AS total, \
-      \        count(*) FILTER (WHERE has_embedding AND embedding_model = ? AND embedding_content_hash = expected_hash) AS ready, \
-      \        count(*) FILTER (WHERE NOT has_embedding OR embedding_model IS DISTINCT FROM ? OR embedding_content_hash IS DISTINCT FROM expected_hash) AS pending, \
-      \        count(*) FILTER (WHERE has_embedding AND embedding_content_hash IS DISTINCT FROM expected_hash) AS stale_hash, \
-      \        string_agg(DISTINCT COALESCE(embedding_model, '(pending)') || ':' || COALESCE(embedding_dimensions::text, '-'), ', ' ORDER BY COALESCE(embedding_model, '(pending)') || ':' || COALESCE(embedding_dimensions::text, '-')) AS stored_spaces \
-      \ FROM classified GROUP BY corpus ORDER BY corpus"
+             \    AND char_length(message.rendered_text) >= 4 \
+             \  UNION ALL \
+             \  SELECT 'memory', COALESCE(memory.source_group_id, memory.scope_id), memory.content, \
+             \         memory.embedding IS NOT NULL, memory.embedding_model, memory.embedding_dimensions, memory.embedding_content_hash \
+             \  FROM memories AS memory WHERE memory.lifecycle IN ('active', 'permanent') \
+             \  UNION ALL \
+             \  SELECT 'episode', episode.conversation_id, episode.summary_p1, \
+             \         episode.embedding IS NOT NULL, episode.embedding_model, episode.embedding_dimensions, episode.embedding_content_hash \
+             \  FROM conversation_compartments AS episode WHERE episode.state = 'active' \
+             \  UNION ALL \
+             \  SELECT 'sticker', NULL::bigint, sticker.description, \
+             \         sticker.embedding IS NOT NULL, sticker.embedding_model, sticker.embedding_dimensions, sticker.embedding_content_hash \
+             \  FROM stickers AS sticker WHERE sticker.description IS NOT NULL AND NOT sticker.banned \
+             \), classified AS ( \
+             \  SELECT corpus.*, encode(digest(convert_to(corpus.content, 'UTF8'), 'sha256'), 'hex') AS expected_hash \
+             \  FROM corpus WHERE (?::bigint IS NULL OR corpus.conversation_id = ?) \
+             \) \
+             \ SELECT corpus, count(*) AS total, \
+             \        count(*) FILTER (WHERE has_embedding AND embedding_model = ? AND embedding_content_hash = expected_hash) AS ready, \
+             \        count(*) FILTER (WHERE NOT has_embedding OR embedding_model IS DISTINCT FROM ? OR embedding_content_hash IS DISTINCT FROM expected_hash) AS pending, \
+             \        count(*) FILTER (WHERE has_embedding AND embedding_content_hash IS DISTINCT FROM expected_hash) AS stale_hash, \
+             \        string_agg(DISTINCT COALESCE(embedding_model, '(pending)') || ':' || COALESCE(embedding_dimensions::text, '-'), ', ' ORDER BY COALESCE(embedding_model, '(pending)') || ':' || COALESCE(embedding_dimensions::text, '-')) AS stored_spaces \
+             \ FROM classified GROUP BY corpus ORDER BY corpus"
       )
       (conversationId, conversationId, targetModel, targetModel)
   pure $
@@ -767,7 +769,7 @@ enqueueContextRebuildAdmin conversationId selectedCompartment profile operationK
       selected
 
 invalidateEmbeddingsAdmin ::
-  (WithConnection :> es, IOE :> es) =>
+  (Concurrent :> es, WithConnection :> es, IOE :> es) =>
   Int64 ->
   [Text] ->
   Eff es (Either Text Value)
@@ -776,16 +778,22 @@ invalidateEmbeddingsAdmin conversationId requestedCorpora =
     EmbeddingMaintenance
     ("admin-reindex:" <> T.pack (show conversationId))
     60
-    (const invalidate)
+    invalidate
     >>= \case
-      Nothing -> pure (Left "embedding maintenance is busy; retry after the current worker batch")
-      Just value -> pure (Right value)
+      MaintenanceUnavailable -> pure (Left "embedding maintenance is busy; retry after the current worker batch")
+      MaintenanceLeaseLost -> pure (Left "embedding maintenance lease was lost; the transaction was cancelled")
+      MaintenanceCompleted result -> pure result
   where
-    invalidate = withTransaction $ do
+    invalidate lease =
+      withMaintenanceFence lease invalidateHeld >>= \case
+        Nothing -> pure (Left "embedding maintenance lease expired before invalidation began")
+        Just result -> pure result
+
+    invalidateHeld = do
       let corpora = if null requestedCorpora then ["memory"] else requestedCorpora
           invalid = filter (`notElem` ["message", "memory", "episode"]) corpora
       if not (null invalid)
-        then pure (object ["error" .= ("unsupported corpora: " <> T.intercalate ", " invalid)])
+        then pure (Left ("unsupported corpora: " <> T.intercalate ", " invalid))
         else do
           messages <-
             if "message" `elem` corpora
@@ -799,7 +807,7 @@ invalidateEmbeddingsAdmin conversationId requestedCorpora =
             if "episode" `elem` corpora
               then execute "UPDATE conversation_compartments SET embedding = NULL, embedding_model = NULL, embedding_dimensions = NULL, embedding_content_hash = NULL, embedding_updated_at = NULL WHERE conversation_id = ? AND state = 'active'" (Only conversationId)
               else pure 0
-          pure $
+          pure . Right $
             object
               [ "conversation_id" .= conversationId,
                 "invalidated"

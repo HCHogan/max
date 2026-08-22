@@ -1,6 +1,6 @@
 cabal-version:      3.0
 name:               max
-version:            0.17.0
+version:            0.17.1
 synopsis:           Multi-platform group agent with durable context and memory
 license:            MIT
 license-file:       LICENSE
@@ -412,6 +412,7 @@ test-suite max-test
         Max.LLM.StreamSpec
         Max.LogSpec
         OneBot.EventSpec
+        OneBot.ServerSpec
         OneBot.SegmentSpec
         Max.RenderSpec
         Max.MonitorSpec

@@ -24,8 +24,8 @@ import Max.Browser.Registry
     reapStaleBrowsers,
   )
 import Max.Config (AppConfig (..), loadConfig)
-import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.AgentTurn (ReclaimedTurns (..), addAgentTurnUsage, reclaimInterruptedTurns)
+import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
 import Max.DB.Monitor (reclaimExpiredMonitorFireClaims)
@@ -48,8 +48,8 @@ import Max.Forward (forwardWorker)
 import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, handleEvents, planDriverFor, resumeInterruptedTurn)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
-import Max.Images (imageWorker)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
+import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Log (withCompactLogger)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
@@ -76,7 +76,7 @@ import Max.Util (trySync)
 import Max.WechatHook (wechatHookBackend, wechatHookWorker)
 import Max.Worker (WorkerCriticality (..), withWorkers, worker)
 import OneBot.Event (Event)
-import OneBot.Server (Client, ServerConfig (..), runServer)
+import OneBot.Server (ClientSlot, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
 import System.Posix.Signals (Handler (Catch), installHandler, sigTERM)
 
@@ -118,7 +118,7 @@ main = do
           sessions <- newSessionRegistry
           skillReg <- newSkillRegistry
           tasks <- newTaskRegistry
-          clientRef <- newTVarIO (Nothing :: Maybe Client)
+          clientRef <- newTVarIO (Nothing :: ClientSlot)
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
           let mEmbed = newEmbedClient httpRuntime <$> cfg.embedding
           episodeScheduler <- traverse (const newEpisodeScheduler) cfg.memoryExtractProfile
@@ -249,7 +249,7 @@ runApp ::
   -- | The log tail the admin panel serves; 'Nothing' when the panel
   -- is not configured, in which case nothing was captured either.
   Maybe LogBuffer ->
-  TVar (Maybe Client) ->
+  TVar ClientSlot ->
   [DeliveryTransport] ->
   -- | Main thread, for 'drainWorker' to interrupt once drained.
   ThreadId ->

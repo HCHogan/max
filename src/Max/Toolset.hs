@@ -20,8 +20,8 @@ module Max.Toolset
   )
 where
 
-import Data.Maybe (isJust)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful
@@ -36,11 +36,11 @@ import Max.Effects.PlatformApi (PlatformApi)
 import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools
   ( SchemaVersion (..),
+    Tool (..),
     ToolAuthority (..),
     ToolCatalog,
     ToolCatalogError,
     ToolDeadline (..),
-    Tool (..),
     ToolDefinition (..),
     ToolEffect (..),
     ToolParallelism (..),
@@ -52,7 +52,6 @@ import Max.Env (BotEnv (..))
 import Max.HttpRuntime (HttpRuntime)
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolStickers)
-import Max.Turn.Continuity (toolCatalogFingerprint)
 import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
@@ -62,7 +61,7 @@ import Max.Tools.Images (imageToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Monitor (monitorToolsFor)
 import Max.Tools.Pins (pinToolsFor)
-import Max.Tools.Plan (durablePlanJournal, plannableSubCatalog, planToolsFor)
+import Max.Tools.Plan (durablePlanJournal, planToolsFor, plannableSubCatalog)
 import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
@@ -70,6 +69,7 @@ import Max.Tools.Skills (skillToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
 import Max.Tools.Subgoal (subgoalToolsFor)
 import Max.Tools.Video (videoToolsFor)
+import Max.Turn.Continuity (toolCatalogFingerprint)
 import OneBot.Types (GroupId, isPrivateChat)
 
 -- | The tool list for one dispatch.
@@ -170,7 +170,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> fileToolsFor env.beTimeZone dc env.beSandboxes
         <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsFor]
         <> maybe [] (searchToolsFor runtime) env.beSearch
-        <> [t | toolMultimodal dc, t <- browserToolsFor (toolGroupId dc) env.beBrowsers]
+        <> [t | toolMultimodal dc, t <- browserToolsFor dc env.beBrowsers]
         <> [t | toolMultimodal dc, t <- videoToolsFor dc]
 
 -- | How many tools a dispatch with these gates would get — the
@@ -279,7 +279,11 @@ toolInventory =
     -- ceiling that would refuse the search a plan might make should refuse the
     -- plan tool too, rather than let it through and find out inside.
     always (definition "plan_run" [EffectRead "network.search", EffectRead "conversation.db"] SequentialOnly RetryUnsafe [CurrentConversation]),
-    always (readTool "view_bilibili" ["network.bilibili"] [CurrentConversation]),
+    -- Queues turn-scoped inline video as well as reading the network.  Keep it
+    -- sequential inside one agent round so concurrent calls cannot race the
+    -- shared attachment order/budget; independent turns have independent
+    -- ToolOutput interpreters and still run concurrently.
+    always (statefulReadTool "view_bilibili" ["network.bilibili", "tool.media"] [CurrentConversation]),
     always (writeTool "sandbox_create" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
     -- The model picks this one's timeout itself, clamped to ten minutes, and
     -- 'timeout --preserve-status' enforces it inside the container.  What that

@@ -56,7 +56,7 @@ runRunBrowser name image = do
           "--name",
           T.unpack name,
           -- Stretch camoufox-mcp's browse-session idle TTL to its
-          -- 15-minute ceiling (default 10) — the group's page state
+          -- 15-minute ceiling (default 10) — each turn's page state
           -- lives in that session, and every expiry forces the model
           -- to re-navigate from scratch.
           "-e",

@@ -41,7 +41,7 @@ import Max.Platform (ActionAddress (..), PlatformBackend (..), actionAddress, ba
 import Max.Platform.Store (platformForLegacyConversation, platformForLegacyMessage)
 import Network.WebSockets qualified as WS
 import OneBot.Action (Action, Envelope (..), Response, encodeAction)
-import OneBot.Server (Client (..))
+import OneBot.Server (Client (..), ClientSlot)
 
 data PlatformApi :: Effect where
   -- | Fire and forget. Silently drops if no client connected (logs).
@@ -75,7 +75,7 @@ runPlatformApi dflt extras = interpret $ \_ -> \case
 
 -- | The NapCat (QQ) backend over the reverse-WS client that
 -- 'OneBot.Server' publishes per connection.
-qqBackend :: TVar (Maybe Client) -> PlatformBackend
+qqBackend :: TVar ClientSlot -> PlatformBackend
 qqBackend ref =
   PlatformBackend
     { pbPlatform = "qq",
@@ -83,11 +83,11 @@ qqBackend ref =
       pbSend = \a ->
         readTVarIO ref >>= \case
           Nothing -> pure (Left "no client connected")
-          Just c -> sendIO c a,
+          Just (_, c) -> sendIO c a,
       pbCall = \a t ->
         readTVarIO ref >>= \case
           Nothing -> pure (Left "no client connected")
-          Just c -> callIO c a t
+          Just (_, c) -> callIO c a t
     }
 
 resolveBackend ::

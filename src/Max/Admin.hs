@@ -55,10 +55,11 @@ import Data.Text.Read qualified as TR
 import Data.Time (diffUTCTime, getCurrentTime, timeZoneMinutes)
 import Data.Version (showVersion)
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
-import Max.BuildInfo (gitRev)
 import Max.AdminTimeline (loadAdminTimeline, waitAdminTimeline)
+import Max.BuildInfo (gitRev)
 import Max.CliProxy (CliProxyConfig (..), credentialJson, fetchCredentials)
 import Max.Command.Parser (effortLevels)
 import Max.ContextAdmin
@@ -77,9 +78,10 @@ import Max.DB.Calls (CallDetail (..), CallRow (..), fetchCall, listCalls)
 import Max.DB.History (MessageCursor (..), messageStatsDaily)
 import Max.DB.Session (listSessions)
 import Max.DB.Usage (UsageDay (..), usageDaily)
-import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
+import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
 import Max.Effects.Http (Http)
+import Max.Effects.Tools (ToolRef (..))
 import Max.Embedding (EmbeddingRecord)
 import Max.Env (BotEnv (..))
 import Max.EpisodeStore (CaptureRun (..), CompartmentId (..), SourceRange (..), episodeHandleText)
@@ -99,7 +101,12 @@ import Max.MemoryStore
     listMemories,
     listUserMemoriesEverywhereAdmin,
   )
+import Max.Plan.Catalog (planCatalog)
+import Max.Plan.Parse (parseFailureText, parsePlan)
+import Max.Plan.Types (planChildren, planHash, planHoles)
+import Max.Plan.Validate (rejectionText, validatePlan)
 import Max.Platform.Store (ConversationSummary (..), listConversations, listPlatformStatus)
+import Max.Platform.Types (noAdvertisedCaps)
 import Max.Recall
   ( RecallCandidate (..),
     RecallHit (..),
@@ -110,19 +117,13 @@ import Max.Recall
 import Max.Session (Session (..), loadSession, updateSession)
 import Max.Skills (NewSkill (..), Skill (..), createSkill, deleteSkill, listAllSkills, updateSkill)
 import Max.Tasks (TaskId (..), TaskInfo (..), cancelTask, listTasks)
+import Max.ToolContext (TurnCapabilities (..))
+import Max.Tools.Plan (validationEnvForContract)
+import Max.Toolset (toolDefinitionsFor)
 import Max.Util (trySync)
 import Network.HTTP.Types (Method, Status, hAuthorization, hCacheControl, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status409, status500, status502)
 import Network.Wai (Response, pathInfo, queryString, requestHeaders, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp qualified as Warp
-import Max.Effects.Tools (ToolRef (..))
-import Max.Plan.Catalog (planCatalog)
-import Max.Plan.Parse (parseFailureText, parsePlan)
-import Max.Plan.Types (planChildren, planHash, planHoles)
-import Max.Plan.Validate (rejectionText, validatePlan)
-import Max.Platform.Types (noAdvertisedCaps)
-import Max.ToolContext (TurnCapabilities (..))
-import Max.Toolset (toolDefinitionsFor)
-import Max.Tools.Plan (validationEnvForContract)
 import OneBot.Types (GroupId (..), UserId (..))
 import Paths_max (version)
 
@@ -271,7 +272,7 @@ needsAuth = \case
 
 -- | App-lived worker: serve the admin API until the process dies.
 adminServer ::
-  (Embedding :> es, Http :> es, Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Embedding :> es, Http :> es, Blob :> es, Concurrent :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   AdminConfig ->
   BotEnv ->
   -- | Configured LLM profile names, for validating a model PATCH.
@@ -369,7 +370,7 @@ staticResponse segs = case lookup key staticAssets of
 -- Handlers.
 
 handle ::
-  (Embedding :> es, Http :> es, Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Embedding :> es, Http :> es, Blob :> es, Concurrent :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   BotEnv ->
   [Text] ->
   LogBuffer ->
@@ -691,13 +692,14 @@ handle env profiles logBuf r params body = case r of
     fetchMemoryHistoryAdmin (MemoryId mid) >>= \case
       Nothing -> pure notFound
       Just detail -> pure (ok detail)
-  RContextEmbeddings -> embeddingSpace >>= \case
-    Nothing -> do
-      status <- loadEmbeddingStatus "(disabled)" (intParam "group")
-      pure . ok $ addObjectFields ["configured" .= False] status
-    Just space -> do
-      status <- loadEmbeddingStatus space.esModelId (intParam "group")
-      pure . ok $ addObjectFields ["configured" .= True] status
+  RContextEmbeddings ->
+    embeddingSpace >>= \case
+      Nothing -> do
+        status <- loadEmbeddingStatus "(disabled)" (intParam "group")
+        pure . ok $ addObjectFields ["configured" .= False] status
+      Just space -> do
+        status <- loadEmbeddingStatus space.esModelId (intParam "group")
+        pure . ok $ addObjectFields ["configured" .= True] status
   RContextRecall -> case (intParam "group", nonBlank =<< lookup "q" params) of
     (Just groupId, Just recallQuery) -> do
       (embedding, embeddingError) <- recallEmbedding recallQuery
@@ -831,7 +833,7 @@ addObjectFields fields = \case
   Object objectValue -> Object (objectValue <> KM.fromList fields)
   value -> value
 
-recallEmbedding :: Embedding :> es => Text -> Eff es (Maybe EmbeddingRecord, Maybe Text)
+recallEmbedding :: (Embedding :> es) => Text -> Eff es (Maybe EmbeddingRecord, Maybe Text)
 recallEmbedding recallQuery =
   embedBatch [recallQuery] >>= \case
     Left fault -> pure (Nothing, Just (renderEmbeddingFault fault))

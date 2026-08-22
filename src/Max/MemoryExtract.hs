@@ -35,12 +35,16 @@ import Data.Time
     utcToLocalTime,
   )
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (conversationScopeFor)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
 import Max.MaintenanceLease
   ( MaintenanceDomain (MemoryDreamMaintenance),
+    MaintenanceLease,
+    MaintenanceRun (..),
+    withMaintenanceFence,
     withMaintenanceLease,
   )
 import Max.MemoryStore
@@ -146,7 +150,7 @@ dreamHourLocal = 4
 -- downtime without re-dreaming dormant scopes forever; a repeat pass
 -- over an already-tidy scope is a cheap "[]".
 dreamWorker ::
-  (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (LLM :> es, Concurrent :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   Text -> -- process-unique lease owner
   Text -> -- extractor profile
   TimeZone ->
@@ -157,11 +161,12 @@ dreamWorker owner profile tz = localDomain "memory-dream" . forever $ do
     logAttention "dream: night crashed" $ object ["error" .= T.pack (show e)]
   where
     leasedNight =
-      withMaintenanceLease MemoryDreamMaintenance owner dreamLeaseSeconds (const night) >>= \case
-        Nothing -> logInfo "dream: another worker owns maintenance lease" (object [])
-        Just () -> pure ()
+      withMaintenanceLease MemoryDreamMaintenance owner dreamLeaseSeconds night >>= \case
+        MaintenanceUnavailable -> logInfo "dream: another worker owns maintenance lease" (object [])
+        MaintenanceCompleted () -> pure ()
+        MaintenanceLeaseLost -> logAttention "dream: maintenance lease lost; cancelled night" (object [])
 
-    night = do
+    night lease = do
       now <- liftIO getCurrentTime
       candidates <- listMemoryMaintenanceCandidates dreamMinEntries
       for_ candidates $ \candidate ->
@@ -173,6 +178,7 @@ dreamWorker owner profile tz = localDomain "memory-dream" . forever $ do
               logInfo "dream: scope" $
                 object ["scope" .= scopeRaw, "scope_id" .= sid, "entries" .= n]
               shrinkScope
+                lease
                 "memory-dream"
                 dreamerSystem
                 ["今天是 " <> fmtDate tz now, ""]
@@ -205,6 +211,7 @@ sleepUntilHour tz hour = do
 -- must only ever shrink.
 shrinkScope ::
   (LLM :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  MaintenanceLease ->
   Text -> -- ChatCtx label / log prefix
   Text -> -- system prompt
   [Text] -> -- extra input header lines
@@ -213,7 +220,7 @@ shrinkScope ::
   Int64 ->
   Int64 ->
   Eff es ()
-shrinkScope label sys header profile scope sid gid = do
+shrinkScope lease label sys header profile scope sid gid = do
   entries <- listMemoryMaintenanceEntries namespace
   let memLine entry =
         T.pack (show entry.mmeMemory.memId.unMemoryId)
@@ -247,7 +254,7 @@ shrinkScope label sys header profile scope sid gid = do
         let shrinkOnly = [op | op <- ops, notAdd op]
             notAdd OpAdd {} = False
             notAdd _ = True
-        traverse_ apply (take 12 shrinkOnly)
+        traverse_ applyFenced (take 12 shrinkOnly)
         logInfo (label <> ": scope done") $
           object
             [ "scope" .= scopeText scope,
@@ -255,6 +262,13 @@ shrinkScope label sys header profile scope sid gid = do
               "ops" .= length shrinkOnly
             ]
   where
+    applyFenced op =
+      withMaintenanceFence lease (apply op) >>= \case
+        Nothing ->
+          logAttention (label <> ": lease lost before mutation") $
+            object ["scope_id" .= sid]
+        Just () -> pure ()
+
     apply = \case
       OpAdd {} -> pure ()
       OpUpdate mid version content reason -> case (,) <$> checkContent content <*> checkReason reason of

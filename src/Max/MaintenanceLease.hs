@@ -8,22 +8,27 @@
 module Max.MaintenanceLease
   ( MaintenanceDomain (..),
     MaintenanceLease (..),
+    MaintenanceRun (..),
     maintenanceDomainText,
     claimMaintenanceLease,
     renewMaintenanceLease,
     releaseMaintenanceLease,
     withMaintenanceLease,
+    withMaintenanceFence,
   )
 where
 
+import Control.Monad (void, when)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..))
-import Control.Monad (void)
 import Effectful
+import Effectful.Concurrent (Concurrent, threadDelay)
+import Effectful.Concurrent.Async (race)
 import Effectful.Exception (finally)
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.DB.Transaction (withTransaction)
 
 data MaintenanceDomain
   = MemoryDreamMaintenance
@@ -36,6 +41,12 @@ data MaintenanceLease = MaintenanceLease
     mlOwner :: !Text,
     mlFencingToken :: !Int64
   }
+  deriving stock (Show, Eq)
+
+data MaintenanceRun a
+  = MaintenanceUnavailable
+  | MaintenanceCompleted !a
+  | MaintenanceLeaseLost
   deriving stock (Show, Eq)
 
 maintenanceDomainText :: MaintenanceDomain -> Text
@@ -104,17 +115,50 @@ releaseMaintenanceLease lease = do
       (maintenanceDomainText lease.mlDomain, lease.mlOwner, lease.mlFencingToken)
   pure (changed == 1)
 
--- | Run an action only while this process owns the named lease.  Release is
--- best-effort and fenced; cancellation cannot delete a successor's lease.
+-- | Run an action only while this process owns and renews the named lease.
+-- Losing the fencing token cancels the action immediately; release is
+-- best-effort and fenced, so cancellation cannot delete a successor's lease.
 withMaintenanceLease ::
-  (WithConnection :> es, IOE :> es) =>
+  (Concurrent :> es, WithConnection :> es, IOE :> es) =>
   MaintenanceDomain ->
   Text ->
   Int ->
   (MaintenanceLease -> Eff es a) ->
-  Eff es (Maybe a)
+  Eff es (MaintenanceRun a)
 withMaintenanceLease domain owner ttlSeconds action =
   claimMaintenanceLease domain owner ttlSeconds >>= \case
-    Nothing -> pure Nothing
+    Nothing -> pure MaintenanceUnavailable
     Just lease ->
-      Just <$> action lease `finally` void (releaseMaintenanceLease lease)
+      runOwned lease `finally` void (releaseMaintenanceLease lease)
+  where
+    runOwned lease =
+      race (action lease) (heartbeat lease) >>= \case
+        Left value -> pure (MaintenanceCompleted value)
+        Right () -> pure MaintenanceLeaseLost
+
+    heartbeat lease = do
+      threadDelay (max 1 (ttlSeconds `div` 3) * 1_000_000)
+      renewed <- renewMaintenanceLease lease ttlSeconds
+      when renewed (heartbeat lease)
+
+-- | Fence one projection mutation with the lease row itself.  The row lock
+-- orders an expired owner's last transaction before a successor can acquire
+-- the next token; checking the token and running the mutation on the same
+-- pinned connection closes the check-then-write race.
+--
+-- 'Nothing' means this owner was already stale and the action did not run.
+withMaintenanceFence ::
+  (WithConnection :> es, IOE :> es) =>
+  MaintenanceLease ->
+  Eff es a ->
+  Eff es (Maybe a)
+withMaintenanceFence lease action = withTransaction $ do
+  held <-
+    query
+      "SELECT 1 FROM maintenance_leases \
+      \ WHERE domain = ? AND owner = ? AND fencing_token = ? AND expires_at > now() \
+      \ FOR UPDATE"
+      (maintenanceDomainText lease.mlDomain, lease.mlOwner, lease.mlFencingToken)
+  case held :: [Only Int] of
+    [] -> pure Nothing
+    _ -> Just <$> action

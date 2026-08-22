@@ -56,7 +56,7 @@ src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher, Help (the
                    splice it at registry init)
 src/Max/Session/   Per-conversation session: versioned TVar handle + serialized CAS persistence
 src/Max/Sandbox/   Per-group Docker workspace lifecycle + registry
-src/Max/Browser/   Per-group camoufox-MCP container lifecycle + registry
+src/Max/Browser/   Per-group camoufox host + per-turn MCP/browser lifecycle
 src/Max/MCP/       Minimal MCP client (Streamable HTTP)
 src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory,
                    Images, Video, Bilibili, Stickers, Pins, Group, Reminder,
@@ -294,7 +294,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
 | Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
-| Maintenance ownership | independently fenced PostgreSQL leases serialize embedding, memory-dream, and context-rebuild domains without making unrelated maintenance jobs block one another |
+| Maintenance ownership | independently fenced PostgreSQL leases serialize embedding, memory-dream, and context-rebuild domains without making unrelated maintenance jobs block one another; the owner heartbeats during long actions, and projection writes either carry the fencing token in SQL or run under a token-checked lease-row lock |
 | Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown`, claims the same turn for recovery, injects its committed sends/results/unknowns into a fresh LLM round, and never silently retries it; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
 | Sandbox workspaces | `sandboxes` persists lifecycle metadata and the named Docker volume holds current state. Boot adopts a running container or rebuilds a missing/stopped shell around the surviving volume; only a positively absent volume marks the workspace destroyed, and TTL GC replaces shutdown/boot reaping |
 
@@ -304,7 +304,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Triggers arriving mid-drain | persisted to `messages` and logged, but not dispatched |
 | Anything NapCat sends while we're down | it dials in over reverse-WS and doesn't buffer; closing this needs history backfill on reconnect |
 | `!use` admin targets | deliberate — just `!use` again |
-| Browser containers | ephemeral: destroyed on exit and reaped on boot |
+| Browser hosts and turn instances | ephemeral: each conversation's lightweight container host is destroyed on exit and reaped on boot; every turn's independent MCP transport and camoufox browse session is terminated when that turn finishes |
 
 Effect stack at the top of `runApp`:
 `IOE → Concurrent → Log → Http → Embedding → Blob → WithConnection → PlatformApi → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.
@@ -359,6 +359,15 @@ outside this runtime. Matrix and iMessage use `StandardPool`; future HTTP
 adapters must do the same. Any long-lived WebSocket transport remains a
 platform-edge resource.
 
+The browser registry shares only a lightweight Docker host per conversation.
+Each durable agent turn—including every plan child—owns a separate MCP client,
+Streamable-HTTP session, camoufox browse session, and operation lock. Sibling
+turns in one group therefore navigate concurrently without page-state or MCP
+request-id interference; calls inside one stateful page remain ordered. Turn
+finalization closes the browse session and terminates its MCP transport with a
+bounded cleanup, while `!clear --all` and process exit retain the stronger
+container teardown fallback.
+
 `ModelCatalog` owns profile discovery and prompt-facing capabilities such as
 multimodal input, reasoning effort and history shape. `LLM` owns completion
 calls only; its production interpreter uses the catalog internally to resolve
@@ -371,6 +380,9 @@ request/response calls. Its interpreter routes each action to a
 `PlatformBackend`; the default QQ backend is implemented by NapCat over the
 reverse WebSocket, while backend-specific names stay at that protocol edge.
 Visible conversation sends sit one layer above it in `Outbound`.
+The current reverse-WebSocket client is generation-tagged: cleanup from a
+superseded socket can abort its own pending calls but cannot erase a newer
+published connection.
 
 `Blob` is the sole owner of the configured storage root. Producers receive an
 opaque, validated `BlobRef` from `putBlob`; ordinary consumers pass that
@@ -392,7 +404,11 @@ runBlob(root)
 
 `Outbound` owns canonical publication, not transport IO. It commits one bot
 message, its reply relation, and per-endpoint delivery jobs first; leased
-workers then render and send each native copy. Before the turn, `Handler` reads
+workers reserve a batch but cross each row into `sending` only immediately
+before processing it. An expired unstarted reservation is safely re-offered;
+only a started send can become `outcome_unknown`. Dispatch admission uses the
+same `reserved → claimed` split, so a dead process cannot quarantine the
+untouched tail of a 32-row batch. Before the turn, `Handler` reads
 the intersection of enabled endpoint output capabilities and uses it both to
 constrain the prompt grammar and to gate action-token execution. QQ mentions,
 faces, and reaction actions additionally require an all-QQ conversation; a
@@ -451,12 +467,21 @@ mutable queue mechanics out of context records. Embedding consumers use the
 injectable `Embedding` effect; only its production interpreter holds the HTTP
 client/model configuration.
 
+Tools that append to that turn-wide media queue are classified as stateful and
+run sequentially within the turn, which makes attachment order and the shared
+budget deterministic. Independent turns still have independent queues and run
+in parallel.
+
 `Handler` creates a `TurnRuntime` at dispatch admission and is its sole
 finalizer. The same object carries phase, cancellation, feedback, absorbed
 messages, and task identity through context collection and every Agent node;
 there is no trigger-id lookup/adoption on the production path. Failed message
 persistence is an explicit non-durable ingest state: media jobs, agent dispatch,
 and proactive work are suppressed while the event loop remains alive.
+The shutdown slot, durable turn, in-memory runtime, and child async are handed
+off under asynchronous-exception masking; before publication the caller owns
+rollback, and after publication the child finalizer owns every resource. The
+child body itself is restored to the normal cancellable state.
 Agent regression tests exercise feedback before an LLM node, asynchronous
 `!kill`, late feedback racing streamed output, and root-owned cleanup through
 this same runtime seam.

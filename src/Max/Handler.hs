@@ -15,15 +15,15 @@ module Max.Handler
 where
 
 import Control.Applicative ((<|>))
-import Control.Exception qualified as Exception
-import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as LBS
-import Data.Int (Int64)
 import Control.Concurrent.STM (TQueue, atomically, newTVarIO, readTQueue, readTVarIO)
+import Control.Exception qualified as Exception
 import Control.Monad (forM_, unless, void, when)
 import Data.Aeson (Value, eitherDecodeStrict', encode, toJSON)
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit, isSpace)
 import Data.Foldable (for_)
+import Data.Int (Int64)
 import Data.List (find, unsnoc)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe, mapMaybe)
@@ -34,16 +34,18 @@ import Data.Traversable (for)
 import Effectful
 import Effectful.Concurrent (threadDelay)
 import Effectful.Concurrent.Async (Concurrent, async, race, withAsync)
-import Effectful.Exception (SomeException, catch, finally)
+import Effectful.Exception (SomeException, catch, finally, mask, onException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.AgentEvent (AgentEvent (..), AgentOutputContext (..), handleAgentEvent)
+import Max.Browser.Registry (browserScopeForTurn, releaseBrowserScope)
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Parser (parseCommand)
 import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
 import Max.Command.Types (Command (..))
+import Max.Context.Types (ContinuationInput (..), digestOnlyContinuation, noContinuation)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.AgentTurn
   ( AgentTurnRecovery (..),
@@ -64,6 +66,22 @@ import Max.DB.Monitor
     expireElaboratedMonitorFire,
     loadAdmittedMonitorFire,
   )
+import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
+import Max.DB.Plan
+  ( ChildDispatch (..),
+    PlanId (..),
+    PlanOrdinal (..),
+    PlanRef (..),
+    StoredPlan (..),
+    WakeablePlan (..),
+    admitClaimedPlanWake,
+    childHasResult,
+    loadChildDispatch,
+    loadPlanWake,
+    remainingChildBudget,
+    requestClaimedChildCancellation,
+    startClaimedPlanChild,
+  )
 import Max.DB.TurnContinuity
   ( ReplyTurnTarget (..),
     continuationDigest,
@@ -74,14 +92,16 @@ import Max.DB.TurnContinuity
     resolveReplyTurn,
     setAgentTurnEnvironment,
   )
-import Max.DB.Notify (WorkChannel (DispatchWork), claimOrWait)
 import Max.Dispatch (DispatchMessage (..), dispatchMentionsSelf, dispatchTextWithoutSelf, stripDispatchVerb)
 import Max.Dispatch qualified as Dispatch
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
+import Max.Effects.Embedding (Embedding)
+import Max.Effects.Http (Http)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), LLM)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded, wasDelivered)
 import Max.Effects.PlatformApi (PlatformApi, sendAction)
+import Max.Effects.ToolOutput (defaultInlineMediaLimit, runToolOutput)
 import Max.Effects.Tools (ToolDefinition (..), ToolRef (..), runTools)
 import Max.Env (BotEnv (..))
 import Max.EpisodeScheduler (armEpisode, bumpEpisode)
@@ -89,91 +109,18 @@ import Max.Faces (faceIdByName)
 import Max.FetchQueue (FetchSignal)
 import Max.Files (enqueueFiles)
 import Max.Forward (enqueueForwards)
-import Max.Images (enqueueImages)
-import Max.Intent (IntentState, clearPendingIntent, enqueueIntent, noteBotActivity)
+import Max.HttpRuntime (HttpRuntime)
 import Max.IR
 import Max.IR.Digest (digest)
+import Max.Images (enqueueImages)
+import Max.Intent (IntentState, clearPendingIntent, enqueueIntent, noteBotActivity)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
 import Max.Monitor (nextCronFire)
 import Max.Monitor.Types (MonitorRef (..), monitorHandleText)
-import Max.Platform.QQ (ensureQQEndpoint, ensureQQEndpointFor, qqEnvelope, qqIngestBody, qqNoticeEnvelopes)
-import Max.Platform.Envelope (InboundEnvelope (..))
-import Max.Platform.Store
-  ( DispatchClaim (..),
-    RegisteredEndpoint (..),
-    DispatchCompletion (..),
-    IngestOptions (..),
-    IngestResult (..),
-    NewIngest (..),
-    OutboundDraft (..),
-    ReactionDraft (..),
-    claimDispatch,
-    claimDispatches,
-    completeDispatch,
-    renewDispatchLease,
-    releaseDeferredDispatches,
-    conversationAdvertisedCaps,
-    defaultIngestOptions,
-    ensureEndpointPrincipals,
-    ingestEnvelope,
-    loadDispatchClaim,
-    resolveMentionIdentities,
-    mentionPrincipalsFor,
-    enqueueReaction,
-    recordInternalMessage,
-    rememberConversationTitle,
-  )
-import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), noAdvertisedCaps, NativeUserId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId, ReactionAction (..))
-import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutputContinuation, renderCurrentLine, renderHistoryLine)
-import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
-import Max.Roster (GroupMember (..), GroupMeta (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
-import Max.Session (Session (..), loadSession, readSession)
-import Max.Shutdown (enterDispatch, leaveDispatch)
-import Max.Skills (Skill (..), skillsForGroup)
-import Max.Tasks
-  ( Note (..),
-    cancelAgentTurnTask,
-    NoteVerb (..),
-    TaskCancelled (..),
-    TaskId (..),
-    TaskInfo (..),
-    TurnCompletion (..),
-    awaitTurnSilence,
-    beginDurableTurnRuntime,
-    beginDurableTurnRuntimeAt,
-    finishTurnRuntime,
-    inFlightTriggers,
-    listTasks,
-    pushToLatest,
-    pushToAgentTurn,
-    pushToTrigger,
-    setTurnPhase,
-    turnRuntimeTaskId,
-    turnRuntimeOutputContext,
-  )
-import Max.ToolContext (SubgoalReturn (..), TurnCapabilities (..), TurnIdentity (..), mkToolContext)
-import Max.Effects.Http (Http)
-import Max.Effects.Embedding (Embedding)
-import Max.Effects.ToolOutput (defaultInlineMediaLimit, runToolOutput)
-import Max.HttpRuntime (HttpRuntime)
-import Max.DB.Plan
-  ( ChildDispatch (..),
-    WakeablePlan (..),
-    PlanOrdinal (..),
-    PlanId (..),
-    PlanRef (..),
-    StoredPlan (..),
-    admitClaimedPlanWake,
-    childHasResult,
-    loadChildDispatch,
-    loadPlanWake,
-    remainingChildBudget,
-    requestClaimedChildCancellation,
-    startClaimedPlanChild,
-  )
 import Max.Plan.Brief (renderPlanValue, subgoalBrief)
 import Max.Plan.Catalog (childReachableEffects, planCatalog)
+import Max.Plan.Drive (Dispatchable (..))
 import Max.Plan.Execute
   ( Deopt (..),
     ExecState,
@@ -183,15 +130,70 @@ import Max.Plan.Execute
     deoptText,
     resumePlan,
   )
-import Max.Plan.Drive (Dispatchable (..))
 import Max.Plan.Reconcile (Desired (..))
 import Max.Plan.Types (Binder (..), EffectBudget (..), Goal (..), NodeId (..), PlanDocument (..))
-import Max.Plan.Validate (CatalogEntry (..), ValidationEnv (..), rejectionText, validatePlan)
+import Max.Plan.Validate (ValidationEnv (..), rejectionText, validatePlan)
 import Max.Plan.Worker (PlanDriver (..), Resumption)
 import Max.Plan.Worker qualified as Worker
+import Max.Platform.Envelope (InboundEnvelope (..))
+import Max.Platform.QQ (ensureQQEndpoint, ensureQQEndpointFor, qqEnvelope, qqIngestBody, qqNoticeEnvelopes)
+import Max.Platform.Store
+  ( DispatchClaim (..),
+    DispatchCompletion (..),
+    IngestOptions (..),
+    IngestResult (..),
+    NewIngest (..),
+    OutboundDraft (..),
+    ReactionDraft (..),
+    RegisteredEndpoint (..),
+    claimDispatch,
+    claimDispatches,
+    completeDispatch,
+    conversationAdvertisedCaps,
+    defaultIngestOptions,
+    enqueueReaction,
+    ensureEndpointPrincipals,
+    ingestEnvelope,
+    loadDispatchClaim,
+    mentionPrincipalsFor,
+    recordInternalMessage,
+    releaseDeferredDispatches,
+    rememberConversationTitle,
+    renewDispatchLease,
+    resolveMentionIdentities,
+    startDispatch,
+  )
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId, ReactionAction (..), noAdvertisedCaps)
+import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutputContinuation, renderCurrentLine, renderHistoryLine)
+import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
+import Max.Roster (GroupMember (..), GroupMeta (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
+import Max.Session (Session (..), loadSession, readSession)
+import Max.Shutdown (enterDispatch, leaveDispatch)
+import Max.Skills (Skill (..), skillsForGroup)
+import Max.Tasks
+  ( Note (..),
+    NoteVerb (..),
+    TaskCancelled (..),
+    TaskId (..),
+    TaskInfo (..),
+    TurnCompletion (..),
+    awaitTurnSilence,
+    beginDurableTurnRuntime,
+    beginDurableTurnRuntimeAt,
+    cancelAgentTurnTask,
+    finishTurnRuntime,
+    inFlightTriggers,
+    listTasks,
+    pushToAgentTurn,
+    pushToLatest,
+    pushToTrigger,
+    setTurnPhase,
+    turnRuntimeOutputContext,
+    turnRuntimeTaskId,
+  )
+import Max.ToolContext (SubgoalReturn (..), TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import Max.Tools.Plan (planResourceHandles, validationEnvForContract)
 import Max.Toolset (plannableToolsFor, toolDefinitionsFor)
-import Max.Context.Types (ContinuationInput (..), digestOnlyContinuation, noContinuation)
 import Max.Turn.Continuity (currentPromptMajor, renderContinuationDigest, renderReplayDelta, toolCatalogFingerprint)
 import Max.Turn.Replay
   ( ReplayCandidate (..),
@@ -513,24 +515,29 @@ runDispatchClaim ::
   DispatchClaim ->
   Eff es ()
 runDispatchClaim workerId fetchSig mIntent claim =
-  trySync
-    ( do
-        mentionPrincipals <- mentionPrincipalsFor (mentionIdentities claim.body)
-        let message = dispatchMessage mentionPrincipals claim
-        enqueueImages fetchSig message
-        enqueueForwards fetchSig message
-        enqueueFiles fetchSig message
-        onDispatchMessage (Just owner) mIntent message
-    )
-    >>= \case
-      -- Only the paths that finished the work here settle the row.  A turn
-      -- takes the row with it (issue #17.D): this used to mark the message
-      -- answered the moment the dispatch async was forked, so a turn that
-      -- crashed, was killed, or lost a drain took the question with it, and a
-      -- message deferred behind a running turn had nowhere to be recorded.
-      Right ClaimSettledHere -> void (completeDispatch workerId claim.canonicalMessageId claim.attemptCount DispatchCompleted)
-      Right ClaimHandedToTurn -> pure ()
-      Left e -> failClaim (T.pack (show (e :: SomeException)))
+  startDispatch workerId claim.canonicalMessageId claim.attemptCount dispatchLeaseSeconds >>= \case
+    False ->
+      logInfo "canonical dispatch reservation was no longer owned" $
+        object ["canonical_message_id" .= claim.canonicalMessageId, "worker" .= workerId]
+    True ->
+      trySync
+        ( do
+            mentionPrincipals <- mentionPrincipalsFor (mentionIdentities claim.body)
+            let message = dispatchMessage mentionPrincipals claim
+            enqueueImages fetchSig message
+            enqueueForwards fetchSig message
+            enqueueFiles fetchSig message
+            onDispatchMessage (Just owner) mIntent message
+        )
+        >>= \case
+          -- Only the paths that finished the work here settle the row.  A turn
+          -- takes the row with it (issue #17.D): this used to mark the message
+          -- answered the moment the dispatch async was forked, so a turn that
+          -- crashed, was killed, or lost a drain took the question with it, and a
+          -- message deferred behind a running turn had nowhere to be recorded.
+          Right ClaimSettledHere -> void (completeDispatch workerId claim.canonicalMessageId claim.attemptCount DispatchCompleted)
+          Right ClaimHandedToTurn -> pure ()
+          Left e -> failClaim (T.pack (show (e :: SomeException)))
   where
     owner = DispatchOwner workerId claim.canonicalMessageId claim.attemptCount
     failClaim err = do
@@ -1302,7 +1309,7 @@ isolatedChildSystem =
       "工具或资料不足时也不要猜造外部事实；在允许的结果类型内明确表达限制。"
     ]
 
-discardChildEvent :: Applicative m => AgentEvent a -> m a
+discardChildEvent :: (Applicative m) => AgentEvent a -> m a
 discardChildEvent = \case
   AgentProgressText _ -> pure ()
   AgentToolDebug _ -> pure ()
@@ -1704,58 +1711,82 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
   -- task registry would walk straight past a dispatch sitting in that
   -- gap.  Claiming before the spawn also closes the race the other
   -- way: 'enterDispatch' and the drain flag share one transaction.
-  started <- liftIO (enterDispatch env.beShutdown)
-  -- Same reason the shutdown slot is claimed here: the agent loop is
-  -- tens of seconds away, and until it attaches, a concurrent trigger
-  -- has to be able to see this question is already taken — as do !ps
-  -- and !kill.  The registry entry opens now and the loop adopts it.
-  mTurn <-
-    if started
-      then
-        ( do
-            durable <-
-              maybe
+  launched <- mask $ \restore -> do
+    started <- liftIO (enterDispatch env.beShutdown)
+    if not started
+      then pure False
+      else do
+        -- Same reason the shutdown slot is claimed here: the agent loop is
+        -- tens of seconds away, and until it attaches, a concurrent trigger
+        -- has to be able to see this question is already taken — as do !ps
+        -- and !kill.  The registry entry opens now and the loop adopts it.
+        durable <-
+          restore
+            ( maybe
                 (startAgentTurn gm.groupId gm.canonicalId gm.authorPrincipalId)
                 pure
                 existingTurn
-            ( do
-                runtime <- case existingTurn of
-                  Nothing ->
-                    liftIO (beginDurableTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
-                  Just _ -> do
-                    firstChunk <- nextAgentTurnOutputChunk durable.atrTurnId
-                    liftIO (beginDurableTurnRuntimeAt env.beTasks durable firstChunk gm.groupId gm.userId (Just gm.canonicalId))
-                pure (Just (runtime, durable))
-              )
+            )
+            `onException` liftIO (leaveDispatch env.beShutdown)
+        let runtimeFailed = do
+              ensureAgentTurnRecoveryPending durable "dispatch cancelled before the in-memory turn runtime was published"
+                `catchSync` \e ->
+                  logAttention "durable turn prologue cleanup failed" $
+                    object ["error" .= T.pack (show (e :: SomeException))]
+              liftIO (leaveDispatch env.beShutdown)
+        turn <-
+          ( ( case existingTurn of
+                Nothing ->
+                  -- This constructor only allocates process-local state.  It
+                  -- runs masked so cancellation cannot land after registry
+                  -- insertion but before the caller receives its owner token.
+                  liftIO (beginDurableTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
+                Just _ -> do
+                  firstChunk <- restore (nextAgentTurnOutputChunk durable.atrTurnId)
+                  liftIO (beginDurableTurnRuntimeAt env.beTasks durable firstChunk gm.groupId gm.userId (Just gm.canonicalId))
+            )
               `catchSync` \e -> do
                 ensureAgentTurnCrashed durable "failed to create the in-memory turn runtime"
                 liftIO (Exception.throwIO (e :: SomeException))
-        )
-          `catchSync` \e -> do
-            liftIO (leaveDispatch env.beShutdown)
-            liftIO (Exception.throwIO (e :: SomeException))
-      else pure Nothing
-  case mTurn of
-    Nothing -> do
-      for_ existingTurn $ \durable ->
-        ensureAgentTurnCrashed durable "restart recovery declined during shutdown drain"
-      logInfo "llm dispatch declined: draining" ident
-      -- The drain can run for a couple of minutes behind a long turn,
-      -- and every @ landing in that window would otherwise get total
-      -- silence — the one failure mode worth being loud about.  A face
-      -- says "seen, not doing it" without a line of chat noise, same
-      -- as the crash and denied-command paths.  Direct triggers only:
-      -- proactive turns stay traceless and a poke has no message to
-      -- react to.
-      when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-        queueQQReaction gm.groupId gm.canonicalId failureFaceId True
-      -- No async will run, so nothing downstream will settle this row.  A
-      -- drain is a restart, and the next boot should answer the question
-      -- rather than find it marked done — so it is deferred, not completed.
-      declinedAt <- addUTCTime deferredRetrySeconds <$> liftIO getCurrentTime
-      settleOwner (DispatchDeferred declinedAt)
-    Just (turn, durable) ->
-      void . async $
+          )
+            `onException` runtimeFailed
+        let launchFailed = do
+              ensureAgentTurnRecoveryPending durable "dispatch cancelled before its worker was published"
+                `catchSync` \e ->
+                  logAttention "durable turn launch cleanup failed" $
+                    object ["error" .= T.pack (show (e :: SomeException))]
+              liftIO $ do
+                leaveDispatch env.beShutdown
+                void (finishTurnRuntime env.beTasks turn)
+              releaseTurnBrowser env durable
+        launchTurn env outputCaps ident gidRaw restore turn durable
+          `onException` launchFailed
+        pure True
+  unless launched $ do
+    for_ existingTurn $ \durable ->
+      ensureAgentTurnCrashed durable "restart recovery declined during shutdown drain"
+    logInfo "llm dispatch declined: draining" ident
+    -- The drain can run for a couple of minutes behind a long turn,
+    -- and every @ landing in that window would otherwise get total
+    -- silence — the one failure mode worth being loud about.  A face
+    -- says "seen, not doing it" without a line of chat noise, same
+    -- as the crash and denied-command paths.  Direct triggers only:
+    -- proactive turns stay traceless and a poke has no message to
+    -- react to.
+    when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
+      queueQQReaction gm.groupId gm.canonicalId failureFaceId True
+    -- No async will run, so nothing downstream will settle this row.  A
+    -- drain is a restart, and the next boot should answer the question
+    -- rather than find it marked done — so it is deferred, not completed.
+    declinedAt <- addUTCTime deferredRetrySeconds <$> liftIO getCurrentTime
+    settleOwner (DispatchDeferred declinedAt)
+  where
+    -- Publish the child while the caller is masked, then restore the child's
+    -- normal cancellation state for all real work.  This is the ownership
+    -- handoff: before 'async' succeeds the caller owns every resource; after
+    -- it succeeds this finalizer owns all of them.
+    launchTurn env outputCaps ident gidRaw restore turn durable =
+      void . async . restore $
         ( localDomain "llm" . holdingDispatchLease $ do
             logInfo "llm dispatch" ident
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
@@ -1811,6 +1842,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
             completion <- liftIO $ do
               leaveDispatch env.beShutdown
               finishTurnRuntime env.beTasks turn
+            releaseTurnBrowser env durable
             let absorbed = completion.tcAbsorbedTriggers
                 unserved = completion.tcUnservedNotes
             when (outputCaps.canReaction && outputCaps.canFace) $
@@ -1848,7 +1880,16 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
               logInfo "dispatch: unserved note re-dispatched" $
                 object ["message_id" .= srcMid]
               dispatchLLM Nothing mIntent orig NeverAbsorb [] src
-  where
+
+    -- Browser teardown is subordinate to turn ownership cleanup.  A wedged or
+    -- already-destroyed browser must not prevent the task entry, shutdown slot,
+    -- reactions, or unserved notes from reaching their final state.
+    releaseTurnBrowser env durable =
+      liftIO (releaseBrowserScope env.beBrowsers (browserScopeForTurn gm.groupId durable.atrTurnId))
+        `catchSync` \e ->
+          logAttention "browser scope finalizer failed" $
+            object ["error" .= T.pack (show (e :: SomeException))]
+
     -- Settling is idempotent by the same guard that makes it safe: the row has
     -- to still be claimed by this worker, so whichever of these runs first
     -- decides and the rest are no-ops.  That is what lets the deferral be
@@ -1906,8 +1947,9 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
       -- delivery.  Re-read once so that race becomes a digest continuation,
       -- not an unclassified ordinary reply.
       replyTarget <- case (steered, replyTarget0, gm.replyTo) of
-        (False, Just target, Just replyMessage) | replyTurnIsInFlight target ->
-          resolveReplyTurn (conversationScopeFor gm.groupId) s.clearedAt replyMessage
+        (False, Just target, Just replyMessage)
+          | replyTurnIsInFlight target ->
+              resolveReplyTurn (conversationScopeFor gm.groupId) s.clearedAt replyMessage
         _ -> pure replyTarget0
       injected <-
         if steered || isJust replyTarget
@@ -2058,9 +2100,9 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
                     Set.fromList [m | c <- companions, let CanonicalMessageId m = c.canonicalId]
                   companionRows =
                     [ h
-                      | h <- rows,
-                        h.canonicalId /= midRaw,
-                        h.canonicalId `Set.member` companionMids
+                    | h <- rows,
+                      h.canonicalId /= midRaw,
+                      h.canonicalId `Set.member` companionMids
                     ]
                   newLine =
                     T.intercalate "\n" $

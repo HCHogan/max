@@ -23,6 +23,7 @@ module Max.MCP.Client
     newMcpClient,
     mcpInitialize,
     mcpCallTool,
+    mcpTerminate,
     renderMcpError,
 
     -- * Result helpers
@@ -43,6 +44,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
+import Data.Foldable (for_)
 import Data.Maybe (isJust, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -123,11 +125,11 @@ protocolVersion = "2025-06-18"
 -- header for subsequent requests.
 mcpInitialize :: McpClient -> IO (Either McpError ())
 mcpInitialize c = do
-  -- Start a *fresh* handshake: drop any prior session id first.  The
-  -- server issues the session on this request and 404s an initialize
-  -- that carries an unknown one — so re-initializing to recover from a
-  -- stale/expired session must not send the dead id.
-  atomically $ writeTVar c.mcSession Nothing
+  -- Start a *fresh* handshake.  The server issues the session on this request
+  -- and 404s an initialize that carries an unknown one; terminating first
+  -- also prevents a failed notification/re-initialize cycle from leaking the
+  -- gateway's previous stdio child.
+  mcpTerminate c
   let params =
         object
           [ "protocolVersion" .= protocolVersion,
@@ -137,7 +139,11 @@ mcpInitialize c = do
   eres <- request c "initialize" params
   case eres of
     Left e -> pure (Left e)
-    Right _ -> notify c "notifications/initialized"
+    Right _ -> do
+      initialized <- notify c "notifications/initialized"
+      case initialized of
+        Right () -> pure (Right ())
+        Left err -> Left err <$ mcpTerminate c
 
 -- | Call one tool.  Returns the JSON-RPC @result@ object (which for
 -- MCP carries @content@ + @isError@), or a 'Left' with a transport /
@@ -149,6 +155,31 @@ mcpCallTool c name args = do
   pure $ case eres of
     Left e -> Left e
     Right result -> maybe (Right result) Left (toolResultError result)
+
+-- | End this Streamable-HTTP session and release the gateway's stdio child.
+-- The local token is forgotten before I/O, so cancellation or an unhealthy
+-- gateway cannot make a dead client usable again.  Teardown is best-effort;
+-- callers already own the stronger fallback of removing its container.
+mcpTerminate :: McpClient -> IO ()
+mcpTerminate c = do
+  mSession <- atomically $ do
+    current <- readTVar c.mcSession
+    writeTVar c.mcSession Nothing
+    pure current
+  for_ mSession $ \sessionId -> do
+    parseRequestEither c.mcEndpoint >>= \case
+      Left _ -> pure ()
+      Right req0 -> do
+        let req =
+              req0
+                { method = "DELETE",
+                  requestHeaders =
+                    [ (CI.mk "Host", c.mcHost),
+                      (CI.mk "Mcp-Session-Id", sessionId)
+                    ]
+                }
+        _ <- runBuffered c.mcHttp StandardPool 4096 4096 req
+        pure ()
 
 -- | Decode the error half of a tool result while preserving provider-owned
 -- metadata.  Success results return 'Nothing'.

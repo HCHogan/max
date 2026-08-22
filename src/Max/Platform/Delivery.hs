@@ -30,8 +30,8 @@ import Data.Aeson (Result (..), fromJSON, toJSON)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Either (fromRight, lefts, rights)
-import Data.List (find, nubBy)
 import Data.Int (Int64)
+import Data.List (find, nubBy)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -42,8 +42,8 @@ import Effectful
 import Effectful.Exception (SomeException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.DB.Notify (WorkChannel (DeliveryWork), claimOrWait)
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.HttpRuntime
   ( BufferedResponse (body),
     HttpPool (LegacyEmsPool, StandardPool),
@@ -63,6 +63,7 @@ import Max.Platform.Store
     claimDeliveries,
     completeDelivery,
     deliveryMentionNatives,
+    startDelivery,
   )
 import Max.Platform.Types
   ( EventKind (..),
@@ -163,8 +164,9 @@ loadDeliveryMedia caps body = do
               if actual > deliveryMediaItemBytes
                 then error "canonical delivery media exceeds per-item byte limit"
                 else case declaredSize of
-                  Just expected | expected /= fromIntegral actual ->
-                    error "canonical delivery media size changed"
+                  Just expected
+                    | expected /= fromIntegral actual ->
+                        error "canonical delivery media size changed"
                   _ -> pure (Right (ref, ResolvedBytes payload))
 
     unresolvable ref detail =
@@ -233,22 +235,28 @@ deliveryWorker workerId transports = localDomain "delivery" loop
       loop
 
     deliverClaim claim = do
-      now <- liftIO getCurrentTime
-      (completion, lowerNotes) <- routeClaim now claim
-      completed <- completeDelivery workerId claim.deliveryId lowerNotes completion
-      if completed
+      started <- startDelivery workerId claim.deliveryId claim.attemptCount deliveryLeaseSeconds
+      if not started
         then
-          logInfo "delivery completed" $
-            object
-              [ "delivery_id" .= claim.deliveryId,
-                "canonical_message_id" .= claim.canonicalMessageId,
-                "platform" .= renderPlatform claim.platform,
-                "outcome" .= completionName completion,
-                "lower_notes" .= toJSON lowerNotes
-              ]
-        else
-          logAttention "delivery lease lost before completion" $
+          logInfo "delivery reservation was no longer owned" $
             object ["delivery_id" .= claim.deliveryId, "worker" .= workerId]
+        else do
+          now <- liftIO getCurrentTime
+          (completion, lowerNotes) <- routeClaim now claim
+          completed <- completeDelivery workerId claim.deliveryId claim.attemptCount lowerNotes completion
+          if completed
+            then
+              logInfo "delivery completed" $
+                object
+                  [ "delivery_id" .= claim.deliveryId,
+                    "canonical_message_id" .= claim.canonicalMessageId,
+                    "platform" .= renderPlatform claim.platform,
+                    "outcome" .= completionName completion,
+                    "lower_notes" .= toJSON lowerNotes
+                  ]
+            else
+              logAttention "delivery lease lost before completion" $
+                object ["delivery_id" .= claim.deliveryId, "worker" .= workerId]
 
     routeClaim now claim = case claim.eventKind of
       EventMessage -> withTransport claim $ \transport -> deliverContent now claim transport DeliverMessage

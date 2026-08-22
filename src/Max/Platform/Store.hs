@@ -35,6 +35,7 @@ module Max.Platform.Store
     DispatchCompletion (..),
     claimDispatches,
     claimDispatch,
+    startDispatch,
     loadDispatchClaim,
     completeDispatch,
     renewDispatchLease,
@@ -57,6 +58,7 @@ module Max.Platform.Store
     expiredSendingDeliverySql,
     claimDeliveries,
     claimDelivery,
+    startDelivery,
     DeliveryCompletion (..),
     completeDelivery,
     UnconfirmedDelivery (..),
@@ -105,18 +107,18 @@ import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import GHC.Generics (Generic)
-import Max.DB.Transaction (withTransaction)
 import Max.DB.Monitor (evaluateLedgerMatches)
+import Max.DB.Transaction (withTransaction)
 import Max.IR
 import Max.IR.Lower
   ( Attribution (..),
     LowerNote,
     OutboundCaps (..),
     ReplyContext (..),
+    Tier (..),
     outboundCapsFromValue,
     outboundCapsToValue,
     platformDisplayLabel,
-    Tier (..),
   )
 import Max.IR.Prompt (promptCanonicalText, systemEventText)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
@@ -1184,27 +1186,27 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
           \ FROM principal_identities pi WHERE pi.principal_identity_id = ? \
           \ RETURNING canonical_message_id, ingest_seq"
           ( ( legacyMessage,
-            legacyGroup,
-            legacyUser,
-            legacySelf,
-            envelope.receivedAt,
-            envelope.occurredAt,
-            Jsonb provenanceSegments,
-            Jsonb contentValue,
-            rendered,
-            rendered,
-            envelope.senderDisplayName,
-            replyLegacy,
-            replyCanonical,
-            options.transcriptKind,
-            endpoint.erConversationId,
-            envelope.endpointId.unEndpointId,
-            nativeEvent,
-            platformName,
-            renderEventKind envelope.eventKind,
-            renderIngestClass envelope.ingestClass
+              legacyGroup,
+              legacyUser,
+              legacySelf,
+              envelope.receivedAt,
+              envelope.occurredAt,
+              Jsonb provenanceSegments,
+              Jsonb contentValue,
+              rendered,
+              rendered,
+              envelope.senderDisplayName,
+              replyLegacy,
+              replyCanonical,
+              options.transcriptKind,
+              endpoint.erConversationId,
+              envelope.endpointId.unEndpointId,
+              nativeEvent,
+              platformName,
+              renderEventKind envelope.eventKind,
+              renderIngestClass envelope.ingestClass
             )
-            :. Only identityId
+              :. Only identityId
           )
       let (cid, ingestSeq) = case inserted :: [(Int64, Int64)] of
             [row] -> row
@@ -1277,7 +1279,7 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
               }
         )
 
-    -- | An ordinary message projects its own body; anything else projects
+    -- \| An ordinary message projects its own body; anything else projects
     -- what it did to another message.  A meta event carries at most one such
     -- relation, and a reaction is the only one that also carries a key.
     metaProjection bodyProjection = case envelope.eventKind of
@@ -1329,23 +1331,23 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
           \ FROM conversation_endpoints origin \
           \ JOIN conversation_endpoints target \
           \   ON target.conversation_id = origin.conversation_id \
-        \  AND target.endpoint_id <> origin.endpoint_id \
-        \ JOIN platform_accounts target_account \
-        \   ON target_account.platform_account_id = target.platform_account_id \
-        \ JOIN message_relations relation \
-        \   ON relation.canonical_message_id = ? \
-        \  AND relation.relation_kind = ? \
-        \  AND relation.target_canonical_message_id IS NOT NULL \
+          \  AND target.endpoint_id <> origin.endpoint_id \
+          \ JOIN platform_accounts target_account \
+          \   ON target_account.platform_account_id = target.platform_account_id \
+          \ JOIN message_relations relation \
+          \   ON relation.canonical_message_id = ? \
+          \  AND relation.relation_kind = ? \
+          \  AND relation.target_canonical_message_id IS NOT NULL \
           \ WHERE origin.endpoint_id = ? \
           \   AND origin.endpoint_mode = 'mirror' \
           \   AND target.endpoint_mode = 'mirror' \
           \   AND target.enabled AND target_account.enabled \
           \   AND ( \
           \     EXISTS (SELECT 1 FROM platform_events copy \
-        \             WHERE copy.endpoint_id = target.endpoint_id \
-        \               AND copy.canonical_message_id = relation.target_canonical_message_id) \
-        \     OR EXISTS (SELECT 1 FROM message_deliveries copy \
-        \                WHERE copy.endpoint_id = target.endpoint_id \
+          \             WHERE copy.endpoint_id = target.endpoint_id \
+          \               AND copy.canonical_message_id = relation.target_canonical_message_id) \
+          \     OR EXISTS (SELECT 1 FROM message_deliveries copy \
+          \                WHERE copy.endpoint_id = target.endpoint_id \
           \                  AND copy.canonical_message_id = relation.target_canonical_message_id \
           \                  AND copy.native_event_id IS NOT NULL) \
           \   ) \
@@ -1898,6 +1900,7 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
   -- long ago its lease ran out.  Separate statement rather than another CTE,
   -- for the reason the delivery sweep is one: data-modifying CTEs share a
   -- snapshot, and the quarantined row would still read as 'claimed' here.
+  _ <- execute expiredReservedDispatchSql ()
   _ <- execute expiredClaimedDispatchSql ()
   rows <-
     query
@@ -1911,11 +1914,10 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
       \ FOR UPDATE OF md SKIP LOCKED LIMIT ? \
       \), claimed AS ( \
       \ UPDATE message_dispatches md \
-      \ SET status = 'claimed', lease_owner = ?, \
-      \     lease_expires_at = max_lease_until(?), \
-      \     attempt_count = attempt_count + 1, last_attempt_at = now(), updated_at = now() \
+      \ SET status = 'reserved', lease_owner = ?, \
+      \     lease_expires_at = max_lease_until(?), updated_at = now() \
       \ FROM candidates c WHERE md.canonical_message_id = c.canonical_message_id \
-      \ RETURNING md.canonical_message_id, md.attempt_count \
+      \ RETURNING md.canonical_message_id, md.attempt_count + 1 AS attempt_count \
       \) \
       \SELECT c.canonical_message_id, m.message_id, m.group_id, m.user_id, m.self_id, \
       \       m.author_principal_id, self_identity.principal_id, \
@@ -1938,6 +1940,27 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
         realToFrac leaseDuration :: Double
       )
   pure (toDispatchClaim <$> (rows :: [DispatchClaimRow]))
+
+-- | Move one reservation into the effectful dispatch phase.  The attempt is
+-- counted, and its lease begins again, only here: a batch tail that never
+-- reaches this transition was never attempted and is safe to re-offer.
+startDispatch ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  CanonicalMessageId ->
+  Int ->
+  NominalDiffTime ->
+  Eff es Bool
+startDispatch workerId (CanonicalMessageId canonical) attempt leaseDuration = do
+  changed <-
+    execute
+      "UPDATE message_dispatches \
+      \ SET status = 'claimed', attempt_count = attempt_count + 1, \
+      \     last_attempt_at = now(), lease_expires_at = max_lease_until(?), updated_at = now() \
+      \ WHERE canonical_message_id = ? AND status = 'reserved' \
+      \   AND lease_owner = ? AND attempt_count + 1 = ?"
+      (realToFrac leaseDuration :: Double, canonical, workerId, attempt)
+  pure (changed == 1)
 
 -- | Settle a claimed row, if this is still the claim that owns it.
 --
@@ -2055,6 +2078,17 @@ claimDelivery workerId (DeliveryId delivery) leaseDuration = do
   claims <- claimDeliveriesWhere workerId (Just delivery) 1 leaseDuration
   pure (listToMaybe claims)
 
+-- | A reservation has not crossed the effect boundary.  If its owner died
+-- before starting it, re-offering is always safe and must not manufacture an
+-- outcome-unknown attempt.
+expiredReservedDispatchSql :: Query
+expiredReservedDispatchSql =
+  "UPDATE message_dispatches \
+  \ SET status = 'pending', lease_owner = NULL, lease_expires_at = NULL, \
+  \     updated_at = now() \
+  \ WHERE status = 'reserved' \
+  \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
+
 -- | The dispatch half of 'expiredSendingDeliverySql'.  A worker can disappear
 -- after durably claiming a message but before recording that it finished, and
 -- an abandoned @claimed@ row is worse off than an abandoned @sending@ one: the
@@ -2095,6 +2129,14 @@ expiredSendingDeliverySql =
   \ WHERE status = 'sending' \
   \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
 
+expiredReservedDeliverySql :: Query
+expiredReservedDeliverySql =
+  "UPDATE message_deliveries \
+  \ SET status = 'pending', lease_owner = NULL, lease_expires_at = NULL, \
+  \     updated_at = now() \
+  \ WHERE status = 'reserved' \
+  \   AND (lease_expires_at IS NULL OR lease_expires_at < now())"
+
 -- | Resolve canonical mention identities to native ids on the destination
 -- endpoint.  The result is captured before calling the pure lowering
 -- function; transports never perform identity lookups or guess from origin
@@ -2126,7 +2168,7 @@ deliveryMentionNatives (EndpointId endpoint) identities = do
       (endpoint, PGArray (map unPrincipalIdentityId identities))
   pure . Map.fromList $
     [ (PrincipalIdentityId identity, NativeUserId native)
-      | (identity, native) <- (rows :: [(Int64, Text)])
+    | (identity, native) <- (rows :: [(Int64, Text)])
     ]
 
 claimDeliveriesWhere ::
@@ -2140,6 +2182,7 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
   -- This sweep is deliberately separate from the claim statement: sibling
   -- data-modifying CTEs share a snapshot and would leave the quarantined row
   -- visible as @sending@ to the ordering predicate until the next poll.
+  _ <- execute expiredReservedDeliverySql ()
   _ <- execute expiredSendingDeliverySql ()
   rows <-
     query
@@ -2157,7 +2200,7 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \     JOIN messages earlier_message ON earlier_message.canonical_message_id = earlier.canonical_message_id \
       \     WHERE earlier.endpoint_id = d.endpoint_id \
       \       AND earlier.delivery_id <> d.delivery_id \
-      \       AND earlier.status IN ('pending', 'failed', 'sending') \
+      \       AND earlier.status IN ('pending', 'failed', 'reserved', 'sending') \
       \       AND (earlier_message.conversation_seq, earlier.delivery_id) \
       \           < (candidate_message.conversation_seq, d.delivery_id) \
       \   ) \
@@ -2165,11 +2208,10 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \ FOR UPDATE OF d SKIP LOCKED LIMIT ? \
       \), claimed AS ( \
       \ UPDATE message_deliveries d \
-      \ SET status = 'sending', lease_owner = ?, \
-      \     lease_expires_at = max_lease_until(?), \
-      \     attempt_count = attempt_count + 1, last_attempt_at = now(), updated_at = now() \
+      \ SET status = 'reserved', lease_owner = ?, \
+      \     lease_expires_at = max_lease_until(?), updated_at = now() \
       \ FROM candidates c WHERE d.delivery_id = c.delivery_id \
-      \ RETURNING d.* \
+      \ RETURNING d.*, d.attempt_count + 1 AS next_attempt_count \
       \) \
       \ SELECT c.delivery_id, c.canonical_message_id, c.endpoint_id, a.platform_account_id, a.platform, \
       \        a.native_account_id, e.native_conversation_id, m.canonical_content, \
@@ -2180,7 +2222,7 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \        COALESCE(reply_message.sender_card, reply_message.sender_nickname), \
       \        reply_message.canonical_content, \
       \        origin_account.platform, COALESCE(m.sender_card, m.sender_nickname), m.message_origin, \
-      \        c.idempotency_key, c.attempt_count, \
+      \        c.idempotency_key, c.next_attempt_count, \
       \        CASE WHEN e.capabilities = '{}'::jsonb THEN a.capabilities ELSE e.capabilities END \
       \ FROM claimed c \
       \ JOIN conversation_endpoints e ON e.endpoint_id = c.endpoint_id \
@@ -2286,14 +2328,38 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       (mDelivery, mDelivery, limit, workerId, realToFrac leaseDuration :: Double)
   pure (toClaim <$> (rows :: [DeliveryClaimRow]))
 
+-- | Cross a delivery reservation into the non-idempotent transport phase.
+-- Refreshing the lease here prevents time spent behind earlier batch members
+-- from consuming the actual send attempt's ambiguity window.
+startDelivery ::
+  (WithConnection :> es, IOE :> es) =>
+  Text ->
+  DeliveryId ->
+  Int ->
+  NominalDiffTime ->
+  Eff es Bool
+startDelivery workerId (DeliveryId delivery) attempt leaseDuration = do
+  changed <-
+    execute
+      "UPDATE message_deliveries \
+      \ SET status = 'sending', attempt_count = attempt_count + 1, \
+      \     last_attempt_at = now(), lease_expires_at = max_lease_until(?), updated_at = now() \
+      \ WHERE delivery_id = ? AND status = 'reserved' \
+      \   AND lease_owner = ? AND attempt_count + 1 = ?"
+      (realToFrac leaseDuration :: Double, delivery, workerId, attempt)
+  pure (changed == 1)
+
 completeDelivery ::
   (WithConnection :> es, IOE :> es) =>
   Text ->
   DeliveryId ->
+  -- | Attempt token returned by the reservation and committed by
+  -- 'startDelivery'.
+  Int ->
   [LowerNote] ->
   DeliveryCompletion ->
   Eff es Bool
-completeDelivery workerId (DeliveryId delivery) lowerNotes completion = do
+completeDelivery workerId (DeliveryId delivery) attempt lowerNotes completion = do
   withTransaction $ do
     safeCompletion <- discardOwnedNativeEvent completion
     changed <- case safeCompletion of
@@ -2341,7 +2407,8 @@ completeDelivery workerId (DeliveryId delivery) lowerNotes completion = do
         \     last_error = ?, next_attempt_at = COALESCE(?, next_attempt_at), \
         \     confirmed_at = CASE WHEN ? THEN now() ELSE confirmed_at END, \
         \     lease_owner = NULL, lease_expires_at = NULL, updated_at = now() \
-        \ WHERE delivery_id = ? AND status = 'sending' AND lease_owner = ?"
+        \ WHERE delivery_id = ? AND status = 'sending' AND lease_owner = ? \
+        \   AND attempt_count = ?"
         ( status,
           unNativeEventId <$> native,
           Jsonb (toJSON lowerNotes),
@@ -2349,7 +2416,8 @@ completeDelivery workerId (DeliveryId delivery) lowerNotes completion = do
           next,
           confirmed,
           delivery,
-          workerId
+          workerId,
+          attempt
         )
 
 listUnconfirmedDeliveries ::
@@ -2426,12 +2494,12 @@ listPlatformStatus =
     \         WHERE pc.platform_account_id = a.platform_account_id \
     \       ), '[]'::jsonb), \
     \       (SELECT max(pe.received_at) FROM platform_events pe WHERE pe.endpoint_id = e.endpoint_id), \
-    \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status IN ('pending', 'sending')), \
+    \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status IN ('pending', 'reserved', 'sending')), \
     \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'failed'), \
     \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'accepted_unconfirmed'), \
     \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'outcome_unknown'), \
     \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'suppressed'), \
-    \       (SELECT min(d.created_at) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status IN ('pending', 'sending', 'failed')), \
+    \       (SELECT min(d.created_at) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status IN ('pending', 'reserved', 'sending', 'failed')), \
     \       (SELECT max(d.updated_at) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id) \
     \ FROM conversation_endpoints e \
     \ JOIN platform_accounts a USING (platform_account_id) \

@@ -7,7 +7,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..), execute)
 import Effectful.PostgreSQL (query)
-import Helpers (insertRawMessage, testTime, truncateAll, withDb)
+import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbConcurrent)
 import Max.Context (ContextDecision (..), ContextTrace (..), contextBudget)
 import Max.ContextAdmin
 import Max.ContextTraceStore (ContextPlanTraceRow (..), listContextPlanTraces, recordContextPlanTrace)
@@ -81,7 +81,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.ContextAdmin" $ do
           \ embedding_updated_at = now()"
           ()
       pure ()
-    invalidated <- withDb pool $ invalidateEmbeddingsAdmin groupId ["message"]
+    invalidated <- withDbConcurrent pool $ invalidateEmbeddingsAdmin groupId ["message"]
     invalidated `shouldSatisfy` \case Right _ -> True; Left _ -> False
     rows <-
       withDb pool $

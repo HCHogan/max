@@ -1,6 +1,8 @@
 module OneBot.Server
   ( ServerConfig (..),
     Client (..),
+    ClientSlot,
+    clearClientGeneration,
     runServer,
   )
 where
@@ -8,12 +10,12 @@ where
 import Control.Concurrent.STM
 import Control.Exception (finally)
 import Control.Monad (void)
-import Data.Foldable (for_)
 import Data.Aeson (Value (Object), decode, eitherDecode)
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
+import Data.Foldable (for_)
 import Data.IORef (atomicModifyIORef', newIORef)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -44,6 +46,16 @@ data Client = Client
     pending :: !(TVar (Map Text (TMVar (Either Text Response))))
   }
 
+-- | Generation-tagged publication slot.  A superseded websocket may finish
+-- after its replacement has published; its cleanup is allowed to abort only
+-- its own pending calls, never to erase the newer client.
+type ClientSlot = Maybe (Int, Client)
+
+clearClientGeneration :: Int -> Maybe (Int, a) -> Maybe (Int, a)
+clearClientGeneration generation current = case current of
+  Just (published, _) | published == generation -> Nothing
+  _ -> current
+
 -- | Run the reverse-WS server. Each accepted connection gets its own
 -- @conn-N@ log domain. Decoded events are pushed onto 'eventQ' for the
 -- app-lived handler to consume. The current 'Client' (if any) is
@@ -52,7 +64,7 @@ runServer ::
   (Log :> es, IOE :> es) =>
   ServerConfig ->
   TQueue Event ->
-  TVar (Maybe Client) ->
+  TVar ClientSlot ->
   Eff es ()
 runServer cfg eventQ clientRef = do
   counter <- liftIO (newIORef (0 :: Int))
@@ -61,16 +73,17 @@ runServer cfg eventQ clientRef = do
       cid <- atomicModifyIORef' counter (\n -> let n' = n + 1 in (n', n'))
       run $
         localDomain ("conn-" <> T.pack (show cid)) $
-          acceptConn cfg pending eventQ clientRef
+          acceptConn cid cfg pending eventQ clientRef
 
 acceptConn ::
   (Log :> es, IOE :> es) =>
+  Int ->
   ServerConfig ->
   WS.PendingConnection ->
   TQueue Event ->
-  TVar (Maybe Client) ->
+  TVar ClientSlot ->
   Eff es ()
-acceptConn cfg pending eventQ clientRef = do
+acceptConn cid cfg pending eventQ clientRef = do
   let req = WS.pendingRequest pending
       reqPath = TE.decodeUtf8Lenient (WS.requestPath req)
   if reqPath /= cfg.path
@@ -84,7 +97,7 @@ acceptConn cfg pending eventQ clientRef = do
       Right () -> do
         conn <- liftIO (WS.acceptRequest pending)
         logInfo_ "ws connected"
-        runConn conn eventQ clientRef `catchSync` \e ->
+        runConn cid conn eventQ clientRef `catchSync` \e ->
           logAttention "connection terminated" $
             object ["error" .= T.pack (show e)]
         liftIO (closeQuietly conn)
@@ -95,18 +108,19 @@ acceptConn cfg pending eventQ clientRef = do
 -- 'call's so callers don't hang past the disconnect.
 runConn ::
   (Log :> es, IOE :> es) =>
+  Int ->
   WS.Connection ->
   TQueue Event ->
-  TVar (Maybe Client) ->
+  TVar ClientSlot ->
   Eff es ()
-runConn conn eventQ clientRef = do
+runConn generation conn eventQ clientRef = do
   pendingMap <- liftIO (newTVarIO Map.empty)
   let client = Client {connection = conn, pending = pendingMap}
   withRunInIO $ \run -> do
-    atomically (writeTVar clientRef (Just client))
+    atomically (writeTVar clientRef (Just (generation, client)))
     WS.withPingThread conn 30 (pure ()) (run (readLoop client eventQ))
       `finally` ( do
-                    atomically (writeTVar clientRef Nothing)
+                    atomically (modifyTVar' clientRef (clearClientGeneration generation))
                     abortPending pendingMap "connection closed"
                 )
 
