@@ -16,6 +16,7 @@ module Max.Toolset
     toolCountFor,
     toolDefinitionsFor,
     toolAllowedByEffectCeiling,
+    defaultToolDeadline,
   )
 where
 

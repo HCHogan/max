@@ -48,6 +48,7 @@ import Max.Plan.Prompt (childPrompt, frontPrompt, guidePlans, renderEffect)
 import Max.Plan.Types (Goal, planChildren)
 import Max.Plan.Validate (CatalogEntry, childEnv, rejectionText, validatePlan)
 import Max.Tools.Plan (planValidationEnv)
+import Max.Toolset (defaultToolDeadline)
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
 
@@ -274,5 +275,8 @@ productionPlanCatalog =
           tdParallelism = SequentialOnly,
           tdRetryClass = RetrySafe,
           tdAuthorities = Set.singleton CurrentConversation,
+          -- What the real inventory gives a tool that doesn't override it;
+          -- plan validation never reads it.
+          tdDeadline = defaultToolDeadline,
           tdFailuresPrecedeEffects = False
         }
