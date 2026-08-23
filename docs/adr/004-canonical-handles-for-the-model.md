@@ -1,8 +1,8 @@
 # ADR 004: Canonical Handles and the Identity the Model Addresses
 
-- Status: Implemented for the original message, media, person, and episode
-  handles. Scoped turn, result, and monitor extensions are proposed by
-  ADR 005, ADR 002, and ADR 006 respectively.
+- Status: Implemented for message, media, person, episode, scoped turn,
+  journal-result, and monitor handles. Type-tagged spelling and explicit
+  cross-platform principal merge remain deferred product work.
 - Date: 2026-08-05 (implemented 2026-08-05, migration `066`; scoped-runtime
   handle amendment 2026-08-09)
 
@@ -118,9 +118,9 @@ ordinals are stored, never assigned while rendering.
 | media | `[image#<canonical_message_id>.<seg_index>]` | `message_images` / `message_videos` PK |
 | person | `[@#<principal_id>]` | `principals.principal_id` |
 | episode | `[episode#<uuid>]` — unchanged | `conversation_compartments.expand_handle` |
-| turn (proposed, ADR 005) | `t#<turn_ordinal>` | `agent_turns UNIQUE (conversation_id, turn_ordinal)` |
-| result (proposed, ADR 002) | `t#<turn_ordinal>:r<execution_ordinal>` | journal `UNIQUE (turn_id, execution_ordinal)` |
-| monitor (proposed, ADR 006) | `m#<monitor_ordinal>` | `monitors UNIQUE (conversation_id, monitor_ordinal)` |
+| turn (ADR 005) | `t#<turn_ordinal>` | `agent_turns UNIQUE (conversation_id, turn_ordinal)` |
+| result (ADR 002/007) | `t#<turn_ordinal>:r<execution_ordinal>` | journal `UNIQUE (turn_id, execution_ordinal)` |
+| monitor (ADR 006) | `m#<monitor_ordinal>` | `monitors UNIQUE (conversation_id, monitor_ordinal)` |
 
 `seg_index` is rendered **verbatim, 0-based**, as stored. A `+1` for
 readability would be an ephemeral mapping, and the invariant this ADR exists

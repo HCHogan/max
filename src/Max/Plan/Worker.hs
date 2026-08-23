@@ -43,7 +43,6 @@ import Control.Monad (unless, void, when)
 import Data.Aeson (Result (..), Value (..), fromJSON, object, (.=))
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (addUTCTime, getCurrentTime)
 import Effectful
 import Effectful.Concurrent (threadDelay)
 import Effectful.Concurrent.Async (Concurrent, race)

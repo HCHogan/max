@@ -19,6 +19,7 @@ module Max.Platform.Delivery
     oneBotNodes,
     oneBotReplySegment,
     oneBotReactionAction,
+    fanOutMediaChunks,
     toCompletion,
     deliveryAttemptBudget,
   )
@@ -404,6 +405,22 @@ mediaTextCaps caps =
   where
     textUnlessDrop TierDrop = TierDrop
     textUnlessDrop _ = TierText
+
+-- | Upload-style transports publish at most one native attachment per wire
+-- event.  Preserve canonical node order by splitting a lowered chunk
+-- immediately before its second and later media nodes; intervening text stays
+-- after the media it followed.  The first wire chunk alone receives reply
+-- provenance in the adapters.
+fanOutMediaChunks :: [[Node 'Lowered]] -> [[Node 'Lowered]]
+fanOutMediaChunks = concatMap splitChunk
+  where
+    splitChunk = go [] False
+    go acc _ [] = [reverse acc | not (null acc)]
+    go acc hasMedia (node : rest) = case node of
+      NMedia {}
+        | hasMedia -> reverse acc : go [node] True rest
+        | otherwise -> go (node : acc) True rest
+      _ -> go (node : acc) hasMedia rest
 
 completionName :: DeliveryCompletion -> Text
 completionName = \case

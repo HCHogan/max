@@ -10,7 +10,7 @@ import Max.IR
 import Max.IR.Lower (OutboundCaps (..), Tier (TierNative), textOnlyCaps)
 import Max.IR.Prompt (promptText)
 import Max.Platform
-import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (LiveDelivery))
+import Max.Platform.Envelope (InboundEnvelope (..))
 import Max.Platform.QQ (qqEnvelope, qqIngestBody)
 import Max.Platform.Store (RegisteredEndpoint (..))
 import Max.Platform.Types
@@ -23,14 +23,14 @@ import Max.Platform.Types
   )
 import Max.WechatHook
   ( CallbackMsg (..),
+    ImagePayload (..),
     Quote (..),
     WechatHookConfig (..),
     callbackPathSegments,
     displayNameFor,
     parseCallback,
-    parseQuote,
     parseImagePayload,
-    ImagePayload (..),
+    parseQuote,
     wechatHookCapabilities,
     wechatHookContent,
     wechatHookInboundBody,
@@ -204,6 +204,8 @@ spec = do
       actionAddress (SendGroupMsg (GroupId (-1000000000001)) [])
         `shouldBe` ConversationAddress (-1000000000001)
       actionAddress (SendPrivateMsg (UserId 7) []) `shouldBe` DirectAddress 7
+      actionAddress (GetGroupMsgHistory (GroupId 8) Nothing 100) `shouldBe` ConversationAddress 8
+      actionAddress (GetFriendMsgHistory (UserId 7) (Just "41") 100) `shouldBe` DirectAddress 7
       actionAddress (SetMsgEmojiLike (MessageId 9) 1 True) `shouldBe` MessageAddress 9
       actionAddress (SetFriendAddRequest "flag" True) `shouldBe` AccountAddress
 

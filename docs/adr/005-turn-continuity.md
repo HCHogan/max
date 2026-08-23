@@ -1,9 +1,10 @@
 # ADR 005: Turn Continuity — Journal Projections and Verbatim Replay
 
-- Status: Proposed. Slices 1–3 ride the v1.0 journal work (they consume
-  ADR 002's step-0 substrate and the L3 send linkage); the replay tier
-  and rendered digests follow. Defaults below (TTLs, budgets) are knobs,
-  recorded so the first implementation has numbers.
+- Status: Implemented through slice 4: durable turns/journal archives, `t#`
+  expansion, reply-linked digest continuation, bounded provider-wire replay,
+  ledger deduplication, drift checks and crash recovery are production paths.
+  Slice 5's small-model 「思路」/`turn_digests` cache and narrator renderer
+  unification remain deferred polish; the deterministic digest is the floor.
 - Date: 2026-08-06; persisted turn-ordinal handle contract 2026-08-09.
 
 ## Context

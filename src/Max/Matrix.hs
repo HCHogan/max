@@ -67,6 +67,7 @@ import Max.Platform.Delivery
   ( DeliveryAttempt (..),
     DeliveryOperation (..),
     DeliveryTransport (..),
+    fanOutMediaChunks,
     loweredText,
     resolveDeliveryMedia,
   )
@@ -154,7 +155,8 @@ matrixCapabilities =
       reaction = True,
       edit = True,
       redact = True,
-      maxTextBytes = Just 65536
+      maxTextBytes = Just 65536,
+      maxNativeMedia = 8
     }
 
 matrixWorker ::
@@ -335,7 +337,7 @@ matrixDeliveryTransport runtime cfg =
     }
   where
     sendChunks claim lowered = do
-      prepareAll (0 :: Int) lowered.chunks >>= \case
+      prepareAll (0 :: Int) (fanOutMediaChunks lowered.chunks) >>= \case
         Left (MatrixContractFailure err) -> pure (AttemptPermanentlyFailed err)
         Left (MatrixMediaFailure err) -> pure (AttemptMediaFallback err)
         Right payloads -> sendAll 0 Nothing payloads

@@ -149,16 +149,15 @@ mediaSpec = describe "media lowering" $ do
   -- A picture max rendered *from* text can fold back to that text; one that
   -- arrived as a picture cannot, and naming it beats inventing a caption.
   --
-  -- Reachable without any text-only endpoint in the room: matrix, iMessage
-  -- and the WeChat hook all advertise max_native_media = 1, so a reply
-  -- holding a table and a code block folds the second one.  Before
+  -- Reachable without any text-only endpoint in the room: the WeChat hook
+  -- advertises max_native_media = 1, while Matrix/iMessage cap one canonical
+  -- delivery at eight.  Before
   -- fold_text that fold shipped "[图片: code.png]" and dropped the snippet.
   it "folds generated media back to the text it was rendered from" $ do
-    let snippet = mkMeta MImage Nothing
-        code =
+    let code =
           NMedia
             (Just (blob "d"))
-            snippet {name = Just "code.png", raw = Just (object ["fold_text" .= ("f = id" :: Text)])}
+            (MediaMeta MImage Nothing Nothing (Just "code.png") Nothing (Just (object ["fold_text" .= ("f = id" :: Text)])))
         out = lower baseEnv {caps = nativeImages} (Body [img (Just (blob "a")), code])
     flat out
       `shouldBe` [ NMedia (ResolvedUrl ("blob:" <> T.replicate 64 "a")) (mkMeta MImage (Just "两只猫")),

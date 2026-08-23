@@ -727,9 +727,9 @@ Key contrasts:
 
 Worth borrowing: NekroAgent's one-time session code wrapping prompt
 markers (structurally stronger anti-forgery than our roster-gated token
-grammar); its recall philosophy for redactions (keep the row, tell the
-model it can still see it — our `redacts` relation is stored but not yet
-consumed by the prompt); its channel ACTIVE/OBSERVE/DISABLED tri-state.
+grammar); its recall philosophy for redactions (keep the row and tell the
+model it can still see it — Max now projects the stored `redacts` relation
+as `[unsend#<canonical-id>]`); its channel ACTIVE/OBSERVE/DISABLED tri-state.
 AstrBot's media toolbox (silk/ffmpeg conversion, long-text-to-image) and
 Telegram draft/edit streaming are reference implementations for future
 adapters.

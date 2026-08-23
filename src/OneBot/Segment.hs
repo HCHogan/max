@@ -20,7 +20,7 @@ import Data.Aeson.Types (Parser, typeMismatch)
 import Data.Foldable (asum)
 import Data.Int (Int64)
 import Data.List (sortOn, unsnoc)
-import Data.Maybe (catMaybes, fromMaybe, isJust)
+import Data.Maybe (catMaybes, isJust)
 import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import Data.Text qualified as T

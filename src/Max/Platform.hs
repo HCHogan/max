@@ -41,6 +41,8 @@ actionAddress = \case
   UploadPrivateFile (UserId user) _ _ -> DirectAddress user
   GetGroupMemberList (GroupId group) -> ConversationAddress group
   GetGroupInfo (GroupId group) -> ConversationAddress group
+  GetGroupMsgHistory (GroupId group) _ _ -> ConversationAddress group
+  GetFriendMsgHistory (UserId user) _ _ -> DirectAddress user
   SetMsgEmojiLike (MessageId message) _ _ -> MessageAddress message
   SendPoke (GroupId group) _ -> ConversationAddress group
   SetFriendAddRequest _ _ -> AccountAddress

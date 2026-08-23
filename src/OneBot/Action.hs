@@ -42,6 +42,12 @@ data Action
   | -- | Fetch group metadata.  Response @data@ carries @group_name@ /
     -- @member_count@ / @max_member_count@.
     GetGroupInfo !GroupId
+  | -- | Read a bounded page of group history.  NapCat's cursor semantics are
+    -- not a durable guarantee, so callers combine an anchored request with a
+    -- latest-page request and still describe the result as best effort.
+    GetGroupMsgHistory !GroupId !(Maybe Text) !Int
+  | -- | Private-chat counterpart of 'GetGroupMsgHistory'.
+    GetFriendMsgHistory !UserId !(Maybe Text) !Int
   | -- | React to a message with a QQ face (贴表情).  The 'Int' is the
     -- face id (face_config.json QSid); 'False' removes the bot's own
     -- reaction again.
@@ -74,6 +80,8 @@ actionName = \case
   UploadPrivateFile {} -> "upload_private_file"
   GetGroupMemberList {} -> "get_group_member_list"
   GetGroupInfo {} -> "get_group_info"
+  GetGroupMsgHistory {} -> "get_group_msg_history"
+  GetFriendMsgHistory {} -> "get_friend_msg_history"
   SetMsgEmojiLike {} -> "set_msg_emoji_like"
   SendPoke {} -> "send_poke"
   SetFriendAddRequest {} -> "set_friend_add_request"
@@ -122,6 +130,20 @@ actionParams = \case
     object ["group_id" .= gid]
   GetGroupInfo gid ->
     object ["group_id" .= gid]
+  GetGroupMsgHistory gid sequenceNumber count ->
+    object $
+      [ "group_id" .= gid,
+        "count" .= count,
+        "reverse_order" .= False
+      ]
+        <> ["message_seq" .= seqNo | Just seqNo <- [sequenceNumber]]
+  GetFriendMsgHistory uid sequenceNumber count ->
+    object $
+      [ "user_id" .= uid,
+        "count" .= count,
+        "reverse_order" .= False
+      ]
+        <> ["message_seq" .= seqNo | Just seqNo <- [sequenceNumber]]
   SetMsgEmojiLike mid emojiId set' ->
     object
       [ "message_id" .= mid,
@@ -131,7 +153,7 @@ actionParams = \case
   -- NapCat's send_poke schema types the ids as strings; a group poke
   -- carries the group, a friend poke only the target.
   SendPoke gid target ->
-    let showT :: Show a => a -> Text
+    let showT :: (Show a) => a -> Text
         showT = T.pack . show
      in object $
           ["user_id" .= showT target]

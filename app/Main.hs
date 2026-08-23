@@ -318,7 +318,7 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
               "monitor-scheduler"
               RequiredWorker
               (monitorWorker cfg.timezone (maintenanceOwner <> "/monitors") dispatchMonitorFire),
-            worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig mIntentSt),
+            worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig mIntentSt clientRef),
             worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (maintenanceOwner <> "/dispatch") fetchSig mIntentSt),
             worker
               "plan-scheduler"

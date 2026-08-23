@@ -48,7 +48,7 @@ import Max.MemoryStore
     userMemoryNamespace,
   )
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, lookupModelCapabilities, modelProfileNames)
-import Max.Sandbox.Docker (ExecResult (..), wrapPackages)
+import Max.Sandbox.Docker (ExecResult (..))
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
 import Max.Platform.Types (PrincipalId (..))
 import Max.Session (Session (..), SessionHandle, updateSession)
@@ -280,7 +280,7 @@ execute t gid uid senderPrincipal replyTarget cmd = do
             object ["sandbox" .= e.seId.unSandboxId, "pkgs" .= pkgs, "cmd" .= cmdLine]
           res <-
             liftIO $
-              execInSandbox env.beSandboxes gid e.seId (wrapPackages pkgs cmdLine) (shellTimeoutSecs pkgs)
+              execInSandbox env.beSandboxes gid e.seId pkgs cmdLine (shellTimeoutSecs pkgs)
           reply $ case res of
             Left err -> "执行失败: " <> err
             Right er -> formatExecResult er
@@ -563,7 +563,8 @@ formatExecResult er =
         | er.erExitCode /= 0
         ]
           <> [ "[输出已截断"
-                 <> maybe "" ("，完整输出在 " <>) er.erSpillPath
+                 <> maybe "" ("，输出文件在 " <>) er.erSpillPath
+                 <> if er.erSpillTruncated then "，文件也达到安全上限" else ""
                  <> "]"
              | er.erTruncated
              ]

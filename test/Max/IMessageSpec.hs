@@ -284,7 +284,7 @@ spec = describe "iMessage adapter" $ do
     iMessageCapabilities.reaction `shouldBe` False
     iMessageCapabilities.edit `shouldBe` False
     iMessageCapabilities.redact `shouldBe` False
-    iMessageCapabilities.maxNativeMedia `shouldBe` 1
+    iMessageCapabilities.maxNativeMedia `shouldBe` 8
     (iMessageCapabilitiesFor True).reply `shouldBe` TierNative
     (iMessageCapabilitiesFor False).reply `shouldBe` TierText
 

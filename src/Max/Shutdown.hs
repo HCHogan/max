@@ -19,12 +19,14 @@
 -- bounded.  That leaves the agent loop as the only thing worth
 -- waiting for.
 --
--- __What still gets dropped.__  A trigger arriving mid-drain is
--- persisted but not dispatched (logged with its message_id).  So is
--- anything NapCat would have delivered during the restart window
--- itself — it dials in over reverse-WS and does not buffer while
--- we're down.  Closing that hole needs history backfill on reconnect,
--- which is its own piece of work.
+-- __What still gets dropped.__  A trigger arriving mid-drain is persisted but
+-- not dispatched (logged with its message_id).  NapCat dials in over reverse
+-- WS and does not provide a durable cursor while we're down.  Reconnect now
+-- performs a bounded, deduplicated message-history backfill for known QQ
+-- endpoints before admitting that generation's live frames, but it cannot
+-- prove an offline-complete interval or reconstruct absent notices.  Reactions,
+-- recalls and messages outside the returned windows therefore remain possible
+-- gaps, recorded as best-effort recovery rather than exactly-once continuity.
 module Max.Shutdown
   ( ShutdownState,
     newShutdownState,

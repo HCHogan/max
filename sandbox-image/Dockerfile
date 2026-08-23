@@ -65,5 +65,15 @@ RUN set -eu; p=6; for a in \
 # (~30s + ~2 GiB RAM).
 RUN nix search nixpkgs hello > /dev/null
 
+# The long-lived sandbox is started as this uid with every Linux capability
+# dropped.  Keep the shared Nix store root-owned: the user may execute realised
+# paths but cannot replace them and poison another group's environment.
+RUN printf 'sandbox:x:1000:1000:Max sandbox:/home/sandbox:/bin/sh\n' >> /etc/passwd \
+ && printf 'sandbox:x:1000:\n' >> /etc/group \
+ && mkdir -p /home/sandbox \
+ && chown 1000:1000 /home/sandbox
+
+ENV HOME=/home/sandbox USER=sandbox
+
 WORKDIR /work
 CMD ["sleep", "infinity"]

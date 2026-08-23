@@ -147,7 +147,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     _ <-
       withDb pool $
         ingestEnvelope
-          defaultIngestOptions {transcriptKind = "command"}
+          (withTranscriptKind "command" defaultIngestOptions)
           (inbound matrix.endpointId now "mx-command" "!version")
     mirrored <- deliveriesFor pool qq.endpointId
     -- The other platform's members did not type it and cannot act on it, and
@@ -1032,9 +1032,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
       withDb pool $
         ingestEnvelope
           defaultIngestOptions
-          (inbound endpoint.endpointId now "anonymous-event" "again")
-            { senderDisplayName = Nothing
-            }
+          (withoutSenderDisplay (inbound endpoint.endpointId now "anonymous-event" "again"))
     let nameOf result = withConn pool $ \conn ->
           query
             conn
@@ -1372,6 +1370,14 @@ inboundBody endpoint now eventId body =
       sourceCursor = Just (PlatformCursor (String "next")),
       rawPayload = Just (object ["event_id" .= eventId])
     }
+
+withTranscriptKind :: Text -> IngestOptions -> IngestOptions
+withTranscriptKind kind (IngestOptions raw dispatch mirrors _ provenance echoes) =
+  IngestOptions raw dispatch mirrors kind provenance echoes
+
+withoutSenderDisplay :: InboundEnvelope -> InboundEnvelope
+withoutSenderDisplay (InboundEnvelope eid native sender _ occurred received kind ingest body relations cursor raw) =
+  InboundEnvelope eid native sender Nothing occurred received kind ingest body relations cursor raw
 
 isNew :: IngestResult -> Bool
 isNew (Ingested _) = True

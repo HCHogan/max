@@ -1,7 +1,10 @@
 cabal-version:      3.0
 name:               max
-version:            0.17.1
+version:            0.17.2
 synopsis:           Multi-platform group agent with durable context and memory
+description:        A multi-platform group agent with a canonical message ledger,
+                    durable turn and plan execution, scoped memory, and typed tools.
+category:           Network
 license:            MIT
 license-file:       LICENSE
 author:             Hank Hogan
@@ -22,12 +25,17 @@ extra-source-files:
     LICENSE
     README.md
     assets/codesnap/*.tmTheme
-    browser-image/*
+    browser-image/Dockerfile
+    browser-image/build.sh
+    browser-image/*.patch
     bridge/imsg/*.go
     bridge/imsg/*.m
     bridge/imsg/go.mod
     bridge/imsg/README.md
     bridge/imsg/*.example
+    bridge/wechat/*.go
+    bridge/wechat/go.mod
+    bridge/wechat/README.md
     cabal.project
     context-eval/README.md
     context-eval/fixtures/*.jsonl
@@ -49,8 +57,10 @@ extra-source-files:
     max.yaml.example
     migrations/*.sql
     nix/*.nix
-    sandbox-image/*
-    scripts/*
+    sandbox-image/Dockerfile
+    sandbox-image/build.sh
+    sandbox-image/nix.conf
+    scripts/*.sh
     skills/*.md
     static/*.html
     static/*.js
@@ -127,6 +137,7 @@ library
         Max.DB.Migrations
         Max.DB.Monitor
         Max.DB.Plan
+        Max.DB.QQBackfill
         Max.DB.Session
         Max.DB.Stickers
         Max.DB.TurnContinuity
@@ -259,7 +270,7 @@ library
         , containers          >= 0.7  && < 0.9
         , cron                >= 0.7  && < 0.8
         , crypton-connection  >= 0.3  && < 0.5
-        , crypton-x509-system >= 1.6  && < 2.0
+        , crypton-x509-system >= 1.6  && < 2
         , cryptohash-sha256   >= 0.11 && < 0.12
         , directory           >= 1.3  && < 1.4
         , effectful           >= 2.5  && < 2.7
@@ -286,7 +297,7 @@ library
         , text                >= 2.1  && < 2.2
         , time                >= 1.12 && < 1.17
         , vector              >= 0.13 && < 0.14
-        , tls                 >= 2.0  && < 3.0
+        , tls                 >= 2.0  && < 3
         , uuid                >= 1.3  && < 1.4
         , file-embed          >= 0.0.15 && < 0.1
         , wai                 >= 3.2  && < 3.3
@@ -411,6 +422,7 @@ test-suite max-test
         Max.IR.PromptSpec
         Max.LLM.StreamSpec
         Max.LogSpec
+        OneBot.ActionSpec
         OneBot.EventSpec
         OneBot.ServerSpec
         OneBot.SegmentSpec
@@ -520,6 +532,7 @@ test-suite max-test-db
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
         Max.DB.PlanSpec
+        Max.DB.QQBackfillSpec
         Max.Plan.WorkerSpec
         Max.PromptIntegrationSpec
         Max.PlatformStoreSpec
@@ -581,3 +594,7 @@ executable max-plan-live
         , opt-env-conf         >= 0.15 && < 0.17
         , text                 >= 2.1  && < 2.2
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+
+source-repository head
+    type:     git
+    location: https://github.com/HCHogan/max.git

@@ -33,6 +33,17 @@ Omit it and the endpoint stands alone.
 - At the temporary OneBot compatibility boundary, QQ direct-chat pseudo ids
   occupy `(-10^12, 0)` while foreign opaque ids occupy `<= -10^12`; the latter
   remain groups. Canonical `conversation_kind` is still the stored authority.
+- Publishing a QQ websocket generation atomically enqueues a recovery barrier
+  ahead of that generation's live frames. The handler gives known enabled QQ
+  group and friend endpoints a bounded latest-plus-last-seen-sequence history
+  pass, orders rows oldest-first, and writes them as `Backfill` with dispatch
+  and mirror creation disabled. Native event identity removes overlap and
+  media workers are woken afterward. The whole reconnect second stays on the
+  live path because QQ history timestamps have only second precision.
+  `qq_backfill_runs` records every attempted endpoint and its counts/stop
+  reason. This is explicitly `best-effort-messages-only`: NapCat has no durable
+  cursor or offline-complete notice stream, so it cannot prove continuous
+  recovery of messages, reactions, or recalls.
 
 Since migration 055, `canonical_content` stores the ADR 003 v2 IR body
 (`{"v":2,"nodes":[...]}`): faces, cards, files and videos keep their
@@ -78,8 +89,11 @@ BlobStore or a bounded HTTP source, uploaded through Matrix's
 authenticated media API, and sent as the matching `m.image`, `m.video`,
 `m.audio`, or `m.file` event. Resolution or upload failure degrades to the
 message's canonical text rather than losing the whole delivery. The current
-adapter sends the first attachment from one canonical delivery;
-multi-attachment fan-out is not implemented yet.
+adapter accepts up to eight native attachments from one canonical delivery
+and fans them out, in canonical order, to one attachment per Matrix event.
+The first event alone carries the reply relation. If a later event has an
+ambiguous outcome, the durable delivery is parked instead of replaying the
+already-sent prefix.
 
 ## iMessage
 
@@ -116,9 +130,11 @@ as `reply_to`; if it disappears, the bridge fails closed and the delivery stays
 on Max's durable retry path. Ordinary sends explicitly remain on AppleScript.
 For a native reply, IMCore's immediate `lastSentMessage` GUID is non-authoritative
 and discarded; the later `messages.after` echo supplies the real GUID and
-confirms the delivery. Like Matrix, one outbound delivery currently sends only
-its first attachment. Installation and SIP recovery steps are in the bridge
-README.
+confirms the delivery. Like Matrix, one outbound delivery accepts up to eight
+native attachments and sends one ordered bridge request per attachment; only
+the first carries the reply relation, and an ambiguous partial send is parked
+rather than blindly repeated. Installation and SIP recovery steps are in the
+bridge README.
 
 Group wakeups use the confirmed mention handle embedded in Messages'
 `attributedBody`, matched against `imessage.mention_handles`. Contact names are
@@ -161,6 +177,13 @@ SELECT a.platform, c.stream_key, c.cursor, c.source_fingerprint,
 FROM platform_ingest_cursors c
 JOIN platform_accounts a USING (platform_account_id)
 ORDER BY a.platform, c.stream_key;
+
+SELECT r.run_id, r.endpoint_id, r.connected_at, r.status, r.coverage,
+       r.fetched_count, r.inserted_count, r.duplicate_count,
+       r.skipped_after_cutoff, r.parse_failure_count, r.stop_reason, r.error
+FROM qq_backfill_runs r
+ORDER BY r.started_at DESC
+LIMIT 50;
 ```
 
 ## Production cutover and rollback

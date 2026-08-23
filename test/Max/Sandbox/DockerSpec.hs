@@ -25,7 +25,10 @@ spec = do
     it "returns the command unchanged with no packages" $
       wrapPackages [] "ls -al" `shouldBe` "ls -al"
 
-    it "warms the store on a silenced pass before the real run" $
-      wrapPackages ["eza"] "eza -al"
-        `shouldBe` "nix shell 'nixpkgs#eza' -c true >/dev/null 2>&1; \
-                   \nix shell 'nixpkgs#eza' -c sh -c 'eza -al'"
+    it "activates store paths already realised by the restricted helper" $
+      wrapPackages ["/nix/store/abc-eza"] "eza -al"
+        `shouldBe` "export PATH='/nix/store/abc-eza/bin':\"$PATH\"; exec sh -c 'eza -al'"
+
+    it "combines multiple outputs and preserves shell quoting" $
+      wrapPackages ["/nix/store/abc-qpdf", "/nix/store/def-python-env"] "python3 -c 'import openpyxl'"
+        `shouldBe` "export PATH='/nix/store/abc-qpdf/bin:/nix/store/def-python-env/bin':\"$PATH\"; exec sh -c 'python3 -c '\\''import openpyxl'\\'''"

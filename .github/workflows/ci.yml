@@ -27,6 +27,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The Haskell process is not the whole deployment: iMessage and WeChat each
+  # ship a small Go companion.  Exercise both their portable fallback and the
+  # native platform implementation so build tags cannot hide a broken bridge.
+  bridge-test:
+    name: bridge-${{ matrix.bridge }}-${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - bridge: imsg
+            os: ubuntu-latest
+            directory: bridge/imsg
+          - bridge: imsg
+            os: macos-latest
+            directory: bridge/imsg
+          - bridge: wechat
+            os: ubuntu-latest
+            directory: bridge/wechat
+          - bridge: wechat
+            os: windows-latest
+            directory: bridge/wechat
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.directory }}/go.mod
+          cache-dependency-path: ${{ matrix.directory }}/go.mod
+
+      - name: Test bridge
+        working-directory: ${{ matrix.directory }}
+        run: go test ./...
+
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -72,6 +107,9 @@ jobs:
 
       - name: Build
         run: nix develop --impure -c cabal build all
+
+      - name: Check source distribution metadata
+        run: nix develop --impure -c cabal check
 
       - name: Verify generated docs
         run: nix develop --impure -c cabal run max-prompt-flow -- --check

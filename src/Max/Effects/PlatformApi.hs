@@ -6,6 +6,8 @@ module Max.Effects.PlatformApi
     qqBackend,
     sendAction,
     callAction,
+    callQQActionOnGeneration,
+    qqGenerationIsCurrent,
 
     -- * Exposed for cancellation-safety tests
     withPendingCall,
@@ -121,6 +123,29 @@ sendAction a = send (SendOp a)
 
 callAction :: (PlatformApi :> es) => Action -> Int -> Eff es (Either Text Response)
 callAction a t = send (CallOp a t)
+
+-- | Issue a recovery action only on the websocket generation whose barrier
+-- the handler is processing.  Re-reading after the response fences a call
+-- whose connection was replaced while it was in flight.
+callQQActionOnGeneration ::
+  TVar ClientSlot ->
+  Int ->
+  Action ->
+  Int ->
+  IO (Either Text Response)
+callQQActionOnGeneration ref expected action timeoutMs =
+  readTVarIO ref >>= \case
+    Just (generation, client) | generation == expected -> do
+      result <- callIO client action timeoutMs
+      current <- qqGenerationIsCurrent ref expected
+      pure $ if current then result else Left "connection generation changed"
+    _ -> pure (Left "connection generation changed")
+
+qqGenerationIsCurrent :: TVar ClientSlot -> Int -> IO Bool
+qqGenerationIsCurrent ref expected =
+  readTVarIO ref >>= \case
+    Just (generation, _) -> pure (generation == expected)
+    Nothing -> pure False
 
 sendIO :: Client -> Action -> IO (Either Text ())
 sendIO client a = do

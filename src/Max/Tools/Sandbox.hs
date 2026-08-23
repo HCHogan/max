@@ -38,15 +38,14 @@ import Data.Time (TimeZone)
 import Effectful
 import Max.Effects.Tools (Tool (..))
 import Max.Tools.Schema
-  ( enumParam,
-    integerParam,
+  ( integerParam,
     noArguments,
     stringArrayParam,
     stringParam,
     toolObject,
     withKeys,
   )
-import Max.Sandbox.Docker (ExecResult (..), SandboxManifest (..), maxOutputBytes, shellQuote, wrapPackages)
+import Max.Sandbox.Docker (ExecResult (..), SandboxManifest (..), maxOutputBytes, shellQuote)
 import Max.Sandbox.Registry
   ( SandboxCreateOpts (..),
     SandboxEntry (..),
@@ -90,15 +89,7 @@ createTool gid reg =
             "running tasks: prefer reusing one from sandbox_list.",
             "开工前先 use_skill 取 sandbox 手册。"
           ],
-      toolSchema =
-        toolObject
-          [ ( "image",
-              stringParam
-                "Docker image (default max-sandbox:latest, the nix-enabled base; only override if you have a specific reason)."
-            ),
-            ("network", enumParam ["bridge", "none"] "bridge | none (default bridge).")
-          ]
-          [],
+      toolSchema = noArguments,
       toolRun = \args ->
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
@@ -117,14 +108,7 @@ createTool gid reg =
     }
   where
     parseArgs :: Object -> Parser SandboxCreateOpts
-    parseArgs o = do
-      mImg <- o .:? "image"
-      mNet <- o .:? "network"
-      pure
-        defaultCreateOpts
-          { scoImage = fromMaybe (scoImage defaultCreateOpts) mImg,
-            scoNetwork = fromMaybe (scoNetwork defaultCreateOpts) mNet
-          }
+    parseArgs _ = pure defaultCreateOpts
 
 --------------------------------------------------------------------------------
 -- sandbox_exec
@@ -137,8 +121,9 @@ execTool gid reg =
         T.unwords
           [ "Run a shell command in a sandbox (verbatim 'sh -c', wallclock",
             "timeout, exit_code 0 = success).  Output capped ~16 KiB per",
-            "stream; when 'truncated' is true the full output is saved to",
-            "'full_output_file' — grep/tail that file next, don't re-run.",
+            "stream; when 'truncated' is true a bounded output spill is saved",
+            "to 'full_output_file'.  'spill_truncated' says whether that file",
+            "also reached its safety cap — inspect it instead of re-running.",
             "Tools not preinstalled: list nixpkgs attributes in 'packages'",
             "(first use downloads — raise timeout_seconds to 120-300)."
           ],
@@ -147,7 +132,8 @@ execTool gid reg =
           [ ("sandbox_id", stringParam "Sandbox id from sandbox_create."),
             ("command", stringParam "Shell command to run."),
             ( "packages",
-              stringArrayParam "nixpkgs attributes to put on PATH for this command (find them with nix_search)."
+              withKeys ["maxItems" .= (32 :: Int)] $
+                stringArrayParam "nixpkgs attributes to put on PATH for this command (find them with nix_search); python3Packages.* attributes are also made importable."
             ),
             ( "timeout_seconds",
               withKeys ["default" .= (30 :: Int)] (integerParam "Max wallclock seconds (default 30, max 600).")
@@ -158,7 +144,7 @@ execTool gid reg =
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
           Right (sid, cmd, pkgs, t) -> do
-            res <- liftIO (execInSandbox reg gid (SandboxId sid) (wrapPackages pkgs cmd) (clamp (1, 600) t))
+            res <- liftIO (execInSandbox reg gid (SandboxId sid) pkgs cmd (clamp (1, 600) t))
             pure $ case res of
               Left err -> Left err
               Right er ->
@@ -166,7 +152,8 @@ execTool gid reg =
                   [ "exit_code" .= er.erExitCode,
                     "stdout" .= er.erStdout,
                     "stderr" .= er.erStderr,
-                    "truncated" .= er.erTruncated
+                    "truncated" .= er.erTruncated,
+                    "spill_truncated" .= er.erSpillTruncated
                   ]
                     <> ["full_output_file" .= p | Just p <- [er.erSpillPath]]
                     <> ["_max_journal_observed_manifest" .= journalObservation er]
@@ -191,7 +178,8 @@ journalObservation er =
         .= object
           [ "sha256" .= er.erStdoutSha256,
             "bytes" .= er.erStdoutBytes,
-            "spill_path" .= er.erSpillPath
+            "spill_path" .= er.erSpillPath,
+            "spill_truncated" .= er.erSpillTruncated
           ],
       "stderr"
         .= object
@@ -248,7 +236,7 @@ nixSearchTool gid reg =
                     <> shellQuote query
                     <> " --json 2>/dev/null | jq -r "
                     <> shellQuote jqProg
-            res <- liftIO (execInSandbox reg gid (SandboxId sid) cmd 120)
+            res <- liftIO (execInSandbox reg gid (SandboxId sid) [] cmd 120)
             pure $ case res of
               Left err -> Left err
               Right er

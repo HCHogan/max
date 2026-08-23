@@ -263,7 +263,7 @@ spec = describe "Matrix adapter" $ do
     matrixCapabilities.reaction `shouldBe` True
     matrixCapabilities.edit `shouldBe` True
     matrixCapabilities.redact `shouldBe` True
-    matrixCapabilities.maxNativeMedia `shouldBe` 1
+    matrixCapabilities.maxNativeMedia `shouldBe` 8
 
   it "emits native Matrix mention, reply, and media contracts" $ do
     let target = Just (NativeEventId "$parent")

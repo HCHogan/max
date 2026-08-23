@@ -340,9 +340,9 @@ mediaTier caps = \case
 -- A media node max /generated/ from text — a rendered table or code block —
 -- knows the text it was made from and says so in @fold_text@.  Folding that
 -- to @[图片: code.png]@ throws the content away at the last step, and it is
--- reachable without any text-only endpoint in the room: matrix, iMessage and
--- the WeChat hook all advertise @max_native_media: 1@, so the second picture
--- in one reply folds even though the first went native.
+-- reachable without any text-only endpoint in the room: the WeChat hook still
+-- advertises @max_native_media: 1@, and Matrix/iMessage cap one canonical
+-- delivery at eight before their adapters fan those media out to wire events.
 --
 -- Only for nodes that carry the key.  A picture that arrived as a picture has
 -- no text form, and inventing one is worse than naming it.

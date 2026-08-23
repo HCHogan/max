@@ -61,8 +61,8 @@ canonical message ledger ────┬──▶ mirror deliveries: native wher
   searching and reading the exact deployed code, ADRs, and schema.
 - Plus the table stakes: concurrent turns with streaming, cancellation,
   and mid-turn feedback; multimodal input; persistent per-group sandboxes
-  and browser automation; skills, reminders, proactive participation, and
-  an authenticated local admin panel.
+  and browser automation; skills, typed monitors, durable orchestration
+  plans, proactive participation, and an authenticated local admin panel.
 
 ## Quick start
 
@@ -78,6 +78,13 @@ cabal run max
 Open <http://localhost:6099> to log the bot account into QQ. Migrations and
 derived-data backfills run automatically. Build `sandbox-image/` and
 `browser-image/` only when those tools are needed.
+
+After a NapCat reconnect, Max also makes a bounded, deduplicated history pass
+over QQ conversations it already knows. Imported rows enrich context and media
+queues but never trigger replies or mirror as new traffic. This is deliberately
+best-effort message recovery, not a durable cursor: NapCat may omit messages
+outside the returned windows and does not reconstruct offline reactions or
+recalls.
 
 Configuration is layered as CLI flags, environment variables, then YAML;
 one LLM API key (OpenAI-compatible, OpenAI Responses, or Anthropic-native)
@@ -105,6 +112,8 @@ cabal build all
 | [ADR 003](docs/adr/003-message-ir-capability-rendering.md) | the message IR, capability-tiered lowering, and prior-art survey |
 | [ADR 004](docs/adr/004-canonical-handles-for-the-model.md) | canonical handles for the model, and the identity it addresses |
 | [ADR 005](docs/adr/005-turn-continuity.md) | turn continuity: durable traces, journal projections, verbatim replay |
+| [ADR 006](docs/adr/006-monitors-typed-triggers.md) | typed durable monitors and the unified scheduler |
+| [ADR 007](docs/adr/007-plans-as-orchestration.md) | plans as durable fork/join orchestration and steering |
 | [development.md](docs/development.md) | tests, evaluation, versioning, and debugging |
 | [prompt-flow.md](docs/prompt-flow.md) | generated prompt and tool-round wire examples |
 

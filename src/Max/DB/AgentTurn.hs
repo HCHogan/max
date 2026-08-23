@@ -259,8 +259,10 @@ finishAgentTurn ref terminal llmTurns abortReason archive = do
         (Only ref.atrTurnId)
     _ <-
       execute
-        "UPDATE agent_turns \
-        \ SET status = ?, finished_at = now(), llm_turns = GREATEST(llm_turns, ?), abort_reason = ?, \
+        "UPDATE agent_turns t \
+        \ SET status = ?, finished_at = now(), \
+        \     finished_ingest_seq = COALESCE((SELECT max(m.ingest_seq) FROM messages m WHERE m.conversation_id=t.conversation_id), 0), \
+        \     llm_turns = GREATEST(llm_turns, ?), abort_reason = ?, \
         \     trace_archive_sha256 = ?, trace_archive_size_bytes = ?, \
         \     trace_archive_created_at = CASE WHEN ?::text IS NULL THEN NULL ELSE now() END, \
         \     trace_archive_expires_at = ? \
@@ -376,11 +378,12 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
         ]
   crashed <-
     execute
-      "UPDATE agent_turns \
+      "UPDATE agent_turns t \
       \ SET status = 'crashed', finished_at = now(), \
+      \     finished_ingest_seq = COALESCE((SELECT max(m.ingest_seq) FROM messages m WHERE m.conversation_id=t.conversation_id), 0), \
       \     abort_reason = COALESCE(abort_reason, 'process restarted while turn was in flight') \
       \ WHERE trigger_canonical_message_id IS NULL \
-      \   AND NOT EXISTS (SELECT 1 FROM monitor_fires f WHERE f.admitted_turn_id=agent_turns.turn_id) \
+      \   AND NOT EXISTS (SELECT 1 FROM monitor_fires f WHERE f.admitted_turn_id=t.turn_id) \
       \   AND (status = ANY (ARRAY['starting'::text, 'running'::text]) \
       \        OR (status = 'recovery-pending' AND recovery_owner IS DISTINCT FROM ?))"
       (Only recoveryOwner)

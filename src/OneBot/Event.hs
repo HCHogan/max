@@ -1,21 +1,32 @@
 module OneBot.Event
   ( Event (..),
     GroupMessage (..),
+    HistoricalMessage (..),
     MessageNotice (..),
     NoticeKind (..),
     EmojiLike (..),
     PokeEvent (..),
     Sender (..),
     parseEvent,
+    parseHistoryMessages,
+    selectHistoryBefore,
   )
 where
 
 import Data.Aeson
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson.Types (Parser, parseEither, typeMismatch)
+import Data.Either (partitionEithers)
+import Data.Int (Int64)
+import Data.List (sortOn)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe)
+import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
+import Data.Text qualified as T
+import Data.Time (UTCTime)
+import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import OneBot.Segment (Segment)
-import OneBot.Types (GroupId, MessageId, UserId (..), privateChatGroupId)
+import OneBot.Types (GroupId, MessageId, UserId (..), parseIntId, privateChatGroupId)
 
 data Sender = Sender
   { userId :: !UserId,
@@ -39,6 +50,18 @@ data GroupMessage = GroupMessage
     message :: ![Segment],
     rawMessage :: !Text,
     sender :: !Sender
+  }
+  deriving stock (Show)
+
+-- | One message returned by NapCat's finite history actions.  The server
+-- connection supplies the account and endpoint identity because history rows
+-- are not full OneBot events.  A source timestamp is mandatory: without it we
+-- cannot keep a response racing the reconnect from stealing a live delivery.
+data HistoricalMessage = HistoricalMessage
+  { hmRaw :: !Value,
+    hmMessage :: !GroupMessage,
+    hmOccurredAt :: !UTCTime,
+    hmMessageSeq :: !(Maybe Text)
   }
   deriving stock (Show)
 
@@ -91,7 +114,11 @@ data NoticeKind
 -- | High-level event we care about. Anything we don't decode lands in 'EvRaw'
 -- with the original 'Value' so it can be logged or revisited later.
 data Event
-  = EvGroupMessage !Text !Value !GroupMessage
+  = -- | Published atomically with the generation-tagged client and ahead of
+    -- any frame from that websocket.  The handler uses it as a reconnect
+    -- barrier while the read loop remains free to receive action responses.
+    EvConnectionReady !Int !UTCTime
+  | EvGroupMessage !Text !Value !GroupMessage
   | EvMessageNotice !Value !MessageNotice
   | EvPoke !PokeEvent
   | EvHeartbeat
@@ -104,6 +131,74 @@ data Event
 
 parseEvent :: Value -> Either String Event
 parseEvent = parseEither eventParser
+
+-- | Decode the @data.messages@ returned by @get_*_msg_history@.  Individual
+-- malformed rows are counted and skipped instead of discarding an otherwise
+-- useful bounded page.  An invalid outer response still fails the batch.
+parseHistoryMessages :: UserId -> GroupId -> Value -> Either String ([HistoricalMessage], Int)
+parseHistoryMessages expectedSelf expectedGroup payload = do
+  rows <- parseEither historyRows payload
+  let (failures, messages) = partitionEithers (parseEither (historyMessage expectedSelf expectedGroup) <$> rows)
+  pure (messages, length failures)
+
+-- | Keep only rows definitely older than the reconnect second, then dedupe
+-- overlapping tail/anchor pages and order them for canonical ingestion.  QQ
+-- timestamps have one-second precision, so dropping the whole reconnect
+-- second is the conservative choice: it may miss a boundary message, but it
+-- cannot consume a post-connect message before its queued live event.
+selectHistoryBefore :: UTCTime -> [HistoricalMessage] -> ([HistoricalMessage], Int)
+selectHistoryBefore connectedAt messages =
+  (sortOn orderKey (Map.elems unique), length messages - length before)
+  where
+    cutoff = posixSecondsToUTCTime (fromInteger (floor (utcTimeToPOSIXSeconds connectedAt) :: Integer))
+    before = filter ((< cutoff) . (.hmOccurredAt)) messages
+    unique = Map.fromList [(message.hmMessage.messageId, message) | message <- before]
+    orderKey message = (message.hmOccurredAt, message.hmMessage.messageId)
+
+historyRows :: Value -> Parser [Value]
+historyRows = \case
+  Object o -> o .:? "messages" .!= []
+  Array values -> pure (foldr (:) [] values)
+  value -> fail ("expected history data object or array, got " <> show value)
+
+historyMessage :: UserId -> GroupId -> Value -> Parser HistoricalMessage
+historyMessage expectedSelf expectedGroup raw@(Object o) = do
+  -- Some NapCat versions include these fields in every row and some omit
+  -- them.  When present they must agree with the endpoint being recovered.
+  suppliedSelf <- o .:? "self_id"
+  case suppliedSelf of
+    Just actual | actual /= expectedSelf -> fail "history row belongs to another account"
+    _ -> pure ()
+  suppliedGroup <- o .:? "group_id"
+  case suppliedGroup of
+    Just actual | actual /= expectedGroup -> fail "history row belongs to another group"
+    _ -> pure ()
+  uid <- o .: "user_id"
+  suppliedSender <- o .:? "sender"
+  timestamp <- o .: "time" >>= parseIntId "history time"
+  sequenceNumber <- o .:? "message_seq" >>= traverse parseSequence
+  groupMessage <-
+    GroupMessage expectedSelf expectedGroup uid
+      <$> o .: "message_id"
+      <*> o .:? "message" .!= []
+      <*> o .:? "raw_message" .!= ""
+      <*> pure (fromMaybe (Sender uid Nothing Nothing) suppliedSender)
+  pure
+    HistoricalMessage
+      { hmRaw = raw,
+        hmMessage = groupMessage,
+        hmOccurredAt = posixSecondsToUTCTime (fromIntegral (timestamp :: Int64)),
+        hmMessageSeq = sequenceNumber
+      }
+historyMessage _ _ value = fail ("expected history message object, got " <> show value)
+
+parseSequence :: Value -> Parser Text
+parseSequence = \case
+  String sequenceNumber -> pure sequenceNumber
+  Number sequenceNumber -> case floatingOrInteger sequenceNumber of
+    Right (integer :: Integer) -> pure (T.pack (show integer))
+    Left (_ :: Double) -> fail "message_seq: expected integer, got float"
+  value -> typeMismatch "message_seq" value
 
 eventParser :: Value -> Parser Event
 eventParser v@(Object o) = do

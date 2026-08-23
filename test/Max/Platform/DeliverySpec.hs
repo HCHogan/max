@@ -35,6 +35,13 @@ import Test.Hspec
 
 spec :: Spec
 spec = do
+  describe "fanOutMediaChunks" $ do
+    it "keeps order and emits at most one native attachment per wire chunk" $ do
+      let first = NMedia (ResolvedUrl "https://cdn.test/1") (MediaMeta MImage Nothing Nothing Nothing Nothing Nothing)
+          second = NMedia (ResolvedUrl "https://cdn.test/2") (MediaMeta MFile Nothing Nothing Nothing Nothing Nothing)
+      fanOutMediaChunks [[NText "caption ", first, NText " between ", second, NText " tail"]]
+        `shouldBe` [[NText "caption ", first, NText " between "], [second, NText " tail"]]
+
   describe "canonical delivery media resolution" $ do
     it "resolves only native-tier media within the endpoint budget" $
       withTempDirectory "max-delivery-media-test" $ \root -> do

@@ -211,10 +211,13 @@ returns `409` while the embedding worker owns its maintenance lease.
 ### Platform release gate
 
 The canonical platform migration and adapters are covered by the ordinary
-pure/DB suites. The Mac-side bridge has its own Go gate:
+pure/DB suites. Both companion bridges have Go gates; CI exercises iMessage
+on Linux and macOS, and WeChat on Linux and Windows so native build tags are
+compiled too:
 
 ```sh
 cd bridge/imsg && go test ./...
+cd bridge/wechat && go test ./...
 ```
 
 For a release, recreate the test database before the DB suite so migration

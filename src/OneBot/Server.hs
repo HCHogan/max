@@ -3,6 +3,7 @@ module OneBot.Server
     Client (..),
     ClientSlot,
     clearClientGeneration,
+    publishClientGeneration,
     runServer,
   )
 where
@@ -22,12 +23,14 @@ import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Time (getCurrentTime)
+import Data.Time qualified as Time
 import Effectful
 import Effectful.Log
 import Max.Util (catchSync, trySyncIO)
 import Network.WebSockets qualified as WS
 import OneBot.Action (Response (..))
-import OneBot.Event (Event, parseEvent)
+import OneBot.Event (Event (EvConnectionReady), parseEvent)
 
 data ServerConfig = ServerConfig
   { host :: !String,
@@ -96,7 +99,15 @@ acceptConn cid cfg pending eventQ clientRef = do
         liftIO (WS.rejectRequest pending (TE.encodeUtf8 msg))
       Right () -> do
         conn <- liftIO (WS.acceptRequest pending)
-        logInfo_ "ws connected"
+        -- The handler will attempt a bounded message-history backfill before
+        -- consuming this generation's live events.  NapCat does not expose a
+        -- durable cursor, so the boundary remains visible and best effort.
+        logAttention "ws connected; scheduling best-effort QQ history backfill" $
+          object
+            [ "connection_generation" .= cid,
+              "history_backfill" .= (True :: Bool),
+              "history_backfill_guarantee" .= ("best-effort-messages-only" :: Text)
+            ]
         runConn cid conn eventQ clientRef `catchSync` \e ->
           logAttention "connection terminated" $
             object ["error" .= T.pack (show e)]
@@ -117,12 +128,28 @@ runConn generation conn eventQ clientRef = do
   pendingMap <- liftIO (newTVarIO Map.empty)
   let client = Client {connection = conn, pending = pendingMap}
   withRunInIO $ \run -> do
-    atomically (writeTVar clientRef (Just (generation, client)))
+    connectedAt <- getCurrentTime
+    publishClientGeneration generation connectedAt client eventQ clientRef
     WS.withPingThread conn 30 (pure ()) (run (readLoop client eventQ))
       `finally` ( do
                     atomically (modifyTVar' clientRef (clearClientGeneration generation))
                     abortPending pendingMap "connection closed"
                 )
+
+-- | Publish the client and enqueue its recovery barrier in one STM commit.
+-- No reader can observe the client without also being able to observe the
+-- barrier, and the websocket read loop starts only after this returns.
+publishClientGeneration ::
+  Int ->
+  Time.UTCTime ->
+  Client ->
+  TQueue Event ->
+  TVar ClientSlot ->
+  IO ()
+publishClientGeneration generation connectedAt client eventQ clientRef =
+  atomically $ do
+    writeTVar clientRef (Just (generation, client))
+    writeTQueue eventQ (EvConnectionReady generation connectedAt)
 
 abortPending ::
   TVar (Map Text (TMVar (Either Text Response))) ->

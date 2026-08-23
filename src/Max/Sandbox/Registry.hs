@@ -52,6 +52,7 @@ where
 import Control.Concurrent.STM
 import Control.Exception (bracket_)
 import Control.Monad (void, when)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.List (sortOn)
@@ -69,15 +70,18 @@ import Max.Sandbox.Docker
     DockerPresence (..),
     ExecResult (..),
     inspectContainerStatus,
+    inspectContainerPolicy,
     inspectVolumePresence,
     listContainersByPrefix,
     listVolumesByPrefix,
     runExec,
+    runPreparePackages,
     runRead,
     runRm,
     runRun,
     runVolumeRm,
     runWrite,
+    wrapPackages,
   )
 import OneBot.Types (GroupId (..))
 
@@ -174,7 +178,11 @@ reconcileSandboxes reg = case reg.srDbPool of
             DockerPresent -> do
               containerState <- inspectContainerStatus row.psContainer
               case containerState of
-                DockerContainerRunning -> adoptPersisted reg pool row
+                DockerContainerRunning -> do
+                  currentPolicy <- inspectContainerPolicy row.psContainer
+                  if currentPolicy && persistedPolicyCurrent row
+                    then adoptPersisted reg pool row
+                    else rebuildPersisted reg pool row
                 DockerContainerStopped -> rebuildPersisted reg pool row
                 DockerContainerMissing -> rebuildPersisted reg pool row
                 DockerContainerUnavailable detail ->
@@ -202,11 +210,13 @@ adoptPersisted reg pool row = do
 
 rebuildPersisted :: SandboxRegistry -> DbPool -> PersistedSandbox -> IO ()
 rebuildPersisted reg pool row = do
+  let secured = securePersisted row
   -- A stopped/dead container still owns its name.  The volume is the durable
   -- state, so discard only the shell and recreate it around that volume.
   runRm row.psContainer
-  runRun row.psContainer row.psImage row.psVolume row.psNetwork >>= \case
-    Right _ -> adoptPersisted reg pool row
+  updateSandboxRuntime pool secured
+  runRun secured.psContainer secured.psImage secured.psVolume secured.psNetwork >>= \case
+    Right _ -> adoptPersisted reg pool secured
     Left detail -> markSandboxUnknown pool row.psId detail
 
 --------------------------------------------------------------------------------
@@ -220,13 +230,13 @@ data SandboxCreateOpts = SandboxCreateOpts
 
 -- | Default image is the nix-enabled base built from
 -- @sandbox-image/@ (@build.sh@ must have been run on the docker
--- host); packages come from the pinned nixpkgs via @nix shell@,
--- with the store shared across sandboxes through 'nixVolume'.
+-- host); packages come from pinned nixpkgs store paths realised by a
+-- restricted helper, with the store shared through 'nixVolume'.
 defaultCreateOpts :: SandboxCreateOpts
 defaultCreateOpts =
   SandboxCreateOpts
     { scoImage = "max-sandbox:latest",
-      scoNetwork = "bridge"
+      scoNetwork = "none"
     }
 
 --------------------------------------------------------------------------------
@@ -239,7 +249,11 @@ createSandbox ::
   IO (Either Text SandboxEntry)
 createSandbox reg gid opts = do
   now <- getCurrentTime
-  allocated <- allocateSandbox reg gid opts now
+  -- Image and network are operator policy, never model-selected authority.
+  -- Keep the argument for the internal API shape, but normalize it here so a
+  -- future caller cannot accidentally re-open the old escape hatch.
+  let securedOpts = opts {scoImage = defaultCreateOpts.scoImage, scoNetwork = defaultCreateOpts.scoNetwork}
+  allocated <- allocateSandbox reg gid securedOpts now
   let (dbId, sid, container, volume) = allocated
   lock <- newTMVarIO ()
   let entry =
@@ -248,12 +262,12 @@ createSandbox reg gid opts = do
             seGroup = gid,
             seContainer = container,
             seVolume = volume,
-            seImage = opts.scoImage,
-            seNetwork = opts.scoNetwork,
+            seImage = securedOpts.scoImage,
+            seNetwork = securedOpts.scoNetwork,
             seCreatedAt = now,
             seExecLock = lock
           }
-  launched <- runRun container opts.scoImage volume opts.scoNetwork
+  launched <- runRun container securedOpts.scoImage volume securedOpts.scoNetwork
   case launched of
     Left err -> do
       for_ reg.srDbPool $ \pool -> markSandboxUnknown pool dbId err
@@ -305,29 +319,59 @@ execInSandbox ::
   SandboxRegistry ->
   GroupId ->
   SandboxId ->
+  -- | nixpkgs attributes realised by the restricted package helper
+  [Text] ->
   Text ->
   Int ->
   IO (Either Text ExecResult)
-execInSandbox reg gid sid cmd timeoutSecs = do
-  mEntry <- listSandbox reg gid sid
-  case mEntry of
-    Nothing -> pure (Left "sandbox not found")
-    Just e ->
-      bracket_
-        (atomically $ takeTMVar e.seExecLock)
-        (atomically $ putTMVar e.seExecLock ())
-        ( do
-            result <- runExec e.seContainer e.seNetwork cmd timeoutSecs
-            -- @-1@ is reserved for failure to invoke Docker itself.  For a
-            -- write-capable tool this must travel as Left so the tool kernel
-            -- records outcome-unknown, never as a seemingly committed shell
-            -- exit code.  Ordinary in-container non-zero exits remain rich
-            -- committed results because the command may have mutated state.
-            pure $
-              if result.erExitCode == -1
-                then Left result.erStderr
-                else Right result
-        )
+execInSandbox reg gid sid packages cmd timeoutSecs = do
+  if length packages > maxPackageAttributes
+    then pure (Left "too many nixpkgs attributes (maximum 32)")
+    else
+      if not (all validNixAttribute packages)
+        then pure (Left "invalid nixpkgs attribute (allowed: letters, digits, '.', '_', '+', '-', non-empty path segments, at most 128 characters)")
+        else run
+  where
+    run = do
+      mEntry <- listSandbox reg gid sid
+      case mEntry of
+        Nothing -> pure (Left "sandbox not found")
+        Just e ->
+          bracket_
+            (atomically $ takeTMVar e.seExecLock)
+            (atomically $ putTMVar e.seExecLock ())
+            ( do
+                prepared <- runPreparePackages e.seImage packages timeoutSecs
+                case prepared of
+                  Left detail -> pure (Left detail)
+                  Right storePaths -> do
+                    result <- runExec e.seContainer e.seNetwork (wrapPackages storePaths cmd) timeoutSecs
+                    -- @-1@ is reserved for failure to invoke Docker itself.  For a
+                    -- write-capable tool this must travel as Left so the tool kernel
+                    -- records outcome-unknown, never as a seemingly committed shell
+                    -- exit code.  Ordinary in-container non-zero exits remain rich
+                    -- committed results because the command may have mutated state.
+                    pure $
+                      if result.erExitCode == -1
+                        then Left result.erStderr
+                        else Right result
+            )
+
+maxPackageAttributes :: Int
+maxPackageAttributes = 32
+
+validNixAttribute :: Text -> Bool
+validNixAttribute attr =
+  not (T.null attr)
+    && T.length attr <= 128
+    && not (any T.null (T.splitOn "." attr))
+    && T.all allowed attr
+  where
+    allowed c =
+      isAsciiLower c
+        || isAsciiUpper c
+        || isDigit c
+        || c `elem` ("._+-" :: String)
 
 readSandboxFile ::
   SandboxRegistry ->
@@ -497,6 +541,27 @@ entryFromPersisted row = do
         seCreatedAt = row.psCreatedAt,
         seExecLock = lock
       }
+
+persistedPolicyCurrent :: PersistedSandbox -> Bool
+persistedPolicyCurrent row =
+  row.psImage == defaultCreateOpts.scoImage
+    && row.psNetwork == defaultCreateOpts.scoNetwork
+
+securePersisted :: PersistedSandbox -> PersistedSandbox
+securePersisted row =
+  row
+    { psImage = defaultCreateOpts.scoImage,
+      psNetwork = defaultCreateOpts.scoNetwork
+    }
+
+updateSandboxRuntime :: DbPool -> PersistedSandbox -> IO ()
+updateSandboxRuntime pool row = withConn pool $ \conn -> do
+  _ <-
+    execute
+      conn
+      "UPDATE sandboxes SET image = ?, network_mode = ? WHERE sandbox_id = ?"
+      (row.psImage, row.psNetwork, row.psId)
+  pure ()
 
 touchSandbox :: SandboxRegistry -> SandboxEntry -> IO ()
 touchSandbox reg entry = for_ reg.srDbPool $ \pool -> withConn pool $ \conn -> do

@@ -1110,9 +1110,10 @@ orchestration layer.
     finished parsed 100%.
 
     What is still open, and named rather than left implicit: `JoinAll` is the
-    only join policy and `WatchEach` is parsed and never acted on. Child tools
-    are now the exact parent/current catalog intersection, further narrowed by
-    the subgoal's declared effects and authorities; broadening the plannable
+    only join policy. `WatchEach` was removed from the grammar instead of being
+    accepted and ignored; `on-failure` is the only watch value. Child tools are
+    now the exact parent/current catalog intersection, further narrowed by the
+    subgoal's declared effects and authorities; broadening the plannable
     catalog remains an explicit per-tool schema decision.
 
 13. **Make the runtime contract match the design under crash, recovery, and

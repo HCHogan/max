@@ -20,10 +20,10 @@ import Helpers (truncateAll)
 import Max.AdminTimelineSpec qualified as AdminTimelineSpec
 import Max.ContextAdminSpec qualified as ContextAdminSpec
 import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
+import Max.DB.AgentTurnSpec qualified as AgentTurnSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.ConnectionSpec qualified as ConnectionSpec
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
-import Max.DB.AgentTurnSpec qualified as AgentTurnSpec
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.HistorySpec qualified as HistorySpec
@@ -31,15 +31,16 @@ import Max.DB.MediaSpec qualified as MediaSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.MonitorSpec qualified as MonitorSpec
 import Max.DB.PlanSpec qualified as PlanSpec
-import Max.Plan.WorkerSpec qualified as PlanWorkerSpec
+import Max.DB.QQBackfillSpec qualified as QQBackfillSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.HistorianSpec qualified as HistorianSpec
 import Max.MaintenanceLeaseSpec qualified as MaintenanceLeaseSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
-import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
+import Max.Plan.WorkerSpec qualified as PlanWorkerSpec
 import Max.PlatformStoreSpec qualified as PlatformStoreSpec
+import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import Max.RecallSpec qualified as RecallSpec
 import System.Environment (lookupEnv)
 import System.Exit (exitSuccess)
@@ -77,6 +78,7 @@ main = do
         FetchQueueSpec.spec pool
         MonitorSpec.spec pool
         PlanSpec.spec pool
+        QQBackfillSpec.spec pool
         PlanWorkerSpec.spec pool
         RecallSpec.spec pool
         PromptIntegrationSpec.spec pool

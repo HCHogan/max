@@ -185,7 +185,7 @@ continuationDigest scope cleared currentMessage now currentPrompt currentCatalog
     Just watermark -> query (targetSql <> " AND t.started_at > ?") (conversationStorageId scope, target.rttTurn.atrTurnId, watermark)
   case targetRows :: [TargetDigestRow] of
     [] -> pure Nothing
-    [row] -> build (targetTurnDigest row) row.tdrPromptMajor row.tdrCatalogFingerprint
+    [row] -> build (targetTurnDigest row) row.tdrPromptMajor row.tdrCatalogFingerprint row.tdrFinishedIngestSeq
     _ -> error "continuationDigest: duplicate target"
   where
     -- Spelling the projection identically to TurnDigestRow keeps Level 0 and
@@ -198,17 +198,17 @@ continuationDigest scope cleared currentMessage now currentPrompt currentCatalog
       \         WHERE j.turn_id=t.turn_id AND jsonb_extract_path_text(j.normalized_input, 'sandbox_id') IS NOT NULL) refs), ''), \
       \       (SELECT m.canonical_message_id FROM messages m WHERE m.agent_turn_id=t.turn_id ORDER BY m.turn_chunk_index DESC LIMIT 1), \
       \       (SELECT split_part(m.rendered_text, E'\\n', 1) FROM messages m WHERE m.agent_turn_id=t.turn_id ORDER BY m.turn_chunk_index DESC LIMIT 1), \
-      \       t.prompt_major, t.tool_catalog_fingerprint \
+      \       t.prompt_major, t.tool_catalog_fingerprint, COALESCE(t.finished_ingest_seq, 0) \
       \FROM conversations c JOIN agent_turns t USING (conversation_id) \
       \WHERE c.legacy_group_id=? AND t.turn_id=? \
       \  AND t.status = ANY (ARRAY['succeeded'::text, 'silence'::text, 'failed'::text, \
       \                            'aborted'::text, 'crashed'::text])"
 
-    build turnDigest promptMajor catalogFingerprint = do
+    build turnDigest promptMajor catalogFingerprint finishedIngestSeq = do
       journal <- loadJournal target.rttTurn.atrTurnId
       outputs <- loadOutputs target.rttTurn.atrTurnId
       let finished = fromMaybe target.rttStartedAt target.rttFinishedAt
-      (interveningCount, messages) <- loadAmbientMessages scope finished currentMessage
+      (interveningCount, messages) <- loadAmbientMessages scope finishedIngestSeq currentMessage
       sandboxStates <- loadSandboxStates scope target.rttTurn.atrTurnId
       sandboxDrift <- loadSandboxDrift scope target.rttTurn.atrTurnId finished currentMessage
       pure . Just $
@@ -251,20 +251,20 @@ loadOutputs turnId =
 loadAmbientMessages ::
   (WithConnection :> es, IOE :> es) =>
   ConversationScope ->
-  UTCTime ->
+  Int64 ->
   CanonicalMessageId ->
   Eff es (Int64, [AmbientMessage])
-loadAmbientMessages scope finished (CanonicalMessageId currentMessage) = do
-  counts <- query (ambientSelect "count(*)") (currentMessage, conversationStorageId scope, finished)
+loadAmbientMessages scope finishedIngestSeq (CanonicalMessageId currentMessage) = do
+  counts <- query (ambientSelect "count(*)") (currentMessage, conversationStorageId scope, finishedIngestSeq)
   samples <-
     query
       ( ambientSelect
           "m.canonical_message_id, CASE WHEN m.user_id=m.self_id THEN 'Max' \
           \ELSE COALESCE(NULLIF(m.sender_card,''), NULLIF(m.sender_nickname,''), m.author_principal_id::text) END, \
           \left(m.rendered_text, 240)"
-          <> " ORDER BY m.received_at DESC, m.ingest_seq DESC LIMIT 5"
+          <> " ORDER BY m.ingest_seq DESC LIMIT 5"
       )
-      (currentMessage, conversationStorageId scope, finished)
+      (currentMessage, conversationStorageId scope, finishedIngestSeq)
   let count = case counts :: [Only Int64] of
         [Only n] -> n
         _ -> 0
@@ -277,7 +277,7 @@ loadAmbientMessages scope finished (CanonicalMessageId currentMessage) = do
       "SELECT " <> projection <> " FROM messages m \
       \JOIN messages current ON current.canonical_message_id = ? AND current.conversation_id = m.conversation_id \
       \JOIN conversations c ON c.conversation_id = m.conversation_id \
-      \WHERE c.legacy_group_id = ? AND m.received_at > ? AND m.received_at < current.received_at \
+      \WHERE c.legacy_group_id = ? AND m.ingest_seq > ? AND m.ingest_seq < current.ingest_seq \
       \  AND m.canonical_message_id <> current.canonical_message_id \
       \  AND NOT m.is_synthetic AND m.kind IN ('chat','system')"
 
@@ -393,13 +393,14 @@ data TargetDigestRow = TargetDigestRow
     tdrOutputId :: !(Maybe Int64),
     tdrOutputLine :: !(Maybe Text),
     tdrPromptMajor :: !Int,
-    tdrCatalogFingerprint :: !(Maybe Text)
+    tdrCatalogFingerprint :: !(Maybe Text),
+    tdrFinishedIngestSeq :: !Int64
   }
 
 instance FromRow TargetDigestRow where
   fromRow =
     TargetDigestRow <$> field <*> field <*> field <*> field <*> field <*> field
-      <*> field <*> field <*> field <*> field <*> field
+      <*> field <*> field <*> field <*> field <*> field <*> field
 
 targetTurnDigest :: TargetDigestRow -> TurnDigest
 targetTurnDigest row =

@@ -292,17 +292,17 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Pending historian capture | leased `episode_capture_runs` rows plus the conversation-scoped historian cursor; boot drains jobs, then re-arms any conversation with newer raw rows |
 | Tiered prompt prefix | current `context_materializations` revision plus append-only versions; active compartment ids/versions, tiers, end cursor, policy, fingerprint, and cache-bust reason are durable |
 | Episode expansion handles | random UUID on the immutable compartment; scoped lookup recovers the exact raw ingest range, including after supersession |
-| Reminders | `reminders` table; the scheduler handle is only a wakeup bell |
+| Monitors and reminders | `monitors` and `monitor_fires` hold TimeCron/LedgerMatch state, retry, provenance, caps and durable turn admission; the scheduler handle is only a wakeup bell |
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
 | Maintenance ownership | independently fenced PostgreSQL leases serialize embedding, memory-dream, and context-rebuild domains without making unrelated maintenance jobs block one another; the owner heartbeats during long actions, and projection writes either carry the fencing token in SQL or run under a token-checked lease-row lock |
 | Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown`, claims the same turn for recovery, injects its committed sends/results/unknowns into a fresh LLM round, and never silently retries it; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
-| Sandbox workspaces | `sandboxes` persists lifecycle metadata and the named Docker volume holds current state. Boot adopts a running container or rebuilds a missing/stopped shell around the surviving volume; only a positively absent volume marks the workspace destroyed, and TTL GC replaces shutdown/boot reaping |
+| Sandbox workspaces | `sandboxes` persists lifecycle metadata and the named Docker volume holds current state. Boot adopts only a running container carrying the current isolation-policy label and fixed image/network metadata; otherwise it rebuilds a non-root, networkless, capability-free, resource-capped, read-only shell around the surviving volume. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping |
 
 | Lost on restart | Why |
 |---|---|
 | Exact in-memory instruction pointer/provider call of an in-flight agent turn | `Max.Tasks` and the provider call stack are process-local. SIGTERM drains first; after a crash Max resumes at turn granularity with a fresh model round over the persisted hole view, not by replaying the interrupted model call or tool instruction |
 | Triggers arriving mid-drain | persisted to `messages` and logged, but not dispatched |
-| Anything NapCat sends while we're down | it dials in over reverse-WS and doesn't buffer; closing this needs history backfill on reconnect |
+| QQ events unavailable from NapCat's bounded history actions | Reconnect atomically queues a recovery barrier before live frames, then pulls latest and last-seen-sequence pages for known enabled group/friend endpoints. Rows older than the reconnect second enter as non-dispatching, non-mirroring `Backfill` and native event identity removes overlap. `qq_backfill_runs` records counts and stop reasons. NapCat still exposes no durable cursor or offline-complete notices, so reactions, recalls, malformed rows and messages outside the bounded windows remain possible source gaps |
 | `!use` admin targets | deliberate — just `!use` again |
 | Browser hosts and turn instances | ephemeral: each conversation's lightweight container host is destroyed on exit and reaped on boot; every turn's independent MCP transport and camoufox browse session is terminated when that turn finishes |
 

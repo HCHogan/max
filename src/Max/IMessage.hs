@@ -68,6 +68,7 @@ import Max.Platform.Delivery
   ( DeliveryAttempt (..),
     DeliveryOperation (..),
     DeliveryTransport (..),
+    fanOutMediaChunks,
     loweredText,
     resolveDeliveryMedia,
   )
@@ -91,7 +92,6 @@ import Max.Platform.Store
   )
 import Max.Platform.Types
 import Max.Worker (retryingWith)
-import Max.Util (catchSync)
 import Network.HTTP.Client qualified as HTTP
 import OneBot.Types (GroupId (..))
 
@@ -209,7 +209,8 @@ iMessageCapabilities =
       -- worker advertises reply=true only while the bridge reports a live
       -- injected IMCore helper.
       reply = TierText,
-      maxTextBytes = Just 65536
+      maxTextBytes = Just 65536,
+      maxNativeMedia = 8
     }
 
 iMessageWorker ::
@@ -448,7 +449,7 @@ iMessageDeliveryTransport runtime cfg =
     }
   where
     sendChunks _claim lowered = do
-      prepareAll (0 :: Int) lowered.chunks >>= \case
+      prepareAll (0 :: Int) (fanOutMediaChunks lowered.chunks) >>= \case
         Left (IMessageContractFailure err) -> pure (AttemptPermanentlyFailed err)
         Left (IMessageMediaFailure err) -> pure (AttemptMediaFallback err)
         Right prepared -> sendAll False Nothing prepared

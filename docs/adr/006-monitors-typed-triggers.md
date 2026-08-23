@@ -1,10 +1,11 @@
 # ADR 006: Monitors — Typed Triggers and the Unified Scheduler
 
-- Status: Proposed. Sequenced after the v1.0 convergence release.
-  Slice 1 (reminder absorption) is a behavior-preserving refactor and
-  may land whenever convenient; elaborated continuations consume the
-  v1.0 journal contract (ADR 002) and ADR 005 slices 1–3. Defaults
-  below are knobs, recorded so the first implementation has numbers.
+- Status: Partially implemented through slice 4. Reminders now use the
+  `monitors`/`monitor_fires` scheduler; `m#`, canned and elaborated `TimeCron`,
+  live-only `LedgerMatch`, fork provenance, role revalidation, TTL/fire caps
+  and durable hourly budgets are production paths. The admin monitor/history
+  projection and a user-facing re-aim operation remain absent. Slice 5
+  `ExternalPoll` remains deliberately deferred standing network authority.
 - Date: 2026-08-09.
 
 ## Context

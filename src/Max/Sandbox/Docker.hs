@@ -7,13 +7,12 @@
 --
 -- == Output limits
 --
--- 'runExec' caps captured @stdout@/@stderr@ at 'maxOutputBytes'
--- each.  Past that, 'erTruncated' is set and the FULL output is
--- spilled to a file inside the container ('erSpillPath', under
--- @/work/.max-out/@) so the model can grep/head the rest with its
--- own exec tool instead of losing it.  Per-call wallclock deadline
--- is enforced *inside the container* via @timeout(1)@ so runaway
--- processes are killed where they live rather than leaving us a
+-- 'runExec' drains @stdout@/@stderr@ concurrently and incrementally, so a
+-- noisy command cannot make the Max process retain an unbounded 'String'.
+-- The model-facing preview is capped at 'maxOutputBytes' per stream and a
+-- best-effort spill is capped at 'maxSpillBytes' per stream.  Per-call
+-- wallclock deadline is enforced *inside the container* via @timeout(1)@ so
+-- runaway processes are killed where they live rather than leaving us a
 -- dangling 'docker exec' to wrestle with.
 module Max.Sandbox.Docker
   ( -- * Lifecycle
@@ -23,6 +22,7 @@ module Max.Sandbox.Docker
     DockerPresence (..),
     DockerContainerStatus (..),
     inspectContainerStatus,
+    inspectContainerPolicy,
     inspectVolumePresence,
     listContainersByPrefix,
     listVolumesByPrefix,
@@ -30,6 +30,7 @@ module Max.Sandbox.Docker
     ExecResult (..),
     SandboxManifest (..),
     runExec,
+    runPreparePackages,
     runRead,
     runWrite,
     -- * Copy
@@ -37,6 +38,7 @@ module Max.Sandbox.Docker
     runCopyFromContainer,
     -- * Tuning knobs
     maxOutputBytes,
+    maxSpillBytes,
     nixVolume,
     -- * Helpers
     shellQuote,
@@ -45,29 +47,42 @@ module Max.Sandbox.Docker
   )
 where
 
-import Control.Exception (IOException, try)
+import Control.Concurrent (forkFinally, newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (IOException, SomeException, bracket, try)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
+import Data.Char (isSpace)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Text.Encoding.Error (lenientDecode)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Text.Read (readMaybe)
+import System.Directory (getTemporaryDirectory, removeFile)
 import System.Exit (ExitCode (..))
+import System.IO (Handle, hClose, hFlush, hSetBinaryMode, openBinaryTempFile)
 import System.Process
   ( CreateProcess (..),
     StdStream (..),
     proc,
     readCreateProcessWithExitCode,
     readProcessWithExitCode,
+    waitForProcess,
+    withCreateProcess,
   )
+import Text.Read (readMaybe)
 
 -- | Per-call stdout/stderr cap (bytes).  Anything past this is
 -- dropped; the caller sees a 'truncated' flag.
 maxOutputBytes :: Int
 maxOutputBytes = 16 * 1024
+
+-- | Per-stream spill cap.  The reader continues draining and hashing after
+-- this point, but does not retain any more bytes on the host.  This keeps both
+-- memory and temporary-disk use finite even for an adversarial command.
+maxSpillBytes :: Int
+maxSpillBytes = 8 * 1024 * 1024
 
 -- | Shared nix store volume, mounted at /nix in every sandbox so a
 -- package downloaded once is instant for all later sandboxes.  On
@@ -77,6 +92,18 @@ maxOutputBytes = 16 * 1024
 nixVolume :: Text
 nixVolume = "max-nix"
 
+-- | A named volume's root mount ownership is reset by some Docker backends.
+-- Mount a persistent child directory as /work so uid/mode changes survive
+-- across helper and long-lived container mount namespaces.
+workVolumeSubpath :: Text
+workVolumeSubpath = ".max-work"
+
+-- | Bump whenever the @docker run@ isolation contract changes.  Reconciliation
+-- rebuilds an older container around its durable /work volume before adopting
+-- it, so a long-lived shell cannot silently retain weaker limits.
+sandboxPolicyVersion :: Text
+sandboxPolicyVersion = "4"
+
 -- | Result of one in-container exec.
 data ExecResult = ExecResult
   { erExitCode :: !Int,
@@ -84,8 +111,11 @@ data ExecResult = ExecResult
     erStderr :: !Text,
     erTruncated :: !Bool,
     -- | When truncated: container-side path holding the full
-    -- stdout+stderr, for the model to grep/head on demand.
+    -- stdout+stderr up to 'maxSpillBytes' per stream, for the model to
+    -- grep/head on demand.
     erSpillPath :: !(Maybe Text),
+    -- | True when output exceeded the bounded spill as well as the preview.
+    erSpillTruncated :: !Bool,
     erDurationMillis :: !Int,
     erActualCommand :: !Text,
     erNetworkMode :: !Text,
@@ -131,9 +161,10 @@ data DockerContainerStatus
 -- Lifecycle.
 
 -- | @docker run -d --init --name NAME [...args] IMAGE sleep infinity@.
--- Mounts the per-sandbox work volume at /work and the shared
--- 'nixVolume' at /nix.  No memory/cpu caps: nixpkgs evaluation alone
--- can want ~2 GiB, and sandboxes are per-group already.
+-- Mounts the per-sandbox work volume at /work and the shared 'nixVolume' at
+-- /nix.  The shell is non-root, has no network/capabilities, and receives hard
+-- resource limits.  The root filesystem is read-only; /work, /tmp and the
+-- unprivileged home are the only writable locations.
 -- Returns the container id on success, or a stderr-flavoured error.
 runRun ::
   -- | container name
@@ -146,34 +177,119 @@ runRun ::
   Text ->
   IO (Either Text Text)
 runRun name image volume network = do
-  let args =
+  prepared <- prepareWorkVolume image volume
+  if not prepared
+    then pure (Left "docker could not prepare the sandbox work volume")
+    else do
+      let args =
+            [ "run",
+              "-d",
+              "--init",
+              "--name",
+              T.unpack name,
+              "--label",
+              "max.sandbox.policy=" <> T.unpack sandboxPolicyVersion,
+              "--network",
+              T.unpack network,
+              "--user",
+              "1000:1000",
+              "--cap-drop",
+              "ALL",
+              "--security-opt",
+              "no-new-privileges",
+              "--memory",
+              "4g",
+              "--memory-swap",
+              "4g",
+              "--cpus",
+              "2",
+              "--pids-limit",
+              "512",
+              "--read-only",
+              "--tmpfs",
+              "/tmp:rw,nosuid,nodev,size=512m,mode=1777",
+              "--tmpfs",
+              "/home/sandbox:rw,nosuid,nodev,size=256m,uid=1000,gid=1000,mode=700",
+              "-v",
+              T.unpack nixVolume <> ":/nix",
+              "--mount",
+              "type=volume,src="
+                <> T.unpack volume
+                <> ",dst=/work,volume-subpath="
+                <> T.unpack workVolumeSubpath
+                <> ",volume-nocopy",
+              "-w",
+              "/work",
+              T.unpack image,
+              "sleep",
+              "infinity"
+            ]
+      res <- try @IOException $ readProcessWithExitCode "docker" args ""
+      pure $ case res of
+        Left e -> Left ("docker run failed: " <> T.pack (show e))
+        Right (ExitSuccess, out, _) -> Right (T.strip (T.pack out))
+        Right (ExitFailure c, _, err) ->
+          Left $
+            "docker run exited "
+              <> T.pack (show c)
+              <> ": "
+              <> T.strip (T.pack err)
+
+-- | A named volume's root is root-owned, and on some Docker backends changes
+-- to that mount root do not survive the next mount namespace.  Prepare a child
+-- directory that can be mounted as /work instead.  Existing root-level files
+-- are migrated into it so adopting an older durable volume does not hide data.
+-- No user-controlled command is involved here.
+prepareWorkVolume :: Text -> Text -> IO Bool
+prepareWorkVolume image volume = do
+  result <-
+    try @IOException $
+      readProcessWithExitCode
+        "docker"
         [ "run",
-          "-d",
-          "--init",
-          "--name",
-          T.unpack name,
+          "--rm",
           "--network",
-          T.unpack network,
+          "none",
+          "--user",
+          "0:0",
+          "--cap-drop",
+          "ALL",
+          "--cap-add",
+          "CHOWN",
+          "--security-opt",
+          "no-new-privileges",
+          "--memory",
+          "512m",
+          "--memory-swap",
+          "512m",
+          "--cpus",
+          "1",
+          "--pids-limit",
+          "64",
+          "--read-only",
           "-v",
-          T.unpack nixVolume <> ":/nix",
-          "-v",
-          T.unpack volume <> ":/work",
-          "-w",
-          "/work",
+          T.unpack volume <> ":/volume",
           T.unpack image,
-          "sleep",
-          "infinity"
+          "sh",
+          "-c",
+          T.unpack $
+            "mkdir -p /volume/"
+              <> workVolumeSubpath
+              <> " && chown 0:0 /volume/"
+              <> workVolumeSubpath
+              <> " && chmod 700 /volume/"
+              <> workVolumeSubpath
+              <> " && find /volume -mindepth 1 -maxdepth 1 ! -name "
+              <> workVolumeSubpath
+              <> " -exec mv {} /volume/"
+              <> workVolumeSubpath
+              <> "/ \\; && chown -R 1000:1000 /volume/"
+              <> workVolumeSubpath
         ]
-  res <- try @IOException $ readProcessWithExitCode "docker" args ""
-  pure $ case res of
-    Left e -> Left ("docker run failed: " <> T.pack (show e))
-    Right (ExitSuccess, out, _) -> Right (T.strip (T.pack out))
-    Right (ExitFailure c, _, err) ->
-      Left $
-        "docker run exited "
-          <> T.pack (show c)
-          <> ": "
-          <> T.strip (T.pack err)
+        ""
+  pure $ case result of
+    Right (ExitSuccess, _, _) -> True
+    _ -> False
 
 -- | @docker rm -fv NAME@ — best-effort; ignores errors.
 runRm :: Text -> IO ()
@@ -223,6 +339,26 @@ inspectContainerStatus name = do
       | otherwise -> DockerContainerUnavailable (dockerFailure code detail)
       where
         detail = T.strip (T.pack (out <> "\n" <> err))
+
+-- | Whether a running/stopped container was created under the current
+-- isolation contract.  Inspection failure is deliberately false: adopting an
+-- unverifiable shell would weaken a write-capable boundary.
+inspectContainerPolicy :: Text -> IO Bool
+inspectContainerPolicy name = do
+  result <-
+    try @IOException $
+      readProcessWithExitCode
+        "docker"
+        [ "container",
+          "inspect",
+          "--format",
+          "{{index .Config.Labels \"max.sandbox.policy\"}}",
+          T.unpack name
+        ]
+        ""
+  pure $ case result of
+    Right (ExitSuccess, out, _) -> T.strip (T.pack out) == sandboxPolicyVersion
+    _ -> False
 
 -- | @docker volume ls -q --filter "name=^PREFIX"@.
 listVolumesByPrefix :: Text -> IO [Text]
@@ -296,7 +432,7 @@ runExec container networkMode cmd timeoutSecs = do
         ["exec", T.unpack container, "sh", "-c", T.unpack ("touch " <> shellQuote marker)]
         ""
   let wrapped =
-        "timeout --preserve-status "
+        "timeout --signal=TERM --kill-after=5s --preserve-status "
           <> T.pack (show timeoutSecs)
           <> " sh -c "
           <> shellQuote cmd
@@ -309,50 +445,67 @@ runExec container networkMode cmd timeoutSecs = do
           "-c",
           T.unpack wrapped
         ]
-  res <- try @IOException $ readProcessWithExitCode "docker" args ""
-  base <- case res of
-    Left e ->
-      pure
-        ExecResult
-          { erExitCode = -1,
-            erStdout = "",
-            erStderr = "docker exec failed: " <> T.pack (show e),
-            erTruncated = False,
-            erSpillPath = Nothing,
-            erDurationMillis = 0,
-            erActualCommand = cmd,
-            erNetworkMode = networkMode,
-            erStdoutSha256 = digestText "",
-            erStdoutBytes = 0,
-            erStderrSha256 = digestText ("docker exec failed: " <> T.pack (show e)),
-            erStderrBytes = textBytes ("docker exec failed: " <> T.pack (show e)),
-            erObservedManifest = Nothing
-          }
-    Right (code, out, err) -> do
-      let fullOut = stripAnsi (T.pack out)
-          fullErr = stripAnsi (T.pack err)
-          (truncatedOut, t1) = truncateBytes maxOutputBytes fullOut
-          (truncatedErr, t2) = truncateBytes maxOutputBytes fullErr
-      spill <-
-        if t1 || t2
-          then spillOutput container fullOut fullErr
-          else pure Nothing
-      pure
-        ExecResult
-          { erExitCode = case code of ExitSuccess -> 0; ExitFailure c -> c,
-            erStdout = truncatedOut,
-            erStderr = truncatedErr,
-            erTruncated = t1 || t2,
-            erSpillPath = spill,
-            erDurationMillis = 0,
-            erActualCommand = cmd,
-            erNetworkMode = networkMode,
-            erStdoutSha256 = digestText fullOut,
-            erStdoutBytes = textBytes fullOut,
-            erStderrSha256 = digestText fullErr,
-            erStderrBytes = textBytes fullErr,
-            erObservedManifest = Nothing
-          }
+  base <-
+    withCaptureFile "max-sandbox-stdout" $ \outPath outTemp ->
+      withCaptureFile "max-sandbox-stderr" $ \errPath errTemp -> do
+        let process =
+              (proc "docker" args)
+                { std_in = CreatePipe,
+                  std_out = CreatePipe,
+                  std_err = CreatePipe
+                }
+        processResult <-
+          try @IOException $
+            withCreateProcess process $ \maybeInput maybeOutput maybeErrors processHandle ->
+              case (maybeInput, maybeOutput, maybeErrors) of
+                (Just input, Just output, Just errors) -> do
+                  hClose input
+                  outDone <- newEmptyMVar
+                  errDone <- newEmptyMVar
+                  _ <- forkFinally (captureStream output outTemp) (putMVar outDone)
+                  _ <- forkFinally (captureStream errors errTemp) (putMVar errDone)
+                  code <- waitForProcess processHandle
+                  outResult <- takeMVar outDone
+                  errResult <- takeMVar errDone
+                  case (outResult, errResult) of
+                    (Right capturedOut, Right capturedErr) -> do
+                      hFlush outTemp
+                      hFlush errTemp
+                      let truncated = capturedOut.csBytes > maxOutputBytes || capturedErr.csBytes > maxOutputBytes
+                          spillTruncated = capturedOut.csSpillTruncated || capturedErr.csSpillTruncated
+                      spill <-
+                        if truncated
+                          then spillOutputFiles container (T.pack stamp) outPath errPath capturedOut capturedErr
+                          else pure Nothing
+                      pure
+                        ExecResult
+                          { erExitCode = case code of ExitSuccess -> 0; ExitFailure c -> c,
+                            erStdout = capturedOut.csPreview,
+                            erStderr = capturedErr.csPreview,
+                            erTruncated = truncated,
+                            erSpillPath = spill,
+                            erSpillTruncated = spillTruncated,
+                            erDurationMillis = 0,
+                            erActualCommand = cmd,
+                            erNetworkMode = networkMode,
+                            erStdoutSha256 = capturedOut.csSha256,
+                            erStdoutBytes = capturedOut.csBytes,
+                            erStderrSha256 = capturedErr.csSha256,
+                            erStderrBytes = capturedErr.csBytes,
+                            erObservedManifest = Nothing
+                          }
+                    captureFailure ->
+                      pure (streamCaptureFailure cmd networkMode captureFailure)
+                _ ->
+                  pure
+                    ( dockerExecFailure
+                        cmd
+                        networkMode
+                        (userError "docker exec did not expose all requested pipes")
+                    )
+        case processResult of
+          Left e -> pure (dockerExecFailure cmd networkMode e)
+          Right result -> pure result
   finished <- getPOSIXTime
   manifest <- observeManifest container marker beforeDiff
   pure
@@ -360,6 +513,150 @@ runExec container networkMode cmd timeoutSecs = do
       { erDurationMillis = max 0 (round ((finished - started) * 1000)),
         erObservedManifest = manifest
       }
+
+-- | Realise allowlisted-by-construction nixpkgs attributes in a short-lived
+-- helper.  This is the only sandbox-related process with bridge networking and
+-- a writable shared Nix store.  The model controls only attribute arguments;
+-- it cannot supply a shell command, image, mount, or network mode.  The actual
+-- user command subsequently runs in the networkless non-root sandbox.
+runPreparePackages :: Text -> [Text] -> Int -> IO (Either Text [Text])
+runPreparePackages _ [] _ = pure (Right [])
+runPreparePackages image packages timeoutSecs = do
+  let expression = packageExpression packages
+      args =
+        [ "run",
+          "--rm",
+          "--network",
+          "bridge",
+          "--cap-drop",
+          "ALL",
+          "--security-opt",
+          "no-new-privileges",
+          "--memory",
+          "4g",
+          "--memory-swap",
+          "4g",
+          "--cpus",
+          "2",
+          "--pids-limit",
+          "512",
+          "-v",
+          T.unpack nixVolume <> ":/nix",
+          T.unpack image,
+          "timeout",
+          "--signal=TERM",
+          "--kill-after=5s",
+          T.unpack (T.pack (show timeoutSecs) <> "s"),
+          "nix",
+          "build",
+          "--impure",
+          "--no-link",
+          "--print-out-paths",
+          "--expr",
+          T.unpack expression
+        ]
+  result <- try @IOException $ readProcessWithExitCode "docker" args ""
+  pure $ case result of
+    Left err -> Left ("package preparation failed: " <> T.pack (show err))
+    Right (ExitSuccess, out, _) ->
+      let paths = filter (not . T.null) (map T.strip (T.lines (T.pack out)))
+       in if not (null paths) && all validPreparedStorePath paths
+            then Right paths
+            else Left "package preparation returned an invalid or empty store-path list"
+    Right (ExitFailure code, out, err) ->
+      Left $
+        "package preparation exited "
+          <> T.pack (show code)
+          <> ": "
+          <> T.takeEnd 4000 (stripAnsi (T.pack (out <> "\n" <> err)))
+
+validPreparedStorePath :: Text -> Bool
+validPreparedStorePath path =
+  case T.stripPrefix "/nix/store/" path of
+    Nothing -> False
+    Just name -> not (T.null name) && not (T.any (\c -> c == '/' || isSpace c) name)
+
+data CapturedStream = CapturedStream
+  { csPreview :: !Text,
+    csSha256 :: !Text,
+    csBytes :: !Int,
+    csSpillTruncated :: !Bool
+  }
+
+captureStream :: Handle -> Handle -> IO CapturedStream
+captureStream source spill = do
+  hSetBinaryMode source True
+  hSetBinaryMode spill True
+  go SHA256.init 0 BS.empty 0
+  where
+    go digest total preview retained = do
+      chunk <- BS.hGetSome source (32 * 1024)
+      if BS.null chunk
+        then do
+          hClose source
+          let truncated = total > maxOutputBytes
+              previewText = stripAnsi (TE.decodeUtf8With lenientDecode preview)
+          pure
+            CapturedStream
+              { csPreview = previewText <> if truncated then "\n…(truncated)" else "",
+                csSha256 = TE.decodeUtf8 (Base16.encode (SHA256.finalize digest)),
+                csBytes = total,
+                csSpillTruncated = total > maxSpillBytes
+              }
+        else do
+          let previewRoom = max 0 (maxOutputBytes - BS.length preview)
+              spillRoom = max 0 (maxSpillBytes - retained)
+              preview' = preview <> BS.take previewRoom chunk
+              spillChunk = BS.take spillRoom chunk
+          BS.hPut spill spillChunk
+          go
+            (SHA256.update digest chunk)
+            (total + BS.length chunk)
+            preview'
+            (retained + BS.length spillChunk)
+
+withCaptureFile :: String -> (FilePath -> Handle -> IO a) -> IO a
+withCaptureFile template = bracket acquire release . uncurry
+  where
+    acquire = do
+      tempDir <- getTemporaryDirectory
+      openBinaryTempFile tempDir template
+    release (path, handle) = do
+      _ <- try @IOException (hClose handle)
+      _ <- try @IOException (removeFile path)
+      pure ()
+
+dockerExecFailure :: Text -> Text -> IOException -> ExecResult
+dockerExecFailure cmd networkMode err =
+  let detail = "docker exec failed: " <> T.pack (show err)
+   in ExecResult
+        { erExitCode = -1,
+          erStdout = "",
+          erStderr = detail,
+          erTruncated = False,
+          erSpillPath = Nothing,
+          erSpillTruncated = False,
+          erDurationMillis = 0,
+          erActualCommand = cmd,
+          erNetworkMode = networkMode,
+          erStdoutSha256 = digestText "",
+          erStdoutBytes = 0,
+          erStderrSha256 = digestText detail,
+          erStderrBytes = textBytes detail,
+          erObservedManifest = Nothing
+        }
+
+streamCaptureFailure ::
+  Text ->
+  Text ->
+  (Either SomeException CapturedStream, Either SomeException CapturedStream) ->
+  ExecResult
+streamCaptureFailure cmd networkMode failures =
+  dockerExecFailure cmd networkMode (userError (captureFailureMessage failures))
+  where
+    captureFailureMessage (outcome, errcome) =
+      "stream capture failed: stdout=" <> render outcome <> "; stderr=" <> render errcome
+    render = either show (const "ok")
 
 -- | Hash and preview the observed /work manifest without streaming an
 -- unbounded directory listing through the host process.  The temporary file
@@ -439,26 +736,73 @@ digestText = TE.decodeUtf8 . Base16.encode . SHA256.hash . TE.encodeUtf8
 textBytes :: Text -> Int
 textBytes = BS.length . TE.encodeUtf8
 
--- | Save an over-cap exec's full output to a file inside the
--- container, so truncation stops being lossy.  Best-effort: any
--- failure just means no spill path (old behavior).
-spillOutput :: Text -> Text -> Text -> IO (Maybe Text)
-spillOutput container fullOut fullErr = do
-  stamp <- (show :: Int -> String) . round . (* 1000) <$> getPOSIXTime
-  let path = "/work/.max-out/exec-" <> T.pack stamp <> ".log"
-      content = "### stdout\n" <> fullOut <> "\n### stderr\n" <> fullErr
-      args =
-        [ "exec",
-          "-i",
-          T.unpack container,
-          "sh",
-          "-c",
-          T.unpack ("mkdir -p /work/.max-out && cat > " <> shellQuote path)
-        ]
-  res <- try @IOException $ readProcessWithExitCode "docker" args (T.unpack content)
-  pure $ case res of
-    Right (ExitSuccess, _, _) -> Just path
-    _ -> Nothing
+-- | Copy the bounded host-side captures back into the sandbox and assemble a
+-- readable combined spill.  @docker cp@ streams from disk, so this does not
+-- re-materialise the retained output in the Max heap.
+spillOutputFiles ::
+  Text ->
+  Text ->
+  FilePath ->
+  FilePath ->
+  CapturedStream ->
+  CapturedStream ->
+  IO (Maybe Text)
+spillOutputFiles container stamp stdoutPath stderrPath capturedOut capturedErr = do
+  let path = "/work/.max-out/exec-" <> stamp <> ".log"
+      stagedOut = path <> ".stdout"
+      stagedErr = path <> ".stderr"
+      copy host target =
+        try @IOException $
+          readProcessWithExitCode
+            "docker"
+            ["cp", host, T.unpack container <> ":" <> T.unpack target]
+            ""
+  created <- dockerExecSmall container "mkdir -p /work/.max-out"
+  copiedOut <- if created then copy stdoutPath stagedOut else pure (Left (userError "spill directory unavailable"))
+  copiedErr <- case copiedOut of
+    Right (ExitSuccess, _, _) -> copy stderrPath stagedErr
+    _ -> pure (Left (userError "stdout spill copy failed"))
+  assembled <- case copiedErr of
+    Right (ExitSuccess, _, _) ->
+      dockerExecSmall container (assembleSpill path stagedOut stagedErr capturedOut capturedErr)
+    _ -> pure False
+  if assembled
+    then pure (Just path)
+    else do
+      _ <- dockerExecSmall container ("rm -f " <> shellQuote stagedOut <> " " <> shellQuote stagedErr <> " " <> shellQuote path)
+      pure Nothing
+
+assembleSpill :: Text -> Text -> Text -> CapturedStream -> CapturedStream -> Text
+assembleSpill path stagedOut stagedErr capturedOut capturedErr =
+  "{ printf '%s\\n' '### stdout'; cat "
+    <> shellQuote stagedOut
+    <> spillMarker capturedOut
+    <> "; printf '%s\\n' '### stderr'; cat "
+    <> shellQuote stagedErr
+    <> spillMarker capturedErr
+    <> "; } > "
+    <> shellQuote path
+    <> " && rm -f "
+    <> shellQuote stagedOut
+    <> " "
+    <> shellQuote stagedErr
+  where
+    spillMarker captured
+      | captured.csSpillTruncated =
+          "; printf '\\n…(spill truncated at %s bytes)\\n' '" <> T.pack (show maxSpillBytes) <> "'"
+      | otherwise = "; printf '\\n'"
+
+dockerExecSmall :: Text -> Text -> IO Bool
+dockerExecSmall container command = do
+  result <-
+    try @IOException $
+      readProcessWithExitCode
+        "docker"
+        ["exec", T.unpack container, "sh", "-c", T.unpack command]
+        ""
+  pure $ case result of
+    Right (ExitSuccess, _, _) -> True
+    _ -> False
 
 -- | Read a file from the container, capped at 'maxOutputBytes'.
 --
@@ -638,28 +982,44 @@ stripAnsi = T.filter keep . T.pack . go . T.unpack
     dropOsc ('\ESC' : '\\' : cs) = cs
     dropOsc (_ : cs) = dropOsc cs
 
--- | Put @pkgs@ (bare nixpkgs attribute names) on PATH for one command
--- via @nix shell@, which realises them from the shared store and
--- execs the command with them available — nothing is installed into
--- the sandbox itself.  Empty list = run the command as-is.
+-- | Put already-realised Nix store paths on PATH for one command.  Nothing is
+-- installed into the sandbox itself.  Empty list = run the command as-is.
 --
--- Two passes: a silenced warm-up run realises the packages (this is
--- where nix's "these paths will be fetched … / copying path …"
--- chatter goes — straight to @/dev/null@), then the real run executes
--- in the now-cached shell so its captured stderr carries only the
--- command's own output, not nix's.
+-- Package realisation is performed separately by 'runPreparePackages', in a
+-- fixed helper with narrowly scoped network authority.  The networkless,
+-- non-root sandbox therefore never needs write access to the shared Nix DB.
+-- A bare @python3Packages.*@ derivation does not alter Python's import path, so
+-- 'packageExpression' collects those attributes into one
+-- @python3.withPackages@ environment.  Every attribute segment is quoted and
+-- validated by the registry before this expression is built.
 wrapPackages :: [Text] -> Text -> Text
 wrapPackages [] cmd = cmd
-wrapPackages pkgs cmd =
-  nixShell <> " -c true >/dev/null 2>&1; "
-    <> nixShell <> " -c sh -c " <> shellQuote cmd
-  where
-    nixShell = "nix shell " <> T.unwords [shellQuote ("nixpkgs#" <> p) | p <- pkgs]
+wrapPackages storePaths cmd =
+  "export PATH="
+    <> shellQuote (T.intercalate ":" (map (<> "/bin") storePaths))
+    <> ":\"$PATH\"; exec sh -c "
+    <> shellQuote cmd
 
--- | Cap a Text at @n@ bytes (approximate — uses character count;
--- close enough for log/model display).  Returns the trimmed text and
--- a flag that's true iff anything was dropped.
-truncateBytes :: Int -> Text -> (Text, Bool)
-truncateBytes n t
-  | T.length t <= n = (t, False)
-  | otherwise = (T.take n t <> "\n…(truncated)", True)
+packageExpression :: [Text] -> Text
+packageExpression packages =
+  "let pkgs = (builtins.getFlake \"nixpkgs\").legacyPackages.${builtins.currentSystem}; in [ "
+    <> T.unwords (map (attributeValue "pkgs") ordinary <> pythonEnvironment)
+    <> " ]"
+  where
+    (python, ordinary) = foldr classify ([], []) packages
+    classify attr (pythonAttrs, ordinaryAttrs) = case T.stripPrefix "python3Packages." attr of
+      Just suffix -> (suffix : pythonAttrs, ordinaryAttrs)
+      Nothing -> (pythonAttrs, attr : ordinaryAttrs)
+    pythonEnvironment =
+      [ "(pkgs.python3.withPackages (ps: [ "
+          <> T.unwords (map (attributeValue "ps") python)
+          <> " ]))"
+        | not (null python)
+      ]
+
+attributeValue :: Text -> Text -> Text
+attributeValue root =
+  foldl
+    (\parent segment -> "(builtins.getAttr \"" <> segment <> "\" " <> parent <> ")")
+    root
+    . T.splitOn "."

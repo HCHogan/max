@@ -207,9 +207,11 @@ half is a bounded digest: the goal, selected evidence, an aggregate of
 older completed work, and a fixed-size recent-node suffix. The pulled
 half is addressable: a journal result or turn record that is both in
 scope and useful to the model may render as a canonical handle under an
-extended ADR 004 grammar. The current `context_expand` implements only
-the episode namespace; `t#` (ADR 005) and a result namespace are future
-members of the same scoped expansion surface, not present capabilities.
+extended ADR 004 grammar. The current `context_expand` implements episode and
+whole-turn `t#` expansion. Result handles (`t#<n>:r<k>`) are implemented as
+typed, conversation-scoped Plan inputs, but deliberately are not accepted by
+`context_expand`: a whole turn is inspectable context, while a result handle
+is a value whose schema and resource authority the Plan validator must prove.
 
 A result handle is syntax, never authority and never the Plan's typed
 binding. It resolves under the current conversation, structured resource,
@@ -330,22 +332,19 @@ Observation grants no authority and weakens no boundary — static
 inference stays conservative — but it turns "the sandbox did something"
 into rows that resume, the admin console, and the narrator can consume.
 
-One hole is named rather than papered over: the default sandbox network
-is `bridge`, so an exec running `curl` is an `EffSend` bypass — an
-arbitrary external effect the outbound ledger never sees. Recording the
-network mode makes the exposure visible per row; closing it (default
-`none`, per-sandbox egress grants, or an egress proxy) is authority work
-deferred post-1.0. Until then the effect vocabulary's send story is
-honest only for ledger sends. The deferral is dated, not open-ended: the
-code-mode evidence (see the rejected alternatives) pushes more work into
-the sandbox over time, so this hole should be first in line once v1.0
-converges. ADR 006's `ExternalPoll` is a distinct host-managed network
-effect: it must record its target, redirect/credential policy, response
-digest, and outcome through the journal and need not reuse sandbox
-mechanics. Holding that feature until ungoverned sandbox egress is closed
-may still be a deliberate defense-in-depth release policy; it is not a
-claim that a scoped host probe and an ambient sandbox `curl` are
-semantically indistinguishable.
+The sandbox egress hole identified by the original decision is now closed for
+`sandbox_exec`. Long-lived shells use fixed `network=none`; callers cannot
+select an image or network. Requested nixpkgs attributes are bounded and
+syntax-validated, then a short-lived helper with a fixed
+`nix build --no-link --print-out-paths` command and no caller-controlled shell
+realizes them into the shared store. The actual command only prepends those
+validated, already-realized store paths to PATH in the networkless, non-root
+sandbox; it does not run Nix or write the shared Nix database. The journal still records the network mode so
+policy drift remains visible. ADR 006's deferred `ExternalPoll` is a distinct
+host-managed network effect: it must record its target, redirect/credential
+policy, response digest, and outcome through the journal and does not reuse
+sandbox mechanics. Browser and explicit web tools retain their separately
+declared network authority.
 
 ### The journal contract (v1.0 slice)
 

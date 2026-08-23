@@ -16,7 +16,6 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..), query)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
 import Effectful (Eff, IOE, (:>), liftIO)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbLog)
 import Max.DB.AgentTurn (AgentTurnTerminal (..), finishAgentTurn, markAgentTurnRunning, startAgentTurn)
@@ -329,9 +328,6 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Plan.Worker" $ do
     readIORef recorded.rcWoken >>= \told -> length told `shouldBe` 1
     head' <- withDb pool (loadPlanHead ref) >>= requireHead
     head'.stStatus `shouldBe` PlanAbandoned
-
-laterTime :: UTCTime
-laterTime = addUTCTime 60 testTime
 
 -- | Open a plan and park it at its fork, then take the lease.
 parkedPlan :: DbPool -> Fixture -> IO (PlanRef, WakeablePlan)

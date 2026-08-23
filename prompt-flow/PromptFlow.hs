@@ -40,6 +40,7 @@ import Max.Context.Types (ContextCandidates (..))
 import Max.DB.Calls (redactDataUrls)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.History (HistoryItem (..), LedgerItem (LedgerItem), MessageCursor (..))
+import Max.DB.History qualified as History
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Agent (assembleToolRound, toolResultMessage)
 import Max.Effects.Blob (blobRefFromSha256)
@@ -536,7 +537,7 @@ episodeLedger :: Int64 -> Int64 -> Int64 -> Text -> Int -> Int -> Text -> Maybe 
 episodeLedger cursor' mid uid name hour minute body reply =
   LedgerItem
     (MessageCursor cursor')
-    ((historyOn (fromGregorian 2025 1 11) mid uid name hour minute body) {replyTo = reply})
+    ((historyOn (fromGregorian 2025 1 11) mid uid name hour minute body :: HistoryItem) {History.replyTo = reply})
     True
 
 episodePromptExcerpt :: Text

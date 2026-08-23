@@ -440,6 +440,9 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
       finishAgentTurn source.fxTurn TurnSucceeded 1 Nothing Nothing
 
     currentAt <- getCurrentTime
+    -- Both rows deliberately share a timestamp.  received_at bounds used to
+    -- omit the ambient row; canonical ingest order must retain it.
+    _ <- insertRawMessage pool 1004 42 2042 9 currentAt (Just "Bob") "same timestamp ambient"
     currentCanonical <- insertRawMessage pool 1002 42 1042 9 currentAt (Just "Alice") "继续把图改成深色"
     [Only currentPrincipal] <- withConn pool $ \connection ->
       query connection "SELECT author_principal_id FROM messages WHERE canonical_message_id=?" (Only currentCanonical)
@@ -490,6 +493,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     rendered `shouldSatisfy` T.isInfixOf "host digest; no archived provider-wire replay"
     rendered `shouldSatisfy` T.isInfixOf "sandbox_exec"
     rendered `shouldSatisfy` T.isInfixOf "工具目录 无变化"
+    rendered `shouldSatisfy` T.isInfixOf "same timestamp ambient"
 
     -- One projection, two windows.  The replay tier keeps the drift note and
     -- drops the record, because the wire items above it already are the
