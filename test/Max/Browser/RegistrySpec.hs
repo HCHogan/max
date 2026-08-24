@@ -113,4 +113,4 @@ spec = describe "withBrowserSession" $ do
 testRegistry :: IO BrowserRegistry
 testRegistry = do
   runtime <- newHttpRuntime
-  newBrowserRegistry runtime Nothing
+  newBrowserRegistry runtime

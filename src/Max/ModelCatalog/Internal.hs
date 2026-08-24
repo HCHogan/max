@@ -65,6 +65,7 @@ data LLMProfile = LLMProfile
     historyAsTurns :: !Bool,
     stream :: !Bool
   }
+  deriving stock (Eq)
 
 -- | Prompt-side limits for one model profile.  @maxInputTokens@ is the
 -- provider's hard input ceiling.  Output is tracked separately because it is
@@ -115,6 +116,7 @@ data ModelCapabilities = ModelCapabilities
 data CatalogEntry
   = CompletionEntry !LLMProfile
   | CapabilityEntry !ModelCapabilities
+  deriving stock (Eq)
 
 -- | One immutable source of truth for public capabilities and private
 -- completion configuration. Constructors stay internal so every catalog
@@ -123,6 +125,7 @@ data ModelCatalog = ModelCatalog
   { catalogDefaultName :: !Text,
     catalogProfiles :: !(Map Text CatalogEntry)
   }
+  deriving stock (Eq)
 
 -- Keep 'AppConfig' printable without ever rendering endpoint credentials.
 instance Show ModelCatalog where

@@ -421,7 +421,8 @@ askChild profile probe attempt = do
           ccEffort = Nothing,
           ccTimeoutSeconds = Nothing,
           ccBufferedRetryDelaysSeconds = Nothing,
-          ccAgentTurnId = Nothing
+          ccAgentTurnId = Nothing,
+          ccConfigGeneration = Nothing
         }
 
 childGoal :: ChildProbe -> Goal
@@ -494,7 +495,8 @@ ask profile task attempt = do
           ccEffort = Nothing,
           ccTimeoutSeconds = Nothing,
           ccBufferedRetryDelaysSeconds = Nothing,
-          ccAgentTurnId = Nothing
+          ccAgentTurnId = Nothing,
+          ccConfigGeneration = Nothing
         }
 
 readReply :: Text -> Bool -> Attempt

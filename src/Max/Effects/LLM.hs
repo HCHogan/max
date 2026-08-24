@@ -49,6 +49,8 @@ module Max.Effects.LLM
 
     -- * Effect operations
     runLLM,
+    runRuntimeLLM,
+    withLLMConfigGeneration,
     LLMInterpreter (..),
     runLLMWith,
     chat,
@@ -83,7 +85,7 @@ import Data.Text.Encoding qualified as TE
 import Data.Traversable (for)
 import Data.Vector qualified as V
 import Effectful
-import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
+import Effectful.Dispatch.Dynamic (interpose, interpret, localSeqUnlift, send)
 import Effectful.Exception (SomeException)
 import Effectful.Log
 import GHC.Clock (getMonotonicTimeNSec)
@@ -92,12 +94,20 @@ import Max.Http.Stream (StreamOutcome (..), streamPost)
 import Max.HttpRuntime (HttpRuntime)
 import Max.LLM.Stream (PartialCall (..), StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, stepResponses)
 import Max.ModelCatalog (ModelCatalog)
-import Max.Turn.Types (AgentTurnId)
 import Max.ModelCatalog.Internal
   ( LLMProfile (..),
     Protocol (..),
     lookupCompletionProfile,
   )
+import Max.RuntimeConfig
+  ( ConfigGeneration,
+    RuntimeConfigStore,
+    RuntimeSnapshot (..),
+    RuntimeValues (..),
+    currentRuntimeSnapshot,
+    lookupRuntimeSnapshot,
+  )
+import Max.Turn.Types (AgentTurnId)
 import Max.Util (trySync)
 
 -- | One block in a multimodal user message.  Maps directly to the
@@ -220,7 +230,10 @@ data ChatCtx = ChatCtx
     ccBufferedRetryDelaysSeconds :: !(Maybe [Int]),
     -- | Durable agent attribution.  Background/model-router calls leave it
     -- empty; every call inside a production turn carries it.
-    ccAgentTurnId :: !(Maybe AgentTurnId)
+    ccAgentTurnId :: !(Maybe AgentTurnId),
+    -- | Immutable runtime generation held by an agent dispatch. Background
+    -- calls use 'Nothing' and resolve the current generation at call start.
+    ccConfigGeneration :: !(Maybe ConfigGeneration)
   }
   deriving stock (Show, Eq)
 
@@ -428,14 +441,76 @@ runLLM ::
   ModelCatalog ->
   Eff (LLM : es) a ->
   Eff es a
-runLLM runtime usageWriter callWriter reg = interpret $ \localEnv -> \case
-  Chat ctx name msgs tools -> runOneChat runtime usageWriter callWriter reg ctx name msgs tools Nothing
+runLLM runtime usageWriter callWriter reg = runLLMResolving runtime usageWriter callWriter (const (pure reg))
+
+-- | Production interpreter: an agent call resolves the generation leased by
+-- its dispatch, while a background call resolves the current generation at
+-- call start.  A leased generation remains in the store until the turn's outer
+-- finalizer releases it.
+runRuntimeLLM ::
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
+  UsageWriter ->
+  CallWriter ->
+  RuntimeConfigStore ->
+  Eff (LLM : es) a ->
+  Eff es a
+runRuntimeLLM runtime usageWriter callWriter store =
+  runLLMResolving runtime usageWriter callWriter resolve
+  where
+    resolve ctx = do
+      snapshot <- case ctx.ccConfigGeneration of
+        Nothing -> currentRuntimeSnapshot store
+        Just generation ->
+          lookupRuntimeSnapshot store generation >>= \case
+            Just snapshot -> pure snapshot
+            Nothing -> error "LLM call referenced a released configuration generation"
+      pure snapshot.rsValues.rvModelCatalog
+
+-- | Supply one worker generation to background calls which do not already
+-- carry a dispatch lease.  Explicit turn generations always win.  This
+-- interposer sits inside the generation worker scope, preventing an old worker
+-- in the retirement overlap from combining its old inputs with the newly
+-- published model catalog.
+withLLMConfigGeneration ::
+  (LLM :> es) =>
+  ConfigGeneration ->
+  Eff es a ->
+  Eff es a
+withLLMConfigGeneration generation = interpose $ \localEnv -> \case
+  Chat ctx profile messages tools ->
+    send (Chat (stamp ctx) profile messages tools)
+  ChatStreaming ctx profile messages tools sink ->
+    localSeqUnlift localEnv $ \unlift ->
+      send (ChatStreaming (stamp ctx) profile messages tools (unlift . sink))
+  where
+    stamp ctx =
+      ctx
+        { ccConfigGeneration =
+            case ctx.ccConfigGeneration of
+              Just existing -> Just existing
+              Nothing -> Just generation
+        }
+
+runLLMResolving ::
+  (Log :> es, IOE :> es) =>
+  HttpRuntime ->
+  UsageWriter ->
+  CallWriter ->
+  (ChatCtx -> IO ModelCatalog) ->
+  Eff (LLM : es) a ->
+  Eff es a
+runLLMResolving runtime usageWriter callWriter resolve = interpret $ \localEnv -> \case
+  Chat ctx name msgs tools -> do
+    reg <- liftIO (resolve ctx)
+    runOneChat runtime usageWriter callWriter reg ctx name msgs tools Nothing
   ChatStreaming ctx name msgs tools sink ->
     -- The sink sends messages, so it is 'Eff', not IO; unlifting it
     -- here is what lets the transport call back into the caller's
     -- effect stack.  Sequential unlift is right: the read loop is
     -- single-threaded and calls the sink one frame at a time.
-    localSeqUnlift localEnv $ \unlift ->
+    localSeqUnlift localEnv $ \unlift -> do
+      reg <- liftIO (resolve ctx)
       runOneChat runtime usageWriter callWriter reg ctx name msgs tools (Just (unlift . sink))
 
 -- | One chat call, shared by the streaming and non-streaming

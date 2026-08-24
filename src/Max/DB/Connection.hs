@@ -34,7 +34,7 @@ data DbConfig = DbConfig
   { url :: !Text,
     maxConns :: !Int
   }
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
 type DbPool = Pool Connection
 

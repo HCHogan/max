@@ -12,6 +12,7 @@
 -- 'Max.ToolContext.ToolContext'.
 module Max.Env
   ( BotEnv (..),
+    applyRuntimeSnapshot,
   )
 where
 
@@ -23,7 +24,13 @@ import Data.Time (TimeZone, UTCTime)
 import Max.Browser.Registry (BrowserRegistry)
 import Max.CliProxy (CliProxyConfig)
 import Max.EpisodeScheduler (EpisodeScheduler)
-import Max.Intent (IntentConfig)
+import Max.Intent.Types (IntentConfig)
+import Max.RuntimeConfig
+  ( ConfigGeneration,
+    RuntimeConfigStore,
+    RuntimeSnapshot (..),
+    RuntimeValues (..),
+  )
 import Max.Sandbox.Registry (SandboxRegistry)
 import Max.Session (SessionRegistry)
 import Max.Shutdown (ShutdownState)
@@ -32,7 +39,13 @@ import Max.Tasks (TaskRegistry)
 import Max.Tools.Search (SearchConfig)
 
 data BotEnv = BotEnv
-  { -- | Persona used when a session hasn't overridden it ('AppConfig.persona').
+  { -- | Whole configuration generation held by this dispatch/event scope.
+    beRuntimeSnapshot :: !RuntimeSnapshot,
+    -- | Configuration generation held by the current dispatch/event scope.
+    beConfigGeneration :: !ConfigGeneration,
+    -- | Store used to acquire a whole immutable generation at dispatch entry.
+    beConfigStore :: !RuntimeConfigStore,
+    -- | Persona used when a session hasn't overridden it ('AppConfig.persona').
     bePersona :: !Text,
     -- | Global emergency reader: raw immutable ledger under ContextBudget.
     beForceRawContext :: !Bool,
@@ -77,6 +90,9 @@ data BotEnv = BotEnv
     -- | Management access to the credential pool serving our LLM base
     -- URL ('Nothing' = @\/api\/quota@ reports itself unconfigured).
     beCliProxy :: !(Maybe CliProxyConfig),
+    -- | Browser proxy captured by this generation. New turn-owned sessions
+    -- use it; an already-running turn retains its old value.
+    beBrowserProxy :: !(Maybe Text),
     -- | Profile for Historian v2 episode capture ('Nothing' = off).  The
     -- configuration key retains its legacy memory-extract name.
     beMemoryExtract :: !(Maybe Text),
@@ -92,3 +108,29 @@ data BotEnv = BotEnv
     -- themselves go through 'Max.Effects.Embedding'.
     beEmbeddingEnabled :: !Bool
   }
+
+-- | Replace every reloadable projection together while retaining the stable
+-- process-lifetime handles.  Callers apply this under a dynamic Reader scope;
+-- the base environment is never mutated in place.
+applyRuntimeSnapshot :: RuntimeSnapshot -> BotEnv -> BotEnv
+applyRuntimeSnapshot snapshot env =
+  let values = snapshot.rsValues
+   in env
+        { beRuntimeSnapshot = snapshot,
+          beConfigGeneration = snapshot.rsGeneration,
+          bePersona = values.rvPersona,
+          beForceRawContext = values.rvForceRawContext,
+          beDebugDefault = values.rvDebugDefault,
+          beStickerDefault = values.rvStickerDefault,
+          beDefaultModel = values.rvDefaultModel,
+          beTimeZone = values.rvTimeZone,
+          beTurnSilenceSeconds = values.rvTurnSilenceSeconds,
+          beOwners = values.rvOwners,
+          beSearch = values.rvSearch,
+          beCliProxy = values.rvCliProxy,
+          beBrowserProxy = values.rvBrowserProxy,
+          beMemoryExtract = values.rvMemoryExtract,
+          beEpisodeScheduler = values.rvMemoryExtract *> env.beEpisodeScheduler,
+          beIntent = values.rvIntent,
+          beEmbeddingEnabled = values.rvEmbeddingEnabled
+        }

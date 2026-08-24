@@ -357,6 +357,12 @@ in
     };
     users.groups.max-bot = { };
 
+    # The process always re-reads this stable name. For rendered/Nix-owned
+    # configuration, activation updates the symlink before systemd invokes the
+    # reload trigger; package and unit changes still alter ExecStart and cause
+    # a restart.
+    environment.etc."max/config.yaml".source = effectiveConfigFile;
+
     services.postgresql = lib.mkIf cfg.postgres.enable {
       enable = true;
       extensions = ps: [ ps.pgvector ];
@@ -413,6 +419,7 @@ in
 
     systemd.services.max = {
       description = "max — QQ group-chat agent";
+      reloadTriggers = [ effectiveConfigFile ];
       after =
         [
           "network-online.target"
@@ -469,13 +476,16 @@ in
         User = "max-bot";
         Group = "max-bot";
         StateDirectory = "max-bot";
+        RuntimeDirectory = "max";
         # The bot resolves images_dir and var/outbox relative paths
         # against its cwd; keep everything under the state dir.
         WorkingDirectory = stateDir;
-        ExecStart = "${cfg.package}/bin/max --config-file ${effectiveConfigFile}";
+        ExecStart = "${cfg.package}/bin/max --config-file /etc/max/config.yaml";
+        ExecReload = "${cfg.package}/bin/maxctl reload --socket /run/max/control.sock";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
         Restart = "on-failure";
         RestartSec = 5;
+        TimeoutStartSec = 30;
         # SIGTERM starts the bot's graceful drain: no new agent
         # dispatches, finish the running ones, then tear down sandboxes
         # and the DB pool.  Systemd has to outwait that, or it SIGKILLs

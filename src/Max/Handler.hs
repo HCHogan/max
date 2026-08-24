@@ -38,7 +38,7 @@ import Effectful.Concurrent.Async (Concurrent, async, race, withAsync)
 import Effectful.Exception (SomeException, catch, finally, mask, onException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
-import Effectful.Reader.Dynamic (Reader, ask)
+import Effectful.Reader.Dynamic (Reader, ask, local)
 import Max.AgentEvent (AgentEvent (..), AgentOutputContext (..), handleAgentEvent)
 import Max.Browser.Registry (browserScopeForTurn, releaseBrowserScope)
 import Max.Command.Dispatcher (DispatchResult (..))
@@ -111,7 +111,7 @@ import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundReque
 import Max.Effects.PlatformApi (PlatformApi, callQQActionOnGeneration, qqGenerationIsCurrent, sendAction)
 import Max.Effects.ToolOutput (defaultInlineMediaLimit, runToolOutput)
 import Max.Effects.Tools (ToolDefinition (..), ToolRef (..), runTools)
-import Max.Env (BotEnv (..))
+import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.Faces (faceIdByName)
 import Max.FetchQueue (FetchSignal, notifyFetch)
@@ -175,8 +175,15 @@ import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), NativeU
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutputContinuation, renderCurrentLine, renderHistoryLine)
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), GroupMeta (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
+import Max.RuntimeConfig
+  ( RuntimeSnapshot (..),
+    RuntimeValues (..),
+    acquireRuntimeConfigSTM,
+    leasedRuntimeSnapshot,
+    releaseRuntimeConfigSTM,
+  )
 import Max.Session (Session (..), loadSession, readSession)
-import Max.Shutdown (enterDispatch, leaveDispatch)
+import Max.Shutdown (enterDispatchWith, leaveDispatchWith)
 import Max.Skills (Skill (..), skillsForGroup)
 import Max.Tasks
   ( Note (..),
@@ -199,7 +206,7 @@ import Max.Tasks
     turnRuntimeOutputContext,
     turnRuntimeTaskId,
   )
-import Max.ToolContext (SubgoalReturn (..), TurnCapabilities (..), TurnIdentity (..), mkToolContext)
+import Max.ToolContext (SubgoalReturn (..), TurnCapabilities (..), TurnIdentity (..), mkToolContext, mkToolContextAt)
 import Max.Tools.Plan (planResourceHandles, validationEnvForContract)
 import Max.Toolset (plannableToolsFor, toolDefinitionsFor)
 import Max.Turn.Continuity (currentPromptMajor, renderContinuationDigest, renderReplayDelta, toolCatalogFingerprint)
@@ -349,6 +356,19 @@ handleEvents q fetchSig mIntent clientRef = loop
   where
     loop = do
       ev <- liftIO (atomically (readTQueue q))
+      baseEnv <- ask @BotEnv
+      lease <- liftIO (atomically (acquireRuntimeConfigSTM baseEnv.beConfigStore))
+      let snapshot = leasedRuntimeSnapshot lease
+      let eventEnv = applyRuntimeSnapshot snapshot baseEnv
+          activeIntent = mIntent >>= \intentState -> intentState <$ eventEnv.beIntent
+      (local (const eventEnv) . local (const snapshot.rsValues.rvModelCatalog) $ handle activeIntent ev)
+        `finally` liftIO (atomically (releaseRuntimeConfigSTM lease))
+      loop
+
+    -- Each dequeued event observes one published generation. Inbound frames
+    -- continue to queue while reload prepares; the OneBot reader and client
+    -- slot are process-owned and never participate in this handoff.
+    handle activeIntent ev =
       case ev of
         EvConnectionReady generation connectedAt ->
           trySync (recoverQQHistory clientRef generation connectedAt fetchSig) >>= \case
@@ -377,7 +397,7 @@ handleEvents q fetchSig mIntent clientRef = loop
           persisted <- persist source raw gm
           case persisted of
             IngestDurable canonical ->
-              processCanonicalDispatch "event-handler" fetchSig mIntent canonical
+              processCanonicalDispatch "event-handler" fetchSig activeIntent canonical
             IngestDuplicate -> do
               let MessageId messageId = gm.messageId
               logTrace "ingest: duplicate source event ignored" $
@@ -412,7 +432,7 @@ handleEvents q fetchSig mIntent clientRef = loop
                 AlreadyIngested {} -> pure ()
                 DeliveryEcho {} -> pure ()
                 EchoUnmatched -> pure ()
-        EvPoke pk -> onPoke mIntent pk
+        EvPoke pk -> onPoke activeIntent pk
         -- Auto-approve friend requests: being friends is what makes
         -- private query delivery (silent commands) reliable on QQ —
         -- NapCat has no API to *initiate* friendships, so we accept
@@ -420,7 +440,6 @@ handleEvents q fetchSig mIntent clientRef = loop
         EvFriendRequest flag (UserId uidRaw) -> do
           logInfo "friend request: auto-approving" $ object ["user_id" .= uidRaw]
           sendAction (SetFriendAddRequest flag True)
-      loop
 
 -- | Persistence runs before any dispatch decision, so it re-derives
 -- "is this a command" from the same parser 'classify' uses rather than
@@ -2052,10 +2071,12 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
   -- gap.  Claiming before the spawn also closes the race the other
   -- way: 'enterDispatch' and the drain flag share one transaction.
   launched <- mask $ \restore -> do
-    started <- liftIO (enterDispatch env.beShutdown)
-    if not started
-      then pure False
-      else do
+    acquired <- liftIO (enterDispatchWith env.beShutdown (acquireRuntimeConfigSTM env.beConfigStore))
+    case acquired of
+      Nothing -> pure False
+      Just configLease -> do
+        let snapshot = leasedRuntimeSnapshot configLease
+            dispatchEnv = applyRuntimeSnapshot snapshot env
         -- Same reason the shutdown slot is claimed here: the agent loop is
         -- tens of seconds away, and until it attaches, a concurrent trigger
         -- has to be able to see this question is already taken — as do !ps
@@ -2067,23 +2088,23 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
                 pure
                 existingTurn
             )
-            `onException` liftIO (leaveDispatch env.beShutdown)
+            `onException` liftIO (leaveDispatchWith env.beShutdown (releaseRuntimeConfigSTM configLease))
         let runtimeFailed = do
               ensureAgentTurnRecoveryPending durable "dispatch cancelled before the in-memory turn runtime was published"
                 `catchSync` \e ->
                   logAttention "durable turn prologue cleanup failed" $
                     object ["error" .= T.pack (show (e :: SomeException))]
-              liftIO (leaveDispatch env.beShutdown)
+              liftIO (leaveDispatchWith env.beShutdown (releaseRuntimeConfigSTM configLease))
         turn <-
           ( ( case existingTurn of
                 Nothing ->
                   -- This constructor only allocates process-local state.  It
                   -- runs masked so cancellation cannot land after registry
                   -- insertion but before the caller receives its owner token.
-                  liftIO (beginDurableTurnRuntime env.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
+                  liftIO (beginDurableTurnRuntime dispatchEnv.beTasks durable gm.groupId gm.userId (Just gm.canonicalId))
                 Just _ -> do
                   firstChunk <- restore (nextAgentTurnOutputChunk durable.atrTurnId)
-                  liftIO (beginDurableTurnRuntimeAt env.beTasks durable firstChunk gm.groupId gm.userId (Just gm.canonicalId))
+                  liftIO (beginDurableTurnRuntimeAt dispatchEnv.beTasks durable firstChunk gm.groupId gm.userId (Just gm.canonicalId))
             )
               `catchSync` \e -> do
                 ensureAgentTurnCrashed durable "failed to create the in-memory turn runtime"
@@ -2096,10 +2117,10 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
                   logAttention "durable turn launch cleanup failed" $
                     object ["error" .= T.pack (show (e :: SomeException))]
               liftIO $ do
-                leaveDispatch env.beShutdown
-                void (finishTurnRuntime env.beTasks turn)
-              releaseTurnBrowser env durable
-        launchTurn env outputCaps ident gidRaw restore turn durable
+                leaveDispatchWith dispatchEnv.beShutdown (releaseRuntimeConfigSTM configLease)
+                void (finishTurnRuntime dispatchEnv.beTasks turn)
+              releaseTurnBrowser dispatchEnv durable
+        launchTurn dispatchEnv configLease outputCaps ident gidRaw restore turn durable
           `onException` launchFailed
         pure True
   unless launched $ do
@@ -2125,8 +2146,8 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
     -- normal cancellation state for all real work.  This is the ownership
     -- handoff: before 'async' succeeds the caller owns every resource; after
     -- it succeeds this finalizer owns all of them.
-    launchTurn env outputCaps ident gidRaw restore turn durable =
-      void . async . restore $
+    launchTurn env configLease outputCaps ident gidRaw restore turn durable =
+      void . async . restore . local (const env) . local (const env.beRuntimeSnapshot.rsValues.rvModelCatalog) $
         ( localDomain "llm" . holdingDispatchLease $ do
             logInfo "llm dispatch" ident
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
@@ -2180,7 +2201,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
             -- slot.  A mid that never had the reaction un-reacts as a
             -- no-op.
             completion <- liftIO $ do
-              leaveDispatch env.beShutdown
+              leaveDispatchWith env.beShutdown (releaseRuntimeConfigSTM configLease)
               finishTurnRuntime env.beTasks turn
             releaseTurnBrowser env durable
             let absorbed = completion.tcAbsorbedTriggers
@@ -2548,7 +2569,8 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
           definitions = toolDefinitionsFor env gm.groupId caps
           catalogFingerprint = toolCatalogFingerprint definitions
           toolCtx =
-            mkToolContext
+            mkToolContextAt
+              env.beRuntimeSnapshot
               ( TurnIdentity
                   gm.groupId
                   gm.canonicalId
@@ -2701,7 +2723,8 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling childDispatc
           gm
       let recoveredCtx = maybe ctx (`injectRecoveryView` ctx) recoveryView
           toolCtx =
-            mkToolContext
+            mkToolContextAt
+              env.beRuntimeSnapshot
               (TurnIdentity gm.groupId gm.canonicalId gm.userId gm.selfId gm.authorPrincipalId s.clearedAt (turnRuntimeOutputContext turn))
               turnCapabilities
           agentCtx = AgentContext toolCtx s.effortOverride Nothing

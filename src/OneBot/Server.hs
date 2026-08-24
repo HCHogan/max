@@ -38,7 +38,7 @@ data ServerConfig = ServerConfig
     path :: !Text,
     accessToken :: !(Maybe Text)
   }
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
 -- | Handle to talk to a connected NapCat client. Carries the websocket plus
 -- a pending-call registry (echo id → TMVar) shared between the read loop

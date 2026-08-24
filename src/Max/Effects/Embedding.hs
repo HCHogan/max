@@ -10,6 +10,7 @@ module Max.Effects.Embedding
     EmbeddingFaultKind (..),
     EmbeddingFault (..),
     runEmbedding,
+    runRuntimeEmbedding,
     runEmbeddingWith,
     embedBatch,
     embeddingSpace,
@@ -20,6 +21,7 @@ where
 import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
+import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Embedding
   ( EmbedClient,
     EmbeddingRecord (..),
@@ -27,6 +29,8 @@ import Max.Embedding
     embeddingModelId,
     makeEmbeddingRecord,
   )
+import Max.Env (BotEnv (..))
+import Max.RuntimeConfig (RuntimeResources (..), RuntimeSnapshot (..))
 
 data EmbeddingSpace = EmbeddingSpace
   { esModelId :: !Text
@@ -53,30 +57,53 @@ data Embedding :: Effect where
 type instance DispatchOf Embedding = Dynamic
 
 runEmbedding ::
-  IOE :> es =>
+  (IOE :> es) =>
   Maybe EmbedClient ->
   Eff (Embedding : es) a ->
   Eff es a
 runEmbedding mClient =
-  runEmbeddingWith
-    (EmbeddingSpace . embeddingModelId <$> mClient)
-    (\texts -> case mClient of
-       Nothing -> pure (Left (EmbeddingFault EmbeddingDisabled "embedding is not configured"))
-       Just client -> do
-         raw <- liftIO (embedTexts client texts)
-         pure $ case raw of
-           Left err -> Left (EmbeddingFault EmbeddingTransport err)
-           Right vectors
-             | length vectors /= length texts ->
-                 Left (EmbeddingFault EmbeddingInvalidShape "embedding provider returned an unexpected result count")
-             | otherwise ->
-                 case traverse (uncurry (makeEmbeddingRecord client)) (zip texts vectors) of
-                   Left err -> Left (EmbeddingFault EmbeddingInvalidVector err)
-                   Right records
-                     | consistentDimensions records -> Right records
-                     | otherwise ->
-                         Left (EmbeddingFault EmbeddingInvalidShape "embedding batch contains inconsistent dimensions")
-    )
+  runEmbeddingResolving (pure mClient)
+
+-- | Resolve the client from the immutable snapshot in the current Reader
+-- scope.  Dispatches install their leased snapshot; generation workers install
+-- the snapshot they were started for.  This keeps endpoint credentials and
+-- model-space provenance on the same side of the publication boundary.
+runRuntimeEmbedding ::
+  (Reader BotEnv :> es, IOE :> es) =>
+  Eff (Embedding : es) a ->
+  Eff es a
+runRuntimeEmbedding =
+  runEmbeddingResolving $ do
+    env <- ask @BotEnv
+    pure env.beRuntimeSnapshot.rsResources.rrEmbeddingClient
+
+runEmbeddingResolving ::
+  (IOE :> es) =>
+  Eff es (Maybe EmbedClient) ->
+  Eff (Embedding : es) a ->
+  Eff es a
+runEmbeddingResolving resolve = interpret $ \_ -> \case
+  GetEmbeddingSpace -> do
+    mClient <- resolve
+    pure (EmbeddingSpace . embeddingModelId <$> mClient)
+  EmbedBatch texts -> do
+    mClient <- resolve
+    case mClient of
+      Nothing -> pure (Left (EmbeddingFault EmbeddingDisabled "embedding is not configured"))
+      Just client -> do
+        raw <- liftIO (embedTexts client texts)
+        pure $ case raw of
+          Left err -> Left (EmbeddingFault EmbeddingTransport err)
+          Right vectors
+            | length vectors /= length texts ->
+                Left (EmbeddingFault EmbeddingInvalidShape "embedding provider returned an unexpected result count")
+            | otherwise ->
+                case traverse (uncurry (makeEmbeddingRecord client)) (zip texts vectors) of
+                  Left err -> Left (EmbeddingFault EmbeddingInvalidVector err)
+                  Right records
+                    | consistentDimensions records -> Right records
+                    | otherwise ->
+                        Left (EmbeddingFault EmbeddingInvalidShape "embedding batch contains inconsistent dimensions")
 
 runEmbeddingWith ::
   Maybe EmbeddingSpace ->
@@ -87,10 +114,10 @@ runEmbeddingWith space runBatch = interpret $ \_ -> \case
   EmbedBatch texts -> runBatch texts
   GetEmbeddingSpace -> pure space
 
-embedBatch :: Embedding :> es => [Text] -> Eff es (Either EmbeddingFault [EmbeddingRecord])
+embedBatch :: (Embedding :> es) => [Text] -> Eff es (Either EmbeddingFault [EmbeddingRecord])
 embedBatch = send . EmbedBatch
 
-embeddingSpace :: Embedding :> es => Eff es (Maybe EmbeddingSpace)
+embeddingSpace :: (Embedding :> es) => Eff es (Maybe EmbeddingSpace)
 embeddingSpace = send GetEmbeddingSpace
 
 renderEmbeddingFault :: EmbeddingFault -> Text

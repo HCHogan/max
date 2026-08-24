@@ -1,26 +1,34 @@
 module Max.Effects.LLMSpec (spec) where
 
 import Data.Aeson (Value (..), decode, eitherDecode, encode, object, toJSON, (.=))
-import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Key (Key)
-import Data.Map.Strict qualified as Map
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (parseEither)
+import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text, isPrefixOf)
 import Data.Vector qualified as V
+import Effectful (liftIO, runEff)
 import Max.Effects.LLM
-  ( ChatMessage (..),
+  ( ChatCtx (..),
+    ChatMessage (..),
     ChatResponse (..),
     ContentBlock (..),
+    LLMInterpreter (..),
     TokenUsage (..),
     ToolCall (..),
+    chat,
     parseResponseAnthropic,
     parseResponseOpenAI,
     parseResponseResponses,
     rebuildAnthropic,
     rebuildOpenAI,
+    runLLMWith,
     stripLeadingThink,
+    withLLMConfigGeneration,
   )
 import Max.LLM.Stream (PartialCall (..), StreamAcc (..), emptyAcc)
+import Max.RuntimeConfig (ConfigGeneration (..))
 import Test.Hspec
 
 -- | Round-tripping a single 'ChatMessage' through aeson should be
@@ -54,6 +62,7 @@ asstWithCalls calls =
 
 spec :: Spec
 spec = do
+  generationSpec
   streamingSpec
   responsesSpec
   describe "ChatMessage JSON round-trip" $ do
@@ -651,6 +660,25 @@ streamingSpec = do
       let steps = ["<think>a</think>答案", "<think>a</think>答案是", "<think>a</think>答案是这个"]
           outs = map stripLeadingThink steps
       zip outs (drop 1 outs) `shouldSatisfy` all (uncurry isPrefixOf)
+
+generationSpec :: Spec
+generationSpec = describe "worker configuration generation" $ do
+  it "stamps background calls and preserves an explicit dispatch generation" $ do
+    observed <- newIORef []
+    let backend =
+          LLMInterpreter
+            { liChat = \ctx _ _ _ _ -> do
+                liftIO (modifyIORef' observed (<> [ctx.ccConfigGeneration]))
+                pure (Right (ContentResp "ok"))
+            }
+        background = ChatCtx "intent" Nothing Nothing Nothing Nothing Nothing Nothing
+        dispatch = background {ccConfigGeneration = Just (ConfigGeneration 7)}
+    runEff . runLLMWith backend . withLLMConfigGeneration (ConfigGeneration 2) $ do
+      _ <- chat background "profile" [] []
+      _ <- chat dispatch "profile" [] []
+      pure ()
+    readIORef observed
+      `shouldReturn` [Just (ConfigGeneration 2), Just (ConfigGeneration 7)]
 
 fieldText :: Key -> Value -> Maybe Text
 fieldText k (Object o) = case KM.lookup k o of

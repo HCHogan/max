@@ -48,10 +48,10 @@ import Max.Effects.Tools
     ToolRetryClass (..),
     buildToolCatalog,
   )
-import Max.Env (BotEnv (..))
+import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.HttpRuntime (HttpRuntime)
 import Max.Platform.Types (noAdvertisedCaps)
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolStickers)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolRuntimeSnapshot, toolStickers)
 import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.Browser (browserToolsFor)
@@ -152,25 +152,26 @@ resolvedToolsFor ::
   ([ToolDefinition], [Tool es])
 resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
   where
-    definitions = toolDefinitionsFor env (toolGroupId dc) (toolCapabilities dc)
+    dispatchEnv = maybe env (`applyRuntimeSnapshot` env) (toolRuntimeSnapshot dc)
+    definitions = toolDefinitionsFor dispatchEnv (toolGroupId dc) (toolCapabilities dc)
     allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
     allowedRunner tool = tool.toolName `Set.member` allowedRefs
     runners0 =
-      builtinsFor env.beTimeZone dc
-        <> reminderToolsFor env.beTimeZone dc
-        <> monitorToolsFor env.beTimeZone dc
+      builtinsFor dispatchEnv.beTimeZone dc
+        <> reminderToolsFor dispatchEnv.beTimeZone dc
+        <> monitorToolsFor dispatchEnv.beTimeZone dc
         <> groupToolsFor dc
-        <> imageToolsFor env.beTimeZone dc
+        <> imageToolsFor dispatchEnv.beTimeZone dc
         <> memoryToolsFor dc
-        <> pinToolsFor env.beSessions env.beDefaultModel dc
+        <> pinToolsFor dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
         <> subgoalToolsFor dc
-        <> skillToolsFor env.beSkills dc
-        <> bilibiliToolsFor env.beTimeZone dc
-        <> sandboxToolsFor env.beTimeZone (toolGroupId dc) env.beSandboxes
-        <> fileToolsFor env.beTimeZone dc env.beSandboxes
-        <> [t | toolStickers dc && env.beEmbeddingEnabled, t <- stickerToolsFor]
-        <> maybe [] (searchToolsFor runtime) env.beSearch
-        <> [t | toolMultimodal dc, t <- browserToolsFor dc env.beBrowsers]
+        <> skillToolsFor dispatchEnv.beSkills dc
+        <> bilibiliToolsFor dispatchEnv.beTimeZone dc
+        <> sandboxToolsFor dispatchEnv.beTimeZone (toolGroupId dc) dispatchEnv.beSandboxes
+        <> fileToolsFor dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes
+        <> [t | toolStickers dc && dispatchEnv.beEmbeddingEnabled, t <- stickerToolsFor]
+        <> maybe [] (searchToolsFor runtime) dispatchEnv.beSearch
+        <> [t | toolMultimodal dc, t <- browserToolsFor dc dispatchEnv.beBrowsers dispatchEnv.beBrowserProxy]
         <> [t | toolMultimodal dc, t <- videoToolsFor dc]
 
 -- | How many tools a dispatch with these gates would get — the

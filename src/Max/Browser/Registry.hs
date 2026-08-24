@@ -15,7 +15,6 @@ module Max.Browser.Registry
     browserScopeForTurn,
     browserScopeForDispatch,
     BrowserRegistry,
-    brProxy,
     newBrowserRegistry,
     withBrowserSession,
     reapStaleBrowsers,
@@ -121,22 +120,17 @@ data BrowserRegistry = BrowserRegistry
     -- read/start/use/update sequence in the tool layer, including the period
     -- before a camoufox session id exists.  A scope finalizer removes its lock
     -- only after the agent has joined every tool call for that turn.
-    brSessionLocks :: !(TVar (Map BrowserScope (TMVar ()))),
-    -- | Proxy URL every browse session routes through (config
-    -- @browser.proxy@); 'Nothing' = direct.  "Max.Tools.Browser"
-    -- passes it to @browse_session_start@.
-    brProxy :: !(Maybe Text)
+    brSessionLocks :: !(TVar (Map BrowserScope (TMVar ())))
   }
 
-newBrowserRegistry :: HttpRuntime -> Maybe Text -> IO BrowserRegistry
-newBrowserRegistry runtime proxy =
+newBrowserRegistry :: HttpRuntime -> IO BrowserRegistry
+newBrowserRegistry runtime =
   BrowserRegistry runtime
     <$> newTVarIO Map.empty
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
-    <*> pure proxy
 
 -- | Serialize stateful camoufox operations for one turn.  Different turns,
 -- including sibling fork children in the same conversation, never share this

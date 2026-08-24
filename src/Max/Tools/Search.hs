@@ -27,22 +27,11 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
 import Max.Effects.Tools (Tool (..))
-import Max.Tools.Schema (integerParam, stringParam, toolObject, withKeys)
-import Max.Util (tshow)
 import Max.Http.Json (postAndParse)
 import Max.HttpRuntime (HttpRuntime)
-
--- | Knobs for the Tavily-backed search.  Everything except the key is
--- defaulted in 'Max.Config.materialize'.
-data SearchConfig = SearchConfig
-  { -- | Tavily API key.  Sent as @Authorization: Bearer ...@.
-    scTavilyApiKey :: !Text,
-    -- | Default and hard cap for @max_results@.
-    scDefaultMaxResults :: !Int,
-    -- | Per-call HTTP timeout (seconds).
-    scTimeoutSeconds :: !Int
-  }
-  deriving stock (Show)
+import Max.Tools.Schema (integerParam, stringParam, toolObject, withKeys)
+import Max.Tools.Search.Types (SearchConfig (..))
+import Max.Util (tshow)
 
 searchToolsFor ::
   (Log :> es, IOE :> es) =>

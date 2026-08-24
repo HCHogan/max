@@ -160,7 +160,7 @@ mediaCaptionWorker profile = localDomain "media-caption" $ do
                   let dataUrl = "data:" <> mime' <> ";base64," <> TE.decodeUtf8 (B64.encode bytes)
                   eres <-
                     chat
-                      (ChatCtx "caption" Nothing Nothing Nothing Nothing Nothing)
+                      (ChatCtx "caption" Nothing Nothing Nothing Nothing Nothing Nothing)
                       profile
                       [ MsgSystem sys,
                         MsgUserBlocks [TextBlock lead, ImageDataUrl dataUrl]

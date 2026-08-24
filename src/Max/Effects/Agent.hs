@@ -81,6 +81,7 @@ import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Exception (SomeException, catch, throwIO)
 import Effectful.Log
+import Effectful.PostgreSQL (WithConnection)
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.DB.AgentTurn
   ( JournalExecution,
@@ -89,8 +90,8 @@ import Max.DB.AgentTurn
     enrichSandboxJournalStart,
     finishJournalExecution,
     markJournalOutcomeUnknown,
-    recordModelNote,
     recordAgentTurnLlmRound,
+    recordModelNote,
     startJournalExecution,
   )
 import Max.Effects.Blob (Blob)
@@ -98,6 +99,8 @@ import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), Conte
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, defaultInlineMediaLimit, drainInlineMedia, runToolOutput)
 import Max.Effects.Tools
   ( CatalogTool (..),
+    SchemaHash (..),
+    SchemaVersion (..),
     ToolCatalog,
     ToolCatalogError,
     ToolDefinition (..),
@@ -107,8 +110,6 @@ import Max.Effects.Tools
     ToolParallelism (..),
     ToolRef (..),
     ToolRetryClass (..),
-    SchemaHash (..),
-    SchemaVersion (..),
     Tools,
     invokeTool,
     listCatalogTools,
@@ -117,6 +118,7 @@ import Max.Effects.Tools
     runTools,
   )
 import Max.Reply (readyPrefix)
+import Max.RuntimeConfig (RuntimeSnapshot (..))
 import Max.Tasks
   ( Note (..),
     NoteVerb (..),
@@ -129,9 +131,8 @@ import Max.Tasks
     setTurnPhase,
     turnRuntimeAgentTurn,
   )
-import Max.ToolContext (ToolContext, toolGroupId, toolTurnOutputContext)
+import Max.ToolContext (ToolContext, toolGroupId, toolRuntimeSnapshot, toolTurnOutputContext)
 import Max.Turn.Types (AgentTurnRef (..), turnOutputAgentTurn)
-import Effectful.PostgreSQL (WithConnection)
 import OneBot.Types (GroupId (..))
 
 -- | Agent-only data around the neutral context handed to tools.
@@ -155,7 +156,8 @@ turnCtx :: AgentContext -> Text -> ChatCtx
 turnCtx ctx source =
   let GroupId gid = toolGroupId ctx.acTools
       durable = (.atrTurnId) . turnOutputAgentTurn <$> toolTurnOutputContext ctx.acTools
-   in ChatCtx source (Just gid) ctx.acEffort Nothing Nothing durable
+      generation = (.rsGeneration) <$> toolRuntimeSnapshot ctx.acTools
+   in ChatCtx source (Just gid) ctx.acEffort Nothing Nothing durable generation
 
 -- | Caps on a single agent invocation.  Per-tool and per-call HTTP
 -- timeouts are configured at the 'LLM' layer; these are loop-level.

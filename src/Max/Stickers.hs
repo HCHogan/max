@@ -21,10 +21,10 @@ where
 import Control.Concurrent (threadDelay)
 import Control.Exception (IOException, try)
 import Control.Monad (forever)
-import Data.Foldable (traverse_)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
+import Data.Foldable (traverse_)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -124,7 +124,7 @@ captionOne profile (sha, mime, mSummary) =
                     _ -> ""
               eres <-
                 chat
-                  (ChatCtx "caption" Nothing Nothing Nothing Nothing Nothing)
+                  (ChatCtx "caption" Nothing Nothing Nothing Nothing Nothing Nothing)
                   profile
                   [ MsgSystem captionSystem,
                     MsgUserBlocks [TextBlock ("这个表情包" <> hint <> "："), ImageDataUrl dataUrl]

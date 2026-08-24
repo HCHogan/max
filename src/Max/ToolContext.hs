@@ -8,6 +8,7 @@ module Max.ToolContext
     SubgoalReturn (..),
     ToolContext,
     mkToolContext,
+    mkToolContextAt,
     toolCapabilities,
     toolConversationScope,
     toolGroupId,
@@ -25,16 +26,18 @@ module Max.ToolContext
     toolCatalogGrants,
     toolEffectCeiling,
     toolSubgoal,
+    toolRuntimeSnapshot,
   )
 where
 
 import Data.Aeson (Value)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
+import Data.Time (UTCTime)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.Plan.Types (Binder, Goal)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
-import Data.Time (UTCTime)
+import Max.RuntimeConfig (RuntimeSnapshot)
 import Max.Turn.Types (AgentTurnId, TurnOutputContext)
 import OneBot.Types (GroupId, UserId)
 
@@ -95,9 +98,9 @@ data SubgoalReturn = SubgoalReturn
 data ToolContext = ToolContext
   { toolIdentity :: !TurnIdentity,
     toolCapabilities :: !TurnCapabilities,
-    toolConversationScope :: !ConversationScope
+    toolConversationScope :: !ConversationScope,
+    toolRuntimeSnapshot :: !(Maybe RuntimeSnapshot)
   }
-  deriving stock (Show, Eq)
 
 -- | Mint current-turn authority from the already-authorized inbound identity.
 -- Model arguments never participate in this construction.
@@ -106,8 +109,13 @@ mkToolContext identity capabilities =
   ToolContext
     { toolIdentity = identity,
       toolCapabilities = capabilities,
-      toolConversationScope = conversationScopeFor identity.tiGroupId
+      toolConversationScope = conversationScopeFor identity.tiGroupId,
+      toolRuntimeSnapshot = Nothing
     }
+
+mkToolContextAt :: RuntimeSnapshot -> TurnIdentity -> TurnCapabilities -> ToolContext
+mkToolContextAt snapshot identity capabilities =
+  (mkToolContext identity capabilities) {toolRuntimeSnapshot = Just snapshot}
 
 toolGroupId :: ToolContext -> GroupId
 toolGroupId = (.toolIdentity.tiGroupId)

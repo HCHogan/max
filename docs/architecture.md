@@ -16,6 +16,13 @@ Layout, runtime data flow, effect stack, and phase status. For behaviour see
 [development.md](development.md), and for transport cutover/repair see
 [platforms.md](platforms.md).
 
+Configuration reload is a process-owned control plane: a local Unix socket
+publishes immutable value/resource generations and hands long-lived workers to
+a reconfigurable supervisor, while the OneBot listener and accepted reverse
+WebSocket remain outside that boundary. See
+[`runbooks/config-reload.md`](runbooks/config-reload.md) for the field matrix and
+operational contract.
+
 ## Layout
 
 ```

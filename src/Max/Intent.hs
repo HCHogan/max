@@ -40,6 +40,7 @@ module Max.Intent
     noteBotActivity,
     intentWorker,
     classifyOnce,
+
     -- * Exposed for tests
     IntentVerdict (..),
     IntentKind (..),
@@ -75,27 +76,12 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.History (HistoryItem (..), fetchRecentInGroup)
 import Max.Dispatch (DispatchMessage (..), dispatchText)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), LLM, chat)
+import Max.Intent.Types (IntentConfig (..))
+import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Prompt (renderHistoryLine)
 import Max.Session (Session (..), SessionRegistry, loadSession, readSession)
 import Max.Util (catchSync, trySync)
-import Max.Platform.Types (CanonicalMessageId (..))
 import OneBot.Types (GroupId (..), isPrivateChat)
-
--- | Resolved @intent.*@ config; presence enables the whole feature.
-data IntentConfig = IntentConfig
-  { -- | LLM profile the classifier calls (fast + cheap, e.g. a flash
-    -- tier model).
-    icProfile :: !Text,
-    -- | Seconds after a proactive reply during which 'KindTopic'
-    -- verdicts are suppressed (name-calls and conversation follow-ups
-    -- are exempt, as are directly-addressed triggers).
-    icCooldownSeconds :: !Int,
-    -- | Hard cap on proactive replies per group per hour, all kinds.
-    icMaxPerHour :: !Int,
-    -- | How many recent group messages the classifier sees.
-    icContextLines :: !Int
-  }
-  deriving stock (Show, Eq)
 
 -- | Pending buffers + throttle bookkeeping, keyed by raw group id.
 data IntentState = IntentState
@@ -511,7 +497,7 @@ classifyOnce mGid profile persona ctxLines newLines = do
             <> (if null ctxLines then ["(无)"] else ctxLines)
             <> ["", "[new messages]"]
             <> (if null newLines then ["(见上下文末尾)"] else newLines)
-  r <- chat (ChatCtx "intent" mGid Nothing Nothing Nothing Nothing) profile [MsgSystem (classifierSystem persona), MsgUser userBody] []
+  r <- chat (ChatCtx "intent" mGid Nothing Nothing Nothing Nothing Nothing) profile [MsgSystem (classifierSystem persona), MsgUser userBody] []
   case r of
     Left err -> do
       logAttention "intent: classify failed" $ object ["error" .= err]

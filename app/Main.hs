@@ -1,8 +1,8 @@
 module Main (main) where
 
 import Control.Concurrent (ThreadId, myThreadId)
-import Control.Concurrent.STM (TQueue, TVar, newTQueueIO, newTVarIO)
-import Control.Exception (AsyncException (UserInterrupt), bracket, finally, throwTo)
+import Control.Concurrent.STM (TQueue, TVar, atomically, newEmptyTMVarIO, newTQueueIO, newTVarIO, putTMVar, readTMVar, readTVarIO, retry, writeTVar)
+import Control.Exception (AsyncException (UserInterrupt), bracket, evaluate, finally, throwIO, throwTo)
 import Control.Monad (forever, unless, when)
 import Data.Foldable (for_)
 import Data.Int (Int64)
@@ -13,17 +13,19 @@ import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Concurrent (threadDelay)
 import Effectful.Concurrent.Async (Concurrent, concurrently_, runConcurrent)
+import Effectful.Exception (onException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
-import Effectful.Reader.Dynamic (Reader, ask, runReader)
-import Max.Admin (adminServer)
+import Effectful.Reader.Dynamic (Reader, ask, local, runReader)
+import GHC.Clock (getMonotonicTime)
+import Max.Admin (AdminConfig (..), adminServer)
 import Max.Browser.Registry
   ( destroyAllBrowsers,
     newBrowserRegistry,
     reapStaleBrowsers,
   )
-import Max.Config (AppConfig (..), loadConfig)
+import Max.Config (AppConfig (..), ConfigChange (..), configChanges, loadConfig, loadConfigCandidate, restartRequiredChanges, runtimeValuesFromConfig)
 import Max.DB.AgentTurn (ReclaimedTurns (..), addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
@@ -33,14 +35,14 @@ import Max.DB.TurnContinuity (pruneTurnArchiveReferences)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits, runDurableAgent)
 import Max.Effects.Blob (Blob, runBlob)
-import Max.Effects.Embedding (Embedding, runEmbedding)
+import Max.Effects.Embedding (Embedding, runRuntimeEmbedding)
 import Max.Effects.Http (Http, runHttp)
-import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, TokenUsage (..), runLLM)
+import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, TokenUsage (..), runRuntimeLLM, withLLMConfigGeneration)
 import Max.Effects.Outbound (Outbound, runOutbound)
-import Max.Effects.PlatformApi (PlatformApi, qqBackend, runPlatformApi)
+import Max.Effects.PlatformApi (PlatformApi, qqBackend, runRuntimePlatformApi)
 import Max.Embedder (embedWorker)
 import Max.Embedding (newEmbedClient)
-import Max.Env (BotEnv (..))
+import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
@@ -51,7 +53,7 @@ import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
 import Max.Images (imageWorker)
 import Max.Intent (IntentState, intentWorker, newIntentState)
-import Max.Log (withCompactLogger)
+import Max.Log (withCompactLoggerDynamic)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.Matrix (matrixDeliveryTransport, matrixWorker)
 import Max.MediaCaption (mediaCaptionWorker)
@@ -59,8 +61,11 @@ import Max.MemoryExtract (dreamWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
 import Max.Monitor (monitorWorker)
 import Max.Plan.Worker (planWorker)
-import Max.Platform.Delivery (DeliveryTransport, deliveryWorker, oneBotDeliveryTransport)
+import Max.Platform.Delivery (deliveryWorker, oneBotDeliveryTransport)
 import Max.Platform.Types (Platform (..))
+import Max.Reload (ReloadError (..), ReloadResponse (..), controlSocketPath, runReloadServer)
+import Max.Reload.Prepare (preflightChangedListener)
+import Max.RuntimeConfig (ConfigGeneration (..), RuntimeConfigStore, RuntimeResources (..), RuntimeSnapshot (..), RuntimeValues (..), acquireRuntimeConfigSTM, currentRuntimeSnapshot, leasedRuntimeSnapshot, newRuntimeConfigStore, publishRuntimeConfigSTM, releaseRuntimeConfigSTM)
 import Max.Sandbox.Registry
   ( gcExpiredSandboxes,
     newDurableSandboxRegistry,
@@ -72,13 +77,15 @@ import Max.Skills (loadSkills, newSkillRegistry)
 import Max.Stickers (stickerCaptionWorker)
 import Max.Tasks (newTaskRegistry)
 import Max.Toolset (allToolsFor)
-import Max.Util (trySync)
-import Max.WechatHook (wechatHookBackend, wechatHookWorker)
+import Max.Util (trySync, trySyncIO)
+import Max.WechatHook (WechatHookConfig (..), wechatHookBackend, wechatHookWorker)
 import Max.Worker (WorkerCriticality (..), withWorkers, worker)
+import Max.Worker.Generation (PrepareFailure (..), RetireOutcome (..), abortGeneration, closeGenerationSupervisor, commitGeneration, newGenerationSupervisor, prepareGeneration)
 import OneBot.Event (Event)
 import OneBot.Server (ClientSlot, ServerConfig (..), runServer)
 import System.IO (BufferMode (LineBuffering), hSetBuffering, stderr, stdout)
 import System.Posix.Signals (Handler (Catch), installHandler, sigTERM)
+import System.Timeout (timeout)
 
 main :: IO ()
 main = do
@@ -95,6 +102,8 @@ main = do
   _ <- installHandler sigTERM (Catch (drainOrInterrupt mainTid shutdown)) Nothing
 
   cfg <- loadConfig
+  activeConfig <- newTVarIO cfg
+  controlPath <- controlSocketPath
   httpRuntime <- newHttpRuntime
   bracket (newDbPool cfg.db) closeDbPool $ \pool -> do
     applied <- runMigrations pool cfg.migrationsDir
@@ -103,13 +112,13 @@ main = do
     -- process exit deliberately leaves them intact.
     reapStaleBrowsers
     sandboxes <- newDurableSandboxRegistry pool
-    browsers <- newBrowserRegistry httpRuntime cfg.browserProxy
+    browsers <- newBrowserRegistry httpRuntime
     ( do
-        -- The panel's log view reads this ring; it fills only when
-        -- the admin API is configured, so a bot without a panel pays
-        -- nothing for it.
-        logBuf <- traverse (const (newLogBuffer logBufferLines)) cfg.admin
-        withCompactLogger cfg.logColor (pushLog <$> logBuf) $ \logger -> do
+        -- Keep the bounded ring alive across admin enable/disable handoffs.
+        -- It is cheap, and allocating it once avoids losing the pre-failure
+        -- lines precisely when an operator enables the panel to investigate.
+        logBuf <- newLogBuffer logBufferLines
+        withCompactLoggerDynamic cfg.logColor ((.logLevel) <$> readTVarIO activeConfig) (Just (pushLog logBuf)) $ \logger -> do
           eventQ <- newTQueueIO
           -- One bell for all three media workers: the jobs live in
           -- @fetch_jobs@ and each worker claims only its own kind, so a
@@ -120,13 +129,46 @@ main = do
           tasks <- newTaskRegistry
           clientRef <- newTVarIO (Nothing :: ClientSlot)
           adminTargets <- newTVarIO (mempty :: Map.Map Int64 Int64)
-          let mEmbed = newEmbedClient httpRuntime <$> cfg.embedding
-          episodeScheduler <- traverse (const newEpisodeScheduler) cfg.memoryExtractProfile
-          mIntentSt <- traverse (const newIntentState) cfg.intent
+          episodeScheduler <- newEpisodeScheduler
+          intentState <- newIntentState
           startedAt <- getCurrentTime
+          let qqEdge = qqBackend clientRef
+              resourcesFor candidate =
+                let wechatHookEdges =
+                      [ wechatHookBackend httpRuntime (runEff . runWithConnectionPool pool) wh
+                      | Just wh <- [candidate.wechathook]
+                      ]
+                 in RuntimeResources
+                      { rrEmbeddingClient = newEmbedClient httpRuntime <$> candidate.embedding,
+                        rrForeignEdges = wechatHookEdges,
+                        rrDeliveryTransports =
+                          [oneBotDeliveryTransport PlatformQQ qqEdge]
+                            <> [matrixDeliveryTransport httpRuntime matrixCfg | matrixCfg <- maybeToList candidate.matrix]
+                            <> [iMessageDeliveryTransport httpRuntime iMessageCfg | iMessageCfg <- maybeToList candidate.imessage]
+                            <> [ oneBotDeliveryTransport PlatformWeChatHook backend
+                               | backend <- wechatHookEdges
+                               ]
+                      }
+              prepareResources candidate = do
+                let resources = resourcesFor candidate
+                -- Force the complete small resource set before publication;
+                -- a lazy constructor failure must be a preparation rejection,
+                -- never a thunk first forced by a live generation.
+                _ <- evaluate resources
+                _ <- evaluate (length resources.rrForeignEdges)
+                _ <- evaluate (length resources.rrDeliveryTransports)
+                for_ resources.rrForeignEdges evaluate
+                for_ resources.rrDeliveryTransports evaluate
+                pure resources
+          initialResources <- prepareResources cfg
+          runtimeStore <- newRuntimeConfigStore (runtimeValuesFromConfig cfg) initialResources
+          initialRuntime <- currentRuntimeSnapshot runtimeStore
           let env =
                 BotEnv
                   { bePersona = cfg.persona,
+                    beRuntimeSnapshot = initialRuntime,
+                    beConfigGeneration = initialRuntime.rsGeneration,
+                    beConfigStore = runtimeStore,
                     beForceRawContext = cfg.forceRawContext,
                     beDebugDefault = cfg.debug,
                     beStickerDefault = cfg.stickersEnabled,
@@ -144,42 +186,25 @@ main = do
                     beBrowsers = browsers,
                     beSearch = cfg.search,
                     beCliProxy = cfg.cliproxy,
+                    beBrowserProxy = cfg.browserProxy,
                     beMemoryExtract = cfg.memoryExtractProfile,
-                    beEpisodeScheduler = episodeScheduler,
+                    beEpisodeScheduler = Just episodeScheduler,
                     beIntent = cfg.intent,
-                    beEmbeddingEnabled = isJust mEmbed
+                    beEmbeddingEnabled = isJust cfg.embedding
                   }
-              qqEdge = qqBackend clientRef
-              wechatHookEdges =
-                [ wechatHookBackend httpRuntime (runEff . runWithConnectionPool pool) wh
-                | Just wh <- [cfg.wechathook]
-                ]
-              -- Every non-QQ backend the action router may resolve a target
-              -- to.  Ownership stays canonical database state; this list only
-              -- says which platforms this process can actually reach.
-              foreignEdges = wechatHookEdges
-              deliveryTransports =
-                [oneBotDeliveryTransport PlatformQQ qqEdge]
-                  <> [matrixDeliveryTransport httpRuntime matrixCfg | matrixCfg <- maybeToList cfg.matrix]
-                  <> [iMessageDeliveryTransport httpRuntime iMessageCfg | iMessageCfg <- maybeToList cfg.imessage]
-                  <> [ oneBotDeliveryTransport PlatformWeChatHook backend
-                     | backend <- wechatHookEdges
-                     ]
           runEff
             . runConcurrent
-            . runLog "max" logger cfg.logLevel
+            . runLog "max" logger LogTrace
             . runHttp httpRuntime
-            . runEmbedding mEmbed
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
-            . runPlatformApi qqEdge foreignEdges
             . runOutbound
             -- Token accounting goes through its own pooled connection
             -- (a plain IO writer): the LLM interpreter sits outside
             -- the WithConnection effect and the eval harness has no
             -- database at all, so the dependency stays out of the
             -- effect stack.
-            . runLLM
+            . runRuntimeLLM
               httpRuntime
               ( \ctx profile u ->
                   runEff . runWithConnectionPool pool $ do
@@ -191,26 +216,29 @@ main = do
               -- without somewhere to read it, it would be disk spent
               -- on nothing.
               ( \(rec :: CallRecord) ->
-                  when (isJust cfg.admin) . runEff . runWithConnectionPool pool $
-                    insertCall
-                      rec.crCtx.ccGroup
-                      rec.crCtx.ccSource
-                      rec.crProfile
-                      rec.crModel
-                      rec.crStreamed
-                      rec.crDurationMs
-                      (redactDataUrls rec.crRequest)
-                      rec.crResponse
-                      rec.crError
-                      ( (\u -> (u.usagePrompt, u.usageCompletion, u.usageCachedPrompt))
-                          <$> rec.crUsage
-                      )
+                  readTVarIO activeConfig >>= \current ->
+                    when (isJust current.admin) . runEff . runWithConnectionPool pool $
+                      insertCall
+                        rec.crCtx.ccGroup
+                        rec.crCtx.ccSource
+                        rec.crProfile
+                        rec.crModel
+                        rec.crStreamed
+                        rec.crDurationMs
+                        (redactDataUrls rec.crRequest)
+                        rec.crResponse
+                        rec.crError
+                        ( (\u -> (u.usagePrompt, u.usageCompletion, u.usageCachedPrompt))
+                            <$> rec.crUsage
+                        )
               )
-              cfg.llm
+              runtimeStore
             . runReader cfg.llm
             . runReader env
+            . runRuntimePlatformApi qqEdge
+            . runRuntimeEmbedding
             . runDurableAgent defaultLimits (allToolsFor httpRuntime env)
-            $ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef deliveryTransports mainTid
+            $ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath applied eventQ fetchSig intentState logBuf clientRef mainTid
       )
       `finally` destroyAllBrowsers browsers
 
@@ -242,19 +270,20 @@ runApp ::
   ) =>
   HttpRuntime ->
   AppConfig ->
+  TVar AppConfig ->
+  RuntimeConfigStore ->
+  (AppConfig -> IO RuntimeResources) ->
+  FilePath ->
   [String] ->
   TQueue Event ->
   FetchSignal ->
-  Maybe IntentState ->
-  -- | The log tail the admin panel serves; 'Nothing' when the panel
-  -- is not configured, in which case nothing was captured either.
-  Maybe LogBuffer ->
+  IntentState ->
+  LogBuffer ->
   TVar ClientSlot ->
-  [DeliveryTransport] ->
   -- | Main thread, for 'drainWorker' to interrupt once drained.
   ThreadId ->
   Eff es ()
-runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef deliveryTransports mainTid =
+runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath applied eventQ fetchSig intentState logBuf clientRef mainTid =
   -- 'OneBot.Server.runServer' must hand a per-connection IO callback to
   -- websockets, which fires that callback in a fresh thread. The 'run'
   -- inside that callback needs ConcUnlift; otherwise SeqUnlift panics and
@@ -269,7 +298,7 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
         [ "host" .= T.pack s.host,
           "port" .= s.port,
           "path" .= s.path,
-          "db_url" .= cfg.db.url,
+          "db_max_conns" .= cfg.db.maxConns,
           "images_dir" .= T.pack cfg.imagesDir,
           "image_workers" .= cfg.imageWorkers,
           -- Which file the settings came from, or that none was
@@ -307,98 +336,221 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
     nSkills <- loadSkills env.beSkills
     logInfo "skills loaded" $ object ["count" .= nSkills]
     for_ reclaimed.rrRecoveries resumeInterruptedTurn
-    -- Long-lived siblings, then the server.  Config-disabled optional
-    -- workers are omitted entirely; enabled optional features remain linked,
-    -- while a clean exit is fatal only for the process's required services.
-    let requiredWorkers =
-          [ worker "image-fetch" RequiredWorker (imageWorker cfg.imageWorkers fetchSig),
-            worker "forward-fetch" RequiredWorker (forwardWorker fetchSig),
-            worker "file-fetch" RequiredWorker (fileWorker fetchSig),
-            worker
-              "monitor-scheduler"
-              RequiredWorker
-              (monitorWorker cfg.timezone (maintenanceOwner <> "/monitors") dispatchMonitorFire),
-            worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig mIntentSt clientRef),
-            worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (maintenanceOwner <> "/dispatch") fetchSig mIntentSt),
-            worker
-              "plan-scheduler"
-              RequiredWorker
-              (planWorker (maintenanceOwner <> "/plans") (planDriverFor httpRuntime)),
-            worker "platform-delivery" RequiredWorker (deliveryWorker (maintenanceOwner <> "/delivery") deliveryTransports)
-          ]
-        -- Restartable, not merely optional (issue #17.F).  Everything below is
-        -- an edge max can be without for a while: a homeserver, a bridge, a
-        -- caption backlog, the admin panel.  Their failures used to be fatal to
-        -- the process because every worker is linked, so each one had to
-        -- remember never to throw — and "Max.IMessage" records what forgetting
-        -- once cost.  The one exception is the drain, whose clean return is the
-        -- point of it.
-        optionalWorkers =
-          [ -- This one is always enabled, but unlike a permanent worker its
-            -- clean return is intentional: it has already raised
-            -- UserInterrupt on main to start graceful unwinding.  Restarting it
-            -- would re-interrupt a process that is already on its way out.
-            worker "shutdown-drain" OptionalWorker (drainWorker cfg.shutdownDrainSeconds mainTid env.beShutdown)
-          ]
-            <> [ worker
-                   "sandbox-gc"
-                   RestartableWorker
-                   ( forever $ do
-                       threadDelay (60 * 60 * 1_000_000)
-                       liftIO (reconcileSandboxes env.beSandboxes)
-                       removed <- liftIO (gcExpiredSandboxes env.beSandboxes)
-                       when (removed > 0) $
-                         logInfo "sandbox TTL GC" (object ["removed" .= removed])
-                   )
-               ]
-            <> [ worker "embeddings" RestartableWorker (embedWorker maintenanceOwner)
-               | env.beEmbeddingEnabled
-               ]
-            <> [ worker
-                   "media-captions"
-                   RestartableWorker
-                   -- Two caption loops under one worker: stickers and
-                   -- ordinary photos/videos poll separately, so a deep
-                   -- sticker backlog cannot starve fresh chat media.
-                   ( concurrently_
-                       (stickerCaptionWorker profile)
-                       (mediaCaptionWorker profile)
-                   )
-               | profile <- maybeToList cfg.stickerCaptionProfile
-               ]
-            <> [ worker
-                   "historian"
-                   RestartableWorker
-                   (historianWorker profile cfg.historianTimeoutSeconds cfg.llm cfg.timezone env.beTasks (defaultModelName cfg.llm) scheduler)
-               | (profile, scheduler) <- maybeToList ((,) <$> cfg.memoryExtractProfile <*> env.beEpisodeScheduler)
-               ]
-            <> [ worker "memory-dream" RestartableWorker (dreamWorker maintenanceOwner profile cfg.timezone)
-               | profile <- maybeToList cfg.memoryExtractProfile
-               ]
-            <> [ worker
-                   "intent"
-                   RestartableWorker
-                   (intentWorker intentCfg cfg.persona (defaultModelName cfg.llm) cfg.timezone env.beSessions (dispatchProactive (Just intentState)) intentState)
-               | (intentCfg, intentState) <- maybeToList ((,) <$> cfg.intent <*> mIntentSt)
-               ]
-            <> [ worker "admin-server" RestartableWorker (adminServer adminCfg env (modelProfileNames cfg.llm) buffer)
-               | (adminCfg, buffer) <- maybeToList ((,) <$> cfg.admin <*> logBuf)
-               ]
-            <> [ worker "call-pruner" RestartableWorker (callPruner cfg.adminCallRetentionDays)
-               | _ <- maybeToList cfg.admin
-               ]
-            <> [ worker "wechathook" RestartableWorker (wechatHookWorker httpRuntime wh)
-               | wh <- maybeToList cfg.wechathook
-               ]
-            <> [ worker "matrix" RestartableWorker (matrixWorker httpRuntime matrixCfg env.beEpisodeScheduler)
-               | matrixCfg <- maybeToList cfg.matrix
-               ]
-            <> [ worker "imessage" RestartableWorker (iMessageWorker httpRuntime iMessageCfg env.beEpisodeScheduler)
-               | iMessageCfg <- maybeToList cfg.imessage
-               ]
-    withWorkers
-      (requiredWorkers <> optionalWorkers)
-      (runServer cfg.server eventQ clientRef)
+    let generationText snapshot = T.pack (show snapshot.rsGeneration.unConfigGeneration)
+        ownerFor snapshot suffix = maintenanceOwner <> "/g" <> generationText snapshot <> "/" <> suffix
+        environmentFor _candidate snapshot = applyRuntimeSnapshot snapshot env
+        runGeneration candidate snapshot onReady =
+          let workerEnv = environmentFor candidate snapshot
+              requiredWorkers =
+                [ worker "image-fetch" RequiredWorker (imageWorker candidate.imageWorkers fetchSig),
+                  worker "forward-fetch" RequiredWorker (forwardWorker fetchSig),
+                  worker "file-fetch" RequiredWorker (fileWorker fetchSig),
+                  worker
+                    "monitor-scheduler"
+                    RequiredWorker
+                    (monitorWorker candidate.timezone (ownerFor snapshot "monitors") dispatchMonitorFire),
+                  worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (ownerFor snapshot "dispatch") fetchSig (intentState <$ workerEnv.beIntent)),
+                  worker
+                    "plan-scheduler"
+                    RequiredWorker
+                    (planWorker (ownerFor snapshot "plans") (planDriverFor httpRuntime)),
+                  worker
+                    "platform-delivery"
+                    RequiredWorker
+                    (deliveryWorker (ownerFor snapshot "delivery") snapshot.rsResources.rrDeliveryTransports)
+                ]
+              optionalWorkers =
+                [ worker "shutdown-drain" OptionalWorker (drainWorker candidate.shutdownDrainSeconds mainTid workerEnv.beShutdown)
+                ]
+                  <> [ worker "embeddings" RestartableWorker (embedWorker (ownerFor snapshot "embedding"))
+                     | workerEnv.beEmbeddingEnabled
+                     ]
+                  <> [ worker
+                         "media-captions"
+                         RestartableWorker
+                         (concurrently_ (stickerCaptionWorker profile) (mediaCaptionWorker profile))
+                     | profile <- maybeToList candidate.stickerCaptionProfile
+                     ]
+                  <> [ worker
+                         "historian"
+                         RestartableWorker
+                         (historianWorker profile candidate.historianTimeoutSeconds candidate.llm candidate.timezone workerEnv.beTasks (defaultModelName candidate.llm) scheduler)
+                     | (profile, scheduler) <- maybeToList ((,) <$> candidate.memoryExtractProfile <*> workerEnv.beEpisodeScheduler)
+                     ]
+                  <> [ worker "memory-dream" RestartableWorker (dreamWorker (ownerFor snapshot "memory-dream") profile candidate.timezone)
+                     | profile <- maybeToList candidate.memoryExtractProfile
+                     ]
+                  <> [ worker
+                         "intent"
+                         RestartableWorker
+                         (intentWorker intentCfg candidate.persona (defaultModelName candidate.llm) candidate.timezone workerEnv.beSessions (dispatchProactive (Just intentState)) intentState)
+                     | intentCfg <- maybeToList candidate.intent
+                     ]
+                  <> [ worker "admin-server" RestartableWorker (adminServer adminCfg workerEnv (modelProfileNames candidate.llm) logBuf)
+                     | adminCfg <- maybeToList candidate.admin
+                     ]
+                  <> [ worker "call-pruner" RestartableWorker (callPruner candidate.adminCallRetentionDays)
+                     | _ <- maybeToList candidate.admin
+                     ]
+                  <> [ worker "wechathook" RestartableWorker (wechatHookWorker httpRuntime wh)
+                     | wh <- maybeToList candidate.wechathook
+                     ]
+                  <> [ worker "matrix" RestartableWorker (matrixWorker httpRuntime matrixCfg workerEnv.beEpisodeScheduler)
+                     | matrixCfg <- maybeToList candidate.matrix
+                     ]
+                  <> [ worker "imessage" RestartableWorker (iMessageWorker httpRuntime iMessageCfg workerEnv.beEpisodeScheduler)
+                     | iMessageCfg <- maybeToList candidate.imessage
+                     ]
+           in local (const workerEnv) . local (const snapshot.rsValues.rvModelCatalog) $
+                withLLMConfigGeneration snapshot.rsGeneration $
+                  withWorkers (requiredWorkers <> optionalWorkers) (liftIO onReady >> liftIO (atomically retry))
+
+        -- A worker generation is another owner of its immutable snapshot, in
+        -- addition to individual dispatch leases.  Holding this lease until
+        -- the entire group exits keeps old model credentials/resources valid
+        -- throughout the bounded retirement overlap.
+        runGenerationLeased run candidate expectedGeneration ready =
+          bracket
+            (atomically (acquireRuntimeConfigSTM runtimeStore))
+            (atomically . releaseRuntimeConfigSTM)
+            ( \lease -> do
+                let snapshot = leasedRuntimeSnapshot lease
+                if snapshot.rsGeneration.unConfigGeneration /= expectedGeneration
+                  then throwIO (userError "worker acquired an unexpected configuration generation")
+                  else
+                    run
+                      ( runGeneration
+                          candidate
+                          snapshot
+                          (for_ ready (atomically . (`putTMVar` ())))
+                      )
+            )
+
+        sandboxGc =
+          forever $ do
+            threadDelay (60 * 60 * 1_000_000)
+            liftIO (reconcileSandboxes env.beSandboxes)
+            removed <- liftIO (gcExpiredSandboxes env.beSandboxes)
+            when (removed > 0) $
+              logInfo "sandbox TTL GC" (object ["removed" .= removed])
+
+    withRunInIO $ \run ->
+      bracket
+        (newGenerationSupervisor 1 (runGenerationLeased run cfg 1 Nothing))
+        closeGenerationSupervisor
+        ( \supervisor ->
+            run $
+              withWorkers
+                [ worker "reload-control" RequiredWorker (runReloadServer controlPath (performReload (runGenerationLeased run) supervisor)),
+                  -- Ingress owns the in-memory OneBot frame once it dequeues
+                  -- it. Keeping this consumer process-lived means a worker
+                  -- handoff cannot cancel it between dequeue and durable
+                  -- canonical ingest; it leases the current config per event.
+                  worker "event-handler" RequiredWorker (handleEvents eventQ fetchSig (Just intentState) clientRef),
+                  worker "sandbox-gc" RestartableWorker sandboxGc
+                ]
+                -- The accepted reverse websocket and its generation remain in
+                -- this process-owned layer for every configuration reload.
+                (runServer cfg.server eventQ clientRef)
+        )
+  where
+    performReload runGenerationLeased supervisor = localDomain "reload" $ do
+      started <- liftIO getMonotonicTime
+      oldSnapshot <- liftIO (currentRuntimeSnapshot runtimeStore)
+      let oldNumber = oldSnapshot.rsGeneration.unConfigGeneration
+          reject err changed restartFields = do
+            finished <- liftIO getMonotonicTime
+            logAttention "configuration reload rejected" $
+              object
+                [ "generation" .= oldNumber,
+                  "duration_ms" .= elapsedMillis started finished,
+                  "changed_fields" .= changed,
+                  "restart_fields" .= restartFields,
+                  "error_category" .= T.pack (show err)
+                ]
+            pure (ReloadResponse False oldNumber oldNumber changed restartFields (Just err))
+      logInfo "configuration reload started" (object ["generation" .= oldNumber])
+      liftIO (timeout reloadCandidateTimeoutMicros loadConfigCandidate) >>= \case
+        Nothing -> reject ReloadTimedOut [] []
+        Just (Left _) -> reject ReloadConfigInvalid [] []
+        Just (Right candidate) -> do
+          current <- liftIO (readTVarIO activeConfig)
+          let changes = configChanges current candidate
+              changedFields = (.changeField) <$> changes
+              restartFields = (.changeField) <$> restartRequiredChanges changes
+          if not (null restartFields)
+            then reject ReloadRestartRequired changedFields restartFields
+            else
+              if null changes
+                then do
+                  finished <- liftIO getMonotonicTime
+                  logInfo "configuration reload completed" $
+                    object
+                      [ "old_generation" .= oldNumber,
+                        "new_generation" .= oldNumber,
+                        "duration_ms" .= elapsedMillis started finished,
+                        "changed_fields" .= changedFields,
+                        "worker_handoff" .= False
+                      ]
+                  pure (ReloadResponse True oldNumber oldNumber [] [] Nothing)
+                else do
+                  let nextNumber = oldNumber + 1
+                  workerReady <- liftIO newEmptyTMVarIO
+                  liftIO
+                    ( timeout reloadPreparationTimeoutMicros . trySyncIO $ do
+                        preflightReloadListeners current candidate
+                        resources <- prepareResources candidate
+                        prepared <- prepareGeneration nextNumber (pure (runGenerationLeased candidate nextNumber (Just workerReady)))
+                        pure (resources, prepared)
+                    )
+                    >>= \case
+                      Nothing -> reject ReloadTimedOut changedFields []
+                      Just (Left _) -> reject ReloadPreparationFailed changedFields []
+                      Just (Right (_, Left PrepareFailure)) -> reject ReloadPreparationFailed changedFields []
+                      Just (Right (resources, Right prepared)) -> do
+                        committed <-
+                          ( trySync . liftIO $
+                              commitGeneration supervisor prepared $ do
+                                snapshots <- publishRuntimeConfigSTM runtimeStore (runtimeValuesFromConfig candidate) resources
+                                writeTVar activeConfig candidate
+                                pure snapshots
+                          )
+                            `onException` liftIO (abortGeneration prepared)
+                        case committed of
+                          Left _ -> do
+                            liftIO (abortGeneration prepared)
+                            reject ReloadInternalFailure changedFields []
+                          Right ((_, published), retired) -> do
+                            -- Serialized reload does not answer until the new
+                            -- group owns its snapshot.  A subsequent request can
+                            -- therefore never collect this generation before its
+                            -- workers have started.
+                            liftIO (atomically (readTMVar workerReady))
+                            finished <- liftIO getMonotonicTime
+                            when (retired == RetireTimedOut) $
+                              logAttention "superseded worker generation did not retire before deadline" $
+                                object ["generation" .= oldNumber]
+                            let newNumber = published.rsGeneration.unConfigGeneration
+                            logInfo "configuration reload completed" $
+                              object
+                                [ "old_generation" .= oldNumber,
+                                  "new_generation" .= newNumber,
+                                  "duration_ms" .= elapsedMillis started finished,
+                                  "changed_fields" .= changedFields,
+                                  "worker_handoff" .= True,
+                                  "retired" .= (retired == Retired)
+                                ]
+                            pure (ReloadResponse True oldNumber newNumber changedFields [] Nothing)
+
+    elapsedMillis before after = round ((after - before) * 1000) :: Int
+
+    preflightReloadListeners old new = do
+      preflightChangedListener
+        ((\adminCfg -> (adminCfg.acHost, adminCfg.acPort)) <$> old.admin)
+        ((\adminCfg -> (adminCfg.acHost, adminCfg.acPort)) <$> new.admin)
+      preflightChangedListener
+        ((\hookCfg -> (hookCfg.whListenHost, hookCfg.whListenPort)) <$> old.wechathook)
+        ((\hookCfg -> (hookCfg.whListenHost, hookCfg.whListenPort)) <$> new.wechathook)
 
 -- | Log lines the admin panel can look back over.  A busy dispatch
 -- prints on the order of ten, so this is a few hundred dispatches —
@@ -406,6 +558,13 @@ runApp httpRuntime cfg applied eventQ fetchSig mIntentSt logBuf clientRef delive
 -- Anything older is journalctl's job.
 logBufferLines :: Int
 logBufferLines = 2000
+
+-- Parsing is local file IO and generation preparation allocates local handles;
+-- five seconds each leaves ample room for bounded retirement and the 25-second
+-- maxctl deadline.  Crucially, both deadlines end before publication.
+reloadCandidateTimeoutMicros, reloadPreparationTimeoutMicros :: Int
+reloadCandidateTimeoutMicros = 5 * 1_000_000
+reloadPreparationTimeoutMicros = 5 * 1_000_000
 
 -- | Roll the @llm_calls@ bodies off on a schedule.
 --

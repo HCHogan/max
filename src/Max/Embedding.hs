@@ -56,7 +56,7 @@ data EmbeddingConfig = EmbeddingConfig
     ecModel :: !Text,
     ecTimeoutSeconds :: !Int
   }
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
 data EmbedClient = EmbedClient
   { emCfg :: !EmbeddingConfig,

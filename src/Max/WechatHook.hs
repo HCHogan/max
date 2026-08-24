@@ -200,7 +200,7 @@ data WechatHookConfig = WechatHookConfig
     whBridgeUrl :: !Text,
     whBridgeToken :: !Text
   }
-  deriving stock (Show)
+  deriving stock (Show, Eq)
 
 --------------------------------------------------------------------------------
 -- Outbound backend.

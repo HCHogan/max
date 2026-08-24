@@ -3,6 +3,7 @@
 module Max.Effects.PlatformApi
   ( PlatformApi,
     runPlatformApi,
+    runRuntimePlatformApi,
     qqBackend,
     sendAction,
     callAction,
@@ -39,8 +40,11 @@ import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Log (Log, logAttention_)
 import Effectful.PostgreSQL (WithConnection)
+import Effectful.Reader.Dynamic (Reader, ask)
+import Max.Env (BotEnv (..))
 import Max.Platform (ActionAddress (..), PlatformBackend (..), actionAddress, backendForPlatform)
 import Max.Platform.Store (platformForLegacyConversation, platformForLegacyMessage)
+import Max.RuntimeConfig (RuntimeResources (..), RuntimeSnapshot (..))
 import Network.WebSockets qualified as WS
 import OneBot.Action (Action, Envelope (..), Response, encodeAction)
 import OneBot.Server (Client (..), ClientSlot)
@@ -74,6 +78,31 @@ runPlatformApi dflt extras = interpret $ \_ -> \case
     resolveBackend dflt extras a >>= \case
       Left err -> pure (Left err)
       Right b -> liftIO (b.pbCall a t)
+
+-- | Production router.  Foreign backends are prepared and published with the
+-- current immutable configuration snapshot; QQ remains the process-lifetime
+-- default so reload never replaces its accepted websocket generation.
+runRuntimePlatformApi ::
+  (IOE :> es, Log :> es, WithConnection :> es, Reader BotEnv :> es) =>
+  PlatformBackend ->
+  Eff (PlatformApi : es) a ->
+  Eff es a
+runRuntimePlatformApi dflt = interpret $ \_ -> \case
+  SendOp action -> do
+    env <- ask @BotEnv
+    let extras = env.beRuntimeSnapshot.rsResources.rrForeignEdges
+    resolveBackend dflt extras action >>= \case
+      Left err -> logAttention_ err
+      Right backend ->
+        liftIO (backend.pbSend action) >>= \case
+          Left err -> logAttention_ (backend.pbName <> " send failed: " <> err)
+          Right () -> pure ()
+  CallOp action timeoutMs -> do
+    env <- ask @BotEnv
+    let extras = env.beRuntimeSnapshot.rsResources.rrForeignEdges
+    resolveBackend dflt extras action >>= \case
+      Left err -> pure (Left err)
+      Right backend -> liftIO (backend.pbCall action timeoutMs)
 
 -- | The NapCat (QQ) backend over the reverse-WS client that
 -- 'OneBot.Server' publishes per connection.

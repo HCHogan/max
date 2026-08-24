@@ -46,7 +46,6 @@ import Max.Browser.Error
 import Max.Browser.Registry
   ( BrowserRegistry,
     BrowserScope,
-    brProxy,
     browserScopeForDispatch,
     browserScopeForTurn,
     callBrowserTool,
@@ -60,10 +59,10 @@ import Max.ToolContext (ToolContext, toolCanonicalId, toolGroupId, toolTurnOutpu
 import Max.Tools.Schema (boolParam, enumParam, numberParam, stringParam, toolObject)
 import Max.Turn.Types (AgentTurnRef (atrTurnId), turnOutputAgentTurn)
 
-browserToolsFor :: (IOE :> es) => ToolContext -> BrowserRegistry -> [Tool es]
-browserToolsFor context reg =
-  [ navigateTool scope reg,
-    viewZhihuTool scope reg,
+browserToolsFor :: (IOE :> es) => ToolContext -> BrowserRegistry -> Maybe Text -> [Tool es]
+browserToolsFor context reg proxy =
+  [ navigateTool scope reg proxy,
+    viewZhihuTool scope reg proxy,
     snapshotTool scope reg,
     clickTool scope reg,
     typeTool scope reg,
@@ -90,10 +89,10 @@ dropSession reg scope sid closeIt = do
     callBrowserTool reg scope "browse_session_close" (object ["sessionId" .= sid])
 
 -- | Start a fresh camoufox browse session and record its id.
-startSession :: BrowserRegistry -> BrowserScope -> IO (Either Text Text)
-startSession reg scope = do
+startSession :: BrowserRegistry -> BrowserScope -> Maybe Text -> IO (Either Text Text)
+startSession reg scope proxy = do
   setCamoSession reg scope Nothing
-  let startArgs = object (("humanize" .= True) : foldMap (\p -> ["proxy" .= p]) reg.brProxy)
+  let startArgs = object (("humanize" .= True) : foldMap (\p -> ["proxy" .= p]) proxy)
   callBrowserTool reg scope "browse_session_start" startArgs >>= \case
     Left e -> pure (Left (renderBrowserError e))
     Right v -> case sessionIdOf v of
@@ -166,8 +165,8 @@ passThrough _ _ = []
 --------------------------------------------------------------------------------
 -- Tools.
 
-navigateTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
-navigateTool scope reg =
+navigateTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Maybe Text -> Tool es
+navigateTool scope reg proxy =
   Tool
     { toolName = "browser_navigate",
       toolDescription =
@@ -178,14 +177,14 @@ navigateTool scope reg =
       toolRun = \args -> liftIO $ do
         case argText args "url" of
           Nothing -> pure (Left "missing required argument: url")
-          Just url -> asResult <$> navigateUrl reg scope url
+          Just url -> asResult <$> navigateUrl reg scope proxy url
     }
 
 -- | Navigate the turn's browser to a URL, starting (or transparently
 -- replacing) the camoufox session as needed — the machinery behind
 -- @browser_navigate@, shared with @view_zhihu@.
-navigateUrl :: BrowserRegistry -> BrowserScope -> Text -> IO (Either Text Value)
-navigateUrl reg scope url =
+navigateUrl :: BrowserRegistry -> BrowserScope -> Maybe Text -> Text -> IO (Either Text Value)
+navigateUrl reg scope proxy url =
   withBrowserSession reg scope $
     getCamoSession reg scope >>= \case
       Nothing -> freshNavigate
@@ -198,7 +197,7 @@ navigateUrl reg scope url =
           Right value -> pure (Right value)
   where
     freshNavigate =
-      startSession reg scope
+      startSession reg scope proxy
         >>= either
           (pure . Left)
           (\sid -> first renderBrowserError <$> callBrowserTool reg scope "browse_session_navigate" (navArgs sid))
@@ -215,8 +214,8 @@ navigateUrl reg scope url =
 -- navigate, and when the response smells like the challenge
 -- (non-200, or the slogan-only interstitial), wait and renavigate,
 -- up to 'zhihuRetries' times.
-viewZhihuTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
-viewZhihuTool scope reg =
+viewZhihuTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Maybe Text -> Tool es
+viewZhihuTool scope reg proxy =
   Tool
     { toolName = "view_zhihu",
       toolDescription =
@@ -237,7 +236,7 @@ viewZhihuTool scope reg =
     }
   where
     go retries url =
-      navigateUrl reg scope url >>= \case
+      navigateUrl reg scope proxy url >>= \case
         Left e -> pure (Left e)
         Right v -> case navPayload v of
           Just (status, txt)

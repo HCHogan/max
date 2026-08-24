@@ -1,0 +1,43 @@
+module Max.ConfigReloadSpec (spec) where
+
+import Max.Config
+import OneBot.Server (ServerConfig (..))
+import System.Environment (withArgs)
+import Test.Hspec
+
+spec :: Spec
+spec = describe "reload candidate configuration" $ do
+  it "returns validation failure instead of exiting the process" $
+    withArgs ["--llm-api-key", "test-key", "--image-workers", "0"] $ do
+      loadConfigCandidate >>= \case
+        Left err -> err `shouldBe` ConfigValidationFailed 1
+        Right _ -> expectationFailure "invalid candidate was accepted"
+
+  it "returns a structured load failure for a missing explicit file" $
+    withArgs ["--llm-api-key", "test-key", "--config-file", "/definitely/missing/max.yaml"] $ do
+      loadConfigCandidate >>= (`shouldSatisfy` isLeft)
+
+  it "classifies hot, handoff, and restart fields centrally without values" $
+    withArgs ["--llm-api-key", "test-key"] $ do
+      Right base <- loadConfigCandidate
+      let candidate =
+            base
+              { persona = "do-not-leak-this-persona",
+                imageWorkers = base.imageWorkers + 1,
+                server = base.server {port = base.server.port + 1}
+              }
+          changes = configChanges base candidate
+      changes
+        `shouldBe` [ ConfigChange "server.port" RestartRequired,
+                     ConfigChange "image_workers" WorkerHandoff,
+                     ConfigChange "persona" DispatchHot
+                   ]
+      show changes `shouldNotContain` "do-not-leak-this-persona"
+
+  it "validates cross-field model references before publication" $
+    withArgs ["--llm-api-key", "test-key"] $ do
+      Right base <- loadConfigCandidate
+      validateConfig (base {memoryExtractProfile = Just "missing-profile"})
+        `shouldContain` ["memory.extract_profile"]
+  where
+    isLeft = \case Left _ -> True; Right _ -> False

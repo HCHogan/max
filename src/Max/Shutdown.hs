@@ -34,6 +34,8 @@ module Max.Shutdown
     -- * Dispatch side
     enterDispatch,
     leaveDispatch,
+    enterDispatchWith,
+    leaveDispatchWith,
 
     -- * Shutdown side
     beginDrain,
@@ -46,7 +48,8 @@ where
 
 import Control.Concurrent (ThreadId)
 import Control.Concurrent.STM
-  ( TVar,
+  ( STM,
+    TVar,
     atomically,
     modifyTVar',
     newTVarIO,
@@ -80,17 +83,33 @@ newShutdownState = ShutdownState <$> newTVarIO False <*> newTVarIO 0
 -- transaction, so a dispatch can never slip past the gate and then be
 -- missed by 'awaitQuiescent'.
 enterDispatch :: ShutdownState -> IO Bool
-enterDispatch st = atomically $ do
+enterDispatch st = maybe False (const True) <$> enterDispatchWith st (pure ())
+
+-- | Atomically claim a dispatch slot and acquire another process-local
+-- resource, such as the current configuration generation.  Keeping these in
+-- one transaction gives reload and shutdown one precise admission boundary.
+enterDispatchWith :: ShutdownState -> STM a -> IO (Maybe a)
+enterDispatchWith st acquire = atomically $ do
   draining <- readTVar st.ssDraining
   if draining
-    then pure False
-    else True <$ modifyTVar' st.ssInflight (+ 1)
+    then pure Nothing
+    else do
+      value <- acquire
+      modifyTVar' st.ssInflight (+ 1)
+      pure (Just value)
 
 -- | Release a slot claimed by 'enterDispatch'.  Belongs in a @finally@
 -- — a dispatch that died without releasing would hold shutdown
 -- hostage until the drain deadline.
 leaveDispatch :: ShutdownState -> IO ()
-leaveDispatch st = atomically (modifyTVar' st.ssInflight (subtract 1))
+leaveDispatch st = leaveDispatchWith st (pure ())
+
+-- | Release an associated resource and the shutdown slot in the same STM
+-- transaction.  The caller still owns the usual outer @finally@ obligation.
+leaveDispatchWith :: ShutdownState -> STM () -> IO ()
+leaveDispatchWith st release = atomically $ do
+  release
+  modifyTVar' st.ssInflight (subtract 1)
 
 --------------------------------------------------------------------------------
 -- Shutdown side

@@ -95,6 +95,19 @@
         default = self.nixosModules.max;
       };
 
+      checks = forEachSystem (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          nixos-reload = import ./nix/tests/reload.nix {
+            inherit nixpkgs system;
+            maxModule = self.nixosModules.max;
+          };
+        }
+      );
+
       devShells = forEachSystem (
         system:
         let
