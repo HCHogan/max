@@ -2,6 +2,8 @@ module OneBot.Event
   ( Event (..),
     GroupMessage (..),
     HistoricalMessage (..),
+    HistoryParseFailure (..),
+    HistoryParseFailureSummary (..),
     MessageNotice (..),
     NoticeKind (..),
     EmojiLike (..),
@@ -9,24 +11,28 @@ module OneBot.Event
     Sender (..),
     parseEvent,
     parseHistoryMessages,
+    summarizeHistoryParseFailures,
     selectHistoryBefore,
   )
 where
 
 import Data.Aeson
+import Data.Aeson.Key qualified as K
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser, parseEither, typeMismatch)
 import Data.Either (partitionEithers)
 import Data.Int (Int64)
-import Data.List (sortOn)
+import Data.List (sort, sortOn)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Ord (Down (..))
 import Data.Scientific (floatingOrInteger)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import OneBot.Segment (Segment)
-import OneBot.Types (GroupId, MessageId, UserId (..), parseIntId, privateChatGroupId)
+import OneBot.Types (GroupId, MessageId (..), UserId (..), parseIntId, privateChatGroupId)
 
 data Sender = Sender
   { userId :: !UserId,
@@ -64,6 +70,25 @@ data HistoricalMessage = HistoricalMessage
     hmMessageSeq :: !(Maybe Text)
   }
   deriving stock (Show)
+
+-- | A deliberately content-free diagnostic for one rejected history row.
+-- Only a stable reason, a numeric message-id hint, and bounded top-level field
+-- names survive; user-authored values and the raw payload never reach logs.
+data HistoryParseFailure = HistoryParseFailure
+  { hpfReason :: !Text,
+    hpfMessageId :: !(Maybe MessageId),
+    hpfFields :: ![Text]
+  }
+  deriving stock (Eq, Show)
+
+-- | One bounded aggregate suitable for structured logs and durable audit.
+data HistoryParseFailureSummary = HistoryParseFailureSummary
+  { hpfsReason :: !Text,
+    hpfsCount :: !Int,
+    hpfsSampleMessageId :: !(Maybe MessageId),
+    hpfsSampleFields :: ![Text]
+  }
+  deriving stock (Eq, Show)
 
 -- | A 戳一戳 (poke) notice.  Friend pokes ride the same pseudo group
 -- id scheme as private messages.
@@ -133,13 +158,74 @@ parseEvent :: Value -> Either String Event
 parseEvent = parseEither eventParser
 
 -- | Decode the @data.messages@ returned by @get_*_msg_history@.  Individual
--- malformed rows are counted and skipped instead of discarding an otherwise
+-- malformed rows are diagnosed and skipped instead of discarding an otherwise
 -- useful bounded page.  An invalid outer response still fails the batch.
-parseHistoryMessages :: UserId -> GroupId -> Value -> Either String ([HistoricalMessage], Int)
+parseHistoryMessages :: UserId -> GroupId -> Value -> Either String ([HistoricalMessage], [HistoryParseFailure])
 parseHistoryMessages expectedSelf expectedGroup payload = do
   rows <- parseEither historyRows payload
-  let (failures, messages) = partitionEithers (parseEither (historyMessage expectedSelf expectedGroup) <$> rows)
-  pure (messages, length failures)
+  let parseRow raw = case parseEither (historyMessage expectedSelf expectedGroup) raw of
+        Left err -> Left (historyParseFailure raw err)
+        Right message -> Right message
+      (failures, messages) = partitionEithers (parseRow <$> rows)
+  pure (messages, failures)
+
+-- | Keep only the most frequent reason categories.  A category carries the
+-- first bounded sample, never a raw row or parser error string.
+summarizeHistoryParseFailures :: Int -> [HistoryParseFailure] -> [HistoryParseFailureSummary]
+summarizeHistoryParseFailures limit failures =
+  take (max 0 limit) $
+    sortOn (\summary -> (Down summary.hpfsCount, summary.hpfsReason)) $
+      mapMaybe toSummary $
+        Map.toList grouped
+  where
+    grouped = Map.fromListWith (flip (<>)) [(failure.hpfReason, [failure]) | failure <- failures]
+    toSummary (reason, sample : rest) =
+      Just
+        HistoryParseFailureSummary
+          { hpfsReason = reason,
+            hpfsCount = 1 + length rest,
+            hpfsSampleMessageId = sample.hpfMessageId,
+            hpfsSampleFields = sample.hpfFields
+          }
+    toSummary (_, []) = Nothing
+
+historyParseFailure :: Value -> String -> HistoryParseFailure
+historyParseFailure raw err =
+  HistoryParseFailure
+    { hpfReason = classifyHistoryParseFailure err,
+      hpfMessageId = historyMessageIdHint raw,
+      hpfFields = historyFieldNames raw
+    }
+
+classifyHistoryParseFailure :: String -> Text
+classifyHistoryParseFailure rawError
+  | contains "belongs to another account" = "endpoint-account-mismatch"
+  | contains "belongs to another group" = "endpoint-conversation-mismatch"
+  | contains "expected history message object" = "row-not-object"
+  | contains "sender" = "invalid-sender"
+  | contains "self_id" = "invalid-self-id"
+  | contains "group_id" = "invalid-group-id"
+  | contains "user_id" = "invalid-user-id"
+  | contains "message_id" = "invalid-message-id"
+  | contains "message_seq" = "invalid-message-seq"
+  | contains "raw_message" = "invalid-raw-message"
+  | contains "message" = "invalid-message"
+  | contains "time" = "invalid-time"
+  | otherwise = "other-schema-mismatch"
+  where
+    errorText = T.pack rawError
+    contains needle = needle `T.isInfixOf` errorText
+
+historyMessageIdHint :: Value -> Maybe MessageId
+historyMessageIdHint (Object row) = do
+  rawId <- KM.lookup (K.fromString "message_id") row
+  either (const Nothing) (Just . MessageId) (parseEither (parseIntId "history message id") rawId)
+historyMessageIdHint _ = Nothing
+
+historyFieldNames :: Value -> [Text]
+historyFieldNames (Object row) =
+  take 16 (sort (T.take 64 . K.toText <$> KM.keys row))
+historyFieldNames _ = []
 
 -- | Keep only rows definitely older than the reconnect second, then dedupe
 -- overlapping tail/anchor pages and order them for canonical ingestion.  QQ

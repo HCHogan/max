@@ -219,7 +219,7 @@ import Max.Turn.Replay
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..), TurnOutputContext, nextTurnOutputLink)
 import Max.Util (catchSync, readIntegral, trySync, tshow)
 import OneBot.Action (Action (..), Response (..))
-import OneBot.Event (Event (..), GroupMessage (..), HistoricalMessage (..), MessageNotice (..), PokeEvent (..), parseHistoryMessages, selectHistoryBefore)
+import OneBot.Event (Event (..), GroupMessage (..), HistoricalMessage (..), HistoryParseFailure, HistoryParseFailureSummary (..), MessageNotice (..), PokeEvent (..), parseHistoryMessages, selectHistoryBefore, summarizeHistoryParseFailures)
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Server (ClientSlot)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat, privateChatUserId)
@@ -493,6 +493,7 @@ data QQHistoryPage = QQHistoryPage
   { qhpSucceeded :: !Bool,
     qhpMessages :: ![HistoricalMessage],
     qhpParseFailures :: !Int,
+    qhpParseFailureDetails :: ![HistoryParseFailure],
     qhpErrors :: ![T.Text]
   }
 
@@ -573,6 +574,8 @@ recoverQQEndpoint clientRef generation connectedAt deadline endpoint = do
                   succeededPages = length (filter (.qhpSucceeded) pages)
                   fetched = sum (length . (.qhpMessages) <$> pages)
                   parseFailures = sum ((.qhpParseFailures) <$> pages)
+                  parseFailureDetails = concatMap (.qhpParseFailureDetails) pages
+                  parseFailureSummaries = summarizeHistoryParseFailures 3 parseFailureDetails
                   pageErrors = concatMap (.qhpErrors) pages
                   (selected, afterCutoff) = selectHistoryBefore connectedAt (concatMap (.qhpMessages) pages)
               (counts, ingestErrors) <- ingestHistoricalMessages clientRef generation deadline endpoint selected
@@ -582,6 +585,7 @@ recoverQQEndpoint clientRef generation connectedAt deadline endpoint = do
                   errors =
                     requestErrors
                       <> pageErrors
+                      <> [renderHistoryParseFailureSummary parseFailureSummaries | not (null parseFailureSummaries)]
                       <> ingestErrors
                       <> ["overall deadline reached" | deadlineExpired && null ingestErrors]
                   complete = succeededPages > 0 && null errors && parseFailures == 0 && current && not deadlineExpired
@@ -620,6 +624,7 @@ recoverQQEndpoint clientRef generation connectedAt deadline endpoint = do
                     "duplicate_count" .= counts.qbcDuplicate,
                     "skipped_after_cutoff" .= afterCutoff,
                     "parse_failure_count" .= parseFailures,
+                    "parse_failure_reasons" .= (historyParseFailureSummaryValue <$> parseFailureSummaries),
                     "stop_reason" .= reason,
                     "coverage" .= ("best-effort-messages-only" :: T.Text)
                   ]
@@ -682,17 +687,36 @@ callHistoryPages clientRef generation deadline = go [] []
             _ -> go (response : responses) errors' rest
 
 observeHistoryPage :: UserId -> GroupId -> Either T.Text Response -> QQHistoryPage
-observeHistoryPage _ _ (Left _) = QQHistoryPage False [] 0 []
+observeHistoryPage _ _ (Left _) = QQHistoryPage False [] 0 [] []
 observeHistoryPage self group (Right response)
   | response.retcode /= 0 =
       QQHistoryPage
         False
         []
         0
+        []
         ["NapCat history retcode=" <> tshow response.retcode <> " status=" <> response.status]
   | otherwise = case parseHistoryMessages self group response.payload of
-      Left err -> QQHistoryPage False [] 1 ["history payload parse failed: " <> T.pack err]
-      Right (messages, failures) -> QQHistoryPage True messages failures []
+      Left err -> QQHistoryPage False [] 1 [] ["history payload parse failed: " <> T.pack err]
+      Right (messages, failures) -> QQHistoryPage True messages (length failures) failures []
+
+historyParseFailureSummaryValue :: HistoryParseFailureSummary -> Value
+historyParseFailureSummaryValue summary =
+  object
+    [ "reason" .= summary.hpfsReason,
+      "count" .= summary.hpfsCount,
+      "sample_message_id" .= summary.hpfsSampleMessageId,
+      "sample_fields" .= summary.hpfsSampleFields
+    ]
+
+renderHistoryParseFailureSummary :: [HistoryParseFailureSummary] -> T.Text
+renderHistoryParseFailureSummary summaries =
+  "malformed history rows: "
+    <> T.intercalate
+      ", "
+      [ summary.hpfsReason <> "=" <> tshow summary.hpfsCount
+      | summary <- summaries
+      ]
 
 ingestHistoricalMessages ::
   (WithConnection :> es, IOE :> es) =>

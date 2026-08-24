@@ -4,7 +4,7 @@ import Data.Aeson (ToJSON, Value, object, (.=))
 import Data.Aeson.Types (Pair)
 import Data.Text (Text)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import OneBot.Event (EmojiLike (..), Event (..), GroupMessage (..), HistoricalMessage (..), MessageNotice (..), NoticeKind (..), PokeEvent (..), Sender (..), parseEvent, parseHistoryMessages, selectHistoryBefore)
+import OneBot.Event (EmojiLike (..), Event (..), GroupMessage (..), HistoricalMessage (..), HistoryParseFailure (..), HistoryParseFailureSummary (..), MessageNotice (..), NoticeKind (..), PokeEvent (..), Sender (..), parseEvent, parseHistoryMessages, selectHistoryBefore, summarizeHistoryParseFailures)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 import Test.Hspec
 
@@ -110,8 +110,10 @@ spec = do
   describe "history recovery" $ do
     it "keeps valid rows while counting malformed or cross-endpoint rows" $
       case parseHistoryMessages (UserId 1000) (GroupId 7777) historyPayload of
-        Right ([historical], failures) -> do
-          failures `shouldBe` 1
+        Right ([historical], [failure]) -> do
+          failure.hpfReason `shouldBe` "endpoint-conversation-mismatch"
+          failure.hpfMessageId `shouldBe` Just (MessageId 9001)
+          failure.hpfFields `shouldSatisfy` \fields -> all (`elem` fields) ["group_id", "message_id"]
           historical.hmMessage.messageId `shouldBe` MessageId 9000
           historical.hmMessage.sender.userId `shouldBe` UserId 2001
           historical.hmMessage.sender.nickname `shouldBe` Nothing
@@ -119,9 +121,23 @@ spec = do
           historical.hmOccurredAt `shouldBe` posixSecondsToUTCTime 100
         other -> expectationFailure ("unexpected history parse result: " <> show other)
 
+    it "aggregates and bounds content-free failure diagnostics" $
+      case parseHistoryMessages (UserId 1000) (GroupId 7777) diagnosticPayload of
+        Right ([], failures) -> do
+          length failures `shouldBe` 3
+          summarizeHistoryParseFailures 1 failures
+            `shouldBe` [ HistoryParseFailureSummary
+                           { hpfsReason = "endpoint-conversation-mismatch",
+                             hpfsCount = 2,
+                             hpfsSampleMessageId = Just (MessageId 9001),
+                             hpfsSampleFields = ["group_id", "message", "message_id", "message_seq", "raw_message", "time", "user_id"]
+                           }
+                       ]
+        other -> expectationFailure ("unexpected history diagnostics: " <> show other)
+
     it "drops the whole reconnect second and dedupes overlapping pages oldest-first" $ do
       let parsed = case parseHistoryMessages (UserId 1000) (GroupId 7777) selectionPayload of
-            Right (messages, 0) -> messages
+            Right (messages, []) -> messages
             other -> error ("history fixture did not parse: " <> show other)
           connectedAt = posixSecondsToUTCTime 101.75
           (selected, skippedAtCutoff) = selectHistoryBefore connectedAt parsed
@@ -171,6 +187,23 @@ selectionPayload =
              historyMessage 7777 8999 99 (40 :: Int),
              historyMessage 7777 9000 100 (41 :: Int),
              historyMessage 7777 9002 101 (42 :: Int)
+           ]
+    ]
+
+diagnosticPayload :: Value
+diagnosticPayload =
+  object
+    [ "messages"
+        .= [ historyMessage 8888 9001 99 ("cursor:40" :: Text),
+             historyMessage 8888 9002 98 ("cursor:39" :: Text),
+             object
+               [ "group_id" .= (7777 :: Int),
+                 "user_id" .= (2001 :: Int),
+                 "message_id" .= (9003 :: Int),
+                 "message_seq" .= ("cursor:38" :: Text),
+                 "message" .= ([] :: [Value]),
+                 "raw_message" .= ("private body must never enter diagnostics" :: Text)
+               ]
            ]
     ]
 
