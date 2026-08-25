@@ -141,7 +141,8 @@ data IMessageMessage = IMessageMessage
     text :: !Text,
     createdAt :: !UTCTime,
     -- On the observed macOS 15 Messages schema this is a predecessor-chain
-    -- pointer, not proof that the user explicitly replied. Provenance only.
+    -- pointer. It identifies the immediate predecessor inside a proven inline
+    -- reply thread, but is not reply evidence by itself on a top-level row.
     replyToGuid :: !(Maybe Text),
     -- The actual inline-reply root exposed by Messages.app.
     threadOriginatorGuid :: !(Maybe Text),
@@ -277,8 +278,8 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
           object ["native_replies" .= health.nativeReplies]
       reconcileSends
       (chatId, cursor) <- catchUp registered health.sourceFingerprint
-      -- Watch is a wake-up hint.  The bridge closes a quiet stream after 30s;
-      -- either a notification or EOF returns here and the next cycle pages the
+      -- Watch is a wake-up hint.  The bridge bounds a quiet stream; either a
+      -- notification or EOF returns here and the next cycle pages the
       -- authoritative physical ROWID cursor again.
       liftIO (watchOnce runtime cfg chatId cursor) >>= \case
         Left err -> do
@@ -415,10 +416,16 @@ iMessageIngressIdentity cfg message
   | otherwise = (NativeUserId message.sender, message.senderName)
 
 -- On the observed macOS 15 Messages schema, @reply_to_guid@ is a rolling
--- predecessor pointer set on ordinary top-level messages. Only
--- @thread_originator_guid@ proves use of Messages' inline-reply UI.
+-- predecessor pointer set even on ordinary top-level messages, so it cannot
+-- prove a reply by itself.  A non-null @thread_originator_guid@ does prove the
+-- inline-reply UI was used; inside that thread the predecessor is the most
+-- precise target available.  This matters for nested replies: the thread root
+-- may be a user message while the immediate predecessor is a Max reply.
 iMessageReplyTarget :: IMessageMessage -> Maybe Text
-iMessageReplyTarget = (.threadOriginatorGuid)
+iMessageReplyTarget message =
+  case message.threadOriginatorGuid of
+    Nothing -> Nothing
+    Just root -> message.replyToGuid <|> Just root
 
 iMessageIsAddressed :: IMessageConfig -> IMessageMessage -> Bool
 iMessageIsAddressed cfg message =

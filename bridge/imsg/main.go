@@ -148,6 +148,8 @@ type server struct {
 	runner              *runner
 	imsgPath            string
 	nativeReplyProbe    func() bool
+	sendGUIDProbe       func(string, int64) (bool, error)
+	watchCursorProbe    func(int64, int64) (bool, error)
 	token               string
 	dbPath              string
 	sqlitePath          string
@@ -209,6 +211,14 @@ func (s *server) rpc(w http.ResponseWriter, request *http.Request) {
 		return
 	}
 	defer cleanup()
+	sendWatermark := int64(0)
+	if input.Method == "send" {
+		sendWatermark, err = s.latestMessageRowID()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+	}
 	response, err := s.runner.call(request.Context(), input.Method, prepared)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -220,7 +230,7 @@ func (s *server) rpc(w http.ResponseWriter, request *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": response.Error})
 		return
 	}
-	result, err := s.sanitizeRPCResult(input.Method, input.Params, response.Result)
+	result, err := s.sanitizeRPCResult(input.Method, prepared, response.Result, sendWatermark)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -292,14 +302,15 @@ func (s *server) prepareRPC(method string, raw json.RawMessage) (json.RawMessage
 	if err := json.Unmarshal(raw, &params); err != nil {
 		return nil, noop, errors.New("invalid send params")
 	}
-	// Once the optional helper is active, imsg otherwise routes every send
-	// through IMCore. Keep ordinary sends on the public AppleScript transport;
-	// IMCore is needed only to create a native inline-reply relation.
+	// Prefer IMCore whenever the optional helper is active. Besides supporting
+	// native replies, this avoids wedging the long-lived RPC runner when
+	// Messages stops answering an AppleScript send. Keep AppleScript as the
+	// compatibility fallback for installations without the helper.
 	replyTo, _ := params["reply_to"].(string)
-	if replyTo == "" {
-		params["transport"] = "applescript"
-	} else {
+	if replyTo != "" || s.supportsNativeReplies() {
 		params["transport"] = "bridge"
+	} else {
+		params["transport"] = "applescript"
 	}
 	fileValue, _ := params["file"].(string)
 	cleanup := noop
@@ -326,7 +337,7 @@ func (s *server) prepareRPC(method string, raw json.RawMessage) (json.RawMessage
 	return prepared, cleanup, nil
 }
 
-func (s *server) sanitizeRPCResult(method string, paramsRaw, resultRaw json.RawMessage) (json.RawMessage, error) {
+func (s *server) sanitizeRPCResult(method string, paramsRaw, resultRaw json.RawMessage, sendWatermark int64) (json.RawMessage, error) {
 	switch method {
 	case "chats.list":
 		return s.filterChats(resultRaw)
@@ -334,7 +345,8 @@ func (s *server) sanitizeRPCResult(method string, paramsRaw, resultRaw json.RawM
 		return s.sanitizeMessages(resultRaw)
 	case "send":
 		var params struct {
-			ReplyTo string `json:"reply_to"`
+			ReplyTo   string `json:"reply_to"`
+			Transport string `json:"transport"`
 		}
 		if err := json.Unmarshal(paramsRaw, &params); err != nil {
 			return nil, fmt.Errorf("decode send params: %w", err)
@@ -343,19 +355,77 @@ func (s *server) sanitizeRPCResult(method string, paramsRaw, resultRaw json.RawM
 		if err := json.Unmarshal(resultRaw, &result); err != nil {
 			return nil, fmt.Errorf("decode send result: %w", err)
 		}
-		if params.ReplyTo == "" {
+		if params.Transport != "bridge" {
 			return resultRaw, nil
 		}
-		// IMCore reports chat.lastSentMessage immediately after sending. That is
-		// explicitly best-effort and can still identify the preceding message.
-		// The later messages.after echo is the authoritative native GUID.
-		delete(result, "guid")
-		delete(result, "message_id")
-		delete(result, "id")
+		// IMCore reports chat.lastSentMessage immediately after sending. Reject a
+		// stale preceding message, but retain a GUID that now names a new outgoing
+		// row in the allowlisted chat. Max needs that native GUID to correlate the
+		// later messages.after echo even when mirror formatting changed the text.
+		guid, _ := result["guid"].(string)
+		authoritative, probeErr := s.authoritativeSendGUID(guid, sendWatermark)
+		if probeErr != nil {
+			return nil, probeErr
+		}
+		if !authoritative {
+			delete(result, "guid")
+			delete(result, "message_id")
+			delete(result, "id")
+		}
 		return json.Marshal(result)
 	default:
 		return resultRaw, nil
 	}
+}
+
+func (s *server) latestMessageRowID() (int64, error) {
+	sqlitePath := s.sqlitePath
+	if sqlitePath == "" {
+		sqlitePath = "/usr/bin/sqlite3"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, sqlitePath, "-readonly", "-noheader", s.dbPath, "SELECT IFNULL(MAX(ROWID), 0) FROM message").Output()
+	if err != nil {
+		return 0, fmt.Errorf("read iMessage send watermark: %w", err)
+	}
+	rowID, err := strconv.ParseInt(strings.TrimSpace(string(output)), 10, 64)
+	if err != nil || rowID < 0 {
+		return 0, errors.New("read iMessage send watermark: invalid row id")
+	}
+	return rowID, nil
+}
+
+func (s *server) authoritativeSendGUID(guid string, afterRowID int64) (bool, error) {
+	if s.sendGUIDProbe != nil {
+		return s.sendGUIDProbe(guid, afterRowID)
+	}
+	if guid == "" || len(guid) > 256 || afterRowID < 0 {
+		return false, nil
+	}
+	sqlitePath := s.sqlitePath
+	if sqlitePath == "" {
+		sqlitePath = "/usr/bin/sqlite3"
+	}
+	escapedGUID := strings.ReplaceAll(guid, "'", "''")
+	escapedChatGUID := strings.ReplaceAll(s.allowedChatGUID, "'", "''")
+	query := fmt.Sprintf(
+		"SELECT EXISTS(SELECT 1 FROM message m JOIN chat_message_join cmj ON cmj.message_id = m.ROWID JOIN chat c ON c.ROWID = cmj.chat_id WHERE m.guid = '%s' AND m.ROWID > %d AND m.is_from_me = 1 AND c.guid = '%s')",
+		escapedGUID, afterRowID, escapedChatGUID,
+	)
+	for attempt := 0; attempt < 10; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		output, err := exec.CommandContext(ctx, sqlitePath, "-readonly", "-noheader", s.dbPath, query).Output()
+		cancel()
+		if err != nil {
+			return false, fmt.Errorf("validate iMessage send guid: %w", err)
+		}
+		if strings.TrimSpace(string(output)) == "1" {
+			return true, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return false, nil
 }
 
 func (s *server) filterChats(raw json.RawMessage) (json.RawMessage, error) {
@@ -678,6 +748,20 @@ func (s *server) watch(w http.ResponseWriter, request *http.Request) {
 		defer cancel()
 		_, _ = s.runner.call(ctx, "watch.unsubscribe", params)
 	}()
+	// A row can land after Max's messages.after page but before the helper has
+	// finished registering this subscription. Check the physical cursor after
+	// subscribing: an earlier row is visible here, while a later row wakes the
+	// registered watcher. This closes the catch-up/subscribe race instead of
+	// making Max wait for a second quiet-window timeout.
+	advanced, err := s.hasMessageAfter(chatID, since)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	if advanced {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	flusher, ok := w.(http.Flusher)
@@ -687,7 +771,10 @@ func (s *server) watch(w http.ResponseWriter, request *http.Request) {
 	}
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
-	timer := time.NewTimer(30 * time.Second)
+	// The helper notification is only a wake-up hint and can be missed after a
+	// Messages/IMCore reconnect. Bound the quiet window so the authoritative
+	// messages.after cursor still sees inbound messages promptly.
+	timer := time.NewTimer(5 * time.Second)
 	defer timer.Stop()
 	for {
 		select {
@@ -706,6 +793,30 @@ func (s *server) watch(w http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+}
+
+func (s *server) hasMessageAfter(chatID, since int64) (bool, error) {
+	if s.watchCursorProbe != nil {
+		return s.watchCursorProbe(chatID, since)
+	}
+	if chatID <= 0 || since < 0 {
+		return false, nil
+	}
+	sqlitePath := s.sqlitePath
+	if sqlitePath == "" {
+		sqlitePath = "/usr/bin/sqlite3"
+	}
+	query := fmt.Sprintf(
+		"SELECT EXISTS(SELECT 1 FROM chat_message_join WHERE chat_id = %d AND message_id > %d)",
+		chatID, since,
+	)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, sqlitePath, "-readonly", "-noheader", s.dbPath, query).Output()
+	if err != nil {
+		return false, fmt.Errorf("check iMessage watch cursor: %w", err)
+	}
+	return strings.TrimSpace(string(output)) == "1", nil
 }
 
 func (s *server) health(w http.ResponseWriter, request *http.Request) {

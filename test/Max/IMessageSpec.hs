@@ -69,8 +69,33 @@ spec = describe "iMessage adapter" $ do
         message.replyToGuid `shouldBe` Just "PREVIOUS-GUID"
         message.threadOriginatorGuid `shouldBe` Just "GUID-1"
         message.mentionedHandles `shouldBe` ["hnkhgn@icloud.com"]
-        iMessageReplyTarget message `shouldBe` Just "GUID-1"
+        -- The thread root proves this is a real inline reply; within that
+        -- thread the predecessor identifies the specific bubble replied to.
+        iMessageReplyTarget message `shouldBe` Just "PREVIOUS-GUID"
         fmap (.attachmentId) message.attachments `shouldBe` ["abc123"]
+      _ -> expectationFailure "expected one message"
+
+  it "falls back to the inline thread root when no predecessor is available" $ do
+    let value =
+          object
+            [ "messages"
+                .= [ object
+                       [ "id" .= (42 :: Int),
+                         "chat_id" .= (7 :: Int),
+                         "guid" .= ("GUID-REPLY" :: String),
+                         "sender" .= ("+85212345678" :: String),
+                         "is_from_me" .= False,
+                         "text" .= ("first inline reply" :: String),
+                         "created_at" .= ("2026-08-03T12:00:01Z" :: String),
+                         "thread_originator_guid" .= ("GUID-ROOT" :: String)
+                       ]
+                   ],
+              "next_rowid" .= (42 :: Int),
+              "has_more" .= False
+            ]
+    page <- parseIMessagePage value `shouldSatisfyRight` const True
+    case page.messages of
+      [message] -> iMessageReplyTarget message `shouldBe` Just "GUID-ROOT"
       _ -> expectationFailure "expected one message"
 
   it "parses standalone reactions without coercing them into chat text" $ do

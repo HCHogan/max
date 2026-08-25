@@ -70,9 +70,22 @@ func TestParseIMessageStatusRequiresLiveBridge(t *testing.T) {
 	}
 }
 
+func TestWatchCursorProbeClosesPostCatchupRace(t *testing.T) {
+	s := &server{watchCursorProbe: func(chatID, since int64) (bool, error) {
+		return chatID == 7 && since == 41, nil
+	}}
+	advanced, err := s.hasMessageAfter(7, 41)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !advanced {
+		t.Fatal("row committed between catch-up and subscribe did not wake reconciliation")
+	}
+}
+
 func TestOutboundAttachmentIsOpaqueOneShotStaging(t *testing.T) {
 	root := t.TempDir()
-	s := &server{outboundRoot: root, maxAttachmentBytes: 1024, allowedChatGUID: "iMessage;+;allowed"}
+	s := &server{outboundRoot: root, maxAttachmentBytes: 1024, allowedChatGUID: "iMessage;+;allowed", nativeReplyProbe: func() bool { return true }}
 	request := httptest.NewRequest(http.MethodPost, "/outbound-attachment?filename=photo.jpg&mime_type=image%2Fjpeg", bytes.NewReader([]byte("jpeg-bytes")))
 	response := httptest.NewRecorder()
 	s.outboundAttachment(response, request)
@@ -99,8 +112,8 @@ func TestOutboundAttachmentIsOpaqueOneShotStaging(t *testing.T) {
 	if strings.Contains(string(prepared), "upload:") || !strings.Contains(string(prepared), root) {
 		t.Fatalf("upload was not resolved only inside the bridge: %s", prepared)
 	}
-	if !strings.Contains(string(prepared), `"transport":"applescript"`) {
-		t.Fatalf("ordinary attachment send did not force AppleScript: %s", prepared)
+	if !strings.Contains(string(prepared), `"transport":"bridge"`) {
+		t.Fatalf("ordinary attachment send did not prefer the active IMCore helper: %s", prepared)
 	}
 	value, ok := s.outboundAttachments.Load(uploaded.ID)
 	if !ok {
@@ -116,18 +129,20 @@ func TestOutboundAttachmentIsOpaqueOneShotStaging(t *testing.T) {
 	}
 }
 
-func TestPrepareRPCSelectsTransportAtNativeReplyBoundary(t *testing.T) {
-	s := &server{}
+func TestPrepareRPCPrefersActiveIMCoreAndFallsBackToAppleScript(t *testing.T) {
 	tests := []struct {
-		name      string
-		raw       json.RawMessage
-		transport string
+		name          string
+		raw           json.RawMessage
+		nativeReplies bool
+		transport     string
 	}{
-		{"ordinary", json.RawMessage(`{"text":"hello"}`), "applescript"},
-		{"native reply", json.RawMessage(`{"text":"hello","reply_to":"parent-guid"}`), "bridge"},
+		{"ordinary with helper", json.RawMessage(`{"text":"hello"}`), true, "bridge"},
+		{"ordinary without helper", json.RawMessage(`{"text":"hello"}`), false, "applescript"},
+		{"native reply", json.RawMessage(`{"text":"hello","reply_to":"parent-guid"}`), true, "bridge"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			s := &server{nativeReplyProbe: func() bool { return test.nativeReplies }}
 			prepared, cleanup, err := s.prepareRPC("send", test.raw)
 			if err != nil {
 				t.Fatal(err)
@@ -144,17 +159,34 @@ func TestPrepareRPCSelectsTransportAtNativeReplyBoundary(t *testing.T) {
 	}
 }
 
-func TestSanitizeSendResultTreatsIMCoreGUIDAsNonAuthoritative(t *testing.T) {
-	s := &server{}
+func TestSanitizeSendResultAcceptsOnlyNewAllowlistedIMCoreGUID(t *testing.T) {
+	probedGUID := ""
+	probedWatermark := int64(0)
+	s := &server{sendGUIDProbe: func(guid string, afterRowID int64) (bool, error) {
+		probedGUID = guid
+		probedWatermark = afterRowID
+		return guid == "fresh-guid", nil
+	}}
 	result := json.RawMessage(`{"ok":true,"guid":"stale-guid","message_id":"stale-id","id":17}`)
-	sanitized, err := s.sanitizeRPCResult("send", json.RawMessage(`{"reply_to":"parent-guid"}`), result)
+	sanitized, err := s.sanitizeRPCResult("send", json.RawMessage(`{"reply_to":"parent-guid","transport":"bridge"}`), result, 41)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(sanitized), "stale") || strings.Contains(string(sanitized), `"id"`) {
 		t.Fatalf("native reply leaked a best-effort identifier: %s", sanitized)
 	}
-	ordinary, err := s.sanitizeRPCResult("send", json.RawMessage(`{}`), result)
+	if probedGUID != "stale-guid" || probedWatermark != 41 {
+		t.Fatalf("unexpected GUID probe: guid=%q watermark=%d", probedGUID, probedWatermark)
+	}
+	fresh := json.RawMessage(`{"ok":true,"guid":"fresh-guid","message_id":"fresh-id","id":42}`)
+	ordinaryBridge, err := s.sanitizeRPCResult("send", json.RawMessage(`{"transport":"bridge"}`), fresh, 41)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(ordinaryBridge), "fresh-guid") {
+		t.Fatalf("ordinary IMCore send lost its authoritative identifier: %s", ordinaryBridge)
+	}
+	ordinary, err := s.sanitizeRPCResult("send", json.RawMessage(`{"transport":"applescript"}`), result, 41)
 	if err != nil {
 		t.Fatal(err)
 	}
