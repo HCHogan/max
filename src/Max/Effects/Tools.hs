@@ -421,11 +421,12 @@ runTools ::
 runTools (ToolCatalog byRef) = interpret $ \_ -> \case
   ListToolSpecs -> pure (map toToolSpec (Map.elems byRef))
   ListCatalogTools -> pure (map (.rtView) (Map.elems byRef))
-  InvokeTool name args -> case Map.lookup (ToolRef name) byRef of
-    Nothing -> pure . ToolRejected $ ToolFault "unknown_tool" ("unknown tool: " <> name) RetrySafe
-    Just registered -> case validateArguments registered.rtView args of
-      Left fault -> pure (ToolRejected fault)
-      Right () -> execute args registered
+  InvokeTool name args ->
+    sanitizeToolOutcome <$> case Map.lookup (ToolRef name) byRef of
+      Nothing -> pure . ToolRejected $ ToolFault "unknown_tool" ("unknown tool: " <> name) RetrySafe
+      Just registered -> case validateArguments registered.rtView args of
+        Left fault -> pure (ToolRejected fault)
+        Right () -> execute args registered
   where
     execute args registered = do
       attempted <- trySync (race (threadDelay deadlineMicros) (registered.rtRun args))
@@ -455,6 +456,40 @@ runTools (ToolCatalog byRef) = interpret $ \_ -> \case
            in if hasCommitEffects definition && not precedesEffects
                 then ToolOutcomeUnknown fault
                 else ToolFailedBeforeEffect fault
+
+-- PostgreSQL JSONB cannot represent U+0000, while external tools and scraped
+-- web snippets can.  Normalise once at the tool kernel boundary so the durable
+-- execution journal and the exact result returned to the model never diverge:
+-- both observe U+FFFD at the same position.  Object keys need the same walk as
+-- string values; faults are persisted as text and therefore need it too.
+sanitizeToolOutcome :: ToolOutcome -> ToolOutcome
+sanitizeToolOutcome = \case
+  ToolRejected fault -> ToolRejected (sanitizeToolFault fault)
+  ToolFailedBeforeEffect fault -> ToolFailedBeforeEffect (sanitizeToolFault fault)
+  ToolSucceeded value -> ToolSucceeded (sanitizeToolValue value)
+  ToolCommitted value -> ToolCommitted (sanitizeToolValue value)
+  ToolOutcomeUnknown fault -> ToolOutcomeUnknown (sanitizeToolFault fault)
+
+sanitizeToolFault :: ToolFault -> ToolFault
+sanitizeToolFault fault =
+  fault
+    { tfCode = sanitizeToolText fault.tfCode,
+      tfMessage = sanitizeToolText fault.tfMessage
+    }
+
+sanitizeToolValue :: Value -> Value
+sanitizeToolValue = \case
+  Object fields ->
+    Object . KeyMap.fromList $
+      [ (Key.fromText (sanitizeToolText (Key.toText key)), sanitizeToolValue value)
+      | (key, value) <- KeyMap.toList fields
+      ]
+  Array values -> Array (sanitizeToolValue <$> values)
+  String value -> String (sanitizeToolText value)
+  other -> other
+
+sanitizeToolText :: Text -> Text
+sanitizeToolText = T.map (\char -> if char == '\0' then '\xfffd' else char)
 
 hasCommitEffects :: ToolDefinition -> Bool
 hasCommitEffects = any isCommitEffect . (.tdEffects)

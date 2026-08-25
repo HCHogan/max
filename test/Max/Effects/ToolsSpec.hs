@@ -101,6 +101,30 @@ spec = describe "validated tool kernel" $ do
     writeOutcome `shouldSatisfy` isOutcomeUnknown
     outcomeResult writeOutcome `shouldBe` Left "boom (outcome unknown; not retried)"
 
+  it "normalizes NULs in tool values and faults before journal or model consumers see them" $ do
+    let dirtyValue =
+          object
+            [ "bad\0key"
+                .= object
+                  [ "nested" .= (["before\0after", "clean"] :: [String])
+                  ]
+            ]
+        cleanValue =
+          object
+            [ "bad\xfffd\&key"
+                .= object
+                  [ "nested" .= (["before\xfffd\&after", "clean"] :: [String])
+                  ]
+            ]
+        dirtyRead = readTool {toolRun = \_ -> pure (Right dirtyValue)}
+        failedRead = readTool {toolRun = \_ -> pure (Left "bad\0fault")}
+    valueCatalog <- expectCatalog (buildToolCatalog [readDefinition] [dirtyRead])
+    valueOutcome <- runEff . runConcurrent . runTools valueCatalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
+    outcomeResult valueOutcome `shouldBe` Right cleanValue
+    faultCatalog <- expectCatalog (buildToolCatalog [readDefinition] [failedRead])
+    faultOutcome <- runEff . runConcurrent . runTools faultCatalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
+    outcomeResult faultOutcome `shouldBe` Left "bad\xfffd\&fault"
+
   it "lets an audited write report a returned error as a plain failure" $ do
     -- Without this, a write tool cannot tell the model "your arguments were
     -- wrong" — every rejection arrives as outcome-unknown, which the host
