@@ -26,6 +26,7 @@ module Max.Platform.Store
     ensureLegacyEndpoint,
     ensureConfiguredEndpoint,
     latestNativeEventId,
+    nativeEventWasDeliveredTo,
     IngestOptions (..),
     defaultIngestOptions,
     IngestResult (..),
@@ -947,6 +948,28 @@ latestNativeEventId (EndpointId endpoint) = do
       \ ORDER BY platform_event_id DESC LIMIT 1"
       (Only endpoint)
   pure (NativeEventId . fromOnly <$> listToMaybe rows)
+
+-- | Whether a native id names a copy Max delivered onto this endpoint, rather
+-- than an event that originated there. Some transports expose a rolling
+-- predecessor pointer even on ordinary top-level messages; adapters can use
+-- this narrower fact to recover reply UI provenance only when the predecessor
+-- is one of Max's known outbound copies.
+nativeEventWasDeliveredTo ::
+  (WithConnection :> es, IOE :> es) =>
+  EndpointId ->
+  NativeEventId ->
+  Eff es Bool
+nativeEventWasDeliveredTo (EndpointId endpoint) (NativeEventId nativeEvent) = do
+  rows <-
+    query
+      "SELECT EXISTS ( \
+      \ SELECT 1 FROM message_deliveries \
+      \ WHERE endpoint_id = ? AND native_event_id = ? \
+      \   AND idempotency_key NOT LIKE 'source:%')"
+      (endpoint, nativeEvent)
+  case rows :: [Only Bool] of
+    [Only delivered] -> pure delivered
+    _ -> error "nativeEventWasDeliveredTo: existence query did not return one row"
 
 -- | Persist one normalized event exactly once.  The unique native event key is
 -- reserved before any canonical row is inserted, and all derived work is

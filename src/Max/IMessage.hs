@@ -17,8 +17,10 @@ module Max.IMessage
     iMessageEventKind,
     iMessageIngressIdentity,
     iMessageReplyTarget,
+    iMessageTransportReplyCandidate,
     iMessageIsAddressed,
     iMessageTextNodes,
+    iMessageTextNodesWithTransportReply,
     iMessageSendTransport,
     iMessageSendParams,
     iMessageAuthoritativeSendGuid,
@@ -37,7 +39,7 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.Int (Int64)
 import Data.List (find, sortOn)
-import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -64,6 +66,7 @@ import Max.HttpRuntime
 import Max.IR
 import Max.IR.Digest (digest)
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
+import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Delivery
   ( DeliveryAttempt (..),
     DeliveryOperation (..),
@@ -72,7 +75,6 @@ import Max.Platform.Delivery
     loweredText,
     resolveDeliveryMedia,
   )
-import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -87,6 +89,7 @@ import Max.Platform.Store
     ensureConfiguredEndpoint,
     ingestEnvelope,
     listUnconfirmedDeliveries,
+    nativeEventWasDeliveredTo,
     readIngestCursor,
     retryUnconfirmedDelivery,
   )
@@ -324,13 +327,21 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
 
     ingestIMessage registered bootstrap next message = do
       received <- liftIO getCurrentTime
-      parts <- messageContent runtime cfg message
+      recoveredTransportReply <- case iMessageTransportReplyCandidate cfg message of
+        Nothing -> pure Nothing
+        Just candidate -> do
+          delivered <- nativeEventWasDeliveredTo registered.endpointId candidate
+          pure (if delivered then Just candidate else Nothing)
+      let explicitReply = NativeEventId <$> iMessageReplyTarget message
+          replyTarget = explicitReply <|> recoveredTransportReply
+          suppressTransportMention = isNothing explicitReply && isJust recoveredTransportReply
+      parts <- messageContent runtime cfg suppressTransportMention message
       forM_ episodeScheduler $ \scheduler ->
         liftIO (bumpEpisode scheduler (GroupId registered.compatibilityConversationId))
       let kind = iMessageEventKind message
           relations =
             catMaybes
-              [ ReplyTo . NativeEventId <$> iMessageReplyTarget message,
+              [ ReplyTo <$> replyTarget,
                 if message.isReaction
                   then
                     (\target -> ReactsTo (NativeEventId target) (fromMaybe "reaction" message.reactionKey) ReactionAdd)
@@ -340,6 +351,10 @@ iMessageWorker runtime cfg episodeScheduler = localDomain "imessage" $ do
           options =
             defaultIngestOptions
               { createDispatch = not bootstrap,
+                -- The Mac sync stream includes Max's own sends. On a live
+                -- cursor those rows are delivery evidence, never new chat
+                -- messages; history bootstrap remains a verbatim archive.
+                selfEventsAreEchoes = not bootstrap,
                 transcriptKind = renderMessageKind (if kind == EventMessage then KindChat else KindSystem)
               }
           (senderNative, senderDisplayName) = iMessageIngressIdentity cfg message
@@ -426,6 +441,25 @@ iMessageReplyTarget message =
   case message.threadOriginatorGuid of
     Nothing -> Nothing
     Just root -> message.replyToGuid <|> Just root
+
+-- Messages sometimes represents a reply-to-mirrored-bubble as only the
+-- transport account mention plus its rolling predecessor pointer, with no
+-- thread root at all. The pointer alone is not proof: ordinary top-level rows
+-- carry one too. This function identifies only the narrow wire shape; the
+-- worker additionally proves that the target is a copy Max delivered onto the
+-- endpoint before recovering the reply relation.
+iMessageTransportReplyCandidate :: IMessageConfig -> IMessageMessage -> Maybe NativeEventId
+iMessageTransportReplyCandidate cfg message
+  | isNothing message.threadOriginatorGuid,
+    isTransportOnlySelfAddress cfg message =
+      NativeEventId <$> message.replyToGuid
+  | otherwise = Nothing
+
+isTransportOnlySelfAddress :: IMessageConfig -> IMessageMessage -> Bool
+isTransportOnlySelfAddress cfg message =
+  let actual = T.toCaseFold (T.strip message.text)
+      display = T.toCaseFold (T.strip cfg.botName)
+   in not (T.null display) && actual `elem` [display, "@" <> display]
 
 iMessageIsAddressed :: IMessageConfig -> IMessageMessage -> Bool
 iMessageIsAddressed cfg message =
@@ -521,14 +555,12 @@ iMessageSendParams cfg replyTarget body upload =
 iMessageSendTransport :: Maybe NativeEventId -> Text
 iMessageSendTransport = maybe "applescript" (const "bridge")
 
--- | The helper's immediate lastSentMessage GUID is best-effort and can be
--- stale. Native replies are therefore accepted without an id and confirmed by
--- the authoritative messages.after echo. AppleScript receipts remain usable.
+-- | The Mac bridge admits an IMCore GUID only after proving it names a new
+-- outgoing row in the configured chat. That validation makes reply GUIDs as
+-- authoritative as ordinary-send receipts and lets the later sync echo match
+-- the delivery exactly even when mirror attribution changed the body.
 iMessageAuthoritativeSendGuid :: Maybe NativeEventId -> Maybe Text -> Maybe NativeEventId
-iMessageAuthoritativeSendGuid replyTarget guid =
-  case replyTarget of
-    Nothing -> NativeEventId <$> guid
-    Just _ -> Nothing
+iMessageAuthoritativeSendGuid _replyTarget guid = NativeEventId <$> guid
 
 uploadBridgeAttachment ::
   HttpRuntime ->
@@ -685,9 +717,10 @@ messageContent ::
   (Blob :> es, Log :> es, IOE :> es) =>
   HttpRuntime ->
   IMessageConfig ->
+  Bool ->
   IMessageMessage ->
   Eff es [Node 'Ingest]
-messageContent runtime cfg message = do
+messageContent runtime cfg suppressTransportMention message = do
   media <- forM message.attachments $ \attachment ->
     if T.null attachment.attachmentId
       then pure (unavailableAttachment attachment)
@@ -712,7 +745,7 @@ messageContent runtime cfg message = do
                     description = Nothing,
                     raw = Nothing
                   }
-  let parts = iMessageTextNodes cfg message <> media
+  let parts = iMessageTextNodesWithTransportReply cfg suppressTransportMention message <> media
   pure
     ( parts
         <> [ NUnsupported
@@ -749,7 +782,16 @@ messageContent runtime cfg message = do
 -- anchor the node, and config names exactly one.  Other participants' mentions
 -- stay as text, which is what they already were.
 iMessageTextNodes :: IMessageConfig -> IMessageMessage -> [Node 'Ingest]
-iMessageTextNodes cfg message
+iMessageTextNodes cfg = iMessageTextNodesWithTransportReply cfg False
+
+-- A reply UI can serialize the transport account as literal or attributed
+-- mention text even though the semantic target is the QQ author whose bubble
+-- Max mirrored. Once the durable delivery ledger has proved that shape, keep
+-- its visible text but demote Max's mention node so dispatch is decided by the
+-- recovered canonical reply target instead of by the transport sender.
+iMessageTextNodesWithTransportReply :: IMessageConfig -> Bool -> IMessageMessage -> [Node 'Ingest]
+iMessageTextNodesWithTransportReply cfg suppressTransportMention message
+  | suppressTransportMention = mergeText (map demoteSelfMention ranged)
   | not (iMessageIsAddressed cfg message) = mergeText ranged
   | any isSelfMention ranged = mergeText ranged
   | otherwise = mergeText (anchorSelf ranged)
@@ -780,6 +822,10 @@ iMessageTextNodes cfg message
         sameHandle handle cfg.accountKey || any (sameHandle handle) cfg.mentionHandles
       _ -> False
 
+    demoteSelfMention node@(NMention _ display)
+      | isSelfMention node = NText display
+    demoteSelfMention node = node
+
     -- Messages writes the mention's display name inline, so that name is the
     -- position.  When it is absent — a rename since, or an @ the sender edited
     -- away — the node lands at the end rather than at an invented offset: the
@@ -799,9 +845,9 @@ iMessageTextNodes cfg message
     firstAnchor text =
       listToMaybe
         [ (before, T.drop (T.length anchor) match)
-          | anchor <- ["@" <> cfg.botName, cfg.botName],
-            let (before, match) = T.breakOn anchor text,
-            not (T.null match)
+        | anchor <- ["@" <> cfg.botName, cfg.botName],
+          let (before, match) = T.breakOn anchor text,
+          not (T.null match)
         ]
 
 splitAtUtf16 :: Int -> Text -> Maybe (Text, Text)

@@ -182,6 +182,27 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     stored <- withConn pool $ \conn -> query conn "SELECT count(*) FROM messages" ()
     (stored :: [Only Int64]) `shouldBe` [Only 1]
 
+  it "distinguishes a delivered mirror copy from a source event with the same native-id shape" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId now "qq-source" "mirror me"))
+    [claim] <- claimStartedDeliveries pool "imessage-reply-proof" 10 30
+    withDb
+      pool
+      ( completeDelivery
+          "imessage-reply-proof"
+          claim.deliveryId
+          claim.attemptCount
+          []
+          (DeliveryAccepted (Just (NativeEventId "imessage-copy")))
+      )
+      `shouldReturn` True
+
+    withDb pool (nativeEventWasDeliveredTo matrix.endpointId (NativeEventId "imessage-copy"))
+      `shouldReturn` True
+    withDb pool (nativeEventWasDeliveredTo qq.endpointId (NativeEventId "qq-source"))
+      `shouldReturn` False
+
   -- group_members was the OneBot member-list call, so a Matrix or iMessage
   -- conversation answered "成员列表获取失败" — the model was told nobody was
   -- in the room.  The ledger can answer anywhere, and it answers in

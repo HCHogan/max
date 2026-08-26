@@ -10,13 +10,14 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "iMessage adapter" $ do
-  it "uses IMCore only for replies and waits for their authoritative echo GUID" $ do
+  it "uses IMCore only for replies and keeps bridge-validated send GUIDs" $ do
     let replyTarget = Just (NativeEventId "parent-guid")
     iMessageSendTransport Nothing `shouldBe` "applescript"
     iMessageSendTransport replyTarget `shouldBe` "bridge"
     iMessageAuthoritativeSendGuid Nothing (Just "sent-guid")
       `shouldBe` Just (NativeEventId "sent-guid")
-    iMessageAuthoritativeSendGuid replyTarget (Just "stale-guid") `shouldBe` Nothing
+    iMessageAuthoritativeSendGuid replyTarget (Just "reply-guid")
+      `shouldBe` Just (NativeEventId "reply-guid")
 
   it "emits native iMessage reply and attachment contracts" $ do
     let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" [] "Maxwell" Nothing 1000
@@ -96,6 +97,60 @@ spec = describe "iMessage adapter" $ do
     page <- parseIMessagePage value `shouldSatisfyRight` const True
     case page.messages of
       [message] -> iMessageReplyTarget message `shouldBe` Just "GUID-ROOT"
+      _ -> expectationFailure "expected one message"
+
+  it "identifies a transport-account reply shape without making its mention direct" $ do
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" (Just 611798505) 1000
+        value =
+          object
+            [ "messages"
+                .= [ object
+                       [ "id" .= (43 :: Int),
+                         "chat_id" .= (7 :: Int),
+                         "guid" .= ("GUID-TRANSPORT-REPLY" :: String),
+                         "sender" .= ("person@example.com" :: String),
+                         "is_from_me" .= False,
+                         "text" .= ("@Maxwell" :: String),
+                         "created_at" .= ("2026-08-26T04:45:15Z" :: String),
+                         "reply_to_guid" .= ("MIRRORED-QQ-GUID" :: String)
+                       ]
+                   ],
+              "next_rowid" .= (43 :: Int),
+              "has_more" .= False
+            ]
+    page <- parseIMessagePage value `shouldSatisfyRight` const True
+    case page.messages of
+      [message] -> do
+        iMessageReplyTarget message `shouldBe` Nothing
+        iMessageTransportReplyCandidate cfg message
+          `shouldBe` Just (NativeEventId "MIRRORED-QQ-GUID")
+        iMessageTextNodesWithTransportReply cfg False message
+          `shouldBe` [NMention (NativeUserId "mac-account") "Maxwell"]
+        iMessageTextNodesWithTransportReply cfg True message
+          `shouldBe` [NText "@Maxwell"]
+      _ -> expectationFailure "expected one message"
+
+  it "does not infer a transport reply from an ordinary addressed sentence" $ do
+    let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" [] "Maxwell" (Just 611798505) 1000
+        value =
+          object
+            [ "messages"
+                .= [ object
+                       [ "id" .= (44 :: Int),
+                         "chat_id" .= (7 :: Int),
+                         "guid" .= ("GUID-DIRECT" :: String),
+                         "sender" .= ("person@example.com" :: String),
+                         "text" .= ("@Maxwell hello" :: String),
+                         "created_at" .= ("2026-08-26T04:46:00Z" :: String),
+                         "reply_to_guid" .= ("ROLLING-PREDECESSOR" :: String)
+                       ]
+                   ],
+              "next_rowid" .= (44 :: Int),
+              "has_more" .= False
+            ]
+    page <- parseIMessagePage value `shouldSatisfyRight` const True
+    case page.messages of
+      [message] -> iMessageTransportReplyCandidate cfg message `shouldBe` Nothing
       _ -> expectationFailure "expected one message"
 
   it "parses standalone reactions without coercing them into chat text" $ do
