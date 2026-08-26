@@ -1,6 +1,7 @@
 module Max.IMessageSpec (spec) where
 
 import Data.Aeson (Value, object, (.=))
+import Data.ByteString qualified as BS
 import Max.IMessage
 import Max.IR
 import Max.IR.Lower (OutboundCaps (..), Tier (..))
@@ -70,9 +71,9 @@ spec = describe "iMessage adapter" $ do
         message.replyToGuid `shouldBe` Just "PREVIOUS-GUID"
         message.threadOriginatorGuid `shouldBe` Just "GUID-1"
         message.mentionedHandles `shouldBe` ["hnkhgn@icloud.com"]
-        -- The thread root proves this is a real inline reply; within that
-        -- thread the predecessor identifies the specific bubble replied to.
-        iMessageReplyTarget message `shouldBe` Just "PREVIOUS-GUID"
+        -- Messages advances reply_to_guid along the conversation, while the
+        -- thread originator remains the bubble selected by the user.
+        iMessageReplyTarget message `shouldBe` Just "GUID-1"
         fmap (.attachmentId) message.attachments `shouldBe` ["abc123"]
       _ -> expectationFailure "expected one message"
 
@@ -98,6 +99,34 @@ spec = describe "iMessage adapter" $ do
     case page.messages of
       [message] -> iMessageReplyTarget message `shouldBe` Just "GUID-ROOT"
       _ -> expectationFailure "expected one message"
+
+  it "types unnamed QQ images before uploading them to Messages" $ do
+    let untyped =
+          MediaMeta
+            { kind = MImage,
+              mime = Nothing,
+              sizeBytes = Nothing,
+              name = Nothing,
+              description = Nothing,
+              raw = Nothing
+            }
+        typed = iMessageUploadMeta untyped (BS.pack [0xff, 0xd8, 0xff, 0xe0])
+    typed.mime `shouldBe` Just "image/jpeg"
+    iMessageMediaFilename typed `shouldBe` "attachment.jpg"
+
+  it "preserves an explicit attachment name and MIME type" $ do
+    let explicit =
+          MediaMeta
+            { kind = MImage,
+              mime = Just "image/png",
+              sizeBytes = Nothing,
+              name = Just "photo.bin",
+              description = Nothing,
+              raw = Nothing
+            }
+        typed = iMessageUploadMeta explicit (BS.pack [0xff, 0xd8, 0xff])
+    typed.mime `shouldBe` Just "image/png"
+    iMessageMediaFilename typed `shouldBe` "photo.bin"
 
   it "identifies a transport-account reply shape without making its mention direct" $ do
     let cfg = IMessageConfig "http://bridge.test" "secret" "mac-account" "iMessage;+;chat" ["hnkhgn@icloud.com"] "Maxwell" (Just 611798505) 1000

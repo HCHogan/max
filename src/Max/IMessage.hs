@@ -18,6 +18,8 @@ module Max.IMessage
     iMessageIngressIdentity,
     iMessageReplyTarget,
     iMessageTransportReplyCandidate,
+    iMessageUploadMeta,
+    iMessageMediaFilename,
     iMessageIsAddressed,
     iMessageTextNodes,
     iMessageTextNodesWithTransportReply,
@@ -143,11 +145,10 @@ data IMessageMessage = IMessageMessage
     isFromMe :: !Bool,
     text :: !Text,
     createdAt :: !UTCTime,
-    -- On the observed macOS 15 Messages schema this is a predecessor-chain
-    -- pointer. It identifies the immediate predecessor inside a proven inline
-    -- reply thread, but is not reply evidence by itself on a top-level row.
+    -- On the observed macOS 15 Messages schema this is a rolling predecessor
+    -- pointer, not the semantic target of an inline reply.
     replyToGuid :: !(Maybe Text),
-    -- The actual inline-reply root exposed by Messages.app.
+    -- The semantic inline-reply target exposed by Messages.app.
     threadOriginatorGuid :: !(Maybe Text),
     mentions :: ![IMessageMention],
     mentionedHandles :: ![Text],
@@ -431,16 +432,12 @@ iMessageIngressIdentity cfg message
   | otherwise = (NativeUserId message.sender, message.senderName)
 
 -- On the observed macOS 15 Messages schema, @reply_to_guid@ is a rolling
--- predecessor pointer set even on ordinary top-level messages, so it cannot
--- prove a reply by itself.  A non-null @thread_originator_guid@ does prove the
--- inline-reply UI was used; inside that thread the predecessor is the most
--- precise target available.  This matters for nested replies: the thread root
--- may be a user message while the immediate predecessor is a Max reply.
+-- predecessor pointer set even on ordinary top-level messages. It can point at
+-- the newest bubble rather than the one the user selected. A non-null
+-- @thread_originator_guid@ is the semantic inline-reply target rendered by
+-- Messages.app, so it is the only authoritative reply relation here.
 iMessageReplyTarget :: IMessageMessage -> Maybe Text
-iMessageReplyTarget message =
-  case message.threadOriginatorGuid of
-    Nothing -> Nothing
-    Just root -> message.replyToGuid <|> Just root
+iMessageReplyTarget = (.threadOriginatorGuid)
 
 -- Messages sometimes represents a reply-to-mirrored-bubble as only the
 -- transport account mention plus its rolling predecessor pointer, with no
@@ -525,7 +522,8 @@ iMessageDeliveryTransport runtime cfg =
           resolveDeliveryMedia runtime iMessageMaxAttachmentBytes bridgePreviewBytes payload meta.sizeBytes >>= \case
             Left err -> pure (Left (IMessageMediaFailure err))
             Right bytes ->
-              uploadBridgeAttachment runtime cfg meta bytes >>= \case
+              let typed = iMessageUploadMeta meta bytes
+               in uploadBridgeAttachment runtime cfg typed bytes >>= \case
                 Left err -> pure (Left (IMessageMediaFailure err))
                 Right uploadId ->
                   pure (Right (replyTarget, iMessageSendParams cfg replyTarget body (Just ("upload:" <> uploadId))))
@@ -562,6 +560,19 @@ iMessageSendTransport = maybe "applescript" (const "bridge")
 iMessageAuthoritativeSendGuid :: Maybe NativeEventId -> Maybe Text -> Maybe NativeEventId
 iMessageAuthoritativeSendGuid _replyTarget guid = NativeEventId <$> guid
 
+-- QQ media arrives as a URL without content metadata. Once the bytes have
+-- been resolved, preserve an explicit producer type or recover it from magic
+-- bytes before handing the attachment to Messages.app.
+iMessageUploadMeta :: MediaMeta -> BS.ByteString -> MediaMeta
+iMessageUploadMeta meta bytes = meta {mime = meta.mime <|> sniffMediaMime bytes}
+
+-- Messages uses both the MIME type and filename extension when deciding
+-- whether an attachment is an inline image or a generic content file.
+iMessageMediaFilename :: MediaMeta -> Text
+iMessageMediaFilename meta = case meta.name of
+  Just name | not (T.null (T.strip name)) -> name
+  _ -> "attachment" <> fromMaybe "" (mimeExtension =<< meta.mime)
+
 uploadBridgeAttachment ::
   HttpRuntime ->
   IMessageConfig ->
@@ -570,7 +581,7 @@ uploadBridgeAttachment ::
   IO (Either Text Text)
 uploadBridgeAttachment runtime cfg meta bytes = do
   let params =
-        [ ("filename", fromMaybe "attachment" meta.name),
+        [ ("filename", iMessageMediaFilename meta),
           ("mime_type", fromMaybe "application/octet-stream" meta.mime)
         ]
       url = T.dropWhileEnd (== '/') cfg.bridgeUrl <> "/outbound-attachment" <> queryText params
