@@ -21,4 +21,10 @@ for attempt in $(seq 1 30); do
 done
 
 docker exec "$container" node /home/camoufox/app/max-acceptance.mjs
+logs=$(docker logs "$container" 2>&1)
+if printf '%s' "$logs" | grep -Eq 'fixture_auth|fixture_identity|workspace-one'; then
+  printf 'FAIL browser logs exposed authentication fixture state\n' >&2
+  exit 1
+fi
+printf 'PASS authentication state is absent from container logs\n'
 docker top "$container" -eo pid,args | awk '/\.cache\/camoufox\// {count++} END {printf "remaining-browser-processes=%d\n",count; if(count) exit 1}'

@@ -132,6 +132,7 @@ EXPOSE 8931
 # <-> one xvfb-wrapped camoufox-mcp child per MCP session.  The bot's
 # docker run publishes 8931 to an ephemeral loopback port.
 CMD ["supergateway", \
+     "--logLevel", "none", \
      "--stateful", \
      "--stdio", "xvfb-run -a --server-args='-screen 0 1280x1024x24' node /home/camoufox/app/dist/index.js", \
      "--outputTransport", "streamableHttp", \

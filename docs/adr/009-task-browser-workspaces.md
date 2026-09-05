@@ -141,6 +141,10 @@ restore without action replay, lease renewal/expiry, and revocation during
 browser launch. It also checks that no browser processes remain after closure.
 The localhost test exception exists only in this container. This does not test
 real accounts, production proxies, or QQ/LLM-triggered task execution.
+Gateway transcript logging is disabled because checkpoint/restore payloads
+contain authentication storage. Acceptance also checks that fixture credentials
+are absent from container logs. Nix builds run `max --help` after installation
+to catch invalid startup parser metadata before activation.
 
 The vault uses the pinned Nix package set's `crypton` 1.0.x and `memory` 0.18
 family, matching the existing TLS dependencies. Selecting a separate `crypton`
