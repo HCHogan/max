@@ -1,0 +1,85 @@
+--- a/src/sessions.ts
++++ b/src/sessions.ts
+@@ -1,4 +1,5 @@
+ import { assertWorkspaceLease } from "./workspace-lease.js";
++import { navigatePage } from "./navigation.js";
+ import { randomUUID } from "node:crypto";
+ import type { Browser, BrowserContextOptions, Response } from "playwright-core";
+ import chalk from "chalk";
+@@ -141,19 +142,16 @@
+   url: string,
+   waitStrategy?: WaitStrategy,
+   timeout?: number,
+-): Promise<Response | null> {
++): Promise<Awaited<ReturnType<typeof navigatePage>>> {
+   const safeUrl = redactUrl(url);
+   const targetUrl = await validateTargetUrl(url);
+   session.rawUrls.push(url);
+ 
+   try {
+-    const response = await session.page.goto(targetUrl.toString(), {
+-      waitUntil: waitStrategy ?? session.waitStrategy,
+-      timeout: timeout ?? DEFAULT_ACTION_TIMEOUT_MS * 6,
+-    });
+-    session.lastNavigationResponse = response;
++    const result = await navigatePage(session.page, targetUrl.toString(), waitStrategy ?? session.waitStrategy, timeout ?? DEFAULT_ACTION_TIMEOUT_MS * 6);
++    session.lastNavigationResponse = result.response;
+     await settleAndAssertSafe(session.page, session.requestGuard);
+-    return response;
++    return result;
+   } catch (navigationError) {
+     const navigationErrorMessage = describeError(navigationError).toLowerCase();
+     if (/\b(?:127\.0\.0\.1|localhost|ip6-localhost|ip6-loopback|::1)\b/.test(navigationErrorMessage)) {
+@@ -305,7 +303,7 @@
+     const currentSession = await getSession(input.sessionId);
+     session = currentSession;
+     return await runSessionExclusive(currentSession, async () => {
+-      const response = await navigateSession(currentSession, input.url, input.waitStrategy, input.timeout);
++      const { response, navigation } = await navigateSession(currentSession, input.url, input.waitStrategy, input.timeout);
+       const mode = input.outputMode ?? "text";
+       const charLimit = input.maxChars ?? DEFAULT_MAX_CHARS;
+       const payload = await runGuardedPageRead(
+@@ -313,7 +311,7 @@
+         currentSession.requestGuard,
+         () => buildBrowsePayload(currentSession.page, response, mode, charLimit, input.selector),
+       );
+-      const basePayload = { sessionId: currentSession.id, expiresAt: sessionExpiresAt(currentSession), ...payload };
++      const basePayload = { sessionId: currentSession.id, expiresAt: sessionExpiresAt(currentSession), ...payload, navigation };
+       if (input.captchaPolicy) {
+         const { mergedPayload, captchaScreenshot } = await maybeDetectCaptcha(currentSession.page, response, basePayload, input.captchaPolicy, redactUrl(input.url));
+         return buildSuccessContent(mergedPayload, captchaScreenshot);
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -117,6 +117,7 @@
+   console.error(chalk.yellow("\n[Camoufox] Shutting down server after " + signal + "..."));
+   rejectPendingBrowses("Server is shutting down.");
+   try {
++    await handleWorkspaceTool("max_workspace_revoke", {});
+     await closeActiveSessions();
+     await closeActiveBrowsers();
+   } catch (shutdownError) {
+@@ -128,6 +129,7 @@
+ 
+ process.on("SIGINT", () => { void shutdown("SIGINT"); });
+ process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
++process.stdin.on("end", () => { void shutdown("stdin closed"); });
+ process.on("uncaughtException", (error) => {
+   console.error(chalk.red("[Camoufox] Uncaught exception:", error));
+   void shutdown("uncaughtException", 1);
+--- a/src/browser-runtime.ts
++++ b/src/browser-runtime.ts
+@@ -311,13 +311,13 @@
+ }
+ 
+ export async function closeBrowser(browser: BrowserInstance): Promise<void> {
+-  activeBrowsers.delete(browser);
+   try {
+     await browser.close();
+   } catch (closeError) {
+     console.error(chalk.yellow(`[Camoufox] Browser close failed: ${describeError(closeError)}`));
+     if (browser.isConnected()) throw new Error("browser closure was not confirmed");
+   }
++  activeBrowsers.delete(browser);
+ }
+ 
+ export async function closeActiveBrowsers(): Promise<void> {

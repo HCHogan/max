@@ -1,10 +1,11 @@
 import type { BrowserContextOptions } from "playwright-core";
 import { closeActiveSessions, getSession, handleSessionStart } from "./sessions.js";
+import { closeActiveBrowsers } from "./browser-runtime.js";
 import { buildSuccessContent, buildToolError } from "./responses.js";
 import type { SessionStartToolInput } from "./schemas.js";
 import { bindWorkspaceLease, drainWorkspaceRequests, renewWorkspaceLease, revokeWorkspaceLease, unbindWorkspaceLease } from "./workspace-lease.js";
 
-let closeFailed = false;
+let closing: Promise<void> | undefined;
 
 export async function handleWorkspaceTool(name: string, input: Record<string, unknown>) {
   try {
@@ -22,12 +23,13 @@ export async function handleWorkspaceTool(name: string, input: Record<string, un
     }
     if (name === "max_workspace_revoke") {
       revokeWorkspaceLease();
-      if (closeFailed) throw new Error("previous close failed");
-      closeFailed = true;
-      await closeActiveSessions();
-      await drainWorkspaceRequests();
-      await closeActiveSessions();
-      closeFailed = false;
+      closing ??= (async () => {
+        await closeActiveSessions();
+        await drainWorkspaceRequests();
+        await closeActiveSessions();
+        await closeActiveBrowsers();
+      })().finally(() => { closing = undefined; });
+      await closing;
       return buildSuccessContent({ closed: true });
     }
     const session = await getSession(String(input.sessionId));

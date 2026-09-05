@@ -171,7 +171,9 @@ navigateTool scope reg proxy =
       toolDescription =
         "Open a URL in this task workspace's (or foreground turn's) isolated stealth browser (camoufox). Starts it on \
         \first use and reopens it transparently if the session expired. Returns the \
-        \page's visible text; call browser_snapshot for interactive elements.",
+        \page's visible text and HTTP status; navigation.complete=false means readiness timed out after \
+        \the document arrived, not a broken browser. Inspect the partial page with browser_snapshot; do not \
+        \blindly repeat navigation. Call browser_snapshot for interactive elements.",
       toolSchema = toolObject [("url", stringParam "Absolute URL to open, e.g. https://example.com")] ["url"],
       toolRun = \args -> liftIO $ do
         case argText args "url" of

@@ -28,7 +28,7 @@ spec = do
       opens <- newIORef 0
       manager <- reusableManager [rawKeepAliveResponse "one", rawKeepAliveResponse "two"] opens
       request <- expectRight =<< parseRequestEither "http://example.test/"
-      let runtime = httpRuntimeFromManagers manager manager
+      let runtime = httpRuntimeFromManagers manager manager manager
       first <- runBuffered runtime StandardPool 16 16 request
       second <- runBuffered runtime StandardPool 16 16 request
       fmap (.body) first `shouldBe` Right "one"
@@ -69,7 +69,7 @@ spec = do
       closes <- newIORef 0
       manager <- fakeManager (rawResponse 503 "0123456789") closes
       request <- expectRight =<< parseRequestEither "http://example.test/"
-      let runtime = httpRuntimeFromManagers manager manager
+      let runtime = httpRuntimeFromManagers manager manager manager
       result <- runBuffered runtime StandardPool 100 4 request
       case result of
         Left (HttpStatusFailure 503 _ "0123" True) -> pure ()
@@ -80,7 +80,7 @@ spec = do
       closes <- newIORef 0
       manager <- fakeManager (rawResponse 200 "body") closes
       request <- expectRight =<< parseRequestEither "http://example.test/"
-      let runtime = httpRuntimeFromManagers manager manager
+      let runtime = httpRuntimeFromManagers manager manager manager
       withStreamingResponse runtime StandardPool 128 request (\_ _ -> pure ())
         `shouldReturn` Right ()
       readIORef closes `shouldReturn` 1
@@ -91,7 +91,7 @@ spec = do
       blocked <- newEmptyMVar @()
       manager <- fakeManager (rawResponse 200 "body") closes
       request <- expectRight =<< parseRequestEither "http://example.test/"
-      let runtime = httpRuntimeFromManagers manager manager
+      let runtime = httpRuntimeFromManagers manager manager manager
       worker <- async $ withStreamingResponse runtime StandardPool 128 request $ \_ _ -> do
         putMVar entered ()
         takeMVar blocked

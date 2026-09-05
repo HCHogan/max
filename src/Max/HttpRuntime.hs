@@ -30,7 +30,7 @@ import Network.HTTP.Client
     HttpException (..),
     HttpExceptionContent (..),
     Manager,
-    ManagerSettings (managerRetryableException),
+    ManagerSettings (managerIdleConnectionCount, managerRetryableException),
     Request (checkResponse),
     brRead,
     newManager,
@@ -53,6 +53,7 @@ import System.X509 (getSystemCertificateStore)
 data HttpPool
   = StandardPool
   | LegacyEmsPool
+  | NonReusingPool
   deriving stock (Eq, Show)
 
 -- | Process-wide outbound HTTP resources.  A 'Manager' owns its connection
@@ -60,7 +61,8 @@ data HttpPool
 -- keep-alive reuse possible across otherwise unrelated features.
 data HttpRuntime = HttpRuntime
   { standardManager :: Manager,
-    legacyEmsManager :: Manager
+    legacyEmsManager :: Manager,
+    nonReusingManager :: Manager
   }
 
 -- | Failures shared by all outbound HTTP users.  Response decoding remains a
@@ -89,24 +91,26 @@ data BufferedResponse = BufferedResponse
   }
   deriving stock (Eq, Show)
 
--- | Construct both long-lived pools.  http-client normally retries a request
+-- | Construct the long-lived managers.  http-client normally retries a request
 -- once when a pooled connection has gone stale.  Max keeps retry policy in the
--- domain layer, so both managers explicitly disable that implicit replay.
+-- domain layer, so all managers explicitly disable that implicit replay.
 newHttpRuntime :: IO HttpRuntime
 newHttpRuntime = do
   standard <- newManager noImplicitRetryTlsSettings
   legacyEmsSettings <- legacyEmsManagerSettings
   legacyEms <- newManager legacyEmsSettings
-  pure (HttpRuntime standard legacyEms)
+  nonReusing <- newManager noImplicitRetryTlsSettings {managerIdleConnectionCount = 0}
+  pure (HttpRuntime standard legacyEms nonReusing)
 
 -- | Injection seam for tests and application components that already own
 -- managers.  Production startup should normally use 'newHttpRuntime'.
-httpRuntimeFromManagers :: Manager -> Manager -> HttpRuntime
+httpRuntimeFromManagers :: Manager -> Manager -> Manager -> HttpRuntime
 httpRuntimeFromManagers = HttpRuntime
 
 managerFor :: HttpPool -> HttpRuntime -> Manager
 managerFor StandardPool = (.standardManager)
 managerFor LegacyEmsPool = (.legacyEmsManager)
+managerFor NonReusingPool = (.nonReusingManager)
 
 parseRequestEither :: String -> IO (Either TransportFailure Request)
 parseRequestEither raw = do

@@ -54,11 +54,19 @@ RUN patch --batch --forward -p1 --input=/tmp/camoufox-workspaces.patch
 COPY workspace-lease.ts workspace-tools.ts /app/src/
 COPY workspace-lease.test.mjs /tmp/workspace-lease.test.mjs
 
+COPY camoufox-navigation.patch /tmp/camoufox-navigation.patch
+RUN patch --batch --forward -p1 --input=/tmp/camoufox-navigation.patch
+COPY navigation.ts /app/src/
+COPY navigation.test.mjs /tmp/navigation.test.mjs
+COPY workspace-close.test.mjs /tmp/workspace-close.test.mjs
+
 FROM source AS builder
 
 RUN npm_config_user_agent="pnpm/10.0.0 npm/10.9.8 node/v22.0.0 linux x64" npm ci \
  && npm run build \
  && node /tmp/workspace-lease.test.mjs /app/dist/workspace-lease.js \
+ && node /tmp/navigation.test.mjs /app/dist/navigation.js \
+ && node /tmp/workspace-close.test.mjs /app/dist/ \
  && npm prune --omit=dev
 
 # camoufox-js considers any existing addon directory complete, even when a
@@ -129,12 +137,12 @@ COPY --from=builder --chown=camoufox:camoufox /root/.cache/camoufox /home/camouf
 EXPOSE 8931
 
 # supergateway bridges: POST /mcp (Streamable HTTP, stateful sessions)
-# <-> one xvfb-wrapped camoufox-mcp child per MCP session.  The bot's
+# <-> one directly signalled camoufox-mcp child per MCP session. The bot's
 # docker run publishes 8931 to an ephemeral loopback port.
 CMD ["supergateway", \
      "--logLevel", "none", \
      "--stateful", \
-     "--stdio", "xvfb-run -a --server-args='-screen 0 1280x1024x24' node /home/camoufox/app/dist/index.js", \
+     "--stdio", "exec node /home/camoufox/app/dist/index.js", \
      "--outputTransport", "streamableHttp", \
      "--streamableHttpPath", "/mcp", \
      "--port", "8931"]

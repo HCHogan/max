@@ -132,6 +132,7 @@ saveCheckpoint registry scope identifier = liftIO $ do
 
 browserMaintenance :: (WithConnection :> es, IOE :> es) => BrowserRegistry -> Eff es ()
 browserMaintenance registry = do
+  liftIO (retryBrowserReleases registry)
   let (idle, grace) = browserRetention registry
   candidates <- browserGcCandidates idle grace
   forM_ candidates $ \(group, identifier, generation, _) -> withSeqEffToIO $ \unlift ->

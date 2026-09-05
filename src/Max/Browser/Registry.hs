@@ -35,6 +35,7 @@ module Max.Browser.Registry
     getCamoSession,
     setCamoSession,
     releaseBrowserScope,
+    retryBrowserReleases,
     stopBrowserScope,
     destroyBrowsersForGroup,
     destroyAllBrowsers,
@@ -53,6 +54,8 @@ import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
@@ -141,6 +144,7 @@ data BrowserRegistry = BrowserRegistry
     brWorkspaceLocks :: !(LockMap Int64),
     brLeases :: !(TVar (Map BrowserScope Value)),
     brRestores :: !(TVar (Map BrowserScope Value)),
+    brPendingReleases :: !(TVar (Set BrowserScope)),
     brRuntimeId :: !Text,
     brVault :: !BrowserVault,
     brIdleSeconds :: !Int,
@@ -160,6 +164,7 @@ newBrowserRegistry runtime = do
     <*> newLockMap
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
+    <*> newTVarIO Set.empty
     <*> pure (T.pack (show started))
     <*> pure vault
     <*> pure 1800
@@ -383,7 +388,8 @@ waitReady client = go 0
 -- a fresh client, but never retries the original operation.
 callBrowserTool :: BrowserRegistry -> BrowserScope -> Text -> Value -> IO (Either BrowserError Value)
 callBrowserTool reg scope toolName args = do
-  eInstance <- ensureBrowserInstance reg scope
+  closing <- Set.member scope <$> readTVarIO reg.brPendingReleases
+  eInstance <- if closing then pure (Left "browser scope is closing") else ensureBrowserInstance reg scope
   case eInstance of
     Left err -> pure (Left (browserCallFailed ("browser unavailable: " <> err)))
     Right instance' -> do
@@ -432,32 +438,29 @@ destroyBrowsersForGroup reg gid = do
         modifyTVar' reg.brCamoSessions (Map.filterWithKey (\scope _ -> browserScopeGroup scope /= gid))
         modifyTVar' reg.brLeases (Map.filterWithKey (\scope _ -> browserScopeGroup scope /= gid))
         modifyTVar' reg.brRestores (Map.filterWithKey (\scope _ -> browserScopeGroup scope /= gid))
+        modifyTVar' reg.brPendingReleases (Set.filter ((/= gid) . browserScopeGroup))
       pure (length entries)
 
 -- | Close and forget the browser owned by one finished turn.  Cleanup is
 -- bounded: a wedged browser must not hold the turn finalizer or shutdown drain
 -- hostage.  The group host container remains available to sibling turns.
 releaseBrowserScope :: BrowserRegistry -> BrowserScope -> IO ()
-releaseBrowserScope reg scope = do
-  withBrowserSession reg scope $ do
-    getCamoSession reg scope >>= \case
-      Nothing -> pure ()
-      Just sid -> do
-        setCamoSession reg scope Nothing
-        _ <- timeout 5_000_000 (callBrowserTool reg scope "browse_session_close" (object ["sessionId" .= sid]))
-        pure ()
-    instance' <- Map.lookup scope <$> readTVarIO reg.brInstances
-    for_ instance' $ \owned -> void (timeout 5_000_000 (mcpTerminate owned.biClient))
-    atomically $ modifyTVar' reg.brInstances (Map.delete scope)
-  atomically $ do
-    modifyTVar' reg.brLeases (Map.delete scope)
-    modifyTVar' reg.brRestores (Map.delete scope)
+releaseBrowserScope registry scope = do
+  atomically $ modifyTVar' registry.brPendingReleases (Set.insert scope)
+  void (stopBrowserScope registry scope)
+
+retryBrowserReleases :: BrowserRegistry -> IO ()
+retryBrowserReleases registry = do
+  pending <- Set.toList <$> readTVarIO registry.brPendingReleases
+  for_ pending $ \scope -> void (stopBrowserScope registry scope)
 
 stopBrowserScope :: BrowserRegistry -> BrowserScope -> IO Bool
 stopBrowserScope registry scope = withBrowserSession registry scope $ do
   instance' <- Map.lookup scope <$> readTVarIO registry.brInstances
   case instance' of
-    Nothing -> pure True
+    Nothing -> do
+      atomically $ modifyTVar' registry.brPendingReleases (Set.delete scope)
+      pure True
     Just owned -> do
       result <- timeout 20_000_000 (mcpCallTool owned.biClient "max_workspace_revoke" (object []))
       case result of
@@ -468,6 +471,7 @@ stopBrowserScope registry scope = withBrowserSession registry scope $ do
             modifyTVar' registry.brCamoSessions (Map.delete scope)
             modifyTVar' registry.brLeases (Map.delete scope)
             modifyTVar' registry.brRestores (Map.delete scope)
+            modifyTVar' registry.brPendingReleases (Set.delete scope)
           pure True
         _ -> pure False
 
@@ -482,6 +486,7 @@ destroyAllBrowsers reg = do
     writeTVar reg.brCamoSessions Map.empty
     writeTVar reg.brLeases Map.empty
     writeTVar reg.brRestores Map.empty
+    writeTVar reg.brPendingReleases Set.empty
     writeTVar reg.brStartLocks Map.empty
 
 releaseBrowser :: BrowserRegistry -> BrowserEntry -> IO ()

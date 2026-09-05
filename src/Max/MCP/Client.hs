@@ -51,7 +51,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Max.HttpRuntime
   ( BufferedResponse (..),
-    HttpPool (StandardPool),
+    HttpPool (NonReusingPool),
     HttpRuntime,
     ResponseMetadata (headers),
     TransportFailure (..),
@@ -178,7 +178,7 @@ mcpTerminate c = do
                       (CI.mk "Mcp-Session-Id", sessionId)
                     ]
                 }
-        _ <- runBuffered c.mcHttp StandardPool 4096 4096 req
+        _ <- runBuffered c.mcHttp NonReusingPool 4096 4096 req
         pure ()
 
 -- | Decode the error half of a tool result while preserving provider-owned
@@ -247,7 +247,7 @@ postRpc c mId method params expectResult = do
                 requestHeaders = hdrs,
                 requestBody = RequestBodyLBS (encode body)
               }
-      runBuffered c.mcHttp StandardPool maxMcpResponseBytes statusPreviewBytes req >>= \case
+      runBuffered c.mcHttp NonReusingPool maxMcpResponseBytes statusPreviewBytes req >>= \case
         Left (HttpStatusFailure code responseHeaders responsePreview _) -> do
           captureSession c responseHeaders
           pure . Left $

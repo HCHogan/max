@@ -126,7 +126,7 @@ spec = do
       opens <- newIORef 0
       standard <- handshakeRefusingManager
       legacy <- countingManager (rawOkResponse "%PDF-1.4") opens
-      let runtime = httpRuntimeFromManagers standard legacy
+      let runtime = httpRuntimeFromManagers standard legacy standard
       resolveDeliveryMedia runtime 4096 64 (ResolvedUrl "http://cdn.test/f.pdf") Nothing
         `shouldReturn` Right "%PDF-1.4"
       readIORef opens `shouldReturn` 1
@@ -135,7 +135,7 @@ spec = do
       opens <- newIORef 0
       standard <- countingManager (rawStatusResponse "404 Not Found" "") =<< newIORef 0
       legacy <- countingManager (rawOkResponse "never asked") opens
-      let runtime = httpRuntimeFromManagers standard legacy
+      let runtime = httpRuntimeFromManagers standard legacy standard
       outcome <- resolveDeliveryMedia runtime 4096 64 (ResolvedUrl "http://cdn.test/f.pdf") Nothing
       outcome `shouldSatisfy` isLeft
       -- A 404 is an answer.  Only an unusable handshake earns the downgrade.
@@ -201,7 +201,6 @@ spec = do
           other -> expectationFailure ("unexpected QQ lowering: " <> show other)
         traverse oneBotNodes lowered.chunks
           `shouldSatisfy` either (const False) (all ((== 2) . length))
-
 
     it "emits every structural node advertised by QQ capabilities" $ do
       let cardRaw =

@@ -5,8 +5,15 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 const clients = [];
+const transports = new Map();
 let effects = 0;
 const fixture = createServer((request, response) => {
+  if (request.url === "/blocked.js" || request.url === "/no-document") return;
+  if (request.url === "/missing") {
+    response.writeHead(404, { "content-type": "text/html" });
+    response.end('<!doctype html><title>Fixture not found</title><p>Missing fixture document</p><script src="/blocked.js"></script>');
+    return;
+  }
   if (request.url === "/effect" && request.method === "POST") {
     effects += 1;
     response.end("effect-recorded");
@@ -48,6 +55,7 @@ async function connect() {
   const transport = new StreamableHTTPClientTransport(new URL("http://127.0.0.1:8931/mcp"));
   await client.connect(transport);
   clients.push(client);
+  transports.set(client, transport);
   return client;
 }
 
@@ -153,9 +161,41 @@ try {
   await pendingStart;
   await rejected(launching, "max_workspace_bind", lease(2));
   report("revocation during browser launch drains and prevents resurrection");
-  console.log("ACCEPTANCE PASSED: 6 real-browser scenarios; only isolated fixture state used");
+
+  const partialClient = await connect();
+  const partialSession = await start(partialClient, 1);
+  const missing = await success(partialClient, "browse_session_navigate", { sessionId: partialSession, _maxLease: lease(1), url: "http://127.0.0.1:18765/missing", timeout: 2000 });
+  assert.equal(missing.status, 404);
+  assert.equal(missing.navigation.complete, false);
+  assert.match(missing.text, /Missing fixture document/);
+  const partialSnapshot = await snapshot(partialClient, partialSession, 1);
+  assert.match(partialSnapshot, /404/);
+  await rejected(partialClient, "browse_session_navigate", { sessionId: partialSession, _maxLease: lease(1), url: "http://127.0.0.1:18765/no-document", timeout: 1000 });
+  await success(partialClient, "max_workspace_revoke");
+  report("stalled scripts return a partial 404; absent documents remain errors without stale-page fallback");
+
+  const foreground = await connect();
+  const foregroundSession = await success(foreground, "browse_session_start", { humanize: false, geoip: false });
+  await success(foreground, "browse_session_navigate", { sessionId: foregroundSession.sessionId, url: "http://127.0.0.1:18765/" });
+  await transports.get(foreground).terminateSession();
+  await foreground.close();
+  clients.splice(clients.indexOf(foreground), 1);
+  await delay(2000);
+  report("transport termination closes a foreground browser using its default virtual display");
+
+  const interrupted = await connect();
+  const interruptedStart = call(interrupted, "browse_session_start", { humanize: false, geoip: false }).catch(() => undefined);
+  await delay(100);
+  await transports.get(interrupted).terminateSession();
+  await interrupted.close();
+  await interruptedStart;
+  clients.splice(clients.indexOf(interrupted), 1);
+  report("transport termination during launch drains without resurrecting a browser");
+  console.log("ACCEPTANCE PASSED: 9 real-browser scenarios; only isolated fixture state used");
 } finally {
   await Promise.allSettled(clients.map(client => call(client, "max_workspace_revoke")));
+  await Promise.allSettled(clients.map(client => transports.get(client).terminateSession()));
   await Promise.allSettled(clients.map(client => client.close()));
+  fixture.closeAllConnections();
   await new Promise(resolve => fixture.close(resolve));
 }

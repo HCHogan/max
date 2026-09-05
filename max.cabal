@@ -68,6 +68,7 @@ extra-source-files:
     sandbox-image/nix.conf
     scripts/*.sh
     scripts/*.mjs
+    scripts/*.hs
     skills/*.md
     static/*.html
     static/*.js

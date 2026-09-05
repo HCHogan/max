@@ -52,6 +52,10 @@ also does not make two logins to the same server account independent.
 An independent worker runs every 15 seconds, skips busy workspace locks, rechecks
 GC eligibility under the ownership lock and refreshes retained backend sessions.
 The upstream 15-minute session timeout is a leak watchdog, not the Max idle TTL.
+Foreground finalizers also revoke and require closure acknowledgement. A failed
+release remains fenced in the registry and is retried by maintenance rather
+than forgotten. The gateway executes the MCP child directly so termination
+reaches its shutdown handler, which drains pending launches and closes browsers.
 Cancellation/deadline fencing is immediate at the next operation boundary;
 physical cleanup is asynchronous and cannot undo an in-flight external effect.
 
@@ -145,6 +149,23 @@ Gateway transcript logging is disabled because checkpoint/restore payloads
 contain authentication storage. Acceptance also checks that fixture credentials
 are absent from container logs. Nix builds run `max --help` after installation
 to catch invalid startup parser metadata before activation.
+
+MCP uses a separate non-reusing HTTP manager with implicit retries disabled.
+Closing an idle TCP connection must not destroy an MCP workspace or replay an
+operation. Initialization, tool calls and termination all use this manager.
+Navigation waits for document commit, then at most ten seconds for readiness
+within the existing navigation deadline. A readiness timeout on the same
+committed document returns its HTTP status and available content with
+`navigation.complete=false`; a missing document, changed page, disconnected
+browser or safety violation remains an error. A 404 is not a transport failure.
+
+The Docker fixture also covers stalled scripts on a 404 page, an uncommitted
+navigation, default virtual-display foreground teardown, and MCP child exit.
+For the actual Haskell HTTP client and registry, run
+`cabal exec -- runghc -package=max scripts/test-browser-runtime.hs ENDPOINT URL`
+against a disposable browser host and a public URL. This checks navigation,
+snapshot after gateway idle expiry, and foreground closure after another idle
+period. Inspect the container for remaining browser/MCP processes afterwards.
 
 The vault uses the pinned Nix package set's `crypton` 1.0.x and `memory` 0.18
 family, matching the existing TLS dependencies. Selecting a separate `crypton`
