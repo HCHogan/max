@@ -108,12 +108,13 @@ cabal build all
 | [architecture.md](docs/architecture.md) | runtime, context/memory design, and durability |
 | [platforms.md](docs/platforms.md) | platform operations, mirroring, and cutover invariants |
 | [ADR 001](docs/adr/001-context-memory-foundations.md) | context/memory invariants and privacy boundaries |
-| [ADR 002](docs/adr/002-partial-plans-adaptive-elaboration.md) | partial plans, adaptive elaboration, and safe deoptimization |
+| [ADR 002](docs/adr/002-partial-plans-adaptive-elaboration.md) | historical partial-plan design; runtime contracts retained by ADR 008 |
 | [ADR 003](docs/adr/003-message-ir-capability-rendering.md) | the message IR, capability-tiered lowering, and prior-art survey |
 | [ADR 004](docs/adr/004-canonical-handles-for-the-model.md) | canonical handles for the model, and the identity it addresses |
 | [ADR 005](docs/adr/005-turn-continuity.md) | turn continuity: durable traces, journal projections, verbatim replay |
 | [ADR 006](docs/adr/006-monitors-typed-triggers.md) | typed durable monitors and the unified scheduler |
-| [ADR 007](docs/adr/007-plans-as-orchestration.md) | plans as durable fork/join orchestration and steering |
+| [ADR 007](docs/adr/007-plans-as-orchestration.md) | existing durable fork/join plans; authoring direction superseded by ADR 008 |
+| [ADR 008](docs/adr/008-durable-tasks-conversation-coordination.md) | durable tasks, monitor admission, and conversation coordination; local cutover candidate |
 | [development.md](docs/development.md) | tests, evaluation, versioning, and debugging |
 | [prompt-flow.md](docs/prompt-flow.md) | generated prompt and tool-round wire examples |
 

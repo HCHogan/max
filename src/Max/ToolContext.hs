@@ -74,7 +74,8 @@ data TurnCapabilities = TurnCapabilities
     -- catalog. Ordinary turns carry Nothing.
     tcEffectCeiling :: !(Maybe (Map Text Text)),
     -- | This turn is a fork child. Ordinary turns carry Nothing.
-    tcSubgoal :: !(Maybe SubgoalReturn)
+    tcSubgoal :: !(Maybe SubgoalReturn),
+    tcBackground :: !Bool
   }
   deriving stock (Show, Eq)
 

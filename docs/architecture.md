@@ -4,12 +4,15 @@ Cross-cutting decisions are recorded in:
 
 - [`ADR 001: Context and Memory Foundations`](adr/001-context-memory-foundations.md)
 - [`ADR 002: Partial Plans and Adaptive Elaboration`](adr/002-partial-plans-adaptive-elaboration.md)
-  — partially superseded by ADR 007
+  — planning direction superseded by ADR 008; reliability contracts retained
 - [`ADR 003: Message IR and Capability-Tiered Rendering`](adr/003-message-ir-capability-rendering.md)
 - [`ADR 004: Canonical Handles and the Identity the Model Addresses`](adr/004-canonical-handles-for-the-model.md)
 - [`ADR 005: Turn Continuity — Journal Projections and Verbatim Replay`](adr/005-turn-continuity.md)
 - [`ADR 006: Monitors — Typed Triggers and the Unified Scheduler`](adr/006-monitors-typed-triggers.md)
 - [`ADR 007: Plans as Orchestration — Fork, Steering, and What the Kernel Is Actually For`](adr/007-plans-as-orchestration.md)
+  — existing implementation; authoring direction superseded by ADR 008
+- [`ADR 008: Durable Tasks and Conversation Coordination`](adr/008-durable-tasks-conversation-coordination.md)
+  — implemented cutover candidate; production validation pending
 
 Layout, runtime data flow, effect stack, and phase status. For behaviour see
 [features.md](features.md); for tests and debugging see
@@ -536,15 +539,19 @@ generations so a hot reload cannot create a second reverse-WebSocket owner.
 | 16 | Durable turns/journal replay, typed monitors, reconnect QQ history audit | ✅, with QQ coverage explicitly best-effort |
 | 17 | Durable plans, fork children, checkpoint/wake recovery and runtime contracts | ✅, `JoinAll` only |
 | 18 | Atomic configuration generations, worker handoff, admin timeline and routine database/operational health gate | ⚠️ implemented; live gate is red pending projection repair and terminal-state reconciliation |
+| 19 | ADR 008 durable task interface, monitor-to-task admission, durable inboxes and conversation frontend | Local implementation; one coordinated production cutover pending; legacy readers/recovery retained |
 
 Remaining work is intentionally narrower than these completed phases:
 
 - ADR 004: explicit cross-platform principal merge.
 - ADR 005: small-model thought/digest cache and narrator unification.
-- ADR 006: admin monitor/history projection, user-facing re-aim, and the
-  deliberately deferred `ExternalPoll` authority.
-- ADR 002/007: ordinary model-filled holes, adaptive horizon policy, more join
-  semantics, production verifiers, and broader schema-derived tool results.
+- ADR 006/008: monitor-to-task admission, overlap/revision/cancellation and admin
+  visibility are implemented. `ExternalPoll` remains deliberately deferred.
+- ADR 008: validate real task outcomes and production health at the coordinated
+  switch; token/cost ceilings and arbitrary task-specific result schemas are
+  not claimed. Keep stored-plan recovery until old work no longer depends on it.
+  Ordinary hole elaboration, adaptive horizon, and expanded Plan grammar are
+  retired directions, not unfinished milestones.
 - ADR 003 operations: share iMessage bridge circuit state with outbound
   delivery so a known-down edge does not create avoidable ambiguity, and add a
   typed reconciliation/acknowledgement lifecycle for durable terminal debt.

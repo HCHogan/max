@@ -16,6 +16,7 @@ import Data.Time (TimeZone, UTCTime, addUTCTime, getCurrentTime)
 import Effectful
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Monitor
+import Max.DB.Task qualified as Task
 import Max.Effects.Tools (Tool (..))
 import Max.IR (MediaKind (..))
 import Max.Monitor (nextCronFire)
@@ -34,7 +35,7 @@ monitorToolsFor ::
   ToolContext ->
   [Tool es]
 monitorToolsFor tz context =
-  [armMonitorTool tz context, listMonitorsTool tz context, cancelMonitorTool context]
+  [armMonitorTool tz context, listMonitorsTool tz context, cancelMonitorTool context, configureMonitorTool context, monitorHistoryTool context]
 
 data ArmArgs = ArmArgs
   { aaGoal :: !Text,
@@ -60,7 +61,7 @@ armMonitorTool tz context =
   Tool
     { toolName = "arm_monitor",
       toolDescription =
-        "武装一个会在条件满足后开启新普通回合的 monitor。trigger=time 用 in_minutes/at/cron；trigger=ledger 用 sender_principal、text_contains、media_kind、mention_self 中至少一个。条件只观察武装后的 live 入站，历史导入不会触发。",
+        "武装一个在条件满足后创建后台任务的 monitor。默认 single-flight + 一个 coalesced pending；结果有变化才通知。trigger=time 用 in_minutes/at/cron；trigger=ledger 至少提供一个条件。只观察武装后的 live 入站，历史导入不会触发。用 configure_monitor 修改目标/重叠策略，用 monitor_history 查看版本、排队和失败历史。",
       toolSchema =
         toolObject
           [ ("goal", stringParam "触发后要重新思考并完成的目标，不是到点原样发送的文本。"),
@@ -238,18 +239,82 @@ cancelMonitorTool ::
 cancelMonitorTool context =
   Tool
     { toolName = "cancel_monitor",
-      toolDescription = "按当前会话里的 m# handle 取消一个 armed monitor。",
-      toolSchema = toolObject [("handle", stringParam "例如 m#3。")] ["handle"],
-      toolRun = \raw -> case parseEither (withObject "args" (.: "handle")) raw of
+      toolDescription = "停止 monitor 的未来触发和未受理 occurrence；默认不取消已经受理的任务。cancel_tasks=true 才额外取消在途任务。仅发起者/管理员可用。",
+      toolSchema = toolObject [("handle", stringParam "例如 m#3。"), ("cancel_tasks", boolParam "是否同时取消已受理任务，默认 false。")] ["handle"],
+      toolRun = \raw -> case parseEither (withObject "args" $ \fields -> (,) <$> fields .: "handle" <*> fields .:? "cancel_tasks" .!= False) raw of
         Left err -> pure (Left ("bad args: " <> T.pack err))
-        Right handle -> case parseMonitorHandle handle of
+        Right (handle, cancelTasks) -> case parseMonitorHandle handle of
           Nothing -> pure (Left "handle 格式无效，应为 m#<正整数>")
           Just ordinal -> do
-            cancelled <- cancelMonitor (toolConversationScope context) ordinal
-            pure $
-              Right $
-                object
-                  [ "ok" .= cancelled,
-                    "cancelled" .= if cancelled then Just (monitorHandleText ordinal) else Nothing
-                  ]
+            Right
+              <$> Task.monitorControl
+                (toolGroupId context)
+                (toolAuthorPrincipalId context)
+                (toolMonitorArmingAllowed context)
+                ordinal.unMonitorOrdinal
+                "cancel"
+                Nothing
+                ""
+                "coalesce"
+                8
+                "cancel"
+                cancelTasks
     }
+
+configureMonitorTool :: (WithConnection :> es, IOE :> es) => ToolContext -> Tool es
+configureMonitorTool context =
+  Tool
+    { toolName = "configure_monitor",
+      toolDescription = "按 revision 显式更新 monitor 未来 occurrence 的目标和重叠策略。旧 occurrence 保留原版本；pending_policy 必须明确 retain/cancel。queue 是每个事件都重要的有界队列，溢出记录可查，不默默丢弃。",
+      toolSchema =
+        toolObject
+          [ ("handle", stringParam "m# 标识"),
+            ("revision", integerParam "当前 revision"),
+            ("goal", stringParam "未来触发的新目标"),
+            ("overlap", enumParam ["coalesce", "queue"] "重叠策略"),
+            ("queue_limit", boundedIntegerParam 1 32 8),
+            ("pending_policy", enumParam ["retain", "cancel"] "旧版本未受理事件的处置")
+          ]
+          ["handle", "revision", "goal", "overlap", "pending_policy"],
+      toolRun = \raw -> case parseEither
+        ( withObject "configure monitor" $ \fields ->
+            (,,,,,)
+              <$> fields .: "handle"
+              <*> fields .: "revision"
+              <*> fields .: "goal"
+              <*> fields .: "overlap"
+              <*> fields .:? "queue_limit" .!= 8
+              <*> fields .: "pending_policy"
+        )
+        raw of
+        Left detail -> pure (Left (T.pack detail))
+        Right (handle, revision, goal, overlap, capacity, pending) -> case parseMonitorHandle handle of
+          Nothing -> pure (Left "无效 m# 标识")
+          Just ordinal ->
+            Right
+              <$> Task.monitorControl
+                (toolGroupId context)
+                (toolAuthorPrincipalId context)
+                (toolMonitorArmingAllowed context)
+                ordinal.unMonitorOrdinal
+                "configure"
+                (Just revision)
+                goal
+                overlap
+                capacity
+                pending
+                False
+    }
+
+monitorHistoryTool :: (WithConnection :> es, IOE :> es) => ToolContext -> Tool es
+monitorHistoryTool context =
+  Tool
+    "monitor_history"
+    "查看 monitor 状态、revision、下次触发和最近 30 次 fire：任务链接、合并、溢出及失败原因。"
+    (toolObject [("handle", stringParam "m# 标识")] ["handle"])
+    ( \raw -> case parseEither (withObject "monitor history" (.: "handle")) raw of
+        Left detail -> pure (Left (T.pack detail))
+        Right handle -> case parseMonitorHandle handle of
+          Nothing -> pure (Left "无效 m# 标识")
+          Just ordinal -> Right <$> Task.monitorHistory (toolGroupId context) ordinal.unMonitorOrdinal
+    )

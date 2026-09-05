@@ -47,7 +47,7 @@ import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
-import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, handleEvents, planDriverFor, resumeInterruptedTurn)
+import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, durableTaskWorker, handleEvents, planDriverFor, resumeInterruptedTurn)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
@@ -350,6 +350,7 @@ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath ap
                     RequiredWorker
                     (monitorWorker candidate.timezone (ownerFor snapshot "monitors") dispatchMonitorFire),
                   worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (ownerFor snapshot "dispatch") fetchSig (intentState <$ workerEnv.beIntent)),
+                  worker "durable-tasks" RequiredWorker (durableTaskWorker (ownerFor snapshot "tasks")),
                   worker
                     "plan-scheduler"
                     RequiredWorker

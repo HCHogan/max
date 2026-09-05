@@ -854,6 +854,31 @@
       <!-- ── 任务 ─────────────────────────────────────────────── -->
       <section x-show="tab === 'tasks'">
         <div class="tabs">
+          <div class="tabs-bar"><p class="card-desc">持久化任务与 monitor · 未解决请求 <span x-text="durableWork.unresolved_requests"></span> · 控制命令：!task</p></div>
+          <div class="tabs-content table-wrap">
+            <table>
+              <thead><tr><th>任务 / 群</th><th>版本 / 状态</th><th>目标</th><th>预算 / 截止</th><th>报告</th></tr></thead>
+              <tbody><template x-for="task in durableWork.tasks" :key="task.handle"><tr>
+                <td><span x-text="task.handle"></span><br><span class="muted" x-text="gname(task.group_id)"></span></td>
+                <td x-text="'r' + task.revision + ' / ' + task.status"></td>
+                <td x-text="task.objective"></td>
+                <td><span x-text="task.calls_reserved + '/' + task.max_calls + ' calls'"></span><br><span x-text="fmtDate(task.deadline)"></span></td>
+                <td><details><summary>查看</summary><pre x-text="task.result || '尚无报告'"></pre></details></td>
+              </tr></template></tbody>
+            </table>
+            <table>
+              <thead><tr><th>Monitor / 群</th><th>版本 / 状态</th><th>重叠 / 下次触发</th><th>任务</th><th>合并 / 溢出 / 错误</th></tr></thead>
+              <tbody><template x-for="monitor in durableWork.monitors" :key="monitor.group_id + ':' + monitor.handle"><tr>
+                <td><span x-text="monitor.handle"></span><br><span class="muted" x-text="gname(monitor.group_id)"></span></td>
+                <td x-text="'r' + monitor.definition_revision + ' / ' + monitor.status"></td>
+                <td><span x-text="monitor.overlap_policy + ' / ' + monitor.queue_limit"></span><br><span x-text="fmtDate(monitor.next_fire_at)"></span></td>
+                <td x-text="monitor.active_tasks || '-'"></td>
+                <td><span x-text="monitor.coalesced + ' / ' + monitor.overflow"></span><br><span x-text="monitor.last_error || ''"></span></td>
+              </tr></template></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="tabs">
           <div class="tabs-bar">
             <p class="card-desc">进程内在跑的任务;kill 立即取消,重启也会清空</p>
             <div class="tabs-actions">

@@ -34,9 +34,12 @@ example 不能证明生产正在使用该值——当前生效配置只能靠运
 - 行为与功能总览：`docs/features.md`
 - 模块布局、数据流、worker 清单、durable 边界：`docs/architecture.md`
 - 设计取舍与不变量（"为什么这样做"）：`docs/adr/` —— 001 上下文与记忆、
-  002 执行计划与 journal 契约、003 消息 IR 与能力降级、004 canonical
-  句柄、005 turn 连续性（journal 投影与原样重放）；001/003 末尾附与
-  AstrBot、NekroAgent 的对比调研
+  003 消息 IR 与能力降级、004 canonical 句柄、005 turn 连续性、006 typed
+  monitor；002/007 的 Plan DSL 与编排路线已由 008 取代，但可靠运行时和旧
+  plan 存量恢复路径仍保留。008 已实现 task_start/status/list/steer/replace/cancel、
+  monitor-to-task 和单前台/多后台协调；查看 `docs/runbooks/task-cutover.md`
+  区分本地实现与生产切换状态。001/003 末尾附与 AstrBot、
+  NekroAgent 的对比调研
 - 平台接入与运维：`docs/platforms.md`；重大变更与生产修复记录：`docs/runbooks/`
 - 完整数据库 schema：`migrations/000_baseline.sql`（生产 schema 基线，单文件）
 - 消息 IR 与能力降级：`src/Max/IR.hs` 与 `src/Max/IR/`；平台层：`src/Max/Platform/`

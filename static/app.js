@@ -68,6 +68,7 @@ function admin() {
     groups: [],
     memories: [],
     tasks: [],
+    durableWork: { tasks: [], monitors: [], unresolved_requests: 0 },
     quota: null,
     quotaErr: '',
     endpoints: [],
@@ -460,6 +461,7 @@ function admin() {
 
     async loadTasks() {
       this.tasks = await this.api('/tasks');
+      this.durableWork = await this.api('/durable-work');
     },
 
     // ── canonical timeline ────────────────────────────────────────

@@ -127,11 +127,11 @@ dialectGuide =
       -- real syntax, and those are the ones the tests parse.
       "  let 名字 = 工具@版本(参数)              调一次工具，把结果绑到名字上，然后接着往下写",
       "  let 名字 = 表达式                       给一个值起名字，不调用任何东西",
-      "  let 名字 = hole \"...\" : 类型 ...          这个值现在写不出来，留个空，下一轮填上再往下走",
+      "  let 名字 = hole \"...\" : 类型 ...          停止当前 legacy plan；不会自动填洞续跑",
       "  fork { 名字: hole ... }                同时开几个子任务，各自派给一个子 agent",
       "  done 表达式                            这就是答案，计划到此为止",
       "  if 条件 { 计划 } else { 计划 }           分支；两边都必须写，各自是一个完整计划",
-      "  hole \"还差什么\" : 类型 ...               写不出来的部分交回去，下一轮再细化",
+      "  hole \"还差什么\" : 类型 ...               停止当前 legacy plan，把剩余工作交回普通工具调用",
       "",
       "例（工具名只是示例，实际有哪些以下面的「可用工具」为准）："
     ]
@@ -166,10 +166,10 @@ dialectGuide =
            "",
            "写不出来就写 hole，别硬凑。hole 是正当出口，编一个不存在的工具不是。",
            "",
-           "hole 有三种位置，区别是谁来填、以及填完之后计划还走不走：",
+           "只有 fork 会可靠挂起等待子任务。普通 hole / let-hole 会结束并放弃当前 plan，不会自动细化恢复：",
            "",
-           "  let x = hole \"...\" : 类型 ...    我下一轮自己填出这个值，然后计划接着往下走",
-           "  hole \"...\" : 类型 ...            剩下的整段我下一轮再写，计划到此为止",
+           "  let x = hole \"...\" : 类型 ...    到此停止，后面的表达式不会恢复执行",
+           "  hole \"...\" : 类型 ...            到此停止，后续用普通工具或 task_start 完成",
            "  fork { x: hole ... }           派给子 agent 填（它只看得见你写在 hole 里的东西）",
            "",
            "不知道某个参数该填什么，就用第一种，额度写 calls: 0：",
@@ -202,7 +202,7 @@ dialectGuide =
            "  · 额度是加起来算的：三个子任务各要 2 次调用就是 6 次，不是 2 次。",
            "  · join / watch 可以省，而且现在只有一个取值：join all（等齐了再往下走）、",
            "    watch on-failure（只有子任务失败才叫醒我）。写别的会被拒绝。",
-           "  · 合并式写不出来就别硬拆。fork 后面再挂一个 hole，等于白拆一次。",
+           "  · 新的委派工作用 task_start；收到结果后由模型综合，不必预写合并表达式。",
            "",
            "== 会被拒绝的写法 ==",
            "",
@@ -210,7 +210,7 @@ dialectGuide =
            "  · 参数字段名或类型对不上，或多给了一个字段。",
            "  · 用不上的可选参数拿 \"\"、\".\"、0、null 去占位。那不是留空，是明确给了一个值，",
            "    工具会当真。不用就整个不写这个字段。",
-           "  · 调用次数、发送次数超额。按最坏分支算：if 两边各调一次工具，就是两次。",
+           "  · 调用次数、发送次数超额。按最坏分支算：if 两边各调一次工具，取较大值一次，不是相加。",
            "  · 用了「允许的效果」里没有的效果。",
            "  · 同一个名字 let 两次，或拿 let、done、if、hole、fork、map、concat 这类词当名字。",
            "  · 工具调用不绑名字。发送类工具的结果没什么用，但也要写成 let sent = reply@1(...)。",
@@ -378,7 +378,7 @@ goalSection env =
          ]
       -- A hole's budget block has to name tokens and ms, and gets rejected for
       -- asking more than these.  Unwritable without knowing the numbers.
-      <> [ "hole 的 budget 里：tokens ≤ "
+      <> [ "hole 的 budget 里（tokens 是表达式 fuel，不是 LLM token 用量上限）：tokens ≤ "
              <> tshow budget.ebMaxTokens
              <> "，ms ≤ "
              <> tshow budget.ebMaxWallClockMs

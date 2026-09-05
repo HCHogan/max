@@ -23,10 +23,6 @@
 --     an exhaustive diagnosis through an already-broken binding environment
 --     produces confident nonsense, which is worse feedback than one true fact.
 --
--- Static budget checks stop at what is statically visible.  'ebMaxTokens' and
--- 'ebMaxWallClockMs' are runtime ceilings the executor enforces as it goes;
--- there is nothing to check about them here, and pretending otherwise would
--- claim a guarantee this module cannot make.
 module Max.Plan.Validate
   ( -- * Kernel
     ValidPlan,

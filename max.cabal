@@ -138,6 +138,7 @@ library
         Max.DB.PlatformIds
         Max.DB.Migrations
         Max.DB.Monitor
+        Max.DB.Task
         Max.DB.Plan
         Max.DB.QQBackfill
         Max.DB.Session
@@ -215,6 +216,7 @@ library
         Max.Recall
         Max.Monitor
         Max.Monitor.Types
+        Max.Task.Types
         Max.Render
         Max.Reload
         Max.Reload.Prepare
@@ -249,6 +251,7 @@ library
         Max.Tools.Monitor
         Max.Tools.Pins
         Max.Tools.Plan
+        Max.Tools.Task
         Max.Tools.Reminder
         Max.Tools.Sandbox
         Max.Tools.Schema
@@ -557,6 +560,7 @@ test-suite max-test-db
         Max.MemoryStoreSpec
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
+        Max.DB.TaskSpec
         Max.DB.PlanSpec
         Max.DB.QQBackfillSpec
         Max.Plan.WorkerSpec

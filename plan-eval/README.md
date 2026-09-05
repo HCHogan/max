@@ -1,5 +1,10 @@
 # plan-eval — ADR 002 计划核心的离线评测
 
+> [ADR 008](../docs/adr/008-durable-tasks-conversation-coordination.md) 已退役
+> model-authored Plan DSL / adaptive elaboration 的发展路线；现有 plan 执行与
+> 恢复路径在迁移完成前仍保留，所以这里继续承担旧语法与内核的回归检查。
+> 候选解析率、准入率及返回类型检查不是新 task 接口的端到端质量验收。
+
 E5 的 exit gate。跑一遍:
 
 ```

@@ -118,6 +118,7 @@ import Max.Session (Session (..), loadSession, updateSession)
 import Max.Skills (NewSkill (..), Skill (..), createSkill, deleteSkill, listAllSkills, updateSkill)
 import Max.Tasks (TaskId (..), TaskInfo (..), cancelTask, listTasks)
 import Max.ToolContext (TurnCapabilities (..))
+import Max.DB.Task (durableWorkOverview)
 import Max.Tools.Plan (validationEnvForContract)
 import Max.Toolset (toolDefinitionsFor)
 import Max.Util (trySync)
@@ -159,6 +160,7 @@ data Route
   | RSkillPatch !Int64
   | RSkillDelete !Int64
   | RTasksList
+  | RDurableWork
   | RTaskKill !Text
   | RUsage
   | -- | Health of the credential pool serving our LLM base URL.
@@ -198,6 +200,7 @@ route m path
       ["api", "memories"] -> Just RMemoriesList
       ["api", "skills"] -> Just RSkillsList
       ["api", "tasks"] -> Just RTasksList
+      ["api", "durable-work"] -> Just RDurableWork
       ["api", "usage"] -> Just RUsage
       ["api", "quota"] -> Just RQuota
       ["api", "stats", "messages"] -> Just RMessageStats
@@ -492,7 +495,8 @@ handle env profiles logBuf r params body = case r of
                   tcMonitorArming = False,
                   tcCatalogGrants = Map.empty,
                   tcEffectCeiling = Nothing,
-                  tcSubgoal = Nothing
+                  tcSubgoal = Nothing,
+                  tcBackground = False
                 }
             catalog = planCatalog (toolDefinitionsFor env gid caps)
             objective = T.strip pc.ppcObjective
@@ -529,6 +533,7 @@ handle env profiles logBuf r params body = case r of
         logInfo "admin: skill deleted" $ object ["id" .= sid]
         pure deleted
       else pure notFound
+  RDurableWork -> ok <$> durableWorkOverview
   RTasksList -> do
     tasks <- liftIO (listTasks env.beTasks Nothing)
     pure (ok (map taskJson tasks))

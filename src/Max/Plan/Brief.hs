@@ -43,7 +43,7 @@ subgoalBrief ordinal item =
         "额度：最多 " <> tshow goal.goalBudget.ebMaxCalls <> " 次工具调用，最多 "
           <> tshow goal.goalBudget.ebMaxSends <> " 次发送，fanout "
           <> tshow goal.goalBudget.ebMaxFanout <> "，" <> tshow goal.goalBudget.ebMaxTokens
-          <> " tokens，" <> tshow goal.goalBudget.ebMaxWallClockMs <> "ms。",
+          <> " 表达式求值 fuel（旧 tokens 字段，不是 LLM token 上限），" <> tshow goal.goalBudget.ebMaxWallClockMs <> "ms。",
         "允许的效果：" <> comma (map renderEffect (Set.toList goal.goalBudget.ebEffects)),
         "允许的权限：" <> comma (map renderAuthority (Set.toList goal.goalAuthority))
       ]

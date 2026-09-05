@@ -226,6 +226,8 @@ finishAgentTurn ::
   Eff es ()
 finishAgentTurn ref terminal llmTurns abortReason archive = do
   withTransaction $ do
+    locked <- query "SELECT c.conversation_id FROM conversations c JOIN agent_turns t USING(conversation_id) WHERE t.turn_id=? FOR UPDATE OF c" (Only ref.atrTurnId)
+    when (null (locked :: [Only Int64])) (error "finishAgentTurn: conversation missing")
     let (archiveSha, archiveSize, archiveExpiry) = case archive of
           Nothing -> (Nothing, Nothing, Nothing)
           Just (sha, size, expires) -> (Just sha, Just size, Just expires)
@@ -359,6 +361,7 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
       \ SET status = 'recovery-pending', recovery_owner = ?, recovery_claimed_at = now() \
       \ FROM conversations c \
       \ WHERE t.conversation_id = c.conversation_id \
+      \   AND NOT EXISTS (SELECT 1 FROM task_attempts task WHERE task.turn_id=t.turn_id) \
       \   AND (t.trigger_canonical_message_id IS NOT NULL OR EXISTS ( \
       \     SELECT 1 FROM monitor_fires f WHERE f.admitted_turn_id=t.turn_id)) \
       \   AND (t.status = ANY (ARRAY['starting'::text, 'running'::text]) \
@@ -383,6 +386,7 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
       \     finished_ingest_seq = COALESCE((SELECT max(m.ingest_seq) FROM messages m WHERE m.conversation_id=t.conversation_id), 0), \
       \     abort_reason = COALESCE(abort_reason, 'process restarted while turn was in flight') \
       \ WHERE trigger_canonical_message_id IS NULL \
+      \   AND NOT EXISTS (SELECT 1 FROM task_attempts task WHERE task.turn_id=t.turn_id) \
       \   AND NOT EXISTS (SELECT 1 FROM monitor_fires f WHERE f.admitted_turn_id=t.turn_id) \
       \   AND (status = ANY (ARRAY['starting'::text, 'running'::text]) \
       \        OR (status = 'recovery-pending' AND recovery_owner IS DISTINCT FROM ?))"

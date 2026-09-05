@@ -500,6 +500,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
               (Map.singleton "context_search" "grant-a")
           )
     withDb pool (finishAgentTurn budgetArming TurnSucceeded 1 Nothing Nothing)
+    _ <- withDb pool (execute "UPDATE monitors SET overlap_policy='queue',queue_limit=8 WHERE monitor_id=?" (Only budgetMonitor.mrMonitorId))
     forM_ [6302 .. 6306] $ \messageId ->
       insertRawMessage pool messageId 65 705 99 now Nothing "budget-hit"
     fireCount pool budgetMonitor `shouldReturn` 5

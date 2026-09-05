@@ -68,6 +68,7 @@ import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Skills (skillToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
 import Max.Tools.Subgoal (subgoalToolsFor)
+import Max.Tools.Task (guardTaskResource, taskToolsFor)
 import Max.Tools.Video (videoToolsFor)
 import Max.Turn.Continuity (toolCatalogFingerprint)
 import OneBot.Types (GroupId, isPrivateChat)
@@ -150,7 +151,7 @@ resolvedToolsFor ::
   BotEnv ->
   ToolContext ->
   ([ToolDefinition], [Tool es])
-resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
+resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filter allowedRunner runners0))
   where
     dispatchEnv = maybe env (`applyRuntimeSnapshot` env) (toolRuntimeSnapshot dc)
     definitions = toolDefinitionsFor dispatchEnv (toolGroupId dc) (toolCapabilities dc)
@@ -165,6 +166,7 @@ resolvedToolsFor runtime env dc = (definitions, filter allowedRunner runners0)
         <> memoryToolsFor dc
         <> pinToolsFor dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
         <> subgoalToolsFor dc
+        <> taskToolsFor dc
         <> skillToolsFor dispatchEnv.beSkills dc
         <> bilibiliToolsFor dispatchEnv.beTimeZone dc
         <> sandboxToolsFor dispatchEnv.beTimeZone (toolGroupId dc) dispatchEnv.beSandboxes
@@ -186,7 +188,7 @@ toolCountFor ::
   Bool -> -- skills visible
   Int
 toolCountFor env gid multimodal stickers skills =
-  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing Nothing))
+  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing Nothing False))
 
 -- | Product-level visibility and effect metadata live in one inventory.  The
 -- actual runners assembled above must match this filtered set exactly or
@@ -208,8 +210,11 @@ toolDefinitionsFor env gid caps =
       SearchOnly -> isJust env.beSearch
       MonitorArmOnly -> caps.tcMonitorArming
       SubgoalOnly -> isJust caps.tcSubgoal
+      BackgroundOnly -> caps.tcBackground
+      LegacyPlanOnly -> isJust caps.tcSubgoal || isJust caps.tcEffectCeiling && not caps.tcBackground
     ceilingOpen definition' =
-      toolAllowedByEffectCeiling caps.tcEffectCeiling definition'
+      (caps.tcBackground && definition'.tdRef == ToolRef "task_finish")
+        || toolAllowedByEffectCeiling caps.tcEffectCeiling definition'
 
 -- | Exact grant intersection for a standing continuation. A matching name is
 -- insufficient: schema, effects, retry class and authorities must retain the
@@ -229,6 +234,8 @@ data ToolGate
   | SkillsOnly
   | SearchOnly
   | MonitorArmOnly
+  | BackgroundOnly
+  | LegacyPlanOnly
   | -- | Only a fork child, which is the only turn that has somewhere to
     -- return a value to.
     SubgoalOnly
@@ -260,7 +267,9 @@ toolInventory =
     always (writeToolV 2 "cancel_reminder" ["monitor.db"] [CurrentConversation]),
     gated MonitorArmOnly (writeToolV 1 "arm_monitor" ["monitor.db"] [CurrentConversation]),
     always (readToolV 1 "list_monitors" ["monitor.db"] [CurrentConversation]),
-    always (writeToolV 1 "cancel_monitor" ["monitor.db"] [CurrentConversation]),
+    always (writeToolV 2 "cancel_monitor" ["monitor.db"] [CurrentConversation]),
+    always (writeTool "configure_monitor" ["monitor.db"] [CurrentConversation]),
+    always (readTool "monitor_history" ["monitor.db"] [CurrentConversation]),
     gated GroupOnly (readTool "group_members" ["chat.roster"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_avatar" ["chat.avatar", "tool.media"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_image" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation]),
@@ -271,15 +280,22 @@ toolInventory =
     always (writeTool "pin_message" ["session.db"] [CurrentConversation]),
     always (writeTool "unpin_message" ["session.db"] [CurrentConversation]),
     gated SkillsOnly (reflectTool "use_skill"),
-    always (reflectTool "plan_guide"),
-    always (readTool "plan_list" ["plan.db"] [CurrentConversation]),
-    always (writeTool "plan_revise" ["plan.db"] [CurrentConversation]),
+    gated LegacyPlanOnly (reflectTool "plan_guide"),
+    gated LegacyPlanOnly (readTool "plan_list" ["plan.db"] [CurrentConversation]),
+    gated LegacyPlanOnly (writeTool "plan_revise" ["plan.db"] [CurrentConversation]),
+    always (writeTool "task_start" ["task.db"] [CurrentConversation]),
+    always (readTool "task_list" ["task.db"] [CurrentConversation]),
+    always (readTool "task_status" ["task.db"] [CurrentConversation]),
+    always (writeTool "task_steer" ["task.db"] [CurrentConversation]),
+    always (writeTool "task_replace" ["task.db"] [CurrentConversation]),
+    always (writeTool "task_cancel" ["task.db"] [CurrentConversation]),
+    gated BackgroundOnly (writeTool "task_finish" ["task.db"] [CurrentConversation]),
     -- The union of what 'Max.Plan.Catalog' declares plannable, stated
     -- statically because the inventory cannot vary with it.  Over-declaring
     -- when search is unconfigured is the conservative direction: an effect
     -- ceiling that would refuse the search a plan might make should refuse the
     -- plan tool too, rather than let it through and find out inside.
-    always (definition "plan_run" [EffectRead "network.search", EffectRead "conversation.db"] SequentialOnly RetryUnsafe [CurrentConversation]),
+    gated LegacyPlanOnly (definition "plan_run" [EffectRead "network.search", EffectRead "conversation.db"] SequentialOnly RetryUnsafe [CurrentConversation]),
     -- Queues turn-scoped inline video as well as reading the network.  Keep it
     -- sequential inside one agent round so concurrent calls cannot race the
     -- shared attachment order/budget; independent turns have independent

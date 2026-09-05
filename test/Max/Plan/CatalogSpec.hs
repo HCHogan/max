@@ -97,7 +97,8 @@ liveSchemas =
             tcMonitorArming = False,
             tcCatalogGrants = Map.empty,
             tcEffectCeiling = Nothing,
-            tcSubgoal = Nothing
+            tcSubgoal = Nothing,
+            tcBackground = False
           }
 
 definitionOf :: Text -> ToolDefinition

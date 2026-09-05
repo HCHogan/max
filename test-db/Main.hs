@@ -30,6 +30,7 @@ import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.MediaSpec qualified as MediaSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.MonitorSpec qualified as MonitorSpec
+import Max.DB.TaskSpec qualified as TaskSpec
 import Max.DB.PlanSpec qualified as PlanSpec
 import Max.DB.QQBackfillSpec qualified as QQBackfillSpec
 import Max.DB.SessionSpec qualified as SessionSpec
@@ -65,6 +66,7 @@ main = do
         SessionSpec.spec pool
         TransactionSpec.spec pool
         AgentTurnSpec.spec pool
+        TaskSpec.spec pool
         ConnectionSpec.spec pool
         ConversationCursorSpec.spec pool
         ContextMaterializationSpec.spec pool

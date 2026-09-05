@@ -1,19 +1,20 @@
 # ADR 007: Plans as Orchestration — Fork, Steering, and What the Kernel Is Actually For
 
-- Status: Accepted and implemented through the production runtime contracts in
-  step 13; supersedes the parts of ADR 002 listed under "What this retires"
-  below. `JoinAll` remains the only join policy. `WatchEach` was removed from
-  the grammar on 2026-08-16: it had been parsed, stored and rendered while the
-  guide told the model that writing it would get the model woken per child, and
-  a word accepted and ignored is worse than one the grammar has never heard of.
-  The `watch` position survives with `on-failure` alone, for the reason the
-  `join` position survives with `all` alone — adding the other value later is a
-  new word rather than a new shape. The two-policy argument below stands and is
-  what the position is being held open for; §553's split by latency is true as
-  of 2026-08-16, when a fork child stopped being limited to the plannable
-  catalog.
+- Status: **Superseded as the model-facing orchestration direction by
+  [ADR 008](008-durable-tasks-conversation-coordination.md)**. Durable child
+  turns, scoped grants, cancellation, checkpoint/wake admission, and fenced
+  recovery remain useful runtime contracts. Whole-plan authoring, prewritten
+  joins, and goal-hash-only steering are no longer requirements for delegation.
+
+  The production plan path implemented through step 13 remains active pending
+  migration, with `JoinAll` and `on-failure` only. `WatchEach` was removed on
+  2026-08-16 because its promised wake behavior was not implemented. Child
+  browser/sandbox effect mappings exist, but ADR 008 records the remaining
+  root-admission restriction; mappings alone do not prove end-to-end reachability.
+  The body below is historical, including rejected alternatives and future
+  integration steps. ADR 008 takes precedence where it changes those decisions.
 - Date: 2026-08-10; production runtime contracts 2026-08-11; issue #17
-  follow-through 2026-08-16.
+  follow-through 2026-08-16; direction superseded by ADR 008 on 2026-09-05.
 
 ## Context
 

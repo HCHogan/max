@@ -145,13 +145,37 @@ dispatchContext =
   AgentContext
     ( mkToolContext
         (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
-        (TurnCapabilities False True False qqAdvertisedCaps True Map.empty Nothing Nothing)
+        (TurnCapabilities False True False qqAdvertisedCaps True Map.empty Nothing Nothing False)
     )
     Nothing
     Nothing
 
 spec :: Spec
 spec = describe "Agent full loop" $ do
+  it "yields the frontend immediately after durable task admission" $ do
+    events <- newIORef []
+    calls <- newIORef (0 :: Int)
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    let startDefinition = echoDefinition {tdRef = ToolRef "task_start", tdParallelism = SequentialOnly}
+        startTool = Tool "task_start" "admit background task" (object ["type" .= ("object" :: Text)]) (\_ -> pure (Right (object ["task_id" .= (42 :: Int)])))
+        provider =
+          LLMInterpreter
+            { liChat = \_ _ _ _ _ -> do
+                liftIO (modifyIORef' calls (+ 1))
+                pure (Right (ToolCallsResp (object []) "" [ToolCall "start" "task_start" (object [])]))
+            }
+    result <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff
+        . runConcurrent
+        . runLog "agent-test" logger LogAttention
+        . runLLMWith provider
+        . runAgent (AgentLimits 4) (const (buildToolCatalog [startDefinition] [startTool]))
+        $ agentTurn turn dispatchContext "fake" [MsgUser "long work"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    readIORef calls `shouldReturn` 1
+    result.reply `shouldSatisfy` maybe False (T.isInfixOf "task#42")
+
   it "runs fake LLM + tool rounds and emits typed output events in memory" $ do
     events <- newIORef []
     calls <- newIORef (0 :: Int)
@@ -226,61 +250,62 @@ spec = describe "Agent full loop" $ do
             _ -> False
         )
 
-  it "treats subgoal_return as a terminal round and suppresses sibling calls" $ do
-    events <- newIORef []
-    siblingCalls <- newIORef (0 :: Int)
-    tasks <- newTaskRegistry
-    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-    let returnDefinition = echoDefinition {tdRef = ToolRef "subgoal_return"}
-        returnTool :: Tool es
-        returnTool =
-          Tool
-            { toolName = "subgoal_return",
-              toolDescription = "return a typed child result",
-              toolSchema = object ["type" .= ("object" :: Text)],
-              toolRun = \args -> pure (Right args)
-            }
-        countedEcho :: (IOE :> es) => Tool es
-        countedEcho =
-          Tool
-            { toolName = "echo",
-              toolDescription = "must not run beside a return",
-              toolSchema = object ["type" .= ("object" :: Text)],
-              toolRun = \args -> do
-                liftIO (modifyIORef' siblingCalls (+ 1))
-                pure (Right args)
-            }
-        returningLLM =
-          LLMInterpreter
-            { liChat = \_ _ _ _ _ ->
-                pure . Right $
-                  ToolCallsResp
-                    (object ["role" .= ("assistant" :: Text)])
-                    ""
-                    [ ToolCall "return-1" "subgoal_return" (object ["answer" .= ("ok" :: Text)]),
-                      ToolCall "echo-1" "echo" (object ["value" .= (7 :: Int)])
-                    ]
-            }
-    result <-
-      withCompactLogger ColorNever Nothing $ \logger ->
-        runEff
-          . runConcurrent
-          . runLog "agent-test" logger LogAttention
-          . runLLMWith returningLLM
-          . runAgent
-            (AgentLimits {maxTurns = 4})
-            (const (buildToolCatalog [returnDefinition, echoDefinition] [returnTool, countedEcho]))
-          $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
-    _ <- finishTurnRuntime tasks turn
-    readIORef siblingCalls `shouldReturn` 0
-    result.turnsUsed `shouldBe` 1
-    result.aborted `shouldBe` Nothing
-    result.appended
-      `shouldSatisfy` any
-        (\case
-           MsgTool "echo-1" body -> "同一轮的其他工具调用已拒绝" `T.isInfixOf` body
-           _ -> False
-        )
+  for_ ["subgoal_return", "task_finish"] $ \returnName ->
+    it ("treats " <> T.unpack returnName <> " as a terminal round and suppresses sibling calls") $ do
+      events <- newIORef []
+      siblingCalls <- newIORef (0 :: Int)
+      tasks <- newTaskRegistry
+      turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+      let returnDefinition = echoDefinition {tdRef = ToolRef returnName}
+          returnTool :: Tool es
+          returnTool =
+            Tool
+              { toolName = returnName,
+                toolDescription = "return a typed child result",
+                toolSchema = object ["type" .= ("object" :: Text)],
+                toolRun = \args -> pure (Right args)
+              }
+          countedEcho :: (IOE :> es) => Tool es
+          countedEcho =
+            Tool
+              { toolName = "echo",
+                toolDescription = "must not run beside a return",
+                toolSchema = object ["type" .= ("object" :: Text)],
+                toolRun = \args -> do
+                  liftIO (modifyIORef' siblingCalls (+ 1))
+                  pure (Right args)
+              }
+          returningLLM =
+            LLMInterpreter
+              { liChat = \_ _ _ _ _ ->
+                  pure . Right $
+                    ToolCallsResp
+                      (object ["role" .= ("assistant" :: Text)])
+                      ""
+                      [ ToolCall "return-1" returnName (object ["answer" .= ("ok" :: Text)]),
+                        ToolCall "echo-1" "echo" (object ["value" .= (7 :: Int)])
+                      ]
+              }
+      result <-
+        withCompactLogger ColorNever Nothing $ \logger ->
+          runEff
+            . runConcurrent
+            . runLog "agent-test" logger LogAttention
+            . runLLMWith returningLLM
+            . runAgent
+              (AgentLimits {maxTurns = 4})
+              (const (buildToolCatalog [returnDefinition, echoDefinition] [returnTool, countedEcho]))
+            $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+      _ <- finishTurnRuntime tasks turn
+      readIORef siblingCalls `shouldReturn` 0
+      result.turnsUsed `shouldBe` 1
+      result.aborted `shouldBe` Nothing
+      result.appended
+        `shouldSatisfy` any
+          ( \case
+              MsgTool "echo-1" body -> "同一轮的其他工具调用已拒绝" `T.isInfixOf` body
+              _ -> False
+          )
 
   it "serializes a tool-call round when any declared effect is unsafe to parallelize" $ do
     order <- newIORef ([] :: [Text])

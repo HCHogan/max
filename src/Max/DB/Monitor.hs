@@ -535,12 +535,12 @@ nextMonitorDeadline now = do
       \        WHERE rm.conversation_id=m.conversation_id \
       \          AND rm.continuation_kind='elaborated' \
       \          AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
-      \          AND recent.admission_state='dispatched' \
+      \          AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow') \
       \          AND recent.dispatched_at>(?::timestamptz - interval '1 hour')) < 4)) \
       \  UNION ALL \
       \  SELECT min(recent.dispatched_at) + interval '1 hour' \
       \  FROM monitor_fires recent JOIN monitors rm USING (monitor_id) \
-      \  WHERE rm.continuation_kind='elaborated' AND recent.admission_state='dispatched' \
+      \  WHERE rm.continuation_kind='elaborated' AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow') \
       \    AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
       \    AND recent.dispatched_at>(?::timestamptz - interval '1 hour') \
       \) deadlines"
@@ -750,7 +750,7 @@ claimElaboratedMonitorFires owner now leaseSeconds limit =
       \       WHERE rm.conversation_id=m.conversation_id \
       \         AND rm.continuation_kind='elaborated' \
       \         AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
-      \         AND recent.admission_state='dispatched' \
+      \         AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow') \
       \         AND recent.dispatched_at>(?::timestamptz - interval '1 hour')) < 4 \
       \    ) \
       \  ORDER BY f.created_at, f.fire_id \
@@ -780,10 +780,10 @@ elaboratedFireSelect :: Query
 elaboratedFireSelect =
   "SELECT f.fire_id, m.monitor_id, m.monitor_ordinal, c.legacy_group_id, \
   \       m.armed_by_principal_id, m.arming_turn_id, arming.turn_ordinal, \
-  \       seed.canonical_message_id, m.goal_text, m.trigger_kind, m.schedule_cron, \
+  \       seed.canonical_message_id, COALESCE(f.definition_snapshot->>'goal',m.goal_text), m.trigger_kind, m.schedule_cron, \
   \       f.scheduled_at, f.trigger_canonical_message_id, f.trigger_evidence, \
-  \       COALESCE(m.effect_ceiling->'tool_grants', '{}'::jsonb)::text, \
-  \       m.required_role, f.claim_owner, f.admitted_turn_id, admitted.turn_ordinal \
+  \       COALESCE(f.definition_snapshot->'grants'->'tool_grants',m.effect_ceiling->'tool_grants', '{}'::jsonb)::text, \
+  \       COALESCE(f.definition_snapshot->>'required_role',m.required_role), f.claim_owner, f.admitted_turn_id, admitted.turn_ordinal \
   \FROM monitor_fires f \
   \JOIN monitors m USING (monitor_id) \
   \JOIN conversations c ON c.conversation_id=m.conversation_id \
@@ -833,7 +833,7 @@ admitElaboratedMonitorTurn owner fireId nextFire = withTransaction $ do
               \ JOIN monitors rm USING (monitor_id) \
               \ WHERE rm.conversation_id=? AND rm.continuation_kind='elaborated' \
               \   AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
-              \   AND recent.admission_state='dispatched' \
+              \   AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow') \
               \   AND recent.dispatched_at>now() - interval '1 hour'"
               (Only conversation)
           let recentCount = exactlyOne "admitElaboratedMonitorTurn budget" (recentRows :: [Only Int64])

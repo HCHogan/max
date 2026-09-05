@@ -23,18 +23,19 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Monitor
   ( TimeMonitor (..),
     armCannedTimeMonitor,
-    cancelMonitor,
     listCannedTimeMonitors,
   )
+import Max.DB.Task qualified as Task
 import Max.Effects.Tools (Tool (..))
 import Max.Monitor (nextCronFire)
-import Max.Monitor.Types (MonitorRef (..), monitorHandleText, parseMonitorHandle)
+import Max.Monitor.Types (MonitorOrdinal (..), MonitorRef (..), monitorHandleText, parseMonitorHandle)
 import Max.Time (fmtDateHM)
 import Max.ToolContext
   ( ToolContext,
     toolAuthorPrincipalId,
     toolConversationScope,
     toolGroupId,
+    toolMonitorArmingAllowed,
     toolTurnOutputContext,
   )
 import Max.Tools (parseTimeArg)
@@ -215,15 +216,18 @@ cancelReminderTool context =
         Left err -> pure $ Left ("bad args: " <> T.pack err)
         Right rawHandle -> case parseMonitorHandle rawHandle of
           Nothing -> pure (Left "handle 格式无效，应为 m#<正整数>")
-          Just ordinal -> do
-            ok <- cancelMonitor (toolConversationScope context) ordinal
-            if ok
-              then pure $ Right $ object ["ok" .= True, "cancelled" .= monitorHandleText ordinal]
-              else
-                pure $
-                  Right $
-                    object
-                      [ "ok" .= False,
-                        "error" .= ("没有找到这个提醒（可能已触发，或不属于本会话）" :: Text)
-                      ]
+          Just ordinal ->
+            Right
+              <$> Task.monitorControl
+                (toolGroupId context)
+                (toolAuthorPrincipalId context)
+                (toolMonitorArmingAllowed context)
+                ordinal.unMonitorOrdinal
+                "cancel"
+                Nothing
+                ""
+                "coalesce"
+                8
+                "cancel"
+                False
     }

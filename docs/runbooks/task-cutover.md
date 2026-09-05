@@ -1,0 +1,102 @@
+# ADR008: one coordinated task cutover
+
+Status: local implementation; no production switch performed by this change.
+
+## User surface
+
+- Long work uses `task_start` with an idempotency key, explicit objective/context
+  and `research`, `browser` or `sandbox` profile. It returns a stable `task#N`.
+- `task_status` and `task_list` inspect work; completion normally wakes the
+  frontend without polling. `task_finish` is private to background execution.
+- `!task list`, `!task status task#N`, `!task steer task#N <note>`.
+- `!task cancel task#N [reason]` and
+  `!task replace task#N <revision> <new objective>` require initiator/admin
+  authority. Rewording does not reset budget. Cancellation cannot retract an
+  effect already admitted or committed.
+- Replying to an unambiguous task-linked output addresses that task. Multiple
+  task handles in one output require an explicit handle. Same author or newest
+  runtime entry is not an assignment. `!feedback task#N <note>` also addresses
+  the durable inbox; unaddressed `!feedback` asks for a target. `!btw <question>`
+  keeps a separate queued request even when the frontend is busy.
+- `monitor_history` includes revisions, task links, coalescing, overflow and
+  failures. `configure_monitor` requires CAS and explicit retain/cancel policy
+  for pending old-revision occurrences. `cancel_monitor` stops future/pending
+  work; `cancel_tasks=true` separately cancels admitted tasks.
+
+## Local gates
+
+Use an isolated PostgreSQL test database, never the production URL:
+
+```sh
+cabal test max-test --test-show-details=direct
+MAX_TEST_DB_URL=<isolated-test-db> cabal test max-test-db --test-show-details=direct
+cabal build all
+cabal run max-prompt-flow
+cabal run max-prompt-flow -- --check
+git diff --check
+```
+
+`Max.DB.TaskSpec` exercises admission, provenance, capability profiles, CAS,
+durable inbox races, cancellation, ancestor reservations, lease recovery,
+resource ownership, frontend/output fences, obligation settlement and monitor
+overlap. Monitor regressions cover changes back to earlier values, periodic
+failure notices, cron advancement after overflow and unowned legacy controls.
+Agent loop tests verify immediate frontend yield and terminal returns.
+Existing database tests continue covering real outbox/dispatch races and legacy
+plan/monitor recovery. The hourly-budget fixture explicitly uses queue policy
+so it tests the budget rather than the new coalescing default.
+
+These are deterministic tests, not measurements of real model quality, Docker
+browser/sandbox behavior, or delivery to a production platform.
+
+## Joint switch
+
+1. Record current operational health, backlog, active plans/monitor fires and
+   the runtime version; address existing health failures before claiming a
+   healthy rollout. Take and verify a database backup, and retain the old binary
+   and configuration without exposing credentials.
+2. Validate the candidate, then drain and replace the service once. Migration
+   087 is additive. Old plan rows and already-admitted monitor turns retain
+   their readers and recovery owner; new fires use tasks. No two workers may
+   own the same task attempt. Do not clear journals, pending requests or
+   `outcome-unknown` effects to make a health report look clean.
+3. Run the following acceptance cases through the real endpoints with bounded
+   test objectives. Measure first-response/completion latency and provider
+   usage; missing usage is unknown. Set quality/latency thresholds before
+   comparing representative tasks, not after seeing results.
+4. Check task state, event history, result links, monitor fire history and
+   per-endpoint delivery state. Only then declare the switch healthy.
+
+### Behavioral acceptance
+
+- A starts long research; B gets a quick answer while A still runs. A's second
+  unrelated question remains separate; an addressed correction reaches A's task.
+- Browser tasks do not share a browser session. Sandbox tasks cannot take
+  another active task's sandbox; ambiguous in-flight effects remain visible.
+- Another participant may suggest evidence, but cannot replace/cancel A's task.
+- Stop between admission and execution, then restart. Recover the same logical
+  task with a new attempt, preserved reservations and journal evidence.
+- Replace/cancel while an attempt finishes. Old reports cannot publish as the
+  current task. Cancel a monitor with both active and pending work and check
+  the separate `cancel_tasks` behavior.
+- Repeated ledger/cron observations preserve their occurrence history without
+  concurrent work on one monitor. Queue overflow is visible. Canned reminders
+  still arrive independently, including on a slow mirrored endpoint.
+- A summary-model failure still produces a bounded, fenced literal task report;
+  a failed physical delivery stays in its endpoint outbox, not a repeated task.
+
+## Limits and rollback
+
+Hard task bounds are tool reservations, agent-model rounds, tree depth, attempt
+count, admission deadline and active-task counts. Tokens/cost and provider
+usage are observational; helper LLM calls are not agent-loop rounds. A success
+report is an explicit agent claim with evidence, not a generic proof of success.
+The frontend deadline includes context assembly; it is not a promised network
+response time or provider reservation. Active-active service takeover is not
+introduced by this change.
+
+An old binary refuses a database containing an unknown migration. Do not delete
+the migration ledger entry to force a downgrade. Prefer a forward fix; restoring
+the verified pre-switch backup requires an explicit outage/reconciliation plan
+for messages and effects committed after that backup. Never blindly replay
+unknown sends or commands. This runbook authorizes none of those operations.

@@ -6,7 +6,13 @@
   and durable hourly budgets are production paths. The admin monitor/history
   projection and a user-facing re-aim operation remain absent. Slice 5
   `ExternalPoll` remains deliberately deferred standing network authority.
-- Date: 2026-08-09.
+  [ADR 008](008-durable-tasks-conversation-coordination.md) retains the typed
+  trigger, occurrence, bounds, and fire-time revalidation contracts. It accepts
+  a replacement from elaborated fire-to-turn admission to the shared task
+  runtime, with explicit overlap, revision, cancellation, and conversation-output
+  coordination, implemented as a local cutover candidate;
+  references below to ADR 002 do not require its retired Plan DSL.
+- Date: 2026-08-09; ADR 008 relationship recorded 2026-09-05.
 
 ## Context
 

@@ -1,22 +1,24 @@
 # ADR 002: Partial Plans and Adaptive Elaboration
 
-- Status: Accepted for the surviving substrate and plan core, **partially
-  superseded by [ADR 007](007-plans-as-orchestration.md)**. The journal, IR,
-  parser, validator, executor, durable plan, and fork scheduler are implemented.
-  Model-driven filling of ordinary `Hole`s and adaptive horizon policies above
-  the shipped orchestration path remain proposed post-1.0 work.
+- Status: **Superseded as the planning/elaboration direction by
+  [ADR 008](008-durable-tasks-conversation-coordination.md)**. The model-authored
+  Plan DSL hypothesis is retired for Max; ordinary hole filling and adaptive
+  horizon are no longer the post-1.0 roadmap. Journal, scoped results, runtime
+  authorization, durable ownership, cancellation, and recovery contracts survive
+  under ADR 008. Existing IR/parser/validator/executor/plan/fork code remains
+  implemented and active pending migration; this status does not remove it.
 
-  ADR 007 retires this ADR's information-flow programme, narrows the
-  validator's claim, inverts the motivation for child plans, and replaces
-  integration steps 7–10. Sections affected are marked inline; ADR 007's
-  "What this retires" table is the authoritative list. Everything not marked
-  stands.
+  [ADR 007](007-plans-as-orchestration.md) first narrowed this design in August.
+  ADR 008 is now authoritative for what survives and what is retired. The body
+  below preserves the historical reasoning and integration sequence; statements
+  about future work or unmarked sections standing do not override ADR 008.
 - Date: 2026-08-03; journal contract and post-cutover revisions 2026-08-05;
   sandbox observability, narrator, and continuity (ADR 005)
   cross-references 2026-08-06; elaboration surface, pull-based hole
   views, harness-write effects, and monitor trigger provenance (ADR 006)
   2026-08-09; partial supersession by ADR 007 marked 2026-08-10; implementation
-  status reconciled with the production path 2026-08-11.
+  status reconciled with the production path 2026-08-11; direction superseded
+  by ADR 008 on 2026-09-05.
 
 ## Context
 
