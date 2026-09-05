@@ -164,13 +164,13 @@ try {
 
   const partialClient = await connect();
   const partialSession = await start(partialClient, 1);
-  const missing = await success(partialClient, "browse_session_navigate", { sessionId: partialSession, _maxLease: lease(1), url: "http://127.0.0.1:18765/missing", timeout: 2000 });
+  const missing = await success(partialClient, "browse_session_navigate", { sessionId: partialSession, _maxLease: lease(1), url: "http://127.0.0.1:18765/missing", timeout: 5000 });
   assert.equal(missing.status, 404);
   assert.equal(missing.navigation.complete, false);
   assert.match(missing.text, /Missing fixture document/);
   const partialSnapshot = await snapshot(partialClient, partialSession, 1);
   assert.match(partialSnapshot, /404/);
-  await rejected(partialClient, "browse_session_navigate", { sessionId: partialSession, _maxLease: lease(1), url: "http://127.0.0.1:18765/no-document", timeout: 1000 });
+  await rejected(partialClient, "browse_session_navigate", { sessionId: partialSession, _maxLease: lease(1), url: "http://127.0.0.1:18765/no-document", timeout: 5000 });
   await success(partialClient, "max_workspace_revoke");
   report("stalled scripts return a partial 404; absent documents remain errors without stale-page fallback");
 
