@@ -748,12 +748,13 @@ dbParser = do
     setting
       [ -- Sized against the connections that are held rather than the ones
         -- that are used.  Every 'Max.DB.Notify' waiter pins one for as long as
-        -- it is asleep, and there are now four work channels — dispatch,
-        -- delivery, monitors, plans — plus one per in-flight admin long-poll.
+        -- it is asleep: dispatch, monitors and plans take one each, delivery
+        -- takes one per lane — one per configured platform plus the unrouted
+        -- lane — and each in-flight admin long-poll takes one more.
         -- At the old default of 8 that left four for every turn, worker and
         -- query in the process, and 'Data.Pool' blocks on acquire with no
         -- timeout: exhaustion does not error, it hangs the bot.
-        help "Connection-pool size.  Four are permanently held by LISTEN waiters",
+        help "Connection-pool size.  LISTEN waiters hold three plus one per delivery lane",
         reader auto,
         option,
         long "db-max-conns",

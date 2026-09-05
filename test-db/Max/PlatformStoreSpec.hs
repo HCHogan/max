@@ -326,6 +326,47 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     withDb pool (startDelivery "worker-next" reclaimed.deliveryId reclaimed.attemptCount 30)
       `shouldReturn` True
 
+  -- Delivery runs one lane per platform so a wedged edge cannot pace the
+  -- others: an unreachable iMessage bridge timing out at 90s per attempt used
+  -- to sit in a shared batch and put that delay in front of every QQ reply
+  -- behind it.  That only works if the lanes partition the queue, so pin both
+  -- halves of the partition here.
+  it "gives each platform lane its own endpoints and nothing else" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    -- One message each way, so both platforms have a delivery outstanding at
+    -- the same time — the case a single shared worker used to serialise.
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-lane" "from matrix"))
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId (addUTCTime 1 now) "qq-lane" "from qq"))
+
+    qqLane <- withDb pool (claimDeliveriesForLane "lane-qq" (LanePlatform PlatformQQ) 10 30)
+    fmap (.platform) qqLane `shouldBe` [PlatformQQ]
+    fmap (.endpointId) qqLane `shouldBe` [qq.endpointId]
+
+    -- Claimed while the QQ row is already reserved by the lane above: the
+    -- Matrix lane must not be waiting on it.
+    matrixLane <- withDb pool (claimDeliveriesForLane "lane-matrix" (LanePlatform PlatformMatrix) 10 30)
+    fmap (.platform) matrixLane `shouldBe` [PlatformMatrix]
+    fmap (.endpointId) matrixLane `shouldBe` [matrix.endpointId]
+
+  it "leaves the platform lanes' complement to the unrouted lane" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-unrouted" "from matrix"))
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound qq.endpointId (addUTCTime 1 now) "qq-unrouted" "from qq"))
+
+    -- A process holding transports for both platforms has no residual work,
+    -- so the extra lane costs a poll and claims nothing.
+    covered <- withDb pool (claimDeliveriesForLane "lane-none" (LaneUnrouted [PlatformQQ, PlatformMatrix]) 10 30)
+    fmap (.platform) covered `shouldBe` []
+
+    -- Drop QQ from the served set, as a process with no QQ transport has it:
+    -- the QQ delivery is then exactly the unrouted lane's job.  Without that
+    -- lane nobody claims it and it stays pending forever instead of failing.
+    unrouted <- withDb pool (claimDeliveriesForLane "lane-unrouted" (LaneUnrouted [PlatformMatrix]) 10 30)
+    fmap (.platform) unrouted `shouldBe` [PlatformQQ]
+    fmap (.endpointId) unrouted `shouldBe` [qq.endpointId]
+
   it "quarantines an expired sending lease without retrying it or blocking the endpoint" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime

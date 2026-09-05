@@ -58,6 +58,8 @@ module Max.Platform.Store
     mentionPrincipalsFor,
     expiredSendingDeliverySql,
     claimDeliveries,
+    DeliveryLane (..),
+    claimDeliveriesForLane,
     claimDelivery,
     startDelivery,
     DeliveryCompletion (..),
@@ -2083,6 +2085,24 @@ releaseDeferredDispatches gid =
       \   AND m.group_id = ? AND md.status = 'deferred'"
       (Only gid)
 
+-- | Which endpoints one delivery lane will claim.
+--
+-- Delivery runs a lane per platform so a wedged edge cannot hold the others
+-- hostage.  Splitting is safe for ordering because the FIFO guard in
+-- 'claimDeliveriesWhere' only ever compares deliveries sharing an
+-- @endpoint_id@, and an endpoint belongs to exactly one platform account,
+-- hence exactly one platform: no ordering constraint has ever spanned a
+-- platform boundary, so no lane can be missing a row it had to wait behind.
+data DeliveryLane
+  = -- | One platform's endpoints, served by that platform's transport.
+    LanePlatform !Platform
+  | -- | Everything the given platforms do not cover.  Deliveries addressed
+    -- to a platform with no registered transport must still be claimed by
+    -- somebody or they sit pending forever; this lane claims them so they
+    -- fail permanently exactly as they did under a single shared worker.
+    LaneUnrouted ![Platform]
+  deriving stock (Eq, Show)
+
 claimDeliveries ::
   (WithConnection :> es, IOE :> es) =>
   -- | stable worker id
@@ -2091,7 +2111,19 @@ claimDeliveries ::
   NominalDiffTime ->
   Eff es [DeliveryClaim]
 claimDeliveries workerId limit leaseDuration = do
-  claimDeliveriesWhere workerId Nothing limit leaseDuration
+  claimDeliveriesWhere workerId Nothing Nothing limit leaseDuration
+
+-- | Claim only the deliveries belonging to one lane.
+claimDeliveriesForLane ::
+  (WithConnection :> es, IOE :> es) =>
+  -- | stable worker id, distinct per lane so leases never collide
+  Text ->
+  DeliveryLane ->
+  Int ->
+  NominalDiffTime ->
+  Eff es [DeliveryClaim]
+claimDeliveriesForLane workerId lane limit leaseDuration = do
+  claimDeliveriesWhere workerId Nothing (Just lane) limit leaseDuration
 
 claimDelivery ::
   (WithConnection :> es, IOE :> es) =>
@@ -2100,7 +2132,7 @@ claimDelivery ::
   NominalDiffTime ->
   Eff es (Maybe DeliveryClaim)
 claimDelivery workerId (DeliveryId delivery) leaseDuration = do
-  claims <- claimDeliveriesWhere workerId (Just delivery) 1 leaseDuration
+  claims <- claimDeliveriesWhere workerId (Just delivery) Nothing 1 leaseDuration
   pure (listToMaybe claims)
 
 -- | A reservation has not crossed the effect boundary.  If its owner died
@@ -2200,10 +2232,22 @@ claimDeliveriesWhere ::
   (WithConnection :> es, IOE :> es) =>
   Text ->
   Maybe Int64 ->
+  Maybe DeliveryLane ->
   Int ->
   NominalDiffTime ->
   Eff es [DeliveryClaim]
-claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
+claimDeliveriesWhere workerId mDelivery mLane limit leaseDuration = do
+  -- Both are NULL for an unfiltered claim, so the predicates below collapse
+  -- to TRUE and the plan is the one every existing caller already had.  An
+  -- empty 'LaneUnrouted' list is a real case, not a degenerate one: with no
+  -- transports registered @<> ALL ('{}')@ is vacuously true and the lane
+  -- claims everything, which is what a transport-less process should do.
+  let mOnlyPlatform = case mLane of
+        Just (LanePlatform platform) -> Just (renderPlatform platform)
+        _ -> Nothing
+      mExceptPlatforms = case mLane of
+        Just (LaneUnrouted served) -> Just (PGArray (renderPlatform <$> served))
+        _ -> Nothing
   -- This sweep is deliberately separate from the claim statement: sibling
   -- data-modifying CTEs share a snapshot and would leave the quarantined row
   -- visible as @sending@ to the ordering predicate until the next poll.
@@ -2220,6 +2264,8 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \   AND d.next_attempt_at <= now() \
       \   AND max_lease_free(d.lease_owner, d.lease_expires_at) \
       \   AND (?::bigint IS NULL OR d.delivery_id = ?) \
+      \   AND (?::text IS NULL OR a.platform = ?) \
+      \   AND (?::text[] IS NULL OR a.platform <> ALL (?)) \
       \   AND NOT EXISTS ( \
       \     SELECT 1 FROM message_deliveries earlier \
       \     JOIN messages earlier_message ON earlier_message.canonical_message_id = earlier.canonical_message_id \
@@ -2350,7 +2396,9 @@ claimDeliveriesWhere workerId mDelivery limit leaseDuration = do
       \   ORDER BY copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
       \ ) reply_copy ON true \
       \ ORDER BY c.delivery_id"
-      (mDelivery, mDelivery, limit, workerId, realToFrac leaseDuration :: Double)
+      ( (mDelivery, mDelivery, mOnlyPlatform, mOnlyPlatform, mExceptPlatforms)
+          :. (mExceptPlatforms, limit, workerId, realToFrac leaseDuration :: Double)
+      )
   pure (toClaim <$> (rows :: [DeliveryClaimRow]))
 
 -- | Cross a delivery reservation into the non-idempotent transport phase.

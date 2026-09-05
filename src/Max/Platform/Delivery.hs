@@ -1,4 +1,13 @@
--- | Durable per-endpoint delivery worker and emit-only transport seam.
+-- | Durable per-endpoint delivery workers and emit-only transport seam.
+--
+-- Delivery runs one lane per platform, concurrently.  A lane is sequential
+-- within itself, which is what preserves per-endpoint order; what it must
+-- not do is make one platform's order depend on another's progress.  A
+-- single shared worker did exactly that: it claimed a mixed batch and walked
+-- it in order, so one edge blocking on its transport stalled every other
+-- platform queued behind it.  An unreachable iMessage bridge timing out at
+-- 90s per attempt paced the whole process at one batch per 90s and put that
+-- delay in front of every QQ and Matrix reply.
 --
 -- A claim contains only the stored canonical IR and endpoint facts.  The
 -- worker resolves destination identities and media, calls the one shared
@@ -32,7 +41,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
 import Data.Either (fromRight, lefts, rights)
 import Data.Int (Int64)
-import Data.List (find, nubBy)
+import Data.List (find, nub, nubBy)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -40,6 +49,7 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (NominalDiffTime, addUTCTime, getCurrentTime)
 import Effectful
+import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Exception (SomeException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
@@ -61,7 +71,8 @@ import Max.Platform (PlatformBackend (..))
 import Max.Platform.Store
   ( DeliveryClaim (..),
     DeliveryCompletion (..),
-    claimDeliveries,
+    DeliveryLane (..),
+    claimDeliveriesForLane,
     completeDelivery,
     deliveryMentionNatives,
     startDelivery,
@@ -86,6 +97,10 @@ data DeliveryAttempt
     -- without a bound: while it is down nothing else can be delivered to this
     -- endpoint either, so waiting denies the ordered lane to no one.  A real
     -- QQ edge outage took 159 attempts over eleven hours and then delivered.
+    --
+    -- "No one" is scoped to the platform's own lane, and only became true
+    -- when delivery stopped sharing one worker across platforms: an edge
+    -- retrying here holds up its own platform, by design, and nobody else.
     AttemptRetryable !Text
   | -- | A reachable edge refused this content (QQ risk control, a reaction on
     -- a deleted target).  Rejections can be transient, so it is retried — but
@@ -222,29 +237,52 @@ nativeMediaTier caps = \case
   MFile -> caps.file
 
 deliveryWorker ::
-  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, Log :> es, Concurrent :> es, IOE :> es) =>
   Text ->
   [DeliveryTransport] ->
   Eff es ()
-deliveryWorker workerId transports = localDomain "delivery" loop
+deliveryWorker workerId transports = localDomain "delivery" $ do
+  logInfo "delivery lanes started" $
+    object
+      [ "platforms" .= (renderPlatform <$> servedPlatforms),
+        "lanes" .= length lanes
+      ]
+  forConcurrently_ lanes runLane
   where
-    loop = do
+    servedPlatforms = nub [transport.platform | transport <- transports]
+
+    -- A lane per served platform, plus the residual one.  Every delivery
+    -- matches exactly one lane: the platform lanes partition what is served
+    -- and 'LaneUnrouted' takes the complement, so nothing is claimed twice
+    -- and nothing is stranded.  Each lane carries its own worker id because
+    -- leases are keyed by owner.
+    lanes =
+      [(LanePlatform platform, renderPlatform platform) | platform <- servedPlatforms]
+        <> [(LaneUnrouted servedPlatforms, "unrouted")]
+
+    -- Every lane holds a LISTEN connection for as long as it is idle, so the
+    -- lane count is a floor on the pool (see @db.max_conns@).
+    runLane (lane, laneName) =
+      localData [("lane", toJSON laneName)] $
+        loop (workerId <> "/" <> laneName) lane
+
+    loop laneWorkerId lane = do
       claims <-
         claimOrWait DeliveryWork $
-          claimDeliveries workerId deliveryBatchSize deliveryLeaseSeconds
-      forM_ claims deliverClaim
-      loop
+          claimDeliveriesForLane laneWorkerId lane deliveryBatchSize deliveryLeaseSeconds
+      forM_ claims (deliverClaim laneWorkerId)
+      loop laneWorkerId lane
 
-    deliverClaim claim = do
-      started <- startDelivery workerId claim.deliveryId claim.attemptCount deliveryLeaseSeconds
+    deliverClaim laneWorkerId claim = do
+      started <- startDelivery laneWorkerId claim.deliveryId claim.attemptCount deliveryLeaseSeconds
       if not started
         then
           logInfo "delivery reservation was no longer owned" $
-            object ["delivery_id" .= claim.deliveryId, "worker" .= workerId]
+            object ["delivery_id" .= claim.deliveryId, "worker" .= laneWorkerId]
         else do
           now <- liftIO getCurrentTime
           (completion, lowerNotes) <- routeClaim now claim
-          completed <- completeDelivery workerId claim.deliveryId claim.attemptCount lowerNotes completion
+          completed <- completeDelivery laneWorkerId claim.deliveryId claim.attemptCount lowerNotes completion
           if completed
             then
               logInfo "delivery completed" $
@@ -257,7 +295,7 @@ deliveryWorker workerId transports = localDomain "delivery" loop
                   ]
             else
               logAttention "delivery lease lost before completion" $
-                object ["delivery_id" .= claim.deliveryId, "worker" .= workerId]
+                object ["delivery_id" .= claim.deliveryId, "worker" .= laneWorkerId]
 
     routeClaim now claim = case claim.eventKind of
       EventMessage -> withTransport claim $ \transport -> deliverContent now claim transport DeliverMessage
