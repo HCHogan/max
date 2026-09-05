@@ -1,0 +1,40 @@
+--- a/node_modules/camoufox-js/dist/sync_api.js
++++ b/node_modules/camoufox-js/dist/sync_api.js
+@@ -7,6 +7,7 @@
+ }
+ export async function NewBrowser(playwright, headless = false, fromOptions = {}, userDataDir = false, debug = false, launch_options = {}) {
+     let virtualDisplay = null;
++    try {
+     // Normalize headless to boolean and prepare options for launchOptions function
+     const normalizedHeadless = headless === "virtual" ? false : headless || false;
+     if (headless === "virtual") {
+@@ -26,4 +27,8 @@
+     }
+     const browser = await playwright.launch(fromOptions);
+     return syncAttachVD(browser, virtualDisplay);
++    } catch (error) {
++        virtualDisplay?.kill();
++        throw error;
++    }
+ }
+--- a/node_modules/camoufox-js/dist/utils.js
++++ b/node_modules/camoufox-js/dist/utils.js
+@@ -237,12 +237,15 @@
+         return browser;
+     }
+     const originalClose = browser.close;
+-    browser.close = (...args) => {
+-        originalClose.apply(browser, ...args);
+-        if (virtualDisplay) {
++    browser.close = async (...args) => {
++        try {
++            return await originalClose.apply(browser, args);
++        } finally {
+             virtualDisplay.kill();
+         }
+     };
++    browser.once?.("disconnected", () => virtualDisplay.kill());
++    browser.once?.("close", () => virtualDisplay.kill());
+     browser._virtualDisplay = virtualDisplay;
+     return browser;
+ }

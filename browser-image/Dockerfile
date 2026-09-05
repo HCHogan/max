@@ -59,10 +59,14 @@ RUN patch --batch --forward -p1 --input=/tmp/camoufox-navigation.patch
 COPY navigation.ts /app/src/
 COPY navigation.test.mjs /tmp/navigation.test.mjs
 COPY workspace-close.test.mjs /tmp/workspace-close.test.mjs
+COPY camoufox-virtual-display.patch /tmp/camoufox-virtual-display.patch
+COPY virtual-display.test.mjs /tmp/virtual-display.test.mjs
 
 FROM source AS builder
 
 RUN npm_config_user_agent="pnpm/10.0.0 npm/10.9.8 node/v22.0.0 linux x64" npm ci \
+ && patch --batch --forward -p1 --input=/tmp/camoufox-virtual-display.patch \
+ && node /tmp/virtual-display.test.mjs /app/node_modules/camoufox-js/dist/ \
  && npm run build \
  && node /tmp/workspace-lease.test.mjs /app/dist/workspace-lease.js \
  && node /tmp/navigation.test.mjs /app/dist/navigation.js \

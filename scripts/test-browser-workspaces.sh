@@ -28,9 +28,9 @@ if [[ "$logs" == *fixture_auth* || "$logs" == *fixture_identity* || "$logs" == *
 fi
 printf 'PASS authentication state is absent from container logs\n'
 for attempt in $(seq 1 30); do
-  if docker top "$container" -eo comm,args | awk '/\.cache\/camoufox\/|Xvfb/ {count++} $1 == "node" && /app\/dist\/index.js/ && !/supergateway/ {count++} END {exit(count > 0)}'; then
+  if docker top "$container" -eo pid,comm,args | awk '/\.cache\/camoufox\/|Xvfb/ {count++} $2 == "node" && /app\/dist\/index.js/ && !/supergateway/ {count++} END {exit(count > 0)}'; then
     break
   fi
   sleep 1
 done
-docker top "$container" -eo comm,args | awk '/\.cache\/camoufox\/|Xvfb/ {count++} $1 == "node" && /app\/dist\/index.js/ && !/supergateway/ {count++} END {printf "remaining-browser-processes=%d\n",count; if(count) exit 1}'
+docker top "$container" -eo pid,comm,args | awk '/\.cache\/camoufox\/|Xvfb/ {count++} $2 == "node" && /app\/dist\/index.js/ && !/supergateway/ {count++} END {printf "remaining-browser-processes=%d\n",count; if(count) exit 1}'

@@ -56,6 +56,9 @@ Foreground finalizers also revoke and require closure acknowledgement. A failed
 release remains fenced in the registry and is retried by maintenance rather
 than forgotten. The gateway executes the MCP child directly so termination
 reaches its shutdown handler, which drains pending launches and closes browsers.
+The pinned Camoufox wrapper awaits asynchronous browser closure and releases
+its virtual display even when launch or close fails; it must not acknowledge
+closure while the underlying Playwright close promise is still pending.
 Cancellation/deadline fencing is immediate at the next operation boundary;
 physical cleanup is asynchronous and cannot undo an in-flight external effect.
 

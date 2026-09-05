@@ -1,0 +1,25 @@
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+
+const directory = pathToFileURL(process.argv[2]);
+const { NewBrowser } = await import(new URL("sync_api.js", directory));
+const { VirtualDisplay } = await import(new URL("virtdisplay.js", directory));
+let allocated = 0;
+VirtualDisplay.prototype.get = function () { allocated += 1; return ":fixture"; };
+VirtualDisplay.prototype.kill = function () { allocated -= 1; };
+const options = { executablePath: "/unused-fixture" };
+await assert.rejects(NewBrowser({ launch: async () => { throw new Error("fixture launch failed"); } }, "virtual", options));
+assert.equal(allocated, 0);
+let finish;
+const pending = new Promise(resolve => { finish = resolve; });
+const browser = await NewBrowser({ launch: async () => ({ close: () => pending }) }, "virtual", options);
+const closed = browser.close();
+assert.equal(allocated, 1);
+assert.ok(closed instanceof Promise);
+finish();
+await closed;
+assert.equal(allocated, 0);
+const failed = await NewBrowser({ launch: async () => ({ close: async () => { throw new Error("fixture close failed"); } }) }, "virtual", options);
+await assert.rejects(failed.close());
+assert.equal(allocated, 0);
+console.log("PASS virtual displays roll back on launch failure and wait for asynchronous browser closure");
