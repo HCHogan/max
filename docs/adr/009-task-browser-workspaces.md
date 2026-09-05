@@ -1,6 +1,6 @@
 # ADR-009: Task browser workspaces, execution leases and explicit identities
 
-Status: Implemented; real Docker/browser integration validation is a deployment gate.
+Status: Implemented; isolated real Camoufox/MCP acceptance passed on h610 on 2026-09-05.
 
 ## Decision
 
@@ -133,3 +133,15 @@ retention, profile permissions/revocation and frozen monitor profiles; unit test
 cover lock ownership, encryption/restart, origin filtering and reload policy.
 The pinned upstream TypeScript build and queued-operation fencing tests are
 separate from a real Docker/Camoufox login-and-restart acceptance test.
+
+Run `bash scripts/test-browser-workspaces.sh [image]` against the built image.
+It starts a disposable, network-isolated container with a local fixture and
+checks login storage, hot continuation, concurrent workspace isolation, cold
+restore without action replay, lease renewal/expiry, and revocation during
+browser launch. It also checks that no browser processes remain after closure.
+The localhost test exception exists only in this container. This does not test
+real accounts, production proxies, or QQ/LLM-triggered task execution.
+
+The vault uses the pinned Nix package set's `crypton` 1.0.x and `memory` 0.18
+family, matching the existing TLS dependencies. Selecting a separate `crypton`
+1.1/`ram` family only for Max creates an inconsistent Haskell package closure.
