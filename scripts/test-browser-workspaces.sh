@@ -22,7 +22,7 @@ done
 
 docker exec "$container" node /home/camoufox/app/max-acceptance.mjs
 logs=$(docker logs "$container" 2>&1)
-if printf '%s' "$logs" | grep -Eq 'fixture_auth|fixture_identity|workspace-one'; then
+if [[ "$logs" == *fixture_auth* || "$logs" == *fixture_identity* || "$logs" == *workspace-one* ]]; then
   printf 'FAIL browser logs exposed authentication fixture state\n' >&2
   exit 1
 fi
