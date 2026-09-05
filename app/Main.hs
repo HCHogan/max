@@ -59,6 +59,7 @@ import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Log (withCompactLoggerDynamic)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.Matrix (matrixDeliveryTransport, matrixWorker)
+import Max.MaxOps.Notifications (notificationServer)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.MemoryExtract (dreamWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
@@ -390,6 +391,9 @@ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath ap
                      ]
                   <> [ worker "admin-server" RestartableWorker (adminServer adminCfg workerEnv (modelProfileNames candidate.llm) logBuf)
                      | adminCfg <- maybeToList candidate.admin
+                     ]
+                  <> [ worker "maxops-notifications" RestartableWorker (notificationServer notificationConfig)
+                     | notificationConfig <- maybeToList candidate.maxopsNotifications
                      ]
                   <> [ worker "call-pruner" RestartableWorker (callPruner candidate.adminCallRetentionDays)
                      | _ <- maybeToList candidate.admin

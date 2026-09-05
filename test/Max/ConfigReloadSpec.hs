@@ -2,6 +2,7 @@ module Max.ConfigReloadSpec (spec) where
 
 import Control.Exception (bracket)
 import Max.Config
+import Max.MaxOps.Notifications (NotificationConfig (..))
 import Max.MaxOps.Types
 import OneBot.Server (ServerConfig (..))
 import System.Environment (lookupEnv, setEnv, unsetEnv, withArgs)
@@ -11,6 +12,15 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "reload candidate configuration" $ do
+  it "loads native notification wiring independently and requires restart for routing changes" $
+    withEnvironment "MAX_MAXOPS_NOTIFY_PORT" "9722" $
+      withEnvironment "MAX_MAXOPS_NOTIFY_TOKEN_FILE" "/run/credentials/max.service/maxops-notifications" $
+        withEnvironment "MAX_MAXOPS_NOTIFY_GROUPS" "611798505" $
+          withEnvironment "MAX_MAXOPS_NOTIFY_HOSTS" "h610,tank" $
+            withArgs ["--llm-api-key", "fixture-key"] $ do
+              config <- loadConfig
+              config.maxopsNotifications `shouldBe` Just (NotificationConfig "127.0.0.1" 9722 "/run/credentials/max.service/maxops-notifications" [611798505] ["h610", "tank"])
+              configChanges config (config {maxopsNotifications = Nothing}) `shouldBe` [ConfigChange "maxops_notifications" RestartRequired]
   it "accepts native maxops environment options and an explicit empty allowlist" $
     withEnvironment "MAX_MAXOPS_ENABLED" "True" $
       withEnvironment "MAX_MAXOPS_TOKEN_FILE" "/run/credentials/max.service/maxops-token" $

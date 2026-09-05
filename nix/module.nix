@@ -278,6 +278,30 @@ in
       };
     };
 
+    maxopsNotifications = {
+      enable = lib.mkEnableOption "authenticated loopback fleet notifications into the durable outbox";
+      port = lib.mkOption {
+        type = lib.types.port;
+        default = 9722;
+        description = "Loopback-only notification receiver port.";
+      };
+      tokenFile = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Dedicated incoming notification credential, supplied through LoadCredential.";
+      };
+      groups = lib.mkOption {
+        type = lib.types.listOf lib.types.ints.positive;
+        default = [];
+        description = "Fixed target QQ groups; webhook bodies cannot select destinations.";
+      };
+      hosts = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        description = "Inventory host names whose alerts may be delivered.";
+      };
+    };
+
     postgres.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -338,6 +362,10 @@ in
       {
         assertion = !cfg.maxops.enable || (lib.hasPrefix "/" cfg.maxops.tokenFile && !lib.hasPrefix "/nix/store/" cfg.maxops.tokenFile);
         message = "services.max.maxops.tokenFile must be an absolute runtime path outside the Nix store.";
+      }
+      {
+        assertion = !cfg.maxopsNotifications.enable || (lib.hasPrefix "/" cfg.maxopsNotifications.tokenFile && !lib.hasPrefix "/nix/store/" cfg.maxopsNotifications.tokenFile && cfg.maxopsNotifications.groups != [] && cfg.maxopsNotifications.hosts != []);
+        message = "services.max.maxopsNotifications requires a runtime credential and explicit nonempty groups and hosts.";
       }
     ];
     # `configFile` wins outright, so anything in `settings` is silently
@@ -503,7 +531,13 @@ in
         MAX_MAXOPS_TOKEN_FILE = "/run/credentials/max.service/maxops-token";
       } // lib.optionalAttrs (cfg.maxops.allowedGroups != null) {
         MAX_MAXOPS_ALLOWED_GROUPS = lib.concatMapStringsSep "," toString cfg.maxops.allowedGroups;
-      });
+      }) // lib.optionalAttrs cfg.maxopsNotifications.enable {
+        MAX_MAXOPS_NOTIFY_PORT = toString cfg.maxopsNotifications.port;
+        MAX_MAXOPS_NOTIFY_HOST = "127.0.0.1";
+        MAX_MAXOPS_NOTIFY_TOKEN_FILE = "/run/credentials/max.service/maxops-notifications";
+        MAX_MAXOPS_NOTIFY_GROUPS = lib.concatMapStringsSep "," toString cfg.maxopsNotifications.groups;
+        MAX_MAXOPS_NOTIFY_HOSTS = lib.concatStringsSep "," cfg.maxopsNotifications.hosts;
+      };
       serviceConfig = {
         User = "max-bot";
         Group = "max-bot";
@@ -515,7 +549,8 @@ in
         ExecStart = "${cfg.package}/bin/max --config-file /etc/max/config.yaml";
         ExecReload = "${cfg.package}/bin/maxctl reload --socket /run/max/control.sock";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
-        LoadCredential = lib.optional cfg.maxops.enable "maxops-token:${cfg.maxops.tokenFile}";
+        LoadCredential = lib.optional cfg.maxops.enable "maxops-token:${cfg.maxops.tokenFile}"
+          ++ lib.optional cfg.maxopsNotifications.enable "maxops-notifications:${cfg.maxopsNotifications.tokenFile}";
         Restart = "on-failure";
         RestartSec = 5;
         TimeoutStartSec = 30;

@@ -48,6 +48,12 @@ pkgs.testers.runNixOSTest {
           tokenFile = "/run/maxops-test-token";
           allowedGroups = [ 611798505 ];
         };
+        maxopsNotifications = {
+          enable = true;
+          tokenFile = "/run/maxops-notify-test-token";
+          groups = [ 611798505 ];
+          hosts = [ "fixture" ];
+        };
       };
 
       # A package path change alters ExecStart/ExecReload and must use
@@ -69,6 +75,7 @@ pkgs.testers.runNixOSTest {
           fi
           umask 077
           printf '%s' 'maxops-nixos-fixture-token-0000001' > /run/maxops-test-token
+          printf '%s' 'maxops-notify-fixture-token-0000002' > /run/maxops-notify-test-token
         '';
       };
     };
@@ -83,6 +90,12 @@ pkgs.testers.runNixOSTest {
     assert "MAX_MAXOPS_ALLOWED_GROUPS=611798505" in environment
     assert "MAX_MAXOPS_TOKEN_FILE=/run/credentials/max.service/maxops-token" in environment
     assert "maxops-nixos-fixture-token-0000001" not in environment
+    machine.succeed("test -r /run/credentials/max.service/maxops-notifications")
+    assert "MAX_MAXOPS_NOTIFY_PORT=9722" in environment
+    assert "MAX_MAXOPS_NOTIFY_HOST=127.0.0.1" in environment
+    assert "MAX_MAXOPS_NOTIFY_GROUPS=611798505" in environment
+    assert "MAX_MAXOPS_NOTIFY_HOSTS=fixture" in environment
+    assert "maxops-notify-fixture-token-0000002" not in environment
 
     original_pid = machine.succeed("systemctl show max -p MainPID --value").strip()
     replacement_system = machine.succeed("readlink -f /run/current-system/specialisation/package-change").strip()

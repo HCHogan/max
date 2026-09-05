@@ -44,6 +44,7 @@ module Max.Platform.Store
     OutboundDraft (..),
     EnqueuedOutbound (..),
     enqueueOutbound,
+    enqueueOutboundInTransaction,
     recordInternalMessage,
     ReactionDraft (..),
     EnqueuedReaction (..),
@@ -1403,7 +1404,13 @@ enqueueOutbound ::
   (WithConnection :> es, IOE :> es) =>
   OutboundDraft ->
   Eff es EnqueuedOutbound
-enqueueOutbound draft = withTransaction $ do
+enqueueOutbound = withTransaction . enqueueOutboundInTransaction
+
+enqueueOutboundInTransaction ::
+  (WithConnection :> es, IOE :> es) =>
+  OutboundDraft ->
+  Eff es EnqueuedOutbound
+enqueueOutboundInTransaction draft = do
   primaryRows <-
     query
       "SELECT e.endpoint_id, e.conversation_id, e.platform_account_id, a.platform, \

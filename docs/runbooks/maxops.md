@@ -1,4 +1,41 @@
-# maxops fleet observations
+# maxops fleet observations and notifications
+
+## Durable incoming notifications
+
+The separate loopback receiver accepts Alertmanager v4 webhooks at
+`POST /v1/alerts`. It has its own credential, separate from admin/query tokens:
+
+```nix
+services.max.maxopsNotifications = {
+  enable = true;
+  tokenFile = "/run/secrets/maxops/alert_sink";
+  groups = [ 611798505 ];
+  hosts = [ "h610" "tank" ];
+};
+```
+
+The default is `127.0.0.1:9722`, with no firewall exposure. Nix uses
+`LoadCredential`, including with a hand-managed config. YAML uses the
+`maxops_notifications` section with `host`, `port`, `token_file`, `groups`,
+and `hosts`; absent port disables it. Listener/routing changes require a
+restart, while the token file is reread on each request.
+
+Destinations come only from configuration. Unscoped/other-host alerts are
+ignored. Firing/resolved alerts become bounded plain-text command messages,
+not LLM turns or executable commands. Mirrored endpoints share the canonical
+notification. HTTP 202 acknowledges durable outbox publication, **not** QQ
+delivery. Failure returns 503 for upstream retry.
+
+Migration 090 stores a hash of labels, start time and lifecycle state per group.
+Concurrent retries share one publication for four hours; reminders, resolution
+and new episodes remain distinct. Receipts and outbox commit in one transaction.
+Receipts older than 30 days are pruned in bounded batches. Existing platform
+`outcome_unknown` semantics remain; end-to-end exactly-once is not promised.
+Requests are limited to 256 KiB, 100 alerts, four concurrent handlers and a
+six-second request processing deadline.
+Neither credentials nor webhook bodies are logged.
+
+## Read-only tools
 
 Max integrates with the authenticated HTTP API of maxops, not a shell or MCP
 adapter. The hub remains the owner of operation names, parameter schemas,

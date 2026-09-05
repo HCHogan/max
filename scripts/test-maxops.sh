@@ -24,6 +24,21 @@ class Agent(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         pass
 
+    def do_POST(self):
+        if self.path != "/v1/unit" or self.headers.get("Authorization") != f"Bearer {agent_token}":
+            self.send_error(401)
+            return
+        params = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        assert params == {"host": "fixture", "unit": "fixture.service"}
+        body = json.dumps({"host": "fixture", "observed_at": datetime.now(timezone.utc).isoformat(),
+                           "unit": {"unit": "fixture.service", "description": "synthetic service", "load_state": "loaded", "active_state": "failed", "sub_state": "failed",
+                                    "details": {"main_pid": 0, "memory_current_bytes": None, "restarts": 1, "exec_main_code": 1, "exec_main_status": 1}}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         if self.path != "/v1/snapshot" or self.headers.get("Authorization") != f"Bearer {agent_token}":
             self.send_error(401)
@@ -56,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="max-maxops-acceptance-") as directory:
         "hosts": [{"name": "fixture", "agent_url": f"http://127.0.0.1:{agent.server_port}",
                    "agent_token_file": str(root / "agent"), "readable_units": ["fixture.service"]}],
         "clients": [{"name": "max", "token_file": str(root / "client"), "hosts": ["fixture"],
-                     "capabilities": ["fleet:read", "host:read", "units:read"]}],
+                     "capabilities": ["fleet:read", "host:read", "units:read", "metrics:read"]}],
     }
     path = root / "hub.json"
     path.write_text(json.dumps(config))
