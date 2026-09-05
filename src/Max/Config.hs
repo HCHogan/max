@@ -147,6 +147,9 @@ data AppConfig = AppConfig
     -- through, e.g. @http://host.docker.internal:7890@ for a proxy on
     -- the docker host.  'Nothing' = direct connections.
     browserProxy :: !(Maybe Text),
+    browserStateKeyFile :: !FilePath,
+    browserIdleSeconds :: !Int,
+    browserGraceSeconds :: !Int,
     -- | LLM profile for Historian v2 episode capture; 'Nothing' disables
     -- chronological capture and automatic memory proposals.  The external
     -- config name remains @memory.extract_profile@ for compatibility.
@@ -310,6 +313,9 @@ validateConfig cfg =
       invalid "image_workers" (cfg.imageWorkers <= 0),
       invalid "shutdown_drain_seconds" (cfg.shutdownDrainSeconds <= 0),
       invalid "turn_silence_seconds" (cfg.turnSilenceSeconds <= 0),
+      invalid "browser.state_key_file" (null cfg.browserStateKeyFile),
+      invalid "browser.idle_seconds" (cfg.browserIdleSeconds <= 0),
+      invalid "browser.grace_seconds" (cfg.browserGraceSeconds < 0),
       invalid "memory.timeout_seconds" (cfg.historianTimeoutSeconds <= 0),
       invalid "admin_call_retention_days" (cfg.adminCallRetentionDays < 0),
       maybe [] validateAdmin cfg.admin,
@@ -365,6 +371,9 @@ configChanges old new = concat
     changed "search" DispatchHot old.search new.search,
     changed "cliproxy" DispatchHot old.cliproxy new.cliproxy,
     changed "browser.proxy" WorkerHandoff old.browserProxy new.browserProxy,
+    changed "browser.state_key_file" RestartRequired old.browserStateKeyFile new.browserStateKeyFile,
+    changed "browser.idle_seconds" RestartRequired old.browserIdleSeconds new.browserIdleSeconds,
+    changed "browser.grace_seconds" RestartRequired old.browserGraceSeconds new.browserGraceSeconds,
     changed "memory.extract_profile" WorkerHandoff old.memoryExtractProfile new.memoryExtractProfile,
     changed "memory.timeout_seconds" WorkerHandoff old.historianTimeoutSeconds new.historianTimeoutSeconds,
     changed "stickers.caption_profile" WorkerHandoff old.stickerCaptionProfile new.stickerCaptionProfile,
@@ -517,6 +526,12 @@ appConfigParser usedRef =
               conf "proxy",
               metavar "URL"
             ]
+    browserStateKeyFile <- subConfig "browser" $ setting
+      [help "Owner-only encryption key for browser checkpoints", reader str, option, long "browser-state-key-file", env "MAX_BROWSER_STATE_KEY_FILE", conf "state_key_file", value "var/browser-state.key"]
+    browserIdleSeconds <- subConfig "browser" $ setting
+      [help "Retain idle task browser workspaces for this many seconds", reader auto, option, long "browser-idle-seconds", env "MAX_BROWSER_IDLE_SECONDS", conf "idle_seconds", value 1800]
+    browserGraceSeconds <- subConfig "browser" $ setting
+      [help "Retain completed task browsers for this many seconds", reader auto, option, long "browser-grace-seconds", env "MAX_BROWSER_GRACE_SECONDS", conf "grace_seconds", value 300]
     memoryExtractProfile <-
       subConfig "memory" $
         optional $

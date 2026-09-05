@@ -293,6 +293,9 @@ llm:
 
 # browser:
 #   proxy: "http://host.docker.internal:7890"
+#   state_key_file: "var/browser-state.key"
+#   idle_seconds: 1800
+#   grace_seconds: 300
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Historian v2.  When extract_profile names an LLM profile, quiet conversation

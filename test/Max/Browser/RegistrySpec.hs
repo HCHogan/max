@@ -11,7 +11,7 @@ import Control.Concurrent.MVar
 import Control.Exception (finally)
 import Control.Monad (forM, forM_, replicateM, when)
 import Data.IORef (atomicModifyIORef', newIORef, readIORef)
-import Max.Browser.Registry (BrowserRegistry, browserScopeForTurn, newBrowserRegistry, withBrowserSession)
+import Max.Browser.Registry (BrowserRegistry, browserScopeForTask, browserScopeForTurn, newBrowserRegistry, tryWithBrowserWorkspace, withBrowserSession, withBrowserWorkspace)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Turn.Types (AgentTurnId (..))
 import OneBot.Types (GroupId (..))
@@ -20,6 +20,15 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "withBrowserSession" $ do
+  it "keeps task generations separate while serializing ownership across generations" $ do
+    reg <- testRegistry
+    browserScopeForTask (GroupId 1) 9 1 `shouldNotBe` browserScopeForTask (GroupId 1) 9 2
+    browserScopeForTask (GroupId 1) 9 1 `shouldNotBe` browserScopeForTask (GroupId 1) 10 1
+    withBrowserWorkspace reg 9 $ do
+      tryWithBrowserWorkspace reg 9 (pure ()) `shouldReturn` Nothing
+      tryWithBrowserWorkspace reg 10 (pure ()) `shouldReturn` Just ()
+    tryWithBrowserWorkspace reg 9 (pure ()) `shouldReturn` Just ()
+
   it "serializes complete operations inside one turn" $ do
     reg <- testRegistry
     let scope = browserScopeForTurn (GroupId 1) (AgentTurnId 1)

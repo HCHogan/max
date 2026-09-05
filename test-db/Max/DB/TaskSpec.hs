@@ -1,4 +1,4 @@
-module Max.DB.TaskSpec (spec) where
+module Max.DB.TaskSpec (spec, seed, admit, claimOne, report, insertOccurrence) where
 
 import Control.Concurrent.Async (concurrently, mapConcurrently)
 import Control.Monad (void)

@@ -7,6 +7,13 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "reload candidate configuration" $ do
+  it "classifies browser retention and key changes as restart-required and validates them" $
+    withArgs ["--llm-api-key", "test-key"] $ do
+      Right base <- loadConfigCandidate
+      let candidate = base {browserStateKeyFile = "not-a-secret-path", browserIdleSeconds = 3600, browserGraceSeconds = 0}
+      configChanges base candidate
+        `shouldBe` [ConfigChange "browser.state_key_file" RestartRequired, ConfigChange "browser.idle_seconds" RestartRequired, ConfigChange "browser.grace_seconds" RestartRequired]
+      validateConfig (base {browserIdleSeconds = 0, browserGraceSeconds = -1}) `shouldContain` ["browser.idle_seconds", "browser.grace_seconds"]
   it "returns validation failure instead of exiting the process" $
     withArgs ["--llm-api-key", "test-key", "--image-workers", "0"] $ do
       loadConfigCandidate >>= \case

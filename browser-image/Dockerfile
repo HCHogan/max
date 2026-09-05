@@ -11,10 +11,8 @@
 # a fresh child per HTTP request, which would drop the browser between
 # calls.  No --sessionTimeout on purpose: idle expiry killed sessions
 # out from under the bot in the playwright-mcp era, and container
-# teardown (!clear / bot exit) is the real GC here.  Note camoufox-mcp
-# additionally expires its *browse* session after idle
-# (CAMOUFOX_MCP_SESSION_TTL_MS, hard-capped upstream at 15 min); the
-# bot's tool layer auto-recovers by starting a fresh browse session.
+# Max's workspace manager controls retention and refreshes retained sessions.
+# CAMOUFOX_MCP_SESSION_TTL_MS is a leak watchdog if that manager disappears.
 #
 # Built from the camoufox-mcp git source with its own package-lock
 # (mirroring upstream's Dockerfile) rather than `npm install -g`: the
@@ -51,10 +49,16 @@ WORKDIR /app
 COPY camoufox-structured-errors.patch /tmp/camoufox-structured-errors.patch
 RUN patch --batch --forward -p1 --input=/tmp/camoufox-structured-errors.patch
 
+COPY camoufox-workspaces.patch /tmp/camoufox-workspaces.patch
+RUN patch --batch --forward -p1 --input=/tmp/camoufox-workspaces.patch
+COPY workspace-lease.ts workspace-tools.ts /app/src/
+COPY workspace-lease.test.mjs /tmp/workspace-lease.test.mjs
+
 FROM source AS builder
 
 RUN npm_config_user_agent="pnpm/10.0.0 npm/10.9.8 node/v22.0.0 linux x64" npm ci \
  && npm run build \
+ && node /tmp/workspace-lease.test.mjs /app/dist/workspace-lease.js \
  && npm prune --omit=dev
 
 # camoufox-js considers any existing addon directory complete, even when a

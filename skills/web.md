@@ -18,9 +18,14 @@ url 接受完整链接、BV号、b23.tv 短链、[card:] 卡片里的链接。�
 
 # 通用网页（browser_*）
 
-browser_navigate 打开任意 URL。隐身浏览器每群一个、跨 dispatch 存活；会话闲置约
-15 分钟会过期，另有请求数预算和不安全请求防护（触发会整个重置）——不管哪种，
-后续工具都会明说"重新 navigate"，照做即可，不算错误。
+browser_navigate 打开任意 URL。每群共享宿主容器，但每个 task 拥有独立页面，子任务
+和 monitor 的每次触发也独立。短重试可继续使用活页面；等待闲置默认保留 30 分钟，
+结束默认保留 5 分钟。前台临时浏览仍只活到当前 turn 结束。冷恢复只能带回已保存的
+cookies/localStorage，不能恢复 DOM、JS、旧 selector 或表单；必须重新 navigate/snapshot。
+点击、提交或中断后的未知效果不能自动重放：先核对站点结果，请发起者用
+!browser reset task#N 清理，再通过 !task steer 提供核对结果。登录身份不按群共享，
+只能由发起者用 !browser save/use/monitor 显式授权。页面隔离不等于服务端账号隔离，
+对同一账号的冲突修改仍须协调，不能因各自有浏览器就假定安全。
 交互循环：browser_snapshot 拿页面文本 + 可交互元素（每个带 CSS selector 和角色/
 名字，默认最多 100 个元素，maxElements 可调，selector 参数可只截某个元素）→
 browser_click / browser_type 用 selector 操作（click 完自带新 snapshot；type 是

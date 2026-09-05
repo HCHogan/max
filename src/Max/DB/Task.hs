@@ -104,6 +104,7 @@ taskStatus (GroupId group) identifier = do
       \ 'owner',owner_principal_id,'parent',parent_task_id,'profile',profile,'effective_tools',grants,\
       \ 'result',result,'calls_reserved',calls_reserved,'max_calls',max_calls,'rounds_reserved',rounds_reserved,\
       \ 'retry_count',retry_count,'next_attempt_at',next_attempt_at,'last_error',last_error,\
+      \ 'browser',(SELECT jsonb_build_object('state',state,'generation',generation,'epoch',epoch,'owner_turn_id',owner_turn_id,'checkpoint_at',checkpoint_at,'last_used_at',last_used_at) FROM browser_workspaces WHERE task_id=work.task_id),\
       \ 'progress',(SELECT jsonb_build_object('revision',revision,'attempt',attempt,'version',version,'body',body,'updated_at',updated_at) FROM task_progress WHERE task_id=work.task_id AND revision=work.revision),\
       \ 'deadline',deadline,'attempts',attempt,'pending_events',(SELECT count(*) FROM task_events WHERE task_id=work.task_id AND event_id>consumed_event),\
       \ 'turns',(SELECT jsonb_agg('t#'||turn.turn_ordinal ORDER BY execution.attempt) FROM task_attempts execution JOIN agent_turns turn USING(turn_id) WHERE execution.task_id=work.task_id),\

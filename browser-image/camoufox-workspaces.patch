@@ -1,0 +1,89 @@
+--- a/src/sessions.ts
++++ b/src/sessions.ts
+@@ -1,5 +1,6 @@
++import { assertWorkspaceLease } from "./workspace-lease.js";
+ import { randomUUID } from "node:crypto";
+-import type { Browser, Response } from "playwright-core";
++import type { Browser, BrowserContextOptions, Response } from "playwright-core";
+ import chalk from "chalk";
+ import { validateTargetUrl } from "./policy.js";
+ import { DEFAULT_ACTION_TIMEOUT_MS, DEFAULT_MAX_CHARS, DEFAULT_MAX_ELEMENTS, DEFAULT_WAIT_STRATEGY, MAX_SESSIONS, SESSION_CLOSE_GRACE_MS, SESSION_TTL_MS } from "./config.js";
+@@ -116,6 +117,7 @@
+   operation: () => Promise<T>,
+ ): Promise<T> {
+   const run = session.op.catch(() => undefined).then(async () => {
++    assertWorkspaceLease();
+     if (session.closing || session.closed) {
+       throw new Error(`Session is closing or closed: ${session.id}`);
+     }
+@@ -163,7 +165,7 @@
+   }
+ }
+ 
+-export async function handleSessionStart(input: SessionStartToolInput) {
++export async function handleSessionStart(input: SessionStartToolInput, storageState?: BrowserContextOptions["storageState"]) {
+   const effectiveInput = applyStealthProfile({
+     ...input,
+     captchaPolicy: input.captchaPolicy ?? "pause",
+@@ -183,11 +185,13 @@
+     const headlessMode = defaultHeadlessMode(effectiveInput.headless);
+ 
+     browser = await launchCamoufoxBrowser(buildCamoufoxOptions(effectiveInput, selectedOS, headlessMode));
++    assertWorkspaceLease();
+     trackBrowser(browser);
+-    const context = await browser.newContext(browserContextOptions(effectiveInput));
++    const context = await browser.newContext({ ...browserContextOptions(effectiveInput), storageState });
+     const requestGuard = await installRequestGuard(context);
+     const page = await context.newPage();
+     requestGuard.watchPage(page);
++    assertWorkspaceLease();
+ 
+     const id = `sess_${randomUUID()}`;
+     const rawUrls = [getProxyServer(effectiveInput.proxy)].filter((rawUrl): rawUrl is string => Boolean(rawUrl));
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,4 +1,6 @@
+ #!/usr/bin/env node
++import { withWorkspaceLease } from "./workspace-lease.js";
++import { handleWorkspaceTool, startWorkspace } from "./workspace-tools.js";
+ import "./sqlite-compat.js";
+ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+@@ -53,8 +55,8 @@
+ 
+   registerTool(
+     name,
+-    { description, inputSchema, outputSchema, annotations },
+-    async (input: unknown): Promise<unknown> => handler(input as z.infer<z.ZodObject<InputArgs>>),
++    { description, inputSchema: { ...inputSchema, _maxLease: z.unknown().optional() }, outputSchema, annotations },
++    async (input: unknown): Promise<unknown> => withWorkspaceLease(name, input, () => handler(input as z.infer<z.ZodObject<InputArgs>>)),
+   );
+ }
+ 
+@@ -79,12 +81,16 @@
+ registerJsonTool("browse_screenshot", "Navigate once and capture a bounded screenshot.", screenshotToolShape, readOnlyOpenWorld, async (input) => handleScreenshot(input as ScreenshotToolInput));
+ registerJsonTool("browse_console", "Navigate once and return bounded console diagnostics.", consoleToolShape, readOnlyOpenWorld, async (input) => handleConsole(input as ConsoleToolInput));
+ registerJsonTool("browse_network_summary", "Navigate once and return a bounded network diagnostic summary.", networkSummaryToolShape, readOnlyOpenWorld, async (input) => handleNetworkSummary(input as NetworkSummaryToolInput), networkSummaryOutputSchema);
+-registerJsonTool("browse_session_start", "Start an isolated short-lived browser session.", sessionStartToolShape, nonReadOnlyOpenWorld, async (input) => handleSessionStart(input as SessionStartToolInput));
++registerJsonTool("browse_session_start", "Start an isolated short-lived browser session.", { ...sessionStartToolShape, storage: z.any().optional() }, nonReadOnlyOpenWorld, async (input) => startWorkspace(input as SessionStartToolInput));
+ registerJsonTool("browse_session_navigate", "Navigate an existing browser session.", sessionNavigateToolShape, nonReadOnlyOpenWorld, async (input) => handleSessionNavigate(input as SessionNavigateToolInput));
+ registerJsonTool("browse_session_action", "Run one bounded action in an existing browser session.", sessionActionToolShape, nonReadOnlyOpenWorld, async (input) => handleSessionAction(input as SessionActionToolInput));
+ registerJsonTool("browse_session_snapshot", "Read the current state of an existing browser session.", sessionSnapshotToolShape, readOnlyOpenWorld, async (input) => handleSessionSnapshot(input as SessionSnapshotToolInput));
+ registerJsonTool("browse_session_resume", "Resume a paused session after human action and return current state.", sessionResumeToolShape, nonReadOnlyOpenWorld, async (input) => handleSessionResume(input as SessionResumeToolInput));
+ registerJsonTool("browse_session_close", "Close an existing browser session.", sessionCloseToolShape, nonReadOnlyOpenWorld, async (input) => handleSessionClose(input as SessionCloseToolInput));
++
++for (const name of ["max_workspace_bind", "max_workspace_renew", "max_workspace_unbind", "max_workspace_revoke", "max_workspace_checkpoint", "max_workspace_keepalive"]) {
++  registerJsonTool(name, "Max internal workspace control.", { epoch: z.number().optional(), until: z.string().optional(), sessionId: z.string().optional() }, nonReadOnlyOpenWorld, async (input) => handleWorkspaceTool(name, input));
++}
+ 
+ async function runServer() {
+   try {
+--- a/src/browser-runtime.ts
++++ b/src/browser-runtime.ts
+@@ -316,6 +316,7 @@
+     await browser.close();
+   } catch (closeError) {
+     console.error(chalk.yellow(`[Camoufox] Browser close failed: ${describeError(closeError)}`));
++    if (browser.isConnected()) throw new Error("browser closure was not confirmed");
+   }
+ }

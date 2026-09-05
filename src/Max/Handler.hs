@@ -41,7 +41,8 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask, local)
 import Max.AgentEvent (AgentEvent (..), AgentOutputContext (..), handleAgentEvent)
-import Max.Browser.Registry (browserScopeForTurn, releaseBrowserScope)
+import Max.Browser.Runtime (releaseBrowserTurn, renewBrowserTurn)
+import Max.Browser.Profile (browserCommandOnce)
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Parser (parseCommand)
@@ -909,6 +910,9 @@ routeTaskInput message = do
             note
         reply outcome
   case pieces of
+    "!browser" : arguments -> do
+      env :: BotEnv <- ask
+      browserCommandOnce env.beBrowsers message.groupId message.authorPrincipalId message.canonicalId arguments >>= reply
     ["!task", "list"] -> DurableTask.listDurableTasks message.groupId >>= reply
     ["!task", "status", handle] | Just identifier <- parseTaskHandle handle -> DurableTask.taskStatus message.groupId identifier >>= reply
     "!task" : "replace" : handle : revision : note
@@ -1784,7 +1788,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
     -- already-destroyed browser must not prevent the task entry, shutdown slot,
     -- reactions, or unserved notes from reaching their final state.
     releaseTurnBrowser env durable =
-      liftIO (releaseBrowserScope env.beBrowsers (browserScopeForTurn gm.groupId durable.atrTurnId))
+      releaseBrowserTurn env.beBrowsers gm.groupId durable.atrTurnId
         `catchSync` \e ->
           logAttention "browser scope finalizer failed" $
             object ["error" .= T.pack (show (e :: SomeException))]
@@ -1921,7 +1925,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
                       "进展用 task_progress，系统会持久化并合并发送。结束必须 task_finish：summary、evidence、unresolved。暂时故障 failed 可标 failure_kind=transient 以退避重试；未知外部效果必须先核对。monitor 用 observation 提供稳定结构化观测值，排除叙述与当前时间。只有确实完成才报 succeeded；不确定就 partial/failed/waiting。",
                       "你说的普通文本不会发到群里。不要重复 outcome-unknown 的外部效果，先核实历史证据。",
                       "工具预留与模型请求预算在树内共享，重启不重置。tokens/cost 是观测值，缺失的 usage 不等于零。",
-                      "共享 sandbox 使用任务级占用，不可抢占其他任务的资源。浏览器按执行回合隔离。"
+                      "共享 sandbox 使用任务级占用，不可抢占其他任务的资源。浏览器工作区属于当前 task，子任务及 monitor 每次触发独立；重试可热接管，执行权属于当前 attempt。冷恢复必须重新 navigate/snapshot，不能复用旧选择器或重放点击/提交。未知效果先核对，再请发起者 !browser reset task#N；登录复用只能由发起者显式 !browser 授权。"
                     ]
                 ),
               MsgUser
@@ -1951,7 +1955,11 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
     taskHeartbeat durable = do
       threadDelay (10 * 1_000_000)
       renewed <- DurableTask.renewTask durable.atrTurnId
-      when renewed (taskHeartbeat durable)
+      when renewed $ do
+        env :: BotEnv <- ask
+        renewBrowserTurn env.beBrowsers gm.groupId durable.atrTurnId
+          `catchSync` \exception -> logAttention "browser lease refresh failed" (object ["error" .= T.pack (show (exception :: SomeException))])
+        taskHeartbeat durable
 
     taskNoticeFallback turn durable = do
       notification <- DurableTask.loadTaskNotification durable.atrTurnId

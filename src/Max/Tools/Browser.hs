@@ -1,6 +1,6 @@
 -- |
 -- Browser tools exposed to the agent.  A group reuses one lightweight Docker
--- host, while every turn/subagent receives an isolated MCP client and camoufox
+-- host, while every task workspace or foreground turn has an isolated MCP client and
 -- browse session (see "Max.Browser.Registry").
 --
 -- == The snapshot → selector → act loop
@@ -17,7 +17,7 @@
 -- == Sessions
 --
 -- All page state lives in a camoufox /browse session/.  The registry
--- records the turn's live @sessionId@; every tool here injects it, so
+-- records the workspace's live @sessionId@; every tool here injects it, so
 -- the model never sees session plumbing.  @browser_navigate@ starts a
 -- session on demand and transparently restarts one when camoufox
 -- expired it (idle TTL, capped upstream at 15 min); the other tools
@@ -38,6 +38,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
+import Effectful.PostgreSQL (WithConnection)
 import Max.Browser.Error
   ( BrowserErrorKind (..),
     browserErrorKind,
@@ -46,21 +47,23 @@ import Max.Browser.Error
 import Max.Browser.Registry
   ( BrowserRegistry,
     BrowserScope,
-    browserScopeForDispatch,
-    browserScopeForTurn,
     callBrowserTool,
     getCamoSession,
     setCamoSession,
+    takeBrowserRestore,
     withBrowserSession,
   )
+import Max.Browser.Runtime (managedBrowserTools)
 import Max.Effects.Tools (Tool (..))
 import Max.MCP.Client (mcpTextContent)
-import Max.ToolContext (ToolContext, toolCanonicalId, toolGroupId, toolTurnOutputContext)
+import Max.ToolContext (ToolContext)
 import Max.Tools.Schema (boolParam, enumParam, numberParam, stringParam, toolObject)
-import Max.Turn.Types (AgentTurnRef (atrTurnId), turnOutputAgentTurn)
 
-browserToolsFor :: (IOE :> es) => ToolContext -> BrowserRegistry -> Maybe Text -> [Tool es]
-browserToolsFor context reg proxy =
+browserToolsFor :: (WithConnection :> es, IOE :> es) => ToolContext -> BrowserRegistry -> Maybe Text -> [Tool es]
+browserToolsFor context reg proxy = managedBrowserTools context reg (\scope -> browserToolsAt scope reg proxy)
+
+browserToolsAt :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Maybe Text -> [Tool es]
+browserToolsAt scope reg proxy =
   [ navigateTool scope reg proxy,
     viewZhihuTool scope reg proxy,
     snapshotTool scope reg,
@@ -70,12 +73,6 @@ browserToolsFor context reg proxy =
     waitForTool scope reg,
     scrollTool scope reg
   ]
-  where
-    scope =
-      maybe
-        (browserScopeForDispatch (toolGroupId context) (toolCanonicalId context))
-        (browserScopeForTurn (toolGroupId context) . (.atrTurnId) . turnOutputAgentTurn)
-        (toolTurnOutputContext context)
 
 --------------------------------------------------------------------------------
 -- Session plumbing.
@@ -92,7 +89,9 @@ dropSession reg scope sid closeIt = do
 startSession :: BrowserRegistry -> BrowserScope -> Maybe Text -> IO (Either Text Text)
 startSession reg scope proxy = do
   setCamoSession reg scope Nothing
-  let startArgs = object (("humanize" .= True) : foldMap (\p -> ["proxy" .= p]) proxy)
+  restored <- takeBrowserRestore reg scope
+  let storage = restored >>= parseMaybe (withObject "checkpoint" (.: "storage"))
+      startArgs = object (("humanize" .= True) : foldMap (\p -> ["proxy" .= p]) proxy <> foldMap (\saved -> ["storage" .= (saved :: Value)]) storage)
   callBrowserTool reg scope "browse_session_start" startArgs >>= \case
     Left e -> pure (Left (renderBrowserError e))
     Right v -> case sessionIdOf v of
@@ -170,7 +169,7 @@ navigateTool scope reg proxy =
   Tool
     { toolName = "browser_navigate",
       toolDescription =
-        "Open a URL in this turn's isolated stealth browser (camoufox). Starts it on \
+        "Open a URL in this task workspace's (or foreground turn's) isolated stealth browser (camoufox). Starts it on \
         \first use and reopens it transparently if the session expired. Returns the \
         \page's visible text; call browser_snapshot for interactive elements.",
       toolSchema = toolObject [("url", stringParam "Absolute URL to open, e.g. https://example.com")] ["url"],

@@ -1,12 +1,12 @@
 -- |
 -- Browser registry: one camoufox-MCP /host container/ per 'GroupId', with an
--- isolated MCP client and camoufox browse session per agent turn.  Containers
+-- isolated MCP client and browse session per task workspace or foreground turn.  Containers
 -- are created lazily and reused across turns, then torn down on @!clear --all@
 -- or bot exit.  Mirrors
 -- "Max.Sandbox.Registry"; we reuse its @docker@ helpers for teardown
 -- and boot-time reaping of the @max-br-@ namespace.
 --
--- A 'BrowserScope' names one turn.  Stateful operations are serialized only
+-- A 'BrowserScope' names one physical workspace generation or foreground turn.  Stateful operations are serialized only
 -- inside that scope; sibling fork children get distinct scopes, MCP clients and
 -- browse sessions, so they can navigate concurrently without changing each
 -- other's page.  Docker creation is serialized per group, never globally.
@@ -14,14 +14,28 @@ module Max.Browser.Registry
   ( BrowserScope,
     browserScopeForTurn,
     browserScopeForDispatch,
+    browserScopeForTask,
     BrowserRegistry,
     newBrowserRegistry,
+    newBrowserRegistryWithHost,
+    configureBrowserRegistry,
+    browserRuntimeId,
+    browserVault,
+    browserRetention,
+    withBrowserWorkspace,
+    tryWithBrowserWorkspace,
+    bindBrowserLease,
+    renewBrowserLease,
+    prepareBrowserRestore,
+    takeBrowserRestore,
+    liveTaskBrowsers,
     withBrowserSession,
     reapStaleBrowsers,
     callBrowserTool,
     getCamoSession,
     setCamoSession,
     releaseBrowserScope,
+    stopBrowserScope,
     destroyBrowsersForGroup,
     destroyAllBrowsers,
     browserNamePrefix,
@@ -32,9 +46,11 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM
 import Control.Exception (bracket_, mask, mask_, onException)
 import Control.Monad (void)
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Bifunctor (first)
 import Data.Foldable (for_)
+import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -51,6 +67,8 @@ import Max.Browser.Error
     browserCallFailed,
     browserErrorFromMcp,
   )
+import Max.Browser.Lock (LockMap, newLockMap, tryWithKeyLock, withKeyLock)
+import Max.Browser.Vault (BrowserVault, newBrowserVault)
 import Max.HttpRuntime (HttpRuntime)
 import Max.MCP.Client
   ( McpClient,
@@ -80,13 +98,11 @@ data BrowserEntry = BrowserEntry
     beCreatedAt :: !UTCTime
   }
 
--- | One stateful browser owner.  A durable turn is the normal owner; the
--- dispatch fallback exists only for tool contexts that predate durable output
--- provenance.  Both constructors include the conversation so @!clear --all@
--- can still revoke every browser belonging to it.
+-- | Task generations and foreground turns are distinct browser owners.
 data BrowserScope
   = BrowserTurnScope !GroupId !AgentTurnId
   | BrowserDispatchScope !GroupId !CanonicalMessageId
+  | BrowserTaskScope !GroupId !Int64 !Int64
   deriving stock (Show, Eq, Ord)
 
 browserScopeForTurn :: GroupId -> AgentTurnId -> BrowserScope
@@ -95,10 +111,14 @@ browserScopeForTurn = BrowserTurnScope
 browserScopeForDispatch :: GroupId -> CanonicalMessageId -> BrowserScope
 browserScopeForDispatch = BrowserDispatchScope
 
+browserScopeForTask :: GroupId -> Int64 -> Int64 -> BrowserScope
+browserScopeForTask = BrowserTaskScope
+
 browserScopeGroup :: BrowserScope -> GroupId
 browserScopeGroup = \case
   BrowserTurnScope gid _ -> gid
   BrowserDispatchScope gid _ -> gid
+  BrowserTaskScope gid _ _ -> gid
 
 data BrowserInstance = BrowserInstance
   { biClient :: McpClient,
@@ -108,40 +128,105 @@ data BrowserInstance = BrowserInstance
 data BrowserRegistry = BrowserRegistry
   { brHttp :: !HttpRuntime,
     -- | Container creation locks are per conversation.  Two unrelated groups,
-    -- and the turn-scoped MCP instances inside one ready container, can start
+    -- and the workspace-scoped MCP instances inside one ready container, can start
     -- concurrently.
     brStartLocks :: !(TVar (Map GroupId (TMVar ()))),
     brEntries :: !(TVar (Map GroupId BrowserEntry)),
-    -- | One independent MCP transport session per turn/subagent.
+    -- | One independent MCP transport session per physical workspace.
     brInstances :: !(TVar (Map BrowserScope BrowserInstance)),
     -- | The scope's live camoufox browse-session id, if a page is open.
     brCamoSessions :: !(TVar (Map BrowserScope Text)),
-    -- | One operation lock per turn.  It covers the whole
-    -- read/start/use/update sequence in the tool layer, including the period
-    -- before a camoufox session id exists.  A scope finalizer removes its lock
-    -- only after the agent has joined every tool call for that turn.
-    brSessionLocks :: !(TVar (Map BrowserScope (TMVar ())))
+    -- | Reference-counted operation locks include holders and waiting callers.
+    brSessionLocks :: !(LockMap BrowserScope),
+    brWorkspaceLocks :: !(LockMap Int64),
+    brLeases :: !(TVar (Map BrowserScope Value)),
+    brRestores :: !(TVar (Map BrowserScope Value)),
+    brRuntimeId :: !Text,
+    brVault :: !BrowserVault,
+    brIdleSeconds :: !Int,
+    brGraceSeconds :: !Int
   }
 
 newBrowserRegistry :: HttpRuntime -> IO BrowserRegistry
-newBrowserRegistry runtime =
+newBrowserRegistry runtime = do
+  vault <- newBrowserVault
+  started <- getCurrentTime
   BrowserRegistry runtime
     <$> newTVarIO Map.empty
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
     <*> newTVarIO Map.empty
+    <*> newLockMap
+    <*> newLockMap
     <*> newTVarIO Map.empty
+    <*> newTVarIO Map.empty
+    <*> pure (T.pack (show started))
+    <*> pure vault
+    <*> pure 1800
+    <*> pure 300
+
+configureBrowserRegistry :: BrowserVault -> Int -> Int -> BrowserRegistry -> BrowserRegistry
+configureBrowserRegistry vault idle grace registry = registry {brVault = vault, brIdleSeconds = idle, brGraceSeconds = grace}
+
+newBrowserRegistryWithHost :: HttpRuntime -> GroupId -> String -> String -> IO BrowserRegistry
+newBrowserRegistryWithHost runtime group endpoint hostHeader = do
+  registry <- newBrowserRegistry runtime
+  created <- getCurrentTime
+  let entry = BrowserEntry group "external-browser-host" endpoint hostHeader created
+  atomically $ modifyTVar' registry.brEntries (Map.insert group entry)
+  pure registry
+
+browserRuntimeId :: BrowserRegistry -> Text
+browserRuntimeId = (.brRuntimeId)
+
+browserVault :: BrowserRegistry -> BrowserVault
+browserVault = (.brVault)
+
+browserRetention :: BrowserRegistry -> (Int, Int)
+browserRetention registry = (registry.brIdleSeconds, registry.brGraceSeconds)
+
+withBrowserWorkspace :: BrowserRegistry -> Int64 -> IO value -> IO value
+withBrowserWorkspace registry = withKeyLock registry.brWorkspaceLocks
+
+tryWithBrowserWorkspace :: BrowserRegistry -> Int64 -> IO value -> IO (Maybe value)
+tryWithBrowserWorkspace registry = tryWithKeyLock registry.brWorkspaceLocks
+
+bindBrowserLease :: BrowserRegistry -> BrowserScope -> Int64 -> UTCTime -> IO (Either BrowserError Value)
+bindBrowserLease registry scope epoch untilTime = do
+  let lease = object ["epoch" .= epoch, "until" .= untilTime]
+  result <- callBrowserTool registry scope "max_workspace_bind" lease
+  case result of
+    Right _ -> atomically $ modifyTVar' registry.brLeases (Map.insert scope lease)
+    Left _ -> pure ()
+  pure result
+
+renewBrowserLease :: BrowserRegistry -> BrowserScope -> Int64 -> UTCTime -> IO ()
+renewBrowserLease registry scope epoch untilTime = do
+  instances <- readTVarIO registry.brInstances
+  leases <- readTVarIO registry.brLeases
+  case (Map.lookup scope instances, Map.lookup scope leases) of
+    (Just owned, Just _) -> void $ timeout 5_000_000 $ mcpCallTool owned.biClient "max_workspace_renew" (object ["epoch" .= epoch, "until" .= untilTime])
+    _ -> pure ()
+
+prepareBrowserRestore :: BrowserRegistry -> BrowserScope -> Value -> IO ()
+prepareBrowserRestore registry scope value = atomically $ modifyTVar' registry.brRestores (Map.insert scope value)
+
+takeBrowserRestore :: BrowserRegistry -> BrowserScope -> IO (Maybe Value)
+takeBrowserRestore registry scope = atomically $ do
+  restores <- readTVar registry.brRestores
+  modifyTVar' registry.brRestores (Map.delete scope)
+  pure (Map.lookup scope restores)
+
+liveTaskBrowsers :: BrowserRegistry -> IO [(GroupId, Int64, Int64)]
+liveTaskBrowsers registry = do
+  instances <- readTVarIO registry.brInstances
+  pure [(group, task, generation) | BrowserTaskScope group task generation <- Map.keys instances]
 
 -- | Serialize stateful camoufox operations for one turn.  Different turns,
 -- including sibling fork children in the same conversation, never share this
 -- lock and continue to run concurrently.
 withBrowserSession :: BrowserRegistry -> BrowserScope -> IO a -> IO a
-withBrowserSession reg scope action = do
-  lock <- lockFor reg.brSessionLocks scope
-  bracket_
-    (atomically $ takeTMVar lock)
-    (atomically $ putTMVar lock ())
-    action
+withBrowserSession reg = withKeyLock reg.brSessionLocks
 
 lockFor :: (Ord key) => TVar (Map key (TMVar ())) -> key -> IO (TMVar ())
 lockFor ref key = atomically $ do
@@ -157,7 +242,7 @@ lockFor ref key = atomically $ do
 getCamoSession :: BrowserRegistry -> BrowserScope -> IO (Maybe Text)
 getCamoSession reg scope = Map.lookup scope <$> readTVarIO reg.brCamoSessions
 
--- | Record ('Just') or forget ('Nothing') the turn's browse-session id.
+-- | Record ('Just') or forget ('Nothing') the workspace's browse-session id.
 setCamoSession :: BrowserRegistry -> BrowserScope -> Maybe Text -> IO ()
 setCamoSession reg scope msid =
   atomically . modifyTVar' reg.brCamoSessions $
@@ -216,7 +301,7 @@ createEntry reg gid = do
       register entry = atomically $ modifyTVar' reg.brEntries (Map.insert gid entry)
   acquireRegistered prepare (runRm name) register
 
--- | Get the turn's isolated MCP client, creating and initializing it if needed.
+-- | Get the workspace's isolated MCP client, creating and initializing it if needed.
 -- The scope lock held by every tool sequence also serializes this transition,
 -- so there can be only one client per scope without a second creation lock.
 ensureBrowserInstance :: BrowserRegistry -> BrowserScope -> IO (Either Text BrowserInstance)
@@ -294,29 +379,25 @@ waitReady client = go 0
 --------------------------------------------------------------------------------
 -- Tool call.
 
--- | Ensure this turn's isolated browser instance is up, then invoke one MCP
--- tool on it.
---
--- Resilience: the MCP session can be lost out from under us (server
--- recycles it, the gateway restarts, memory pressure).  On that we
--- re-run the @initialize@ handshake once and retry; if even that fails
--- the container is unhealthy, so we tear it down and report — the next
--- call rebuilds a fresh one.  Re-initializing makes supergateway spawn
--- a *fresh* camoufox-mcp child, so this scope's browse session died with the old
--- one — forget it without disturbing sibling turns.
+-- | Ensure the isolated browser instance exists. Transport loss may initialize
+-- a fresh client, but never retries the original operation.
 callBrowserTool :: BrowserRegistry -> BrowserScope -> Text -> Value -> IO (Either BrowserError Value)
 callBrowserTool reg scope toolName args = do
   eInstance <- ensureBrowserInstance reg scope
   case eInstance of
     Left err -> pure (Left (browserCallFailed ("browser unavailable: " <> err)))
     Right instance' -> do
-      r <- mcpCallTool instance'.biClient toolName args
+      lease <- Map.lookup scope <$> readTVarIO reg.brLeases
+      let arguments = case (args, lease) of
+            (Object fields, Just value) | toolName /= "max_workspace_bind" -> Object (KeyMap.insert "_maxLease" value fields)
+            _ -> args
+      r <- mcpCallTool instance'.biClient toolName arguments
       case r of
         Left err | err.mcpErrorKind == McpSessionError -> do
           setCamoSession reg scope Nothing
           reinit <- mcpInitialize instance'.biClient
           case reinit of
-            Right () -> first browserErrorFromMcp <$> mcpCallTool instance'.biClient toolName args
+            Right () -> pure (Left (browserCallFailed "browser transport restarted; previous operation was not replayed"))
             Left _ -> do
               entries <- readTVarIO reg.brEntries
               case Map.lookup (browserScopeGroup scope) entries of
@@ -327,7 +408,7 @@ callBrowserTool reg scope toolName args = do
                   void (timeout 5_000_000 (mcpTerminate instance'.biClient))
                   atomically $ modifyTVar' reg.brInstances (deleteOwnedInstance scope instance'.biHostCreatedAt)
               pure . Left . browserCallFailed $
-                "browser instance lost; rebuilt for this turn's next call (was: "
+                "browser instance lost; reinitialized without replay (was: "
                   <> renderMcpError err
                   <> ")"
         _ -> pure (first browserErrorFromMcp r)
@@ -349,7 +430,8 @@ destroyBrowsersForGroup reg gid = do
       atomically $ do
         modifyTVar' reg.brInstances (Map.filterWithKey (\scope _ -> browserScopeGroup scope /= gid))
         modifyTVar' reg.brCamoSessions (Map.filterWithKey (\scope _ -> browserScopeGroup scope /= gid))
-        modifyTVar' reg.brSessionLocks (Map.filterWithKey (\scope _ -> browserScopeGroup scope /= gid))
+        modifyTVar' reg.brLeases (Map.filterWithKey (\scope _ -> browserScopeGroup scope /= gid))
+        modifyTVar' reg.brRestores (Map.filterWithKey (\scope _ -> browserScopeGroup scope /= gid))
       pure (length entries)
 
 -- | Close and forget the browser owned by one finished turn.  Cleanup is
@@ -367,7 +449,27 @@ releaseBrowserScope reg scope = do
     instance' <- Map.lookup scope <$> readTVarIO reg.brInstances
     for_ instance' $ \owned -> void (timeout 5_000_000 (mcpTerminate owned.biClient))
     atomically $ modifyTVar' reg.brInstances (Map.delete scope)
-  atomically $ modifyTVar' reg.brSessionLocks (Map.delete scope)
+  atomically $ do
+    modifyTVar' reg.brLeases (Map.delete scope)
+    modifyTVar' reg.brRestores (Map.delete scope)
+
+stopBrowserScope :: BrowserRegistry -> BrowserScope -> IO Bool
+stopBrowserScope registry scope = withBrowserSession registry scope $ do
+  instance' <- Map.lookup scope <$> readTVarIO registry.brInstances
+  case instance' of
+    Nothing -> pure True
+    Just owned -> do
+      result <- timeout 20_000_000 (mcpCallTool owned.biClient "max_workspace_revoke" (object []))
+      case result of
+        Just (Right _) -> do
+          void (timeout 5_000_000 (mcpTerminate owned.biClient))
+          atomically $ do
+            modifyTVar' registry.brInstances (Map.delete scope)
+            modifyTVar' registry.brCamoSessions (Map.delete scope)
+            modifyTVar' registry.brLeases (Map.delete scope)
+            modifyTVar' registry.brRestores (Map.delete scope)
+          pure True
+        _ -> pure False
 
 -- | Tear down every browser container.  Used by the top-level bracket
 -- in @main@ on bot exit.
@@ -378,7 +480,8 @@ destroyAllBrowsers reg = do
   atomically $ do
     writeTVar reg.brInstances Map.empty
     writeTVar reg.brCamoSessions Map.empty
-    writeTVar reg.brSessionLocks Map.empty
+    writeTVar reg.brLeases Map.empty
+    writeTVar reg.brRestores Map.empty
     writeTVar reg.brStartLocks Map.empty
 
 releaseBrowser :: BrowserRegistry -> BrowserEntry -> IO ()

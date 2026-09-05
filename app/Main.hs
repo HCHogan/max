@@ -23,9 +23,12 @@ import Max.Admin (AdminConfig (..), adminServer)
 import Max.Browser.Registry
   ( destroyAllBrowsers,
     newBrowserRegistry,
+    configureBrowserRegistry,
     reapStaleBrowsers,
   )
 import Max.Config (AppConfig (..), ConfigChange (..), configChanges, loadConfig, loadConfigCandidate, restartRequiredChanges, runtimeValuesFromConfig)
+import Max.Browser.Runtime (browserMaintenance)
+import Max.Browser.Vault (loadBrowserVault)
 import Max.DB.AgentTurn (ReclaimedTurns (..), addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
@@ -111,7 +114,8 @@ main = do
     -- process exit deliberately leaves them intact.
     reapStaleBrowsers
     sandboxes <- newDurableSandboxRegistry pool
-    browsers <- newBrowserRegistry httpRuntime
+    browserKey <- loadBrowserVault cfg.browserStateKeyFile
+    browsers <- configureBrowserRegistry browserKey cfg.browserIdleSeconds cfg.browserGraceSeconds <$> newBrowserRegistry httpRuntime
     ( do
         -- Keep the bounded ring alive across admin enable/disable handoffs.
         -- It is cheap, and allocating it once avoids losing the pre-failure
@@ -350,6 +354,7 @@ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath ap
                     (monitorWorker candidate.timezone (ownerFor snapshot "monitors") dispatchMonitorFire),
                   worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (ownerFor snapshot "dispatch") fetchSig (intentState <$ workerEnv.beIntent)),
                   worker "durable-tasks" RequiredWorker (durableTaskWorker (ownerFor snapshot "tasks")),
+                  worker "browser-workspaces" RestartableWorker (forever (browserMaintenance workerEnv.beBrowsers >> threadDelay 15_000_000)),
                   worker
                     "platform-delivery"
                     RequiredWorker

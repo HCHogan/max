@@ -127,6 +127,9 @@ child result nor a monitor event becomes a privileged instruction to the
 frontend. Follow-on effects must remain associated with an authorized task or
 new user request; the frontend's broader tools cannot launder a narrower grant.
 
+Browser workspace lifetime, attempt fencing, cold recovery and explicit account
+profiles are specified and implemented by [ADR-009](009-task-browser-workspaces.md).
+
 Host profiles provide useful defaults instead of asking the model to guess
 calls, tokens, milliseconds, and effect algebra. Limits apply across descendants
 and recovery. Admission accounts for outstanding reservations as well as settled

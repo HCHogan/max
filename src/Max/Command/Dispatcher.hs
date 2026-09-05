@@ -24,6 +24,7 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Browser.Registry (destroyBrowsersForGroup)
+import Max.DB.Browser (revokeConversationBrowsers)
 import Max.Command.Help (helpText)
 import Max.Command.Types
 import Max.Command.Version (readHostUptime, readOsPretty, versionCard)
@@ -205,6 +206,7 @@ execute t gid uid senderPrincipal replyTarget cmd = do
       now <- liftIO getCurrentTime
       updateSession t (\s -> (Session.clearAll now s, ()))
       n <- liftIO (destroySandboxesForGroup env.beSandboxes gid)
+      revokeConversationBrowsers gid
       nb <- liftIO (destroyBrowsersForGroup env.beBrowsers gid)
       logInfo "session: clear --all" $
         object ["sandboxes_destroyed" .= n, "browsers_destroyed" .= nb]

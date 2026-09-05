@@ -55,10 +55,8 @@ runRunBrowser name image = do
           "--init",
           "--name",
           T.unpack name,
-          -- Stretch camoufox-mcp's browse-session idle TTL to its
-          -- 15-minute ceiling (default 10) — each turn's page state
-          -- lives in that session, and every expiry forces the model
-          -- to re-navigate from scratch.
+          -- The workspace manager refreshes retained sessions; this timeout
+          -- bounds leaks when its heartbeat disappears.
           "-e",
           "CAMOUFOX_MCP_SESSION_TTL_MS=900000",
           -- Headroom over the default of 1: recovery from a wedged
