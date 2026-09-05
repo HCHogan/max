@@ -527,11 +527,11 @@ appConfigParser usedRef =
               metavar "URL"
             ]
     browserStateKeyFile <- subConfig "browser" $ setting
-      [help "Owner-only encryption key for browser checkpoints", reader str, option, long "browser-state-key-file", env "MAX_BROWSER_STATE_KEY_FILE", conf "state_key_file", value "var/browser-state.key"]
+      [help "Owner-only encryption key for browser checkpoints", reader str, option, long "browser-state-key-file", env "MAX_BROWSER_STATE_KEY_FILE", conf "state_key_file", metavar "FILE", value "var/browser-state.key"]
     browserIdleSeconds <- subConfig "browser" $ setting
-      [help "Retain idle task browser workspaces for this many seconds", reader auto, option, long "browser-idle-seconds", env "MAX_BROWSER_IDLE_SECONDS", conf "idle_seconds", value 1800]
+      [help "Retain idle task browser workspaces for this many seconds", reader auto, option, long "browser-idle-seconds", env "MAX_BROWSER_IDLE_SECONDS", conf "idle_seconds", metavar "SECONDS", value 1800]
     browserGraceSeconds <- subConfig "browser" $ setting
-      [help "Retain completed task browsers for this many seconds", reader auto, option, long "browser-grace-seconds", env "MAX_BROWSER_GRACE_SECONDS", conf "grace_seconds", value 300]
+      [help "Retain completed task browsers for this many seconds", reader auto, option, long "browser-grace-seconds", env "MAX_BROWSER_GRACE_SECONDS", conf "grace_seconds", metavar "SECONDS", value 300]
     memoryExtractProfile <-
       subConfig "memory" $
         optional $

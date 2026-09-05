@@ -7,6 +7,12 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "reload candidate configuration" $ do
+  it "accepts browser options through the startup parser and its metadata checks" $
+    withArgs ["--llm-api-key", "test-key", "--browser-state-key-file", "test-browser.key", "--browser-idle-seconds", "3600", "--browser-grace-seconds", "60"] $ do
+      config <- loadConfig
+      config.browserStateKeyFile `shouldBe` "test-browser.key"
+      config.browserIdleSeconds `shouldBe` 3600
+      config.browserGraceSeconds `shouldBe` 60
   it "classifies browser retention and key changes as restart-required and validates them" $
     withArgs ["--llm-api-key", "test-key"] $ do
       Right base <- loadConfigCandidate
