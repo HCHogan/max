@@ -141,6 +141,9 @@ endpointValues conversation = do
       \ 'delivery_failed', (SELECT count(*) FROM message_deliveries delivery \
       \                     WHERE delivery.endpoint_id = endpoint.endpoint_id \
       \                       AND delivery.status = 'failed'), \
+      \ 'delivery_permanent_failure', (SELECT count(*) FROM message_deliveries delivery \
+      \                               WHERE delivery.endpoint_id = endpoint.endpoint_id \
+      \                                 AND delivery.status = 'permanent_failure'), \
       \ 'delivery_parked', (SELECT count(*) FROM message_deliveries delivery \
       \                     WHERE delivery.endpoint_id = endpoint.endpoint_id \
       \                       AND delivery.status = 'outcome_unknown'), \
@@ -164,11 +167,15 @@ workSummaryValue conversation = do
       \ 'delivery_active', (SELECT count(*) FROM message_deliveries delivery \
       \                     JOIN messages message USING (canonical_message_id) \
       \                     WHERE message.conversation_id = ? \
-      \                       AND delivery.status IN ('pending', 'sending', 'failed')), \
+      \                       AND delivery.status IN ('pending', 'reserved', 'sending', 'failed')), \
       \ 'delivery_outcome_unknown', (SELECT count(*) FROM message_deliveries delivery \
       \                              JOIN messages message USING (canonical_message_id) \
       \                              WHERE message.conversation_id = ? \
       \                                AND delivery.status = 'outcome_unknown'), \
+      \ 'delivery_permanent_failure', (SELECT count(*) FROM message_deliveries delivery \
+      \                                JOIN messages message USING (canonical_message_id) \
+      \                                WHERE message.conversation_id = ? \
+      \                                  AND delivery.status = 'permanent_failure'), \
       \ 'delivery_suppressed', (SELECT count(*) FROM message_deliveries delivery \
       \                         JOIN messages message USING (canonical_message_id) \
       \                         WHERE message.conversation_id = ? \
@@ -176,10 +183,10 @@ workSummaryValue conversation = do
       \ 'dispatch_active', (SELECT count(*) FROM message_dispatches dispatch \
       \                     JOIN messages message USING (canonical_message_id) \
       \                     WHERE message.conversation_id = ? \
-      \                       AND dispatch.status IN ('pending', 'claimed', 'failed')), \
+      \                       AND dispatch.status IN ('pending', 'reserved', 'claimed', 'failed', 'deferred')), \
       \ 'media_pending_global', (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL), \
       \ 'media_parked_global', (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL))"
-      (conversation, conversation, conversation, conversation)
+      (conversation, conversation, conversation, conversation, conversation)
   case rows :: [Only Value] of
     [Only summary] -> pure summary
     _ -> error "workSummaryValue: query returned an unexpected shape"

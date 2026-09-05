@@ -162,9 +162,9 @@ spec = do
           next `shouldSatisfy` (> epoch)
         other -> expectationFailure ("unexpected completion: " <> show other)
 
-    it "suppresses an over-budget rejection so the ordered lane releases" $
+    it "permanently fails an over-budget rejection so the ordered lane releases" $
       case toCompletion deliveryAttemptBudget epoch (AttemptRejected "retcode 1200") of
-        DeliverySuppressedAs reason -> do
+        DeliveryPermanentlyFailed reason -> do
           reason `shouldSatisfy` T.isInfixOf "retry budget exhausted"
           reason `shouldSatisfy` T.isInfixOf "retcode 1200"
         other -> expectationFailure ("unexpected completion: " <> show other)

@@ -32,9 +32,10 @@ docker-compose.yml NapCat container; shared ./var/outbox volume
 sandbox-image/     nix-enabled sandbox base image  → max-sandbox:latest
 browser-image/     camoufox-mcp + supergateway + camoufox → max-browser:latest
 nix/module.nix     NixOS module for production deployment
-.github/workflows/ CI: build + pure and PostgreSQL/pgvector tests through the
-                   flake dev shell, plus a pure `nix build .#max` so the
-                   packaged build can't rot
+.github/workflows/ CI: independent build/lint, pure-test and
+                   PostgreSQL/pgvector-test jobs through the flake dev shell,
+                   plus a pure `nix build .#max` so one failure cannot hide
+                   another and the packaged build cannot rot
 max.cabal          library + max executable
 migrations/*.sql   schema migrations, applied on boot
 skills/*.md        builtin skill manuals, baked into the binary (file-embed);
@@ -88,11 +89,15 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    shared claim loop), MediaCaption + Stickers (caption workers),
-                   Reminder, Reply (planning), ReplySend (planning made real:
+                   Turn + Plan (durable orchestration/recovery), Monitor
+                   (typed trigger scheduler), Reminder, Reply (planning),
+                   ReplySend (planning made real:
                    placeholders, sending, persistence — shared by final,
                    streamed, and progress text), Render, Roster, Shutdown (graceful
-                   drain), Tasks, Tools, BuildInfo (compile-time git rev), Admin
-                   (JSON API + panel), Util
+                   drain), Tasks, Worker (required/optional/restartable
+                   supervision), Reload/RuntimeConfig (immutable generations),
+                   Tools, BuildInfo (compile-time git rev), Admin (JSON API +
+                   panel and operational health counters), Util
 app/Main.hs        wires effects + workers + server
 ```
 
@@ -128,9 +133,10 @@ app/Main.hs        wires effects + workers + server
                                             └─────────────────────────┘
 ```
 
-QQ and Matrix may be endpoints of the same canonical conversation; iMessage is
-standalone. Required dispatch and delivery workers close both post-commit crash
-windows. Matrix retries reuse deterministic transaction IDs. Non-idempotent
+QQ, Matrix, and a configured iMessage chat may be endpoints of the same
+canonical conversation; an iMessage endpoint may also remain standalone.
+Required dispatch and delivery workers close both post-commit crash windows.
+Matrix retries reuse deterministic transaction IDs. Non-idempotent
 QQ/iMessage ambiguity is parked until echo/status reconciliation, never placed
 back on the retry queue by a timeout. Context, Historian, and memory therefore
 see one semantic row regardless of how many transport copies exist.
@@ -303,6 +309,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
 | Maintenance ownership | independently fenced PostgreSQL leases serialize embedding, memory-dream, and context-rebuild domains without making unrelated maintenance jobs block one another; the owner heartbeats during long actions, and projection writes either carry the fencing token in SQL or run under a token-checked lease-row lock |
 | Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown`, claims the same turn for recovery, injects its committed sends/results/unknowns into a fresh LLM round, and never silently retries it; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
+| Durable plans and fork children | `plans`/`plan_revisions` persist intent and checkpoints, spawn edges own schema-checked child results, and the plan worker reclaims expired wake leases. `JoinAll` is the only admitted join policy; child tools remain bounded by the plan's effect ceiling |
 | Sandbox workspaces | `sandboxes` persists lifecycle metadata and the named Docker volume holds current state. Boot adopts only a running container carrying the current isolation-policy label and fixed image/network metadata; otherwise it rebuilds a non-root, networkless, capability-free, resource-capped, read-only shell around the surviving volume. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping |
 
 | Lost on restart | Why |
@@ -498,11 +505,16 @@ ordinary constructor makes them identical. A separate opaque proof can express
 only an explicitly host-authorized group source projected into a direct-message
 turn; reversed DM-to-group and same-kind projections cannot be constructed.
 
-Workers are started as one flat list (`withLinkedWorkers` in `app/Main.hs`),
-each `link`ed so a worker dying silently takes the process down rather than
-leaving a stuck queue behind. An optional worker is an action that does nothing
-when its config is absent — the async finishes immediately and linking a
-finished async is a no-op, so "feature off" needs no special case.
+Workers are assembled per immutable runtime-config generation and supervised
+through `withWorkers`. Required queue owners (fetch, monitor, dispatch, plan,
+delivery) turn either an exception or a normal return into process failure.
+Config-disabled workers are omitted. Enabled optional edges (embedding,
+Historian, intent, admin, WeChat, Matrix, iMessage) are `RestartableWorker`s:
+synchronous failures stay inside that edge and retry with bounded exponential
+backoff, while asynchronous shutdown still propagates. The bounded
+shutdown-drain action is the only `OptionalWorker` whose normal return is part
+of its contract. OneBot listener ownership remains outside reloadable worker
+generations so a hot reload cannot create a second reverse-WebSocket owner.
 
 ## Phase status
 
@@ -520,3 +532,19 @@ finished async is a no-op, so "feature off" needs no special case.
 | 12 | Skills (progressive disclosure) + episode memory extraction | ✅ |
 | 13 | Token-planned infinite context + unified Historian/memory lifecycle | ✅ |
 | 14 | Merged self-knowledge + exact deployed-source inspection | ✅ |
+| 15 | Canonical message IR, identities, per-endpoint capability lowering, QQ/Matrix/iMessage/WeChat ingress and mirror delivery | ✅ |
+| 16 | Durable turns/journal replay, typed monitors, reconnect QQ history audit | ✅, with QQ coverage explicitly best-effort |
+| 17 | Durable plans, fork children, checkpoint/wake recovery and runtime contracts | ✅, `JoinAll` only |
+| 18 | Atomic configuration generations, worker handoff, admin timeline and routine database/operational health gate | ⚠️ implemented; live gate is red pending projection repair and terminal-state reconciliation |
+
+Remaining work is intentionally narrower than these completed phases:
+
+- ADR 004: explicit cross-platform principal merge.
+- ADR 005: small-model thought/digest cache and narrator unification.
+- ADR 006: admin monitor/history projection, user-facing re-aim, and the
+  deliberately deferred `ExternalPoll` authority.
+- ADR 002/007: ordinary model-filled holes, adaptive horizon policy, more join
+  semantics, production verifiers, and broader schema-derived tool results.
+- ADR 003 operations: share iMessage bridge circuit state with outbound
+  delivery so a known-down edge does not create avoidable ambiguity, and add a
+  typed reconciliation/acknowledgement lifecycle for durable terminal debt.

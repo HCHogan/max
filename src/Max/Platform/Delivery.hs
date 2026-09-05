@@ -366,10 +366,10 @@ deliveryWorker workerId transports = localDomain "delivery" loop
 -- retryable-shaped forever, and every retry re-blocks the endpoint's ordered
 -- lane behind one row that will never land.  A rejection is only reported
 -- once the transport has proved no message was emitted, so ending it is a
--- content decision, not an undecidable outcome: the copy is suppressed and
--- the lane releases.  Attempts that could have taken effect are already
--- terminal as @outcome_unknown@ on their first occurrence, and an unreachable
--- edge is deliberately unbounded — see 'AttemptRetryable'.
+-- deterministic poison, not an undecidable outcome: the copy is permanently
+-- failed and the lane releases.  Attempts that could have taken effect are
+-- already terminal as @outcome_unknown@ on their first occurrence, and an
+-- unreachable edge is deliberately unbounded — see 'AttemptRetryable'.
 toCompletion :: Int -> UTCTime -> DeliveryAttempt -> DeliveryCompletion
 toCompletion attempts now = \case
   AttemptConfirmed native -> DeliveryConfirmedAs native
@@ -377,7 +377,7 @@ toCompletion attempts now = \case
   AttemptRetryable err -> DeliveryRetry err (addUTCTime (retryDelay attempts) now)
   AttemptRejected err
     | attempts >= deliveryAttemptBudget ->
-        DeliverySuppressedAs
+        DeliveryPermanentlyFailed
           ( "retry budget exhausted after "
               <> T.pack (show attempts)
               <> " attempts: "

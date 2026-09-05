@@ -359,10 +359,10 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
         _ -> False
 
   -- The retry budget in Max.Platform.Delivery converts an exhausted retryable
-  -- attempt into a suppression precisely so the endpoint's ordered lane stops
-  -- waiting on a copy that can never land.  That only works if a suppressed
+  -- attempt into a permanent failure precisely so the endpoint's ordered lane
+  -- stops waiting on a copy that can never land.  That only works if a terminal
   -- row leaves the blocking set.
-  it "releases the ordered lane once a poisoned copy is suppressed" $ do
+  it "releases the ordered lane once a poisoned copy permanently fails" $ do
     (qq, matrix) <- mirrorPair pool
     now <- getCurrentTime
     _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-poison" "risk controlled"))
@@ -376,11 +376,45 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Platform.Store" $ do
     retried.deliveryId `shouldBe` poisoned.deliveryId
     withDb
       pool
-      (completeDelivery "worker-b" retried.deliveryId retried.attemptCount [] (DeliverySuppressedAs "retry budget exhausted after 16 attempts: retcode 1200"))
+      (completeDelivery "worker-b" retried.deliveryId retried.attemptCount [] (DeliveryPermanentlyFailed "retry budget exhausted after 16 attempts: retcode 1200"))
       `shouldReturn` True
+    rows <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT status FROM message_deliveries WHERE delivery_id = ?"
+        (Only retried.deliveryId.unDeliveryId)
+    (rows :: [Only Text]) `shouldBe` [Only "permanent_failure"]
     released <- claimStartedDeliveries pool "worker-c" 10 30
     fmap (.canonicalMessageId) released `shouldSatisfy` ((== 1) . length)
     released `shouldSatisfy` all ((/= poisoned.deliveryId) . (.deliveryId))
+
+  it "reports deterministic poison separately from deliberate suppression" $ do
+    (qq, matrix) <- mirrorPair pool
+    now <- getCurrentTime
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId now "mx-permanent" "poison"))
+    [poisoned] <- claimStartedDeliveries pool "worker-a" 10 30
+    withDb
+      pool
+      (completeDelivery "worker-a" poisoned.deliveryId poisoned.attemptCount [] (DeliveryPermanentlyFailed "invalid target"))
+      `shouldReturn` True
+    _ <- withDb pool (ingestEnvelope defaultIngestOptions (inbound matrix.endpointId (addUTCTime 1 now) "mx-suppressed" "policy"))
+    [suppressed] <- claimStartedDeliveries pool "worker-b" 10 30
+    withDb
+      pool
+      (completeDelivery "worker-b" suppressed.deliveryId suppressed.attemptCount [] (DeliverySuppressedAs "reaction unsupported"))
+      `shouldReturn` True
+    rows <- withConn pool $ \conn ->
+      query
+        conn
+        "SELECT status, count(*) FROM message_deliveries WHERE endpoint_id = ? GROUP BY status ORDER BY status"
+        (Only qq.endpointId.unEndpointId)
+    (rows :: [(Text, Int64)]) `shouldBe` [("permanent_failure", 1), ("suppressed", 1)]
+    statuses <- withDb pool listPlatformStatus
+    case [status | status <- statuses, status.endpointId == qq.endpointId] of
+      [status] -> do
+        status.permanentFailureDeliveries `shouldBe` 1
+        status.suppressedDeliveries `shouldBe` 1
+      _ -> expectationFailure "missing QQ endpoint status"
 
   it "persists the shared lowerer's degradation audit on completion" $ do
     (qq, matrix) <- mirrorPair pool

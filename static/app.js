@@ -263,7 +263,14 @@ function admin() {
         case 'logs':
           return { n: h.warn_logs || 0, tone: 'busy' };
         case 'timeline':
-          return { n: (h.failed_deliveries || 0) + (h.media_parked || 0), tone: 'bad' };
+          return {
+            n:
+              (h.failed_deliveries || 0) +
+              (h.permanent_failure_deliveries || 0) +
+              (h.unknown_deliveries || 0) +
+              (h.media_parked || 0),
+            tone: 'bad',
+          };
         case 'context':
           return { n: h.failed_captures || 0, tone: 'bad' };
         default:
@@ -1065,7 +1072,12 @@ function admin() {
       const chatLast = msgLast && chat.find((d) => d.day === msgLast.day);
 
       const h = this.overview.health || {};
-      const stuck = (h.failed_deliveries || 0) + (h.media_parked || 0) + (h.failed_captures || 0);
+      const stuck =
+        (h.failed_deliveries || 0) +
+        (h.permanent_failure_deliveries || 0) +
+        (h.unknown_deliveries || 0) +
+        (h.media_parked || 0) +
+        (h.failed_captures || 0);
 
       return [
         {

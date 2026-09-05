@@ -18,7 +18,7 @@ module Max.Reload
 where
 
 import Control.Exception (IOException, bracket, throwIO, try)
-import Control.Monad (forever, unless, void)
+import Control.Monad (forever, unless, void, when)
 import Data.Aeson
   ( FromJSON,
     ToJSON,
@@ -27,6 +27,7 @@ import Data.Aeson
   )
 import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy qualified as LBS
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Word (Word64)
 import Effectful
@@ -128,7 +129,7 @@ requestReload path = withSocketsDo $ do
       pure $ case eitherDecodeStrict' line of
         Left _ -> Left "max reload returned an invalid response"
         Right response -> Right response
-    pure (maybe (Left "timed out waiting for Max to finish reloading") id timed)
+    pure (fromMaybe (Left "timed out waiting for Max to finish reloading") timed)
   pure $ case attempted of
     Left _ -> Left "could not connect to the Max reload control socket"
     Right response -> response
@@ -200,4 +201,4 @@ prepareSocketPath path = do
 removeSocketIfPresent :: FilePath -> IO ()
 removeSocketIfPresent path = do
   exists <- doesPathExist path
-  if exists then void (try @IOException (removeFile path)) else pure ()
+  when exists $ void (try @IOException (removeFile path))

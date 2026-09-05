@@ -471,6 +471,7 @@ data PlatformEndpointStatus = PlatformEndpointStatus
     failedDeliveries :: !Int64,
     acceptedUnconfirmedDeliveries :: !Int64,
     outcomeUnknownDeliveries :: !Int64,
+    permanentFailureDeliveries :: !Int64,
     suppressedDeliveries :: !Int64,
     oldestPendingAt :: !(Maybe UTCTime),
     lastDeliveryAt :: !(Maybe UTCTime)
@@ -483,6 +484,7 @@ instance FromRow PlatformEndpointStatus where
     PlatformEndpointStatus . EndpointId
       <$> field
       <*> (ConversationId <$> field)
+      <*> field
       <*> field
       <*> field
       <*> field
@@ -2395,7 +2397,7 @@ completeDelivery workerId (DeliveryId delivery) attempt lowerNotes completion = 
       DeliveryUnknown err next ->
         finish "outcome_unknown" Nothing (Just err) (Just next) False
       DeliveryPermanentlyFailed err ->
-        finish "suppressed" Nothing (Just err) Nothing False
+        finish "permanent_failure" Nothing (Just err) Nothing False
       DeliverySuppressedAs reason ->
         finish "suppressed" Nothing (Just reason) Nothing False
     pure (changed == 1)
@@ -2521,6 +2523,7 @@ listPlatformStatus =
     \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'failed'), \
     \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'accepted_unconfirmed'), \
     \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'outcome_unknown'), \
+    \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'permanent_failure'), \
     \       (SELECT count(*) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status = 'suppressed'), \
     \       (SELECT min(d.created_at) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id AND d.status IN ('pending', 'reserved', 'sending', 'failed')), \
     \       (SELECT max(d.updated_at) FROM message_deliveries d WHERE d.endpoint_id = e.endpoint_id) \

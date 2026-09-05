@@ -10,8 +10,8 @@
 -- cabal test max-test-db
 -- @
 --
--- When 'MAX_TEST_DB_URL' is unset, the suite exits 0 with a friendly
--- note so CI without a database doesn't break.
+-- An unset 'MAX_TEST_DB_URL' is a failed integration gate, not a passing empty
+-- suite.  CI and release checks must provide a real PostgreSQL database.
 module Main (main) where
 
 import Control.Exception (bracket)
@@ -43,7 +43,7 @@ import Max.PlatformStoreSpec qualified as PlatformStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import Max.RecallSpec qualified as RecallSpec
 import System.Environment (lookupEnv)
-import System.Exit (exitSuccess)
+import System.Exit (die)
 import Test.Hspec (hspec)
 
 main :: IO ()
@@ -51,9 +51,9 @@ main = do
   mUrl <- lookupEnv "MAX_TEST_DB_URL"
   case mUrl of
     Nothing -> do
-      putStrLn "MAX_TEST_DB_URL not set — skipping DB integration tests."
-      putStrLn "  e.g. export MAX_TEST_DB_URL=postgresql://127.0.0.1:5433/max_test"
-      exitSuccess
+      die
+        "MAX_TEST_DB_URL not set; refusing to report a skipped DB integration suite as passing.\n\
+        \  e.g. export MAX_TEST_DB_URL=postgresql://127.0.0.1:5433/max_test"
     Just url -> bracket (newDbPool (DbConfig (T.pack url) 4)) closeDbPool $ \pool -> do
       applied <- runMigrations pool "migrations"
       case applied of

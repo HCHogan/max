@@ -188,13 +188,17 @@ SELECT status, count(*) FROM message_deliveries GROUP BY status ORDER BY status;
 SELECT status, count(*) FROM message_dispatches GROUP BY status ORDER BY status;
 SELECT endpoint_id, count(*)
 FROM message_deliveries
-WHERE status IN ('failed', 'outcome_unknown', 'suppressed')
+WHERE status IN ('failed', 'outcome_unknown', 'permanent_failure', 'suppressed')
 GROUP BY endpoint_id ORDER BY endpoint_id;
 SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL;
 ```
 
-Investigate growing failed queues, parked media, unexpected suppressions, or
-non-monotone per-endpoint native events before ending the observation window.
+Investigate growing failed queues, every permanent failure, parked media,
+unexpected suppressions, or non-monotone per-endpoint native events before
+ending the observation window. `permanent_failure` is deterministic poison;
+`suppressed` is deliberate capability/policy behavior. Migration 086 cannot
+losslessly reclassify historical `suppressed` rows, so this distinction is
+authoritative for completions recorded after that migration.
 
 ## Post-cutover repairs
 
@@ -234,7 +238,7 @@ that deploy forward.
 
 **2026-08-05 delivery retry budget.** A rejection by a reachable edge (QQ risk
 control, a reaction on a deleted target) was retryable-shaped forever and held
-the endpoint's ordered lane behind it. It now ends as `suppressed` after
+the endpoint's ordered lane behind it. It now ends as `permanent_failure` after
 `deliveryAttemptBudget` attempts (~45 minutes). An *unreachable* edge is
 deliberately exempt: production delivery 72552 spent 159 attempts across an
 eleven-hour QQ outage and then landed, and while an edge is down the lane is
@@ -248,7 +252,31 @@ recomputed `rendered_text` from the enriched canonical body while ingest still
 rendered it from the pre-identity ingest body, so it failed on every row whose
 mention display had been enriched. Both sides now render from the resolved
 canonical body, and the gate requires the baseline. `verify` is safe to run
-against the live database again.
+against the live database again. Run it from the exact deployed closure after
+every deploy while traffic is flowing:
+
+```sh
+sudo -u max-bot env MAX_DB_URL='postgresql:///max-bot?host=/run/postgresql' \
+  max-adr003-maintenance verify
+```
+
+`verify` checks schema, canonical IR, projections, ledger relationships, and
+the operational health gate. For a cheaper check between deploys, run the same
+command with `health`; it reports retryable queues and fails on deterministic
+delivery poison, ambiguous outcomes, parked work, or expired durable leases.
+
+**2026-09-05 routine verification follow-up.** A read-only run of the exact
+deployed 0.17.3 maintenance binary against the live database was executable but
+not green: 2,522 of 149,395 messages had a stale `rendered_text` projection.
+The first 50 reported rows dated from 2026-08-06 through 2026-08-07; that sample
+does not prove the extent of the full set. Equivalent operational queries also
+found 1,175 delivery and 9 dispatch `outcome_unknown` rows plus 385 parked media
+jobs. Five of the delivery ambiguities were created by the iMessage mirror
+after the active service generation started, while the adapter logged a bridge
+connection timeout roughly every 90 seconds. No projection, delivery, or media
+row was changed during this check. A controlled reprojection, terminal-state
+reconciliation, and another live `verify` are still required before calling the
+routine production gate green.
 
 ## Atomic rollback
 

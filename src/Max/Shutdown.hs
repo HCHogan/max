@@ -61,6 +61,7 @@ import Control.Concurrent.STM
   )
 import Control.Exception (AsyncException (UserInterrupt), throwTo)
 import Control.Monad (unless)
+import Data.Maybe (isJust)
 import Data.Ord (clamp)
 import Effectful
 import Effectful.Log
@@ -83,7 +84,7 @@ newShutdownState = ShutdownState <$> newTVarIO False <*> newTVarIO 0
 -- transaction, so a dispatch can never slip past the gate and then be
 -- missed by 'awaitQuiescent'.
 enterDispatch :: ShutdownState -> IO Bool
-enterDispatch st = maybe False (const True) <$> enterDispatchWith st (pure ())
+enterDispatch st = isJust <$> enterDispatchWith st (pure ())
 
 -- | Atomically claim a dispatch slot and acquire another process-local
 -- resource, such as the current configuration generation.  Keeping these in

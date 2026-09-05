@@ -155,8 +155,10 @@ GET /api/platforms/status
 
 The response lists every endpoint's canonical conversation, native address,
 declared capabilities, ingest cursors/fingerprint/revision, last inbound event,
-delivery backlog, accepted-unconfirmed count, outcome-unknown count, suppressed
-count, and oldest pending timestamp.
+delivery backlog, accepted-unconfirmed count, outcome-unknown count, permanent
+failure count, suppressed count, and oldest pending timestamp. Permanent
+failure means deterministic poison that needs attention; suppression means Max
+intentionally emitted no native copy because of endpoint capability or policy.
 
 Useful direct checks during cutover:
 

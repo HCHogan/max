@@ -1,5 +1,3 @@
-{-# LANGUAGE NamedFieldPuns #-}
-
 -- | Transactional lifecycle for reloadable worker generations.
 --
 -- A candidate's fallible preparation runs before its worker thread exists.

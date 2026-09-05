@@ -1,7 +1,9 @@
 # ADR 003: Message IR and Capability-Tiered Rendering
 
-- Status: Accepted / Implemented
-- Date: 2026-08-04
+- Status: Accepted / Implemented. Migration 086 separates deterministic
+  `permanent_failure` from deliberate capability/policy `suppressed` outcomes
+  across storage, status APIs, the admin timeline, and the operational gate.
+- Date: 2026-08-04; delivery terminal-state observability 2026-09-05.
 
 ## Context
 

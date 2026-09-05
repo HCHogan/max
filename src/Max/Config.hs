@@ -68,7 +68,7 @@ import Data.Int (Int64)
 import Data.List.NonEmpty qualified as NE
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone, minutesToTimeZone)
@@ -405,7 +405,7 @@ runtimeValuesFromConfig cfg =
       rvBrowserProxy = cfg.browserProxy,
       rvMemoryExtract = cfg.memoryExtractProfile,
       rvIntent = cfg.intent,
-      rvEmbeddingEnabled = maybe False (const True) cfg.embedding,
+      rvEmbeddingEnabled = isJust cfg.embedding,
       rvModelCatalog = cfg.llm,
       rvLogLevel = cfg.logLevel
     }

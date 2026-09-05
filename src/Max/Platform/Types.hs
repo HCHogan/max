@@ -190,5 +190,6 @@ data DeliveryStatus
   | DeliveryConfirmed
   | DeliveryFailed
   | DeliveryOutcomeUnknown
+  | DeliveryPermanentFailure
   | DeliverySuppressed
   deriving stock (Eq, Ord, Show, Generic)

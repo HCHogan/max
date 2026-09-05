@@ -25,9 +25,14 @@ PostgreSQL 17 with pgvector; the database suite is a required release gate.
 
 ```sh
 cabal test max-test                          # in-memory: pure logic
-cabal test max-test-db                       # DB integration; needs MAX_TEST_DB_URL
+cabal test max-test-db                       # DB integration; requires MAX_TEST_DB_URL
 cabal test all --test-show-details=direct    # both, verbose
 ```
+
+The DB suite must not be counted as passing when `MAX_TEST_DB_URL` is absent.
+Set it explicitly, or do not claim the integration gate was run. CI runs the
+unit and DB suites as independent jobs so a lint or unit failure cannot hide
+the database result.
 
 ### `max-test` (no DB)
 

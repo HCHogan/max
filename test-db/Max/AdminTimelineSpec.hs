@@ -70,6 +70,35 @@ spec pool = before_ (truncateAll pool) $ describe "Max.AdminTimeline" $ do
         (Only (resultId message).unCanonicalMessageId)
     wait waiter `shouldReturn` True
 
+  it "counts reserved deliveries and deferred dispatches as active work" $ do
+    endpoint <-
+      withDb pool $
+        ensureConfiguredEndpoint
+          PlatformMatrix
+          (NativeAccountId "@max:queued.test")
+          (NativeConversationId "!room:queued.test")
+          ConversationGroup
+          EndpointStandalone
+          (Just 45)
+          textOnlyCaps
+    now <- getCurrentTime
+    message <- withDb pool (ingestEnvelope defaultIngestOptions (baseEnvelope endpoint.endpointId now "queued"))
+    let messageId = (resultId message).unCanonicalMessageId
+    _ <- withConn pool $ \conn ->
+      execute
+        conn
+        "UPDATE message_deliveries SET status = 'reserved' WHERE canonical_message_id = ?"
+        (Only messageId)
+    _ <- withConn pool $ \conn ->
+      execute
+        conn
+        "UPDATE message_dispatches SET status = 'deferred' WHERE canonical_message_id = ?"
+        (Only messageId)
+    timeline <- withDb pool (loadAdminTimeline 45 Nothing 10)
+    let rendered = maybe "" (TE.decodeUtf8 . LBS.toStrict . encode) timeline
+    rendered `shouldSatisfy` T.isInfixOf "\"delivery_active\":1"
+    rendered `shouldSatisfy` T.isInfixOf "\"dispatch_active\":1"
+
   it "hydrates identities, authenticated blobs, forward children, raw unsupported data, and delivery audit" $ do
     endpoint <-
       withDb pool $
@@ -129,6 +158,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.AdminTimeline" $ do
     rendered `shouldSatisfy` T.isInfixOf "lower_notes"
     rendered `shouldSatisfy` T.isInfixOf "capabilities"
     rendered `shouldSatisfy` T.isInfixOf "work_summary"
+    rendered `shouldSatisfy` T.isInfixOf "delivery_permanent_failure"
     rendered `shouldSatisfy` T.isInfixOf "media_parked_global"
 
 baseEnvelope :: EndpointId -> UTCTime -> Text -> InboundEnvelope

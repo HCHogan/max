@@ -41,7 +41,7 @@ import Max.Platform.Types (PrincipalId, PrincipalIdentityId)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (die)
 
-data Command = Migrate | Reproject | Verify | Gate
+data Command = Migrate | Reproject | Verify | Health | Gate
   deriving stock (Eq, Show)
 
 data ProjectionRow = ProjectionRow
@@ -72,6 +72,7 @@ run command migrationsDir pool = case command of
   Migrate -> migrate pool migrationsDir
   Reproject -> withConn pool reproject
   Verify -> withConn pool (verify False)
+  Health -> withConn pool operationalHealth
   Gate -> do
     withConn pool preflightDrained
     migrate pool migrationsDir
@@ -171,7 +172,12 @@ verify requireDrained connection = do
     putStrLn "ADR 003 release gate FAILED:"
     mapM_ (putStrLn . ("  - " <>)) (take 50 problems)
     when (length problems > 50) $ putStrLn ("  - ... and " <> show (length problems - 50) <> " more")
-    die "database is not safe to start with the final ADR 003 binary"
+    die
+      ( if requireDrained
+          then "database is not safe to start with the final ADR 003 binary"
+          else "database integrity verification failed"
+      )
+  operationalHealth connection
   putStrLn
     ( if requireDrained
         then "ADR 003 release gate PASSED (schema, IR, projections, ledger, and queues)"
@@ -195,6 +201,29 @@ decodeBody row = case fromJSON row.canonicalContent of
           <> " is not decodable v2 IR: "
           <> err
       )
+
+-- | Fast, read-only operational gate.  Retryable queues are reported because
+-- they are useful during an incident, but only states that have lost automatic
+-- progress or require explicit reconciliation fail the command.  A second run
+-- after one lease interval separates a recovery race from a genuinely
+-- abandoned owner.
+operationalHealth :: Connection -> IO ()
+operationalHealth connection = do
+  measurements <- forM operationalChecks $ \(label, critical, sql) -> do
+    count <- scalarCount connection sql
+    putStrLn ("health: " <> label <> "=" <> show count)
+    pure (label, critical, count)
+  let problems =
+        [ label <> ": " <> show count
+        | (label, critical, count) <- measurements,
+          critical,
+          count /= 0
+        ]
+  unless (null problems) $ do
+    putStrLn "Operational health check FAILED:"
+    mapM_ (putStrLn . ("  - " <>)) problems
+    die "durable work requires operator attention"
+  putStrLn "Operational health check PASSED"
 
 verifyProjections :: Connection -> IO [String]
 verifyProjections connection = do
@@ -363,14 +392,82 @@ drainChecks :: [(String, Query)]
 drainChecks =
   [ ( "active delivery rows",
       "SELECT count(*) FROM message_deliveries \
-      \WHERE status IN ('pending', 'sending', 'failed')"
+      \WHERE status IN ('pending', 'reserved', 'sending', 'failed')"
     ),
     ( "active dispatch rows",
       "SELECT count(*) FROM message_dispatches \
-      \WHERE status IN ('pending', 'claimed', 'failed')"
+      \WHERE status IN ('pending', 'reserved', 'claimed', 'failed', 'deferred')"
     ),
     ( "unprocessed durable media jobs",
       "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL"
+    )
+  ]
+
+-- The boolean says whether a non-zero count is a failed health gate.  Pending
+-- and retryable work is expected while traffic is flowing; expired ownership,
+-- ambiguous effects, parked work, and deterministic poison are not.
+operationalChecks :: [(String, Bool, Query)]
+operationalChecks =
+  [ ( "delivery_retryable",
+      False,
+      "SELECT count(*) FROM message_deliveries WHERE status = 'failed'"
+    ),
+    ( "delivery_permanent_failure",
+      True,
+      "SELECT count(*) FROM message_deliveries WHERE status = 'permanent_failure'"
+    ),
+    ( "delivery_outcome_unknown",
+      True,
+      "SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'"
+    ),
+    ( "delivery_expired_lease",
+      True,
+      "SELECT count(*) FROM message_deliveries \
+      \WHERE status IN ('reserved', 'sending') AND lease_expires_at <= now()"
+    ),
+    ( "dispatch_retryable",
+      False,
+      "SELECT count(*) FROM message_dispatches WHERE status = 'failed'"
+    ),
+    ( "dispatch_outcome_unknown",
+      True,
+      "SELECT count(*) FROM message_dispatches WHERE status = 'outcome_unknown'"
+    ),
+    ( "dispatch_expired_lease",
+      True,
+      "SELECT count(*) FROM message_dispatches \
+      \WHERE status IN ('reserved', 'claimed') AND lease_expires_at <= now()"
+    ),
+    ( "media_parked",
+      True,
+      "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL"
+    ),
+    ( "monitor_fire_parked",
+      True,
+      "SELECT count(*) FROM monitor_fires WHERE parked_at IS NOT NULL"
+    ),
+    ( "monitor_fire_expired_claim",
+      True,
+      "SELECT count(*) FROM monitor_fires \
+      \WHERE admission_state = 'pending' AND cancelled_at IS NULL \
+      \  AND parked_at IS NULL AND claim_expires_at <= now()"
+    ),
+    ( "plan_expired_wake_claim",
+      True,
+      "SELECT count(*) FROM plans \
+      \WHERE status = 'open' AND exec_state IS NOT NULL \
+      \  AND wake_claim_expires_at <= now()"
+    ),
+    ( "journal_unresolved_outcome_unknown",
+      True,
+      "SELECT count(*) FROM execution_journal journal \
+      \JOIN agent_turns turn USING (turn_id) \
+      \WHERE journal.state = 'outcome-unknown' \
+      \  AND turn.status IN ('starting', 'running', 'recovery-pending')"
+    ),
+    ( "sandbox_outcome_unknown",
+      True,
+      "SELECT count(*) FROM sandboxes WHERE status = 'outcome-unknown'"
     )
   ]
 
@@ -379,12 +476,12 @@ preflightChecks =
   [ ( "message_deliveries",
       "active delivery rows before migration",
       "SELECT count(*) FROM message_deliveries \
-      \WHERE status IN ('pending', 'sending', 'failed')"
+      \WHERE status IN ('pending', 'reserved', 'sending', 'failed')"
     ),
     ( "message_dispatches",
       "active dispatch rows before migration",
       "SELECT count(*) FROM message_dispatches \
-      \WHERE status IN ('pending', 'claimed', 'failed')"
+      \WHERE status IN ('pending', 'reserved', 'claimed', 'failed', 'deferred')"
     ),
     ( "fetch_jobs",
       "unprocessed durable media jobs before migration",
@@ -417,11 +514,12 @@ parseCommand = \case
   ["migrate"] -> pure Migrate
   ["reproject"] -> pure Reproject
   ["verify"] -> pure Verify
+  ["health"] -> pure Health
   ["gate"] -> pure Gate
   _ ->
     die
       "usage: cabal run max-adr003-maintenance -- \
-      \(migrate|reproject|verify|gate)\n\
+      \(migrate|reproject|verify|health|gate)\n\
       \  environment: MAX_DB_URL (required), MAX_MIGRATIONS_DIR (default: migrations)"
 
 requireEnv :: String -> IO String

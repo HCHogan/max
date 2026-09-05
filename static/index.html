@@ -330,7 +330,7 @@
             <p class="card-desc">每个端点的投递健康与最近活动</p>
             <div class="table-wrap">
               <table>
-                <thead><tr><th>会话</th><th>端点</th><th>状态</th><th class="text-right">pending</th><th class="text-right">failed</th><th class="text-right">unknown</th><th>最近入站</th></tr></thead>
+                <thead><tr><th>会话</th><th>端点</th><th>状态</th><th class="text-right">pending</th><th class="text-right">failed</th><th class="text-right">permanent</th><th class="text-right">unknown</th><th>最近入站</th></tr></thead>
                 <tbody>
                   <template x-for="e in endpoints" :key="e.endpointId">
                     <tr>
@@ -343,6 +343,7 @@
                       </td>
                       <td class="num text-right" data-label="pending" x-text="e.pendingDeliveries"></td>
                       <td class="num text-right" data-label="failed" x-text="e.failedDeliveries"></td>
+                      <td class="num text-right" data-label="permanent" x-text="e.permanentFailureDeliveries"></td>
                       <td class="num text-right" data-label="unknown" x-text="e.outcomeUnknownDeliveries"></td>
                       <td class="stamp" data-label="最近入站" x-text="fmtDate(e.lastInboundAt)"></td>
                     </tr>
@@ -425,7 +426,7 @@
                         <span x-text="endpoint.platform + ' · ' + endpoint.mode"></span>
                         <span class="id" x-text="endpoint.endpoint_id"></span>
                         <span :class="endpoint.enabled ? 'ok' : 'bad'" x-text="endpoint.enabled ? 'enabled' : 'disabled'"></span>
-                        <span class="muted" x-text="'pending ' + endpoint.delivery_pending + ' · failed ' + endpoint.delivery_failed + ' · parked ' + endpoint.delivery_parked"></span>
+                        <span class="muted" x-text="'pending ' + endpoint.delivery_pending + ' · failed ' + endpoint.delivery_failed + ' · permanent ' + endpoint.delivery_permanent_failure + ' · parked ' + endpoint.delivery_parked"></span>
                       </summary>
                       <pre x-text="pretty(endpoint.capabilities)"></pre>
                     </details>
@@ -480,7 +481,7 @@
                               <tr>
                                 <td class="rowkey" data-label="endpoint"><span class="id" x-text="delivery.endpoint_id"></span></td>
                                 <td data-label="platform" x-text="delivery.platform"></td>
-                                <td data-label="status"><span class="verdict" :class="{ deny: delivery.status === 'permanent_failure' || delivery.status === 'parked' }" x-text="delivery.status"></span></td>
+                                <td data-label="status"><span class="verdict" :class="{ deny: delivery.status === 'permanent_failure' || delivery.status === 'outcome_unknown' }" x-text="delivery.status"></span></td>
                                 <td class="id" data-label="native" x-text="delivery.native_event_id || '-'"></td>
                                 <td class="num" data-label="attempt" x-text="delivery.attempt_count"></td>
                                 <td class="wide" data-label="lower notes / error"><pre x-text="delivery.last_error || pretty(delivery.lower_notes || [])"></pre></td>

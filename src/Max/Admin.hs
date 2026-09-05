@@ -798,15 +798,17 @@ healthCounters = do
       "SELECT \
       \  (SELECT count(*) FROM message_deliveries WHERE status = 'failed'), \
       \  (SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'), \
+      \  (SELECT count(*) FROM message_deliveries WHERE status = 'permanent_failure'), \
       \  (SELECT count(*) FROM episode_capture_runs WHERE status = 'failed'), \
       \  (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NULL), \
       \  (SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL)"
       ()
-  pure $ case rows :: [(Int64, Int64, Int64, Int64, Int64)] of
-    [(failed, unknown, captures, pending, parked)] ->
+  pure $ case rows :: [(Int64, Int64, Int64, Int64, Int64, Int64)] of
+    [(failed, unknown, permanentFailures, captures, pending, parked)] ->
       object
         [ "failed_deliveries" .= failed,
           "unknown_deliveries" .= unknown,
+          "permanent_failure_deliveries" .= permanentFailures,
           "failed_captures" .= captures,
           "media_pending" .= pending,
           "media_parked" .= parked

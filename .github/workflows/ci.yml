@@ -1,18 +1,22 @@
-# Two independent jobs, because the bot gets built two different ways
-# and only one of them was ever checked here.
+# Independent jobs cover the bot's two build paths and keep quality, unit, and
+# PostgreSQL failures visible at the same time.
 #
-#   build-test  — through the same flake dev shell developers use
+#   build-test  — build and quality checks through the same flake dev shell
+#                 developers use
 #                 (nix develop --impure; devenv-as-flake-module needs
 #                 impure eval), so CI's GHC/toolchain pin is exactly
 #                 flake.lock's.  Haskell deps are compiled by cabal
 #                 inside the shell and cached across runs — the first
 #                 run after a dependency bump is slow (~40 min), cached
 #                 runs are minutes.
+#   unit-test   — pure Haskell tests, independent of lint.
+#   db-test     — PostgreSQL/pgvector migrations and integration tests,
+#                 independent of both lint and unit failures.
 #
 #   nix-build   — the flake package, which is what nix/module.nix
 #                 actually installs in production.
 #
-# The build-test job also starts PostgreSQL with pgvector and requires the
+# The db-test job starts PostgreSQL with pgvector and requires the
 # integration suite. Context/memory correctness lives in SQL boundaries,
 # transactions, migrations, and cursors; skipping that suite is not safe.
 name: CI
@@ -65,20 +69,6 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    services:
-      postgres:
-        image: pgvector/pgvector:pg17
-        env:
-          POSTGRES_USER: max_test
-          POSTGRES_PASSWORD: max_test
-          POSTGRES_DB: max_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U max_test -d max_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     steps:
       - uses: actions/checkout@v4
 
@@ -98,8 +88,9 @@ jobs:
             ~/.cache/cabal
             ~/.local/state/cabal
             dist-newstyle
-          key: cabal-${{ runner.os }}-${{ hashFiles('flake.lock', 'max.cabal') }}
+          key: cabal-${{ runner.os }}-build-${{ hashFiles('flake.lock', 'max.cabal') }}
           restore-keys: |
+            cabal-${{ runner.os }}-build-
             cabal-${{ runner.os }}-
 
       - name: cabal update
@@ -122,13 +113,88 @@ jobs:
           nix develop --impure -c hlint
           src app maintenance test test-db prompt-flow eval context-eval
 
+  unit-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+
+      - name: Cache cabal store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cabal
+            ~/.cache/cabal
+            ~/.local/state/cabal
+            dist-newstyle
+          key: cabal-${{ runner.os }}-unit-${{ hashFiles('flake.lock', 'max.cabal') }}
+          restore-keys: |
+            cabal-${{ runner.os }}-unit-
+            cabal-${{ runner.os }}-
+
+      - name: cabal update
+        run: nix develop --impure -c cabal update
+
       - name: Test
         run: nix develop --impure -c cabal test max-test --test-show-details=direct
+
+  db-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: max_test
+          POSTGRES_PASSWORD: max_test
+          POSTGRES_DB: max_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U max_test -d max_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+
+      - name: Cache cabal store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cabal
+            ~/.cache/cabal
+            ~/.local/state/cabal
+            dist-newstyle
+          key: cabal-${{ runner.os }}-db-${{ hashFiles('flake.lock', 'max.cabal') }}
+          restore-keys: |
+            cabal-${{ runner.os }}-db-
+            cabal-${{ runner.os }}-
+
+      - name: cabal update
+        run: nix develop --impure -c cabal update
 
       - name: Test PostgreSQL integration
         run: nix develop --impure -c cabal test max-test-db --test-show-details=direct
         env:
           MAX_TEST_DB_URL: postgresql://max_test:max_test@127.0.0.1:5432/max_test
+
+      - name: Verify database and operational health gate
+        run: nix develop --impure -c cabal run max-adr003-maintenance -- verify
+        env:
+          MAX_DB_URL: postgresql://max_test:max_test@127.0.0.1:5432/max_test
 
   # The deployment path nothing else covered.  build-test compiles with
   # cabal against the devenv toolchain; nix/module.nix installs
