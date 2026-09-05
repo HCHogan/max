@@ -5,6 +5,7 @@ module Max.DB.Task
     listDurableTasks,
     taskStatus,
     claimTask,
+    nextTaskWakeMicros,
     fencedTaskTurns,
     loadTaskExecution,
     isTaskTurn,
@@ -12,6 +13,12 @@ module Max.DB.Task
     authorizeTaskStep,
     taskInbox,
     taskReport,
+    recordTaskProgress,
+    finishRequest,
+    recordTaskFailure,
+    notificationKind,
+    monitorTaskProfile,
+    configureMonitor,
     claimFrontend,
     admitTaskNotification,
     loadTaskNotification,
@@ -32,6 +39,7 @@ import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
@@ -41,7 +49,7 @@ import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Transaction (withTransaction)
 import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
-import Max.Task.Types (TaskProfile, profileName)
+import Max.Task.Types (TaskProfile (..), parseProfile, profileName)
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..))
 
@@ -82,9 +90,9 @@ listDurableTasks (GroupId group) = do
   rows <-
     query
       "SELECT COALESCE(jsonb_agg(summary ORDER BY task_id DESC),'[]'::jsonb)::text FROM (\
-      \ SELECT work.task_id,jsonb_build_object('task', 'task#'||work.task_id,'revision',revision,'objective',left(objective,300),\
+      \ SELECT work.task_id,jsonb_build_object('task', 'task#'||work.task_id,'revision',revision,'objective',left(objective,1500),\
       \ 'status',status,'owner',owner_principal_id,'parent',parent_task_id,'deadline',deadline) AS summary\
-      \ FROM durable_tasks work JOIN conversations USING(conversation_id) WHERE legacy_group_id=? ORDER BY task_id DESC LIMIT 30) recent"
+      \ FROM durable_tasks work JOIN conversations USING(conversation_id) WHERE legacy_group_id=? ORDER BY task_id DESC LIMIT 150) recent"
       (Only group)
   decodeRow rows
 
@@ -95,13 +103,15 @@ taskStatus (GroupId group) identifier = do
       "SELECT jsonb_build_object('task','task#'||work.task_id,'revision',revision,'objective',objective,'status',status,\
       \ 'owner',owner_principal_id,'parent',parent_task_id,'profile',profile,'effective_tools',grants,\
       \ 'result',result,'calls_reserved',calls_reserved,'max_calls',max_calls,'rounds_reserved',rounds_reserved,\
+      \ 'retry_count',retry_count,'next_attempt_at',next_attempt_at,'last_error',last_error,\
+      \ 'progress',(SELECT jsonb_build_object('revision',revision,'attempt',attempt,'version',version,'body',body,'updated_at',updated_at) FROM task_progress WHERE task_id=work.task_id AND revision=work.revision),\
       \ 'deadline',deadline,'attempts',attempt,'pending_events',(SELECT count(*) FROM task_events WHERE task_id=work.task_id AND event_id>consumed_event),\
       \ 'turns',(SELECT jsonb_agg('t#'||turn.turn_ordinal ORDER BY execution.attempt) FROM task_attempts execution JOIN agent_turns turn USING(turn_id) WHERE execution.task_id=work.task_id),\
       \ 'usage',(SELECT jsonb_build_object('prompt_tokens',COALESCE(sum(turn.prompt_tokens),0),\
       \ 'completion_tokens',COALESCE(sum(turn.completion_tokens),0),'accounting','observational; missing provider usage is unknown, not zero')\
       \ FROM task_attempts execution JOIN agent_turns turn USING(turn_id) WHERE execution.task_id=work.task_id),\
-      \ 'events',(SELECT COALESCE(jsonb_agg(event),'[]') FROM (SELECT event_id,revision,kind,author_principal_id,source_message_id,left(body,2000) AS body\
-      \ FROM task_events WHERE task_id=work.task_id ORDER BY event_id DESC LIMIT 12) event))::text\
+      \ 'events',(SELECT COALESCE(jsonb_agg(event),'[]') FROM (SELECT event_id,revision,kind,author_principal_id,source_message_id,left(body,10000) AS body\
+      \ FROM task_events WHERE task_id=work.task_id ORDER BY event_id DESC LIMIT 60) event))::text\
       \ FROM durable_tasks work JOIN conversations USING(conversation_id) WHERE legacy_group_id=? AND work.task_id=?"
       (group, identifier)
   decodeRow rows
@@ -118,7 +128,7 @@ fencedTaskTurns = do
       "SELECT execution.turn_id FROM task_attempts execution JOIN durable_tasks work USING(task_id) JOIN agent_turns turn USING(turn_id)\
       \ WHERE (turn.status IN ('starting','running','recovery-pending') OR turn.status='crashed' AND turn.abort_reason='task execution lease expired')\
       \ AND (work.status<>'running' OR work.revision<>execution.revision OR work.attempt<>execution.attempt OR execution.lease_until<=clock_timestamp())\
-      \ ORDER BY execution.turn_id DESC LIMIT 128"
+      \ ORDER BY execution.turn_id DESC LIMIT 640"
       ()
   pure [turn | Only turn <- rows]
 
@@ -135,15 +145,15 @@ loadTaskExecution turn = do
       \ 'ordinal',current_turn.turn_ordinal,'group',conversation.legacy_group_id,'principal',work.owner_principal_id,\
       \ 'seed',COALESCE(work.source_message_id,source.trigger_canonical_message_id,0),'objective',work.objective,\
       \ 'profile',work.profile,'inputs',work.inputs || jsonb_build_object('late_coalesced_occurrences',\
-      \ (SELECT jsonb_agg(event) FROM (SELECT fire_id,left(trigger_evidence,1000) AS evidence FROM monitor_fires\
-      \ WHERE coalesced_into=work.monitor_fire_id AND created_at>work.created_at ORDER BY fire_id DESC LIMIT 16) event)),\
+      \ (SELECT jsonb_agg(event) FROM (SELECT fire_id,left(trigger_evidence,5000) AS evidence FROM monitor_fires\
+      \ WHERE coalesced_into=work.monitor_fire_id AND created_at>work.created_at ORDER BY fire_id DESC LIMIT 80) event)),\
       \ 'grants',work.grants,'deadline',work.deadline,\
-      \ 'history',COALESCE((SELECT string_agg(entry,E'\\n' ORDER BY attempt DESC) FROM (\
+      \ 'history',COALESCE((SELECT 'latest progress: '||body::text||E'\\n' FROM task_progress WHERE task_id=work.task_id AND revision=work.revision),'')||COALESCE((SELECT string_agg(entry,E'\\n' ORDER BY attempt DESC) FROM (\
       \ SELECT previous.attempt,'attempt '||previous.attempt||' revision '||previous.revision||': '||\
       \ COALESCE(previous.report::text,'no committed report; inspect journal before repeating effects')||E'\\n'||\
       \ COALESCE((SELECT string_agg(tool_ref||' ['||state||'] '||COALESCE(result_preview,failure_detail,''),E'\\n' ORDER BY execution_ordinal)\
-      \ FROM (SELECT * FROM execution_journal WHERE turn_id=previous.turn_id ORDER BY execution_ordinal DESC LIMIT 20) journal),'') AS entry\
-      \ FROM task_attempts previous WHERE previous.task_id=work.task_id AND previous.attempt<execution.attempt ORDER BY previous.attempt DESC LIMIT 3) prior),''))::text\
+      \ FROM (SELECT * FROM execution_journal WHERE turn_id=previous.turn_id ORDER BY execution_ordinal DESC LIMIT 100) journal),'') AS entry\
+      \ FROM task_attempts previous WHERE previous.task_id=work.task_id AND previous.attempt<execution.attempt ORDER BY previous.attempt DESC LIMIT 15) prior),''))::text\
       \ FROM task_attempts execution JOIN durable_tasks work USING(task_id) JOIN conversations conversation USING(conversation_id)\
       \ JOIN agent_turns source ON source.turn_id=work.source_turn_id JOIN agent_turns current_turn ON current_turn.turn_id=execution.turn_id\
       \ WHERE execution.turn_id=? AND execution.revision=work.revision AND execution.attempt=work.attempt AND work.status='running'"
@@ -208,8 +218,8 @@ admitTaskNotification = withTransaction $ do
     query
       "SELECT notice.notification_id,work.conversation_id,work.owner_principal_id,work.source_message_id\
       \ FROM task_notifications notice JOIN durable_tasks work USING(task_id) LEFT JOIN agent_turns turn ON turn.turn_id=notice.turn_id\
-      \ WHERE notice.delivered_at IS NULL AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<3\
-      \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence'))\
+      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
+      \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence','succeeded'))\
       \ AND NOT EXISTS (SELECT 1 FROM conversation_frontends frontend WHERE frontend.conversation_id=work.conversation_id AND frontend.lease_until>clock_timestamp())\
       \ ORDER BY notice.notification_id LIMIT 1"
       ()
@@ -223,9 +233,9 @@ admitTaskNotification = withTransaction $ do
         query
           "SELECT notice.notification_id FROM task_notifications notice JOIN durable_tasks work USING(task_id)\
           \ LEFT JOIN agent_turns turn ON turn.turn_id=notice.turn_id WHERE notice.notification_id=?\
-          \ AND notice.delivered_at IS NULL AND notice.revision=work.revision AND notice.attempt=work.attempt\
-          \ AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<3\
-          \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence'))\
+          \ AND notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt\
+          \ AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
+          \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence','succeeded'))\
           \ AND NOT EXISTS (SELECT 1 FROM conversation_frontends frontend WHERE frontend.conversation_id=work.conversation_id AND frontend.lease_until>clock_timestamp())\
           \ FOR UPDATE OF notice"
           (Only notification)
@@ -250,9 +260,9 @@ loadTaskNotification turn = do
   rows <-
     query
       "SELECT conversation.legacy_group_id,COALESCE(work.source_message_id,source.trigger_canonical_message_id,0),\
-      \ 'task#'||work.task_id||' revision '||notice.revision||E'\\n'||left(notice.body::text,16000),work.grants::text\
+      \ 'task#'||work.task_id||' revision '||notice.revision||E'\\n'||left(notice.body::text,80000),work.grants::text\
       \ FROM task_notifications notice JOIN durable_tasks work USING(task_id) JOIN conversations conversation USING(conversation_id)\
-      \ JOIN agent_turns source ON source.turn_id=work.source_turn_id WHERE notice.turn_id=? AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled'"
+      \ JOIN agent_turns source ON source.turn_id=work.source_turn_id WHERE notice.turn_id=? AND notice.superseded_at IS NULL AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled'"
       (Only turn)
   pure $ case rows of
     [(group, seed, body, grants)] -> case eitherDecodeStrict' (TE.encodeUtf8 grants) of
@@ -302,11 +312,11 @@ monitorHistory :: (WithConnection :> es, IOE :> es) => GroupId -> Int64 -> Eff e
 monitorHistory (GroupId group) ordinal = do
   rows <-
     query
-      "SELECT jsonb_build_object('handle','m#'||monitor_ordinal,'revision',definition_revision,'goal',goal_text,\
+      "SELECT jsonb_build_object('handle','m#'||monitor_ordinal,'revision',definition_revision,'goal',goal_text,'profile',task_profile,\
       \ 'status',status,'overlap',overlap_policy,'queue_limit',queue_limit,'change_only',change_only,'next_fire',next_fire_at,\
       \ 'fires',(SELECT COALESCE(jsonb_agg(entry),'[]') FROM (SELECT fire_id,definition_revision,scheduled_at,disposition,\
-      \ task_id,coalesced_into,admission_state,left(trigger_evidence,1000) AS evidence,last_error FROM monitor_fires\
-      \ WHERE monitor_id=definition.monitor_id ORDER BY fire_id DESC LIMIT 30) entry))::text\
+      \ task_id,coalesced_into,admission_state,left(trigger_evidence,5000) AS evidence,last_error FROM monitor_fires\
+      \ WHERE monitor_id=definition.monitor_id ORDER BY fire_id DESC LIMIT 150) entry))::text\
       \ FROM monitors definition JOIN conversations USING(conversation_id) WHERE legacy_group_id=? AND monitor_ordinal=?"
       (group, ordinal)
   decodeRow rows
@@ -326,17 +336,66 @@ durableWorkOverview = do
   rows <-
     query
       "SELECT jsonb_build_object('tasks',(SELECT COALESCE(jsonb_agg(entry),'[]') FROM (\
-      \ SELECT 'task#'||task_id AS handle,legacy_group_id AS group_id,owner_principal_id,revision,status,profile,left(objective,300) AS objective,\
-      \ calls_reserved,max_calls,rounds_reserved,deadline,left(result::text,2000) AS result FROM durable_tasks JOIN conversations USING(conversation_id)\
-      \ ORDER BY task_id DESC LIMIT 100) entry),\
+      \ SELECT 'task#'||task_id AS handle,legacy_group_id AS group_id,owner_principal_id,revision,status,profile,left(objective,1500) AS objective,\
+      \ calls_reserved,max_calls,rounds_reserved,max_rounds,deadline,retry_count,next_attempt_at,last_error,\
+      \ (SELECT body->>'summary' FROM task_progress WHERE task_id=durable_tasks.task_id AND revision=durable_tasks.revision) AS progress,\
+      \ (SELECT count(*) FROM task_notifications WHERE task_id=durable_tasks.task_id AND revision=durable_tasks.revision AND attempt=durable_tasks.attempt AND superseded_at IS NULL AND delivered_at IS NULL AND attempts>=15) AS failed_notifications,\
+      \ left(result::text,10000) AS result FROM durable_tasks JOIN conversations USING(conversation_id)\
+      \ ORDER BY task_id DESC LIMIT 500) entry),\
       \ 'monitors',(SELECT COALESCE(jsonb_agg(entry),'[]') FROM (SELECT 'm#'||monitor_ordinal AS handle,legacy_group_id AS group_id,\
-      \ definition_revision,status,overlap_policy,queue_limit,next_fire_at,\
+      \ definition_revision,status,task_profile,change_only,overlap_policy,queue_limit,next_fire_at,\
       \ (SELECT count(*) FROM monitor_fires WHERE monitor_id=definition.monitor_id AND disposition='coalesced') AS coalesced,\
       \ (SELECT count(*) FROM monitor_fires WHERE monitor_id=definition.monitor_id AND disposition='overflow') AS overflow,\
       \ (SELECT string_agg('task#'||work.task_id||' '||work.status,', ') FROM monitor_fires fire JOIN durable_tasks work ON work.task_id=fire.task_id\
-      \ WHERE fire.monitor_id=definition.monitor_id AND work.status IN ('queued','running','waiting')) AS active_tasks,\
+      \ WHERE fire.monitor_id=definition.monitor_id AND work.status IN ('queued','running','waiting','retrying')) AS active_tasks,\
       \ (SELECT last_error FROM monitor_fires WHERE monitor_id=definition.monitor_id ORDER BY fire_id DESC LIMIT 1) AS last_error\
-      \ FROM monitors definition JOIN conversations USING(conversation_id) ORDER BY monitor_id DESC LIMIT 100) entry),\
-      \ 'unresolved_requests',(SELECT count(*) FROM conversation_requests WHERE disposition IN ('pending','waiting','failed')))::text"
+      \ FROM monitors definition JOIN conversations USING(conversation_id) ORDER BY monitor_id DESC LIMIT 500) entry),\
+      \ 'unresolved_requests',(SELECT count(*) FROM conversation_requests WHERE disposition IN ('pending','delegated','waiting','failed')))::text"
       ()
   decodeRow rows
+
+recordTaskProgress :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Value -> Eff es Bool
+recordTaskProgress turn progress = do
+  rows <- query "SELECT max_task_progress(?,?::jsonb)" (turn, encoded progress)
+  pure (rows == [Only True])
+
+finishRequest :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Text -> Text -> Eff es Bool
+finishRequest turn disposition reply = do
+  rows <- query "SELECT max_request_finish(?,?,?)" (turn, disposition, reply)
+  pure (rows == [Only True])
+
+recordTaskFailure :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Text -> Bool -> Eff es Bool
+recordTaskFailure turn detail retryable = do
+  rows <- query "SELECT max_task_failure(?,?,?)" (turn, detail, retryable)
+  pure (rows == [Only True])
+
+notificationKind :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Eff es (Maybe Text)
+notificationKind turn = do
+  rows <- query "SELECT kind FROM task_notifications WHERE turn_id=? AND superseded_at IS NULL" (Only turn)
+  pure $ case rows of [Only kind] -> Just kind; _ -> Nothing
+
+monitorTaskProfile :: (WithConnection :> es, IOE :> es) => MonitorFireId -> Eff es TaskProfile
+monitorTaskProfile fire = do
+  rows <- query "SELECT COALESCE(definition_snapshot->>'profile',task_profile) FROM monitor_fires JOIN monitors USING(monitor_id) WHERE fire_id=?" (Only fire)
+  pure $ case rows of [Only profile] -> fromMaybe Research (parseProfile profile); _ -> Research
+
+configureMonitor :: (WithConnection :> es, IOE :> es) => GroupId -> PrincipalId -> Bool -> Int64 -> Int -> Text -> Text -> Int -> Text -> Text -> Bool -> Eff es Value
+configureMonitor (GroupId group) (PrincipalId actor) administrator ordinal revision objective overlap capacity pending profile changeOnly = do
+  rows <- query "SELECT max_monitor_configure(?,?,?,?,?,?,?,?,?,?,?)::text" (group, actor, administrator, ordinal, revision, objective, overlap, capacity, pending, profile, changeOnly)
+  decodeRow rows
+
+nextTaskWakeMicros :: (WithConnection :> es, IOE :> es) => Eff es Int
+nextTaskWakeMicros = do
+  rows <-
+    query
+      "SELECT LEAST(30000000,GREATEST(50000,COALESCE(ceil(extract(epoch FROM min(wake_at)-clock_timestamp())*1000000),30000000)))::integer\
+      \ FROM (SELECT next_attempt_at AS wake_at FROM durable_tasks WHERE status='retrying' AND next_attempt_at>clock_timestamp()\
+      \ UNION ALL SELECT notice.next_attempt_at FROM task_notifications notice JOIN durable_tasks work USING(task_id)\
+      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.attempts<15\
+      \ AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status\
+      \ AND notice.next_attempt_at>clock_timestamp()\
+      \ UNION ALL SELECT deadline FROM durable_tasks WHERE status IN ('queued','running','waiting','retrying') AND deadline>clock_timestamp()\
+      \ UNION ALL SELECT execution.lease_until FROM task_attempts execution JOIN durable_tasks work USING(task_id)\
+      \ WHERE work.status='running' AND execution.attempt=work.attempt AND execution.lease_until>clock_timestamp()) scheduled"
+      ()
+  pure $ case rows of [Only waitMicros] -> waitMicros; _ -> 30000000

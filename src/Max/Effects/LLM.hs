@@ -92,6 +92,7 @@ import GHC.Clock (getMonotonicTimeNSec)
 import Max.Http.Json (defaultRetryDelaysSecs, postAndParseRetrying, replyRetryDelaysSecs)
 import Max.Http.Stream (StreamOutcome (..), streamPost)
 import Max.HttpRuntime (HttpRuntime)
+import Max.LLM.Admission (Admission, newAdmission, priorityForSource, withAdmission)
 import Max.LLM.Stream (PartialCall (..), StreamAcc (..), accToolCalls, stepAnthropic, stepOpenAI, stepResponses)
 import Max.ModelCatalog (ModelCatalog)
 import Max.ModelCatalog.Internal
@@ -500,18 +501,21 @@ runLLMResolving ::
   (ChatCtx -> IO ModelCatalog) ->
   Eff (LLM : es) a ->
   Eff es a
-runLLMResolving runtime usageWriter callWriter resolve = interpret $ \localEnv -> \case
-  Chat ctx name msgs tools -> do
-    reg <- liftIO (resolve ctx)
-    runOneChat runtime usageWriter callWriter reg ctx name msgs tools Nothing
-  ChatStreaming ctx name msgs tools sink ->
-    -- The sink sends messages, so it is 'Eff', not IO; unlifting it
-    -- here is what lets the transport call back into the caller's
-    -- effect stack.  Sequential unlift is right: the read loop is
-    -- single-threaded and calls the sink one frame at a time.
-    localSeqUnlift localEnv $ \unlift -> do
+runLLMResolving runtime usageWriter callWriter resolve action = do
+  admission <- liftIO (newAdmission 50 10)
+  interpret (\localEnv -> \case
+    Chat ctx name msgs tools -> do
       reg <- liftIO (resolve ctx)
-      runOneChat runtime usageWriter callWriter reg ctx name msgs tools (Just (unlift . sink))
+      runOneChat admission runtime usageWriter callWriter reg ctx name msgs tools Nothing
+    ChatStreaming ctx name msgs tools sink ->
+      -- The sink sends messages, so it is 'Eff', not IO; unlifting it
+      -- here is what lets the transport call back into the caller's
+      -- effect stack.  Sequential unlift is right: the read loop is
+      -- single-threaded and calls the sink one frame at a time.
+      localSeqUnlift localEnv $ \unlift -> do
+        reg <- liftIO (resolve ctx)
+        runOneChat admission runtime usageWriter callWriter reg ctx name msgs tools (Just (unlift . sink))
+    ) action
 
 -- | One chat call, shared by the streaming and non-streaming
 -- operations.  A 'Just' sink means \"stream if the profile allows it\";
@@ -519,6 +523,7 @@ runLLMResolving runtime usageWriter callWriter resolve = interpret $ \localEnv -
 -- request-response path.
 runOneChat ::
   (Log :> es, IOE :> es) =>
+  Admission ->
   HttpRuntime ->
   UsageWriter ->
   CallWriter ->
@@ -529,7 +534,7 @@ runOneChat ::
   [ToolSpec] ->
   Maybe (Text -> Eff es ()) ->
   Eff es (Either Text ChatResponse)
-runOneChat runtime usageWriter callWriter reg ctx name msgs tools mSink = case lookupCompletionProfile name reg of
+runOneChat admission runtime usageWriter callWriter reg ctx name msgs tools mSink = case lookupCompletionProfile name reg of
   Nothing -> do
     logAttention "llm: unknown profile" $ object ["profile" .= name]
     pure $ Left ("unknown llm profile: " <> name)
@@ -557,7 +562,7 @@ runOneChat runtime usageWriter callWriter reg ctx name msgs tools mSink = case l
           "transport_retries" .= length (if streaming then replyRetryDelaysSecs else bufferedRetryDelays)
         ]
     t0 <- liftIO getMonotonicTimeNSec
-    r <- case mSink of
+    r <- withAdmission admission cfg.baseUrl (priorityForSource ctx.ccSource) $ case mSink of
       Just sink | cfg.stream -> callChatStream runtime cfg msgs tools sink
       _ -> callChat runtime bufferedRetryDelays cfg msgs tools
     t1 <- liftIO getMonotonicTimeNSec

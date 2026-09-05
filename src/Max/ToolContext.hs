@@ -5,7 +5,6 @@
 module Max.ToolContext
   ( TurnIdentity (..),
     TurnCapabilities (..),
-    SubgoalReturn (..),
     ToolContext,
     mkToolContext,
     mkToolContextAt,
@@ -25,20 +24,17 @@ module Max.ToolContext
     toolMonitorArmingAllowed,
     toolCatalogGrants,
     toolEffectCeiling,
-    toolSubgoal,
     toolRuntimeSnapshot,
   )
 where
 
-import Data.Aeson (Value)
 import Data.Map.Strict (Map)
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
-import Max.Plan.Types (Binder, Goal)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
 import Max.RuntimeConfig (RuntimeSnapshot)
-import Max.Turn.Types (AgentTurnId, TurnOutputContext)
+import Max.Turn.Types (TurnOutputContext)
 import OneBot.Types (GroupId, UserId)
 
 data TurnIdentity = TurnIdentity
@@ -73,26 +69,7 @@ data TurnCapabilities = TurnCapabilities
     -- | A fired monitor intersects its frozen grants with this turn's current
     -- catalog. Ordinary turns carry Nothing.
     tcEffectCeiling :: !(Maybe (Map Text Text)),
-    -- | This turn is a fork child. Ordinary turns carry Nothing.
-    tcSubgoal :: !(Maybe SubgoalReturn),
     tcBackground :: !Bool
-  }
-  deriving stock (Show, Eq)
-
--- | What a fork child is for, and the one way it can succeed.
---
--- ADR 007 §11. A child turn produces a /value/, not a continuation — that is
--- the whole difference between delegating a subgoal and starting a
--- conversation about it. So it gets a tool whose argument type is the
--- subgoal's own declared result type, and its prose goes nowhere.
-data SubgoalReturn = SubgoalReturn
-  { -- | The child's own turn, which is what the spawn edge is keyed by.
-    sgTurn :: !AgentTurnId,
-    -- | The complete durable contract, not only its result schema. Planning,
-    -- tool budgets, effects, authority and recovery all read this same value.
-    sgGoal :: !Goal,
-    -- | Values explicitly named by 'goalInputs'; no ambient parent bindings.
-    sgInputs :: ![(Binder, Value)]
   }
   deriving stock (Show, Eq)
 
@@ -159,6 +136,3 @@ toolCatalogGrants = (.toolCapabilities.tcCatalogGrants)
 
 toolEffectCeiling :: ToolContext -> Maybe (Map Text Text)
 toolEffectCeiling = (.toolCapabilities.tcEffectCeiling)
-
-toolSubgoal :: ToolContext -> Maybe SubgoalReturn
-toolSubgoal = (.toolCapabilities.tcSubgoal)

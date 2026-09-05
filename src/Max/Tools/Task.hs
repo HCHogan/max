@@ -4,6 +4,7 @@ import Data.Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
@@ -28,7 +29,7 @@ taskToolsFor context =
       (parseArgs (withObject "task_status" (.: "task")) $ \handle -> withHandle handle (fmap Right . taskStatus group))
   ]
     <> [controlTool operation | operation <- ["steer", "replace", "cancel"], not background || operation == "steer"]
-    <> [finishTool | background]
+    <> (if background then [finishTool, progressTool] else [requestFinishTool | isNothing (toolEffectCeiling context)])
   where
     group = toolGroupId context
     principal = toolAuthorPrincipalId context
@@ -42,14 +43,14 @@ taskToolsFor context =
     startTool =
       Tool
         { toolName = "task_start",
-          toolDescription = "把长研究、浏览器或 sandbox 工作交给后台。持久化后立即返回 task#，当前前台回合随即交还会话；不要等待或轮询。子任务不会直接向群里发言。profile 只收窄现有权限。每棵任务树共享 40 次工具预留、80 次模型请求和 10 分钟截止时间，重试不重置。token/cost 仅观测，不是硬额度。",
+          toolDescription = "把长研究、浏览器或 sandbox 工作交给后台。持久化后立即返回 task#，当前前台回合随即交还会话；不要等待或轮询。子任务不会直接向群里发言。profile 只收窄现有权限。每棵任务树共享 200 次工具预留、400 次模型请求和 50 分钟截止时间，重试不重置。token/cost 仅观测，不是硬额度。",
           toolSchema =
             toolObject
               [ ("key", stringParam "本回合内稳定的幂等键；同一工作重试必须复用。"),
                 ("objective", stringParam "自包含目标、约束和期望证据，不依赖整段聊天记录。"),
                 ("profile", enumParam ["research", "browser", "sandbox"] "research 默认只读；browser 或 sandbox 仅增加对应权限。"),
-                ("context", stringParam "显式传给子任务的上下文，最多 12000 字符。"),
-                ("resources", stringArrayParam "可选的本会话 t#N:rM 结果句柄，最多 8 个；在 admission 时解析并冻结。")
+                ("context", stringParam "显式传给子任务的上下文，最多 60000 字符。"),
+                ("resources", stringArrayParam "可选的本会话 t#N:rM 结果句柄，最多 40 个；在 admission 时解析并冻结。")
               ]
               ["key", "objective", "profile"],
           toolRun = parseArgs
@@ -63,7 +64,7 @@ taskToolsFor context =
             )
             $ \(key, objective, requested, explicitContext, resources) -> case (durable, parseProfile requested) of
               (Just turn, Just profile)
-                | T.length explicitContext <= 12000 && length resources <= 8 -> do
+                | T.length explicitContext <= 60000 && length resources <= 40 -> do
                     resolved <- traverse (resolveJournalResultValue (toolConversationScope context) (toolClearedAt context)) resources
                     let grants = taskGrants profile (toolCatalogGrants context)
                     if Nothing `elem` resolved
@@ -114,9 +115,11 @@ taskToolsFor context =
           toolSchema =
             toolObject
               [ ("status", enumParam ["succeeded", "partial", "waiting", "failed"] "任务结果"),
-                ("summary", stringParam "最多 8000 字符，明确发现、限制及下一步"),
-                ("evidence", stringArrayParam "证据链接或本会话产物句柄；最多 16 条"),
-                ("unresolved", stringArrayParam "未解决的问题；最多 16 条")
+                ("summary", stringParam "最多 40000 字符，明确发现、限制及下一步"),
+                ("evidence", stringArrayParam "证据链接或本会话产物句柄；最多 80 条"),
+                ("unresolved", stringArrayParam "未解决的问题；最多 80 条"),
+                ("failure_kind", enumParam ["permanent", "transient"] "failed 时说明错误是否暂时性；未知外部效果不能自动重试。"),
+                ("observation", object ["description" .= ("monitor 的稳定结构化观测值，排除叙述和当前时间；变化通知比较此值。" :: Text)])
               ]
               ["status", "summary", "evidence", "unresolved"],
           toolRun = \raw -> case durable of
@@ -128,17 +131,42 @@ taskToolsFor context =
                 pure $ if accepted then Right (object ["returned" .= True]) else Left "报告无效或当前任务 revision/lease 已失效"
         }
 
+    progressTool =
+      Tool
+        "task_progress"
+        "记录持久化进度；重复状态去重，待发布进度合并。只交给父任务或协调前台，不直接发群。"
+        (toolObject [("summary", stringParam "当前进度、阻碍或正在验证的证据，最多 40000 字符。")] ["summary"])
+        ( \raw -> case durable of
+            Nothing -> pure (Left "缺少持久化任务上下文")
+            Just turn -> do
+              accepted <- recordTaskProgress turn.atrTurnId raw
+              pure $ if accepted then Right (object ["recorded" .= True]) else Left "进度无效或执行已失效"
+        )
+    requestFinishTool =
+      Tool
+        "request_finish"
+        "明确结束前台请求：answered 已回答，waiting 正在向用户询问缺失信息，declined 明确拒绝。reply 是要发给用户的最终内容；不要先用其他工具重复发送。"
+        (toolObject [("disposition", enumParam ["answered", "waiting", "declined"] "请求的真实处置"), ("reply", stringParam "给用户的完整答复或明确的澄清问题，最多 40000 字符。")] ["disposition", "reply"])
+        ( parseArgs (withObject "request_finish" $ \fields -> (,) <$> fields .: "disposition" <*> fields .: "reply") $ \(disposition, reply) -> case durable of
+            Nothing -> pure (Left "缺少持久化前台上下文")
+            Just turn -> do
+              accepted <- finishRequest turn.atrTurnId disposition reply
+              pure $ if accepted then Right (object ["returned" .= True, "reply" .= (reply :: Text)]) else Left "请求处置无效或前台已失去所有权"
+        )
+
 validateReport :: Value -> Parser ()
 validateReport = withObject "report" $ \fields -> do
   status <- fields .: "status"
   summary <- fields .: "summary"
   evidence <- fields .: "evidence" :: Parser [Text]
   unresolved <- fields .: "unresolved" :: Parser [Text]
-  if status `elem` (["succeeded", "partial", "waiting", "failed"] :: [Text])
+  failureKind <- fields .:? "failure_kind" :: Parser (Maybe Text)
+  if maybe True (`elem` ["permanent", "transient"]) failureKind
+    && status `elem` (["succeeded", "partial", "waiting", "failed"] :: [Text])
     && not (T.null (T.strip summary))
-    && T.length summary <= 8000
-    && length evidence <= 16
-    && length unresolved <= 16
+    && T.length summary <= 40000
+    && length evidence <= 80
+    && length unresolved <= 80
     then pure ()
     else fail "报告字段或长度无效"
 

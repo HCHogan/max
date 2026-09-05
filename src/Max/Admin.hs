@@ -42,8 +42,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.FileEmbed (embedDir)
 import Data.Int (Int64)
-import Data.Map.Strict (Map)
-import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Ord (clamp)
 import Data.Set qualified as Set
@@ -81,7 +79,6 @@ import Max.DB.Usage (UsageDay (..), usageDaily)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.Embedding (Embedding, EmbeddingSpace (..), embedBatch, embeddingSpace, renderEmbeddingFault)
 import Max.Effects.Http (Http)
-import Max.Effects.Tools (ToolRef (..))
 import Max.Embedding (EmbeddingRecord)
 import Max.Env (BotEnv (..))
 import Max.EpisodeStore (CaptureRun (..), CompartmentId (..), SourceRange (..), episodeHandleText)
@@ -101,12 +98,7 @@ import Max.MemoryStore
     listMemories,
     listUserMemoriesEverywhereAdmin,
   )
-import Max.Plan.Catalog (planCatalog)
-import Max.Plan.Parse (parseFailureText, parsePlan)
-import Max.Plan.Types (planChildren, planHash, planHoles)
-import Max.Plan.Validate (rejectionText, validatePlan)
 import Max.Platform.Store (ConversationSummary (..), listConversations, listPlatformStatus)
-import Max.Platform.Types (noAdvertisedCaps)
 import Max.Recall
   ( RecallCandidate (..),
     RecallHit (..),
@@ -117,10 +109,7 @@ import Max.Recall
 import Max.Session (Session (..), loadSession, updateSession)
 import Max.Skills (NewSkill (..), Skill (..), createSkill, deleteSkill, listAllSkills, updateSkill)
 import Max.Tasks (TaskId (..), TaskInfo (..), cancelTask, listTasks)
-import Max.ToolContext (TurnCapabilities (..))
 import Max.DB.Task (durableWorkOverview)
-import Max.Tools.Plan (validationEnvForContract)
-import Max.Toolset (toolDefinitionsFor)
 import Max.Util (trySync)
 import Network.HTTP.Types (Method, Status, hAuthorization, hCacheControl, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status409, status500, status502)
 import Network.Wai (Response, pathInfo, queryString, requestHeaders, requestMethod, responseLBS, strictRequestBody)
@@ -181,7 +170,6 @@ data Route
   | RContextEmbeddings
   | RContextRecall
   | RContextIntegrity
-  | RPlanCheck
   | RContextRebuild
   | RContextReindex
   | -- | A baked-in static asset (the panel itself).  Carries the
@@ -241,7 +229,6 @@ route m path
       _ -> Nothing
   | m == methodPost = case path of
       ["api", "skills"] -> Just RSkillCreate
-      ["api", "plan", "check"] -> Just RPlanCheck
       ["api", "context", "rebuild"] -> Just RContextRebuild
       ["api", "context", "reindex"] -> Just RContextReindex
       _ -> Nothing
@@ -466,61 +453,6 @@ handle env profiles logBuf r params body = case r of
           Right s -> do
             logInfo "admin: skill created" $ object ["id" .= s.skillId, "name" .= s.skillName]
             pure (ok (skillJson s))
-  -- The plan kernel's only entry has always been a model deciding to call
-  -- @plan_run@, and in production it has decided to once, ever.  So the thing
-  -- worth building was not another way to /run/ a plan — it was a way to ask
-  -- why one would not be accepted, against this binary's live catalog rather
-  -- than a test fixture.
-  --
-  -- Deliberately parse and validate only.  Executing from here would need the
-  -- Agent, LLM and Outbound rows this server does not have, and a turn minted
-  -- on behalf of nobody in somebody's conversation; that is a much larger
-  -- authority question than a syntax check, and it should not arrive as a side
-  -- effect of one.
-  RPlanCheck ->
-    case A.eitherDecode body :: Either String PostPlanCheck of
-      Left err -> pure (bad ("invalid json: " <> T.pack err))
-      Right pc -> do
-        let gid = GroupId pc.ppcGroupId
-            -- The gates a fresh turn in that conversation would open with.  A
-            -- plan is checked against the catalog it would actually meet, so a
-            -- tool missing here is missing for the same reason it would be
-            -- missing then.
-            caps =
-              TurnCapabilities
-                { tcMultimodal = fromMaybe True pc.ppcMultimodal,
-                  tcStickers = False,
-                  tcSkills = False,
-                  tcOutput = noAdvertisedCaps,
-                  tcMonitorArming = False,
-                  tcCatalogGrants = Map.empty,
-                  tcEffectCeiling = Nothing,
-                  tcSubgoal = Nothing,
-                  tcBackground = False
-                }
-            catalog = planCatalog (toolDefinitionsFor env gid caps)
-            objective = T.strip pc.ppcObjective
-            root = "plan:" <> T.take 12 (T.filter (/= ' ') objective)
-        pure $ case parsePlan pc.ppcPlan of
-          Left failure -> ok (checkResult "parse" (parseFailureText failure) catalog)
-          Right parsed ->
-            -- No resource bodies: nothing has been resolved because nothing is
-            -- being run, so a plan naming a handle is rejected here and would
-            -- not be at dispatch.  Reported as the stage it failed at rather
-            -- than smoothed over.
-            case validatePlan (validationEnvForContract catalog objective Nothing mempty) root parsed of
-              Left rejection -> ok (checkResult "validate" (rejectionText rejection) catalog)
-              Right _ ->
-                ok
-                  ( A.object
-                      [ "ok" .= True,
-                        "root" .= root,
-                        "hash" .= planHash parsed,
-                        "holes" .= length (planHoles root parsed),
-                        "children" .= length (planChildren root parsed),
-                        "catalog" .= catalogNames catalog
-                      ]
-                  )
   RSkillPatch sid ->
     case A.eitherDecode body of
       Left err -> pure (bad ("invalid json: " <> T.pack err))
@@ -1097,43 +1029,6 @@ instance A.FromJSON PostSkill where
       <*> o A..: "description"
       <*> o A..: "body"
       <*> (fromMaybe True <$> o A..:? "enabled")
-
--- | Body of @POST /api/plan/check@.
-data PostPlanCheck = PostPlanCheck
-  { -- | Which conversation's gates to check against; the catalog differs by
-    -- private-vs-group and by what the profile can see.
-    ppcGroupId :: !Int64,
-    ppcObjective :: !Text,
-    ppcPlan :: !Text,
-    -- | Defaults to the wider catalog, because a check that quietly hides the
-    -- browser tools would answer a question nobody asked.
-    ppcMultimodal :: !(Maybe Bool)
-  }
-
-instance A.FromJSON PostPlanCheck where
-  parseJSON = A.withObject "plan check" $ \o ->
-    PostPlanCheck
-      <$> o A..: "group_id"
-      <*> (fromMaybe "" <$> o A..:? "objective")
-      <*> o A..: "plan"
-      <*> o A..:? "multimodal"
-
--- | Which stage refused it, and what the catalog looked like when it did.
---
--- The catalog is in every answer, including the failures: "no such tool" and
--- "that tool is not plannable" read identically to whoever wrote the plan, and
--- the list is what tells them apart.
-checkResult :: Text -> Text -> Map ToolRef entry -> A.Value
-checkResult stage detail catalog =
-  A.object
-    [ "ok" .= False,
-      "stage" .= stage,
-      "error" .= detail,
-      "catalog" .= catalogNames catalog
-    ]
-
-catalogNames :: Map ToolRef entry -> [Text]
-catalogNames = map (.unToolRef) . Map.keys
 
 data PostContextRebuild = PostContextRebuild
   { pcrConversationId :: !Int64,

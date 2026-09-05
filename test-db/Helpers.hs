@@ -100,8 +100,7 @@ truncateAll pool = withConn pool $ \c -> do
       \  qq_backfill_runs, \
       \  monitor_fires, \
       \  monitors, \
-      \  plan_revisions, \
-      \  plans, \
+      \  retired_runtime_records, \
       \  turn_edges, \
       \  execution_journal, \
       \  sandboxes, \

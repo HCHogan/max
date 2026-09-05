@@ -12,7 +12,6 @@
 -- so assembling the full set there would close a cycle.
 module Max.Toolset
   ( allToolsFor,
-    plannableToolsFor,
     toolCountFor,
     toolDefinitionsFor,
     toolAllowedByEffectCeiling,
@@ -21,11 +20,10 @@ module Max.Toolset
 where
 
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isJust)
+import Data.Maybe (isJust, isNothing)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful
-import Effectful.Concurrent (Concurrent)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Max.Effects.Blob (Blob)
@@ -61,13 +59,11 @@ import Max.Tools.Images (imageToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Monitor (monitorToolsFor)
 import Max.Tools.Pins (pinToolsFor)
-import Max.Tools.Plan (durablePlanJournal, planToolsFor, plannableSubCatalog)
 import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Skills (skillToolsFor)
 import Max.Tools.Stickers (stickerToolsFor)
-import Max.Tools.Subgoal (subgoalToolsFor)
 import Max.Tools.Task (guardTaskResource, taskToolsFor)
 import Max.Tools.Video (videoToolsFor)
 import Max.Turn.Continuity (toolCatalogFingerprint)
@@ -85,7 +81,6 @@ allToolsFor ::
     Http :> es,
     Embedding :> es,
     Log :> es,
-    Concurrent :> es,
     PlatformApi :> es,
     Outbound :> es,
     ToolOutput :> es,
@@ -96,43 +91,7 @@ allToolsFor ::
   BotEnv ->
   ToolContext ->
   Either ToolCatalogError (ToolCatalog es)
-allToolsFor runtime env dc =
-  buildToolCatalog definitions runners
-  where
-    (definitions, base) = resolvedToolsFor runtime env dc
-    allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
-    -- The plan runners are built from the tools this dispatch already resolved
-    -- — a plan calls them through a sub-catalog of exactly these — so they can
-    -- only be assembled after the gate has run, and then get filtered by the
-    -- same gate themselves.
-    runners = base <> filter allowedRunner (planToolsFor (durablePlanJournal dc) definitions base)
-    allowedRunner tool = tool.toolName `Set.member` allowedRefs
-
--- | The sub-catalog a suspended plan resumes into.
---
--- ADR 007 §11. A plan that parked at a fork continues in a worker rather than
--- in the turn that wrote it, and it has to reach the same tools it would have
--- reached inline — same gates, same effect ceiling, same subset — or a plan
--- admitted against one catalog would execute against another.
---
--- It is the plannable subset and nothing else, which also means a resumed plan
--- cannot speak: no tool in that subset sends.
-plannableToolsFor ::
-  ( Blob :> es,
-    Http :> es,
-    Embedding :> es,
-    Log :> es,
-    PlatformApi :> es,
-    Outbound :> es,
-    ToolOutput :> es,
-    WithConnection :> es,
-    IOE :> es
-  ) =>
-  HttpRuntime ->
-  BotEnv ->
-  ToolContext ->
-  Either ToolCatalogError (ToolCatalog es)
-plannableToolsFor runtime env dc = uncurry plannableSubCatalog (resolvedToolsFor runtime env dc)
+allToolsFor runtime env dc = uncurry buildToolCatalog (resolvedToolsFor runtime env dc)
 
 -- | The gated definitions and the gated runners, which every catalog in this
 -- module is a selection of.
@@ -165,7 +124,6 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
         <> imageToolsFor dispatchEnv.beTimeZone dc
         <> memoryToolsFor dc
         <> pinToolsFor dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
-        <> subgoalToolsFor dc
         <> taskToolsFor dc
         <> skillToolsFor dispatchEnv.beSkills dc
         <> bilibiliToolsFor dispatchEnv.beTimeZone dc
@@ -188,7 +146,7 @@ toolCountFor ::
   Bool -> -- skills visible
   Int
 toolCountFor env gid multimodal stickers skills =
-  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing Nothing False))
+  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing False))
 
 -- | Product-level visibility and effect metadata live in one inventory.  The
 -- actual runners assembled above must match this filtered set exactly or
@@ -209,11 +167,10 @@ toolDefinitionsFor env gid caps =
       SkillsOnly -> caps.tcSkills
       SearchOnly -> isJust env.beSearch
       MonitorArmOnly -> caps.tcMonitorArming
-      SubgoalOnly -> isJust caps.tcSubgoal
       BackgroundOnly -> caps.tcBackground
-      LegacyPlanOnly -> isJust caps.tcSubgoal || isJust caps.tcEffectCeiling && not caps.tcBackground
+      FrontendOnly -> not caps.tcBackground && isNothing caps.tcEffectCeiling
     ceilingOpen definition' =
-      (caps.tcBackground && definition'.tdRef == ToolRef "task_finish")
+      (caps.tcBackground && definition'.tdRef `elem` [ToolRef "task_finish", ToolRef "task_progress"])
         || toolAllowedByEffectCeiling caps.tcEffectCeiling definition'
 
 -- | Exact grant intersection for a standing continuation. A matching name is
@@ -234,11 +191,8 @@ data ToolGate
   | SkillsOnly
   | SearchOnly
   | MonitorArmOnly
+  | FrontendOnly
   | BackgroundOnly
-  | LegacyPlanOnly
-  | -- | Only a fork child, which is the only turn that has somewhere to
-    -- return a value to.
-    SubgoalOnly
 
 data ToolInventoryItem = ToolInventoryItem
   { tiGate :: !ToolGate,
@@ -247,10 +201,7 @@ data ToolInventoryItem = ToolInventoryItem
 
 toolInventory :: [ToolInventoryItem]
 toolInventory =
-  [ -- The one act a fork child performs that an ordinary turn cannot, and the
-    -- only way a child can succeed at all.
-    gated SubgoalOnly (writeTool "subgoal_return" ["plan.children"] [CurrentConversation]),
-    always (readTool "inspect_source" ["self.source"] [ProcessResource "self-source"]),
+  [ always (readTool "inspect_source" ["self.source"] [ProcessResource "self-source"]),
     always (readTool "get_message_by_id" ["conversation.db"] [CurrentConversation]),
     always (llmReadTool "context_search" ["conversation.db"] [CurrentConversation]),
     always (readToolV 2 "context_expand" ["conversation.db"] [CurrentConversation]),
@@ -268,7 +219,7 @@ toolInventory =
     gated MonitorArmOnly (writeToolV 1 "arm_monitor" ["monitor.db"] [CurrentConversation]),
     always (readToolV 1 "list_monitors" ["monitor.db"] [CurrentConversation]),
     always (writeToolV 2 "cancel_monitor" ["monitor.db"] [CurrentConversation]),
-    always (writeTool "configure_monitor" ["monitor.db"] [CurrentConversation]),
+    always (writeToolV 2 "configure_monitor" ["monitor.db"] [CurrentConversation]),
     always (readTool "monitor_history" ["monitor.db"] [CurrentConversation]),
     gated GroupOnly (readTool "group_members" ["chat.roster"] [CurrentConversation, CurrentEndpoint]),
     gated MultimodalOnly (statefulReadTool "view_avatar" ["chat.avatar", "tool.media"] [CurrentConversation, CurrentEndpoint]),
@@ -280,22 +231,15 @@ toolInventory =
     always (writeTool "pin_message" ["session.db"] [CurrentConversation]),
     always (writeTool "unpin_message" ["session.db"] [CurrentConversation]),
     gated SkillsOnly (reflectTool "use_skill"),
-    gated LegacyPlanOnly (reflectTool "plan_guide"),
-    gated LegacyPlanOnly (readTool "plan_list" ["plan.db"] [CurrentConversation]),
-    gated LegacyPlanOnly (writeTool "plan_revise" ["plan.db"] [CurrentConversation]),
     always (writeTool "task_start" ["task.db"] [CurrentConversation]),
     always (readTool "task_list" ["task.db"] [CurrentConversation]),
     always (readTool "task_status" ["task.db"] [CurrentConversation]),
     always (writeTool "task_steer" ["task.db"] [CurrentConversation]),
     always (writeTool "task_replace" ["task.db"] [CurrentConversation]),
     always (writeTool "task_cancel" ["task.db"] [CurrentConversation]),
-    gated BackgroundOnly (writeTool "task_finish" ["task.db"] [CurrentConversation]),
-    -- The union of what 'Max.Plan.Catalog' declares plannable, stated
-    -- statically because the inventory cannot vary with it.  Over-declaring
-    -- when search is unconfigured is the conservative direction: an effect
-    -- ceiling that would refuse the search a plan might make should refuse the
-    -- plan tool too, rather than let it through and find out inside.
-    gated LegacyPlanOnly (definition "plan_run" [EffectRead "network.search", EffectRead "conversation.db"] SequentialOnly RetryUnsafe [CurrentConversation]),
+    gated BackgroundOnly (writeToolV 2 "task_finish" ["task.db"] [CurrentConversation]),
+    gated BackgroundOnly (writeTool "task_progress" ["task.db"] [CurrentConversation]),
+    gated FrontendOnly (writeTool "request_finish" ["task.db"] [CurrentConversation]),
     -- Queues turn-scoped inline video as well as reading the network.  Keep it
     -- sequential inside one agent round so concurrent calls cannot race the
     -- shared attachment order/budget; independent turns have independent

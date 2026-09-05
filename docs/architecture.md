@@ -92,7 +92,7 @@ src/Max/           Config (opt-env-conf), Env (BotEnv Reader), Prompt, Handler,
                    Embedding + Embedder
                    (vector worker), Forward/Image/File workers, FetchQueue (their
                    shared claim loop), MediaCaption + Stickers (caption workers),
-                   Turn + Plan (durable orchestration/recovery), Monitor
+                   Turn + Task (durable execution/recovery), Monitor
                    (typed trigger scheduler), Reminder, Reply (planning),
                    ReplySend (planning made real:
                    placeholders, sending, persistence — shared by final,
@@ -537,9 +537,9 @@ generations so a hot reload cannot create a second reverse-WebSocket owner.
 | 14 | Merged self-knowledge + exact deployed-source inspection | ✅ |
 | 15 | Canonical message IR, identities, per-endpoint capability lowering, QQ/Matrix/iMessage/WeChat ingress and mirror delivery | ✅ |
 | 16 | Durable turns/journal replay, typed monitors, reconnect QQ history audit | ✅, with QQ coverage explicitly best-effort |
-| 17 | Durable plans, fork children, checkpoint/wake recovery and runtime contracts | ✅, `JoinAll` only |
+| 17 | Historical Plan DSL and fork/checkpoint orchestration | Retired by ADR 008; execution journal and turn runtime retained |
 | 18 | Atomic configuration generations, worker handoff, admin timeline and routine database/operational health gate | ⚠️ implemented; live gate is red pending projection repair and terminal-state reconciliation |
-| 19 | ADR 008 durable task interface, monitor-to-task admission, durable inboxes and conversation frontend | Local implementation; one coordinated production cutover pending; legacy readers/recovery retained |
+| 19 | ADR 008 durable task interface, monitor-to-task admission, durable inboxes and conversation frontend | Initial cutover reported complete by operator; follow-up adds fivefold quotas, provider admission, progress/retries and Plan retirement (migration 088) |
 
 Remaining work is intentionally narrower than these completed phases:
 
@@ -549,7 +549,8 @@ Remaining work is intentionally narrower than these completed phases:
   visibility are implemented. `ExternalPoll` remains deliberately deferred.
 - ADR 008: validate real task outcomes and production health at the coordinated
   switch; token/cost ceilings and arbitrary task-specific result schemas are
-  not claimed. Keep stored-plan recovery until old work no longer depends on it.
+  not claimed. Migration 088 archives old Plan work without replay and removes
+  its runtime. New Task data, reservations and journal evidence survive upgrade.
   Ordinary hole elaboration, adaptive horizon, and expanded Plan grammar are
   retired directions, not unfinished milestones.
 - ADR 003 operations: share iMessage bridge circuit state with outbound

@@ -1,13 +1,16 @@
 # ADR008: one coordinated task cutover
 
-Status: local implementation; no production switch performed by this change.
+Status: the operator reports the initial 087 cutover complete. This follow-up
+adds migration 088; it has not been deployed or verified against production.
 
 ## User surface
 
 - Long work uses `task_start` with an idempotency key, explicit objective/context
   and `research`, `browser` or `sandbox` profile. It returns a stable `task#N`.
 - `task_status` and `task_list` inspect work; completion normally wakes the
-  frontend without polling. `task_finish` is private to background execution.
+  frontend without polling. `task_finish` and `task_progress` are private to background execution.
+- `request_finish` records answered/waiting/declined and the frontend reply;
+  only recorded output settles an explicit request.
 - `!task list`, `!task status task#N`, `!task steer task#N <note>`.
 - `!task cancel task#N [reason]` and
   `!task replace task#N <revision> <new objective>` require initiator/admin
@@ -20,7 +23,7 @@ Status: local implementation; no production switch performed by this change.
   keeps a separate queued request even when the frontend is busy.
 - `monitor_history` includes revisions, task links, coalescing, overflow and
   failures. `configure_monitor` requires CAS and explicit retain/cancel policy
-  for pending old-revision occurrences. `cancel_monitor` stops future/pending
+  for pending old-revision occurrences, plus explicit profile/change_only fields. `cancel_monitor` stops future/pending
   work; `cancel_tasks=true` separately cancels admitted tasks.
 
 ## Local gates
@@ -30,6 +33,7 @@ Use an isolated PostgreSQL test database, never the production URL:
 ```sh
 cabal test max-test --test-show-details=direct
 MAX_TEST_DB_URL=<isolated-test-db> cabal test max-test-db --test-show-details=direct
+PGHOST=<test-host> PGPORT=<test-port> PGUSER=<test-role> bash scripts/test-task-upgrade.sh
 cabal build all
 cabal run max-prompt-flow
 cabal run max-prompt-flow -- --check
@@ -42,22 +46,28 @@ resource ownership, frontend/output fences, obligation settlement and monitor
 overlap. Monitor regressions cover changes back to earlier values, periodic
 failure notices, cron advancement after overflow and unowned legacy controls.
 Agent loop tests verify immediate frontend yield and terminal returns.
-Existing database tests continue covering real outbox/dispatch races and legacy
-plan/monitor recovery. The hourly-budget fixture explicitly uses queue policy
+Existing database tests continue covering real outbox/dispatch races and monitor recovery. The upgrade script creates its own
+isolated database and verifies preservation of active Tasks alongside archived
+Plan work (the test role needs CREATEDB). Provider admission tests exercise
+reserved foreground capacity, class fairness and cancellation cleanup. The hourly-budget fixture explicitly uses queue policy
 so it tests the budget rather than the new coalescing default.
 
 These are deterministic tests, not measurements of real model quality, Docker
 browser/sandbox behavior, or delivery to a production platform.
 
-## Joint switch
+## Follow-up switch
 
 1. Record current operational health, backlog, active plans/monitor fires and
    the runtime version; address existing health failures before claiming a
    healthy rollout. Take and verify a database backup, and retain the old binary
    and configuration without exposing credentials.
 2. Validate the candidate, then drain and replace the service once. Migration
-   087 is additive. Old plan rows and already-admitted monitor turns retain
-   their readers and recovery owner; new fires use tasks. No two workers may
+   088 expands active Task quotas without resetting reservations, snapshots old
+   monitor profiles/policy, archives Plan definitions/revisions/spawn edges in
+   `retired_runtime_records`, and removes Plan tables/triggers. Legacy Plan work
+   is aborted, not replayed; shared journals preserve uncertain effects. Existing
+   Task IDs/revisions/leases remain intact. Do not run the old binary concurrently
+   with this schema. Already-admitted monitor turns retain their recovery reader. No two workers may
    own the same task attempt. Do not clear journals, pending requests or
    `outcome-unknown` effects to make a health report look clean.
 3. Run the following acceptance cases through the real endpoints with bounded
@@ -87,12 +97,14 @@ browser/sandbox behavior, or delivery to a production platform.
 
 ## Limits and rollback
 
-Hard task bounds are tool reservations, agent-model rounds, tree depth, attempt
+The [ADR quota table](../adr/008-durable-tasks-conversation-coordination.md#fivefold-quota-changes)
+lists all fivefold changes. Hard task bounds are tool reservations, agent-model rounds, tree depth, attempt
 count, admission deadline and active-task counts. Tokens/cost and provider
 usage are observational; helper LLM calls are not agent-loop rounds. A success
 report is an explicit agent claim with evidence, not a generic proof of success.
 The frontend deadline includes context assembly; it is not a promised network
-response time or provider reservation. Active-active service takeover is not
+response time. A process-local per-provider gate reserves ten of 50 LLM-effect
+slots for foreground; it cannot reserve actual backend capacity. Active-active service takeover is not
 introduced by this change.
 
 An old binary refuses a database containing an unknown migration. Do not delete

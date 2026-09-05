@@ -377,10 +377,10 @@ armElaboratedMonitor (GroupId legacyGroup) (PrincipalId principal) armingTurn go
         let (armedCount, conditionCount) = case capRows :: [(Int64, Int64)] of
               [counts] -> counts
               _ -> error "armElaboratedMonitor: cap count"
-        if armedCount >= 20
+        if armedCount >= 100
           then pure (Left ArmedMonitorCapReached)
           else
-            if triggerKind /= "time_cron" && conditionCount >= 5
+            if triggerKind /= "time_cron" && conditionCount >= 25
               then pure (Left ConditionMonitorCapReached)
               else do
                 ordinalRows <-
@@ -536,7 +536,7 @@ nextMonitorDeadline now = do
       \          AND rm.continuation_kind='elaborated' \
       \          AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
       \          AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow') \
-      \          AND recent.dispatched_at>(?::timestamptz - interval '1 hour')) < 4)) \
+      \          AND recent.dispatched_at>(?::timestamptz - interval '1 hour')) < 20)) \
       \  UNION ALL \
       \  SELECT min(recent.dispatched_at) + interval '1 hour' \
       \  FROM monitor_fires recent JOIN monitors rm USING (monitor_id) \
@@ -751,7 +751,7 @@ claimElaboratedMonitorFires owner now leaseSeconds limit =
       \         AND rm.continuation_kind='elaborated' \
       \         AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
       \         AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow') \
-      \         AND recent.dispatched_at>(?::timestamptz - interval '1 hour')) < 4 \
+      \         AND recent.dispatched_at>(?::timestamptz - interval '1 hour')) < 20 \
       \    ) \
       \  ORDER BY f.created_at, f.fire_id \
       \  FOR UPDATE OF f SKIP LOCKED LIMIT ? \
@@ -838,7 +838,7 @@ admitElaboratedMonitorTurn owner fireId nextFire = withTransaction $ do
               (Only conversation)
           let recentCount = exactlyOne "admitElaboratedMonitorTurn budget" (recentRows :: [Only Int64])
               bypassBudget = triggerKind == "time_cron" && isNothing scheduleCron
-          if not bypassBudget && recentCount >= 4
+          if not bypassBudget && recentCount >= 20
             then do
               _ <-
                 execute

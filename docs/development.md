@@ -124,20 +124,21 @@ export MAX_TEST_DB_URL=postgresql://127.0.0.1:5433/max_test
 cabal test max-test-db
 ```
 
-Without `MAX_TEST_DB_URL` the suite exits 0 for local workflows that do not have
-Postgres available. CI always supplies the variable and requires the suite.
+Without `MAX_TEST_DB_URL` the suite fails rather than reporting an empty pass.
+CI always supplies the variable and requires the suite.
 Every case runs after `TRUNCATE … RESTART IDENTITY CASCADE`.
 `Max.DB.TransactionSpec` additionally proves that every statement in the
 application transaction runs on one physical pooled connection by throwing
 after an insert and checking that rollback removed it. This guards row locks,
 advisory transaction locks, and atomic cursor/publication boundaries against
 connection-pool drift.
-`Max.DB.PlanSpec` covers ADR 007's durable plans: ordinal allocation under
-concurrent opens, the compare-and-set that stops a stale writer from erasing a
-head it did not read, the append-only revision log that answers "what did this
-plan look like when that child was dispatched", and the `spawn` edges the
-reconciler reads as its actual side. The diff itself is pure and lives in
-`Max.Plan.ReconcileSpec` under `max-test`.
+`Max.DB.TaskSpec` covers scoped admission, shared reservations, fenced execution,
+request disposition, durable progress, persisted retries, and versioned monitors.
+`Max.LLM.AdmissionSpec` tests provider capacity reservation, priority fairness,
+provider isolation and cancellation cleanup. Run the populated 087-to-088
+upgrade gate with `PGHOST=127.0.0.1 PGPORT=5433 PGUSER=<test-role> bash scripts/test-task-upgrade.sh`.
+It creates and drops its own database; the test role needs CREATEDB permission.
+Historical SQL migrations remain immutable; legacy Plan code and tests are removed.
 The prompt integration cases also publish real active compartments, assert
 gap annotations for partial backfill, and exercise the all-conversation
 compartment-to-raw-tail reader end to end. EpisodeStore cases additionally

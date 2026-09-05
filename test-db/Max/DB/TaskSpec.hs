@@ -5,6 +5,7 @@ import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int64)
+import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Time (addUTCTime, getCurrentTime)
@@ -60,7 +61,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
           let toolContext =
                 mkToolContext
                   (TurnIdentity (GroupId 900) message (UserId 1) (UserId 99) actor Nothing (Just output))
-                  (TurnCapabilities True False False noAdvertisedCaps False grants Nothing Nothing False)
+                  (TurnCapabilities True False False noAdvertisedCaps False grants Nothing False)
           withDbLog pool $ case [tool | tool <- taskToolsFor toolContext, tool.toolName == "task_start"] of
             [tool] -> tool.toolRun (object ["key" .= profile, "objective" .= ("bounded work" :: Text), "profile" .= profile])
             _ -> error "task_start missing"
@@ -242,7 +243,9 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (taskReport execution.atrTurnId success) `shouldReturn` True
     withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
     (firstClaim, secondClaim) <- concurrently (withDb pool admitTaskNotification) (withDb pool admitTaskNotification)
-    let [notification] = firstClaim <> secondClaim
+    notification <- case firstClaim <> secondClaim of
+      [claimed] -> pure claimed
+      other -> expectationFailure ("expected one notification, got " <> show other) >> fail "notification claim"
     length (firstClaim <> secondClaim) `shouldBe` 1
     withDb pool admitTaskNotification `shouldReturn` []
     Just frontend <- withDb pool (taskTurnRef notification)
@@ -278,6 +281,8 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (claimFrontend frontend) `shouldReturn` True
     publication <- withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnFailed 0 Nothing Nothing)
+    withDb pool admitTaskNotification `shouldReturn` []
+    void $ withDb pool $ execute "UPDATE task_notifications SET next_attempt_at=now() - interval '1 second'" ()
     [_] <- withDb pool admitTaskNotification
     withDb pool (taskForReply (GroupId 900) publication.canonicalMessageId) `shouldReturn` Just identifier
 
@@ -420,6 +425,202 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     status pool identifier `shouldReturn` "queued"
     _ <- withDb pool (monitorControl (GroupId 900) actor False monitor.mrMonitorOrdinal.unMonitorOrdinal "cancel" Nothing "" "coalesce" 8 "cancel" True)
     status pool identifier `shouldReturn` "cancelled"
+
+
+  it "uses fivefold task quotas without granting extra authority" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "limits"
+    rows <- withDb pool $ query "SELECT max_calls,max_rounds,extract(epoch FROM deadline-created_at)::integer,grants::text FROM durable_tasks WHERE task_id=?" (Only identifier)
+    rows `shouldBe` [(200 :: Int, 400 :: Int, 3000 :: Int, "{}" :: Text)]
+
+  it "persists retry backoff and preserves reservations across attempts" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "transient"
+    first <- claimOne pool
+    withDb pool (authorizeTaskStep first.atrTurnId (Just "web_search") True) `shouldReturn` True
+    withDb pool (recordTaskFailure first.atrTurnId "HTTP 503 unavailable" True) `shouldReturn` True
+    withDb pool (finishAgentTurn first TurnFailed 1 (Just "HTTP 503 unavailable") Nothing)
+    status pool identifier `shouldReturn` "retrying"
+    withDb pool (claimTask "too-early") `shouldReturn` []
+    wakeMicros <- withDb pool nextTaskWakeMicros
+    wakeMicros `shouldSatisfy` (\delay -> delay >= 50000 && delay <= 5000000)
+    rows <- withDb pool $ query "SELECT retry_count,calls_reserved,next_attempt_at>now(),last_error FROM durable_tasks WHERE task_id=?" (Only identifier)
+    rows `shouldBe` [(1 :: Int, 1 :: Int, True, "HTTP 503 unavailable" :: Text)]
+    void $ withDb pool $ execute "UPDATE durable_tasks SET next_attempt_at=now()-interval '1 second' WHERE task_id=?" (Only identifier)
+    second <- claimOne pool
+    second `shouldNotBe` first
+    counters <- withDb pool $ query "SELECT attempt,calls_reserved FROM durable_tasks WHERE task_id=?" (Only identifier)
+    counters `shouldBe` [(2 :: Int, 1 :: Int)]
+    withDb pool (recordTaskFailure first.atrTurnId "stale" True) `shouldReturn` False
+
+  it "does not automatically retry ambiguous effects" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "ambiguous"
+    execution <- claimOne pool
+    _ <- withDb pool (startJournalExecution execution (JournalStart "uncertain" "sandbox_exec" 1 "hash" (object []) (toJSON ([] :: [Text])) "retry-unsafe"))
+    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 503" True) `shouldReturn` True
+    withDb pool (finishAgentTurn execution TurnFailed 1 Nothing Nothing)
+    status pool identifier `shouldReturn` "waiting"
+    withDb pool (claimTask "no-replay") `shouldReturn` []
+
+  it "does not retry permanent failures" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "permanent"
+    execution <- claimOne pool
+    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 403" False) `shouldReturn` True
+    withDb pool (finishAgentTurn execution TurnFailed 1 Nothing Nothing)
+    status pool identifier `shouldReturn` "failed"
+
+  it "coalesces durable progress, preserves its latest version, and fences old attempts" $ do
+    source@(_, _, actor) <- seed pool 900 1
+    identifier <- admit pool source "progress"
+    execution <- claimOne pool
+    let progress body = object ["summary" .= (body :: Text)]
+    withDb pool (recordTaskProgress execution.atrTurnId (progress "first")) `shouldReturn` True
+    withDb pool (recordTaskProgress execution.atrTurnId (progress "first")) `shouldReturn` True
+    withDb pool (recordTaskProgress execution.atrTurnId (progress "second")) `shouldReturn` True
+    rows <- withDb pool $ query "SELECT version,body->>'summary',(SELECT count(*) FROM task_notifications WHERE task_id=progress.task_id) FROM task_progress progress WHERE task_id=?" (Only identifier)
+    rows `shouldBe` [(2 :: Int64, "second" :: Text, 1 :: Int64)]
+    [notification] <- withDb pool admitTaskNotification
+    Just frontend <- withDb pool (taskTurnRef notification)
+    withDb pool (claimFrontend frontend) `shouldReturn` True
+    void $ withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "new objective")
+    withDb pool (recordTaskProgress execution.atrTurnId (progress "too late")) `shouldReturn` False
+    withDb pool (authorizeTaskStep notification (Just "output") False) `shouldReturn` False
+    withDb pool (loadTaskNotification notification) `shouldReturn` Nothing
+
+  it "supersedes pending progress without suppressing the final result" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "progress-result"
+    execution <- claimOne pool
+    withDb pool (recordTaskProgress execution.atrTurnId (object ["summary" .= ("working" :: Text)])) `shouldReturn` True
+    withDb pool (taskReport execution.atrTurnId success) `shouldReturn` True
+    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
+    rows <- withDb pool $ query "SELECT kind,superseded_at IS NOT NULL FROM task_notifications WHERE task_id=? ORDER BY notification_id" (Only identifier)
+    rows `shouldBe` [("progress" :: Text, True), ("result", False)]
+    [notification] <- withDb pool admitTaskNotification
+    withDb pool (notificationKind notification) `shouldReturn` Just "result"
+
+  it "routes child progress to the parent inbox without waking or reporting to the room" $ do
+    source@(_, message, actor) <- seed pool 900 1
+    identifier <- admit pool source "parent-progress"
+    parent <- claimOne pool
+    void $ withDb pool (admitTask parent message actor "child" "child work" Research (object []) Map.empty)
+    withDb pool (taskReport parent.atrTurnId (report "waiting")) `shouldReturn` True
+    withDb pool (finishAgentTurn parent TurnSucceeded 1 Nothing Nothing)
+    child <- claimOne pool
+    withDb pool (recordTaskProgress child.atrTurnId (object ["summary" .= ("working" :: Text)])) `shouldReturn` True
+    status pool identifier `shouldReturn` "waiting"
+    events <- withDb pool $ query "SELECT kind FROM task_events WHERE task_id=?" (Only identifier)
+    events `shouldSatisfy` elem (Only ("child_progress" :: Text))
+    withDb pool admitTaskNotification `shouldReturn` []
+
+  for_ ["answered", "waiting", "declined"] $ \disposition ->
+    it ("records explicit frontend disposition only after output: " <> show disposition) $ do
+      (frontend, message, _) <- seed pool 900 1
+      withDb pool (claimFrontend frontend) `shouldReturn` True
+      withDb pool (finishRequest frontend.atrTurnId disposition "visible reply") `shouldReturn` True
+      void $ withDb pool (enqueueOutbound (draft frontend))
+      withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
+      rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
+      rows `shouldBe` [Only disposition]
+
+  it "does not count a successful turn without an output receipt as an answered request" $ do
+    (frontend, message, _) <- seed pool 900 1
+    withDb pool (claimFrontend frontend) `shouldReturn` True
+    withDb pool (finishRequest frontend.atrTurnId "answered" "not sent") `shouldReturn` True
+    withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
+    rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
+    rows `shouldBe` [Only ("failed" :: Text)]
+
+  it "keeps unclassified prose unresolved instead of inferring success" $ do
+    (frontend, message, _) <- seed pool 900 1
+    withDb pool (claimFrontend frontend) `shouldReturn` True
+    void $ withDb pool (enqueueOutbound (draft frontend))
+    withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
+    rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
+    rows `shouldBe` [Only ("waiting" :: Text)]
+
+  it "snapshots monitor profiles and change policy under the definition CAS" $ do
+    (turn, _, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
+    changed <- withDb pool (configureMonitor (GroupId 900) actor False monitor.mrMonitorOrdinal.unMonitorOrdinal 1 "browser watch" "queue" 160 "retain" "browser" True)
+    hasError changed `shouldBe` False
+    insertOccurrence pool monitor "browser"
+    stale <- withDb pool (configureMonitor (GroupId 900) actor False monitor.mrMonitorOrdinal.unMonitorOrdinal 1 "stale" "queue" 160 "retain" "sandbox" False)
+    hasError stale `shouldBe` True
+    rows <- withDb pool $ query "SELECT definition_revision,definition_snapshot->>'profile' FROM monitor_fires" ()
+    rows `shouldBe` [(2 :: Int, "browser" :: Text)]
+
+  it "compares stable monitor observations rather than generated wording" $ do
+    (turn, seedMessage, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
+    let observation summary value = object ["status" .= ("succeeded" :: Text), "summary" .= (summary :: Text), "observation" .= (value :: Int)]
+    finishOccurrence pool monitor seedMessage "first" (observation "first wording" 1)
+    finishOccurrence pool monitor seedMessage "same" (observation "different wording" 1)
+    finishOccurrence pool monitor seedMessage "changed" (observation "same wording" 2)
+    rows <- withDb pool $ query "SELECT count(*) FROM task_notifications WHERE kind='result'" ()
+    rows `shouldBe` [Only (2 :: Int64)]
+
+
+  it "keeps progress publication separate from the source obligation" $ do
+    source@(_, message, _) <- seed pool 900 1
+    _ <- admit pool source "visible-progress"
+    execution <- claimOne pool
+    withDb pool (recordTaskProgress execution.atrTurnId (object ["summary" .= ("working" :: Text)])) `shouldReturn` True
+    [notification] <- withDb pool admitTaskNotification
+    Just frontend <- withDb pool (taskTurnRef notification)
+    withDb pool (claimFrontend frontend) `shouldReturn` True
+    void $ withDb pool (enqueueOutbound (draft frontend))
+    withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
+    rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
+    rows `shouldBe` [Only ("delegated" :: Text)]
+    withDb pool (recordTaskProgress execution.atrTurnId (object ["summary" .= ("next step" :: Text)])) `shouldReturn` True
+    withDb pool admitTaskNotification `shouldReturn` []
+    wakeMicros <- withDb pool nextTaskWakeMicros
+    wakeMicros `shouldSatisfy` (\delay -> delay > 0 && delay <= 30000000)
+
+  it "does not retry after the shared tool budget is exhausted" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "retry-budget"
+    execution <- claimOne pool
+    void $ withDb pool $ execute "UPDATE durable_tasks SET calls_reserved=max_calls WHERE task_id=?" (Only identifier)
+    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 503" True) `shouldReturn` True
+    withDb pool (finishAgentTurn execution TurnFailed 1 Nothing Nothing)
+    status pool identifier `shouldReturn` "failed"
+    withDb pool (claimTask "spent") `shouldReturn` []
+
+  it "retains backoff when feedback arrives during a retry" $ do
+    source@(_, _, actor) <- seed pool 900 1
+    identifier <- admit pool source "retry-feedback"
+    execution <- claimOne pool
+    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 503" True) `shouldReturn` True
+    withDb pool (finishAgentTurn execution TurnFailed 1 Nothing Nothing)
+    void $ withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing "extra evidence")
+    status pool identifier `shouldReturn` "retrying"
+    withDb pool (claimTask "still-too-early") `shouldReturn` []
+
+  it "keeps an old occurrence's change-only policy after monitor configuration" $ do
+    (turn, seedMessage, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
+    finishOccurrence pool monitor seedMessage "first" success
+    insertOccurrence pool monitor "old-pending"
+    changed <- withDb pool (configureMonitor (GroupId 900) actor False monitor.mrMonitorOrdinal.unMonitorOrdinal 1 "watch" "coalesce" 40 "retain" "research" False)
+    hasError changed `shouldBe` False
+    [fire] <- withDb pool (claimElaboratedMonitorFires "monitor-test" now 60 10)
+    void $ withDb pool (admitMonitorTask "monitor-test" fire.emfFireId Nothing Map.empty seedMessage)
+    execution <- claimOne pool
+    withDb pool (taskReport execution.atrTurnId success) `shouldReturn` True
+    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
+    rows <- withDb pool $ query "SELECT count(*) FROM task_notifications WHERE kind='result'" ()
+    rows `shouldBe` [Only (1 :: Int64)]
+    finishOccurrence pool monitor seedMessage "new-first" success
+    finishOccurrence pool monitor seedMessage "new-same" success
+    later <- withDb pool $ query "SELECT count(*) FROM task_notifications WHERE kind='result'" ()
+    later `shouldBe` [Only (3 :: Int64)]
 
 seed :: DbPool -> Int64 -> Int64 -> IO (AgentTurnRef, CanonicalMessageId, PrincipalId)
 seed pool group user = do

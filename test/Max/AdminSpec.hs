@@ -35,7 +35,6 @@ spec = describe "Max.Admin" $ do
       route "GET" ["api", "skills"] `shouldBe` Just RSkillsList
       route "POST" ["api", "skills"] `shouldBe` Just RSkillCreate
       route "POST" ["api", "context", "rebuild"] `shouldBe` Just RContextRebuild
-      route "POST" ["api", "plan", "check"] `shouldBe` Just RPlanCheck
       -- Check only.  Running a plan needs a turn minted on behalf of nobody,
       -- and this server has no Agent row to mint one with.
       route "POST" ["api", "plan", "run"] `shouldBe` Nothing

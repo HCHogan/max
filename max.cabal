@@ -3,7 +3,7 @@ name:               max
 version:            0.17.3
 synopsis:           Multi-platform group agent with durable context and memory
 description:        A multi-platform group agent with a canonical message ledger,
-                    durable turn and plan execution, scoped memory, and typed tools.
+                    durable task and turn execution, scoped memory, and typed tools.
 category:           Network
 license:            MIT
 license-file:       LICENSE
@@ -24,6 +24,9 @@ extra-source-files:
     .github/workflows/*.yml
     LICENSE
     README.md
+    scripts/test-task-upgrade.sh
+    test-db/fixtures/task-upgrade-before.sql
+    test-db/fixtures/task-upgrade-after.sql
     assets/codesnap/*.tmTheme
     browser-image/Dockerfile
     browser-image/build.sh
@@ -50,8 +53,6 @@ extra-source-files:
     docker-compose.yml
     eval/README.md
     eval/fixtures/*.jsonl
-    plan-eval/README.md
-    plan-eval/fixtures/*.jsonl
     flake.lock
     flake.nix
     max.yaml.example
@@ -139,7 +140,6 @@ library
         Max.DB.Migrations
         Max.DB.Monitor
         Max.DB.Task
-        Max.DB.Plan
         Max.DB.QQBackfill
         Max.DB.Session
         Max.DB.Stickers
@@ -181,6 +181,7 @@ library
         Max.IR.Lower
         Max.IR.Prompt
         Max.Platform.Envelope
+        Max.LLM.Admission
         Max.LLM.Stream
         Max.Log
         Max.LogBuffer
@@ -196,26 +197,12 @@ library
         Max.Platform.Types
         Max.Platform.Store
         Max.Platform.QQ
-        Max.Plan.Accept
-        Max.Plan.Eval
-        Max.Plan.Execute
-        Max.Plan.Interpret
-        Max.Plan.Parse
-        Max.Plan.Prompt
-        Max.Plan.Brief
-        Max.Plan.Drive
-        Max.Plan.Worker
-        Max.Plan.Reconcile
-        Max.Plan.Schema
-        Max.Plan.Session
-        Max.Plan.Types
-        Max.Plan.Catalog
-        Max.Plan.Validate
         Max.Prompt
         Max.Prompt.System
         Max.Recall
         Max.Monitor
         Max.Monitor.Types
+        Max.Task.Policy
         Max.Task.Types
         Max.Render
         Max.Reload
@@ -250,7 +237,6 @@ library
         Max.Tools.Memory
         Max.Tools.Monitor
         Max.Tools.Pins
-        Max.Tools.Plan
         Max.Tools.Task
         Max.Tools.Reminder
         Max.Tools.Sandbox
@@ -260,7 +246,6 @@ library
         Max.Tools.SelfSource
         Max.Tools.Skills
         Max.Tools.Stickers
-        Max.Tools.Subgoal
         Max.Tools.Video
         Max.Util
         Max.WechatHook
@@ -444,6 +429,7 @@ test-suite max-test
         Max.IR.LawSpec
         Max.IR.LowerSpec
         Max.IR.PromptSpec
+        Max.LLM.AdmissionSpec
         Max.LLM.StreamSpec
         Max.LogSpec
         OneBot.ActionSpec
@@ -461,6 +447,7 @@ test-suite max-test
         Max.SessionSpec
         Max.ShutdownSpec
         Max.SkillsSpec
+        Max.Task.PolicySpec
         Max.TasksSpec
         Max.Effects.AgentSpec
         Max.Effects.BlobSpec
@@ -475,20 +462,6 @@ test-suite max-test
         Max.MCP.ClientSpec
         Max.PlatformSpec
         Max.Platform.DeliverySpec
-        Max.Plan.AcceptSpec
-        Max.Plan.EvalSpec
-        Max.Plan.ExecuteSpec
-        Max.Plan.InterpretSpec
-        Max.Plan.ParseSpec
-        Max.Plan.PromptSpec
-        Max.Plan.BriefSpec
-        Max.Plan.DriveSpec
-        Max.Plan.ReconcileSpec
-        Max.Plan.SchemaSpec
-        Max.Plan.SessionSpec
-        Max.Plan.TypesSpec
-        Max.Plan.CatalogSpec
-        Max.Plan.ValidateSpec
         Max.PromptFlowSpec
         PromptFlow
         Max.MemoryExtractSpec
@@ -499,7 +472,6 @@ test-suite max-test
         Max.ReminderArgsSpec
         Max.Sandbox.DockerSpec
         Max.Tools.FilesSpec
-        Max.Tools.PlanSpec
         Max.ToolsSpec
         Max.Turn.TypesSpec
         Max.TurnReplaySpec
@@ -561,9 +533,7 @@ test-suite max-test-db
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
         Max.DB.TaskSpec
-        Max.DB.PlanSpec
         Max.DB.QQBackfillSpec
-        Max.Plan.WorkerSpec
         Max.PromptIntegrationSpec
         Max.PlatformStoreSpec
         Max.RecallSpec
@@ -584,46 +554,6 @@ test-suite max-test-db
         , text                 >= 2.1  && < 2.2
         , time                 >= 1.12 && < 1.17
     ghc-options:        -threaded -rtsopts -with-rtsopts=-N
-
--- Offline evaluation for ADR 002's plan core: parse, validate, preview and
--- price recorded candidate segments with no LLM, database or effects.  E5's
--- exit gate; see plan-eval/README.md.
-executable max-plan-eval
-    import:           warnings, lang
-    hs-source-dirs:   plan-eval
-    main-is:          Main.hs
-    other-modules:    Harness
-    build-depends:
-        , aeson                >= 2.2  && < 2.4
-        , base                 >= 4.20 && < 5
-        , bytestring           >= 0.12 && < 0.13
-        , containers           >= 0.7  && < 0.9
-        , max
-        , text                 >= 2.1  && < 2.2
-    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
-
--- The other half of ADR 002 step 8: ask real models to write the dialect and
--- judge what comes back in the same environment the offline gate uses.  A
--- separate binary so the gate above stays config-free and runnable in CI.
-executable max-plan-live
-    import:           warnings, lang
-    hs-source-dirs:   plan-eval
-    main-is:          Live.hs
-    other-modules:
-        Harness
-        Paths_max
-    autogen-modules:  Paths_max
-    build-depends:
-        , aeson                >= 2.2  && < 2.4
-        , base                 >= 4.20 && < 5
-        , bytestring           >= 0.12 && < 0.13
-        , containers           >= 0.7  && < 0.9
-        , effectful            >= 2.5  && < 2.7
-        , log-effectful        >= 1.0  && < 1.1
-        , max
-        , opt-env-conf         >= 0.15 && < 0.17
-        , text                 >= 2.1  && < 2.2
-    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
 
 source-repository head
     type:     git

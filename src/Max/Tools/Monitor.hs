@@ -74,8 +74,8 @@ armMonitorTool tz context =
             ("media_kind", enumParam ["image", "sticker", "video", "audio", "file"] "ledger：媒体类型。"),
             ("mention_self", boolParam "ledger：消息是否 @ 了 Max（默认 false）。"),
             ("cooldown_seconds", boundedIntegerParam 0 86400 60),
-            ("ttl_days", boundedIntegerParam 1 365 30),
-            ("max_fires", boundedIntegerParam 1 20 20)
+            ("ttl_days", boundedIntegerParam 1 1825 150),
+            ("max_fires", boundedIntegerParam 1 100 100)
           ]
           ["goal", "trigger"],
       toolRun = \raw -> case parseEither (withObject "args" parseArm) raw of
@@ -84,8 +84,8 @@ armMonitorTool tz context =
           | not (toolMonitorArmingAllowed context) -> pure (Left "当前角色无权武装会主动发起回合的 monitor")
           | T.null (T.strip args.aaGoal) -> pure (Left "goal 不能为空")
           | args.aaCooldownSeconds < 0 || args.aaCooldownSeconds > 86400 -> pure (Left "cooldown_seconds 必须在 0..86400")
-          | args.aaTtlDays < 1 || args.aaTtlDays > 365 -> pure (Left "ttl_days 必须在 1..365")
-          | args.aaMaxFires < 1 || args.aaMaxFires > 20 -> pure (Left "max_fires 必须在 1..20")
+          | args.aaTtlDays < 1 || args.aaTtlDays > 1825 -> pure (Left "ttl_days 必须在 1..1825")
+          | args.aaMaxFires < 1 || args.aaMaxFires > 100 -> pure (Left "max_fires 必须在 1..100")
           | Nothing <- toolTurnOutputContext context -> pure (Left "当前回合缺少可持久化的 arming-turn provenance")
           | otherwise -> do
               let Just outputContext = toolTurnOutputContext context
@@ -149,14 +149,14 @@ armMonitorTool tz context =
         <*> o .:? "media_kind"
         <*> (fromMaybe False <$> o .:? "mention_self")
         <*> (fromMaybe 60 <$> o .:? "cooldown_seconds")
-        <*> (fromMaybe 30 <$> o .:? "ttl_days")
-        <*> (fromMaybe 20 <$> o .:? "max_fires")
+        <*> (fromMaybe 150 <$> o .:? "ttl_days")
+        <*> (fromMaybe 100 <$> o .:? "max_fires")
 
 resolveTime :: TimeZone -> ArmArgs -> UTCTime -> Either Text (Maybe Text, UTCTime)
 resolveTime tz args now = case (args.aaInMinutes, args.aaAt, args.aaCron) of
   (Just minutes, Nothing, Nothing)
     | minutes <= 0 -> Left "in_minutes 必须是正整数"
-    | minutes > 527040 -> Left "in_minutes 太大了（上限约一年）"
+    | minutes > 2635200 -> Left "in_minutes 太大了（上限约五年）"
     | otherwise -> Right (Nothing, addUTCTime (fromIntegral (minutes * 60)) now)
   (Nothing, Just absolute, Nothing) -> do
     fireAt <- parseTimeArg tz absolute
@@ -205,8 +205,8 @@ armResult tz fireAt cron = \case
 
 armErrorText :: MonitorArmError -> Text
 armErrorText = \case
-  ArmedMonitorCapReached -> "本会话已达到 20 个 armed monitor 上限"
-  ConditionMonitorCapReached -> "本会话已达到 5 个 condition monitor 上限"
+  ArmedMonitorCapReached -> "本会话已达到 100 个 armed monitor 上限"
+  ConditionMonitorCapReached -> "本会话已达到 25 个 condition monitor 上限"
   ArmingTurnOutsideConversation -> "arming turn 不属于当前会话"
 
 listMonitorsTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
@@ -256,7 +256,7 @@ cancelMonitorTool context =
                 Nothing
                 ""
                 "coalesce"
-                8
+                40
                 "cancel"
                 cancelTasks
     }
@@ -272,45 +272,49 @@ configureMonitorTool context =
             ("revision", integerParam "当前 revision"),
             ("goal", stringParam "未来触发的新目标"),
             ("overlap", enumParam ["coalesce", "queue"] "重叠策略"),
-            ("queue_limit", boundedIntegerParam 1 32 8),
-            ("pending_policy", enumParam ["retain", "cancel"] "旧版本未受理事件的处置")
+            ("queue_limit", boundedIntegerParam 1 160 40),
+            ("pending_policy", enumParam ["retain", "cancel"] "旧版本未受理事件的处置"),
+            ("profile", enumParam ["research", "browser", "sandbox"] "后台能力；始终与触发时授权取交集"),
+            ("change_only", boolParam "仅稳定 observation 改变时报告")
           ]
-          ["handle", "revision", "goal", "overlap", "pending_policy"],
+          ["handle", "revision", "goal", "overlap", "pending_policy", "profile", "change_only"],
       toolRun = \raw -> case parseEither
         ( withObject "configure monitor" $ \fields ->
-            (,,,,,)
+            (,,,,,,,)
               <$> fields .: "handle"
               <*> fields .: "revision"
               <*> fields .: "goal"
               <*> fields .: "overlap"
-              <*> fields .:? "queue_limit" .!= 8
+              <*> fields .:? "queue_limit" .!= 40
               <*> fields .: "pending_policy"
+              <*> fields .: "profile"
+              <*> fields .: "change_only"
         )
         raw of
         Left detail -> pure (Left (T.pack detail))
-        Right (handle, revision, goal, overlap, capacity, pending) -> case parseMonitorHandle handle of
+        Right (handle, revision, goal, overlap, capacity, pending, profile, changedOnly) -> case parseMonitorHandle handle of
           Nothing -> pure (Left "无效 m# 标识")
           Just ordinal ->
             Right
-              <$> Task.monitorControl
+              <$> Task.configureMonitor
                 (toolGroupId context)
                 (toolAuthorPrincipalId context)
                 (toolMonitorArmingAllowed context)
                 ordinal.unMonitorOrdinal
-                "configure"
-                (Just revision)
+                revision
                 goal
                 overlap
                 capacity
                 pending
-                False
+                profile
+                changedOnly
     }
 
 monitorHistoryTool :: (WithConnection :> es, IOE :> es) => ToolContext -> Tool es
 monitorHistoryTool context =
   Tool
     "monitor_history"
-    "查看 monitor 状态、revision、下次触发和最近 30 次 fire：任务链接、合并、溢出及失败原因。"
+    "查看 monitor 状态、revision、下次触发和最近 150 次 fire：任务链接、合并、溢出及失败原因。"
     (toolObject [("handle", stringParam "m# 标识")] ["handle"])
     ( \raw -> case parseEither (withObject "monitor history" (.: "handle")) raw of
         Left detail -> pure (Left (T.pack detail))

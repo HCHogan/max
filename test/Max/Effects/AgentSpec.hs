@@ -145,7 +145,7 @@ dispatchContext =
   AgentContext
     ( mkToolContext
         (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
-        (TurnCapabilities False True False qqAdvertisedCaps True Map.empty Nothing Nothing False)
+        (TurnCapabilities False True False qqAdvertisedCaps True Map.empty Nothing False)
     )
     Nothing
     Nothing
@@ -250,7 +250,7 @@ spec = describe "Agent full loop" $ do
             _ -> False
         )
 
-  for_ ["subgoal_return", "task_finish"] $ \returnName ->
+  for_ ["task_finish", "request_finish"] $ \returnName ->
     it ("treats " <> T.unpack returnName <> " as a terminal round and suppresses sibling calls") $ do
       events <- newIORef []
       siblingCalls <- newIORef (0 :: Int)
@@ -282,7 +282,7 @@ spec = describe "Agent full loop" $ do
                     ToolCallsResp
                       (object ["role" .= ("assistant" :: Text)])
                       ""
-                      [ ToolCall "return-1" returnName (object ["answer" .= ("ok" :: Text)]),
+                      [ ToolCall "return-1" returnName (object ["reply" .= ("typed reply" :: Text)]),
                         ToolCall "echo-1" "echo" (object ["value" .= (7 :: Int)])
                       ]
               }
@@ -300,6 +300,7 @@ spec = describe "Agent full loop" $ do
       readIORef siblingCalls `shouldReturn` 0
       result.turnsUsed `shouldBe` 1
       result.aborted `shouldBe` Nothing
+      when (returnName == "request_finish") (result.reply `shouldBe` Just "typed reply")
       result.appended
         `shouldSatisfy` any
           ( \case

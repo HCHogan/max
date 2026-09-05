@@ -47,7 +47,7 @@ import Max.EpisodeScheduler (newEpisodeScheduler)
 import Max.FetchQueue (FetchSignal, newFetchSignal)
 import Max.Files (fileWorker)
 import Max.Forward (forwardWorker)
-import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, durableTaskWorker, handleEvents, planDriverFor, resumeInterruptedTurn)
+import Max.Handler (dispatchMonitorFire, dispatchPendingWorker, dispatchProactive, durableTaskWorker, handleEvents, resumeInterruptedTurn)
 import Max.Historian (historianWorker)
 import Max.HttpRuntime (HttpRuntime, newHttpRuntime)
 import Max.IMessage (iMessageDeliveryTransport, iMessageWorker)
@@ -60,7 +60,6 @@ import Max.MediaCaption (mediaCaptionWorker)
 import Max.MemoryExtract (dreamWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
 import Max.Monitor (monitorWorker)
-import Max.Plan.Worker (planWorker)
 import Max.Platform.Delivery (deliveryWorker, oneBotDeliveryTransport)
 import Max.Platform.Types (Platform (..))
 import Max.Reload (ReloadError (..), ReloadResponse (..), controlSocketPath, runReloadServer)
@@ -351,10 +350,6 @@ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath ap
                     (monitorWorker candidate.timezone (ownerFor snapshot "monitors") dispatchMonitorFire),
                   worker "canonical-dispatch" RequiredWorker (dispatchPendingWorker (ownerFor snapshot "dispatch") fetchSig (intentState <$ workerEnv.beIntent)),
                   worker "durable-tasks" RequiredWorker (durableTaskWorker (ownerFor snapshot "tasks")),
-                  worker
-                    "plan-scheduler"
-                    RequiredWorker
-                    (planWorker (ownerFor snapshot "plans") (planDriverFor httpRuntime)),
                   worker
                     "platform-delivery"
                     RequiredWorker

@@ -72,6 +72,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
 import Data.List (find)
+import Data.Maybe (listToMaybe)
 import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -145,10 +146,6 @@ data AgentContext = AgentContext
     -- call this turn makes ('turnCtx').  'Nothing' = the profile's
     -- configured effort.
     acEffort :: !(Maybe Text),
-    -- | Host-enforced tool-call budget for a delegated child. Ordinary turns
-    -- use 'Nothing'. Administrative return/guide calls are free; a child
-    -- plan_run conservatively reserves its whole call budget, so direct calls
-    -- and an inner plan cannot each spend the same allowance.
     acMaxToolCalls :: !(Maybe Int)
   }
 
@@ -160,7 +157,7 @@ turnCtx ctx source =
   let GroupId gid = toolGroupId ctx.acTools
       durable = (.atrTurnId) . turnOutputAgentTurn <$> toolTurnOutputContext ctx.acTools
       generation = (.rsGeneration) <$> toolRuntimeSnapshot ctx.acTools
-   in ChatCtx source (Just gid) ctx.acEffort Nothing Nothing durable generation
+   in ChatCtx (if (toolCapabilities ctx.acTools).tcBackground then "task/" <> source else source) (Just gid) ctx.acEffort Nothing Nothing durable generation
 
 -- | Caps on a single agent invocation.  Per-tool and per-call HTTP
 -- timeouts are configured at the 'LLM' layer; these are loop-level.
@@ -171,11 +168,11 @@ data AgentLimits = AgentLimits
   }
   deriving stock (Show)
 
--- | Sane starting point: 200 turns covers long multi-round sandbox
+-- | Sane starting point: 1000 turns covers long multi-round sandbox
 -- sessions with @say@ status updates interleaved, while still capping
 -- runaway loops.  Hard cap to keep cost bounded.
 defaultLimits :: AgentLimits
-defaultLimits = AgentLimits {maxTurns = 200}
+defaultLimits = AgentLimits {maxTurns = 1000}
 
 -- | What one agent run produced.
 data AgentResult = AgentResult
@@ -455,13 +452,12 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
               -- results keep call order so each tool_call id is
               -- answered in sequence.
               registered <- listCatalogTools
-              let isReturn name = name `elem` ["subgoal_return", "task_finish"]
+              let isReturn name = name `elem` ["task_finish", "request_finish"]
                   returnRound = any (isReturn . (.callName)) tcs
                   suppressed tc = returnRound && not (isReturn tc.callName)
                   remaining = maybe maxBound (\limit -> max 0 (limit - callsUsed)) ctx.acMaxToolCalls
                   callCost tc
-                    | tc.callName `elem` ["subgoal_return", "task_finish", "plan_guide"] = 0
-                    | tc.callName == "plan_run" = maybe 1 (max 1) ctx.acMaxToolCalls
+                    | tc.callName `elem` ["task_finish", "task_progress", "request_finish"] = 0
                     | otherwise = 1
                   roundCost = sum [callCost tc | tc <- tcs, not (suppressed tc)]
                   overBudget = roundCost > remaining
@@ -498,7 +494,7 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                                 if suppressed tc
                                   then
                                     pure
-                                      ( toolResultMessage tc (Left "subgoal_return 必须单独提交；同一轮的其他工具调用已拒绝"),
+                                      ( toolResultMessage tc (Left "task_finish/request_finish 必须单独提交；同一轮的其他工具调用已拒绝"),
                                         ToolCallFinished tc.callName (Left "tool suppressed after child return")
                                       )
                                   else executeOne h call
@@ -525,12 +521,13 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                       Just (Number number) <- [KeyMap.lookup "task_id" fields],
                       Just identifier <- [toBoundedInteger number]
                     ]
+                  requestedReplies = [body | (_, ToolCallFinished "request_finish" (Right (Object fields))) <- executed, Just (String body) <- [KeyMap.lookup "reply" fields]]
                   yielded = not (null startedTasks) && not (toolCapabilities ctx.acTools).tcBackground
               if returned || yielded
                 then
                   pure
                     AgentResult
-                      { reply = if yielded then Just ("已交给后台任务 " <> T.intercalate "、" startedTasks <> "，完成后会通知；现在可以继续问别的问题。") else Nothing,
+                      { reply = if yielded then Just ("已交给后台任务 " <> T.intercalate "、" startedTasks <> "，完成后会通知；现在可以继续问别的问题。") else listToMaybe requestedReplies,
                         appended = appended' <> newMsgs,
                         turnsUsed = n + 1,
                         aborted = Nothing,

@@ -23,12 +23,6 @@
 # names something.
 - ignore: {name: Eta reduce}
 
-# The same rule under a second name.  `\handles -> f <$> traverse g handles`
-# becomes `fmap f . traverse g`, which is an eta reduction that hlint reports as
-# a functor hint because the binding happens to end in a map.  `handles` names
-# something, and its siblings in the same record are all lambdas.
-- ignore: {name: Use fmap, within: Max.Tools.Plan}
-
 # `\x -> x `op` y` reads left to right; the backtick section it becomes does
 # not.  Explicitness wins in the cases hlint finds here.
 - ignore: {name: Avoid lambda using `infix`}
@@ -41,13 +35,7 @@
 
 # A `concat` of several optional line groups reads as a list of sections;
 # spelling five of them as `<>` chains does not.
-- ignore: {name: Use ++, within: [Max.Roster, Max.Plan.Prompt]}
-
-# Suggested as `Data.Bifunctor.first f`, and hlint says outright that it
-# "increases laziness".  Max.Plan.Eval carries a fuel counter through every
-# step; a change to when the pair's halves are forced is a change to when fuel
-# is spent, which is not a style question.
-- ignore: {name: Use first, within: Max.Plan.Eval}
+- ignore: {name: Use ++, within: Max.Roster}
 
 # `foldr (keepFirst . (.field)) []` is the fused form, and it is harder to read
 # than the composition it replaces for a list of a few dozen candidates.  The

@@ -191,6 +191,14 @@ jobs:
         env:
           MAX_TEST_DB_URL: postgresql://max_test:max_test@127.0.0.1:5432/max_test
 
+      - name: Test populated task upgrade
+        run: nix develop --impure -c bash scripts/test-task-upgrade.sh
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5432
+          PGUSER: max_test
+          PGPASSWORD: max_test
+
       - name: Verify database and operational health gate
         run: nix develop --impure -c cabal run max-adr003-maintenance -- verify
         env:

@@ -457,10 +457,10 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
                 20
                 (Map.singleton "context_search" "grant-a")
             )
-    armedConditions <- forM [1 .. 5 :: Int] (armLedger >=> requireRight "arm condition")
+    armedConditions <- forM [1 .. 25 :: Int] (armLedger >=> requireRight "arm condition")
     map (.mrMonitorOrdinal) armedConditions
-      `shouldBe` map MonitorOrdinal [1 .. 5]
-    armLedger (6 :: Int) `shouldReturn` Left ConditionMonitorCapReached
+      `shouldBe` map MonitorOrdinal [1 .. 25]
+    armLedger (26 :: Int) `shouldReturn` Left ConditionMonitorCapReached
 
     let future = addUTCTime 86400 now
         armTime index fireAt =
@@ -475,10 +475,10 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
                 fireAt
                 (Map.singleton "context_search" "grant-a")
             )
-    forM_ [1 .. 15 :: Int] $ \index -> armTime index future >>= requireRight "arm time"
-    armTime (16 :: Int) future `shouldReturn` Left ArmedMonitorCapReached
+    forM_ [1 .. 75 :: Int] $ \index -> armTime index future >>= requireRight "arm time"
+    armTime (76 :: Int) future `shouldReturn` Left ArmedMonitorCapReached
     length <$> withDb pool (listArmedMonitors (conversationScopeFor (GroupId 64)))
-      `shouldReturn` 20
+      `shouldReturn` 100
 
     -- Use a fresh conversation to exercise five already-admitted occurrences
     -- without the cap fixture above obscuring the per-group budget.
@@ -496,18 +496,18 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
               (LedgerMatchSpec Nothing (Just "budget-hit") Nothing False)
               0
               (addUTCTime 86400 now)
-              10
+              100
               (Map.singleton "context_search" "grant-a")
           )
     withDb pool (finishAgentTurn budgetArming TurnSucceeded 1 Nothing Nothing)
-    _ <- withDb pool (execute "UPDATE monitors SET overlap_policy='queue',queue_limit=8 WHERE monitor_id=?" (Only budgetMonitor.mrMonitorId))
-    forM_ [6302 .. 6306] $ \messageId ->
+    _ <- withDb pool (execute "UPDATE monitors SET overlap_policy='queue',queue_limit=40 WHERE monitor_id=?" (Only budgetMonitor.mrMonitorId))
+    forM_ [6302 .. 6322] $ \messageId ->
       insertRawMessage pool messageId 65 705 99 now Nothing "budget-hit"
-    fireCount pool budgetMonitor `shouldReturn` 5
-    claimed <- withDb pool (claimElaboratedMonitorFires "budget-worker" now 60 10)
+    fireCount pool budgetMonitor `shouldReturn` 21
+    claimed <- withDb pool (claimElaboratedMonitorFires "budget-worker" now 60 50)
     admitted <- catMaybes <$> mapM (\fire -> withDb pool (admitElaboratedMonitorTurn "budget-worker" fire.emfFireId Nothing)) claimed
-    length admitted `shouldBe` 4
-    budgetStates pool budgetMonitor `shouldReturn` [(4, 1)]
+    length admitted `shouldBe` 20
+    budgetStates pool budgetMonitor `shouldReturn` [(20, 1)]
 
     oneShot <- requireRight "arm one-shot" =<< armTimeFor pool budgetPrincipal budgetArming now
     withDb pool (admitDueTimeMonitors now) `shouldReturn` 1
@@ -526,7 +526,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     [released] <- withDb pool (claimElaboratedMonitorFires "budget-worker-2" now 60 10)
     finalTurn <- withDb pool (admitElaboratedMonitorTurn "budget-worker-2" released.emfFireId Nothing)
     finalTurn `shouldSatisfy` isJust
-    budgetStates pool budgetMonitor `shouldReturn` [(5, 0)]
+    budgetStates pool budgetMonitor `shouldReturn` [(21, 0)]
 
   it "expires world watchers at TTL/max-fire boundaries and quietly closes a missing arming principal" $ do
     truncateAll pool
