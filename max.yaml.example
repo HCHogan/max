@@ -258,6 +258,18 @@ llm:
 #   max_results: 5
 #   timeout_seconds: 30
 
+# Read-only fleet observations through maxops. Disabled by default; an empty
+# allowed_groups denies everyone (including owners and private chats).
+# Use a dedicated hub client token in an owner-only runtime file, never inline.
+# Changes support maxctl reload; removal also fences tools in existing turns.
+# Explicit services.max.maxops.allowedGroups / MAX_MAXOPS_ALLOWED_GROUPS override
+# this YAML allowlist. Mirrored endpoints share their QQ conversation's grant.
+# maxops:
+#   enabled: true
+#   base_url: "http://100.64.0.3:9721"
+#   token_file: "/run/credentials/max.service/maxops-token"
+#   allowed_groups: [611798505]
+
 # ─────────────────────────────────────────────────────────────────────────────
 # The credential pool in front of a subscription.  When the LLM base_url above
 # points at a CLIProxyAPI holding ChatGPT/Gemini/Claude OAuth credentials, a

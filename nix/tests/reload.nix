@@ -43,6 +43,11 @@ pkgs.testers.runNixOSTest {
         postgres.enable = false;
         sandboxImage.enable = false;
         browserImage.enable = false;
+        maxops = {
+          enable = true;
+          tokenFile = "/run/maxops-test-token";
+          allowedGroups = [ 611798505 ];
+        };
       };
 
       # A package path change alters ExecStart/ExecReload and must use
@@ -62,6 +67,8 @@ pkgs.testers.runNixOSTest {
           if [ ! -e /run/max-test-config.yaml ]; then
             echo 'persona: old' > /run/max-test-config.yaml
           fi
+          umask 077
+          printf '%s' 'maxops-nixos-fixture-token-0000001' > /run/maxops-test-token
         '';
       };
     };
@@ -70,6 +77,12 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("max.service")
     machine.wait_for_file("/run/max/control.sock")
+    machine.succeed("test -r /run/credentials/max.service/maxops-token")
+    environment = machine.succeed("systemctl show max --property=Environment --value")
+    assert "MAX_MAXOPS_ENABLED=True" in environment
+    assert "MAX_MAXOPS_ALLOWED_GROUPS=611798505" in environment
+    assert "MAX_MAXOPS_TOKEN_FILE=/run/credentials/max.service/maxops-token" in environment
+    assert "maxops-nixos-fixture-token-0000001" not in environment
 
     original_pid = machine.succeed("systemctl show max -p MainPID --value").strip()
     replacement_system = machine.succeed("readlink -f /run/current-system/specialisation/package-change").strip()

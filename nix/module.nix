@@ -258,6 +258,26 @@ in
       '';
     };
 
+    maxops = {
+      enable = lib.mkEnableOption "read-only maxops fleet tools";
+      baseUrl = lib.mkOption {
+        type = lib.types.str;
+        default = "http://127.0.0.1:9721";
+        description = "Authenticated maxops hub URL, without embedded credentials.";
+      };
+      tokenFile = lib.mkOption {
+        type = lib.types.str;
+        default = "";
+        description = "Runtime token file for a dedicated maxops client, loaded through systemd credentials.";
+      };
+      allowedGroups = lib.mkOption {
+        type = lib.types.nullOr (lib.types.listOf lib.types.ints.positive);
+        default = null;
+        example = [ 611798505 ];
+        description = "QQ group allowlist. Null leaves max.yaml maxops.allowed_groups in control; an empty list denies everyone. Explicit lists override YAML.";
+      };
+    };
+
     postgres.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -314,6 +334,12 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = !cfg.maxops.enable || (lib.hasPrefix "/" cfg.maxops.tokenFile && !lib.hasPrefix "/nix/store/" cfg.maxops.tokenFile);
+        message = "services.max.maxops.tokenFile must be an absolute runtime path outside the Nix store.";
+      }
+    ];
     # `configFile` wins outright, so anything in `settings` is silently
     # discarded — which reads as "I set that and it didn't work".  Say
     # so, and point at the channel that does work with a hand-managed
@@ -471,7 +497,13 @@ in
         MAX_IMAGES_DIR = lib.mkDefault "${stateDir}/images";
         # The .sql files ship with the flake source, not the binary.
         MAX_MIGRATIONS_DIR = lib.mkDefault "${../migrations}";
-      };
+      } // lib.optionalAttrs cfg.maxops.enable ({
+        MAX_MAXOPS_ENABLED = "True";
+        MAX_MAXOPS_BASE_URL = cfg.maxops.baseUrl;
+        MAX_MAXOPS_TOKEN_FILE = "/run/credentials/max.service/maxops-token";
+      } // lib.optionalAttrs (cfg.maxops.allowedGroups != null) {
+        MAX_MAXOPS_ALLOWED_GROUPS = lib.concatMapStringsSep "," toString cfg.maxops.allowedGroups;
+      });
       serviceConfig = {
         User = "max-bot";
         Group = "max-bot";
@@ -483,6 +515,7 @@ in
         ExecStart = "${cfg.package}/bin/max --config-file /etc/max/config.yaml";
         ExecReload = "${cfg.package}/bin/maxctl reload --socket /run/max/control.sock";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
+        LoadCredential = lib.optional cfg.maxops.enable "maxops-token:${cfg.maxops.tokenFile}";
         Restart = "on-failure";
         RestartSec = 5;
         TimeoutStartSec = 30;

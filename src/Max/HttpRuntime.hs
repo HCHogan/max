@@ -33,7 +33,9 @@ import Network.HTTP.Client
     ManagerSettings (managerIdleConnectionCount, managerRetryableException),
     Request (checkResponse),
     brRead,
+    managerSetProxy,
     newManager,
+    noProxy,
     parseRequest,
     responseBody,
     responseHeaders,
@@ -99,7 +101,7 @@ newHttpRuntime = do
   standard <- newManager noImplicitRetryTlsSettings
   legacyEmsSettings <- legacyEmsManagerSettings
   legacyEms <- newManager legacyEmsSettings
-  nonReusing <- newManager noImplicitRetryTlsSettings {managerIdleConnectionCount = 0}
+  nonReusing <- newManager (managerSetProxy noProxy noImplicitRetryTlsSettings) {managerIdleConnectionCount = 0}
   pure (HttpRuntime standard legacyEms nonReusing)
 
 -- | Injection seam for tests and application components that already own

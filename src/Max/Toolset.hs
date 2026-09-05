@@ -48,7 +48,9 @@ import Max.Effects.Tools
   )
 import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.HttpRuntime (HttpRuntime)
+import Max.MaxOps.Types (maxOpsAllowed)
 import Max.Platform.Types (noAdvertisedCaps)
+import Max.RuntimeConfig (RuntimeSnapshot (..), RuntimeValues (..), currentRuntimeSnapshot)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolRuntimeSnapshot, toolStickers)
 import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
@@ -56,6 +58,7 @@ import Max.Tools.Browser (browserToolsFor)
 import Max.Tools.Files (fileToolsFor)
 import Max.Tools.Group (groupToolsFor)
 import Max.Tools.Images (imageToolsFor)
+import Max.Tools.MaxOps (maxOpsToolsFor)
 import Max.Tools.Memory (memoryToolsFor)
 import Max.Tools.Monitor (monitorToolsFor)
 import Max.Tools.Pins (pinToolsFor)
@@ -131,6 +134,7 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
         <> fileToolsFor dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes
         <> [t | toolStickers dc && dispatchEnv.beEmbeddingEnabled, t <- stickerToolsFor]
         <> maybe [] (searchToolsFor runtime) dispatchEnv.beSearch
+        <> maxOpsToolsFor runtime dispatchEnv.beMaxOps ((.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore) (toolGroupId dc)
         <> [t | toolMultimodal dc, t <- browserToolsFor dc dispatchEnv.beBrowsers dispatchEnv.beBrowserProxy]
         <> [t | toolMultimodal dc, t <- videoToolsFor dc]
 
@@ -166,6 +170,7 @@ toolDefinitionsFor env gid caps =
       StickersOnly -> caps.tcStickers && env.beEmbeddingEnabled
       SkillsOnly -> caps.tcSkills
       SearchOnly -> isJust env.beSearch
+      MaxOpsOnly -> maxOpsAllowed env.beMaxOps gid
       MonitorArmOnly -> caps.tcMonitorArming
       BackgroundOnly -> caps.tcBackground
       FrontendOnly -> not caps.tcBackground && isNothing caps.tcEffectCeiling
@@ -190,6 +195,7 @@ data ToolGate
   | StickersOnly
   | SkillsOnly
   | SearchOnly
+  | MaxOpsOnly
   | MonitorArmOnly
   | FrontendOnly
   | BackgroundOnly
@@ -267,6 +273,8 @@ toolInventory =
     always (sendReadTool "send_file_from_sandbox" ["sandbox.fs"]),
     gated StickersOnly (llmReadTool "find_stickers" ["sticker.db"] [CurrentConversation]),
     gated SearchOnly (readTool "web_search" ["network.search"] [CurrentConversation]),
+    gated MaxOpsOnly (readTool "maxops_operations" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
+    gated MaxOpsOnly (readTool "maxops_query" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
     gated MultimodalOnly (browserTool "browser_navigate"),
     gated MultimodalOnly (browserTool "view_zhihu"),
     gated MultimodalOnly (browserTool "browser_snapshot"),

@@ -21,14 +21,14 @@ import Effectful.Reader.Dynamic (Reader, ask, local, runReader)
 import GHC.Clock (getMonotonicTime)
 import Max.Admin (AdminConfig (..), adminServer)
 import Max.Browser.Registry
-  ( destroyAllBrowsers,
+  ( configureBrowserRegistry,
+    destroyAllBrowsers,
     newBrowserRegistry,
-    configureBrowserRegistry,
     reapStaleBrowsers,
   )
-import Max.Config (AppConfig (..), ConfigChange (..), configChanges, loadConfig, loadConfigCandidate, restartRequiredChanges, runtimeValuesFromConfig)
 import Max.Browser.Runtime (browserMaintenance)
 import Max.Browser.Vault (loadBrowserVault)
+import Max.Config (AppConfig (..), ConfigChange (..), configChanges, loadConfig, loadConfigCandidate, restartRequiredChanges, runtimeValuesFromConfig)
 import Max.DB.AgentTurn (ReclaimedTurns (..), addAgentTurnUsage, reclaimInterruptedTurns)
 import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
@@ -188,6 +188,7 @@ main = do
                     beSandboxes = sandboxes,
                     beBrowsers = browsers,
                     beSearch = cfg.search,
+                    beMaxOps = cfg.maxops,
                     beCliProxy = cfg.cliproxy,
                     beBrowserProxy = cfg.browserProxy,
                     beMemoryExtract = cfg.memoryExtractProfile,

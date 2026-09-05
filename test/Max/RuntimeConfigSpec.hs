@@ -6,6 +6,7 @@ import Data.Text (Text)
 import Data.Time (minutesToTimeZone)
 import Effectful.Log (LogLevel (LogInfo))
 import Max.Intent.Types (IntentConfig (..))
+import Max.MaxOps.Types (defaultMaxOpsConfig)
 import Max.ModelCatalog
 import Max.RuntimeConfig
 import Test.Hspec
@@ -67,6 +68,7 @@ values name =
       rvTurnSilenceSeconds = 600,
       rvOwners = [],
       rvSearch = Nothing,
+      rvMaxOps = defaultMaxOpsConfig,
       rvCliProxy = Nothing,
       rvBrowserProxy = Just name,
       rvMemoryExtract = Just name,

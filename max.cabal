@@ -136,6 +136,8 @@ library
         Max.ContextTraceStore
         Max.ConversationScope
         Max.MCP.Client
+        Max.MaxOps.Client
+        Max.MaxOps.Types
         Max.DB.Calls
         Max.DB.AgentTurn
         Max.DB.Connection
@@ -252,6 +254,7 @@ library
         Max.Tools.Sandbox
         Max.Tools.Schema
         Max.Tools.Search
+        Max.Tools.MaxOps
         Max.Tools.Search.Types
         Max.Tools.SelfSource
         Max.Tools.Skills
@@ -430,6 +433,7 @@ test-suite max-test
         Max.Command.ParserSpec
         Max.Command.PermissionSpec
         Max.ConfigReloadSpec
+        Max.MaxOpsSpec
         Max.ConversationScopeSpec
         Max.DB.CallsSpec
         Max.DispatchFixture

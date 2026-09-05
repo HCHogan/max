@@ -81,6 +81,7 @@ import Max.IMessage (IMessageConfig (..))
 import Max.Intent (IntentConfig (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
+import Max.MaxOps.Types (MaxOpsConfig (..), defaultMaxOpsConfig, validateMaxOpsConfig)
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, defaultContextLimits, modelProfileNames)
 import Max.ModelCatalog qualified as ModelCatalog
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
@@ -139,6 +140,7 @@ data AppConfig = AppConfig
     -- | Web-search backend, if configured.  When 'Nothing' the
     -- @web_search@ tool is not registered (model doesn't see it).
     search :: !(Maybe SearchConfig),
+    maxops :: !MaxOpsConfig,
     -- | Credential pool behind the LLM base URL, if it is a
     -- CLIProxyAPI we hold a management key for.  'Nothing' = the
     -- @\/api\/quota@ endpoint reports itself unconfigured.
@@ -324,6 +326,7 @@ validateConfig cfg =
       maybe [] validateIMessage cfg.imessage,
       maybe [] validateWechatHook cfg.wechathook,
       maybe [] validateIntent cfg.intent,
+      validateMaxOpsConfig cfg.maxops,
       validateProfile "memory.extract_profile" cfg.memoryExtractProfile,
       validateProfile "stickers.caption_profile" cfg.stickerCaptionProfile,
       validateProfile "intent.profile" ((.icProfile) <$> cfg.intent)
@@ -352,44 +355,46 @@ validateConfig cfg =
 -- | Explicit reload ownership for every top-level setting.  Values are never
 -- rendered: diagnostics name fields and classes only.
 configChanges :: AppConfig -> AppConfig -> [ConfigChange]
-configChanges old new = concat
-  [ changed "server.host" RestartRequired old.server.host new.server.host,
-    changed "server.port" RestartRequired old.server.port new.server.port,
-    changed "server.path" RestartRequired old.server.path new.server.path,
-    changed "server.access_token" RestartRequired old.server.accessToken new.server.accessToken,
-    changed "db.url" RestartRequired old.db.url new.db.url,
-    changed "db.max_conns" RestartRequired old.db.maxConns new.db.maxConns,
-    changed "migrations_dir" RestartRequired old.migrationsDir new.migrationsDir,
-    changed "images_dir" RestartRequired old.imagesDir new.imagesDir,
-    changed "image_workers" WorkerHandoff old.imageWorkers new.imageWorkers,
-    changed "shutdown_drain_seconds" WorkerHandoff old.shutdownDrainSeconds new.shutdownDrainSeconds,
-    changed "turn_silence_seconds" DispatchHot old.turnSilenceSeconds new.turnSilenceSeconds,
-    changed "llm" DispatchHot old.llm new.llm,
-    changed "context.force_raw_fallback" DispatchHot old.forceRawContext new.forceRawContext,
-    changed "timezone_minutes" DispatchHot old.timezone new.timezone,
-    changed "persona" DispatchHot old.persona new.persona,
-    changed "search" DispatchHot old.search new.search,
-    changed "cliproxy" DispatchHot old.cliproxy new.cliproxy,
-    changed "browser.proxy" WorkerHandoff old.browserProxy new.browserProxy,
-    changed "browser.state_key_file" RestartRequired old.browserStateKeyFile new.browserStateKeyFile,
-    changed "browser.idle_seconds" RestartRequired old.browserIdleSeconds new.browserIdleSeconds,
-    changed "browser.grace_seconds" RestartRequired old.browserGraceSeconds new.browserGraceSeconds,
-    changed "memory.extract_profile" WorkerHandoff old.memoryExtractProfile new.memoryExtractProfile,
-    changed "memory.timeout_seconds" WorkerHandoff old.historianTimeoutSeconds new.historianTimeoutSeconds,
-    changed "stickers.caption_profile" WorkerHandoff old.stickerCaptionProfile new.stickerCaptionProfile,
-    changed "stickers.enabled" DispatchHot old.stickersEnabled new.stickersEnabled,
-    changed "owners" DispatchHot old.owners new.owners,
-    changed "matrix" WorkerHandoff old.matrix new.matrix,
-    changed "imessage" WorkerHandoff old.imessage new.imessage,
-    changed "wechathook" WorkerHandoff old.wechathook new.wechathook,
-    changed "intent" WorkerHandoff old.intent new.intent,
-    changed "admin" WorkerHandoff old.admin new.admin,
-    changed "admin_call_retention_days" WorkerHandoff old.adminCallRetentionDays new.adminCallRetentionDays,
-    changed "embedding" WorkerHandoff old.embedding new.embedding,
-    changed "debug" DispatchHot old.debug new.debug,
-    changed "log_level" DispatchHot old.logLevel new.logLevel,
-    changed "log_color" RestartRequired old.logColor new.logColor
-  ]
+configChanges old new =
+  concat
+    [ changed "server.host" RestartRequired old.server.host new.server.host,
+      changed "server.port" RestartRequired old.server.port new.server.port,
+      changed "server.path" RestartRequired old.server.path new.server.path,
+      changed "server.access_token" RestartRequired old.server.accessToken new.server.accessToken,
+      changed "db.url" RestartRequired old.db.url new.db.url,
+      changed "db.max_conns" RestartRequired old.db.maxConns new.db.maxConns,
+      changed "migrations_dir" RestartRequired old.migrationsDir new.migrationsDir,
+      changed "images_dir" RestartRequired old.imagesDir new.imagesDir,
+      changed "image_workers" WorkerHandoff old.imageWorkers new.imageWorkers,
+      changed "shutdown_drain_seconds" WorkerHandoff old.shutdownDrainSeconds new.shutdownDrainSeconds,
+      changed "turn_silence_seconds" DispatchHot old.turnSilenceSeconds new.turnSilenceSeconds,
+      changed "llm" DispatchHot old.llm new.llm,
+      changed "context.force_raw_fallback" DispatchHot old.forceRawContext new.forceRawContext,
+      changed "timezone_minutes" DispatchHot old.timezone new.timezone,
+      changed "persona" DispatchHot old.persona new.persona,
+      changed "search" DispatchHot old.search new.search,
+      changed "maxops" DispatchHot old.maxops new.maxops,
+      changed "cliproxy" DispatchHot old.cliproxy new.cliproxy,
+      changed "browser.proxy" WorkerHandoff old.browserProxy new.browserProxy,
+      changed "browser.state_key_file" RestartRequired old.browserStateKeyFile new.browserStateKeyFile,
+      changed "browser.idle_seconds" RestartRequired old.browserIdleSeconds new.browserIdleSeconds,
+      changed "browser.grace_seconds" RestartRequired old.browserGraceSeconds new.browserGraceSeconds,
+      changed "memory.extract_profile" WorkerHandoff old.memoryExtractProfile new.memoryExtractProfile,
+      changed "memory.timeout_seconds" WorkerHandoff old.historianTimeoutSeconds new.historianTimeoutSeconds,
+      changed "stickers.caption_profile" WorkerHandoff old.stickerCaptionProfile new.stickerCaptionProfile,
+      changed "stickers.enabled" DispatchHot old.stickersEnabled new.stickersEnabled,
+      changed "owners" DispatchHot old.owners new.owners,
+      changed "matrix" WorkerHandoff old.matrix new.matrix,
+      changed "imessage" WorkerHandoff old.imessage new.imessage,
+      changed "wechathook" WorkerHandoff old.wechathook new.wechathook,
+      changed "intent" WorkerHandoff old.intent new.intent,
+      changed "admin" WorkerHandoff old.admin new.admin,
+      changed "admin_call_retention_days" WorkerHandoff old.adminCallRetentionDays new.adminCallRetentionDays,
+      changed "embedding" WorkerHandoff old.embedding new.embedding,
+      changed "debug" DispatchHot old.debug new.debug,
+      changed "log_level" DispatchHot old.logLevel new.logLevel,
+      changed "log_color" RestartRequired old.logColor new.logColor
+    ]
   where
     changed field klass before after
       | before == after = []
@@ -410,6 +415,7 @@ runtimeValuesFromConfig cfg =
       rvTurnSilenceSeconds = cfg.turnSilenceSeconds,
       rvOwners = cfg.owners,
       rvSearch = cfg.search,
+      rvMaxOps = cfg.maxops,
       rvCliProxy = cfg.cliproxy,
       rvBrowserProxy = cfg.browserProxy,
       rvMemoryExtract = cfg.memoryExtractProfile,
@@ -513,6 +519,7 @@ appConfigParser usedRef =
           valueWithShown (const "(built-in Chinese default)") defaultPersona
         ]
     search <- subConfig "search" searchParser
+    maxops <- subConfig "maxops" maxOpsParser
     cliproxy <- subConfig "cliproxy" cliproxyParser
     browserProxy <-
       subConfig "browser" $
@@ -526,12 +533,18 @@ appConfigParser usedRef =
               conf "proxy",
               metavar "URL"
             ]
-    browserStateKeyFile <- subConfig "browser" $ setting
-      [help "Owner-only encryption key for browser checkpoints", reader str, option, long "browser-state-key-file", env "MAX_BROWSER_STATE_KEY_FILE", conf "state_key_file", metavar "FILE", value "var/browser-state.key"]
-    browserIdleSeconds <- subConfig "browser" $ setting
-      [help "Retain idle task browser workspaces for this many seconds", reader auto, option, long "browser-idle-seconds", env "MAX_BROWSER_IDLE_SECONDS", conf "idle_seconds", metavar "SECONDS", value 1800]
-    browserGraceSeconds <- subConfig "browser" $ setting
-      [help "Retain completed task browsers for this many seconds", reader auto, option, long "browser-grace-seconds", env "MAX_BROWSER_GRACE_SECONDS", conf "grace_seconds", metavar "SECONDS", value 300]
+    browserStateKeyFile <-
+      subConfig "browser" $
+        setting
+          [help "Owner-only encryption key for browser checkpoints", reader str, option, long "browser-state-key-file", env "MAX_BROWSER_STATE_KEY_FILE", conf "state_key_file", metavar "FILE", value "var/browser-state.key"]
+    browserIdleSeconds <-
+      subConfig "browser" $
+        setting
+          [help "Retain idle task browser workspaces for this many seconds", reader auto, option, long "browser-idle-seconds", env "MAX_BROWSER_IDLE_SECONDS", conf "idle_seconds", metavar "SECONDS", value 1800]
+    browserGraceSeconds <-
+      subConfig "browser" $
+        setting
+          [help "Retain completed task browsers for this many seconds", reader auto, option, long "browser-grace-seconds", env "MAX_BROWSER_GRACE_SECONDS", conf "grace_seconds", metavar "SECONDS", value 300]
     memoryExtractProfile <-
       subConfig "memory" $
         optional $
@@ -782,6 +795,22 @@ dbParser = do
 
 --------------------------------------------------------------------------------
 -- Search.
+
+maxOpsParser :: Parser MaxOpsConfig
+maxOpsParser = do
+  mocEnabled <-
+    yesNoSwitch
+      [help "Enable read-only maxops tools in explicitly allowed groups", long "maxops-enabled", env "MAX_MAXOPS_ENABLED", conf "enabled", value False]
+  mocBaseUrl <-
+    setting
+      [help "maxops hub base URL (no credentials, query or fragment)", reader str, option, long "maxops-base-url", env "MAX_MAXOPS_BASE_URL", conf "base_url", metavar "URL", value defaultMaxOpsConfig.mocBaseUrl]
+  mocTokenFile <-
+    setting
+      [help "Runtime file containing the dedicated maxops client bearer token", reader str, option, long "maxops-token-file", env "MAX_MAXOPS_TOKEN_FILE", conf "token_file", metavar "FILE", value ""]
+  mocAllowedGroups <-
+    setting
+      [help "QQ groups allowed to use maxops; empty denies everyone", reader (commaSeparatedList auto), option, long "maxops-allowed-groups", env "MAX_MAXOPS_ALLOWED_GROUPS", conf "allowed_groups", metavar "GROUP[,GROUP..]", value []]
+  pure MaxOpsConfig {..}
 
 searchParser :: Parser (Maybe SearchConfig)
 searchParser = do
@@ -1152,9 +1181,10 @@ wechatHookParser = do
       ]
   nicknames <-
     setting
-      [ help "wxid -> display name (config file only).  WeChat 4.x leaves the \
-             \hook's contact database unreachable, so this table is the only \
-             \source of names; an unlisted sender stays honestly nameless.",
+      [ help
+          "wxid -> display name (config file only).  WeChat 4.x leaves the \
+          \hook's contact database unreachable, so this table is the only \
+          \source of names; an unlisted sender stays honestly nameless.",
         conf "nicknames",
         valueWithShown (const "{}") Map.empty
       ]

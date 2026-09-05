@@ -34,6 +34,8 @@ taskGrants profile = Map.filterWithKey (\name _ -> name `elem` allowed)
   where
     allowed =
       [ "web_search",
+        "maxops_operations",
+        "maxops_query",
         "get_message_by_id",
         "context_search",
         "context_expand",

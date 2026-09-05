@@ -42,6 +42,7 @@ import Log (LogLevel)
 import Max.CliProxy (CliProxyConfig)
 import Max.Embedding (EmbedClient)
 import Max.Intent.Types (IntentConfig)
+import Max.MaxOps.Types (MaxOpsConfig)
 import Max.ModelCatalog (ModelCatalog)
 import Max.Platform (PlatformBackend)
 import Max.Platform.Delivery (DeliveryTransport)
@@ -63,6 +64,7 @@ data RuntimeValues = RuntimeValues
     rvTurnSilenceSeconds :: !Int,
     rvOwners :: ![Int64],
     rvSearch :: !(Maybe SearchConfig),
+    rvMaxOps :: !MaxOpsConfig,
     rvCliProxy :: !(Maybe CliProxyConfig),
     rvBrowserProxy :: !(Maybe Text),
     rvMemoryExtract :: !(Maybe Text),
