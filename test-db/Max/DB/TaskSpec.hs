@@ -53,6 +53,7 @@ import Max.Task.State (FailureKind (..), TaskControlError (TaskCallerFenced, Tas
 import Max.Task.State qualified as TaskState
 import Max.Task.ToolRuntime (taskToolsWithDatabase)
 import Max.Task.Types (TaskProfile (..), taskHandle)
+import Max.Task.View (renderTaskHistory)
 import Max.ToolContext
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
@@ -430,12 +431,13 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (finishAgentTurn next TurnSucceeded 1 Nothing Nothing)
     status pool identifier `shouldReturn` "succeeded"
 
-  it "recovers expired execution with its original budget and unknown effect evidence" $ do
+  it "recovers expired execution with its original budget, unknown effects and model notes" $ do
     source <- seed pool 900 1
     identifier <- admit pool source "recover"
     first <- claimOne pool
     withDb pool (authorizeTaskStep first.atrTurnId (ExecutionWork ReserveCall)) `shouldReturn` True
     _ <- withDb pool (startJournalExecution first (JournalStart "first" "web_search" 1 "hash" (object []) (toJSON ([] :: [Text])) "retry-safe"))
+    withDb pool (recordModelNote first "evidence noted before restart")
     void $ withDb pool $ execute "UPDATE task_attempts SET lease_until=now()-interval '1 second' WHERE turn_id=?" (Only first.atrTurnId)
     second <- claimOne pool
     second `shouldNotBe` first
@@ -443,7 +445,11 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     rows <- withDb pool $ query "SELECT calls_reserved FROM durable_tasks WHERE task_id=?" (Only identifier)
     rows `shouldBe` [Only (1 :: Int)]
     journal <- withDb pool $ query "SELECT state FROM execution_journal WHERE turn_id=?" (Only first.atrTurnId)
-    journal `shouldBe` [Only ("outcome-unknown" :: Text)]
+    journal `shouldMatchList` [Only ("outcome-unknown" :: Text), Only "succeeded"]
+    Just recovered <- withDb pool (loadTaskExecution second.atrTurnId)
+    let history = renderTaskHistory recovered.teHistory
+    history `shouldSatisfy` T.isInfixOf "web_search [outcome-unknown]"
+    history `shouldSatisfy` T.isInfixOf "model_note [succeeded] evidence noted before restart"
 
   it "shares reservations across descendants under parallel requests" $ do
     source@(_, message, actor) <- seed pool 900 1

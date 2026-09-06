@@ -205,11 +205,11 @@ loadTaskExecution turn = withTransaction $ do
       attempts <- forM previous $ \(previousTurn, attempt, revision, report) -> do
         journal <-
           query
-            "SELECT tool_ref,state,COALESCE(result_preview,failure_detail,'') FROM (\
-            \ SELECT execution_ordinal,tool_ref,state,result_preview,failure_detail FROM execution_journal\
+            "SELECT event_kind,tool_ref,state,COALESCE(result_preview,failure_detail,'') FROM (\
+            \ SELECT execution_ordinal,event_kind,tool_ref,state,result_preview,failure_detail FROM execution_journal\
             \ WHERE turn_id=? ORDER BY execution_ordinal DESC LIMIT 100) recent ORDER BY execution_ordinal"
             (Only (previousTurn :: AgentTurnId))
-        pure (AttemptHistory attempt revision report [JournalHistory tool state preview | (tool, state, preview) <- journal])
+        pure (AttemptHistory attempt revision report [JournalHistory kind tool state preview | (kind, tool, state, preview) <- journal])
       observations <-
         query
           "SELECT fire_id,left(trigger_evidence,5000) FROM monitor_fires\

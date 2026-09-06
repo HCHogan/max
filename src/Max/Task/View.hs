@@ -14,6 +14,7 @@ where
 import Data.Aeson (Value, encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -28,7 +29,8 @@ data TaskEventView = TaskEventView
   deriving stock (Eq, Show)
 
 data JournalHistory = JournalHistory
-  { tool :: !Text,
+  { kind :: !Text,
+    tool :: !(Maybe Text),
     state :: !Text,
     preview :: !Text
   }
@@ -75,7 +77,7 @@ renderTaskHistory history =
         <> maybe "no committed report; inspect journal before repeating effects" jsonText entry.report
         <> "\n"
         <> T.intercalate "\n" (map renderJournal entry.journal)
-    renderJournal entry = entry.tool <> " [" <> entry.state <> "] " <> entry.preview
+    renderJournal entry = fromMaybe entry.kind entry.tool <> " [" <> entry.state <> "] " <> entry.preview
 
 renderTaskNotification :: Int64 -> Int -> Value -> Text
 renderTaskNotification task revision body = taskHandle task <> " revision " <> tshow revision <> "\n" <> T.take 80000 (jsonText body)
