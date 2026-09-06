@@ -56,6 +56,7 @@ import Max.DB.Monitor.Admission qualified as MonitorAdmission
 import Max.DB.Task.Admission qualified as Admission
 import Max.DB.Task.Authorization qualified as Authorization
 import Max.DB.Task.Control qualified as Control
+import Max.DB.Task.Frontend (claimFrontend, frontendWorkWaitingWithin)
 import Max.DB.Task.MonitorControl qualified as MonitorControl
 import Max.DB.Task.Overview qualified as Overview
 import Max.DB.Task.Query qualified as Query
@@ -69,7 +70,6 @@ import Max.Monitor.Policy (OverlapPolicy, parseOverlapPolicy)
 import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Task.Admission (AdmissionError, TaskAdmissionReceipt (..), admissionErrorText)
-import Max.Task.Policy (frontendLeaseSeconds)
 import Max.Task.State qualified as State
 import Max.Task.Types (TaskProfile (..), parseProfile, profileName)
 import Max.Task.View
@@ -269,48 +269,19 @@ taskReport turn report = case State.parseTaskReport report of
 taskReportTyped :: (WithConnection :> es, IOE :> es) => AgentTurnId -> State.TaskReport -> Eff es Bool
 taskReportTyped = Reporting.submitReport
 
-claimFrontend :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Eff es Bool
-claimFrontend turn = withTransaction $ do
-  _ <- Record.lockTurnConversation turn.atrTurnId
-  active <-
-    query
-      "SELECT conversation_id,trigger_canonical_message_id FROM agent_turns WHERE turn_id=? AND status IN ('starting','running','recovery-pending') FOR UPDATE"
-      (Only turn.atrTurnId)
-  case active :: [(Int64, Maybe Int64)] of
-    [(conversation, trigger)] -> do
-      occupied <-
-        query
-          "SELECT EXISTS(SELECT 1 FROM conversation_frontends WHERE conversation_id=? AND turn_id<>? AND lease_until>clock_timestamp())"
-          (conversation, turn.atrTurnId)
-      if occupied == [Only True]
-        then pure False
-        else do
-          now <- Record.databaseNow
-          void $
-            execute
-              "INSERT INTO conversation_frontends(conversation_id,turn_id,lease_until) VALUES(?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET turn_id=excluded.turn_id,lease_until=excluded.lease_until"
-              (conversation, turn.atrTurnId, addUTCTime (fromIntegral frontendLeaseSeconds) now)
-          void $ execute "UPDATE agent_turns SET frontend_managed=true WHERE turn_id=?" (Only turn.atrTurnId)
-          void $
-            execute
-              "INSERT INTO conversation_requests(message_id,turn_id) SELECT ?,? WHERE ?::bigint IS NOT NULL AND NOT EXISTS(SELECT 1 FROM task_notifications WHERE turn_id=?) ON CONFLICT(message_id) DO UPDATE SET turn_id=excluded.turn_id WHERE conversation_requests.disposition='pending'"
-              (trigger, turn.atrTurnId, trigger, turn.atrTurnId)
-          pure True
-    _ -> pure False
-
 admitTaskNotification :: (WithConnection :> es, IOE :> es) => Eff es [AgentTurnId]
 admitTaskNotification = withTransaction $ do
   rows <-
     query
-      "SELECT notice.notification_id,work.conversation_id,work.owner_principal_id,work.source_message_id\
+      "SELECT notice.notification_id,work.conversation_id,work.owner_principal_id,work.source_message_id,notice.kind\
       \ FROM task_notifications notice JOIN durable_tasks work USING(task_id) LEFT JOIN agent_turns turn ON turn.turn_id=notice.turn_id\
-      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
+      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.review_decision->>'action' IS DISTINCT FROM 'skip' AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
       \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence','succeeded'))\
       \ AND NOT EXISTS (SELECT 1 FROM conversation_frontends frontend WHERE frontend.conversation_id=work.conversation_id AND frontend.lease_until>clock_timestamp())\
-      \ ORDER BY notice.notification_id LIMIT 1"
+      \ ORDER BY (notice.kind='progress'),notice.notification_id LIMIT 1"
       ()
-  case rows :: [(Int64, Int64, Int64, Maybe Int64)] of
-    [(notification, conversation, principal, source)] -> do
+  case rows :: [(Int64, Int64, Int64, Maybe Int64, Text)] of
+    [(notification, conversation, principal, source, kind)] -> do
       locked <- query "SELECT conversation_id FROM conversations WHERE conversation_id=? FOR UPDATE" (Only conversation)
       case locked :: [Only Int64] of
         [] -> error "admitTaskNotification: conversation missing"
@@ -319,13 +290,25 @@ admitTaskNotification = withTransaction $ do
         query
           "SELECT notice.notification_id FROM task_notifications notice JOIN durable_tasks work USING(task_id)\
           \ LEFT JOIN agent_turns turn ON turn.turn_id=notice.turn_id WHERE notice.notification_id=?\
-          \ AND notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt\
+          \ AND notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.review_decision->>'action' IS DISTINCT FROM 'skip' AND notice.next_attempt_at<=clock_timestamp() AND notice.revision=work.revision AND notice.attempt=work.attempt\
           \ AND notice.body->>'status'=work.status AND work.status<>'cancelled' AND notice.attempts<15\
           \ AND (notice.turn_id IS NULL OR turn.status IN ('failed','aborted','crashed','silence','succeeded'))\
           \ AND NOT EXISTS (SELECT 1 FROM conversation_frontends frontend WHERE frontend.conversation_id=work.conversation_id AND frontend.lease_until>clock_timestamp())\
           \ FOR UPDATE OF notice"
           (Only notification)
-      if null (available :: [Only Int64]) then pure [] else admitNotification notification conversation principal source
+      if null (available :: [Only Int64]) then pure [] else do
+        published <- query
+          "SELECT EXISTS(SELECT 1 FROM task_notifications n JOIN messages m ON m.agent_turn_id=n.turn_id WHERE n.notification_id=?)"
+          (Only notification)
+        waiting <- if kind == "progress" then frontendWorkWaitingWithin conversation Nothing else pure False
+        if kind == "progress" && published == [Only True] then do
+          void $ execute "UPDATE task_notifications SET delivered_at=clock_timestamp() WHERE notification_id=?" (Only notification)
+          pure []
+        else if waiting then do
+          now <- Record.databaseNow
+          void $ execute "UPDATE task_notifications SET next_attempt_at=? WHERE notification_id=?" (addUTCTime 30 now, notification)
+          pure []
+        else admitNotification notification conversation principal source
     _ -> pure []
   where
     admitNotification notification conversation principal source = do
@@ -336,7 +319,7 @@ admitTaskNotification = withTransaction $ do
           (conversation, source, principal, conversation)
       case admitted of
         [Only turn] -> do
-          void (execute "UPDATE task_notifications SET turn_id=?,attempts=attempts+1 WHERE notification_id=?" (turn, notification))
+          void (execute "UPDATE task_notifications SET turn_id=?,attempts=attempts+1,review_decision=NULL,reviewed_at=NULL WHERE notification_id=?" (turn, notification))
           void (execute "INSERT INTO task_output_turns(task_id,turn_id,revision,attempt) SELECT task_id,turn_id,revision,attempt FROM task_notifications WHERE notification_id=?" (Only notification))
           pure [turn]
         _ -> error "admitTaskNotification: no turn"
@@ -448,7 +431,7 @@ recordTaskFailure = Reporting.submitFailure
 
 notificationKind :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Eff es (Maybe Text)
 notificationKind turn = do
-  rows <- query "SELECT kind FROM task_notifications WHERE turn_id=? AND superseded_at IS NULL" (Only turn)
+  rows <- query "SELECT kind FROM task_notifications WHERE turn_id=?" (Only turn)
   pure $ case rows of [Only kind] -> Just kind; _ -> Nothing
 
 monitorTaskProfile :: (WithConnection :> es, IOE :> es) => MonitorFireId -> Eff es TaskProfile
@@ -473,7 +456,7 @@ nextTaskWakeMicros = do
       "SELECT LEAST(30000000,GREATEST(50000,COALESCE(ceil(extract(epoch FROM min(wake_at)-clock_timestamp())*1000000),30000000)))::integer\
       \ FROM (SELECT next_attempt_at AS wake_at FROM durable_tasks WHERE status='retrying' AND next_attempt_at>clock_timestamp()\
       \ UNION ALL SELECT notice.next_attempt_at FROM task_notifications notice JOIN durable_tasks work USING(task_id)\
-      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.attempts<15\
+      \ WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.review_decision->>'action' IS DISTINCT FROM 'skip' AND notice.attempts<15\
       \ AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status\
       \ AND notice.next_attempt_at>clock_timestamp()\
       \ UNION ALL SELECT deadline FROM durable_tasks WHERE status IN ('queued','running','waiting','retrying') AND deadline>clock_timestamp()\

@@ -35,6 +35,7 @@ import Max.DB.MonitorSpec qualified as MonitorSpec
 import Max.DB.QQBackfillSpec qualified as QQBackfillSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TaskSpec qualified as TaskSpec
+import Max.DB.ProgressSpec qualified as ProgressSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.HistorianSpec qualified as HistorianSpec
@@ -72,6 +73,7 @@ main = do
         TransactionSpec.spec pool
         AgentTurnSpec.spec pool
         TaskSpec.spec pool
+        ProgressSpec.spec pool
         BrowserSpec.spec pool
         ConnectionSpec.spec pool
         ConversationCursorSpec.spec pool

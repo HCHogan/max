@@ -57,7 +57,7 @@ class Agent(BaseHTTPRequestHandler):
 
 with tempfile.TemporaryDirectory(prefix="max-maxops-acceptance-") as directory:
     root = Path(directory)
-    for name, token in [("agent", agent_token), ("client", secrets.token_hex(32))]:
+    for name, token in [("agent", agent_token), ("execution", secrets.token_hex(32)), ("client", secrets.token_hex(32)), ("manager", secrets.token_hex(32))]:
         path = root / name
         path.write_text(token)
         path.chmod(0o600)
@@ -68,10 +68,15 @@ with tempfile.TemporaryDirectory(prefix="max-maxops-acceptance-") as directory:
         port = reservation.getsockname()[1]
     config = {
         "listen": f"127.0.0.1:{port}",
+        "state_file": str(root / "hub.db"),
         "hosts": [{"name": "fixture", "agent_url": f"http://127.0.0.1:{agent.server_port}",
-                   "agent_token_file": str(root / "agent"), "readable_units": ["fixture.service"]}],
+                   "agent_token_file": str(root / "agent"), "execution_token_file": str(root / "execution"),
+                   "readable_units": ["fixture.service"]}],
         "clients": [{"name": "max", "token_file": str(root / "client"), "hosts": ["fixture"],
-                     "capabilities": ["fleet:read", "host:read", "units:read", "metrics:read"]}],
+                     "capabilities": ["fleet:read", "host:read", "units:read", "metrics:read"]},
+                    {"name": "max-manager", "token_file": str(root / "manager"), "hosts": ["fixture"],
+                     "access": "manage", "capabilities": ["fleet:read", "host:read", "units:read", "metrics:read",
+                     "diagnostics:collect", "remediations:manage", "jobs:read", "jobs:cancel", "events:read", "self:read"]}],
     }
     path = root / "hub.json"
     path.write_text(json.dumps(config))
@@ -97,7 +102,10 @@ with tempfile.TemporaryDirectory(prefix="max-maxops-acceptance-") as directory:
         subprocess.run(["cabal", "exec", "--", "runghc", "-package=max", "scripts/test-maxops.hs",
                         endpoint, str(root / "client"), "fixture", "fixture.service"],
                        env=environment, check=True)
-        print("PASS real Rust hub + Max tool runners with environment proxies disabled (synthetic agent)")
+        subprocess.run(["cabal", "exec", "--", "runghc", "-package=max", "scripts/test-maxops.hs",
+                        endpoint, str(root / "manager"), "fixture", "fixture.service", "--management"],
+                       env=environment, check=True)
+        print("PASS real Rust hub + Max query/management runners, durable jobs and synthetic agent")
     finally:
         hub.terminate()
         try:

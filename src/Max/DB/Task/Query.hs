@@ -50,7 +50,10 @@ readTask (GroupId group) identifier = withReadSnapshot $ do
         listToMaybe
           <$> queryRows
             progressRow
-            "SELECT revision,attempt,version,body::text,updated_at FROM task_progress WHERE task_id=? AND revision=?"
+            "SELECT p.revision,p.attempt,p.version,p.body::text,p.updated_at,COALESCE(n.review_decision,'null'::jsonb)::text,n.reviewed_at\
+            \ FROM task_progress p LEFT JOIN LATERAL (SELECT review_decision,reviewed_at FROM task_notifications\
+            \ WHERE task_id=p.task_id AND progress_version=p.version AND kind='progress' ORDER BY notification_id DESC LIMIT 1) n ON true\
+            \ WHERE p.task_id=? AND p.revision=?"
             (identifier, core.summary.revision)
       turns <-
         queryRows
@@ -88,5 +91,5 @@ readTask (GroupId group) identifier = withReadSnapshot $ do
         <*> field
         <*> field
     browserRow = BrowserView <$> enumField parseWorkspaceState <*> field <*> field <*> field <*> field <*> field
-    progressRow = ProgressView <$> field <*> field <*> field <*> jsonField <*> field
+    progressRow = ProgressView <$> field <*> field <*> field <*> jsonField <*> field <*> jsonField <*> field
     eventRow = EventView <$> field <*> field <*> field <*> field <*> field <*> field

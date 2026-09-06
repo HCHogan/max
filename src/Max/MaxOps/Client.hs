@@ -1,17 +1,18 @@
 module Max.MaxOps.Client
   ( maxOpsOperations,
     maxOpsQuery,
+    maxOpsExecute,
   )
 where
 
-import Control.Monad (unless)
-import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, withObject, (.:), (.=))
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, (.=))
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.List (find)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Max.HttpRuntime
   ( BufferedResponse (..),
     HttpPool (NonReusingPool),
@@ -20,67 +21,57 @@ import Max.HttpRuntime
     parseRequestEither,
     runBuffered,
   )
+import Max.MaxOps.Protocol
 import Max.MaxOps.Types
 import Max.Util (trySyncIO)
 import Network.HTTP.Client qualified as HTTP
 import System.IO (IOMode (ReadMode), withBinaryFile)
 import System.Timeout (timeout)
 
-maxOpsOperations :: HttpRuntime -> MaxOpsConfig -> IO (Either Text Value)
-maxOpsOperations runtime config = do
-  result <- maxOpsRequest runtime config "GET" "/v1/operations" Nothing
-  pure $ do
-    catalog <- result >>= parseCatalog
-    pure (object ["version" .= (1 :: Int), "operations" .= catalog])
+maxOpsOperations :: HttpRuntime -> MaxOpsConfig -> CatalogAccess -> IO (Either Text Value)
+maxOpsOperations runtime config access = fmap (catalogValue access) <$> loadCatalog runtime config
+
+loadCatalog :: HttpRuntime -> MaxOpsConfig -> IO (Either Text Catalog)
+loadCatalog runtime config = do
+  result <- maxOpsRequest runtime config "GET" "/v1/operations" Nothing Nothing
+  pure (result >>= parseCatalog)
 
 maxOpsQuery :: HttpRuntime -> MaxOpsConfig -> Text -> Value -> IO (Either Text Value)
-maxOpsQuery runtime config operation params
+maxOpsQuery runtime config operation params = do
+  result <- maxOpsCall runtime config True operation params Nothing
+  pure (result >>= withLogText)
+
+-- | Submissions return durable handles immediately. Polling, cancellation and
+-- reconciliation use the same registry; no HTTP failure automatically replays
+-- a write, including controls whose only protection is remote revision CAS.
+maxOpsExecute :: HttpRuntime -> MaxOpsConfig -> Text -> Value -> Maybe Text -> IO (Either Text Value)
+maxOpsExecute runtime config = maxOpsCall runtime config False
+
+maxOpsCall :: HttpRuntime -> MaxOpsConfig -> Bool -> Text -> Value -> Maybe Text -> IO (Either Text Value)
+maxOpsCall runtime config readOnly operation params key
   | not (isObject params) = pure (Left "maxops params must be an object")
-  | LBS.length (encode request) > 4096 = pure (Left "maxops request exceeds 4096 bytes")
+  | LBS.length (encode request) > 2 * 1024 * 1024 = pure (Left "maxops request exceeds 2 MiB")
+  | maybe False (not . validateIdempotencyKey) key = pure (Left "maxops idempotency_key must contain 1..128 printable ASCII characters without spaces")
   | otherwise = do
-      catalog <- maxOpsOperations runtime config
-      case catalog >>= parseCatalog of
+      catalog <- loadCatalog runtime config
+      case catalog of
         Left failure -> pure (Left failure)
-        Right operations
-          | any ((== Just operation) . operationName) operations ->
-              maxOpsRequest runtime config "POST" "/v1/execute" (Just request)
-          | otherwise -> pure (Left "maxops operation is unavailable or not read-only; call maxops_operations")
+        Right available -> case find ((== operation) . (.name)) available.operations of
+          Just entry | entry.readOnly == readOnly -> case (entry.requiresKey, key) of
+            (True, Nothing) -> pure (Left "maxops operation requires a stable idempotency_key")
+            (False, Just _) -> pure (Left "maxops operation does not accept idempotency_key; use its current revision or job handle")
+            _ -> maxOpsRequest runtime config "POST" "/v1/execute" (Just request) key
+          _ -> pure (Left (if readOnly then "maxops operation is unavailable or not read-only; call maxops_operations" else "maxops operation is unavailable or not a write; call maxops_operations"))
   where
     request = object ["op" .= operation, "params" .= params]
     isObject (Object _) = True
     isObject _ = False
 
-parseCatalog :: Value -> Either Text [Value]
-parseCatalog value = case parseEither parser value of
-  Left _ -> Left "maxops returned an invalid operation catalog"
-  Right operations -> Right operations
-  where
-    parser = withObject "maxops catalog" $ \fields -> do
-      version <- fields .: "version" :: Parser Int
-      unless (version == 1) (fail "unsupported catalog version")
-      operations <- fields .: "operations" :: Parser [Value]
-      filterMReadOnly operations
-    filterMReadOnly =
-      fmap concat
-        . traverse
-          ( withObject "operation" $ \fields -> do
-              name <- fields .: "name" :: Parser Text
-              readOnly <- fields .: "read_only" :: Parser Bool
-              schema <- fields .: "params_schema" :: Parser Value
-              unless (not (T.null name) && isObject schema) (fail "invalid operation")
-              pure [Object fields | readOnly]
-          )
-    isObject (Object _) = True
-    isObject _ = False
-
-operationName :: Value -> Maybe Text
-operationName value = either (const Nothing) Just (parseEither (withObject "operation" (.: "name")) value)
-
-maxOpsRequest :: HttpRuntime -> MaxOpsConfig -> BS.ByteString -> Text -> Maybe Value -> IO (Either Text Value)
-maxOpsRequest runtime config method path payload
+maxOpsRequest :: HttpRuntime -> MaxOpsConfig -> BS.ByteString -> Text -> Maybe Value -> Maybe Text -> IO (Either Text Value)
+maxOpsRequest runtime config method path payload key
   | not config.mocEnabled || not (null (validateMaxOpsConfig config)) = pure (Left "maxops is not configured")
   | otherwise = do
-      result <- timeout 15_000_000 $ do
+      result <- timeout 30_000_000 $ do
         credential <- trySyncIO $ withBinaryFile config.mocTokenFile ReadMode (`BS.hGet` 515)
         case credential of
           Left _ -> pure (Left "maxops credential file is unavailable")
@@ -98,11 +89,11 @@ maxOpsRequest runtime config method path payload
                             HTTP.setRequestIgnoreStatus $
                               request
                                 { HTTP.method = method,
-                                  HTTP.requestHeaders = [("Authorization", "Bearer " <> token), ("Content-Type", "application/json"), ("Accept", "application/json")],
+                                  HTTP.requestHeaders = [("Authorization", "Bearer " <> token), ("Content-Type", "application/json"), ("Accept", "application/json")] <> [("Idempotency-Key", TE.encodeUtf8 value) | Just value <- [key]],
                                   HTTP.requestBody = maybe (HTTP.RequestBodyBS BS.empty) (HTTP.RequestBodyLBS . encode) payload,
                                   HTTP.redirectCount = 0,
                                   HTTP.proxy = Nothing,
-                                  HTTP.responseTimeout = HTTP.responseTimeoutMicro 15_000_000
+                                  HTTP.responseTimeout = HTTP.responseTimeoutMicro 30_000_000
                                 }
                         pure $ case response of
                           Left failure -> Left (safeFailure failure)

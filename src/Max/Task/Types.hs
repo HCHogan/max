@@ -15,18 +15,20 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Text.Read (readMaybe)
 
-data TaskProfile = Research | Browser | Sandbox
+data TaskProfile = Research | Browser | Sandbox | Operations
   deriving stock (Eq, Show)
 
 profileName :: TaskProfile -> Text
 profileName Research = "research"
 profileName Browser = "browser"
 profileName Sandbox = "sandbox"
+profileName Operations = "operations"
 
 parseProfile :: Text -> Maybe TaskProfile
 parseProfile "research" = Just Research
 parseProfile "browser" = Just Browser
 parseProfile "sandbox" = Just Sandbox
+parseProfile "operations" = Just Operations
 parseProfile _ = Nothing
 
 taskGrants :: TaskProfile -> Map Text Text -> Map Text Text
@@ -53,6 +55,7 @@ taskGrants profile = Map.filterWithKey (\name _ -> name `elem` allowed)
       ]
         <> case profile of
           Research -> []
+          Operations -> ["maxops_execute"]
           Browser ->
             [ "browser_navigate",
               "browser_snapshot",

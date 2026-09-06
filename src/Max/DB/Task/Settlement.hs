@@ -103,14 +103,15 @@ settleTurn turn successful abortReason frontendManaged = do
 settleNotification :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Bool -> Maybe Text -> Eff es ()
 settleNotification turn successful abortReason = do
   receipts <- query "SELECT EXISTS(SELECT 1 FROM messages WHERE agent_turn_id=?)" (Only turn)
-  when (successful && receipts == [Only True]) $
+  when (receipts == [Only True]) $
     void $
       execute
-        "UPDATE task_notifications SET delivered_at=now() WHERE turn_id=? AND superseded_at IS NULL AND delivered_at IS NULL"
-        (Only turn)
+        "UPDATE task_notifications SET delivered_at=now() WHERE turn_id=? AND (superseded_at IS NULL OR kind='progress') AND delivered_at IS NULL AND (? OR kind='progress')"
+        (turn, successful)
   pending <-
     query
-      "SELECT notification_id,attempts FROM task_notifications WHERE turn_id=? AND delivered_at IS NULL AND superseded_at IS NULL FOR UPDATE"
+      "SELECT notification_id,attempts FROM task_notifications WHERE turn_id=? AND delivered_at IS NULL AND superseded_at IS NULL\
+      \ AND review_decision->>'action' IS DISTINCT FROM 'skip' FOR UPDATE"
       (Only turn)
   now <- databaseNow
   forM_ (pending :: [(Int64, Int)]) $ \(identifier, attempts) ->

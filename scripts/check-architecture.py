@@ -29,6 +29,8 @@ PURE = {
     "Max.Task.Types",
     "Max.Task.State",
     "Max.Task.Execution",
+    "Max.Task.Progress",
+    "Max.MaxOps.Protocol",
     "Max.Task.Query",
     "Max.Task.Overview",
     "Max.Task.Admission",
@@ -51,7 +53,7 @@ def check_imports():
         path = ROOT / "src" / (module.replace(".", "/") + ".hs")
         source = path.read_text()
         for dependency in IMPORT.findall(source):
-            pure_external = dependency.startswith(("Data.", "Crypto.Hash.")) or dependency in {"Text.Read", "Control.Applicative", "Network.HTTP.Types.Header"}
+            pure_external = dependency.startswith(("Data.", "Crypto.Hash.")) or dependency in {"Text.Read", "Control.Applicative", "Control.Monad", "Network.HTTP.Types.Header"}
             # Exception is a typeclass declaration; no exception-throwing IO.
             exception_type = dependency == "Control.Exception" and "import Control.Exception (Exception)" in source
             if dependency not in PURE and not pure_external and not exception_type:

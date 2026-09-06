@@ -69,7 +69,7 @@ operationalChecks =
     ),
     ( "task_notification_exhausted",
       True,
-      "SELECT count(*) FROM task_notifications notice JOIN durable_tasks work USING(task_id) WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.attempts>=15 AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled'"
+      "SELECT count(*) FROM task_notifications notice JOIN durable_tasks work USING(task_id) WHERE notice.delivered_at IS NULL AND notice.superseded_at IS NULL AND notice.review_decision->>'action' IS DISTINCT FROM 'skip' AND notice.attempts>=15 AND notice.revision=work.revision AND notice.attempt=work.attempt AND notice.body->>'status'=work.status AND work.status<>'cancelled'"
     ),
     ( "request_pending",
       False,

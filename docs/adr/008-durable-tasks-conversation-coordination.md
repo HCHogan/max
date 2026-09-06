@@ -309,8 +309,8 @@ No deployment, destructive cleanup, or Git commit is implied by implementation.
 | Shared execution | `Max.Handler` dispatches tasks through the existing Agent, TurnRuntime, journal, browser scope and finalizer. Task attempts are excluded from legacy turn recovery; expired attempts get new fenced turns, not blind script replay. |
 | Budgets and scheduling | Tree-wide reservations: 200 tools, 400 agent-model rounds, six-hour admission deadline (children inherit the parent's remaining deadline); 40 active background tasks globally, ten per conversation/principal, fair principal ordering, depth parameter 15 and at most 40 attempts. Reservations survive crashes and replacement. Token/cost usage is observational, not an enforced spend ceiling; helper-model calls are not agent rounds. |
 | Frontend | One database-fenced activation per canonical conversation, 600 inline tools and a six-hour activation deadline, with a further 150 seconds of ownership for terminal checkpointing (`Max.Task.Policy`). Model calls default to 30 minutes per HTTP attempt; the four-hour phase watchdog accommodates the initial attempt, all five retries and backoff. Successful delegation yields immediately. New same-author questions are not absorbed. Addressed controls bypass the LLM. |
-| Output | Background attempts cannot insert conversation output. Root reports get separate frontend activations; nested reports wake their parent. Stale task revisions/attempts and expired frontend ownership cannot publish. A failed/silent summary model falls back to a bounded, literal report through the same fenced boundary. |
-| Monitors | New elaborated fires atomically link to tasks, retaining legacy admitted-turn readers. New monitors default to research; `configure_monitor` atomically selects research/browser/sandbox and change-only policy under CAS. Existing occurrences keep their frozen profile/policy. Versioned snapshots, single-flight, coalescing or bounded queues, explicit old-pending policy, separate cancellation of admitted work, change-only notifications based on stable `observation` plus status (whole-report fallback when absent) and bounded repeated failure notices. Canned reminders keep their existing outboxes. |
+| Output | Background attempts cannot insert conversation output. Root reports get separate frontend activations; nested reports wake their parent. Root progress uses a buffered, tool-free frontend review with an explicit publish/skip decision; a skipped version produces no message. Stale task revisions/attempts/progress versions and expired frontend ownership cannot publish. A failed/silent final-result summary model falls back to a bounded, literal report through the same fenced boundary. Progress never uses that fallback. |
+| Monitors | New elaborated fires atomically link to tasks, retaining legacy admitted-turn readers. New monitors default to research; `configure_monitor` atomically selects research/browser/sandbox/operations and change-only policy under CAS. Existing occurrences keep their frozen profile/policy. Versioned snapshots, single-flight, coalescing or bounded queues, explicit old-pending policy, separate cancellation of admitted work, change-only notifications based on stable `observation` plus status (whole-report fallback when absent) and bounded repeated failure notices. Canned reminders keep their existing outboxes. |
 | Operator visibility | `task_status`, `monitor_history`, `configure_monitor`, `!task`, and the admin durable-work view expose state, provenance, outstanding requests, overlap and failures. |
 
 The Plan parser, validator, executor, worker, database API, authoring tools,
@@ -341,7 +341,22 @@ archived Plan work or resets a live Task's identity, revision, spend or lease.
   latest revision/attempt-tagged value. Identical updates deduplicate; pending
   root updates coalesce and subsequent notices are spaced by 30 seconds.
   Children update the parent inbox without waking it for progress alone.
-  Terminal reports supersede pending progress and use the same frontend fence.
+  The conversation's frontend model reviews the latest progress together with
+  its objective, conversation context and previous published progress. It makes
+  one buffered call without executable tools or a publication stream, returning
+  a bounded `publish` reply/reason or a `skip` reason. Decisions belong to a
+  specific progress version; skip is a successful no-message disposition and
+  never completes the original user request. Task status exposes the decision.
+  Already-eligible user work takes priority; a new foreground activation can
+  revoke an unpublished progress activation. The shared lease watcher cancels
+  the model call when ownership, version or task validity changes. A new review
+  attempt reassesses the current conversation rather than reusing an unpublished
+  decision from the previous attempt. Model/parse failures retain bounded retry
+  and coalescing without directly publishing the report.
+  Publication uses the shared reply parser and Message IR/outbox path, with one
+  canonical output per progress notice. A committed output survives a failed
+  terminal checkpoint without being republished. Terminal reports supersede
+  pending progress and retain their result notification guarantees.
 - **Retries:** classified temporary transport failures or an explicit transient
   failed report enter `retrying`, with persisted 5/10/20/40/80/160/300-second
   backoff. The worker wakes from the persisted next-attempt deadline as well
@@ -496,3 +511,14 @@ actual answers and responsiveness; they must be measured rather than assumed.
 - **Delete existing plan rows or restart them through the new API:** rejected.
   History, active work, and ambiguous effects are migration obligations, not
   expendable implementation details.
+
+### maxops operations profile
+
+The `operations` profile intersects existing parent grants with the research
+queries plus `maxops_execute`. Management is not inherited by research, browser,
+sandbox or final-result report activations. Max delegates execution to the
+credential-scoped maxops protocol-2 registry; it records invocation evidence in
+the existing execution journal and retains returned job/change identifiers in
+task context, without maintaining a second remote-job state machine. Submissions
+require the same stable idempotency key on retry; revisioned controls require
+new remote observations. HTTP uncertainty never causes automatic write replay.

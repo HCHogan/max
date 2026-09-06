@@ -7,9 +7,14 @@ migration 091; production behavioral acceptance is separate from automated gates
 ## User surface
 
 - Long work uses `task_start` with an idempotency key, explicit objective/context
-  and `research`, `browser` or `sandbox` profile. It returns a stable `task#N`.
+  and `research`, `browser`, `sandbox` or `operations` profile. It returns a stable `task#N`.
 - `task_status` and `task_list` inspect work; completion normally wakes the
   frontend without polling. `task_finish` and `task_progress` are private to background execution.
+- Root progress is reviewed by the conversation frontend model with no executable
+  tools or live output stream. Its versioned publish/skip decision is visible in
+  `task_status.progress.review_decision`; skip produces no conversation message.
+  User requests can preempt an unpublished review; failed reviews retry without
+  dumping the background report. Final results keep their existing fallback.
 - `request_finish` records answered/waiting/declined and the frontend reply;
   only recorded output settles an explicit request.
 - `!task list`, `!task status task#N`, `!task steer task#N <note>`.
@@ -102,6 +107,12 @@ browser/sandbox behavior, or delivery to a production platform.
 - Replace/cancel while an attempt finishes. Old reports cannot publish as the
   current task. Cancel a monitor with both active and pending work and check
   the separate `cancel_tasks` behavior.
+- A progress review chooses skip: no message is created and no retry is queued.
+  A later version is reviewed normally. A newer progress version, cancellation
+  or replacement rejects an old review reply at publication time.
+- A slow progress review is preempted by a user request; the model request is
+  cancelled and the new foreground owner remains valid. A restart after a
+  committed progress message does not publish that progress again.
 - Repeated ledger/cron observations preserve their occurrence history without
   concurrent work on one monitor. Queue overflow is visible. Canned reminders
   still arrive independently, including on a slow mirrored endpoint.

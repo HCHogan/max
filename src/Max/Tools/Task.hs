@@ -44,12 +44,12 @@ taskToolsFor context =
     startTool =
       Tool
         { toolName = "task_start",
-          toolDescription = "把长研究、浏览器或 sandbox 工作交给后台。持久化后立即返回 task#，当前前台回合随即交还会话；不要等待或轮询。子任务不会直接向群里发言。profile 只收窄现有权限。每棵任务树共享 200 次工具预留、400 次模型请求和 50 分钟截止时间，重试不重置。token/cost 仅观测，不是硬额度。",
+          toolDescription = "把长研究、浏览器、sandbox 或 maxops 运维工作交给后台。持久化后立即返回 task#，当前前台回合随即交还会话；不要等待或轮询。子任务不会直接向群里发言。profile 只收窄现有权限。每棵任务树共享 200 次工具预留、400 次模型请求和六小时截止时间，重试不重置。token/cost 仅观测，不是硬额度。",
           toolSchema =
             toolObject
               [ ("key", stringParam "本回合内稳定的幂等键；同一工作重试必须复用。"),
                 ("objective", stringParam "自包含目标、约束和期望证据，不依赖整段聊天记录。"),
-                ("profile", enumParam ["research", "browser", "sandbox"] "research 默认只读；browser 或 sandbox 仅增加对应权限。"),
+                ("profile", enumParam ["research", "browser", "sandbox", "operations"] "research 默认只读；browser/sandbox 增加对应权限；operations 允许继承已授权的 maxops 管理操作。"),
                 ("context", stringParam "显式传给子任务的上下文，最多 60000 字符。"),
                 ("resources", stringArrayParam "可选的本会话 t#N:rM 结果句柄，最多 40 个；在 admission 时解析并冻结。")
               ]
@@ -70,19 +70,15 @@ taskToolsFor context =
                     let grants = taskGrants profile (toolCatalogGrants context)
                     if Nothing `elem` resolved
                       then pure (Left "某个输入句柄无效、超出会话或已清除边界")
-                      else
-                        if profile == Browser && not (Map.member "browser_navigate" grants)
-                          then pure (Left "当前权限没有 browser_navigate，不能启动 browser 任务")
-                          else
-                            if profile == Sandbox && not (Map.member "sandbox_exec" grants)
-                              then pure (Left "当前权限没有 sandbox_exec，不能启动 sandbox 任务")
-                              else do
-                                admitted <- startTask key objective profile (object ["context" .= explicitContext, "resources" .= Map.fromList (zip resources resolved)])
-                                case admitted of
-                                  Left failure -> pure (Left (admissionErrorText failure))
-                                  Right accepted -> do
-                                    if background then pure () else yieldFrontend ("已交给后台任务 " <> taskHandle accepted.taskId <> "，完成后会通知；现在可以继续问别的问题。")
-                                    pure (Right (toJSON accepted))
+                      else case lookup profile [(Browser, "browser_navigate"), (Sandbox, "sandbox_exec"), (Operations, "maxops_execute")] of
+                        Just required | not (Map.member required grants) -> pure (Left ("当前权限没有 " <> required <> "，不能启动 " <> profileName profile <> " 任务"))
+                        _ -> do
+                          admitted <- startTask key objective profile (object ["context" .= explicitContext, "resources" .= Map.fromList (zip resources resolved)])
+                          case admitted of
+                            Left failure -> pure (Left (admissionErrorText failure))
+                            Right accepted -> do
+                              if background then pure () else yieldFrontend ("已交给后台任务 " <> taskHandle accepted.taskId <> "，完成后会通知；现在可以继续问别的问题。")
+                              pure (Right (toJSON accepted))
               _ -> pure (Left "缺少持久化回合、profile 无效或输入过大")
         }
     controlTool operation =
@@ -125,7 +121,7 @@ taskToolsFor context =
     progressTool =
       Tool
         "task_progress"
-        "记录持久化进度；重复状态去重，待发布进度合并。只交给父任务或协调前台，不直接发群。"
+        "记录持久化进度；重复状态去重，待评估进度合并。子任务交给父任务；根任务由会话前台判断是否需要转述，不保证每条进度都发群。"
         (toolObject [("summary", stringParam "当前进度、阻碍或正在验证的证据，最多 40000 字符。")] ["summary"])
         (parseArgs (withObject "task progress" (.: "summary")) (fmap (either (Left . renderExecutionFailure) (const (Right (object ["recorded" .= True])))) . reportProgress))
     requestFinishTool =

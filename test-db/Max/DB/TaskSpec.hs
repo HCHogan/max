@@ -1,4 +1,4 @@
-module Max.DB.TaskSpec (spec, seed, admit, claimOne, report, insertOccurrence) where
+module Max.DB.TaskSpec (spec, seed, admit, claimOne, report, insertOccurrence, draft) where
 
 import Control.Concurrent.Async (concurrently, mapConcurrently)
 import Control.Exception (bracket_)
@@ -28,6 +28,7 @@ import Max.DB.Monitor.Occurrence (OccurrenceDraft (..), recordOccurrence)
 import Max.DB.Task
 import Max.DB.Task.Overview qualified as WorkQuery
 import Max.DB.Task.Query qualified as TaskQuery
+import Max.DB.Task.Progress (recordProgressDecision)
 import Max.DB.Task.Record (databaseNow)
 import Max.Effects.MonitorControl qualified as MonitorCapability
 import Max.Effects.MonitorQuery qualified as MonitorQueryCapability
@@ -46,6 +47,7 @@ import Max.Task.Admission qualified as Admission
 import Max.Task.Execution (ExecutionFailure (..))
 import Max.Task.Overview qualified as WorkView
 import Max.Task.Policy (frontendDeadlineSeconds)
+import Max.Task.Progress (ProgressDecision (PublishProgress))
 import Max.Task.Query qualified as QueryView
 import Max.Task.State (FailureKind (..), TaskControlError (TaskCallerFenced, TaskNotFound), TaskOperation (Cancel, Steer))
 import Max.Task.State qualified as TaskState
@@ -287,6 +289,26 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
   it "requires a bound execution before accepting a report" $ do
     rejected <- withDb pool . ExecutionCapability.runTaskExecution Nothing $ ExecutionCapability.reportProgress "no owner"
     rejected `shouldBe` Left ExecutionContextMissing
+
+  it "persists an operations profile with only the caller's existing maxops management grant" $ do
+    (turn, message, actor) <- seed pool 900 1
+    let grants = Map.fromList [("maxops_query", "query-grant"), ("maxops_execute", "management-grant"), ("sandbox_exec", "sandbox-grant")]
+        scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor grants False
+    admitted <- withDb pool . ControlCapability.runTaskControl scope $
+      ControlCapability.startTask "fleet-operation" "diagnose and verify" Operations (object [])
+    case admitted of
+      Right (receipt :: Admission.TaskAdmissionReceipt) -> do
+        receipt.grants `shouldBe` Map.delete "sandbox_exec" grants
+        rows <- withDb pool $ query "SELECT profile FROM durable_tasks WHERE task_id=?" (Only receipt.taskId)
+        rows `shouldBe` [Only ("operations" :: Text)]
+      Left failure -> expectationFailure (show failure)
+
+  it "prevents a research parent from manufacturing management authority through an operations child" $ do
+    source@(_, message, actor) <- seed pool 900 1
+    _ <- admit pool source "research-parent"
+    parent <- claimOne pool
+    rejected <- withDb pool (admitTaskReceipt parent message actor "forged-operation" "restart" Operations (object []) (Map.singleton "maxops_execute" "invented"))
+    rejected `shouldBe` Left AdmissionWidenedAuthority
 
   it "enforces the profile grant ceiling at task admission even without a parent" $ do
     (turn, message, actor) <- seed pool 900 1
@@ -900,6 +922,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     [notification] <- withDb pool admitTaskNotification
     Just frontend <- withDb pool (taskTurnRef notification)
     withDb pool (claimFrontend frontend) `shouldReturn` True
+    withDb pool (recordProgressDecision notification 1 (PublishProgress "task report" "useful progress")) `shouldReturn` True
     void $ withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
     rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)

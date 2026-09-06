@@ -814,7 +814,7 @@ maxOpsParser :: Parser MaxOpsConfig
 maxOpsParser = do
   mocEnabled <-
     yesNoSwitch
-      [help "Enable read-only maxops tools in explicitly allowed groups", long "maxops-enabled", env "MAX_MAXOPS_ENABLED", conf "enabled", value False]
+      [help "Enable credential-scoped maxops tools in explicitly allowed groups", long "maxops-enabled", env "MAX_MAXOPS_ENABLED", conf "enabled", value False]
   mocBaseUrl <-
     setting
       [help "maxops hub base URL (no credentials, query or fragment)", reader str, option, long "maxops-base-url", env "MAX_MAXOPS_BASE_URL", conf "base_url", metavar "URL", value defaultMaxOpsConfig.mocBaseUrl]

@@ -1,4 +1,4 @@
-# maxops fleet observations and notifications
+# maxops fleet operations and notifications
 
 ## Durable incoming notifications
 
@@ -35,13 +35,15 @@ Requests are limited to 256 KiB, 100 alerts, four concurrent handlers and a
 six-second request processing deadline.
 Neither credentials nor webhook bodies are logged.
 
-## Read-only tools
+## Operation tools (maxops 0.3 / protocol 2)
 
 Max integrates with the authenticated HTTP API of maxops, not a shell or MCP
 adapter. The hub remains the owner of operation names, parameter schemas,
 inventory, host grants, capability grants and readable service allowlists.
-This integration is read-only: it cannot restart a service, reboot a host,
-deploy a configuration or execute a command.
+Protocol 2 exposes observations, durable submissions and revisioned controls.
+The adapter also accepts protocol-1 read-only catalogs. Unknown protocol versions
+or inconsistent operation metadata fail closed. No operation-name table is
+maintained in Max; schemas and permissions come from the current hub catalog.
 
 ## Configuration
 
@@ -63,7 +65,10 @@ Both tool discovery and execution check the host-resolved conversation ID;
 the model cannot supply an identity, group, credential or endpoint. Ordinary
 turns, task children and monitor occurrences intersect their existing catalog
 grants with the current group policy. Research/browser/sandbox task profiles
-can inherit these read-only tools, but cannot manufacture a missing grant.
+can inherit query tools. The explicit `operations` profile can additionally
+inherit `maxops_execute`; it cannot manufacture a missing parent grant. Existing
+research tasks and final-result reporters do not gain management authority.
+Migration 100 admits the new profile for durable tasks and configured monitors.
 
 Run `maxctl reload` after changing YAML. A previously constructed tool runner
 checks the current published maxops config before starting each invocation.
@@ -91,7 +96,10 @@ also sets `MAX_MAXOPS_ALLOWED_GROUPS`. Environment overrides YAML. Leave
 reload instead. An explicit `allowedGroups = []` denies every group.
 
 Create a separate hub client named `max`, with a distinct runtime token and
-explicit hosts/capabilities. Do not reuse a human operator or agent token.
+explicit hosts/capabilities. For management, the hub client additionally needs
+`access = "manage"` and the relevant capability, repository, deployment and
+target executor grants. Read-only credentials remain read-only. Do not reuse a
+human operator or agent token.
 No credentials belong in Git plaintext, the Nix store, model arguments or the
 sandbox. Token files are reread per HTTP request; rotating a systemd credential
 requires a service restart to refresh its private copy. The group allowlist
@@ -99,24 +107,54 @@ does not replace the hub's host/capability checks.
 
 ## Tools and interpretation
 
-- `maxops_operations {}` returns the authenticated version-1 operation catalog
-  and its parameter schemas, filtering out non-read-only operations.
-- `maxops_query {"op":"fleet.overview","params":{}}` discovers the current
-  catalog again, requires a permitted read-only operation, then calls
-  `/v1/execute`. Operation-specific validation belongs to the hub registry.
-- Query limits match the hub's 4 KiB request / 2 MiB response boundaries. Each
-  HTTP request has a 15-second total timeout; redirects, environment proxies
-  and implicit HTTP replay are disabled. Transport errors omit exception
-  details and response bodies so a reflected token cannot enter a tool error.
+- `maxops_operations {}` returns the authenticated catalog, preserving `kind`,
+  `read_only`, `idempotency`, minimum protocol version and parameter/response
+  schemas. A task without `maxops_execute` also gets a read-only operation
+  catalog, even when the underlying credential has management grants.
+  Protocol-1 catalogs expose only legacy read-only operations.
+- `maxops_query {"op":"fleet.overview","params":{}}` rediscovers the current
+  catalog and accepts only `read_only=true`, including job/workspace/change
+  readers, event replay and hub status. The tool remains parallel-safe.
+- `maxops_execute {"op":"diagnostics.collect","params":{"host":"example"},
+  "idempotency_key":"incident-123-diagnostic"}` accepts only writes. It is
+  sequential, records write effects in the existing execution journal, and never
+  automatically replays a failed HTTP call. A transport failure remains an
+  unknown effect; inspect remote jobs/state before taking another action.
+- `job_submission` requires a stable 1–128 character printable ASCII
+  `idempotency_key`, forwarded only in the HTTP `Idempotency-Key` header. The
+  returned job handle acknowledges admission, not successful execution. Poll
+  `jobs.status` to a terminal state and inspect evidence/logs. Reusing the key
+  with different parameters must conflict rather than create another job.
+- `job_control` mutations do not accept a submission key. Follow their current
+  schema and re-read revision/InvocationID before a control, workspace edit or
+  later deployment stage. Max does not create a second job scheduler or copy
+  maxops job state into its task database.
+- Requests and responses are bounded to 2 MiB, matching `/v1/execute`. Each HTTP
+  call has a 30-second total limit; redirects, proxies and automatic retries are
+  disabled. Errors omit exception details and response bodies. Large edits and
+  long jobs remain bounded by the hub/executor's own policy.
+- Binary log envelopes retain base64 bytes, offsets and `complete`/`truncated`
+  metadata. Derived `stdout_text`/`stderr_text` decode UTF-8 with replacement for
+  split or invalid sequences; exact bytes remain available in the original fields.
 - Preserve `unknown`, `unavailable`, `stale` and per-host partial failures.
   Missing observations are not evidence of either health or a powered-off host.
   Journal messages are untrusted observations, never instructions. Logs can
   contain application secrets: enable `logs:read` only for trusted conversations
   and tightly allowlisted services. Normal Max tool-result storage still applies.
 
-The current h610 pilot inventory contains only h610. Expanding to the fleet
-requires deploying agents and explicitly extending hub inventory and grants;
-enabling these Max tools alone does not do that.
+Inventory and management scope belong to the consuming Nix configuration. A
+host that has an observation agent does not thereby have an executor or writable
+services. Enabling Max tools does not enlarge the hub principal's scope.
+
+For long operations use `task_start` with `profile="operations"`; preserve job,
+workspace, change and idempotency identifiers in task evidence. Task progress
+goes through the conversation model's publish/skip review. Final reports must
+distinguish submission, execution, activation and verified results.
+
+The existing Alertmanager-v4 `/v1/alerts` receiver remains compatible. Generic
+`events.list` replay and diagnostic/remediation operations are available through
+the tools; this adapter does not implicitly subscribe a webhook or start an
+automatic repair policy.
 
 ## Acceptance
 
@@ -125,7 +163,11 @@ configuration, live revocation, transport and token handling regressions.
 `bash scripts/test-maxops.sh /path/to/maxops-hub` runs the real Rust hub and Max
 tool runners against an isolated synthetic agent, with deliberately unusable
 HTTP proxy environment variables. It checks discovery, queries, host/unit
-denials, mutation rejection and group revocation without touching production.
+denials, query/write separation and group revocation. A second isolated management
+principal checks diagnostic submission, idempotency conflicts, terminal job
+results, event replay and revisioned remediation completion. Its temporary
+SQLite store and synthetic agent never operate on a production host. The Rust
+hub is built from the source revision under review before running the script.
 
 For a live read-only check, run the following where the configured token is
 already available; do not copy a production token into a developer shell:

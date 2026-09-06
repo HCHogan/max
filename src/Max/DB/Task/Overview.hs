@@ -47,7 +47,7 @@ readWorkOverview = withReadSnapshot $ do
       \ calls_reserved,max_calls,rounds_reserved,max_rounds,deadline,retry_count,next_attempt_at,last_error,\
       \ (SELECT body->>'summary' FROM task_progress WHERE task_id=work.task_id AND revision=work.revision),\
       \ (SELECT count(*) FROM task_notifications WHERE task_id=work.task_id AND revision=work.revision AND attempt=work.attempt\
-      \ AND superseded_at IS NULL AND delivered_at IS NULL AND attempts>=15),left(result::text,10000)\
+      \ AND superseded_at IS NULL AND delivered_at IS NULL AND review_decision->>'action' IS DISTINCT FROM 'skip' AND attempts>=15),left(result::text,10000)\
       \ FROM durable_tasks work JOIN conversations USING(conversation_id) ORDER BY task_id DESC LIMIT 500"
       ()
   monitors <-

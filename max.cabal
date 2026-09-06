@@ -143,6 +143,7 @@ library
         Max.ConversationScope
         Max.MCP.Client
         Max.MaxOps.Client
+        Max.MaxOps.Protocol
         Max.MaxOps.Notifications
         Max.MaxOps.Types
         Max.DB.Calls
@@ -174,6 +175,8 @@ library
         Max.DB.Task.Authorization
         Max.DB.Task.Admission
         Max.DB.Task.Reporting
+        Max.DB.Task.Frontend
+        Max.DB.Task.Progress
         Max.DB.Task.Settlement
         Max.DB.Task.Control
         Max.DB.Task.Scheduling
@@ -289,6 +292,8 @@ library
         Max.Effects.MonitorQuery
         Max.Effects.MonitorControl
         Max.Task.Policy
+        Max.Task.Progress
+        Max.Task.ProgressReview
         Max.Task.Types
         Max.Task.Admission
         Max.Task.Execution
@@ -568,6 +573,7 @@ test-suite max-test
         Max.SkillsSpec
         Max.Agent.FailureSpec
         Max.Task.PolicySpec
+        Max.Task.ProgressSpec
         Max.Task.StateSpec
         Max.Monitor.PolicySpec
         Max.TasksSpec
@@ -659,6 +665,7 @@ test-suite max-test-db
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
         Max.DB.TaskSpec
+        Max.DB.ProgressSpec
         Max.DB.BrowserSpec
         Max.DB.QQBackfillSpec
         Max.PromptIntegrationSpec

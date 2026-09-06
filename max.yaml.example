@@ -265,7 +265,8 @@ llm:
 #   max_results: 5
 #   timeout_seconds: 30
 
-# Read-only fleet observations through maxops. Disabled by default; an empty
+# Fleet queries and management through maxops's credential-scoped registry.
+# Management requires explicit hub grants. Disabled by default; an empty
 # allowed_groups denies everyone (including owners and private chats).
 # Use a dedicated hub client token in an owner-only runtime file, never inline.
 # Changes support maxctl reload; removal also fences tools in existing turns.

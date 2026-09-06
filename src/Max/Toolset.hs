@@ -55,6 +55,7 @@ import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.File.ToolRuntime (fileToolsWithDatabase)
 import Max.HttpRuntime (HttpRuntime)
 import Max.MaxOps.Types (maxOpsAllowed)
+import Max.MaxOps.Protocol (CatalogAccess (..))
 import Max.Media.ToolRuntime (imageToolsWithDatabase, stickerToolsWithDatabase, videoToolsWithDatabase)
 import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
 import Max.Monitor.ToolRuntime (monitorToolsWithDatabase, reminderToolsWithDatabase)
@@ -141,6 +142,7 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
         <> [t | toolStickers dc && dispatchEnv.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
         <> maybe [] (searchToolsFor runtime) dispatchEnv.beSearch
         <> maxOpsToolsFor runtime dispatchEnv.beMaxOps ((.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore) (toolGroupId dc)
+          (if "maxops_execute" `Set.member` allowedRefs then ManagementCatalog else ReadOnlyCatalog)
         <> [t | toolMultimodal dc, t <- browserToolsFor dc dispatchEnv.beBrowsers dispatchEnv.beBrowserProxy]
         <> [t | toolMultimodal dc, t <- videoToolsWithDatabase dc]
 
@@ -281,6 +283,7 @@ toolInventory =
     gated SearchOnly (readTool "web_search" ["network.search"] [CurrentConversation]),
     gated MaxOpsOnly (readTool "maxops_operations" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
     gated MaxOpsOnly (readTool "maxops_query" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
+    gated MaxOpsOnly (writeTool "maxops_execute" ["fleet.management"] [CurrentConversation, ProcessResource "maxops"]),
     gated MultimodalOnly (browserTool "browser_navigate"),
     gated MultimodalOnly (browserTool "view_zhihu"),
     gated MultimodalOnly (browserTool "browser_snapshot"),

@@ -260,7 +260,7 @@ in
     };
 
     maxops = {
-      enable = lib.mkEnableOption "read-only maxops fleet tools";
+      enable = lib.mkEnableOption "maxops fleet tools scoped by the hub principal's capabilities";
       baseUrl = lib.mkOption {
         type = lib.types.str;
         default = "http://127.0.0.1:9721";

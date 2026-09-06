@@ -26,6 +26,8 @@ for migration in migrations/*.sql; do
       continue
     elif [[ "$name" == "097_endpoint_known_identities.sql" ]]; then
       psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/endpoint-identities-upgrade.sql
+    elif [[ "$name" == "099_progress_review.sql" ]]; then
+      psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/progress-review-upgrade.sql
     else
       psql -X -v ON_ERROR_STOP=1 -1 -d "$database" -f "$migration" >/dev/null
     fi

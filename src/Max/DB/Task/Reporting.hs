@@ -52,12 +52,15 @@ submitProgress turn summary
       if previous == [(task.revision, task.attempt, progress)]
         then pure True
         else do
-          void $
-            execute
+          versions <-
+            query
               "INSERT INTO task_progress(task_id,revision,attempt,body) VALUES(?,?,?,?::jsonb)\
               \ ON CONFLICT(task_id) DO UPDATE SET revision=excluded.revision,attempt=excluded.attempt,\
-              \ version=task_progress.version+1,body=excluded.body,updated_at=now()"
+              \ version=task_progress.version+1,body=excluded.body,updated_at=now() RETURNING version"
               (task.taskId, task.revision, task.attempt, jsonText progress)
+          version <- case versions :: [Only Int64] of
+            [Only value] -> pure value
+            _ -> error "progress upsert did not return its version"
           case task.parent of
             Just parent ->
               void $
@@ -65,22 +68,31 @@ submitProgress turn summary
                   "INSERT INTO task_events(task_id,revision,kind,body) SELECT task_id,revision,'child_progress',?\
                   \ FROM durable_tasks WHERE task_id=? AND revision=? AND status IN ('queued','running','waiting','retrying')"
                   (T.take 60000 (taskHandle task.taskId <> ": " <> jsonText progress), parent, task.parentRevision)
-            Nothing -> routeProgress task progress
+            Nothing -> routeProgress task version progress
           pure True
 
-routeProgress :: (WithConnection :> es, IOE :> es) => TaskRecord -> Value -> Eff es ()
-routeProgress task progress = do
+routeProgress :: (WithConnection :> es, IOE :> es) => TaskRecord -> Int64 -> Value -> Eff es ()
+routeProgress task version progress = do
+  -- Claimed snapshots are immutable. A newer version revokes an in-flight
+  -- review; its lease watcher cancels the model and the output guard rejects
+  -- any response that raced the update.
+  void $ execute
+    "UPDATE task_notifications SET superseded_at=clock_timestamp() WHERE task_id=? AND kind='progress'\
+    \ AND turn_id IS NOT NULL AND delivered_at IS NULL AND superseded_at IS NULL\
+    \ AND review_decision->>'action' IS DISTINCT FROM 'skip'"
+    (Only task.taskId)
   pending <-
     query
       "SELECT notification_id FROM task_notifications WHERE task_id=? AND kind='progress' AND turn_id IS NULL\
-      \ AND delivered_at IS NULL AND superseded_at IS NULL ORDER BY notification_id DESC LIMIT 1 FOR UPDATE"
+      \ AND delivered_at IS NULL AND superseded_at IS NULL AND review_decision->>'action' IS DISTINCT FROM 'skip'\
+      \ ORDER BY notification_id DESC LIMIT 1 FOR UPDATE"
       (Only task.taskId)
   case pending :: [Only Int64] of
     [Only notification] ->
       void $
         execute
-          "UPDATE task_notifications SET body=?::jsonb,revision=?,attempt=? WHERE notification_id=?"
-          (jsonText progress, task.revision, task.attempt, notification)
+          "UPDATE task_notifications SET body=?::jsonb,revision=?,attempt=?,progress_version=? WHERE notification_id=?"
+          (jsonText progress, task.revision, task.attempt, version, notification)
     _ -> do
       previous <- query "SELECT max(created_at) FROM task_notifications WHERE task_id=? AND kind='progress'" (Only task.taskId)
       now <- databaseNow
@@ -89,8 +101,8 @@ routeProgress task progress = do
             _ -> now
       void $
         execute
-          "INSERT INTO task_notifications(task_id,revision,attempt,body,kind,next_attempt_at) VALUES(?,?,?,?::jsonb,'progress',?)"
-          (task.taskId, task.revision, task.attempt, jsonText progress, wake)
+          "INSERT INTO task_notifications(task_id,revision,attempt,body,kind,next_attempt_at,progress_version) VALUES(?,?,?,?::jsonb,'progress',?,?)"
+          (task.taskId, task.revision, task.attempt, jsonText progress, wake, version)
 
 submitRequest :: (WithConnection :> es, IOE :> es) => AgentTurnId -> RequestDisposition -> Text -> Eff es Bool
 submitRequest turn disposition reply
