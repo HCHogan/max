@@ -146,10 +146,10 @@ main = do
                       { rrEmbeddingClient = newEmbedClient httpRuntime <$> candidate.embedding,
                         rrForeignEdges = wechatHookEdges,
                         rrDeliveryTransports =
-                          [oneBotDeliveryTransport PlatformQQ qqEdge]
+                          [oneBotDeliveryTransport httpRuntime PlatformQQ qqEdge]
                             <> [matrixDeliveryTransport httpRuntime matrixCfg | matrixCfg <- maybeToList candidate.matrix]
                             <> [iMessageDeliveryTransport httpRuntime iMessageCfg | iMessageCfg <- maybeToList candidate.imessage]
-                            <> [ oneBotDeliveryTransport PlatformWeChatHook backend
+                            <> [ oneBotDeliveryTransport httpRuntime PlatformWeChatHook backend
                                | backend <- wechatHookEdges
                                ]
                       }

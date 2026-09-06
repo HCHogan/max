@@ -41,13 +41,14 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask, local)
 import Max.AgentEvent (AgentEvent (..), AgentOutputContext (..), handleAgentEvent)
-import Max.Browser.Runtime (releaseBrowserTurn, renewBrowserTurn)
 import Max.Browser.Profile (browserCommandOnce)
+import Max.Browser.Runtime (releaseBrowserTurn, renewBrowserTurn)
 import Max.Command.Dispatcher (DispatchResult (..))
 import Max.Command.Dispatcher qualified as CmdDispatch
 import Max.Command.Parser (parseCommand)
 import Max.Command.Permission (PermTier (..), requiredCapability, tierSatisfied)
 import Max.Command.Types (Command (..))
+import Max.Concurrent.Lease (renewUntilLost)
 import Max.Context.Types (ContinuationInput (..), digestOnlyContinuation, noContinuation)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.AgentTurn
@@ -90,7 +91,7 @@ import Max.Dispatch (DispatchMessage (..), dispatchMentionsSelf, dispatchTextWit
 import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), LLM)
-import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded, wasDelivered)
+import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded, wasPublished)
 import Max.Effects.PlatformApi (PlatformApi, callQQActionOnGeneration, qqGenerationIsCurrent, sendAction)
 import Max.Effects.Tools (ToolDefinition (..), ToolRef (..))
 import Max.Env (BotEnv (..), applyRuntimeSnapshot)
@@ -137,7 +138,7 @@ import Max.Platform.Store
   )
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId, ReactionAction (..), noAdvertisedCaps)
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutputContinuation, renderHistoryLine)
-import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
+import Max.ReplySend (ReplyPublication (..), ReplyPublicationException (..), ReplyTarget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), GroupMeta (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.RuntimeConfig
   ( RuntimeSnapshot (..),
@@ -149,7 +150,7 @@ import Max.RuntimeConfig
 import Max.Session (Session (..), loadSession, readSession)
 import Max.Shutdown (enterDispatchWith, leaveDispatchWith)
 import Max.Skills (Skill (..), skillsForGroup)
-import Max.Task.Policy (frontendToolLimit, frontendDeadlineSeconds, retryableFailure)
+import Max.Task.Policy (frontendDeadlineSeconds, frontendToolLimit, retryableFailure)
 import Max.Task.Types (TaskProfile (Research), parseTaskHandle, taskGrants, taskHandle)
 import Max.Tasks
   ( Note (..),
@@ -164,7 +165,7 @@ import Max.Tasks
     setTurnPhase,
     turnRuntimeOutputContext,
   )
-import Max.ToolContext ( TurnCapabilities (..), TurnIdentity (..), mkToolContextAt)
+import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContextAt)
 import Max.Toolset (toolDefinitionsFor)
 import Max.Turn.Continuity (currentPromptMajor, renderContinuationDigest, renderReplayDelta, toolCatalogFingerprint)
 import Max.Turn.Replay
@@ -924,11 +925,15 @@ routeTaskInput message = do
         Just identifier <- parseTaskHandle handle ->
           mutate identifier operation Nothing (if null note && operation == "cancel" then "cancelled by user" else T.unwords note)
     "!task" : _ -> replyText message "用法：!task list | status task#N | steer task#N 内容 | cancel task#N [原因] | replace task#N revision 新目标" >> pure True
-    command : handle : note | command `elem` ["!feedback", "!fb"], Just identifier <- parseTaskHandle handle ->
-      mutate identifier "steer" Nothing (T.unwords note)
-    command : note | command `elem` ["!feedback", "!fb"], not (null note) -> do
-      target <- maybe (pure Nothing) (DurableTask.taskForReply message.groupId) message.replyTo
-      maybe (pure False) (\identifier -> mutate identifier "steer" Nothing (T.unwords note)) target
+    command : handle : note
+      | command `elem` ["!feedback", "!fb"],
+        Just identifier <- parseTaskHandle handle ->
+          mutate identifier "steer" Nothing (T.unwords note)
+    command : note
+      | command `elem` ["!feedback", "!fb"],
+        not (null note) -> do
+          target <- maybe (pure Nothing) (DurableTask.taskForReply message.groupId) message.replyTo
+          maybe (pure False) (\identifier -> mutate identifier "steer" Nothing (T.unwords note)) target
     handle : note | Just identifier <- parseTaskHandle handle -> mutate identifier "steer" Nothing (T.unwords note)
     _ | "!" `T.isPrefixOf` body -> pure False
     _ -> do
@@ -1196,7 +1201,7 @@ dispatchCommand mIntent gm body = localDomain "cmd" $ do
               orTurnOutput = Nothing,
               orMonitorFireId = Nothing
             }
-      if wasDelivered outcome
+      if wasPublished outcome
         then queueQQReaction gm.groupId gm.canonicalId ackFaceId True
         else do
           logInfo "cmd: private delivery failed, group fallback" $
@@ -1431,7 +1436,6 @@ taskProgressEvent identifier = \case
   AgentToolDebug _ -> pure ()
   AgentFinalStreamText _ -> pure False
 
-
 -- The 'TriggerOrigin' says what woke the bot — see
 -- 'Max.Prompt.PromptInputs.origin'.
 --
@@ -1440,6 +1444,7 @@ taskProgressEvent identifier = \case
 -- it is also where graceful shutdown gates: once draining,
 -- new triggers are logged and dropped rather than started.  See
 -- "Max.Shutdown".
+
 -- | Who is responsible for the dispatch row once 'onDispatchMessage' returns.
 --
 -- Only the LLM path hands it on: everything else — a command, a pong, a
@@ -1709,12 +1714,16 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
                 when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
                   queueQQReaction gm.groupId gm.canonicalId failureFaceId True
               )
-              `catch` \TaskCancelled ->
-                -- User-initiated !kill — quieter log, not an error.
+              `catch` \(ReplyPublicationException err) ->
                 do
-                  finishAgentTurn durable TurnAborted 0 (Just "cancelled by !kill") Nothing
-                  logInfo "llm dispatch cancelled" $
-                    object ["group_id" .= gidRaw]
+                  finishAgentTurn durable TurnFailed 0 (Just ("reply publication failed: " <> err)) Nothing
+                  logAttention "stream publication failed; committed prefix retained" $ object ["error" .= err]
+                  `catch` \TaskCancelled ->
+                    -- User-initiated !kill — quieter log, not an error.
+                    do
+                      finishAgentTurn durable TurnAborted 0 (Just "cancelled by !kill") Nothing
+                      logInfo "llm dispatch cancelled" $
+                        object ["group_id" .= gidRaw]
         )
           `finally` do
             -- Any asynchronous exit other than !kill, including forced
@@ -1815,8 +1824,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
       Nothing -> act
       Just o -> withAsync (renewDispatchLeaseLoop o) (const act)
 
-    renewDispatchLeaseLoop o = do
-      threadDelay (max 1 (floor dispatchLeaseSeconds `div` 3) * 1_000_000)
+    renewDispatchLeaseLoop o = renewUntilLost (max 1 (floor dispatchLeaseSeconds `div` 3) * 1_000_000) $ do
       -- A blip reaching the database is not evidence the row was taken away,
       -- so it costs a renewal and not the lease.
       held <-
@@ -1825,14 +1833,13 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
             logAttention "dispatch lease renewal failed" $
               object ["error" .= T.pack (show (e :: SomeException))]
             pure True
-      if held
-        then renewDispatchLeaseLoop o
-        else
-          logAttention "dispatch lease lost while the turn was still running" $
-            object
-              [ "canonical_message_id" .= o.doMessage,
-                "worker" .= o.doWorker
-              ]
+      unless held $
+        logAttention "dispatch lease lost while the turn was still running" $
+          object
+            [ "canonical_message_id" .= o.doMessage,
+              "worker" .= o.doWorker
+            ]
+      pure held
 
     work outputCaps turn durable = do
       env :: BotEnv <- ask
@@ -1858,12 +1865,14 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
                 Just target -> resolveReplyTurn (conversationScopeFor gm.groupId) session.clearedAt target
               raced <-
                 race
-                  (withProcessingReaction outputCaps $ do
-                    kind <- DurableTask.notificationKind durable.atrTurnId
-                    if kind == Just "progress" then do
-                      delivered <- taskNoticeFallback turn durable
-                      unless delivered (finishAgentTurn durable TurnFailed 0 (Just "progress notification could not be recorded") Nothing)
-                      else dispatchOrdinary outputCaps turn durable env session (replyTarget >>= finishedTarget))
+                  ( withProcessingReaction outputCaps $ do
+                      kind <- DurableTask.notificationKind durable.atrTurnId
+                      if kind == Just "progress"
+                        then do
+                          delivered <- taskNoticeFallback turn durable
+                          unless delivered (finishAgentTurn durable TurnFailed 0 (Just "progress notification could not be recorded") Nothing)
+                        else dispatchOrdinary outputCaps turn durable env session (replyTarget >>= finishedTarget)
+                  )
                   (threadDelay (frontendDeadlineSeconds * 1_000_000))
               case raced of
                 Left () -> pure ()
@@ -1952,14 +1961,13 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
           archive <- captureTurnArchive durable session.model result
           finishAgentTurn durable (if isJust result.aborted then TurnFailed else TurnSucceeded) result.turnsUsed result.aborted archive
 
-    taskHeartbeat durable = do
-      threadDelay (10 * 1_000_000)
+    taskHeartbeat durable = renewUntilLost (10 * 1_000_000) $ do
       renewed <- DurableTask.renewTask durable.atrTurnId
       when renewed $ do
         env :: BotEnv <- ask
         renewBrowserTurn env.beBrowsers gm.groupId durable.atrTurnId
           `catchSync` \exception -> logAttention "browser lease refresh failed" (object ["error" .= T.pack (show (exception :: SomeException))])
-        taskHeartbeat durable
+      pure renewed
 
     taskNoticeFallback turn durable = do
       notification <- DurableTask.loadTaskNotification durable.atrTurnId
@@ -1980,7 +1988,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
                   orTurnOutput = link,
                   orMonitorFireId = Nothing
                 }
-          if wasDelivered recorded
+          if wasPublished recorded
             then finishAgentTurn durable TurnSucceeded 0 Nothing Nothing >> pure True
             else pure False
 
@@ -2112,13 +2120,9 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
       -- bounded together (see "Max.ReplySend").
       streamBudget <- liftIO (newTVarIO freshBudget)
       let output = AgentOutputContext target gm.canonicalId debugEff streamBudget
-      -- The front turn's ceiling, and issue #17's second half.  A fork child
-      -- races a total wall-clock budget it declared; a front turn cannot, both
-      -- because nobody declared one and because killing a turn for taking a
-      -- while is wrong when taking a while is the job.  What it races instead
-      -- is /silence/: 'awaitTurnSilence' only fires once this turn has stopped
-      -- changing phase, so honest multi-round work pushes its own deadline out
-      -- and only a turn wedged inside one round runs it down.
+      -- In addition to the activation's total deadline, detect a stalled
+      -- round. Healthy round transitions reset this silence watchdog; a tool
+      -- that never returns must still be cancelled before a round boundary.
       --
       -- Racing rather than a deadline checked at round boundaries, because the
       -- failure this exists for is a tool call that never returns — a boundary
@@ -2265,7 +2269,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
           -- split across two senders still gets one message ceiling and
           -- one image-dedupe set (see "Max.ReplySend").
           budget <- liftIO (readTVarIO streamBudget)
-          _ <-
+          publication <-
             sendAndPersistReply
               target {rtStickers = stickersEff}
               budget
@@ -2283,7 +2287,9 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
           -- settled capture later produces both chronological summaries and
           -- scoped memory proposals from the same exact source range.
           for_ env.beEpisodeScheduler $ \scheduler -> liftIO (armEpisode scheduler gm.groupId)
-          pure TurnSucceeded
+          pure $ case publication.failure of
+            Nothing -> TurnSucceeded
+            Just _ -> TurnFailed
 
     captureTurnArchive durable profile result = do
       captureTurnArchiveFields durable profile result.appended result.turnsUsed result.aborted

@@ -178,6 +178,15 @@ mediaSpec = describe "media lowering" $ do
                    LowerNote "image" NoteFolded (Just "unresolvable source")
                  ]
 
+  it "retains a fitting suffix after an oversized UTF-8 character" $ do
+    let out = lower baseEnv {caps = textOnlyCaps {maxTextBytes = Just 1}} (Body [NText "你a"])
+    flat out `shouldBe` [NText "a"]
+    out.notes `shouldSatisfy` (not . null)
+
+  it "emits no empty chunk when every text character exceeds the byte budget" $ do
+    let out = lower baseEnv {caps = textOnlyCaps {maxTextBytes = Just 1}} (Body [NText "你"])
+    out.chunks `shouldBe` []
+
   it "keeps the clickable URL when folding remote media, never a blob ref" $ do
     let out =
           lower

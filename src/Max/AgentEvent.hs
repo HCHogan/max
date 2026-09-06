@@ -30,14 +30,15 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
+import Effectful.Exception (throwIO)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
-import Max.MessageKind (MessageKind (KindDebug))
 import Max.Effects.Blob (Blob)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded)
 import Max.IR (Body (..), Node (NText))
+import Max.MessageKind (MessageKind (KindDebug))
 import Max.Platform.Types (CanonicalMessageId)
-import Max.ReplySend (ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
+import Max.ReplySend (ReplyPublication (..), ReplyPublicationException (..), ReplyTarget (..), SendBudget, canStream, freshBudget, sendAndPersistReply)
 import Max.Turn.Types (nextTurnOutputLink)
 
 -- | Debug facts emitted by the loop without deciding whether debug output is
@@ -87,9 +88,11 @@ handleAgentEvent ctx = \case
     if not (canStream budget)
       then pure False
       else do
-        budget' <- sendAndPersistReply ctx.aocReplyTarget budget body
-        liftIO (atomically (writeTVar ctx.aocStreamBudget budget'))
-        pure True
+        publication <- sendAndPersistReply ctx.aocReplyTarget budget body
+        liftIO (atomically (writeTVar ctx.aocStreamBudget publication.budget))
+        case publication.failure of
+          Nothing -> pure True
+          Just err -> throwIO (ReplyPublicationException err)
   where
     sendDebug :: Text -> Eff es ()
     sendDebug body = do

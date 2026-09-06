@@ -7,24 +7,17 @@
 -- outbox work performed afterwards, so no transport can expose a message that
 -- the conversation ledger forgot.
 --
--- The result distinguishes three states that callers must not conflate:
---
--- * 'SendFailed': canonical publication failed and no send is scheduled;
--- * 'SentUnrecorded': retained for test/legacy interpreters only;
--- * 'SentRecorded': canonical message and endpoint jobs are committed.
---
--- In particular, retrying 'SentUnrecorded' would duplicate a message the user
--- has already seen.  The production interpreter logs that degraded state and
--- lets the dispatch continue, matching the existing reply-path policy.
+-- 'Published' acknowledges the canonical transaction, never physical delivery.
+-- Platform receipts belong to the durable delivery worker.
 module Max.Effects.Outbound
   ( Outbound,
     OutboundRequest (..),
     OutboundDeliveryScope (..),
-    SendOutcome (..),
+    PublicationResult (..),
     runOutbound,
     runOutboundWith,
     sendRecorded,
-    wasDelivered,
+    wasPublished,
   )
 where
 
@@ -43,7 +36,7 @@ import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOut
 import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Turn.Types (TurnOutputLink)
 import Max.Util (trySync)
-import OneBot.Types (GroupId (..), MessageId (..))
+import OneBot.Types (GroupId (..))
 
 -- | Everything fixed before one visible message is sent.
 data OutboundRequest = OutboundRequest
@@ -72,29 +65,25 @@ data OutboundDeliveryScope
   | DeliverSourceEndpoint !CanonicalMessageId
   deriving stock (Show, Eq)
 
--- | What became externally observable after a send attempt.
-data SendOutcome
-  = SendFailed !Text
-  | -- | The user saw the message, but the transcript did not get a row.  The
-    -- id is absent when the platform returned success without one.
-    SentUnrecorded !(Maybe MessageId) !Text
-  | SentRecorded !CanonicalMessageId
+-- | The canonical publication commit point, independent of platform delivery.
+data PublicationResult
+  = PublicationFailed !Text
+  | Published !CanonicalMessageId
   deriving stock (Show, Eq)
 
-wasDelivered :: SendOutcome -> Bool
-wasDelivered SendFailed {} = False
-wasDelivered SentUnrecorded {} = True
-wasDelivered SentRecorded {} = True
+wasPublished :: PublicationResult -> Bool
+wasPublished PublicationFailed {} = False
+wasPublished Published {} = True
 
 data Outbound :: Effect where
-  SendRecorded :: OutboundRequest -> Outbound m SendOutcome
+  SendRecorded :: OutboundRequest -> Outbound m PublicationResult
 
 type instance DispatchOf Outbound = Dynamic
 
 -- | Production interpreter: publish the canonical bot message and every
 -- endpoint delivery before any transport worker can send it.  A platform
 -- outage therefore leaves durable backlog instead of an unrecorded visible
--- message; 'SentRecorded' now means the canonical send intent is committed.
+-- message; 'Published' now means the canonical send intent is committed.
 runOutbound ::
   forall es a.
   (WithConnection :> es, Log :> es, IOE :> es) =>
@@ -102,7 +91,7 @@ runOutbound ::
   Eff es a
 runOutbound = runOutboundWith deliver
   where
-    deliver :: OutboundRequest -> Eff es SendOutcome
+    deliver :: OutboundRequest -> Eff es PublicationResult
     deliver req = do
       let GroupId group = req.orGroupId
           draft =
@@ -119,9 +108,9 @@ runOutbound = runOutboundWith deliver
               }
       trySync (enqueueOutbound draft) >>= \case
         Left e -> failed req ("canonical publish failed: " <> T.pack (show (e :: SomeException)))
-        Right queued -> pure (SentRecorded queued.canonicalMessageId)
+        Right queued -> pure (Published queued.canonicalMessageId)
 
-    failed :: OutboundRequest -> Text -> Eff es SendOutcome
+    failed :: OutboundRequest -> Text -> Eff es PublicationResult
     failed req reason = do
       logAttention "outbound: send failed" $
         object
@@ -129,18 +118,18 @@ runOutbound = runOutboundWith deliver
             "kind" .= T.pack (show req.orKind),
             "error" .= reason
           ]
-      pure (SendFailed reason)
+      pure (PublicationFailed reason)
 
 -- | Install any request handler as the interpreter.  Besides keeping
 -- 'runOutbound' small, this is the in-memory seam for Handler/Agent tests: a
 -- fake can capture requests and choose any delivery state without PlatformApi or a
 -- database.
 runOutboundWith ::
-  (OutboundRequest -> Eff es SendOutcome) ->
+  (OutboundRequest -> Eff es PublicationResult) ->
   Eff (Outbound : es) a ->
   Eff es a
 runOutboundWith f = interpret $ \_ -> \case
   SendRecorded req -> f req
 
-sendRecorded :: (Outbound :> es) => OutboundRequest -> Eff es SendOutcome
+sendRecorded :: (Outbound :> es) => OutboundRequest -> Eff es PublicationResult
 sendRecorded = send . SendRecorded

@@ -153,6 +153,7 @@ qqCapabilities =
       emote = TierNative,
       image = TierNative,
       sticker = TierNative,
+      file = TierNative,
       card = TierNative,
       reaction = True,
       maxTextBytes = Just 12000,
@@ -245,6 +246,7 @@ qqSegmentNodes segment = case segment of
     ]
   where
     keepRaw = Just (toJSON segment)
+
 forwardIdFrom :: Value -> Maybe Text
 forwardIdFrom (Object payload) = case KeyMap.lookup (Key.fromText "id") payload of
   Just (String forwardId) | not (T.null forwardId) -> Just forwardId

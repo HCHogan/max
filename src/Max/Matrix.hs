@@ -32,8 +32,8 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (Pair, Parser, parseEither, parseMaybe)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
-import Data.Int (Int64)
 import Data.Either (fromRight)
+import Data.Int (Int64)
 import Data.List (findIndex)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
@@ -63,15 +63,15 @@ import Max.HttpRuntime
 import Max.IR
 import Max.IR.Digest (digest)
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
+import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Delivery
-  ( DeliveryAttempt (..),
-    DeliveryOperation (..),
+  ( DeliveryOperation (..),
     DeliveryTransport (..),
     fanOutMediaChunks,
     loweredText,
     resolveDeliveryMedia,
   )
-import Max.MessageKind (MessageKind (..), renderMessageKind)
+import Max.Platform.Delivery.Parts
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -329,33 +329,28 @@ matrixDeliveryTransport :: HttpRuntime -> MatrixConfig -> DeliveryTransport
 matrixDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformMatrix,
-      deliver = \claim -> \case
-        DeliverMessage lowered -> sendChunks claim lowered
+      deliver = \journal claim -> \case
+        DeliverMessage lowered -> sendChunks journal claim lowered
         DeliverEdit target lowered -> sendEdit claim target lowered
         DeliverReaction target key action previous -> sendReaction claim target key action previous
         DeliverRedaction target -> sendRedaction claim "redact" target
     }
   where
-    sendChunks claim lowered = do
-      prepareAll (0 :: Int) (fanOutMediaChunks lowered.chunks) >>= \case
+    sendChunks journal claim lowered = do
+      let chunks = fanOutMediaChunks lowered.chunks
+      prepareParts (\index -> matrixChunkPayload runtime cfg (if index == 0 then lowered.replyNative else Nothing)) chunks >>= \case
         Left (MatrixContractFailure err) -> pure (AttemptPermanentlyFailed err)
         Left (MatrixMediaFailure err) -> pure (AttemptMediaFallback err)
-        Right payloads -> sendAll 0 Nothing payloads
-      where
-        prepareAll _ [] = pure (Right [])
-        prepareAll chunkIndex (chunk : rest) =
-          matrixChunkPayload runtime cfg (if chunkIndex == 0 then lowered.replyNative else Nothing) chunk >>= \case
-            Left err -> pure (Left err)
-            Right payload -> fmap (payload :) <$> prepareAll (chunkIndex + 1) rest
-
-        sendAll _ native [] = pure (AttemptConfirmed native)
-        sendAll chunkIndex native (payload : rest) =
-          sendMatrixDelivery runtime cfg claim chunkIndex payload >>= \case
-            Left err ->
-              pure $ case native of
-                Nothing -> AttemptRetryable err
-                Just _ -> AttemptOutcomeUnknown err
-            Right eventId -> sendAll (chunkIndex + 1) (native <|> Just eventId) rest
+        Right payloads -> runDeliveryParts
+          journal
+          IdempotentParts
+          AttemptConfirmed
+          [wireFingerprint (if i == 0 then lowered.replyNative else Nothing) chunk | (i, chunk) <- zip [0 :: Int ..] chunks]
+          payloads
+          $ \index payload ->
+            sendMatrixDelivery runtime cfg claim index payload >>= \case
+              Left err -> pure (AttemptRetryable err)
+              Right native -> pure (AttemptConfirmed (Just native))
 
     sendEdit claim target lowered = case lowered.chunks of
       [chunk] ->
@@ -470,7 +465,8 @@ matrixEditPayload (NativeEventId target) = \case
             [ "rel_type" .= ("m.replace" :: Text),
               "event_id" .= target
             ]
-     in Object . KeyMap.insert "m.new_content" (Object newContent)
+     in Object
+          . KeyMap.insert "m.new_content" (Object newContent)
           . KeyMap.insert "m.relates_to" relation
           . KeyMap.insert "body" (String fallbackBody)
           $ newContent
@@ -1052,7 +1048,6 @@ nonEmpty value
 
 matrixStreamKey :: Text
 matrixStreamKey = "sync"
-
 
 matrixHttpTimeoutMicros :: Int
 matrixHttpTimeoutMicros = 150_000_000

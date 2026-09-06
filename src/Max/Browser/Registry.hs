@@ -70,8 +70,8 @@ import Max.Browser.Error
     browserCallFailed,
     browserErrorFromMcp,
   )
-import Max.Browser.Lock (LockMap, newLockMap, tryWithKeyLock, withKeyLock)
 import Max.Browser.Vault (BrowserVault, newBrowserVault)
+import Max.Concurrent.Lock (LockMap, newLockMap, tryWithKeyLock, withKeyLock)
 import Max.HttpRuntime (HttpRuntime)
 import Max.MCP.Client
   ( McpClient,

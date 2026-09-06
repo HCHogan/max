@@ -59,6 +59,18 @@ spec = do
         media.resolved `shouldBe` [(first, ResolvedUrl "https://x/a.png")]
         media.notes `shouldBe` []
 
+    it "uses the next valid native slot after an unreadable blob" $
+      withTempDirectory "max-media-budget" $ \root -> do
+        result <- runEff . runBlob root $ do
+          ref <- putBlob "image"
+          let good = fromJust (mediaBlobRef (blobRefSha256 ref))
+              missing = fromJust (mediaBlobRef (T.replicate 64 "0"))
+          loadDeliveryMedia
+            textOnlyCaps {image = TierNative, maxNativeMedia = 1}
+            (Body [NMedia (Just missing) imageMeta, NMedia (Just good) imageMeta])
+        map snd result.resolved `shouldBe` [ResolvedBytes "image"]
+        length result.notes `shouldBe` 1
+
     it "loads content-addressed sources and verifies their declared size" $
       withTempDirectory "max-delivery-media-test" $ \root -> do
         media <- runEff . runBlob root $ do

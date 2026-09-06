@@ -50,7 +50,6 @@ module Max.Sandbox.Registry
 where
 
 import Control.Concurrent.STM
-import Control.Exception (bracket_)
 import Control.Monad (void, when)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Foldable (for_)
@@ -64,13 +63,14 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query, withTransaction)
+import Max.Concurrent.Lock (withLock)
 import Max.DB.Connection (DbPool, withConn)
 import Max.Sandbox.Docker
   ( DockerContainerStatus (..),
     DockerPresence (..),
     ExecResult (..),
-    inspectContainerStatus,
     inspectContainerPolicy,
+    inspectContainerStatus,
     inspectVolumePresence,
     listContainersByPrefix,
     listVolumesByPrefix,
@@ -337,9 +337,8 @@ execInSandbox reg gid sid packages cmd timeoutSecs = do
       case mEntry of
         Nothing -> pure (Left "sandbox not found")
         Just e ->
-          bracket_
-            (atomically $ takeTMVar e.seExecLock)
-            (atomically $ putTMVar e.seExecLock ())
+          withLock
+            e.seExecLock
             ( do
                 prepared <- runPreparePackages e.seImage packages timeoutSecs
                 case prepared of
@@ -385,9 +384,8 @@ readSandboxFile reg gid sid path maxBytes = do
   case mEntry of
     Nothing -> pure (Left "sandbox not found")
     Just e ->
-      bracket_
-        (atomically $ takeTMVar e.seExecLock)
-        (atomically $ putTMVar e.seExecLock ())
+      withLock
+        e.seExecLock
         (runRead e.seContainer path maxBytes)
 
 writeSandboxFile ::
@@ -402,9 +400,8 @@ writeSandboxFile reg gid sid path content = do
   case mEntry of
     Nothing -> pure (Left "sandbox not found")
     Just e ->
-      bracket_
-        (atomically $ takeTMVar e.seExecLock)
-        (atomically $ putTMVar e.seExecLock ())
+      withLock
+        e.seExecLock
         (runWrite e.seContainer path content)
 
 --------------------------------------------------------------------------------
@@ -441,10 +438,8 @@ destroyAllSandboxes reg = do
 -- unavailable; the durable row remains outcome-unknown for reconciliation.
 releaseSandbox :: SandboxRegistry -> SandboxEntry -> IO (Either Text ())
 releaseSandbox reg entry =
-  bracket_
-    (atomically $ takeTMVar entry.seExecLock)
-    (atomically $ putTMVar entry.seExecLock ())
-    $ do
+  withLock entry.seExecLock $
+    do
       for_ reg.srDbPool $ \pool -> markSandboxDestroying pool entry.seId
       cleaned <- cleanupSandbox entry
       atomically $ modifyTVar' reg.srEntries (Map.delete entry.seId)
@@ -636,9 +631,8 @@ destroyPersisted reg row = do
         case Map.lookup sid entries of
           Nothing -> action
           Just entry ->
-            bracket_
-              (atomically $ takeTMVar entry.seExecLock)
-              (atomically $ putTMVar entry.seExecLock ())
+            withLock
+              entry.seExecLock
               action
   case reg.srDbPool of
     Nothing -> pure False

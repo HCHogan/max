@@ -2,18 +2,18 @@ module Max.Effects.OutboundSpec (spec) where
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Effectful (liftIO, runEff)
-import Max.MessageKind (MessageKind (KindChat))
 import Max.Effects.Outbound
   ( OutboundDeliveryScope (..),
     OutboundRequest (..),
-    SendOutcome (..),
+    PublicationResult (..),
     runOutboundWith,
     sendRecorded,
-    wasDelivered,
+    wasPublished,
   )
 import Max.IR
+import Max.MessageKind (MessageKind (KindChat))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalIdentityId (..))
-import OneBot.Types (GroupId (..), MessageId (..))
+import OneBot.Types (GroupId (..))
 import Test.Hspec
 
 request :: OutboundRequest
@@ -32,7 +32,7 @@ spec :: Spec
 spec = describe "Outbound" $ do
   it "can be interpreted in memory without a platform or database" $ do
     seen <- newIORef Nothing
-    let receipt = SentRecorded (CanonicalMessageId 42)
+    let receipt = Published (CanonicalMessageId 42)
     actual <-
       runEff
         . runOutboundWith
@@ -41,11 +41,9 @@ spec = describe "Outbound" $ do
     actual `shouldBe` receipt
     readIORef seen `shouldReturn` Just request
 
-  it "does not invite a duplicate retry after delivery without persistence" $ do
-    wasDelivered (SendFailed "offline") `shouldBe` False
-    wasDelivered (SentUnrecorded Nothing "missing message id") `shouldBe` True
-    wasDelivered (SentUnrecorded (Just (MessageId 42)) "db unavailable") `shouldBe` True
-    wasDelivered (SentRecorded (CanonicalMessageId 42)) `shouldBe` True
+  it "acknowledges only canonical publication" $ do
+    wasPublished (PublicationFailed "offline") `shouldBe` False
+    wasPublished (Published (CanonicalMessageId 42)) `shouldBe` True
 
   it "carries semantic IR and keeps reply outside the content body" $ do
     let req =

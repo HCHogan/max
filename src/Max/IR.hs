@@ -12,7 +12,7 @@
 -- stored format a single versioned schema.
 --
 -- Phase transitions are the pipeline: model output parses to 'ModelParsed'
--- and resolves to 'Canonical' (ReplySend); 'Max.IR.Lower' degrades
+-- and resolves to 'Canonical' (Max.Reply.Resolve); 'Max.IR.Lower' degrades
 -- 'Canonical' per endpoint capability; the admin surface hydrates it.
 -- Only @'Body' \''Canonical'@ has JSON instances — the stored codec is
 -- pinned to exactly one phase, encoded as @{"v":2,"nodes":[...]}@.

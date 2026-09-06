@@ -16,6 +16,7 @@ import Max.DB.FetchQueue
     completeJob,
     enqueueJob,
     failJob,
+    jobClaim,
     maxAttempts,
   )
 import Test.Hspec
@@ -68,7 +69,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.FetchQueue" $ do
   it "returns a failed job to the pool, counting the attempt" $ do
     withDbLog pool (enqueueJob JobImage "m1:0" ("payload-a" :: Text))
     [j1] <- claim pool JobImage 10
-    withDbLog pool (failJob j1.cjId "boom")
+    withDbLog pool (failJob (jobClaim j1) "boom")
     [j2] <- claim pool JobImage 10
     (j1.cjAttempt, j2.cjAttempt) `shouldBe` (1, 2)
 
@@ -77,7 +78,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.FetchQueue" $ do
     let burn 0 = pure ()
         burn n = do
           [j] <- claim pool JobImage 10
-          withDbLog pool (failJob j.cjId "boom")
+          withDbLog pool (failJob (jobClaim j) "boom")
           burn (n - 1 :: Int)
     burn maxAttempts
     parked <- claim pool JobImage 10
@@ -86,12 +87,24 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.FetchQueue" $ do
   it "drops a completed job so the table only ever holds live work" $ do
     withDbLog pool (enqueueJob JobImage "m1:0" ("payload-a" :: Text))
     [j] <- claim pool JobImage 10
-    withDbLog pool (completeJob j.cjId)
+    withDbLog pool (completeJob (jobClaim j))
     -- Re-enqueueing the same key must work again: the row is gone, not
     -- lingering to block it via the UNIQUE constraint.
     withDbLog pool (enqueueJob JobImage "m1:0" ("payload-b" :: Text))
     [j'] <- claim pool JobImage 10
     (j'.cjPayload, j'.cjAttempt) `shouldBe` ("payload-b", 1)
+
+  it "fences late completion and failure from an expired attempt" $ do
+    withDbLog pool (enqueueJob JobImage "stale" ("payload" :: Text))
+    [old] <- claimWithLease pool JobImage 0 1
+    [current] <- claim pool JobImage 1
+    withDbLog pool (failJob (jobClaim old) "late failure")
+    again <- claim pool JobImage 1
+    length again `shouldBe` 0
+    withDbLog pool (completeJob (jobClaim old))
+    withDbLog pool (failJob (jobClaim current) "current failure")
+    [next] <- claim pool JobImage 1
+    next.cjAttempt `shouldBe` 3
 
   it "respects the batch limit" $ do
     withDbLog pool $

@@ -312,7 +312,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Embeddings, captions | workers poll messages, memories, active episode summaries, stickers, and media for missing/incompatible derived data, so any gap or model change backfills itself |
 | Maintenance ownership | independently fenced PostgreSQL leases serialize embedding, memory-dream, and context-rebuild domains without making unrelated maintenance jobs block one another; the owner heartbeats during long actions, and projection writes either carry the fencing token in SQL or run under a token-checked lease-row lock |
 | Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown`, claims the same turn for recovery, injects its committed sends/results/unknowns into a fresh LLM round, and never silently retries it; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
-| Durable plans and fork children | `plans`/`plan_revisions` persist intent and checkpoints, spawn edges own schema-checked child results, and the plan worker reclaims expired wake leases. `JoinAll` is the only admitted join policy; child tools remain bounded by the plan's effect ceiling |
+| Durable tasks and child work | `durable_tasks`, task inputs/events and notifications retain goals, ownership, budgets and results; each attempt uses the existing agent runtime. Migration 088 retired the Plan tables. Child grants remain bounded by their parent |
 | Sandbox workspaces | `sandboxes` persists lifecycle metadata and the named Docker volume holds current state. Boot adopts only a running container carrying the current isolation-policy label and fixed image/network metadata; otherwise it rebuilds a non-root, networkless, capability-free, resource-capped, read-only shell around the surviving volume. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping |
 
 | Lost on restart | Why |
@@ -377,7 +377,7 @@ adapters must do the same. Any long-lived WebSocket transport remains a
 platform-edge resource.
 
 The browser registry shares only a lightweight Docker host per conversation.
-Each durable agent turn—including every plan child—owns a separate MCP client,
+Each durable agent turn—including every background task attempt—owns a separate MCP client,
 Streamable-HTTP session, camoufox browse session, and operation lock. Sibling
 turns in one group therefore navigate concurrently without page-state or MCP
 request-id interference; calls inside one stateful page remain ordered. Turn
@@ -426,15 +426,36 @@ before processing it. An expired unstarted reservation is safely re-offered;
 only a started send can become `outcome_unknown`. Dispatch admission uses the
 same `reserved → claimed` split, so a dead process cannot quarantine the
 untouched tail of a 32-row batch. Before the turn, `Handler` reads
-the intersection of enabled endpoint output capabilities and uses it both to
-constrain the prompt grammar and to gate action-token execution. QQ mentions,
-faces, and reaction actions additionally require an all-QQ conversation; a
-legacy numeric ID is only a locator and never implies the protocol. Matrix
-retries with a deterministic transaction key.
-Non-idempotent QQ/iMessage timeout is recorded as outcome-unknown and can move
-again only after echo or authoritative status reconciliation. A transport can
-therefore be down without producing an externally visible message that the
-canonical ledger forgot.
+the conversation's semantic output capabilities. Content with a total lower
+path remains available across mixed endpoints; native encoding is decided per
+endpoint. QQ faces and reactions require an enabled QQ endpoint, and reaction
+targets still require a valid native copy.
+
+Canonical publication returns `Published` or `PublicationFailed`; it makes no
+claim about physical delivery. `ReplySend` spends budget only on committed
+chunks and stops at the first failure. Stream publication failure escapes the
+provider retry path, preserving the committed prefix without replaying it.
+`Max.Reply.Resolve` supplies the shared model-text resolver for replies,
+reminders and artifact captions, with no publication or transport authority.
+Sandbox images and files both publish blob-backed canonical messages; bounded
+container reads precede host allocation. The QQ delivery adapter alone owns
+file-upload staging and the NapCat mount path.
+
+Migration 092 records every wire chunk in `message_delivery_parts`, including
+its fingerprint, stable transaction key, status and native receipt. Echoes,
+replies and actions resolve through `message_delivery_copies`, including
+historical single-receipt deliveries. Reconciliation confirms individual parts;
+the parent becomes confirmed only when all parts are proven. A retry must keep
+the same wire plan and skips successful parts. Matrix may replay uncertain
+parts with stable transaction keys; QQ/iMessage require proof of no effect
+before retrying an uncertain part.
+
+`Max.Concurrent.Lease` scopes renewal and cancellation around delivery, fetch
+and maintenance work, while task/dispatch loops share its renewal primitive
+with explicit domain policy. Delivery renewal covers media preparation through
+completion, and each part checks ownership before sending. Fetch settlement
+uses an attempt token so stale workers cannot clear or delete a successor's
+claim. `Max.Concurrent.Lock` supplies both keyed locks and entry-owned mutexes.
 
 The Mac-side iMessage bridge derives native-reply capability from a live
 `imsg status` probe instead of configuration. Max records capability changes on

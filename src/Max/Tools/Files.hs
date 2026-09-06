@@ -9,14 +9,8 @@
 -- copy bytes from the host blob path into a sandbox via @docker cp@.
 --
 -- == Outbound
---
--- * Images: @docker cp@ out to a temp file, base64-encode, send as
---   @SegImage (Just "base64://...")@.  Works without any shared
---   filesystem with NapCat — fine up to a few MB per image.
--- * Files: @docker cp@ out to the bot's @var/outbox/@ directory,
---   then call @upload_group_file@ with the container-side path
---   (@\/data\/outbox\/...@) NapCat sees via the bind mount in
---   docker-compose.yml.
+-- Both images and files publish blob-backed canonical messages. The endpoint
+-- delivery worker owns platform emission, receipts and recovery.
 module Max.Tools.Files
   ( fileToolsFor,
 
@@ -30,49 +24,37 @@ import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromMaybe, isJust)
 import Data.Ord (clamp)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone)
-import Data.UUID qualified as UUID
-import Data.UUID.V4 (nextRandom)
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.ConversationScope (ConversationScope)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
-import Max.MessageKind (MessageKind (KindChat))
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob, resolveBlobHostPath)
-import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), SendOutcome (..), sendRecorded)
-import Max.Effects.PlatformApi (PlatformApi, callAction)
+import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), PublicationResult (..), sendRecorded)
 import Max.Effects.Tools (Tool (..))
 import Max.IR
-import Max.IR.Prompt (MentionRoster (..), parseModelChunk)
+import Max.MessageKind (MessageKind (KindChat))
+import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationRoster)
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..))
 import Max.Reply (chunkSource, planReply)
-import Max.Sandbox.Docker (runCopyFromContainer, runCopyToContainer)
+import Max.Reply.Resolve
+import Max.Sandbox.Docker (readSandboxArtifact, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
 import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities, toolTurnOutputContext)
-import Max.Turn.Types (TurnOutputContext, nextTurnOutputLink)
 import Max.Tools.Schema (integerParam, stringParam, toolObject, withKeys)
-import Max.Util (withTempDirectory)
-import OneBot.Action (Action (UploadGroupFile, UploadPrivateFile), Response (..))
-import OneBot.Types (GroupId (..), isPrivateChat, privateChatUserId)
-import System.Directory (createDirectoryIfMissing)
-import System.FilePath (takeFileName, (</>))
-
--- | Where staged outbound files live on the host, and the
--- corresponding path inside the NapCat container (see
--- docker-compose.yml's @volumes@).
-outboxHostDir, outboxContainerDir :: FilePath
-outboxHostDir = "var/outbox"
-outboxContainerDir = "/data/outbox"
+import Max.Turn.Types (TurnOutputContext, nextTurnOutputLink)
+import OneBot.Types (GroupId (..))
+import System.FilePath (takeFileName)
 
 fileToolsFor ::
   ( Blob :> es,
     WithConnection :> es,
-    PlatformApi :> es,
     Outbound :> es,
     Log :> es,
     IOE :> es
@@ -85,7 +67,7 @@ fileToolsFor tz dc sandboxes =
   [ listRecentFilesTool tz gid,
     importFileToSandboxTool (toolConversationScope dc) gid sandboxes,
     sendImageFromSandboxTool (toolOutputCapabilities dc) (toolTurnOutputContext dc) gid sandboxes,
-    sendFileFromSandboxTool gid sandboxes
+    sendFileFromSandboxTool (toolTurnOutputContext dc) gid sandboxes
   ]
   where
     gid = toolGroupId dc
@@ -206,6 +188,7 @@ importFileToSandboxTool scope gid sandboxes =
 
 sendImageFromSandboxTool ::
   ( Blob :> es,
+    WithConnection :> es,
     Outbound :> es,
     Log :> es,
     IOE :> es
@@ -241,8 +224,8 @@ sendImageFromSandboxTool outputCaps turnOutputContext gid sandboxes =
                 Left err -> pure (Left err)
                 Right bytes -> do
                   blob <- putBlob bytes
+                  (replyTo, caption) <- captionBody outputCaps gid mCaption
                   let source = mediaBlobRef (blobRefSha256 blob)
-                      (replyTo, caption) = captionBody outputCaps gid mCaption
                       body = Body (caption.nodes <> [NMedia source (imageMeta bytes)])
                   turnOutput <- traverse (liftIO . nextTurnOutputLink) turnOutputContext
                   outcome <-
@@ -257,9 +240,8 @@ sendImageFromSandboxTool outputCaps turnOutputContext gid sandboxes =
                           orMonitorFireId = Nothing
                         }
                   case outcome of
-                    SendFailed err -> pure (Left ("图片发送失败: " <> err))
-                    SentUnrecorded {} -> sent sid bytes (Nothing :: Maybe CanonicalMessageId)
-                    SentRecorded canonical -> sent sid bytes (Just canonical)
+                    PublicationFailed err -> pure (Left ("图片发送失败: " <> err))
+                    Published canonical -> sent sid bytes (Just canonical)
     }
   where
     imageMeta bytes =
@@ -291,135 +273,84 @@ sendImageFromSandboxTool outputCaps turnOutputContext gid sandboxes =
     parseArgs :: Object -> Parser (Text, Text, Maybe Text)
     parseArgs o = (,,) <$> o .: "sandbox_id" <*> o .: "path" <*> o .:? "caption"
 
--- | Parse a model-authored image caption directly into ingest IR.
---
--- The caption is model-authored text, written under the same format
--- guide as a reply, so it arrives carrying the same placeholders — and
--- this was the last sender that never learned to read them.
--- Production: @"[reply#493645310] 画好了，macOS belike：…"@ went to the
--- group with the token visible, weeks after the reply and narration
--- paths were both taught to consume it.  Pure and top-level for the
--- It shares the model-token codec with ordinary replies; model-only media
--- handles are deliberately dropped because the image tool has already chosen
--- the attachment it is publishing.
---
--- One message, so @[split]@ cannot be honoured the way it is elsewhere;
--- plan the caption anyway and rejoin, which eats the markers instead of
--- printing them.  The trailing newline keeps the caption off the image,
--- as it always did.  Mentions are checked for syntax only — a tool has
--- no roster to check membership against.  A caption that is nothing but
--- a quote still quotes: unlike a narration line, the message it rides
--- on is going out regardless.
---
--- Mentions fold to text unconditionally.  A caption is written by a tool,
--- not by the reply path, so there is nothing here to resolve a principal
--- against an account with — and "@name" is the honest rendering of an
--- unresolved mention everywhere else too.
+-- | Captions share the canonical resolver, including scoped reply and mention
+-- lookup. Layout folds to one message; the attachment supplies its own media.
 captionBody ::
-  AdvertisedCaps -> GroupId -> Maybe Text -> (Maybe CanonicalMessageId, Body 'Canonical)
-captionBody _ _ Nothing = (Nothing, Body [])
-captionBody outputCaps _ (Just caption) =
-  ( CanonicalMessageId <$> if outputCaps.canReply then quoted else Nothing,
-    Body (if null body then [] else body <> [NText "\n"])
-  )
-  where
-    (quoted, parsed) =
-      parseModelChunk
-        MentionRoster {names = [], selfPrincipal = Nothing}
-        (T.intercalate "\n" (map chunkSource (planReply caption)))
-    body = trimEdges (mergeText (concatMap resolve parsed.nodes))
-    resolve = \case
-      NText text -> [NText text]
-      NMention _ display -> [NText (mentionToken display)]
-      NEmote emote
-        | outputCaps.canFace -> [NEmote emote]
-        | otherwise -> []
-      NMedia {} -> []
-      NCard card -> [NCard card]
-
--- | Stage a file from a container into a host temp file, read it,
--- delete the temp.  Used for the base64-image path; bytes stay in
--- memory for one HTTP request and then go.
-readSandboxArtifact :: Text -> Text -> IO (Either Text BS.ByteString)
-readSandboxArtifact container path =
-  withTempDirectory "max-artifact-" $ \workspace -> do
-    let tmp = workspace </> "artifact"
-    cpRes <- runCopyFromContainer container path tmp
-    case cpRes of
-      Left err -> pure (Left err)
-      Right () -> Right <$> BS.readFile tmp
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  AdvertisedCaps -> GroupId -> Maybe Text -> Eff es (Maybe CanonicalMessageId, Body 'Canonical)
+captionBody _ _ Nothing = pure (Nothing, Body [])
+captionBody caps gid@(GroupId group) (Just caption) = do
+  roster <- conversationRoster group
+  let target =
+        ResolveContext
+          gid
+          [(name, identity.riPrincipalId) | identity <- roster.crIdentities, Just name <- [identity.riDisplayName]]
+          Nothing
+          False
+          caps.canReply
+          caps.canMention
+          caps.canFace
+          False
+  (_, reply, body) <-
+    resolveModelText
+      target
+      Set.empty
+      (T.intercalate "\n" (map chunkSource (planReply (cleanModelText caption))))
+  pure (reply, Body (if null body.nodes then [] else body.nodes <> [NText "\n"]))
 
 --------------------------------------------------------------------------------
 -- send_file_from_sandbox
 
 sendFileFromSandboxTool ::
-  ( PlatformApi :> es,
-    Log :> es,
-    IOE :> es
-  ) =>
-  GroupId ->
-  SandboxRegistry ->
-  Tool es
-sendFileFromSandboxTool gid sandboxes =
+  (Blob :> es, Outbound :> es, IOE :> es) =>
+  Maybe TurnOutputContext -> GroupId -> SandboxRegistry -> Tool es
+sendFileFromSandboxTool output gid sandboxes =
   Tool
     { toolName = "send_file_from_sandbox",
-      toolDescription =
-        "Upload a file from a sandbox into the group's 群文件 (any artifact: \
-        \.csv/.pdf/.zip/…).  Optional 'name' overrides the displayed filename.",
+      toolDescription = "Publish a sandbox artifact (.csv/.pdf/.zip/...) as a file in this conversation. Optional name overrides the filename. Maximum 64 MiB.",
       toolSchema =
         toolObject
-          [ ("sandbox_id", stringParam "Sandbox the file lives in."),
-            ("path", stringParam "Path to the file (relative to /work, or absolute)."),
-            ("name", stringParam "Display name in QQ (default: basename of path).")
+          [ ("sandbox_id", stringParam "Sandbox containing the file."),
+            ("path", stringParam "File path relative to /work, or absolute."),
+            ("name", stringParam "Optional displayed filename.")
           ]
           ["sandbox_id", "path"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
-        Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (sid, path, mName) -> do
-          mEntry <- liftIO (listSandbox sandboxes gid (SandboxId sid))
-          case mEntry of
+        Left err -> pure (Left ("bad args: " <> T.pack err))
+        Right (sid, path, override) -> do
+          entry <- liftIO (listSandbox sandboxes gid (SandboxId sid))
+          case entry of
             Nothing -> pure (Left "sandbox not found")
-            Just e -> do
-              liftIO (createDirectoryIfMissing True outboxHostDir)
-              uuid <- liftIO nextRandom
-              let basename = takeFileName (T.unpack path)
-                  staged = UUID.toString uuid <> "-" <> basename
-                  hostStaged = outboxHostDir </> staged
-                  containerStaged = T.pack (outboxContainerDir <> "/" <> staged)
-                  displayName = fromMaybe (T.pack basename) mName
-              cpRes <- liftIO (runCopyFromContainer e.seContainer path hostStaged)
-              case cpRes of
-                Left err -> pure (Left ("docker cp failed: " <> err))
-                Right () -> do
-                  let uploadAction
-                        | isPrivateChat gid =
-                            UploadPrivateFile (privateChatUserId gid) containerStaged displayName
-                        | otherwise = UploadGroupFile gid containerStaged displayName
-                  callRes <- callAction uploadAction 60000
-                  case callRes of
-                    Left err -> pure (Left ("upload_group_file failed: " <> err))
-                    Right (Response _ rc _ _)
-                      | rc /= 0 ->
-                          pure $
-                            Left $
-                              "upload_group_file retcode " <> T.pack (show rc)
-                    Right _ -> do
-                      logInfo "file uploaded from sandbox" $
-                        object
-                          [ "sandbox_id" .= sid,
-                            "name" .= displayName,
-                            "staged" .= hostStaged
-                          ]
-                      pure $
-                        Right $
-                          object
+            Just sandbox ->
+              liftIO (readSandboxArtifact sandbox.seContainer path) >>= \case
+                Left err -> pure (Left err)
+                Right bytes -> do
+                  blob <- putBlob bytes
+                  link <- traverse (liftIO . nextTurnOutputLink) output
+                  let name = fromMaybe (T.pack (takeFileName (T.unpack path))) override
+                      meta = MediaMeta MFile Nothing (Just (fromIntegral (BS.length bytes))) (Just name) Nothing Nothing
+                  outcome <-
+                    sendRecorded
+                      OutboundRequest
+                        { orKind = KindChat,
+                          orGroupId = gid,
+                          orBody = Body [NMedia (mediaBlobRef (blobRefSha256 blob)) meta],
+                          orReplyTo = Nothing,
+                          orDeliveryScope = DeliverConversation,
+                          orTurnOutput = link,
+                          orMonitorFireId = Nothing
+                        }
+                  pure $ case outcome of
+                    PublicationFailed err -> Left ("file publication failed: " <> err)
+                    Published canonical ->
+                      Right
+                        ( object
                             [ "ok" .= True,
-                              "name" .= displayName
+                              "name" .= name,
+                              "_max_journal_canonical_message_id" .= canonical.unCanonicalMessageId
                             ]
+                        )
     }
   where
     parseArgs :: Object -> Parser (Text, Text, Maybe Text)
     parseArgs o = (,,) <$> o .: "sandbox_id" <*> o .: "path" <*> o .:? "name"
-
---------------------------------------------------------------------------------
--- Helpers.

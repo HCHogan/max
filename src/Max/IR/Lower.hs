@@ -28,6 +28,7 @@ module Max.IR.Lower
     LowerNote (..),
     LoweredMessage (..),
     lower,
+    mediaTier,
     platformDisplayLabel,
   )
 where
@@ -424,7 +425,8 @@ chunkNodes (Just rawLimit) ns0 = go [] 0 ns0
                 then
                   if null acc
                     then
-                      let (chunks, notes) = go [] 0 rest
+                      let suffix = T.drop 1 t
+                          (chunks, notes) = go [] 0 ([NText suffix | not (T.null suffix)] <> rest)
                        in (chunks, LowerNote "text" NoteDropped (Just "one character exceeds max_text_bytes") : notes)
                     else flush acc (n : rest)
                 else

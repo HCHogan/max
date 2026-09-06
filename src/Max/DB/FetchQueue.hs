@@ -22,6 +22,9 @@
 module Max.DB.FetchQueue
   ( JobKind (..),
     ClaimedJob (..),
+    JobClaim (..),
+    jobClaim,
+    renewJob,
     maxAttempts,
     enqueueJob,
     claimJobs,
@@ -34,7 +37,6 @@ import Data.Aeson (FromJSON, Result (..), ToJSON, Value, fromJSON, toJSON)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Effectful
 import Effectful.Log
@@ -69,6 +71,17 @@ data ClaimedJob a = ClaimedJob
     cjPayload :: !a
   }
   deriving stock (Show)
+
+-- | Attempt-scoped authority; a stale worker cannot settle a successor.
+data JobClaim = JobClaim !Int64 !Int deriving stock (Show, Eq)
+
+jobClaim :: ClaimedJob a -> JobClaim
+jobClaim job = JobClaim job.cjId job.cjAttempt
+
+renewJob :: (WithConnection :> es, IOE :> es) => JobClaim -> Int -> Eff es Bool
+renewJob (JobClaim jid attempt) seconds = do
+  n <- execute "UPDATE fetch_jobs SET claimed_until = clock_timestamp() + (? * interval '1 second') WHERE id = ? AND attempts = ? AND parked_at IS NULL AND claimed_until > clock_timestamp()" (seconds, jid, attempt)
+  pure (n == 1)
 
 newtype Jsonb = Jsonb Value
 
@@ -131,40 +144,40 @@ claimJobs kind leaseSeconds limit = do
       Error err -> do
         logAttention "fetch queue: undecodable payload, parking" $
           object ["id" .= (jid :: Int64), "kind" .= kindText kind, "error" .= T.pack err]
-        parkJob jid (T.pack err)
+        parkJob (JobClaim jid attempt) (T.pack err)
         pure []
 
 -- | Done: the row's whole purpose is discharged, so drop it.  Keeps
 -- the table to just live work, which is what lets the claim query stay
 -- a plain index walk.
-completeJob :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es ()
-completeJob jid = do
-  _ <- execute "DELETE FROM fetch_jobs WHERE id = ?" (Only jid)
+completeJob :: (WithConnection :> es, IOE :> es) => JobClaim -> Eff es ()
+completeJob (JobClaim jid attempt) = do
+  _ <- execute "DELETE FROM fetch_jobs WHERE id = ? AND attempts = ? AND claimed_until IS NOT NULL" (jid, attempt)
   pure ()
 
 -- | Failed.  Records why and drops the lease so the next claim picks
 -- the job straight back up — unless the attempt budget is spent, in
 -- which case the same statement parks it.  Deciding here rather than
 -- at the call site keeps 'maxAttempts' out of all three workers.
-failJob :: (WithConnection :> es, IOE :> es) => Int64 -> Text -> Eff es ()
-failJob jid err = do
+failJob :: (WithConnection :> es, IOE :> es) => JobClaim -> Text -> Eff es ()
+failJob (JobClaim jid attempt) err = do
   _ <-
     execute
       "UPDATE fetch_jobs \
       \   SET last_error = ?, \
       \       claimed_until = NULL, \
       \       parked_at = CASE WHEN attempts >= ? THEN now() ELSE NULL END \
-      \ WHERE id = ?"
-      (err, maxAttempts, jid)
+      \ WHERE id = ? AND attempts = ? AND claimed_until IS NOT NULL"
+      (err, maxAttempts, jid, attempt)
   pure ()
 
 -- | Out of attempts (or undecodable): stop claiming it, keep the row.
-parkJob :: (WithConnection :> es, IOE :> es) => Int64 -> Text -> Eff es ()
-parkJob jid err = do
+parkJob :: (WithConnection :> es, IOE :> es) => JobClaim -> Text -> Eff es ()
+parkJob (JobClaim jid attempt) err = do
   _ <-
     execute
       "UPDATE fetch_jobs \
       \   SET last_error = ?, claimed_until = NULL, parked_at = now() \
-      \ WHERE id = ?"
-      (err, jid)
+      \ WHERE id = ? AND attempts = ? AND claimed_until IS NOT NULL"
+      (err, jid, attempt)
   pure ()

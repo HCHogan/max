@@ -116,7 +116,7 @@ library
         Max.Browser.Docker
         Max.Browser.Error
         Max.Browser.Registry
-        Max.Browser.Lock
+        Max.Concurrent.Lock
         Max.Browser.Vault
         Max.Browser.Runtime
         Max.Browser.Profile
@@ -208,7 +208,10 @@ library
         Max.MemoryStore
         Max.ModelCatalog
         Max.Platform
+        Max.Concurrent.Lease
         Max.Platform.Delivery
+        Max.Platform.Delivery.Parts
+        Max.Platform.Delivery.Store
         Max.Platform.Types
         Max.Platform.Store
         Max.Platform.QQ
@@ -224,6 +227,7 @@ library
         Max.Reload.Prepare
         Max.Reply
         Max.ReplySend
+        Max.Reply.Resolve
         Max.Resource
         Max.RuntimeConfig
         Max.Roster
@@ -463,6 +467,7 @@ test-suite max-test
         Max.MonitorSpec
         Max.ReplySpec
         Max.ReplySendSpec
+        Max.Concurrent.LeaseSpec
         Max.ResourceSpec
         Max.ReloadSpec
         Max.RuntimeConfigSpec
@@ -562,6 +567,7 @@ test-suite max-test-db
         Max.DB.QQBackfillSpec
         Max.PromptIntegrationSpec
         Max.PlatformStoreSpec
+        Max.PublicationSpec
         Max.MaxOpsNotificationSpec
         Max.RecallSpec
     build-depends:
@@ -578,6 +584,7 @@ test-suite max-test-db
         , effectful            >= 2.5  && < 2.7
         , effectful-postgresql >= 0.1  && < 0.2
         , postgresql-simple    >= 0.7  && < 0.8
+        , stm                  >= 2.5 && < 2.6
         , text                 >= 2.1  && < 2.2
         , time                 >= 1.12 && < 1.17
         , http-types           >= 0.12 && < 0.13

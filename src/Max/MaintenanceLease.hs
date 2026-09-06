@@ -18,16 +18,16 @@ module Max.MaintenanceLease
   )
 where
 
-import Control.Monad (void, when)
+import Control.Monad (void)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
-import Effectful.Concurrent (Concurrent, threadDelay)
-import Effectful.Concurrent.Async (race)
+import Effectful.Concurrent (Concurrent)
 import Effectful.Exception (finally)
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.Concurrent.Lease
 import Max.DB.Transaction (withTransaction)
 
 data MaintenanceDomain
@@ -132,14 +132,13 @@ withMaintenanceLease domain owner ttlSeconds action =
       runOwned lease `finally` void (releaseMaintenanceLease lease)
   where
     runOwned lease =
-      race (action lease) (heartbeat lease) >>= \case
-        Left value -> pure (MaintenanceCompleted value)
-        Right () -> pure MaintenanceLeaseLost
-
-    heartbeat lease = do
-      threadDelay (max 1 (ttlSeconds `div` 3) * 1_000_000)
-      renewed <- renewMaintenanceLease lease ttlSeconds
-      when renewed (heartbeat lease)
+      withOwnedLease
+        (max 1 (ttlSeconds `div` 3) * 1_000_000)
+        (renewMaintenanceLease lease ttlSeconds)
+        (action lease)
+        >>= \case
+          LeaseCompleted value -> pure (MaintenanceCompleted value)
+          LeaseLost -> pure MaintenanceLeaseLost
 
 -- | Fence one projection mutation with the lease row itself.  The row lock
 -- orders an expired owner's last transaction before a successor can acquire

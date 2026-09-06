@@ -41,14 +41,18 @@ import Data.Aeson (FromJSON)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
+import Max.Concurrent.Lease
 import Max.DB.FetchQueue
   ( ClaimedJob (..),
     JobKind,
     claimJobs,
     completeJob,
     failJob,
+    jobClaim,
+    renewJob,
   )
 import Max.Util (trySync)
 
@@ -80,7 +84,7 @@ recheckMicros = 60 * 1000000
 -- 'Max.DB.FetchQueue.failJob' decides whether the job goes back in the
 -- pool or parks.
 runFetchLoop ::
-  (WithConnection :> es, Log :> es, IOE :> es, FromJSON a) =>
+  (Concurrent :> es, WithConnection :> es, Log :> es, IOE :> es, FromJSON a) =>
   FetchSignal ->
   JobKind ->
   -- | Lease length; comfortably longer than the slowest fetch of this kind.
@@ -109,11 +113,22 @@ runFetchLoop signal kind leaseSeconds batch process = loop
         unless (fired || v /= v0) retry
 
     one j = do
-      r <- trySync (process j.cjPayload)
-      case r of
-        Right (Right ()) -> completeJob j.cjId
-        Right (Left err) -> giveBack j err
-        Left e -> giveBack j (T.pack (show e))
+      result <- withOwnedLease
+        (max 1 (leaseSeconds `div` 3) * 1_000_000)
+        (renewJob (jobClaim j) leaseSeconds)
+        $ do
+          held <- renewJob (jobClaim j) leaseSeconds
+          if not held
+            then pure ()
+            else do
+              r <- trySync (process j.cjPayload)
+              case r of
+                Right (Right ()) -> completeJob (jobClaim j)
+                Right (Left err) -> giveBack j err
+                Left e -> giveBack j (T.pack (show e))
+      case result of
+        LeaseCompleted () -> pure ()
+        LeaseLost -> logAttention "fetch lease lost; stale worker stopped" $ object ["id" .= j.cjId]
 
     giveBack j err = do
       logAttention "fetch job failed" $
@@ -123,4 +138,4 @@ runFetchLoop signal kind leaseSeconds batch process = loop
             "attempt" .= j.cjAttempt,
             "error" .= err
           ]
-      failJob j.cjId err
+      failJob (jobClaim j) err

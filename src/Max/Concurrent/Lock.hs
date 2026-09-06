@@ -1,4 +1,4 @@
-module Max.Browser.Lock (LockMap, newLockMap, withKeyLock, tryWithKeyLock) where
+module Max.Concurrent.Lock (withLock, LockMap, newLockMap, withKeyLock, tryWithKeyLock) where
 
 import Control.Concurrent.STM
 import Control.Exception (bracket, bracket_)
@@ -10,10 +10,14 @@ newtype LockMap key = LockMap (TVar (Map key (TMVar (), Int)))
 newLockMap :: IO (LockMap key)
 newLockMap = LockMap <$> newTVarIO Map.empty
 
+-- | One cancellation-safe mutex scope, shared by keyed and entry-owned locks.
+withLock :: TMVar () -> IO value -> IO value
+withLock lock = bracket_ (atomically (takeTMVar lock)) (atomically (putTMVar lock ()))
+
 withKeyLock :: (Ord key) => LockMap key -> key -> IO value -> IO value
 withKeyLock registry key action =
   withLockReference registry key $ \lock ->
-    bracket_ (atomically (takeTMVar lock)) (atomically (putTMVar lock ())) action
+    withLock lock action
 
 tryWithKeyLock :: (Ord key) => LockMap key -> key -> IO value -> IO (Maybe value)
 tryWithKeyLock registry key action = withLockReference registry key $ \lock ->

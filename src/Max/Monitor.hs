@@ -42,21 +42,21 @@ import Max.DB.Monitor
     recordMonitorFireFailure,
   )
 import Max.DB.Notify (WorkChannel (MonitorWork), claimOrWaitUntil)
+import Max.Effects.Blob (Blob)
 import Max.Effects.Outbound
   ( Outbound,
     OutboundDeliveryScope (..),
     OutboundRequest (..),
-    SendOutcome (..),
+    PublicationResult (..),
     sendRecorded,
   )
 import Max.IR (Body (..), Phase (Canonical))
-import Max.Effects.Blob (Blob)
-import Max.Reply (Chunk (TextChunk))
-import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, prepareReplyChunk)
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Monitor.Types (MonitorFireId (..), MonitorId (..), MonitorRef (..))
-import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationRoster, conversationAdvertisedCaps)
+import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationAdvertisedCaps, conversationRoster)
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId)
+import Max.Reply (Chunk (TextChunk))
+import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, prepareReplyChunk)
 import Max.Util (catchSync)
 import OneBot.Types (GroupId (..))
 import System.Cron (CronSchedule, nextMatch)
@@ -154,11 +154,10 @@ monitorWorker tz owner dispatchElaborated = loop
         Nothing -> do
           outcome <-
             catchSync (deliver fire) $ \e ->
-              pure (SendFailed (T.pack (show e)))
+              pure (PublicationFailed (T.pack (show e)))
           case outcome of
-            SentRecorded canonical -> advance fire (Just canonical)
-            SentUnrecorded {} -> advance fire Nothing
-            SendFailed err -> do
+            Published canonical -> advance fire (Just canonical)
+            PublicationFailed err -> do
               -- Covers an ambiguous/concurrent publish: the unique provenance
               -- may have committed even when this caller observed an error.
               lookupMonitorFireOutput fire.cmfFireId >>= \case
@@ -242,17 +241,18 @@ deliveryBody ::
 deliveryBody groupId@(GroupId group) body = do
   roster <- conversationRoster group
   caps <- conversationAdvertisedCaps group Nothing
-  let target = ReplyTarget
-        { rtGroupId = groupId,
-          rtRosterNames = [(name, identity.riPrincipalId) | identity <- roster.crIdentities, Just name <- [identity.riDisplayName]],
-          rtSelfPrincipal = Nothing,
-          rtStickers = caps.canMedia,
-          rtCanReply = caps.canReply,
-          rtCanMention = caps.canMention,
-          rtCanFace = caps.canFace,
-          rtCanImage = caps.canMedia,
-          rtTurnOutputContext = Nothing
-        }
+  let target =
+        ReplyTarget
+          { rtGroupId = groupId,
+            rtRosterNames = [(name, identity.riPrincipalId) | identity <- roster.crIdentities, Just name <- [identity.riDisplayName]],
+            rtSelfPrincipal = Nothing,
+            rtStickers = caps.canMedia,
+            rtCanReply = caps.canReply,
+            rtCanMention = caps.canMention,
+            rtCanFace = caps.canFace,
+            rtCanImage = caps.canMedia,
+            rtTurnOutputContext = Nothing
+          }
   (_, prepared) <- prepareReplyChunk target freshBudget (TextChunk ("⏰ 提醒：" <> cleanModelText body))
   pure $ case prepared of
     Just (resolved, replyTo, _) -> (resolved, replyTo)

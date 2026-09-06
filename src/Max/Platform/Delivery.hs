@@ -34,16 +34,15 @@ module Max.Platform.Delivery
   )
 where
 
-import Control.Applicative ((<|>))
 import Control.Monad (forM_)
 import Data.Aeson (Result (..), fromJSON, toJSON)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base64 qualified as B64
-import Data.Either (fromRight, lefts, rights)
+import Data.Either (fromRight)
 import Data.Int (Int64)
-import Data.List (find, nub, nubBy)
+import Data.List (find, nub)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -53,6 +52,7 @@ import Effectful.Concurrent.Async (Concurrent, forConcurrently_)
 import Effectful.Exception (SomeException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
+import Max.Concurrent.Lease
 import Max.DB.Notify (WorkChannel (DeliveryWork), claimOrWait)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.HttpRuntime
@@ -68,6 +68,8 @@ import Max.IR
 import Max.IR.Digest (digest)
 import Max.IR.Lower
 import Max.Platform (PlatformBackend (..))
+import Max.Platform.Delivery.Parts
+import Max.Platform.Delivery.Store
 import Max.Platform.Store
   ( DeliveryClaim (..),
     DeliveryCompletion (..),
@@ -81,40 +83,17 @@ import Max.Platform.Types
   ( EventKind (..),
     NativeEventId (..),
     NativeUserId (..),
-    Platform,
+    Platform (..),
     ReactionAction (..),
     renderPlatform,
   )
-import Max.Util (readIntegral, trySync, trySyncIO)
-import OneBot.Action (Action (SetMsgEmojiLike), Response (..), extractOutMid, sendChatMsg)
+import Max.Util (readIntegral, trySync, trySyncIO, withBinaryTempFile)
+import OneBot.Action (Action (SetMsgEmojiLike, UploadGroupFile, UploadPrivateFile), Response (..), extractOutMid, sendChatMsg)
 import OneBot.Segment (Segment (..), imageSeg, stickerSeg)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..))
-
-data DeliveryAttempt
-  = AttemptConfirmed !(Maybe NativeEventId)
-  | AttemptAccepted !(Maybe NativeEventId)
-  | -- | The edge could not be reached and provably had no effect.  Retried
-    -- without a bound: while it is down nothing else can be delivered to this
-    -- endpoint either, so waiting denies the ordered lane to no one.  A real
-    -- QQ edge outage took 159 attempts over eleven hours and then delivered.
-    --
-    -- "No one" is scoped to the platform's own lane, and only became true
-    -- when delivery stopped sharing one worker across platforms: an edge
-    -- retrying here holds up its own platform, by design, and nobody else.
-    AttemptRetryable !Text
-  | -- | A reachable edge refused this content (QQ risk control, a reaction on
-    -- a deleted target).  Rejections can be transient, so it is retried — but
-    -- the endpoint is demonstrably working, so the lane must not wait on it
-    -- forever; 'deliveryAttemptBudget' ends it.
-    AttemptRejected !Text
-  | AttemptOutcomeUnknown !Text
-  | AttemptPermanentlyFailed !Text
-  | AttemptSuppressed !Text
-  | -- | Native media preparation failed before the adapter emitted any
-    -- message. The worker may safely re-run the shared lowerer at text tier;
-    -- adapters never construct that fallback themselves.
-    AttemptMediaFallback !Text
-  deriving stock (Eq, Show)
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat, privateChatUserId)
+import System.Directory (createDirectoryIfMissing)
+import System.FilePath (takeFileName)
+import System.IO (hClose)
 
 data DeliveryOperation
   = DeliverMessage !LoweredMessage
@@ -125,7 +104,7 @@ data DeliveryOperation
 
 data DeliveryTransport = DeliveryTransport
   { platform :: !Platform,
-    deliver :: !(DeliveryClaim -> DeliveryOperation -> IO DeliveryAttempt)
+    deliver :: !(PartJournal -> DeliveryClaim -> DeliveryOperation -> IO DeliveryAttempt)
   }
 
 -- | What the native media tier resolved to, plus the audit trail for what it
@@ -150,23 +129,26 @@ loadDeliveryMedia ::
   OutboundCaps ->
   Body 'Canonical ->
   Eff es DeliveryMedia
-loadDeliveryMedia caps body = do
-  loaded <- traverse loadOne candidates
-  let resolved = rights loaded
-      notes = lefts loaded
-      totalBytes = sum [BS.length bytes | (_, ResolvedBytes bytes) <- resolved]
-  if totalBytes > deliveryMediaTotalBytes
-    then error "canonical delivery media exceeds total byte limit"
-    else pure DeliveryMedia {resolved, notes}
+loadDeliveryMedia caps body = go (max 0 caps.maxNativeMedia) [] [] 0 candidates
   where
-    candidates =
-      nubBy (\(left, _) (right, _) -> left == right) . take (max 0 caps.maxNativeMedia) $
-        mapMaybe nativeSource body.nodes
-
+    candidates = mapMaybe nativeSource body.nodes
     nativeSource = \case
-      NMedia (Just ref) meta
-        | nativeMediaTier caps meta.kind == TierNative -> Just (ref, meta.sizeBytes)
+      NMedia (Just ref) meta | mediaTier caps meta.kind == TierNative -> Just (ref, meta.sizeBytes)
       _ -> Nothing
+    go remaining resolved notes total pending
+      | remaining <= 0 = pure DeliveryMedia {resolved = reverse resolved, notes = reverse notes}
+      | otherwise = case pending of
+          [] -> pure DeliveryMedia {resolved = reverse resolved, notes = reverse notes}
+          candidate@(ref, _) : rest
+            | Just _ <- lookup ref resolved -> go (remaining - 1) resolved notes total rest
+            | otherwise ->
+                loadOne candidate >>= \case
+                  Left note -> go remaining resolved (note : notes) total rest
+                  Right value@(_, payload) -> do
+                    let bytes = case payload of ResolvedBytes bs -> BS.length bs; ResolvedUrl _ -> 0
+                    if total + bytes > deliveryMediaTotalBytes
+                      then error "canonical delivery media exceeds total byte limit"
+                      else go (remaining - 1) (value : resolved) notes (total + bytes) rest
 
     loadOne (ref, declaredSize) = case mediaRefBlobSha ref of
       Nothing -> pure (Right (ref, ResolvedUrl (renderMediaRef ref)))
@@ -228,14 +210,6 @@ resolveDeliveryMedia runtime maxBytes previewBytes (ResolvedUrl sourceUrl) decla
               | otherwise -> Right response.body
   | otherwise = pure (Left "delivery media has no transferable source")
 
-nativeMediaTier :: OutboundCaps -> MediaKind -> Tier
-nativeMediaTier caps = \case
-  MImage -> caps.image
-  MSticker -> caps.sticker
-  MVideo -> caps.video
-  MAudio -> caps.audio
-  MFile -> caps.file
-
 deliveryWorker ::
   (Blob :> es, WithConnection :> es, Log :> es, Concurrent :> es, IOE :> es) =>
   Text ->
@@ -280,30 +254,46 @@ deliveryWorker workerId transports = localDomain "delivery" $ do
           logInfo "delivery reservation was no longer owned" $
             object ["delivery_id" .= claim.deliveryId, "worker" .= laneWorkerId]
         else do
-          now <- liftIO getCurrentTime
-          (completion, lowerNotes) <- routeClaim now claim
-          completed <- completeDelivery laneWorkerId claim.deliveryId claim.attemptCount lowerNotes completion
-          if completed
-            then
-              logInfo "delivery completed" $
+          result <- withOwnedLease
+            (floor deliveryLeaseSeconds * 1_000_000 `div` 3)
+            (renewDelivery laneWorkerId claim (floor deliveryLeaseSeconds))
+            $ do
+              (completion, lowerNotes) <- withEffToIO (ConcUnlift Ephemeral Unlimited) $ \run ->
+                let journal =
+                      PartJournal
+                        { plan = run . planDeliveryParts laneWorkerId claim,
+                          begin = \safety index -> run (beginDeliveryPart laneWorkerId claim safety index),
+                          finish = \index attempt -> run (finishDeliveryPart laneWorkerId claim index attempt)
+                        }
+                 in run (liftIO getCurrentTime >>= \now -> routeClaim journal now claim)
+              completed <- completeDelivery laneWorkerId claim.deliveryId claim.attemptCount lowerNotes completion
+              logInfo "delivery settled" $
                 object
                   [ "delivery_id" .= claim.deliveryId,
-                    "canonical_message_id" .= claim.canonicalMessageId,
-                    "platform" .= renderPlatform claim.platform,
+                    "recorded" .= completed,
                     "outcome" .= completionName completion,
                     "lower_notes" .= toJSON lowerNotes
                   ]
-            else
-              logAttention "delivery lease lost before completion" $
-                object ["delivery_id" .= claim.deliveryId, "worker" .= laneWorkerId]
+          case result of
+            LeaseCompleted () -> pure ()
+            LeaseLost -> do
+              now <- liftIO getCurrentTime
+              _ <-
+                completeDelivery
+                  laneWorkerId
+                  claim.deliveryId
+                  claim.attemptCount
+                  []
+                  (DeliveryUnknown "delivery lease lost during transport" now)
+              logAttention "delivery lease lost; remaining parts cancelled" $ object ["delivery_id" .= claim.deliveryId]
 
-    routeClaim now claim = case claim.eventKind of
-      EventMessage -> withTransport claim $ \transport -> deliverContent now claim transport DeliverMessage
+    routeClaim journal now claim = case claim.eventKind of
+      EventMessage -> withTransport claim $ \transport -> deliverContent journal now claim transport DeliverMessage
       EventEdit
         | not claim.capabilities.edit -> pure (DeliverySuppressedAs "edit unsupported", [])
         | Just target <- claim.actionTarget ->
             withTransport claim $ \transport ->
-              deliverContent now claim transport (DeliverEdit target)
+              deliverContent journal now claim transport (DeliverEdit target)
         | otherwise -> pure (DeliveryPermanentlyFailed "edit target has no native copy", [])
       EventReaction
         | not claim.capabilities.reaction -> pure (DeliverySuppressedAs "reaction unsupported", [])
@@ -312,6 +302,7 @@ deliveryWorker workerId transports = localDomain "delivery" $ do
             withTransport claim $ \transport -> do
               attempt <-
                 runTransport
+                  journal
                   transport
                   claim
                   (DeliverReaction target key claim.reactionAction claim.previousReactionNative)
@@ -321,7 +312,7 @@ deliveryWorker workerId transports = localDomain "delivery" $ do
         | not claim.capabilities.redact -> pure (DeliverySuppressedAs "redaction unsupported", [])
         | Just target <- claim.actionTarget ->
             withTransport claim $ \transport -> do
-              attempt <- runTransport transport claim (DeliverRedaction target)
+              attempt <- runTransport journal transport claim (DeliverRedaction target)
               pure (toCompletion claim.attemptCount now attempt, [])
         | otherwise -> pure (DeliveryPermanentlyFailed "redaction target has no native copy", [])
       EventMembership -> pure (DeliverySuppressedAs "membership events are not delivered", [])
@@ -334,7 +325,7 @@ deliveryWorker workerId transports = localDomain "delivery" $ do
           )
       Just transport -> act transport
 
-    deliverContent now claim transport operation = do
+    deliverContent journal now claim transport operation = do
       nativeMentions <-
         deliveryMentionNatives claim.endpointId (mentionIdentities claim.body)
       mediaResult <- trySync (loadDeliveryMedia claim.capabilities claim.body)
@@ -362,7 +353,7 @@ deliveryWorker workerId transports = localDomain "delivery" $ do
         Right _
           | null lowered.chunks -> pure (DeliverySuppressedAs "lowering produced no output", loweredNotes)
           | otherwise -> do
-              attempt <- runTransport transport claim (operation lowered)
+              attempt <- runTransport journal transport claim (operation lowered)
               case attempt of
                 AttemptMediaFallback err -> do
                   let relowered = lowerWith (mediaTextCaps claim.capabilities) []
@@ -372,7 +363,7 @@ deliveryWorker workerId transports = localDomain "delivery" $ do
                     then pure (DeliverySuppressedAs "media fallback produced no output", fallbackNotes)
                     else do
                       logLowered claim "delivery lowered after media failure" relowered fallbackNotes
-                      secondAttempt <- runTransport transport claim (operation relowered)
+                      secondAttempt <- runTransport journal transport claim (operation relowered)
                       let completion' = case secondAttempt of
                             AttemptMediaFallback err' -> DeliveryPermanentlyFailed ("media fallback loop: " <> err')
                             other -> toCompletion claim.attemptCount now other
@@ -391,8 +382,8 @@ deliveryWorker workerId transports = localDomain "delivery" $ do
             "lower_notes" .= toJSON notes
           ]
 
-    runTransport transport claim operation =
-      liftIO (trySyncIO (transport.deliver claim operation)) >>= \case
+    runTransport journal transport claim operation =
+      liftIO (trySyncIO (transport.deliver journal claim operation)) >>= \case
         Left e ->
           pure
             ( AttemptOutcomeUnknown
@@ -513,41 +504,68 @@ loweredText = fmap T.concat . traverse emit
       NCard {} -> Left "text emitter received a native card"
 
 -- | Adapter for OneBot-shaped edge transports.  Each lowered chunk is one
--- send, and no OneBot send is idempotent: once a chunk may have taken effect,
--- a later failure parks the delivery rather than retrying and duplicating the
--- prefix chunks.
-oneBotDeliveryTransport :: Platform -> PlatformBackend -> DeliveryTransport
-oneBotDeliveryTransport platform backend =
+-- send. Successful parts retain their receipts; uncertain parts park until
+-- reconciled because the OneBot edge cannot deduplicate a replay.
+oneBotDeliveryTransport :: HttpRuntime -> Platform -> PlatformBackend -> DeliveryTransport
+oneBotDeliveryTransport runtime platform backend =
   DeliveryTransport
     { platform,
-      deliver = \claim -> \case
-        DeliverMessage lowered -> sendChunks claim lowered 0 False Nothing lowered.chunks
+      deliver = \journal claim -> \case
+        DeliverMessage lowered -> sendChunks journal claim lowered
         DeliverReaction target key action _ -> sendReaction target key action
         DeliverEdit {} -> pure (AttemptPermanentlyFailed "OneBot endpoint advertised edit without an emitter")
         DeliverRedaction {} -> pure (AttemptPermanentlyFailed "OneBot endpoint advertised redaction without an emitter")
     }
   where
-    sendChunks _ _ _ _ firstNative [] = pure (AttemptAccepted firstNative)
-    sendChunks claim lowered index sentAny firstNative (chunk : rest) =
-      case oneBotNodes chunk of
-        Left err -> pure (AttemptPermanentlyFailed err)
-        Right body -> case oneBotReplySegment index lowered.replyNative of
-          Left err -> pure (AttemptPermanentlyFailed err)
-          Right replyPrefix ->
-            backend.pbCall (sendChatMsg (GroupId claim.compatibilityConversationId) (replyPrefix <> body)) oneBotTimeoutMs >>= \case
+    sendChunks journal claim lowered = do
+      let chunks = concatMap splitFiles lowered.chunks
+          prepare index chunk = case chunk of
+            [NMedia payload meta]
+              | meta.kind == MFile && platform == PlatformQQ ->
+                  resolveDeliveryMedia runtime deliveryMediaItemBytes 2048 payload meta.sizeBytes >>= \case
+                    Left err -> pure (Left (AttemptMediaFallback err))
+                    Right bytes -> pure (Right (Left (bytes, fromMaybe "artifact" meta.name)))
+            _ -> pure $ case (,) <$> oneBotNodes chunk <*> oneBotReplySegment index lowered.replyNative of
+              Left err -> Left (AttemptPermanentlyFailed err)
+              Right (body, reply) -> Right (Right (reply <> body))
+      prepareParts prepare chunks >>= \case
+        Left err -> pure err
+        Right payloads -> runDeliveryParts
+          journal
+          NonIdempotentParts
+          AttemptAccepted
+          [wireFingerprint (if i == 0 then lowered.replyNative else Nothing) chunk | (i, chunk) <- zip [0 :: Int ..] chunks]
+          payloads
+          $ \_ payload -> do
+            let gid = GroupId claim.compatibilityConversationId
+            response <- case payload of
+              Right body -> backend.pbCall (sendChatMsg gid body) oneBotTimeoutMs
+              Left (bytes, name) -> withQQFile bytes $ \path ->
+                backend.pbCall (if isPrivateChat gid then UploadPrivateFile (privateChatUserId gid) path name else UploadGroupFile gid path name) 60000
+            pure $ case response of
               Left err
-                | sentAny || not (failedBeforeEffect err) -> pure (AttemptOutcomeUnknown err)
-                | otherwise -> pure (AttemptRetryable err)
-              -- The edge answered, so it is up: this is a refusal of the
-              -- content itself (risk control, a banned link, a dead target),
-              -- not a transport outage.
-              Right (Response _ retcode payload _)
-                | retcode /= 0 ->
-                    let err = "retcode " <> T.pack (show retcode)
-                     in pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRejected err
-                | otherwise -> do
-                    let native = NativeEventId . T.pack . show <$> extractOutMid payload
-                    sendChunks claim lowered (index + 1) True (firstNative <|> native) rest
+                | failedBeforeEffect err -> AttemptRetryable err
+                | otherwise -> AttemptOutcomeUnknown err
+              Right (Response _ retcode value _)
+                | retcode /= 0 -> AttemptRejected ("retcode " <> T.pack (show retcode))
+                | otherwise -> AttemptAccepted (NativeEventId . T.pack . show <$> extractOutMid value)
+
+    -- QQ files are file-library uploads, each its own wire part. Other nodes
+    -- retain their order and the existing multi-image message behavior.
+    splitFiles [] = []
+    splitFiles (node@(NMedia _ meta) : rest) | meta.kind == MFile = [node] : splitFiles rest
+    splitFiles nodes = let (prefix, rest) = break isFile nodes in prefix : splitFiles rest
+    isFile (NMedia _ meta) = meta.kind == MFile
+    isFile _ = False
+
+    -- This mount is an edge concern. Canonical publishers never know NapCat
+    -- paths; files exist here only for the duration of one bounded upload.
+    withQQFile bytes action = do
+      createDirectoryIfMissing True "var/outbox"
+      withBinaryTempFile "var/outbox" "qq-artifact" $ \path handle -> do
+        BS.hPut handle bytes
+        hClose handle
+        action (T.pack ("/data/outbox/" <> takeFileName path))
 
     sendReaction (NativeEventId target) key action =
       case oneBotReactionAction (NativeEventId target) key action of

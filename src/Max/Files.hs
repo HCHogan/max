@@ -21,6 +21,7 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobFile), enqueueJob)
@@ -31,9 +32,9 @@ import Max.Effects.Http (Http, getBytesQqCompatible)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.IR (Body (..), MediaKind (MFile), MediaMeta (..), Node (NMedia), Phase (Canonical))
+import Max.Platform.Types (CanonicalMessageId (..))
 import OneBot.Action (Action (GetGroupFileUrl), Response (..))
 import OneBot.Segment (FileSegInfo (..), Segment (..))
-import Max.Platform.Types (CanonicalMessageId (..))
 import OneBot.Types (GroupId (..), UserId (..))
 
 -- | One inbound file pending fetch.
@@ -132,7 +133,8 @@ fileLeaseSeconds :: Int
 fileLeaseSeconds = 900
 
 fileWorker ::
-  ( Log :> es,
+  ( Concurrent :> es,
+    Log :> es,
     Http :> es,
     Blob :> es,
     WithConnection :> es,
@@ -196,7 +198,7 @@ processOne job = do
 -- worth another go, since the commonest cause is NapCat not being
 -- connected yet after a restart.
 resolveUrl ::
-  PlatformApi :> es =>
+  (PlatformApi :> es) =>
   FileJob ->
   Eff es (Either Text Text)
 resolveUrl job = case job.fjUrlHint of

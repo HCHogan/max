@@ -26,6 +26,7 @@ module Max.Sandbox.Docker
     inspectVolumePresence,
     listContainersByPrefix,
     listVolumesByPrefix,
+
     -- * Exec
     ExecResult (..),
     SandboxManifest (..),
@@ -33,13 +34,18 @@ module Max.Sandbox.Docker
     runPreparePackages,
     runRead,
     runWrite,
+
     -- * Copy
     runCopyToContainer,
     runCopyFromContainer,
+    readSandboxArtifact,
+    readBoundedArtifact,
+
     -- * Tuning knobs
     maxOutputBytes,
     maxSpillBytes,
     nixVolume,
+
     -- * Helpers
     shellQuote,
     wrapPackages,
@@ -71,6 +77,7 @@ import System.Process
     waitForProcess,
     withCreateProcess,
   )
+import System.Timeout (timeout)
 import Text.Read (readMaybe)
 
 -- | Per-call stdout/stderr cap (bytes).  Anything past this is
@@ -917,6 +924,56 @@ runCopyToContainer container hostPath containerPath = do
           <> ": "
           <> T.strip (T.pack err)
 
+-- | Read bytes directly from the container with a bound at both ends. No
+-- unbounded host staging file or readFile allocation precedes validation.
+readSandboxArtifact :: Text -> Text -> IO (Either Text BS.ByteString)
+readSandboxArtifact container path = do
+  result <- try @IOException
+    $ timeout (35 * 1_000_000)
+    $ withCreateProcess
+      ( proc
+          "docker"
+          [ "exec",
+            "--workdir",
+            "/work",
+            T.unpack container,
+            "timeout",
+            "30",
+            "head",
+            "-c",
+            show (artifactLimit + 1),
+            "--",
+            T.unpack path
+          ]
+      )
+        { std_out = CreatePipe,
+          std_err = NoStream
+        }
+    $ \_ output _ process ->
+      case output of
+        Nothing -> pure (Left "sandbox artifact stream unavailable")
+        Just handle -> do
+          bytes <- readBoundedArtifact artifactLimit handle
+          status <- waitForProcess process
+          pure $ case status of
+            ExitSuccess -> bytes
+            ExitFailure code -> Left ("sandbox artifact read failed: " <> T.pack (show code))
+  pure $ case result of
+    Left err -> Left (T.pack (show err))
+    Right Nothing -> Left "sandbox artifact read timed out"
+    Right (Just value) -> value
+  where
+    artifactLimit = 64 * 1024 * 1024
+
+-- | Retain at most limit+1 bytes; the extra byte distinguishes an exact fit.
+readBoundedArtifact :: Int -> Handle -> IO (Either Text BS.ByteString)
+readBoundedArtifact limit handle = do
+  bytes <- BS.hGet handle (max 0 limit + 1)
+  pure $
+    if BS.length bytes > max 0 limit
+      then Left "sandbox artifact exceeds byte limit"
+      else Right bytes
+
 -- | @docker cp CONTAINER:CONTAINER_PATH HOST_PATH@.  Used by
 -- @send_image_from_sandbox@ / @send_file_from_sandbox@ to materialise
 -- a sandbox artifact onto the host so we can read or stage it.
@@ -1014,7 +1071,7 @@ packageExpression packages =
       [ "(pkgs.python3.withPackages (ps: [ "
           <> T.unwords (map (attributeValue "ps") python)
           <> " ]))"
-        | not (null python)
+      | not (null python)
       ]
 
 attributeValue :: Text -> Text -> Text

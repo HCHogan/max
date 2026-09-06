@@ -70,13 +70,13 @@ import Max.IR.Digest (digest)
 import Max.IR.Lower (LoweredMessage (..), OutboundCaps (..), Tier (..), textOnlyCaps)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.Platform.Delivery
-  ( DeliveryAttempt (..),
-    DeliveryOperation (..),
+  ( DeliveryOperation (..),
     DeliveryTransport (..),
     fanOutMediaChunks,
     loweredText,
     resolveDeliveryMedia,
   )
+import Max.Platform.Delivery.Parts
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (..))
 import Max.Platform.Store
   ( CursorRecord (..),
@@ -479,40 +479,32 @@ iMessageDeliveryTransport :: HttpRuntime -> IMessageConfig -> DeliveryTransport
 iMessageDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformIMessage,
-      deliver = \claim -> \case
-        DeliverMessage lowered -> sendChunks claim lowered
+      deliver = \journal _claim -> \case
+        DeliverMessage lowered -> sendChunks journal lowered
         DeliverEdit {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised edit without an emitter")
         DeliverReaction {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised reaction without an emitter")
         DeliverRedaction {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised redaction without an emitter")
     }
   where
-    sendChunks _claim lowered = do
-      prepareAll (0 :: Int) (fanOutMediaChunks lowered.chunks) >>= \case
+    sendChunks journal lowered = do
+      let chunks = fanOutMediaChunks lowered.chunks
+      prepareParts (\index -> prepareChunk (if index == 0 then lowered.replyNative else Nothing)) chunks >>= \case
         Left (IMessageContractFailure err) -> pure (AttemptPermanentlyFailed err)
         Left (IMessageMediaFailure err) -> pure (AttemptMediaFallback err)
-        Right prepared -> sendAll False Nothing prepared
-      where
-        prepareAll _ [] = pure (Right [])
-        prepareAll index (chunk : rest) =
-          prepareChunk (if index == 0 then lowered.replyNative else Nothing) chunk >>= \case
-            Left err -> pure (Left err)
-            Right prepared -> fmap (prepared :) <$> prepareAll (index + 1) rest
-
-        sendAll _ firstNative [] = pure (AttemptAccepted firstNative)
-        sendAll sentAny firstNative ((replyTarget, params) : rest) =
-          bridgeRpc runtime cfg "send" params >>= \case
-            Left (BridgeBeforeEffect err) ->
-              pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRetryable err
-            Left (BridgeRejected err) ->
-              pure $ if sentAny then AttemptOutcomeUnknown err else AttemptRetryable err
-            Left (BridgeOutcomeUnknown err) -> pure (AttemptOutcomeUnknown err)
-            Right value -> case parseEither sendResultParser value of
-              Left err -> pure (AttemptOutcomeUnknown ("imsg send response: " <> T.pack err))
-              Right guid ->
-                sendAll
-                  True
-                  (firstNative <|> iMessageAuthoritativeSendGuid replyTarget guid)
-                  rest
+        Right prepared -> runDeliveryParts
+          journal
+          NonIdempotentParts
+          AttemptAccepted
+          [wireFingerprint (if i == 0 then lowered.replyNative else Nothing) chunk | (i, chunk) <- zip [0 :: Int ..] chunks]
+          prepared
+          $ \_ (replyTarget, params) ->
+            bridgeRpc runtime cfg "send" params >>= \case
+              Left (BridgeBeforeEffect err) -> pure (AttemptRetryable err)
+              Left (BridgeRejected err) -> pure (AttemptRejected err)
+              Left (BridgeOutcomeUnknown err) -> pure (AttemptOutcomeUnknown err)
+              Right value -> case parseEither sendResultParser value of
+                Left err -> pure (AttemptOutcomeUnknown ("imsg send response: " <> T.pack err))
+                Right guid -> pure (AttemptAccepted (iMessageAuthoritativeSendGuid replyTarget guid))
 
     prepareChunk replyTarget chunk = case loweredText chunk of
       Left err -> pure (Left (IMessageContractFailure err))
@@ -524,9 +516,9 @@ iMessageDeliveryTransport runtime cfg =
             Right bytes ->
               let typed = iMessageUploadMeta meta bytes
                in uploadBridgeAttachment runtime cfg typed bytes >>= \case
-                Left err -> pure (Left (IMessageMediaFailure err))
-                Right uploadId ->
-                  pure (Right (replyTarget, iMessageSendParams cfg replyTarget body (Just ("upload:" <> uploadId))))
+                    Left err -> pure (Left (IMessageMediaFailure err))
+                    Right uploadId ->
+                      pure (Right (replyTarget, iMessageSendParams cfg replyTarget body (Just ("upload:" <> uploadId))))
         _ -> pure (Left (IMessageContractFailure "iMessage emitter received more than one native media node"))
 
 data IMessageEmitFailure

@@ -42,6 +42,7 @@ import Max.MaxOpsNotificationSpec qualified as MaxOpsNotificationSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PlatformStoreSpec qualified as PlatformStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
+import Max.PublicationSpec qualified as PublicationSpec
 import Max.RecallSpec qualified as RecallSpec
 import System.Environment (lookupEnv)
 import System.Exit (die)
@@ -84,6 +85,7 @@ main = do
         RecallSpec.spec pool
         PromptIntegrationSpec.spec pool
         PlatformStoreSpec.spec pool
+        PublicationSpec.spec pool
         MaxOpsNotificationSpec.spec pool
       -- Final wipe so a developer running tests against the dev DB
       -- doesn't leave random fixture rows behind.

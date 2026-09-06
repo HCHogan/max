@@ -20,16 +20,16 @@ import Data.Text qualified as T
 import Data.Time (getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
+import Effectful.Concurrent (Concurrent)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobForward), enqueueJob)
 import Max.Dispatch (DispatchMessage (..))
-import Max.Util (tshow)
 import Max.Effects.PlatformApi (PlatformApi, callAction)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
-import Max.Images (enqueueImagesFromNode)
 import Max.IR (Body (..), ForwardRef (..), Node (NForward))
 import Max.IR.Digest (digest)
+import Max.Images (enqueueImagesFromNode)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (Backfill))
 import Max.Platform.QQ (ensureQQEndpointFor, qqIngestBody)
 import Max.Platform.Store
@@ -49,6 +49,7 @@ import Max.Platform.Types
     NativeEventId (..),
     NativeUserId (..),
   )
+import Max.Util (tshow)
 import OneBot.Action (Action (GetForwardMsg), Response (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), UserId (..), parseIntId)
@@ -116,7 +117,7 @@ forwardLeaseSeconds :: Int
 forwardLeaseSeconds = 300
 
 forwardWorker ::
-  (Log :> es, PlatformApi :> es, WithConnection :> es, IOE :> es) =>
+  (Concurrent :> es, Log :> es, PlatformApi :> es, WithConnection :> es, IOE :> es) =>
   FetchSignal ->
   Eff es ()
 forwardWorker sig = localDomain "forward-worker" $ do

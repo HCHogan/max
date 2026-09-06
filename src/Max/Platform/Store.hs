@@ -55,6 +55,7 @@ module Max.Platform.Store
     DeliveryClaim (..),
     deliveryMentionNatives,
     resolveMentionIdentities,
+    resolveNativeTarget,
     ensureEndpointPrincipals,
     mentionPrincipalsFor,
     expiredSendingDeliverySql,
@@ -1079,10 +1080,9 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
           NativeUserId sender = envelope.senderNativeId
       exact <-
         query
-          "SELECT canonical_message_id FROM message_deliveries \
+          "SELECT DISTINCT canonical_message_id FROM message_delivery_copies \
           \ WHERE endpoint_id = ? AND native_event_id = ? \
-          \   AND idempotency_key NOT LIKE 'source:%' \
-          \ FOR UPDATE"
+          \   AND idempotency_key NOT LIKE 'source:%'"
           (envelope.endpointId.unEndpointId, nativeEvent)
       candidate <- case exact :: [Only Int64] of
         [Only cid] -> pure (Just cid)
@@ -1112,12 +1112,24 @@ ingestEnvelope unsafeOptions unsafeEnvelope = withTransaction $ do
               | otherwise -> pure Nothing
         _ -> error "ingestEnvelope: duplicate native delivery id invariant violated"
       forM candidate $ \cid -> do
+        -- Every part writer locks the parent first, including reconciliation.
+        parents <- query "SELECT delivery_id FROM message_deliveries WHERE canonical_message_id=? AND endpoint_id=? ORDER BY delivery_id FOR UPDATE" (cid, envelope.endpointId.unEndpointId)
+        let _ = parents :: [Only Int64]
+        _ <-
+          execute
+            "UPDATE message_delivery_parts p SET status='confirmed',updated_at=now() FROM message_deliveries d WHERE d.delivery_id=p.delivery_id AND d.endpoint_id=? AND d.canonical_message_id=? AND p.native_event_id=?"
+            (envelope.endpointId.unEndpointId, cid, nativeEvent)
+        _ <-
+          execute
+            "UPDATE message_deliveries d SET status='confirmed',confirmed_at=now(),updated_at=now() WHERE d.endpoint_id=? AND d.canonical_message_id=? AND d.status='accepted_unconfirmed' AND EXISTS (SELECT 1 FROM message_delivery_parts p WHERE p.delivery_id=d.delivery_id) AND NOT EXISTS (SELECT 1 FROM message_delivery_parts p WHERE p.delivery_id=d.delivery_id AND p.status<>'confirmed')"
+            (envelope.endpointId.unEndpointId, cid)
         _ <-
           execute
             "UPDATE message_deliveries \
             \ SET status = 'confirmed', native_event_id = ?, confirmed_at = ?, \
             \     lease_owner = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = now() \
-            \ WHERE canonical_message_id = ? AND endpoint_id = ?"
+            \ WHERE canonical_message_id = ? AND endpoint_id = ? \
+            \ AND NOT EXISTS (SELECT 1 FROM message_delivery_parts p WHERE p.delivery_id=message_deliveries.delivery_id)"
             (nativeEvent, envelope.receivedAt, cid, envelope.endpointId.unEndpointId)
         _ <-
           execute
@@ -2330,14 +2342,14 @@ claimDeliveriesWhere workerId mDelivery mLane limit leaseDuration = do
       \     UNION ALL \
       \     SELECT target_delivery.native_event_id, 1 AS source_rank, target_delivery.updated_at AS copied_at, \
       \            target_delivery.delivery_id AS copy_id \
-      \     FROM message_deliveries target_delivery \
+      \     FROM message_delivery_copies target_delivery \
       \     WHERE target_delivery.endpoint_id = c.endpoint_id \
       \       AND target_delivery.native_event_id IS NOT NULL \
       \       AND (target_delivery.canonical_message_id = action_relation.target_canonical_message_id \
       \            OR (action_relation.target_canonical_message_id IS NULL \
       \                AND target_delivery.native_event_id = action_relation.target_native_event_id)) \
       \   ) copies \
-      \   ORDER BY copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
+      \   ORDER BY CASE WHEN copies.native_event_id = action_relation.target_native_event_id THEN 0 ELSE 1 END, copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
       \ ) action_copy ON true \
       \ LEFT JOIN LATERAL ( \
       \   SELECT copies.native_event_id FROM ( \
@@ -2361,7 +2373,7 @@ claimDeliveriesWhere workerId mDelivery mLane limit leaseDuration = do
       \     FROM message_relations prior_relation \
       \     JOIN messages prior_message \
       \       ON prior_message.canonical_message_id = prior_relation.canonical_message_id \
-      \     JOIN message_deliveries prior_delivery \
+      \     JOIN message_delivery_copies prior_delivery \
       \       ON prior_delivery.endpoint_id = c.endpoint_id \
       \      AND prior_delivery.canonical_message_id = prior_relation.canonical_message_id \
       \      AND prior_delivery.native_event_id IS NOT NULL \
@@ -2394,13 +2406,13 @@ claimDeliveriesWhere workerId mDelivery mLane limit leaseDuration = do
       \     UNION ALL \
       \     SELECT target_delivery.native_event_id, 1 AS source_rank, target_delivery.updated_at AS copied_at, \
       \            target_delivery.delivery_id AS copy_id \
-      \     FROM message_deliveries target_delivery \
+      \     FROM message_delivery_copies target_delivery \
       \     WHERE target_delivery.endpoint_id = c.endpoint_id \
       \       AND target_delivery.native_event_id IS NOT NULL \
       \       AND (target_delivery.canonical_message_id = reply_relation.target_canonical_message_id \
       \            OR target_delivery.native_event_id = reply_relation.target_native_event_id) \
       \   ) copies \
-      \   ORDER BY copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
+      \   ORDER BY CASE WHEN copies.native_event_id = reply_relation.target_native_event_id THEN 0 ELSE 1 END, copies.source_rank, copies.copied_at DESC, copies.copy_id DESC LIMIT 1 \
       \ ) reply_copy ON true \
       \ ORDER BY c.delivery_id"
       ( (mDelivery, mDelivery, mOnlyPlatform, mOnlyPlatform, mExceptPlatforms)
@@ -2445,8 +2457,10 @@ completeDelivery workerId (DeliveryId delivery) attempt lowerNotes completion = 
     changed <- case safeCompletion of
       DeliveryConfirmedAs native ->
         finish ("confirmed" :: Text) native Nothing Nothing True
-      DeliveryAccepted native ->
-        finish "accepted_unconfirmed" native Nothing Nothing False
+      DeliveryAccepted native -> do
+        rows <- query "SELECT EXISTS (SELECT 1 FROM message_delivery_parts WHERE delivery_id=?) AND NOT EXISTS (SELECT 1 FROM message_delivery_parts WHERE delivery_id=? AND status<>'confirmed')" (delivery, delivery)
+        let confirmed = rows == [Only True]
+        finish (if confirmed then "confirmed" else "accepted_unconfirmed") native Nothing Nothing confirmed
       DeliveryRetry err next ->
         finish "failed" Nothing (Just err) (Just next) False
       DeliveryUnknown err next ->
@@ -2471,7 +2485,7 @@ completeDelivery workerId (DeliveryId delivery) attempt lowerNotes completion = 
         query
           "SELECT EXISTS (\
           \ SELECT 1 FROM message_deliveries target\
-          \ JOIN message_deliveries owner ON owner.endpoint_id = target.endpoint_id\
+          \ JOIN message_delivery_copies owner ON owner.endpoint_id = target.endpoint_id\
           \ WHERE target.delivery_id = ? AND owner.delivery_id <> target.delivery_id\
           \   AND owner.native_event_id = ?)"
           (delivery, native)
@@ -2488,7 +2502,7 @@ completeDelivery workerId (DeliveryId delivery) attempt lowerNotes completion = 
         \     confirmed_at = CASE WHEN ? THEN now() ELSE confirmed_at END, \
         \     lease_owner = NULL, lease_expires_at = NULL, updated_at = now() \
         \ WHERE delivery_id = ? AND status = 'sending' AND lease_owner = ? \
-        \   AND attempt_count = ?"
+        \   AND attempt_count = ? AND lease_expires_at > clock_timestamp()"
         ( status,
           unNativeEventId <$> native,
           Jsonb (toJSON lowerNotes),
@@ -2501,59 +2515,45 @@ completeDelivery workerId (DeliveryId delivery) attempt lowerNotes completion = 
         )
 
 listUnconfirmedDeliveries ::
-  (WithConnection :> es, IOE :> es) =>
-  Platform ->
-  Int ->
-  Eff es [UnconfirmedDelivery]
+  (WithConnection :> es, IOE :> es) => Platform -> Int -> Eff es [UnconfirmedDelivery]
 listUnconfirmedDeliveries platform limit = do
   rows <-
     query
-      "SELECT d.delivery_id, d.native_event_id, d.updated_at \
-      \ FROM message_deliveries d \
-      \ JOIN conversation_endpoints e USING (endpoint_id) \
-      \ JOIN platform_accounts a USING (platform_account_id) \
-      \ WHERE a.platform = ? AND d.status = 'accepted_unconfirmed' \
-      \   AND d.native_event_id IS NOT NULL \
-      \ ORDER BY d.updated_at, d.delivery_id LIMIT ?"
+      "SELECT d.delivery_id,d.native_event_id,d.updated_at FROM message_delivery_copies d JOIN conversation_endpoints e USING(endpoint_id) JOIN platform_accounts a USING(platform_account_id) WHERE a.platform=? AND d.status='accepted_unconfirmed' AND d.part_status='accepted_unconfirmed' ORDER BY d.updated_at,d.delivery_id LIMIT ?"
       (renderPlatform platform, limit)
-  pure
-    [ UnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) updated
-    | (delivery, native, updated) <- rows
-    ]
+  pure [UnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) updated | (delivery, native, updated) <- rows]
 
--- | Reconciliation CAS independent of a delivery lease.  A late status query
--- cannot overwrite an echo that already confirmed the same row.
+-- | Provider status settles one part. The parent is confirmed only after all
+-- parts are proven; historical deliveries retain their single-receipt behavior.
 confirmUnconfirmedDelivery ::
-  (WithConnection :> es, IOE :> es) =>
-  DeliveryId ->
-  NativeEventId ->
-  Eff es Bool
-confirmUnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) = do
+  (WithConnection :> es, IOE :> es) => DeliveryId -> NativeEventId -> Eff es Bool
+confirmUnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) = withTransaction $ do
+  lockDeliveryParent delivery
+  parts <- execute "UPDATE message_delivery_parts SET status='confirmed',last_error=NULL,updated_at=now() WHERE delivery_id=? AND native_event_id=? AND status='accepted_unconfirmed'" (delivery, native)
   changed <-
     execute
-      "UPDATE message_deliveries \
-      \ SET status = 'confirmed', confirmed_at = now(), last_error = NULL, updated_at = now() \
-      \ WHERE delivery_id = ? AND native_event_id = ? AND status = 'accepted_unconfirmed'"
+      "UPDATE message_deliveries d SET status='confirmed',confirmed_at=now(),last_error=NULL,updated_at=now() WHERE delivery_id=? AND status='accepted_unconfirmed' AND ((native_event_id=? AND NOT EXISTS (SELECT 1 FROM message_delivery_parts p WHERE p.delivery_id=d.delivery_id)) OR (EXISTS (SELECT 1 FROM message_delivery_parts p WHERE p.delivery_id=d.delivery_id) AND NOT EXISTS (SELECT 1 FROM message_delivery_parts p WHERE p.delivery_id=d.delivery_id AND p.status<>'confirmed')))"
       (delivery, native)
-  pure (changed == 1)
+  pure (parts > 0 || changed > 0)
 
--- | A provider's explicit @failed@ send status proves the earlier accepted
--- attempt did not complete.  Only that evidence may put a non-idempotent send
--- back on the ordinary retry queue.
+-- | Explicit provider failure permits retrying this part alone. Successful
+-- siblings keep their receipts and will be skipped by the transport runner.
 retryUnconfirmedDelivery ::
-  (WithConnection :> es, IOE :> es) =>
-  DeliveryId ->
-  NativeEventId ->
-  Text ->
-  Eff es Bool
-retryUnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) reason = do
+  (WithConnection :> es, IOE :> es) => DeliveryId -> NativeEventId -> Text -> Eff es Bool
+retryUnconfirmedDelivery (DeliveryId delivery) (NativeEventId native) reason = withTransaction $ do
+  lockDeliveryParent delivery
+  parts <- execute "UPDATE message_delivery_parts SET status='retry',native_event_id=NULL,last_error=?,updated_at=now() WHERE delivery_id=? AND native_event_id=? AND status='accepted_unconfirmed'" (reason, delivery, native)
   changed <-
     execute
-      "UPDATE message_deliveries \
-      \ SET status = 'failed', next_attempt_at = now(), last_error = ?, updated_at = now() \
-      \ WHERE delivery_id = ? AND native_event_id = ? AND status = 'accepted_unconfirmed'"
-      (reason, delivery, native)
-  pure (changed == 1)
+      "UPDATE message_deliveries d SET status='failed',next_attempt_at=now(),last_error=?,updated_at=now(),native_event_id=CASE WHEN native_event_id=? THEN NULL ELSE native_event_id END WHERE delivery_id=? AND status='accepted_unconfirmed' AND (? OR (native_event_id=? AND NOT EXISTS (SELECT 1 FROM message_delivery_parts p WHERE p.delivery_id=d.delivery_id)))"
+      (reason, native, delivery, parts > 0, native)
+  pure (changed > 0)
+
+lockDeliveryParent :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es ()
+lockDeliveryParent delivery = do
+  rows <- query "SELECT delivery_id FROM message_deliveries WHERE delivery_id=? FOR UPDATE" (Only delivery)
+  let _ = rows :: [Only Int64]
+  pure ()
 
 listPlatformStatus ::
   (WithConnection :> es, IOE :> es) =>
@@ -3107,7 +3107,7 @@ resolveReply (EndpointId endpoint) relations = case find isReply relations of
         \ UNION ALL \
         \ SELECT m.canonical_message_id, m.message_id, 1 AS source_rank, \
         \        d.updated_at AS copied_at, d.delivery_id AS copy_id \
-        \ FROM message_deliveries d \
+        \ FROM message_delivery_copies d \
         \ JOIN messages m USING (canonical_message_id) \
         \ WHERE d.endpoint_id = ? AND d.native_event_id = ? \
         \ ) target \
@@ -3160,7 +3160,7 @@ resolveNativeTarget (EndpointId endpoint) target = do
       \ UNION ALL \
       \ SELECT canonical_message_id, 1 AS source_rank, updated_at AS copied_at, \
       \        delivery_id AS copy_id \
-      \ FROM message_deliveries \
+      \ FROM message_delivery_copies \
       \ WHERE endpoint_id = ? AND native_event_id = ? \
       \ ) target \
       \ ORDER BY target.source_rank, target.copied_at DESC, target.copy_id DESC \
