@@ -1,7 +1,9 @@
 # ADR 008: Durable Tasks and Conversation Coordination
 
-- Status: Accepted. The operator reports the initial task cutover complete.
-  **This follow-up (migration 088) is local implementation, not yet deployed.**
+- Status: Accepted. Read-only production inspection on 2026-09-06 confirmed
+  migrations 087–089 and deployed revision `4e9f934` on h610. The P0 follow-up
+  below includes migration 091; release validation and real-provider behavioral
+  acceptance are separate gates in the cutover runbook.
   This decision retires the model-authored Plan DSL and adaptive-elaboration
   programme of [ADR 002](002-partial-plans-adaptive-elaboration.md), and the
   requirement in [ADR 007](007-plans-as-orchestration.md) that delegation and
@@ -11,7 +13,8 @@
 - Date: 2026-09-05.
 - Review baseline: `c53b95a`, version `0.17.3`. The baseline table below describes
   the pre-change implementation. The implementation section describes the follow-up to `4d27c41`.
-  Production health has not been independently rechecked in this change.
+  Deployment evidence does not establish operational health or completion of
+  the real-provider behavioral acceptance cases below.
 
 ## Context
 
@@ -305,7 +308,7 @@ No deployment, destructive cleanup, or Git commit is implied by implementation.
 | Capabilities | `Max.Task.Types` filters effective host grants for research/browser/sandbox. No Plan result schema is needed. Child grants are intersected again with current definitions on execution; no conversation-send tools are granted. |
 | Shared execution | `Max.Handler` dispatches tasks through the existing Agent, TurnRuntime, journal, browser scope and finalizer. Task attempts are excluded from legacy turn recovery; expired attempts get new fenced turns, not blind script replay. |
 | Budgets and scheduling | Tree-wide reservations: 200 tools, 400 agent-model rounds, 50-minute admission deadline; 40 active background tasks globally, ten per conversation/principal, fair principal ordering, depth parameter 15 and at most 40 attempts. Reservations survive crashes and replacement. Token/cost usage is observational, not an enforced spend ceiling; helper-model calls are not agent rounds. |
-| Frontend | One database-fenced activation per canonical conversation, 30 inline tools and a 375-second activation deadline. Successful delegation yields immediately. New same-author questions are not absorbed. Addressed controls bypass the LLM. |
+| Frontend | One database-fenced activation per canonical conversation, 60 inline tools and a 750-second activation deadline (migration 091 gives a 900-second ownership lease). Successful delegation yields immediately. New same-author questions are not absorbed. Addressed controls bypass the LLM. |
 | Output | Background attempts cannot insert conversation output. Root reports get separate frontend activations; nested reports wake their parent. Stale task revisions/attempts and expired frontend ownership cannot publish. A failed/silent summary model falls back to a bounded, literal report through the same fenced boundary. |
 | Monitors | New elaborated fires atomically link to tasks, retaining legacy admitted-turn readers. New monitors default to research; `configure_monitor` atomically selects research/browser/sandbox and change-only policy under CAS. Existing occurrences keep their frozen profile/policy. Versioned snapshots, single-flight, coalescing or bounded queues, explicit old-pending policy, separate cancellation of admitted work, change-only notifications based on stable `observation` plus status (whole-report fallback when absent) and bounded repeated failure notices. Canned reminders keep their existing outboxes. |
 | Operator visibility | `task_status`, `monitor_history`, `configure_monitor`, `!task`, and the admin durable-work view expose state, provenance, outstanding requests, overlap and failures. |
@@ -380,6 +383,32 @@ single-flight/one coalesced pending occurrence, heartbeat timing, cooldown
 intervals, transport/body safety and model context-window limits are invariants
 or external constraints, not quotas to multiply. The frontend lease becomes
 450 seconds so it exceeds the 375-second activation deadline.
+
+### P0 closure (2026-09-06)
+
+- The frontend limits above are doubled again from 30 tools / 375 seconds to
+  60 tools / 750 seconds. Migration 091 extends still-valid ownership leases
+  by 450 seconds, leaves expired leases untouched, and gives new claims 900
+  seconds. Background task budgets and provider admission remain as specified
+  in the fivefold table.
+- `maintenance health` and `verify` use the shared `Max.DB.Health` queries.
+  They no longer query the removed `plans` table. Expired task attempts,
+  overdue live tasks, expired active frontend leases, exhausted current task
+  notifications and failed requests fail the gate. Pending requests and
+  retrying tasks are reported without failing it. Integration tests execute
+  every production query on the latest schema and check unhealthy fixtures.
+- Cron overflow tests obtain their reference timestamp from PostgreSQL, so
+  exact occurrence/deadline comparisons use the database's microsecond
+  precision. The populated upgrade gate covers 087 → 088 preservation and
+  subsequent migrations, including active/expired frontend leases at 091.
+- Stream transport timeouts cannot interrupt publication between an outbox
+  commit and acknowledgement of the sent prefix. Partial streams carry an
+  explicit interruption outcome and fail the turn instead of recording
+  success. Caller cancellation still propagates and closes the reader.
+- Canned reminders resolve their stored body through the ordinary reply
+  placeholder path while retaining one canonical output per monitor fire.
+  Explicit mention placeholders retain native mention semantics; the system
+  does not prepend an additional mention of the initiator.
 
 The [cutover runbook](../runbooks/task-cutover.md) separates local deterministic
 validation from the real-provider/browser/platform trials still required at the

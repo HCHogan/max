@@ -14,6 +14,8 @@ import Effectful.PostgreSQL (execute, query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbLog)
 import Max.DB.AgentTurn
 import Max.DB.Connection (DbPool)
+import Max.DB.Health (operationalChecks)
+import Max.Task.Policy (frontendDeadlineSeconds)
 import Max.DB.Monitor
 import Max.DB.Task
 import Max.Effects.Tools (Tool (..))
@@ -30,6 +32,43 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
+  it "runs every production health query against the current schema" $ do
+    for_ operationalChecks $ \(label, _, sql) -> do
+      rows <- withDb pool $ query sql ()
+      rows `shouldBe` [Only (0 :: Int64)]
+      label `shouldNotBe` "plan_expired_wake_claim"
+
+  it "detects expired task/frontend ownership and distinguishes pending requests" $ do
+    source <- seed pool 900 1
+    _ <- admit pool source "health"
+    _ <- claimOne pool
+    (front, _, _) <- seed pool 901 1
+    withDb pool (claimFrontend front) `shouldReturn` True
+    [Only remaining] <- withDb pool $ query "SELECT extract(epoch FROM lease_until-clock_timestamp())::double precision FROM conversation_frontends WHERE turn_id=?" (Only front.atrTurnId)
+    (remaining :: Double) `shouldSatisfy` (> fromIntegral frontendDeadlineSeconds)
+    void $ withDb pool $ execute "UPDATE task_attempts SET lease_until=now()-interval '1 second'" ()
+    void $ withDb pool $ execute "UPDATE durable_tasks SET deadline=now()-interval '1 second'" ()
+    void $ withDb pool $ execute "UPDATE conversation_frontends SET lease_until=now()-interval '1 second'" ()
+    healthCount pool "task_expired_attempt" `shouldReturn` 1
+    healthCount pool "task_overdue_deadline" `shouldReturn` 1
+    healthCount pool "frontend_expired_lease" `shouldReturn` 1
+    healthCount pool "request_pending" `shouldReturn` 2
+    withDb pool (finishAgentTurn front TurnFailed 0 (Just "interrupted") Nothing)
+    healthCount pool "request_failed" `shouldReturn` 1
+    healthCount pool "frontend_expired_lease" `shouldReturn` 0
+    [critical | ("request_pending", critical, _) <- operationalChecks] `shouldBe` [False]
+
+  it "only fails notification health for an exhausted current obligation" $ do
+    source <- seed pool 900 1
+    _ <- admit pool source "notice-health"
+    execution <- claimOne pool
+    withDb pool (taskReport execution.atrTurnId success) `shouldReturn` True
+    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
+    void $ withDb pool $ execute "UPDATE task_notifications SET attempts=15" ()
+    healthCount pool "task_notification_exhausted" `shouldReturn` 1
+    void $ withDb pool $ execute "UPDATE task_notifications SET superseded_at=now()" ()
+    healthCount pool "task_notification_exhausted" `shouldReturn` 0
+
   it "admits once per source key and transfers the source obligation atomically" $ do
     source@(turn, _, _) <- seed pool 900 1
     (left, right) <- concurrently (admit pool source "same") (admit pool source "same")
@@ -389,7 +428,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
 
   it "advances cron after queue overflow without admitting an extra task" $ do
     (turn, seedMessage, actor) <- seed pool 900 1
-    now <- getCurrentTime
+    [Only now] <- withDb pool $ query "SELECT clock_timestamp()" ()
     Right monitor <- withDb pool (armElaboratedTimeMonitor (GroupId 900) actor turn "watch" (Just "* * * * *") now Map.empty)
     _ <- withDb pool (monitorControl (GroupId 900) actor False monitor.mrMonitorOrdinal.unMonitorOrdinal "configure" (Just 1) "watch" "queue" 1 "retain" False)
     insertOccurrence pool monitor "pending"
@@ -693,3 +732,10 @@ draft turn =
       turnOutputLink = Just (TurnOutputLink turn.atrTurnId 0),
       monitorFireId = Nothing
     }
+
+healthCount :: DbPool -> String -> IO Int64
+healthCount pool label = case [sql | (name, _, sql) <- operationalChecks, name == label] of
+  [sql] -> do
+    [Only count] <- withDb pool $ query sql ()
+    pure count
+  _ -> fail ("missing health check: " <> label)

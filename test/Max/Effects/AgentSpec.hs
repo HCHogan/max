@@ -176,6 +176,24 @@ spec = describe "Agent full loop" $ do
     readIORef calls `shouldReturn` 1
     result.reply `shouldSatisfy` maybe False (T.isInfixOf "task#42")
 
+  it "preserves a streamed prefix while returning an explicit interruption" $ do
+    events <- newIORef []
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    let interrupted = LLMInterpreter {liChat = \_ _ _ _ sink -> do
+          for_ sink ($ "第一段\n\n第二段")
+          pure (Right (InterruptedResp "第一段\n\n第二段没写完" "stream timed out"))}
+    result <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff . runConcurrent . runLog "agent-test" logger LogAttention
+        . runLLMWith interrupted
+        . runAgent (AgentLimits {maxTurns = 4}) (const (buildToolCatalog [] [])) $
+          agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    result.sentPrefix `shouldBe` "第一段\n\n"
+    result.reply `shouldBe` Just "第一段\n\n第二段没写完"
+    result.aborted `shouldBe` Just "LLM stream interrupted: stream timed out"
+    readIORef events `shouldReturn` [SeenFinalStream "第一段\n\n"]
+
   it "runs fake LLM + tool rounds and emits typed output events in memory" $ do
     events <- newIORef []
     calls <- newIORef (0 :: Int)

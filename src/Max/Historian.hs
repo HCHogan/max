@@ -556,6 +556,7 @@ generateHistorianCapture timeoutSeconds profile conversationId messages = do
         Nothing
     decodeResponse = \case
       Left err -> Left ("", "provider: " <> err, False)
+      Right (InterruptedResp raw err) -> Left (raw, "provider interrupted: " <> err, False)
       Right ToolCallsResp {} -> Left ("", "historian returned unexpected tool calls", False)
       Right (ContentResp raw) -> case parseEpisodeCapture raw of
         Left err -> Left (raw, T.pack err, True)

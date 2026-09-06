@@ -58,6 +58,7 @@ data SourceSlice = SourceSlice
 -- file-embed tracks existing files rather than directory membership, so adding
 -- an eligible file under one of these roots must accompany a byte change here;
 -- the source-bundle tests then prove that the new file shipped.
+-- Includes the ADR008 health queries and migration 091 lease upgrade fixture.
 embeddedFiles :: [(FilePath, BS.ByteString)]
 embeddedFiles =
   prefixDirectory "src" $(embedDir "src")

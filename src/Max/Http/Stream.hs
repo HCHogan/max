@@ -30,9 +30,11 @@ module Max.Http.Stream
 where
 
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (waitSTM, withAsync)
+import Control.Concurrent.STM (atomically, newTBQueueIO, orElse, readTBQueue, writeTBQueue)
+import Control.Monad (when)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Control.Monad (when)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -71,20 +73,20 @@ data StreamOutcome
 -- | POST @body@ and fold the SSE response as it arrives.
 --
 -- @onGrow@ fires after any frame that extended 'saText', with the
--- accumulator so far.  It is called on the request thread, so a slow
--- callback backpressures the read loop — which is what we want: sending
--- a QQ message must not race ahead of the socket.
+-- accumulator so far. A single-slot queue backpressures the reader while
+-- publication runs on the caller thread, outside the network timeout.
 streamPost ::
   (Log :> es, IOE :> es) =>
   HttpRuntime ->
   -- | Seconds to wait before each retry; length = max retries.  Only
   -- consulted while nothing has arrived yet.
   [Int] ->
-  -- | Timeout for the whole stream, seconds.
+  -- | Timeout for receiving the stream, seconds; publication is outside it.
   Int ->
   [Header] ->
   String -> -- url
   ByteString -> -- request body
+
   -- | One SSE payload folded into the accumulator
   -- ('Max.LLM.Stream.stepOpenAI' or @stepAnthropic@).
   (ByteString -> StreamAcc -> StreamAcc) ->
@@ -97,7 +99,8 @@ streamPost runtime delays secs hdrs url body step onGrow = go delays
       (out, retryOk) <- attempt
       case out of
         StreamFailed err
-          | retryOk, (d : rest) <- remaining -> do
+          | retryOk,
+            (d : rest) <- remaining -> do
               -- Only reachable when nothing arrived: any outcome with
               -- text comes back Truncated, never Failed.
               logAttention "stream: retrying" $
@@ -113,28 +116,37 @@ streamPost runtime delays secs hdrs url body step onGrow = go delays
       -- and it is also how we tell a retryable failure from one that
       -- has already said something.
       progress <- liftIO (newIORef emptyAcc)
-      result <- withRunInIO $ \run ->
-        -- The wall clock covers the callbacks too, not just the socket:
-        -- @onGrow@ sends QQ messages, so a long answer spends real time
-        -- in here.  That is the intended shape — better one bound on
-        -- "how long this call may take" than a separate one per read
-        -- that a slow group could never trip.
-        timeout (secs * 1_000_000) $ do
-          parseRequestEither url >>= \case
-            Left failure -> pure (Left failure)
-            Right request0 ->
-              withStreamingResponse
-                runtime
-                StandardPool
-                statusPreviewBytes
-                request0
-                  { HTTP.method = "POST",
-                    HTTP.requestHeaders = hdrs,
-                    HTTP.requestBody = HTTP.RequestBodyBS body,
-                    HTTP.responseTimeout =
-                      HTTP.responseTimeoutMicro (secs * 1_000_000)
-                  }
-                (\_ -> readLoop run progress)
+      result <- withRunInIO $ \run -> do
+        updates <- newTBQueueIO 1
+        -- A timeout must never interrupt publication between an outbox commit
+        -- and its sent-prefix acknowledgement. Otherwise the final tail would
+        -- publish that same text again. Caller cancellation still cancels both
+        -- threads and propagates; it is never converted into a partial reply.
+        let receive = timeout (secs * 1_000_000) $ do
+              parseRequestEither url >>= \case
+                Left failure -> pure (Left failure)
+                Right request0 ->
+                  withStreamingResponse
+                    runtime
+                    StandardPool
+                    statusPreviewBytes
+                    request0
+                      { HTTP.method = "POST",
+                        HTTP.requestHeaders = hdrs,
+                        HTTP.requestBody = HTTP.RequestBodyBS body,
+                        HTTP.responseTimeout =
+                          HTTP.responseTimeoutMicro (secs * 1_000_000)
+                      }
+                    (\_ -> readLoop updates progress)
+        withAsync receive $ \reader -> do
+          let drain = do
+                next <-
+                  atomically $
+                    (Left <$> readTBQueue updates) `orElse` (Right <$> waitSTM reader)
+                case next of
+                  Left acc -> run (onGrow acc) >> drain
+                  Right outcome -> pure outcome
+          drain
       soFar <- liftIO (readIORef progress)
       pure $ case result of
         Nothing -> stalled soFar "stream timed out" True
@@ -155,10 +167,11 @@ streamPost runtime delays secs hdrs url body step onGrow = go delays
     -- indistinguishable from an ordinary failed POST, so it stays
     -- retryable.  Once there is text, replaying would say it twice.
     stalled acc err retryOk
+      | acc.saDone = (StreamComplete acc, False)
       | T.null acc.saText && null acc.saCalls = (StreamFailed err, retryOk)
       | otherwise = (StreamTruncated acc err, False)
 
-    readLoop run progress bodyReader = loop "" emptyAcc
+    readLoop updates progress bodyReader = loop "" emptyAcc
       where
         loop buf acc = do
           chunk <- HTTP.brRead bodyReader
@@ -168,9 +181,11 @@ streamPost runtime delays secs hdrs url body step onGrow = go delays
               let (frames, rest) = sseFrames (buf <> chunk)
                   acc' = foldl (flip step) acc frames
               writeIORef progress acc'
-              when (acc'.saText /= acc.saText) (run (onGrow acc'))
+              when (acc'.saText /= acc.saText) (atomically (writeTBQueue updates acc'))
+              -- OpenAI usage may follow finish_reason in a later body chunk.
+              -- Continue collecting it; a timeout after a terminal frame still
+              -- returns the completed message via 'stalled'.
               loop rest acc'
-
 
 retryableTransportFailure :: TransportFailure -> Bool
 retryableTransportFailure = \case

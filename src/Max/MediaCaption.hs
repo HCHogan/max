@@ -168,6 +168,7 @@ mediaCaptionWorker profile = localDomain "media-caption" $ do
                       []
                   case eres of
                     Left err -> failed ("chat: " <> err)
+                    Right (InterruptedResp _ err) -> failed ("chat interrupted: " <> err)
                     Right (ToolCallsResp {}) -> failed "chat: unexpected tool calls"
                     Right (ContentResp raw)
                       | T.null (T.strip raw) -> failed "chat: empty caption"

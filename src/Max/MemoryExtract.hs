@@ -244,6 +244,7 @@ shrinkScope lease label sys header profile scope sid gid = do
             <> ["", "输出操作 JSON 数组："]
   chat (ChatCtx label (Just gid) Nothing Nothing Nothing Nothing Nothing) profile [MsgSystem sys, MsgUser input] [] >>= \case
     Left err -> logAttention (label <> ": chat failed") $ object ["error" .= err]
+    Right (InterruptedResp _ err) -> logAttention (label <> ": chat interrupted") $ object ["error" .= err]
     Right (ToolCallsResp {}) ->
       logAttention (label <> ": unexpected tool calls") $ object []
     Right (ContentResp raw) -> case parseOps raw of

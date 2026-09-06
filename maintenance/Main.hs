@@ -36,6 +36,7 @@ import Max.IR
     mentionIdentities,
   )
 import Max.IR.Prompt (promptCanonicalText)
+import Max.DB.Health (operationalChecks)
 import Max.Platform.Store (expiredSendingDeliverySql, mentionPrincipalsFor)
 import Max.Platform.Types (PrincipalId, PrincipalIdentityId)
 import System.Environment (getArgs, lookupEnv)
@@ -403,73 +404,6 @@ drainChecks =
     )
   ]
 
--- The boolean says whether a non-zero count is a failed health gate.  Pending
--- and retryable work is expected while traffic is flowing; expired ownership,
--- ambiguous effects, parked work, and deterministic poison are not.
-operationalChecks :: [(String, Bool, Query)]
-operationalChecks =
-  [ ( "delivery_retryable",
-      False,
-      "SELECT count(*) FROM message_deliveries WHERE status = 'failed'"
-    ),
-    ( "delivery_permanent_failure",
-      True,
-      "SELECT count(*) FROM message_deliveries WHERE status = 'permanent_failure'"
-    ),
-    ( "delivery_outcome_unknown",
-      True,
-      "SELECT count(*) FROM message_deliveries WHERE status = 'outcome_unknown'"
-    ),
-    ( "delivery_expired_lease",
-      True,
-      "SELECT count(*) FROM message_deliveries \
-      \WHERE status IN ('reserved', 'sending') AND lease_expires_at <= now()"
-    ),
-    ( "dispatch_retryable",
-      False,
-      "SELECT count(*) FROM message_dispatches WHERE status = 'failed'"
-    ),
-    ( "dispatch_outcome_unknown",
-      True,
-      "SELECT count(*) FROM message_dispatches WHERE status = 'outcome_unknown'"
-    ),
-    ( "dispatch_expired_lease",
-      True,
-      "SELECT count(*) FROM message_dispatches \
-      \WHERE status IN ('reserved', 'claimed') AND lease_expires_at <= now()"
-    ),
-    ( "media_parked",
-      True,
-      "SELECT count(*) FROM fetch_jobs WHERE parked_at IS NOT NULL"
-    ),
-    ( "monitor_fire_parked",
-      True,
-      "SELECT count(*) FROM monitor_fires WHERE parked_at IS NOT NULL"
-    ),
-    ( "monitor_fire_expired_claim",
-      True,
-      "SELECT count(*) FROM monitor_fires \
-      \WHERE admission_state = 'pending' AND cancelled_at IS NULL \
-      \  AND parked_at IS NULL AND claim_expires_at <= now()"
-    ),
-    ( "plan_expired_wake_claim",
-      True,
-      "SELECT count(*) FROM plans \
-      \WHERE status = 'open' AND exec_state IS NOT NULL \
-      \  AND wake_claim_expires_at <= now()"
-    ),
-    ( "journal_unresolved_outcome_unknown",
-      True,
-      "SELECT count(*) FROM execution_journal journal \
-      \JOIN agent_turns turn USING (turn_id) \
-      \WHERE journal.state = 'outcome-unknown' \
-      \  AND turn.status IN ('starting', 'running', 'recovery-pending')"
-    ),
-    ( "sandbox_outcome_unknown",
-      True,
-      "SELECT count(*) FROM sandboxes WHERE status = 'outcome-unknown'"
-    )
-  ]
 
 preflightChecks :: [(Text, String, Query)]
 preflightChecks =

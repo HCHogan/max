@@ -1,13 +1,20 @@
 module Max.HttpRuntimeSpec (spec) where
 
-import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
+import Control.Concurrent (newEmptyMVar, putMVar, readMVar, takeMVar, tryPutMVar)
 import Control.Concurrent.Async (AsyncCancelled, async, cancel, waitCatch)
 import Control.Exception (fromException, toException)
+import Control.Monad (void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Maybe (isJust)
+import Effectful (liftIO, runEff)
+import Effectful.Log (runLog)
+import Log (LogLevel (LogAttention))
+import Max.Http.Stream (StreamOutcome (..), streamPost)
 import Max.HttpRuntime
+import Max.LLM.Stream (StreamAcc (..), stepOpenAI)
+import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Network.HTTP.Client
   ( HttpException (..),
     HttpExceptionContent (..),
@@ -19,6 +26,7 @@ import Network.HTTP.Client
     newManager,
   )
 import Network.TLS qualified as TLS
+import System.Timeout qualified as Timeout
 import Test.Hspec
 
 spec :: Spec
@@ -104,12 +112,106 @@ spec = do
         Right value -> expectationFailure ("cancellation became a value: " <> show value)
       readIORef closes `shouldReturn` 1
 
+  describe "stream publication" $ do
+    it "finishes publication acknowledgement even when the network times out after commit" $ do
+      closed <- newEmptyMVar
+      committed <- newIORef []
+      acknowledged <- newIORef False
+      manager <- stalledStreamManager [textFrame] (void $ tryPutMVar closed ())
+      let runtime = httpRuntimeFromManagers manager manager manager
+      result <- Timeout.timeout 3_000_000 $ withCompactLogger ColorNever Nothing $ \logger ->
+        runEff $ runLog "test" logger LogAttention $ streamPost runtime [] 1 [] "http://example.test/" "{}" stepOpenAI $ \acc -> liftIO $ do
+          modifyIORef' committed (<> [acc.saText])
+          -- Hold publication after the externally visible commit until the
+          -- network timeout closes its socket. Its acknowledgement must survive.
+          readMVar closed
+          modifyIORef' acknowledged (const True)
+      case result of
+        Just (StreamTruncated acc "stream timed out") -> acc.saText `shouldBe` "first paragraph"
+        _ -> expectationFailure ("unexpected result: " <> show result)
+      readIORef committed `shouldReturn` ["first paragraph"]
+      readIORef acknowledged `shouldReturn` True
+
+    it "propagates publication failures and closes the network reader" $ do
+      closed <- newEmptyMVar
+      manager <- stalledStreamManager [textFrame] (void $ tryPutMVar closed ())
+      let runtime = httpRuntimeFromManagers manager manager manager
+      withCompactLogger
+        ColorNever
+        Nothing
+        ( \logger ->
+            runEff $ runLog "test" logger LogAttention $ streamPost runtime [] 30 [] "http://example.test/" "{}" stepOpenAI $ \_ ->
+              liftIO $ ioError (userError "publication failed")
+        )
+        `shouldThrow` anyIOException
+      Timeout.timeout 1_000_000 (readMVar closed) `shouldReturn` Just ()
+
+    it "honours caller cancellation during publication without returning a retryable result" $ do
+      entered <- newEmptyMVar
+      blocked <- newEmptyMVar @()
+      closed <- newEmptyMVar
+      manager <- stalledStreamManager [textFrame] (void $ tryPutMVar closed ())
+      let runtime = httpRuntimeFromManagers manager manager manager
+      withCompactLogger ColorNever Nothing $ \logger -> do
+        worker <- async $
+          runEff $
+            runLog "test" logger LogAttention $
+              streamPost runtime [] 30 [] "http://example.test/" "{}" stepOpenAI $ \_ -> liftIO $ do
+                putMVar entered ()
+                takeMVar blocked
+        Timeout.timeout 1_000_000 (takeMVar entered) `shouldReturn` Just ()
+        cancel worker
+        result <- waitCatch worker
+        case result of
+          Left exception -> (fromException exception :: Maybe AsyncCancelled) `shouldSatisfy` isJust
+          Right value -> expectationFailure ("cancellation became a value: " <> show value)
+      Timeout.timeout 1_000_000 (readMVar closed) `shouldReturn` Just ()
+
+    it "retains trailing usage and completes when the socket times out after a terminal frame" $ do
+      closed <- newEmptyMVar
+      manager <-
+        stalledStreamManager
+          [ textFrame,
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":3}}\n\n",
+            "data: [DONE]\n\n"
+          ]
+          (void $ tryPutMVar closed ())
+      let runtime = httpRuntimeFromManagers manager manager manager
+      result <- Timeout.timeout 3_000_000 $ withCompactLogger ColorNever Nothing $ \logger ->
+        runEff $ runLog "test" logger LogAttention $ streamPost runtime [] 1 [] "http://example.test/" "{}" stepOpenAI (const (pure ()))
+      case result of
+        Just (StreamComplete acc) -> do
+          acc.saText `shouldBe` "first paragraph"
+          acc.saPromptTokens `shouldBe` Just 10
+          acc.saCompletionTokens `shouldBe` Just 3
+        _ -> expectationFailure ("unexpected result: " <> show result)
+      Timeout.timeout 1_000_000 (readMVar closed) `shouldReturn` Just ()
+
 chunkReader :: [ByteString] -> IO (IO ByteString)
 chunkReader chunks = do
   remaining <- newIORef chunks
   pure $ atomicModifyIORef' remaining $ \case
     [] -> ([], BS.empty)
     chunk : rest -> (rest, chunk)
+
+textFrame :: ByteString
+textFrame = "data: {\"choices\":[{\"delta\":{\"content\":\"first paragraph\"}}]}\n\n"
+
+-- A provider that emits SSE and then holds an incomplete response open.
+stalledStreamManager :: [ByteString] -> IO () -> IO Manager
+stalledStreamManager frames close = do
+  blocked <- newEmptyMVar
+  newManager
+    defaultManagerSettings
+      { managerRawConnection = pure $ \_ _ _ -> do
+          chunks <- newIORef ("HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n" : frames)
+          makeConnection
+            (atomicModifyIORef' chunks (\case [] -> ([], Nothing); chunk : rest -> (rest, Just chunk)) >>= maybe (takeMVar blocked) pure)
+            (const (pure ()))
+            close,
+        managerRetryableException = const False
+      }
 
 fakeManager :: ByteString -> IORef Int -> IO Manager
 fakeManager responseBytes closes =

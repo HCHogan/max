@@ -12,7 +12,7 @@ import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful (liftIO)
 import Effectful.PostgreSQL (execute, query)
-import Helpers (insertRawMessage, insertRawMessageWithClass, testTime, truncateAll, withDb)
+import Helpers (insertRawMessage, insertRawMessageWithClass, testTime, truncateAll, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
   ( AgentTurnRecovery (..),
@@ -46,7 +46,8 @@ import Max.DB.Monitor
     recordMonitorFireFailure,
   )
 import Max.DB.Notify (WorkChannel (MonitorWork), claimOrWaitUntil)
-import Max.IR (Body (..), Node (NText))
+import Max.IR (Body (..), Node (NText, NMention))
+import Max.Monitor (deliveryBody)
 import Max.Monitor.Types
   ( LedgerMatchSpec (..),
     MonitorFireId,
@@ -68,6 +69,17 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
+  it "resolves mentions in reminder text without adding an initiator mention" $ do
+    truncateAll pool
+    _ <- insertRawMessage pool 9001 900 1 42 testTime (Just "requester") "hello"
+    [Only principal] <- withDb pool $ query "SELECT author_principal_id FROM messages WHERE group_id=900 LIMIT 1" ()
+    (body, replyTo) <- withDbLog pool $ deliveryBody (GroupId 900) ("[mention#" <> T.pack (show (principal :: Int64)) <> "] I love you")
+    replyTo `shouldBe` Nothing
+    length [() | NMention _ _ <- body.nodes] `shouldBe` 1
+    T.concat [text | NText text <- body.nodes] `shouldBe` "⏰ 提醒： I love you"
+    (plain, _) <- withDbLog pool $ deliveryBody (GroupId 900) "喝水"
+    plain `shouldBe` Body [NText "⏰ 提醒：喝水"]
+
   it "wakes the cross-process scheduler from durable PostgreSQL work notification" $ do
     truncateAll pool
     principal <- seedConversation pool 4901 41 6

@@ -42,6 +42,7 @@ module Max.ReplySend
     freshBudget,
     canStream,
     sendAndPersistReply,
+    prepareReplyChunk,
     cleanModelText,
     stripStickerText,
     stripBareMarkers,
@@ -90,15 +91,13 @@ import Max.Reply
   )
 import Max.Sticker (ResolvedSticker (..), resolveSticker)
 import Max.Turn.Types (TurnOutputContext, nextTurnOutputLink)
-import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
+import OneBot.Types (GroupId (..), isPrivateChat)
 import System.Random (randomRIO)
 
 -- | Where a reply is going and what it may do when it gets there.
 -- Everything here is fixed for the duration of one dispatch.
 data ReplyTarget = ReplyTarget
   { rtGroupId :: !GroupId,
-    -- | The bot's own QQ id, for attributing the persisted rows.
-    rtSelfId :: !UserId,
     -- | Display-name → principal, so @\@显示名@ can be rescued into the
     -- canonical @[\@#id]@ form small models keep forgetting to write.
     -- This is the roster the prompt actually showed, so the names the model
@@ -106,7 +105,7 @@ data ReplyTarget = ReplyTarget
     rtRosterNames :: ![(T.Text, PrincipalId)],
     -- | The bot's own principal, so a self-mention the model copied out of
     -- the transcript is dropped instead of sent.
-    rtSelfPrincipal :: !PrincipalId,
+    rtSelfPrincipal :: !(Maybe PrincipalId),
     -- | Whether sticker sending is enabled for this group.
     rtStickers :: !Bool,
     -- | Portable endpoint gates.  The prompt is the friendly policy; these
@@ -211,7 +210,7 @@ sendAndPersistReply rt budget rawBody
     budget' = budget {sbChunksLeft = max 0 (budget.sbChunksLeft - length chunks)}
 
     sendOne b (i, chunk) = do
-      (b', mPlan) <- planChunk b chunk
+      (b', mPlan) <- prepareReplyChunk rt b chunk
       case mPlan of
         Nothing -> pure b'
         Just (resolvedBody, replyTo, pacingText) -> do
@@ -239,6 +238,14 @@ sendAndPersistReply rt budget rawBody
               SentRecorded {} -> pure ()
           pure b'
 
+-- | Resolve model placeholders before publication. Canned reminders use the
+-- same resolver, then commit one message with their unique fire provenance.
+prepareReplyChunk ::
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  ReplyTarget -> SendBudget -> Chunk ->
+  Eff es (SendBudget, Maybe (Body 'Canonical, Maybe CanonicalMessageId, T.Text))
+prepareReplyChunk rt = planChunk
+  where
     -- One chunk becomes one ingest-phase body plus an envelope reply.
     -- Model-only handles are resolved before publication, and image handles
     -- are deduplicated across the complete streamed reply.
@@ -323,7 +330,7 @@ sendAndPersistReply rt budget rawBody
           logAttention (subject <> " render failed, sending text") $ object ["error" .= err]
           asText
 
-    mentionRoster = MentionRoster {names = rt.rtRosterNames, selfPrincipal = Just rt.rtSelfPrincipal}
+    mentionRoster = MentionRoster {names = rt.rtRosterNames, selfPrincipal = rt.rtSelfPrincipal}
 
     resolveModelNode mentions = \case
       NText text -> pure [NText text]

@@ -13,3 +13,13 @@ done
 psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/task-upgrade-before.sql >/dev/null
 psql -X -v ON_ERROR_STOP=1 -1 -d "$database" -f migrations/088_task_runtime_completion.sql >/dev/null
 psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/task-upgrade-after.sql
+for migration in migrations/*.sql; do
+  name="$(basename "$migration")"
+  if [[ "$name" > "088_task_runtime_completion.sql" ]]; then
+    if [[ "$name" == "091_frontend_limits.sql" ]]; then
+      psql -X -v ON_ERROR_STOP=1 -d "$database" -f test-db/fixtures/frontend-limits-upgrade.sql
+    else
+      psql -X -v ON_ERROR_STOP=1 -1 -d "$database" -f "$migration" >/dev/null
+    fi
+  fi
+done

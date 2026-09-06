@@ -502,6 +502,9 @@ classifyOnce mGid profile persona ctxLines newLines = do
     Left err -> do
       logAttention "intent: classify failed" $ object ["error" .= err]
       pure Nothing
+    Right (InterruptedResp _ err) -> do
+      logAttention "intent: classify interrupted" $ object ["error" .= err]
+      pure Nothing
     Right (ToolCallsResp {}) -> do
       logAttention "intent: unexpected tool_calls" $ object []
       pure Nothing

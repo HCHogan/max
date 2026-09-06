@@ -27,6 +27,7 @@ extra-source-files:
     scripts/test-task-upgrade.sh
     test-db/fixtures/task-upgrade-before.sql
     test-db/fixtures/task-upgrade-after.sql
+    test-db/fixtures/frontend-limits-upgrade.sql
     test-db/fixtures/browser-upgrade-after.sql
     assets/codesnap/*.tmTheme
     browser-image/Dockerfile
@@ -145,6 +146,7 @@ library
         Max.DB.ConversationCursor
         Max.DB.FetchQueue
         Max.DB.Files
+        Max.DB.Health
         Max.DB.History
         Max.DB.Media
         Max.DB.Notify

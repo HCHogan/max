@@ -7,12 +7,12 @@ module Max.Monitor
     CannedRetry (..),
     maxCannedAttempts,
     cannedRetryDecision,
+    deliveryBody,
   )
 where
 
 import Control.Monad (when)
 import Data.Aeson (object, (.=))
-import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, isNothing)
 import Data.Ord (clamp)
 import Data.Text (Text)
@@ -49,13 +49,16 @@ import Max.Effects.Outbound
     SendOutcome (..),
     sendRecorded,
   )
-import Max.IR (Body (..), MentionTarget (..), Node (..), Phase (Canonical))
+import Max.IR (Body (..), Phase (Canonical))
+import Max.Effects.Blob (Blob)
+import Max.Reply (Chunk (TextChunk))
+import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, prepareReplyChunk)
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Monitor.Types (MonitorFireId (..), MonitorId (..), MonitorRef (..))
-import Max.Platform.Store (resolveMentionIdentities)
-import Max.Platform.Types (PrincipalId (..))
-import Max.Util (catchSync, tshow)
-import OneBot.Types (GroupId (..), isPrivateChat)
+import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationRoster, conversationAdvertisedCaps)
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId)
+import Max.Util (catchSync)
+import OneBot.Types (GroupId (..))
 import System.Cron (CronSchedule, nextMatch)
 import System.Cron.Parser (parseCronSchedule)
 
@@ -110,7 +113,7 @@ claimBatchSize :: Int
 claimBatchSize = 50
 
 monitorWorker ::
-  (WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) =>
+  (Blob :> es, WithConnection :> es, Outbound :> es, Log :> es, IOE :> es) =>
   TimeZone ->
   Text ->
   (ElaboratedMonitorFire -> Eff es ()) ->
@@ -215,13 +218,13 @@ monitorWorker tz owner dispatchElaborated = loop
 
     deliver fire = do
       let groupId = GroupId fire.cmfGroupId
-      body <- deliveryBody groupId (PrincipalId <$> fire.cmfAuthorPrincipalId) fire.cmfText
+      (body, replyTo) <- deliveryBody groupId fire.cmfText
       sendRecorded
         OutboundRequest
           { orKind = KindChat,
             orGroupId = groupId,
             orBody = body,
-            orReplyTo = Nothing,
+            orReplyTo = replyTo,
             orDeliveryScope = DeliverConversation,
             orTurnOutput = Nothing,
             orMonitorFireId = Just fire.cmfFireId
@@ -231,25 +234,26 @@ data MonitorWorkItem
   = WorkCanned !CannedMonitorFire
   | WorkElaborated !ElaboratedMonitorFire
 
+-- | A reminder's body owns its mentions. Never add an extra mention of the
+-- initiator; resolve the stored placeholders exactly as ordinary model text.
 deliveryBody ::
-  (WithConnection :> es, IOE :> es) =>
-  GroupId ->
-  Maybe PrincipalId ->
-  Text ->
-  Eff es (Body 'Canonical)
-deliveryBody groupId maybePrincipal body
-  | isPrivateChat groupId = pure plain
-  | otherwise = case maybePrincipal of
-      Nothing -> pure plain
-      Just principal -> do
-        let GroupId conversation = groupId
-        resolved <- resolveMentionIdentities conversation [principal]
-        pure $ case Map.lookup principal resolved of
-          Nothing -> plain
-          Just identity ->
-            Body
-              [ NMention (MentionIdentity identity) (tshow principal.unPrincipalId),
-                NText (" ⏰ 提醒：" <> body)
-              ]
-  where
-    plain = Body [NText ("⏰ 提醒：" <> body)]
+  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  GroupId -> Text -> Eff es (Body 'Canonical, Maybe CanonicalMessageId)
+deliveryBody groupId@(GroupId group) body = do
+  roster <- conversationRoster group
+  caps <- conversationAdvertisedCaps group Nothing
+  let target = ReplyTarget
+        { rtGroupId = groupId,
+          rtRosterNames = [(name, identity.riPrincipalId) | identity <- roster.crIdentities, Just name <- [identity.riDisplayName]],
+          rtSelfPrincipal = Nothing,
+          rtStickers = caps.canMedia,
+          rtCanReply = caps.canReply,
+          rtCanMention = caps.canMention,
+          rtCanFace = caps.canFace,
+          rtCanImage = caps.canMedia,
+          rtTurnOutputContext = Nothing
+        }
+  (_, prepared) <- prepareReplyChunk target freshBudget (TextChunk ("⏰ 提醒：" <> cleanModelText body))
+  pure $ case prepared of
+    Just (resolved, replyTo, _) -> (resolved, replyTo)
+    Nothing -> (Body [], Nothing)

@@ -132,6 +132,7 @@ captionOne profile (sha, mime, mSummary) =
                   []
               case eres of
                 Left err -> failed ("chat: " <> err)
+                Right (InterruptedResp _ err) -> failed ("chat interrupted: " <> err)
                 Right (ToolCallsResp {}) -> failed "chat: unexpected tool calls"
                 Right (ContentResp raw) -> apply (T.strip raw)
   where

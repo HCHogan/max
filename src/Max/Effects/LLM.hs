@@ -188,6 +188,8 @@ data ToolSpec = ToolSpec
 data ChatResponse
   = -- | A plain text answer.  The loop is done.
     ContentResp !Text
+  | -- | Usable partial text, with an explicit transport failure. Never success.
+    InterruptedResp !Text !Text
   | -- | The model wants to call one or more tools.  Caller executes
     -- them and re-invokes 'chat' with the results appended.  The
     -- first field is the provider's assistant message verbatim; build
@@ -386,7 +388,7 @@ data LLM :: Effect where
   -- The sink receives the text /so far/, not the delta: the accumulator
   -- already holds the whole thing, and a caller deciding \"is a
   -- paragraph finished\" has to look at the accumulation anyway.  It
-  -- runs on the reading thread, so a slow sink backpressures the socket
+  -- runs outside the network timeout, with a bounded queue backpressuring the socket
   -- — which is what we want, since it is sending QQ messages.
   --
   -- Falls back to a plain 'Chat' when the profile has streaming off;
@@ -574,6 +576,9 @@ runOneChat admission runtime usageWriter callWriter reg ctx name msgs tools mSin
         logInfo "llm: got content" $
           object $
             ["len" .= T.length text, "profile" .= name] <> usageFields mUsage
+      Right (InterruptedResp text reason, _) ->
+        logAttention "llm: interrupted content" $
+          object ["len" .= T.length text, "profile" .= name, "error" .= reason]
       Right (ToolCallsResp _ narration tcs, mUsage) ->
         logInfo "llm: got tool_calls" $
           object $
@@ -604,7 +609,10 @@ runOneChat admission runtime usageWriter callWriter reg ctx name msgs tools mSin
               crDurationMs = fromIntegral ((t1 - t0) `div` 1_000_000),
               crRequest = requestBodyFor cfg msgs tools streaming,
               crResponse = either (const Nothing) (Just . responseJson . fst) r,
-              crError = either Just (const Nothing) r,
+              crError = case r of
+                Left err -> Just err
+                Right (InterruptedResp _ reason, _) -> Just reason
+                Right _ -> Nothing,
               crUsage = either (const Nothing) snd r
             }
       )
@@ -658,6 +666,7 @@ requestBodyFor cfg msgs tools streaming =
 responseJson :: ChatResponse -> Value
 responseJson = \case
   ContentResp t -> object ["content" .= t]
+  InterruptedResp t reason -> object ["content" .= t, "interrupted" .= True, "error" .= reason]
   ToolCallsResp raw narration tcs ->
     object
       [ "raw" .= raw,
@@ -786,7 +795,7 @@ callChatStream runtime cfg msgs tools sink = case cfg.protocol of
                 "len" .= T.length acc.saText,
                 "partial_calls" .= length (accToolCalls acc)
               ]
-          pure (Right (ContentResp (stripLeadingThink acc.saText <> interruptionMarker), accUsage acc))
+          pure (Right (InterruptedResp (stripLeadingThink acc.saText <> interruptionMarker) why, accUsage acc))
 
     accUsage acc = case (acc.saPromptTokens, acc.saCompletionTokens) of
       (Just p, Just c) -> Just (TokenUsage p c acc.saCachedTokens)

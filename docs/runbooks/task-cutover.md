@@ -1,7 +1,8 @@
 # ADR008: one coordinated task cutover
 
-Status: the operator reports the initial 087 cutover complete. This follow-up
-adds migration 088; it has not been deployed or verified against production.
+Status: read-only inspection on 2026-09-06 confirmed migrations 087–089 and
+revision `4e9f934` on h610. This release adds the P0 follow-up and frontend-limit
+migration 091; production behavioral acceptance is separate from automated gates.
 
 ## User surface
 
@@ -51,13 +52,22 @@ isolated database and verifies preservation of active Tasks alongside archived
 Plan work (the test role needs CREATEDB). Provider admission tests exercise
 reserved foreground capacity, class fairness and cancellation cleanup. The hourly-budget fixture explicitly uses queue policy
 so it tests the budget rather than the new coalescing default.
+The upgrade gate also applies subsequent migrations and verifies that 091
+extends active frontend leases without reviving expired ones. Health tests
+execute the exact production queries on the current schema. Cron timestamp
+fixtures use PostgreSQL precision, avoiding nanosecond rounding failures.
+Stream tests exercise timeout after publication commit, callback failure,
+caller cancellation and trailing usage after a terminal frame on a still-open
+provider socket.
+Reminder tests check body mention resolution without an automatic initiator
+mention.
 
 These are deterministic tests, not measurements of real model quality, Docker
 browser/sandbox behavior, or delivery to a production platform.
 
 ## Follow-up switch
 
-1. Record current operational health, backlog, active plans/monitor fires and
+1. Record current operational health, backlog, active tasks/monitor fires and
    the runtime version; address existing health failures before claiming a
    healthy rollout. Take and verify a database backup, and retain the old binary
    and configuration without exposing credentials.
@@ -70,6 +80,9 @@ browser/sandbox behavior, or delivery to a production platform.
    with this schema. Already-admitted monitor turns retain their recovery reader. No two workers may
    own the same task attempt. Do not clear journals, pending requests or
    `outcome-unknown` effects to make a health report look clean.
+   For installations already on 088 or later, apply only pending migrations;
+   091 doubles valid frontend lease time without resetting tasks or replaying
+   reminders.
 3. Run the following acceptance cases through the real endpoints with bounded
    test objectives. Measure first-response/completion latency and provider
    usage; missing usage is unknown. Set quality/latency thresholds before
@@ -96,6 +109,20 @@ browser/sandbox behavior, or delivery to a production platform.
   a failed physical delivery stays in its endpoint outbox, not a repeated task.
 
 ## Limits and rollback
+
+This release allows 60 frontend tool calls and 750 seconds per
+activation, with a 900-second database lease. This doubles the frontend values
+from migration 088. Canned reminders use the normal body placeholder resolver;
+only an explicit body mention generates an @, with no extra initiator mention.
+
+`maintenance health` reports `request_pending` and `task_retrying` as backlog.
+It fails on `task_expired_attempt`, `task_overdue_deadline`,
+`frontend_expired_lease`, `task_notification_exhausted`, and `request_failed`,
+in addition to the existing delivery/dispatch/media/monitor/journal checks.
+Recheck expired ownership after a recovery interval; investigate persistent
+counts and historical failed requests individually. Do not delete obligations
+to make the gate green. A clean isolated database is schema/test evidence,
+not a production health result.
 
 The [ADR quota table](../adr/008-durable-tasks-conversation-coordination.md#fivefold-quota-changes)
 lists all fivefold changes. Hard task bounds are tool reservations, agent-model rounds, tree depth, attempt

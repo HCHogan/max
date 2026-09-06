@@ -6,9 +6,9 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "task policy" $ do
-  it "relaxes foreground quotas fivefold" $ do
-    frontendToolLimit `shouldBe` 30
-    frontendDeadlineSeconds `shouldBe` 375
+  it "doubles the foreground tool and activation limits" $ do
+    frontendToolLimit `shouldBe` 60
+    frontendDeadlineSeconds `shouldBe` 750
   for_ ["HTTP 429 busy", "HTTP 503 unavailable", "HTTP response timed out", "HTTP connection failed: reset"] $ \detail ->
     it ("retries temporary failures: " <> show detail) $
       retryableFailure detail `shouldBe` True

@@ -388,6 +388,15 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                     aborted = Just err,
                     sentPrefix = sent
                   }
+            Right (InterruptedResp text reason) ->
+              pure
+                AgentResult
+                  { reply = Just text,
+                    appended = appended' <> [MsgAssistant text],
+                    turnsUsed = n + 1,
+                    aborted = Just ("LLM stream interrupted: " <> reason),
+                    sentPrefix = sent
+                  }
             Right (ContentResp text) -> do
               -- A feedback note that raced in during this final call
               -- would be lost — the task is released right after we
@@ -590,9 +599,9 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
     -- is most replies, releases nothing at all.  That bound is the
     -- honest limit of what streaming buys here.
     --
-    -- The TVar is written before the send, not after: if sending throws
-    -- we have still said that much, and re-releasing the same paragraph
-    -- on the next frame would say it twice.
+    -- Transport timeouts run on the reader thread. They cannot interrupt this
+    -- callback after publication but before its acknowledgement; cancellation
+    -- of the caller propagates instead of entering the final-tail send path.
     releaseParagraphs ::
       AgentEventSink (Eff (Tools : ToolOutput : es)) ->
       TVar Text ->
