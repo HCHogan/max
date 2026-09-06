@@ -9,8 +9,12 @@ sandbox_destroy、群里 !clear --all、连续 14 天没用触发 TTL 清理。b
 同一个沙箱里的 sandbox_exec 会自动排队串行执行（并发调用不会互相打架），但两个
 任务写同一个文件仍要自己协调。它是有期限的工作区，不是长期存储：重要产物尽快发出去。
 sandbox_create 没有参数。镜像和网络是宿主策略，不交给调用者选择：命令固定在
-max-sandbox:latest 里以 uid 1000、无 Linux capability、no-new-privileges、network=none
-运行，有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写。
+max-sandbox:latest 里以 uid 1000、无 Linux capability、no-new-privileges 运行，
+有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写。
+固定的 max-sandbox 网络允许访问公网 IPv4，可以 curl、git clone、调用公开 API、
+下载项目依赖；宿主机、内网、链路本地、Tailscale 地址和其他沙箱均不可访问，IPv6 关闭。
+联网不等于获得对外写入权限：发布、上传、修改远端数据仍须符合任务授权。
+网络写入结果不明时先核实，不能因为命令超时就重复执行。
 
 # 装软件（nix，不是 apt）
 
@@ -21,8 +25,8 @@ git/vim/nano、python3/perl、jq/rg/make。除此之外的工具都按需取。�
 （镜像里没有包管理器数据库，只会浪费一轮）。要用没预装的工具，把 nixpkgs
 attribute 传给 sandbox_exec 的 packages 参数：宿主生成固定 Nix 表达式，短命网络
 helper 只负责 `nix build --no-link --print-out-paths`，随后把返回的只读 store 路径放进
-这一条命令的 PATH，无需安装，一次最多 32 个。真正的 `sh -c` 仍在无网非 root 沙箱里，
-而且不会运行 Nix，不能用 curl/wget/pip 访问互联网。
+这一条命令的 PATH，无需安装，一次最多 32 个。真正的 `sh -c` 在有公网访问能力的
+非 root 沙箱里执行；不要自行修改共享 Nix store。
 attribute 名用 nix_search 查（regex 匹配名字和描述，最多回 30 条，如 'ffmpeg'、
 'python.*opencv'、'^nodejs$'；空结果就放宽 regex）。包 store 全沙箱共享：某个包
 第一次用要下载，那一次把 timeout_seconds 提到 120-300；下过之后所有沙箱瞬时可用。
@@ -30,7 +34,8 @@ attribute 名用 nix_search 查（regex 匹配名字和描述，最多回 30 条
 Python 专门提醒：python3 本身已预装，标准库直接跑。第三方库把对应
 `python3Packages.<attr>` 放进 packages；宿主会把同一次调用里的这些库收成一个
 `python3.withPackages` 环境，所以命令中的 python3 可以直接 import。例如
-packages=["python3Packages.openpyxl"]。不要建联网 venv 或 pip install；沙箱故意无网。
+packages=["python3Packages.openpyxl"]。需要 PyPI 的特定版本时，可以在 /work 中创建
+独立 venv 并联网安装；不要修改全局 Python 环境。
 
 # 跑命令
 

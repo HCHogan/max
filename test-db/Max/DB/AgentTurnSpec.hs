@@ -326,7 +326,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         "INSERT INTO sandboxes \
         \ (conversation_id, sandbox_handle, container_name, volume_name, image, network_mode, status) \
         \ SELECT conversation_id, 's77', 'max-sb-42-s77', 'max-sb-42-s77-data', \
-        \        'max-sandbox:latest', 'none', 'active' \
+        \        'max-sandbox:latest', 'max-sandbox', 'active' \
         \ FROM conversations WHERE legacy_group_id = 42"
         ()
     let forged =
@@ -341,7 +341,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     enriched <- withDb pool (enrichSandboxJournalStart fixture.fxGroup forged)
     case enriched.jsInput of
       Object fields -> do
-        KeyMap.lookup "_max_host_network_mode" fields `shouldBe` Just (String "none")
+        KeyMap.lookup "_max_host_network_mode" fields `shouldBe` Just (String "max-sandbox")
         KeyMap.lookup "timeout_seconds" fields `shouldBe` Just (Number 30)
         KeyMap.lookup "packages" fields `shouldBe` Just (Array mempty)
       other -> expectationFailure ("expected enriched object, got " <> show other)

@@ -334,13 +334,17 @@ Observation grants no authority and weakens no boundary — static
 inference stays conservative — but it turns "the sandbox did something"
 into rows that resume, the admin console, and the narrator can consume.
 
-The sandbox egress hole identified by the original decision is now closed for
-`sandbox_exec`. Long-lived shells use fixed `network=none`; callers cannot
-select an image or network. Requested nixpkgs attributes are bounded and
+`sandbox_exec` now permits public IPv4 egress through the operator-provisioned
+`max-sandbox` network. NixOS filters host, private, link-local, CGNAT and peer
+connections after destination NAT; IPv6 is disabled. Callers cannot select an
+image or network. This intentionally permits public API and repository access;
+the command journal is not a per-HTTP-request audit or a conversation outbox.
+External writes still require the task's authority, and an ambiguous command
+must not be replayed automatically. Requested nixpkgs attributes are bounded and
 syntax-validated, then a short-lived helper with a fixed
 `nix build --no-link --print-out-paths` command and no caller-controlled shell
 realizes them into the shared store. The actual command only prepends those
-validated, already-realized store paths to PATH in the networkless, non-root
+validated, already-realized store paths to PATH in the non-root
 sandbox; it does not run Nix or write the shared Nix database. The journal still records the network mode so
 policy drift remains visible. ADR 006's deferred `ExternalPoll` is a distinct
 host-managed network effect: it must record its target, redirect/credential

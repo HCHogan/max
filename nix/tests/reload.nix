@@ -42,6 +42,7 @@ pkgs.testers.runNixOSTest {
         configFile = "/run/max-test-config.yaml";
         postgres.enable = false;
         sandboxImage.enable = false;
+        sandboxNetwork.enable = false;
         browserImage.enable = false;
         maxops = {
           enable = true;

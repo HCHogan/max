@@ -193,6 +193,7 @@ let
     };
 in
 {
+  imports = [ ./sandbox-network.nix ];
   options.services.max = {
     enable = lib.mkEnableOption "max — QQ group-chat agent over OneBot 11";
 

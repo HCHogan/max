@@ -108,6 +108,10 @@
             inherit nixpkgs system;
             maxModule = self.nixosModules.max;
           };
+          sandbox-network = import ./nix/tests/sandbox-network.nix {
+            inherit nixpkgs system;
+            maxModule = self.nixosModules.max;
+          };
         }
       );
 

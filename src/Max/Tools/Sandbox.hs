@@ -124,6 +124,8 @@ execTool gid reg =
             "stream; when 'truncated' is true a bounded output spill is saved",
             "to 'full_output_file'.  'spill_truncated' says whether that file",
             "also reached its safety cap — inspect it instead of re-running.",
+            "Public internet access is available; host, private-network and peer-sandbox",
+            "connections are blocked. External writes still need task authorization.",
             "Tools not preinstalled: list nixpkgs attributes in 'packages'",
             "(first use downloads — raise timeout_seconds to 120-300)."
           ],

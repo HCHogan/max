@@ -7,7 +7,7 @@ import_file_to_sandbox 拿进 /work，成品 send_file_from_sandbox 发回群文
 看效果，转成图片走 send_image_from_sandbox。工具分两档：能用命令行解决就不开
 python；要精细读写内容才上 python 库——记住 sandbox 手册里的 Python 规则：把
 `python3Packages.<attr>` 直接放进 packages，宿主生成可 import 的 Nix Python 环境，
-不要在无网沙箱里 pip install。
+需要 PyPI 特定版本时，再按 sandbox 手册在 /work 的独立 venv 中安装。
 
 # PDF
 

@@ -45,6 +45,7 @@ module Max.Sandbox.Docker
     maxOutputBytes,
     maxSpillBytes,
     nixVolume,
+    sandboxNetwork,
 
     -- * Helpers
     shellQuote,
@@ -109,7 +110,12 @@ workVolumeSubpath = ".max-work"
 -- rebuilds an older container around its durable /work volume before adopting
 -- it, so a long-lived shell cannot silently retain weaker limits.
 sandboxPolicyVersion :: Text
-sandboxPolicyVersion = "4"
+sandboxPolicyVersion = "5"
+
+-- Provisioned with public-only egress by the NixOS sandbox-network module.
+-- A missing network is an error; never fall back to Docker's default bridge.
+sandboxNetwork :: Text
+sandboxNetwork = "max-sandbox"
 
 -- | Result of one in-container exec.
 data ExecResult = ExecResult
@@ -169,7 +175,7 @@ data DockerContainerStatus
 
 -- | @docker run -d --init --name NAME [...args] IMAGE sleep infinity@.
 -- Mounts the per-sandbox work volume at /work and the shared 'nixVolume' at
--- /nix.  The shell is non-root, has no network/capabilities, and receives hard
+-- /nix.  The shell is non-root, has public-only egress/no capabilities, and receives hard
 -- resource limits.  The root filesystem is read-only; /work, /tmp and the
 -- unprivileged home are the only writable locations.
 -- Returns the container id on success, or a stderr-flavoured error.
@@ -180,7 +186,7 @@ runRun ::
   Text ->
   -- | volume name (mounted at /work)
   Text ->
-  -- | network mode ("bridge" / "none")
+  -- | operator-provisioned network
   Text ->
   IO (Either Text Text)
 runRun name image volume network = do
@@ -359,12 +365,12 @@ inspectContainerPolicy name = do
         [ "container",
           "inspect",
           "--format",
-          "{{index .Config.Labels \"max.sandbox.policy\"}}",
+          "{{index .Config.Labels \"max.sandbox.policy\"}} {{.HostConfig.NetworkMode}} {{len .NetworkSettings.Networks}}",
           T.unpack name
         ]
         ""
   pure $ case result of
-    Right (ExitSuccess, out, _) -> T.strip (T.pack out) == sandboxPolicyVersion
+    Right (ExitSuccess, out, _) -> T.words (T.pack out) == [sandboxPolicyVersion, sandboxNetwork, "1"]
     _ -> False
 
 -- | @docker volume ls -q --filter "name=^PREFIX"@.
@@ -522,10 +528,10 @@ runExec container networkMode cmd timeoutSecs = do
       }
 
 -- | Realise allowlisted-by-construction nixpkgs attributes in a short-lived
--- helper.  This is the only sandbox-related process with bridge networking and
--- a writable shared Nix store.  The model controls only attribute arguments;
+-- helper.  This is the only sandbox-related process with a writable shared
+-- Nix store.  The model controls only attribute arguments;
 -- it cannot supply a shell command, image, mount, or network mode.  The actual
--- user command subsequently runs in the networkless non-root sandbox.
+-- user command subsequently runs in the non-root, public-egress sandbox.
 runPreparePackages :: Text -> [Text] -> Int -> IO (Either Text [Text])
 runPreparePackages _ [] _ = pure (Right [])
 runPreparePackages image packages timeoutSecs = do
@@ -1043,7 +1049,7 @@ stripAnsi = T.filter keep . T.pack . go . T.unpack
 -- installed into the sandbox itself.  Empty list = run the command as-is.
 --
 -- Package realisation is performed separately by 'runPreparePackages', in a
--- fixed helper with narrowly scoped network authority.  The networkless,
+-- fixed helper with narrowly scoped package authority.  The unprivileged,
 -- non-root sandbox therefore never needs write access to the shared Nix DB.
 -- A bare @python3Packages.*@ derivation does not alter Python's import path, so
 -- 'packageExpression' collects those attributes into one

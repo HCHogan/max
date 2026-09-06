@@ -81,6 +81,7 @@ import Max.Sandbox.Docker
     runRun,
     runVolumeRm,
     runWrite,
+    sandboxNetwork,
     wrapPackages,
   )
 import OneBot.Types (GroupId (..))
@@ -236,7 +237,7 @@ defaultCreateOpts :: SandboxCreateOpts
 defaultCreateOpts =
   SandboxCreateOpts
     { scoImage = "max-sandbox:latest",
-      scoNetwork = "none"
+      scoNetwork = sandboxNetwork
     }
 
 --------------------------------------------------------------------------------
