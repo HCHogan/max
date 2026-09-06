@@ -18,6 +18,7 @@ import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Authorization
 import Max.DB.Task.Record
 import Max.Task.Admission (AdmissionError (..))
+import Max.Task.Policy (taskDeadlineSeconds)
 import Max.Task.Types (TaskProfile, profileName, taskGrants)
 import Max.Turn.Types (AgentTurnId)
 
@@ -77,7 +78,8 @@ admitTaskWithin turn message actor key objective profile inputs grants = do
                                   then pure (Left AdmissionQueueFull)
                                   else do
                                     now <- databaseNow
-                                    let deadline = min (addUTCTime 3000 now) (maybe (addUTCTime 3000 now) (.deadline) parent)
+                                    let admissionDeadline = addUTCTime (fromIntegral taskDeadlineSeconds) now
+                                        deadline = min admissionDeadline (maybe admissionDeadline (.deadline) parent)
                                         parentId = (.taskId) <$> parent
                                         rootId = (\task -> fromMaybe task.taskId task.root) <$> parent
                                     inserted <-

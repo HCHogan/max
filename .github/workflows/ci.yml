@@ -195,17 +195,14 @@ jobs:
           MAX_TEST_DB_URL: postgresql://max_test:max_test@127.0.0.1:5432/max_test
 
       - name: Test populated task upgrade
-        run: nix develop --impure -c bash scripts/test-task-upgrade.sh
+        # devenv sets PGPORT for its local database; apply the CI connection
+        # after entering the shell so the service container remains authoritative.
+        run: nix develop --impure -c env PGHOST=127.0.0.1 PGPORT=5432 PGUSER=max_test bash scripts/test-task-upgrade.sh
         env:
-          PGHOST: 127.0.0.1
-          PGPORT: 5432
-          PGUSER: max_test
           PGPASSWORD: max_test
 
       - name: Verify database and operational health gate
-        run: nix develop --impure -c cabal run max-adr003-maintenance -- verify
-        env:
-          MAX_DB_URL: postgresql://max_test:max_test@127.0.0.1:5432/max_test
+        run: nix develop --impure -c env MAX_DB_URL=postgresql://max_test:max_test@127.0.0.1:5432/max_test cabal run max-adr003-maintenance -- verify
 
   # The deployment path nothing else covered.  build-test compiles with
   # cabal against the devenv toolchain; nix/module.nix installs

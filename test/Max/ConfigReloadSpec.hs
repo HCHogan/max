@@ -2,8 +2,10 @@ module Max.ConfigReloadSpec (spec) where
 
 import Control.Exception (bracket)
 import Max.Config
+import Max.Http.Json (replyRetryDelaysSecs)
 import Max.MaxOps.Notifications (NotificationConfig (..))
 import Max.MaxOps.Types
+import Max.Task.Policy (frontendDeadlineSeconds, taskDeadlineSeconds)
 import OneBot.Server (ServerConfig (..))
 import System.Environment (lookupEnv, setEnv, unsetEnv, withArgs)
 import System.IO (hClose, hPutStr)
@@ -12,6 +14,28 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "reload candidate configuration" $ do
+  it "leaves room for all slow-model attempts inside the phase and task deadlines" $
+    withArgs ["--llm-api-key", "test-key"] $ do
+      config <- loadConfig
+      -- Compare the resolved catalog without exposing its private transport
+      -- settings. An explicit default must leave the effective config unchanged.
+      explicit <- withArgs ["--llm-api-key", "test-key", "--llm-timeout-seconds", "1800"] loadConfig
+      configChanges config explicit `shouldBe` []
+      let retryBudget = 1800 * (1 + length replyRetryDelaysSecs) + sum replyRetryDelaysSecs
+      config.turnSilenceSeconds `shouldSatisfy` (> retryBudget)
+      frontendDeadlineSeconds `shouldSatisfy` (> config.turnSilenceSeconds)
+      taskDeadlineSeconds `shouldSatisfy` (> config.turnSilenceSeconds)
+  it "preserves explicit model and watchdog timeout overrides on reload" $
+    withSystemTempFile "max-timeouts.yaml" $ \path handle -> do
+      hPutStr handle "turn_silence_seconds: 600\nllm:\n  default: main\n  profiles:\n    main:\n      api_key: test-key\n      timeout_seconds: 120\n"
+      hClose handle
+      withArgs ["--config-file", path] $ do
+        config <- loadConfig
+        config.turnSilenceSeconds `shouldBe` 600
+        explicit <- withArgs ["--config-file", path, "--llm-timeout-seconds", "120"] loadConfig
+        configChanges config explicit `shouldBe` []
+        updated <- withArgs ["--config-file", path, "--llm-timeout-seconds", "1800", "--turn-silence-seconds", "14400"] loadConfig
+        configChanges config updated `shouldBe` [ConfigChange "turn_silence_seconds" DispatchHot, ConfigChange "llm" DispatchHot]
   it "loads native notification wiring independently and requires restart for routing changes" $
     withEnvironment "MAX_MAXOPS_NOTIFY_PORT" "9722" $
       withEnvironment "MAX_MAXOPS_NOTIFY_TOKEN_FILE" "/run/credentials/max.service/maxops-notifications" $

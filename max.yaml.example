@@ -68,6 +68,11 @@ persona: |
 # you), or the drain gets SIGKILLed halfway through.
 # shutdown_drain_seconds: 120
 
+# A phase may spend up to four hours waiting for slow local inference. This
+# accommodates six 30-minute HTTP attempts plus retry backoff. Foreground
+# activations and newly admitted background tasks have a six-hour deadline.
+# turn_silence_seconds: 14400
+
 # Display timezone for all model/user-facing timestamps (the prompt's
 # 现在/[HH:MM] lines, tool result times).  Minutes east of UTC; stored
 # times stay UTC.  Default 480 = UTC+8.
@@ -180,7 +185,9 @@ llm:
       model: deepseek-v4-flash
       max_tokens: 16384
       temperature: 0.7
-      timeout_seconds: 120
+      # Total time per HTTP attempt, including queueing and the full stream.
+      # The default is 1800 seconds; explicit per-profile overrides still win.
+      timeout_seconds: 1800
 
     deepseek-pro:
       api_key: "sk-..."

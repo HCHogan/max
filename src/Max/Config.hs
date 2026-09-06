@@ -487,7 +487,7 @@ appConfigParser usedRef =
           env "MAX_TURN_SILENCE_SECONDS",
           conf "turn_silence_seconds",
           metavar "SECS",
-          value 600
+          value 14400
         ]
     llm <- llmParser
     forceRawContext <-
@@ -1740,7 +1740,7 @@ materializeLLM (dn, fileProfiles, overlay) = do
             -- any explicit value other than 1.0.
             temperature = spec.temperature,
             effort = spec.effort,
-            timeoutSeconds = fromMaybe 120 spec.timeoutSeconds,
+            timeoutSeconds = fromMaybe 1800 spec.timeoutSeconds,
             protocol = fromMaybe ProtocolOpenAI spec.protocol,
             multimodal = resolvedMultimodal,
             historyAsTurns = fromMaybe False spec.historyAsTurns,

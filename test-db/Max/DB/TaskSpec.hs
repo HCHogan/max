@@ -746,11 +746,20 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     _ <- withDb pool (monitorControl (GroupId 900) actor False monitor.mrMonitorOrdinal.unMonitorOrdinal "cancel" Nothing "" "coalesce" 8 "cancel" True)
     status pool identifier `shouldReturn` "cancelled"
 
-  it "uses fivefold task quotas without granting extra authority" $ do
+  it "allows six hours for slow-model tasks without granting extra authority" $ do
     source <- seed pool 900 1
     identifier <- admit pool source "limits"
     rows <- withDb pool $ query "SELECT max_calls,max_rounds,extract(epoch FROM deadline-created_at)::integer,grants::text FROM durable_tasks WHERE task_id=?" (Only identifier)
-    rows `shouldBe` [(200 :: Int, 400 :: Int, 3000 :: Int, "{}" :: Text)]
+    rows `shouldBe` [(200 :: Int, 400 :: Int, 21600 :: Int, "{}" :: Text)]
+
+  it "caps child admission at the parent's remaining deadline" $ do
+    source@(_, message, actor) <- seed pool 900 1
+    identifier <- admit pool source "parent-deadline"
+    parent <- claimOne pool
+    void $ withDb pool $ execute "UPDATE durable_tasks SET deadline=now()+interval '10 minutes' WHERE task_id=?" (Only identifier)
+    child <- withDb pool (admitTask parent message actor "child-deadline" "work" Research (object []) Map.empty)
+    rows <- withDb pool $ query "SELECT child.deadline=parent.deadline FROM durable_tasks child JOIN durable_tasks parent ON parent.task_id=child.parent_task_id WHERE child.task_id=?" (Only (identifierOf child))
+    rows `shouldBe` [Only True]
 
   it "persists retry backoff and preserves reservations across attempts" $ do
     source <- seed pool 900 1
