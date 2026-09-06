@@ -4,10 +4,10 @@ import Data.Text (Text)
 import Data.Text qualified as T
 
 frontendToolLimit :: Int
-frontendToolLimit = 60
+frontendToolLimit = 600
 
 frontendDeadlineSeconds :: Int
-frontendDeadlineSeconds = 750
+frontendDeadlineSeconds = 3600
 
 retryableFailure :: Text -> Bool
 retryableFailure detail =
