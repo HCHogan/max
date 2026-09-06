@@ -48,11 +48,16 @@ skills/*.md        builtin skill manuals, baked into the binary (file-embed);
 src/OneBot/        OneBot 11 wire protocol: types (incl. private-chat pseudo-groups),
                    segments, events, actions, server
 src/Max/Effects/   effectful 2.5 effects: Http, Blob, Embedding (injectable validated
-                   vectors), PlatformApi, Outbound (visible send
-                   + persistence), LLM (OpenAI + Anthropic, buffered or streamed),
-                   validated Tools catalog, ToolOutput (turn-scoped tool media), Agent
-                   (DB effect from upstream effectful-postgresql)
-src/Max/LLM/       Stream: SSE framing + the two protocols' delta reducers, pure
+                   vectors), PlatformQuery/Interaction/Account, Outbound (visible send
+                   + persistence), LLM (OpenAI + Anthropic + Responses, buffered or streamed),
+                   Tools execution, ToolDirectory, ToolOutput/ToolOutputRead,
+                   ToolControl, TaskQuery/TaskControl/TaskExecution, TurnQuery,
+                   Agent (DB effect from upstream effectful-postgresql)
+src/Max/Tool/      pure tool catalog, schemas, host metadata and loop control
+src/Max/Agent/     separate admission/journal/inbox contracts and durable assembly
+src/Max/Execution/ shared pre-effect steps and journal facts
+src/Max/LLM/       Types/Protocol/Stream: pure codecs and stream reconstruction;
+                   Configuration/Admission/Transport/Observability: call components
 src/Max/Http/      Json: bounded buffered POST + domain retries; Stream: SSE folding;
                    both execute through the process-wide HttpRuntime pools
 src/Max/HttpRuntime process-wide http-client managers, bounded response scopes,
@@ -324,7 +329,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Browser hosts and turn instances | ephemeral: each conversation's lightweight container host is destroyed on exit and reaped on boot; every turn's independent MCP transport and camoufox browse session is terminated when that turn finishes |
 
 Effect stack at the top of `runApp`:
-`IOE → Concurrent → Log → Http → Embedding → Blob → WithConnection → PlatformApi → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → Agent`.
+`IOE → Concurrent → Log → Http → BlobHost → Blob → WithConnection → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → PlatformAccount → PlatformInteraction → PlatformQuery → Embedding → Agent`.
 
 ### PostgreSQL transaction ownership
 
@@ -334,8 +339,60 @@ This wrapper acquires one physical pooled connection and interposes the
 uses that same connection. This is required because effectful-postgresql
 0.1.0.1's pooled transaction wrapper starts `BEGIN` on one connection while
 body operations may otherwise reacquire another. The local wrapper makes
-rollback, row locks, advisory transaction locks, and commit visibility real;
-the DB suite deliberately throws after an insert and proves no row survives.
+rollback, row locks, advisory transaction locks, and commit visibility real.
+Nested operations use savepoints and cannot commit their caller's transaction.
+Agent admission reserves a model round with its turn counter, or a tool call
+with its started journal row, in one transaction. Database tests inject failures
+at the second write and prove the budget reservation rolls back too.
+
+Task tools are assembled with bound conversation, caller and execution scopes.
+Their code holds TaskQuery/TaskControl/TaskExecution and TurnQuery capabilities,
+without raw SQL, Blob or IO access. Task control rechecks the caller inside the
+mutation transaction; administrative authority is absent from that interface.
+Monitor and reminder tools similarly receive MonitorQuery/MonitorControl;
+list/history readers have no control capability. Host assembly supplies one
+clock value per invocation. The write interpreter rechecks the bound actor,
+conversation and execution lease in the definition transaction; elaborated
+arming also requires the host role, and the frozen grants come from assembly.
+Task, monitor and memory control use the same caller-authorization primitive.
+Memory tools hold MemoryQuery/MemoryControl. Their actor, evidence and permanent
+lifecycle come from the interpreter; source identity and the current lease are
+rechecked with the write. Explicit saves and Historian proposals share locked
+admission for the 30-item namespace capacity; Historian also rejects exact
+duplicates within that transaction. Publication takes the conversation lock
+before run/cursor rows, matching the tool write lock order.
+Time parsing and cron calculation are pure modules, independent of tools and
+the scheduler. Task list/detail, monitor history and the admin work overview
+are decoded into domain values and rendered by Haskell.
+Standalone multi-query details run in a read-only repeatable snapshot; nested
+reads inherit the caller transaction. SQL retains filters, limits and aggregates.
+Conversation built-ins use ConversationQuery for scoped message, forward,
+recall and episode reads, plus TurnQuery for cleared-watermark trace access.
+History/media/episode/recall read types do not import store implementations.
+Prompt and tool reads share the pure Context.Media renderer; media enrichment
+runs only after scoped rows have been selected.
+MediaQuery supplies scoped image/video/file reads, and StickerQuery owns the
+compatible, unbanned shared-library search. Group tools use the conversation
+roster reader. Known identities are recorded per endpoint at ingest or a
+contentless interaction; sharing a bot account does not reveal another room
+or authorize a foreign mention. Migration 097 reconstructs this projection
+from canonical senders/mentions, turn initiators and each endpoint's own account.
+PinControl allows pin/unpin only; its authorization runs after
+the local Session mutex and database row lock, immediately before the update
+in the same transaction. Session cache publication follows COMMIT and rejects
+nested transactions that could later roll back.
+Image preparation is a host callback owning ffmpeg; canonical caption resolution
+is assembled outside the Docker file adapter. Browser workspace ownership is
+established in Browser.ToolRuntime before native MCP tools run. These resource
+adapters retain explicit host IO without receiving database capabilities.
+
+The Agent loop receives separate admission, journal and inbox contracts from
+`Agent.Runtime`; it imports no database implementation. Tool call modes in the
+host catalog determine checkpoint budget and terminal exclusivity. Accepted
+task runners emit `LoopControl` through a per-invocation `ToolControl` scope;
+the tool kernel verifies the declared mode and discards control on failure.
+The loop consumes continue/yield/finish values without recognizing tool names
+or decoding control from model-facing JSON.
 
 ### Outbound HTTP ownership
 
@@ -368,7 +425,11 @@ decoding and retry decisions stay with callers. In particular, the primitive
 never silently replays a request. Buffered LLM calls use a caller-selected
 schedule (normally 2/8 seconds; Historian selects none), while streamed reply
 calls retry only before text or tool-call output becomes observable, using the
-longer 2/8/20/45/90-second schedule.
+longer 2/8/20/45/90-second schedule. `Http.Failure` and `LLM.Failure` retain
+structured causes through `AgentFailure` into task settlement. HTTP 408/429/5xx
+and temporary connection failures are retryable; diagnostic words such as
+"provider" or "timeout" in a 4xx body do not override its status. Partial streams
+have their own terminal outcome and never trigger a durable automatic replay.
 
 The OneBot reverse WebSocket and browser page
 traffic inside the camoufox container are not outbound HTTP clients and remain
@@ -392,27 +453,31 @@ the selected profile's endpoint and credentials. This keeps command and prompt
 code from depending on transport secrets or growing catalog operations into the
 completion effect.
 
-`PlatformApi` is the low-level capability for raw platform actions and
-request/response calls. Its interpreter routes each action to a
-`PlatformBackend`; the default QQ backend is implemented by NapCat over the
-reverse WebSocket, while backend-specific names stay at that protocol edge.
-Visible conversation sends sit one layer above it in `Outbound`.
-The current reverse-WebSocket client is generation-tagged: cleanup from a
-superseded socket can abort its own pending calls but cannot erase a newer
-published connection.
+`PlatformQuery` reads typed group metadata, members, file addresses and forward
+payloads. `PlatformInteraction` permits poke; `PlatformAccount` permits responding
+to friend requests and is only required at ingress. Roster and permission readers
+do not receive either write capability. Each interpreter routes through the same
+canonical endpoint ownership check; a missing foreign backend cannot fall back to
+QQ. The runtime resolver reads the caller's immutable configuration generation.
+Raw `OneBot.Action` and response envelopes stay in the platform adapters and
+interpreters. Content and recorded reactions continue through `Outbound`.
 
-`Blob` is the sole owner of the configured storage root. Producers receive an
-opaque, validated `BlobRef` from `putBlob`; ordinary consumers pass that
-reference back to `readBlob` and never assemble a host path themselves. The
-boundary has one deliberately loud escape hatch:
+The current reverse-WebSocket client is generation-tagged. The dedicated QQ
+history query checks its generation before and after each call, and returns
+`PlatformGenerationChanged` if replaced; recovery never decides this from error
+text. Cleanup from a superseded socket cannot erase a newer published client.
+
+Assembly installs `Blob` and `BlobHost` with the same configured storage root.
+Producers receive an opaque, validated `BlobRef` from `putBlob`; ordinary consumers
+only need content access. Host path bridging is a separate capability supplied to
+the Docker import and ffmpeg adapters:
 
 ```
-runBlob(root)
+Blob
   ├─ putBlob bytes             ──▶ BlobRef
-  ├─ readBlob BlobRef          ──▶ bytes
-  └─ resolveBlobHostPath ref   ──▶ host path
-                                   ├─ Docker cp import
-                                   └─ ffmpeg video/GIF frame extraction
+  └─ readBlob BlobRef          ──▶ bytes
+BlobHost
+  └─ resolveBlobHostPath ref   ──▶ host path (Docker cp / ffmpeg)
 ```
 
 `BotEnv` therefore carries no blob root. The database still receives derived
@@ -474,16 +539,16 @@ persistence dependency.  The production sink is assembled per dispatch in
 `Handler`, where reply target, debug policy, and the shared stream budget are
 known.
 
-Each `AgentTurn` adds two narrower scopes inside the process stack:
+Each `AgentTurn` installs narrower scopes inside the process stack:
 
 ```
 Handler
   └─ TurnRuntime + AgentContext (ToolContext + LLM effort)
        └─ Agent
-            ├─ validated catalog (schema hash + effects + authority + retry class)
-            ├─ runTools (allToolsFor ToolContext)
+            ├─ ToolDirectory ◀── pure ToolCatalog (schema + host metadata)
+            ├─ runToolsWith ◀── ToolRegistry (validated closures)
             │    └─ concrete tool ──queueInlineMedia──▶ ToolOutput
-            └─ drainInlineMedia ──▶ next LLM tool round
+            └─ ToolOutputRead ──drainInlineMedia──▶ next LLM tool round
 ```
 
 Catalog construction rejects duplicate names, malformed schemas, and
@@ -498,12 +563,22 @@ inventory used to build the live catalog.
 turn identity. It carries current-conversation authority alongside capability
 gates; model-provided ids can select resources only inside that scope and
 cannot construct another conversation authority. Concrete tools do not import
-`Agent`. `ToolOutput` owns a fresh media queue per turn;
+`Agent`. `Max.AgentEvent` is the pure output protocol; `Max.AgentOutput` owns its
+production sink and reply publication. Assembly creates one fresh media queue per
+turn and installs separate `ToolOutput` producer and `ToolOutputRead` consumer
+interpreters over it;
 draining a round clears queued media but preserves the turn-wide attachment
 counter. This prevents concurrent turns from sharing output state and keeps
 mutable queue mechanics out of context records. Embedding consumers use the
-injectable `Embedding` effect; only its production interpreter holds the HTTP
-client/model configuration.
+injectable `Embedding` effect. Its assembly supplies a client resolver from the
+current leased scope; the effect no longer imports `BotEnv`. The bounded `Http`
+effect preserves typed transport, status and size-limit failures, with compatibility
+pool policy chosen by its interpreter for QQ/Bilibili media downloads.
+
+`scripts/check-architecture.py` checks pure-domain imports, raw RPC placement and
+approved host-path adapters. Compiler fixtures prove that read-only directories,
+platform queries and media producers cannot acquire the corresponding write or
+consume permissions. A positive fixture must compile before any denial is accepted.
 
 Tools that append to that turn-wide media queue are classified as stateful and
 run sequentially within the turn, which makes attachment order and the shared

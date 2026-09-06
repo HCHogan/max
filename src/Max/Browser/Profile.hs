@@ -1,6 +1,6 @@
 module Max.Browser.Profile (browserCommand, browserCommandOnce, filterProfileState) where
 
-import Control.Monad (void)
+import Control.Monad (forM_, void)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
@@ -17,7 +17,7 @@ import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Browser.Registry
 import Max.Browser.Runtime (profileIdentity, resetTaskBrowser, workspaceIdentity)
 import Max.Browser.Vault (openBrowserState, sealBrowserState)
-import Max.DB.Browser (browserCommandOwner, browserWorkspace, resetBrowserWorkspace)
+import Max.DB.Browser (browserCommandOwner, browserWorkspace, resetBrowserWorkspace, revokeProfileWorkspaces)
 import Max.DB.Transaction (withTransaction)
 import Max.Monitor.Types (MonitorOrdinal (..), parseMonitorHandle)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
@@ -97,6 +97,7 @@ browserCommand registry group@(GroupId groupId) actor@(PrincipalId principal) pi
                       (principal, name, origin, groupId)
                   case profiles of
                     [Only profile] -> do
+                      revokeProfileWorkspaces profile
                       saved <- liftIO (sealBrowserState (browserVault registry) (profileIdentity profile) state)
                       void $ execute "UPDATE browser_profiles SET checkpoint=? WHERE profile_id=?" (saved, profile)
                       pure (Right (object ["saved" .= name, "origin" .= origin]))
@@ -118,8 +119,9 @@ browserCommand registry group@(GroupId groupId) actor@(PrincipalId principal) pi
               _ -> pure (Left "active profile not found for this owner and conversation")
       ["delete", name] -> withTransaction $ do
         lockConversation
-        changed <- execute "UPDATE browser_profiles SET revoked=true,checkpoint=NULL,version=version+1,updated_at=clock_timestamp() WHERE principal_id=? AND name=? AND conversation_id=(SELECT conversation_id FROM conversations WHERE legacy_group_id=?)" (principal, name, groupId)
-        pure (Right (object ["revoked" .= changed]))
+        changed <- query "UPDATE browser_profiles SET revoked=true,checkpoint=NULL,version=version+1,updated_at=clock_timestamp() WHERE principal_id=? AND name=? AND conversation_id=(SELECT conversation_id FROM conversations WHERE legacy_group_id=?) RETURNING profile_id" (principal, name, groupId)
+        forM_ (changed :: [Only Int64]) $ \(Only profile) -> revokeProfileWorkspaces profile
+        pure (Right (object ["revoked" .= length changed]))
       ["unmonitor", handle] | Just ordinal <- parseMonitorHandle handle -> withTransaction $ do
         lockConversation
         removed <- query "DELETE FROM browser_monitor_profiles binding USING monitors,conversations WHERE binding.monitor_id=monitors.monitor_id AND monitors.conversation_id=conversations.conversation_id AND legacy_group_id=? AND armed_by_principal_id=? AND monitor_ordinal=? RETURNING binding.monitor_id" (groupId, principal, ordinal.unMonitorOrdinal)

@@ -38,12 +38,12 @@ import Max.DB.FetchQueue (JobKind (JobImage), enqueueJob)
 import Max.DB.Stickers (StickerMeta, recordSticker, stickerMeta)
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Blob (Blob, blobRefSha256, blobRefStoredPath, putBlob)
-import Max.Effects.Http (Http, getBytesQqCompatible)
+import Max.Effects.Http (Http, getQQMedia, renderDownloadError)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.IR qualified as IR
+import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Util (withTempDirectory)
 import OneBot.Segment (ImageSegInfo (..), Segment (..), VideoSegInfo (..))
-import Max.Platform.Types (CanonicalMessageId (..))
 import OneBot.Types (GroupId (..))
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -250,12 +250,12 @@ processOne job = do
         "canonical_message_id" .= job.canonicalMessageId,
         "seg_index" .= job.segIndex
       ]
-  r <- getBytesQqCompatible job.url maxBytes
+  r <- getQQMedia job.url maxBytes
   case r of
     -- Carries the URL because the queue's own failure log is generic;
     -- this is what someone reads when a picture never showed up.
     Left err ->
-      pure (Left ("download failed (" <> job.url <> "): " <> err))
+      pure (Left ("download failed (" <> job.url <> "): " <> renderDownloadError err))
     Right (bytes, mime) -> do
       ref <- putBlob bytes
       let sha = blobRefSha256 ref

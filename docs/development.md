@@ -17,6 +17,62 @@ lambda-to-section rewrites, and `data`→`newtype`, which is not a safe rewrite
 under the project-wide `StrictData`. Each ignore carries its reason; add one
 the same way rather than leaving a hint to rot.
 
+## Architecture boundaries
+
+```sh
+cabal build all
+python3 scripts/check-architecture.py
+```
+
+CI runs this check against the built library. The pure task/monitor/browser
+policies, tool catalog, LLM codecs and AgentEvent protocol have a closed set of approved
+imports. The tool directory has no executable registry. Compiler fixtures prove
+that blob content cannot resolve host paths, media producers cannot drain the
+queue, media consumers cannot produce, and directory-only clients cannot execute
+tools or arbitrary IO. Platform queries cannot poke, approve friends or publish
+content; account and interaction capabilities are also checked independently.
+Directory clients cannot request loop control, and no JSON decoder exists for
+loop-control values. A positive fixture must compile before any denial counts
+as a pass.
+
+Production assembly shares one media queue and cumulative budget per turn;
+`ToolOutput` is passed to tool closures, and `ToolOutputRead` to the Agent loop.
+Only the ffmpeg/docker adapters receive `BlobHost`. Embedding resolves its client
+from the caller's leased runtime scope without importing the application env.
+The bounded HTTP effect preserves structured transport/status/limit failures;
+QQ/Bilibili media compatibility policy is selected inside its interpreter.
+
+Task tools use conversation-bound TaskQuery, caller-bound TaskControl,
+execution-bound TaskExecution and result-handle TurnQuery. They cannot import
+raw SQL/Blob implementations or require unrestricted IO; resource affinity stays
+in the task tool assembly adapter. Compiler fixtures deny task writes and raw
+IO to query-only clients. Monitor/reminder tools now use bound MonitorQuery
+and MonitorControl with the same transaction-scoped source authorization;
+list and history readers cannot control monitors. Their clock is supplied per
+invocation by host assembly, and pure schedule/parser code imports no tools or
+scheduler implementation. Compiler fixtures reject monitor control and IO from
+query clients. MemoryQuery/MemoryControl bind conversation, actor and source;
+concurrent tool/Historian admission shares one capacity check and insert under
+the conversation lock. Built-in conversation reads use ConversationQuery and
+TurnQuery, with shared pure media rendering. Read-model row codecs have a
+separate import allowlist that grants no query or execution capability.
+MediaQuery binds image/video/file reads to the current conversation; StickerQuery
+searches only the compatible, unbanned shared library. Group tools read the bound
+roster, whose identity evidence is scoped to the endpoint even when multiple
+rooms share the bot account. Migration 097 backfills canonical speakers, mentions,
+turn initiators and the bot identity; the populated-upgrade fixture checks
+foreign identities remain invisible and original messages remain unchanged.
+PinControl exposes only pin edits and checks authority after both session
+locks, in the CAS transaction. Database tests cover scope isolation, competing
+pins, expired writers and cache rollback. Images use a host-supplied preparation
+callback; file captions use the shared canonical resolver from assembly. Browser
+and Docker tools retain explicit resource IO but cannot import raw stores.
+Compiler fixtures also deny publication, host paths and raw IO to read clients.
+Agent cannot import database implementations: execution
+admission, journal facts and inbox reads have separate interpreter contracts.
+Tool control is collected per invocation and released only after success;
+control names and model JSON are never interpreted by the loop.
+
 ## Tests
 
 Two test suites — one in-memory, one against Postgres — plus CI (GitHub Actions)

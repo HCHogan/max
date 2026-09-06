@@ -43,7 +43,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log
-import Max.Effects.Http (Http, getBytesWith)
+import Max.Effects.Http (DownloadError (..), Http, getBytesWith, renderDownloadError)
+import Max.HttpRuntime (TransportFailure (..))
 
 -- | Resolved @cliproxy.*@ config; presence of the management key
 -- enables the section, the same shape every other optional feature
@@ -192,12 +193,12 @@ responseLimit = 1024 * 1024
 
 -- | Say what the status code means here.  A bare @HTTP 404@ from this
 -- endpoint has exactly one likely cause and it isn't a typo'd path.
-explain :: Text -> Text
-explain err
-  | "HTTP 404" `T.isPrefixOf` err =
-      err <> " — the proxy has no management API; set remote-management.secret-key in its config"
-  | "HTTP 401" `T.isPrefixOf` err = err <> " — management key rejected"
-  | otherwise = err
+explain :: DownloadError -> Text
+explain failure =
+  renderDownloadError failure <> case failure of
+    DownloadTransport (HttpStatusFailure 404 _ _ _) -> " — the proxy has no management API; set remote-management.secret-key in its config"
+    DownloadTransport (HttpStatusFailure 401 _ _ _) -> " — management key rejected"
+    _ -> ""
 
 -- | One credential, rendered for the admin API.
 --

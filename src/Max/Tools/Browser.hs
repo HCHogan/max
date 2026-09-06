@@ -23,7 +23,7 @@
 -- expired it (idle TTL, capped upstream at 15 min); the other tools
 -- report the expiry and point the model back at @browser_navigate@.
 module Max.Tools.Browser
-  ( browserToolsFor,
+  ( browserToolsAt,
   )
 where
 
@@ -38,7 +38,6 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
-import Effectful.PostgreSQL (WithConnection)
 import Max.Browser.Error
   ( BrowserErrorKind (..),
     browserErrorKind,
@@ -53,14 +52,9 @@ import Max.Browser.Registry
     takeBrowserRestore,
     withBrowserSession,
   )
-import Max.Browser.Runtime (managedBrowserTools)
 import Max.Effects.Tools (Tool (..))
 import Max.MCP.Client (mcpTextContent)
-import Max.ToolContext (ToolContext)
 import Max.Tools.Schema (boolParam, enumParam, numberParam, stringParam, toolObject)
-
-browserToolsFor :: (WithConnection :> es, IOE :> es) => ToolContext -> BrowserRegistry -> Maybe Text -> [Tool es]
-browserToolsFor context reg proxy = managedBrowserTools context reg (\scope -> browserToolsAt scope reg proxy)
 
 browserToolsAt :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Maybe Text -> [Tool es]
 browserToolsAt scope reg proxy =

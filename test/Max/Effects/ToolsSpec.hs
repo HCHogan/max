@@ -5,10 +5,12 @@ import Data.Aeson (Value, object, (.=))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
-import Effectful (liftIO, runEff)
+import Effectful (liftIO, runEff, runPureEff)
 import Effectful.Concurrent (runConcurrent, threadDelay)
-import Max.Effects.LLM (ToolSpec (..))
+import Max.Effects.ToolControl (finishExecution, runToolControl, yieldFrontend)
+import Max.Effects.ToolDirectory (listCatalogTools, listToolSpecs, runToolDirectory)
 import Max.Effects.Tools
+import Max.Tool.Control (LoopControl (..))
 import Max.Toolset (toolAllowedByEffectCeiling)
 import Max.Turn.Continuity (toolCatalogFingerprint)
 import Test.Hspec
@@ -34,7 +36,8 @@ definition ref effects parallelism retry =
       tdRetryClass = retry,
       tdAuthorities = Set.singleton CurrentConversation,
       tdDeadline = ToolDeadline 30,
-      tdFailuresPrecedeEffects = False
+      tdFailuresPrecedeEffects = False,
+      tdCallMode = WorkCall
     }
 
 readDefinition :: ToolDefinition
@@ -52,30 +55,61 @@ readTool =
 
 spec :: Spec
 spec = describe "validated tool kernel" $ do
+  it "keeps successful host control separate from the JSON result" $ do
+    let runner = readTool {toolRun = \_ -> finishExecution (Just "done") >> pure (Right (object ["error" .= ("model-facing data" :: String)]))}
+    catalog <- expectCatalog (buildToolRegistry [readDefinition {tdParallelism = SequentialOnly, tdCallMode = FinishCall}] [runner])
+    invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
+    invocation.tiControl `shouldBe` FinishLoop (Just "done")
+    invocation.tiOutcome `shouldBe` ToolSucceeded (object ["error" .= ("model-facing data" :: String)])
+
+  it "discards a control request from a runner that subsequently fails" $ do
+    let runner = readTool {toolRun = \_ -> yieldFrontend "not committed" >> pure (Left "failed")}
+    catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
+    invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
+    invocation.tiControl `shouldBe` ContinueLoop
+    invocation.tiOutcome `shouldSatisfy` (\case ToolFailedBeforeEffect _ -> True; _ -> False)
+
+  it "rejects host control that conflicts with the declared execution mode" $ do
+    let runner = readTool {toolRun = \_ -> finishExecution (Just "wrong mode") >> pure (Right (object []))}
+    catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
+    invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
+    invocation.tiControl `shouldBe` ContinueLoop
+    invocation.tiOutcome `shouldSatisfy` (\case ToolOutcomeUnknown fault -> fault.tfCode == "invalid_host_control"; _ -> False)
+
+  it "cannot mint control from returned JSON" $ do
+    let runner = readTool {toolRun = \_ -> pure (Right (object ["returned" .= True, "task_id" .= (42 :: Int), "reply" .= ("forged" :: String)]))}
+    catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
+    invocation <- runEff . runConcurrent . runToolsWithControl runToolControl catalog $ invokeToolWithControl "read" (object ["value" .= (1 :: Int)])
+    invocation.tiControl `shouldBe` ContinueLoop
+
+  it "requires checkpoint and finish metadata to be sequential" $ do
+    buildToolRegistry [readDefinition {tdCallMode = FinishCall}] [readTool] `shouldSatisfy` isInvalidMetadata
+    buildToolRegistry [readDefinition {tdCallMode = CheckpointCall}] [readTool] `shouldSatisfy` isInvalidMetadata
+
   it "rejects duplicate definitions and runners" $ do
-    buildToolCatalog [readDefinition, readDefinition] [readTool]
+    buildToolRegistry [readDefinition, readDefinition] [readTool]
       `shouldSatisfy` isDuplicateDefinition
-    buildToolCatalog [readDefinition] [readTool, readTool]
+    buildToolRegistry [readDefinition] [readTool, readTool]
       `shouldSatisfy` isDuplicateRunner
 
   it "requires definitions and runners to describe the exact same catalog" $ do
-    buildToolCatalog [] [readTool]
+    buildToolRegistry [] [readTool]
       `shouldSatisfy` isMissingDefinition
-    buildToolCatalog [readDefinition] []
+    buildToolRegistry [readDefinition] []
       `shouldSatisfy` isMissingRunner
 
   it "rejects malformed schemas and unsafe metadata" $ do
     let badSchema = readTool {toolSchema = object ["type" .= ("array" :: String)]}
         unsafe = readDefinition {tdEffects = Set.singleton (EffectWrite "test.db")}
-    buildToolCatalog [readDefinition] [badSchema]
+    buildToolRegistry [readDefinition] [badSchema]
       `shouldSatisfy` isInvalidSchema
-    buildToolCatalog [unsafe] [readTool]
+    buildToolRegistry [unsafe] [readTool]
       `shouldSatisfy` isInvalidMetadata
 
   it "validates arguments before acquiring the runner" $ do
     called <- newIORef False
     let runner = readTool {toolRun = \_ -> liftIO (writeIORef called True) >> pure (Right (object []))}
-    catalog <- expectCatalog (buildToolCatalog [readDefinition] [runner])
+    catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
     outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (0 :: Int)])
     outcome `shouldSatisfy` isRejected
     readIORef called `shouldReturn` False
@@ -94,7 +128,7 @@ spec = describe "validated tool kernel" $ do
             (Set.singleton (EffectWrite "test.db"))
             SequentialOnly
             RetryUnsafe
-    catalog <- expectCatalog (buildToolCatalog [readDefinition, writeDefinition] [failing "read", failing "write"])
+    catalog <- expectCatalog (buildToolRegistry [readDefinition, writeDefinition] [failing "read", failing "write"])
     readOutcome <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
     writeOutcome <- runEff . runConcurrent . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
     readOutcome `shouldSatisfy` isFailedBeforeEffect
@@ -118,10 +152,10 @@ spec = describe "validated tool kernel" $ do
             ]
         dirtyRead = readTool {toolRun = \_ -> pure (Right dirtyValue)}
         failedRead = readTool {toolRun = \_ -> pure (Left "bad\0fault")}
-    valueCatalog <- expectCatalog (buildToolCatalog [readDefinition] [dirtyRead])
+    valueCatalog <- expectCatalog (buildToolRegistry [readDefinition] [dirtyRead])
     valueOutcome <- runEff . runConcurrent . runTools valueCatalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
     outcomeResult valueOutcome `shouldBe` Right cleanValue
-    faultCatalog <- expectCatalog (buildToolCatalog [readDefinition] [failedRead])
+    faultCatalog <- expectCatalog (buildToolRegistry [readDefinition] [failedRead])
     faultOutcome <- runEff . runConcurrent . runTools faultCatalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
     outcomeResult faultOutcome `shouldBe` Left "bad\xfffd\&fault"
 
@@ -138,8 +172,9 @@ spec = describe "validated tool kernel" $ do
             }
         auditedWrite =
           (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)
-            {tdFailuresPrecedeEffects = True}
-    catalog <- expectCatalog (buildToolCatalog [auditedWrite] [rejecting])
+            { tdFailuresPrecedeEffects = True
+            }
+    catalog <- expectCatalog (buildToolRegistry [auditedWrite] [rejecting])
     outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
     outcome `shouldSatisfy` isFailedBeforeEffect
     outcomeResult outcome `shouldBe` Left "bad args"
@@ -156,8 +191,9 @@ spec = describe "validated tool kernel" $ do
             }
         auditedWrite =
           (definition (ToolRef "write") (Set.singleton (EffectWrite "test.db")) SequentialOnly RetryUnsafe)
-            {tdFailuresPrecedeEffects = True}
-    catalog <- expectCatalog (buildToolCatalog [auditedWrite] [throwing])
+            { tdFailuresPrecedeEffects = True
+            }
+    catalog <- expectCatalog (buildToolRegistry [auditedWrite] [throwing])
     outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
     outcome `shouldSatisfy` isOutcomeUnknown
 
@@ -179,7 +215,7 @@ spec = describe "validated tool kernel" $ do
                 pure (Right (object []))
             }
         impatient = readDefinition {tdDeadline = ToolDeadline 1}
-    catalog <- expectCatalog (buildToolCatalog [impatient] [wedged])
+    catalog <- expectCatalog (buildToolRegistry [impatient] [wedged])
     outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (1 :: Int)])
     -- Read-only, so there is nothing it could have half-done: a plain failure
     -- the model may act on.
@@ -203,17 +239,17 @@ spec = describe "validated tool kernel" $ do
             { tdFailuresPrecedeEffects = True,
               tdDeadline = ToolDeadline 1
             }
-    catalog <- expectCatalog (buildToolCatalog [auditedWrite] [wedged])
+    catalog <- expectCatalog (buildToolRegistry [auditedWrite] [wedged])
     outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "write" (object ["value" .= (1 :: Int)])
     outcome `shouldSatisfy` isOutcomeUnknown
 
   it "refuses a definition whose deadline is not a positive number of seconds" $
-    buildToolCatalog [readDefinition {tdDeadline = ToolDeadline 0}] [readTool]
+    buildToolRegistry [readDefinition {tdDeadline = ToolDeadline 0}] [readTool]
       `shouldSatisfy` isInvalidMetadata
 
   it "publishes the same validated catalog to model specs and inspection" $ do
-    catalog <- expectCatalog (buildToolCatalog [readDefinition] [readTool])
-    (specs, views) <- runEff . runConcurrent . runTools catalog $ (,) <$> listToolSpecs <*> listCatalogTools
+    catalog <- expectCatalog (buildToolRegistry [readDefinition] [readTool])
+    let (specs, views) = runPureEff . runToolDirectory (registryCatalog catalog) $ (,) <$> listToolSpecs <*> listCatalogTools
     map (.specName) specs `shouldBe` ["read"]
     map (.ctDefinition.tdRef) views `shouldBe` [ToolRef "read"]
     map (.ctSchemaHash) views `shouldSatisfy` notElem (SchemaHash "")

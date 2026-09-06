@@ -70,6 +70,7 @@ import Max.Context
     estimateMessagesTokens,
     estimateTextTokens,
   )
+import Max.Context.Media (consumeMarkers, tagMediaMarkers)
 import Max.Context.Policy
   ( ContextCostModel (..),
     PolicyDrop (..),
@@ -106,7 +107,6 @@ import Max.ContextTraceStore (recordContextPlanTrace)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.DB.Files (FileRecord (..))
 import Max.DB.Files qualified as DBFiles
-import Max.DB.Media (MediaSegment (..), MessageMedia (..), fetchMediaSegments, noMessageMedia)
 import Max.DB.History
   ( HistoryItem (..),
     HistoryPage (..),
@@ -118,14 +118,16 @@ import Max.DB.History
     fetchMessagesByIdsInScope,
     fetchNewestPromptPageBefore,
   )
+import Max.DB.History.Media (withMediaHandles)
+import Max.DB.Media (MediaSegment (..), MessageMedia (..), fetchMediaSegments, noMessageMedia)
 import Max.DB.TurnContinuity (recentTurnDigests)
 import Max.Dispatch (DispatchMessage (..), dispatchText, dispatchTextWithoutSelf)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
-import Max.Effects.LLM (ChatMessage (..), ContentBlock (..))
 import Max.EpisodeStore (ActiveCompartment (..), CompartmentId (..), SourceRange (..), episodeHandleText, listActiveCompartments)
+import Max.IR (Body (..), Node (..), Phase (Canonical))
 import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
-import Max.IR (Body (..), Node (..), Phase (Canonical))
+import Max.LLM.Types (ChatMessage (..), ContentBlock (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
 import Max.ModelCatalog (ContextLimits, defaultContextLimits)
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
@@ -438,8 +440,9 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks con
           logInfo "context: no active compartment; using token-budgeted raw fallback" $
             object ["group_id" .= gid]
           collectRawFallback "raw_fallback_no_compartments"
-        _ | mutationMode == ReadOnlyPreview ->
-          collectProjectionFallback "read_only_preview" covered
+        _
+          | mutationMode == ReadOnlyPreview ->
+              collectProjectionFallback "read_only_preview" covered
         _ -> do
           when (any (.activeGapBefore) (drop 1 covered)) $
             logAttention "context: invalid gap inside selected compartment suffix" $
@@ -591,31 +594,31 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks con
       { csCandidates =
           ContextCandidates $
             PromptInputs
-            { defaultPersona = defaultPersona,
-              session = s,
-              triggerMessage = gm,
-              recentTurns = recentTurns',
-              continuationView = continuation'.ciView,
-              replaySegments = continuation'.ciSegments,
-              replayCovered = continuation'.ciCovered,
-              transcript = transcriptCtx,
-              compartments = compartments',
-              historyTurns = historyTurns',
-              inFlight = inFlight',
-              pinnedItems = pinnedItems'',
-              replyCtx = replyCtx',
-              triggerForward = triggerKids,
-              multimodal = multimodal',
-              outputCapabilities = outputCaps,
-              origin = origin',
-              groupBrief = brief,
-              groupMemories = groupMems,
-              userMemories = userMems,
-              images = images' <> videos',
-              skills = skills',
-              now = now',
-              tz = tz'
-            },
+              { defaultPersona = defaultPersona,
+                session = s,
+                triggerMessage = gm,
+                recentTurns = recentTurns',
+                continuationView = continuation'.ciView,
+                replaySegments = continuation'.ciSegments,
+                replayCovered = continuation'.ciCovered,
+                transcript = transcriptCtx,
+                compartments = compartments',
+                historyTurns = historyTurns',
+                inFlight = inFlight',
+                pinnedItems = pinnedItems'',
+                replyCtx = replyCtx',
+                triggerForward = triggerKids,
+                multimodal = multimodal',
+                outputCapabilities = outputCaps,
+                origin = origin',
+                groupBrief = brief,
+                groupMemories = groupMems,
+                userMemories = userMems,
+                images = images' <> videos',
+                skills = skills',
+                now = now',
+                tz = tz'
+              },
         csMaterializationVersion = materializationVersion,
         csMaterializationReason = materializationReason
       }
@@ -758,60 +761,6 @@ waitForTriggerForward mid = go 0
             _ -> do
               liftIO (threadDelay (stepMs * 1000))
               go (elapsed + stepMs)
-
--- | Upgrade bare opaque-media display markers to the canonical handles the
--- model can pass to a tool (ADR 004):
---
---   * @[forward]@ → @[forward#\<id\>]@, naming the container message, which
---     is what the child rows are keyed under;
---   * @[video]@ → @[video#\<id\>.\<seg\>: \<简介\>](\<时长\>)@, naming one
---     clip, because @(canonical_message_id, seg_index)@ is the primary key
---     of @message_videos@.
---
--- Markers are consumed left to right against the segments in @seg_index@
--- order: both orders come from the canonical node list, so they agree.  A
--- marker with no segment left (the download failed, so no row exists) keeps
--- its bare form — @view_video@ could not have returned it either.
-tagMediaMarkers :: Map.Map Int64 MessageMedia -> HistoryItem -> HistoryItem
-tagMediaMarkers segments h =
-  h {renderedText = tagVideos (T.replace "[forward]" forwardHandle h.renderedText)}
-  where
-    forwardHandle = "[forward#" <> tshow h.canonicalId <> "]"
-    media = Map.findWithDefault noMessageMedia h.canonicalId segments
-    tagVideos = consumeMarkers "[video]" (mmVideos media) videoHandle
-    videoHandle seg =
-      "[video#"
-        <> tshow h.canonicalId
-        <> "."
-        <> tshow seg.msSegIndex
-        <> maybe "" (\d -> ": " <> T.take 120 d) seg.msDescription
-        <> "]"
-        <> maybe "" (\d -> "(" <> fmtDurationSec d <> ")") seg.msDurationSeconds
-
--- | 'tagMediaMarkers' for callers holding a handful of rows rather than a
--- whole turn's context: fetch the media segments those rows need, then tag.
--- One query, so a tool returning a forward bundle costs the same as one
--- returning a single message.
-withMediaHandles ::
-  (WithConnection :> es, IOE :> es) =>
-  [HistoryItem] ->
-  Eff es [HistoryItem]
-withMediaHandles [] = pure []
-withMediaHandles items = do
-  segments <- fetchMediaSegments (map (.canonicalId) items)
-  pure (map (tagMediaMarkers segments) items)
-
--- | Replace each occurrence of @marker@, left to right, with the handle
--- built from the next media segment; occurrences past the end of the
--- segment list are left alone.
-consumeMarkers :: Text -> [MediaSegment] -> (MediaSegment -> Text) -> Text -> Text
-consumeMarkers marker = go
-  where
-    go [] _ t = t
-    go (seg : rest) handle t = case T.breakOn marker t of
-      (_, "") -> t
-      (before, suffix) ->
-        before <> handle seg <> go rest handle (T.drop (T.length marker) suffix)
 
 -- | Everyone appearing in this turn's context, principal ↔ display name.
 --
@@ -1658,6 +1607,7 @@ renderUser ::
   [ContextCompartment] ->
   [Text] -> -- recent durable turn lines, newest first
   Maybe Text -> -- exact-reply continuation digest
+
   -- | The conversation transcript, chronological — or 'Nothing' when
   -- it is being emitted as separate turns and the @[recent messages]@
   -- block should not appear here at all.

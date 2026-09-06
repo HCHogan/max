@@ -23,37 +23,37 @@ import Data.Time (TimeZone)
 import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
-import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope)
-import Max.DB.Media (StoredImage (..), fetchMessageImagesInScope)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
-import Max.Effects.LLM (ToolSpec (..))
+import Max.Effects.MediaQuery (MediaQuery, readImages)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
-import Max.Tools.Schema (integerParam, toolObject)
-import Max.ImagePrep (prepareImageForLLM)
+import Max.History.Types (HistoryItem (..), bestName)
+import Max.Media.Types (StoredImage (..))
 import Max.Time (fmtHM)
-import Max.ToolContext (ToolContext, toolConversationScope, toolMultimodal)
+import Max.Tool.Types (ToolSpec (..))
+import Max.ToolContext (ToolContext, toolMultimodal)
+import Max.Tools.Schema (integerParam, toolObject)
 
 -- | Same per-image cap as the prompt builder's inline path.
 maxImageBytes :: Int
 maxImageBytes = 20 * 1024 * 1024
 
 imageToolsFor ::
-  (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
+  (Blob :> es, MediaQuery :> es, Log :> es, ToolOutput :> es) =>
   TimeZone -> -- display timezone for the image label's HH:MM
   ToolContext ->
+  (Text -> BS.ByteString -> Eff es (Text, BS.ByteString)) ->
   [Tool es]
-imageToolsFor tz dc
-  | toolMultimodal dc = [viewImageTool tz dc]
+imageToolsFor tz dc prepare
+  | toolMultimodal dc = [viewImageTool tz prepare]
   | otherwise = []
 
 viewImageTool ::
-  (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
+  (Blob :> es, MediaQuery :> es, Log :> es, ToolOutput :> es) =>
   TimeZone ->
-  ToolContext ->
+  (Text -> BS.ByteString -> Eff es (Text, BS.ByteString)) ->
   Tool es
-viewImageTool tz dc =
+viewImageTool tz prepare =
   Tool
     { toolName = viewImageSpec.specName,
       toolDescription = viewImageSpec.specDescription,
@@ -61,11 +61,11 @@ viewImageTool tz dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, seg) -> do
-          rows <- fetchMessageImagesInScope scope mid seg
+          (message, rows) <- readImages mid seg
           case rows of
             [] -> pure $ Left "这条消息没有已存的图片（id 写错了？或图片没下载成功）"
             imgs -> do
-              label <- imageLabel mid
+              let label = imageLabel mid message
               let refs = [(i.storedImageMime, i.storedImageSha256) | i <- imgs]
               attached <- attachAll label (zip [1 :: Int ..] refs) (length refs)
               pure $
@@ -83,20 +83,16 @@ viewImageTool tz dc =
     parseArgs :: Object -> Parser (Int64, Maybe Int)
     parseArgs o = (,) <$> o .: "message_id" <*> o .:? "seg_index"
 
-    scope = toolConversationScope dc
-
     -- "[10:32 Alice] 消息里的图片" — mirrors the label the prompt
     -- builder puts on inline images, so both kinds read the same.
-    imageLabel mid =
-      fetchMessageInScope scope mid >>= \case
-        Nothing -> pure ("[message " <> T.pack (show mid) <> "] 里的图片")
-        Just h ->
-          pure $
-            "["
-              <> fmtHM tz h.receivedAt
-              <> " "
-              <> bestName h
-              <> "] 消息里的图片"
+    imageLabel mid = \case
+      Nothing -> "[message " <> T.pack (show mid) <> "] 里的图片"
+      Just h ->
+        "["
+          <> fmtHM tz h.receivedAt
+          <> " "
+          <> bestName h
+          <> "] 消息里的图片"
 
     attachAll _ [] _ = pure (0 :: Int)
     attachAll label ((i, (mime, sha)) : rest) total = do
@@ -115,7 +111,7 @@ viewImageTool tz dc =
                 object ["sha256" .= sha, "error" .= T.pack (show e)]
               attachAll label rest total
             Right bytes0 -> do
-              (mime', bytes) <- liftIO (prepareImageForLLM mime bytes0)
+              (mime', bytes) <- prepare mime bytes0
               if BS.length bytes > maxImageBytes
                 then do
                   logAttention "view_image: skipped (too large)" $

@@ -23,6 +23,7 @@ module Max.Session
     loadSession,
     readSession,
     updateSession,
+    updateSessionGuarded,
 
     -- * Convenience updates (pass to 'updateSession')
     clearHistory,
@@ -50,10 +51,12 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Time (UTCTime)
+import Data.Void (absurd)
 import Effectful
 import Effectful.Exception (bracket, mask, throwIO)
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.Session qualified as DB
+import Max.DB.Transaction (withCommittedTransaction)
 import Max.Session.Types (Session (..))
 import OneBot.Types (GroupId)
 
@@ -117,7 +120,21 @@ updateSession ::
   SessionHandle ->
   (Session -> (Session, a)) ->
   Eff es a
-updateSession handle f =
+updateSession handle f = either absurd id <$> updateSessionGuarded handle (pure (Right ())) (Right . f)
+
+-- | Recheck a domain's authority after acquiring both the local mutation lock
+-- and the persisted session row. Guard, decision and CAS share one transaction;
+-- publish the cache only after COMMIT, masked against asynchronous interruption.
+-- A CAS refresh reruns the guard. Nested transactions are rejected, since their
+-- later rollback cannot be reflected in an already-published TVar.
+updateSessionGuarded ::
+  forall es rejection a.
+  (WithConnection :> es, IOE :> es) =>
+  SessionHandle ->
+  Eff es (Either rejection ()) ->
+  (Session -> Either rejection (Session, a)) ->
+  Eff es (Either rejection a)
+updateSessionGuarded handle guard f =
   bracket
     (liftIO (takeMVar handle.mutationLock))
     (const (liftIO (putMVar handle.mutationLock ())))
@@ -126,15 +143,25 @@ updateSession handle f =
           \restore -> retryCAS restore maxSessionCASRetries
     )
   where
+    retryCAS :: (forall x. Eff es x -> Eff es x) -> Int -> Eff es (Either rejection a)
     retryCAS restore retriesLeft = do
       oldRecord <- liftIO (readTVarIO handle.state)
-      let (newSession, result) = f oldRecord.session
-      committed <- restore (DB.saveSessionCAS oldRecord newSession)
+      committed <- withCommittedTransaction $ restore $ do
+        current <- DB.lockRecordRevision oldRecord
+        if not current
+          then pure (Right Nothing)
+          else
+            guard >>= \case
+              Left failure -> pure (Left failure)
+              Right () -> case f oldRecord.session of
+                Left failure -> pure (Left failure)
+                Right (newSession, result) -> Right . fmap (,result) <$> DB.saveSessionCAS oldRecord newSession
       case committed of
-        Just newRecord -> do
+        Left failure -> pure (Left failure)
+        Right (Just (newRecord, result)) -> do
           liftIO . atomically $ writeTVar handle.state newRecord
-          pure result
-        Nothing -> do
+          pure (Right result)
+        Right Nothing -> do
           latest <- restore (DB.fetchRecord oldRecord.session.groupId handle.defaultModel)
           case latest of
             Nothing -> throwIO (SessionMissing oldRecord.session.groupId)

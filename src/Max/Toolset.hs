@@ -26,49 +26,49 @@ import Data.Text (Text)
 import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
+import Max.Browser.ToolRuntime (browserToolsFor)
+import Max.Conversation.ToolRuntime (builtinsWithDatabase, groupToolsWithDatabase)
 import Max.Effects.Blob (Blob)
+import Max.Effects.BlobHost (BlobHost)
 import Max.Effects.Embedding (Embedding)
 import Max.Effects.Http (Http)
 import Max.Effects.Outbound (Outbound)
-import Max.Effects.PlatformApi (PlatformApi)
+import Max.Effects.PlatformInteraction (PlatformInteraction)
+import Max.Effects.PlatformQuery (PlatformQuery)
+import Max.Effects.ToolControl (ToolControl)
 import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools
   ( SchemaVersion (..),
     Tool (..),
     ToolAuthority (..),
-    ToolCatalog,
     ToolCatalogError,
     ToolDeadline (..),
     ToolDefinition (..),
     ToolEffect (..),
     ToolParallelism (..),
     ToolRef (..),
+    ToolRegistry,
     ToolRetryClass (..),
-    buildToolCatalog,
+    buildToolRegistry,
   )
 import Max.Env (BotEnv (..), applyRuntimeSnapshot)
+import Max.File.ToolRuntime (fileToolsWithDatabase)
 import Max.HttpRuntime (HttpRuntime)
 import Max.MaxOps.Types (maxOpsAllowed)
+import Max.Media.ToolRuntime (imageToolsWithDatabase, stickerToolsWithDatabase, videoToolsWithDatabase)
+import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
+import Max.Monitor.ToolRuntime (monitorToolsWithDatabase, reminderToolsWithDatabase)
+import Max.Pin.ToolRuntime (pinToolsWithDatabase)
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.RuntimeConfig (RuntimeSnapshot (..), RuntimeValues (..), currentRuntimeSnapshot)
+import Max.Task.ToolRuntime (guardTaskResource, taskToolsWithDatabase)
+import Max.Tool.Types (ToolCallMode (..))
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolRuntimeSnapshot, toolStickers)
-import Max.Tools (builtinsFor)
 import Max.Tools.Bilibili (bilibiliToolsFor)
-import Max.Tools.Browser (browserToolsFor)
-import Max.Tools.Files (fileToolsFor)
-import Max.Tools.Group (groupToolsFor)
-import Max.Tools.Images (imageToolsFor)
 import Max.Tools.MaxOps (maxOpsToolsFor)
-import Max.Tools.Memory (memoryToolsFor)
-import Max.Tools.Monitor (monitorToolsFor)
-import Max.Tools.Pins (pinToolsFor)
-import Max.Tools.Reminder (reminderToolsFor)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Skills (skillToolsFor)
-import Max.Tools.Stickers (stickerToolsFor)
-import Max.Tools.Task (guardTaskResource, taskToolsFor)
-import Max.Tools.Video (videoToolsFor)
 import Max.Turn.Continuity (toolCatalogFingerprint)
 import OneBot.Types (GroupId, isPrivateChat)
 
@@ -80,32 +80,38 @@ import OneBot.Types (GroupId, isPrivateChat)
 -- a browser or a video reader would burn turns discovering it can't
 -- use them.
 allToolsFor ::
-  ( Blob :> es,
+  ( BlobHost :> es,
+    Blob :> es,
     Http :> es,
     Embedding :> es,
     Log :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
+    PlatformInteraction :> es,
     Outbound :> es,
     ToolOutput :> es,
+    ToolControl :> es,
     WithConnection :> es,
     IOE :> es
   ) =>
   HttpRuntime ->
   BotEnv ->
   ToolContext ->
-  Either ToolCatalogError (ToolCatalog es)
-allToolsFor runtime env dc = uncurry buildToolCatalog (resolvedToolsFor runtime env dc)
+  Either ToolCatalogError (ToolRegistry es)
+allToolsFor runtime env dc = uncurry buildToolRegistry (resolvedToolsFor runtime env dc)
 
 -- | The gated definitions and the gated runners, which every catalog in this
 -- module is a selection of.
 resolvedToolsFor ::
-  ( Blob :> es,
+  ( BlobHost :> es,
+    Blob :> es,
     Http :> es,
     Embedding :> es,
     Log :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
+    PlatformInteraction :> es,
     Outbound :> es,
     ToolOutput :> es,
+    ToolControl :> es,
     WithConnection :> es,
     IOE :> es
   ) =>
@@ -120,23 +126,23 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
     allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
     allowedRunner tool = tool.toolName `Set.member` allowedRefs
     runners0 =
-      builtinsFor dispatchEnv.beTimeZone dc
-        <> reminderToolsFor dispatchEnv.beTimeZone dc
-        <> monitorToolsFor dispatchEnv.beTimeZone dc
-        <> groupToolsFor dc
-        <> imageToolsFor dispatchEnv.beTimeZone dc
-        <> memoryToolsFor dc
-        <> pinToolsFor dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
-        <> taskToolsFor dc
+      builtinsWithDatabase dispatchEnv.beTimeZone dc
+        <> reminderToolsWithDatabase dispatchEnv.beTimeZone dc
+        <> monitorToolsWithDatabase dispatchEnv.beTimeZone dc
+        <> groupToolsWithDatabase dc
+        <> imageToolsWithDatabase dispatchEnv.beTimeZone dc
+        <> memoryToolsWithDatabase dc
+        <> pinToolsWithDatabase dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
+        <> taskToolsWithDatabase dc
         <> skillToolsFor dispatchEnv.beSkills dc
         <> bilibiliToolsFor dispatchEnv.beTimeZone dc
         <> sandboxToolsFor dispatchEnv.beTimeZone (toolGroupId dc) dispatchEnv.beSandboxes
-        <> fileToolsFor dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes
-        <> [t | toolStickers dc && dispatchEnv.beEmbeddingEnabled, t <- stickerToolsFor]
+        <> fileToolsWithDatabase dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes
+        <> [t | toolStickers dc && dispatchEnv.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
         <> maybe [] (searchToolsFor runtime) dispatchEnv.beSearch
         <> maxOpsToolsFor runtime dispatchEnv.beMaxOps ((.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore) (toolGroupId dc)
         <> [t | toolMultimodal dc, t <- browserToolsFor dc dispatchEnv.beBrowsers dispatchEnv.beBrowserProxy]
-        <> [t | toolMultimodal dc, t <- videoToolsFor dc]
+        <> [t | toolMultimodal dc, t <- videoToolsWithDatabase dc]
 
 -- | How many tools a dispatch with these gates would get — the
 -- @!version@ card's number.  This is intentionally a pure projection
@@ -154,7 +160,7 @@ toolCountFor env gid multimodal stickers skills =
 
 -- | Product-level visibility and effect metadata live in one inventory.  The
 -- actual runners assembled above must match this filtered set exactly or
--- 'buildToolCatalog' rejects the dispatch before the model sees a schema.
+-- 'buildToolRegistry' rejects the dispatch before the model sees a schema.
 toolDefinitionsFor :: BotEnv -> GroupId -> TurnCapabilities -> [ToolDefinition]
 toolDefinitionsFor env gid caps =
   [ item.tiDefinition
@@ -243,9 +249,9 @@ toolInventory =
     always (writeTool "task_steer" ["task.db"] [CurrentConversation]),
     always (writeTool "task_replace" ["task.db"] [CurrentConversation]),
     always (writeTool "task_cancel" ["task.db"] [CurrentConversation]),
-    gated BackgroundOnly (writeToolV 2 "task_finish" ["task.db"] [CurrentConversation]),
-    gated BackgroundOnly (writeTool "task_progress" ["task.db"] [CurrentConversation]),
-    gated FrontendOnly (writeTool "request_finish" ["task.db"] [CurrentConversation]),
+    gated BackgroundOnly ((writeToolV 2 "task_finish" ["task.db"] [CurrentConversation]) {tdCallMode = FinishCall}),
+    gated BackgroundOnly ((writeTool "task_progress" ["task.db"] [CurrentConversation]) {tdCallMode = CheckpointCall}),
+    gated FrontendOnly ((writeTool "request_finish" ["task.db"] [CurrentConversation]) {tdCallMode = FinishCall}),
     -- Queues turn-scoped inline video as well as reading the network.  Keep it
     -- sequential inside one agent round so concurrent calls cannot race the
     -- shared attachment order/budget; independent turns have independent
@@ -302,7 +308,8 @@ definition name effects parallelism retry authorities =
       tdRetryClass = retry,
       tdAuthorities = Set.fromList authorities,
       tdDeadline = defaultToolDeadline,
-      tdFailuresPrecedeEffects = False
+      tdFailuresPrecedeEffects = False,
+      tdCallMode = WorkCall
     }
 
 -- | What a tool gets unless it says otherwise.

@@ -23,6 +23,7 @@ import Data.ByteString qualified as BS
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Max.Http.Failure (TransportFailure (..), renderTransportFailure)
 import Max.Util (trySyncIO)
 import Network.Connection (TLSSettings (..))
 import Network.HTTP.Client
@@ -66,20 +67,6 @@ data HttpRuntime = HttpRuntime
     legacyEmsManager :: Manager,
     nonReusingManager :: Manager
   }
-
--- | Failures shared by all outbound HTTP users.  Response decoding remains a
--- caller concern and therefore is intentionally absent from this type.
-data TransportFailure
-  = RequestConstructionFailure Text
-  | ResponseTimeoutFailure
-  | ConnectionTimeoutFailure
-  | ConnectionFailed Text
-  | TlsFailed Text
-  | ProxyFailure Text
-  | ProtocolFailure Text
-  | HttpStatusFailure Int ResponseHeaders ByteString Bool
-  | ResponseBodyLimitExceeded Int
-  deriving stock (Eq, Show)
 
 data ResponseMetadata = ResponseMetadata
   { status :: Status,
@@ -199,27 +186,6 @@ classifyTransportException exception =
           case fromException exception of
             Just ioException -> ConnectionFailed (T.pack (displayException (ioException :: IOException)))
             Nothing -> ProtocolFailure (T.pack (displayException exception))
-
-renderTransportFailure :: TransportFailure -> Text
-renderTransportFailure = \case
-  RequestConstructionFailure message -> "invalid HTTP request: " <> message
-  ResponseTimeoutFailure -> "HTTP response timed out"
-  ConnectionTimeoutFailure -> "HTTP connection timed out"
-  ConnectionFailed message -> "HTTP connection failed: " <> message
-  TlsFailed message -> "TLS failed: " <> message
-  ProxyFailure message -> "HTTP proxy failed: " <> message
-  ProtocolFailure message -> "HTTP protocol failed: " <> message
-  HttpStatusFailure code _ bodyPreview truncated ->
-    "HTTP "
-      <> T.pack (show code)
-      <> if BS.null bodyPreview
-        then ""
-        else
-          ": "
-            <> T.pack (show bodyPreview)
-            <> if truncated then "…" else ""
-  ResponseBodyLimitExceeded bodyLimit ->
-    "HTTP response exceeded " <> T.pack (show bodyLimit) <> " bytes"
 
 noImplicitRetryTlsSettings :: ManagerSettings
 noImplicitRetryTlsSettings =

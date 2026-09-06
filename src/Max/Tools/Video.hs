@@ -22,27 +22,24 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Exception (IOException, try)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Media (StoredVideo (..), fetchMessageVideoInScope)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
-import Max.Effects.LLM (ToolSpec (..))
+import Max.Effects.MediaQuery (MediaQuery, readVideo)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
-import Max.Tools.Schema (integerParam, toolObject)
+import Max.Media.Types (StoredVideo (..))
 import Max.Time (fmtDurationSec)
-import Max.ToolContext (ToolContext, toolConversationScope)
+import Max.Tool.Types (ToolSpec (..))
+import Max.Tools.Schema (integerParam, toolObject)
 
 videoToolsFor ::
-  (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
-  ToolContext ->
+  (Blob :> es, MediaQuery :> es, Log :> es, ToolOutput :> es) =>
   [Tool es]
-videoToolsFor dc = [viewVideoTool dc]
+videoToolsFor = [viewVideoTool]
 
 viewVideoTool ::
-  (Blob :> es, WithConnection :> es, Log :> es, ToolOutput :> es, IOE :> es) =>
-  ToolContext ->
+  (Blob :> es, MediaQuery :> es, Log :> es, ToolOutput :> es) =>
   Tool es
-viewVideoTool dc =
+viewVideoTool =
   Tool
     { toolName = viewVideoSpec.specName,
       toolDescription = viewVideoSpec.specDescription,
@@ -50,7 +47,7 @@ viewVideoTool dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, seg) -> do
-          mVideo <- fetchMessageVideoInScope scope mid seg
+          mVideo <- readVideo mid seg
           case mVideo of
             Nothing ->
               pure $
@@ -70,8 +67,6 @@ viewVideoTool dc =
                       bytes
     }
   where
-    scope = toolConversationScope dc
-
     parseArgs o = (,) <$> (o .: "message_id" :: Parser Int64) <*> o .:? "seg_index"
 
     -- Stated duration beats the model's own sampled-frame guess.

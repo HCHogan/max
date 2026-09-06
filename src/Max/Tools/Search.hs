@@ -18,6 +18,7 @@ where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
+import Data.Bifunctor (first)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Maybe (fromMaybe)
 import Data.Ord (clamp)
@@ -27,6 +28,7 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
 import Max.Effects.Tools (Tool (..))
+import Max.Http.Failure (renderResponseFailure)
 import Max.Http.Json (postAndParse)
 import Max.HttpRuntime (HttpRuntime)
 import Max.Tools.Schema (integerParam, stringParam, toolObject, withKeys)
@@ -128,7 +130,7 @@ callTavily runtime cfg query maxResults = do
         [ ("Authorization", "Bearer " <> TE.encodeUtf8 cfg.scTavilyApiKey),
           ("Content-Type", "application/json")
         ]
-  postAndParse runtime cfg.scTimeoutSeconds headers "https://api.tavily.com/search" body compactResponse
+  first renderResponseFailure <$> postAndParse runtime cfg.scTimeoutSeconds headers "https://api.tavily.com/search" body compactResponse
 
 -- | Strip everything we don't want surfaced to the model: scores
 -- (it'll just second-guess them), raw_content (already capped at

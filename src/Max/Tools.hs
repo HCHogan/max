@@ -18,59 +18,58 @@ where
 
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
-import Data.Foldable (asum)
 import Data.Int (Int64)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (LocalTime, TimeZone, defaultTimeLocale, localTimeToUTC, parseTimeM)
+import Data.Time (TimeZone)
 import Effectful
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
-import Max.ConversationScope (currentConversationRecall)
-import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..), bestName, fetchForwardChildrenInScope, fetchMessageInScope)
-import Max.DB.TurnContinuity (expandTurnTrace)
+import Max.Context.Media (tagMediaMarkers)
+import Max.Effects.ConversationQuery (ConversationQuery, expandEpisode, readForward, readMessage, searchConversation)
 import Max.Effects.Embedding (Embedding, embedBatch, renderEmbeddingFault)
-import Max.Effects.PlatformApi (PlatformApi, callAction)
+import Max.Effects.PlatformInteraction (PlatformInteraction, pokeUser)
 import Max.Effects.Tools (Tool (..))
+import Max.Effects.TurnQuery (TurnQuery, expandTurnTrace)
 import Max.Embedding (EmbeddingRecord)
-import Max.EpisodeStore (EpisodeExpansion (..), SourceRange (..), episodeHandleText, expandEpisode, parseEpisodeHandle)
-import Data.Map.Strict qualified as Map
-import Max.DB.Media (MessageMedia, fetchMediaSegments)
-import Max.Prompt (tagMediaMarkers, withMediaHandles)
-import Max.Recall (RecallHit (..), searchRecall)
+import Max.Episode.Types (EpisodeExpansion (..), SourceRange (..), episodeHandleText, parseEpisodeHandle)
+import Max.History.Types (HistoryItem (..), LedgerItem (..), MessageCursor (..), bestName)
+import Max.Media.Types (MessageMedia)
+import Max.Platform.Failure (renderPlatformFailure)
+import Max.Recall.Types (RecallHit (..))
 import Max.Time (fmtDateHM)
-import Max.ToolContext (ToolContext, toolClearedAt, toolConversationScope, toolGroupId)
-import Max.Turn.Types (ParsedTurnHandle (..), parseTurnHandle)
+import Max.Time.Parse (parseTimeArg)
+import Max.ToolContext (ToolContext, toolGroupId)
 import Max.Tools.Schema (boundedIntegerParam, integerParam, stringParam, toolObject)
 import Max.Tools.SelfSource (selfSourceTools)
-import OneBot.Action (Action (..), Response (..))
+import Max.Turn.Types (ParsedTurnHandle (..), parseTurnHandle)
 import OneBot.Types (UserId (..))
 
 builtinsFor ::
-  ( WithConnection :> es,
-    PlatformApi :> es,
+  ( ConversationQuery :> es,
+    TurnQuery :> es,
+    PlatformInteraction :> es,
     Embedding :> es,
-    Log :> es,
-    IOE :> es
+    Log :> es
   ) =>
   TimeZone ->
   ToolContext ->
   [Tool es]
 builtinsFor tz dc =
   selfSourceTools
-    <> [ getMessageByIdTool tz dc,
-         contextSearchTool tz dc,
-         contextExpandTool tz dc,
-         viewForwardTool tz dc,
+    <> [ getMessageByIdTool tz,
+         contextSearchTool tz,
+         contextExpandTool tz,
+         viewForwardTool tz,
          pokeTool dc
        ]
 
 --------------------------------------------------------------------------------
 -- get_message_by_id
 
-getMessageByIdTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
-getMessageByIdTool tz dc =
+getMessageByIdTool :: (ConversationQuery :> es) => TimeZone -> Tool es
+getMessageByIdTool tz =
   Tool
     { toolName = "get_message_by_id",
       toolDescription =
@@ -83,9 +82,8 @@ getMessageByIdTool tz dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right mid -> do
-          m <- fetchMessageInScope (toolConversationScope dc) mid
-          tagged <- withMediaHandles (maybe [] pure m)
-          pure $ Right (toJSON (map (historyItemSummary tz) tagged))
+          message <- readMessage mid
+          pure $ Right (toJSON (map (historyItemSummary tz) (maybe [] pure message)))
     }
   where
     parseArgs :: Object -> Parser Int64
@@ -94,11 +92,10 @@ getMessageByIdTool tz dc =
 -- context_search
 
 contextSearchTool ::
-  (WithConnection :> es, Embedding :> es, Log :> es, IOE :> es) =>
+  (ConversationQuery :> es, Embedding :> es, Log :> es) =>
   TimeZone ->
-  ToolContext ->
   Tool es
-contextSearchTool tz dc =
+contextSearchTool tz =
   Tool
     { toolName = "context_search",
       toolDescription =
@@ -119,8 +116,7 @@ contextSearchTool tz dc =
           | T.null (T.strip rawQuery) -> pure (Left "bad args: query cannot be blank")
           | otherwise -> do
               embedding <- bestEffortRecallEmbedding "context_search" rawQuery
-              let scope = toolConversationScope dc
-              hits <- searchRecall (currentConversationRecall scope) rawQuery embedding limit
+              hits <- searchConversation rawQuery embedding limit
               pure . Right $
                 contextSearchSummary
                   tz
@@ -180,8 +176,8 @@ recallHitSummary tz hit =
 --------------------------------------------------------------------------------
 -- context_expand
 
-contextExpandTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
-contextExpandTool tz dc =
+contextExpandTool :: (ConversationQuery :> es, TurnQuery :> es) => TimeZone -> Tool es
+contextExpandTool tz =
   Tool
     { toolName = "context_expand",
       toolDescription =
@@ -204,25 +200,12 @@ contextExpandTool tz dc =
         Left err -> pure $ Left ("bad args: " <> T.pack err)
         Right (rawHandle, after, limit) -> case (parseEpisodeHandle rawHandle, parseTurnHandle rawHandle) of
           (Just handle, _) -> do
-            let scope = toolConversationScope dc
-            expanded0 <-
-              expandEpisode
-                (currentConversationRecall scope)
-                handle
-                (MessageCursor <$> after)
-                limit
-            expanded <- traverse (withEpisodeMedia tz) expanded0
+            expanded <- expandEpisode handle (MessageCursor <$> after) limit
             pure $ case expanded of
               Nothing -> Left "episode not found or not visible in this conversation"
-              Just episode -> Right episode
+              Just (episode, media) -> Right (episodeExpansionSummary tz media episode)
           (Nothing, Just (ParsedTurn ordinal)) -> do
-            expanded <-
-              expandTurnTrace
-                (toolConversationScope dc)
-                (toolClearedAt dc)
-                ordinal
-                after
-                limit
+            expanded <- expandTurnTrace ordinal after limit
             pure $ maybe (Left "turn not found or not visible in this conversation") Right expanded
           (Nothing, Just ParsedTurnResult {}) ->
             pure (Left "bad args: pass the t#<n> turn handle, not a t#<n>:r<m> result handle")
@@ -234,17 +217,6 @@ contextExpandTool tz dc =
         <$> o .: "handle"
         <*> o .:? "after_cursor"
         <*> (fromMaybe 40 <$> o .:? "limit")
-
--- | Attach the media handles each expanded line needs, then render.  One
--- query for the page, the same way the prompt builder does it for a turn.
-withEpisodeMedia ::
-  (WithConnection :> es, IOE :> es) =>
-  TimeZone ->
-  EpisodeExpansion ->
-  Eff es Value
-withEpisodeMedia tz episode = do
-  media <- fetchMediaSegments [entry.history.canonicalId | entry <- episode.expansionMessages]
-  pure (episodeExpansionSummary tz media episode)
 
 episodeExpansionSummary :: TimeZone -> Map.Map Int64 MessageMedia -> EpisodeExpansion -> Value
 episodeExpansionSummary tz media episode =
@@ -278,26 +250,6 @@ expandedHistoryItem tz media entry =
   where
     h = tagMediaMarkers media entry.history
 
--- | Accept the timestamp shapes a model plausibly emits.  Naive times
--- are read in the display timezone — the same clock the tool's results
--- and the prompt show — then converted to the UTC the DB stores, so a
--- time the model saw in an earlier result round-trips to the right row.
-parseTimeArg :: TimeZone -> Text -> Either Text UTCTime
-parseTimeArg tz t =
-  case asum [parseTimeM True defaultTimeLocale f s :: Maybe LocalTime | f <- fmts] of
-    Just lt -> Right (localTimeToUTC tz lt)
-    Nothing -> Left ("bad time '" <> t <> "': use 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM'")
-  where
-    s = T.unpack (T.strip t)
-    fmts =
-      [ "%Y-%m-%d %H:%M:%S",
-        "%Y-%m-%d %H:%M",
-        "%Y-%m-%d",
-        "%Y-%m-%dT%H:%M:%S%QZ",
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M"
-      ]
-
 -- view_forward — expand a 转发聊天记录 on demand
 
 -- | Cap on child lines returned per call — a mega-bundle shouldn't
@@ -305,8 +257,8 @@ parseTimeArg tz t =
 maxForwardChildren :: Int
 maxForwardChildren = 100
 
-viewForwardTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
-viewForwardTool tz dc =
+viewForwardTool :: (ConversationQuery :> es) => TimeZone -> Tool es
+viewForwardTool tz =
   Tool
     { toolName = "view_forward",
       toolDescription =
@@ -318,23 +270,17 @@ viewForwardTool tz dc =
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "message_id")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid :: Int64) -> do
-          kids <-
-            fetchForwardChildrenInScope
-              (toolConversationScope dc)
-              mid
-              maxForwardChildren
+          kids <- readForward mid maxForwardChildren
           if null kids
             then pure $ Left "这条消息没有已展开的转发内容（不是转发聊天记录，或还没抓取完）"
-            else do
-              tagged <- withMediaHandles kids
-              pure . Right . toJSON $ map (historyItemSummary tz) tagged
+            else pure . Right . toJSON $ map (historyItemSummary tz) kids
     }
 
 --------------------------------------------------------------------------------
 -- poke — 戳一戳
 
 pokeTool ::
-  (PlatformApi :> es, Log :> es) =>
+  (PlatformInteraction :> es, Log :> es) =>
   ToolContext ->
   Tool es
 pokeTool dc =
@@ -350,14 +296,12 @@ pokeTool dc =
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "qq")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (qq :: Int64) -> do
-          eres <- callAction (SendPoke (toolGroupId dc) (UserId qq)) 10000
+          eres <- pokeUser (toolGroupId dc) (UserId qq)
           case eres of
-            Left err -> pure $ Left ("poke 失败: " <> err)
-            Right (Response _ rc _ _)
-              | rc /= 0 -> pure $ Left ("poke retcode " <> T.pack (show rc))
-              | otherwise -> do
-                  logInfo "poke: sent" $ object ["qq" .= qq]
-                  pure $ Right (object ["ok" .= True])
+            Left err -> pure $ Left ("poke 失败: " <> renderPlatformFailure err)
+            Right () -> do
+              logInfo "poke: sent" $ object ["qq" .= qq]
+              pure $ Right (object ["ok" .= True])
     }
 
 --------------------------------------------------------------------------------

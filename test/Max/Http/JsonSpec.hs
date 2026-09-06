@@ -1,6 +1,6 @@
 module Max.Http.JsonSpec (spec) where
 
-import Max.Http.Json (defaultRetryDelaysSecs, replyRetryDelaysSecs, retryableStatus, retryableStatusBody)
+import Max.Http.Json (defaultRetryDelaysSecs, replyRetryDelaysSecs, retryableStatus)
 import Test.Hspec
 
 spec :: Spec
@@ -25,23 +25,7 @@ spec = do
 
     it "never retries success" $ do
       retryableStatus 200 `shouldBe` False
-
-  describe "retryableStatusBody" $ do
-    it "retries a relay-wrapped 4xx that blames an upstream" $ do
-      retryableStatusBody
-        400
-        "{\"error\":{\"message\":\"Error from provider (Console Go): Upstream request failed\",\"type\":\"invalid_request_error\"}}"
-        `shouldBe` True
-      retryableStatusBody 429 "Provider rate limit exceeded" `shouldBe` True
-
-    it "still fails fast on a genuine bad request" $ do
-      retryableStatusBody 400 "{\"error\":{\"message\":\"messages: field required\"}}" `shouldBe` False
-      retryableStatusBody 401 "Invalid API key" `shouldBe` False
-      retryableStatusBody 422 "unknown parameter: reasoning_effort" `shouldBe` False
-
-    it "keeps every plain-status verdict" $ do
-      retryableStatusBody 503 "" `shouldBe` True
-      retryableStatusBody 200 "" `shouldBe` False
+      retryableStatus 600 `shouldBe` False
 
   describe "defaultRetryDelaysSecs" $
     it "is a short, bounded schedule" $ do

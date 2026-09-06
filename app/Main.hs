@@ -20,6 +20,7 @@ import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Effectful.Reader.Dynamic (Reader, ask, local, runReader)
 import GHC.Clock (getMonotonicTime)
 import Max.Admin (AdminConfig (..), adminServer)
+import Max.Agent.Runtime (runDurableAgent)
 import Max.Browser.Registry
   ( configureBrowserRegistry,
     destroyAllBrowsers,
@@ -36,13 +37,15 @@ import Max.DB.Migrations (runMigrations)
 import Max.DB.Monitor (reclaimExpiredMonitorFireClaims)
 import Max.DB.TurnContinuity (pruneTurnArchiveReferences)
 import Max.DB.Usage (insertUsage)
-import Max.Effects.Agent (Agent, defaultLimits, runDurableAgent)
+import Max.Effects.Agent (Agent, defaultLimits)
 import Max.Effects.Blob (Blob, runBlob)
+import Max.Effects.BlobHost (BlobHost, runBlobHost)
 import Max.Effects.Embedding (Embedding, runRuntimeEmbedding)
 import Max.Effects.Http (Http, runHttp)
 import Max.Effects.LLM (CallRecord (..), ChatCtx (..), LLM, TokenUsage (..), runRuntimeLLM, withLLMConfigGeneration)
 import Max.Effects.Outbound (Outbound, runOutbound)
-import Max.Effects.PlatformApi (PlatformApi, qqBackend, runRuntimePlatformApi)
+import Max.Effects.PlatformAccount (PlatformAccount)
+import Max.Effects.PlatformQuery (PlatformQuery)
 import Max.Embedder (embedWorker)
 import Max.Embedding (newEmbedClient)
 import Max.Env (BotEnv (..), applyRuntimeSnapshot)
@@ -65,6 +68,7 @@ import Max.MemoryExtract (dreamWorker)
 import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
 import Max.Monitor (monitorWorker)
 import Max.Platform.Delivery (deliveryWorker, oneBotDeliveryTransport)
+import Max.Platform.Runtime (qqBackend, runRuntimePlatforms)
 import Max.Platform.Types (Platform (..))
 import Max.Reload (ReloadError (..), ReloadResponse (..), controlSocketPath, runReloadServer)
 import Max.Reload.Prepare (preflightChangedListener)
@@ -201,6 +205,7 @@ main = do
             . runConcurrent
             . runLog "max" logger LogTrace
             . runHttp httpRuntime
+            . runBlobHost cfg.imagesDir
             . runBlob cfg.imagesDir
             . runWithConnectionPool pool
             . runOutbound
@@ -240,8 +245,8 @@ main = do
               runtimeStore
             . runReader cfg.llm
             . runReader env
-            . runRuntimePlatformApi qqEdge
-            . runRuntimeEmbedding
+            . runRuntimePlatforms qqEdge
+            . runRuntimeEmbedding ((\active -> active.beRuntimeSnapshot.rsResources.rrEmbeddingClient) <$> ask @BotEnv)
             . runDurableAgent defaultLimits (allToolsFor httpRuntime env)
             $ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath applied eventQ fetchSig intentState logBuf clientRef mainTid
       )
@@ -263,9 +268,11 @@ runApp ::
     Log :> es,
     Http :> es,
     Embedding :> es,
+    BlobHost :> es,
     Blob :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
+    PlatformAccount :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,

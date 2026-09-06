@@ -42,6 +42,8 @@ import Max.Effects.LLM
     LLM,
     chat,
   )
+import Max.Http.Failure (renderResponseFailure)
+import Max.LLM.Failure (renderLLMFailure)
 import Max.Util (catchSync, trySync, withTempDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -131,8 +133,8 @@ captionOne profile (sha, mime, mSummary) =
                   ]
                   []
               case eres of
-                Left err -> failed ("chat: " <> err)
-                Right (InterruptedResp _ err) -> failed ("chat interrupted: " <> err)
+                Left err -> failed ("chat: " <> renderLLMFailure err)
+                Right (InterruptedResp _ err) -> failed ("chat interrupted: " <> renderResponseFailure err)
                 Right (ToolCallsResp {}) -> failed "chat: unexpected tool calls"
                 Right (ContentResp raw) -> apply (T.strip raw)
   where

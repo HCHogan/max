@@ -80,7 +80,7 @@ module Max.Platform.Store
 where
 
 import Control.Applicative ((<|>))
-import Control.Monad (forM, forM_, join, void, when)
+import Control.Monad (forM, forM_, join, unless, void, when)
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson
   ( KeyValue ((.=)),
@@ -112,6 +112,7 @@ import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import GHC.Generics (Generic)
+import Max.Conversation.Roster (ConversationRoster (..), RosterIdentity (..))
 import Max.DB.Monitor (evaluateLedgerMatches)
 import Max.DB.Transaction (withTransaction)
 import Max.IR
@@ -159,22 +160,6 @@ data RegisteredEndpoint = RegisteredEndpoint
   }
   deriving stock (Eq, Show, Generic)
 
--- | One account this conversation's endpoints have an identity row for,
--- together with the person behind it.
-data RosterIdentity = RosterIdentity
-  { riPrincipalId :: !PrincipalId,
-    riPlatform :: !Platform,
-    riNativeUserId :: !Text,
-    riDisplayName :: !(Maybe Text)
-  }
-  deriving stock (Eq, Show, Generic)
-
-data ConversationRoster = ConversationRoster
-  { crPlatforms :: ![Platform],
-    crIdentities :: ![RosterIdentity]
-  }
-  deriving stock (Eq, Show, Generic)
-
 -- | The ledger's answer to "who is in this room", as /people/.
 --
 -- Available on every platform, because it is assembled from what the
@@ -203,13 +188,14 @@ conversationRoster legacyConversation = do
       (Only legacyConversation)
   rows <-
     query
-      "SELECT pi.principal_id, a.platform, pi.native_user_id, pi.display_name \
+      "SELECT DISTINCT pi.principal_id, a.platform, pi.native_user_id, pi.display_name \
       \ FROM conversations c \
       \ JOIN conversation_endpoints e USING (conversation_id) \
       \ JOIN platform_accounts a USING (platform_account_id) \
-      \ JOIN principal_identities pi USING (platform_account_id) \
+      \ JOIN endpoint_known_identities known ON known.endpoint_id=e.endpoint_id \
+      \ JOIN principal_identities pi ON pi.principal_identity_id=known.principal_identity_id AND pi.platform_account_id=a.platform_account_id \
       \ WHERE c.legacy_group_id = ? AND e.enabled AND a.enabled \
-      \ ORDER BY pi.principal_id, pi.principal_identity_id"
+      \ ORDER BY pi.principal_id, a.platform, pi.native_user_id, pi.display_name"
       (Only legacyConversation)
   pure
     ConversationRoster
@@ -507,7 +493,8 @@ instance FromRow PlatformEndpointStatus where
       <*> field
 
 data EndpointRow = EndpointRow
-  { erConversationId :: !Int64,
+  { erEndpointId :: !Int64,
+    erConversationId :: !Int64,
     erPlatformAccountId :: !Int64,
     erPlatform :: !Text,
     erNativeAccountId :: !Text,
@@ -515,7 +502,7 @@ data EndpointRow = EndpointRow
   }
 
 instance FromRow EndpointRow where
-  fromRow = EndpointRow <$> field <*> field <*> field <*> field <*> field
+  fromRow = EndpointRow <$> field <*> field <*> field <*> field <*> field <*> field
 
 data DeliveryClaimRow = DeliveryClaimRow
   { dcDeliveryId :: !Int64,
@@ -1447,7 +1434,8 @@ enqueueOutboundInTransaction draft = do
       _ -> error "enqueueOutbound: conversation has no enabled endpoint"
   let endpointRow =
         EndpointRow
-          { erConversationId = conversation,
+          { erEndpointId = primaryEndpoint,
+            erConversationId = conversation,
             erPlatformAccountId = account,
             erPlatform = platformName,
             erNativeAccountId = accountNative,
@@ -1588,7 +1576,8 @@ recordInternalMessage draft = withTransaction $ do
       _ -> error "recordInternalMessage: conversation has no enabled endpoint"
   let endpointRow =
         EndpointRow
-          { erConversationId = conversation,
+          { erEndpointId = primaryEndpoint,
+            erConversationId = conversation,
             erPlatformAccountId = account,
             erPlatform = platformName,
             erNativeAccountId = accountNative,
@@ -1765,13 +1754,17 @@ enqueueReaction draft = withTransaction $ do
         rows@((originEndpoint, account, platformName, accountNative, legacyGroup) : _) -> do
           let endpointRow =
                 EndpointRow
-                  { erConversationId = conversation,
+                  { erEndpointId = originEndpoint,
+                    erConversationId = conversation,
                     erPlatformAccountId = account,
                     erPlatform = platformName,
                     erNativeAccountId = accountNative,
                     erLegacyGroupId = legacyGroup
                   }
-          (_, principal) <- ensurePrincipalIdentity endpointRow (NativeUserId accountNative) (Just "max")
+          identities <- ensureIdentityBatch endpointRow (Map.singleton (NativeUserId accountNative) (Just "max"))
+          principal <- case Map.elems identities of
+            [(_, identifier)] -> pure identifier
+            _ -> error "enqueueReaction: missing self identity"
           canonicalRows <- query "SELECT nextval('canonical_message_id_seq')" ()
           compatibilityRows <- query "SELECT -nextval('synthetic_message_id_seq')" ()
           let canonical = exactlyOne "enqueueReaction canonical id" (canonicalRows :: [Only Int64])
@@ -2834,8 +2827,14 @@ ensureIdentityBatch ::
   EndpointRow ->
   Map NativeUserId (Maybe Text) ->
   Eff es (Map NativeUserId (Int64, Int64))
-ensureIdentityBatch endpoint =
-  Map.traverseWithKey (ensurePrincipalIdentity endpoint)
+ensureIdentityBatch endpoint natives = do
+  identities <- Map.traverseWithKey (ensurePrincipalIdentity endpoint) natives
+  unless (Map.null identities) $
+    void $
+      execute
+        "INSERT INTO endpoint_known_identities(endpoint_id,principal_identity_id) SELECT ?,unnest(?::bigint[]) ON CONFLICT DO NOTHING"
+        (endpoint.erEndpointId, PGArray (map fst (Map.elems identities)))
+  pure identities
 
 -- | The mention resolution the canonical prompt projection needs, read back
 -- from the identity batch this transaction already ensured.
@@ -2922,7 +2921,8 @@ resolveMentionIdentities conversation principals = do
       \ FROM conversations c \
       \ JOIN conversation_endpoints e ON e.conversation_id = c.conversation_id AND e.enabled \
       \ JOIN platform_accounts a ON a.platform_account_id = e.platform_account_id AND a.enabled \
-      \ JOIN principal_identities pi ON pi.platform_account_id = a.platform_account_id \
+      \ JOIN endpoint_known_identities known ON known.endpoint_id=e.endpoint_id \
+      \ JOIN principal_identities pi ON pi.principal_identity_id=known.principal_identity_id AND pi.platform_account_id=a.platform_account_id \
       \ WHERE c.legacy_group_id = ? AND pi.principal_id = ANY(?) \
       \ ORDER BY pi.principal_id, \
       \          CASE a.platform WHEN 'qq' THEN 0 ELSE 1 END, e.endpoint_id, \
@@ -2998,7 +2998,7 @@ fetchEndpoint ::
 fetchEndpoint (EndpointId endpoint) = do
   rows <-
     query
-      "SELECT e.conversation_id, e.platform_account_id, a.platform, a.native_account_id, \
+      "SELECT e.endpoint_id, e.conversation_id, e.platform_account_id, a.platform, a.native_account_id, \
       \       c.legacy_group_id \
       \FROM conversation_endpoints e \
       \JOIN platform_accounts a USING (platform_account_id) \

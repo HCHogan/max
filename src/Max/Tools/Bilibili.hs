@@ -23,12 +23,12 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Effectful
 import Effectful.Log
 import Max.Bilibili
-import Max.Effects.Http (Http, getBytesWithLegacyTls)
+import Max.Effects.Http (Http, getBilibiliMedia, renderDownloadError)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
-import Max.Tools.Schema (boolParam, stringParam, toolObject, withKeys)
 import Max.Time (fmtDateHM)
 import Max.ToolContext (ToolContext, toolMultimodal)
+import Max.Tools.Schema (boolParam, stringParam, toolObject, withKeys)
 
 bilibiliToolsFor ::
   (Http :> es, Log :> es, ToolOutput :> es) =>
@@ -147,8 +147,8 @@ viewBilibiliTool tz dc =
                            )
                     ]
               | otherwise ->
-                  getBytesWithLegacyTls streamUrl biliHeaders maxStreamBytes >>= \case
-                    Left err -> pure ["video_attached" .= False, "video_note" .= ("视频下载失败: " <> err)]
+                  getBilibiliMedia streamUrl biliHeaders maxStreamBytes >>= \case
+                    Left err -> pure ["video_attached" .= False, "video_note" .= ("视频下载失败: " <> renderDownloadError err)]
                     Right (bytes, _) -> do
                       let label = "[B站 " <> info.bvBvid <> " " <> info.bvTitle <> "]:"
                           dataUrl = "data:video/mp4;base64," <> TE.decodeUtf8 (B64.encode bytes)

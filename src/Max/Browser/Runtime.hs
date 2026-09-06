@@ -15,10 +15,12 @@ import Effectful.Exception (onException)
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Browser.Error (renderBrowserError)
 import Max.Browser.Registry
+import Max.Browser.State (WorkspaceError (..), WorkspaceState (..), renderWorkspaceError)
 import Max.Browser.Vault (openBrowserState, sealBrowserState)
 import Max.DB.Browser
 import Max.DB.Task (authorizeTaskStep)
 import Max.Effects.Tools (Tool (..))
+import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Platform.Types (PrincipalId)
 import Max.ToolContext (ToolContext, toolCanonicalId, toolGroupId, toolTurnOutputContext)
 import Max.Turn.Types (AgentTurnId, AgentTurnRef (..), turnOutputAgentTurn)
@@ -48,17 +50,17 @@ managedBrowserTools context registry build = map wrap (build fallback)
               identity <- taskBrowserIdentity turn group
               case identity of
                 Nothing -> do
-                  allowed <- authorizeTaskStep turn (Just original.toolName) False
+                  allowed <- authorizeTaskStep turn (ExecutionWork CheckOnly)
                   if allowed then original.toolRun arguments else pure (Left "browser execution was fenced")
                 Just identifier -> withSeqEffToIO $ \unlift ->
                   liftIO $ withBrowserWorkspace registry identifier $ unlift $ do
                     acquired <- acquireReady turn identifier
                     case acquired of
-                      Left detail -> pure (Left detail)
+                      Left detail -> pure (Left (renderWorkspaceError detail))
                       Right workspace -> do
                         let scope = browserScopeForTask group identifier workspace.bwGeneration
                         session <- liftIO (getCamoSession registry scope)
-                        let cold = workspace.bwState == "cold" || isNothing session
+                        let cold = workspace.bwState == Cold || isNothing session
                         if cold && original.toolName `notElem` ["browser_navigate", "view_zhihu"]
                           then pure (Left "browser workspace is cold; call browser_navigate and obtain a fresh snapshot. DOM, JS state and previous selectors were not restored; never replay uncertain actions")
                           else case restoreWorkspace workspace of
@@ -103,14 +105,14 @@ managedBrowserTools context registry build = map wrap (build fallback)
     acquireReady turn identifier = do
       acquired <- acquireBrowserWorkspace turn (browserRuntimeId registry)
       case acquired of
-        Right workspace | workspace.bwState == "hot" -> do
+        Right workspace | workspace.bwState == Hot -> do
           let scope = browserScopeForTask group identifier workspace.bwGeneration
           session <- liftIO (getCamoSession registry scope)
           if isNothing session
             then do
               stopped <- liftIO (stopBrowserScope registry scope)
               if not stopped
-                then pure (Left "previous browser did not confirm closure; cold recovery refused")
+                then pure (Left WorkspaceClosureUnconfirmed)
                 else do
                   retireBrowserWorkspace identifier workspace.bwGeneration
                   acquireBrowserWorkspace turn (browserRuntimeId registry)
@@ -188,7 +190,7 @@ releaseBrowserTurn registry group turn = do
 
 renewBrowserTurn :: (WithConnection :> es, IOE :> es) => BrowserRegistry -> GroupId -> AgentTurnId -> Eff es ()
 renewBrowserTurn registry group turn = do
-  allowed <- authorizeTaskStep turn (Just "browser_navigate") False
+  allowed <- authorizeTaskStep turn (ExecutionWork CheckOnly)
   when allowed $ do
     rows <- query "SELECT space.task_id,space.generation,space.epoch,attempt.lease_until FROM browser_workspaces space JOIN task_attempts attempt ON attempt.turn_id=space.owner_turn_id WHERE space.owner_turn_id=? AND space.runtime_id=? AND space.state IN ('cold','hot','busy')" (turn, browserRuntimeId registry)
     forM_ rows $ \(identifier, generation, epoch, untilTime) ->

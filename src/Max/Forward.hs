@@ -25,12 +25,13 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Max.DB.FetchQueue (JobKind (JobForward), enqueueJob)
 import Max.Dispatch (DispatchMessage (..))
-import Max.Effects.PlatformApi (PlatformApi, callAction)
+import Max.Effects.PlatformQuery (PlatformQuery, queryForward)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.IR (Body (..), ForwardRef (..), Node (NForward))
 import Max.IR.Digest (digest)
 import Max.Images (enqueueImagesFromNode)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (Backfill))
+import Max.Platform.Failure (renderPlatformFailure)
 import Max.Platform.QQ (ensureQQEndpointFor, qqIngestBody)
 import Max.Platform.Store
   ( IngestOptions (..),
@@ -50,7 +51,6 @@ import Max.Platform.Types
     NativeUserId (..),
   )
 import Max.Util (tshow)
-import OneBot.Action (Action (GetForwardMsg), Response (..))
 import OneBot.Segment (Segment (..))
 import OneBot.Types (GroupId (..), UserId (..), parseIntId)
 
@@ -117,7 +117,7 @@ forwardLeaseSeconds :: Int
 forwardLeaseSeconds = 300
 
 forwardWorker ::
-  (Concurrent :> es, Log :> es, PlatformApi :> es, WithConnection :> es, IOE :> es) =>
+  (Concurrent :> es, Log :> es, PlatformQuery :> es, WithConnection :> es, IOE :> es) =>
   FetchSignal ->
   Eff es ()
 forwardWorker sig = localDomain "forward-worker" $ do
@@ -125,7 +125,7 @@ forwardWorker sig = localDomain "forward-worker" $ do
   runFetchLoop sig JobForward forwardLeaseSeconds 4 (processJob sig)
 
 processJob ::
-  (Log :> es, PlatformApi :> es, WithConnection :> es, IOE :> es) =>
+  (Log :> es, PlatformQuery :> es, WithConnection :> es, IOE :> es) =>
   FetchSignal ->
   ForwardJob ->
   Eff es (Either Text ())
@@ -135,16 +135,11 @@ processJob sig job = do
       [ "forward_id" .= job.forwardId,
         "container_message_id" .= job.containerMessageId
       ]
-  eres <- callAction (GetForwardMsg job.forwardId) timeoutMs
+  eres <- queryForward job.forwardId
   case eres of
     Left err ->
-      pure (Left ("get_forward_msg failed (" <> job.forwardId <> "): " <> err))
-    Right (Response _ rc _ _)
-      | rc /= 0 ->
-          -- Usually a chain QQ has since expired; the attempt budget
-          -- turns that into a few retries and then a parked row.
-          pure (Left ("get_forward_msg retcode " <> tshow rc <> " (" <> job.forwardId <> ")"))
-    Right (Response _ _ payload _) ->
+      pure (Left ("get_forward_msg failed (" <> job.forwardId <> "): " <> renderPlatformFailure err))
+    Right payload ->
       case parseEither nodesParser payload of
         Left perr ->
           pure (Left ("forward response parse error (" <> job.forwardId <> "): " <> T.pack perr))
@@ -152,8 +147,6 @@ processJob sig job = do
           endpoint <- ensureQQEndpointFor (UserId job.selfId) (GroupId job.groupId)
           received <- liftIO getCurrentTime
           Right <$> ingestNodes sig endpoint received job nodes
-  where
-    timeoutMs = 30000
 
 ingestNodes ::
   (Log :> es, WithConnection :> es, IOE :> es) =>

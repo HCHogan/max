@@ -8,14 +8,18 @@
 module Max.Effects.ToolOutput
   ( ToolOutput,
     InlineMedia (..),
+    ToolOutputRead,
+    ToolOutputQueue,
+    newToolOutputQueue,
     runToolOutput,
+    runToolOutputRead,
     queueInlineMedia,
     drainInlineMedia,
     defaultInlineMediaLimit,
   )
 where
 
-import Control.Concurrent.STM (atomically, newTVarIO, readTVar, writeTVar)
+import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, writeTVar)
 import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
@@ -28,38 +32,50 @@ data InlineMedia = InlineMedia
 
 data ToolOutput :: Effect where
   QueueInlineMedia :: InlineMedia -> ToolOutput m Bool
-  DrainInlineMedia :: ToolOutput m [InlineMedia]
+
+data ToolOutputRead :: Effect where
+  DrainInlineMedia :: ToolOutputRead m [InlineMedia]
 
 type instance DispatchOf ToolOutput = Dynamic
+
+type instance DispatchOf ToolOutputRead = Dynamic
 
 defaultInlineMediaLimit :: Int
 defaultInlineMediaLimit = 8
 
--- | Install a fresh queue.  The total counter survives drains so a long tool
--- loop cannot reset its attachment budget every round.
+-- | The queue belongs to one turn. Only the assembly layer shares this handle
+-- between the producer and consumer interpreters; tool closures receive the
+-- producer effect alone. The total counter survives drains.
+data ToolOutputQueue = ToolOutputQueue !Int !(TVar (Int, [InlineMedia]))
+
+newToolOutputQueue :: (IOE :> es) => Int -> Eff es ToolOutputQueue
+newToolOutputQueue limit = ToolOutputQueue (max 0 limit) <$> liftIO (newTVarIO (0, []))
+
 runToolOutput ::
   (IOE :> es) =>
-  Int ->
+  ToolOutputQueue ->
   Eff (ToolOutput : es) a ->
   Eff es a
-runToolOutput limit action = do
-  state <- liftIO (newTVarIO (0 :: Int, [] :: [InlineMedia]))
-  interpret
-    ( \_ -> \case
-        QueueInlineMedia media -> liftIO . atomically $ do
-          (used, queued) <- readTVar state
-          if used >= max 0 limit
-            then pure False
-            else True <$ writeTVar state (used + 1, queued <> [media])
-        DrainInlineMedia -> liftIO . atomically $ do
-          (used, queued) <- readTVar state
-          writeTVar state (used, [])
-          pure queued
-    )
-    action
+runToolOutput (ToolOutputQueue limit state) = interpret $ \_ -> \case
+  QueueInlineMedia media -> liftIO . atomically $ do
+    (used, queued) <- readTVar state
+    if used >= limit
+      then pure False
+      else True <$ writeTVar state (used + 1, queued <> [media])
+
+runToolOutputRead ::
+  (IOE :> es) =>
+  ToolOutputQueue ->
+  Eff (ToolOutputRead : es) a ->
+  Eff es a
+runToolOutputRead (ToolOutputQueue _ state) = interpret $ \_ -> \case
+  DrainInlineMedia -> liftIO . atomically $ do
+    (used, queued) <- readTVar state
+    writeTVar state (used, [])
+    pure queued
 
 queueInlineMedia :: (ToolOutput :> es) => InlineMedia -> Eff es Bool
 queueInlineMedia = send . QueueInlineMedia
 
-drainInlineMedia :: (ToolOutput :> es) => Eff es [InlineMedia]
+drainInlineMedia :: (ToolOutputRead :> es) => Eff es [InlineMedia]
 drainInlineMedia = send DrainInlineMedia

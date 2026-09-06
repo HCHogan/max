@@ -19,37 +19,16 @@ module Max.DB.Media
 where
 
 import Data.Int (Int64)
-import Data.Map.Strict (Map)
 import Data.Map.Merge.Strict qualified as Map
+import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (In (..), Only (..))
-import Database.PostgreSQL.Simple.FromRow (FromRow, field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
-
-data StoredImage = StoredImage
-  { storedImageSegIndex :: !Int,
-    storedImageMime :: !Text,
-    storedImageSha256 :: !Text
-  }
-  deriving stock (Show, Eq)
-
-instance FromRow StoredImage where
-  fromRow = StoredImage <$> field <*> field <*> field
-
-data StoredVideo = StoredVideo
-  { storedVideoSegIndex :: !Int,
-    storedVideoMime :: !Text,
-    storedVideoSha256 :: !Text,
-    storedVideoDurationSeconds :: !(Maybe Double)
-  }
-  deriving stock (Show, Eq)
-
-instance FromRow StoredVideo where
-  fromRow = StoredVideo <$> field <*> field <*> field <*> field
+import Max.Media.Types
 
 fetchMessageImagesInScope ::
   (WithConnection :> es, IOE :> es) =>
@@ -87,26 +66,6 @@ fetchMessageVideoInScope scope canonical seg = do
       \  LIMIT 1"
       (conversationStorageId scope, canonical, seg, seg)
   pure (listToMaybe rows)
-
--- | One addressable picture or clip on a message: its @seg_index@, and what
--- the captioner has said about it so far.
-data MediaSegment = MediaSegment
-  { msSegIndex :: !Int,
-    msDescription :: !(Maybe Text),
-    msDurationSeconds :: !(Maybe Double)
-  }
-  deriving stock (Show, Eq)
-
--- | A message's media, in @seg_index@ order — the order its markers appear
--- in @rendered_text@, because both come from the canonical node list.
-data MessageMedia = MessageMedia
-  { mmImages :: ![MediaSegment],
-    mmVideos :: ![MediaSegment]
-  }
-  deriving stock (Show, Eq)
-
-noMessageMedia :: MessageMedia
-noMessageMedia = MessageMedia {mmImages = [], mmVideos = []}
 
 -- | Every addressable picture and clip on the given messages.
 --

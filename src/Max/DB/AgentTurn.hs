@@ -32,7 +32,7 @@ module Max.DB.AgentTurn
   )
 where
 
-import Control.Monad (when)
+import Control.Monad (forM_, when)
 import Data.Aeson (Value (..), eitherDecodeStrict', encode)
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
@@ -49,8 +49,11 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
+import Max.DB.Task.Record (lockTurnConversation)
+import Max.DB.Task.Settlement (settleTurn)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
+import Max.Execution.Types (JournalExecution (..), JournalFinish (..), JournalStart (..))
 import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Turn.Types
@@ -76,33 +79,6 @@ terminalText = \case
   TurnFailed -> "failed"
   TurnAborted -> "aborted"
   TurnCrashed -> "crashed"
-
-data JournalStart = JournalStart
-  { jsCallId :: !Text,
-    jsToolRef :: !Text,
-    jsSchemaVersion :: !Int,
-    jsSchemaHash :: !Text,
-    jsInput :: !Value,
-    jsEffectLabels :: !Value,
-    jsRetryClass :: !Text
-  }
-  deriving stock (Show, Eq)
-
-data JournalExecution = JournalExecution
-  { jeJournalId :: !Int64,
-    jeTurn :: !AgentTurnRef,
-    jeExecutionOrdinal :: !ExecutionOrdinal,
-    jeNodeId :: !Text
-  }
-  deriving stock (Show, Eq)
-
-data JournalFinish
-  = JournalRejected !Text !Text
-  | JournalFailed !Text !Text
-  | JournalSucceeded !Value
-  | JournalCommitted !Value
-  | JournalOutcomeUnknown !Text !Text
-  deriving stock (Show, Eq)
 
 -- | Safe metadata returned by a scoped lookup.  The internal blob digest is
 -- intentionally absent.  A later artifact resolver can read through the
@@ -259,8 +235,8 @@ finishAgentTurn ref terminal llmTurns abortReason archive = do
         \ WHERE j.turn_id = t.turn_id AND j.turn_id = ? AND j.state = 'started' \
         \   AND t.status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text])"
         (Only ref.atrTurnId)
-    _ <-
-      execute
+    settled <-
+      query
         "UPDATE agent_turns t \
         \ SET status = ?, finished_at = now(), \
         \     finished_ingest_seq = COALESCE((SELECT max(m.ingest_seq) FROM messages m WHERE m.conversation_id=t.conversation_id), 0), \
@@ -268,7 +244,7 @@ finishAgentTurn ref terminal llmTurns abortReason archive = do
         \     trace_archive_sha256 = ?, trace_archive_size_bytes = ?, \
         \     trace_archive_created_at = CASE WHEN ?::text IS NULL THEN NULL ELSE now() END, \
         \     trace_archive_expires_at = ? \
-        \ WHERE turn_id = ? AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text])"
+        \ WHERE turn_id = ? AND status = ANY (ARRAY['starting'::text, 'running'::text, 'recovery-pending'::text]) RETURNING frontend_managed"
         ( terminalText terminal,
           max 0 llmTurns,
           T.take 4000 <$> abortReason,
@@ -278,6 +254,7 @@ finishAgentTurn ref terminal llmTurns abortReason archive = do
           archiveExpiry,
           ref.atrTurnId
         )
+    forM_ (settled :: [Only Bool]) $ \(Only managed) -> settleTurn ref.atrTurnId (terminal == TurnSucceeded || terminal == TurnSilence) abortReason managed
     case archiveConversation of
       Nothing -> pure ()
       Just conversationId -> do
@@ -319,6 +296,7 @@ ensureAgentTurnRecoveryPending ::
   Text ->
   Eff es ()
 ensureAgentTurnRecoveryPending ref reason = withTransaction $ do
+  _ <- lockTurnConversation ref.atrTurnId
   _ <-
     execute
       "UPDATE execution_journal j \
@@ -347,6 +325,14 @@ reclaimInterruptedTurns ::
   Text ->
   Eff es ReclaimedTurns
 reclaimInterruptedTurns recoveryOwner = withTransaction $ do
+  -- Recovery uses the same conversation-before-turn/journal order as normal
+  -- settlement. Lock only conversations with recoverable or unknown work.
+  (_ :: [Only Int64]) <-
+    query
+      "SELECT c.conversation_id FROM conversations c WHERE EXISTS(SELECT 1 FROM agent_turns t WHERE t.conversation_id=c.conversation_id AND t.status IN ('starting','running','recovery-pending'))\
+      \ OR EXISTS(SELECT 1 FROM agent_turns t JOIN execution_journal j USING(turn_id) WHERE t.conversation_id=c.conversation_id AND j.state='started')\
+      \ ORDER BY c.conversation_id FOR UPDATE"
+      ()
   executions <-
     execute
       "UPDATE execution_journal \
@@ -380,7 +366,7 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
             (recoveryRows :: [(AgentTurnId, Int64, Int64, Maybe Int64, Maybe Int64)])
         ]
   crashed <-
-    execute
+    query
       "UPDATE agent_turns t \
       \ SET status = 'crashed', finished_at = now(), \
       \     finished_ingest_seq = COALESCE((SELECT max(m.ingest_seq) FROM messages m WHERE m.conversation_id=t.conversation_id), 0), \
@@ -389,12 +375,13 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
       \   AND NOT EXISTS (SELECT 1 FROM task_attempts task WHERE task.turn_id=t.turn_id) \
       \   AND NOT EXISTS (SELECT 1 FROM monitor_fires f WHERE f.admitted_turn_id=t.turn_id) \
       \   AND (status = ANY (ARRAY['starting'::text, 'running'::text]) \
-      \        OR (status = 'recovery-pending' AND recovery_owner IS DISTINCT FROM ?))"
+      \        OR (status = 'recovery-pending' AND recovery_owner IS DISTINCT FROM ?)) RETURNING turn_id,abort_reason,frontend_managed"
       (Only recoveryOwner)
+  forM_ (crashed :: [(AgentTurnId, Maybe Text, Bool)]) $ \(turn, reason, managed) -> settleTurn turn False reason managed
   pure
     ReclaimedTurns
       { rrTurnsPendingResume = fromIntegral (length recoveries),
-        rrTurnsCrashed = crashed,
+        rrTurnsCrashed = fromIntegral (length crashed),
         rrExecutionsUnknown = executions,
         rrRecoveries = recoveries
       }

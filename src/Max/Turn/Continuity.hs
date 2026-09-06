@@ -18,18 +18,18 @@ where
 
 import Crypto.Hash.SHA256 qualified as SHA256
 import Data.ByteString.Base16 qualified as B16
-import Data.List (sortOn)
 import Data.Int (Int64)
+import Data.List (sortOn)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (TimeZone, UTCTime)
-import Max.Effects.Tools
+import Max.Time (fmtDateHM)
+import Max.Tool.Types
   ( SchemaVersion (..),
     ToolDefinition (..),
     ToolRef (..),
   )
-import Max.Time (fmtDateHM)
 import Max.Turn.Types (TurnOrdinal, turnHandleText)
 
 data TurnDigest = TurnDigest
@@ -252,5 +252,5 @@ renderDuration rawSeconds
 oneLine :: Text -> Text
 oneLine = T.take 240 . T.unwords . T.words
 
-tshow :: Show a => a -> Text
+tshow :: (Show a) => a -> Text
 tshow = T.pack . show

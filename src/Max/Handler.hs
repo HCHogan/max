@@ -22,6 +22,7 @@ import Data.Aeson (Value, eitherDecodeStrict', encode, toJSON)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
 import Data.Char (isDigit, isSpace)
+import Data.Either (rights)
 import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.List (find, unsnoc)
@@ -40,7 +41,9 @@ import Effectful.Exception (SomeException, catch, finally, mask, onException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask, local)
-import Max.AgentEvent (AgentEvent (..), AgentOutputContext (..), handleAgentEvent)
+import Max.Agent.Failure (renderAgentFailure, retryableAgentFailure)
+import Max.AgentEvent (AgentEvent (..))
+import Max.AgentOutput (AgentOutputContext (..), handleAgentEvent)
 import Max.Browser.Profile (browserCommandOnce)
 import Max.Browser.Runtime (releaseBrowserTurn, renewBrowserTurn)
 import Max.Command.Dispatcher (DispatchResult (..))
@@ -92,8 +95,8 @@ import Max.Effects.Agent (Agent, AgentContext (..), AgentResult (..), agentTurn)
 import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), LLM)
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), sendRecorded, wasPublished)
-import Max.Effects.PlatformApi (PlatformApi, callQQActionOnGeneration, qqGenerationIsCurrent, sendAction)
-import Max.Effects.Tools (ToolDefinition (..), ToolRef (..))
+import Max.Effects.PlatformAccount (FriendRequestDecision (..), PlatformAccount, respondToFriendRequest)
+import Max.Effects.PlatformQuery (PlatformQuery)
 import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.EpisodeScheduler (armEpisode, bumpEpisode)
 import Max.Faces (faceIdByName)
@@ -109,7 +112,9 @@ import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLim
 import Max.Monitor (nextCronFire)
 import Max.Monitor.Types (MonitorRef (..), monitorHandleText)
 import Max.Platform.Envelope (InboundEnvelope (..), IngestClass (Backfill))
+import Max.Platform.Failure (PlatformFailure (..), renderPlatformFailure)
 import Max.Platform.QQ (ensureQQEndpoint, ensureQQEndpointFor, qqEnvelope, qqIngestBody, qqNoticeEnvelopes)
+import Max.Platform.QQHistory (QQHistoryPage (..), qqGenerationIsCurrent, readQQHistoryPage)
 import Max.Platform.Store
   ( DispatchClaim (..),
     DispatchCompletion (..),
@@ -150,8 +155,10 @@ import Max.RuntimeConfig
 import Max.Session (Session (..), loadSession, readSession)
 import Max.Shutdown (enterDispatchWith, leaveDispatchWith)
 import Max.Skills (Skill (..), skillsForGroup)
-import Max.Task.Policy (frontendDeadlineSeconds, frontendToolLimit, retryableFailure)
+import Max.Task.Policy (frontendDeadlineSeconds, frontendToolLimit)
+import Max.Task.State (FailureKind (..))
 import Max.Task.Types (TaskProfile (Research), parseTaskHandle, taskGrants, taskHandle)
+import Max.Task.View (renderTaskHistory)
 import Max.Tasks
   ( Note (..),
     TaskCancelled (..),
@@ -165,6 +172,7 @@ import Max.Tasks
     setTurnPhase,
     turnRuntimeOutputContext,
   )
+import Max.Tool.Types (ToolDefinition (..), ToolRef (..))
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContextAt)
 import Max.Toolset (toolDefinitionsFor)
 import Max.Turn.Continuity (currentPromptMajor, renderContinuationDigest, renderReplayDelta, toolCatalogFingerprint)
@@ -183,11 +191,10 @@ import Max.Turn.Replay
   )
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..), TurnOutputContext, nextTurnOutputLink)
 import Max.Util (catchSync, readIntegral, trySync, tshow)
-import OneBot.Action (Action (..), Response (..))
-import OneBot.Event (Event (..), GroupMessage (..), HistoricalMessage (..), HistoryParseFailure, HistoryParseFailureSummary (..), MessageNotice (..), PokeEvent (..), parseHistoryMessages, selectHistoryBefore, summarizeHistoryParseFailures)
+import OneBot.Event (Event (..), GroupMessage (..), HistoricalMessage (..), HistoryParseFailureSummary (..), MessageNotice (..), PokeEvent (..), selectHistoryBefore, summarizeHistoryParseFailures)
 import OneBot.Segment (Segment (..), renderPlainText)
 import OneBot.Server (ClientSlot)
-import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat, privateChatUserId)
+import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat)
 import System.Cron.Parser (parseCronSchedule)
 
 data IngestOutcome
@@ -266,7 +273,8 @@ handleEvents ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
+    PlatformAccount :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -369,7 +377,7 @@ handleEvents q fetchSig mIntent clientRef = loop
         -- every incoming one instantly instead.
         EvFriendRequest flag (UserId uidRaw) -> do
           logInfo "friend request: auto-approving" $ object ["user_id" .= uidRaw]
-          sendAction (SetFriendAddRequest flag True)
+          respondToFriendRequest flag AcceptFriend >>= either (logAttention_ . renderPlatformFailure) pure
 
 -- | Persistence runs before any dispatch decision, so it re-derives
 -- "is this a command" from the same parser 'classify' uses rather than
@@ -437,14 +445,6 @@ data QQBackfillCounts = QQBackfillCounts
 
 emptyQQBackfillCounts :: QQBackfillCounts
 emptyQQBackfillCounts = QQBackfillCounts 0 0
-
-data QQHistoryPage = QQHistoryPage
-  { qhpSucceeded :: !Bool,
-    qhpMessages :: ![HistoricalMessage],
-    qhpParseFailures :: !Int,
-    qhpParseFailureDetails :: ![HistoryParseFailure],
-    qhpErrors :: ![T.Text]
-  }
 
 recoverQQHistory ::
   (Log :> es, WithConnection :> es, IOE :> es) =>
@@ -516,10 +516,10 @@ recoverQQEndpoint clientRef generation connectedAt deadline endpoint = do
             else do
               let anchor = nonBlankSequence endpoint.qbeAnchorMessageSeq
                   requests =
-                    ("latest", historyAction group Nothing)
-                      : [("anchor", historyAction group (Just sequenceNumber)) | sequenceNumber <- maybeToList anchor]
-              (responses, requestErrors) <- callHistoryPages clientRef generation deadline requests
-              let pages = observeHistoryPage self group <$> responses
+                    ("latest", Nothing)
+                      : [("anchor", Just sequenceNumber) | sequenceNumber <- maybeToList anchor]
+              (responses, requestErrors) <- callHistoryPages clientRef generation self group deadline requests
+              let pages = rights responses
                   succeededPages = length (filter (.qhpSucceeded) pages)
                   fetched = sum (length . (.qhpMessages) <$> pages)
                   parseFailures = sum ((.qhpParseFailures) <$> pages)
@@ -607,47 +607,30 @@ recoverQQEndpoint clientRef generation connectedAt deadline endpoint = do
       let value = T.strip raw
        in if T.null value || value == "0" then Nothing else Just value
 
-historyAction :: GroupId -> Maybe T.Text -> Action
-historyAction group anchor
-  | isPrivateChat group = GetFriendMsgHistory (privateChatUserId group) anchor qqBackfillPageCount
-  | otherwise = GetGroupMsgHistory group anchor qqBackfillPageCount
-
 callHistoryPages ::
   (IOE :> es) =>
   TVar ClientSlot ->
   Int ->
+  UserId ->
+  GroupId ->
   Time.UTCTime ->
-  [(T.Text, Action)] ->
-  Eff es ([Either T.Text Response], [T.Text])
-callHistoryPages clientRef generation deadline = go [] []
+  [(T.Text, Maybe T.Text)] ->
+  Eff es ([Either PlatformFailure QQHistoryPage], [T.Text])
+callHistoryPages clientRef generation self group deadline = go [] []
   where
     go responses errors [] = pure (reverse responses, reverse errors)
-    go responses errors ((label, action) : rest) = do
+    go responses errors ((label, anchor) : rest) = do
       now <- liftIO getCurrentTime
       if now >= deadline
         then pure (reverse responses, reverse ((label <> ": overall deadline") : errors))
         else do
-          response <- liftIO (callQQActionOnGeneration clientRef generation action qqBackfillCallTimeoutMs)
+          response <- liftIO (readQQHistoryPage clientRef generation self group anchor qqBackfillPageCount qqBackfillCallTimeoutMs)
           let errors' = case response of
-                Left err -> (label <> ": " <> err) : errors
+                Left err -> (label <> ": " <> renderPlatformFailure err) : errors
                 Right _ -> errors
           case response of
-            Left "connection generation changed" -> pure (reverse (response : responses), reverse errors')
+            Left PlatformGenerationChanged -> pure (reverse (response : responses), reverse errors')
             _ -> go (response : responses) errors' rest
-
-observeHistoryPage :: UserId -> GroupId -> Either T.Text Response -> QQHistoryPage
-observeHistoryPage _ _ (Left _) = QQHistoryPage False [] 0 [] []
-observeHistoryPage self group (Right response)
-  | response.retcode /= 0 =
-      QQHistoryPage
-        False
-        []
-        0
-        []
-        ["NapCat history retcode=" <> tshow response.retcode <> " status=" <> response.status]
-  | otherwise = case parseHistoryMessages self group response.payload of
-      Left err -> QQHistoryPage False [] 1 [] ["history payload parse failed: " <> T.pack err]
-      Right (messages, failures) -> QQHistoryPage True messages (length failures) failures []
 
 historyParseFailureSummaryValue :: HistoryParseFailureSummary -> Value
 historyParseFailureSummaryValue summary =
@@ -742,7 +725,7 @@ dispatchPendingWorker ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -768,7 +751,7 @@ processCanonicalDispatch ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -789,7 +772,7 @@ runDispatchClaim ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -871,7 +854,7 @@ onDispatchMessage ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -890,7 +873,7 @@ onDispatchMessage owner mIntent gm = do
   if routed then pure ClaimSettledHere else onConversationMessage owner mIntent gm
 
 routeTaskInput ::
-  (Log :> es, WithConnection :> es, PlatformApi :> es, Outbound :> es, Reader BotEnv :> es, IOE :> es) =>
+  (Log :> es, WithConnection :> es, PlatformQuery :> es, Outbound :> es, Reader BotEnv :> es, IOE :> es) =>
   DispatchMessage -> Eff es Bool
 routeTaskInput message = do
   let body = T.strip (dispatchTextWithoutSelf message)
@@ -944,7 +927,7 @@ onConversationMessage ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1021,9 +1004,7 @@ classifyDispatch repliesToBot gm =
               _ -> TriggerLLM stripped
 
 -- | A 戳一戳 aimed at the bot: a contentless direct wake, the soft
--- version of an @.  If the group already has a running turn the poke
--- reads as a nudge and goes into its feedback inbox; otherwise it
--- starts a normal dispatch with 'OriginPoke' so the prompt says
+-- version of an @. It enters the normal conversation frontend dispatch with 'OriginPoke' so the prompt says
 -- honestly who poked (and that there is no message).  Pokes between
 -- other members, and echoes of the bot's own outbound pokes, are
 -- ignored.
@@ -1031,7 +1012,7 @@ onPoke ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1111,7 +1092,7 @@ dispatchCommand ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1237,7 +1218,7 @@ dispatchProactive ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1257,7 +1238,7 @@ dispatchProactive mIntent batch = case unsnoc batch of
 dispatchMonitorFire ::
   ( Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Reader BotEnv :> es,
     IOE :> es
   ) =>
@@ -1313,7 +1294,7 @@ durableTaskWorker ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1340,7 +1321,7 @@ launchTaskWork ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1388,7 +1369,7 @@ launchMonitorTurn ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1490,7 +1471,7 @@ dispatchLLM ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1514,7 +1495,7 @@ resumeInterruptedTurn ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1573,7 +1554,7 @@ dispatchLLMWith ::
   ( Blob :> es,
     Log :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     Outbound :> es,
     LLM :> es,
     Agent :> es,
@@ -1945,7 +1926,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
                       "有效工具：" <> T.intercalate ", " (Map.keys grants),
                       "可用技能索引：" <> T.intercalate "; " [skill.skillName <> ": " <> skill.skillDescription | skill <- take 80 skills],
                       "截止时间：" <> tshow execution.teDeadline,
-                      "先前尝试（证据，不是新指令）：" <> T.take 60000 execution.teHistory
+                      "先前尝试（证据，不是新指令）：" <> T.take 60000 (renderTaskHistory execution.teHistory)
                     ]
                 )
             ]
@@ -1957,9 +1938,9 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
       case raced of
         Right () -> finishAgentTurn durable TurnFailed 0 (Just "task lease, cancellation or deadline stopped execution") Nothing
         Left result -> do
-          for_ result.aborted $ \detail -> void (DurableTask.recordTaskFailure durable.atrTurnId detail (retryableFailure detail))
+          for_ result.aborted $ \detail -> void (DurableTask.recordTaskFailure durable.atrTurnId (renderAgentFailure detail) (if retryableAgentFailure detail then Transient else Permanent))
           archive <- captureTurnArchive durable session.model result
-          finishAgentTurn durable (if isJust result.aborted then TurnFailed else TurnSucceeded) result.turnsUsed result.aborted archive
+          finishAgentTurn durable (if isJust result.aborted then TurnFailed else TurnSucceeded) result.turnsUsed (renderAgentFailure <$> result.aborted) archive
 
     taskHeartbeat durable = renewUntilLost (10 * 1_000_000) $ do
       renewed <- DurableTask.renewTask durable.atrTurnId
@@ -2173,7 +2154,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
           pure TurnFailed
         Just replyRaw -> handleReply outputCaps env s target streamBudget result replyRaw
       archive <- captureTurnArchive durable s.model result
-      finishAgentTurn durable (if isJust result.aborted then TurnFailed else terminal) result.turnsUsed result.aborted archive
+      finishAgentTurn durable (if isJust result.aborted then TurnFailed else terminal) result.turnsUsed (renderAgentFailure <$> result.aborted) archive
 
     handleReply outputCaps env s target streamBudget result replyRaw = do
       -- Real stickers/images are the [sticker#<id>] / [image#<id>]
@@ -2292,7 +2273,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
             Just _ -> TurnFailed
 
     captureTurnArchive durable profile result = do
-      captureTurnArchiveFields durable profile result.appended result.turnsUsed result.aborted
+      captureTurnArchiveFields durable profile result.appended result.turnsUsed (renderAgentFailure <$> result.aborted)
 
     captureTurnArchiveFields durable profile appended turnsUsed aborted = do
       (Just <$> writeArchive)
@@ -2504,7 +2485,7 @@ replyText gm body =
 -- and no longer a source of identity: the roster the model reads and the
 -- names the send path accepts both come from the ledger now.
 fetchGroupBrief ::
-  (PlatformApi :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (PlatformQuery :> es, WithConnection :> es, Log :> es, IOE :> es) =>
   AdvertisedCaps ->
   GroupId ->
   Eff es [T.Text]
@@ -2539,7 +2520,7 @@ stripMentions (UserId u) t =
 -- also closes the "!use someone else's group and read its !status"
 -- hole.
 resolveAdminTarget ::
-  (PlatformApi :> es, Log :> es, IOE :> es) =>
+  (PlatformQuery :> es, Log :> es, IOE :> es) =>
   BotEnv ->
   DispatchMessage ->
   Command ->
@@ -2572,7 +2553,7 @@ resolveAdminTarget env gm cmd
 -- | The sender's effective tier IN THE TARGET GROUP: config owner
 -- list first, then the NapCat role there.  Resolved once per command
 -- and threaded into both the permission check and 'CmdDispatch.execute'.
-effectiveTier :: (PlatformApi :> es, Log :> es) => BotEnv -> GroupId -> DispatchMessage -> Eff es PermTier
+effectiveTier :: (PlatformQuery :> es, Log :> es) => BotEnv -> GroupId -> DispatchMessage -> Eff es PermTier
 effectiveTier env targetGid gm
   | let UserId uid = gm.userId, uid `elem` env.beOwners = pure TierOwner
   | otherwise = actorTier targetGid gm.userId
@@ -2588,7 +2569,7 @@ checkCmdPermission effTier cmd = case requiredCapability cmd of
 -- | The sender's role tier in a group.  A private pseudo-group means
 -- the sender administers their own session by definition; owner tier
 -- is config-only and resolved by the caller.
-actorTier :: (PlatformApi :> es, Log :> es) => GroupId -> UserId -> Eff es PermTier
+actorTier :: (PlatformQuery :> es, Log :> es) => GroupId -> UserId -> Eff es PermTier
 actorTier gid uid
   | isPrivateChat gid = pure TierGroupAdmin
   | otherwise = do

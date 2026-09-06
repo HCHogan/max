@@ -19,6 +19,8 @@ import Helpers (truncateAll, withDb)
 import Max.Browser.Profile (browserCommand, browserCommandOnce)
 import Max.Browser.Registry (browserRuntimeId, browserVault, configureBrowserRegistry, newBrowserRegistry, newBrowserRegistryWithHost)
 import Max.Browser.Runtime (browserMaintenance, releaseBrowserTurn, workspaceIdentity)
+import Max.Browser.State (WorkspaceState (..))
+import Max.Browser.ToolRuntime (browserToolsFor)
 import Max.Browser.Vault (sealBrowserState)
 import Max.DB.AgentTurn (AgentTurnTerminal (TurnSucceeded), finishAgentTurn)
 import Max.DB.Browser
@@ -31,7 +33,6 @@ import Max.HttpRuntime (newHttpRuntime)
 import Max.Monitor.Types
 import Max.Platform.Types (PrincipalId (..), noAdvertisedCaps)
 import Max.ToolContext
-import Max.Tools.Browser (browserToolsFor)
 import Max.Turn.Types
 import Network.HTTP.Types (status200, status202)
 import Network.Wai (Application, requestMethod, responseLBS, strictRequestBody)
@@ -139,7 +140,7 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
     withDb pool (finishBrowserOperation turn.atrTurnId original.bwEpoch (Just "encrypted") True) `shouldReturn` True
     Right cold <- withDb pool (acquireBrowserWorkspace turn.atrTurnId "new-runtime")
     cold.bwGeneration `shouldSatisfy` (> original.bwGeneration)
-    cold.bwState `shouldBe` "cold"
+    cold.bwState `shouldBe` Cold
     cold.bwCheckpoint `shouldBe` Just "encrypted"
 
   it "does not automatically resume an interrupted operation, including after restart" $ do

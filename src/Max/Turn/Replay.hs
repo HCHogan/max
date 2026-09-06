@@ -38,7 +38,7 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Time (UTCTime, addUTCTime)
 import Max.Context (estimateMessagesTokens)
-import Max.Effects.LLM (ChatMessage (..))
+import Max.LLM.Types (ChatMessage (..))
 import Max.Turn.Types (AgentTurnRef (..))
 
 -- | One turn on the fork-from chain, with the durable facts the predicate

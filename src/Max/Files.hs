@@ -12,8 +12,7 @@ module Max.Files
   )
 where
 
-import Data.Aeson (FromJSON (..), Result (..), ToJSON (..), Value, fromJSON, withObject, (.:), (.:?))
-import Data.Aeson.Types (Parser, parseEither)
+import Data.Aeson (FromJSON (..), Result (..), ToJSON (..), fromJSON, withObject, (.:), (.:?))
 import Data.ByteString qualified as BS
 import Data.Foldable (traverse_)
 import Data.Int (Int64)
@@ -28,12 +27,12 @@ import Max.DB.FetchQueue (JobKind (JobFile), enqueueJob)
 import Max.DB.Files qualified as DB
 import Max.Dispatch (DispatchMessage (..))
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
-import Max.Effects.Http (Http, getBytesQqCompatible)
-import Max.Effects.PlatformApi (PlatformApi, callAction)
+import Max.Effects.Http (Http, getQQMedia, renderDownloadError)
+import Max.Effects.PlatformQuery (PlatformQuery, queryGroupFileUrl)
 import Max.FetchQueue (FetchSignal, notifyFetch, runFetchLoop)
 import Max.IR (Body (..), MediaKind (MFile), MediaMeta (..), Node (NMedia), Phase (Canonical))
+import Max.Platform.Failure (renderPlatformFailure)
 import Max.Platform.Types (CanonicalMessageId (..))
-import OneBot.Action (Action (GetGroupFileUrl), Response (..))
 import OneBot.Segment (FileSegInfo (..), Segment (..))
 import OneBot.Types (GroupId (..), UserId (..))
 
@@ -138,7 +137,7 @@ fileWorker ::
     Http :> es,
     Blob :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     IOE :> es
   ) =>
   FetchSignal ->
@@ -152,7 +151,7 @@ processOne ::
     Http :> es,
     Blob :> es,
     WithConnection :> es,
-    PlatformApi :> es,
+    PlatformQuery :> es,
     IOE :> es
   ) =>
   FileJob ->
@@ -167,10 +166,10 @@ processOne job = do
   resolveUrl job >>= \case
     Left err -> pure (Left err)
     Right u -> do
-      r <- getBytesQqCompatible u maxBytes
+      r <- getQQMedia u maxBytes
       case r of
         Left err ->
-          pure (Left ("download failed (" <> job.fjFileId <> "): " <> err))
+          pure (Left ("download failed (" <> job.fjFileId <> "): " <> renderDownloadError err))
         Right (bytes, mime) -> do
           ref <- putBlob bytes
           let sha = blobRefSha256 ref
@@ -198,22 +197,13 @@ processOne job = do
 -- worth another go, since the commonest cause is NapCat not being
 -- connected yet after a restart.
 resolveUrl ::
-  (PlatformApi :> es) =>
+  (PlatformQuery :> es) =>
   FileJob ->
   Eff es (Either Text Text)
 resolveUrl job = case job.fjUrlHint of
   Just u | not (T.null u) -> pure (Right u)
   _ -> do
-    let timeoutMs = 30000
-        tagged msg = Left (msg <> " (" <> job.fjFileId <> ")")
-    eres <- callAction (GetGroupFileUrl (GroupId job.fjGroupId) job.fjFileId) timeoutMs
-    pure $ case eres of
-      Left err -> tagged ("get_group_file_url failed: " <> err)
-      Right (Response _ rc payload _)
-        | rc /= 0 -> tagged ("get_group_file_url retcode " <> T.pack (show rc))
-        | otherwise -> case parseEither extractUrl payload of
-            Left perr -> tagged ("get_group_file_url parse error: " <> T.pack perr)
-            Right u -> Right u
-
-extractUrl :: Value -> Parser Text
-extractUrl = withObject "GroupFileUrl" $ \o -> o .: "url"
+    result <- queryGroupFileUrl (GroupId job.fjGroupId) job.fjFileId
+    pure $ case result of
+      Left failure -> Left ("get_group_file_url failed: " <> renderPlatformFailure failure <> " (" <> job.fjFileId <> ")")
+      Right url -> Right url

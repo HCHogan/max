@@ -9,6 +9,7 @@ module Max.DB.Session
     fetchRecordOrInit,
     fetchRecord,
     saveSessionCAS,
+    lockRecordRevision,
     listSessions,
   )
 where
@@ -158,6 +159,14 @@ saveSessionCAS old new
         if changed == 1
           then Just (SessionRecord new nextRevision)
           else Nothing
+
+-- | Wait for the persisted row before evaluating a guarded mutation. The
+-- caller owns a transaction and rechecks authority after this lock succeeds.
+lockRecordRevision :: (WithConnection :> es, IOE :> es) => SessionRecord -> Eff es Bool
+lockRecordRevision record = do
+  let GroupId group = record.session.groupId
+  rows <- query "SELECT revision FROM sessions WHERE group_id=? FOR UPDATE" (Only group)
+  pure (rows == [Only record.revision])
 
 --------------------------------------------------------------------------------
 

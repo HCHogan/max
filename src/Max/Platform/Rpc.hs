@@ -1,16 +1,13 @@
-{-# LANGUAGE TypeFamilies #-}
-
-module Max.Effects.PlatformApi
-  ( PlatformApi,
-    runPlatformApi,
-    runRuntimePlatformApi,
+-- | OneBot compatibility RPC edge. Domain callers use the narrow platform
+-- effects; canonical content publication has its separate Outbound boundary.
+module Max.Platform.Rpc
+  ( PlatformRouter,
+    platformRouter,
+    callPlatform,
+    sendPlatform,
     qqBackend,
-    sendAction,
-    callAction,
     callQQActionOnGeneration,
     qqGenerationIsCurrent,
-
-    -- * Exposed for cancellation-safety tests
     withPendingCall,
   )
 where
@@ -29,7 +26,8 @@ import Control.Concurrent.STM
     takeTMVar,
   )
 import Control.Exception (bracket_, try)
-import Data.Aeson (encode)
+import Data.Aeson (Value, encode)
+import Data.Bifunctor (first)
 import Data.List (nub)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
@@ -37,72 +35,39 @@ import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Effectful
-import Effectful.Dispatch.Dynamic (interpret, send)
-import Effectful.Log (Log, logAttention_)
 import Effectful.PostgreSQL (WithConnection)
-import Effectful.Reader.Dynamic (Reader, ask)
-import Max.Env (BotEnv (..))
 import Max.Platform (ActionAddress (..), PlatformBackend (..), actionAddress, backendForPlatform)
+import Max.Platform.Failure (PlatformFailure (..))
 import Max.Platform.Store (platformForLegacyConversation, platformForLegacyMessage)
-import Max.RuntimeConfig (RuntimeResources (..), RuntimeSnapshot (..))
 import Network.WebSockets qualified as WS
-import OneBot.Action (Action, Envelope (..), Response, encodeAction)
+import OneBot.Action (Action, Envelope (..), Response (..), encodeAction)
 import OneBot.Server (Client (..), ClientSlot)
 
-data PlatformApi :: Effect where
-  -- | Fire and forget. Silently drops if no client connected (logs).
-  SendOp :: Action -> PlatformApi m ()
-  -- | Send and await response. Times out per millisecond budget; returns
-  -- @Left@ on send failure, timeout, or disconnect mid-flight.
-  CallOp :: Action -> Int -> PlatformApi m (Either Text Response)
+data PlatformRouter es = PlatformRouter !PlatformBackend !(Eff es [PlatformBackend])
 
-type instance DispatchOf PlatformApi = Dynamic
+-- | Resolve foreign backends from the caller's leased generation per call.
+platformRouter :: PlatformBackend -> Eff es [PlatformBackend] -> PlatformRouter es
+platformRouter = PlatformRouter
 
--- | Interpret compatibility actions through explicit canonical endpoint
--- ownership.  Targetless account operations remain QQ-only.
-runPlatformApi ::
-  (IOE :> es, Log :> es, WithConnection :> es) =>
-  PlatformBackend -> -- default backend (QQ / NapCat)
-  [PlatformBackend] -> -- foreign backends (WeChat, …)
-  Eff (PlatformApi : es) a ->
-  Eff es a
-runPlatformApi dflt extras = interpret $ \_ -> \case
-  SendOp a -> do
-    resolveBackend dflt extras a >>= \case
-      Left err -> logAttention_ err
-      Right b ->
-        liftIO (b.pbSend a) >>= \case
-          Left err -> logAttention_ (b.pbName <> " send failed: " <> err)
-          Right () -> pure ()
-  CallOp a t -> do
-    resolveBackend dflt extras a >>= \case
-      Left err -> pure (Left err)
-      Right b -> liftIO (b.pbCall a t)
+callPlatform :: (WithConnection :> es, IOE :> es) => PlatformRouter es -> Action -> Int -> Eff es (Either PlatformFailure Value)
+callPlatform (PlatformRouter dflt resolve) action timeoutMs = do
+  extras <- resolve
+  resolveBackend dflt extras action >>= \case
+    Left failure -> pure (Left failure)
+    Right backend -> do
+      response <- liftIO (backend.pbCall action timeoutMs)
+      pure $ case response of
+        Left message -> Left (PlatformTransportFailure message)
+        Right value
+          | value.retcode /= 0 -> Left (PlatformRejected value.retcode)
+          | otherwise -> Right value.payload
 
--- | Production router.  Foreign backends are prepared and published with the
--- current immutable configuration snapshot; QQ remains the process-lifetime
--- default so reload never replaces its accepted websocket generation.
-runRuntimePlatformApi ::
-  (IOE :> es, Log :> es, WithConnection :> es, Reader BotEnv :> es) =>
-  PlatformBackend ->
-  Eff (PlatformApi : es) a ->
-  Eff es a
-runRuntimePlatformApi dflt = interpret $ \_ -> \case
-  SendOp action -> do
-    env <- ask @BotEnv
-    let extras = env.beRuntimeSnapshot.rsResources.rrForeignEdges
-    resolveBackend dflt extras action >>= \case
-      Left err -> logAttention_ err
-      Right backend ->
-        liftIO (backend.pbSend action) >>= \case
-          Left err -> logAttention_ (backend.pbName <> " send failed: " <> err)
-          Right () -> pure ()
-  CallOp action timeoutMs -> do
-    env <- ask @BotEnv
-    let extras = env.beRuntimeSnapshot.rsResources.rrForeignEdges
-    resolveBackend dflt extras action >>= \case
-      Left err -> pure (Left err)
-      Right backend -> liftIO (backend.pbCall action timeoutMs)
+sendPlatform :: (WithConnection :> es, IOE :> es) => PlatformRouter es -> Action -> Eff es (Either PlatformFailure ())
+sendPlatform (PlatformRouter dflt resolve) action = do
+  extras <- resolve
+  resolveBackend dflt extras action >>= \case
+    Left failure -> pure (Left failure)
+    Right backend -> first PlatformTransportFailure <$> liftIO (backend.pbSend action)
 
 -- | The NapCat (QQ) backend over the reverse-WS client that
 -- 'OneBot.Server' publishes per connection.
@@ -126,7 +91,7 @@ resolveBackend ::
   PlatformBackend ->
   [PlatformBackend] ->
   Action ->
-  Eff es (Either Text PlatformBackend)
+  Eff es (Either PlatformFailure PlatformBackend)
 resolveBackend dflt extras action = do
   let backends = dflt : extras
       configured = nub ((.pbPlatform) <$> backends)
@@ -136,22 +101,10 @@ resolveBackend dflt extras action = do
     DirectAddress user -> platformForLegacyConversation (negate user)
     MessageAddress message -> platformForLegacyMessage message
   pure $ case platform of
-    Nothing -> Left "platform route unresolved: target has no canonical endpoint"
+    Nothing -> Left PlatformRouteMissing
     Just name -> case backendForPlatform name backends of
       Just backend -> Right backend
-      Nothing ->
-        Left
-          ( "platform route unavailable: endpoint requires "
-              <> name
-              <> ", configured="
-              <> T.intercalate "," configured
-          )
-
-sendAction :: (PlatformApi :> es) => Action -> Eff es ()
-sendAction a = send (SendOp a)
-
-callAction :: (PlatformApi :> es) => Action -> Int -> Eff es (Either Text Response)
-callAction a t = send (CallOp a t)
+      Nothing -> Left (PlatformRouteUnavailable name configured)
 
 -- | Issue a recovery action only on the websocket generation whose barrier
 -- the handler is processing.  Re-reading after the response fences a call
@@ -161,14 +114,14 @@ callQQActionOnGeneration ::
   Int ->
   Action ->
   Int ->
-  IO (Either Text Response)
+  IO (Either PlatformFailure Response)
 callQQActionOnGeneration ref expected action timeoutMs =
   readTVarIO ref >>= \case
     Just (generation, client) | generation == expected -> do
       result <- callIO client action timeoutMs
       current <- qqGenerationIsCurrent ref expected
-      pure $ if current then result else Left "connection generation changed"
-    _ -> pure (Left "connection generation changed")
+      pure $ if current then first PlatformTransportFailure result else Left PlatformGenerationChanged
+    _ -> pure (Left PlatformGenerationChanged)
 
 qqGenerationIsCurrent :: TVar ClientSlot -> Int -> IO Bool
 qqGenerationIsCurrent ref expected =

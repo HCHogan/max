@@ -10,12 +10,13 @@ import Effectful (liftIO)
 import Effectful.PostgreSQL (query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbLog)
 import Max.AgentEvent
+import Max.AgentOutput (AgentOutputContext (..), handleAgentEvent)
 import Max.DB.Connection (DbPool)
 import Max.Effects.Outbound
 import Max.IR
 import Max.Platform.Types
+import Max.Reply.Caption (captionBody)
 import Max.ReplySend
-import Max.Tools.Files (captionBody)
 import OneBot.Types (GroupId (..))
 import Test.Hspec
 

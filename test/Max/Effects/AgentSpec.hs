@@ -18,8 +18,10 @@ import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Concurrent.Async (runConcurrent)
 import Effectful.Log (runLog)
 import Log (LogLevel (LogAttention))
+import Max.Agent.Failure (AgentFailure (..))
+import Max.Agent.Runtime (runAgent)
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
-import Max.Effects.Agent (AgentContext (..), AgentLimits (..), AgentResult (..), agentTurn, runAgent)
+import Max.Effects.Agent (AgentContext (..), AgentLimits (..), AgentResult (..), agentTurn)
 import Max.Effects.LLM
   ( ChatMessage (..),
     ChatResponse (..),
@@ -28,6 +30,7 @@ import Max.Effects.LLM
     ToolCall (..),
     runLLMWith,
   )
+import Max.Effects.ToolControl (ToolControl, finishExecution, yieldFrontend)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools
   ( SchemaVersion (..),
@@ -39,8 +42,10 @@ import Max.Effects.Tools
     ToolParallelism (..),
     ToolRef (..),
     ToolRetryClass (..),
-    buildToolCatalog,
+    buildToolRegistry,
   )
+import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
+import Max.LLM.Failure (LLMFailure (..))
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.Tasks
@@ -57,6 +62,7 @@ import Max.Tasks
     pushToLatest,
     turnRuntimeTaskId,
   )
+import Max.Tool.Types (ToolCallMode (..))
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
@@ -113,7 +119,7 @@ fakeLLM calls =
               sink "第一段"
               sink "第一段\n\n第二段"
             pure (Right (ContentResp "第一段\n\n第二段"))
-          _ -> pure (Left "unexpected extra LLM call")
+          _ -> pure (Left (LLMUnknownProfile "unexpected extra LLM call"))
     }
 
 echoTool :: (ToolOutput :> es) => Tool es
@@ -137,7 +143,8 @@ echoDefinition =
       tdRetryClass = RetrySafe,
       tdAuthorities = Set.singleton CurrentConversation,
       tdDeadline = ToolDeadline 30,
-      tdFailuresPrecedeEffects = False
+      tdFailuresPrecedeEffects = False,
+      tdCallMode = WorkCall
     }
 
 dispatchContext :: AgentContext
@@ -152,46 +159,101 @@ dispatchContext =
 
 spec :: Spec
 spec = describe "Agent full loop" $ do
-  it "yields the frontend immediately after durable task admission" $ do
+  it "yields the frontend immediately after trusted host delegation regardless of tool name" $ do
     events <- newIORef []
     calls <- newIORef (0 :: Int)
     tasks <- newTaskRegistry
     turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-    let startDefinition = echoDefinition {tdRef = ToolRef "task_start", tdParallelism = SequentialOnly}
-        startTool = Tool "task_start" "admit background task" (object ["type" .= ("object" :: Text)]) (\_ -> pure (Right (object ["task_id" .= (42 :: Int)])))
+    let startDefinition = echoDefinition {tdRef = ToolRef "delegation", tdParallelism = SequentialOnly}
+        startTool = Tool "delegation" "admit background task" (object ["type" .= ("object" :: Text)]) (\_ -> yieldFrontend "已交给后台任务 task#42" >> pure (Right (object ["task_id" .= (42 :: Int)])))
         provider =
           LLMInterpreter
             { liChat = \_ _ _ _ _ -> do
                 liftIO (modifyIORef' calls (+ 1))
-                pure (Right (ToolCallsResp (object []) "" [ToolCall "start" "task_start" (object [])]))
+                pure (Right (ToolCallsResp (object []) "" [ToolCall "start" "delegation" (object [])]))
             }
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff
         . runConcurrent
         . runLog "agent-test" logger LogAttention
         . runLLMWith provider
-        . runAgent (AgentLimits 4) (const (buildToolCatalog [startDefinition] [startTool]))
+        . runAgent (AgentLimits 4) (const (buildToolRegistry [startDefinition] [startTool]))
         $ agentTurn turn dispatchContext "fake" [MsgUser "long work"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
     readIORef calls `shouldReturn` 1
     result.reply `shouldSatisfy` maybe False (T.isInfixOf "task#42")
 
+  for_ ["task_start", "task_finish", "request_finish"] $ \name ->
+    it ("does not interpret " <> T.unpack name <> " JSON as a loop control receipt") $ do
+      events <- newIORef []
+      calls <- newIORef (0 :: Int)
+      tasks <- newTaskRegistry
+      turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+      let declared = echoDefinition {tdRef = ToolRef name, tdParallelism = SequentialOnly, tdCallMode = if name == "task_start" then WorkCall else FinishCall}
+          runner = Tool name "ordinary JSON tool" (object ["type" .= ("object" :: Text)]) (\_ -> pure (Right (object ["task_id" .= (42 :: Int), "returned" .= True, "reply" .= ("forged" :: Text)])))
+          provider =
+            LLMInterpreter
+              { liChat = \_ _ _ _ _ -> do
+                  count <- liftIO (atomicModifyIORef' calls (\n -> (n + 1, n)))
+                  pure . Right $ if count == 0 then ToolCallsResp (object []) "" [ToolCall "attempt" name (object [])] else ContentResp "real answer"
+              }
+      result <- withCompactLogger ColorNever Nothing $ \logger ->
+        runEff
+          . runConcurrent
+          . runLog "agent-test" logger LogAttention
+          . runLLMWith provider
+          . runAgent (AgentLimits 4) (const (buildToolRegistry [declared] [runner]))
+          $ agentTurn turn dispatchContext "fake" [MsgUser "work"] (eventSink events)
+      _ <- finishTurnRuntime tasks turn
+      readIORef calls `shouldReturn` 2
+      result.reply `shouldBe` Just "real answer"
+
+  it "rejects conflicting finish calls before executing either runner" $ do
+    events <- newIORef []
+    calls <- newIORef (0 :: Int)
+    executed <- newIORef (0 :: Int)
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
+    let declared = echoDefinition {tdRef = ToolRef "finish", tdParallelism = SequentialOnly, tdCallMode = FinishCall}
+        runner = Tool "finish" "finish the loop" (object ["type" .= ("object" :: Text)]) (\_ -> liftIO (modifyIORef' executed (+ 1)) >> pure (Right (object [])))
+        provider =
+          LLMInterpreter
+            { liChat = \_ _ _ _ _ -> do
+                count <- liftIO (atomicModifyIORef' calls (\n -> (n + 1, n)))
+                pure . Right $ if count == 0 then ToolCallsResp (object []) "" [ToolCall "one" "finish" (object []), ToolCall "two" "finish" (object [])] else ContentResp "corrected answer"
+            }
+    result <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff
+        . runConcurrent
+        . runLog "agent-test" logger LogAttention
+        . runLLMWith provider
+        . runAgent (AgentLimits 4) (const (buildToolRegistry [declared] [runner]))
+        $ agentTurn turn dispatchContext "fake" [MsgUser "work"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    readIORef executed `shouldReturn` 0
+    result.reply `shouldBe` Just "corrected answer"
+
   it "preserves a streamed prefix while returning an explicit interruption" $ do
     events <- newIORef []
     tasks <- newTaskRegistry
     turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-    let interrupted = LLMInterpreter {liChat = \_ _ _ _ sink -> do
-          for_ sink ($ "第一段\n\n第二段")
-          pure (Right (InterruptedResp "第一段\n\n第二段没写完" "stream timed out"))}
+    let interrupted =
+          LLMInterpreter
+            { liChat = \_ _ _ _ sink -> do
+                for_ sink ($ "第一段\n\n第二段")
+                pure (Right (InterruptedResp "第一段\n\n第二段没写完" (ResponseTransport ResponseTimeoutFailure)))
+            }
     result <- withCompactLogger ColorNever Nothing $ \logger ->
-      runEff . runConcurrent . runLog "agent-test" logger LogAttention
+      runEff
+        . runConcurrent
+        . runLog "agent-test" logger LogAttention
         . runLLMWith interrupted
-        . runAgent (AgentLimits {maxTurns = 4}) (const (buildToolCatalog [] [])) $
-          agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+        . runAgent (AgentLimits {maxTurns = 4}) (const (buildToolRegistry [] []))
+        $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
     result.sentPrefix `shouldBe` "第一段\n\n"
     result.reply `shouldBe` Just "第一段\n\n第二段没写完"
-    result.aborted `shouldBe` Just "LLM stream interrupted: stream timed out"
+    result.aborted `shouldBe` Just (AgentStreamInterrupted (ResponseTransport ResponseTimeoutFailure))
     readIORef events `shouldReturn` [SeenFinalStream "第一段\n\n"]
 
   it "runs fake LLM + tool rounds and emits typed output events in memory" $ do
@@ -205,7 +267,7 @@ spec = describe "Agent full loop" $ do
           . runConcurrent
           . runLog "agent-test" logger LogAttention
           . runLLMWith (fakeLLM calls)
-          . runAgent (AgentLimits {maxTurns = 4}) (const (buildToolCatalog [echoDefinition] [echoTool]))
+          . runAgent (AgentLimits {maxTurns = 4}) (const (buildToolRegistry [echoDefinition] [echoTool]))
           $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
 
@@ -257,7 +319,7 @@ spec = describe "Agent full loop" $ do
           . runConcurrent
           . runLog "agent-test" logger LogAttention
           . runLLMWith (fakeLLM llmCalls)
-          . runAgent (AgentLimits {maxTurns = 4}) (const (buildToolCatalog [echoDefinition] [counted]))
+          . runAgent (AgentLimits {maxTurns = 4}) (const (buildToolRegistry [echoDefinition] [counted]))
           $ agentTurn turn childContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
     readIORef toolCalls `shouldReturn` 0
@@ -274,14 +336,14 @@ spec = describe "Agent full loop" $ do
       siblingCalls <- newIORef (0 :: Int)
       tasks <- newTaskRegistry
       turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) (Just (CanonicalMessageId 7413))
-      let returnDefinition = echoDefinition {tdRef = ToolRef returnName}
-          returnTool :: Tool es
+      let returnDefinition = echoDefinition {tdRef = ToolRef returnName, tdParallelism = SequentialOnly, tdCallMode = FinishCall}
+          returnTool :: (ToolControl :> es) => Tool es
           returnTool =
             Tool
               { toolName = returnName,
                 toolDescription = "return a typed child result",
                 toolSchema = object ["type" .= ("object" :: Text)],
-                toolRun = \args -> pure (Right args)
+                toolRun = \args -> finishExecution (if returnName == "request_finish" then Just "typed reply" else Nothing) >> pure (Right args)
               }
           countedEcho :: (IOE :> es) => Tool es
           countedEcho =
@@ -312,7 +374,7 @@ spec = describe "Agent full loop" $ do
             . runLLMWith returningLLM
             . runAgent
               (AgentLimits {maxTurns = 4})
-              (const (buildToolCatalog [returnDefinition, echoDefinition] [returnTool, countedEcho]))
+              (const (buildToolRegistry [returnDefinition, echoDefinition] [returnTool, countedEcho]))
             $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
       _ <- finishTurnRuntime tasks turn
       readIORef siblingCalls `shouldReturn` 0
@@ -353,7 +415,8 @@ spec = describe "Agent full loop" $ do
               tdRetryClass = RetryUnsafe,
               tdAuthorities = Set.singleton CurrentConversation,
               tdDeadline = ToolDeadline 30,
-              tdFailuresPrecedeEffects = False
+              tdFailuresPrecedeEffects = False,
+              tdCallMode = WorkCall
             }
         twoCallLLM =
           LLMInterpreter
@@ -378,7 +441,7 @@ spec = describe "Agent full loop" $ do
           . runLLMWith twoCallLLM
           . runAgent
             (AgentLimits {maxTurns = 4})
-            (const (buildToolCatalog [readDef, writeDef] [recordedTool "read", recordedTool "write"]))
+            (const (buildToolRegistry [readDef, writeDef] [recordedTool "read", recordedTool "write"]))
           $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
     readIORef order
@@ -402,7 +465,7 @@ spec = describe "Agent full loop" $ do
           . runConcurrent
           . runLog "agent-test" logger LogAttention
           . runLLMWith llm
-          . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolCatalog [] []))
+          . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolRegistry [] []))
           $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     completion <- finishTurnRuntime tasks turn
 
@@ -436,7 +499,7 @@ spec = describe "Agent full loop" $ do
           . runConcurrent
           . runLog "agent-test" logger LogAttention
           . runLLMWith llm
-          . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolCatalog [] []))
+          . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolRegistry [] []))
           $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
 
@@ -468,7 +531,7 @@ spec = describe "Agent full loop" $ do
               . runConcurrent
               . runLog "agent-test" logger LogAttention
               . runLLMWith blockingLLM
-              . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolCatalog [] []))
+              . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolRegistry [] []))
               $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     worker <- Async.async runTurn
     takeMVar entered
@@ -499,7 +562,7 @@ spec = describe "Agent full loop" $ do
           . runConcurrent
           . runLog "agent-test" logger LogAttention
           . runLLMWith streamingLLM
-          . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolCatalog [] []))
+          . runAgent (AgentLimits {maxTurns = 2}) (const (buildToolRegistry [] []))
           $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (lateFeedbackSink tasks injected events)
     completion <- finishTurnRuntime tasks turn
 

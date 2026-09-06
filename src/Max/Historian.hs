@@ -71,6 +71,8 @@ import Max.EpisodeScheduler
     retryEpisodeAt,
   )
 import Max.EpisodeStore
+import Max.Http.Failure (renderResponseFailure)
+import Max.LLM.Failure (renderLLMFailure)
 import Max.MemoryStore
   ( MemoryId (..),
     MemoryItem (..),
@@ -555,8 +557,8 @@ generateHistorianCapture timeoutSeconds profile conversationId messages = do
         Nothing
         Nothing
     decodeResponse = \case
-      Left err -> Left ("", "provider: " <> err, False)
-      Right (InterruptedResp raw err) -> Left (raw, "provider interrupted: " <> err, False)
+      Left err -> Left ("", "provider: " <> renderLLMFailure err, False)
+      Right (InterruptedResp raw err) -> Left (raw, "provider interrupted: " <> renderResponseFailure err, False)
       Right ToolCallsResp {} -> Left ("", "historian returned unexpected tool calls", False)
       Right (ContentResp raw) -> case parseEpisodeCapture raw of
         Left err -> Left (raw, T.pack err, True)

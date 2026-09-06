@@ -2,12 +2,14 @@ module Max.ToolsSpec (spec) where
 
 import Data.Map.Strict qualified as Map
 import Data.Time (utc)
-import Effectful (IOE)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection)
+import Max.Effects.ConversationQuery (ConversationQuery)
 import Max.Effects.Embedding (Embedding)
-import Max.Effects.PlatformApi (PlatformApi)
+import Max.Effects.MemoryControl (MemoryControl)
+import Max.Effects.MemoryQuery (MemoryQuery)
+import Max.Effects.PlatformInteraction (PlatformInteraction)
 import Max.Effects.Tools (Tool (..))
+import Max.Effects.TurnQuery (TurnQuery)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), TurnIdentity (..), mkToolContext)
 import Max.Tools (builtinsFor)
@@ -15,9 +17,9 @@ import Max.Tools.Memory (memoryToolsFor)
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
-type BuiltinEffects = '[WithConnection, PlatformApi, Embedding, Log, IOE]
+type BuiltinEffects = '[ConversationQuery, TurnQuery, PlatformInteraction, Embedding, Log]
 
-type MemoryEffects = '[WithConnection, Log, IOE]
+type MemoryEffects = '[MemoryQuery, MemoryControl]
 
 toolContext :: ToolContext
 toolContext =
@@ -39,6 +41,6 @@ spec = describe "model-visible builtins" $ do
                  ]
 
   it "does not register the legacy memory search alias" $ do
-    let tools = memoryToolsFor toolContext :: [Tool MemoryEffects]
+    let tools = memoryToolsFor :: [Tool MemoryEffects]
     map (.toolName) tools
       `shouldBe` ["memory_save", "memory_update", "memory_forget", "memory_list"]

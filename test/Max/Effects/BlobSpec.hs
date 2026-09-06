@@ -10,11 +10,11 @@ import Max.Effects.Blob
     blobRefStoredPath,
     putBlob,
     readBlob,
-    resolveBlobHostPath,
     runBlob,
   )
-import System.Directory (doesFileExist)
+import Max.Effects.BlobHost (resolveBlobHostPath, runBlobHost)
 import Max.Util (withTempDirectory)
+import System.Directory (doesFileExist)
 import System.FilePath ((</>))
 import Test.Hspec
 
@@ -24,7 +24,7 @@ spec = describe "Blob" $ do
     withTempDirectory "max-blob-test" $ \root -> do
       let payload = BS8.pack "blob boundary"
       (ref, bytes, host) <-
-        runEff . runBlob root $ do
+        runEff . runBlobHost root . runBlob root $ do
           ref <- putBlob payload
           bytes <- readBlob ref
           host <- resolveBlobHostPath ref

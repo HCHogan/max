@@ -7,7 +7,7 @@ module Max.Http.Json
     postAndParseRetrying,
     defaultRetryDelaysSecs,
     replyRetryDelaysSecs,
-    retryableStatusBody,
+
     -- * Exposed for tests
     retryableStatus,
   )
@@ -26,13 +26,13 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log (Log, logAttention)
+import Max.Http.Failure (ResponseFailure (..), renderResponseFailure, retryableResponseFailure, retryableStatus)
 import Max.HttpRuntime
   ( BufferedResponse (body),
     HttpPool (StandardPool),
     HttpRuntime,
     TransportFailure (..),
     parseRequestEither,
-    renderTransportFailure,
     runBuffered,
   )
 import Network.HTTP.Client qualified as HTTP
@@ -49,43 +49,6 @@ defaultRetryDelaysSecs = [2, 8]
 replyRetryDelaysSecs :: [Int]
 replyRetryDelaysSecs = [2, 8, 20, 45, 90]
 
-data Failure
-  = FailTimeout
-  | FailRequest !Text
-  | FailTransport !Text
-  | FailStatus !Int !Text
-  | FailDecode !Text
-
-renderFailure :: Failure -> Text
-renderFailure = \case
-  FailTimeout -> "request timed out"
-  FailRequest message -> message
-  FailTransport message -> "http: " <> message
-  FailStatus code responsePreview ->
-    "HTTP " <> T.pack (show code) <> ": " <> responsePreview
-  FailDecode message -> message
-
-retryableFailure :: Failure -> Bool
-retryableFailure = \case
-  FailTimeout -> True
-  FailTransport _ -> True
-  FailStatus code responsePreview -> retryableStatusBody code responsePreview
-  FailRequest _ -> False
-  FailDecode _ -> False
-
-retryableStatus :: Int -> Bool
-retryableStatus code = code == 408 || code == 429 || code >= 500
-
--- | Gateways sometimes wrap a transient upstream/provider failure in their
--- own 4xx response.  Those are replayable; genuine client errors are not.
-retryableStatusBody :: Int -> Text -> Bool
-retryableStatusBody code responsePreview =
-  retryableStatus code
-    || (code >= 400 && smellsUpstream (T.toLower responsePreview))
-  where
-    smellsUpstream low =
-      "upstream" `T.isInfixOf` low || "provider" `T.isInfixOf` low
-
 postAndParse ::
   (Log :> es, IOE :> es) =>
   HttpRuntime ->
@@ -94,7 +57,7 @@ postAndParse ::
   String ->
   BS.ByteString ->
   (Value -> Parser a) ->
-  Eff es (Either Text a)
+  Eff es (Either ResponseFailure a)
 postAndParse runtime = postAndParseRetrying runtime []
 
 -- | POST one buffered JSON request.  Only this domain layer retries, using the
@@ -108,24 +71,24 @@ postAndParseRetrying ::
   String ->
   BS.ByteString ->
   (Value -> Parser a) ->
-  Eff es (Either Text a)
+  Eff es (Either ResponseFailure a)
 postAndParseRetrying runtime delays secs headers url requestBody parser = go delays
   where
     go remaining = do
       result <- attempt
       case result of
         Left failure
-          | retryableFailure failure,
+          | retryableResponseFailure failure,
             delay : rest <- remaining -> do
               logAttention "http: retrying" $
                 object
                   [ "url" .= T.pack url,
                     "delay_s" .= delay,
-                    "error" .= renderFailure failure
+                    "error" .= renderResponseFailure failure
                   ]
               liftIO (threadDelay (delay * 1_000_000))
               go rest
-        _ -> pure (either (Left . renderFailure) Right result)
+        _ -> pure result
 
     attempt = do
       result <- liftIO $ timeout (secs * 1_000_000) $ do
@@ -145,11 +108,11 @@ postAndParseRetrying runtime delays secs headers url requestBody parser = go del
                     HTTP.responseTimeoutMicro (secs * 1_000_000)
                 }
       case result of
-        Nothing -> pure (Left FailTimeout)
+        Nothing -> pure (Left (ResponseTransport ResponseTimeoutFailure))
         Just (Left failure) -> do
-          let domainFailure = failureFromTransport failure
-          case domainFailure of
-            FailStatus code _ -> do
+          let domainFailure = ResponseTransport failure
+          case failure of
+            HttpStatusFailure code _ _ _ -> do
               -- Keep the existing request diagnostics: provider 4xxs are
               -- otherwise impossible to debug when the malformed block is
               -- later than the system-prompt prefix.
@@ -167,22 +130,11 @@ postAndParseRetrying runtime delays secs headers url requestBody parser = go del
               responsePreview = T.take 800 (TE.decodeUtf8Lenient responseBody)
           pure $ case eitherDecodeStrict' responseBody of
             Left err ->
-              Left (FailDecode ("parse: " <> T.pack err <> "\nbody: " <> responsePreview))
+              Left (ResponseDecode ("parse: " <> T.pack err <> "\nbody: " <> responsePreview))
             Right value -> case parseEither parser value of
               Left err ->
-                Left (FailDecode ("extract: " <> T.pack err <> "\nbody: " <> responsePreview))
+                Left (ResponseDecode ("extract: " <> T.pack err <> "\nbody: " <> responsePreview))
               Right parsed -> Right parsed
-
-failureFromTransport :: TransportFailure -> Failure
-failureFromTransport = \case
-  ResponseTimeoutFailure -> FailTimeout
-  ConnectionTimeoutFailure -> FailTimeout
-  RequestConstructionFailure message -> FailRequest ("invalid HTTP request: " <> message)
-  ResponseBodyLimitExceeded bodyLimit ->
-    FailDecode ("HTTP response exceeded " <> T.pack (show bodyLimit) <> " bytes")
-  HttpStatusFailure code _ responsePreview _ ->
-    FailStatus code (TE.decodeUtf8Lenient responsePreview)
-  failure -> FailTransport (renderTransportFailure failure)
 
 -- | One line per chat message for safe diagnostics.  'Nothing' for non-chat
 -- JSON such as the Tavily request.

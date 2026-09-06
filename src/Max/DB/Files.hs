@@ -15,55 +15,11 @@ where
 import Data.Int (Int64)
 import Data.Maybe (listToMaybe)
 import Data.Text (Text)
-import Data.Time (UTCTime)
-import Database.PostgreSQL.Simple (FromRow)
-import Database.PostgreSQL.Simple.FromRow (field, fromRow)
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.Blob.Reference (BlobRef, blobRefSha256, blobRefStoredPath)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
-import Max.Effects.Blob (BlobRef, blobRefFromSha256, blobRefSha256, blobRefStoredPath)
-
--- | One row in 'group_files'.  Fields after 'fileName' may be
--- 'Nothing' until the file worker has finished fetching.
-data FileRecord = FileRecord
-  { frFileId :: !Text,
-    frGroupId :: !Int64,
-    frCanonicalMessageId :: !(Maybe Int64),
-    frSenderUserId :: !Int64,
-    frFileName :: !Text,
-    frMimeType :: !(Maybe Text),
-    frBytesSize :: !(Maybe Int64),
-    frBlobRef :: !(Maybe BlobRef),
-    frReceivedAt :: !UTCTime,
-    frFetchedAt :: !(Maybe UTCTime)
-  }
-  deriving stock (Show)
-
-instance FromRow FileRecord where
-  fromRow = do
-    fileId <- field
-    groupId <- field
-    messageId <- field
-    senderUserId <- field
-    fileName <- field
-    mimeType <- field
-    bytesSize <- field
-    sha <- field
-    receivedAt <- field
-    fetchedAt <- field
-    pure
-      FileRecord
-        { frFileId = fileId,
-          frGroupId = groupId,
-          frCanonicalMessageId = messageId,
-          frSenderUserId = senderUserId,
-          frFileName = fileName,
-          frMimeType = mimeType,
-          frBytesSize = bytesSize,
-          frBlobRef = sha >>= blobRefFromSha256,
-          frReceivedAt = receivedAt,
-          frFetchedAt = fetchedAt
-        }
+import Max.File.Types (FileRecord (..))
 
 -- | Idempotent insert on first sight.  The file worker fills in the
 -- storage columns afterwards via 'markStored'.  Returning @()@; the

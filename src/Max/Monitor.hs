@@ -23,9 +23,6 @@ import Data.Time
     addUTCTime,
     diffUTCTime,
     getCurrentTime,
-    localTimeToUTC,
-    utc,
-    utcToLocalTime,
   )
 import Effectful
 import Effectful.Log (Log, logAttention, logInfo)
@@ -52,6 +49,7 @@ import Max.Effects.Outbound
   )
 import Max.IR (Body (..), Phase (Canonical))
 import Max.MessageKind (MessageKind (KindChat))
+import Max.Monitor.Schedule (nextCronFire)
 import Max.Monitor.Types (MonitorFireId (..), MonitorId (..), MonitorRef (..))
 import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationAdvertisedCaps, conversationRoster)
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId)
@@ -59,17 +57,10 @@ import Max.Reply (Chunk (TextChunk))
 import Max.ReplySend (ReplyTarget (..), cleanModelText, freshBudget, prepareReplyChunk)
 import Max.Util (catchSync)
 import OneBot.Types (GroupId (..))
-import System.Cron (CronSchedule, nextMatch)
 import System.Cron.Parser (parseCronSchedule)
 
 -- | The next UTC instant strictly after the supplied time whose wall clock in
 -- the configured display timezone matches the cron schedule.
-nextCronFire :: TimeZone -> CronSchedule -> UTCTime -> Maybe UTCTime
-nextCronFire tz schedule after = do
-  let pseudo = localTimeToUTC utc (utcToLocalTime tz after)
-  pseudoNext <- nextMatch schedule pseudo
-  pure (localTimeToUTC tz (utcToLocalTime utc pseudoNext))
-
 capMicros :: Int
 capMicros = 3600 * 1000000
 

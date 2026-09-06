@@ -19,6 +19,7 @@ module Max.Bilibili
     fetchStreamUrl,
     resolveShort,
     biliHeaders,
+
     -- * Pure parsers (exposed for tests)
     parseVideoInfo,
     parseComments,
@@ -35,7 +36,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
-import Max.Effects.Http (Http, getBytesWith, getFinalUrl)
+import Max.Effects.Http (Http, getBytesWith, getFinalUrl, renderDownloadError)
 import Text.Read (readMaybe)
 
 -- | A bilibili video reference found in message text.
@@ -88,10 +89,10 @@ findB23 t = case T.breakOn "b23.tv/" t of
 
 -- | Follow a b23.tv short link one redirect hop and re-scan the
 -- target URL for the real reference.
-resolveShort :: Http :> es => Text -> Eff es (Either Text BiliRef)
+resolveShort :: (Http :> es) => Text -> Eff es (Either Text BiliRef)
 resolveShort url =
   getFinalUrl url >>= \case
-    Left err -> pure (Left ("b23 短链解析失败: " <> err))
+    Left err -> pure (Left ("b23 短链解析失败: " <> renderDownloadError err))
     Right loc -> case findBiliRef loc of
       Just r@(RefBvid _) -> pure (Right r)
       Just r@(RefAvid _) -> pure (Right r)
@@ -146,15 +147,15 @@ biliHeaders =
 maxApiBytes :: Int
 maxApiBytes = 4 * 1024 * 1024
 
-getJson :: Http :> es => Text -> Eff es (Either Text Value)
+getJson :: (Http :> es) => Text -> Eff es (Either Text Value)
 getJson url =
   getBytesWith url biliHeaders maxApiBytes >>= \case
-    Left err -> pure (Left err)
+    Left err -> pure (Left (renderDownloadError err))
     Right (bytes, _) -> case eitherDecodeStrict' bytes of
       Left e -> pure (Left ("响应不是 JSON: " <> T.pack e))
       Right v -> pure (Right v)
 
-fetchVideoInfo :: Http :> es => BiliRef -> Eff es (Either Text BiliVideo)
+fetchVideoInfo :: (Http :> es) => BiliRef -> Eff es (Either Text BiliVideo)
 fetchVideoInfo ref = do
   let q = case ref of
         RefBvid bv -> Just ("bvid=" <> bv)
@@ -168,7 +169,7 @@ fetchVideoInfo ref = do
 
 -- | Top comments by like count, first page.  A closed comment section
 -- (or any API refusal) is a 'Left' the caller may degrade to empty.
-fetchTopComments :: Http :> es => Int64 -> Int -> Eff es (Either Text [BiliComment])
+fetchTopComments :: (Http :> es) => Int64 -> Int -> Eff es (Either Text [BiliComment])
 fetchTopComments aid n =
   (>>= parseComments n)
     <$> getJson
@@ -179,7 +180,7 @@ fetchTopComments aid n =
       )
 
 -- | Progressive MP4 URL + its size for the first page of a video.
-fetchStreamUrl :: Http :> es => Text -> Int64 -> Eff es (Either Text (Text, Int64))
+fetchStreamUrl :: (Http :> es) => Text -> Int64 -> Eff es (Either Text (Text, Int64))
 fetchStreamUrl bvid cid =
   (>>= parseStreamUrl)
     <$> getJson

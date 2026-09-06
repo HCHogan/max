@@ -6,7 +6,7 @@
 -- == Why this is a module and not a function in "Max.Handler"
 --
 -- There are now two callers.  The handler sends the final reply; the
--- typed sink in "Max.AgentEvent" sends streamed paragraphs and progress
+-- typed sink in "Max.AgentOutput" sends streamed paragraphs and progress
 -- narration.  Every previous attempt to
 -- give one of those its own copy of \"turn model text into messages\"
 -- produced the same bug twice in one day (@a0faa5b@, @d7f8177@):

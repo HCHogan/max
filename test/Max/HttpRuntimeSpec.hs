@@ -11,6 +11,8 @@ import Data.Maybe (isJust)
 import Effectful (liftIO, runEff)
 import Effectful.Log (runLog)
 import Log (LogLevel (LogAttention))
+import Max.Effects.Http qualified as Download
+import Max.Http.Failure (ResponseFailure (..))
 import Max.Http.Stream (StreamOutcome (..), streamPost)
 import Max.HttpRuntime
 import Max.LLM.Stream (StreamAcc (..), stepOpenAI)
@@ -63,6 +65,58 @@ spec = do
         Left (RequestConstructionFailure _) -> pure ()
         Left failure -> expectationFailure ("wrong failure: " <> show failure)
         Right _ -> expectationFailure "malformed URL was accepted"
+
+  describe "bounded download effect" $ do
+    it "keeps body-limit failures structured through the effect boundary" $ do
+      closes <- newIORef 0
+      manager <- fakeManager (rawResponse 200 "oversized") closes
+      let runtime = httpRuntimeFromManagers manager manager manager
+      result <- runEff . Download.runHttp runtime $ Download.getBytes "http://example.test/" 3
+      result `shouldBe` Left (Download.DownloadTransport (ResponseBodyLimitExceeded 3))
+
+    it "rejects invalid limits before opening a connection" $ do
+      opens <- newIORef 0
+      manager <- reusableManager [rawKeepAliveResponse "unused"] opens
+      let runtime = httpRuntimeFromManagers manager manager manager
+      result <- runEff . Download.runHttp runtime $ Download.getBytes "http://example.test/" 0
+      result `shouldBe` Left (Download.InvalidDownloadLimit 0)
+      readIORef opens `shouldReturn` 0
+
+    it "keeps status failures when a redirect lookup reaches an unavailable server" $ do
+      closes <- newIORef 0
+      manager <- fakeManager (rawResponse 503 "unavailable") closes
+      let runtime = httpRuntimeFromManagers manager manager manager
+      result <- runEff . Download.runHttp runtime $ Download.getFinalUrl "http://example.test/"
+      result `shouldSatisfy` \case
+        Left (Download.DownloadTransport (HttpStatusFailure 503 _ "unavailable" False)) -> True
+        _ -> False
+
+    it "resolves one redirect hop without downloading the target" $ do
+      opens <- newIORef 0
+      manager <- reusableManager ["HTTP/1.1 302 Found\r\nLocation: https://target.test/video\r\nContent-Length: 0\r\n\r\n"] opens
+      let runtime = httpRuntimeFromManagers manager manager manager
+      result <- runEff . Download.runHttp runtime $ Download.getFinalUrl "http://example.test/"
+      result `shouldBe` Right "https://target.test/video"
+      readIORef opens `shouldReturn` 1
+
+    it "reports malformed response headers as data rather than throwing" $ do
+      closes <- newIORef 0
+      manager <- fakeManager "HTTP/1.1 200 OK\r\nContent-Type: \xff\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx" closes
+      let runtime = httpRuntimeFromManagers manager manager manager
+      result <- runEff . Download.runHttp runtime $ Download.getBytes "http://example.test/" 8
+      result `shouldBe` Left (Download.InvalidResponseHeader "Content-Type")
+
+    it "chooses media compatibility policy inside the interpreter without affecting web downloads" $ do
+      closes <- newIORef 0
+      standard <- fakeManager (rawResponse 200 "web") closes
+      media <- fakeManager (rawResponse 200 "media") closes
+      let runtime = httpRuntimeFromManagers standard media standard
+      results <- runEff . Download.runHttp runtime $ do
+        web <- Download.getBytes "http://example.test/" 8
+        qq <- Download.getQQMedia "http://example.test/" 8
+        bili <- Download.getBilibiliMedia "http://example.test/" [] 8
+        pure (fmap fst web, fmap fst qq, fmap fst bili)
+      results `shouldBe` (Right "web", Right "media", Right "media")
 
   describe "bounded bodies" $ do
     it "accepts a body exactly equal to the limit" $ do
@@ -127,7 +181,7 @@ spec = do
           readMVar closed
           modifyIORef' acknowledged (const True)
       case result of
-        Just (StreamTruncated acc "stream timed out") -> acc.saText `shouldBe` "first paragraph"
+        Just (StreamTruncated acc (ResponseTransport ResponseTimeoutFailure)) -> acc.saText `shouldBe` "first paragraph"
         _ -> expectationFailure ("unexpected result: " <> show result)
       readIORef committed `shouldReturn` ["first paragraph"]
       readIORef acknowledged `shouldReturn` True

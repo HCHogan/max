@@ -23,7 +23,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import Max.Effects.LLM (ChatMessage (..), ContentBlock (..), ToolCall (..))
+import Max.LLM.Types (ChatMessage (..), ContentBlock (..), ToolCall (..))
 import Max.ModelCatalog (ContextLimits (..), contextInputBudget)
 
 -- | Reserves resolved for one concrete prompt.  Attachment reserve is applied

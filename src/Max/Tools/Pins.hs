@@ -16,40 +16,17 @@ import Data.Int (Int64)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
-import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
-import Max.DB.History (fetchMessageInScope)
+import Max.Effects.PinControl (PinControl, pinMessage, unpinMessage)
 import Max.Effects.Tools (Tool (..))
-import Max.Session (Session (..), SessionRegistry, loadSession, updateSession)
-import Max.Session qualified as Session
-import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId)
+import Max.Pin.Policy (PinFailure (..))
 import Max.Tools.Schema (integerParam, toolObject)
 import Max.Util (tshow)
 
-pinToolsFor ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  SessionRegistry ->
-  Text -> -- default model name (for 'loadSession')
-  ToolContext ->
-  [Tool es]
-pinToolsFor sessions defaultModel dc =
-  [ pinTool sessions defaultModel dc,
-    unpinTool sessions defaultModel dc
-  ]
+pinToolsFor :: (PinControl :> es) => [Tool es]
+pinToolsFor = [pinTool, unpinTool]
 
--- | Cap on how many pins the *model* may accumulate.  The user's
--- @!pin@ is uncapped (they can see and manage the list); an autonomous
--- pinner needs a backstop so the block can't silently eat the prompt.
-maxToolPins :: Int
-maxToolPins = 12
-
-pinTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  SessionRegistry ->
-  Text ->
-  ToolContext ->
-  Tool es
-pinTool sessions defaultModel dc =
+pinTool :: (PinControl :> es) => Tool es
+pinTool =
   Tool
     { toolName = "pin_message",
       toolDescription =
@@ -63,36 +40,11 @@ pinTool sessions defaultModel dc =
         toolObject [("message_id", integerParam "要固定的消息 id（上下文行里的 #<id>）")] ["message_id"],
       toolRun = \args -> case parseEither (withObject "args" parseMessageId) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right mid ->
-          fetchMessageInScope (toolConversationScope dc) mid >>= \case
-            Nothing -> pure $ Left ("找不到 message_id=" <> tshow mid)
-            Just _ -> do
-              t <- loadSession sessions defaultModel (toolGroupId dc)
-              res <- updateSession t $ \s ->
-                if length s.pinned >= maxToolPins && mid `notElem` s.pinned
-                  then (s, Left (length s.pinned))
-                  else let s' = Session.addPin mid s in (s', Right (length s'.pinned))
-              case res of
-                Left n ->
-                  pure $
-                    Left
-                      ( "pin 已达上限（"
-                          <> tshow n
-                          <> " 条）；先用 unpin_message 清掉不再需要的"
-                      )
-                Right n -> do
-                  logInfo "pin tool: pinned" $
-                    object ["message_id" .= mid, "pin_count" .= n]
-                  pure $ Right (object ["ok" .= True, "pin_count" .= n])
+        Right mid -> renderResult mid <$> pinMessage mid
     }
 
-unpinTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  SessionRegistry ->
-  Text ->
-  ToolContext ->
-  Tool es
-unpinTool sessions defaultModel dc =
+unpinTool :: (PinControl :> es) => Tool es
+unpinTool =
   Tool
     { toolName = "unpin_message",
       toolDescription =
@@ -104,18 +56,16 @@ unpinTool sessions defaultModel dc =
         toolObject [("message_id", integerParam "要移除的消息 id（[pinned] 行里的 #<id>）")] ["message_id"],
       toolRun = \args -> case parseEither (withObject "args" parseMessageId) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right mid -> do
-          t <- loadSession sessions defaultModel (toolGroupId dc)
-          removed <- updateSession t $ \s ->
-            if mid `elem` s.pinned
-              then (Session.removePin mid s, True)
-              else (s, False)
-          if removed
-            then do
-              logInfo "pin tool: unpinned" $ object ["message_id" .= mid]
-              pure $ Right (object ["ok" .= True])
-            else pure $ Left ("message_id=" <> tshow mid <> " 不在 pin 列表里")
+        Right mid -> renderResult mid <$> unpinMessage mid
     }
+
+renderResult :: Int64 -> Either PinFailure Int -> Either Text Value
+renderResult message = \case
+  Right count -> Right (object ["ok" .= True, "pin_count" .= count])
+  Left PinCallerFenced -> Left "当前回合已失去执行权限"
+  Left PinNotVisible -> Left ("找不到 message_id=" <> tshow message)
+  Left (PinAtCapacity count) -> Left ("pin 已达上限（" <> tshow count <> " 条）；先用 unpin_message 清掉不再需要的")
+  Left PinNotPresent -> Left ("message_id=" <> tshow message <> " 不在 pin 列表里")
 
 parseMessageId :: Object -> Parser Int64
 parseMessageId o = o .: "message_id"

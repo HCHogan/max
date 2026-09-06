@@ -20,6 +20,7 @@ import Helpers (truncateAll)
 import Max.AdminTimelineSpec qualified as AdminTimelineSpec
 import Max.ContextAdminSpec qualified as ContextAdminSpec
 import Max.ContextMaterializationSpec qualified as ContextMaterializationSpec
+import Max.ConversationCapabilitiesSpec qualified as ConversationCapabilitiesSpec
 import Max.DB.AgentTurnSpec qualified as AgentTurnSpec
 import Max.DB.BrowserSpec qualified as BrowserSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
@@ -39,11 +40,14 @@ import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.HistorianSpec qualified as HistorianSpec
 import Max.MaintenanceLeaseSpec qualified as MaintenanceLeaseSpec
 import Max.MaxOpsNotificationSpec qualified as MaxOpsNotificationSpec
+import Max.MemoryCapabilitiesSpec qualified as MemoryCapabilitiesSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
+import Max.PlatformCapabilitiesSpec qualified as PlatformCapabilitiesSpec
 import Max.PlatformStoreSpec qualified as PlatformStoreSpec
 import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import Max.PublicationSpec qualified as PublicationSpec
 import Max.RecallSpec qualified as RecallSpec
+import Max.ResourceCapabilitiesSpec qualified as ResourceCapabilitiesSpec
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import Test.Hspec (hspec)
@@ -73,10 +77,13 @@ main = do
         ConversationCursorSpec.spec pool
         ContextMaterializationSpec.spec pool
         ContextAdminSpec.spec pool
+        ConversationCapabilitiesSpec.spec pool
+        ResourceCapabilitiesSpec.spec pool
         EpisodeStoreSpec.spec pool
         HistorianSpec.spec pool
         HistorySpec.spec pool
         FilesSpec.spec pool
+        MemoryCapabilitiesSpec.spec pool
         MemoryStoreSpec.spec pool
         MediaSpec.spec pool
         FetchQueueSpec.spec pool
@@ -84,6 +91,7 @@ main = do
         QQBackfillSpec.spec pool
         RecallSpec.spec pool
         PromptIntegrationSpec.spec pool
+        PlatformCapabilitiesSpec.spec pool
         PlatformStoreSpec.spec pool
         PublicationSpec.spec pool
         MaxOpsNotificationSpec.spec pool

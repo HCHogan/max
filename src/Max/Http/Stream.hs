@@ -16,13 +16,8 @@
 -- returned with whatever was accumulated, and the caller decides what
 -- to do with a half-written reply.
 --
--- And only when the failure looks transient: transport errors,
--- timeouts, empty streams, and the statuses
--- 'Max.Http.Json.retryableStatusBody' accepts (408\/429\/5xx, plus
--- relay-wrapped 4xx that blame an upstream).  A genuine bad request
--- fails once and fails identically forever — with the reply path's
--- schedule now stretching into minutes, replaying one would turn a
--- fast, diagnosable 400 into a three-minute stall before the same 400.
+-- Retries are based on structured transport failures and HTTP statuses.
+-- Once text or tool calls arrive, no automatic replay is permitted.
 module Max.Http.Stream
   ( streamPost,
     StreamOutcome (..),
@@ -36,18 +31,15 @@ import Control.Monad (when)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.IORef (newIORef, readIORef, writeIORef)
-import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
-import Max.Http.Json (retryableStatusBody)
+import Max.Http.Failure (ResponseFailure (..), retryableResponseFailure)
 import Max.HttpRuntime
   ( HttpPool (StandardPool),
     HttpRuntime,
     TransportFailure (..),
     parseRequestEither,
-    renderTransportFailure,
     withStreamingResponse,
   )
 import Max.LLM.Stream (StreamAcc (..), emptyAcc, sseFrames)
@@ -62,12 +54,12 @@ data StreamOutcome
   | -- | The body stopped early: socket closed, timed out, or the
     -- connection died mid-message.  The accumulator holds everything
     -- that did arrive — possibly a half-written sentence the group has
-    -- already seen.  The 'Text' says what went wrong.
-    StreamTruncated !StreamAcc !Text
+    -- already seen. The failure retains its structured cause.
+    StreamTruncated !StreamAcc !ResponseFailure
   | -- | Nothing usable arrived: non-2xx, transport error before the
     -- first byte, or a body with no assistant text at all.  Safe to
     -- treat as an ordinary failed call.
-    StreamFailed !Text
+    StreamFailed !ResponseFailure
   deriving stock (Show)
 
 -- | POST @body@ and fold the SSE response as it arrives.
@@ -149,26 +141,20 @@ streamPost runtime delays secs hdrs url body step onGrow = go delays
           drain
       soFar <- liftIO (readIORef progress)
       pure $ case result of
-        Nothing -> stalled soFar "stream timed out" True
-        Just (Left (HttpStatusFailure code _ responsePreview _)) ->
-          let responseText = T.take 500 (TE.decodeUtf8Lenient responsePreview)
-           in ( StreamFailed ("HTTP " <> T.pack (show code) <> ": " <> responseText),
-                retryableStatusBody code responseText
-              )
-        Just (Left failure) ->
-          stalled soFar (renderTransportFailure failure) (retryableTransportFailure failure)
+        Nothing -> stalled soFar (ResponseTransport ResponseTimeoutFailure)
+        Just (Left failure) -> stalled soFar (ResponseTransport failure)
         Just (Right acc)
           | acc.saDone -> (StreamComplete acc, False)
           | T.null acc.saText && null acc.saCalls ->
-              (StreamFailed "stream ended with no content", True)
-          | otherwise -> (StreamTruncated acc "stream ended without a terminal frame", False)
+              (StreamFailed ResponseEmptyStream, True)
+          | otherwise -> (StreamTruncated acc ResponseMissingTerminal, False)
 
     -- A connection that died before producing anything is
     -- indistinguishable from an ordinary failed POST, so it stays
     -- retryable.  Once there is text, replaying would say it twice.
-    stalled acc err retryOk
+    stalled acc err
       | acc.saDone = (StreamComplete acc, False)
-      | T.null acc.saText && null acc.saCalls = (StreamFailed err, retryOk)
+      | T.null acc.saText && null acc.saCalls = (StreamFailed err, retryableResponseFailure err)
       | otherwise = (StreamTruncated acc err, False)
 
     readLoop updates progress bodyReader = loop "" emptyAcc
@@ -186,13 +172,6 @@ streamPost runtime delays secs hdrs url body step onGrow = go delays
               -- Continue collecting it; a timeout after a terminal frame still
               -- returns the completed message via 'stalled'.
               loop rest acc'
-
-retryableTransportFailure :: TransportFailure -> Bool
-retryableTransportFailure = \case
-  RequestConstructionFailure _ -> False
-  ResponseBodyLimitExceeded _ -> False
-  HttpStatusFailure {} -> False
-  _ -> True
 
 statusPreviewBytes :: Int
 statusPreviewBytes = 2000

@@ -20,35 +20,15 @@ module Max.Roster
 where
 
 import Control.Applicative ((<|>))
-import Data.Aeson (Value, withArray, withObject, (.!=), (.:), (.:?))
-import Data.Aeson.Types (Parser, parseEither)
-import Data.Foldable (toList)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log
-import Max.Effects.PlatformApi (PlatformApi, callAction)
-import OneBot.Action (Action (GetGroupInfo, GetGroupMemberList), Response (..))
+import Max.Effects.PlatformQuery (PlatformQuery, queryGroupMembers, queryGroupMeta)
+import Max.Platform.Failure (PlatformFailure, renderPlatformFailure)
+import Max.Platform.Roster (GroupMember (..), GroupMeta (..))
 import OneBot.Types (GroupId (..), UserId (..))
-
-data GroupMeta = GroupMeta
-  { gmName :: !Text,
-    gmMemberCount :: !(Maybe Int)
-  }
-  deriving stock (Show, Eq)
-
-data GroupMember = GroupMember
-  { mUserId :: !UserId,
-    mNickname :: !(Maybe Text),
-    -- | 群名片 — what the group actually sees; wins over nickname.
-    mCard :: !(Maybe Text),
-    -- | @owner@ / @admin@ / @member@.
-    mRole :: !Text,
-    -- | 专属头衔, when set.
-    mTitle :: !(Maybe Text)
-  }
-  deriving stock (Show, Eq)
 
 -- | 群名片 > 昵称 > QQ号 — same preference order as the prompt's
 -- display names.
@@ -59,60 +39,21 @@ memberName m =
     nonBlank (Just t) | not (T.null (T.strip t)) = Just (T.strip t)
     nonBlank _ = Nothing
 
--- | Group name / member count.  'Nothing' on any RPC or parse
--- failure — callers degrade to not knowing, never to erroring.
-fetchGroupMeta ::
-  (PlatformApi :> es, Log :> es) =>
-  GroupId ->
-  Eff es (Maybe GroupMeta)
-fetchGroupMeta gid = fetchParsed (GetGroupInfo gid) "group info" metaP
-  where
-    metaP = withObject "group info" $ \o ->
-      GroupMeta
-        <$> o .: "group_name"
-        <*> o .:? "member_count"
+-- | Callers degrade to an unknown roster on failure, with one diagnostic at
+-- this presentation boundary. They never acquire platform write capability.
+fetchGroupMeta :: (PlatformQuery :> es, Log :> es) => GroupId -> Eff es (Maybe GroupMeta)
+fetchGroupMeta gid = fetchResult "group info" (queryGroupMeta gid)
 
--- | Full member list, NapCat order.  'Nothing' on failure.
-fetchGroupMembers ::
-  (PlatformApi :> es, Log :> es) =>
-  GroupId ->
-  Eff es (Maybe [GroupMember])
-fetchGroupMembers gid =
-  fetchParsed (GetGroupMemberList gid) "member list" membersP
-  where
-    membersP =
-      withArray "member list" $
-        fmap toList . traverse memberP
-    memberP = withObject "member" $ \o ->
-      GroupMember
-        <$> o .: "user_id"
-        <*> o .:? "nickname"
-        <*> o .:? "card"
-        <*> o .:? "role" .!= "member"
-        <*> o .:? "title"
+fetchGroupMembers :: (PlatformQuery :> es, Log :> es) => GroupId -> Eff es (Maybe [GroupMember])
+fetchGroupMembers gid = fetchResult "member list" (queryGroupMembers gid)
 
--- | Shared call/retcode/parse skeleton for the two lookups.
-fetchParsed ::
-  (PlatformApi :> es, Log :> es) =>
-  Action ->
-  Text -> -- label for log lines
-  (Value -> Parser a) ->
-  Eff es (Maybe a)
-fetchParsed action label parser =
-  callAction action 10000 >>= \case
-    Left err -> do
-      logAttention (label <> " fetch failed") $ object ["error" .= err]
+fetchResult :: (Log :> es) => Text -> Eff es (Either PlatformFailure a) -> Eff es (Maybe a)
+fetchResult label action =
+  action >>= \case
+    Left failure -> do
+      logAttention (label <> " fetch failed") $ object ["error" .= renderPlatformFailure failure]
       pure Nothing
-    Right (Response _ rc payload _)
-      | rc /= 0 -> do
-          logAttention (label <> " retcode bad") $ object ["retcode" .= rc]
-          pure Nothing
-      | otherwise -> case parseEither parser payload of
-          Left e -> do
-            logAttention (label <> " parse failed") $
-              object ["error" .= T.pack e]
-            pure Nothing
-          Right x -> pure (Just x)
+    Right value -> pure (Just value)
 
 -- | The 群信息 lines for the system prompt's [environment] block
 -- (un-indented; the renderer prefixes).  Group name and 群主/管理员

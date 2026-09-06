@@ -12,8 +12,8 @@ where
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Base64 qualified as B64
-import Data.Int (Int64)
 import Data.Function (on)
+import Data.Int (Int64)
 import Data.List (find, groupBy, sortOn)
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
@@ -21,13 +21,13 @@ import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Log
-import Max.Effects.Http (Http, getBytesQqCompatible)
-import Effectful.PostgreSQL (WithConnection)
-import Max.Effects.PlatformApi (PlatformApi)
+import Max.Conversation.Roster (ConversationRoster (..), RosterIdentity (..))
+import Max.Effects.ConversationQuery (ConversationQuery, readRoster)
+import Max.Effects.Http (Http, getQQMedia, renderDownloadError)
+import Max.Effects.PlatformQuery (PlatformQuery)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, queueInlineMedia)
 import Max.Effects.Tools (Tool (..))
 import Max.IR (sniffMediaMime)
-import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationRoster)
 import Max.Platform.Types (Platform (..), PrincipalId (..), renderPlatform)
 import Max.Roster
   ( GroupMember (..),
@@ -44,7 +44,7 @@ import Max.Util (tshow)
 import OneBot.Types (GroupId (..), UserId (..), isPrivateChat)
 
 groupToolsFor ::
-  (PlatformApi :> es, Http :> es, Log :> es, ToolOutput :> es, WithConnection :> es, IOE :> es) =>
+  (PlatformQuery :> es, Http :> es, Log :> es, ToolOutput :> es, ConversationQuery :> es) =>
   ToolContext ->
   [Tool es]
 groupToolsFor dc =
@@ -72,17 +72,17 @@ data RosterEntry = RosterEntry
   }
 
 membersTool ::
-  (PlatformApi :> es, WithConnection :> es, Log :> es, IOE :> es) =>
+  (PlatformQuery :> es, ConversationQuery :> es, Log :> es) =>
   GroupId ->
   Tool es
-membersTool gid@(GroupId legacy) =
+membersTool gid =
   Tool
     { toolName = "group_members",
       toolDescription =
         "查询本会话的成员列表：每个成员的 id、名字（群名片优先）、所在平台，\
         \QQ 群还带 role（owner=群主 / admin=管理员 / member=普通成员）和专属头衔。\
         \id 就是 [mention#<id>] 里的那个数字，指的是人不是账号。\
-        \id 为 null 表示这人还没在本会话说过话，认得出但 @ 不了。\
+        \id 为 null 表示本会话还没有这人的身份记录，认得出但 @ 不了。\
         \可选 query 按名字或 id 过滤；成员太多时用 offset 翻页。",
       toolSchema =
         toolObject
@@ -97,7 +97,7 @@ membersTool gid@(GroupId legacy) =
           -- enrichment on top of it, not the source.  This tool used to *be*
           -- the OneBot call, so a Matrix or iMessage conversation got
           -- "成员列表获取失败" — the model was told nobody was in the room.
-          roster <- conversationRoster legacy
+          roster <- readRoster
           let qq = PlatformQQ `elem` roster.crPlatforms
           members <- if qq then fetchGroupMembers gid else pure Nothing
           meta <- if qq then fetchGroupMeta gid else pure Nothing
@@ -183,7 +183,7 @@ membersTool gid@(GroupId legacy) =
        in case members of
             Nothing -> people
             Just native ->
-              [ enrich person native | person <- people ]
+              [enrich person native | person <- people]
                 <> [ RosterEntry
                        { reId = Nothing,
                          reName = memberName m,
@@ -222,7 +222,7 @@ maxAvatarBytes :: Int
 maxAvatarBytes = 2 * 1024 * 1024
 
 avatarTool ::
-  (PlatformApi :> es, Http :> es, Log :> es, ToolOutput :> es) =>
+  (PlatformQuery :> es, Http :> es, Log :> es, ToolOutput :> es) =>
   ToolContext ->
   Tool es
 avatarTool dc =
@@ -279,11 +279,11 @@ fetchAndQueue ::
   Text -> -- label for the injected image block
   Eff es (Either Text Value)
 fetchAndQueue url label =
-  getBytesQqCompatible url maxAvatarBytes >>= \case
+  getQQMedia url maxAvatarBytes >>= \case
     Left err -> do
       logAttention "view_avatar: fetch failed" $
-        object ["url" .= url, "error" .= err]
-      pure $ Left ("头像下载失败: " <> err)
+        object ["url" .= url, "error" .= renderDownloadError err]
+      pure $ Left ("头像下载失败: " <> renderDownloadError err)
     Right (bytes, mime) -> do
       let mime' = fromMaybe (defaultMime mime) (sniffMediaMime bytes)
           b64 = TE.decodeUtf8 (B64.encode bytes)
@@ -297,4 +297,3 @@ fetchAndQueue url label =
     defaultMime m
       | "image/" `T.isPrefixOf` m = m
       | otherwise = "image/jpeg"
-

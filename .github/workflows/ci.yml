@@ -99,6 +99,9 @@ jobs:
       - name: Build
         run: nix develop --impure -c cabal build all
 
+      - name: Check architecture boundaries
+        run: nix develop --impure -c python3 scripts/check-architecture.py
+
       - name: Check source distribution metadata
         run: nix develop --impure -c cabal check
 

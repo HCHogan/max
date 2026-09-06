@@ -12,30 +12,32 @@ import Data.Int (Int64)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (TimeZone, UTCTime, addUTCTime, getCurrentTime)
+import Data.Time (TimeZone, UTCTime, addUTCTime)
 import Effectful
-import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Monitor
-import Max.DB.Task qualified as Task
+import Effectful.Reader.Static (Reader, ask)
+import Max.Effects.MonitorControl (MonitorControl, armMonitor)
+import Max.Effects.MonitorControl qualified as Control
+import Max.Effects.MonitorQuery (MonitorQuery, listMonitors, readMonitorHistory)
 import Max.Effects.Tools (Tool (..))
 import Max.IR (MediaKind (..))
-import Max.Monitor (nextCronFire)
+import Max.Monitor.Control
+import Max.Monitor.Policy (parseOverlapPolicy)
+import Max.Monitor.Schedule (nextCronFire)
 import Max.Monitor.Types
+import Max.Monitor.View (ArmedMonitor (..))
 import Max.Platform.Types (PrincipalId (..))
+import Max.Task.Types (parseProfile)
 import Max.Time (fmtDateHM)
-import Max.ToolContext
-import Max.Tools (parseTimeArg)
+import Max.Time.Parse (parseTimeArg)
 import Max.Tools.Schema (boolParam, boundedIntegerParam, enumParam, integerParam, noArguments, stringParam, toolObject)
-import Max.Turn.Types (turnOutputAgentTurn)
 import System.Cron.Parser (parseCronSchedule)
 
 monitorToolsFor ::
-  (WithConnection :> es, IOE :> es) =>
+  (MonitorQuery :> es, MonitorControl :> es, Reader UTCTime :> es) =>
   TimeZone ->
-  ToolContext ->
   [Tool es]
-monitorToolsFor tz context =
-  [armMonitorTool tz context, listMonitorsTool tz context, cancelMonitorTool context, configureMonitorTool context, monitorHistoryTool context]
+monitorToolsFor tz =
+  [armMonitorTool tz, listMonitorsTool tz, cancelMonitorTool, configureMonitorTool, monitorHistoryTool]
 
 data ArmArgs = ArmArgs
   { aaGoal :: !Text,
@@ -53,11 +55,10 @@ data ArmArgs = ArmArgs
   }
 
 armMonitorTool ::
-  (WithConnection :> es, IOE :> es) =>
+  (MonitorControl :> es, Reader UTCTime :> es) =>
   TimeZone ->
-  ToolContext ->
   Tool es
-armMonitorTool tz context =
+armMonitorTool tz =
   Tool
     { toolName = "arm_monitor",
       toolDescription =
@@ -81,46 +82,23 @@ armMonitorTool tz context =
       toolRun = \raw -> case parseEither (withObject "args" parseArm) raw of
         Left err -> pure (Left ("bad args: " <> T.pack err))
         Right args
-          | not (toolMonitorArmingAllowed context) -> pure (Left "当前角色无权武装会主动发起回合的 monitor")
           | T.null (T.strip args.aaGoal) -> pure (Left "goal 不能为空")
           | args.aaCooldownSeconds < 0 || args.aaCooldownSeconds > 86400 -> pure (Left "cooldown_seconds 必须在 0..86400")
           | args.aaTtlDays < 1 || args.aaTtlDays > 1825 -> pure (Left "ttl_days 必须在 1..1825")
           | args.aaMaxFires < 1 || args.aaMaxFires > 100 -> pure (Left "max_fires 必须在 1..100")
-          | Nothing <- toolTurnOutputContext context -> pure (Left "当前回合缺少可持久化的 arming-turn provenance")
           | otherwise -> do
-              let Just outputContext = toolTurnOutputContext context
-                  armingTurn = turnOutputAgentTurn outputContext
-                  effectCeiling = toolCatalogGrants context
-              now <- liftIO getCurrentTime
+              now <- ask @UTCTime
               case args.aaTrigger of
                 "time" -> case resolveTime tz args now of
                   Left err -> pure (Left err)
                   Right (cron, fireAt) -> do
-                    armed <-
-                      armElaboratedTimeMonitor
-                        (toolGroupId context)
-                        (toolAuthorPrincipalId context)
-                        armingTurn
-                        (T.strip args.aaGoal)
-                        cron
-                        fireAt
-                        effectCeiling
+                    armed <- armMonitor (Control.TimeMonitor (T.strip args.aaGoal) cron fireAt)
                     pure (armResult tz fireAt cron armed)
                 "ledger" -> case ledgerSpec args of
                   Left err -> pure (Left err)
                   Right spec -> do
                     let expires = addUTCTime (fromIntegral (args.aaTtlDays * 86400)) now
-                    armed <-
-                      armLedgerMatchMonitor
-                        (toolGroupId context)
-                        (toolAuthorPrincipalId context)
-                        armingTurn
-                        (T.strip args.aaGoal)
-                        spec
-                        args.aaCooldownSeconds
-                        expires
-                        args.aaMaxFires
-                        effectCeiling
+                    armed <- armMonitor (Control.LedgerMonitor (T.strip args.aaGoal) spec args.aaCooldownSeconds expires args.aaMaxFires)
                     pure $
                       case armed of
                         Left err -> Left (armErrorText err)
@@ -203,21 +181,13 @@ armResult tz fireAt cron = \case
           "cron" .= cron
         ]
 
-armErrorText :: MonitorArmError -> Text
-armErrorText = \case
-  ArmedMonitorCapReached -> "本会话已达到 100 个 armed monitor 上限"
-  ConditionMonitorCapReached -> "本会话已达到 25 个 condition monitor 上限"
-  ArmingTurnOutsideConversation -> "arming turn 不属于当前会话"
-
-listMonitorsTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
-listMonitorsTool tz context =
+listMonitorsTool :: (MonitorQuery :> es) => TimeZone -> Tool es
+listMonitorsTool tz =
   Tool
     { toolName = "list_monitors",
       toolDescription = "列出当前会话全部 armed monitor；用返回的 m# handle 取消。",
       toolSchema = noArguments,
-      toolRun = \_ -> do
-        monitors <- listArmedMonitors (toolConversationScope context)
-        pure $ Right $ toJSON (map summarize monitors)
+      toolRun = \_ -> Right . toJSON . map summarize <$> listMonitors
     }
   where
     summarize monitor =
@@ -233,10 +203,9 @@ listMonitorsTool tz context =
         ]
 
 cancelMonitorTool ::
-  (WithConnection :> es, IOE :> es) =>
-  ToolContext ->
+  (MonitorControl :> es) =>
   Tool es
-cancelMonitorTool context =
+cancelMonitorTool =
   Tool
     { toolName = "cancel_monitor",
       toolDescription = "停止 monitor 的未来触发和未受理 occurrence；默认不取消已经受理的任务。cancel_tasks=true 才额外取消在途任务。仅发起者/管理员可用。",
@@ -245,24 +214,11 @@ cancelMonitorTool context =
         Left err -> pure (Left ("bad args: " <> T.pack err))
         Right (handle, cancelTasks) -> case parseMonitorHandle handle of
           Nothing -> pure (Left "handle 格式无效，应为 m#<正整数>")
-          Just ordinal -> do
-            Right
-              <$> Task.monitorControl
-                (toolGroupId context)
-                (toolAuthorPrincipalId context)
-                (toolMonitorArmingAllowed context)
-                ordinal.unMonitorOrdinal
-                "cancel"
-                Nothing
-                ""
-                "coalesce"
-                40
-                "cancel"
-                cancelTasks
+          Just ordinal -> either (Left . monitorControlErrorText) (Right . toJSON) <$> Control.controlMonitor ordinal CancelMonitor cancelTasks
     }
 
-configureMonitorTool :: (WithConnection :> es, IOE :> es) => ToolContext -> Tool es
-configureMonitorTool context =
+configureMonitorTool :: (MonitorControl :> es) => Tool es
+configureMonitorTool =
   Tool
     { toolName = "configure_monitor",
       toolDescription = "按 revision 显式更新 monitor 未来 occurrence 的目标和重叠策略。旧 occurrence 保留原版本；pending_policy 必须明确 retain/cancel。queue 是每个事件都重要的有界队列，溢出记录可查，不默默丢弃。",
@@ -294,24 +250,26 @@ configureMonitorTool context =
         Left detail -> pure (Left (T.pack detail))
         Right (handle, revision, goal, overlap, capacity, pending, profile, changedOnly) -> case parseMonitorHandle handle of
           Nothing -> pure (Left "无效 m# 标识")
-          Just ordinal ->
-            Right
-              <$> Task.configureMonitor
-                (toolGroupId context)
-                (toolAuthorPrincipalId context)
-                (toolMonitorArmingAllowed context)
-                ordinal.unMonitorOrdinal
-                revision
-                goal
-                overlap
-                capacity
-                pending
-                profile
-                changedOnly
+          Just ordinal -> case (parseOverlapPolicy overlap, parsePendingPolicy pending, parseProfile profile) of
+            (Just overlapPolicy, Just pendingPolicy, Just capability) -> do
+              result <- Control.controlMonitor ordinal (ConfigureMonitor revision goal overlapPolicy capacity pendingPolicy (Just (capability, changedOnly))) False
+              pure $ case result of
+                Left failure -> Left (monitorControlErrorText failure)
+                Right receipt ->
+                  Right $
+                    object
+                      [ "ok" .= True,
+                        "revision" .= receipt.revision,
+                        "admitted_tasks_cancelled" .= receipt.tasksCancelled,
+                        "pending_policy" .= pending,
+                        "profile" .= profile,
+                        "change_only" .= changedOnly
+                      ]
+            _ -> pure (Left "invalid monitor definition")
     }
 
-monitorHistoryTool :: (WithConnection :> es, IOE :> es) => ToolContext -> Tool es
-monitorHistoryTool context =
+monitorHistoryTool :: (MonitorQuery :> es) => Tool es
+monitorHistoryTool =
   Tool
     "monitor_history"
     "查看 monitor 状态、revision、下次触发和最近 150 次 fire：任务链接、合并、溢出及失败原因。"
@@ -320,5 +278,5 @@ monitorHistoryTool context =
         Left detail -> pure (Left (T.pack detail))
         Right handle -> case parseMonitorHandle handle of
           Nothing -> pure (Left "无效 m# 标识")
-          Just ordinal -> Right <$> Task.monitorHistory (toolGroupId context) ordinal.unMonitorOrdinal
+          Just ordinal -> maybe (Left "monitor not found in this conversation") (Right . toJSON) <$> readMonitorHistory ordinal
     )

@@ -37,7 +37,8 @@ import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query_)
-import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob, resolveBlobHostPath)
+import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
+import Max.Effects.BlobHost (BlobHost, resolveBlobHostPath)
 import Max.Effects.LLM
   ( ChatCtx (..),
     ChatMessage (..),
@@ -46,7 +47,9 @@ import Max.Effects.LLM
     LLM,
     chat,
   )
+import Max.Http.Failure (renderResponseFailure)
 import Max.ImagePrep (prepareImageForLLM)
+import Max.LLM.Failure (renderLLMFailure)
 import Max.Util (catchSync, trySync, withTempDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -77,7 +80,7 @@ maxCaptionBytes :: Int
 maxCaptionBytes = 5 * 1024 * 1024
 
 mediaCaptionWorker ::
-  (Blob :> es, WithConnection :> es, LLM :> es, Log :> es, IOE :> es) =>
+  (BlobHost :> es, Blob :> es, WithConnection :> es, LLM :> es, Log :> es, IOE :> es) =>
   Text -> -- vision-capable LLM profile name
   Eff es ()
 mediaCaptionWorker profile = localDomain "media-caption" $ do
@@ -97,8 +100,8 @@ mediaCaptionWorker profile = localDomain "media-caption" $ do
             <> "   AND i.first_seen_at > now() - interval '"
             <> show recencyDays
             <> " days' \
-              \ AND NOT EXISTS (SELECT 1 FROM stickers s WHERE s.sha256 = i.sha256) \
-              \ ORDER BY i.first_seen_at DESC LIMIT "
+               \ AND NOT EXISTS (SELECT 1 FROM stickers s WHERE s.sha256 = i.sha256) \
+               \ ORDER BY i.first_seen_at DESC LIMIT "
             <> show batchSize
       vids <-
         query_ . fromString $
@@ -109,7 +112,7 @@ mediaCaptionWorker profile = localDomain "media-caption" $ do
             <> "   AND v.first_seen_at > now() - interval '"
             <> show recencyDays
             <> " days' \
-              \ ORDER BY v.first_seen_at DESC LIMIT "
+               \ ORDER BY v.first_seen_at DESC LIMIT "
             <> show batchSize
       if null (imgs :: [(Text, Text)]) && null (vids :: [(Text, Text)])
         then liftIO (threadDelay idleMicros)
@@ -167,8 +170,8 @@ mediaCaptionWorker profile = localDomain "media-caption" $ do
                       ]
                       []
                   case eres of
-                    Left err -> failed ("chat: " <> err)
-                    Right (InterruptedResp _ err) -> failed ("chat interrupted: " <> err)
+                    Left err -> failed ("chat: " <> renderLLMFailure err)
+                    Right (InterruptedResp _ err) -> failed ("chat interrupted: " <> renderResponseFailure err)
                     Right (ToolCallsResp {}) -> failed "chat: unexpected tool calls"
                     Right (ContentResp raw)
                       | T.null (T.strip raw) -> failed "chat: empty caption"

@@ -21,7 +21,7 @@
 --      via 'Tools', append assistant-with-tool-calls + tool-result
 --      messages, re-enter.
 --
--- After 'maxTurns' the loop stops with @aborted = Just "max-turns"@
+-- After 'maxTurns' the loop stops with @aborted = Just AgentRoundLimit@
 -- and a fallback reply.  Hard cap to keep cost bounded.
 --
 -- == Streaming
@@ -57,8 +57,7 @@ module Max.Effects.Agent
     AgentContext (..),
     assembleToolRound,
     toolResultMessage,
-    runAgent,
-    runDurableAgent,
+    runAgentWith,
     agentTurn,
     defaultLimits,
   )
@@ -72,8 +71,6 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
 import Data.List (find)
-import Data.Maybe (listToMaybe)
-import Data.Scientific (toBoundedInteger)
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -83,46 +80,36 @@ import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
 import Effectful.Exception (SomeException, catch, throwIO)
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
+import Max.Agent.Execution
+import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
-import Max.DB.AgentTurn
-  ( JournalExecution,
-    JournalFinish (..),
-    JournalStart (..),
-    enrichSandboxJournalStart,
-    finishJournalExecution,
-    markJournalOutcomeUnknown,
-    recordAgentTurnLlmRound,
-    recordModelNote,
-    startJournalExecution,
-  )
-import Max.DB.Task qualified as DurableTask
-import Max.Effects.Blob (Blob)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
-import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, defaultInlineMediaLimit, drainInlineMedia, runToolOutput)
+import Max.Effects.ToolControl (ToolControl, runToolControl)
+import Max.Effects.ToolDirectory (ToolDirectory, listCatalogTools, listToolSpecs, runToolDirectory)
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, ToolOutputRead, defaultInlineMediaLimit, drainInlineMedia, newToolOutputQueue, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
   ( CatalogTool (..),
     SchemaHash (..),
     SchemaVersion (..),
-    ToolCatalog,
     ToolCatalogError,
     ToolDefinition (..),
     ToolEffect (..),
     ToolFault (..),
+    ToolInvocation (..),
     ToolOutcome (..),
     ToolParallelism (..),
     ToolRef (..),
+    ToolRegistry,
     ToolRetryClass (..),
     Tools,
-    invokeTool,
-    listCatalogTools,
-    listToolSpecs,
+    invokeToolWithControl,
     outcomeResult,
-    runTools,
+    registryCatalog,
+    runToolsWithControl,
   )
+import Max.Execution.Types
 import Max.Reply (readyPrefix)
 import Max.RuntimeConfig (RuntimeSnapshot (..))
-import Max.Task.Types (taskHandle)
 import Max.Tasks
   ( Note (..),
     NoteVerb (..),
@@ -135,6 +122,8 @@ import Max.Tasks
     setTurnPhase,
     turnRuntimeAgentTurn,
   )
+import Max.Tool.Control (LoopControl (..), controlReply, mergeControls)
+import Max.Tool.Types (ToolCallMode (..))
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolRuntimeSnapshot, toolTurnOutputContext)
 import Max.Turn.Types (AgentTurnRef (..), turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
@@ -190,7 +179,7 @@ data AgentResult = AgentResult
     turnsUsed :: !Int,
     -- | 'Just' iff the loop ended for a reason other than the model
     -- producing a content response (e.g. hit 'maxTurns', LLM error).
-    aborted :: !(Maybe Text),
+    aborted :: !(Maybe AgentFailure),
     -- | The leading slice of 'reply' that the streaming sink already
     -- sent, verbatim.  Empty for a non-streamed turn, which is every
     -- turn on a profile with @stream = false@.
@@ -236,109 +225,44 @@ type instance DispatchOf Agent = Dynamic
 --   * Activates the explicit 'TurnRuntime' created by Handler.
 --   * Spins up a 'Tools' scope built from the per-group factory.
 --   * Drives the loop, draining the task's inbox between turns.
-runAgent ::
+runAgentWith ::
   forall es a.
   (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
+  ExecutionAdmission es ->
+  ExecutionJournal es ->
+  ExecutionInbox es ->
   AgentLimits ->
-  (ToolContext -> Either ToolCatalogError (ToolCatalog (ToolOutput : es))) ->
+  (ToolContext -> Either ToolCatalogError (ToolRegistry (ToolOutput : ToolControl : es))) ->
   Eff (Agent : es) a ->
   Eff es a
-runAgent lims toolFactory = runAgentWithJournal noAgentJournal lims toolFactory
-
--- | Production interpreter.  Keeping the journal callbacks outside the
--- generic loop preserves the existing in-memory Agent seam while ensuring the
--- real stack always writes E0 rows.
-runDurableAgent ::
-  forall es a.
-  ( LLM :> es,
-    Concurrent :> es,
-    Blob :> es,
-    WithConnection :> es,
-    Log :> es,
-    IOE :> es
-  ) =>
-  AgentLimits ->
-  (ToolContext -> Either ToolCatalogError (ToolCatalog (ToolOutput : es))) ->
-  Eff (Agent : es) a ->
-  Eff es a
-runDurableAgent = runAgentWithJournal durableAgentJournal
-
-data AgentJournal es = AgentJournal
-  { ajRecordLlmRound :: AgentTurnRef -> Eff es Bool,
-    ajCheck :: AgentTurnRef -> Eff es Bool,
-    ajInbox :: AgentTurnRef -> Eff es Text,
-    ajRecordNote :: AgentTurnRef -> Text -> Eff es (),
-    ajStart :: GroupId -> AgentTurnRef -> JournalStart -> Eff es (Maybe JournalExecution),
-    ajFinish :: JournalExecution -> JournalFinish -> Eff es (),
-    ajUnknown :: JournalExecution -> Text -> Eff es ()
-  }
-
-noAgentJournal :: AgentJournal es
-noAgentJournal =
-  AgentJournal
-    { ajRecordLlmRound = \_ -> pure True,
-      ajCheck = \_ -> pure True,
-      ajInbox = \_ -> pure "",
-      ajRecordNote = \_ _ -> pure (),
-      ajStart = \_ _ _ -> pure Nothing,
-      ajFinish = \_ _ -> pure (),
-      ajUnknown = \_ _ -> pure ()
-    }
-
-durableAgentJournal ::
-  (Blob :> es, WithConnection :> es, IOE :> es) =>
-  AgentJournal es
-durableAgentJournal =
-  AgentJournal
-    { ajRecordLlmRound = \turn -> do
-        allowed <- DurableTask.authorizeTaskStep turn.atrTurnId Nothing True
-        if allowed then recordAgentTurnLlmRound turn.atrTurnId else pure False,
-      ajCheck = \turn -> DurableTask.authorizeTaskStep turn.atrTurnId (Just "task_finish") False,
-      ajInbox = DurableTask.taskInbox . (.atrTurnId),
-      ajRecordNote = recordModelNote,
-      ajStart = \gid turn start -> do
-        allowed <- DurableTask.authorizeTaskStep turn.atrTurnId (Just start.jsToolRef) True
-        unless allowed (throwIO TaskCancelled)
-        enriched <- enrichSandboxJournalStart gid start
-        Just <$> startJournalExecution turn enriched,
-      ajFinish = finishJournalExecution,
-      ajUnknown = markJournalOutcomeUnknown
-    }
-
-runAgentWithJournal ::
-  forall es a.
-  (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
-  AgentJournal es ->
-  AgentLimits ->
-  (ToolContext -> Either ToolCatalogError (ToolCatalog (ToolOutput : es))) ->
-  Eff (Agent : es) a ->
-  Eff es a
-runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
+runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv -> \case
   AgentTurn turn ctx profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
     catalog <- either throwIO pure (toolFactory ctx.acTools)
     let cancel = throwTo selfTid TaskCancelled
-        emit :: AgentEventSink (Eff (Tools : ToolOutput : es))
-        emit event = raise (raise (unlift (sink event)))
+        emit :: AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es))
+        emit event = raise (raise (raise (unlift (sink event))))
     -- Handler created this runtime before context collection and remains its
     -- sole finalizer.  Agent only activates the worker cancellation hook and
     -- consumes feedback through the explicit object.
     preKilled <- liftIO (activateTurnRuntime turn "llm" cancel)
     when preKilled $ throwIO TaskCancelled
-    runToolOutput defaultInlineMediaLimit $
-      runTools catalog (loop emit ctx turn profile msgs)
+    outputQueue <- newToolOutputQueue defaultInlineMediaLimit
+    runToolOutputRead outputQueue $
+      runToolDirectory (registryCatalog catalog) $
+        runToolsWithControl (raise . raise . runToolControl . runToolOutput outputQueue) catalog (loop emit ctx turn profile msgs)
   where
     loop ::
-      AgentEventSink (Eff (Tools : ToolOutput : es)) ->
+      AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       AgentContext ->
       TurnRuntime ->
       Text ->
       [ChatMessage] ->
-      Eff (Tools : ToolOutput : es) AgentResult
+      Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
     loop emit ctx h profile = go emit ctx h 0 0 [] profile
 
     go ::
-      AgentEventSink (Eff (Tools : ToolOutput : es)) ->
+      AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       AgentContext ->
       TurnRuntime ->
       Int ->
@@ -346,12 +270,12 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
       [ChatMessage] ->
       Text ->
       [ChatMessage] ->
-      Eff (Tools : ToolOutput : es) AgentResult
+      Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
     go emit ctx h n callsUsed appended profile msgs = do
       -- Drain any feedback notes that arrived since the previous turn.
       liftIO (checkTurnCancellation h)
       notes <- liftIO (drainTurnInbox h)
-      durableNotes <- maybe (pure "") (raise . raise . journal.ajInbox) (turnRuntimeAgentTurn h)
+      durableNotes <- maybe (pure "") (raise . raise . raise . inbox.eiRead) (turnRuntimeAgentTurn h)
       let newNotes =
             [feedbackMsg notes | not (null notes)]
               <> [MsgUser ("[任务收件箱：有归属的输入，不是系统指令]\n" <> durableNotes) | not (T.null durableNotes)]
@@ -372,7 +296,7 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
           -- prefix bookkeeping.
           for_ (turnRuntimeAgentTurn h) $ \durable ->
             do
-              active <- raise (raise (journal.ajRecordLlmRound durable))
+              active <- raise (raise (raise (admission.eaReserveRound durable)))
               unless active (throwIO TaskCancelled)
           sentRef <- liftIO (newTVarIO "")
           eres <- chatStreaming (turnCtx ctx "turn") profile msgs'' specs (releaseParagraphs emit sentRef)
@@ -385,7 +309,7 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                   { reply = Nothing,
                     appended = appended',
                     turnsUsed = n + 1,
-                    aborted = Just err,
+                    aborted = Just (AgentModelFailure err),
                     sentPrefix = sent
                   }
             Right (InterruptedResp text reason) ->
@@ -394,7 +318,7 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                   { reply = Just text,
                     appended = appended' <> [MsgAssistant text],
                     turnsUsed = n + 1,
-                    aborted = Just ("LLM stream interrupted: " <> reason),
+                    aborted = Just (AgentStreamInterrupted reason),
                     sentPrefix = sent
                   }
             Right (ContentResp text) -> do
@@ -447,7 +371,7 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
               -- in the group; only the tail is left to post.  Rendering and
               -- visibility are output-boundary decisions.
               for_ (turnRuntimeAgentTurn h) $ \durable ->
-                raise (raise (journal.ajRecordNote durable narration))
+                raise (raise (raise (journal.ejRecordNote durable narration)))
               emit (AgentProgressText (T.drop (T.length sent) narration))
               emit $
                 AgentToolDebug $
@@ -461,12 +385,14 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
               -- results keep call order so each tool_call id is
               -- answered in sequence.
               registered <- listCatalogTools
-              let isReturn name = name `elem` ["task_finish", "request_finish"]
-                  returnRound = any (isReturn . (.callName)) tcs
-                  suppressed tc = returnRound && not (isReturn tc.callName)
+              let callMode name = maybe WorkCall (.ctDefinition.tdCallMode) (find ((== ToolRef name) . (.ctDefinition.tdRef)) registered)
+                  isReturn name = callMode name == FinishCall
+                  returnCalls = filter (isReturn . (.callName)) tcs
+                  returnRound = not (null returnCalls)
+                  suppressed tc = returnRound && (length returnCalls /= 1 || not (isReturn tc.callName))
                   remaining = maybe maxBound (\limit -> max 0 (limit - callsUsed)) ctx.acMaxToolCalls
                   callCost tc
-                    | tc.callName `elem` ["task_finish", "task_progress", "request_finish"] = 0
+                    | callMode tc.callName /= WorkCall = 0
                     | otherwise = 1
                   roundCost = sum [callCost tc | tc <- tcs, not (suppressed tc)]
                   overBudget = roundCost > remaining
@@ -490,7 +416,8 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                   then
                     pure
                       [ ( toolResultMessage tc (Left "这个子任务的工具调用额度已经用满，不能再执行这个调用"),
-                          ToolCallFinished tc.callName (Left "child tool-call budget exhausted")
+                          ToolCallFinished tc.callName (Left "child tool-call budget exhausted"),
+                          ContinueLoop
                         )
                       | tc <- tcs
                       ]
@@ -503,8 +430,9 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                                 if suppressed tc
                                   then
                                     pure
-                                      ( toolResultMessage tc (Left "task_finish/request_finish 必须单独提交；同一轮的其他工具调用已拒绝"),
-                                        ToolCallFinished tc.callName (Left "tool suppressed after child return")
+                                      ( toolResultMessage tc (Left "结束回合的操作必须单独提交；同一轮的其他工具调用已拒绝"),
+                                        ToolCallFinished tc.callName (Left "tool suppressed after child return"),
+                                        ContinueLoop
                                       )
                                   else executeOne h call
                             )
@@ -515,34 +443,22 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
               -- Emit result facts after the concurrent round rejoins.  This
               -- keeps the higher-rank callback on its sequential unlift and
               -- gives debug output a deterministic call order.
-              for_ executed $ \(_, event) -> emit (AgentToolDebug event)
-              let toolMsgs = map fst executed
+              for_ executed $ \(_, event, _) -> emit (AgentToolDebug event)
+              let toolMsgs = [message | (message, _, _) <- executed]
               imgs <- drainToolMedia
               let newMsgs = assembleToolRound raw tcs toolMsgs imgs
-                  returned =
-                    or
-                      [ isReturn tc.callName && not ("error:" `T.isPrefixOf` content)
-                      | (tc, MsgTool _ content) <- zip tcs toolMsgs
-                      ]
-                  startedTasks =
-                    [ taskHandle identifier
-                    | (_, ToolCallFinished "task_start" (Right (Object fields))) <- executed,
-                      Just (Number number) <- [KeyMap.lookup "task_id" fields],
-                      Just identifier <- [toBoundedInteger number]
-                    ]
-                  requestedReplies = [body | (_, ToolCallFinished "request_finish" (Right (Object fields))) <- executed, Just (String body) <- [KeyMap.lookup "reply" fields]]
-                  yielded = not (null startedTasks) && not (toolCapabilities ctx.acTools).tcBackground
-              if returned || yielded
-                then
+                  control = mergeControls [decision | (_, _, decision) <- executed]
+              case controlReply control of
+                Just finalReply ->
                   pure
                     AgentResult
-                      { reply = if yielded then Just ("已交给后台任务 " <> T.intercalate "、" startedTasks <> "，完成后会通知；现在可以继续问别的问题。") else listToMaybe requestedReplies,
+                      { reply = finalReply,
                         appended = appended' <> newMsgs,
                         turnsUsed = n + 1,
                         aborted = Nothing,
                         sentPrefix = sent
                       }
-                else
+                Nothing ->
                   if overBudget
                     then finalAnswer ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
                     else
@@ -559,13 +475,13 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
       [ChatMessage] ->
       Text ->
       [ChatMessage] ->
-      Eff (Tools : ToolOutput : es) AgentResult
+      Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
     finalAnswer ctx h n appended profile msgs = do
       logInfo "agent: max turns reached, forcing final answer" $
         object ["turns" .= n]
       liftIO (checkTurnCancellation h)
       for_ (turnRuntimeAgentTurn h) $ \durable -> do
-        active <- raise (raise (journal.ajRecordLlmRound durable))
+        active <- raise (raise (raise (admission.eaReserveRound durable)))
         unless active (throwIO TaskCancelled)
       let capNote =
             MsgUser
@@ -574,9 +490,9 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
       eres <-
         chat (turnCtx ctx "wrapup") profile (capToolResults toolResultBudget (msgs <> [capNote])) []
       let (mText, ab) = case eres of
-            Right (ContentResp t) | not (T.null (T.strip t)) -> (Just t, Just "max-turns")
-            Right _ -> (Nothing, Just "max-turns")
-            Left err -> (Nothing, Just err)
+            Right (ContentResp t) | not (T.null (T.strip t)) -> (Just t, Just AgentRoundLimit)
+            Right _ -> (Nothing, Just AgentRoundLimit)
+            Left err -> (Nothing, Just (AgentModelFailure err))
       pure
         AgentResult
           { reply = mText,
@@ -603,10 +519,10 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
     -- callback after publication but before its acknowledgement; cancellation
     -- of the caller propagates instead of entering the final-tail send path.
     releaseParagraphs ::
-      AgentEventSink (Eff (Tools : ToolOutput : es)) ->
+      AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       TVar Text ->
       Text ->
-      Eff (Tools : ToolOutput : es) ()
+      Eff (Tools : ToolDirectory : ToolOutputRead : es) ()
     releaseParagraphs emit sentRef soFar = do
       sent <- liftIO (readTVarIO sentRef)
       let (ready, _held) = readyPrefix (T.drop (T.length sent) soFar)
@@ -646,11 +562,11 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
     -- adjacent text blocks — the shape strict providers accept).
     -- Injected AFTER all tool-result messages so every tool_call id is
     -- answered first, as the OpenAI wire requires.
-    drainToolMedia :: Eff (Tools : ToolOutput : es) [InlineMedia]
+    drainToolMedia :: Eff (Tools : ToolDirectory : ToolOutputRead : es) [InlineMedia]
     drainToolMedia = drainInlineMedia
 
     checkDurable turn = for_ (turnRuntimeAgentTurn turn) $ \durable -> do
-      active <- raise (raise (journal.ajCheck durable))
+      active <- raise (raise (raise (admission.eaCheck durable)))
       unless active (throwIO TaskCancelled)
 
     prepareJournal ::
@@ -658,15 +574,18 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
       TurnRuntime ->
       [CatalogTool] ->
       ToolCall ->
-      Eff (Tools : ToolOutput : es) (Maybe JournalExecution)
+      Eff (Tools : ToolDirectory : ToolOutputRead : es) (Maybe JournalExecution)
     prepareJournal gid turn registered tc = case turnRuntimeAgentTurn turn of
       Nothing -> pure Nothing
       Just durable -> do
         let mView = find ((== ToolRef tc.callName) . (.ctDefinition.tdRef)) registered
             start = maybe (unknownJournalStart tc) (catalogJournalStart tc) mView
-        raise (raise (journal.ajStart gid durable start))
+        let step = case (.ctDefinition.tdCallMode) <$> mView of
+              Just mode | mode /= WorkCall -> ExecutionCheckpoint
+              _ -> ExecutionWork ReserveCall
+        raise (raise (raise (admission.eaStartTool gid durable step start)))
 
-    executeOne :: TurnRuntime -> (ToolCall, Maybe JournalExecution) -> Eff (Tools : ToolOutput : es) (ChatMessage, ToolDebugEvent)
+    executeOne :: TurnRuntime -> (ToolCall, Maybe JournalExecution) -> Eff (Tools : ToolDirectory : ToolOutputRead : es) (ChatMessage, ToolDebugEvent, LoopControl)
     executeOne turn (tc, journalRow) = do
       liftIO (checkTurnCancellation turn)
       checkDurable turn
@@ -676,14 +595,15 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
             "name" .= tc.callName,
             "args" .= previewJson 200 tc.callArguments
           ]
-      outcome <-
-        invokeTool tc.callName tc.callArguments
+      invocation <-
+        invokeToolWithControl tc.callName tc.callArguments
           `catch` \e -> do
             for_ journalRow $ \row ->
-              raise (raise (journal.ajUnknown row (T.pack (show (e :: SomeException)))))
+              raise (raise (raise (journal.ejUnknown row (T.pack (show (e :: SomeException))))))
             throwIO e
+      let outcome = invocation.tiOutcome
       for_ journalRow $ \row ->
-        raise (raise (journal.ajFinish row (journalFinish outcome)))
+        raise (raise (raise (journal.ejFinish row (journalFinish outcome))))
       liftIO (checkTurnCancellation turn)
       -- Host-only observation fields are journal evidence.  Remove them from
       -- the value returned to the model so E0 changes durability without
@@ -700,11 +620,11 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
                 "result" .= previewJson 400 v,
                 "full_len" .= T.length full
               ]
-          pure (toolResultMessage tc (Right v), ToolCallFinished tc.callName (Right v))
+          pure (toolResultMessage tc (Right v), ToolCallFinished tc.callName (Right v), invocation.tiControl)
         Left err -> do
           logAttention "agent: tool failed" $
             object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName outcome, "error" .= err]
-          pure (toolResultMessage tc (Left err), ToolCallFinished tc.callName (Left err))
+          pure (toolResultMessage tc (Left err), ToolCallFinished tc.callName (Left err), ContinueLoop)
 
     outcomeName :: ToolOutcome -> Text
     outcomeName = \case
@@ -771,7 +691,7 @@ runAgentWithJournal journal lims toolFactory = interpret $ \localEnv -> \case
 -- scoped 'ToolOutput' effect,
 -- while the protocol-neutral conversation transition is just data.
 -- Keeping it here also gives documentation/tests the exact production
--- shape without standing up Postgres, PlatformApi, or an LLM endpoint.
+-- shape without standing up Postgres, platform RPC, or an LLM endpoint.
 assembleToolRound ::
   Value -> -- provider's assistant message, verbatim
   [ToolCall] ->

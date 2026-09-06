@@ -1,8 +1,12 @@
 module Max.EmbeddingSpec (spec) where
 
 import Data.Aeson (Value, decode, object, (.=))
+import Effectful (runEff)
+import Effectful.Reader.Dynamic (ask, local, runReader)
+import Max.Effects.Embedding (EmbeddingSpace (..), embeddingSpace, runRuntimeEmbedding)
 import Max.Embedding
-  ( EmbeddingConfig (..),
+  ( EmbedClient,
+    EmbeddingConfig (..),
     EmbeddingRecord (..),
     embeddingRequest,
     makeEmbeddingRecord,
@@ -52,6 +56,15 @@ spec = describe "embeddingRequest" $ do
     makeEmbeddingRecord client "hello" [] `shouldBe` Left "embedding vector is empty"
     makeEmbeddingRecord client "hello" [0 / 0]
       `shouldBe` Left "embedding vector contains a non-finite value"
+  it "resolves the client from the caller's current scope on each operation" $ do
+    runtime <- newHttpRuntime
+    let client = newEmbedClient runtime config
+    spaces <- runEff . runReader (Just client) . runRuntimeEmbedding (ask @(Maybe EmbedClient)) $ do
+      initial <- embeddingSpace
+      disabled <- local @(Maybe EmbedClient) (const Nothing) embeddingSpace
+      restored <- embeddingSpace
+      pure (initial, disabled, restored)
+    spaces `shouldBe` (Just (EmbeddingSpace "test-model"), Nothing, Just (EmbeddingSpace "test-model"))
   where
     config =
       EmbeddingConfig

@@ -30,71 +30,34 @@ where
 import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Int (Int64)
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
-import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
-import Max.ConversationScope (currentConversationRecall)
+import Max.Effects.MemoryControl (MemoryControl, forgetMemory, saveMemory, updateMemory)
+import Max.Effects.MemoryQuery (MemoryQuery, listMemories)
 import Max.Effects.Tools (Tool (..))
-import Max.MemoryStore
-  ( ExpectedVersion (..),
-    MemoryActor (..),
-    MemoryActorKind (..),
-    MemoryDraft (..),
-    MemoryEvidence (..),
-    MemoryId,
-    MemoryItem (..),
-    MemoryLifecycle (..),
-    MemoryMutationResult (..),
-    MemoryScope (..),
-    MemoryUpdate (..),
-    MemoryVersion,
-    archiveVisibleMemory,
-    countMemories,
-    createMemory,
-    groupMemoryNamespace,
-    listMemories,
-    parseScope,
-    updateVisibleMemory,
-    userMemoryNamespace,
-  )
-import Max.ToolContext (ToolContext, toolAuthorPrincipalId, toolCanonicalId, toolConversationScope, toolGroupId)
+import Max.Memory.Policy
+import Max.Memory.Types (ExpectedVersion (..), MemoryId, MemoryItem (..), MemoryScope (..), MemoryVersion, parseScope)
 import Max.Tools.Schema (enumParam, integerParam, stringParam, toolObject)
 import Max.Util (tshow)
-import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
-import OneBot.Types (GroupId (..))
-
--- | Per (scope, scope_id) ceiling.  Hitting it turns 'memory_save'
--- into an error that demands consolidation first — the pressure that
--- keeps the block small enough to inject wholesale.
-maxMemoriesPerScope :: Int
-maxMemoriesPerScope = 30
-
--- | One memory is a compact fact, not an essay.
-maxMemoryChars :: Int
-maxMemoryChars = 300
 
 memoryToolsFor ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  ToolContext ->
+  (MemoryQuery :> es, MemoryControl :> es) =>
   [Tool es]
-memoryToolsFor dc =
-  [ saveTool dc,
-    updateTool dc,
-    forgetTool dc,
-    listTool dc
+memoryToolsFor =
+  [ saveTool,
+    updateTool,
+    forgetTool,
+    listTool
   ]
 
 --------------------------------------------------------------------------------
 -- memory_save
 
 saveTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  ToolContext ->
+  (MemoryControl :> es) =>
   Tool es
-saveTool dc =
+saveTool =
   Tool
     { toolName = "memory_save",
       toolDescription =
@@ -110,48 +73,14 @@ saveTool dc =
               stringParam
                 ("一条紧凑的事实（≤" <> tshow maxMemoryChars <> " 字），第三人称陈述句，不带上下文引用。")
             ),
-            ("user_id", integerParam "scope=user 时记忆归属的 QQ 号；缺省为当前发言者。")
+            ("user_id", integerParam "scope=user 时记忆归属的人物 principal ID（来自 [@#principal]）；缺省为当前发言者。")
           ]
           ["scope", "content"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (scopeRaw, content, mUid) -> do
-          let GroupId gid = toolGroupId dc
-              PrincipalId triggerPrincipal = toolAuthorPrincipalId dc
-              conversation = toolConversationScope dc
-          case parseScope scopeRaw of
-            Nothing -> pure $ Left "scope 必须是 group 或 user"
-            Just scope -> case checkContent content of
-              Left err -> pure (Left err)
-              Right c -> do
-                let sid = case scope of
-                      ScopeGroup -> gid
-                      ScopeUser -> fromMaybe triggerPrincipal mUid
-                    namespace = case scope of
-                      ScopeGroup -> groupMemoryNamespace conversation
-                      ScopeUser -> userMemoryNamespace conversation sid
-                n <- countMemories namespace
-                if n >= maxMemoriesPerScope
-                  then
-                    pure $
-                      Left $
-                        "该 scope 的记忆已满（"
-                          <> tshow maxMemoriesPerScope
-                          <> " 条）。先用 memory_forget 删掉过时的，或用 memory_update 合并相近条目，再保存。"
-                  else do
-                    let CanonicalMessageId sourceMessage = toolCanonicalId dc
-                        actor = MemoryActor ActorAgentTool (Just triggerPrincipal) (Just "memory_save tool")
-                        draft =
-                          MemoryDraft
-                            { draftContent = c,
-                              draftLifecycle = MemoryPermanent,
-                              draftCategory = Nothing,
-                              draftEvidence = MessageEvidence conversation (Just triggerPrincipal) sourceMessage
-                            }
-                    saved <- createMemory actor namespace draft
-                    logInfo "memory: saved" $
-                      object ["id" .= saved.memId, "version" .= saved.memVersion, "scope" .= scopeRaw, "scope_id" .= sid]
-                    pure $ Right (object ["id" .= saved.memId, "version" .= saved.memVersion])
+        Right (scopeRaw, content, mUid) -> case parseSubject scopeRaw mUid of
+          Left failure -> pure (Left failure)
+          Right subject -> either (Left . memoryWriteFailureText) (Right . mutationSummary) <$> saveMemory subject content
     }
   where
     parseArgs :: Object -> Parser (Text, Text, Maybe Int64)
@@ -161,10 +90,9 @@ saveTool dc =
 -- memory_update
 
 updateTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  ToolContext ->
+  (MemoryControl :> es) =>
   Tool es
-updateTool dc =
+updateTool =
   Tool
     { toolName = "memory_update",
       toolDescription =
@@ -181,26 +109,7 @@ updateTool dc =
           ["id", "version", "content"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (mid, version, content) ->
-          case checkContent content of
-            Left err -> pure (Left err)
-            Right c -> do
-              let PrincipalId triggerPrincipal = toolAuthorPrincipalId dc
-                  CanonicalMessageId sourceMessage = toolCanonicalId dc
-                  conversation = toolConversationScope dc
-                  actor = MemoryActor ActorAgentTool (Just triggerPrincipal) (Just "memory_update tool")
-              result <-
-                updateVisibleMemory
-                  actor
-                  (currentConversationRecall conversation)
-                  mid
-                  (ExpectedVersion version)
-                  (MemoryUpdate c (MessageEvidence conversation (Just triggerPrincipal) sourceMessage))
-              case result of
-                MemoryMutationApplied updated -> do
-                  logInfo "memory: updated" $ object ["id" .= updated.memId, "version" .= updated.memVersion]
-                  pure $ Right (object ["id" .= updated.memId, "version" .= updated.memVersion])
-                MemoryMutationRejected -> pure $ Left "记忆不存在、不可见，或版本已变化；请重新 memory_list 后再试"
+        Right (mid, version, content) -> either (Left . memoryWriteFailureText) (Right . mutationSummary) <$> updateMemory mid (ExpectedVersion version) content
     }
   where
     parseArgs :: Object -> Parser (MemoryId, MemoryVersion, Text)
@@ -210,10 +119,9 @@ updateTool dc =
 -- memory_forget
 
 forgetTool ::
-  (WithConnection :> es, Log :> es, IOE :> es) =>
-  ToolContext ->
+  (MemoryControl :> es) =>
   Tool es
-forgetTool dc =
+forgetTool =
   Tool
     { toolName = "memory_forget",
       toolDescription =
@@ -230,20 +138,10 @@ forgetTool dc =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (mid, version) -> do
-          let PrincipalId triggerPrincipal = toolAuthorPrincipalId dc
-              conversation = toolConversationScope dc
-              actor = MemoryActor ActorAgentTool (Just triggerPrincipal) (Just "memory_forget tool")
-          result <-
-            archiveVisibleMemory
-              actor
-              (currentConversationRecall conversation)
-              mid
-              (ExpectedVersion version)
-          case result of
-            MemoryMutationApplied archived -> do
-              logInfo "memory: forgotten" $ object ["id" .= archived.memId, "version" .= archived.memVersion]
-              pure $ Right (object ["ok" .= True, "version" .= archived.memVersion])
-            MemoryMutationRejected -> pure $ Left "记忆不存在、不可见，或版本已变化；请重新 memory_list 后再试"
+          result <- forgetMemory mid (ExpectedVersion version)
+          pure $ case result of
+            Left failure -> Left (memoryWriteFailureText failure)
+            Right archived -> Right (object ["ok" .= True, "version" .= archived.memVersion])
     }
   where
     parseArgs :: Object -> Parser (MemoryId, MemoryVersion)
@@ -253,10 +151,9 @@ forgetTool dc =
 -- memory_list
 
 listTool ::
-  (WithConnection :> es, IOE :> es) =>
-  ToolContext ->
+  (MemoryQuery :> es) =>
   Tool es
-listTool dc =
+listTool =
   Tool
     { toolName = "memory_list",
       toolDescription =
@@ -267,22 +164,14 @@ listTool dc =
       toolSchema =
         toolObject
           [ ("scope", enumParam ["group", "user"] "group 或 user。"),
-            ("user_id", integerParam "scope=user 时的 QQ 号；缺省为当前发言者。group 始终是本会话。")
+            ("user_id", integerParam "scope=user 时的人物 principal ID（来自 [@#principal]）；缺省为当前发言者。group 始终是本会话。")
           ]
           ["scope"],
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
-        Right (scopeRaw, mSid) -> do
-          let PrincipalId triggerPrincipal = toolAuthorPrincipalId dc
-              conversation = toolConversationScope dc
-          case parseScope scopeRaw of
-            Nothing -> pure $ Left "scope 必须是 group 或 user"
-            Just scope -> do
-              let namespace = case scope of
-                    ScopeGroup -> groupMemoryNamespace conversation
-                    ScopeUser -> userMemoryNamespace conversation (fromMaybe triggerPrincipal mSid)
-              items <- listMemories namespace
-              pure $ Right (toJSON (map memorySummary items))
+        Right (scopeRaw, mSid) -> case parseSubject scopeRaw mSid of
+          Left failure -> pure (Left failure)
+          Right subject -> Right . toJSON . map memorySummary <$> listMemories subject
     }
   where
     parseArgs :: Object -> Parser (Text, Maybe Int64)
@@ -299,11 +188,11 @@ memorySummary m =
 
 -- Shared guards.
 
-checkContent :: Text -> Either Text Text
-checkContent raw
-  | T.null c = Left "content 不能为空"
-  | T.length c > maxMemoryChars =
-      Left ("content 太长（" <> tshow (T.length c) <> " 字），压缩到 " <> tshow maxMemoryChars <> " 字以内")
-  | otherwise = Right c
-  where
-    c = T.strip raw
+parseSubject :: Text -> Maybe Int64 -> Either Text MemorySubject
+parseSubject raw principal = case parseScope raw of
+  Just ScopeGroup -> Right ConversationMemory
+  Just ScopeUser -> Right (PersonMemory principal)
+  Nothing -> Left "scope 必须是 group 或 user"
+
+mutationSummary :: MemoryItem -> Value
+mutationSummary item = object ["id" .= item.memId, "version" .= item.memVersion]

@@ -24,6 +24,7 @@
     hpack
     ormolu
     hlint
+    python3 # architecture import and capability checks
 
     # tooling for protocol debugging
     websocat

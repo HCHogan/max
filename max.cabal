@@ -26,6 +26,8 @@ extra-source-files:
     README.md
     scripts/test-task-upgrade.sh
     test-db/fixtures/task-upgrade-before.sql
+    test-db/fixtures/task-settlement-upgrade.sql
+    test-db/fixtures/task-authority-upgrade.sql
     test-db/fixtures/task-upgrade-after.sql
     test-db/fixtures/frontend-limits-upgrade.sql
     test-db/fixtures/browser-upgrade-after.sql
@@ -70,6 +72,7 @@ extra-source-files:
     scripts/*.sh
     scripts/*.mjs
     scripts/*.hs
+    scripts/*.py
     skills/*.md
     static/*.html
     static/*.js
@@ -110,11 +113,13 @@ library
         OneBot.Server
         OneBot.Types
         Max.AgentEvent
+        Max.AgentOutput
         Max.Admin
         Max.AdminTimeline
         Max.Bilibili
         Max.Browser.Docker
         Max.Browser.Error
+        Max.Browser.State
         Max.Browser.Registry
         Max.Concurrent.Lock
         Max.Browser.Vault
@@ -143,17 +148,36 @@ library
         Max.DB.Calls
         Max.DB.AgentTurn
         Max.DB.Connection
+        Max.DB.Codec
         Max.DB.ConversationCursor
         Max.DB.FetchQueue
         Max.DB.Files
         Max.DB.Health
         Max.DB.History
+        Max.History.Types
+        Max.Media.Types
+        Max.Episode.Types
+        Max.Recall.Types
+        Max.Context.Media
+        Max.Effects.ConversationQuery
+        Max.Conversation.ToolRuntime
+        Max.DB.History.Media
         Max.DB.Media
         Max.DB.Notify
         Max.DB.PlatformIds
         Max.DB.Migrations
         Max.DB.Monitor
+        Max.DB.Monitor.Occurrence
+        Max.DB.Monitor.Admission
         Max.DB.Task
+        Max.DB.Task.Record
+        Max.DB.Task.Authorization
+        Max.DB.Task.Admission
+        Max.DB.Task.Reporting
+        Max.DB.Task.Settlement
+        Max.DB.Task.Control
+        Max.DB.Task.Scheduling
+        Max.DB.Task.MonitorControl
         Max.DB.Browser
         Max.DB.QQBackfill
         Max.DB.Session
@@ -164,11 +188,27 @@ library
         Max.Dispatch
         Max.Effects.Agent
         Max.Effects.Blob
+        Max.Blob.Reference
+        Max.File.Types
+        Max.File.ToolRuntime
+        Max.Conversation.Roster
+        Max.Media.ToolRuntime
+        Max.Browser.ToolRuntime
+        Max.Reply.Caption
+        Max.Effects.MediaQuery
+        Max.Effects.PinControl
+        Max.Pin.Policy
+        Max.Pin.ToolRuntime
+        Max.Effects.StickerQuery
+        Max.Effects.BlobHost
         Max.Effects.Embedding
         Max.Effects.Http
         Max.Effects.LLM
-        Max.Effects.PlatformApi
+        Max.Effects.PlatformAccount
+        Max.Effects.PlatformInteraction
+        Max.Effects.PlatformQuery
         Max.Effects.Outbound
+        Max.Effects.ToolDirectory
         Max.Effects.ToolOutput
         Max.Effects.Tools
         Max.Embedder
@@ -182,6 +222,7 @@ library
         Max.Forward
         Max.Handler
         Max.Historian
+        Max.Http.Failure
         Max.Http.Json
         Max.HttpRuntime
         Max.Http.Stream
@@ -197,6 +238,14 @@ library
         Max.IR.Prompt
         Max.Platform.Envelope
         Max.LLM.Admission
+        Max.LLM.Failure
+        Max.Execution.Types
+        Max.Agent.Execution
+        Max.Agent.Runtime
+        Max.Agent.Failure
+        Max.LLM.Types
+        Max.LLM.Protocol
+        Max.LLM.CallContext
         Max.LLM.Stream
         Max.Log
         Max.LogBuffer
@@ -206,8 +255,19 @@ library
         Max.MessageKind
         Max.MemoryExtract
         Max.MemoryStore
+        Max.Memory.Types
+        Max.Memory.Policy
+        Max.Memory.ToolRuntime
+        Max.Effects.MemoryQuery
+        Max.Effects.MemoryControl
+        Max.DB.ConversationLock
         Max.ModelCatalog
         Max.Platform
+        Max.Platform.Failure
+        Max.Platform.Roster
+        Max.Platform.Rpc
+        Max.Platform.Runtime
+        Max.Platform.QQHistory
         Max.Concurrent.Lease
         Max.Platform.Delivery
         Max.Platform.Delivery.Parts
@@ -220,8 +280,29 @@ library
         Max.Recall
         Max.Monitor
         Max.Monitor.Types
+        Max.Monitor.Policy
+        Max.Monitor.Control
+        Max.Monitor.View
+        Max.Monitor.Schedule
+        Max.Monitor.ToolRuntime
+        Max.Time.Parse
+        Max.Effects.MonitorQuery
+        Max.Effects.MonitorControl
         Max.Task.Policy
         Max.Task.Types
+        Max.Task.Admission
+        Max.Task.Execution
+        Max.Task.ToolRuntime
+        Max.Effects.TaskQuery
+        Max.Effects.TaskControl
+        Max.Effects.TaskExecution
+        Max.Effects.TurnQuery
+        Max.Task.Query
+        Max.Task.Overview
+        Max.DB.Task.Overview
+        Max.DB.Task.Query
+        Max.Task.State
+        Max.Task.View
         Max.Render
         Max.Reload
         Max.Reload.Prepare
@@ -246,6 +327,10 @@ library
         Max.Turn.Replay
         Max.Time
         Max.Toolset
+        Max.Tool.Catalog
+        Max.Tool.Control
+        Max.Effects.ToolControl
+        Max.Tool.Types
         Max.ToolContext
         Max.Tools
         Max.Tools.Bilibili
@@ -272,7 +357,10 @@ library
         Max.Worker
         Max.Worker.Generation
     other-modules:
-        Max.ModelCatalog.Internal
+        Max.LLM.Configuration
+      Max.LLM.Observability
+      Max.LLM.Transport
+      Max.ModelCatalog.Internal
         Paths_max
     autogen-modules:  Paths_max
     build-depends:
@@ -309,6 +397,7 @@ library
         , path-io             >= 1.8  && < 1.10
         , opt-env-conf        >= 0.15 && < 0.17
         , postgresql-simple   >= 0.7  && < 0.8
+        , postgresql-libpq    >= 0.10 && < 0.12
         , process             >= 1.6  && < 1.7
         , random              >= 1.2  && < 1.4
         , resource-pool       >= 0.4  && < 0.6
@@ -434,6 +523,7 @@ test-suite max-test
         Max.CliProxySpec
         Max.BilibiliSpec
         Max.Browser.ErrorSpec
+        Max.Browser.StateSpec
         Max.Browser.RegistrySpec
         Max.Browser.VaultSpec
         Max.Browser.ProfileSpec
@@ -457,6 +547,7 @@ test-suite max-test
         Max.IR.LowerSpec
         Max.IR.PromptSpec
         Max.LLM.AdmissionSpec
+        Max.LLM.TransportSpec
         Max.LLM.StreamSpec
         Max.LogSpec
         OneBot.ActionSpec
@@ -475,13 +566,16 @@ test-suite max-test
         Max.SessionSpec
         Max.ShutdownSpec
         Max.SkillsSpec
+        Max.Agent.FailureSpec
         Max.Task.PolicySpec
+        Max.Task.StateSpec
+        Max.Monitor.PolicySpec
         Max.TasksSpec
         Max.Effects.AgentSpec
         Max.Effects.BlobSpec
         Max.Effects.EmbeddingSpec
         Max.Effects.LLMSpec
-        Max.Effects.PlatformApiSpec
+        Max.Platform.RpcSpec
         Max.Effects.OutboundSpec
         Max.Effects.ToolOutputSpec
         Max.Effects.ToolsSpec
@@ -515,7 +609,6 @@ test-suite max-test
         , containers      >= 0.7  && < 0.9
         , directory       >= 1.3  && < 1.4
         , effectful       >= 2.5  && < 2.7
-        , effectful-postgresql >= 0.1 && < 0.2
         , file-embed      >= 0.0.15 && < 0.1
         , filepath        >= 1.5  && < 1.6
         , hspec           >= 2.11 && < 2.12
@@ -555,17 +648,21 @@ test-suite max-test-db
         Max.DB.TransactionSpec
         Max.ContextMaterializationSpec
         Max.ContextAdminSpec
+        Max.ConversationCapabilitiesSpec
+        Max.ResourceCapabilitiesSpec
         Max.EpisodeStoreSpec
         Max.HistorianSpec
         Max.DB.HistorySpec
         Max.DB.MediaSpec
         Max.MemoryStoreSpec
+        Max.MemoryCapabilitiesSpec
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
         Max.DB.TaskSpec
         Max.DB.BrowserSpec
         Max.DB.QQBackfillSpec
         Max.PromptIntegrationSpec
+        Max.PlatformCapabilitiesSpec
         Max.PlatformStoreSpec
         Max.PublicationSpec
         Max.MaxOpsNotificationSpec

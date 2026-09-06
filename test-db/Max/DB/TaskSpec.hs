@@ -1,37 +1,182 @@
 module Max.DB.TaskSpec (spec, seed, admit, claimOne, report, insertOccurrence) where
 
 import Control.Concurrent.Async (concurrently, mapConcurrently)
+import Control.Exception (bracket_)
 import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.Int (Int64)
 import Data.Foldable (for_)
+import Data.Int (Int64)
+import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
+import Data.Ord (Down (..))
 import Data.Text (Text)
+import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (execute, query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbLog)
+import Max.Agent.Execution (ExecutionAdmission (..))
+import Max.Agent.Runtime (durableExecutionAdmission)
+import Max.Browser.State qualified as BrowserState
+import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
 import Max.DB.Connection (DbPool)
 import Max.DB.Health (operationalChecks)
-import Max.Task.Policy (frontendDeadlineSeconds)
 import Max.DB.Monitor
+import Max.DB.Monitor.Occurrence (OccurrenceDraft (..), recordOccurrence)
 import Max.DB.Task
+import Max.DB.Task.Overview qualified as WorkQuery
+import Max.DB.Task.Query qualified as TaskQuery
+import Max.DB.Task.Record (databaseNow)
+import Max.Effects.MonitorControl qualified as MonitorCapability
+import Max.Effects.MonitorQuery qualified as MonitorQueryCapability
+import Max.Effects.TaskControl qualified as ControlCapability
+import Max.Effects.TaskExecution qualified as ExecutionCapability
+import Max.Effects.ToolControl (runToolControl)
 import Max.Effects.Tools (Tool (..))
+import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.IR (Body (..), Node (NText))
+import Max.Monitor.Control qualified as MonitorControl
 import Max.Monitor.Types
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
-import Max.Task.Types (TaskProfile (..))
+import Max.Task.Admission (AdmissionError (..))
+import Max.Task.Admission qualified as Admission
+import Max.Task.Execution (ExecutionFailure (..))
+import Max.Task.Overview qualified as WorkView
+import Max.Task.Policy (frontendDeadlineSeconds)
+import Max.Task.Query qualified as QueryView
+import Max.Task.State (FailureKind (..), TaskControlError (TaskCallerFenced, TaskNotFound), TaskOperation (Cancel, Steer))
+import Max.Task.State qualified as TaskState
+import Max.Task.ToolRuntime (taskToolsWithDatabase)
+import Max.Task.Types (TaskProfile (..), taskHandle)
 import Max.ToolContext
-import Max.Tools.Task (taskToolsFor)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
+  it "uses explicit Haskell settlement without business cascade triggers" $ do
+    rows <- withDb pool $ query "SELECT tgname FROM pg_trigger WHERE tgname IN ('task_attempt_settle','task_completion','browser_task_changed','monitor_fire_snapshot','zz_browser_fire_profile','browser_profile_changed')" ()
+    (rows :: [Only Text]) `shouldBe` []
+
+  it "reads typed, scoped task facts with nullable retry state and bounded event history" $ do
+    source@(_, _, actor) <- seed pool 900 1
+    identifier <- admit pool source "typed-detail"
+    task <- withDb pool (TaskQuery.readTask (GroupId 900) identifier)
+    case task of
+      Just details -> do
+        details.core.summary.taskId `shouldBe` identifier
+        details.core.nextAttemptAt `shouldBe` Nothing
+        details.browser `shouldBe` Nothing
+        details.progress `shouldBe` Nothing
+        details.usage `shouldBe` QueryView.TaskUsage 0 0
+      Nothing -> expectationFailure "typed task detail missing"
+    withDb pool (TaskQuery.readTask (GroupId 901) identifier) `shouldReturn` Nothing
+    withDb pool (TaskQuery.listTasks (GroupId 901)) `shouldReturn` []
+    for_ [1 .. 65 :: Int] $ \event -> do
+      _ <- withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing ("event " <> T.pack (show event)))
+      pure ()
+    detailed <- withDb pool (TaskQuery.readTask (GroupId 900) identifier)
+    case detailed of
+      Just details -> do
+        length details.events `shouldBe` 60
+        details.core.pendingEvents `shouldBe` 65
+        let ids = map (.eventId) details.events
+        ids `shouldBe` sortOn Down ids
+      Nothing -> expectationFailure "task disappeared after events"
+
+  it "renders completed task details from report, usage and workspace facts" $ do
+    (turn, message, actor) <- seed pool 900 1
+    admitted <- withDb pool (admitTaskReceipt turn message actor "rich-query" (T.replicate 2000 "x") Research (object []) Map.empty)
+    identifier <- case admitted of
+      Right (receipt :: Admission.TaskAdmissionReceipt) -> pure receipt.taskId
+      Left failure -> fail (show failure)
+    execution <- claimOne pool
+    withDb pool (recordTaskProgress execution.atrTurnId (object ["summary" .= ("working" :: Text)])) `shouldReturn` True
+    withDb pool (addAgentTurnUsage execution.atrTurnId 120 35 (Just 10))
+    _ <- withDb pool $ execute "INSERT INTO browser_workspaces(task_id,revision) VALUES(?,1)" (Only identifier)
+    withDb pool (taskReport execution.atrTurnId success) `shouldReturn` True
+    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
+    detail <- withDb pool (TaskQuery.readTask (GroupId 900) identifier)
+    case detail of
+      Just details -> do
+        T.length details.core.summary.objective `shouldBe` 2000
+        details.core.summary.status `shouldBe` TaskState.Succeeded
+        details.turns `shouldBe` [execution.atrTurnOrdinal.unTurnOrdinal]
+        details.usage `shouldBe` QueryView.TaskUsage 120 35
+        case details.browser of
+          Just browser -> browser.state `shouldBe` BrowserState.Cold
+          Nothing -> expectationFailure "workspace facts missing"
+        case details.progress of
+          Just progress -> progress.body `shouldBe` object ["status" .= ("running" :: Text), "summary" .= ("working" :: Text)]
+          Nothing -> expectationFailure "progress facts missing"
+        details.core.result `shouldSatisfy` maybe False (\case Object fields -> KeyMap.lookup "status" fields == Just (String "succeeded"); _ -> False)
+      Nothing -> expectationFailure "completed task missing"
+    summaries <- withDb pool (TaskQuery.listTasks (GroupId 900))
+    case summaries of
+      [summary] -> T.length summary.objective `shouldBe` 1500
+      _ -> expectationFailure "bounded task summary missing"
+
+  it "commits model admission and its round count in one transaction" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "atomic-model-admission"
+    execution <- claimOne pool
+    let install = withDb pool $ do
+          void $ execute "CREATE FUNCTION issue19_reject_round() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN IF NEW.llm_turns>OLD.llm_turns THEN RAISE EXCEPTION ''injected round failure''; END IF; RETURN NEW; END'" ()
+          void $ execute "CREATE TRIGGER issue19_reject_round BEFORE UPDATE ON agent_turns FOR EACH ROW EXECUTE FUNCTION issue19_reject_round()" ()
+        remove = withDb pool $ do
+          void $ execute "DROP TRIGGER issue19_reject_round ON agent_turns" ()
+          void $ execute "DROP FUNCTION issue19_reject_round()" ()
+    bracket_ install remove $
+      withDb pool (durableExecutionAdmission.eaReserveRound execution) `shouldThrow` anyException
+    reserved <- withDb pool $ query "SELECT rounds_reserved FROM durable_tasks WHERE task_id=?" (Only identifier)
+    reserved `shouldBe` [Only (0 :: Int)]
+    withDb pool (durableExecutionAdmission.eaReserveRound execution) `shouldReturn` True
+    counts <- withDb pool $ query "SELECT work.rounds_reserved,turn.llm_turns FROM durable_tasks work JOIN task_attempts USING(task_id) JOIN agent_turns turn USING(turn_id) WHERE work.task_id=?" (Only identifier)
+    counts `shouldBe` [(1 :: Int, 1 :: Int)]
+
+  it "rolls back tool budget when the pre-effect journal cannot commit" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "atomic-tool-admission"
+    execution <- claimOne pool
+    let start = JournalStart "call" "web_search" 1 "fixture" (object []) (toJSON ([] :: [Value])) "safe"
+        install = withDb pool $ do
+          void $ execute "CREATE FUNCTION issue19_reject_journal() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RAISE EXCEPTION ''injected journal failure''; END'" ()
+          void $ execute "CREATE TRIGGER issue19_reject_journal BEFORE INSERT ON execution_journal FOR EACH ROW EXECUTE FUNCTION issue19_reject_journal()" ()
+        remove = withDb pool $ do
+          void $ execute "DROP TRIGGER issue19_reject_journal ON execution_journal" ()
+          void $ execute "DROP FUNCTION issue19_reject_journal()" ()
+        admitCall = withDb pool (durableExecutionAdmission.eaStartTool (GroupId 900) execution (ExecutionWork ReserveCall) start)
+    bracket_ install remove $ admitCall `shouldThrow` anyException
+    reserved <- withDb pool $ query "SELECT calls_reserved FROM durable_tasks WHERE task_id=?" (Only identifier)
+    reserved `shouldBe` [Only (0 :: Int)]
+    _ <- admitCall
+    counts <- withDb pool $ query "SELECT work.calls_reserved,(SELECT count(*) FROM execution_journal WHERE turn_id=?) FROM durable_tasks work WHERE work.task_id=?" (execution.atrTurnId, identifier)
+    counts `shouldBe` [(1 :: Int, 1 :: Int64)]
+
+  it "rolls back the turn, task and notification when downstream settlement fails" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "atomic-settle"
+    execution <- claimOne pool
+    withDb pool (taskReport execution.atrTurnId success) `shouldReturn` True
+    let install = withDb pool $ do
+          void $ execute "CREATE FUNCTION issue19_reject_notice() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RAISE EXCEPTION ''injected notification failure''; END'" ()
+          void $ execute "CREATE TRIGGER issue19_reject_notice BEFORE INSERT ON task_notifications FOR EACH ROW EXECUTE FUNCTION issue19_reject_notice()" ()
+        remove = withDb pool $ do
+          void $ execute "DROP TRIGGER issue19_reject_notice ON task_notifications" ()
+          void $ execute "DROP FUNCTION issue19_reject_notice()" ()
+    bracket_ install remove $
+      withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing) `shouldThrow` anyException
+    states <- withDb pool $ query "SELECT work.status,turn.status FROM durable_tasks work JOIN task_attempts attempt USING(task_id) JOIN agent_turns turn USING(turn_id) WHERE work.task_id=?" (Only identifier)
+    states `shouldBe` [("running" :: Text, "starting" :: Text)]
+    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
+    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
+    notices <- withDb pool $ query "SELECT count(*) FROM task_notifications WHERE task_id=? AND kind='result'" (Only identifier)
+    notices `shouldBe` [Only (1 :: Int64)]
+
   it "runs every production health query against the current schema" $ do
     for_ operationalChecks $ \(label, _, sql) -> do
       rows <- withDb pool $ query sql ()
@@ -69,6 +214,13 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     void $ withDb pool $ execute "UPDATE task_notifications SET superseded_at=now()" ()
     healthCount pool "task_notification_exhausted" `shouldReturn` 0
 
+  it "does not reveal an idempotent admission to a different actor" $ do
+    source@(turn, message, _) <- seed pool 900 1
+    (_, _, other) <- seed pool 900 2
+    _ <- admit pool source "private-key"
+    denied <- withDb pool (admitTask turn message other "private-key" "guess" Research (object []) Map.empty)
+    hasError denied `shouldBe` True
+
   it "admits once per source key and transfers the source obligation atomically" $ do
     source@(turn, _, _) <- seed pool 900 1
     (left, right) <- concurrently (admit pool source "same") (admit pool source "same")
@@ -93,6 +245,70 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     denied <- withDb pool (taskControl (GroupId 901) actor True identifier "cancel" Nothing Nothing "wrong conversation")
     hasError denied `shouldBe` True
 
+  it "fences the task-control caller in the same transaction as its mutation" $ do
+    source@(turn, message, actor) <- seed pool 900 1
+    identifier <- admit pool source "caller-fence"
+    let scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor Map.empty False
+        control note = withDb pool . ControlCapability.runTaskControl scope $ ControlCapability.controlTask identifier Steer Nothing note
+    accepted <- control "before caller finishes"
+    accepted `shouldSatisfy` either (const False) (const True)
+    withDb pool (finishAgentTurn turn TurnSucceeded 0 Nothing Nothing)
+    control "stale caller" `shouldReturn` Left TaskCallerFenced
+    events <- withDb pool $ query "SELECT count(*) FROM task_events WHERE task_id=? AND body='stale caller'" (Only identifier)
+    events `shouldBe` [Only (0 :: Int64)]
+
+  it "binds task control to the caller's conversation" $ do
+    (turn, message, actor) <- seed pool 900 1
+    foreignSource <- seed pool 901 1
+    identifier <- admit pool foreignSource "other-conversation"
+    let scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor Map.empty False
+    rejected <- withDb pool . ControlCapability.runTaskControl scope $ ControlCapability.controlTask identifier Steer Nothing "guessed handle"
+    rejected `shouldBe` Left TaskNotFound
+
+  it "rechecks the bound caller identity against its current turn" $ do
+    (turn, message, _) <- seed pool 900 1
+    ownerSource@(_, _, owner) <- seed pool 900 2
+    identifier <- admit pool ownerSource "other-owner"
+    let forgedScope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message owner Map.empty False
+    rejected <- withDb pool . ControlCapability.runTaskControl forgedScope $ ControlCapability.controlTask identifier Cancel Nothing "wrong caller"
+    rejected `shouldBe` Left TaskCallerFenced
+
+  it "takes admission authority from the bound scope rather than input JSON" $ do
+    (turn, message, actor) <- seed pool 900 1
+    let grants = Map.fromList [("web_search", "search-grant"), ("browser_navigate", "browser-grant")]
+        scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor grants False
+    admitted <-
+      withDb pool . ControlCapability.runTaskControl scope $
+        ControlCapability.startTask "scoped-grants" "research" Research (object ["grants" .= Map.singleton ("poke" :: Text) ("invented" :: Text)])
+    case admitted of
+      Right (receipt :: Admission.TaskAdmissionReceipt) -> receipt.grants `shouldBe` Map.singleton "web_search" "search-grant"
+      Left failure -> expectationFailure (show failure)
+
+  it "requires a bound execution before accepting a report" $ do
+    rejected <- withDb pool . ExecutionCapability.runTaskExecution Nothing $ ExecutionCapability.reportProgress "no owner"
+    rejected `shouldBe` Left ExecutionContextMissing
+
+  it "enforces the profile grant ceiling at task admission even without a parent" $ do
+    (turn, message, actor) <- seed pool 900 1
+    rejected <- withDb pool (admitTaskReceipt turn message actor "wider-profile" "research" Research (object []) (Map.singleton "browser_navigate" "browser-grant"))
+    rejected `shouldBe` Left AdmissionWidenedAuthority
+    tasks <- withDb pool $ query "SELECT count(*) FROM durable_tasks" ()
+    tasks `shouldBe` [Only (0 :: Int64)]
+
+  it "enforces frozen profile policy during monitor task admission" $ do
+    (turn, message, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    let grants = Map.singleton "browser_navigate" "browser-grant"
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 grants)
+    insertOccurrence pool monitor "profile-ceiling"
+    [fire] <- withDb pool (claimElaboratedMonitorFires "monitor-test" now 60 10)
+    rejected <- withDb pool (admitMonitorTask "monitor-test" fire.emfFireId Nothing grants message)
+    hasError rejected `shouldBe` True
+    tasks <- withDb pool $ query "SELECT count(*) FROM durable_tasks" ()
+    tasks `shouldBe` [Only (0 :: Int64)]
+    linked <- withDb pool $ query "SELECT count(*) FROM monitor_fires WHERE task_id IS NOT NULL" ()
+    linked `shouldBe` [Only (0 :: Int64)]
+
   it "admits browser and sandbox through task_start without an inline Plan schema" $ do
     (turn, message, actor) <- seed pool 900 1
     output <- newTurnOutputContext turn
@@ -101,7 +317,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
                 mkToolContext
                   (TurnIdentity (GroupId 900) message (UserId 1) (UserId 99) actor Nothing (Just output))
                   (TurnCapabilities True False False noAdvertisedCaps False grants Nothing False)
-          withDbLog pool $ case [tool | tool <- taskToolsFor toolContext, tool.toolName == "task_start"] of
+          withDbLog pool $ fmap fst . runToolControl $ case [tool | tool <- taskToolsWithDatabase toolContext, tool.toolName == "task_start"] of
             [tool] -> tool.toolRun (object ["key" .= profile, "objective" .= ("bounded work" :: Text), "profile" .= profile])
             _ -> error "task_start missing"
     denied <- invokeWith Map.empty ("browser" :: Text)
@@ -127,7 +343,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     _ <- admit pool source "background"
     background <- claimOne pool
     withDb pool (claimFrontend front) `shouldReturn` True
-    withDb pool (authorizeTaskStep background.atrTurnId (Just "web_search") True) `shouldReturn` True
+    withDb pool (authorizeTaskStep background.atrTurnId (ExecutionWork ReserveCall)) `shouldReturn` True
     (other, _, _) <- seed pool 900 2
     withDb pool (claimFrontend other) `shouldReturn` False
     withDb pool (finishAgentTurn front TurnSucceeded 0 Nothing Nothing)
@@ -139,7 +355,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (claimFrontend first) `shouldReturn` True
     void $ withDb pool $ execute "UPDATE conversation_frontends SET lease_until=now()-interval '1 second'" ()
     withDb pool (claimFrontend second) `shouldReturn` True
-    withDb pool (authorizeTaskStep first.atrTurnId (Just "task_finish") False) `shouldReturn` False
+    withDb pool (authorizeTaskStep first.atrTurnId ExecutionCheckpoint) `shouldReturn` False
     withDb pool (enqueueOutbound (draft first)) `shouldThrow` anyException
 
   it "blocks direct background publication at the canonical outbox boundary" $ do
@@ -153,7 +369,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     identifier <- admit pool source "cancel"
     execution <- claimOne pool
     _ <- withDb pool (taskControl (GroupId 900) actor False identifier "cancel" Nothing Nothing "stop now")
-    withDb pool (authorizeTaskStep execution.atrTurnId (Just "web_search") True) `shouldReturn` False
+    withDb pool (authorizeTaskStep execution.atrTurnId (ExecutionWork ReserveCall)) `shouldReturn` False
     withDb pool (taskReport execution.atrTurnId success) `shouldReturn` False
     withDb pool (isTaskTurn execution.atrTurnId) `shouldReturn` True
     withDb pool (loadTaskExecution execution.atrTurnId) `shouldReturn` Nothing
@@ -164,7 +380,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     source@(_, _, actor) <- seed pool 900 1
     identifier <- admit pool source "replace"
     old <- claimOne pool
-    withDb pool (authorizeTaskStep old.atrTurnId (Just "web_search") True) `shouldReturn` True
+    withDb pool (authorizeTaskStep old.atrTurnId (ExecutionWork ReserveCall)) `shouldReturn` True
     changed <- withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "new objective")
     hasError changed `shouldBe` False
     stale <- withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "lost update")
@@ -196,7 +412,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     source <- seed pool 900 1
     identifier <- admit pool source "recover"
     first <- claimOne pool
-    withDb pool (authorizeTaskStep first.atrTurnId (Just "web_search") True) `shouldReturn` True
+    withDb pool (authorizeTaskStep first.atrTurnId (ExecutionWork ReserveCall)) `shouldReturn` True
     _ <- withDb pool (startJournalExecution first (JournalStart "first" "web_search" 1 "hash" (object []) (toJSON ([] :: [Text])) "retry-safe"))
     void $ withDb pool $ execute "UPDATE task_attempts SET lease_until=now()-interval '1 second' WHERE turn_id=?" (Only first.atrTurnId)
     second <- claimOne pool
@@ -215,7 +431,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     hasError child `shouldBe` False
     descendant <- claimOne pool
     void $ withDb pool $ execute "UPDATE durable_tasks SET max_calls=1 WHERE task_id=?" (Only identifier)
-    answers <- mapConcurrently (\turn -> withDb pool (authorizeTaskStep turn.atrTurnId (Just "web_search") True)) [parent, descendant]
+    answers <- mapConcurrently (\turn -> withDb pool (authorizeTaskStep turn.atrTurnId (ExecutionWork ReserveCall))) [parent, descendant]
     length (filter id answers) `shouldBe` 1
 
   it "prevents nested grants from exceeding the parent grant map" $ do
@@ -290,7 +506,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     Just frontend <- withDb pool (taskTurnRef notification)
     withDb pool (claimFrontend frontend) `shouldReturn` True
     _ <- withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "new specification")
-    withDb pool (authorizeTaskStep notification (Just "task_finish") False) `shouldReturn` False
+    withDb pool (authorizeTaskStep notification ExecutionCheckpoint) `shouldReturn` False
     withDb pool (enqueueOutbound (draft frontend)) `shouldThrow` anyException
 
   it "resolves the source obligation only after the coordinated report is recorded" $ do
@@ -325,11 +541,76 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     [_] <- withDb pool admitTaskNotification
     withDb pool (taskForReply (GroupId 900) publication.canonicalMessageId) `shouldReturn` Just identifier
 
-  it "exposes a bounded admin projection for durable tasks, monitors and obligations" $ do
-    source <- seed pool 900 1
-    _ <- admit pool source "admin"
-    overview <- withDb pool durableWorkOverview
-    hasError overview `shouldBe` False
+  it "fences monitor mutations when the bound frontend lease expires" $ do
+    (turn, _, actor) <- seed pool 900 1
+    withDb pool (claimFrontend turn) `shouldReturn` True
+    now <- getCurrentTime
+    let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor Map.empty False
+        reminder = MonitorCapability.armMonitor (MonitorCapability.CannedReminder "reminder" Nothing (addUTCTime 60 now))
+    Right monitor <- withDb pool (MonitorCapability.runMonitorControl scope reminder)
+    void $ withDb pool (execute "UPDATE conversation_frontends SET lease_until=now()-interval '1 second' WHERE turn_id=?" (Only turn.atrTurnId))
+    withDb pool (MonitorCapability.runMonitorControl scope reminder) `shouldReturn` Left MonitorControl.ArmingCallerFenced
+    withDb pool (MonitorCapability.runMonitorControl scope (MonitorCapability.controlMonitor monitor.mrMonitorOrdinal MonitorControl.CancelMonitor False)) `shouldReturn` Left MonitorControl.MonitorCallerFenced
+    rows <- withDb pool (query "SELECT status FROM monitors" ())
+    rows `shouldBe` [Only ("armed" :: Text)]
+
+  it "binds monitor identity, role and query scope outside tool arguments" $ do
+    (turn, _, actor) <- seed pool 900 1
+    (_, _, otherActor) <- seed pool 901 2
+    withDb pool (claimFrontend turn) `shouldReturn` True
+    now <- getCurrentTime
+    let scope = MonitorCapability.MonitorControlScope (GroupId 900) (Just turn) actor (Map.singleton "context_search" "frozen") False
+        reminder = MonitorCapability.armMonitor (MonitorCapability.CannedReminder "reminder" Nothing (addUTCTime 60 now))
+        elaborated = MonitorCapability.armMonitor (MonitorCapability.TimeMonitor "watch" Nothing (addUTCTime 60 now))
+    withDb pool (MonitorCapability.runMonitorControl (scope {MonitorCapability.principal = otherActor}) reminder) `shouldReturn` Left MonitorControl.ArmingCallerFenced
+    withDb pool (MonitorCapability.runMonitorControl (scope {MonitorCapability.group = GroupId 901}) reminder) `shouldReturn` Left MonitorControl.ArmingCallerFenced
+    withDb pool (MonitorCapability.runMonitorControl scope elaborated) `shouldReturn` Left MonitorControl.MonitorArmingForbidden
+    Right monitor <- withDb pool (MonitorCapability.runMonitorControl (scope {MonitorCapability.armingAllowed = True}) elaborated)
+    grants <- withDb pool (query "SELECT effect_ceiling->'tool_grants' FROM monitors WHERE monitor_id=?" (Only monitor.mrMonitorId))
+    grants `shouldBe` [Only (object ["context_search" .= ("frozen" :: Text)])]
+    withDb pool (MonitorQueryCapability.runMonitorQuery (conversationScopeFor (GroupId 901)) (MonitorQueryCapability.readMonitorHistory monitor.mrMonitorOrdinal)) `shouldReturn` Nothing
+    cancelled <- withDb pool (MonitorCapability.runMonitorControl scope (MonitorCapability.controlMonitor monitor.mrMonitorOrdinal MonitorControl.CancelMonitor False))
+    cancelled `shouldSatisfy` either (const False) (const True)
+
+  it "reads scoped, bounded monitor history as typed facts" $ do
+    (turn, _, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
+    for_ [1 .. 155 :: Int] $ \index -> insertOccurrence pool monitor (T.pack (show index))
+    void $ withDb pool (execute "UPDATE monitor_fires SET trigger_evidence=? WHERE monitor_id=?" (T.replicate 6000 "x", monitor.mrMonitorId))
+    Just history <- withDb pool (WorkQuery.readMonitorHistory (GroupId 900) monitor.mrMonitorOrdinal.unMonitorOrdinal)
+    history.definition.goal `shouldBe` "watch"
+    history.definition.status `shouldBe` WorkView.Armed
+    length history.fires `shouldBe` 150
+    map (.fireId) history.fires `shouldBe` map (.fireId) (sortOn (Down . (.fireId)) history.fires)
+    map (T.length . (.evidence)) history.fires `shouldBe` replicate 150 5000
+    withDb pool (WorkQuery.readMonitorHistory (GroupId 901) monitor.mrMonitorOrdinal.unMonitorOrdinal) `shouldReturn` Nothing
+    toJSON history `shouldSatisfy` (\case Object fields -> KeyMap.lookup "handle" fields == Just (String "m#1"); _ -> False)
+
+  it "exposes typed admin facts with active task links, coalescing and obligations" $ do
+    (turn, seedMessage, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
+    insertOccurrence pool monitor "active"
+    claimedAt <- getCurrentTime
+    [fire] <- withDb pool (claimElaboratedMonitorFires "overview" claimedAt 60 10)
+    admitted <- withDb pool (admitMonitorTask "overview" fire.emfFireId Nothing Map.empty seedMessage)
+    hasError admitted `shouldBe` False
+    insertOccurrence pool monitor "pending"
+    insertOccurrence pool monitor "coalesced"
+    overview <- withDb pool WorkQuery.readWorkOverview
+    length overview.tasks `shouldBe` 1
+    length overview.monitors `shouldBe` 1
+    overview.unresolvedRequests `shouldBe` 0
+    [task] <- pure overview.tasks
+    [view] <- pure overview.monitors
+    task.groupId `shouldBe` 900
+    task.result `shouldBe` Nothing
+    view.coalesced `shouldBe` 2
+    view.activeTasks `shouldBe` [WorkView.ActiveTask task.taskId TaskState.Queued]
+    toJSON view `shouldSatisfy` (\case Object fields -> KeyMap.lookup "active_tasks" fields == Just (String (taskHandle task.taskId <> " queued")); _ -> False)
+    edge <- withDb pool durableWorkOverview
+    edge `shouldBe` toJSON overview
 
   it "delivers a completed child to its waiting parent, not the room" $ do
     source@(_, message, actor) <- seed pool 900 1
@@ -465,7 +746,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     _ <- withDb pool (monitorControl (GroupId 900) actor False monitor.mrMonitorOrdinal.unMonitorOrdinal "cancel" Nothing "" "coalesce" 8 "cancel" True)
     status pool identifier `shouldReturn` "cancelled"
 
-
   it "uses fivefold task quotas without granting extra authority" $ do
     source <- seed pool 900 1
     identifier <- admit pool source "limits"
@@ -476,8 +756,8 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     source <- seed pool 900 1
     identifier <- admit pool source "transient"
     first <- claimOne pool
-    withDb pool (authorizeTaskStep first.atrTurnId (Just "web_search") True) `shouldReturn` True
-    withDb pool (recordTaskFailure first.atrTurnId "HTTP 503 unavailable" True) `shouldReturn` True
+    withDb pool (authorizeTaskStep first.atrTurnId (ExecutionWork ReserveCall)) `shouldReturn` True
+    withDb pool (recordTaskFailure first.atrTurnId "HTTP 503 unavailable" Transient) `shouldReturn` True
     withDb pool (finishAgentTurn first TurnFailed 1 (Just "HTTP 503 unavailable") Nothing)
     status pool identifier `shouldReturn` "retrying"
     withDb pool (claimTask "too-early") `shouldReturn` []
@@ -490,14 +770,14 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     second `shouldNotBe` first
     counters <- withDb pool $ query "SELECT attempt,calls_reserved FROM durable_tasks WHERE task_id=?" (Only identifier)
     counters `shouldBe` [(2 :: Int, 1 :: Int)]
-    withDb pool (recordTaskFailure first.atrTurnId "stale" True) `shouldReturn` False
+    withDb pool (recordTaskFailure first.atrTurnId "stale" Transient) `shouldReturn` False
 
   it "does not automatically retry ambiguous effects" $ do
     source <- seed pool 900 1
     identifier <- admit pool source "ambiguous"
     execution <- claimOne pool
     _ <- withDb pool (startJournalExecution execution (JournalStart "uncertain" "sandbox_exec" 1 "hash" (object []) (toJSON ([] :: [Text])) "retry-unsafe"))
-    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 503" True) `shouldReturn` True
+    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 503" Transient) `shouldReturn` True
     withDb pool (finishAgentTurn execution TurnFailed 1 Nothing Nothing)
     status pool identifier `shouldReturn` "waiting"
     withDb pool (claimTask "no-replay") `shouldReturn` []
@@ -506,7 +786,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     source <- seed pool 900 1
     identifier <- admit pool source "permanent"
     execution <- claimOne pool
-    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 403" False) `shouldReturn` True
+    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 403" Permanent) `shouldReturn` True
     withDb pool (finishAgentTurn execution TurnFailed 1 Nothing Nothing)
     status pool identifier `shouldReturn` "failed"
 
@@ -525,7 +805,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (claimFrontend frontend) `shouldReturn` True
     void $ withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "new objective")
     withDb pool (recordTaskProgress execution.atrTurnId (progress "too late")) `shouldReturn` False
-    withDb pool (authorizeTaskStep notification (Just "output") False) `shouldReturn` False
+    withDb pool (authorizeTaskStep notification (ExecutionWork CheckOnly)) `shouldReturn` False
     withDb pool (loadTaskNotification notification) `shouldReturn` Nothing
 
   it "supersedes pending progress without suppressing the final result" $ do
@@ -603,7 +883,6 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     rows <- withDb pool $ query "SELECT count(*) FROM task_notifications WHERE kind='result'" ()
     rows `shouldBe` [Only (2 :: Int64)]
 
-
   it "keeps progress publication separate from the source obligation" $ do
     source@(_, message, _) <- seed pool 900 1
     _ <- admit pool source "visible-progress"
@@ -626,7 +905,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     identifier <- admit pool source "retry-budget"
     execution <- claimOne pool
     void $ withDb pool $ execute "UPDATE durable_tasks SET calls_reserved=max_calls WHERE task_id=?" (Only identifier)
-    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 503" True) `shouldReturn` True
+    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 503" Transient) `shouldReturn` True
     withDb pool (finishAgentTurn execution TurnFailed 1 Nothing Nothing)
     status pool identifier `shouldReturn` "failed"
     withDb pool (claimTask "spent") `shouldReturn` []
@@ -635,7 +914,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     source@(_, _, actor) <- seed pool 900 1
     identifier <- admit pool source "retry-feedback"
     execution <- claimOne pool
-    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 503" True) `shouldReturn` True
+    withDb pool (recordTaskFailure execution.atrTurnId "HTTP 503" Transient) `shouldReturn` True
     withDb pool (finishAgentTurn execution TurnFailed 1 Nothing Nothing)
     void $ withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing "extra evidence")
     status pool identifier `shouldReturn` "retrying"
@@ -714,12 +993,9 @@ finishOccurrence pool monitor seedMessage key outcome = do
   withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
 
 insertOccurrence :: DbPool -> MonitorRef -> Text -> IO ()
-insertOccurrence pool monitor key =
-  void $
-    withDb pool $
-      execute
-        "INSERT INTO monitor_fires(monitor_id,conversation_id,scheduled_at,idempotency_key) SELECT monitor_id,conversation_id,now(),? FROM monitors WHERE monitor_id=?"
-        (key, monitor.mrMonitorId)
+insertOccurrence pool monitor key = void $ withDb pool $ do
+  now <- databaseNow
+  recordOccurrence monitor.mrMonitorId (OccurrenceDraft key now Nothing "" False)
 
 draft :: AgentTurnRef -> OutboundDraft
 draft turn =

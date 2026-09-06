@@ -31,25 +31,29 @@ where
 
 import Control.Monad (forM, forM_, unless, when)
 import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
+import Data.Either (fromRight)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Either (fromRight)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple (Only (..), Query)
-import Database.PostgreSQL.Simple.FromRow (FromRow (..), field)
+import Database.PostgreSQL.Simple.FromRow (FromRow (..), RowParser, field)
 import Database.PostgreSQL.Simple.ToField (ToField (..), toJSONField)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
+import Max.DB.Codec (queryRows)
+import Max.DB.Monitor.Occurrence qualified as Occurrence
 import Max.DB.Transaction (withTransaction)
 import Max.IR (Body, Phase (Canonical))
+import Max.Monitor.Control (MonitorArmError (..))
 import Max.Monitor.Types
+import Max.Monitor.View (ArmedMonitor (..), TimeMonitor (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), PrincipalIdentityId)
 import Max.Turn.Types (AgentTurnId, AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..))
@@ -59,37 +63,18 @@ newtype Jsonb = Jsonb Value
 instance ToField Jsonb where
   toField (Jsonb value) = toJSONField value
 
-data MonitorArmError
-  = ArmedMonitorCapReached
-  | ConditionMonitorCapReached
-  | ArmingTurnOutsideConversation
-  deriving stock (Show, Eq)
-
-data ArmedMonitor = ArmedMonitor
-  { amRef :: !MonitorRef,
-    amGoal :: !Text,
-    amTriggerKind :: !Text,
-    amContinuationKind :: !Text,
-    amNextFireAt :: !(Maybe UTCTime),
-    amExpiresAt :: !(Maybe UTCTime),
-    amFireCount :: !Int64,
-    amMaxFireCount :: !(Maybe Int64),
-    amCreatedAt :: !UTCTime
-  }
-  deriving stock (Show, Eq)
-
-instance FromRow ArmedMonitor where
-  fromRow =
-    ArmedMonitor
-      <$> (MonitorRef <$> field <*> field)
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
-      <*> field
+armedMonitorRow :: RowParser ArmedMonitor
+armedMonitorRow =
+  ArmedMonitor
+    <$> (MonitorRef <$> field <*> field)
+    <*> field
+    <*> field
+    <*> field
+    <*> field
+    <*> field
+    <*> field
+    <*> field
+    <*> field
 
 data ElaboratedMonitorFire = ElaboratedMonitorFire
   { emfFireId :: !MonitorFireId,
@@ -155,56 +140,39 @@ instance FromRow ElaboratedMonitorFire where
           emfAdmittedTurn = AgentTurnRef <$> admittedTurnId <*> admittedTurnOrdinal
         }
 
-data TimeMonitor = TimeMonitor
-  { tmRef :: !MonitorRef,
-    tmGroupId :: !Int64,
-    tmAuthorPrincipalId :: !(Maybe Int64),
-    tmArmingTurn :: !(Maybe AgentTurnRef),
-    tmText :: !Text,
-    tmCron :: !(Maybe Text),
-    tmNextFireAt :: !UTCTime,
-    tmCreatedAt :: !UTCTime,
-    tmFireCount :: !Int64,
-    tmDeliveryAttempts :: !Int,
-    tmNextAttemptAt :: !(Maybe UTCTime),
-    tmLastError :: !(Maybe Text),
-    tmParkedAt :: !(Maybe UTCTime)
-  }
-  deriving stock (Show, Eq)
-
-instance FromRow TimeMonitor where
-  fromRow = do
-    monitorId <- field
-    ordinal <- field
-    groupId <- field
-    author <- field
-    armingTurnId <- field
-    armingTurnOrdinal <- field
-    text <- field
-    cron <- field
-    nextFire <- field
-    created <- field
-    fireCount <- field
-    attempts <- field
-    nextAttempt <- field
-    lastError <- field
-    parked <- field
-    pure
-      TimeMonitor
-        { tmRef = MonitorRef monitorId ordinal,
-          tmGroupId = groupId,
-          tmAuthorPrincipalId = author,
-          tmArmingTurn = AgentTurnRef <$> armingTurnId <*> armingTurnOrdinal,
-          tmText = text,
-          tmCron = cron,
-          tmNextFireAt = nextFire,
-          tmCreatedAt = created,
-          tmFireCount = fireCount,
-          tmDeliveryAttempts = attempts,
-          tmNextAttemptAt = nextAttempt,
-          tmLastError = lastError,
-          tmParkedAt = parked
-        }
+timeMonitorRow :: RowParser TimeMonitor
+timeMonitorRow = do
+  monitorId <- field
+  ordinal <- field
+  groupId <- field
+  author <- field
+  armingTurnId <- field
+  armingTurnOrdinal <- field
+  text <- field
+  cron <- field
+  nextFire <- field
+  created <- field
+  fireCount <- field
+  attempts <- field
+  nextAttempt <- field
+  lastError <- field
+  parked <- field
+  pure
+    TimeMonitor
+      { tmRef = MonitorRef monitorId ordinal,
+        tmGroupId = groupId,
+        tmAuthorPrincipalId = author,
+        tmArmingTurn = AgentTurnRef <$> armingTurnId <*> armingTurnOrdinal,
+        tmText = text,
+        tmCron = cron,
+        tmNextFireAt = nextFire,
+        tmCreatedAt = created,
+        tmFireCount = fireCount,
+        tmDeliveryAttempts = attempts,
+        tmNextAttemptAt = nextAttempt,
+        tmLastError = lastError,
+        tmParkedAt = parked
+      }
 
 -- | Effective user-visible deadline: an occurrence in retry/backoff wins over
 -- the unchanged schedule time, matching the legacy reminder contract.
@@ -266,8 +234,7 @@ armCannedTimeMonitor (GroupId legacyGroup) (PrincipalId principal) armingTurn bo
         \ (conversation_id, monitor_ordinal, armed_by_principal_id, arming_turn_id, \
         \  goal_text, trigger_kind, trigger_version, trigger_spec, continuation_kind, \
         \  effect_ceiling, status, schedule_cron, next_fire_at) \
-        \ VALUES (?, ?, ?, ?, ?, 'time_cron', 1, \
-        \   jsonb_strip_nulls(jsonb_build_object('kind','TimeCron','version',1,'at',?::timestamptz,'cron',?::text)), \
+        \ VALUES (?, ?, ?, ?, ?, 'time_cron', 1, ?, \
         \   'canned', '{}'::jsonb, 'armed', ?, ?) \
         \ RETURNING monitor_id"
         ( conversation,
@@ -275,8 +242,7 @@ armCannedTimeMonitor (GroupId legacyGroup) (PrincipalId principal) armingTurn bo
           principal,
           fmap (.atrTurnId) armingTurn,
           body,
-          fireAt,
-          cron,
+          Jsonb (object (["kind" .= ("TimeCron" :: Text), "version" .= (1 :: Int), "at" .= fireAt] <> ["cron" .= expression | Just expression <- [cron]])),
           cron,
           fireAt
         )
@@ -426,7 +392,8 @@ listCannedTimeMonitors ::
   ConversationScope ->
   Eff es [TimeMonitor]
 listCannedTimeMonitors scope =
-  query
+  queryRows
+    timeMonitorRow
     "SELECT m.monitor_id, m.monitor_ordinal, c.legacy_group_id, m.armed_by_principal_id, \
     \       m.arming_turn_id, arming.turn_ordinal, m.goal_text, m.schedule_cron, \
     \       m.next_fire_at, m.created_at, m.fire_count, \
@@ -450,7 +417,8 @@ listArmedMonitors ::
   ConversationScope ->
   Eff es [ArmedMonitor]
 listArmedMonitors scope =
-  query
+  queryRows
+    armedMonitorRow
     "SELECT m.monitor_id, m.monitor_ordinal, m.goal_text, m.trigger_kind, \
     \       m.continuation_kind, m.next_fire_at, m.expires_at, m.fire_count, \
     \       m.max_fire_count, m.created_at \
@@ -557,18 +525,26 @@ admitDueTimeMonitors ::
   UTCTime ->
   Eff es Int64
 admitDueTimeMonitors now = withTransaction $ do
+  locked <-
+    query
+      "SELECT c.conversation_id FROM conversations c WHERE EXISTS(SELECT 1 FROM monitors m WHERE m.conversation_id=c.conversation_id AND m.status='armed'\
+      \ AND (m.expires_at<=? OR m.continuation_kind='elaborated' AND m.armed_by_principal_id IS NULL OR m.trigger_kind='time_cron' AND m.next_fire_at<=?))\
+      \ ORDER BY c.conversation_id FOR UPDATE OF c SKIP LOCKED"
+      (now, now)
+  let conversations = PGArray [identifier | Only identifier <- (locked :: [Only Int64])]
+
   expiredByTtl <-
     query
       "UPDATE monitors SET status='expired', status_reason='ttl_expired', next_fire_at=NULL, updated_at=now() \
-      \ WHERE status='armed' AND expires_at IS NOT NULL AND expires_at<=? \
+      \ WHERE conversation_id=ANY(?) AND status='armed' AND expires_at IS NOT NULL AND expires_at<=? \
       \ RETURNING monitor_id"
-      (Only now)
+      (conversations, now)
   missingOwners <-
     query
       "UPDATE monitors SET status='expired', status_reason='arming_principal_missing', next_fire_at=NULL, updated_at=now() \
-      \ WHERE status='armed' AND continuation_kind='elaborated' AND armed_by_principal_id IS NULL \
+      \ WHERE conversation_id=ANY(?) AND status='armed' AND continuation_kind='elaborated' AND armed_by_principal_id IS NULL \
       \ RETURNING monitor_id"
-      ()
+      (Only conversations)
   let expiredIds =
         [monitorId | Only monitorId <- (expiredByTtl :: [Only MonitorId])]
           <> [monitorId | Only monitorId <- (missingOwners :: [Only MonitorId])]
@@ -579,20 +555,27 @@ admitDueTimeMonitors now = withTransaction $ do
         \ WHERE monitor_id=ANY(?) AND admission_state='pending' AND cancelled_at IS NULL"
         (Only (PGArray expiredIds))
     pure ()
-  execute
-    "WITH due AS ( \
-    \  SELECT m.monitor_id, m.conversation_id, m.next_fire_at FROM monitors m \
-    \  WHERE m.status='armed' AND m.trigger_kind='time_cron' \
-    \    AND m.next_fire_at<=? \
-    \    AND NOT EXISTS (SELECT 1 FROM monitor_fires f WHERE f.monitor_id=m.monitor_id \
-    \      AND f.admission_state='pending' AND f.cancelled_at IS NULL) \
-    \  FOR UPDATE OF m SKIP LOCKED \
-    \) INSERT INTO monitor_fires (monitor_id, conversation_id, idempotency_key, scheduled_at, trigger_evidence) \
-    \SELECT due.monitor_id, due.conversation_id, \
-    \       'time:' || due.monitor_id::text || ':' || extract(epoch FROM due.next_fire_at)::text, \
-    \       due.next_fire_at, 'TimeCron reached ' || due.next_fire_at::text FROM due \
-    \ON CONFLICT DO NOTHING"
-    (Only now)
+  due <-
+    query
+      "SELECT m.monitor_id,m.next_fire_at FROM monitors m WHERE m.conversation_id=ANY(?) AND m.status='armed' AND m.trigger_kind='time_cron'\
+      \ AND m.next_fire_at<=? AND NOT EXISTS(SELECT 1 FROM monitor_fires f WHERE f.monitor_id=m.monitor_id AND f.admission_state='pending' AND f.cancelled_at IS NULL)\
+      \ ORDER BY m.monitor_id FOR UPDATE OF m SKIP LOCKED"
+      (conversations, now)
+  inserted <- forM (due :: [(MonitorId, UTCTime)]) $ \(identifier, scheduled) -> do
+    definition <- Occurrence.loadDefinition identifier
+    case definition of
+      Nothing -> pure 0
+      Just current -> do
+        let draft =
+              Occurrence.OccurrenceDraft
+                ("time:" <> T.pack (show identifier.unMonitorId) <> ":" <> T.pack (show scheduled))
+                scheduled
+                Nothing
+                ("TimeCron reached " <> T.pack (show scheduled))
+                False
+        occurrence <- Occurrence.insertOccurrenceWithin current draft
+        pure $ maybe 0 (const 1) occurrence
+  pure (sum inserted)
 
 -- | Evaluate one exact canonical ingest row.  The caller invokes this only
 -- for a host-authenticated LiveDelivery inbound message, from inside the same
@@ -612,6 +595,7 @@ evaluateLedgerMatches ::
   UTCTime ->
   Eff es Int64
 evaluateLedgerMatches conversation ingestSeq canonical sender self mentionPrincipals rendered body observedAt = do
+  (_ :: [Only Int64]) <- query "SELECT conversation_id FROM conversations WHERE conversation_id=? FOR UPDATE" (Only conversation)
   -- A max-count expiry still allows the already-admitted last fire to cross
   -- into its turn; TTL expiry cancels every pending occurrence quietly.
   ttlRows <-
@@ -673,14 +657,14 @@ evaluateLedgerMatches conversation ingestSeq canonical sender self mentionPrinci
                         "LedgerMatch matched #"
                           <> T.pack (show messageId)
                           <> if T.null rendered then "" else ": " <> rendered
-                inserted <-
-                  execute
-                    "INSERT INTO monitor_fires \
-                    \ (monitor_id, conversation_id, idempotency_key, scheduled_at, trigger_canonical_message_id, \
-                    \  trigger_evidence, counted_at_admission) \
-                    \ VALUES (?, ?, 'ledger:' || ?::text || ':' || ?::text, ?, ?, ?, true) \
-                    \ ON CONFLICT DO NOTHING"
-                    (monitorId, conversation, monitorId, messageId, observedAt, messageId, evidence)
+                definition <- Occurrence.loadDefinition monitorId
+                occurrence <- case definition of
+                  Nothing -> pure Nothing
+                  Just current ->
+                    Occurrence.insertOccurrenceWithin
+                      current
+                      (Occurrence.OccurrenceDraft ("ledger:" <> T.pack (show monitorId.unMonitorId) <> ":" <> T.pack (show messageId)) observedAt (Just messageId) evidence True)
+                let inserted = maybe 0 (const 1) occurrence
                 when (inserted == 1 && maybe False (newCount >=) maxCount) $ do
                   _ <-
                     execute

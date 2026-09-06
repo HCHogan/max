@@ -13,9 +13,6 @@
 -- delivery worker owns platform emission, receipts and recovery.
 module Max.Tools.Files
   ( fileToolsFor,
-
-    -- * Exposed for tests
-    captionBody,
   )
 where
 
@@ -23,50 +20,47 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromMaybe, isJust)
-import Data.Ord (clamp)
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone)
 import Effectful
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection)
-import Max.ConversationScope (ConversationScope)
-import Max.DB.Files (FileRecord (..))
-import Max.DB.Files qualified as DBFiles
-import Max.Effects.Blob (Blob, blobRefSha256, putBlob, resolveBlobHostPath)
+import Max.Effects.Blob (Blob, blobRefSha256, putBlob)
+import Max.Effects.BlobHost (BlobHost, resolveBlobHostPath)
+import Max.Effects.MediaQuery (MediaQuery)
+import Max.Effects.MediaQuery qualified as MediaQuery
 import Max.Effects.Outbound (Outbound, OutboundDeliveryScope (..), OutboundRequest (..), PublicationResult (..), sendRecorded)
 import Max.Effects.Tools (Tool (..))
+import Max.File.Types (FileRecord (..))
 import Max.IR
 import Max.MessageKind (MessageKind (KindChat))
-import Max.Platform.Store (ConversationRoster (..), RosterIdentity (..), conversationRoster)
-import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..))
-import Max.Reply (chunkSource, planReply)
-import Max.Reply.Resolve
+import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Sandbox.Docker (readSandboxArtifact, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
-import Max.ToolContext (ToolContext, toolConversationScope, toolGroupId, toolOutputCapabilities, toolTurnOutputContext)
+import Max.ToolContext (ToolContext, toolGroupId, toolTurnOutputContext)
 import Max.Tools.Schema (integerParam, stringParam, toolObject, withKeys)
 import Max.Turn.Types (TurnOutputContext, nextTurnOutputLink)
 import OneBot.Types (GroupId (..))
 import System.FilePath (takeFileName)
 
 fileToolsFor ::
-  ( Blob :> es,
-    WithConnection :> es,
+  ( BlobHost :> es,
+    Blob :> es,
+    MediaQuery :> es,
     Outbound :> es,
     Log :> es,
     IOE :> es
   ) =>
   TimeZone ->
   ToolContext ->
+  (Maybe Text -> Eff es (Maybe CanonicalMessageId, Body 'Canonical)) ->
   SandboxRegistry ->
   [Tool es]
-fileToolsFor tz dc sandboxes =
-  [ listRecentFilesTool tz gid,
-    importFileToSandboxTool (toolConversationScope dc) gid sandboxes,
-    sendImageFromSandboxTool (toolOutputCapabilities dc) (toolTurnOutputContext dc) gid sandboxes,
+fileToolsFor tz dc resolveCaption sandboxes =
+  [ listRecentFilesTool tz,
+    importFileToSandboxTool gid sandboxes,
+    sendImageFromSandboxTool resolveCaption (toolTurnOutputContext dc) gid sandboxes,
     sendFileFromSandboxTool (toolTurnOutputContext dc) gid sandboxes
   ]
   where
@@ -76,11 +70,10 @@ fileToolsFor tz dc sandboxes =
 -- list_recent_files
 
 listRecentFilesTool ::
-  (WithConnection :> es, IOE :> es) =>
+  (MediaQuery :> es) =>
   TimeZone ->
-  GroupId ->
   Tool es
-listRecentFilesTool tz (GroupId gid) =
+listRecentFilesTool tz =
   Tool
     { toolName = "list_recent_files",
       toolDescription =
@@ -94,7 +87,7 @@ listRecentFilesTool tz (GroupId gid) =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right lim -> do
-          rows <- DBFiles.listRecentInGroup gid (clamp (1, 50) lim)
+          rows <- MediaQuery.listFiles lim
           pure $ Right (toJSON (map summarize rows))
     }
   where
@@ -122,16 +115,15 @@ listRecentFilesTool tz (GroupId gid) =
 -- import_file_to_sandbox
 
 importFileToSandboxTool ::
-  ( Blob :> es,
-    WithConnection :> es,
+  ( BlobHost :> es,
+    MediaQuery :> es,
     Log :> es,
     IOE :> es
   ) =>
-  ConversationScope ->
   GroupId ->
   SandboxRegistry ->
   Tool es
-importFileToSandboxTool scope gid sandboxes =
+importFileToSandboxTool gid sandboxes =
   Tool
     { toolName = "import_file_to_sandbox",
       toolDescription =
@@ -147,7 +139,7 @@ importFileToSandboxTool scope gid sandboxes =
       toolRun = \args -> case parseEither (withObject "args" parseArgs) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (fid, sid, mDest) -> do
-          mFile <- DBFiles.fetchByFileIdInScope scope fid
+          mFile <- MediaQuery.readStoredFile fid
           case mFile of
             Nothing -> pure (Left "unknown file_id (try list_recent_files first)")
             Just r -> case r.frBlobRef of
@@ -188,17 +180,16 @@ importFileToSandboxTool scope gid sandboxes =
 
 sendImageFromSandboxTool ::
   ( Blob :> es,
-    WithConnection :> es,
     Outbound :> es,
     Log :> es,
     IOE :> es
   ) =>
-  AdvertisedCaps ->
+  (Maybe Text -> Eff es (Maybe CanonicalMessageId, Body 'Canonical)) ->
   Maybe TurnOutputContext ->
   GroupId ->
   SandboxRegistry ->
   Tool es
-sendImageFromSandboxTool outputCaps turnOutputContext gid sandboxes =
+sendImageFromSandboxTool resolveCaption turnOutputContext gid sandboxes =
   Tool
     { toolName = "send_image_from_sandbox",
       toolDescription =
@@ -224,7 +215,7 @@ sendImageFromSandboxTool outputCaps turnOutputContext gid sandboxes =
                 Left err -> pure (Left err)
                 Right bytes -> do
                   blob <- putBlob bytes
-                  (replyTo, caption) <- captionBody outputCaps gid mCaption
+                  (replyTo, caption) <- resolveCaption mCaption
                   let source = mediaBlobRef (blobRefSha256 blob)
                       body = Body (caption.nodes <> [NMedia source (imageMeta bytes)])
                   turnOutput <- traverse (liftIO . nextTurnOutputLink) turnOutputContext
@@ -273,32 +264,6 @@ sendImageFromSandboxTool outputCaps turnOutputContext gid sandboxes =
     parseArgs :: Object -> Parser (Text, Text, Maybe Text)
     parseArgs o = (,,) <$> o .: "sandbox_id" <*> o .: "path" <*> o .:? "caption"
 
--- | Captions share the canonical resolver, including scoped reply and mention
--- lookup. Layout folds to one message; the attachment supplies its own media.
-captionBody ::
-  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  AdvertisedCaps -> GroupId -> Maybe Text -> Eff es (Maybe CanonicalMessageId, Body 'Canonical)
-captionBody _ _ Nothing = pure (Nothing, Body [])
-captionBody caps gid@(GroupId group) (Just caption) = do
-  roster <- conversationRoster group
-  let target =
-        ResolveContext
-          gid
-          [(name, identity.riPrincipalId) | identity <- roster.crIdentities, Just name <- [identity.riDisplayName]]
-          Nothing
-          False
-          caps.canReply
-          caps.canMention
-          caps.canFace
-          False
-  (_, reply, body) <-
-    resolveModelText
-      target
-      Set.empty
-      (T.intercalate "\n" (map chunkSource (planReply (cleanModelText caption))))
-  pure (reply, Body (if null body.nodes then [] else body.nodes <> [NText "\n"]))
-
---------------------------------------------------------------------------------
 -- send_file_from_sandbox
 
 sendFileFromSandboxTool ::

@@ -17,41 +17,30 @@ import Data.Aeson.Types (parseEither)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (TimeZone, UTCTime, addUTCTime, getCurrentTime)
+import Data.Time (TimeZone, UTCTime, addUTCTime)
 import Effectful
-import Effectful.PostgreSQL (WithConnection)
-import Max.DB.Monitor
-  ( TimeMonitor (..),
-    armCannedTimeMonitor,
-    listCannedTimeMonitors,
-  )
-import Max.DB.Task qualified as Task
+import Effectful.Reader.Static (Reader, ask)
+import Max.Effects.MonitorControl (MonitorControl, armMonitor)
+import Max.Effects.MonitorControl qualified as Control
+import Max.Effects.MonitorQuery (MonitorQuery, listReminders)
 import Max.Effects.Tools (Tool (..))
-import Max.Monitor (nextCronFire)
-import Max.Monitor.Types (MonitorOrdinal (..), MonitorRef (..), monitorHandleText, parseMonitorHandle)
+import Max.Monitor.Control (MonitorCommand (CancelMonitor), armErrorText, monitorControlErrorText)
+import Max.Monitor.Schedule (nextCronFire)
+import Max.Monitor.Types (MonitorRef (..), monitorHandleText, parseMonitorHandle)
+import Max.Monitor.View (TimeMonitor (..))
 import Max.Time (fmtDateHM)
-import Max.ToolContext
-  ( ToolContext,
-    toolAuthorPrincipalId,
-    toolConversationScope,
-    toolGroupId,
-    toolMonitorArmingAllowed,
-    toolTurnOutputContext,
-  )
-import Max.Tools (parseTimeArg)
+import Max.Time.Parse (parseTimeArg)
 import Max.Tools.Schema (integerParam, noArguments, stringParam, toolObject)
-import Max.Turn.Types (turnOutputAgentTurn)
 import System.Cron.Parser (parseCronSchedule)
 
 reminderToolsFor ::
-  (WithConnection :> es, IOE :> es) =>
+  (MonitorQuery :> es, MonitorControl :> es, Reader UTCTime :> es) =>
   TimeZone ->
-  ToolContext ->
   [Tool es]
-reminderToolsFor tz context =
-  [ setReminderTool tz context,
-    listRemindersTool tz context,
-    cancelReminderTool context
+reminderToolsFor tz =
+  [ setReminderTool tz,
+    listRemindersTool tz,
+    cancelReminderTool
   ]
 
 data SetArgs = SetArgs
@@ -62,16 +51,15 @@ data SetArgs = SetArgs
   }
 
 setReminderTool ::
-  (WithConnection :> es, IOE :> es) =>
+  (MonitorControl :> es, Reader UTCTime :> es) =>
   TimeZone ->
-  ToolContext ->
   Tool es
-setReminderTool tz context =
+setReminderTool tz =
   Tool
     { toolName = "set_reminder",
       toolDescription =
         T.unwords
-          [ "设一个定时提醒，到点我会主动在这个会话里 @ 你并发出提醒内容。",
+          [ "设一个定时提醒，到点我会主动在这个会话里发出提醒内容。",
             "text 是提醒内容；触发时间三选一：",
             "in_minutes（几分钟后，一次性，相对时间，优先用它以免算错）、",
             "at（一次性绝对时间 'YYYY-MM-DD HH:MM'）、",
@@ -97,27 +85,22 @@ setReminderTool tz context =
         Right setArgs
           | T.null (T.strip setArgs.saText) -> pure (Left "text 不能为空")
           | otherwise -> do
-              now <- liftIO getCurrentTime
+              now <- ask @UTCTime
               case resolveWhen tz setArgs now of
                 Left err -> pure (Left err)
                 Right (cron, fireAt) -> do
-                  ref <-
-                    armCannedTimeMonitor
-                      (toolGroupId context)
-                      (toolAuthorPrincipalId context)
-                      (turnOutputAgentTurn <$> toolTurnOutputContext context)
-                      (T.strip setArgs.saText)
-                      cron
-                      fireAt
-                  pure $
-                    Right $
-                      object
-                        [ "ok" .= True,
-                          "handle" .= monitorHandleText ref.mrMonitorOrdinal,
-                          "next_fire" .= fmtDateHM tz fireAt,
-                          "recurring" .= isJust cron,
-                          "cron" .= cron
-                        ]
+                  result <- armMonitor (Control.CannedReminder (T.strip setArgs.saText) cron fireAt)
+                  pure $ case result of
+                    Left failure -> Left (armErrorText failure)
+                    Right ref ->
+                      Right $
+                        object
+                          [ "ok" .= True,
+                            "handle" .= monitorHandleText ref.mrMonitorOrdinal,
+                            "next_fire" .= fmtDateHM tz fireAt,
+                            "recurring" .= isJust cron,
+                            "cron" .= cron
+                          ]
     }
   where
     parseSet objectValue =
@@ -175,15 +158,13 @@ resolveWhen tz setArgs now =
         Nothing -> Left "这个 cron 表达式算不出下一次触发时间"
         Just time -> Right (Just (T.strip expression), time)
 
-listRemindersTool :: (WithConnection :> es, IOE :> es) => TimeZone -> ToolContext -> Tool es
-listRemindersTool tz context =
+listRemindersTool :: (MonitorQuery :> es) => TimeZone -> Tool es
+listRemindersTool tz =
   Tool
     { toolName = "list_reminders",
       toolDescription = "列出本会话所有还没触发的提醒（含投递重试或已暂停状态）。",
       toolSchema = noArguments,
-      toolRun = \_ -> do
-        monitors <- listCannedTimeMonitors (toolConversationScope context)
-        pure $ Right $ toJSON (map summarize monitors)
+      toolRun = \_ -> Right . toJSON . map summarize <$> listReminders
     }
   where
     summarize monitor =
@@ -204,10 +185,9 @@ listRemindersTool tz context =
       | otherwise = "scheduled"
 
 cancelReminderTool ::
-  (WithConnection :> es, IOE :> es) =>
-  ToolContext ->
+  (MonitorControl :> es) =>
   Tool es
-cancelReminderTool context =
+cancelReminderTool =
   Tool
     { toolName = "cancel_reminder",
       toolDescription = "按 handle 取消一个未触发的提醒（循环提醒会就此停止）。handle 从 list_reminders 或 set_reminder 的返回里拿。",
@@ -216,18 +196,5 @@ cancelReminderTool context =
         Left err -> pure $ Left ("bad args: " <> T.pack err)
         Right rawHandle -> case parseMonitorHandle rawHandle of
           Nothing -> pure (Left "handle 格式无效，应为 m#<正整数>")
-          Just ordinal ->
-            Right
-              <$> Task.monitorControl
-                (toolGroupId context)
-                (toolAuthorPrincipalId context)
-                (toolMonitorArmingAllowed context)
-                ordinal.unMonitorOrdinal
-                "cancel"
-                Nothing
-                ""
-                "coalesce"
-                8
-                "cancel"
-                False
+          Just ordinal -> either (Left . monitorControlErrorText) (Right . toJSON) <$> Control.controlMonitor ordinal CancelMonitor False
     }

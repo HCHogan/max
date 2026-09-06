@@ -37,8 +37,9 @@ import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (RecallPolicy, conversationStorageId, recallConversationScope)
 import Max.DB.History (notForwardChild)
 import Max.Embedding (EmbeddingRecord (..))
-import Max.EpisodeStore (EpisodeHandle)
-import Max.MemoryStore (MemoryId)
+import Max.Episode.Types (EpisodeHandle)
+import Max.Memory.Types (MemoryId)
+import Max.Recall.Types (RecallHit (..))
 
 data RecallCorpus
   = RecallMemories
@@ -91,23 +92,6 @@ instance FromRow RecallCandidate where
       <*> field
       <*> field
       <*> field
-
-data RecallHit = RecallHit
-  { rhSource :: !Text,
-    rhDedupKey :: !Text,
-    rhSnippet :: !Text,
-    rhOccurredAt :: !UTCTime,
-    rhPrincipalId :: !(Maybe Int64),
-    rhMessageId :: !(Maybe Int64),
-    rhEpisodeHandle :: !(Maybe EpisodeHandle),
-    rhMemoryId :: !(Maybe MemoryId),
-    rhScore :: !Double,
-    rhLexicalScore :: !(Maybe Double),
-    rhSemanticScore :: !(Maybe Double),
-    rhPinned :: !Bool,
-    rhPermanent :: !Bool
-  }
-  deriving stock (Show, Eq)
 
 data RecallTraceCandidate = RecallTraceCandidate
   { rtcCandidate :: !RecallCandidate,
@@ -466,43 +450,43 @@ lexicalCandidatesSql =
   \    AND "
     <> notForwardChild "message"
     <> " \
-  \    AND (position(lower(input.query_text) in lower(message.rendered_text)) > 0 \
-  \      OR similarity(message.rendered_text, input.query_text) >= 0.08) \
-  \  ORDER BY lexical_score DESC, message.received_at DESC, message.canonical_message_id \
-  \  LIMIT (SELECT candidate_limit FROM input) \
-  \), media AS ( \
-  \  SELECT source.canonical_message_id, string_agg(DISTINCT source.description, ' | ') AS description \
-  \  FROM ( \
-  \    SELECT link.canonical_message_id, image.description FROM message_images AS link \
-  \    JOIN images AS image USING (sha256) JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
-  \    WHERE image.description IS NOT NULL AND message.group_id = input.conversation_id \
-  \    UNION ALL \
-  \    SELECT link.canonical_message_id, video.description FROM message_videos AS link \
-  \    JOIN videos AS video USING (sha256) JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
-  \    WHERE video.description IS NOT NULL AND message.group_id = input.conversation_id \
-  \  ) AS source \
-  \  GROUP BY source.canonical_message_id \
-  \), caption_candidates AS ( \
-  \  SELECT 'caption'::text AS source, 'message:' || message.canonical_message_id::text AS dedup_key, \
-  \         left(media.description, 800) AS snippet, message.received_at AS occurred_at, \
-  \         message.author_principal_id AS principal_id, message.canonical_message_id, NULL::uuid AS episode_handle, \
-  \         NULL::bigint AS memory_id, 0::double precision AS importance, \
-  \         GREATEST(similarity(media.description, input.query_text), \
-  \           CASE WHEN position(lower(input.query_text) in lower(media.description)) > 0 THEN 1 ELSE 0 END \
-  \         )::double precision AS lexical_score, \
-  \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
-  \  FROM media JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
-  \  LEFT JOIN pins USING (canonical_message_id) \
-  \  WHERE message.group_id = input.conversation_id \
-  \    AND (position(lower(input.query_text) in lower(media.description)) > 0 \
-  \      OR similarity(media.description, input.query_text) >= 0.08) \
-  \  ORDER BY lexical_score DESC, message.received_at DESC, message.canonical_message_id \
-  \  LIMIT (SELECT candidate_limit FROM input) \
-  \) \
-  \SELECT * FROM memory_candidates \
-  \UNION ALL SELECT * FROM episode_candidates \
-  \UNION ALL SELECT * FROM message_candidates \
-  \UNION ALL SELECT * FROM caption_candidates"
+       \    AND (position(lower(input.query_text) in lower(message.rendered_text)) > 0 \
+       \      OR similarity(message.rendered_text, input.query_text) >= 0.08) \
+       \  ORDER BY lexical_score DESC, message.received_at DESC, message.canonical_message_id \
+       \  LIMIT (SELECT candidate_limit FROM input) \
+       \), media AS ( \
+       \  SELECT source.canonical_message_id, string_agg(DISTINCT source.description, ' | ') AS description \
+       \  FROM ( \
+       \    SELECT link.canonical_message_id, image.description FROM message_images AS link \
+       \    JOIN images AS image USING (sha256) JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
+       \    WHERE image.description IS NOT NULL AND message.group_id = input.conversation_id \
+       \    UNION ALL \
+       \    SELECT link.canonical_message_id, video.description FROM message_videos AS link \
+       \    JOIN videos AS video USING (sha256) JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
+       \    WHERE video.description IS NOT NULL AND message.group_id = input.conversation_id \
+       \  ) AS source \
+       \  GROUP BY source.canonical_message_id \
+       \), caption_candidates AS ( \
+       \  SELECT 'caption'::text AS source, 'message:' || message.canonical_message_id::text AS dedup_key, \
+       \         left(media.description, 800) AS snippet, message.received_at AS occurred_at, \
+       \         message.author_principal_id AS principal_id, message.canonical_message_id, NULL::uuid AS episode_handle, \
+       \         NULL::bigint AS memory_id, 0::double precision AS importance, \
+       \         GREATEST(similarity(media.description, input.query_text), \
+       \           CASE WHEN position(lower(input.query_text) in lower(media.description)) > 0 THEN 1 ELSE 0 END \
+       \         )::double precision AS lexical_score, \
+       \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
+       \  FROM media JOIN messages AS message USING (canonical_message_id) CROSS JOIN input \
+       \  LEFT JOIN pins USING (canonical_message_id) \
+       \  WHERE message.group_id = input.conversation_id \
+       \    AND (position(lower(input.query_text) in lower(media.description)) > 0 \
+       \      OR similarity(media.description, input.query_text) >= 0.08) \
+       \  ORDER BY lexical_score DESC, message.received_at DESC, message.canonical_message_id \
+       \  LIMIT (SELECT candidate_limit FROM input) \
+       \) \
+       \SELECT * FROM memory_candidates \
+       \UNION ALL SELECT * FROM episode_candidates \
+       \UNION ALL SELECT * FROM message_candidates \
+       \UNION ALL SELECT * FROM caption_candidates"
 
 semanticCandidatesSql :: Query
 semanticCandidatesSql =
@@ -564,19 +548,19 @@ semanticCandidatesSql =
   \    AND "
     <> notForwardChild "message"
     <> " \
-  \    AND message.embedding_model = input.model_id AND message.embedding_dimensions = input.dimensions \
-  \), message_candidates AS ( \
-  \  SELECT CASE WHEN pins.canonical_message_id IS NULL THEN 'message' ELSE 'pin' END::text AS source, \
-  \         'message:' || message.canonical_message_id::text AS dedup_key, left(message.rendered_text, 800) AS snippet, \
-  \         message.received_at AS occurred_at, message.author_principal_id AS principal_id, message.canonical_message_id, \
-  \         NULL::uuid AS episode_handle, NULL::bigint AS memory_id, 0::double precision AS importance, \
-  \         NULL::double precision AS lexical_score, \
-  \         (1 - (message.embedding <=> message.query_vector))::double precision AS semantic_score, \
-  \         (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
-  \  FROM compatible_messages AS message LEFT JOIN pins USING (canonical_message_id) \
-  \  ORDER BY message.embedding <=> message.query_vector, message.received_at DESC, message.canonical_message_id \
-  \  LIMIT (SELECT candidate_limit FROM input) \
-  \) \
-  \SELECT * FROM memory_candidates \
-  \UNION ALL SELECT * FROM episode_candidates \
-  \UNION ALL SELECT * FROM message_candidates"
+       \    AND message.embedding_model = input.model_id AND message.embedding_dimensions = input.dimensions \
+       \), message_candidates AS ( \
+       \  SELECT CASE WHEN pins.canonical_message_id IS NULL THEN 'message' ELSE 'pin' END::text AS source, \
+       \         'message:' || message.canonical_message_id::text AS dedup_key, left(message.rendered_text, 800) AS snippet, \
+       \         message.received_at AS occurred_at, message.author_principal_id AS principal_id, message.canonical_message_id, \
+       \         NULL::uuid AS episode_handle, NULL::bigint AS memory_id, 0::double precision AS importance, \
+       \         NULL::double precision AS lexical_score, \
+       \         (1 - (message.embedding <=> message.query_vector))::double precision AS semantic_score, \
+       \         (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
+       \  FROM compatible_messages AS message LEFT JOIN pins USING (canonical_message_id) \
+       \  ORDER BY message.embedding <=> message.query_vector, message.received_at DESC, message.canonical_message_id \
+       \  LIMIT (SELECT candidate_limit FROM input) \
+       \) \
+       \SELECT * FROM memory_candidates \
+       \UNION ALL SELECT * FROM episode_candidates \
+       \UNION ALL SELECT * FROM message_candidates"

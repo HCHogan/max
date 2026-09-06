@@ -31,29 +31,18 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Effectful.Log
-import Effectful.PostgreSQL (WithConnection, query)
 import Max.Effects.Embedding (Embedding, embedBatch, renderEmbeddingFault)
+import Max.Effects.StickerQuery (StickerQuery, searchStickers)
 import Max.Effects.Tools (Tool (..))
 import Max.Tools.Schema (stringParam, toolObject)
-import Max.Embedding (EmbeddingRecord (..))
 
 stickerToolsFor ::
-  ( WithConnection :> es,
+  ( StickerQuery :> es,
     Embedding :> es,
-    Log :> es,
-    IOE :> es
+    Log :> es
   ) =>
   [Tool es]
 stickerToolsFor = [findStickersTool]
-
--- | Beyond this cosine distance the best "match" is noise; better to
--- tell the model there's nothing than to surface a random sticker.
-maxDist :: Double
-maxDist = 0.65
-
--- | How many closest candidates to show the model.
-topK :: Int
-topK = 6
 
 data Candidate = Candidate
   { cId :: !Int64,
@@ -63,10 +52,9 @@ data Candidate = Candidate
 -- | @find_stickers@: semantic search over the captioned library.
 -- Returns a numbered list; sends nothing.
 findStickersTool ::
-  ( WithConnection :> es,
+  ( StickerQuery :> es,
     Embedding :> es,
-    Log :> es,
-    IOE :> es
+    Log :> es
   ) =>
   Tool es
 findStickersTool =
@@ -89,17 +77,7 @@ findStickersTool =
       case embedded of
         Left fault -> pure $ Left ("embedding failed: " <> renderEmbeddingFault fault)
         Right [record] -> do
-          rows <-
-            query
-              "WITH compatible AS MATERIALIZED ( \
-                \  SELECT id, description, embedding FROM stickers \
-                \  WHERE NOT banned AND embedding_model = ? AND embedding_dimensions = ? \
-                \), ranked AS ( \
-                \  SELECT id, description, embedding <=> ?::vector AS distance FROM compatible \
-                \) \
-                \ SELECT id, description FROM ranked WHERE distance <= ? \
-                \ ORDER BY distance ASC LIMIT ?"
-              (record.erModelId, record.erDimensions, record.erVector, maxDist, topK)
+          rows <- searchStickers record
           let cands = [Candidate i d | (i, d) <- rows :: [(Int64, Text)]]
           logInfo "find_stickers" $ object ["query" .= q, "n" .= length cands]
           pure . Right $

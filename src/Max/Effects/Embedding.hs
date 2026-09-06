@@ -21,7 +21,6 @@ where
 import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
-import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Embedding
   ( EmbedClient,
     EmbeddingRecord (..),
@@ -29,8 +28,6 @@ import Max.Embedding
     embeddingModelId,
     makeEmbeddingRecord,
   )
-import Max.Env (BotEnv (..))
-import Max.RuntimeConfig (RuntimeResources (..), RuntimeSnapshot (..))
 
 data EmbeddingSpace = EmbeddingSpace
   { esModelId :: !Text
@@ -61,28 +58,17 @@ runEmbedding ::
   Maybe EmbedClient ->
   Eff (Embedding : es) a ->
   Eff es a
-runEmbedding mClient =
-  runEmbeddingResolving (pure mClient)
+runEmbedding mClient = runRuntimeEmbedding (pure mClient)
 
--- | Resolve the client from the immutable snapshot in the current Reader
--- scope.  Dispatches install their leased snapshot; generation workers install
--- the snapshot they were started for.  This keeps endpoint credentials and
--- model-space provenance on the same side of the publication boundary.
+-- | Assembly supplies a client resolver evaluated once per operation, so a
+-- dispatch can retain its leased generation while the effect knows only the
+-- embedding client. Do not capture a process-start snapshot for live reload.
 runRuntimeEmbedding ::
-  (Reader BotEnv :> es, IOE :> es) =>
-  Eff (Embedding : es) a ->
-  Eff es a
-runRuntimeEmbedding =
-  runEmbeddingResolving $ do
-    env <- ask @BotEnv
-    pure env.beRuntimeSnapshot.rsResources.rrEmbeddingClient
-
-runEmbeddingResolving ::
   (IOE :> es) =>
   Eff es (Maybe EmbedClient) ->
   Eff (Embedding : es) a ->
   Eff es a
-runEmbeddingResolving resolve = interpret $ \_ -> \case
+runRuntimeEmbedding resolve = interpret $ \_ -> \case
   GetEmbeddingSpace -> do
     mClient <- resolve
     pure (EmbeddingSpace . embeddingModelId <$> mClient)

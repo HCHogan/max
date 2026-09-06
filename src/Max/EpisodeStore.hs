@@ -66,8 +66,6 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
-import Data.UUID (UUID)
-import Data.UUID qualified as UUID
 import Database.PostgreSQL.Simple (FromRow, In (..), Only (..), Query)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
@@ -83,8 +81,11 @@ import Max.ConversationScope
     recallConversationScope,
   )
 import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
+import Max.DB.ConversationLock (lockConversation)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..), historyColumns, transcriptEligibleExpr)
 import Max.DB.Transaction (withTransaction)
+import Max.Episode.Types
+import Max.Memory.Policy (DuplicatePolicy (RejectExactDuplicates), MemoryAdmissionFailure (..))
 import Max.MemoryStore
   ( ExpectedVersion (..),
     MemoryActor (..),
@@ -99,10 +100,8 @@ import Max.MemoryStore
     MemoryScope (..),
     MemoryUpdate (..),
     MemoryVersion (..),
+    admitMemory,
     archiveVisibleMemory,
-    countMemories,
-    createMemory,
-    findExactMemory,
     memoryNamespace,
     parseCategory,
     parseScope,
@@ -117,20 +116,6 @@ newtype CaptureRunId = CaptureRunId {unCaptureRunId :: Int64}
 newtype CompartmentId = CompartmentId {unCompartmentId :: Int64}
   deriving stock (Show, Eq, Ord)
   deriving newtype (FromField, ToField, FromJSON, ToJSON)
-
--- | An unguessable model-facing reference to one immutable compartment.
--- Internal sequence ids never cross the prompt/tool boundary, and possession
--- of a handle is not authority: 'expandEpisode' always applies the current
--- 'RecallPolicy' again.
-newtype EpisodeHandle = EpisodeHandle {unEpisodeHandle :: UUID}
-  deriving stock (Show, Eq, Ord)
-  deriving newtype (FromField, ToField)
-
-episodeHandleText :: EpisodeHandle -> Text
-episodeHandleText = UUID.toText . (.unEpisodeHandle)
-
-parseEpisodeHandle :: Text -> Maybe EpisodeHandle
-parseEpisodeHandle = fmap EpisodeHandle . UUID.fromText
 
 data CaptureReason
   = CaptureIdle
@@ -147,22 +132,6 @@ captureReasonText = \case
   CaptureTokenPressure -> "token_pressure"
   CaptureBackfill -> "backfill"
   CaptureRebuild -> "rebuild"
-
-data SourceRange = SourceRange
-  { srStart :: !MessageCursor,
-    srEnd :: !MessageCursor,
-    srHash :: !Text,
-    srMessageCount :: !Int
-  }
-  deriving stock (Show, Eq)
-
-instance FromRow SourceRange where
-  fromRow =
-    SourceRange . MessageCursor
-      <$> field
-      <*> (MessageCursor <$> field)
-      <*> field
-      <*> field
 
 data CaptureRun = CaptureRun
   { crId :: !CaptureRunId,
@@ -1004,6 +973,8 @@ publishCaptureRun ::
   ValidatedEpisodeCapture ->
   Eff es CompartmentId
 publishCaptureRun scope lease validated = withTransaction $ do
+  locked <- lockConversation (conversationStorageId scope)
+  unless locked (publicationFailure "capture conversation no longer exists")
   run <- lockGeneratedRun scope lease
   verifyRunSource scope run
   compartment <- insertStagedCompartment run validated.validatedCapture
@@ -1180,25 +1151,22 @@ applyMemoryProposal scope _run compartment indexed = case indexed.ivpValidated o
           ScopeGroup -> conversationStorageId scope
           ScopeUser -> fromMaybe (conversationStorageId scope) userId
         namespace = memoryNamespace scope memoryScope subject
-    duplicate <- findExactMemory namespace content
-    count <- countMemories namespace
-    if isJust duplicate
-      then rejected "exact duplicate already exists" evidence
-      else
-        if count >= historianMemoryCap
-          then rejected "memory namespace is at capacity" evidence
-          else do
-            memory <-
-              createMemory
-                historianActor
-                namespace
-                MemoryDraft
-                  { draftContent = content,
-                    draftLifecycle = MemoryActive,
-                    draftCategory = category,
-                    draftEvidence = EpisodeEvidence scope compartment.unCompartmentId
-                  }
-            applied memory evidence
+    admitted <-
+      admitMemory
+        RejectExactDuplicates
+        historianActor
+        namespace
+        MemoryDraft
+          { draftContent = content,
+            draftLifecycle = MemoryActive,
+            draftCategory = category,
+            draftEvidence = EpisodeEvidence scope compartment.unCompartmentId
+          }
+    case admitted of
+      Right memory -> applied memory evidence
+      Left ExactMemoryAlreadyExists -> rejected "exact duplicate already exists" evidence
+      Left MemoryAtCapacity -> rejected "memory namespace is at capacity" evidence
+      Left MemoryConversationMissing -> publicationFailure "memory conversation no longer exists"
   ValidatedUpdate memoryId version content evidence ->
     updateVisibleMemory
       historianActor
@@ -1224,9 +1192,6 @@ applyMemoryProposal scope _run compartment indexed = case indexed.ivpValidated o
       MemoryMutationRejected -> rejected "scope, lifecycle, or expected version rejected the mutation" evidence
     baseOutcome evidence status reason memory =
       ProposalOutcome indexed.ivpIndex indexed.ivpOriginal evidence status reason memory
-
-historianMemoryCap :: Int
-historianMemoryCap = 30
 
 historianActor :: MemoryActor
 historianActor = MemoryActor ActorHistorian Nothing (Just "episode capture proposal")
@@ -1316,17 +1281,6 @@ data ActiveCompartment = ActiveCompartment
 -- | One policy-checked page of the immutable source range behind a summary.
 -- Pages contain ledger rows, not re-summarized text, including rows that were
 -- deliberately excluded from the normal prompt transcript.
-data EpisodeExpansion = EpisodeExpansion
-  { expansionHandle :: !EpisodeHandle,
-    expansionRange :: !SourceRange,
-    expansionState :: !Text,
-    expansionSourceHashMatches :: !Bool,
-    expansionMessages :: ![LedgerItem],
-    expansionHasMore :: !Bool,
-    expansionNextCursor :: !(Maybe MessageCursor)
-  }
-  deriving stock (Show)
-
 instance FromRow ActiveCompartment where
   fromRow =
     ActiveCompartment

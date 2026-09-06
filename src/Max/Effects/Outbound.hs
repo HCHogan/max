@@ -122,7 +122,7 @@ runOutbound = runOutboundWith deliver
 
 -- | Install any request handler as the interpreter.  Besides keeping
 -- 'runOutbound' small, this is the in-memory seam for Handler/Agent tests: a
--- fake can capture requests and choose any delivery state without PlatformApi or a
+-- fake can capture requests and choose any delivery state without platform RPC or a
 -- database.
 runOutboundWith ::
   (OutboundRequest -> Eff es PublicationResult) ->
