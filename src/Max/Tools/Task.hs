@@ -127,8 +127,8 @@ taskToolsFor context =
     requestFinishTool =
       Tool
         "request_finish"
-        "明确结束前台请求：answered 已回答，waiting 正在向用户询问缺失信息，declined 明确拒绝。reply 是要发给用户的最终内容；不要先用其他工具重复发送。"
-        (toolObject [("disposition", enumParam ["answered", "waiting", "declined"] "请求的真实处置"), ("reply", stringParam "给用户的完整答复或明确的澄清问题，最多 40000 字符。")] ["disposition", "reply"])
+        "明确结束前台请求：answered 已回答，waiting 正在向用户询问缺失信息，declined 明确拒绝。系统会把 reply 发给用户；最终内容只写在 reply，调用本工具的这一轮正文留空，不加旁白，也不要先在正文或其他发送工具里重复发送。"
+        (toolObject [("disposition", enumParam ["answered", "waiting", "declined"] "请求的真实处置"), ("reply", stringParam "给用户的完整答复、澄清问题或拒绝理由，最多 40000 字符。系统会发送此内容，不要另写一份正文。")] ["disposition", "reply"])
         ( parseArgs (withObject "request_finish" $ \fields -> (,) <$> fields .: "disposition" <*> fields .: "reply") $ \(disposition, reply) -> case State.parseDisposition disposition of
             Nothing -> pure (Left "无效请求处置")
             Just typed ->

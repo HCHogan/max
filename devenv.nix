@@ -59,6 +59,7 @@
   };
 
   env = {
+    MAX_CODEMODE_JS_WASM = "${import ./nix/codemode-js.nix { inherit pkgs; }}/quickjs.wasm";
     # Static CJK face for typst table rendering (matches nix/module.nix).
     TYPST_FONT_PATHS = "${pkgs.source-han-sans}/share/fonts";
     # Appearance and the ocean theme, same as nix/module.nix — without this a

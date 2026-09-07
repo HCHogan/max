@@ -162,6 +162,8 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
             if any ((== "jobs.wait") . (.name)) catalog.operations || not (any (.requiresKey) catalog.operations)
               then Right (Just (object ["catalog" .= value, "availability" .= object ["tools" .= map operationToolName catalog.operations, "unavailable" .= ([] :: [Text])]]))
               else Left "maxops 缺少 jobs.wait；请先更新 Hub，再加载完整工具包"
+    prepareSkill "codemode" =
+      pure (Right (Just (object ["availability" .= object ["tools" .= (["run_code"] :: [Text]), "unavailable" .= ([] :: [Text])]])))
     prepareSkill name =
       pure
         ( Right

@@ -134,6 +134,7 @@ renderPromptFlow =
            "",
            "- `ChatMessage` 是 Prompt、Agent、LLM 三层之间唯一的协议中立表示。",
            "- 工具调用返回后，assistant 原文逐字保留；tool result 先配对，附件再作为一条 user blocks 消息追加。",
+           "- codemode 技能在下一轮添加 run_code；JS 的叶子调用复用原生执行器，返回值筛选后作为 tool result，附件和技能激活仍走宿主通道。",
            "- 后续请求重发完整消息前缀。OpenAI/Anthropic/Responses 只在最外层 wire 编码不同。",
            "- 文档中的请求使用 `stream: false`，便于展示缓冲形状；流式路径复用同一批字段 builder，只额外切换 stream 字段。"
          ]

@@ -7,6 +7,7 @@ module Max.CodeMode.Wasm
     WasmExit (..),
     defaultWasmLimits,
     runWasm,
+    runWasmWithInput,
     watToWasm,
   )
 where
@@ -60,7 +61,7 @@ foreign import ccall unsafe "max_wasm_delete" wasmDelete :: Ptr WasmHandle -> IO
 
 foreign import ccall unsafe "max_wasm_interrupt" wasmInterrupt :: Ptr WasmHandle -> IO ()
 
-foreign import ccall safe "max_wasm_run" wasmRun :: Ptr WasmHandle -> Ptr Word8 -> CSize -> Word64 -> Int64 -> FunPtr ToolCallback -> StablePtr Mailbox -> CString -> CSize -> IO CInt
+foreign import ccall safe "max_wasm_run" wasmRun :: Ptr WasmHandle -> Ptr Word8 -> CSize -> Word64 -> Int64 -> Ptr Word8 -> CSize -> Ptr (Ptr Word8) -> Ptr CSize -> FunPtr ToolCallback -> StablePtr Mailbox -> CString -> CSize -> IO CInt
 
 foreign export ccall "max_haskell_wasm_dispatch" dispatchCallback :: ToolCallback
 
@@ -79,20 +80,27 @@ data RunningWasm = RunningWasm
     rwCallback :: !(StablePtr Mailbox),
     rwStopped :: !(TVar Bool),
     rwQueue :: !(TQueue Pending),
-    rwWorker :: !(Async.Async WasmExit)
+    rwWorker :: !(Async.Async (WasmExit, Maybe ByteString))
   }
 
 -- | Host calls are serviced on an Effectful thread through a mailbox. The FFI
 -- callback copies bytes only; it cannot throw a Haskell exception through C or
 -- retain a guest pointer. Nothing requests a trap after a host control decision.
 runWasm :: (Concurrent :> es, IOE :> es) => WasmLimits -> ByteString -> (ByteString -> Eff es (Maybe ByteString)) -> Eff es WasmExit
-runWasm limits binary dispatch
-  | limits.wlFuel == 0 || limits.wlMemoryBytes <= 0 || limits.wlTimeoutMicros <= 0 || limits.wlModuleBytes <= 0 || limits.wlHostCalls <= 0 = pure (WasmTrapped "invalid host resource limits")
-  | BS.length binary > limits.wlModuleBytes = pure (WasmTrapped "module exceeds host size limit")
+runWasm limits binary dispatch = fst <$> runWasmWithInput limits binary Nothing dispatch
+
+-- | Optional immutable input enables the data ABI. One bounded output survives
+-- a later guest trap; neither channel can dispatch tools or manufacture control.
+runWasmWithInput :: (Concurrent :> es, IOE :> es) => WasmLimits -> ByteString -> Maybe ByteString -> (ByteString -> Eff es (Maybe ByteString)) -> Eff es (WasmExit, Maybe ByteString)
+runWasmWithInput limits binary input dispatch
+  | limits.wlFuel == 0 || limits.wlMemoryBytes <= 0 || limits.wlTimeoutMicros <= 0 || limits.wlModuleBytes <= 0 || limits.wlHostCalls <= 0 = invalid "invalid host resource limits"
+  | BS.length binary > limits.wlModuleBytes = invalid "module exceeds host size limit"
+  | maybe False ((> 1024 * 1024) . BS.length) input = invalid "input exceeds host size limit"
   | otherwise = bracket (liftIO acquire) (liftIO . release) $ \running -> do
       result <- race (threadDelay limits.wlTimeoutMicros) (drive 0 running)
-      pure (fromRight WasmTimedOut result)
+      pure (fromRight (WasmTimedOut, Nothing) result)
   where
+    invalid detail = pure (WasmTrapped detail, Nothing)
     acquire = Exception.mask $ \restore -> do
       queue <- newTQueueIO
       stopped <- newTVarIO False
@@ -111,9 +119,21 @@ runWasm limits binary dispatch
       freeStablePtr running.rwCallback
       wasmDelete running.rwHandle
     run handle callback =
-      BS.useAsCStringLen binary $ \(bytes, size) -> allocaBytes 4096 $ \message -> do
-        code <- wasmRun handle (castPtr bytes) (fromIntegral size) limits.wlFuel limits.wlMemoryBytes callbackPointer callback message 4096
-        if code == 0 then pure WasmCompleted else WasmTrapped <$> readDiagnostic message
+      BS.useAsCStringLen binary $ \(bytes, size) -> allocaBytes 4096 $ \message ->
+        withInput $ \inputBytes inputSize -> alloca $ \outputPtr -> alloca $ \outputSize -> do
+          code <- wasmRun handle (castPtr bytes) (fromIntegral size) limits.wlFuel limits.wlMemoryBytes inputBytes inputSize outputPtr outputSize callbackPointer callback message 4096
+          buffer <- peek outputPtr
+          output <-
+            if buffer == nullPtr
+              then pure Nothing
+              else do
+                len <- peek outputSize
+                Just <$> (BS.packCStringLen (castPtr buffer, fromIntegral len) `Exception.finally` wasmFree buffer)
+          exit <- if code == 0 then pure WasmCompleted else WasmTrapped <$> readDiagnostic message
+          pure (exit, output)
+    withInput action = case input of
+      Nothing -> action nullPtr 0
+      Just value -> BS.useAsCStringLen value $ \(bytes, size) -> action (castPtr bytes) (fromIntegral size)
     drive count running = do
       next <-
         liftIO . atomically $
@@ -121,7 +141,7 @@ runWasm limits binary dispatch
       case next of
         Left result -> either throwIO pure result
         Right (Pending request response)
-          | count >= limits.wlHostCalls -> pure (WasmTrapped "host call limit exceeded")
+          | count >= limits.wlHostCalls -> invalid "host call limit exceeded"
           | otherwise -> do
               value <- dispatch request
               liftIO . atomically $ putTMVar response value

@@ -68,13 +68,17 @@ static bool in_bounds(size_t memory, uint32_t offset, uint32_t length) {
   return offset <= memory && length <= memory - offset;
 }
 
-typedef struct { max_wasm_tool_cb callback; void *context; } host_callback;
+typedef struct {
+  max_wasm_tool_cb callback;
+  void *context;
+  const uint8_t *input;
+  size_t input_length;
+  uint8_t **output;
+  size_t *output_length;
+} host_callback;
 
-static wasm_trap_t *tool_call(void *data, wasmtime_caller_t *caller,
-                             const wasmtime_val_t *args, size_t nargs,
-                             wasmtime_val_t *results, size_t nresults) {
-  (void)nargs; (void)nresults;
-  host_callback *host = data;
+static wasm_trap_t *guest_slice(wasmtime_caller_t *caller, uint32_t offset,
+                                uint32_t length, size_t limit, uint8_t **bytes) {
   wasmtime_extern_t item;
   if (!wasmtime_caller_export_get(caller, "memory", 6, &item))
     return trap_text("max_v1 requires exported memory");
@@ -84,16 +88,27 @@ static wasm_trap_t *tool_call(void *data, wasmtime_caller_t *caller,
   }
   wasmtime_context_t *context = wasmtime_caller_context(caller);
   size_t size = wasmtime_memory_data_size(context, &item.of.memory);
-  uint8_t *bytes = wasmtime_memory_data(context, &item.of.memory);
+  bool valid = length <= limit && in_bounds(size, offset, length);
+  if (valid) *bytes = wasmtime_memory_data(context, &item.of.memory) + offset;
+  wasmtime_extern_delete(&item);
+  return valid ? NULL : trap_text("max_v1 invalid request or reply memory range");
+}
+
+static wasm_trap_t *tool_call(void *data, wasmtime_caller_t *caller,
+                             const wasmtime_val_t *args, size_t nargs,
+                             wasmtime_val_t *results, size_t nresults) {
+  (void)nargs; (void)nresults;
+  host_callback *host = data;
   uint32_t rp = (uint32_t)args[0].of.i32, rn = (uint32_t)args[1].of.i32;
   uint32_t wp = (uint32_t)args[2].of.i32, wn = (uint32_t)args[3].of.i32;
-  if (!rn || rn > MESSAGE_LIMIT || !wn || wn > MESSAGE_LIMIT ||
-      !in_bounds(size, rp, rn) || !in_bounds(size, wp, wn)) {
-    wasmtime_extern_delete(&item);
+  if (!rn || !wn)
     return trap_text("max_v1 invalid request or reply memory range");
-  }
-  int32_t length = host->callback(host->context, bytes + rp, rn, bytes + wp, wn);
-  wasmtime_extern_delete(&item);
+  uint8_t *request, *reply;
+  wasm_trap_t *trap = guest_slice(caller, rp, rn, MESSAGE_LIMIT, &request);
+  if (trap) return trap;
+  trap = guest_slice(caller, wp, wn, MESSAGE_LIMIT, &reply);
+  if (trap) return trap;
+  int32_t length = host->callback(host->context, request, rn, reply, wn);
   if (length < 0 || (uint32_t)length > wn)
     return trap_text("max_v1 host stopped or reply exceeds capacity; do not replay effects");
   results[0].kind = WASMTIME_I32;
@@ -101,10 +116,74 @@ static wasm_trap_t *tool_call(void *data, wasmtime_caller_t *caller,
   return NULL;
 }
 
+static wasm_trap_t *input_size(void *data, wasmtime_caller_t *caller,
+                               const wasmtime_val_t *args, size_t nargs,
+                               wasmtime_val_t *results, size_t nresults) {
+  (void)caller; (void)args; (void)nargs; (void)nresults;
+  host_callback *host = data;
+  results[0].kind = WASMTIME_I32;
+  results[0].of.i32 = (int32_t)host->input_length;
+  return NULL;
+}
+
+static wasm_trap_t *input_read(void *data, wasmtime_caller_t *caller,
+                               const wasmtime_val_t *args, size_t nargs,
+                               wasmtime_val_t *results, size_t nresults) {
+  (void)nargs; (void)nresults;
+  host_callback *host = data;
+  uint32_t offset = (uint32_t)args[0].of.i32;
+  uint32_t pointer = (uint32_t)args[1].of.i32, length = (uint32_t)args[2].of.i32;
+  if (!in_bounds(host->input_length, offset, length))
+    return trap_text("max_v1 invalid input range");
+  uint8_t *bytes;
+  wasm_trap_t *trap = guest_slice(caller, pointer, length, 1024 * 1024, &bytes);
+  if (trap) return trap;
+  memcpy(bytes, host->input + offset, length);
+  results[0].kind = WASMTIME_I32;
+  results[0].of.i32 = (int32_t)length;
+  return NULL;
+}
+
+static wasm_trap_t *output_write(void *data, wasmtime_caller_t *caller,
+                                 const wasmtime_val_t *args, size_t nargs,
+                                 wasmtime_val_t *results, size_t nresults) {
+  (void)nargs; (void)results; (void)nresults;
+  host_callback *host = data;
+  if (*host->output) return trap_text("max_v1 output already written");
+  uint32_t pointer = (uint32_t)args[0].of.i32, length = (uint32_t)args[1].of.i32;
+  uint8_t *bytes;
+  wasm_trap_t *trap = guest_slice(caller, pointer, length, MESSAGE_LIMIT, &bytes);
+  if (trap) return trap;
+  *host->output = malloc(length ? length : 1);
+  if (!*host->output) return trap_text("max_v1 could not allocate output");
+  memcpy(*host->output, bytes, length);
+  *host->output_length = length;
+  return NULL;
+}
+
+static wasmtime_error_t *define_func(wasmtime_linker_t *linker, const char *name,
+                                     size_t parameters, size_t returns,
+                                     wasmtime_func_callback_t callback, host_callback *host) {
+  wasm_valtype_vec_t p, r;
+  wasm_valtype_vec_new_uninitialized(&p, parameters);
+  wasm_valtype_vec_new_uninitialized(&r, returns);
+  for (size_t i = 0; i < parameters; ++i) p.data[i] = wasm_valtype_new_i32();
+  for (size_t i = 0; i < returns; ++i) r.data[i] = wasm_valtype_new_i32();
+  wasm_functype_t *signature = wasm_functype_new(&p, &r);
+  wasmtime_error_t *error = wasmtime_linker_define_func(linker, "max_v1", 6, name,
+                                                       strlen(name), signature, callback, host, NULL);
+  wasm_functype_delete(signature);
+  return error;
+}
+
 int max_wasm_run(max_wasm *run, const uint8_t *bytes, size_t length,
-                 uint64_t fuel, int64_t memory, max_wasm_tool_cb callback, void *callback_context,
+                 uint64_t fuel, int64_t memory,
+                 const uint8_t *input, size_t input_length, uint8_t **output, size_t *output_length,
+                 max_wasm_tool_cb callback, void *callback_context,
                  char *message, size_t capacity) {
-  host_callback host = { callback, callback_context };
+  *output = NULL;
+  *output_length = 0;
+  host_callback host = { callback, callback_context, input, input_length, output, output_length };
   wasmtime_module_t *module = NULL;
   wasmtime_store_t *store = NULL;
   wasmtime_linker_t *linker = NULL;
@@ -126,17 +205,16 @@ int max_wasm_run(max_wasm *run, const uint8_t *bytes, size_t length,
     goto cleanup;
   }
   linker = wasmtime_linker_new(run->engine);
-  wasm_valtype_t *params[4] = {wasm_valtype_new_i32(), wasm_valtype_new_i32(),
-                              wasm_valtype_new_i32(), wasm_valtype_new_i32()};
-  wasm_valtype_t *returns[1] = {wasm_valtype_new_i32()};
-  wasm_valtype_vec_t p, r;
-  wasm_valtype_vec_new(&p, 4, params);
-  wasm_valtype_vec_new(&r, 1, returns);
-  wasm_functype_t *signature = wasm_functype_new(&p, &r);
-  error = wasmtime_linker_define_func(linker, "max_v1", 6, "tool_call", 9,
-                                       signature, tool_call, &host, NULL);
-  wasm_functype_delete(signature);
+  error = define_func(linker, "tool_call", 4, 1, tool_call, &host);
   if (error) goto failed;
+  if (input) {
+    error = define_func(linker, "input_size", 0, 1, input_size, &host);
+    if (error) goto failed;
+    error = define_func(linker, "input_read", 3, 1, input_read, &host);
+    if (error) goto failed;
+    error = define_func(linker, "output_write", 2, 0, output_write, &host);
+    if (error) goto failed;
+  }
   wasmtime_instance_t instance;
   error = wasmtime_linker_instantiate(linker, context, module, &instance, &trap);
   if (error || trap) goto failed;

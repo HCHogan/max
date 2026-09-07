@@ -71,6 +71,7 @@ uniqueDefinitions = foldlM insertOne Map.empty
 validateDefinition :: ToolDefinition -> Either ToolCatalogError ()
 validateDefinition definition
   | T.null (T.strip definition.tdRef.unToolRef) = bad "tool ref is blank"
+  | definition.tdRef == ToolRef "run_code" = bad "run_code is reserved for the orchestration adapter; it cannot own the leaf scheduling gate"
   | definition.tdSchemaVersion.unSchemaVersion <= 0 = bad "schema version must be positive"
   | definition.tdDeadline.toolDeadlineSeconds <= 0 = bad "start-to-close deadline must be positive"
   | definition.tdCallMode /= WorkCall && definition.tdParallelism == ParallelSafe =

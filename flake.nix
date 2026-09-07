@@ -69,7 +69,9 @@
               max = hlib.dontCheck (
                 (hself.callCabal2nix "max" (cleanSrc pkgs) { wasmtime = pkgs.wasmtime; }).overrideAttrs (old: {
                   MAX_GIT_REV = self.shortRev or self.dirtyShortRev or "unknown";
+                  MAX_CODEMODE_JS_WASM = "${import ./nix/codemode-js.nix { inherit pkgs; }}/quickjs.wasm";
                   postInstall = (old.postInstall or "") + ''
+                    install -Dm644 codemode/QUICKJS-LICENSE $out/share/licenses/max/QuickJS-ng.txt
                     $out/bin/max --help > /dev/null
                   '';
                 })
@@ -87,6 +89,7 @@
         in
         {
           max = maxPackage pkgs;
+          codemode-js = import ./nix/codemode-js.nix { inherit pkgs; };
           default = maxPackage pkgs;
         }
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {

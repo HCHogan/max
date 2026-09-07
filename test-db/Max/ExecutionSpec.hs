@@ -19,6 +19,7 @@ import Helpers (truncateAll, withDb)
 import Max.Agent.Execution (ExecutionAdmission (..))
 import Max.Agent.Runtime (durableExecutionAdmission)
 import Max.CodeMode.Execution
+import Max.CodeMode.JavaScript (runJavaScript)
 import Max.CodeMode.Wasm
 import Max.DB.AgentTurn
 import Max.DB.Connection (DbPool)
@@ -58,6 +59,60 @@ hostHooks = hoistExecutionHooks raise . hooks
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution with real journal" $ do
+  it "records a JavaScript syntax failure before any leaf as failed-before-effect" $ do
+    (_, turn) <- fixture
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
+    result <- withHost pool . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session (hostHooks turn) (views registry) "return ("
+    outcomeName (codeModeInvocation result).tiOutcome `shouldBe` "failed-before-effect"
+    states turn `shouldReturn` [("host:wasm/v1", "failed")]
+    callCount turn `shouldReturn` 0
+
+  it "journals real JavaScript batches and source evidence without charging the container" $ do
+    (_, turn) <- fixture
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])
+    let source = "return max.batch([1,2].map(value => ({tool:'echo',args:{value}}))).map(max.value);"
+    result <- withHost pool . runTools registry $ do
+      session <- newExecutionSession (Just 2)
+      runJavaScript session (hostHooks turn) (views registry) source
+    result.cmExit `shouldBe` WasmCompleted
+    states turn `shouldReturn` [("host:wasm/v1", "succeeded"), ("echo", "succeeded"), ("echo", "succeeded")]
+    callCount turn `shouldReturn` 2
+    sourceRows <- withDb pool $ query "SELECT normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v1'" (Only turn.atrTurnId)
+    sourceRows `shouldBe` [Only source]
+
+  it "retains committed JavaScript leaves and partial failure evidence without replay" $ do
+    (_, turn) <- fixture
+    count <- newIORef (0 :: Int)
+    let definition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdRetryClass = RetryUnsafe, tdParallelism = SequentialOnly, tdFailuresPrecedeEffects = False}
+        runner = echoTool {toolRun = \value -> liftIO (modifyIORef' count (+ 1)) >> pure (Right value)}
+    registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
+    result <- withHost pool . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session (hostHooks turn) (views registry) "tools.echo({value:1}); throw new Error('after commit');"
+    result.cmExit `shouldSatisfy` (\case WasmTrapped _ -> True; _ -> False)
+    map (.ccOutcome) result.cmCalls `shouldBe` ["committed"]
+    states turn `shouldReturn` [("host:wasm/v1", "outcome-unknown"), ("echo", "committed")]
+    callCount turn `shouldReturn` 1
+    readIORef count `shouldReturn` 1
+
+  it "cancels a JavaScript host call with no leaked worker or later effect" $ do
+    (_, turn) <- fixture
+    entered <- newEmptyMVar
+    blocked <- newEmptyMVar
+    let runner = echoTool {toolRun = \value -> liftIO (putMVar entered () >> takeMVar blocked) >> pure (Right value)}
+        definition = echoDefinition {tdParallelism = SequentialOnly}
+    registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
+    worker <- Async.async . withHost pool . runTools registry $ do
+      session <- newExecutionSession Nothing
+      runJavaScript session (hostHooks turn) (views registry) "tools.echo({value:1}); tools.echo({value:2});"
+    reached <- timeout 30000000 (takeMVar entered)
+    reached `shouldBe` Just ()
+    timeout 3000000 (Async.cancel worker) `shouldReturn` Just ()
+    states turn `shouldReturn` [("host:wasm/v1", "outcome-unknown"), ("echo", "outcome-unknown")]
+    callCount turn `shouldReturn` 1
+
   it "records identical leaf outcomes, schemas, input and results through both adapters" $ do
     (_, turn) <- fixture
     let readFail = echoTool {toolName = "read_fail", toolRun = \_ -> pure (Left "read failed")}

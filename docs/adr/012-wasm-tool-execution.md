@@ -1,6 +1,6 @@
 # ADR-012: One host execution boundary for native calls and Wasm
 
-Status: accepted; first implementation batch complete (2026-09-07).
+Status: accepted; host execution and JavaScript/model-entry batches implemented (2026-09-07).
 
 ## Context
 
@@ -115,6 +115,70 @@ libffi trampoline allocation assertion in the current Nix toolchain. The final
 bridge uses a static `foreign export` and a scoped mailbox `StablePtr`, and all
 embedding tests run against the linked Wasmtime 45 C library. The historical
 Python experiment does not substitute for these tests.
+
+## Second batch: JavaScript SDK and model entry
+
+Ship a pinned QuickJS-ng interpreter compiled to core Wasm at package build
+time. Embed that fixed artifact in Max; submitted JavaScript is data interpreted
+inside Wasm, never host compiler input. Nix builds the guest from pinned sources
+for development and release. Its only imports are the Max ABI: no WASI linker,
+ambient filesystem, network, environment, clock or random source. A fresh store
+isolates each submission. Source, output, memory, fuel, host calls and elapsed
+time have independent host limits.
+
+The `codemode` skill contains the complete SDK contract and enables `run_code`
+on the next model round. Native tools remain available with their full schemas;
+the SDK's `tools` object is generated from that same round's catalog. Loading
+another skill during a program does not change its snapshot. This entry adds
+composition, never capability authority. `run_code` is reserved for the agent
+adapter and cannot be recursively called through the guest tool interface.
+
+The model adapter accepts `run_code` only as the sole call of a model round.
+Mixed submissions are rejected before any effect, preserving the native finish
+suppression rule and avoiding order-dependent nested execution. The adapter
+enters outside the leaf gate and shares its ExecutionSession and hooks. A
+program may submit a bounded batch of leaf requests; the shared executor, not
+JavaScript promises, decides concurrency from catalog metadata.
+
+Programs are async function bodies with an explicit JSON return value. The SDK
+offers named tool methods, a raw outcome interface and a batch operation.
+Successful values are unwrapped by named methods; failures retain their outcome
+and retry classification. There is no automatic retry. Promise jobs run inside
+the guest and unresolved promises fail explicitly. Host finish/yield stops the
+guest out of band. Media and skill controls continue through the existing host
+channels even when later JavaScript throws.
+
+The ABI gains bounded host input and a single bounded output, distinct from
+tool dispatch. Tool results up to 4 MiB may be paged from one run-local reply
+buffer; reading pages never dispatches an effect again. The next invocation
+replaces that buffer. Programs return at most 64 KiB of selected JSON.
+The outer journal stores the source and runtime digest, catalog
+fingerprint, limits, final output and bounded leaf receipts. Leaf outcomes
+remain authoritative after syntax errors, exceptions, resource interruption or
+output overflow. Recovery never automatically replays a program. Model results
+include partial receipts on failure and warn against replaying committed or
+unknown work.
+
+Failure before submitting any leaf, or with every submitted leaf returning a
+known pre-effect failure/rejection, is `failed-before-effect` and may be
+corrected. Count submissions independently from returned receipts: a timed-out
+host call with no receipt is still potentially effectful. Other container
+failures are conservatively `outcome-unknown`; individual leaf rows retain the
+precise outcomes. Neither classification introduces an automatic retry.
+
+Acceptance uses the real embedded QuickJS/Wasmtime path, including model skill
+activation, native/JS shared budgets, batch execution, hidden/recursive calls,
+finish, media, JavaScript errors, resource limits and durable journal outcomes.
+The first batch's native/Wasm tests remain regression gates.
+
+Local validation passes 1,092 unit examples and 331 real PostgreSQL examples.
+The JS cases execute the actual pinned guest, not a mock JavaScript host. They
+cover model skill activation and media, parallel batches, large Unicode replies
+without duplicate effects, finish, pending and rejected promises, fuel and
+timeout, and the distinction between failure before submission and an
+interrupted host effect without a returned receipt. Build, architecture checks,
+HLint and prompt-flow generation/check pass. These checks do not imply fleet
+deployment.
 
 ## References
 

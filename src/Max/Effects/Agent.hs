@@ -82,6 +82,7 @@ import Effectful.Log
 import Max.Agent.Execution
 import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
+import Max.CodeMode.Model (codeModeSpecs, executeModelBatch)
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
 import Max.Effects.ToolControl (ToolControl, runToolControl)
 import Max.Effects.ToolDirectory (ToolDirectory, listCatalogTools, listToolSpecs, runToolDirectoryDynamic)
@@ -290,7 +291,9 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
         then finalAnswer ctx h n appended' profile msgs'
         else do
           liftIO (setTurnPhase h "llm")
-          specs <- listToolSpecs
+          nativeSpecs <- listToolSpecs
+          let codeEnabled = (toolCapabilities ctx.acTools).tcSkills && Map.member "codemode" (toolSkillLoads ctx.acTools)
+              specs = nativeSpecs <> codeModeSpecs codeEnabled
           -- Trim before the call AND carry the trimmed list forward
           -- (every recursion below builds on msgs''): stubs are
           -- permanent, so between trim events the list is byte-stable
@@ -394,7 +397,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                   requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
               for_ tcs $ \tc ->
                 logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]
-              batch <- executeToolBatch session hooks registered requests
+              batch <- executeModelBatch codeEnabled session hooks registered requests
               for_ (zip tcs batch.tbInvocations) $ \(tc, invocation) ->
                 case outcomeResult invocation.tiOutcome of
                   Right value -> logInfo "agent: tool result" $ object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName invocation.tiOutcome, "result" .= previewJson 400 value, "full_len" .= LBS.length (encode value)]

@@ -18,6 +18,29 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "embedded Wasmtime boundary" $ do
+  it "keeps input/output separate from tool dispatch and preserves output after a trap" $ do
+    binary <- compileWat "(module (import \"max_v1\" \"input_read\" (func $read (param i32 i32 i32) (result i32))) (import \"max_v1\" \"output_write\" (func $write (param i32 i32))) (memory (export \"memory\") 1) (func (export \"_start\") (drop (call $read (i32.const 0) (i32.const 0) (i32.const 2))) (call $write (i32.const 0) (i32.const 2)) unreachable))"
+    result <- runEff . runConcurrent $ runWasmWithInput defaultWasmLimits binary (Just "{}") (\_ -> liftIO (fail "data channel dispatched a tool"))
+    fst result `shouldSatisfy` trapped
+    snd result `shouldBe` Just "{}"
+    runEff (runConcurrent (runWasm defaultWasmLimits binary (\_ -> pure Nothing))) >>= (`shouldSatisfy` trapped)
+
+  it "rejects invalid data ranges and a second output without replacing the first" $ do
+    forM_
+      [ "(call $write (i32.const -1) (i32.const 1))",
+        "(call $write (i32.const 0) (i32.const 65537))",
+        "(drop (call $read (i32.const 1) (i32.const 0) (i32.const 2)))"
+      ]
+      $ \body -> do
+        binary <- compileWat ("(module (import \"max_v1\" \"input_read\" (func $read (param i32 i32 i32) (result i32))) (import \"max_v1\" \"output_write\" (func $write (param i32 i32))) (memory (export \"memory\") 2) (func (export \"_start\") " <> body <> "))")
+        result <- runEff . runConcurrent $ runWasmWithInput defaultWasmLimits binary (Just "{}") (\_ -> pure Nothing)
+        fst result `shouldSatisfy` trapped
+        snd result `shouldBe` Nothing
+    binary <- compileWat "(module (import \"max_v1\" \"output_write\" (func $write (param i32 i32))) (memory (export \"memory\") 1) (data (i32.const 0) \"12\") (func (export \"_start\") (call $write (i32.const 0) (i32.const 1)) (call $write (i32.const 1) (i32.const 1))))"
+    result <- runEff . runConcurrent $ runWasmWithInput defaultWasmLimits binary (Just "{}") (\_ -> pure Nothing)
+    fst result `shouldSatisfy` trapped
+    snd result `shouldBe` Just "1"
+
   it "copies UTF-8 requests and replies through the host mailbox" $ do
     seen <- newIORef []
     binary <- guestCalls [object ["tool" .= ("echo" :: Text), "args" .= object ["value" .= (7 :: Int)]]] "(if (i32.ne (i32.load8_u (i32.const 65536)) (i32.const 123)) (then unreachable))"

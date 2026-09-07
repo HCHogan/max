@@ -67,12 +67,18 @@ def check_imports():
     executor = (ROOT / "src/Max/Execution/Tools.hs").read_text()
     guest = (ROOT / "src/Max/CodeMode/Execution.hs").read_text()
     wasm = (ROOT / "src/Max/CodeMode/Wasm.hs").read_text()
-    for name, source in [("Tool execution", executor), ("Wasm adapter", guest)]:
+    model = (ROOT / "src/Max/CodeMode/Model.hs").read_text()
+    javascript = (ROOT / "src/Max/CodeMode/JavaScript.hs").read_text()
+    for name, source in [("Tool execution", executor), ("Wasm adapter", guest), ("Code submission", model), ("JavaScript SDK", javascript)]:
         for dependency in IMPORT.findall(source):
             if dependency.startswith("Max.DB.") or dependency in {"Effectful.PostgreSQL", "Max.Effects.LLM", "Max.Env", "Max.Agent.Runtime"}:
                 errors.append(f"{name}: LLM, persistence or application assembly leaked into execution")
     if "invokeTool" in guest or "executeToolBatch" not in guest:
         errors.append("Wasm adapter bypasses shared tool execution")
+    if "invokeTool" in model or "executeToolBatch" not in model:
+        errors.append("Code submission bypasses shared tool execution")
+    if "toolRun" in model or "toolRun" in javascript:
+        errors.append("Code container registered as a recursively scheduled leaf")
     for dependency in IMPORT.findall(wasm):
         if dependency.startswith("Max.") or dependency.startswith("System.Process"):
             errors.append(f"Wasm mechanics acquired domain or subprocess capability: {dependency}")

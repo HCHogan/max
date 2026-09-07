@@ -25,7 +25,7 @@
 --
 -- == Builtin skills
 --
--- Files under @skills\/@ (self-knowledge, sandbox, web, office and maxops)
+-- Files under @skills\/@ (self-knowledge, sandbox, web, office, maxops, codemode)
 -- are baked into the binary (file-embed, same deployment
 -- story as the admin panel's assets) and seeded into the registry
 -- with negative ids.  They exist for content that is coupled

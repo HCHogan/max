@@ -448,9 +448,10 @@ succeeded and the row was dropped.
 
 ## Embedded Wasm execution
 
-ADR-012's first batch is an internal API, not an advertised model tool. Native
-Agent rounds call `executeToolBatch`; `runWasmTools` adapts core Wasm imports to
-that same executor. Supply one `ExecutionSession` for an invocation and the
+ADR-012 routes native calls and the `codemode` skill's `run_code` entry through
+`executeModelBatch`. Ordinary calls enter `executeToolBatch`; code containers
+enter outside its scheduling gate, and their leaves use the same executor.
+Supply one `ExecutionSession` for an invocation and the
 same immutable registry/catalog snapshot to both adapters. Continue to interpret
 `ToolOutput` with the invocation's existing queue. Apply returned skill loads
 only when assembling the next model round. Never construct an executable
@@ -469,10 +470,35 @@ reply each fit within 64 KiB. There are no WASI imports or ambient resources.
 These are fixture/embedding defaults, not fleet model timeout settings. The
 wall timeout cancels host IO and interrupts guest instructions; compilation
 must finish before native resources can be freed, so this is not a hard bound
-on compiler wall time. User-facing compiler admission/caching is a later batch.
+on compiler wall time. The model entry accepts JavaScript source only; it cannot
+submit arbitrary Wasm or compilation options.
+
+QuickJS-ng 0.16.2 is built from pinned sources by `nix/codemode-js.nix`. The guest
+uses libc for allocation/string/math, with the ambient syscall archive member
+removed and explicit internal stubs in `codemode/quickjs.c`. The build verifies
+the final import section contains exactly the four Max ABI functions. It does
+not link host WASI. The development shell and release package set the build-time
+`MAX_CODEMODE_JS_WASM` path; Template Haskell embeds the artifact in Max.
+For Cabal outside the shell, prepare the fallback file once and after changing
+the guest C source or Nix derivation:
+
+```sh
+mkdir -p .generated
+nix build .#codemode-js --out-link .generated/js-runtime
+ln -sfn js-runtime/quickjs.wasm .generated/quickjs.wasm
+```
+
+The JS entry uses 1 billion fuel units, 64 MiB memory and a 30-minute elapsed
+limit including tool waits. Source and final output are each bounded to 64 KiB.
+Named SDK methods are synchronous (await is supported); `max.batch` submits up
+to 32 leaves to the host's metadata-based concurrency rules. Large replies are
+read from a bounded ephemeral buffer without another tool invocation. Runtime
+imports, guest source, SDK source and model schemas are independent of native
+tool authority. Full SDK usage ships in `skills/codemode.md`.
 
 Run `cabal test max-test` for memory/ABI, resources, control, media and local
-budget cases. Run `cabal test max-test-db` with `MAX_TEST_DB_URL` pointing to a
+budget cases, plus real QuickJS execution and skill/model-loop integration.
+Run `cabal test max-test-db` with `MAX_TEST_DB_URL` pointing to a
 dedicated PostgreSQL database for leaf journal parity, durable budget races,
 interruption, trap-after-commit and lease takeover. The database suite is
 destructive to its designated test database and refuses to skip when unset.

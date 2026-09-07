@@ -162,6 +162,55 @@ dispatchContext =
 
 spec :: Spec
 spec = describe "Agent full loop" $ do
+  it "loads codemode, invokes JavaScript with the round catalog, and preserves media and later skill activation" $ do
+    registry <- newSkillRegistry
+    events <- newIORef []
+    calls <- newIORef (0 :: Int)
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) Nothing
+    let executionContext =
+          dispatchContext
+            { acTools =
+                mkToolContext
+                  (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
+                  (TurnCapabilities False False True qqAdvertisedCaps True Map.empty Nothing False)
+            }
+        factory current =
+          buildToolRegistry
+            ( [echoDefinition, echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
+                <> [echoDefinition {tdRef = ToolRef "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
+            )
+            ( [echoTool]
+                <> skillToolsFor registry current (const (pure (Right Nothing)))
+                <> [echoTool {toolName = "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
+            )
+        provider =
+          LLMInterpreter
+            { liChat = \_ _ messages specs _ -> do
+                roundNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
+                let names = map (.specName) specs
+                    respond name args = pure (Right (ToolCallsResp (object []) "" [ToolCall (T.pack (show roundNo)) name args]))
+                case roundNo of
+                  0 -> do
+                    liftIO $ names `shouldNotContain` ["run_code"]
+                    respond "use_skill" (object ["name" .= ("codemode" :: Text)])
+                  1 -> do
+                    liftIO $ names `shouldContain` ["run_code"]
+                    liftIO $ names `shouldNotContain` ["web_search"]
+                    respond "run_code" (object ["code" .= ("const value = tools.echo({value:7}); tools.use_skill({name:'web'}); return {answer:value.echo.value, hidden:!max.names.includes('web_search')};" :: Text)])
+                  _ -> do
+                    liftIO $ names `shouldContain` ["web_search", "run_code"]
+                    liftIO $ any (\case MsgTool "1" body -> "\"answer\":7" `T.isInfixOf` body && "\"hidden\":true" `T.isInfixOf` body; _ -> False) messages `shouldBe` True
+                    liftIO $ any (\case MsgUserBlocks blocks -> any (\case ImageDataUrl _ -> True; _ -> False) blocks; _ -> False) messages `shouldBe` True
+                    pure (Right (ContentResp "done"))
+            }
+    result <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff . runConcurrent . runLog "codemode-model-test" logger LogAttention . runLLMWith provider . runAgent (AgentLimits 4) factory $
+        agentTurn turn executionContext "fake" [MsgUser "compose"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    result.reply `shouldBe` Just "done"
+    readIORef calls `shouldReturn` 3
+
   it "loads a complete skill next round, rejects same-batch hidden calls, and isolates requests" $ do
     registry <- newSkillRegistry
     events <- newIORef []

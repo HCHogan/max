@@ -69,6 +69,8 @@ embeddedFiles =
     <> prefixDirectory "migrations" $(embedDir "migrations")
     <> prefixDirectory "docs" $(embedDir "docs")
     <> prefixDirectory "skills" $(embedDir "skills")
+    <> prefixDirectory "codemode" $(embedDir "codemode")
+    <> prefixDirectory "cbits" $(embedDir "cbits")
     <> prefixDirectory "static" $(embedDir "static")
     <> prefixDirectory "nix" $(embedDir "nix")
     <> prefixDirectory "context-eval" $(embedDir "context-eval")
@@ -104,7 +106,9 @@ sourceFiles = Map.fromList (mapMaybe decodeSource embeddedFiles)
 allowedTextPath :: FilePath -> Bool
 allowedTextPath path =
   takeExtension path
-    `elem` [ ".cabal",
+    `elem` [ ".c",
+             ".h",
+             ".cabal",
              ".css",
              ".example",
              ".hs",
@@ -124,7 +128,7 @@ allowedTextPath path =
              ".yaml",
              ".yml"
            ]
-    || takeFileName path `elem` ["Dockerfile", "LICENSE", "nix.conf"]
+    || takeFileName path `elem` ["Dockerfile", "LICENSE", "QUICKJS-LICENSE", "nix.conf"]
 
 portablePath :: FilePath -> Text
 portablePath = T.pack . map (\c -> if isPathSeparator c then '/' else c)

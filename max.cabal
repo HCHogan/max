@@ -51,6 +51,9 @@ extra-source-files:
     docs/architecture.md
     docs/adr/*.md
     cbits/max_wasm.h
+    codemode/*.c
+    codemode/*.js
+    codemode/QUICKJS-LICENSE
     docs/features.md
     docs/development.md
     docs/platforms.md
@@ -249,6 +252,8 @@ library
         Max.Execution.Types
         Max.Execution.Tools
         Max.CodeMode.Wasm
+        Max.CodeMode.JavaScript
+        Max.CodeMode.Model
         Max.CodeMode.Execution
         Max.Agent.Execution
         Max.Agent.Runtime
@@ -546,6 +551,7 @@ test-suite max-test
     other-modules:
         ExecutionFixture
         Max.CodeMode.WasmSpec
+        Max.CodeMode.JavaScriptSpec
         Max.Execution.ToolsSpec
         Max.AdminSpec
         Max.CliProxySpec
