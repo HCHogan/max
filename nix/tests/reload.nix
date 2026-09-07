@@ -17,7 +17,10 @@ let
   };
   testPackage = pkgs.symlinkJoin {
     name = "max-reload-test-package";
-    paths = [ fakeMax fakeMaxctl ];
+    paths = [
+      fakeMax
+      fakeMaxctl
+    ];
   };
   replacementPackage = pkgs.runCommand "max-reload-test-package-v2" { } ''
     mkdir -p $out/bin
@@ -29,6 +32,7 @@ let
 in
 pkgs.testers.runNixOSTest {
   name = "max-configuration-reload";
+  requiredFeatures.kvm = false;
 
   nodes.machine =
     { lib, ... }:
@@ -41,9 +45,9 @@ pkgs.testers.runNixOSTest {
         package = testPackage;
         configFile = "/run/max-test-config.yaml";
         postgres.enable = false;
-        sandboxImage.enable = false;
+        sandbox.enable = false;
         sandboxNetwork.enable = false;
-        browserImage.enable = false;
+        browser.enable = false;
         maxops = {
           enable = true;
           tokenFile = "/run/maxops-test-token";
@@ -59,8 +63,7 @@ pkgs.testers.runNixOSTest {
 
       # A package path change alters ExecStart/ExecReload and must use
       # systemd's restart path, never the configuration reload path.
-      specialisation.package-change.configuration.services.max.package =
-        lib.mkForce replacementPackage;
+      specialisation.package-change.configuration.services.max.package = lib.mkForce replacementPackage;
 
       virtualisation.docker.enable = lib.mkForce false;
       systemd.services.max.requires = lib.mkForce [ "max-test-config.service" ];

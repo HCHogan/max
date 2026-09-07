@@ -1,14 +1,14 @@
 -- |
 -- Durable sandbox registry.  PostgreSQL owns lifecycle metadata and each
--- named Docker volume owns the live filesystem; the STM map is only a cache
--- and per-sandbox lock table.  Production boot reconciles rows with Docker,
+-- durable work directory owns the live filesystem; the STM map is only a cache
+-- and per-sandbox lock table.  Production boot reconciles rows with the runtime broker,
 -- adopting a live container or rebuilding it around a surviving volume.
 --
 -- == Concurrency
 --
 -- Multiple agent dispatches in the same session can hit the same
 -- sandbox in parallel.  Each 'SandboxEntry' carries a 'TMVar' exec
--- lock so 'execInSandbox' serializes against itself; @docker exec@
+-- lock so 'execInSandbox' serializes against itself; guest command execution
 -- still spawns independent processes inside the container, so we
 -- pick the lock granularity to be the natural one: "one shell at a
 -- time per sandbox".
@@ -65,9 +65,9 @@ import Data.Time (NominalDiffTime, UTCTime, addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), execute, query, withTransaction)
 import Max.Concurrent.Lock (withLock)
 import Max.DB.Connection (DbPool, withConn)
-import Max.Sandbox.Docker
-  ( DockerContainerStatus (..),
-    DockerPresence (..),
+import Max.Sandbox.Runtime
+  ( RuntimeContainerStatus (..),
+    RuntimePresence (..),
     ExecResult (..),
     inspectContainerPolicy,
     inspectContainerStatus,
@@ -170,23 +170,23 @@ reconcileSandboxes reg = case reg.srDbPool of
           -- positively reports absence; daemon/CLI failure is not absence.
           volumeState <- inspectVolumePresence row.psVolume
           case volumeState of
-            DockerAbsent -> do
+            RuntimeAbsent -> do
               runRm row.psContainer
               atomically $ modifyTVar' reg.srEntries (Map.delete (SandboxId row.psHandle))
               markSandboxDestroyed pool row.psId "durable volume missing during boot reconciliation"
-            DockerUnavailable detail ->
+            RuntimeUnavailable detail ->
               markSandboxUnknown pool row.psId detail
-            DockerPresent -> do
+            RuntimePresent -> do
               containerState <- inspectContainerStatus row.psContainer
               case containerState of
-                DockerContainerRunning -> do
+                RuntimeContainerRunning -> do
                   currentPolicy <- inspectContainerPolicy row.psContainer
                   if currentPolicy && persistedPolicyCurrent row
                     then adoptPersisted reg pool row
                     else rebuildPersisted reg pool row
-                DockerContainerStopped -> rebuildPersisted reg pool row
-                DockerContainerMissing -> rebuildPersisted reg pool row
-                DockerContainerUnavailable detail ->
+                RuntimeContainerStopped -> rebuildPersisted reg pool row
+                RuntimeContainerMissing -> rebuildPersisted reg pool row
+                RuntimeContainerUnavailable detail ->
                   markSandboxUnknown pool row.psId detail
     for_ (Set.toList (containers `Set.difference` knownContainers)) runRm
     for_ (Set.toList (volumes `Set.difference` knownVolumes)) runVolumeRm
@@ -229,14 +229,12 @@ data SandboxCreateOpts = SandboxCreateOpts
   }
   deriving stock (Show)
 
--- | Default image is the nix-enabled base built from
--- @sandbox-image/@ (@build.sh@ must have been run on the docker
--- host); packages come from pinned nixpkgs store paths realised by a
--- restricted helper, with the store shared through 'nixVolume'.
+-- | The host module owns the prebuilt NixOS closure and pinned package source.
+-- Legacy database image/network columns now record this runtime profile.
 defaultCreateOpts :: SandboxCreateOpts
 defaultCreateOpts =
   SandboxCreateOpts
-    { scoImage = "max-sandbox:latest",
+    { scoImage = "nixos-sandbox-v1",
       scoNetwork = sandboxNetwork
     }
 
@@ -341,12 +339,12 @@ execInSandbox reg gid sid packages cmd timeoutSecs = do
           withLock
             e.seExecLock
             ( do
-                prepared <- runPreparePackages e.seImage packages timeoutSecs
+                prepared <- runPreparePackages e.seContainer packages timeoutSecs
                 case prepared of
                   Left detail -> pure (Left detail)
                   Right storePaths -> do
                     result <- runExec e.seContainer e.seNetwork (wrapPackages storePaths cmd) timeoutSecs
-                    -- @-1@ is reserved for failure to invoke Docker itself.  For a
+                    -- @-1@ is reserved for failure to invoke the runtime client.  For a
                     -- write-capable tool this must travel as Left so the tool kernel
                     -- records outcome-unknown, never as a seemingly committed shell
                     -- exit code.  Ordinary in-container non-zero exits remain rich
@@ -435,7 +433,7 @@ destroyAllSandboxes reg = do
   for_ entries (void . releaseSandbox reg)
 
 -- The exec lock keeps destruction from racing an in-container operation.
--- Once destruction begins, the cache entry is removed even if Docker becomes
+-- Once destruction begins, the cache entry is removed even if the runtime becomes
 -- unavailable; the durable row remains outcome-unknown for reconciliation.
 releaseSandbox :: SandboxRegistry -> SandboxEntry -> IO (Either Text ())
 releaseSandbox reg entry =
@@ -457,9 +455,9 @@ cleanupSandbox entry = do
   runRm entry.seContainer
   runVolumeRm entry.seVolume
   inspectVolumePresence entry.seVolume >>= \case
-    DockerAbsent -> pure (Right ())
-    DockerPresent -> pure (Left "volume cleanup failed; durable volume still exists")
-    DockerUnavailable detail -> pure (Left ("destruction outcome unknown: " <> detail))
+    RuntimeAbsent -> pure (Right ())
+    RuntimePresent -> pure (Left "volume cleanup failed; durable volume still exists")
+    RuntimeUnavailable detail -> pure (Left ("destruction outcome unknown: " <> detail))
 
 --------------------------------------------------------------------------------
 -- Durable metadata helpers.
@@ -624,9 +622,9 @@ destroyPersisted reg row = do
         runVolumeRm row.psVolume
         atomically $ modifyTVar' reg.srEntries (Map.delete sid)
         inspectVolumePresence row.psVolume >>= \case
-          DockerAbsent -> markSandboxDestroyed pool row.psId "sandbox TTL expired" >> pure True
-          DockerPresent -> markSandboxUnknown pool row.psId "TTL cleanup failed; durable volume still exists" >> pure False
-          DockerUnavailable detail -> markSandboxUnknown pool row.psId ("TTL destruction outcome unknown: " <> detail) >> pure False
+          RuntimeAbsent -> markSandboxDestroyed pool row.psId "sandbox TTL expired" >> pure True
+          RuntimePresent -> markSandboxUnknown pool row.psId "TTL cleanup failed; durable volume still exists" >> pure False
+          RuntimeUnavailable detail -> markSandboxUnknown pool row.psId ("TTL destruction outcome unknown: " <> detail) >> pure False
       withEntryLock action = do
         entries <- readTVarIO reg.srEntries
         case Map.lookup sid entries of

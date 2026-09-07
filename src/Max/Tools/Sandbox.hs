@@ -6,10 +6,10 @@
 -- == What the model sees
 --
 -- A small JSON-schema'd toolkit for "run stuff in a Linux box".
--- The box is nix-based (image built from @sandbox-image/@, nixpkgs
--- pinned to 26.05, /nix shared across all sandboxes): instead of
+-- The box is a prebuilt NixOS system (declared in @nix/sandbox-guest.nix@, nixpkgs
+-- pinned to 26.05, host /nix/store mounted read-only): instead of
 -- apt-installing, the model passes @packages@ to @sandbox_exec@ and
--- we wrap the command in @nix shell nixpkgs#… -c@, so models that
+-- the host broker builds them and adds their store paths to PATH, so models that
 -- don't know nix never have to write a nix command; @nix_search@
 -- covers discovery.  The sandbox survives across @-mention
 -- dispatches; the model is told this so it can reuse one between
@@ -45,7 +45,7 @@ import Max.Tools.Schema
     toolObject,
     withKeys,
   )
-import Max.Sandbox.Docker (ExecResult (..), SandboxManifest (..), maxOutputBytes, shellQuote)
+import Max.Sandbox.Runtime (ExecResult (..), SandboxManifest (..), maxOutputBytes, runSearch)
 import Max.Sandbox.Registry
   ( SandboxCreateOpts (..),
     SandboxEntry (..),
@@ -55,6 +55,7 @@ import Max.Sandbox.Registry
     defaultCreateOpts,
     destroySandbox,
     execInSandbox,
+    listSandbox,
     listSandboxesForGroup,
     readSandboxFile,
     writeSandboxFile,
@@ -82,7 +83,7 @@ createTool gid reg =
     { toolName = "sandbox_create",
       toolDescription =
         T.unwords
-          [ "Create a Linux sandbox (Docker container) and get the 'sandbox_id' the",
+          [ "Create a Linux sandbox (NixOS container) and get the 'sandbox_id' the",
             "other sandbox_* tools take.  Nix-based: do NOT apt/yum install — pass",
             "nixpkgs attributes in sandbox_exec's 'packages' instead.  Sandboxes",
             "persist across dispatches and are shared with this group's other",
@@ -206,10 +207,7 @@ journalObservation er =
 --------------------------------------------------------------------------------
 -- nix_search
 
--- | Runs @nix search@ inside the sandbox (piped through jq, which
--- the base image ships) so results come from the same pinned
--- nixpkgs the sandbox will fetch from.  The image bakes the eval
--- cache, so searches are cheap after the first.
+-- | Search the host-owned package pin after checking sandbox ownership.
 nixSearchTool :: (IOE :> es) => GroupId -> SandboxRegistry -> Tool es
 nixSearchTool gid reg =
   Tool
@@ -231,23 +229,17 @@ nixSearchTool gid reg =
         case parseEither (withObject "args" parseArgs) args of
           Left e -> pure $ Left ("bad args: " <> T.pack e)
           Right (sid, query) -> do
-            let jqProg =
-                  "to_entries[:30][] | \"\\(.key|split(\".\")[2:]|join(\".\")) \\(.value.version) \\(.value.description)\""
-                cmd =
-                  "nix search nixpkgs "
-                    <> shellQuote query
-                    <> " --json 2>/dev/null | jq -r "
-                    <> shellQuote jqProg
-            res <- liftIO (execInSandbox reg gid (SandboxId sid) [] cmd 120)
+            entry <- liftIO (listSandbox reg gid (SandboxId sid))
+            res <- case entry of
+              Nothing -> pure (Left "sandbox not found")
+              Just sandbox -> liftIO (runSearch sandbox.seContainer query)
             pure $ case res of
               Left err -> Left err
-              Right er
-                | er.erExitCode /= 0 ->
-                    Left ("nix search failed (exit " <> T.pack (show er.erExitCode) <> "): " <> er.erStderr)
-                | T.null (T.strip er.erStdout) ->
+              Right results
+                | T.null (T.strip results) ->
                     Right (object ["results" .= ("" :: Text), "note" .= ("no packages matched; try a broader regex" :: Text)])
                 | otherwise ->
-                    Right (object ["results" .= er.erStdout, "truncated" .= er.erTruncated])
+                    Right (object ["results" .= T.take maxOutputBytes results, "truncated" .= (T.length results > maxOutputBytes)])
     }
   where
     parseArgs :: Object -> Parser (Text, Text)

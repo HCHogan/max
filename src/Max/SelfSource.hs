@@ -63,6 +63,7 @@ embeddedFiles :: [(FilePath, BS.ByteString)]
 embeddedFiles =
   prefixDirectory "src" $(embedDir "src")
     <> prefixDirectory "app" $(embedDir "app")
+    <> prefixDirectory "runtime-cli" $(embedDir "runtime-cli")
     <> prefixDirectory "test" $(embedDir "test")
     <> prefixDirectory "test-db" $(embedDir "test-db")
     <> prefixDirectory "migrations" $(embedDir "migrations")
@@ -74,7 +75,6 @@ embeddedFiles =
     <> prefixDirectory "eval" $(embedDir "eval")
     <> prefixDirectory "prompt-flow" $(embedDir "prompt-flow")
     <> prefixDirectory "scripts" $(embedDir "scripts")
-    <> prefixDirectory "sandbox-image" $(embedDir "sandbox-image")
     <> prefixDirectory "browser-image" $(embedDir "browser-image")
     <> prefixDirectory "bridge" $(embedDir "bridge")
     <> prefixDirectory ".github/workflows" $(embedDir ".github/workflows")
@@ -86,7 +86,6 @@ embeddedFiles =
          ("flake.nix", $(embedFile "flake.nix")),
          ("flake.lock", $(embedFile "flake.lock")),
          ("devenv.nix", $(embedFile "devenv.nix")),
-         ("docker-compose.yml", $(embedFile "docker-compose.yml")),
          ("max.yaml.example", $(embedFile "max.yaml.example"))
        ]
 

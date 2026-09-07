@@ -323,14 +323,14 @@ toolInventory =
     always (writeTool "sandbox_create" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),
     -- The model picks this one's timeout itself, clamped to ten minutes, and
     -- 'timeout --preserve-status' enforces it inside the container.  What that
-    -- cannot bound is the host side: 'docker exec' wedging leaves the call
+    -- cannot bound is the host side: a wedged runtime client leaves the call
     -- hanging with the command already finished or never started.  So this is
     -- the container's own ceiling plus enough slack to be sure the difference
-    -- is docker's and not the command's.  It sits above the turn watchdog on
+    -- is the runtime's and not the command's. It sits above the turn watchdog on
     -- purpose — for a front-model turn that watchdog fires first, and this is
     -- here for the plan executor, which has no such thing over it.
     always (withDeadline 660 (writeTool "sandbox_exec" ["sandbox.process", "sandbox.fs"] [CurrentConversation, ProcessResource "sandbox"])),
-    -- Same container mechanism, fixed 120s inside; the slack is the same idea.
+    -- Host package search has its own 120s bound; allow transport slack here.
     always (withDeadline 180 (statefulReadTool "nix_search" ["sandbox.process", "network.nix"] [CurrentConversation, ProcessResource "sandbox"])),
     always (statefulReadTool "sandbox_list" ["sandbox.registry"] [CurrentConversation, ProcessResource "sandbox"]),
     always (writeTool "sandbox_destroy" ["sandbox.lifecycle"] [CurrentConversation, ProcessResource "sandbox"]),

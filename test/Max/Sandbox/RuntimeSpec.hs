@@ -1,7 +1,7 @@
-module Max.Sandbox.DockerSpec (spec) where
+module Max.Sandbox.RuntimeSpec (spec) where
 
 import Control.Exception (bracket)
-import Max.Sandbox.Docker (inspectContainerPolicy, stripAnsi, wrapPackages)
+import Max.Sandbox.Runtime (inspectContainerPolicy, stripAnsi, wrapPackages)
 import System.Directory (Permissions (..), getPermissions, setPermissions)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.FilePath ((</>))
@@ -12,19 +12,19 @@ spec :: Spec
 spec = do
   describe "container network adoption" $ do
     it "adopts only the current policy on exactly the operator network" $
-      withDockerInspection "printf '5 max-sandbox 1\\n'" $
+      withRuntimeInspection "printf '6 max-sandbox 1\\n'" $
         inspectContainerPolicy "fixture" `shouldReturn` True
     it "rejects an otherwise current container connected to a second network" $
-      withDockerInspection "printf '5 max-sandbox 2\\n'" $
+      withRuntimeInspection "printf '6 max-sandbox 2\\n'" $
         inspectContainerPolicy "fixture" `shouldReturn` False
     it "rejects a replaced network even when its policy label is current" $
-      withDockerInspection "printf '5 bridge 1\\n'" $
+      withRuntimeInspection "printf '6 bridge 1\\n'" $
         inspectContainerPolicy "fixture" `shouldReturn` False
     it "rebuilds an old disconnected shell" $
-      withDockerInspection "printf '4 none 0\\n'" $
+      withRuntimeInspection "printf '4 none 0\\n'" $
         inspectContainerPolicy "fixture" `shouldReturn` False
-    it "does not adopt when Docker inspection fails" $
-      withDockerInspection "exit 1" $
+    it "does not adopt when runtime inspection fails" $
+      withRuntimeInspection "exit 1" $
         inspectContainerPolicy "fixture" `shouldReturn` False
 
   describe "stripAnsi" $ do
@@ -55,9 +55,9 @@ spec = do
       wrapPackages ["/nix/store/abc-qpdf", "/nix/store/def-python-env"] "python3 -c 'import openpyxl'"
         `shouldBe` "export PATH='/nix/store/abc-qpdf/bin:/nix/store/def-python-env/bin':\"$PATH\"; exec sh -c 'python3 -c '\\''import openpyxl'\\'''"
 
-withDockerInspection :: String -> IO a -> IO a
-withDockerInspection output action = withSystemTempDirectory "max-docker-policy" $ \directory -> do
-  let command = directory </> "docker"
+withRuntimeInspection :: String -> IO a -> IO a
+withRuntimeInspection output action = withSystemTempDirectory "max-runtime-policy" $ \directory -> do
+  let command = directory </> "max-runtime"
   writeFile command ("#!/bin/sh\n" <> output <> "\n")
   permissions <- getPermissions command
   setPermissions command (permissions {executable = True})

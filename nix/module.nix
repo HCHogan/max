@@ -5,12 +5,9 @@
 #     `settings`, secrets via `environmentFile`),
 #   * a local PostgreSQL (with pgvector) and a peer-authenticated
 #     database,
-#   * Docker plus one-shot units that build the container images the
-#     bot spawns: the nix-enabled sandbox base (max-sandbox:latest,
-#     from ../sandbox-image) and the camoufox browser
-#     (max-browser:latest, from ../browser-image),
-#   * optionally the NapCat container (QQ client) with the outbox
-#     bind-mount the file tools expect.
+#   * the Haskell runtime broker, native browser service templates and
+#     dynamically launched NixOS sandboxes under max-stack.target,
+#   * optionally native NapCat with the outbox bind mount the file tools expect.
 #
 # The admin panel (settings.admin.port) rides inside the bot process,
 # so it needs no unit of its own — but it opens a port this module does
@@ -52,8 +49,6 @@ let
   # Only visible when the config comes from `settings`; a hand-managed
   # `configFile` that raises the drain needs TimeoutStopSec raised too.
   drainSeconds = cfg.settings.shutdown_drain_seconds or 120;
-  sandboxImageSrc = ../sandbox-image;
-  browserImageSrc = ../browser-image;
   # Hand-written rather than `makeFontsConf`, which appends dejavu-fonts
   # unconditionally.  That lands DejaVu Sans *second* in the fallback
   # chain, ahead of Sarasa, and codesnap takes it — so every CJK character
@@ -72,48 +67,74 @@ let
   # default: its deserializer rejects a partial object rather than filling
   # gaps in, so an override-only config fails with `missing field`.
   codeFontFamily = "RecMonoCasual Nerd Font Mono";
-  codeSnapConfig = pkgs.writeText "max-codesnap.json" (builtins.toJSON {
-    print_eggs = false;
-    snapshot_config = {
-      theme = "ocean";
-      themes_folders = [ "${codeThemes}" ];
-      code_config = {
-        font_family = codeFontFamily;
-        breadcrumbs = {
-          enable = false;
-          separator = "/";
-          color = "#80848b";
+  codeSnapConfig = pkgs.writeText "max-codesnap.json" (
+    builtins.toJSON {
+      print_eggs = false;
+      snapshot_config = {
+        theme = "ocean";
+        themes_folders = [ "${codeThemes}" ];
+        code_config = {
           font_family = codeFontFamily;
+          breadcrumbs = {
+            enable = false;
+            separator = "/";
+            color = "#80848b";
+            font_family = codeFontFamily;
+          };
+        };
+        # Decoration on something being read on a phone.  The shadow is killed
+        # by colour, not by radius: radius 0 removes the blur and leaves the
+        # default #00000040 as a hard-edged block the width of the window.
+        watermark = {
+          content = "";
+          font_family = codeFontFamily;
+          color = "#ffffff";
+        };
+        window = {
+          mac_window_bar = false;
+          margin = {
+            x = 16;
+            y = 16;
+          };
+          shadow = {
+            radius = 0;
+            color = "#00000000";
+          };
+          radius = 12;
+          border = {
+            width = 1;
+            color = "#ffffff18";
+          };
+          title_config = {
+            color = "#ffffff";
+            font_family = codeFontFamily;
+          };
+        };
+        # Silver-blue, left to right: pale enough that the dark window keeps a
+        # visible edge against it in a chat thumbnail.
+        background = {
+          start = {
+            x = 0;
+            y = 0;
+          };
+          end = {
+            x = "max";
+            y = 0;
+          };
+          stops = [
+            {
+              position = 0;
+              color = "#cfdce8";
+            }
+            {
+              position = 1;
+              color = "#f2f7fa";
+            }
+          ];
         };
       };
-      # Decoration on something being read on a phone.  The shadow is killed
-      # by colour, not by radius: radius 0 removes the blur and leaves the
-      # default #00000040 as a hard-edged block the width of the window.
-      watermark = {
-        content = "";
-        font_family = codeFontFamily;
-        color = "#ffffff";
-      };
-      window = {
-        mac_window_bar = false;
-        margin = { x = 16; y = 16; };
-        shadow = { radius = 0; color = "#00000000"; };
-        radius = 12;
-        border = { width = 1; color = "#ffffff18"; };
-        title_config = { color = "#ffffff"; font_family = codeFontFamily; };
-      };
-      # Silver-blue, left to right: pale enough that the dark window keeps a
-      # visible edge against it in a chat thumbnail.
-      background = {
-        start = { x = 0; y = 0; };
-        end = { x = "max"; y = 0; };
-        stops = [
-          { position = 0; color = "#cfdce8"; }
-          { position = 1; color = "#f2f7fa"; }
-        ];
-      };
-    };
-  });
+    }
+  );
   codeFontsConf = pkgs.writeText "max-code-fonts.conf" ''
     <?xml version="1.0"?>
     <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
@@ -128,72 +149,13 @@ let
     </fontconfig>
   '';
 
-  # camoufox-js otherwise discovers and downloads the browser at image-build
-  # time, then downloads uBlock Origin and a 66 MiB GeoIP database on the
-  # first live session.  Besides being non-reproducible, either runtime
-  # download can block launch or leave a corrupt partial cache.  Make all
-  # three fixed-output Nix inputs and let Docker only unpack local bytes.
-  camoufoxBrowser = import ./camoufox-browser.nix { inherit pkgs; };
-  camoufoxBrowserArchive = camoufoxBrowser.archive;
-  camoufoxBrowserArchiveName = baseNameOf "${camoufoxBrowserArchive}";
-  camoufoxBrowserArchiveDir = dirOf "${camoufoxBrowserArchive}";
-  camoufoxUblockOrigin = camoufoxBrowser.ublockOrigin;
-  camoufoxUblockOriginName = baseNameOf "${camoufoxUblockOrigin}";
-  camoufoxUblockOriginDir = dirOf "${camoufoxUblockOrigin}";
-  camoufoxGeoLiteCity = camoufoxBrowser.geoLiteCity;
-  camoufoxGeoLiteCityName = baseNameOf "${camoufoxGeoLiteCity}";
-  camoufoxGeoLiteCityDir = dirOf "${camoufoxGeoLiteCity}";
-
-  # The ordinary directory store path only changes with browser-image/.
-  # Include the fixed-output browser path in a separate fingerprint so a
-  # browser bump necessarily produces a fresh docker tag as well.
-  browserImageFingerprint = pkgs.writeText "max-browser-image-inputs" ''
-    docker-context=${browserImageSrc}
-    camoufox-browser=${camoufoxBrowserArchive}
-    ublock-origin=${camoufoxUblockOrigin}
-    geolite-city=${camoufoxGeoLiteCity}
-  '';
-
-  # One-shot unit that builds a docker image from store-backed inputs.
-  # The tag is the input fingerprint's store hash, so edits rebuild exactly
-  # once and unchanged rebuilds are a no-op inspect.
-  mkImageBuild =
-    {
-      name,
-      src,
-      tagSource ? src,
-      buildCommand ? ''docker build -t "${name}:$tag" ${src}'',
-    }:
-    {
-      description = "max: build the ${name} container image";
-      after = [
-        "docker.service"
-        "network-online.target"
-      ];
-      requires = [ "docker.service" ];
-      wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
-      path = [ config.virtualisation.docker.package ];
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        # First build downloads base layers and toolchains — minutes,
-        # not seconds.
-        TimeoutStartSec = "60min";
-      };
-      script = ''
-        set -o pipefail
-        tag=$(basename ${tagSource} | cut -c1-8)
-        if ! docker image inspect "${name}:$tag" >/dev/null 2>&1; then
-          ${buildCommand}
-        fi
-        # The bot's default image name tracks the current content tag.
-        docker tag "${name}:$tag" ${name}:latest
-      '';
-    };
 in
 {
-  imports = [ ./sandbox-network.nix ];
+  imports = [
+    ./runtime.nix
+    ./sandbox-network.nix
+    ./napcat-module.nix
+  ];
   options.services.max = {
     enable = lib.mkEnableOption "max — QQ group-chat agent over OneBot 11";
 
@@ -293,12 +255,12 @@ in
       };
       groups = lib.mkOption {
         type = lib.types.listOf lib.types.ints.positive;
-        default = [];
+        default = [ ];
         description = "Fixed target QQ groups; webhook bodies cannot select destinations.";
       };
       hosts = lib.mkOption {
         type = lib.types.listOf lib.types.str;
-        default = [];
+        default = [ ];
         description = "Inventory host names whose alerts may be delivered.";
       };
     };
@@ -313,59 +275,25 @@ in
       '';
     };
 
-    sandboxImage.enable = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Build the nix-enabled sandbox base image (max-sandbox:latest)
-        from the repo's sandbox-image/ at boot.  The image tag is
-        derived from the store hash of that directory, so changing the
-        Dockerfile/nix.conf rebuilds exactly once; the shared max-nix
-        store volume is seeded by docker on first container start.
-      '';
-    };
-
-    browserImage.enable = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = ''
-        Fetch and verify the pinned Camoufox browser with Nix, then build
-        max-browser:latest from the repo's browser-image/ at boot.  The
-        image tag fingerprints both inputs, so an unchanged rebuild is a
-        no-op.  The per-group browser containers the bot spawns are
-        instances of this image.
-      '';
-    };
-
-    napcat = {
-      enable = lib.mkEnableOption "the NapCat container (QQ client) alongside the bot";
-
-      qq = lib.mkOption {
-        type = lib.types.str;
-        default = "0";
-        description = "QQ account NapCat logs in as (0 = pick at the web UI).";
-      };
-
-      environmentFiles = lib.mkOption {
-        type = lib.types.listOf lib.types.path;
-        default = [ ];
-        description = ''
-          Environment files for the container; set
-          NAPCAT_ACCESS_TOKEN to the same value as the bot's
-          MAX_ACCESS_TOKEN.
-        '';
-      };
-    };
   };
 
   config = lib.mkIf cfg.enable {
     assertions = [
       {
-        assertion = !cfg.maxops.enable || (lib.hasPrefix "/" cfg.maxops.tokenFile && !lib.hasPrefix "/nix/store/" cfg.maxops.tokenFile);
+        assertion =
+          !cfg.maxops.enable
+          || (lib.hasPrefix "/" cfg.maxops.tokenFile && !lib.hasPrefix "/nix/store/" cfg.maxops.tokenFile);
         message = "services.max.maxops.tokenFile must be an absolute runtime path outside the Nix store.";
       }
       {
-        assertion = !cfg.maxopsNotifications.enable || (lib.hasPrefix "/" cfg.maxopsNotifications.tokenFile && !lib.hasPrefix "/nix/store/" cfg.maxopsNotifications.tokenFile && cfg.maxopsNotifications.groups != [] && cfg.maxopsNotifications.hosts != []);
+        assertion =
+          !cfg.maxopsNotifications.enable
+          || (
+            lib.hasPrefix "/" cfg.maxopsNotifications.tokenFile
+            && !lib.hasPrefix "/nix/store/" cfg.maxopsNotifications.tokenFile
+            && cfg.maxopsNotifications.groups != [ ]
+            && cfg.maxopsNotifications.hosts != [ ]
+          );
         message = "services.max.maxopsNotifications requires a runtime credential and explicit nonempty groups and hosts.";
       }
     ];
@@ -401,16 +329,14 @@ in
         127.0.0.1) instead.
       '';
 
-    virtualisation.docker.enable = true;
-
     users.users.max-bot = {
       isSystemUser = true;
       group = "max-bot";
       home = stateDir;
-      # The bot drives sandboxes through the docker CLI.
-      extraGroups = [ "docker" ];
+      extraGroups = [ "max-outbox" ];
     };
     users.groups.max-bot = { };
+    users.groups.max-outbox = { };
 
     # The process always re-reads this stable name. For rendered/Nix-owned
     # configuration, activation updates the symlink before systemd invokes the
@@ -440,61 +366,15 @@ in
       psql -d max-bot -tAc 'CREATE EXTENSION IF NOT EXISTS vector' >/dev/null
     '';
 
-    systemd.services.max-sandbox-image = lib.mkIf cfg.sandboxImage.enable (
-      mkImageBuild {
-        name = "max-sandbox";
-        src = sandboxImageSrc;
-      }
-    );
-    systemd.services.max-browser-image = lib.mkIf cfg.browserImage.enable (
-      mkImageBuild {
-        name = "max-browser";
-        src = browserImageSrc;
-        tagSource = browserImageFingerprint;
-        # Stream the runtime assets into the context instead of copying
-        # another ~730 MiB into a context derivation in the Nix store.
-        # Docker still receives a normal tar context, entirely local.
-        buildCommand = ''
-          ${pkgs.gnutar}/bin/tar \
-            --create --file=- \
-            --transform='s|^${camoufoxBrowserArchiveName}$|camoufox-browser.zip|' \
-            --transform='s|^${camoufoxUblockOriginName}$|ublock-origin.xpi|' \
-            --transform='s|^${camoufoxGeoLiteCityName}$|GeoLite2-City.mmdb|' \
-            --directory=${browserImageSrc} . \
-            --directory=${camoufoxBrowserArchiveDir} ${camoufoxBrowserArchiveName} \
-            --directory=${camoufoxUblockOriginDir} ${camoufoxUblockOriginName} \
-            --directory=${camoufoxGeoLiteCityDir} ${camoufoxGeoLiteCityName} \
-            | docker build \
-                --build-arg CAMOUFOX_BROWSER_VERSION=${camoufoxBrowser.version} \
-                --build-arg CAMOUFOX_BROWSER_RELEASE=${camoufoxBrowser.release} \
-                -t "max-browser:$tag" -
-        '';
-      }
-    );
-
     systemd.services.max = {
       description = "max — QQ group-chat agent";
       reloadTriggers = [ effectiveConfigFile ];
-      after =
-        [
-          "network-online.target"
-          "docker.service"
-        ]
-        ++ lib.optional cfg.postgres.enable "postgresql.service"
-        ++ lib.optional cfg.sandboxImage.enable "max-sandbox-image.service"
-        ++ lib.optional cfg.browserImage.enable "max-browser-image.service";
-      requires =
-        [ "docker.service" ]
-        ++ lib.optional cfg.postgres.enable "postgresql.service"
-        ++ lib.optional cfg.sandboxImage.enable "max-sandbox-image.service"
-        ++ lib.optional cfg.browserImage.enable "max-browser-image.service";
+      after = [ "network-online.target" ] ++ lib.optional cfg.postgres.enable "postgresql.service";
+      requires = lib.optional cfg.postgres.enable "postgresql.service";
       wants = [ "network-online.target" ];
-      wantedBy = [ "multi-user.target" ];
-      # Sandbox lifecycle shells out to the docker CLI; table replies
-      # shell out to typst and code blocks to codesnap; sticker captioning
-      # to ffmpeg (GIF frames).
+      wantedBy = [ "max-stack.target" ];
+      # Table rendering, code screenshots and animated-sticker frames.
       path = [
-        config.virtualisation.docker.package
         pkgs.typst
         pkgs.codesnap
         pkgs.ffmpeg
@@ -526,13 +406,18 @@ in
         MAX_IMAGES_DIR = lib.mkDefault "${stateDir}/images";
         # The .sql files ship with the flake source, not the binary.
         MAX_MIGRATIONS_DIR = lib.mkDefault "${../migrations}";
-      } // lib.optionalAttrs cfg.maxops.enable ({
-        MAX_MAXOPS_ENABLED = "True";
-        MAX_MAXOPS_BASE_URL = cfg.maxops.baseUrl;
-        MAX_MAXOPS_TOKEN_FILE = "/run/credentials/max.service/maxops-token";
-      } // lib.optionalAttrs (cfg.maxops.allowedGroups != null) {
-        MAX_MAXOPS_ALLOWED_GROUPS = lib.concatMapStringsSep "," toString cfg.maxops.allowedGroups;
-      }) // lib.optionalAttrs cfg.maxopsNotifications.enable {
+      }
+      // lib.optionalAttrs cfg.maxops.enable (
+        {
+          MAX_MAXOPS_ENABLED = "True";
+          MAX_MAXOPS_BASE_URL = cfg.maxops.baseUrl;
+          MAX_MAXOPS_TOKEN_FILE = "/run/credentials/max.service/maxops-token";
+        }
+        // lib.optionalAttrs (cfg.maxops.allowedGroups != null) {
+          MAX_MAXOPS_ALLOWED_GROUPS = lib.concatMapStringsSep "," toString cfg.maxops.allowedGroups;
+        }
+      )
+      // lib.optionalAttrs cfg.maxopsNotifications.enable {
         MAX_MAXOPS_NOTIFY_PORT = toString cfg.maxopsNotifications.port;
         MAX_MAXOPS_NOTIFY_HOST = "127.0.0.1";
         MAX_MAXOPS_NOTIFY_TOKEN_FILE = "/run/credentials/max.service/maxops-notifications";
@@ -550,7 +435,8 @@ in
         ExecStart = "${cfg.package}/bin/max --config-file /etc/max/config.yaml";
         ExecReload = "${cfg.package}/bin/maxctl reload --socket /run/max/control.sock";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
-        LoadCredential = lib.optional cfg.maxops.enable "maxops-token:${cfg.maxops.tokenFile}"
+        LoadCredential =
+          lib.optional cfg.maxops.enable "maxops-token:${cfg.maxops.tokenFile}"
           ++ lib.optional cfg.maxopsNotifications.enable "maxops-notifications:${cfg.maxopsNotifications.tokenFile}";
         Restart = "on-failure";
         RestartSec = 5;
@@ -563,17 +449,13 @@ in
 
         # Sandboxing.  The whole of what this process needs from the host
         # is: TCP in (WS endpoint, admin panel) and out (LLM APIs, web
-        # tools), two unix sockets (/run/postgresql, /run/docker.sock),
+        # tools), unix sockets for PostgreSQL and the restricted runtime broker,
         # its own state directory, and a writable /tmp for the typst and
         # ffmpeg workspaces.  Everything below takes away something it
         # never asked for.
         #
-        # Read this before adding more: the service user is in the
-        # `docker` group, and the docker socket is root on this host by
-        # construction.  These settings shrink the blast radius of a bug;
-        # they do not contain an attacker who knows the socket is there.
-        # The fix for *that* is rootless docker or a socket proxy, not a
-        # longer list here.
+        # The runtime broker is a separate root process with a fixed API.
+        # Max has no Docker group membership or general host command authority.
         NoNewPrivileges = true;
         CapabilityBoundingSet = [ "" ];
         AmbientCapabilities = [ "" ];
@@ -599,13 +481,8 @@ in
         SystemCallArchitectures = "native";
         SystemCallFilter = [ "@system-service" ];
         SystemCallErrorNumber = "EPERM";
-        # Maps every uid but this one to nobody.  Verified against the
-        # two things that could plausibly break: the docker socket still
-        # opens through the `docker` supplementary group, and postgres
-        # peer auth still sees max-bot rather than an overflow uid.  If
-        # something ever behaves strangely under this unit, drop this
-        # line first — it is the only setting here that adds a namespace
-        # rather than removing an ability.
+        # Preserve the service uid for PostgreSQL peer auth and broker
+        # SO_PEERCRED authorization while mapping unrelated users to nobody.
         PrivateUsers = true;
         # AF_NETLINK is kept, but not because DNS dies without it —
         # measured, glibc falls back to assuming both families work.
@@ -619,10 +496,8 @@ in
           "AF_INET6"
           "AF_NETLINK"
         ];
-        # Blobs, staged outbox files and rendered tables are the bot's
-        # own; nothing on this host reads them as another user.  NapCat
-        # reads the outbox as container root through the bind mount,
-        # which 0600 does not stop.
+        # Private by default. Delivery explicitly grants the dedicated
+        # outbox group read access to short-lived QQ upload files.
         UMask = "0077";
         # Left off on purpose, each for a reason that outlives the next
         # `systemd-analyze security` run:
@@ -641,44 +516,8 @@ in
       };
     };
 
-    # NixOS defaults oci-containers to podman; the bot's images, the
-    # max-nix volume and the host-gateway extra_host all live on the
-    # docker side, so keep NapCat there too.
-    virtualisation.oci-containers.backend =
-      lib.mkIf cfg.napcat.enable "docker";
-
-    virtualisation.oci-containers.containers = lib.mkMerge [
-      (lib.mkIf cfg.napcat.enable {
-        napcat = {
-          image = "mlikiowa/napcat-docker:latest";
-          environment = {
-            ACCOUNT = cfg.napcat.qq;
-            WSR_ENABLE = "true";
-            WS_URLS = ''["ws://host.docker.internal:8080/onebot"]'';
-          };
-          environmentFiles = cfg.napcat.environmentFiles;
-          ports = [ "6099:6099" ];
-          volumes = [
-            "${stateDir}/napcat/QQ:/app/.config/QQ"
-            "${stateDir}/napcat/config:/app/napcat/config"
-            # Outbox handoff: the bot stages files at var/outbox (relative
-            # to its WorkingDirectory) and references /data/outbox/... in
-            # upload_group_file actions.
-            "${stateDir}/var/outbox:/data/outbox"
-          ];
-          extraOptions = [ "--add-host=host.docker.internal:host-gateway" ];
-        };
-      })
+    systemd.tmpfiles.rules = [
+      "d ${stateDir}/var/outbox 2770 max-bot max-outbox -"
     ];
-
-    systemd.tmpfiles.rules =
-      [
-        "d ${stateDir}/var/outbox 0755 max-bot max-bot -"
-      ]
-      ++ lib.optionals cfg.napcat.enable [
-        "d ${stateDir}/napcat 0755 root root -"
-        "d ${stateDir}/napcat/QQ 0755 root root -"
-        "d ${stateDir}/napcat/config 0755 root root -"
-      ];
   };
 }

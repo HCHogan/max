@@ -31,9 +31,10 @@ operational contract.
 ```
 flake.nix          devenv shell as a flake module (GHC 9.10, Postgres 17 + pgvector)
 devenv.nix         service definitions + .env sourcing on shell entry
-docker-compose.yml NapCat container; shared ./var/outbox volume
-sandbox-image/     nix-enabled sandbox base image  → max-sandbox:latest
-browser-image/     camoufox-mcp + supergateway + camoufox → max-browser:latest
+nix/runtime.nix    max-stack.target, Haskell broker and systemd templates
+nix/sandbox-guest.nix Prebuilt NixOS sandbox, shared read-only host store
+nix/napcat-module.nix Native NapCat and dedicated outbox handoff
+browser-image/     Camoufox MCP patches and acceptance fixtures
 nix/module.nix     NixOS module for production deployment
 .github/workflows/ CI: independent build/lint, pure-test and
                    PostgreSQL/pgvector-test jobs through the flake dev shell,
@@ -71,7 +72,7 @@ src/Max/Command/   !cmd DSL: Types, Parser (megaparsec), Dispatcher, Help (the
                    !help text — a leaf module so the self-knowledge skill can
                    splice it at registry init)
 src/Max/Session/   Per-conversation session: versioned TVar handle + serialized CAS persistence
-src/Max/Sandbox/   Per-group Docker workspace lifecycle + registry
+src/Max/Sandbox/   Per-group NixOS workspace lifecycle + registry
 src/Max/Browser/   Per-group camoufox host + per-turn MCP/browser lifecycle
 src/Max/MCP/       Minimal MCP client (Streamable HTTP)
 src/Max/Tools/     Tool implementations (Files, Sandbox, Search, Browser, Memory,
@@ -318,7 +319,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 | Maintenance ownership | independently fenced PostgreSQL leases serialize embedding, memory-dream, and context-rebuild domains without making unrelated maintenance jobs block one another; the owner heartbeats during long actions, and projection writes either carry the fencing token in SQL or run under a token-checked lease-row lock |
 | Agent turn record and effect facts | `agent_turns` assigns a conversation-scoped ordinal at admission; `execution_journal` commits `started` before a tool and its terminal state afterward. Boot marks any still-started effect `outcome-unknown`, claims the same turn for recovery, injects its committed sends/results/unknowns into a fresh LLM round, and never silently retries it; visible output rows carry `(agent_turn_id, turn_chunk_index)` |
 | Durable tasks and child work | `durable_tasks`, task inputs/events and notifications retain goals, ownership, budgets and results; each attempt uses the existing agent runtime. Migration 088 retired the Plan tables. Child grants remain bounded by their parent |
-| Sandbox workspaces | `sandboxes` persists lifecycle metadata and the named Docker volume holds current state. Boot adopts only a running container carrying the current isolation-policy label and exactly the fixed public-egress network; otherwise it rebuilds a non-root, capability-free, resource-capped, read-only shell around the surviving volume. NixOS owns network provisioning and host/private/peer filtering; Haskell owns container reconciliation. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping |
+| Sandbox workspaces | `sandboxes` persists lifecycle metadata and the root-owned runtime work directory holds current state. Boot adopts only a running container carrying the current broker generation and matching systemd invocation; otherwise it rebuilds a non-root, capability-free, resource-capped, read-only shell around the surviving volume. NixOS owns network provisioning and host/private/peer filtering; Haskell owns instance reconciliation and the privileged broker API. Only a positively absent volume marks the workspace destroyed, and 14-day sliding TTL GC replaces shutdown/boot reaping |
 
 | Lost on restart | Why |
 |---|---|
@@ -404,7 +405,7 @@ the local Session mutex and database row lock, immediately before the update
 in the same transaction. Session cache publication follows COMMIT and rejects
 nested transactions that could later roll back.
 Image preparation is a host callback owning ffmpeg; canonical caption resolution
-is assembled outside the Docker file adapter. Browser workspace ownership is
+is assembled outside the runtime file adapter. Browser workspace ownership is
 established in Browser.ToolRuntime before native MCP tools run. These resource
 adapters retain explicit host IO without receiving database capabilities.
 
@@ -459,7 +460,7 @@ outside this runtime. Matrix and iMessage use `StandardPool`; future HTTP
 adapters must do the same. Any long-lived WebSocket transport remains a
 platform-edge resource.
 
-The browser registry shares only a lightweight Docker host per conversation.
+The browser registry shares only a ordinary systemd browser service per conversation.
 Each durable agent turn—including every background task attempt—owns a separate MCP client,
 Streamable-HTTP session, camoufox browse session, and operation lock. Sibling
 turns in one group therefore navigate concurrently without page-state or MCP
@@ -492,14 +493,14 @@ text. Cleanup from a superseded socket cannot erase a newer published client.
 Assembly installs `Blob` and `BlobHost` with the same configured storage root.
 Producers receive an opaque, validated `BlobRef` from `putBlob`; ordinary consumers
 only need content access. Host path bridging is a separate capability supplied to
-the Docker import and ffmpeg adapters:
+the sandbox import and ffmpeg adapters:
 
 ```
 Blob
   ├─ putBlob bytes             ──▶ BlobRef
   └─ readBlob BlobRef          ──▶ bytes
 BlobHost
-  └─ resolveBlobHostPath ref   ──▶ host path (Docker cp / ffmpeg)
+  └─ resolveBlobHostPath ref   ──▶ host path (unprivileged runtime client / ffmpeg)
 ```
 
 `BotEnv` therefore carries no blob root. The database still receives derived

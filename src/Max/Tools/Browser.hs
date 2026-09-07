@@ -1,6 +1,6 @@
 -- |
--- Browser tools exposed to the agent.  A group reuses one lightweight Docker
--- host, while every task workspace or foreground turn has an isolated MCP client and
+-- Browser tools exposed to the agent. A group reuses one native browser
+-- service, while every task workspace or foreground turn has an isolated MCP client and
 -- browse session (see "Max.Browser.Registry").
 --
 -- == The snapshot → selector → act loop

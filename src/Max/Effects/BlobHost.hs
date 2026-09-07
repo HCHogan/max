@@ -1,7 +1,7 @@
 {-# LANGUAGE TypeFamilies #-}
 
 -- | Host-path bridge for adapters whose external process owns the input
--- handle (docker cp and ffmpeg). Content consumers only need 'Blob'.
+-- handle (sandbox file transfer and ffmpeg). Content consumers only need 'Blob'.
 module Max.Effects.BlobHost
   ( BlobHost,
     runBlobHost,

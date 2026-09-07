@@ -33,8 +33,6 @@ extra-source-files:
     test-db/fixtures/frontend-limits-upgrade.sql
     test-db/fixtures/browser-upgrade-after.sql
     assets/codesnap/*.tmTheme
-    browser-image/Dockerfile
-    browser-image/build.sh
     browser-image/*.patch
     browser-image/*.ts
     browser-image/*.mjs
@@ -57,7 +55,6 @@ extra-source-files:
     docs/platforms.md
     docs/prompt-flow.md
     docs/runbooks/*.md
-    docker-compose.yml
     eval/README.md
     eval/fixtures/*.jsonl
     flake.lock
@@ -65,11 +62,9 @@ extra-source-files:
     max.yaml.example
     migrations/*.sql
     nix/*.nix
+    nix/browser-deps/*.json
     nix/tests/*.nix
     nix/tests/*.py
-    sandbox-image/Dockerfile
-    sandbox-image/build.sh
-    sandbox-image/nix.conf
     scripts/*.sh
     scripts/*.mjs
     scripts/*.hs
@@ -121,7 +116,7 @@ library
         Max.Admin
         Max.AdminTimeline
         Max.Bilibili
-        Max.Browser.Docker
+        Max.Browser.Service
         Max.Browser.Error
         Max.Browser.State
         Max.Browser.Registry
@@ -321,7 +316,7 @@ library
         Max.Resource
         Max.RuntimeConfig
         Max.Roster
-        Max.Sandbox.Docker
+        Max.Sandbox.Runtime
         Max.Sandbox.Registry
         Max.Session
         Max.Session.Types
@@ -363,6 +358,9 @@ library
         Max.Tools.Video
         Max.Util
         Max.WechatHook
+        Max.Runtime.Broker
+        Max.Runtime.Client
+        Max.Runtime.Protocol
         Max.Worker
         Max.Worker.Generation
     other-modules:
@@ -440,6 +438,16 @@ executable max
         , time                 >= 1.12 && < 1.17
         , unix                 >= 2.8  && < 2.9
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+
+executable max-runtime
+    import:           warnings, lang
+    hs-source-dirs:   runtime-cli
+    main-is:          Main.hs
+    build-depends:
+        , base >= 4.20 && < 5
+        , max
+        , text >= 2.1 && < 2.2
+    ghc-options:      -threaded -rtsopts
 
 executable maxctl
     import:           warnings, lang
@@ -602,7 +610,8 @@ test-suite max-test
         Max.PromptSpec
         Max.RecallSpec
         Max.ReminderArgsSpec
-        Max.Sandbox.DockerSpec
+        Max.Sandbox.RuntimeSpec
+        Max.Runtime.ProtocolSpec
         Max.Tools.FilesSpec
         Max.ToolsSpec
         Max.Turn.TypesSpec

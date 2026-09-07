@@ -306,13 +306,13 @@ llm:
 # ─────────────────────────────────────────────────────────────────────────────
 # Stealth-browser proxy.  Every camoufox browse session routes page traffic
 # through this proxy (needed for sites unreachable directly, e.g. google
-# behind censored DNS).  For a proxy running on the docker host, use the
-# host.docker.internal form — the containers add a host-gateway alias for it.
+# behind censored DNS). Native browsers can reach a host proxy through
+# its loopback listener.
 # Omit for direct connections.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # browser:
-#   proxy: "http://host.docker.internal:7890"
+#   proxy: "http://127.0.0.1:7890"
 #   state_key_file: "var/browser-state.key"
 #   idle_seconds: 1800
 #   grace_seconds: 300

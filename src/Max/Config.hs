@@ -147,9 +147,9 @@ data AppConfig = AppConfig
     -- CLIProxyAPI we hold a management key for.  'Nothing' = the
     -- @\/api\/quota@ endpoint reports itself unconfigured.
     cliproxy :: !(Maybe CliProxyConfig),
-    -- | Proxy URL the stealth-browser containers route page traffic
-    -- through, e.g. @http://host.docker.internal:7890@ for a proxy on
-    -- the docker host.  'Nothing' = direct connections.
+    -- | Proxy URL the native browsers route page traffic through,
+    -- e.g. @http://127.0.0.1:7890@ for a host proxy.
+    -- 'Nothing' = direct connections.
     browserProxy :: !(Maybe Text),
     browserStateKeyFile :: !FilePath,
     browserIdleSeconds :: !Int,
@@ -530,7 +530,7 @@ appConfigParser usedRef =
       subConfig "browser" $
         optional $
           setting
-            [ help "Proxy URL for the stealth-browser containers, e.g. http://host.docker.internal:7890 (use the host.docker.internal form for a proxy on the docker host)",
+            [ help "Proxy URL for native stealth browsers, e.g. http://127.0.0.1:7890 for a host proxy",
               reader str,
               option,
               long "browser-proxy",

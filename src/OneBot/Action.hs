@@ -29,7 +29,7 @@ data Action
     GetGroupFileUrl !GroupId !Text -- group_id, file_id
   | -- | Upload a local file to the group's "群文件" area.  @file_path@
     -- is a path *inside the NapCat container* — we stage to a shared
-    -- volume on the host so NapCat can read it (see docker-compose.yml).
+    -- outbox directory so native NapCat can read it (see nix/napcat-module.nix).
     UploadGroupFile !GroupId !Text !Text -- group_id, file_path, display_name
   | -- | Private-chat counterpart of 'UploadGroupFile'.
     UploadPrivateFile !UserId !Text !Text -- user_id, file_path, display_name

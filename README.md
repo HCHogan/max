@@ -71,13 +71,15 @@ direnv allow                         # or: nix develop --impure
 cp .env.example .env
 cp max.yaml.example max.yaml
 devenv up                            # PostgreSQL on 127.0.0.1:5433
-docker compose up -d napcat
 cabal run max
 ```
 
-Open <http://localhost:6099> to log the bot account into QQ. Migrations and
-derived-data backfills run automatically. Build `sandbox-image/` and
-`browser-image/` only when those tools are needed.
+The NixOS module provisions native NapCat, browser services and command
+sandboxes under `max-stack.target`. Enable `services.max.napcat.enable` for QQ,
+then open <http://localhost:6099> on that host to log in. OneBot uses loopback
+port 18080 by default. Migrations and derived-data backfills run automatically.
+Local Haskell development does not require Docker; executing systemd sandboxes
+requires the NixOS runtime services. See the [runtime and migration runbook](docs/runbooks/native-runtime.md).
 
 After a NapCat reconnect, Max also makes a bounded, deduplicated history pass
 over QQ conversations it already knows. Imported rows enrich context and media

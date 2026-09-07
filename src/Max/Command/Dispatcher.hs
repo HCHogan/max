@@ -49,7 +49,7 @@ import Max.MemoryStore
     userMemoryNamespace,
   )
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, lookupModelCapabilities, modelProfileNames)
-import Max.Sandbox.Docker (ExecResult (..))
+import Max.Sandbox.Runtime (ExecResult (..))
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
 import Max.Platform.Types (PrincipalId (..))
 import Max.Session (Session (..), SessionHandle, updateSession)

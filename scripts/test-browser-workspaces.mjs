@@ -52,7 +52,7 @@ const report = message => console.log(`PASS ${message}`);
 
 async function connect() {
   const client = new Client({ name: "max-workspace-acceptance", version: "1" });
-  const transport = new StreamableHTTPClientTransport(new URL("http://127.0.0.1:8931/mcp"));
+  const transport = new StreamableHTTPClientTransport(new URL(process.env.MAX_BROWSER_ENDPOINT ?? "http://127.0.0.1:8931/mcp"));
   await client.connect(transport);
   clients.push(client);
   transports.set(client, transport);
@@ -190,6 +190,9 @@ try {
   await interrupted.close();
   await interruptedStart;
   clients.splice(clients.indexOf(interrupted), 1);
+  await delay(1000);
+  // A late child response must not kill the gateway or sibling MCP sessions.
+  await independent.listTools({}, { timeout: 5000 });
   report("transport termination during launch drains without resurrecting a browser");
   console.log("ACCEPTANCE PASSED: 9 real-browser scenarios; only isolated fixture state used");
 } finally {

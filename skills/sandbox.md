@@ -8,8 +8,8 @@ sandbox_destroy、群里 !clear --all、连续 14 天没用触发 TTL 清理。b
 记录接回原来的 /work 卷；旧策略或停止的容器会围着原卷重建。同群的其他并发任务共享这些沙箱；
 同一个沙箱里的 sandbox_exec 会自动排队串行执行（并发调用不会互相打架），但两个
 任务写同一个文件仍要自己协调。它是有期限的工作区，不是长期存储：重要产物尽快发出去。
-sandbox_create 没有参数。镜像和网络是宿主策略，不交给调用者选择：命令固定在
-max-sandbox:latest 里以 uid 1000、无 Linux capability、no-new-privileges 运行，
+sandbox_create 没有参数。NixOS 系统和网络是宿主策略，不交给调用者选择：命令固定在
+宿主预构建的 NixOS 沙箱里以 uid 1000、无 Linux capability、no-new-privileges 运行，
 有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写。
 固定的 max-sandbox 网络允许访问公网 IPv4，可以 curl、git clone、调用公开 API、
 下载项目依赖；宿主机、内网、链路本地、Tailscale 地址和其他沙箱均不可访问，IPv6 关闭。
@@ -18,15 +18,16 @@ max-sandbox:latest 里以 uid 1000、无 Linux capability、no-new-privileges �
 
 # 装软件（nix，不是 apt）
 
-镜像预装的是一套接近 Ubuntu 默认的基础环境，直接可用不必再传 packages：
+NixOS 沙箱预装的是一套接近 Ubuntu 默认的基础环境，直接可用不必再传 packages：
 bash/coreutils/sed/awk/grep/find/diff/patch/file/tree/bc、tar/gzip/xz/bzip2/zstd/
 zip/unzip、curl/wget/openssl/rsync/socat/nc、ip/ss/ping/dig、ps/top/lsof/pstree、
 git/vim/nano、python3/perl、jq/rg/make。除此之外的工具都按需取。不要 apt/yum
-（镜像里没有包管理器数据库，只会浪费一轮）。要用没预装的工具，把 nixpkgs
-attribute 传给 sandbox_exec 的 packages 参数：宿主生成固定 Nix 表达式，短命网络
-helper 只负责 `nix build --no-link --print-out-paths`，随后把返回的只读 store 路径放进
+（沙箱里没有这些包管理器的数据库）。要用没预装的工具，把 nixpkgs
+attribute 传给 sandbox_exec 的 packages 参数：宿主 broker 根据固定 nixpkgs 版本构建，
+为沙箱保存 GC roots，随后把返回的只读 store 路径放进
 这一条命令的 PATH，无需安装，一次最多 32 个。真正的 `sh -c` 在有公网访问能力的
-非 root 沙箱里执行；不要自行修改共享 Nix store。
+非 root 沙箱里执行。沙箱只读共享宿主 /nix/store，没有宿主 Nix daemon socket 或数据库；
+不要自行修改共享 store。停止实例保留 /work 和 GC roots，销毁沙箱才移除它们。
 attribute 名用 nix_search 查（regex 匹配名字和描述，最多回 30 条，如 'ffmpeg'、
 'python.*opencv'、'^nodejs$'；空结果就放宽 regex）。包 store 全沙箱共享：某个包
 第一次用要下载，那一次把 timeout_seconds 提到 120-300；下过之后所有沙箱瞬时可用。

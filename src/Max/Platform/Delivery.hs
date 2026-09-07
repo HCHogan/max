@@ -92,6 +92,7 @@ import OneBot.Action (Action (SetMsgEmojiLike, UploadGroupFile, UploadPrivateFil
 import OneBot.Segment (Segment (..), imageSeg, stickerSeg)
 import OneBot.Types (GroupId (..), MessageId (..), UserId (..), isPrivateChat, privateChatUserId)
 import System.Directory (createDirectoryIfMissing)
+import System.Posix.Files (setFileMode)
 import System.FilePath (takeFileName)
 import System.IO (hClose)
 
@@ -565,6 +566,9 @@ oneBotDeliveryTransport runtime platform backend =
       withBinaryTempFile "var/outbox" "qq-artifact" $ \path handle -> do
         BS.hPut handle bytes
         hClose handle
+        -- The setgid outbox directory assigns the dedicated max-outbox group.
+        -- Native NapCat gets read access only to this short-lived upload file.
+        setFileMode path 0o640
         action (T.pack ("/data/outbox/" <> takeFileName path))
 
     sendReaction (NativeEventId target) key action =

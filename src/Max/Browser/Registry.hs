@@ -1,15 +1,15 @@
 -- |
--- Browser registry: one camoufox-MCP /host container/ per 'GroupId', with an
--- isolated MCP client and browse session per task workspace or foreground turn.  Containers
+-- Browser registry: one camoufox-MCP /host service/ per 'GroupId', with an
+-- isolated MCP client and browse session per task workspace or foreground turn. Services
 -- are created lazily and reused across turns, then torn down on @!clear --all@
 -- or bot exit.  Mirrors
--- "Max.Sandbox.Registry"; we reuse its @docker@ helpers for teardown
+-- "Max.Sandbox.Registry"; we reuse its runtime helpers for teardown
 -- and boot-time reaping of the @max-br-@ namespace.
 --
 -- A 'BrowserScope' names one physical workspace generation or foreground turn.  Stateful operations are serialized only
 -- inside that scope; sibling fork children get distinct scopes, MCP clients and
 -- browse sessions, so they can navigate concurrently without changing each
--- other's page.  Docker creation is serialized per group, never globally.
+-- other's page.  Browser service creation is serialized per group, never globally.
 module Max.Browser.Registry
   ( BrowserScope,
     browserScopeForTurn,
@@ -59,9 +59,8 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
-import Max.Browser.Docker
+import Max.Browser.Service
   ( browserHostPort,
-    containerPort,
     defaultBrowserImage,
     runRunBrowser,
   )
@@ -85,7 +84,7 @@ import Max.MCP.Client
   )
 import Max.Platform.Types (CanonicalMessageId)
 import Max.Resource (acquireRegistered, releaseRegistered)
-import Max.Sandbox.Docker (listContainersByPrefix, runRm)
+import Max.Sandbox.Runtime (listContainersByPrefix, runRm)
 import Max.Turn.Types (AgentTurnId)
 import OneBot.Types (GroupId (..))
 import System.Timeout (timeout)
@@ -291,10 +290,9 @@ createEntry reg gid = do
               Left err -> pure (Left err)
               Right port -> do
                 let endpoint = "http://127.0.0.1:" <> show port <> "/mcp"
-                    -- supergateway does no Host validation; send the
-                    -- container-internal bind anyway so a future server
-                    -- with a rebinding guard works.
-                    hostHeader = "localhost:" <> show containerPort
+                    -- Match the actual loopback endpoint, including its
+                    -- dynamically allocated port, for Host validation.
+                    hostHeader = "localhost:" <> show port
                 pure . Right $
                   BrowserEntry
                     { beGroup = gid,
@@ -345,7 +343,7 @@ deleteOwnedInstance scope generation instances =
 -- | Replace an unhealthy host only after its last dependent scope has gone.
 -- The group start lock orders this check against both new instance lookup and
 -- @!clear --all@; the creation timestamp prevents a late old failure from
--- retiring a replacement container that reused the stable Docker name.
+-- retiring a replacement container that reused the stable instance name.
 retireBrowserHostIfUnused :: BrowserRegistry -> BrowserEntry -> IO ()
 retireBrowserHostIfUnused reg failedEntry = do
   startLock <- lockFor reg.brStartLocks failedEntry.beGroup

@@ -1,0 +1,13 @@
+--- a/node_modules/supergateway/dist/gateways/stdioToStatefulStreamableHttp.js
++++ b/node_modules/supergateway/dist/gateways/stdioToStatefulStreamableHttp.js
+@@ -94,6 +94,9 @@
+                         logger.info('Child → StreamableHttp:', line);
+                         try {
+-                            transport.send(jsonMsg);
++                            // The client can disconnect before its child replies.
++                            // send() rejects asynchronously; synchronous catch alone
++                            // lets one closed request crash all sibling sessions.
++                            void transport.send(jsonMsg).catch(() => logger.error('Client request closed before its response'));
+                         }
+                         catch (e) {
+                             logger.error(`Failed to send to StreamableHttp`, e);

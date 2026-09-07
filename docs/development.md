@@ -37,7 +37,7 @@ as a pass.
 
 Production assembly shares one media queue and cumulative budget per turn;
 `ToolOutput` is passed to tool closures, and `ToolOutputRead` to the Agent loop.
-Only the ffmpeg/docker adapters receive `BlobHost`. Embedding resolves its client
+Only the ffmpeg/runtime adapters receive `BlobHost`. Embedding resolves its client
 from the caller's leased runtime scope without importing the application env.
 The bounded HTTP effect preserves structured transport/status/limit failures;
 QQ/Bilibili media compatibility policy is selected inside its interpreter.
@@ -66,7 +66,7 @@ PinControl exposes only pin edits and checks authority after both session
 locks, in the CAS transaction. Database tests cover scope isolation, competing
 pins, expired writers and cache rollback. Images use a host-supplied preparation
 callback; file captions use the shared canonical resolver from assembly. Browser
-and Docker tools retain explicit resource IO but cannot import raw stores.
+and Runtime tools retain explicit resource IO but cannot import raw stores.
 Compiler fixtures also deny publication, host paths and raw IO to read clients.
 Agent cannot import database implementations: execution
 admission, journal facts and inbox reads have separate interpreter contracts.
@@ -156,7 +156,7 @@ Pure logic in `test/` mirroring the library layout:
 - `Max.ReplySpec` — reply paragraph splitting (fences, `[split]`, chunk ceiling)
 - `Max.ReplySendSpec` — that splitting a reply at a `readyPrefix` boundary sends
   the same messages as never splitting it, plus the per-reply chunk ceiling
-- `Max.Sandbox.DockerSpec` — package wrapping and exec argv
+- `Max.Sandbox.RuntimeSpec` — package wrapping and exec argv
 - `Max.SessionSpec` — pure session mutators (`addPin`, `clearAll`, …)
 - `Max.ShutdownSpec` — drain flag / in-flight counter transitions
 - `Max.SelfSourceSpec` — the allowlisted compile-time bundle, stable identity,
@@ -373,9 +373,11 @@ Database:
 pgcli "postgresql://127.0.0.1:5433/max"
 ```
 
-Image blobs: `var/images/<2hex>/<sha256>`. Sandbox/browser containers: per-group
-(`max-sb-*` / `max-br-*`), destroyed on `!clear --all` or shutdown, reaped on
-boot. Outbox staging: `var/outbox/` (shared with NapCat container).
+Image blobs: `var/images/<2hex>/<sha256>`. Native sandbox/browser instances use
+`max-sb-*` / `max-br-*` identifiers. Durable sandbox work survives shutdown and
+is reconciled on boot; `!clear --all` destroys it explicitly. Browser services
+are recreated on startup. Outbox staging is `var/outbox/`, shared read-only with
+the native NapCat service.
 
 One log line per event, on stdout:
 

@@ -1,28 +1,33 @@
-# Public egress for command sandboxes. Keep filtering separate from Docker's
-# own tables so its NAT and bridge management cannot overwrite this policy.
-{ config, lib, pkgs, ... }:
+# Native nspawn public egress. Isolated bridge ports prevent sibling traffic.
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 let
   cfg = config.services.max;
-  network = "max-sandbox";
-  bridge = "max-sb-egress";
+  bridge = "max-sb-native";
 in
 {
   options.services.max.sandboxNetwork.enable = lib.mkOption {
     type = lib.types.bool;
     default = true;
-    description = ''
-      Provision the fixed Max command-sandbox network and public IPv4 egress
-      policy. Disable only when an equivalent network is managed externally.
-      Missing network provisioning makes sandbox creation fail closed.
-    '';
+    description = "Provision native sandbox public IPv4 egress; disable only with an equivalent externally managed policy.";
   };
-
-  config = lib.mkIf (cfg.enable && cfg.sandboxNetwork.enable) {
-    assertions = [{
-      assertion = config.networking.nftables.enable;
-      message = "Max sandbox public egress requires nftables filtering.";
-    }];
+  config = lib.mkIf (cfg.enable && cfg.sandbox.enable && cfg.sandboxNetwork.enable) {
     networking.nftables.enable = lib.mkDefault true;
+    assertions = [
+      {
+        assertion = config.networking.nftables.enable;
+        message = "Max sandbox public egress requires nftables filtering.";
+      }
+    ];
+    boot.kernel.sysctl."net.ipv4.ip_forward" = lib.mkDefault 1;
+    networking.firewall.extraForwardRules = ''
+      iifname "${bridge}" accept
+      oifname "${bridge}" ct state { established, related } accept
+    '';
     networking.nftables.tables.max-sandbox = {
       family = "inet";
       content = ''
@@ -44,18 +49,26 @@ in
         chain forward {
           type filter hook forward priority -10; policy accept;
           iifname "${bridge}" meta nfproto ipv6 counter reject with icmpx type admin-prohibited
+          iifname "${bridge}" ip saddr != 10.231.0.0/16 counter drop
           iifname "${bridge}" ip daddr @non_public_v4 counter reject with icmpx type admin-prohibited
           oifname "${bridge}" ct state != { established, related } counter drop
         }
+        chain postrouting {
+          type nat hook postrouting priority srcnat; policy accept;
+          ip saddr 10.231.0.0/16 oifname != "${bridge}" masquerade
+        }
       '';
     };
-
     systemd.services.max-sandbox-network = {
-      description = "Max sandbox public-egress network";
-      requires = [ "docker.service" "nftables.service" ];
-      after = [ "docker.service" "nftables.service" ];
-      before = [ "max.service" ];
-      path = [ config.virtualisation.docker.package pkgs.nftables pkgs.jq ];
+      description = "Max native sandbox bridge";
+      partOf = [ "max-stack.target" ];
+      requires = [ "nftables.service" ];
+      after = [ "nftables.service" ];
+      before = [ "max-runtime.service" ];
+      path = [
+        pkgs.iproute2
+        pkgs.nftables
+      ];
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -63,27 +76,43 @@ in
       script = ''
         set -eu
         nft list table inet max-sandbox >/dev/null
-        # List first: an inspection/daemon error must not masquerade as absence.
-        existing=$(docker network ls --filter name='^${network}$' --format '{{.Name}}')
-        if [ -z "$existing" ]; then
-          docker network create --driver bridge --ipv6=false \
-            --opt com.docker.network.bridge.name=${bridge} \
-            --opt com.docker.network.bridge.enable_icc=false \
-            --label max.sandbox.network-policy=public-v1 ${network}
+        if ! ip link show dev ${bridge} >/dev/null 2>&1; then
+          ip link add name ${bridge} type bridge
         fi
-        docker network inspect ${network} | jq -e '
-          length == 1 and (.[0] |
-            .Driver == "bridge" and .Internal == false and .EnableIPv6 == false and
-            .Options["com.docker.network.bridge.name"] == "${bridge}" and
-            .Options["com.docker.network.bridge.enable_icc"] == "false" and
-            .Labels["max.sandbox.network-policy"] == "public-v1")
-        ' >/dev/null
+        ip link set dev ${bridge} type bridge stp_state 0
+        ip address replace 10.231.0.1/16 dev ${bridge}
+        ip link set dev ${bridge} up
       '';
+      # Do not remove a bridge beneath live instances during unit updates.
     };
-
     systemd.services.max = {
       requires = [ "max-sandbox-network.service" ];
       after = [ "max-sandbox-network.service" ];
+    };
+    # Coexist with unrelated Docker workloads without changing its global
+    # FORWARD policy. The earlier nftables chain still filters public egress.
+    systemd.services.max-sandbox-docker-network = lib.mkIf config.virtualisation.docker.enable {
+      description = "Max native bridge coexistence with Docker forwarding";
+      wantedBy = [
+        "docker.service"
+        "max-stack.target"
+      ];
+      partOf = [
+        "docker.service"
+        "max-stack.target"
+      ];
+      after = [ "docker.service" ];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+      };
+      # This separate unit avoids restarting the Docker daemon to add rules.
+      script = ''
+        ${pkgs.iptables}/bin/iptables -w -C DOCKER-USER -i ${bridge} -j ACCEPT 2>/dev/null || \
+          ${pkgs.iptables}/bin/iptables -w -I DOCKER-USER 1 -i ${bridge} -j ACCEPT
+        ${pkgs.iptables}/bin/iptables -w -C DOCKER-USER -o ${bridge} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || \
+          ${pkgs.iptables}/bin/iptables -w -I DOCKER-USER 1 -o ${bridge} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+      '';
     };
   };
 }

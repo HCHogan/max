@@ -19,6 +19,12 @@
     }:
     let
       forEachSystem = nixpkgs.lib.genAttrs (import systems);
+      sandboxSystem =
+        system: extraModules:
+        nixpkgs.lib.nixosSystem {
+          inherit system;
+          modules = [ ./nix/sandbox-guest.nix ] ++ extraModules;
+        };
 
       # Source tree for the nix build, minus the fat dev directories
       # (dist-newstyle alone would drag gigabytes into the store).
@@ -85,15 +91,28 @@
         }
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           camoufox-browser = (import ./nix/camoufox-browser.nix { inherit pkgs; }).bundle;
+          max-browser = import ./nix/browser.nix { inherit pkgs; };
+          max-sandbox = (sandboxSystem system [ ]).config.system.build.toplevel;
         }
       );
 
       nixosModules = {
         max =
-          { pkgs, lib, ... }:
+          {
+            pkgs,
+            lib,
+            config,
+            ...
+          }:
           {
             imports = [ ./nix/module.nix ];
             services.max.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.max;
+            services.max.sandbox.package = lib.mkDefault (sandboxSystem pkgs.stdenv.hostPlatform.system config.services.max.sandbox.extraModules)
+            .config.system.build.toplevel;
+            services.max.sandbox.nixpkgs = lib.mkDefault nixpkgs.outPath;
+            services.max.browser.package =
+              lib.mkDefault
+                self.packages.${pkgs.stdenv.hostPlatform.system}.max-browser;
           };
         default = self.nixosModules.max;
       };
@@ -111,6 +130,7 @@
           sandbox-network = import ./nix/tests/sandbox-network.nix {
             inherit nixpkgs system;
             maxModule = self.nixosModules.max;
+            maxPackage = self.packages.${system}.max;
           };
         }
       );

@@ -1,7 +1,7 @@
 module Max.Tools.FilesSpec (spec) where
 
 import Data.ByteString qualified as BS
-import Max.Sandbox.Docker (readBoundedArtifact)
+import Max.Sandbox.Runtime (readBoundedArtifact)
 import Max.Util (withTempDirectory)
 import System.FilePath ((</>))
 import System.IO (IOMode (ReadMode), withBinaryFile)

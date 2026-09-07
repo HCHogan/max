@@ -1,0 +1,11 @@
+--- a/node_modules/supergateway/dist/gateways/stdioToStatefulStreamableHttp.js
++++ b/node_modules/supergateway/dist/gateways/stdioToStatefulStreamableHttp.js
+@@ -1,0 +1 @@
++import { writeFileSync, renameSync } from 'node:fs';
+@@ -184,1 +185,5 @@
+-    app.listen(port, () => {
++    const server = app.listen(0, '127.0.0.1', () => {
++        const endpoint = process.env.MAX_BROWSER_ENDPOINT_FILE;
++        if (!endpoint) throw new Error('MAX_BROWSER_ENDPOINT_FILE is required');
++        writeFileSync(endpoint + '.tmp', JSON.stringify({port: server.address().port}), {mode: 0o600});
++        renameSync(endpoint + '.tmp', endpoint);

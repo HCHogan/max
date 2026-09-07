@@ -6,7 +6,7 @@
 --
 -- The 'Max.Files' worker downloads incoming files to the blob store
 -- and rows them in 'group_files'.  These tools read that catalog and
--- copy bytes from the host blob path into a sandbox via @docker cp@.
+-- copy bytes from the host blob path into a sandbox via the runtime client.
 --
 -- == Outbound
 -- Both images and files publish blob-backed canonical messages. The endpoint
@@ -35,7 +35,7 @@ import Max.File.Types (FileRecord (..))
 import Max.IR
 import Max.MessageKind (MessageKind (KindChat))
 import Max.Platform.Types (CanonicalMessageId (..))
-import Max.Sandbox.Docker (readSandboxArtifact, runCopyToContainer)
+import Max.Sandbox.Runtime (readSandboxArtifact, runCopyToContainer)
 import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), SandboxRegistry, listSandbox)
 import Max.Time (fmtDateHMS)
 import Max.ToolContext (ToolContext, toolGroupId, toolTurnOutputContext)
@@ -149,14 +149,14 @@ importFileToSandboxTool gid sandboxes =
                 case mEntry of
                   Nothing -> pure (Left "sandbox not found")
                   Just e -> do
-                    -- docker cp requires a host path; this is one of the
+                    -- the runtime client opens a host path; this is one of the
                     -- deliberately explicit Blob boundary escapes.
                     hostPath <- resolveBlobHostPath ref
                     let destName = fromMaybe r.frFileName mDest
                         containerPath = "/work/" <> destName
                     cpRes <- liftIO (runCopyToContainer e.seContainer hostPath containerPath)
                     case cpRes of
-                      Left err -> pure (Left ("docker cp failed: " <> err))
+                      Left err -> pure (Left ("sandbox copy failed: " <> err))
                       Right () -> do
                         logInfo "file imported to sandbox" $
                           object

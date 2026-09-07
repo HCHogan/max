@@ -3,7 +3,7 @@ let
   version = "152.0.4";
   release = "beta.28";
   ublockOriginVersion = "1.72.2";
-  geoLiteVersion = "2026.08.01";
+  geoLiteVersion = "1.0.96";
   assets = {
     x86_64-linux = {
       archiveArch = "x86_64";
@@ -25,10 +25,15 @@ let
     url = "https://addons.mozilla.org/firefox/downloads/file/4888680/ublock_origin-${ublockOriginVersion}.xpi";
     hash = "sha256-QMMVsNp4cYaBVez656UKWN+gkgrr2GXgCCFJhvG3xXg=";
   };
-  geoLiteCity = pkgs.fetchurl {
-    url = "https://github.com/P3TERX/GeoLite.mmdb/releases/download/${geoLiteVersion}/GeoLite2-City.mmdb";
-    hash = "sha256-bmaEyrBOu6EMHqn0pEMXXKD/CA4lXoT57wNQUXWCZX4=";
+  # Use a versioned npm archive: the previous daily GitHub release was deleted
+  # upstream. Extract only the database; execute no package lifecycle scripts.
+  geoLiteArchive = pkgs.fetchurl {
+    url = "https://registry.npmjs.org/geolite2-city/-/geolite2-city-${geoLiteVersion}.tgz";
+    hash = "sha512-33sKqF3F6VldBI4vpY8+wKR4PnS7x15RHXz3jdoo63pYQB4dqB6znHNs5NqYAgMKqRvFpqzZ//py+xXgIJGQyg==";
   };
+  geoLiteCity = pkgs.runCommand "GeoLite2-City.mmdb" { } ''
+    tar -xzOf ${geoLiteArchive} package/GeoLite2-City.mmdb.gz | gzip -d > "$out"
+  '';
 in
 {
   inherit

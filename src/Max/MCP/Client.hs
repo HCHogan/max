@@ -73,10 +73,8 @@ data McpClient = McpClient
   { mcEndpoint :: !String,
     -- | Value for the @Host@ request header.  Some MCP servers enforce
     -- DNS-rebinding protection: playwright-mcp 403s unless @Host@
-    -- matches the address it bound to (e.g. @localhost:8931@).  We
-    -- reach servers via a docker-published @127.0.0.1:<random>@ port,
-    -- so we send the container-internal host explicitly rather than
-    -- the connect host.
+    -- matches the address it bound to. The native browser publishes
+    -- a kernel-assigned loopback port; its Host header uses that port.
     mcHost :: !ByteString,
     mcHttp :: !HttpRuntime,
     mcSession :: !(TVar (Maybe ByteString)),
