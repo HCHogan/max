@@ -22,6 +22,12 @@ store is shared read-only; package preparation and per-sandbox GC roots remain
 host-owned. Work directories survive instance replacement and application
 restarts. Browser workspace ownership, leases and recovery follow ADR 009.
 
+Persistent state is grouped under `/var/lib/max`, with separate ownership for
+`app`, `runtime`, `napcat` and dynamic browser instances. The main service and
+peer PostgreSQL role/database use `max`. h610 declares configuration as Nix
+attributes and renders JSON through SOPS; manual YAML and environment files
+are retired. Sockets and credentials remain ephemeral under `/run`.
+
 The broker exposes no arbitrary host command, unit property or file-path API.
 File transfers use pipes; the unprivileged client opens and reads/writes host files.
 The broker rejects socket, device and regular-file descriptors. Guest command

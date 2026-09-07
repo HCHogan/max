@@ -25,9 +25,9 @@ let
     );
   brokerConfig = pkgs.writeText "max-runtime.json" (
     builtins.toJSON {
-      user = "max-bot";
+      user = "max";
       stateDirectory = runtime.stateDirectory;
-      gcRootsDirectory = "/nix/var/nix/gcroots/max-sandboxes";
+      gcRootsDirectory = "${runtime.stateDirectory}/gcroots";
       legacyVolumeDirectory = "/var/lib/docker/volumes";
       nixpkgs = toString cfg.sandbox.nixpkgs;
       system = pkgs.stdenv.hostPlatform.system;
@@ -62,7 +62,7 @@ in
   options.services.max = {
     runtime.stateDirectory = lib.mkOption {
       type = lib.types.str;
-      default = "/var/lib/max-runtime";
+      default = "/var/lib/max/runtime";
       description = "Root-owned instance metadata and durable sandbox work directories.";
     };
     sandbox = {
@@ -131,15 +131,15 @@ in
     systemd.tmpfiles.rules = [
       "d ${runtime.stateDirectory} 0700 root root -"
       "d /run/netns 0755 root root -"
-      "d /nix/var/nix/gcroots/max-sandboxes 0700 root root -"
+      "d ${runtime.stateDirectory}/gcroots 0700 root root -"
     ];
     systemd.sockets.max-runtime = {
       description = "Max instance control socket";
       partOf = [ "max-stack.target" ];
       socketConfig = {
         ListenStream = "/run/max-runtime/control.sock";
-        SocketUser = "max-bot";
-        SocketGroup = "max-bot";
+        SocketUser = "max";
+        SocketGroup = "max";
         SocketMode = "0600";
         DirectoryMode = "0755";
         RemoveOnStop = true;
@@ -148,8 +148,8 @@ in
     systemd.services.max-runtime = {
       description = "Max restricted instance broker";
       partOf = [ "max-stack.target" ];
-      requires = [ "max-runtime.socket" ];
-      after = [ "max-runtime.socket" ] ++ lib.optional cfg.sandbox.enable "max-sandbox-network.service";
+      requires = [ "max-runtime.socket" "max-storage.service" ];
+      after = [ "max-runtime.socket" "max-storage.service" ] ++ lib.optional cfg.sandbox.enable "max-sandbox-network.service";
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/max-runtime --serve ${brokerConfig}";
         User = "root";
@@ -219,10 +219,12 @@ in
     systemd.services."max-browser@" = lib.mkIf cfg.browser.enable {
       description = "Max browser %i";
       partOf = [ "max-stack.target" ];
+      requires = [ "max-storage.service" ];
+      after = [ "max-storage.service" ];
       restartIfChanged = false;
       environment = {
-        HOME = "/var/lib/max-browser/%i";
-        XDG_CACHE_HOME = "/var/cache/max-browser/%i";
+        HOME = "/var/lib/max/browser/%i";
+        XDG_CACHE_HOME = "/var/lib/max/browser-cache/%i";
         MAX_BROWSER_ENDPOINT_FILE = "/run/max-browser-%i/endpoint.json";
         CAMOUFOX_MCP_MAX_SESSIONS = "4";
         CAMOUFOX_MCP_SESSION_TTL_MS = "900000";
@@ -230,12 +232,11 @@ in
       serviceConfig = {
         ExecStart = "${cfg.browser.package}/bin/max-browser";
         DynamicUser = true;
-        StateDirectory = "max-browser/%i";
+        StateDirectory = [ "max/browser/%i" "max/browser-cache/%i" ];
         StateDirectoryMode = "0700";
-        CacheDirectory = "max-browser/%i";
         RuntimeDirectory = "max-browser-%i";
         RuntimeDirectoryMode = "0700";
-        WorkingDirectory = "/var/lib/max-browser/%i";
+        WorkingDirectory = "/var/lib/max/browser/%i";
         Slice = "max-browser.slice";
         NoNewPrivileges = true;
         CapabilityBoundingSet = [ "" ];
@@ -259,7 +260,9 @@ in
         TimeoutStopSec = 30;
         Restart = "no";
         InaccessiblePaths = [
-          "-/var/lib/max-bot"
+          "-/var/lib/max/app"
+          "-/var/lib/max/napcat"
+          "-/var/lib/max/private"
           "-${runtime.stateDirectory}"
           "-/run/max"
           "-/run/max-runtime"

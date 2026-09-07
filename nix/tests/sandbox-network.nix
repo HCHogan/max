@@ -73,7 +73,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("max.service")
     machine.wait_for_unit("max-sandbox-network.service")
     machine.succeed("touch /run/netns/max-foreign-fixture; mount --bind /proc/self/ns/net /run/netns/max-foreign-fixture")
-    cli = "runuser -u max-bot -- max-runtime "
+    cli = "runuser -u max -- max-runtime "
     name = "max-sb--100-s1"
     unit = "max-sandbox@-100-s1.service"
     volume = name + "-data"
@@ -101,7 +101,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(execute + "test ! -S /nix/var/nix/daemon-socket/socket")
         machine.succeed(execute + "sh -c 'findmnt -no OPTIONS /nix/store | grep -w ro'")
         machine.succeed(execute + "sh -c 'echo durable > /work/keep; git --version; python3 --version; jq --version'")
-        machine.succeed("systemd-run --quiet --pipe --wait --collect --uid=max-bot -p PrivateUsers=yes -p NoNewPrivileges=yes -p RestrictNamespaces=yes max-runtime status " + name)
+        machine.succeed("systemd-run --quiet --pipe --wait --collect --uid=max -p PrivateUsers=yes -p NoNewPrivileges=yes -p RestrictNamespaces=yes max-runtime status " + name)
         machine.succeed("chmod 666 /run/max-runtime/control.sock")
         status, _ = machine.execute("runuser -u nobody -- max-runtime list max-sb-")
         # Early credential rejection can close the socket while the client is
@@ -119,7 +119,7 @@ pkgs.testers.runNixOSTest {
         package = machine.succeed(cli + f"build {name} 120 hello").strip()
         assert package.startswith("/nix/store/")
         machine.succeed(execute + shlex.quote(package + "/bin/hello") + " | grep Hello")
-        machine.succeed(f"find /nix/var/nix/gcroots/max-sandboxes/{name} -type l | grep .")
+        machine.succeed(f"find /var/lib/max/runtime/gcroots/{name} -type l | grep .")
 
     with subtest("changing only the browser template preserves sandbox adoption"):
         invocation = machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip()
@@ -169,7 +169,7 @@ pkgs.testers.runNixOSTest {
         peer = "max-sb--100-s2"
         machine.succeed(cli + f"create {peer} nixos-sandbox-v1 {peer}-data max-sandbox")
         machine.succeed(cli + f"exec {peer} python3 -m http.server 8080 --directory /work >/tmp/peer-http.log 2>&1 &")
-        peer_ip = machine.succeed(f"jq -r .address /var/lib/max-runtime/instances/{peer}.json").strip()
+        peer_ip = machine.succeed(f"jq -r .address /var/lib/max/runtime/instances/{peer}.json").strip()
         machine.wait_until_succeeds(f"curl -fsS --max-time 3 http://{peer_ip}:8080/")
         machine.fail(curl + f"http://{peer_ip}:8080/")
         machine.succeed("systemctl reload nftables; systemctl restart max-sandbox-network")
@@ -187,11 +187,14 @@ pkgs.testers.runNixOSTest {
         machine.succeed("systemctl is-active --quiet max-browser@-100.service")
         machine.fail("journalctl -u max-browser@-100 --no-pager | grep -F 'Main process exited'")
         machine.fail("journalctl -u max-browser@-100 --no-pager | grep -E 'fixture_auth|fixture_identity|workspace-one'")
+        machine.succeed("test $(stat -c %d:%i /var/lib/max/private) = $(stat -c %d:%i /var/lib/private/max)")
+        machine.succeed("test -d /var/lib/max/private/browser/-100; test -d /var/lib/max/private/browser-cache/-100")
+        machine.fail("runuser -u max -- ls /var/lib/max/private/browser/-100")
         machine.succeed(cli + "remove max-br--100")
         assert machine.succeed("systemctl show max-browser@-100 -p MainPID --value").strip() == "0"
 
     with subtest("stop preserves data; explicit destroy removes data and package roots"):
-        machine.succeed("mkdir /var/lib/max-runtime/volumes/.migration-fixture")
+        machine.succeed("mkdir /var/lib/max/runtime/volumes/.migration-fixture")
         volumes = machine.succeed(cli + "volumes max-sb-").splitlines()
         assert volume in volumes and ".migration-fixture" not in volumes
         machine.fail(cli + f"volume-remove {volume}")
@@ -206,7 +209,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(cli + f"remove {name}")
         machine.succeed(cli + f"volume-status {volume}")
         machine.succeed(cli + f"volume-remove {volume}")
-        machine.succeed(f"test ! -e /nix/var/nix/gcroots/max-sandboxes/{name}")
+        machine.succeed(f"test ! -e /var/lib/max/runtime/gcroots/{name}")
         status, _ = machine.execute(cli + f"volume-status {volume}")
         assert status == 3
 

@@ -123,6 +123,10 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in
         pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          state-migration = import ./nix/tests/state-migration.nix {
+            inherit nixpkgs system;
+            maxModule = self.nixosModules.max;
+          };
           nixos-reload = import ./nix/tests/reload.nix {
             inherit nixpkgs system;
             maxModule = self.nixosModules.max;

@@ -6,7 +6,7 @@
 }:
 let
   cfg = config.services.max.napcat;
-  state = "/var/lib/max-napcat";
+  state = "/var/lib/max/napcat";
 in
 {
   options.services.max.napcat = {
@@ -25,6 +25,11 @@ in
       type = lib.types.listOf lib.types.path;
       default = [ ];
       description = "Runtime credentials, including NAPCAT_ACCESS_TOKEN matching Max's MAX_ACCESS_TOKEN.";
+    };
+    accessTokenFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.path;
+      default = null;
+      description = "OneBot token loaded as a systemd credential, matching Max's server.access_token.";
     };
     websocketPort = lib.mkOption {
       type = lib.types.port;
@@ -49,18 +54,21 @@ in
       MAX_WS_PORT = lib.mkDefault (toString cfg.websocketPort);
     };
     systemd.tmpfiles.rules = [
-      "d /var/lib/max-bot/napcat 0700 root root -"
-      "d /var/lib/max-bot/napcat/QQ 0700 max-napcat max-napcat -"
-      "d /var/lib/max-bot/napcat/config 0700 max-napcat max-napcat -"
+      "d ${state} 0700 max-napcat max-napcat -"
+      "d ${state}/QQ 0700 max-napcat max-napcat -"
+      "d ${state}/config 0700 max-napcat max-napcat -"
+      "d ${state}/outbox 0700 max-napcat max-napcat -"
     ];
     systemd.services.max-napcat = {
       description = "Max native NapCat QQ client";
       partOf = [ "max-stack.target" ];
       wantedBy = [ "max-stack.target" ];
+      requires = [ "max-storage.service" ];
       wants = [ "network-online.target" ];
       after = [
         "network-online.target"
         "max.service"
+        "max-storage.service"
       ];
       path = [
         pkgs.jq
@@ -73,6 +81,9 @@ in
       };
       preStart = ''
         set -eu
+        ${lib.optionalString (cfg.accessTokenFile != null) ''
+          export NAPCAT_ACCESS_TOKEN="$(cat "$CREDENTIALS_DIRECTORY/access-token")"
+        ''}
         config_file=${state}/config/onebot11_${cfg.qq}.json
         test -f "$config_file" || printf '{}' > "$config_file"
         # The token is read from the environment by jq, never a CLI argument
@@ -99,15 +110,12 @@ in
         Group = "max-napcat";
         SupplementaryGroups = [ "max-outbox" ];
         Slice = "max.slice";
-        StateDirectory = "max-napcat";
+        StateDirectory = "max/napcat";
         StateDirectoryMode = "0700";
         WorkingDirectory = state;
         EnvironmentFile = cfg.environmentFiles;
-        BindPaths = [
-          "/var/lib/max-bot/napcat/QQ:${state}/QQ"
-          "/var/lib/max-bot/napcat/config:${state}/config"
-        ];
-        BindReadOnlyPaths = [ "/var/lib/max-bot/var/outbox:${state}/outbox" ];
+        LoadCredential = lib.optional (cfg.accessTokenFile != null) "access-token:${cfg.accessTokenFile}";
+        BindReadOnlyPaths = [ "/var/lib/max/app/var/outbox:${state}/outbox" ];
         NoNewPrivileges = true;
         CapabilityBoundingSet = [ "" ];
         ProtectSystem = "strict";

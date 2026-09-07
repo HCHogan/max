@@ -1,7 +1,7 @@
 # Native Max runtime
 
 Max's NixOS module provisions `max-stack.target`. `max.service` runs as
-`max-bot`, and `max-runtime.socket` activates the separate root
+`max`, and `max-runtime.socket` activates the separate root
 `max-runtime.service` broker. Both broker and client are Haskell modules in
 this repository, built as `max-runtime`. The fixed, versioned Unix protocol
 accepts Max instance identifiers and operations; it cannot select host commands,
@@ -28,10 +28,33 @@ this behavior during package builds, independently of browser launch timing.
 
 `max-napcat.service` uses the pinned community napcat.nix QQ integration and a
 bubblewrap launcher. Its QQ version follows the fleet's pinned nixpkgs. It keeps
-account data in `/var/lib/max-bot/napcat/{QQ,config}` and exposes only the outbox
+account data in `/var/lib/max/napcat/{QQ,config}` and exposes only the outbox
 through a read-only bind. Short-lived upload files are group-readable by the
 separate `max-outbox` group. The default OneBot listener is `127.0.0.1:18080`;
 NapCat's web UI binds `127.0.0.1:6099`.
+
+## Configuration and directory ownership
+
+h610 declares all application settings in `nixos/hosts/h610/max.nix` in the
+fleet's nix-config repository. SOPS substitutes encrypted secret values into
+`/run/secrets/rendered/max-config.json`; `/etc/max/config.json` is the stable
+application entry point. No manually maintained `max.yaml` or environment file
+is loaded. Generic module users may still supply `settings` or `configFile`.
+
+Persistent Max state is under root-owned `/var/lib/max`:
+
+- `app`: main service home, images, files, outbox and browser checkpoint key;
+  owned by `max`, mode 0700.
+- `runtime`: root-owned sandbox work, disposable guest roots and broker metadata.
+- `napcat`: QQ account/configuration, owned by `max-napcat`.
+- `browser/<id>` and `browser-cache/<id>`: per-instance DynamicUser directories.
+  `max-storage.service` binds `private` onto `/var/lib/private/max`, preserving
+  systemd's private-state protection while keeping the physical data in this tree.
+- `backups`: root-only migration backups and retired manual configuration.
+
+Sockets and decrypted credentials remain ephemeral under `/run`. The shared
+host Nix store and shared PostgreSQL cluster retain their system locations;
+Max's peer-authenticated database and role are both named `max`.
 
 ## Lifecycle and storage
 
@@ -60,8 +83,8 @@ services.max.sandbox.extraModules = [
 ];
 ```
 
-Durable work is `/var/lib/max-runtime/volumes/<legacy-name>-data/work`.
-Expendable guest roots are under `/var/lib/max-runtime/roots`, and root-owned
+Durable work is `/var/lib/max/runtime/volumes/<legacy-name>-data/work`.
+Expendable guest roots are under `/var/lib/max/runtime/roots`, and root-owned
 instance metadata is under `instances`. Stopping an instance preserves work and
 package roots. Explicit destruction removes both. The database retains its
 existing container/volume columns and stable identifiers; the image column now
@@ -69,7 +92,7 @@ records `nixos-sandbox-v1`.
 
 The guest mounts host `/nix/store` read-only, without the host Nix daemon socket
 or database. Requested packages are built by the host from its fixed nixpkgs
-source, rooted under `/nix/var/nix/gcroots/max-sandboxes/<instance>/`, and placed
+source, rooted under `/var/lib/max/runtime/gcroots/<instance>/`, and placed
 on PATH for the requested command. Python package attributes are combined into
 one `python3.withPackages` environment. Native manifests observe `/work`; the
 legacy Docker layer-diff fields are empty because no Docker filesystem layer
@@ -99,6 +122,7 @@ nix build .#packages.x86_64-linux.max-browser
 scripts/test-browser-workspaces.sh "$(readlink -f result)"
 nix build .#checks.x86_64-linux.sandbox-network
 nix build .#checks.x86_64-linux.nixos-reload
+nix build .#checks.x86_64-linux.state-migration
 ```
 
 The native-runtime VM check exercises actual nspawn registration, caller uid,
@@ -115,7 +139,7 @@ TCP DNS restored both sites without weakening address validation. h610's
 DNS for domestic domains. After applying a DNS change, flush both resolved and
 NSS caches (`resolvectl flush-caches`, `nscd -i hosts`) before retesting.
 
-## Migrating an existing Docker deployment
+## Historical Docker-to-native migration
 
 This is an offline maintenance operation. Build and validate the new system
 first. Retain its store path and the current `/run/current-system`, and verify a
@@ -128,40 +152,48 @@ Inspect the proposed copy with the new `max-runtime` on PATH:
 scripts/migrate-native-runtime.sh --check
 ```
 
-During the authorized maintenance window:
+`migrate-native-runtime.sh` is the first-stage copier used by the original
+Docker cutover. Its default staging tree is `/var/lib/max-runtime`, and its
+NapCat source is `/var/lib/max-bot/napcat`. It deliberately preserves Docker
+volumes and verifies content/hardlinks before publishing each work directory.
+For a fresh Docker migration, stop the old workloads, provide the new
+`max-runtime` binary on PATH and prepare the `max-napcat` system user/group
+before running `--copy`. Then run the state-layout migration below **before**
+activating the current module. Do not activate the new `max` user while the
+old `max-bot` account/database still need renaming.
 
-1. Stop `max.service` gracefully and stop `docker-napcat.service`. Stop only
-   Docker containers whose names belong to Max (`max-sb-*` and `max-br-*`).
-2. For `max.service`, `max-runtime.service`, `max-runtime.socket` and
-   `max-napcat.service`, create a runtime drop-in at
-   `/run/systemd/system/<unit>.d/90-max-native-cutover.conf` containing
-   `[Unit]` and `ConditionPathExists=/run/max-native-cutover-ready` on separate
-   lines. Ensure that marker does not exist, reload systemd, and stop all four
-   units before activating the validated system. Check again after activation
-   that all four are inactive. Runtime masks alone are insufficient: NixOS unit
-   definitions under `/etc/systemd/system` take precedence over `/run` masks.
-   This creates the native service users without starting account login or
-   database reconciliation before the work has been copied.
-3. Run `scripts/migrate-native-runtime.sh --copy` with root permissions and the
-   new `max-runtime` on PATH. It copies `.max-work` (or older root-level work),
-   verifies content and inventory, then atomically publishes each native volume.
-   It backs up NapCat state before changing ownership. Existing completed copies
-   are preserved; a partial staging directory is retained for inspection.
-4. Remove only those four cutover drop-ins, reload systemd and restart
-   `max-stack.target`. Verify Max's
-   database reconciliation, existing work contents, browser navigation/workspace
-   recovery, NapCat login and the OneBot connection. Do not send test QQ messages
-   without authorization.
+For both migrations, gate `max.service`, `max-runtime.service`,
+`max-runtime.socket` and `max-napcat.service` with runtime drop-ins at
+`/run/systemd/system/<unit>.d/90-max-native-cutover.conf` containing `[Unit]`
+and `ConditionPathExists=/run/max-native-cutover-ready` on separate lines.
+Ensure the marker is absent and reload systemd. Runtime masks alone are
+insufficient: NixOS unit definitions under `/etc` take precedence over `/run`.
+Retain those gates throughout activation; remove only the four migration
+files after validation and reload systemd before starting the target.
 
-An unmigrated Docker work volume returns runtime-unavailable rather than missing,
-so a skipped migration cannot falsely destroy its database row. Old work and
-`max-nix` are never deleted by the copy script. Cached dependencies are rebuilt
-from the host pin; existing scripts or virtualenvs containing absolute paths into
-the old Docker store may require rebuilding those environments.
+## Migrating the original native state layout
 
-For rollback, stop the native stack and apply the same conditional drop-ins
-before activating the saved old system, then remove the drop-ins, reload systemd
-and start its original services. The old Docker volumes and
-QQ backup are retained. If native work has changed since cutover, preserve and
-reconcile those changes before returning to the older copies; rollback does not
-silently overwrite either version of the work.
+Validate `checks.x86_64-linux.state-migration` and the new system first. Run
+`scripts/migrate-max-state.sh --check` on the host. Gate the four units listed
+above, stop `max-stack.target`, and wait for every browser/sandbox unit to stop.
+Run `scripts/migrate-max-state.sh --migrate` before activating the new module.
+The script verifies PostgreSQL/QQ backups, atomically moves the old state trees,
+archives manual configuration and disposable runtime metadata, preserves the
+service UID/GID while renaming it to `max`, and renames the database/role without
+recreating either. Known absolute media paths are updated transactionally;
+relative paths and browser encryption keys remain intact. Indirect Nix GC roots
+are registered again at their new paths.
+
+Activate the validated system with the startup gates still present. Verify peer
+DB access, rendered JSON and ownership, then remove the gates and start
+`max-stack.target`. Check real QQ login, OneBot connectivity, existing sandbox
+work and browser navigation. Old Docker volume backups remain Docker-owned
+rollback archives; this migration does not delete them.
+
+If a step fails, keep the startup gates and use the phase/output plus
+`/var/lib/max/backups/latest-state-migration` to inspect retained evidence. The
+script refuses to overwrite an existing destination; do not blindly rerun it.
+A rollback requires stopping the new stack, restoring directory locations and
+UID/GID names, renaming the database/role back (or restoring its verified dump),
+and selecting the retained old system. Do not start the old generation against
+new paths or the new database name.
