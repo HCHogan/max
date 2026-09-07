@@ -80,6 +80,11 @@ nftables allow public IPv4 egress while blocking host, private, link-local,
 Tailscale and sibling addresses. Where unrelated Docker services remain, narrow
 DOCKER-USER forwarding rules coexist with this earlier filter. Max does not
 enable Docker or grant its user membership in the Docker group.
+The network unit prepares a shared `/run/netns` mount. Daemons that bind their
+own namespaces, such as DAE, should start after `max-sandbox-network.service` so
+later sandbox creation cannot hide an earlier namespace mount. The nspawn
+template preserves the broker's DNS configuration instead of copying a host
+loopback resolver into the private network.
 
 ## Validation
 

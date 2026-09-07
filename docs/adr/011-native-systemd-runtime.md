@@ -1,6 +1,6 @@
 # ADR 011 — Native systemd runtime for Max
 
-Status: Accepted; implemented and validated in NixOS VMs. Production cutover pending.
+Status: Accepted; implemented and validated in NixOS VMs and on h610.
 
 Max's durable runtime ownership belongs in its database and Haskell registries.
 Docker supplied process/container lifecycle, package storage and resource limits,
