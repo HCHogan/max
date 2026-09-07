@@ -445,3 +445,34 @@ SELECT kind, dedupe_key, attempts, parked_at, last_error FROM fetch_jobs;
 Rows still present are in flight, waiting, or — with `parked_at` set — gave up
 after `Max.DB.FetchQueue.maxAttempts` tries. Nothing there means the download
 succeeded and the row was dropped.
+
+## Embedded Wasm execution
+
+ADR-012's first batch is an internal API, not an advertised model tool. Native
+Agent rounds call `executeToolBatch`; `runWasmTools` adapts core Wasm imports to
+that same executor. Supply one `ExecutionSession` for an invocation and the
+same immutable registry/catalog snapshot to both adapters. Continue to interpret
+`ToolOutput` with the invocation's existing queue. Apply returned skill loads
+only when assembling the next model round. Never construct an executable
+registry from guest data or re-run a failed script automatically.
+
+The flake and development shell provide Wasmtime 45's C API. Re-enter the dev
+shell after updating `devenv.nix`. A standalone Cabal environment needs
+`wasmtime.h` in its include path and `libwasmtime` in its library path; the
+Wasmtime CLI alone is insufficient. The runtime links the C shim through
+`c-sources` and uses a static Haskell foreign export plus a scoped `StablePtr`;
+it does not allocate libffi callback trampolines or launch subprocesses.
+
+Default internal run limits are 10 million fuel units, 64 MiB linear memory,
+30 seconds wall time, a 1 MiB binary module and 128 host imports. A request and
+reply each fit within 64 KiB. There are no WASI imports or ambient resources.
+These are fixture/embedding defaults, not fleet model timeout settings. The
+wall timeout cancels host IO and interrupts guest instructions; compilation
+must finish before native resources can be freed, so this is not a hard bound
+on compiler wall time. User-facing compiler admission/caching is a later batch.
+
+Run `cabal test max-test` for memory/ABI, resources, control, media and local
+budget cases. Run `cabal test max-test-db` with `MAX_TEST_DB_URL` pointing to a
+dedicated PostgreSQL database for leaf journal parity, durable budget races,
+interruption, trap-after-commit and lease takeover. The database suite is
+destructive to its designated test database and refuses to skip when unset.

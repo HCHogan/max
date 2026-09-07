@@ -50,6 +50,7 @@ extra-source-files:
     devenv.nix
     docs/architecture.md
     docs/adr/*.md
+    cbits/max_wasm.h
     docs/features.md
     docs/development.md
     docs/platforms.md
@@ -102,6 +103,10 @@ common lang
 library
     import:           warnings, lang
     hs-source-dirs:   src
+    c-sources:       cbits/max_wasm.c
+    include-dirs:    cbits
+    extra-libraries: wasmtime
+    cc-options:      -std=c11 -Wall -Wextra
     exposed-modules:
         OneBot.Action
         OneBot.Event
@@ -242,6 +247,9 @@ library
         Max.LLM.Admission
         Max.LLM.Failure
         Max.Execution.Types
+        Max.Execution.Tools
+        Max.CodeMode.Wasm
+        Max.CodeMode.Execution
         Max.Agent.Execution
         Max.Agent.Runtime
         Max.Agent.Failure
@@ -533,9 +541,12 @@ executable max-context-eval
 test-suite max-test
     import:             warnings, lang
     type:               exitcode-stdio-1.0
-    hs-source-dirs:     test, prompt-flow
+    hs-source-dirs:     test, prompt-flow, test-support
     main-is:            Spec.hs
     other-modules:
+        ExecutionFixture
+        Max.CodeMode.WasmSpec
+        Max.Execution.ToolsSpec
         Max.AdminSpec
         Max.CliProxySpec
         Max.BilibiliSpec
@@ -653,10 +664,12 @@ test-suite max-test
 test-suite max-test-db
     import:             warnings, lang
     type:               exitcode-stdio-1.0
-    hs-source-dirs:     test-db
+    hs-source-dirs:     test-db, test-support
     main-is:            Main.hs
     other-modules:
         Helpers
+        ExecutionFixture
+        Max.ExecutionSpec
         Max.AdminTimelineSpec
         Max.DB.ConnectionSpec
         Max.DB.ConversationCursorSpec

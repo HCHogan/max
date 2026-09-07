@@ -67,7 +67,7 @@
               # the environment instead; "unknown" (e.g. a tarball
               # build) renders as no rev at all.
               max = hlib.dontCheck (
-                (hself.callCabal2nix "max" (cleanSrc pkgs) { }).overrideAttrs (old: {
+                (hself.callCabal2nix "max" (cleanSrc pkgs) { wasmtime = pkgs.wasmtime; }).overrideAttrs (old: {
                   MAX_GIT_REV = self.shortRev or self.dirtyShortRev or "unknown";
                   postInstall = (old.postInstall or "") + ''
                     $out/bin/max --help > /dev/null

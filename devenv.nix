@@ -21,6 +21,7 @@
   };
 
   packages = with pkgs; [
+    wasmtime # embedded C API: headers and library
     hpack
     ormolu
     hlint

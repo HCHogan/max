@@ -66,20 +66,18 @@ where
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, writeTVar)
 import Control.Monad (unless, when)
-import Data.Aeson (Value (..), encode, toJSON)
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (Value (..), encode)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
-import Data.List (find)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Effectful
-import Effectful.Concurrent.Async (Concurrent, mapConcurrently)
+import Effectful.Concurrent.Async (Concurrent)
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift, send)
-import Effectful.Exception (SomeException, catch, throwIO)
+import Effectful.Exception (throwIO)
 import Effectful.Log
 import Max.Agent.Execution
 import Max.Agent.Failure (AgentFailure (..))
@@ -89,26 +87,15 @@ import Max.Effects.ToolControl (ToolControl, runToolControl)
 import Max.Effects.ToolDirectory (ToolDirectory, listCatalogTools, listToolSpecs, runToolDirectoryDynamic)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, ToolOutputRead, defaultInlineMediaLimit, drainInlineMedia, newToolOutputQueue, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
-  ( CatalogTool (..),
-    SchemaHash (..),
-    SchemaVersion (..),
-    ToolCatalogError,
-    ToolDefinition (..),
-    ToolEffect (..),
-    ToolFault (..),
+  ( ToolCatalogError,
     ToolInvocation (..),
-    ToolOutcome (..),
-    ToolParallelism (..),
-    ToolRef (..),
     ToolRegistry,
-    ToolRetryClass (..),
     Tools,
-    invokeToolWithIdentity,
     outcomeResult,
     registryCatalog,
     runToolsWithInvocationDynamic,
   )
-import Max.Execution.Types
+import Max.Execution.Tools
 import Max.Reply (readyPrefix)
 import Max.RuntimeConfig (RuntimeSnapshot (..))
 import Max.Tasks
@@ -125,7 +112,6 @@ import Max.Tasks
   )
 import Max.Tool.Bundles (SkillLoad (..))
 import Max.Tool.Control (LoopControl (..), controlReply, controlSkillLoads, mergeControls)
-import Max.Tool.Types (ToolCallMode (..))
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolRuntimeSnapshot, toolSkillLoads, toolTurnOutputContext, withToolInvocationIdentity, withToolSkillLoads)
 import Max.Turn.Types (AgentTurnRef (..), turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
@@ -254,6 +240,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
     -- consumes feedback through the explicit object.
     preKilled <- liftIO (activateTurnRuntime turn "llm" cancel)
     when preKilled $ throwIO TaskCancelled
+    session <- newExecutionSession context.acMaxToolCalls
     outputQueue <- newToolOutputQueue defaultInlineMediaLimit
     runToolOutputRead outputQueue $
       runToolDirectoryDynamic (registryCatalog . snd <$> liftIO (readTVarIO catalogRef)) $
@@ -263,9 +250,10 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
               (current, _) <- liftIO (readTVarIO catalogRef)
               either throwIO pure (toolFactory (withToolInvocationIdentity identity current))
           )
-          (loop catalogRef emit context turn profile (msgs <> recoveryMessages))
+          (loop session catalogRef emit context turn profile (msgs <> recoveryMessages))
   where
     loop ::
+      ExecutionSession ->
       TVar (ToolContext, ToolRegistry (ToolOutput : ToolControl : es)) ->
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       AgentContext ->
@@ -273,20 +261,20 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    loop catalogRef emit ctx h profile = go catalogRef emit ctx h 0 0 [] profile
+    loop session catalogRef emit ctx h profile = go session catalogRef emit ctx h 0 [] profile
 
     go ::
+      ExecutionSession ->
       TVar (ToolContext, ToolRegistry (ToolOutput : ToolControl : es)) ->
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       AgentContext ->
       TurnRuntime ->
       Int ->
-      Int ->
       [ChatMessage] ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    go catalogRef emit ctx h n callsUsed appended profile msgs = do
+    go session catalogRef emit ctx h n appended profile msgs = do
       catalog <- either throwIO pure (toolFactory ctx.acTools)
       liftIO (atomically (writeTVar catalogRef (ctx.acTools, catalog)))
       -- Drain any feedback notes that arrived since the previous turn.
@@ -375,7 +363,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                       logInfo "agent: btw notes raced final answer, continuing" $
                         object ["count" .= length xs]
                       let newMsgs = [MsgAssistant text, feedbackMsg xs]
-                      go catalogRef emit ctx h (n + 1) callsUsed (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                      go session catalogRef emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -402,61 +390,18 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
               -- results keep call order so each tool_call id is
               -- answered in sequence.
               registered <- listCatalogTools
-              let callMode name = maybe WorkCall (.ctDefinition.tdCallMode) (find ((== ToolRef name) . (.ctDefinition.tdRef)) registered)
-                  isReturn name = callMode name == FinishCall
-                  returnCalls = filter (isReturn . (.callName)) tcs
-                  returnRound = not (null returnCalls)
-                  suppressed tc = returnRound && (length returnCalls /= 1 || not (isReturn tc.callName))
-                  remaining = maybe maxBound (\limit -> max 0 (limit - callsUsed)) ctx.acMaxToolCalls
-                  callCost tc
-                    | callMode tc.callName /= WorkCall = 0
-                    | otherwise = 1
-                  roundCost = sum [callCost tc | tc <- tcs, not (suppressed tc)]
-                  overBudget = roundCost > remaining
-              journalRows <-
-                if overBudget
-                  then pure (replicate (length tcs) Nothing)
-                  else
-                    traverse
-                      (\tc -> if suppressed tc then pure Nothing else prepareJournal (toolGroupId ctx.acTools) h registered tc)
-                      tcs
-              let canParallel tc =
-                    any
-                      ( \view ->
-                          view.ctDefinition.tdRef == ToolRef tc.callName
-                            && view.ctDefinition.tdParallelism == ParallelSafe
-                      )
-                      registered
-              let journaledCalls = zip tcs journalRows
-              executed <-
-                if overBudget
-                  then
-                    pure
-                      [ ( toolResultMessage tc (Left "这个子任务的工具调用额度已经用满，不能再执行这个调用"),
-                          ToolCallFinished tc.callName (Left "child tool-call budget exhausted"),
-                          ContinueLoop
-                        )
-                      | tc <- tcs
-                      ]
-                  else case journaledCalls of
-                    [call] -> (: []) <$> executeOne h call
-                    _
-                      | returnRound ->
-                          traverse
-                            ( \call@(tc, _) ->
-                                if suppressed tc
-                                  then
-                                    pure
-                                      ( toolResultMessage tc (Left "结束回合的操作必须单独提交；同一轮的其他工具调用已拒绝"),
-                                        ToolCallFinished tc.callName (Left "tool suppressed after child return"),
-                                        ContinueLoop
-                                      )
-                                  else executeOne h call
-                            )
-                            journaledCalls
-                    _
-                      | all canParallel tcs -> mapConcurrently (executeOne h) journaledCalls
-                      | otherwise -> traverse (executeOne h) journaledCalls
+              let hooks = hoistExecutionHooks (raise . raise . raise) (executionHooks admission journal (toolGroupId ctx.acTools) h)
+                  requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
+              for_ tcs $ \tc ->
+                logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]
+              batch <- executeToolBatch session hooks registered requests
+              for_ (zip tcs batch.tbInvocations) $ \(tc, invocation) ->
+                case outcomeResult invocation.tiOutcome of
+                  Right value -> logInfo "agent: tool result" $ object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName invocation.tiOutcome, "result" .= previewJson 400 value, "full_len" .= LBS.length (encode value)]
+                  Left err -> logAttention "agent: tool failed" $ object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName invocation.tiOutcome, "error" .= err]
+              liftIO (checkTurnCancellation h)
+              let executed = zipWith nativeResult tcs batch.tbInvocations
+                  overBudget = batch.tbOverBudget
               -- Emit result facts after the concurrent round rejoins.  This
               -- keeps the higher-rank callback on its sequential unlift and
               -- gives debug output a deterministic call order.
@@ -480,7 +425,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                   if overBudget
                     then finalAnswer ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
                     else
-                      go catalogRef emit nextContext h (n + 1) (callsUsed + if overBudget then 0 else roundCost) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                      go session catalogRef emit nextContext h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
     -- gets a real answer built from whatever the loop already gathered,
@@ -587,130 +532,11 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       active <- raise (raise (raise (admission.eaCheck durable)))
       unless active (throwIO TaskCancelled)
 
-    prepareJournal ::
-      GroupId ->
-      TurnRuntime ->
-      [CatalogTool] ->
-      ToolCall ->
-      Eff (Tools : ToolDirectory : ToolOutputRead : es) (Maybe JournalExecution)
-    prepareJournal gid turn registered tc = case turnRuntimeAgentTurn turn of
-      Nothing -> pure Nothing
-      Just durable -> do
-        let mView = find ((== ToolRef tc.callName) . (.ctDefinition.tdRef)) registered
-            start = maybe (unknownJournalStart tc) (catalogJournalStart tc) mView
-        let step = case (.ctDefinition.tdCallMode) <$> mView of
-              Just mode | mode /= WorkCall -> ExecutionCheckpoint
-              _ -> ExecutionWork ReserveCall
-        raise (raise (raise (admission.eaStartTool gid durable step start)))
-
-    executeOne :: TurnRuntime -> (ToolCall, Maybe JournalExecution) -> Eff (Tools : ToolDirectory : ToolOutputRead : es) (ChatMessage, ToolDebugEvent, LoopControl)
-    executeOne turn (tc, journalRow) = do
-      liftIO (checkTurnCancellation turn)
-      checkDurable turn
-      logInfo "agent: tool call" $
-        object
-          [ "id" .= tc.callId,
-            "name" .= tc.callName,
-            "args" .= previewJson 200 tc.callArguments
-          ]
-      invocation <-
-        invokeToolWithIdentity ((\row -> "max:j" <> T.pack (show row.jeJournalId)) <$> journalRow) tc.callName tc.callArguments
-          `catch` \e -> do
-            for_ journalRow $ \row ->
-              raise (raise (raise (journal.ejUnknown row (T.pack (show (e :: SomeException))))))
-            throwIO e
-      let outcome = invocation.tiOutcome
-      for_ journalRow $ \row ->
-        raise (raise (raise (journal.ejFinish row (journalFinish (journalControl invocation)))))
-      liftIO (checkTurnCancellation turn)
-      -- Host-only observation fields are journal evidence.  Remove them from
-      -- the value returned to the model so E0 changes durability without
-      -- changing the tool protocol or influencing the answer.
-      let result = outcomeResult (stripJournalMetadata outcome)
-      case result of
-        Right v -> do
-          let full = TE.decodeUtf8 (LBS.toStrict (encode v))
-          logInfo "agent: tool result" $
-            object
-              [ "id" .= tc.callId,
-                "name" .= tc.callName,
-                "outcome" .= outcomeName outcome,
-                "result" .= previewJson 400 v,
-                "full_len" .= T.length full
-              ]
-          pure (toolResultMessage tc (Right v), ToolCallFinished tc.callName (Right v), invocation.tiControl)
-        Left err -> do
-          logAttention "agent: tool failed" $
-            object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName outcome, "error" .= err]
-          pure (toolResultMessage tc (Left err), ToolCallFinished tc.callName (Left err), ContinueLoop)
-
-    outcomeName :: ToolOutcome -> Text
-    outcomeName = \case
-      ToolRejected {} -> "rejected"
-      ToolFailedBeforeEffect {} -> "failed-before-effect"
-      ToolSucceeded {} -> "succeeded"
-      ToolCommitted {} -> "committed"
-      ToolOutcomeUnknown {} -> "outcome-unknown"
-
-    -- Durable activation evidence comes only from the typed host channel. The
-    -- private manifest is stored atomically with the successful tool result.
-    journalControl invocation = case controlSkillLoads invocation.tiControl of
-      [] -> invocation.tiOutcome
-      loads -> case invocation.tiOutcome of
-        ToolSucceeded (Object fields) -> ToolSucceeded (Object (KeyMap.insert "_max_journal_observed_manifest" (object ["skill_loads" .= loads]) fields))
-        ToolCommitted (Object fields) -> ToolCommitted (Object (KeyMap.insert "_max_journal_observed_manifest" (object ["skill_loads" .= loads]) fields))
-        other -> other
-
-    catalogJournalStart :: ToolCall -> CatalogTool -> JournalStart
-    catalogJournalStart tc view =
-      JournalStart
-        { jsCallId = tc.callId,
-          jsToolRef = tc.callName,
-          jsSchemaVersion = view.ctDefinition.tdSchemaVersion.unSchemaVersion,
-          jsSchemaHash = view.ctSchemaHash.unSchemaHash,
-          jsInput = tc.callArguments,
-          jsEffectLabels = toJSON (map effectLabel (Set.toList view.ctDefinition.tdEffects)),
-          jsRetryClass = retryClassText view.ctDefinition.tdRetryClass
-        }
-
-    unknownJournalStart :: ToolCall -> JournalStart
-    unknownJournalStart tc =
-      JournalStart tc.callId tc.callName 0 "unknown" tc.callArguments (toJSON ([] :: [Value])) "safe"
-
-    effectLabel :: ToolEffect -> Value
-    effectLabel = \case
-      EffectRead domain -> object ["kind" .= ("read" :: Text), "domain" .= domain]
-      EffectWrite domain -> object ["kind" .= ("write" :: Text), "domain" .= domain]
-      EffectSend domain -> object ["kind" .= ("send" :: Text), "domain" .= domain]
-      EffectLLM -> object ["kind" .= ("llm" :: Text)]
-      EffectReflect -> object ["kind" .= ("reflect" :: Text)]
-
-    retryClassText :: ToolRetryClass -> Text
-    retryClassText = \case
-      RetrySafe -> "safe"
-      RetryIdempotent -> "idempotent"
-      RetryUnsafe -> "unsafe"
-
-    journalFinish :: ToolOutcome -> JournalFinish
-    journalFinish = \case
-      ToolRejected fault -> JournalRejected fault.tfCode fault.tfMessage
-      ToolFailedBeforeEffect fault -> JournalFailed fault.tfCode fault.tfMessage
-      ToolSucceeded value -> JournalSucceeded value
-      ToolCommitted value -> JournalCommitted value
-      ToolOutcomeUnknown fault -> JournalOutcomeUnknown fault.tfCode fault.tfMessage
-
-    stripJournalMetadata :: ToolOutcome -> ToolOutcome
-    stripJournalMetadata = \case
-      ToolSucceeded value -> ToolSucceeded (stripValue value)
-      ToolCommitted value -> ToolCommitted (stripValue value)
-      other -> other
-      where
-        stripValue (Object fields) =
-          Object
-            ( KeyMap.delete "_max_journal_canonical_message_id" $
-                KeyMap.delete "_max_journal_observed_manifest" fields
-            )
-        stripValue value = value
+-- | The model protocol adapter owns messages and debug events, not execution.
+nativeResult :: ToolCall -> ToolInvocation -> (ChatMessage, ToolDebugEvent, LoopControl)
+nativeResult tc invocation =
+  let result = outcomeResult invocation.tiOutcome
+   in (toolResultMessage tc result, ToolCallFinished tc.callName result, invocation.tiControl)
 
 -- | Build the messages appended after one tool-call response.  This is
 -- deliberately a pure seam between the effectful pieces of the loop:
@@ -748,16 +574,11 @@ toolResultMessage tc = \case
   Right v -> MsgTool tc.callId (TE.decodeUtf8 (LBS.toStrict (encode v)))
   Left err -> MsgTool tc.callId ("error: " <> err)
 
--- | Render a 'Value' as a single-line preview suitable for logs:
--- newlines/whitespace collapsed, truncated to @n@ characters with an
--- ellipsis suffix.  Keeps log lines readable without losing context.
+-- | Bounded, single-line diagnostic text for the protocol adapter.
 previewJson :: Int -> Value -> Text
-previewJson n v =
-  let s = TE.decodeUtf8 (LBS.toStrict (encode v))
-      collapsed = T.unwords (T.words s)
-   in if T.length collapsed <= n
-        then collapsed
-        else T.take n collapsed <> "…"
+previewJson limit value =
+  let text = T.unwords (T.words (TE.decodeUtf8 (LBS.toStrict (encode value))))
+   in if T.length text <= limit then text else T.take limit text <> "…"
 
 -- | High watermark: total tool-result characters tolerated before a
 -- trim event.  Individual tools already cap their own output

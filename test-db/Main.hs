@@ -32,12 +32,13 @@ import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.MediaSpec qualified as MediaSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.MonitorSpec qualified as MonitorSpec
+import Max.DB.ProgressSpec qualified as ProgressSpec
 import Max.DB.QQBackfillSpec qualified as QQBackfillSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TaskSpec qualified as TaskSpec
-import Max.DB.ProgressSpec qualified as ProgressSpec
 import Max.DB.TransactionSpec qualified as TransactionSpec
 import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
+import Max.ExecutionSpec qualified as ExecutionSpec
 import Max.HistorianSpec qualified as HistorianSpec
 import Max.MaintenanceLeaseSpec qualified as MaintenanceLeaseSpec
 import Max.MaxOpsNotificationSpec qualified as MaxOpsNotificationSpec
@@ -67,6 +68,7 @@ main = do
         [] -> putStrLn "migrations: nothing to apply (test DB already up to date)"
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
+        ExecutionSpec.spec pool
         AdminTimelineSpec.spec pool
         MaintenanceLeaseSpec.spec pool
         SessionSpec.spec pool

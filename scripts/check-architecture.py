@@ -62,6 +62,21 @@ def check_imports():
         if re.search(r"\b(IOE|liftIO|unsafePerformIO|unsafeCoerce)\b", source):
             errors.append(f"{module}: implementation escape in pure domain module")
 
+    # Native and guest adapters must share execution policy. The embedded VM
+    # cannot acquire tools or persistence itself; it transports bounded bytes.
+    executor = (ROOT / "src/Max/Execution/Tools.hs").read_text()
+    guest = (ROOT / "src/Max/CodeMode/Execution.hs").read_text()
+    wasm = (ROOT / "src/Max/CodeMode/Wasm.hs").read_text()
+    for name, source in [("Tool execution", executor), ("Wasm adapter", guest)]:
+        for dependency in IMPORT.findall(source):
+            if dependency.startswith("Max.DB.") or dependency in {"Effectful.PostgreSQL", "Max.Effects.LLM", "Max.Env", "Max.Agent.Runtime"}:
+                errors.append(f"{name}: LLM, persistence or application assembly leaked into execution")
+    if "invokeTool" in guest or "executeToolBatch" not in guest:
+        errors.append("Wasm adapter bypasses shared tool execution")
+    for dependency in IMPORT.findall(wasm):
+        if dependency.startswith("Max.") or dependency.startswith("System.Process"):
+            errors.append(f"Wasm mechanics acquired domain or subprocess capability: {dependency}")
+
     # Read-model codecs may decode SQL fields, but cannot execute queries or IO.
     read_models = {
         "Max.Memory.Types": {"Max.ConversationScope", "Max.Memory.Policy"},
