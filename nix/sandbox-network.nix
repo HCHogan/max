@@ -68,6 +68,7 @@ in
       path = [
         pkgs.iproute2
         pkgs.nftables
+        pkgs.util-linux
       ];
       serviceConfig = {
         Type = "oneshot";
@@ -76,6 +77,13 @@ in
       script = ''
         set -eu
         nft list table inet max-sandbox >/dev/null
+        # Prepare iproute2's shared namespace directory before other daemons
+        # bind namespaces beneath it; a later overmount would hide their mounts.
+        mkdir -p /run/netns
+        if ! mountpoint -q /run/netns; then
+          mount --bind /run/netns /run/netns
+        fi
+        mount --make-shared /run/netns
         if ! ip link show dev ${bridge} >/dev/null 2>&1; then
           ip link add name ${bridge} type bridge
         fi

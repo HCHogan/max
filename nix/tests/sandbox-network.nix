@@ -72,6 +72,7 @@ pkgs.testers.runNixOSTest {
     start_all()
     machine.wait_for_unit("max.service")
     machine.wait_for_unit("max-sandbox-network.service")
+    machine.succeed("touch /run/netns/max-foreign-fixture; mount --bind /proc/self/ns/net /run/netns/max-foreign-fixture")
     cli = "runuser -u max-bot -- max-runtime "
     name = "max-sb--100-s1"
     unit = "max-sandbox@-100-s1.service"
@@ -84,6 +85,8 @@ pkgs.testers.runNixOSTest {
         print(machine.succeed("journalctl -u max-runtime -u 'max-sandbox@*' --no-pager -n 120"))
         raise
     machine.succeed("machinectl show max-sandbox--100-s1 -p Leader | grep -E 'Leader=[1-9]'")
+    # Creating the first sandbox must not hide an earlier daemon's namespace.
+    machine.succeed("umount /run/netns/max-foreign-fixture; rm /run/netns/max-foreign-fixture")
     try:
         assert machine.succeed(execute + "id -u").strip() == "1000"
     except Exception:
