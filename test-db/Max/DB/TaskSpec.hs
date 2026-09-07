@@ -6,6 +6,7 @@ import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Foldable (for_)
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
@@ -14,6 +15,8 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (addUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..))
+import Effectful (liftIO)
+import Effectful.Exception (throwIO)
 import Effectful.PostgreSQL (execute, query)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb, withDbLog)
 import Max.Agent.Execution (ExecutionAdmission (..))
@@ -27,8 +30,8 @@ import Max.DB.Monitor
 import Max.DB.Monitor.Occurrence (OccurrenceDraft (..), recordOccurrence)
 import Max.DB.Task
 import Max.DB.Task.Overview qualified as WorkQuery
-import Max.DB.Task.Query qualified as TaskQuery
 import Max.DB.Task.Progress (recordProgressDecision)
+import Max.DB.Task.Query qualified as TaskQuery
 import Max.DB.Task.Record (databaseNow)
 import Max.Effects.MonitorControl qualified as MonitorCapability
 import Max.Effects.MonitorQuery qualified as MonitorQueryCapability
@@ -38,10 +41,15 @@ import Max.Effects.ToolControl (runToolControl)
 import Max.Effects.Tools (Tool (..))
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.IR (Body (..), Node (NText))
+import Max.MaxOps.Client (MaxOpsClient (..))
+import Max.MaxOps.Protocol (Catalog (..), Operation (..), parseCatalog)
+import Max.MaxOps.TaskRuntime (admitMaxOpsTask, runMaxOpsTask)
+import Max.MaxOps.Types (MaxOpsConfig (..))
 import Max.Monitor.Control qualified as MonitorControl
 import Max.Monitor.Types
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
+import Max.ReplySend (ReplyPublicationException (..))
 import Max.Task.Admission (AdmissionError (..))
 import Max.Task.Admission qualified as Admission
 import Max.Task.Execution (ExecutionFailure (..))
@@ -54,13 +62,157 @@ import Max.Task.State qualified as TaskState
 import Max.Task.ToolRuntime (taskToolsWithDatabase)
 import Max.Task.Types (TaskProfile (..), taskHandle)
 import Max.Task.View (renderTaskHistory)
+import Max.Tasks (TaskCancelled (..))
+import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.ToolContext
+import Max.Turn.Failure (handleTurnFailures)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
+  it "executes an admitted fleet job without model polling and retains its submission identity" $ do
+    (front, message, actor) <- seed pool 611798505 1
+    withDb pool (claimFrontend front) `shouldReturn` True
+    output <- newTurnOutputContext front
+    let config = MaxOpsConfig True "http://hub.test" "/test/runtime-token" [611798505]
+        operation name kind readonly idempotency =
+          object
+            [ "name" .= (name :: Text),
+              "kind" .= (kind :: Text),
+              "read_only" .= readonly,
+              "idempotency" .= (idempotency :: Text),
+              "minimum_protocol_version" .= (2 :: Int),
+              "params_schema" .= object ["type" .= ("object" :: Text)]
+            ]
+        rawCatalog =
+          object
+            [ "version" .= (2 :: Int),
+              "operations"
+                .= [operation "exec.run" "job_submission" False "required", operation "jobs.wait" "job_control" True "none"]
+            ]
+        grants = Map.singleton "maxops_execute" "test-grant"
+        contextFor turnOutput background =
+          mkToolContext
+            (TurnIdentity (GroupId 611798505) message (UserId 1) (UserId 99) actor Nothing (Just turnOutput))
+            (TurnCapabilities False False True noAdvertisedCaps False grants Nothing background)
+    catalog <- either (fail . T.unpack) pure (parseCatalog rawCatalog)
+    entry <- case catalog.operations of first : _ -> pure first; _ -> fail "empty fixture"
+    (admitted, _) <-
+      withDb pool $
+        runToolControl
+          ( admitMaxOpsTask
+              (withToolInvocationIdentity (Just "max:j41") (contextFor output False))
+              config
+              entry
+              (object [])
+          )
+    admitted `shouldSatisfy` either (const False) (const True)
+    taskTurn <- claimOne pool
+    Just task <- withDb pool (loadTaskExecution taskTurn.atrTurnId)
+    taskOutput <- newTurnOutputContext taskTurn
+    keys <- newIORef []
+    waits <- newIORef (0 :: Int)
+    let client =
+          MaxOpsClient
+            ( \_ op _ key ->
+                if op.name == "exec.run"
+                  then do
+                    modifyIORef' keys (<> [key])
+                    pure (Right (object ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("queued" :: Text)]))
+                  else do
+                    modifyIORef' waits (+ 1)
+                    pure
+                      ( Right
+                          ( object
+                              [ "job"
+                                  .= object
+                                    [ "handle"
+                                        .= object
+                                          ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("succeeded" :: Text), "revision" .= (3 :: Int)]
+                                    ]
+                              ]
+                          )
+                      )
+            )
+            (\_ _ -> pure (Right rawCatalog))
+    for_ [1, 2 :: Int] $ \_ -> do
+      result <- withDbLog pool $ runMaxOpsTask client config (pure config) (contextFor taskOutput True) task
+      result.status `shouldBe` TaskState.ReportSucceeded
+    readIORef keys `shouldReturn` [Just "max:j41", Just "max:j41"]
+    readIORef waits `shouldReturn` 2
+    rows <- withDb pool $ query "SELECT state FROM execution_journal WHERE turn_id=?" (Only taskTurn.atrTurnId)
+    (rows :: [Only Text]) `shouldBe` [Only "committed", Only "committed"]
+
+  it "recovers skill receipts across attempts but not across task revisions" $ do
+    source@(_, _, actor) <- seed pool 900 1
+    identifier <- admit pool source "skill-retry"
+    first <- claimOne pool
+    let instructions = "configured web manual"
+        receipt = SkillLoad "web" (skillLoadVersion instructions) instructions Nothing
+        start = JournalStart "load" "use_skill" 1 "fixture" (object []) (toJSON ([] :: [Text])) "unsafe"
+    journal <- withDb pool (startJournalExecution first start)
+    withDbLog
+      pool
+      ( finishJournalExecution
+          journal
+          ( JournalSucceeded
+              ( object
+                  ["_max_journal_observed_manifest" .= object ["skill_loads" .= [receipt]]]
+              )
+          )
+      )
+    withDb pool (recordTaskFailure first.atrTurnId "HTTP 503" Transient) `shouldReturn` True
+    withDb pool (finishAgentTurn first TurnFailed 1 Nothing Nothing)
+    void $ withDb pool $ execute "UPDATE durable_tasks SET next_attempt_at=now()-interval '1 second' WHERE task_id=?" (Only identifier)
+    second <- claimOne pool
+    withDb pool (readSkillLoads second) `shouldReturn` [receipt]
+    void $ withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "new objective")
+    third <- claimOne pool
+    withDb pool (readSkillLoads third) `shouldReturn` []
+
+  it "settles kill before recovery cleanup and immediately admits the next frontend" $ do
+    (front, CanonicalMessageId message, _) <- seed pool 650536599 1
+    withDb pool (claimFrontend front) `shouldReturn` True
+    withDb pool $
+      handleTurnFailures
+        (\_ -> liftIO (expectationFailure "kill reached crash handler"))
+        (\_ -> liftIO (expectationFailure "kill reached publication handler"))
+        (finishAgentTurn front TurnCancelled 0 (Just "cancelled by !kill") Nothing)
+        (throwIO TaskCancelled)
+    withDb pool (ensureAgentTurnRecoveryPending front "finally")
+    states <- withDb pool $ query "SELECT status FROM agent_turns WHERE turn_id=?" (Only front.atrTurnId)
+    (states :: [Only Text]) `shouldBe` [Only "aborted"]
+    requests <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message)
+    (requests :: [Only Text]) `shouldBe` [Only "cancelled"]
+    ownership <- withDb pool $ query "SELECT count(*) FROM conversation_frontends WHERE turn_id=?" (Only front.atrTurnId)
+    (ownership :: [Only Int]) `shouldBe` [Only 0]
+    (next, _, _) <- seed pool 650536599 2
+    withDb pool (claimFrontend next) `shouldReturn` True
+
+  it "settles a kill that interrupts publication failure cleanup" $ do
+    (front, _, _) <- seed pool 650536599 1
+    withDb pool (claimFrontend front) `shouldReturn` True
+    withDb pool $
+      handleTurnFailures
+        (\_ -> liftIO (expectationFailure "publication was treated as synchronous"))
+        (\_ -> throwIO TaskCancelled)
+        (finishAgentTurn front TurnCancelled 0 (Just "cancelled during failure cleanup") Nothing)
+        (throwIO (ReplyPublicationException "fixture send failure"))
+    withDb pool (ensureAgentTurnRecoveryPending front "finally")
+    (next, _, _) <- seed pool 650536599 2
+    withDb pool (claimFrontend next) `shouldReturn` True
+
+  it "cancels a killed durable task instead of reviving a retryable attempt" $ do
+    source <- seed pool 900 1
+    identifier <- admit pool source "killed-attempt"
+    execution <- claimOne pool
+    void $ withDb pool (recordTaskFailure execution.atrTurnId "transient prior failure" Transient)
+    withDb pool (finishAgentTurn execution TurnCancelled 0 (Just "cancelled by !kill") Nothing)
+    withDb pool (ensureAgentTurnRecoveryPending execution "finally")
+    status pool identifier `shouldReturn` "cancelled"
+
   it "uses explicit Haskell settlement without business cascade triggers" $ do
     rows <- withDb pool $ query "SELECT tgname FROM pg_trigger WHERE tgname IN ('task_attempt_settle','task_completion','browser_task_changed','monitor_fire_snapshot','zz_browser_fire_profile','browser_profile_changed')" ()
     (rows :: [Only Text]) `shouldBe` []
@@ -295,8 +447,9 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     (turn, message, actor) <- seed pool 900 1
     let grants = Map.fromList [("maxops_query", "query-grant"), ("maxops_execute", "management-grant"), ("sandbox_exec", "sandbox-grant")]
         scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor grants False
-    admitted <- withDb pool . ControlCapability.runTaskControl scope $
-      ControlCapability.startTask "fleet-operation" "diagnose and verify" Operations (object [])
+    admitted <-
+      withDb pool . ControlCapability.runTaskControl scope $
+        ControlCapability.startTask "fleet-operation" "diagnose and verify" Operations (object [])
     case admitted of
       Right (receipt :: Admission.TaskAdmissionReceipt) -> do
         receipt.grants `shouldBe` Map.delete "sandbox_exec" grants

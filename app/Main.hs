@@ -62,6 +62,7 @@ import Max.Intent (IntentState, intentWorker, newIntentState)
 import Max.Log (withCompactLoggerDynamic)
 import Max.LogBuffer (LogBuffer, newLogBuffer, pushLog)
 import Max.Matrix (matrixDeliveryTransport, matrixWorker)
+import Max.MaxOps.Client (maxOpsClient)
 import Max.MaxOps.Notifications (notificationServer)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.MemoryExtract (dreamWorker)
@@ -194,6 +195,7 @@ main = do
                     beBrowsers = browsers,
                     beSearch = cfg.search,
                     beMaxOps = cfg.maxops,
+                    beMaxOpsClient = maxOpsClient httpRuntime,
                     beCliProxy = cfg.cliproxy,
                     beBrowserProxy = cfg.browserProxy,
                     beMemoryExtract = cfg.memoryExtractProfile,

@@ -18,15 +18,16 @@ import Effectful.PostgreSQL.Connection.Pool (runWithConnectionPool)
 import Helpers (insertRawMessage, testTime, truncateAll, withDb)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
-import Max.DB.TurnContinuity
 import Max.DB.Connection (DbPool, withConn)
+import Max.DB.TurnContinuity
 import Max.Effects.Blob (Blob, blobRefSha256, putBlob, runBlob)
 import Max.IR (Body (..), Node (NText))
 import Max.Platform.Store (EnqueuedOutbound (..), OutboundDraft (..), enqueueOutbound)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
-import Max.Turn.Types
+import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Turn.Continuity (TurnDigest (..), currentPromptMajor, renderContinuationDigest, renderReplayDelta)
 import Max.Turn.Replay (ReplayCandidate (..))
+import Max.Turn.Types
 import OneBot.Types (GroupId (..))
 import System.Directory
   ( createDirectory,
@@ -104,17 +105,25 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
 
       let largeHandle = resultHandleText fixture.fxTurn.atrTurnOrdinal noteAndFirst.jeExecutionOrdinal
           inlineHandle = resultHandleText fixture.fxTurn.atrTurnOrdinal second.jeExecutionOrdinal
-      withDbBlob pool blobRoot
+      withDbBlob
+        pool
+        blobRoot
         (resolveJournalResultValue (conversationScopeFor fixture.fxGroup) Nothing largeHandle)
         `shouldReturn` Just largeValue
-      withDbBlob pool blobRoot
+      withDbBlob
+        pool
+        blobRoot
         (resolveJournalResultValue (conversationScopeFor fixture.fxGroup) Nothing inlineHandle)
         `shouldReturn` Just (object ["ok" .= True])
-      withDbBlob pool blobRoot
+      withDbBlob
+        pool
+        blobRoot
         (resolveJournalResultValue (conversationScopeFor other.fxGroup) Nothing largeHandle)
         `shouldReturn` Nothing
       future <- addUTCTime 1 <$> getCurrentTime
-      withDbBlob pool blobRoot
+      withDbBlob
+        pool
+        blobRoot
         (resolveJournalResultValue (conversationScopeFor fixture.fxGroup) (Just future) largeHandle)
         `shouldReturn` Nothing
 
@@ -345,6 +354,27 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
         KeyMap.lookup "timeout_seconds" fields `shouldBe` Just (Number 30)
         KeyMap.lookup "packages" fields `shouldBe` Just (Array mempty)
       other -> expectationFailure ("expected enriched object, got " <> show other)
+
+  it "restores only successful host skill receipts from the same execution" $ do
+    fixture <- createFixture pool 42 1001
+    independent <- createFixture pool 42 1002
+    let instructions = "full skill instructions"
+        load = SkillLoad "web" (skillLoadVersion instructions) instructions Nothing
+    execution <- withDb pool $ startJournalExecution fixture.fxTurn (journalStart "skill" "use_skill")
+    forged <- withDb pool $ startJournalExecution independent.fxTurn (journalStart "forged" "echo")
+    withTemporaryBlobRoot $ \blobRoot -> withDbBlob pool blobRoot $ do
+      finishJournalExecution
+        execution
+        ( JournalSucceeded
+            ( object
+                [ "instructions" .= instructions,
+                  "_max_journal_observed_manifest" .= object ["skill_loads" .= [load]]
+                ]
+            )
+        )
+      finishJournalExecution forged (JournalSucceeded (object ["skill_loads" .= [load]]))
+    withDb pool (readSkillLoads fixture.fxTurn) `shouldReturn` [load]
+    withDb pool (readSkillLoads independent.fxTurn) `shouldReturn` []
 
   it "stores host-observed sandbox evidence separately from the tool result" $ do
     fixture <- createFixture pool 42 1001

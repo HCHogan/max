@@ -16,7 +16,9 @@ import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (race)
 import Control.Monad (replicateM_)
 import Data.Either (isLeft, isRight)
+import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Set qualified as Set
+import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Tasks
   ( Note (..),
     NoteVerb (..),
@@ -24,30 +26,30 @@ import Max.Tasks
     TaskHandle (..),
     TaskInfo (..),
     TurnCompletion (..),
-    activateTurnRuntime,
     absorbedTriggers,
-    awaitTurnSilence,
+    activateTurnRuntime,
     attachTask,
+    awaitTurnSilence,
     beginDispatch,
     beginDurableTurnRuntime,
     beginTurnRuntime,
-    checkTurnCancellation,
-    drainTurnInbox,
-    drainInbox,
-    endDispatch,
+    cancelAllTasks,
     cancelTask,
+    checkTurnCancellation,
+    drainInbox,
+    drainTurnInbox,
+    endDispatch,
     finishTurnRuntime,
     inFlightTriggers,
     listTasks,
     newTaskRegistry,
-    pushToLatest,
     pushToAgentTurn,
+    pushToLatest,
     pushToTrigger,
     requeueInbox,
     setTurnPhase,
     turnRuntimeTaskId,
   )
-import Max.Platform.Types (CanonicalMessageId (..))
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
@@ -61,6 +63,16 @@ bob = UserId 2
 
 spec :: Spec
 spec = describe "Max.Tasks" $ do
+  it "signals each killed task only once while its finalizer is still running" $ do
+    registry <- newTaskRegistry
+    turn <- beginTurnRuntime registry gid alice Nothing
+    signals <- newIORef (0 :: Int)
+    _ <- activateTurnRuntime turn "working" (modifyIORef' signals (+ 1))
+    cancelAllTasks registry `shouldReturn` 1
+    cancelAllTasks registry `shouldReturn` 1
+    cancelTask registry (turnRuntimeTaskId turn) `shouldReturn` True
+    readIORef signals `shouldReturn` 1
+
   describe "explicit TurnRuntime" $ do
     it "owns visibility, phase, feedback and finalization without trigger lookup" $ do
       reg <- newTaskRegistry

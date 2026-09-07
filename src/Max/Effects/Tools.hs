@@ -12,6 +12,9 @@ module Max.Effects.Tools
     runTools,
     runToolsWith,
     runToolsWithControl,
+    runToolsWithControlDynamic,
+    runToolsWithInvocationDynamic,
+    invokeToolWithIdentity,
     invokeTool,
     invokeToolWithControl,
     outcomeResult,
@@ -30,6 +33,7 @@ import Effectful
 import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Concurrent.Async (race)
 import Effectful.Dispatch.Dynamic (interpret, send)
+import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
 import Max.Tool.Catalog (ToolCatalog, buildToolCatalog, lookupCatalogTool, validateArguments)
 import Max.Tool.Control (LoopControl (..), mapControlText)
 import Max.Tool.Types
@@ -70,7 +74,7 @@ buildToolRegistry definitions runners = do
       pure (ref, RegisteredTool view runner.toolRun)
 
 data Tools :: Effect where
-  InvokeTool :: Text -> Value -> Tools m ToolInvocation
+  InvokeTool :: Maybe Text -> Text -> Value -> Tools m ToolInvocation
 
 type instance DispatchOf Tools = Dynamic
 
@@ -95,8 +99,28 @@ runToolsWithControl ::
   ToolRegistry toolEs ->
   Eff (Tools : es) a ->
   Eff es a
-runToolsWithControl lower registry = interpret $ \_ -> \case
-  InvokeTool name args ->
+runToolsWithControl lower registry = runToolsWithControlDynamic lower (pure registry)
+
+-- The assembly layer advances this snapshot only between model rounds.
+runToolsWithControlDynamic ::
+  forall es toolEs a.
+  (Concurrent :> es) =>
+  (forall x. Eff toolEs x -> Eff es (x, LoopControl)) ->
+  Eff es (ToolRegistry toolEs) ->
+  Eff (Tools : es) a ->
+  Eff es a
+runToolsWithControlDynamic lower currentRegistry = runToolsWithInvocationDynamic lower (const currentRegistry)
+
+runToolsWithInvocationDynamic ::
+  forall es toolEs a.
+  (Concurrent :> es) =>
+  (forall x. Eff toolEs x -> Eff es (x, LoopControl)) ->
+  (Maybe Text -> Eff es (ToolRegistry toolEs)) ->
+  Eff (Tools : es) a ->
+  Eff es a
+runToolsWithInvocationDynamic lower currentRegistry = interpret $ \_ -> \case
+  InvokeTool identity name args -> do
+    registry <- currentRegistry identity
     sanitizeInvocation <$> case Map.lookup (ToolRef name) registry.registryRunners of
       Nothing -> pure . ordinary . ToolRejected $ ToolFault "unknown_tool" ("unknown tool: " <> name) RetrySafe
       Just registered -> case validateArguments registered.rtView args of
@@ -140,12 +164,21 @@ permitsControl :: ToolDefinition -> LoopControl -> Bool
 permitsControl _ ContinueLoop = True
 permitsControl definition (YieldLoop _) = definition.tdCallMode == WorkCall && definition.tdParallelism == SequentialOnly
 permitsControl definition (FinishLoop _) = definition.tdCallMode == FinishCall
+permitsControl definition (LoadSkills _) = definition.tdParallelism == SequentialOnly && EffectReflect `elem` definition.tdEffects
 
 ordinary :: ToolOutcome -> ToolInvocation
 ordinary outcome = ToolInvocation outcome ContinueLoop
 
 sanitizeInvocation :: ToolInvocation -> ToolInvocation
-sanitizeInvocation invocation = ToolInvocation (sanitizeToolOutcome invocation.tiOutcome) (mapControlText sanitizeToolText invocation.tiControl)
+sanitizeInvocation invocation = ToolInvocation (sanitizeToolOutcome invocation.tiOutcome) (sanitizeControl invocation.tiControl)
+  where
+    sanitizeControl (LoadSkills loads) =
+      LoadSkills
+        [ load {slInstructions = instructions, slVersion = skillLoadVersion instructions, slMetadata = sanitizeToolValue <$> load.slMetadata}
+        | load <- loads,
+          let instructions = sanitizeToolText load.slInstructions
+        ]
+    sanitizeControl control = mapControlText sanitizeToolText control
 
 -- PostgreSQL JSONB cannot represent U+0000, while external tools and scraped
 -- web snippets can.  Normalise once at the tool kernel boundary so the durable
@@ -192,7 +225,7 @@ invokeTool :: (Tools :> es) => Text -> Value -> Eff es ToolOutcome
 invokeTool name args = (.tiOutcome) <$> invokeToolWithControl name args
 
 invokeToolWithControl :: (Tools :> es) => Text -> Value -> Eff es ToolInvocation
-invokeToolWithControl name args = send (InvokeTool name args)
+invokeToolWithControl name args = send (InvokeTool Nothing name args)
 
 outcomeResult :: ToolOutcome -> Either Text Value
 outcomeResult = \case
@@ -201,3 +234,7 @@ outcomeResult = \case
   ToolSucceeded value -> Right value
   ToolCommitted value -> Right value
   ToolOutcomeUnknown fault -> Left (fault.tfMessage <> " (outcome unknown; not retried)")
+
+-- Host identity is supplied by the execution journal, never from arguments.
+invokeToolWithIdentity :: (Tools :> es) => Maybe Text -> Text -> Value -> Eff es ToolInvocation
+invokeToolWithIdentity identity name args = send (InvokeTool identity name args)

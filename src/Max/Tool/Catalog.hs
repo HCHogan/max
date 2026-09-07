@@ -126,12 +126,15 @@ validatePropertySchema ref (name, Object propertySchema) =
   case KeyMap.lookup "type" propertySchema of
     Nothing -> Right ()
     Just (String kind)
-      | kind `elem` ["string", "integer", "number", "boolean", "object", "array"] -> Right ()
+      | kind `elem` supportedTypes -> Right ()
       | otherwise -> invalid ("unsupported type for " <> key <> ": " <> kind)
+    Just (Array kinds)
+      | not (null kinds) && all (\case String kind -> kind `elem` supportedTypes; _ -> False) kinds -> Right ()
     Just _ -> invalid ("type for " <> key <> " must be a string")
   where
     key = Key.toText name
     invalid = Left . InvalidToolSchema ref
+    supportedTypes = ["string", "integer", "number", "boolean", "object", "array", "null"]
 validatePropertySchema ref (name, _) =
   Left (InvalidToolSchema ref ("property schema must be an object: " <> Key.toText name))
 
@@ -149,7 +152,13 @@ validateArguments view = \case
           _ -> []
     case find (not . (`KeyMap.member` args) . Key.fromText) required of
       Just name -> Left (rejectedFault view ("missing required property: " <> name))
-      Nothing -> traverse_ (validatePresent args view) (KeyMap.toList properties)
+      Nothing -> do
+        case KeyMap.lookup "additionalProperties" schema of
+          Just (Bool False)
+            | Just name <- find (not . (`KeyMap.member` properties)) (KeyMap.keys args) ->
+                Left (rejectedFault view ("unknown property: " <> Key.toText name))
+          _ -> Right ()
+        traverse_ (validatePresent args view) (KeyMap.toList properties)
   _ -> Left (rejectedFault view "arguments must be a JSON object")
 
 validatePresent :: Object -> CatalogTool -> (Key.Key, Value) -> Either ToolFault ()
@@ -161,6 +170,9 @@ validatePresent args view (name, Object propertySchema) = case KeyMap.lookup nam
       Just (String kind)
         | valueHasType kind value -> Right ()
         | otherwise -> Left (rejectedFault view (Key.toText name <> " must be " <> kind))
+      Just (Array kinds)
+        | any (\case String kind -> valueHasType kind value; _ -> False) kinds -> Right ()
+        | otherwise -> Left (rejectedFault view (Key.toText name <> " has no permitted type"))
       _ -> Right ()
     validateEnum value
     validateBounds value
@@ -193,6 +205,7 @@ valueHasType "number" Number {} = True
 valueHasType "boolean" Bool {} = True
 valueHasType "object" Object {} = True
 valueHasType "array" Array {} = True
+valueHasType "null" Null = True
 valueHasType _ _ = False
 
 rejectedFault :: CatalogTool -> Text -> ToolFault

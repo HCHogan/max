@@ -25,15 +25,21 @@ module Max.ToolContext
     toolCatalogGrants,
     toolEffectCeiling,
     toolRuntimeSnapshot,
+    toolSkillLoads,
+    withToolSkillLoads,
+    toolInvocationIdentity,
+    withToolInvocationIdentity,
   )
 where
 
 import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Time (UTCTime)
 import Max.ConversationScope (ConversationScope, conversationScopeFor)
 import Max.Platform.Types (AdvertisedCaps, CanonicalMessageId, PrincipalId)
 import Max.RuntimeConfig (RuntimeSnapshot)
+import Max.Tool.Bundles (SkillLoad, mergeSkillLoads)
 import Max.Turn.Types (TurnOutputContext)
 import OneBot.Types (GroupId, UserId)
 
@@ -62,7 +68,8 @@ data TurnCapabilities = TurnCapabilities
     tcOutput :: !AdvertisedCaps,
     -- | Host-resolved role policy for standing bot-initiated activity.
     tcMonitorArming :: !Bool,
-    -- | Exact current catalog exposed to this turn. Each name maps to a
+    -- | Authorized catalog ceiling, independent of loaded skill visibility.
+    -- Each name maps to a
     -- stable schema/effect/authority fingerprint; an arming tool freezes the
     -- map as the monitor's arm-time ceiling.
     tcCatalogGrants :: !(Map Text Text),
@@ -77,7 +84,9 @@ data ToolContext = ToolContext
   { toolIdentity :: !TurnIdentity,
     toolCapabilities :: !TurnCapabilities,
     toolConversationScope :: !ConversationScope,
-    toolRuntimeSnapshot :: !(Maybe RuntimeSnapshot)
+    toolRuntimeSnapshot :: !(Maybe RuntimeSnapshot),
+    toolInvocationIdentity :: !(Maybe Text),
+    toolSkillLoads :: !(Map Text SkillLoad)
   }
 
 -- | Mint current-turn authority from the already-authorized inbound identity.
@@ -88,12 +97,20 @@ mkToolContext identity capabilities =
     { toolIdentity = identity,
       toolCapabilities = capabilities,
       toolConversationScope = conversationScopeFor identity.tiGroupId,
-      toolRuntimeSnapshot = Nothing
+      toolRuntimeSnapshot = Nothing,
+      toolSkillLoads = Map.empty,
+      toolInvocationIdentity = Nothing
     }
 
 mkToolContextAt :: RuntimeSnapshot -> TurnIdentity -> TurnCapabilities -> ToolContext
 mkToolContextAt snapshot identity capabilities =
   (mkToolContext identity capabilities) {toolRuntimeSnapshot = Just snapshot}
+
+withToolInvocationIdentity :: Maybe Text -> ToolContext -> ToolContext
+withToolInvocationIdentity identity context = context {toolInvocationIdentity = identity}
+
+withToolSkillLoads :: [SkillLoad] -> ToolContext -> ToolContext
+withToolSkillLoads loads context = context {toolSkillLoads = mergeSkillLoads context.toolSkillLoads loads}
 
 toolGroupId :: ToolContext -> GroupId
 toolGroupId = (.toolIdentity.tiGroupId)

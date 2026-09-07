@@ -1,7 +1,8 @@
 module Max.Effects.ToolsSpec (spec) where
 
 import Control.Exception (throwIO)
-import Data.Aeson (Value, object, (.=))
+import Control.Monad (forM_)
+import Data.Aeson (Value (Null), object, (.=))
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
@@ -113,6 +114,25 @@ spec = describe "validated tool kernel" $ do
     outcome <- runEff . runConcurrent . runTools catalog $ invokeTool "read" (object ["value" .= (0 :: Int)])
     outcome `shouldSatisfy` isRejected
     readIORef called `shouldReturn` False
+
+  it "accepts nullable schema unions and rejects unknown arguments before effects" $ do
+    let runner =
+          readTool
+            { toolSchema =
+                object
+                  [ "type" .= ("object" :: String),
+                    "additionalProperties" .= False,
+                    "properties"
+                      .= object
+                        ["value" .= object ["type" .= (["integer", "null"] :: [String])]]
+                  ],
+              toolRun = pure . Right
+            }
+    catalog <- expectCatalog (buildToolRegistry [readDefinition] [runner])
+    forM_ [object [], object ["value" .= Null], object ["value" .= (3 :: Int)]] $ \args ->
+      runEff (runConcurrent (runTools catalog (invokeTool "read" args))) `shouldReturn` ToolSucceeded args
+    forM_ [object ["forged_group" .= (42 :: Int)], object ["value" .= True]] $ \args ->
+      runEff (runConcurrent (runTools catalog (invokeTool "read" args))) >>= (`shouldSatisfy` isRejected)
 
   it "classifies read failures before effect and writes conservatively as outcome unknown" $ do
     let failing name =

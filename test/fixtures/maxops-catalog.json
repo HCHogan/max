@@ -1,0 +1,1571 @@
+{
+  "operations": [
+    {
+      "capability": "fleet:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "fleet.overview",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "title": "Empty",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Observed agent and exporter state for permitted hosts"
+    },
+    {
+      "capability": "units:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "units.failed",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "FailedParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Failed readable services; unreachable hosts remain explicit"
+    },
+    {
+      "capability": "host:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "host.facts",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "title": "HostParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Kernel, uptime and the running system closure"
+    },
+    {
+      "capability": "metrics:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "host.metrics",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "title": "HostParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Host-scoped CPU, memory, load, filesystem and network observations from Prometheus"
+    },
+    {
+      "capability": "host:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "deploy.status",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "FailedParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Running closure versus persistent system profile; unavailable hosts remain explicit"
+    },
+    {
+      "capability": "units:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "units.list",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "title": "HostParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "All explicitly readable services, including unloaded services"
+    },
+    {
+      "capability": "units:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "units.status",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "unit"
+        ],
+        "title": "UnitParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "State of one explicitly readable service"
+    },
+    {
+      "capability": "logs:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "units.logs",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "lines": {
+            "default": 50,
+            "format": "uint16",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "since_seconds": {
+            "default": 3600,
+            "format": "uint32",
+            "maximum": 86400,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "unit"
+        ],
+        "title": "LogParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Bounded recent journal entries for one readable service"
+    },
+    {
+      "capability": "alerts:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "alerts.active",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "title": "Empty",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Active alerts with an instance label matching permitted hosts"
+    },
+    {
+      "capability": "events:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "events.list",
+      "params_schema": {
+        "$defs": {
+          "EventKind": {
+            "enum": [
+              "alert_firing",
+              "alert_resolved",
+              "diagnostic_collected",
+              "remediation_started",
+              "remediation_finished"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "host": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kinds": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/EventKind"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "default": 100,
+            "format": "uint16",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "title": "EventsListParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Replay durable fleet events after a scoped cursor"
+    },
+    {
+      "capability": "self:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "self.status",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "title": "Empty",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Hub readiness, component state and bounded queue counters"
+    },
+    {
+      "capability": "exec:run",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "exec.run",
+      "params_schema": {
+        "$defs": {
+          "CommandSpec": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "argv": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "argv"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "script": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "script"
+                ],
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "$ref": "#/$defs/CommandSpec"
+          },
+          "credential_refs": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "cwd": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "env": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "type": "object"
+          },
+          "host": {
+            "type": "string"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "default": null,
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "host",
+          "profile",
+          "command"
+        ],
+        "title": "ExecRunParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Run a bounded command using a configured target profile"
+    },
+    {
+      "capability": "units:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "units.start",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_invocation_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "unit"
+        ],
+        "title": "UnitActionParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Start one explicitly manageable systemd service"
+    },
+    {
+      "capability": "units:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "units.stop",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_invocation_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "unit"
+        ],
+        "title": "UnitActionParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Stop one explicitly manageable systemd service"
+    },
+    {
+      "capability": "units:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "units.restart",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_invocation_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "unit"
+        ],
+        "title": "UnitActionParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Restart one explicitly manageable systemd service"
+    },
+    {
+      "capability": "units:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "units.reload",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_invocation_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "unit": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "host",
+          "unit"
+        ],
+        "title": "UnitActionParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Reload one explicitly manageable systemd service without upgrading to restart"
+    },
+    {
+      "capability": "jobs:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "jobs.list",
+      "params_schema": {
+        "$defs": {
+          "JobState": {
+            "enum": [
+              "queued",
+              "dispatching",
+              "running",
+              "reconciling",
+              "succeeded",
+              "failed",
+              "cancelled",
+              "timed_out",
+              "outcome_unknown"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": 50,
+            "format": "uint16",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "states": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/JobState"
+            },
+            "type": "array"
+          }
+        },
+        "title": "JobsListParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "List durable jobs owned by the authenticated principal"
+    },
+    {
+      "capability": "jobs:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "jobs.status",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "JobIdParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Read one durable job and its current target-confirmed state"
+    },
+    {
+      "capability": "jobs:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "jobs.logs",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 65536,
+            "format": "uint32",
+            "maximum": 65536,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "stderr_offset": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stdout_offset": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "JobLogsParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Read bounded command output using byte offsets"
+    },
+    {
+      "capability": "jobs:cancel",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "jobs.cancel",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "expected_revision",
+          "reason"
+        ],
+        "title": "JobCancelParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Request cancellation of a non-terminal job"
+    },
+    {
+      "capability": "workspace:write",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "workspace.create",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_remote_head": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repository": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository"
+        ],
+        "title": "WorkspaceCreateParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Create an isolated workspace at the currently observed configured remote ref"
+    },
+    {
+      "capability": "workspace:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "workspace.status",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "repository": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "workspace_id"
+        ],
+        "title": "WorkspaceStatusParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Read a workspace's durable revision and Git identities"
+    },
+    {
+      "capability": "workspace:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "workspace.read",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "max_bytes": {
+            "default": 262144,
+            "format": "uint32",
+            "maximum": 262144,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "path": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "workspace_id",
+          "expected_revision",
+          "path"
+        ],
+        "title": "WorkspaceReadParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Read one regular UTF-8 file from an exact workspace revision"
+    },
+    {
+      "capability": "workspace:write",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "workspace.apply",
+      "params_schema": {
+        "$defs": {
+          "WorkspaceEdit": {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "UTF-8 replacement contents. `null` deletes an existing regular file.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path"
+            ],
+            "type": "object"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "edits": {
+            "items": {
+              "$ref": "#/$defs/WorkspaceEdit"
+            },
+            "type": "array"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "workspace_id",
+          "expected_revision",
+          "edits"
+        ],
+        "title": "WorkspaceApplyParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Create a new immutable workspace revision from bounded file replacements or deletions"
+    },
+    {
+      "capability": "workspace:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "workspace.diff",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "workspace_id",
+          "expected_revision"
+        ],
+        "title": "WorkspaceRevisionParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Render the bounded Git patch for an exact workspace revision"
+    },
+    {
+      "capability": "workspace:write",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "workspace.commit",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "workspace_id",
+          "expected_revision",
+          "message"
+        ],
+        "title": "WorkspaceCommitParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Commit an exact workspace tree using the configured author identity"
+    },
+    {
+      "capability": "workspace:write",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "workspace.check",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "check": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "workspace_id",
+          "expected_revision",
+          "check"
+        ],
+        "title": "WorkspaceCheckParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Run one configured check against an immutable workspace revision"
+    },
+    {
+      "capability": "workspace:publish",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "workspace.publish",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_remote_head": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "workspace_id",
+          "expected_revision",
+          "reference",
+          "expected_remote_head"
+        ],
+        "title": "WorkspacePublishParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Publish an exact committed workspace revision if the remote ref baseline is unchanged"
+    },
+    {
+      "capability": "deploy:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "deploy.prepare",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "profile": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "target_host": {
+            "type": "string"
+          },
+          "workspace_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repository",
+          "workspace_id",
+          "expected_revision",
+          "target_host",
+          "profile"
+        ],
+        "title": "DeployPrepareParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Freeze source and observed runtime baselines into a durable change plan"
+    },
+    {
+      "capability": "deploy:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "deploy.build",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "change_id",
+          "expected_revision"
+        ],
+        "title": "DeployChangeParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Build the exact prepared workspace revision into a verified Nix artifact"
+    },
+    {
+      "capability": "deploy:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "deploy.activate",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "change_id",
+          "expected_revision"
+        ],
+        "title": "DeployChangeParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Conditionally activate a built artifact against the plan runtime baseline"
+    },
+    {
+      "capability": "deploy:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "deploy.verify",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "change_id",
+          "expected_revision"
+        ],
+        "title": "DeployChangeParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Run target-owned acceptance checks against the activated artifact"
+    },
+    {
+      "capability": "deploy:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "deploy.rollback",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "change_id",
+          "expected_revision"
+        ],
+        "title": "DeployChangeParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Conditionally restore the plan baseline only while this change still owns runtime state"
+    },
+    {
+      "capability": "changes:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "changes.status",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "change_id"
+        ],
+        "title": "ChangeStatusParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Read a durable change plan and reconcile its current stage job"
+    },
+    {
+      "capability": "changes:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "changes.history",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": 50,
+            "format": "uint16",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "title": "ChangeHistoryParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "List durable changes owned by the authenticated principal"
+    },
+    {
+      "capability": "diagnostics:collect",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "diagnostics.collect",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": "string"
+          },
+          "lines": {
+            "default": 50,
+            "format": "uint16",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "probes": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "since_seconds": {
+            "default": 3600,
+            "format": "uint32",
+            "maximum": 86400,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "unit": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "host"
+        ],
+        "title": "DiagnosticCollectParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Collect bounded target evidence and configured probes into a durable bundle"
+    },
+    {
+      "capability": "remediations:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "remediations.begin",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id",
+          "host"
+        ],
+        "title": "RemediationBeginParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Claim one budgeted remediation attempt for an event episode"
+    },
+    {
+      "capability": "remediations:manage",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "remediations.finish",
+      "params_schema": {
+        "$defs": {
+          "RemediationState": {
+            "enum": [
+              "active",
+              "succeeded",
+              "failed",
+              "no_action",
+              "superseded"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "outcome": {
+            "$ref": "#/$defs/RemediationState"
+          },
+          "related_change_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "related_job_id": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remediation_id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "remediation_id",
+          "expected_revision",
+          "outcome",
+          "summary"
+        ],
+        "title": "RemediationFinishParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Record a remediation outcome and related job or change"
+    },
+    {
+      "capability": "self:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "resources.list",
+      "params_schema": {
+        "$defs": {
+          "DiscoveryResourceKind": {
+            "enum": [
+              "hosts",
+              "units",
+              "repositories",
+              "deployments",
+              "execution_profiles"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/$defs/DiscoveryResourceKind",
+            "default": "hosts"
+          },
+          "limit": {
+            "default": 50,
+            "format": "uint16",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "title": "ResourcesParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Discover authorized hosts, units, repositories, deployments or target execution profiles in bounded pages"
+    },
+    {
+      "capability": "jobs:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "jobs.wait",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "after_revision": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "default": 10,
+            "format": "uint16",
+            "maximum": 10,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "JobWaitParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Wait up to 10 seconds for a job revision or terminal outcome; no submission is replayed"
+    },
+    {
+      "capability": "jobs:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "jobs.events",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "after_sequence": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "job_id": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "format": "uint16",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "JobEventsParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Replay durable events for an owned job after a sequence cursor"
+    },
+    {
+      "capability": "jobs:read",
+      "idempotency": "none",
+      "kind": "job_control",
+      "minimum_protocol_version": 2,
+      "name": "jobs.result",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 8192,
+            "format": "uint32",
+            "maximum": 32768,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pointer": {
+            "default": "",
+            "description": "RFC 6901 pointer into the stored result; empty selects the root.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "title": "JobResultParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Read a bounded result fragment using a JSON pointer and UTF-8 byte offsets"
+    },
+    {
+      "capability": "deploy:manage",
+      "idempotency": "required",
+      "kind": "job_submission",
+      "minimum_protocol_version": 2,
+      "name": "deploy.run",
+      "params_schema": {
+        "$defs": {
+          "DeployUntil": {
+            "enum": [
+              "built",
+              "verified"
+            ],
+            "type": "string"
+          }
+        },
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "change_id": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "until": {
+            "$ref": "#/$defs/DeployUntil"
+          }
+        },
+        "required": [
+          "change_id",
+          "expected_revision",
+          "until"
+        ],
+        "title": "DeployRunParams",
+        "type": "object"
+      },
+      "read_only": false,
+      "summary": "Durably run a prepared change through build or verified activation; preserves revision and external-writer guards"
+    }
+  ],
+  "version": 2
+}

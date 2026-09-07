@@ -19,6 +19,8 @@ module Max.Toolset
   )
 where
 
+import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, isNothing)
 import Data.Set qualified as Set
@@ -54,8 +56,10 @@ import Max.Effects.Tools
 import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.File.ToolRuntime (fileToolsWithDatabase)
 import Max.HttpRuntime (HttpRuntime)
+import Max.MaxOps.Client (maxOpsOperations)
+import Max.MaxOps.Protocol (Catalog (..), CatalogAccess (..), Operation (..), operationToolName, parseCatalog)
+import Max.MaxOps.TaskRuntime (admitMaxOpsTask)
 import Max.MaxOps.Types (maxOpsAllowed)
-import Max.MaxOps.Protocol (CatalogAccess (..))
 import Max.Media.ToolRuntime (imageToolsWithDatabase, stickerToolsWithDatabase, videoToolsWithDatabase)
 import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
 import Max.Monitor.ToolRuntime (monitorToolsWithDatabase, reminderToolsWithDatabase)
@@ -63,10 +67,11 @@ import Max.Pin.ToolRuntime (pinToolsWithDatabase)
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.RuntimeConfig (RuntimeSnapshot (..), RuntimeValues (..), currentRuntimeSnapshot)
 import Max.Task.ToolRuntime (guardTaskResource, taskToolsWithDatabase)
+import Max.Tool.Bundles (SkillLoad (..), toolBundle, toolVisible)
 import Max.Tool.Types (ToolCallMode (..))
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolRuntimeSnapshot, toolStickers)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolRuntimeSnapshot, toolSkillLoads, toolStickers)
 import Max.Tools.Bilibili (bilibiliToolsFor)
-import Max.Tools.MaxOps (maxOpsToolsFor)
+import Max.Tools.MaxOps (maxOpsBundle)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Skills (skillToolsFor)
@@ -123,9 +128,60 @@ resolvedToolsFor ::
 resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filter allowedRunner runners0))
   where
     dispatchEnv = maybe env (`applyRuntimeSnapshot` env) (toolRuntimeSnapshot dc)
-    definitions = toolDefinitionsFor dispatchEnv (toolGroupId dc) (toolCapabilities dc)
-    allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
-    allowedRunner tool = tool.toolName `Set.member` allowedRefs
+    authorized = toolDefinitionsFor dispatchEnv (toolGroupId dc) (toolCapabilities dc)
+    definitions = filter (\definition' -> toolVisible (toolSkillLoads dc) definition'.tdRef.unToolRef && definition'.tdRef.unToolRef `notElem` ["maxops_operations", "maxops_query", "maxops_execute"]) authorized <> remoteDefinitions
+    loadedOperations = case Map.lookup "maxops" (toolSkillLoads dc) >>= (.slMetadata) >>= (\case Object fields -> KeyMap.lookup "catalog" fields; _ -> Nothing) of
+      Just value -> either (const []) (.operations) (parseCatalog value)
+      Nothing -> []
+    remotePairs =
+      [ (entry, marker)
+      | entry <- loadedOperations,
+        marker <- authorized,
+        marker.tdRef == ToolRef (if entry.readOnly then "maxops_query" else "maxops_execute")
+      ]
+    remoteDefinitions =
+      [ marker
+          { tdRef = ToolRef (operationToolName entry),
+            tdEffects = if entry.requiresKey then marker.tdEffects else Set.delete (EffectWrite "task.db") marker.tdEffects,
+            tdRetryClass = if entry.requiresKey then RetryIdempotent else marker.tdRetryClass
+          }
+      | (entry, marker) <- remotePairs
+      ]
+    allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- authorized]
+    visibleRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
+    allowedRunner tool = tool.toolName `Set.member` visibleRefs
+    prepareSkill "maxops" = do
+      current <- (.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore
+      if current /= dispatchEnv.beMaxOps || not (maxOpsAllowed current (toolGroupId dc)) || not (any (`Set.member` allowedRefs) ["maxops_query", "maxops_execute"])
+        then pure (Left "maxops access is unavailable or changed")
+        else do
+          fetched <- maxOpsOperations runtime current (if "maxops_execute" `Set.member` allowedRefs then ManagementCatalog else ReadOnlyCatalog)
+          pure $ do
+            value <- fetched
+            catalog <- parseCatalog value
+            if any ((== "jobs.wait") . (.name)) catalog.operations || not (any (.requiresKey) catalog.operations)
+              then Right (Just (object ["catalog" .= value, "availability" .= object ["tools" .= map operationToolName catalog.operations, "unavailable" .= ([] :: [Text])]]))
+              else Left "maxops 缺少 jobs.wait；请先更新 Hub，再加载完整工具包"
+    prepareSkill name =
+      pure
+        ( Right
+            ( Just
+                ( object
+                    [ "availability"
+                        .= object
+                          [ "tools" .= [ref | ref <- Set.toList allowedRefs, toolBundle ref == Just name],
+                            "unavailable"
+                              .= [ item.tiDefinition.tdRef.unToolRef
+                                 | item <- toolInventory,
+                                   toolBundle item.tiDefinition.tdRef.unToolRef == Just name,
+                                   item.tiDefinition.tdRef.unToolRef `Set.notMember` allowedRefs
+                                 ],
+                            "reason" .= ("工具受当前模型、平台配置和授权上限约束" :: Text)
+                          ]
+                    ]
+                )
+            )
+        )
     runners0 =
       builtinsWithDatabase dispatchEnv.beTimeZone dc
         <> reminderToolsWithDatabase dispatchEnv.beTimeZone dc
@@ -135,14 +191,19 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
         <> memoryToolsWithDatabase dc
         <> pinToolsWithDatabase dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
         <> taskToolsWithDatabase dc
-        <> skillToolsFor dispatchEnv.beSkills dc
+        <> skillToolsFor dispatchEnv.beSkills dc prepareSkill
         <> bilibiliToolsFor dispatchEnv.beTimeZone dc
         <> sandboxToolsFor dispatchEnv.beTimeZone (toolGroupId dc) dispatchEnv.beSandboxes
         <> fileToolsWithDatabase dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes
         <> [t | toolStickers dc && dispatchEnv.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
         <> maybe [] (searchToolsFor runtime) dispatchEnv.beSearch
-        <> maxOpsToolsFor runtime dispatchEnv.beMaxOps ((.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore) (toolGroupId dc)
-          (if "maxops_execute" `Set.member` allowedRefs then ManagementCatalog else ReadOnlyCatalog)
+        <> maxOpsBundle
+          runtime
+          dispatchEnv.beMaxOps
+          ((.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore)
+          (toolGroupId dc)
+          (map fst remotePairs)
+          (admitMaxOpsTask dc dispatchEnv.beMaxOps)
         <> [t | toolMultimodal dc, t <- browserToolsFor dc dispatchEnv.beBrowsers dispatchEnv.beBrowserProxy]
         <> [t | toolMultimodal dc, t <- videoToolsWithDatabase dc]
 
@@ -158,7 +219,7 @@ toolCountFor ::
   Bool -> -- skills visible
   Int
 toolCountFor env gid multimodal stickers skills =
-  length (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing False))
+  length (filter (toolVisible Map.empty . (.tdRef.unToolRef)) (toolDefinitionsFor env gid (TurnCapabilities multimodal stickers skills noAdvertisedCaps True Map.empty Nothing False)))
 
 -- | Product-level visibility and effect metadata live in one inventory.  The
 -- actual runners assembled above must match this filtered set exactly or
@@ -283,7 +344,7 @@ toolInventory =
     gated SearchOnly (readTool "web_search" ["network.search"] [CurrentConversation]),
     gated MaxOpsOnly (readTool "maxops_operations" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
     gated MaxOpsOnly (readTool "maxops_query" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
-    gated MaxOpsOnly (writeTool "maxops_execute" ["fleet.management"] [CurrentConversation, ProcessResource "maxops"]),
+    gated MaxOpsOnly (writeTool "maxops_execute" ["fleet.management", "task.db"] [CurrentConversation, ProcessResource "maxops"]),
     gated MultimodalOnly (browserTool "browser_navigate"),
     gated MultimodalOnly (browserTool "view_zhihu"),
     gated MultimodalOnly (browserTool "browser_snapshot"),

@@ -1,3 +1,5 @@
+{-# LANGUAGE TemplateHaskell #-}
+
 -- |
 -- Skills: named instruction packs the model pulls into context on
 -- demand — progressive disclosure in the Claude Code sense, sized for
@@ -23,8 +25,8 @@
 --
 -- == Builtin skills
 --
--- Files under @skills\/@ (currently: self-knowledge, sandbox, web,
--- office) are baked into the binary (file-embed, same deployment
+-- Files under @skills\/@ (self-knowledge, sandbox, web, office and maxops)
+-- are baked into the binary (file-embed, same deployment
 -- story as the admin panel's assets) and seeded into the registry
 -- with negative ids.  They exist for content that is coupled
 -- to the code it ships with — @self-knowledge@ is THIS binary's
@@ -45,8 +47,6 @@
 -- dependencies, so ADDING a file under @skills\/@ does not recompile
 -- this module on its own (and @touch@ doesn't either — cabal tracks
 -- content hashes).  Make any byte-level change here when adding one.
-{-# LANGUAGE TemplateHaskell #-}
-
 module Max.Skills
   ( Skill (..),
     SkillRegistry,
@@ -82,9 +82,9 @@ import Effectful.Exception (try)
 import Effectful.PostgreSQL (WithConnection, execute, query, query_)
 import Max.Command.Help (helpText)
 import Max.Command.Version (buildIdentityLines, readOsPretty)
+import Max.Util (tshow)
 import OneBot.Types (GroupId (..))
 import System.FilePath (dropExtension, takeExtension)
-import Max.Util (tshow)
 
 -- | One skill row, cached verbatim.
 data Skill = Skill

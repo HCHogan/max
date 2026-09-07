@@ -25,6 +25,7 @@ import Max.Browser.Registry (BrowserRegistry)
 import Max.CliProxy (CliProxyConfig)
 import Max.EpisodeScheduler (EpisodeScheduler)
 import Max.Intent.Types (IntentConfig)
+import Max.MaxOps.Client (MaxOpsClient)
 import Max.MaxOps.Types (MaxOpsConfig)
 import Max.RuntimeConfig
   ( ConfigGeneration,
@@ -89,6 +90,7 @@ data BotEnv = BotEnv
     -- @web_search@ tool isn't registered).
     beSearch :: !(Maybe SearchConfig),
     beMaxOps :: !MaxOpsConfig,
+    beMaxOpsClient :: !MaxOpsClient,
     -- | Management access to the credential pool serving our LLM base
     -- URL ('Nothing' = @\/api\/quota@ reports itself unconfigured).
     beCliProxy :: !(Maybe CliProxyConfig),

@@ -1,10 +1,11 @@
 -- | Trusted loop decisions emitted by host runners after accepted domain
 -- operations. No JSON decoder exists: model values are never control signals.
-module Max.Tool.Control (LoopControl (..), mergeControls, controlReply, mapControlText) where
+module Max.Tool.Control (LoopControl (..), mergeControls, controlReply, controlSkillLoads, mapControlText) where
 
 import Data.Text (Text)
+import Max.Tool.Bundles (SkillLoad)
 
-data LoopControl = ContinueLoop | YieldLoop !Text | FinishLoop !(Maybe Text)
+data LoopControl = ContinueLoop | YieldLoop !Text | FinishLoop !(Maybe Text) | LoadSkills ![SkillLoad]
   deriving stock (Eq, Show)
 
 -- | Finish is exclusive at admission. Several successful delegations in one
@@ -15,6 +16,9 @@ mergeControls = foldl merge ContinueLoop
     merge (FinishLoop reply) _ = FinishLoop reply
     merge _ control@(FinishLoop _) = control
     merge (YieldLoop first) (YieldLoop next) = YieldLoop (first <> "\n" <> next)
+    merge (LoadSkills first) (LoadSkills next) = LoadSkills (first <> next)
+    merge current@(YieldLoop _) (LoadSkills _) = current
+    merge (LoadSkills _) control@(YieldLoop _) = control
     merge current ContinueLoop = current
     merge _ control = control
 
@@ -23,8 +27,14 @@ controlReply :: LoopControl -> Maybe (Maybe Text)
 controlReply ContinueLoop = Nothing
 controlReply (YieldLoop reply) = Just (Just reply)
 controlReply (FinishLoop reply) = Just reply
+controlReply (LoadSkills _) = Nothing
+
+controlSkillLoads :: LoopControl -> [SkillLoad]
+controlSkillLoads (LoadSkills loads) = loads
+controlSkillLoads _ = []
 
 mapControlText :: (Text -> Text) -> LoopControl -> LoopControl
 mapControlText _ ContinueLoop = ContinueLoop
 mapControlText f (YieldLoop reply) = YieldLoop (f reply)
 mapControlText f (FinishLoop reply) = FinishLoop (f <$> reply)
+mapControlText _ control@(LoadSkills _) = control

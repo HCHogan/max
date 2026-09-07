@@ -187,7 +187,7 @@ systemPrompt multimodal' private outputCaps persona skills' =
              else
                [ "",
                  "技能对照表（预先写好的做事流程；条目只有一句简介，用 use_skill 传名字\
-                 \取完整说明再照着做。只在简介和手头的事明确对上时取用，日常聊天用不到）："
+                 \加载完整说明和权限内的整套工具，下一轮再调用。只在简介和手头的事明确对上时取用，日常聊天用不到）："
                ]
                  <> ["  " <> n <> "：" <> d | (n, d) <- skills']
          )

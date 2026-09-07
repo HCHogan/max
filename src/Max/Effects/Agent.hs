@@ -71,6 +71,7 @@ import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
 import Data.List (find)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -85,7 +86,7 @@ import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
 import Max.Effects.ToolControl (ToolControl, runToolControl)
-import Max.Effects.ToolDirectory (ToolDirectory, listCatalogTools, listToolSpecs, runToolDirectory)
+import Max.Effects.ToolDirectory (ToolDirectory, listCatalogTools, listToolSpecs, runToolDirectoryDynamic)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, ToolOutputRead, defaultInlineMediaLimit, drainInlineMedia, newToolOutputQueue, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
   ( CatalogTool (..),
@@ -102,10 +103,10 @@ import Max.Effects.Tools
     ToolRegistry,
     ToolRetryClass (..),
     Tools,
-    invokeToolWithControl,
+    invokeToolWithIdentity,
     outcomeResult,
     registryCatalog,
-    runToolsWithControl,
+    runToolsWithInvocationDynamic,
   )
 import Max.Execution.Types
 import Max.Reply (readyPrefix)
@@ -122,9 +123,10 @@ import Max.Tasks
     setTurnPhase,
     turnRuntimeAgentTurn,
   )
-import Max.Tool.Control (LoopControl (..), controlReply, mergeControls)
+import Max.Tool.Bundles (SkillLoad (..))
+import Max.Tool.Control (LoopControl (..), controlReply, controlSkillLoads, mergeControls)
 import Max.Tool.Types (ToolCallMode (..))
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolRuntimeSnapshot, toolTurnOutputContext)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolRuntimeSnapshot, toolSkillLoads, toolTurnOutputContext, withToolInvocationIdentity, withToolSkillLoads)
 import Max.Turn.Types (AgentTurnRef (..), turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
 
@@ -238,7 +240,12 @@ runAgentWith ::
 runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv -> \case
   AgentTurn turn ctx profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
-    catalog <- either throwIO pure (toolFactory ctx.acTools)
+    restored <- maybe (pure []) journal.ejReadSkillLoads (turnRuntimeAgentTurn turn)
+    let context = ctx {acTools = withToolSkillLoads restored ctx.acTools}
+        restoredInstructions = T.intercalate "\n\n" (map (.slInstructions) (Map.elems (toolSkillLoads context.acTools)))
+        recoveryMessages = [MsgUser ("[恢复的宿主技能说明]\n" <> restoredInstructions) | not (T.null restoredInstructions)]
+    catalog <- either throwIO pure (toolFactory context.acTools)
+    catalogRef <- liftIO (newTVarIO (context.acTools, catalog))
     let cancel = throwTo selfTid TaskCancelled
         emit :: AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es))
         emit event = raise (raise (raise (unlift (sink event))))
@@ -249,19 +256,27 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
     when preKilled $ throwIO TaskCancelled
     outputQueue <- newToolOutputQueue defaultInlineMediaLimit
     runToolOutputRead outputQueue $
-      runToolDirectory (registryCatalog catalog) $
-        runToolsWithControl (raise . raise . runToolControl . runToolOutput outputQueue) catalog (loop emit ctx turn profile msgs)
+      runToolDirectoryDynamic (registryCatalog . snd <$> liftIO (readTVarIO catalogRef)) $
+        runToolsWithInvocationDynamic
+          (raise . raise . runToolControl . runToolOutput outputQueue)
+          ( \identity -> do
+              (current, _) <- liftIO (readTVarIO catalogRef)
+              either throwIO pure (toolFactory (withToolInvocationIdentity identity current))
+          )
+          (loop catalogRef emit context turn profile (msgs <> recoveryMessages))
   where
     loop ::
+      TVar (ToolContext, ToolRegistry (ToolOutput : ToolControl : es)) ->
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       AgentContext ->
       TurnRuntime ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    loop emit ctx h profile = go emit ctx h 0 0 [] profile
+    loop catalogRef emit ctx h profile = go catalogRef emit ctx h 0 0 [] profile
 
     go ::
+      TVar (ToolContext, ToolRegistry (ToolOutput : ToolControl : es)) ->
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
       AgentContext ->
       TurnRuntime ->
@@ -271,7 +286,9 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    go emit ctx h n callsUsed appended profile msgs = do
+    go catalogRef emit ctx h n callsUsed appended profile msgs = do
+      catalog <- either throwIO pure (toolFactory ctx.acTools)
+      liftIO (atomically (writeTVar catalogRef (ctx.acTools, catalog)))
       -- Drain any feedback notes that arrived since the previous turn.
       liftIO (checkTurnCancellation h)
       notes <- liftIO (drainTurnInbox h)
@@ -358,7 +375,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                       logInfo "agent: btw notes raced final answer, continuing" $
                         object ["count" .= length xs]
                       let newMsgs = [MsgAssistant text, feedbackMsg xs]
-                      go emit ctx h (n + 1) callsUsed (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                      go catalogRef emit ctx h (n + 1) callsUsed (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -448,6 +465,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
               imgs <- drainToolMedia
               let newMsgs = assembleToolRound raw tcs toolMsgs imgs
                   control = mergeControls [decision | (_, _, decision) <- executed]
+                  nextContext = ctx {acTools = withToolSkillLoads (concatMap (\(_, _, decision) -> controlSkillLoads decision) executed) ctx.acTools}
               case controlReply control of
                 Just finalReply ->
                   pure
@@ -462,7 +480,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                   if overBudget
                     then finalAnswer ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
                     else
-                      go emit ctx h (n + 1) (callsUsed + if overBudget then 0 else roundCost) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                      go catalogRef emit nextContext h (n + 1) (callsUsed + if overBudget then 0 else roundCost) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
     -- gets a real answer built from whatever the loop already gathered,
@@ -596,14 +614,14 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
             "args" .= previewJson 200 tc.callArguments
           ]
       invocation <-
-        invokeToolWithControl tc.callName tc.callArguments
+        invokeToolWithIdentity ((\row -> "max:j" <> T.pack (show row.jeJournalId)) <$> journalRow) tc.callName tc.callArguments
           `catch` \e -> do
             for_ journalRow $ \row ->
               raise (raise (raise (journal.ejUnknown row (T.pack (show (e :: SomeException))))))
             throwIO e
       let outcome = invocation.tiOutcome
       for_ journalRow $ \row ->
-        raise (raise (raise (journal.ejFinish row (journalFinish outcome))))
+        raise (raise (raise (journal.ejFinish row (journalFinish (journalControl invocation)))))
       liftIO (checkTurnCancellation turn)
       -- Host-only observation fields are journal evidence.  Remove them from
       -- the value returned to the model so E0 changes durability without
@@ -633,6 +651,15 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       ToolSucceeded {} -> "succeeded"
       ToolCommitted {} -> "committed"
       ToolOutcomeUnknown {} -> "outcome-unknown"
+
+    -- Durable activation evidence comes only from the typed host channel. The
+    -- private manifest is stored atomically with the successful tool result.
+    journalControl invocation = case controlSkillLoads invocation.tiControl of
+      [] -> invocation.tiOutcome
+      loads -> case invocation.tiOutcome of
+        ToolSucceeded (Object fields) -> ToolSucceeded (Object (KeyMap.insert "_max_journal_observed_manifest" (object ["skill_loads" .= loads]) fields))
+        ToolCommitted (Object fields) -> ToolCommitted (Object (KeyMap.insert "_max_journal_observed_manifest" (object ["skill_loads" .= loads]) fields))
+        other -> other
 
     catalogJournalStart :: ToolCall -> CatalogTool -> JournalStart
     catalogJournalStart tc view =
@@ -756,9 +783,17 @@ capToolResults budget msgs
   | otherwise = reverse (go (budget `div` 2) (reverse msgs))
   where
     total = sum [T.length c | MsgTool _ c <- msgs]
+    protected =
+      Set.fromList
+        ( [tc.callId | MsgAssistantToolCalls _ calls <- msgs, tc <- calls, tc.callName == "use_skill"]
+            <> case [calls | MsgAssistantToolCalls _ calls <- reverse msgs] of
+              calls : _ -> map (.callId) calls
+              [] -> []
+        )
     go _ [] = []
     go rem_ (m : rest) = case m of
       MsgTool cid content
+        | cid `Set.member` protected -> m : go rem_ rest
         | isStub content -> m : go rem_ rest
         | rem_ <= 0 -> MsgTool cid (stub content) : go 0 rest
         | otherwise ->

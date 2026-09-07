@@ -21,6 +21,7 @@ module Max.DB.AgentTurn
     ensureAgentTurnRecoveryPending,
     reclaimInterruptedTurns,
     recoveryViewForTurn,
+    readSkillLoads,
     nextAgentTurnOutputChunk,
     enrichSandboxJournalStart,
     startJournalExecution,
@@ -50,12 +51,13 @@ import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.ConversationScope (ConversationScope, conversationStorageId)
 import Max.DB.Task.Record (lockTurnConversation)
-import Max.DB.Task.Settlement (settleTurn)
+import Max.DB.Task.Settlement (SettlementOutcome (..), settleTurn)
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.Blob (Blob, blobRefFromSha256, blobRefSha256, putBlob, readBlob)
 import Max.Execution.Types (JournalExecution (..), JournalFinish (..), JournalStart (..))
 import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
+import Max.Tool.Bundles (SkillLoad)
 import Max.Turn.Types
 import OneBot.Types (GroupId (..))
 
@@ -68,6 +70,7 @@ data AgentTurnTerminal
   = TurnSucceeded
   | TurnSilence
   | TurnFailed
+  | TurnCancelled
   | TurnAborted
   | TurnCrashed
   deriving stock (Show, Eq)
@@ -77,6 +80,7 @@ terminalText = \case
   TurnSucceeded -> "succeeded"
   TurnSilence -> "silence"
   TurnFailed -> "failed"
+  TurnCancelled -> "aborted"
   TurnAborted -> "aborted"
   TurnCrashed -> "crashed"
 
@@ -254,7 +258,12 @@ finishAgentTurn ref terminal llmTurns abortReason archive = do
           archiveExpiry,
           ref.atrTurnId
         )
-    forM_ (settled :: [Only Bool]) $ \(Only managed) -> settleTurn ref.atrTurnId (terminal == TurnSucceeded || terminal == TurnSilence) abortReason managed
+    let outcome = case terminal of
+          TurnSucceeded -> SettlementSucceeded
+          TurnSilence -> SettlementSucceeded
+          TurnCancelled -> SettlementCancelled
+          _ -> SettlementFailed
+    forM_ (settled :: [Only Bool]) $ \(Only managed) -> settleTurn ref.atrTurnId outcome abortReason managed
     case archiveConversation of
       Nothing -> pure ()
       Just conversationId -> do
@@ -377,7 +386,7 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
       \   AND (status = ANY (ARRAY['starting'::text, 'running'::text]) \
       \        OR (status = 'recovery-pending' AND recovery_owner IS DISTINCT FROM ?)) RETURNING turn_id,abort_reason,frontend_managed"
       (Only recoveryOwner)
-  forM_ (crashed :: [(AgentTurnId, Maybe Text, Bool)]) $ \(turn, reason, managed) -> settleTurn turn False reason managed
+  forM_ (crashed :: [(AgentTurnId, Maybe Text, Bool)]) $ \(turn, reason, managed) -> settleTurn turn SettlementFailed reason managed
   pure
     ReclaimedTurns
       { rrTurnsPendingResume = fromIntegral (length recoveries),
@@ -390,6 +399,24 @@ reclaimInterruptedTurns recoveryOwner = withTransaction $ do
 -- process restart.  This is a horizon-1 hole view, not ADR 005's general
 -- continuity read side: it is host-selected for exactly the turn being
 -- recovered and exposes no blob addresses or ambient handles.
+-- Successful host control receipts, including earlier attempts of this exact
+-- task revision. Ordinary tool text and another task's receipts cannot load tools.
+readSkillLoads :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Eff es [SkillLoad]
+readSkillLoads turn = do
+  rows <-
+    query
+      "SELECT (j.observed_manifest->'skill_loads')::text FROM execution_journal j \
+      \ WHERE j.tool_ref='use_skill' AND j.state IN ('succeeded','committed') \
+      \ AND jsonb_typeof(j.observed_manifest->'skill_loads')='array' AND \
+      \ (j.turn_id=? OR j.turn_id IN (SELECT previous.turn_id FROM task_attempts previous \
+      \ JOIN task_attempts current ON previous.task_id=current.task_id AND previous.revision=current.revision \
+      \ WHERE current.turn_id=? AND previous.attempt<=current.attempt)) \
+      \ ORDER BY j.turn_id,j.execution_ordinal"
+      (turn.atrTurnId, turn.atrTurnId)
+  concat <$> traverse decode (rows :: [Only Text])
+  where
+    decode (Only value) = either (error . ("invalid durable skill receipt: " <>)) pure (eitherDecodeStrict' (TE.encodeUtf8 value))
+
 recoveryViewForTurn ::
   (WithConnection :> es, IOE :> es) =>
   AgentTurnRef ->

@@ -6,6 +6,7 @@ module Max.Agent.Execution (ExecutionAdmission (..), ExecutionJournal (..), Exec
 import Data.Text (Text)
 import Effectful (Eff)
 import Max.Execution.Types
+import Max.Tool.Bundles (SkillLoad)
 import Max.Turn.Types (AgentTurnRef)
 import OneBot.Types (GroupId)
 
@@ -18,7 +19,8 @@ data ExecutionAdmission es = ExecutionAdmission
 data ExecutionJournal es = ExecutionJournal
   { ejRecordNote :: AgentTurnRef -> Text -> Eff es (),
     ejFinish :: JournalExecution -> JournalFinish -> Eff es (),
-    ejUnknown :: JournalExecution -> Text -> Eff es ()
+    ejUnknown :: JournalExecution -> Text -> Eff es (),
+    ejReadSkillLoads :: AgentTurnRef -> Eff es [SkillLoad]
   }
 
 newtype ExecutionInbox es = ExecutionInbox {eiRead :: AgentTurnRef -> Eff es Text}

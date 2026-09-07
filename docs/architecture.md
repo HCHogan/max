@@ -331,6 +331,28 @@ the in-memory handles are read caches and wakeup bells, never the record.
 Effect stack at the top of `runApp`:
 `IOE → Concurrent → Log → Http → BlobHost → Blob → WithConnection → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → PlatformAccount → PlatformInteraction → PlatformQuery → Embedding → Agent`.
 
+### Skill visibility and fleet jobs
+
+ADR-010 separates the authorized tool ceiling from the current model catalog.
+`use_skill` emits typed `LoadSkills` control; the agent updates its local visibility
+snapshot between rounds. Full instructions and fixed dependencies load together.
+Successful host receipts recover the same task revision's bundles; a new request
+starts with base tools. Catalog and invocation admission share the snapshot, so
+same-batch calls cannot use a just-loaded capability early. Loaded manuals and
+the latest tool results survive normal result trimming.
+
+The maxops bundle comes from the credential-filtered Hub input-schema registry.
+`MaxOps.Client` owns transport; `MaxOps.TaskRuntime` owns only Max's durable
+submission/observer task. It reuses a host-generated identity and uses `jobs.wait`
+without model polling. maxops owns remote jobs, deployment stages, CAS and recovery.
+Observer cancellation does not imply remote cancellation. Reports follow the
+existing frontend interpretation path.
+
+`!kill` has its own typed terminal settlement: request cancellation and frontend
+release commit together, and killed background attempts cannot auto-retry.
+Cancellation encloses normal work and publication failure cleanup at the dispatch
+root; shutdown interruptions remain eligible for recovery.
+
 ### PostgreSQL transaction ownership
 
 Every multi-statement publication uses `Max.DB.Transaction.withTransaction`.

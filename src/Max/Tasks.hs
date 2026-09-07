@@ -705,8 +705,9 @@ cancelTask reg tid = do
     case Map.lookup tid m of
       Nothing -> pure Nothing
       Just e -> do
+        killed <- readTVar e.teKilled
         writeTVar e.teKilled True
-        Just <$> readTVar e.teCancel
+        if killed then pure (Just Nothing) else Just <$> readTVar e.teCancel
   case mAct of
     Nothing -> pure False
     Just act -> sequence_ act >> pure True
@@ -734,8 +735,9 @@ cancelAllTasks reg = do
     (_, m) <- readTVar reg.trState
     traverse
       ( \e -> do
+          killed <- readTVar e.teKilled
           writeTVar e.teKilled True
-          readTVar e.teCancel
+          if killed then pure Nothing else readTVar e.teCancel
       )
       (Map.elems m)
   sequence_ (catMaybes acts)

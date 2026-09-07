@@ -48,6 +48,7 @@ import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
 import Max.LLM.Failure (LLMFailure (..))
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
+import Max.Skills (newSkillRegistry)
 import Max.Tasks
   ( Note (..),
     NoteVerb (..),
@@ -62,8 +63,10 @@ import Max.Tasks
     pushToLatest,
     turnRuntimeTaskId,
   )
-import Max.Tool.Types (ToolCallMode (..))
-import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext)
+import Max.Tool.Bundles (toolVisible)
+import Max.Tool.Types (ToolCallMode (..), ToolSpec (..))
+import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext, toolSkillLoads)
+import Max.Tools.Skills (skillToolsFor)
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
@@ -159,6 +162,59 @@ dispatchContext =
 
 spec :: Spec
 spec = describe "Agent full loop" $ do
+  it "loads a complete skill next round, rejects same-batch hidden calls, and isolates requests" $ do
+    registry <- newSkillRegistry
+    events <- newIORef []
+    calls <- newIORef (0 :: Int)
+    effects <- newIORef (0 :: Int)
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) Nothing
+    let executionContext =
+          dispatchContext
+            { acTools =
+                mkToolContext
+                  (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
+                  (TurnCapabilities False False True qqAdvertisedCaps True Map.empty Nothing False)
+            }
+        factory current =
+          buildToolRegistry
+            ( [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
+                <> [echoDefinition {tdRef = ToolRef "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
+            )
+            ( skillToolsFor registry current (const (pure (Right Nothing)))
+                <> [ Tool
+                       "web_search"
+                       "search"
+                       (object ["type" .= ("object" :: Text)])
+                       (\_ -> liftIO (modifyIORef' effects (+ 1)) >> pure (Right (object ["result" .= T.replicate 70000 "x"])))
+                   | toolVisible (toolSkillLoads current) "web_search"
+                   ]
+            )
+        provider =
+          LLMInterpreter
+            { liChat = \_ _ messages tools _ -> do
+                roundNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
+                let names = map (.specName) tools
+                    respond toolCalls = pure (Right (ToolCallsResp (object []) "" toolCalls))
+                case roundNo of
+                  0 -> do
+                    liftIO $ names `shouldBe` ["use_skill"]
+                    respond [ToolCall "load" "use_skill" (object ["name" .= ("web" :: Text)]), ToolCall "too-early" "web_search" (object [])]
+                  1 -> do
+                    liftIO $ names `shouldContain` ["use_skill", "web_search"]
+                    liftIO $ readIORef effects `shouldReturn` 0
+                    respond [ToolCall "search" "web_search" (object [])]
+                  _ -> do
+                    liftIO $ maximum [T.length body | MsgTool _ body <- messages] `shouldSatisfy` (> 70000)
+                    pure (Right (ContentResp "done"))
+            }
+    _ <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff . runConcurrent . runLog "skill-test" logger LogAttention . runLLMWith provider . runAgent (AgentLimits 4) factory $
+        agentTurn turn executionContext "fake" [MsgUser "search"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    readIORef effects `shouldReturn` 1
+    toolVisible (toolSkillLoads executionContext.acTools) "web_search" `shouldBe` False
+
   it "yields the frontend immediately after trusted host delegation regardless of tool name" $ do
     events <- newIORef []
     calls <- newIORef (0 :: Int)

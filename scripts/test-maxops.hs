@@ -3,23 +3,23 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-import Control.Concurrent (threadDelay)
 import Control.Monad (unless, when)
 import Data.Aeson (Value (..), object, (.=))
 import Data.Aeson.Key (Key)
 import Data.Aeson.KeyMap qualified as KeyMap
-import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Foldable (toList)
+import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List (find)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Effectful (IOE, runEff)
+import Effectful (IOE, liftIO, runEff)
 import Max.Effects.Tools (Tool (..))
 import Max.HttpRuntime (newHttpRuntime)
-import Max.MaxOps.Protocol (CatalogAccess (..))
+import Max.MaxOps.Client (maxOpsInvoke, maxOpsOperations)
+import Max.MaxOps.Protocol (Catalog (..), CatalogAccess (..), Operation (..), operationToolName, parseCatalog)
 import Max.MaxOps.Types
-import Max.Tools.MaxOps (maxOpsToolsFor)
+import Max.Tools.MaxOps (maxOpsBundle)
 import OneBot.Types (GroupId (..))
 import System.Environment (getArgs)
 import System.Exit (die)
@@ -34,14 +34,24 @@ main = do
   runtime <- newHttpRuntime
   let config = MaxOpsConfig True endpoint tokenFile [611798505]
   current <- newIORef config
-  let tools :: [Tool '[IOE]]
-      tools = maxOpsToolsFor runtime config (readIORef current) (GroupId 611798505) (if management then ManagementCatalog else ReadOnlyCatalog)
+  rawCatalog <- maxOpsOperations runtime config (if management then ManagementCatalog else ReadOnlyCatalog) >>= either (die . T.unpack) pure
+  catalog <- either (die . T.unpack) pure (parseCatalog rawCatalog)
+  keyRef <- newIORef Nothing
+  let hostSubmit operation params = liftIO $ readIORef keyRef >>= maxOpsInvoke runtime config operation params
+      tools :: [Tool '[IOE]]
+      tools = maxOpsBundle runtime config (readIORef current) (GroupId 611798505) catalog.operations hostSubmit
       call name params = case find ((== name) . (.toolName)) tools of
         Nothing -> die "expected maxops tool is missing"
         Just tool -> runEff (tool.toolRun params)
-      query operation params = call "maxops_query" (object ["op" .= (operation :: Text), "params" .= params])
+      query operation params = case find (\entry -> entry.name == operation && entry.readOnly) catalog.operations of
+        Nothing -> pure (Left "operation is not in the read-only bundle")
+        Just entry -> call (operationToolName entry) params
       execute :: Text -> Value -> Maybe Text -> IO (Either Text Value)
-      execute operation params key = call "maxops_execute" (object (["op" .= operation, "params" .= params] <> ["idempotency_key" .= value | Just value <- [key]]))
+      execute operation params key = do
+        writeIORef keyRef key
+        case find (\entry -> entry.name == operation && not entry.readOnly) catalog.operations of
+          Nothing -> pure (Left "operation is not in the management bundle")
+          Just entry -> call (operationToolName entry) params
       success label action = do
         result <- action
         case result of
@@ -50,10 +60,10 @@ main = do
       denied label action = do
         result <- action
         case result of
-          Left "maxops HTTP 403" -> putStrLn ("PASS " <> label)
+          Left detail | "maxops HTTP 403" `T.isPrefixOf` detail -> putStrLn ("PASS " <> label)
           _ -> die (label <> ": expected scoped HTTP 403 denial")
-  catalog <- success "authenticated operation catalog" (call "maxops_operations" (object []))
-  unless (hasField "operations" catalog) (die "catalog has no operations")
+  unless (hasField "operations" rawCatalog) (die "catalog has no operations")
+  putStrLn "PASS authenticated complete input-only operation bundle"
   overview <- success "fleet overview with partial-state semantics" (query "fleet.overview" (object []))
   unless (hasField "hosts" overview) (die "overview has no hosts")
   facts <- success "host facts" (query "host.facts" (object ["host" .= host]))
@@ -67,7 +77,7 @@ main = do
   denied "hub metrics scope" (query "host.metrics" (object ["host" .= ("maxops-denied-fixture" :: Text)]))
   denied "hub unit scope" (query "units.status" (object ["host" .= host, "unit" .= ("maxops-denied-fixture.service" :: Text)]))
   mutation <- query "units.restart" (object ["host" .= host, "unit" .= unit])
-  unless (mutation == Left "maxops operation is unavailable or not read-only; call maxops_operations") (die "mutation was not rejected")
+  unless (mutation == Left "operation is not in the read-only bundle") (die "mutation was not rejected")
   putStrLn "PASS mutation denied by the read-only query path"
   when management $ do
     let params = object ["host" .= host]
@@ -77,17 +87,18 @@ main = do
     repeated <- success "same idempotency key resumes the original job" (execute "diagnostics.collect" params key)
     unless (field "job_id" repeated == Just identifier) (die "idempotent submission duplicated the job")
     conflict <- execute "diagnostics.collect" (object ["host" .= host, "lines" .= (51 :: Int)]) key
-    unless (conflict == Left "maxops HTTP 409") (die "changed specification did not conflict with the original key")
+    unless (either (T.isPrefixOf "maxops HTTP 409") (const False) conflict) (die "changed specification did not conflict with the original key")
     putStrLn "PASS changed specification cannot reuse a submitted key"
     let waitForJob job remaining = do
-          status <- query "jobs.status" (object ["job_id" .= job]) >>= either (die . T.unpack) pure
+          waited <- query "jobs.wait" (object ["job_id" .= job, "timeout_seconds" .= (10 :: Int)]) >>= either (die . T.unpack) pure
+          status <- maybe (die "wait has no job") pure (field "job" waited)
           case field "handle" status >>= field "state" of
             Just (String "succeeded") -> pure status
-            Just (String state) | state `elem` ["queued", "dispatching", "running", "reconciling"], remaining > (0 :: Int) -> threadDelay 100000 >> waitForJob job (remaining - 1)
+            Just (String state) | state `elem` ["queued", "dispatching", "running", "reconciling"], remaining > (0 :: Int) -> waitForJob job (remaining - 1)
             _ -> die "diagnostic did not reach a verified successful terminal state"
     completed <- waitForJob identifier 100
     unless (hasField "result" completed) (die "terminal job lost its evidence")
-    putStrLn "PASS queued job is polled to a terminal result"
+    putStrLn "PASS queued job is observed with bounded jobs.wait"
     _ <- success "job list" (query "jobs.list" (object []))
     events <- success "durable event replay" (query "events.list" (object ["host" .= host]))
     _ <- success "hub status" (query "self.status" (object []))
@@ -103,14 +114,14 @@ main = do
     _ <- success "revisioned control without idempotency header" (execute "remediations.finish" (object ["remediation_id" .= remediationId, "expected_revision" .= revision, "outcome" .= ("no_action" :: Text), "summary" .= ("isolated adapter test" :: Text)]) Nothing)
     denied "management host scope" (execute "diagnostics.collect" (object ["host" .= ("maxops-denied-fixture" :: Text)]) (Just "denied-fixture"))
   let deniedTools :: [Tool '[IOE]]
-      deniedTools = maxOpsToolsFor runtime config (readIORef current) (GroupId 611798506) ManagementCatalog
+      deniedTools = maxOpsBundle runtime config (readIORef current) (GroupId 611798506) catalog.operations hostSubmit
   unless (null deniedTools) (die "unlisted group received tools")
   writeIORef current (config {mocAllowedGroups = []})
   revoked <- query "fleet.overview" (object [])
-  unless (revoked == Left "maxops access was revoked or configuration changed; start a new turn") (die "old turn retained revoked authority")
+  unless (revoked == Left "maxops access was revoked or configuration changed; start a new request") (die "old turn retained revoked authority")
   when management $ do
     revokedWrite <- execute "diagnostics.collect" (object ["host" .= host]) (Just "revoked-fixture")
-    unless (revokedWrite == Left "maxops access was revoked or configuration changed; start a new turn") (die "old turn retained management authority")
+    unless (revokedWrite == Left "maxops access was revoked or configuration changed; start a new request") (die "old turn retained management authority")
   putStrLn "PASS unlisted group and revoked in-flight turn denied"
 
 field :: Key -> Value -> Maybe Value

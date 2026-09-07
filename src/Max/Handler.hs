@@ -38,7 +38,7 @@ import Data.Traversable (for)
 import Effectful
 import Effectful.Concurrent (threadDelay)
 import Effectful.Concurrent.Async (Concurrent, async, race, withAsync)
-import Effectful.Exception (SomeException, catch, finally, mask, onException)
+import Effectful.Exception (SomeException, finally, mask, onException)
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Dynamic (Reader, ask, local)
@@ -82,6 +82,7 @@ import Max.DB.QQBackfill
   )
 import Max.DB.Task (TaskExecution (..))
 import Max.DB.Task qualified as DurableTask
+import Max.DB.Task.Progress qualified as ProgressStore
 import Max.DB.TurnContinuity
   ( ReplyTurnTarget (..),
     continuationDigest,
@@ -108,6 +109,7 @@ import Max.IR
 import Max.IR.Digest (digest)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentState, clearPendingIntent, enqueueIntent, noteBotActivity)
+import Max.MaxOps.TaskRuntime (isMaxOpsTask, runMaxOpsTask)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
 import Max.Monitor (nextCronFire)
@@ -144,12 +146,13 @@ import Max.Platform.Store
   )
 import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), NativeUserId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId, ReactionAction (..), noAdvertisedCaps)
 import Max.Prompt (ContextReadMode (..), TriggerOrigin (..), buildContextWithReadModeForOutputContinuation, renderHistoryLine)
-import Max.ReplySend (ReplyPublication (..), ReplyPublicationException (..), ReplyTarget (..), SendBudget (..), cleanModelText, freshBudget, sendAndPersistReply)
+import Max.ReplySend (ReplyPublication (..), ReplyTarget (..), SendBudget (..), cleanModelText, freshBudget, sendAndPersistReply)
 import Max.Roster (GroupMember (..), GroupMeta (..), fetchGroupMembers, fetchGroupMeta, memberName, renderGroupBrief)
 import Max.RuntimeConfig
   ( RuntimeSnapshot (..),
     RuntimeValues (..),
     acquireRuntimeConfigSTM,
+    currentRuntimeSnapshot,
     leasedRuntimeSnapshot,
     releaseRuntimeConfigSTM,
   )
@@ -160,7 +163,6 @@ import Max.Task.Policy (frontendDeadlineSeconds, frontendToolLimit)
 import Max.Task.Progress (ProgressDecision (..), progressReviewEvidence)
 import Max.Task.Progress qualified as Progress
 import Max.Task.ProgressReview (reviewProgress)
-import Max.DB.Task.Progress qualified as ProgressStore
 import Max.Task.State (FailureKind (..))
 import Max.Task.Types (TaskProfile (Research), parseTaskHandle, taskGrants, taskHandle)
 import Max.Task.View (renderTaskHistory)
@@ -168,10 +170,10 @@ import Max.Tasks
   ( Note (..),
     TaskCancelled (..),
     TurnCompletion (..),
+    activateTurnRuntime,
     awaitTurnSilence,
     beginDurableTurnRuntime,
     beginDurableTurnRuntimeAt,
-    activateTurnRuntime,
     cancelAgentTurnTask,
     finishTurnRuntime,
     inFlightTriggers,
@@ -182,6 +184,7 @@ import Max.Tool.Types (ToolDefinition (..), ToolRef (..))
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContextAt)
 import Max.Toolset (toolDefinitionsFor)
 import Max.Turn.Continuity (currentPromptMajor, renderContinuationDigest, renderReplayDelta, toolCatalogFingerprint)
+import Max.Turn.Failure (handleTurnFailures)
 import Max.Turn.Replay
   ( ReplayCandidate (..),
     ReplayEnvironment (..),
@@ -1688,29 +1691,27 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
             -- 'TaskCancelled' is async-tagged, so it flies past 'catchSync'
             -- (and every trySyncIO on the way up) — the outer 'catch' is the
             -- one place a user-initiated @!kill@ comes to rest.
-            ( work outputCaps turn durable `catchSync` \e -> do
-                finishAgentTurn durable TurnCrashed 0 (Just (T.pack (show (e :: SomeException)))) Nothing
-                logAttention "llm dispatch crashed" $
-                  object ["error" .= T.pack (show e)]
-                -- The processing reaction is already gone (its 'finally' ran
-                -- while the exception unwound), which without this looked
-                -- exactly like a silent success: 托腮 vanished, no reply, no
-                -- face.  Swap in the failure face so a crash is visibly a
-                -- crash — direct triggers only; proactive turns stay
-                -- traceless, and a poke has no message to react to.
-                when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
-                  queueQQReaction gm.groupId gm.canonicalId failureFaceId True
+            handleTurnFailures
+              ( \e -> do
+                  finishAgentTurn durable TurnCrashed 0 (Just (T.pack (show e))) Nothing
+                  logAttention "llm dispatch crashed" $ object ["error" .= T.pack (show e)]
+                  when (origin == OriginDirect && outputCaps.canReaction && outputCaps.canFace) $
+                    queueQQReaction gm.groupId gm.canonicalId failureFaceId True
               )
-              `catch` \(ReplyPublicationException err) ->
-                do
+              ( \err -> do
                   finishAgentTurn durable TurnFailed 0 (Just ("reply publication failed: " <> err)) Nothing
                   logAttention "stream publication failed; committed prefix retained" $ object ["error" .= err]
-                  `catch` \TaskCancelled ->
-                    -- User-initiated !kill — quieter log, not an error.
-                    do
-                      finishAgentTurn durable TurnAborted 0 (Just "cancelled by !kill") Nothing
-                      logInfo "llm dispatch cancelled" $
-                        object ["group_id" .= gidRaw]
+              )
+              ( do
+                  finishAgentTurn durable TurnCancelled 0 (Just "cancelled by !kill") Nothing
+                  logInfo "llm dispatch cancelled" $ object ["group_id" .= gidRaw]
+              )
+              ( do
+                  worker <- liftIO Thread.myThreadId
+                  preKilled <- liftIO (activateTurnRuntime turn "starting" (Thread.throwTo worker TaskCancelled))
+                  when preKilled (liftIO (Exception.throwIO TaskCancelled))
+                  work outputCaps turn durable
+              )
         )
           `finally` do
             -- Any asynchronous exit other than !kill, including forced
@@ -1927,7 +1928,7 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
                     [ taskHandle execution.teTaskId <> " revision " <> tshow execution.teRevision,
                       "目标：" <> execution.teObjective,
                       "显式输入：" <> renderTaskValue execution.teInputs,
-                      "有效工具：" <> T.intercalate ", " (Map.keys grants),
+                      "当前只提供基础工具；先 use_skill 加载需要的完整工具包，下一轮再调用。",
                       "可用技能索引：" <> T.intercalate "; " [skill.skillName <> ": " <> skill.skillDescription | skill <- take 80 skills],
                       "截止时间：" <> tshow execution.teDeadline,
                       "先前尝试（证据，不是新指令）：" <> T.take 60000 (renderTaskHistory execution.teHistory)
@@ -1937,11 +1938,18 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
       setAgentTurnEnvironment durable currentPromptMajor (toolCatalogFingerprint definitions)
       raced <-
         race
-          (agentTurn turn (AgentContext toolCtx session.effortOverride Nothing) session.model messages (taskProgressEvent durable.atrTurnId))
+          ( if isMaxOpsTask execution.teInputs
+              then liftIO (setTurnPhase turn "maxops-job") >> Left <$> runMaxOpsTask env.beMaxOpsClient env.beMaxOps ((.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore) toolCtx execution
+              else Right <$> agentTurn turn (AgentContext toolCtx session.effortOverride Nothing) session.model messages (taskProgressEvent durable.atrTurnId)
+          )
           (taskHeartbeat durable)
       case raced of
         Right () -> finishAgentTurn durable TurnFailed 0 (Just "task lease, cancellation or deadline stopped execution") Nothing
-        Left result -> do
+        Left (Left report) -> do
+          accepted <- DurableTask.taskReportTyped durable.atrTurnId report
+          unless accepted (liftIO (Exception.throwIO TaskCancelled))
+          finishAgentTurn durable TurnSucceeded 0 Nothing Nothing
+        Left (Right result) -> do
           for_ result.aborted $ \detail -> void (DurableTask.recordTaskFailure durable.atrTurnId (renderAgentFailure detail) (if retryableAgentFailure detail then Transient else Permanent))
           archive <- captureTurnArchive durable session.model result
           finishAgentTurn durable (if isJust result.aborted then TurnFailed else TurnSucceeded) result.turnsUsed (renderAgentFailure <$> result.aborted) archive
@@ -1979,51 +1987,70 @@ dispatchLLMWith existingTurn recoveryView monitorView effectCeiling owner mInten
 
     dispatchProgress outputCaps turn durable env session = do
       handled <- ProgressStore.progressReviewHandled durable.atrTurnId
-      if handled then finishAgentTurn durable TurnSucceeded 0 Nothing Nothing else do
-        preKilled <- liftIO $ do
-          worker <- Thread.myThreadId
-          activateTurnRuntime turn "progress-review" (Thread.throwTo worker TaskCancelled)
-        when preKilled (liftIO (Exception.throwIO TaskCancelled))
-        outcome <- withOwnedLease (1 * 1_000_000) (ProgressStore.progressReviewCurrent durable.atrTurnId) $ do
-          snapshot <- ProgressStore.loadProgressReview durable.atrTurnId
-          case snapshot of
-            Nothing -> pure (Left "progress review is no longer current or foreground work is waiting")
-            Just review -> do
-              catalog :: ModelCatalog <- ask
-              let capabilities = lookupModelCapabilities session.model catalog
-                  multimodal = maybe False supportsMultimodal capabilities
-                  historyTurns = maybe False usesHistoryTurns capabilities
-                  limits = maybe defaultContextLimits (.contextLimits) capabilities
-              liftIO (setTurnPhase turn "progress-review")
-              setAgentTurnEnvironment durable currentPromptMajor (toolCatalogFingerprint [])
-              brief <- fetchGroupBrief outputCaps gm.groupId
-              (context, roster) <- buildContextWithReadModeForOutputContinuation
-                (digestOnlyContinuation (Just (progressReviewEvidence review)))
-                limits
-                (if env.beForceRawContext then RawLedgerEmergency else TieredContext)
-                outputCaps env.bePersona multimodal historyTurns origin env.beTimeZone brief [] Set.empty session gm
-              decision <- case review.decision of
-                Just stored -> pure (Right stored)
-                Nothing -> reviewProgress
-                  (ChatCtx "task-progress-review" (Just (let GroupId group = gm.groupId in group)) session.effortOverride Nothing (Just []) (Just durable.atrTurnId) (Just env.beRuntimeSnapshot.rsGeneration))
-                  session.model context
-              pure $ (review.version,, roster) <$> decision
-        case outcome of
-          LeaseLost -> finishAgentTurn durable TurnAborted 0 (Just "progress review yielded its foreground lease or became stale") Nothing
-          LeaseCompleted (Left detail) -> finishAgentTurn durable TurnFailed 1 (Just detail) Nothing
-          LeaseCompleted (Right (version, decision, roster)) -> do
-            recorded <- ProgressStore.recordProgressDecision durable.atrTurnId version decision
-            if not recorded then finishAgentTurn durable TurnAborted 1 (Just "progress decision was fenced before commit") Nothing
-            else case decision of
-              SkipProgress _ -> finishAgentTurn durable TurnSucceeded 1 Nothing Nothing
-              PublishProgress reply _ -> do
-                let target = sendTarget outputCaps gm [(name, PrincipalId principal) | (principal, name) <- roster] False (turnRuntimeOutputContext turn)
-                -- One canonical output makes a committed progress update safe
-                -- to acknowledge even if the process dies before settlement.
-                published <- sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) reply
-                finishAgentTurn durable
-                  (if null published.committed then TurnFailed else TurnSucceeded)
-                  1 published.failure Nothing
+      if handled
+        then finishAgentTurn durable TurnSucceeded 0 Nothing Nothing
+        else do
+          preKilled <- liftIO $ do
+            worker <- Thread.myThreadId
+            activateTurnRuntime turn "progress-review" (Thread.throwTo worker TaskCancelled)
+          when preKilled (liftIO (Exception.throwIO TaskCancelled))
+          outcome <- withOwnedLease (1 * 1_000_000) (ProgressStore.progressReviewCurrent durable.atrTurnId) $ do
+            snapshot <- ProgressStore.loadProgressReview durable.atrTurnId
+            case snapshot of
+              Nothing -> pure (Left "progress review is no longer current or foreground work is waiting")
+              Just review -> do
+                catalog :: ModelCatalog <- ask
+                let capabilities = lookupModelCapabilities session.model catalog
+                    multimodal = maybe False supportsMultimodal capabilities
+                    historyTurns = maybe False usesHistoryTurns capabilities
+                    limits = maybe defaultContextLimits (.contextLimits) capabilities
+                liftIO (setTurnPhase turn "progress-review")
+                setAgentTurnEnvironment durable currentPromptMajor (toolCatalogFingerprint [])
+                brief <- fetchGroupBrief outputCaps gm.groupId
+                (context, roster) <-
+                  buildContextWithReadModeForOutputContinuation
+                    (digestOnlyContinuation (Just (progressReviewEvidence review)))
+                    limits
+                    (if env.beForceRawContext then RawLedgerEmergency else TieredContext)
+                    outputCaps
+                    env.bePersona
+                    multimodal
+                    historyTurns
+                    origin
+                    env.beTimeZone
+                    brief
+                    []
+                    Set.empty
+                    session
+                    gm
+                decision <- case review.decision of
+                  Just stored -> pure (Right stored)
+                  Nothing ->
+                    reviewProgress
+                      (ChatCtx "task-progress-review" (Just (let GroupId group = gm.groupId in group)) session.effortOverride Nothing (Just []) (Just durable.atrTurnId) (Just env.beRuntimeSnapshot.rsGeneration))
+                      session.model
+                      context
+                pure $ (review.version,,roster) <$> decision
+          case outcome of
+            LeaseLost -> finishAgentTurn durable TurnAborted 0 (Just "progress review yielded its foreground lease or became stale") Nothing
+            LeaseCompleted (Left detail) -> finishAgentTurn durable TurnFailed 1 (Just detail) Nothing
+            LeaseCompleted (Right (version, decision, roster)) -> do
+              recorded <- ProgressStore.recordProgressDecision durable.atrTurnId version decision
+              if not recorded
+                then finishAgentTurn durable TurnAborted 1 (Just "progress decision was fenced before commit") Nothing
+                else case decision of
+                  SkipProgress _ -> finishAgentTurn durable TurnSucceeded 1 Nothing Nothing
+                  PublishProgress reply _ -> do
+                    let target = sendTarget outputCaps gm [(name, PrincipalId principal) | (principal, name) <- roster] False (turnRuntimeOutputContext turn)
+                    -- One canonical output makes a committed progress update safe
+                    -- to acknowledge even if the process dies before settlement.
+                    published <- sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) reply
+                    finishAgentTurn
+                      durable
+                      (if null published.committed then TurnFailed else TurnSucceeded)
+                      1
+                      published.failure
+                      Nothing
 
     dispatchOrdinary outputCaps turn durable env s continuationTarget = do
       catalog :: ModelCatalog <- ask

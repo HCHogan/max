@@ -2,7 +2,8 @@
 -- its caller's pinned transaction, with the conversation already locked.
 -- A terminal checkpoint and all resulting obligations commit together.
 module Max.DB.Task.Settlement
-  ( settleTurn,
+  ( SettlementOutcome (..),
+    settleTurn,
     completeTask,
     cancelDescendants,
     revokeTaskBrowser,
@@ -24,10 +25,15 @@ import Max.Task.State
 import Max.Task.Types (taskHandle)
 import Max.Turn.Types (AgentTurnId)
 
+data SettlementOutcome = SettlementSucceeded | SettlementFailed | SettlementCancelled
+  deriving stock (Eq, Show)
+
 -- | Called only after the caller successfully changed the turn from live to
 -- terminal. Repeated terminal writes must not settle the same attempt twice.
-settleTurn :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Bool -> Maybe Text -> Bool -> Eff es ()
-settleTurn turn successful abortReason frontendManaged = do
+settleTurn :: (WithConnection :> es, IOE :> es) => AgentTurnId -> SettlementOutcome -> Maybe Text -> Bool -> Eff es ()
+settleTurn turn outcomeKind abortReason frontendManaged = do
+  let successful = outcomeKind == SettlementSucceeded
+      cancelled = outcomeKind == SettlementCancelled
   attempt <- loadAttempt turn
   forM_ attempt $ \execution -> do
     current <- loadTask execution.taskId
@@ -48,19 +54,22 @@ settleTurn turn successful abortReason frontendManaged = do
             "SELECT EXISTS(SELECT 1 FROM execution_journal journal JOIN task_attempts history USING(turn_id) WHERE history.task_id=? AND journal.state IN ('started','outcome-unknown'))"
             (Only task.taskId)
         let decision =
-              decideSettlement
-                SettlementFacts
-                  { now,
-                    deadline = task.deadline,
-                    attempt = task.attempt,
-                    retryCount = task.retryCount,
-                    budgetExhausted = budgets == [Only True],
-                    retryable = execution.retryable,
-                    ambiguousEffects = unknown == [Only True],
-                    pendingInput = pending == [Only True],
-                    report = execution.report,
-                    abortReason
-                  }
+              if cancelled
+                then TaskSettlement Cancelled (TaskReport ReportCancelled (fromMaybe "execution cancelled" abortReason) [] ["Execution stopped; some external effects remain unconfirmed and require observation before retry" | unknown == [Only True]] Nothing Nothing) Nothing
+                else
+                  decideSettlement
+                    SettlementFacts
+                      { now,
+                        deadline = task.deadline,
+                        attempt = task.attempt,
+                        retryCount = task.retryCount,
+                        budgetExhausted = budgets == [Only True],
+                        retryable = execution.retryable,
+                        ambiguousEffects = unknown == [Only True],
+                        pendingInput = pending == [Only True],
+                        report = execution.report,
+                        abortReason
+                      }
         void $
           execute
             "UPDATE durable_tasks SET consumed_event=GREATEST(consumed_event,?),next_attempt_at=?,\
@@ -84,7 +93,10 @@ settleTurn turn successful abortReason frontendManaged = do
     let outcome = case outcomes :: [(Text, Text)] of
           [(decision, reply)] -> (fromMaybe RequestWaiting (parseDisposition decision), Just reply)
           _ -> (RequestWaiting, Nothing)
-        disposition = if successful && receipts == [Only True] then fst outcome else RequestFailed
+        disposition
+          | cancelled = RequestCancelled
+          | successful && receipts == [Only True] = fst outcome
+          | otherwise = RequestFailed
         reason = T.take 5000 (fromMaybe (fromMaybe "No explicit request disposition was recorded" abortReason) (snd outcome))
     void $
       execute

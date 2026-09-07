@@ -5,6 +5,7 @@
 module Max.Effects.ToolDirectory
   ( ToolDirectory,
     runToolDirectory,
+    runToolDirectoryDynamic,
     listToolSpecs,
     listCatalogTools,
   )
@@ -22,9 +23,12 @@ data ToolDirectory :: Effect where
 type instance DispatchOf ToolDirectory = Dynamic
 
 runToolDirectory :: ToolCatalog -> Eff (ToolDirectory : es) a -> Eff es a
-runToolDirectory catalog = interpret $ \_ -> \case
-  ListToolSpecs -> pure (catalogSpecs catalog)
-  ListCatalogTools -> pure (catalogTools catalog)
+runToolDirectory catalog = runToolDirectoryDynamic (pure catalog)
+
+runToolDirectoryDynamic :: Eff es ToolCatalog -> Eff (ToolDirectory : es) a -> Eff es a
+runToolDirectoryDynamic currentCatalog = interpret $ \_ -> \case
+  ListToolSpecs -> catalogSpecs <$> currentCatalog
+  ListCatalogTools -> catalogTools <$> currentCatalog
 
 listToolSpecs :: (ToolDirectory :> es) => Eff es [ToolSpec]
 listToolSpecs = send ListToolSpecs
