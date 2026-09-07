@@ -24,6 +24,7 @@ PURE = {
     "Max.LLM.Stream",
     "Max.ModelCatalog.Internal",
     "Max.Tool.Types",
+    "Max.Tool.Bundles",
     "Max.Tool.Control",
     "Max.Tool.Catalog",
     "Max.Task.Types",
@@ -130,7 +131,9 @@ def check_imports():
         if relative in read_only_platform and dependencies & {"Max.Effects.PlatformInteraction", "Max.Effects.PlatformAccount"}:
             errors.append(f"{relative}: platform writes in a read-only consumer")
         if "Max.Effects.ToolControl" in dependencies and relative not in {
-            "src/Max/Tools/Task.hs", "src/Max/Task/ToolRuntime.hs", "src/Max/Toolset.hs", "src/Max/Agent/Runtime.hs", "src/Max/Effects/Agent.hs"
+            "src/Max/Tools/Task.hs", "src/Max/Task/ToolRuntime.hs", "src/Max/Toolset.hs", "src/Max/Agent/Runtime.hs", "src/Max/Effects/Agent.hs",
+            "src/Max/Tools/Skills.hs",  # Publishes host-validated skill activation receipts.
+            "src/Max/MaxOps/TaskRuntime.hs",  # Yields after durable task admission.
         }:
             errors.append(f"{relative}: host loop control outside trusted task runners/assembly")
         if relative.startswith("src/Max/Tools") and "Max.Effects.PlatformAccount" in dependencies:
@@ -208,6 +211,8 @@ execute :: Tools :> es => Eff es ToolOutcome
 execute = invokeTool "read" Null
 control :: ToolControl :> es => Eff es ()
 control = finishExecution Nothing
+loadSkills :: ToolControl :> es => Eff es ()
+loadSkills = activateSkills []
 readMedia :: MediaQuery :> es => Eff es ()
 readMedia = () <$ readImages 1 Nothing
 editPins :: PinControl :> es => Eff es ()
@@ -251,6 +256,7 @@ NEGATIVE = {
     "task query cannot use arbitrary IO": ("IOE", 'bad :: TaskQuery :> es => Eff es ()\nbad = liftIO (pure ())'),
     "turn result reader cannot control tasks": ("TaskControl", 'bad :: TurnQuery :> es => Eff es ()\nbad = () <$ startTask "key" "goal" Research Null'),
     "directory cannot stop an agent loop": ("ToolControl", 'bad :: ToolDirectory :> es => Eff es ()\nbad = finishExecution Nothing'),
+    "directory cannot activate skills": ("ToolControl", 'bad :: ToolDirectory :> es => Eff es ()\nbad = activateSkills []'),
     "loop control cannot be decoded from JSON": ("LoopControl", 'bad :: Value -> Result LoopControl\nbad = fromJSON'),
     "platform query cannot poke": ("PlatformInteraction", "bad :: PlatformQuery :> es => Eff es (Either PlatformFailure ())\nbad = pokeUser (GroupId 1) (UserId 2)"),
     "platform query cannot administer an account": ("PlatformAccount", 'bad :: PlatformQuery :> es => Eff es (Either PlatformFailure ())\nbad = respondToFriendRequest "flag" AcceptFriend'),
