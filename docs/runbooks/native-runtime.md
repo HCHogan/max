@@ -127,16 +127,23 @@ During the authorized maintenance window:
 
 1. Stop `max.service` gracefully and stop `docker-napcat.service`. Stop only
    Docker containers whose names belong to Max (`max-sb-*` and `max-br-*`).
-2. Runtime-mask `max.service`, `max-runtime.service`, `max-runtime.socket` and
-   `max-napcat.service` while activating the validated system. This creates the
-   declarative native service users while preventing an early account login or
-   database reconciliation against work that has not yet been copied.
+2. For `max.service`, `max-runtime.service`, `max-runtime.socket` and
+   `max-napcat.service`, create a runtime drop-in at
+   `/run/systemd/system/<unit>.d/90-max-native-cutover.conf` containing
+   `[Unit]` and `ConditionPathExists=/run/max-native-cutover-ready` on separate
+   lines. Ensure that marker does not exist, reload systemd, and stop all four
+   units before activating the validated system. Check again after activation
+   that all four are inactive. Runtime masks alone are insufficient: NixOS unit
+   definitions under `/etc/systemd/system` take precedence over `/run` masks.
+   This creates the native service users without starting account login or
+   database reconciliation before the work has been copied.
 3. Run `scripts/migrate-native-runtime.sh --copy` with root permissions and the
    new `max-runtime` on PATH. It copies `.max-work` (or older root-level work),
    verifies content and inventory, then atomically publishes each native volume.
    It backs up NapCat state before changing ownership. Existing completed copies
    are preserved; a partial staging directory is retained for inspection.
-4. Unmask the four native units and restart `max-stack.target`. Verify Max's
+4. Remove only those four cutover drop-ins, reload systemd and restart
+   `max-stack.target`. Verify Max's
    database reconciliation, existing work contents, browser navigation/workspace
    recovery, NapCat login and the OneBot connection. Do not send test QQ messages
    without authorization.
@@ -147,8 +154,9 @@ so a skipped migration cannot falsely destroy its database row. Old work and
 from the host pin; existing scripts or virtualenvs containing absolute paths into
 the old Docker store may require rebuilding those environments.
 
-For rollback, stop and mask the native stack before activating the saved old
-system, then unmask and start its original services. The old Docker volumes and
+For rollback, stop the native stack and apply the same conditional drop-ins
+before activating the saved old system, then remove the drop-ins, reload systemd
+and start its original services. The old Docker volumes and
 QQ backup are retained. If native work has changed since cutover, preserve and
 reconcile those changes before returning to the older copies; rollback does not
 silently overwrite either version of the work.

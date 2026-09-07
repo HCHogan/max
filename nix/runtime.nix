@@ -195,6 +195,8 @@ in
           "--directory=${runtime.stateDirectory}/roots/max-sb-%i"
           "--private-users=pick"
           "--private-users-ownership=auto"
+          # The broker supplies DNS reachable from the private network namespace.
+          "--resolv-conf=off"
           # Store files are world-readable and immutable. No ownership mapping
           # is needed here, and omitting it also supports VM/9p-backed stores.
           "--bind-ro=/nix/store:/nix/store"

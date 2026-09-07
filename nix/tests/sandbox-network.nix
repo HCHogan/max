@@ -46,6 +46,7 @@ pkgs.testers.runNixOSTest {
       pkgs.jq
       pkgs.hello
       pkgs.rsync
+      pkgs.dnsmasq
       config.services.max.browser.package
     ];
     users.users.max-napcat = { isSystemUser = true; group = "max-napcat"; };
@@ -54,6 +55,7 @@ pkgs.testers.runNixOSTest {
       enable = true;
       package = testPackage;
       postgres.enable = false;
+      sandbox.nameservers = [ "8.8.8.8" ];
     };
     systemd.services."max-browser@".environment = {
       NODE_ENV = "test";
@@ -144,11 +146,14 @@ pkgs.testers.runNixOSTest {
         machine.succeed(f"ip route add {address}/32 via 1.1.1.2")
     machine.succeed("mkdir -p /tmp/public-fixture; echo public-ok > /tmp/public-fixture/index.html")
     machine.succeed("ip netns exec outside python3 -m http.server 8080 --directory /tmp/public-fixture >/tmp/public-http.log 2>&1 &")
+    machine.succeed("ip netns exec outside dnsmasq --keep-in-foreground --no-resolv --no-hosts --bind-interfaces --listen-address=8.8.8.8 --address=/public.test/8.8.8.8 >/tmp/public-dns.log 2>&1 &")
     for address in destinations:
         machine.wait_until_succeeds(f"curl -fsS --max-time 3 http://{address}:8080/ | grep public-ok")
     curl = execute + "curl -fsS --connect-timeout 2 --max-time 3 "
 
     with subtest("public access works; private destinations and DNS rebinding are blocked"):
+        machine.succeed(execute + "grep -Fx 'nameserver 8.8.8.8' /etc/resolv.conf")
+        machine.wait_until_succeeds(curl + "http://public.test:8080/ | grep public-ok")
         machine.succeed(curl + "http://8.8.8.8:8080/ | grep public-ok")
         for address in destinations[1:]:
             machine.fail(curl + f"http://{address}:8080/")
@@ -207,6 +212,21 @@ pkgs.testers.runNixOSTest {
         status, _ = machine.execute(cli + "volume-status max-sb-200-s1-data")
         assert status == 125
         machine.fail(cli + "create max-sb-200-s1 nixos-sandbox-v1 max-sb-200-s1-data max-sandbox")
+
+    with subtest("migration startup gates survive NixOS activation"):
+        gated = ["max.service", "max-runtime.service", "max-runtime.socket"]
+        for service in gated:
+            dropin = f"/run/systemd/system/{service}.d/90-max-native-cutover.conf"
+            machine.succeed(f"mkdir -p /run/systemd/system/{service}.d")
+            machine.succeed(f"printf '[Unit]\\nConditionPathExists=/run/max-native-cutover-ready\\n' > {dropin}")
+        machine.succeed("systemctl daemon-reload; systemctl stop " + " ".join(gated))
+        machine.succeed("/run/current-system/bin/switch-to-configuration test")
+        for service in gated:
+            machine.succeed(f"systemctl start {service}")
+            machine.fail(f"systemctl is-active {service}")
+            machine.succeed(f"rm /run/systemd/system/{service}.d/90-max-native-cutover.conf")
+        machine.succeed("systemctl daemon-reload; systemctl restart max-stack.target")
+        machine.wait_for_unit("max.service")
 
     with subtest("offline migration verifies copies and preserves rollback data"):
         # Only Docker discovery is stubbed. Copying, systemd stop checks,
