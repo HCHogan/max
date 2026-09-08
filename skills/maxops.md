@@ -9,12 +9,23 @@
 # 操作与结果
 
 先观察当前状态，再选择明确操作。job handle 只表示已受理；完成要看最终状态和证据。
+查询具体服务先用 units_status/units_logs；units_list 可按 state/prefix 分页。
+unit_scope=all_loaded 只覆盖已加载单元，allowlist 只覆盖授权名单；空列表不代表整机健康。
+诊断近期事件优先用 maxops_events_recent，指定 host、unit、since_seconds；events_list
+用于从旧游标重放历史。默认概要省略大 payload，确需原始记录再用 events_get(event_id,pointer=/payload) 有界读取。
 每个作业提交工具由宿主创建持久化后台任务、生成幂等键并自动提交和等待；返回 task#
 只是受理，不要重复提交或轮询。结果回到前台后再结合会话转述。需要模型分多步判断
 的长运维工作可用 task_start 的 operations profile；纯作业观察不消耗模型轮次。
+提交会在同批调用完成后交接前台。需要根据命令结果继续排查或修复时，先启动完整
+operations 任务，在任务中提交作业并接收子任务结果；最终结果汇报回合只转述，
+不要从汇报回合重新开展诊断、创建修复或把工具范围变化解释成凭据变化。
+命令输出使用 jobs_logs 的 stdout_text/stderr_text；jobs_result 读取的是结构化结果
+JSON，不存在通用的 /stdout 路径。
 保留 unavailable、stale、局部失败和 outcome_unknown，不能把没有观察到当成健康。
 
 用 maxops_resources_list 查询权限内的主机、服务、执行 profile、仓库和 deployment。
+kind=execution_profiles 时必须同时传 host。403 的 code 指明主机、capability 或服务
+范围限制，不能靠换前台/后台或重复提交消除；先确认具体范围。
 maxops_deploy_prepare 冻结可复核的变更计划；随后 maxops_deploy_run 用 change_id 和
 expected_revision 执行固定流程：until=built 只构建，until=verified 构建、激活并验收。
 需要独立控制时仍可使用 build/activate/verify/rollback，各阶段遵守同样的前置条件。

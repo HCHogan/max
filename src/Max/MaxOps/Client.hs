@@ -123,14 +123,24 @@ safeFailure = \case
           Right (Object fields)
             | Just (String machineCode) <- KeyMap.lookup "code" fields,
               Just (String retry) <- KeyMap.lookup "retry" fields,
-              machineCode `elem` ["unsupported_operation", "idempotency_conflict", "revision_conflict", "stale_baseline", "cursor_invalid", "workflow_conflict", "unauthenticated", "forbidden", "not_found", "state_conflict", "cursor_expired", "busy", "invalid_request", "unavailable"],
+              machineCode `elem` ["unsupported_operation", "idempotency_conflict", "revision_conflict", "stale_baseline", "cursor_invalid", "workflow_conflict", "unauthenticated", "forbidden", "not_found", "state_conflict", "cursor_expired", "busy", "invalid_request", "unavailable", "capability_not_permitted", "host_not_permitted", "unit_not_readable", "unit_not_manageable", "logs_not_permitted", "repository_not_permitted", "deployment_not_permitted", "execution_profile_host_required", "invalid_unit_name"],
               retry `elem` ["refresh_catalog", "never", "refresh", "replan", "restart_listing", "observe", "backoff", "observe_before_retry"] ->
-                prefix <> " code=" <> machineCode <> " retry=" <> retry
+                prefix <> " code=" <> machineCode <> " retry=" <> retry <> failureHint machineCode
           _ -> prefix
   ResponseBodyLimitExceeded _ -> "maxops response exceeds 2 MiB"
   ResponseTimeoutFailure -> "maxops request timed out"
   ConnectionTimeoutFailure -> "maxops connection timed out"
   _ -> "maxops transport unavailable"
+
+failureHint :: Text -> Text
+failureHint = \case
+  "unit_not_readable" -> "：目标 unit 不在服务观察范围；用 resources_list(kind=units,host=...) 查看范围。切换前台/后台不会改变 Hub 的服务授权。"
+  "unit_not_manageable" -> "：目标服务未授予启停权限；可读权限与管理权限独立。"
+  "capability_not_permitted" -> "：Hub 凭据缺少该操作 capability；加载技能不会扩大权限。"
+  "host_not_permitted" -> "：目标主机不在授权范围；用 resources_list(kind=hosts) 查看。"
+  "execution_profile_host_required" -> "：查询 execution_profiles 必须指定 host；先查询 kind=hosts，再传入准确主机名。"
+  "invalid_unit_name" -> "：需要准确 systemd unit 名称（包括后缀）；不能传路径或通配符。"
+  _ -> ""
 
 -- The load receipt pins the registry metadata. Hub reauthorizes every call;
 -- there is no discovery round trip per operation and no write transport retry.

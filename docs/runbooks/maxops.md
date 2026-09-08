@@ -155,6 +155,32 @@ The existing Alertmanager-v4 `/v1/alerts` receiver remains compatible. Generic
 the tools; this adapter does not implicitly subscribe a webhook or start an
 automatic repair policy.
 
+## Service scope and diagnostic handoff
+
+Enable `readAllUnits` on both the Hub host entry and Agent to observe all loaded
+systemd units, including timers, targets and scopes, and read exact unit status
+and bounded logs. This does not grant typed service mutations: `manageableUnits`
+remains a separate exact service list. `unit_scope.coverage` distinguishes
+`all_loaded` from `allowlist`; neither implies every installed unit file was read.
+`units.list` is paged with `limit`/`cursor` and optional `state`/`prefix` filters.
+
+Use `events.recent` for incident diagnosis (last hour, newest first, at most 20
+by default), with host/unit/time filters. `events.list` retains oldest-first replay.
+Summary views omit large event payloads; `events.get` reads bounded JSON fragments
+by event ID, pointer and byte offset. `jobs.logs` contains command output;
+`jobs.result` contains result JSON, without a universal `/stdout` pointer.
+
+Permission errors retain fixed machine codes for host, capability, readable unit,
+manageable unit and log restrictions. Max renders safe, static hints without
+reflecting upstream error bodies. Discovery's execution_profiles kind requires
+`host` in its schema as well as at runtime.
+
+A frontend submission yields after its already admitted tool batch, so a sibling
+status query is not discarded. Later batches and guest calls remain stopped.
+The durable observer attaches up to 8192 bytes per output stream to its terminal
+report when logs are available. Multi-step work belongs to an operations task;
+the result reporter remains read-only and does not resume repair work.
+
 ## Acceptance
 
 Deploy the updated Hub contract before enabling the new Max bundle. Existing

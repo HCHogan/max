@@ -12,6 +12,7 @@ import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef,
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import Effectful (IOE, liftIO, runEff)
 import Max.Config (loadConfigCandidate, runtimeValuesFromConfig)
 import Max.Effects.Tools (Tool (..))
@@ -221,6 +222,14 @@ spec = describe "maxops" $ do
         (runtime, _) <- fixture ["HTTP/1.1 401 Unauthorized\r\nContent-Length: 32\r\n\r\n" <> fixtureToken]
         maxOpsOperations runtime config ManagementCatalog `shouldReturn` Left "maxops HTTP 401"
 
+    it "preserves typed permission and parameter hints without reflecting upstream text" $
+      withToken $ \config -> forM_ [("unit_not_readable", "服务观察范围"), ("execution_profile_host_required", "必须指定 host")] $ \(code, hint) -> do
+        let body = LBS.toStrict (encode (object ["code" .= (code :: Text), "retry" .= ("never" :: Text), "error" .= ("secret upstream contents" :: Text)]))
+            wire = "HTTP/1.1 403 Forbidden\r\nContent-Length: " <> BS8.pack (show (BS.length body)) <> "\r\n\r\n" <> body
+        (runtime, _) <- fixture [wire]
+        result <- maxOpsOperations runtime config ManagementCatalog
+        result `shouldSatisfy` (\case Left message -> code `T.isInfixOf` message && hint `T.isInfixOf` message && not ("secret" `T.isInfixOf` message); _ -> False)
+
     it "bounds upstream response bodies" $
       withToken $ \config -> do
         let bytes = BS.replicate (2 * 1024 * 1024 + 1) 120
@@ -249,7 +258,7 @@ spec = describe "maxops" $ do
     it "loads the complete actual Hub input schema contract" $ do
       Right raw <- eitherDecodeFileStrict' "test/fixtures/maxops-catalog.json"
       Right loaded <- pure (parseCatalog raw)
-      length loaded.operations `shouldBe` 43
+      length loaded.operations `shouldBe` 45
       let defs =
             [ ToolDefinition
                 (ToolRef (operationToolName entry))

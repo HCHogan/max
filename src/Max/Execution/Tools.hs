@@ -123,9 +123,12 @@ executeToolBatch session hooks catalog requests =
       then pure (ToolBatch (map (const (rejected "call_budget_exhausted" "这个子任务的工具调用额度已经用满，不能再执行这个调用")) requests) True)
       else do
         unused <- liftIO (newTVarIO total)
+        yielded <- liftIO (newTVarIO False)
         let release = liftIO . atomically $ do
               refund <- readTVar unused
               modifyTVar' session.remaining (fmap (+ refund))
+              pending <- readTVar yielded
+              when pending (writeTVar session.terminal True)
             execute request
               | suppressed request = pure (rejected "finish_batch_conflict" "结束回合的操作必须单独提交；同一轮的其他工具调用已拒绝")
               | otherwise = do
@@ -144,12 +147,14 @@ executeToolBatch session hooks catalog requests =
                               }
                       (_, invocation) <- withExecutionRecord admitting step start $ \row -> mask $ \restore -> do
                         result <- restore (invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments)
-                        -- Set before returning to guest or caller; JSON cannot
-                        -- clear this latch and a subsequent guest trap cannot
-                        -- erase the trusted control returned by this call.
+                        -- A yield hands off after this admitted batch. Finish
+                        -- remains immediate. The finally action also preserves
+                        -- a yield when a later sibling is interrupted.
                         when (isJust (controlReply result.tiControl)) $
                           liftIO . atomically $
-                            writeTVar session.terminal True
+                            case result.tiControl of
+                              YieldLoop {} -> writeTVar yielded True
+                              _ -> writeTVar session.terminal True
                         pure ((), result)
                       pure invocation
         invocations <- restoreBatch (if all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release

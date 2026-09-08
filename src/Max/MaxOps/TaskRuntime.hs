@@ -109,7 +109,7 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
                 Right value -> do
                   mapM_ (\row -> finishJournalExecution row (JournalCommitted value)) journal
                   case value of
-                    Object fields | Just (String identifier) <- KeyMap.lookup "job_id" fields -> observe waitOperation identifier Nothing
+                    Object fields | Just (String identifier) <- KeyMap.lookup "job_id" fields -> observe (find ((== "jobs.logs") . (.name)) catalog.operations) waitOperation identifier Nothing
                     _ -> pure (failed "maxops 没有返回持久化 job handle；不能重复提交")
             _ -> pure (failed "maxops 操作契约已变化或缺少 jobs.wait；未提交操作")
   where
@@ -142,7 +142,7 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
           submit operation params key (attempt + 1)
         _ -> pure result
 
-    observe operation identifier revision = do
+    observe logsOperation operation identifier revision = do
       check
       response <-
         liftIO $
@@ -152,7 +152,7 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
             (object ["job_id" .= identifier, "after_revision" .= revision, "timeout_seconds" .= (10 :: Int)])
             Nothing
       case response of
-        Left detail | transient detail -> liftIO (threadDelay 2_000_000) >> observe operation identifier revision
+        Left detail | transient detail -> liftIO (threadDelay 2_000_000) >> observe logsOperation operation identifier revision
         Left detail -> pure ((failed detail) {evidence = ["maxops job " <> identifier]})
         Right value -> case parseEither
           ( withObject "wait" $ \fields -> do
@@ -169,17 +169,24 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
           Left _ -> pure ((failed "maxops 返回了无效的等待结果") {evidence = ["maxops job " <> identifier]})
           Right (job, state :: Text, next :: Int) ->
             if state `elem` ["succeeded", "failed", "cancelled", "timed_out", "outcome_unknown"]
-              then
+              then do
+                output <- case logsOperation of
+                  Nothing -> pure Nothing
+                  Just logs -> do
+                    check
+                    result <- liftIO (client.invokeOperation config logs (object ["job_id" .= identifier, "limit" .= (8192 :: Int)]) Nothing)
+                    pure (Just (either (\detail -> object ["unavailable" .= detail]) id result))
+                let report = object (["job" .= job] <> ["output" .= logs | Just logs <- [output]])
                 pure
                   ( TaskReport
                       (if state == "succeeded" then ReportSucceeded else if state == "outcome_unknown" then ReportWaiting else ReportFailed)
-                      ("maxops 作业结果（远端证据）：\n" <> render job)
+                      ("maxops 作业结果（远端证据，输出有界；仅汇报，由所属 operations 任务继续后续工作）：\n" <> render report)
                       ["maxops job " <> identifier]
                       ["远端效果未知，需要核实；不能以新键重复提交" | state == "outcome_unknown"]
                       Nothing
-                      (Just job)
+                      (Just report)
                   )
-              else observe operation identifier (Just next)
+              else observe logsOperation operation identifier (Just next)
 
     transient detail = any (`T.isPrefixOf` detail) ["maxops transport", "maxops request timed out", "maxops connection timed out", "maxops HTTP 5", "maxops HTTP 429"]
     failed detail = TaskReport ReportFailed detail [] ["操作未被确认完成"] Nothing Nothing

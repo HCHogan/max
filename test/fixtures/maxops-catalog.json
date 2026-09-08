@@ -119,18 +119,48 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
+          "cursor": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "host": {
             "type": "string"
+          },
+          "limit": {
+            "default": 50,
+            "format": "uint16",
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "prefix": {
+            "default": null,
+            "description": "Literal unit-name prefix, not a shell pattern.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "state": {
+            "default": null,
+            "description": "Exact active state, for example failed or active. Omit to list all states.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "host"
         ],
-        "title": "HostParams",
+        "title": "UnitsListParams",
         "type": "object"
       },
       "read_only": true,
-      "summary": "All explicitly readable services, including unloaded services"
+      "summary": "Page authorized loaded units and configured unloaded units; filter by state or literal prefix. Coverage is explicit; an empty list is not whole-host health"
     },
     {
       "capability": "units:read",
@@ -157,7 +187,7 @@
         "type": "object"
       },
       "read_only": true,
-      "summary": "State of one explicitly readable service"
+      "summary": "State of one authorized systemd unit, including services, timers, targets and scopes"
     },
     {
       "capability": "logs:read",
@@ -220,6 +250,102 @@
       "idempotency": "none",
       "kind": "observation",
       "minimum_protocol_version": 1,
+      "name": "events.get",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "limit": {
+            "default": 8192,
+            "format": "uint32",
+            "maximum": 32768,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pointer": {
+            "default": "",
+            "description": "RFC 6901 pointer; empty selects the event, /payload selects its evidence.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "event_id"
+        ],
+        "title": "EventGetParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Read bounded event evidence by event_id, JSON pointer and byte offset; use /payload for details omitted from summaries"
+    },
+    {
+      "capability": "events:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
+      "name": "events.recent",
+      "params_schema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "additionalProperties": false,
+        "properties": {
+          "before_sequence": {
+            "default": null,
+            "format": "uint64",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "host": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": 20,
+            "format": "uint16",
+            "maximum": 50,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "since_seconds": {
+            "default": 3600,
+            "format": "uint32",
+            "maximum": 604800,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "unit": {
+            "default": null,
+            "description": "Exact systemd unit; matches unit/name labels or a diagnostic unit.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "RecentEventsParams",
+        "type": "object"
+      },
+      "read_only": true,
+      "summary": "Recent incident events, newest first, default last hour and 20 entries; filter by host/unit and use next_before_sequence for older pages"
+    },
+    {
+      "capability": "events:read",
+      "idempotency": "none",
+      "kind": "observation",
+      "minimum_protocol_version": 1,
       "name": "events.list",
       "params_schema": {
         "$defs": {
@@ -272,7 +398,7 @@
         "type": "object"
       },
       "read_only": true,
-      "summary": "Replay durable fleet events after a scoped cursor"
+      "summary": "Replay durable fleet events oldest first after a scoped cursor; use events.recent for incident diagnosis"
     },
     {
       "capability": "self:read",
@@ -1375,6 +1501,16 @@
         },
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "if": {
+          "properties": {
+            "kind": {
+              "const": "execution_profiles"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
         "properties": {
           "cursor": {
             "default": null,
@@ -1385,6 +1521,7 @@
           },
           "host": {
             "default": null,
+            "description": "Required when kind is execution_profiles; optional for other kinds.",
             "type": [
               "string",
               "null"
@@ -1401,6 +1538,17 @@
             "minimum": 1,
             "type": "integer"
           }
+        },
+        "then": {
+          "properties": {
+            "host": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "host"
+          ]
         },
         "title": "ResourcesParams",
         "type": "object"
@@ -1522,7 +1670,7 @@
         "type": "object"
       },
       "read_only": true,
-      "summary": "Read a bounded result fragment using a JSON pointer and UTF-8 byte offsets"
+      "summary": "Read stored result JSON using a JSON pointer (empty selects root); command stdout/stderr are in jobs.logs, not /stdout"
     },
     {
       "capability": "deploy:manage",

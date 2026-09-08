@@ -90,7 +90,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
           object
             [ "version" .= (2 :: Int),
               "operations"
-                .= [operation "exec.run" "job_submission" False "required", operation "jobs.wait" "job_control" True "none"]
+                .= [operation "exec.run" "job_submission" False "required", operation "jobs.wait" "job_control" True "none", operation "jobs.logs" "job_control" True "none"]
             ]
         grants = Map.singleton "maxops_execute" "test-grant"
         contextFor turnOutput background =
@@ -121,25 +121,28 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
                   then do
                     modifyIORef' keys (<> [key])
                     pure (Right (object ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("queued" :: Text)]))
-                  else do
-                    modifyIORef' waits (+ 1)
-                    pure
-                      ( Right
-                          ( object
-                              [ "job"
-                                  .= object
-                                    [ "handle"
-                                        .= object
-                                          ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("succeeded" :: Text), "revision" .= (3 :: Int)]
-                                    ]
-                              ]
-                          )
-                      )
+                  else if op.name == "jobs.logs"
+                    then pure (Right (object ["stdout_text" .= ("bounded diagnostic output" :: Text), "complete" .= True]))
+                    else do
+                      modifyIORef' waits (+ 1)
+                      pure
+                        ( Right
+                            ( object
+                                [ "job"
+                                    .= object
+                                      [ "handle"
+                                          .= object
+                                            ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("succeeded" :: Text), "revision" .= (3 :: Int)]
+                                      ]
+                                ]
+                            )
+                        )
             )
             (\_ _ -> pure (Right rawCatalog))
     for_ [1, 2 :: Int] $ \_ -> do
       result <- withDbLog pool $ runMaxOpsTask client config (pure config) (contextFor taskOutput True) task
       result.status `shouldBe` TaskState.ReportSucceeded
+      result.summary `shouldSatisfy` T.isInfixOf "bounded diagnostic output"
     readIORef keys `shouldReturn` [Just "max:j41", Just "max:j41"]
     readIORef waits `shouldReturn` 2
     rows <- withDb pool $ query "SELECT state FROM execution_journal WHERE turn_id=?" (Only taskTurn.atrTurnId)
