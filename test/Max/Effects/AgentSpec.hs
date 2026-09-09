@@ -7,7 +7,7 @@ import Control.Concurrent (newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Concurrent.Async qualified as Async
 import Control.Exception (fromException)
 import Control.Monad (when)
-import Data.Aeson (object, (.=))
+import Data.Aeson (Value, object, (.=))
 import Data.Foldable (for_)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
 import Data.Map.Strict qualified as Map
@@ -49,6 +49,7 @@ import Max.Http.Failure (ResponseFailure (..), TransportFailure (..))
 import Max.LLM.Failure (LLMFailure (..))
 import Max.Log (ColorMode (ColorNever), withCompactLogger)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
+import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Skills (newSkillRegistry)
 import Max.Tasks
   ( Note (..),
@@ -66,6 +67,7 @@ import Max.Tasks
     turnRuntimeTaskId,
   )
 import Max.Tool.Bundles (toolVisible)
+import Max.Tool.Catalog (buildToolCatalog, catalogTools)
 import Max.Tool.Types (ToolCallMode (..), ToolSpec (..))
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext, toolSkillLoads)
 import Max.Tools.Skills (skillToolsFor)
@@ -197,7 +199,7 @@ spec = describe "Agent full loop" $ do
                       toolRun echoTool args
                   )
               ]
-                <> skillToolsFor registry current (const (pure (Right Nothing)))
+                <> skillToolsFor registry current (const (pure (Right Nothing))) Right
                 <> [echoTool {toolName = "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
             )
         provider =
@@ -235,6 +237,67 @@ spec = describe "Agent full loop" $ do
     result.reply `shouldBe` Just "done"
     readIORef calls `shouldReturn` 3
 
+  it "loads and runs a saved workflow through the model loop on the next round" $ do
+    registry <- newSkillRegistry
+    events <- newIORef []
+    rounds <- newIORef (0 :: Int)
+    leaves <- newIORef (0 :: Int)
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) Nothing
+    let searchDefinition = echoDefinition {tdRef = ToolRef "web_search"}
+        searchSchema = object ["type" .= ("object" :: Text)]
+        searchTool = Tool "web_search" "search" searchSchema $ \_ -> do
+          leaf <- liftIO $ atomicModifyIORef' leaves (\n -> (n + 1, n))
+          when (leaf == 0) $ liftIO $ do
+            _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "之后只保留官方来源" Nothing NoteSteer)
+            pure ()
+          pure (Right (object ["results" .= ([] :: [Value])]))
+        executionContext =
+          dispatchContext
+            { acTools =
+                mkToolContext
+                  (TurnIdentity (GroupId 7777) (CanonicalMessageId 7413) (UserId 2001) (UserId 1000) (PrincipalId 2001) Nothing Nothing)
+                  (TurnCapabilities False False True qqAdvertisedCaps True Map.empty Nothing False)
+            }
+    available <- either (fail . show) pure (buildToolCatalog [searchDefinition] [ToolSpec "web_search" "search" searchSchema])
+    let factory current =
+          buildToolRegistry
+            ( [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
+                <> [searchDefinition | toolVisible (toolSkillLoads current) "web_search"]
+            )
+            ( skillToolsFor registry current (const (pure (Right Nothing))) (bindWorkflowContracts (catalogTools available))
+                <> [searchTool | toolVisible (toolSkillLoads current) "web_search"]
+            )
+        provider =
+          LLMInterpreter
+            { liChat = \_ _ messages specs _ -> do
+                roundNo <- liftIO $ atomicModifyIORef' rounds (\n -> (n + 1, n))
+                let respond name args = pure (Right (ToolCallsResp (object []) "" [ToolCall (T.pack (show roundNo)) name args]))
+                case roundNo of
+                  0 -> do
+                    liftIO $ map (.specName) specs `shouldNotContain` ["run_code"]
+                    liftIO $ map (.specName) specs `shouldNotContain` ["web_search"]
+                    respond "use_skill" (object ["name" .= ("batch-search" :: Text)])
+                  1 -> do
+                    liftIO $ map (.specName) specs `shouldContain` ["web_search", "run_code"]
+                    respond "run_code" (object ["workflow" .= ("batch-search/search" :: Text), "args" .= object ["queries" .= (["one", "two"] :: [Text]), "limit" .= (2 :: Int)]])
+                  _ -> do
+                    liftIO $ readIORef leaves `shouldReturn` 2
+                    liftIO $ case reverse messages of
+                      MsgUser note : MsgTool "1" body : _ -> do
+                        note `shouldBe` "[feedback]: 之后只保留官方来源"
+                        body `shouldSatisfy` T.isInfixOf "batch-search/search"
+                        body `shouldSatisfy` T.isInfixOf "run_ref"
+                      other -> expectationFailure ("saved workflow lost its complete result/input boundary: " <> show other)
+                    pure (Right (ContentResp "done"))
+            }
+    result <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff . runConcurrent . runLog "saved-workflow-model" logger LogAttention . runLLMWith provider . runAgent (AgentLimits 4) factory $
+        agentTurn turn executionContext "fake" [MsgUser "batch search"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    result.reply `shouldBe` Just "done"
+    readIORef rounds `shouldReturn` 3
+
   it "loads a complete skill next round, rejects same-batch hidden calls, and isolates requests" $ do
     registry <- newSkillRegistry
     events <- newIORef []
@@ -254,7 +317,7 @@ spec = describe "Agent full loop" $ do
             ( [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
                 <> [echoDefinition {tdRef = ToolRef "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
             )
-            ( skillToolsFor registry current (const (pure (Right Nothing)))
+            ( skillToolsFor registry current (const (pure (Right Nothing))) Right
                 <> [ Tool
                        "web_search"
                        "search"

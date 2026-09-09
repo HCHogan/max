@@ -154,7 +154,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     identifier <- admit pool source "skill-retry"
     first <- claimOne pool
     let instructions = "configured web manual"
-        receipt = SkillLoad "web" (skillLoadVersion instructions) instructions Nothing
+        receipt = SkillLoad "web" (skillLoadVersion instructions) instructions Nothing Nothing
         start = JournalStart "load" "use_skill" 1 "fixture" (object []) (toJSON ([] :: [Text])) "unsafe"
     journal <- withDb pool (startJournalExecution first start)
     withDbLog

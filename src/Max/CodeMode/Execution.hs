@@ -19,7 +19,7 @@ import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Either (fromRight)
 import Data.Foldable (toList)
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -30,6 +30,7 @@ import Max.CodeMode.Wasm
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
 import Max.Execution.Types
+import Max.Skill.Contract (validateValue)
 import Max.Tool.Control (LoopControl (..), controlReply, mergeControls)
 import Max.Tool.Types
 
@@ -47,7 +48,9 @@ data CodeModeResult = CodeModeResult
     cmControl :: !LoopControl,
     cmOutput :: !(Maybe Value),
     cmSubmittedCalls :: !Int,
-    cmOverBudget :: !Bool
+    cmOverBudget :: !Bool,
+    cmRunRef :: !Text,
+    cmWorkflow :: !(Maybe Value)
   }
   deriving stock (Show, Eq)
 
@@ -55,11 +58,13 @@ data CodeModeResult = CodeModeResult
 data WasmProgram = WasmProgram
   { wpModule :: !ByteString,
     wpInput :: !(Maybe ByteString),
-    wpEvidence :: !Value
+    wpEvidence :: !Value,
+    wpOutputContract :: !(Maybe Value),
+    wpWorkflow :: !(Maybe Value)
   }
 
 runWasmTools :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> WasmLimits -> ByteString -> Eff es CodeModeResult
-runWasmTools session hooks catalog limits binary = runWasmProgram session hooks catalog limits (WasmProgram binary Nothing Null)
+runWasmTools session hooks catalog limits binary = runWasmProgram session hooks catalog limits (WasmProgram binary Nothing Null Nothing Nothing)
 
 -- | Orchestration enters outside the leaf gate. Registering this as a leaf Tool
 -- runner would recursively acquire that gate and deadlock.
@@ -126,7 +131,7 @@ runWasmProgram session hooks catalog limits program = do
             (False, [invocation]) -> reply (outcomeEnvelope invocation.tiOutcome)
             (True, invocations) -> reply (toJSON (map (outcomeEnvelope . (.tiOutcome)) invocations))
             _ -> error "executeToolBatch violated result cardinality"
-  (result, _) <- withExecutionRecord hooks ExecutionCheckpoint start $ \_ -> do
+  (result, _) <- withExecutionRecord hooks ExecutionCheckpoint start $ \row -> do
     (exit, rawOutput) <- runWasmWithInput limits program.wpModule program.wpInput dispatch
     calls <- reverse <$> liftIO (readTVarIO receipts)
     control <- liftIO (readTVarIO decisions)
@@ -136,8 +141,12 @@ runWasmProgram session hooks catalog limits program = do
         finalExit
           | isJust (controlReply control) = WasmHostStopped
           | Left _ <- parsed = WasmTrapped "guest output is not JSON"
+          | exit == WasmCompleted,
+            Just contract <- program.wpOutputContract,
+            Left err <- validateValue contract (fromMaybe Null (fromRight Nothing parsed)) =
+              WasmTrapped ("workflow output contract: " <> err)
           | otherwise = exit
-        result = CodeModeResult finalExit calls control (fromRight Nothing parsed) submittedCalls overBudget
+        result = CodeModeResult finalExit calls control (fromRight Nothing parsed) submittedCalls overBudget (maybe label (("journal#" <>) . T.pack . show . (.jeJournalId)) row) program.wpWorkflow
     pure (result, codeModeInvocation result)
   pure result
   where
@@ -149,7 +158,9 @@ codeModeInvocation result = ToolInvocation outcome result.cmControl
     count = length result.cmCalls
     summary =
       object
-        [ "exit" .= T.pack (show result.cmExit),
+        [ "run_ref" .= result.cmRunRef,
+          "workflow" .= result.cmWorkflow,
+          "exit" .= T.pack (show result.cmExit),
           "value" .= result.cmOutput,
           "over_budget" .= result.cmOverBudget,
           "call_count" .= count,

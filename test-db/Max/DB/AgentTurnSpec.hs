@@ -384,7 +384,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
     fixture <- createFixture pool 42 1001
     independent <- createFixture pool 42 1002
     let instructions = "full skill instructions"
-        load = SkillLoad "web" (skillLoadVersion instructions) instructions Nothing
+        load = SkillLoad "web" (skillLoadVersion instructions) instructions Nothing Nothing
     execution <- withDb pool $ startJournalExecution fixture.fxTurn (journalStart "skill" "use_skill")
     forged <- withDb pool $ startJournalExecution independent.fxTurn (journalStart "forged" "echo")
     withTemporaryBlobRoot $ \blobRoot -> withDbBlob pool blobRoot $ do

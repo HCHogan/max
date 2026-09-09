@@ -25,6 +25,7 @@ import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, isNothing)
 import Data.Set qualified as Set
 import Data.Text (Text)
+import Data.Text qualified as T
 import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
@@ -52,6 +53,7 @@ import Max.Effects.Tools
     ToolRegistry,
     ToolRetryClass (..),
     buildToolRegistry,
+    registryCatalog,
   )
 import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.File.ToolRuntime (fileToolsWithDatabase)
@@ -66,10 +68,12 @@ import Max.Monitor.ToolRuntime (monitorToolsWithDatabase, reminderToolsWithDatab
 import Max.Pin.ToolRuntime (pinToolsWithDatabase)
 import Max.Platform.Types (noAdvertisedCaps)
 import Max.RuntimeConfig (RuntimeSnapshot (..), RuntimeValues (..), currentRuntimeSnapshot)
+import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Task.ToolRuntime (guardTaskResource, taskToolsWithDatabase)
 import Max.Tool.Bundles (SkillLoad (..), toolBundle, toolVisible)
+import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Types (ToolCallMode (..))
-import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolRuntimeSnapshot, toolSkillLoads, toolStickers)
+import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolRuntimeSnapshot, toolSkillLoads, toolStickers, withToolSkillLoads)
 import Max.Tools.Bilibili (bilibiliToolsFor)
 import Max.Tools.MaxOps (maxOpsBundle)
 import Max.Tools.Sandbox (sandboxToolsFor)
@@ -108,6 +112,7 @@ allToolsFor runtime env dc = uncurry buildToolRegistry (resolvedToolsFor runtime
 -- | The gated definitions and the gated runners, which every catalog in this
 -- module is a selection of.
 resolvedToolsFor ::
+  forall es.
   ( BlobHost :> es,
     Blob :> es,
     Http :> es,
@@ -184,6 +189,9 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
                 )
             )
         )
+    bindPackages loads = do
+      registry <- either (Left . T.pack . show) Right (allToolsFor runtime env (withToolSkillLoads loads dc) :: Either ToolCatalogError (ToolRegistry es))
+      bindWorkflowContracts (catalogTools (registryCatalog registry)) loads
     runners0 =
       builtinsWithDatabase dispatchEnv.beTimeZone dc
         <> reminderToolsWithDatabase dispatchEnv.beTimeZone dc
@@ -193,7 +201,7 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
         <> memoryToolsWithDatabase dc
         <> pinToolsWithDatabase dispatchEnv.beSessions dispatchEnv.beDefaultModel dc
         <> taskToolsWithDatabase dc
-        <> skillToolsFor dispatchEnv.beSkills dc prepareSkill
+        <> skillToolsFor dispatchEnv.beSkills dc prepareSkill bindPackages
         <> bilibiliToolsFor dispatchEnv.beTimeZone dc
         <> sandboxToolsFor dispatchEnv.beTimeZone (toolGroupId dc) dispatchEnv.beSandboxes
         <> fileToolsWithDatabase dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes

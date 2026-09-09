@@ -108,7 +108,8 @@ import Max.Recall
     searchRecallTrace,
   )
 import Max.Session (Session (..), loadSession, updateSession)
-import Max.Skills (NewSkill (..), Skill (..), createSkill, deleteSkill, listAllSkills, updateSkill)
+import Max.Skill.Package (SkillPackage, emptyPackage)
+import Max.Skills (NewSkill (..), Skill (..), createSkill, deleteSkill, listAllSkills, updateSkillAtRevision)
 import Max.Tasks (TaskId (..), TaskInfo (..), cancelTask, listTasks)
 import Max.Util (trySync)
 import Network.HTTP.Types (Method, Status, hAuthorization, hCacheControl, hContentType, methodDelete, methodGet, methodPatch, methodPost, status200, status400, status401, status404, status409, status500, status502)
@@ -446,7 +447,8 @@ handle env profiles logBuf r params body = case r of
                 nsEnabled = ps.psEnabled,
                 -- NULL marks rows minted here rather than taught from
                 -- chat; 0 marks a row minted here rather than by a user.
-                nsCreatedBy = Nothing
+                nsCreatedBy = Nothing,
+                nsPackage = ps.psPackage
               }
         case res of
           Left err -> pure (bad err)
@@ -905,19 +907,30 @@ applySkillPatch env sid o =
     Left err -> pure (jsonResponse status400 (object ["error" .= err]))
     Right [] -> pure (jsonResponse status400 (object ["error" .= ("no recognised fields" :: Text)]))
     Right es ->
-      updateSkill env.beSkills sid (\s -> foldl (flip ($)) s es) >>= \case
-        Left "not found" -> pure (jsonResponse status404 (object ["error" .= ("not found" :: Text)]))
+      case expectedRevision of
         Left err -> pure (jsonResponse status400 (object ["error" .= err]))
-        Right s -> do
-          logInfo "admin: skill patched" $
-            object ["id" .= sid, "fields" .= map fst recognised]
-          pure (jsonResponse status200 (skillJson s))
+        Right revision ->
+          updateSkillAtRevision env.beSkills sid revision (\s -> foldl (flip ($)) s es) >>= \case
+            Left "not found" -> pure (jsonResponse status404 (object ["error" .= ("not found" :: Text)]))
+            Left "skill revision conflict" -> pure (jsonResponse status409 (object ["error" .= ("skill revision conflict" :: Text)]))
+            Left err -> pure (jsonResponse status400 (object ["error" .= err]))
+            Right s -> do
+              logInfo "admin: skill patched" $ object ["id" .= sid, "fields" .= map fst recognised]
+              pure (jsonResponse status200 (skillJson s))
   where
+    expectedRevision :: Either Text (Maybe Integer)
+    expectedRevision = case KM.lookup "expected_revision" o of
+      Nothing
+        | KM.member "package" o -> Left "package updates require expected_revision"
+        | otherwise -> Right Nothing
+      Just value -> case A.fromJSON value of
+        A.Success n | n > 0 -> Right (Just n)
+        _ -> Left "expected_revision must be a positive integer"
     recognised =
       [ (k, v)
       | (key, v) <- KM.toList o,
         let k = Key.toText key,
-        k `elem` (["name", "group_id", "description", "body", "enabled"] :: [Text])
+        k `elem` (["name", "group_id", "description", "body", "enabled", "package"] :: [Text])
       ]
     edits :: Either Text [Skill -> Skill]
     edits = traverse toEdit recognised
@@ -929,6 +942,9 @@ applySkillPatch env sid o =
       ("group_id", Null) -> Right (\s -> s {skillGroup = Nothing})
       ("description", String d) -> Right (\s -> s {skillDescription = T.strip d})
       ("body", String b) -> Right (\s -> s {skillBody = b})
+      ("package", value) -> case A.fromJSON value of
+        A.Success package -> Right (\s -> s {skillPackage = package})
+        A.Error err -> Left (T.pack err)
       ("enabled", Bool b) -> Right (\s -> s {skillEnabled = b})
       (k, _) -> Left ("bad value for field: " <> k)
 
@@ -977,7 +993,9 @@ skillJson s =
       "body" .= s.skillBody,
       "enabled" .= s.skillEnabled,
       "created_by" .= s.skillCreatedBy,
-      "updated_at" .= s.skillUpdatedAt
+      "updated_at" .= s.skillUpdatedAt,
+      "revision" .= s.skillRevision,
+      "package" .= s.skillPackage
     ]
 
 callRowJson :: CallRow -> Value
@@ -1018,7 +1036,8 @@ data PostSkill = PostSkill
     psGroup :: !(Maybe Int64),
     psDescription :: !Text,
     psBody :: !Text,
-    psEnabled :: !Bool
+    psEnabled :: !Bool,
+    psPackage :: !SkillPackage
   }
 
 instance A.FromJSON PostSkill where
@@ -1029,6 +1048,7 @@ instance A.FromJSON PostSkill where
       <*> o A..: "description"
       <*> o A..: "body"
       <*> (fromMaybe True <$> o A..:? "enabled")
+      <*> (fromMaybe emptyPackage <$> o A..:? "package")
 
 data PostContextRebuild = PostContextRebuild
   { pcrConversationId :: !Int64,

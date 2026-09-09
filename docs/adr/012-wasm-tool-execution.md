@@ -186,3 +186,9 @@ deployment.
 - [ADR-010](010-skill-tool-bundles.md)
 - [Wasmtime C API](https://docs.wasmtime.dev/c-api/)
 - [Wasmtime interruption](https://docs.wasmtime.dev/examples-interrupting-wasm.html)
+
+## Saved workflow submissions
+
+[ADR-014](014-versioned-skill-workflows.md) extends the same model adapter with
+version-pinned skill workflows and input/output contracts. Their leaves continue
+through this executor; stored programs are not registered as leaf runners.

@@ -59,13 +59,16 @@ module Max.Skills
     NewSkill (..),
     createSkill,
     updateSkill,
+    updateSkillAtRevision,
     deleteSkill,
     validateSkill,
   )
 where
 
+import Control.Concurrent.MVar (MVar, newMVar, putMVar, takeMVar)
 import Control.Concurrent.STM
 import Control.Monad (when)
+import Data.Aeson (Result (..), Value, eitherDecodeStrict', fromJSON, toJSON)
 import Data.ByteString (ByteString)
 import Data.Char (isSpace)
 import Data.FileEmbed (embedDir)
@@ -79,10 +82,12 @@ import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), SqlError (..), (:.) (..))
 import Effectful
-import Effectful.Exception (try)
+import Effectful.Exception (bracket_, mask_, try)
 import Effectful.PostgreSQL (WithConnection, execute, query, query_)
 import Max.Command.Help (helpText)
 import Max.Command.Version (buildIdentityLines, readOsPretty)
+import Max.DB.Transaction (withCommittedTransaction)
+import Max.Skill.Package (SkillPackage, emptyPackage, validatePackage, validatePackageName)
 import Max.Util (tshow)
 import OneBot.Types (GroupId (..))
 import System.FilePath (dropExtension, takeExtension)
@@ -102,13 +107,15 @@ data Skill = Skill
     skillEnabled :: !Bool,
     -- | QQ uid that taught it from chat; 'Nothing' = admin API.
     skillCreatedBy :: !(Maybe Int64),
-    skillUpdatedAt :: !UTCTime
+    skillUpdatedAt :: !UTCTime,
+    skillRevision :: !Integer,
+    skillPackage :: !SkillPackage
   }
   deriving stock (Show, Eq)
 
 -- | The whole table in one TVar, keyed by id.  Builtins sit under
 -- negative keys, DB rows under their (positive) primary keys.
-newtype SkillRegistry = SkillRegistry (TVar (Map Int64 Skill))
+data SkillRegistry = SkillRegistry (TVar (Map Int64 Skill)) (MVar ())
 
 -- | Every @skills\/*.md@ in the repo, baked in at compile time.
 builtinSkillFiles :: [(FilePath, ByteString)]
@@ -131,17 +138,23 @@ parseBuiltin bootTime osName sid (path, bytes)
   | takeExtension path /= ".md" = Nothing
   | T.null name || T.null desc || T.null body = Nothing
   | otherwise =
-      Just
-        Skill
-          { skillId = sid,
-            skillName = name,
-            skillGroup = Nothing,
-            skillDescription = desc,
-            skillBody = body,
-            skillEnabled = True,
-            skillCreatedBy = Nothing,
-            skillUpdatedAt = bootTime
-          }
+      do
+        package <- case lookup (dropExtension path <> ".json") builtinSkillFiles of
+          Nothing -> Just emptyPackage
+          Just source -> either (const Nothing) Just (eitherDecodeStrict' source)
+        Just
+          Skill
+            { skillId = sid,
+              skillName = name,
+              skillGroup = Nothing,
+              skillDescription = desc,
+              skillBody = body,
+              skillEnabled = True,
+              skillCreatedBy = Nothing,
+              skillUpdatedAt = bootTime,
+              skillRevision = 1,
+              skillPackage = package
+            }
   where
     name = T.pack (dropExtension path)
     (descLine, rest) = T.breakOn "\n" (TE.decodeUtf8Lenient bytes)
@@ -158,44 +171,51 @@ newSkillRegistry = do
   let parsed =
         [s | file <- builtinSkillFiles, Just s <- [parseBuiltin bootTime osName 0 file]]
       builtins = [s {skillId = sid} | (sid, s) <- zip [-1, -2 ..] parsed]
-  SkillRegistry <$> newTVarIO (Map.fromList [(s.skillId, s) | s <- builtins])
+  SkillRegistry <$> newTVarIO (Map.fromList [(s.skillId, s) | s <- builtins]) <*> newMVar ()
 
 -- | Boot-time load of every DB row, layered over the builtins seeded
 -- by 'newSkillRegistry'.  Returns the total count for the startup log
 -- line.
 loadSkills :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff es Int
-loadSkills (SkillRegistry t) = do
+loadSkills reg@(SkillRegistry t _) = withMutation reg $ do
   rows <-
     query_
-      "SELECT id, name, group_id, description, body, enabled, created_by, updated_at \
+      "SELECT id, name, group_id, description, body, enabled, created_by, updated_at, revision, package \
       \  FROM skills ORDER BY id"
-  let skills = map fromRow rows
+  skills <- traverse skillFromRow rows
   liftIO . atomically $ do
     m <- readTVar t
     let builtins = Map.filterWithKey (\k _ -> k < 0) m
     writeTVar t (Map.fromList [(s.skillId, s) | s <- skills] <> builtins)
   Map.size <$> liftIO (readTVarIO t)
-  where
-    fromRow ((i, n, g, d, b, e) :. (cb, up)) =
-      Skill
-        { skillId = i,
-          skillName = n,
-          skillGroup = g,
-          skillDescription = d,
-          skillBody = b,
-          skillEnabled = e,
-          skillCreatedBy = cb,
-          skillUpdatedAt = up
-        }
+
+skillFromRow :: (IOE :> es) => ((Int64, Text, Maybe Int64, Text, Text, Bool) :. (Maybe Int64, UTCTime, Integer, Value)) -> Eff es Skill
+skillFromRow ((i, n, g, d, b, e) :. (cb, up, revision, raw :: Value)) = do
+  package <- case fromJSON raw of
+    Error err -> liftIO (ioError (userError ("invalid persisted skill package: " <> err)))
+    Success value -> pure value
+  pure
+    Skill
+      { skillId = i,
+        skillName = n,
+        skillGroup = g,
+        skillDescription = d,
+        skillBody = b,
+        skillEnabled = e,
+        skillCreatedBy = cb,
+        skillUpdatedAt = up,
+        skillRevision = revision,
+        skillPackage = package
+      }
 
 -- Only this reserved namespace is refreshed by experience maintenance. Ordinary
 -- admin skill mutations remain write-through and cannot race a full reload.
 refreshExperienceSkills :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff es ()
-refreshExperienceSkills (SkillRegistry registry) = do
+refreshExperienceSkills reg@(SkillRegistry registry _) = withMutation reg $ do
   rows <-
     query_
-      "SELECT id,name,group_id,description,body,enabled,created_by,updated_at FROM skills WHERE name LIKE 'learned-task-%'"
-  let learned = [Skill sid name group description body enabled creator updated | (sid, name, group, description, body, enabled, creator, updated) <- rows]
+      "SELECT id,name,group_id,description,body,enabled,created_by,updated_at,revision,package FROM skills WHERE name LIKE 'learned-task-%'"
+  learned <- traverse skillFromRow rows
   liftIO . atomically $ modifyTVar' registry $ \current ->
     Map.fromList [(skill.skillId, skill) | skill <- learned] <> Map.filter (not . T.isPrefixOf "learned-task-" . (.skillName)) current
 
@@ -205,7 +225,7 @@ refreshExperienceSkills (SkillRegistry registry) = do
 -- group-scoped over DB-global over builtin — so a DB row hot-fixes a
 -- builtin, and a group specialises either.
 skillsForGroup :: SkillRegistry -> GroupId -> IO [Skill]
-skillsForGroup (SkillRegistry t) (GroupId gid) = do
+skillsForGroup (SkillRegistry t _) (GroupId gid) = do
   m <- readTVarIO t
   let visible =
         [ s
@@ -230,7 +250,7 @@ lookupSkill reg gid name = do
 
 -- | Every row, enabled or not — the admin surface.
 listAllSkills :: SkillRegistry -> IO [Skill]
-listAllSkills (SkillRegistry t) = Map.elems <$> readTVarIO t
+listAllSkills (SkillRegistry t _) = Map.elems <$> readTVarIO t
 
 --------------------------------------------------------------------------------
 -- Mutations (write-through: Postgres first, cache second).
@@ -243,7 +263,8 @@ data NewSkill = NewSkill
     nsDescription :: !Text,
     nsBody :: !Text,
     nsEnabled :: !Bool,
-    nsCreatedBy :: !(Maybe Int64)
+    nsCreatedBy :: !(Maybe Int64),
+    nsPackage :: !SkillPackage
   }
 
 -- | Size caps.  The description is a permanent line in every
@@ -260,6 +281,7 @@ maxBodyLen = 49152
 validateSkill :: Text -> Text -> Text -> Either Text ()
 validateSkill name desc body
   | "learned-task-" `T.isPrefixOf` name = Left "learned-task- 为任务经验保留，需通过 experience 回放审核发布"
+  | any (T.any (== '\0')) [name, desc, body] = Left "skill content cannot contain NUL"
   | T.null name = Left "name 不能为空"
   | T.length name > maxNameLen = Left ("name 太长（上限 " <> tshow maxNameLen <> " 字符）")
   | T.any isSpace name = Left "name 不能含空白字符（用 - 连接）"
@@ -277,88 +299,82 @@ createSkill ::
   SkillRegistry ->
   NewSkill ->
   Eff es (Either Text Skill)
-createSkill (SkillRegistry t) ns =
-  case validateSkill ns.nsName ns.nsDescription ns.nsBody of
+createSkill reg@(SkillRegistry t _) ns = withMutation reg $
+  case validateSkill ns.nsName ns.nsDescription ns.nsBody >> validateNamedPackage ns.nsName ns.nsPackage of
     Left err -> pure (Left err)
     Right () -> do
-      eres <-
-        try @SqlError $
+      result <- try @SqlError . withCommittedTransaction $ do
+        rows <-
           query
-            "INSERT INTO skills (name, group_id, description, body, enabled, created_by) \
-            \ VALUES (?,?,?,?,?,?) RETURNING id, updated_at"
-            (ns.nsName, ns.nsGroup, ns.nsDescription, ns.nsBody, ns.nsEnabled, ns.nsCreatedBy)
-      case eres of
-        Left e
-          | sqlState e == "23505" ->
-              pure (Left ("已存在同名技能：" <> ns.nsName))
-          | otherwise -> pure (Left ("insert failed: " <> TE.decodeUtf8Lenient (sqlErrorMsg e)))
-        Right [(sid, up)] -> do
-          let s =
-                Skill
-                  { skillId = sid,
-                    skillName = ns.nsName,
-                    skillGroup = ns.nsGroup,
-                    skillDescription = ns.nsDescription,
-                    skillBody = ns.nsBody,
-                    skillEnabled = ns.nsEnabled,
-                    skillCreatedBy = ns.nsCreatedBy,
-                    skillUpdatedAt = up
-                  }
-          liftIO . atomically $ modifyTVar' t (Map.insert sid s)
-          pure (Right s)
-        Right _ -> pure (Left "insert failed: unexpected result shape")
+            "INSERT INTO skills (name, group_id, description, body, enabled, created_by, package) VALUES (?,?,?,?,?,?,?) RETURNING id, updated_at"
+            (ns.nsName, ns.nsGroup, ns.nsDescription, ns.nsBody, ns.nsEnabled, ns.nsCreatedBy, toJSON ns.nsPackage)
+        case rows of
+          [(sid, up)] -> do
+            recordVersion sid
+            pure (Right (Skill sid ns.nsName ns.nsGroup ns.nsDescription ns.nsBody ns.nsEnabled ns.nsCreatedBy up 1 ns.nsPackage))
+          _ -> pure (Left "insert failed: unexpected result shape")
+      publish t result
 
--- | Apply a pure edit to one skill.  The edit can touch name, scope,
--- description, body and the enabled flag; id and provenance are
--- fixed.  'Left' carries a user-showable reason ("not found",
--- validation, duplicate name).
-updateSkill ::
-  (WithConnection :> es, IOE :> es) =>
-  SkillRegistry ->
-  Int64 ->
-  (Skill -> Skill) ->
-  Eff es (Either Text Skill)
-updateSkill (SkillRegistry t) sid f
-  | sid < 0 = pure (Left "内置技能（随二进制发布）不可修改；建一个同名技能即可覆盖它")
-  | otherwise = do
-      m <- liftIO (readTVarIO t)
-      case Map.lookup sid m of
+-- | Existing callers still get CAS against their observed cache revision.
+updateSkill :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Int64 -> (Skill -> Skill) -> Eff es (Either Text Skill)
+updateSkill registry sid = updateSkillAtRevision registry sid Nothing
+
+updateSkillAtRevision :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Int64 -> Maybe Integer -> (Skill -> Skill) -> Eff es (Either Text Skill)
+updateSkillAtRevision reg@(SkillRegistry t _) sid expected edit
+  | sid < 0 = pure (Left "内置技能不可修改；创建独立名称的工作流包")
+  | otherwise = withMutation reg $ do
+      current <- Map.lookup sid <$> liftIO (readTVarIO t)
+      case current of
         Nothing -> pure (Left "not found")
-        Just old | "learned-task-" `T.isPrefixOf` old.skillName -> pure (Left "任务经验需重新回放审核，禁用请使用 experience invalidate")
-        Just old -> do
-          let new0 = f old
-              new = new0 {skillId = old.skillId, skillCreatedBy = old.skillCreatedBy}
-          case validateSkill new.skillName new.skillDescription new.skillBody of
-            Left err -> pure (Left err)
-            Right () -> do
-              eres <-
-                try @SqlError $
-                  query
-                    "UPDATE skills SET name = ?, group_id = ?, description = ?, body = ?, \
-                    \ enabled = ?, updated_at = now() WHERE id = ? RETURNING updated_at"
-                    (new.skillName, new.skillGroup, new.skillDescription, new.skillBody, new.skillEnabled, sid)
-              case eres of
-                Left e
-                  | sqlState e == "23505" ->
-                      pure (Left ("已存在同名技能：" <> new.skillName))
-                  | otherwise -> pure (Left ("update failed: " <> TE.decodeUtf8Lenient (sqlErrorMsg e)))
-                Right [Only up] -> do
-                  let new' = new {skillUpdatedAt = up}
-                  liftIO . atomically $ modifyTVar' t (Map.insert sid new')
-                  pure (Right new')
-                Right _ -> pure (Left "not found")
+        Just old
+          | "learned-task-" `T.isPrefixOf` old.skillName -> pure (Left "任务经验需重新回放审核，禁用请使用 experience invalidate")
+          | maybe False (/= old.skillRevision) expected -> pure (Left "skill revision conflict")
+          | otherwise -> do
+              let changed = edit old
+                  new = changed {skillId = old.skillId, skillCreatedBy = old.skillCreatedBy, skillRevision = old.skillRevision + 1}
+              case validateSkill new.skillName new.skillDescription new.skillBody >> validateNamedPackage new.skillName new.skillPackage of
+                Left err -> pure (Left err)
+                Right () -> do
+                  result <- try @SqlError . withCommittedTransaction $ do
+                    rows <-
+                      query
+                        "UPDATE skills SET name=?, group_id=?, description=?, body=?, enabled=?, revision=?, package=?, updated_at=now() WHERE id=? AND revision=? RETURNING updated_at"
+                        (new.skillName, new.skillGroup, new.skillDescription, new.skillBody, new.skillEnabled, new.skillRevision, toJSON new.skillPackage, sid, old.skillRevision)
+                    case rows of
+                      [Only up] -> recordVersion sid >> pure (Right new {skillUpdatedAt = up})
+                      _ -> pure (Left "skill revision conflict")
+                  publish t result
 
--- | Remove a skill.  'False' when the id doesn't exist; builtins
--- (negative ids) are not deletable and the cache entry must survive,
--- so they never reach the DELETE.
-deleteSkill ::
-  (WithConnection :> es, IOE :> es) =>
-  SkillRegistry ->
-  Int64 ->
-  Eff es Bool
-deleteSkill (SkillRegistry t) sid
+recordVersion :: (WithConnection :> es, IOE :> es) => Int64 -> Eff es ()
+recordVersion sid = do
+  _ <- execute "INSERT INTO skill_versions (skill_id, revision, snapshot) SELECT id, revision, to_jsonb(skills) FROM skills WHERE id=?" (Only sid)
+  pure ()
+
+publish :: (IOE :> es) => TVar (Map Int64 Skill) -> Either SqlError (Either Text Skill) -> Eff es (Either Text Skill)
+publish t = \case
+  Left e
+    | sqlState e == "23505" -> pure (Left "已存在同名技能或版本")
+    | otherwise -> pure (Left ("skill write failed: " <> TE.decodeUtf8Lenient (sqlErrorMsg e)))
+  Right (Left err) -> pure (Left err)
+  Right (Right skill) -> do
+    liftIO . atomically $ modifyTVar' t (Map.insert skill.skillId skill)
+    pure (Right skill)
+
+-- Serialize DB commits and cache publication; cancellation cannot land in the
+-- commit-to-cache gap. SQL still uses CAS across independent registry instances.
+withMutation :: (IOE :> es) => SkillRegistry -> Eff es a -> Eff es a
+withMutation (SkillRegistry _ gate) action =
+  bracket_ (liftIO (takeMVar gate)) (liftIO (putMVar gate ())) (mask_ action)
+
+deleteSkill :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Int64 -> Eff es Bool
+deleteSkill reg@(SkillRegistry t _) sid
   | sid < 0 = pure False
-  | otherwise = do
-      n <- execute "DELETE FROM skills WHERE id = ?" (Only sid)
+  | otherwise = withMutation reg $ do
+      n <- withCommittedTransaction (execute "DELETE FROM skills WHERE id = ?" (Only sid))
       when (n > 0) . liftIO . atomically $ modifyTVar' t (Map.delete sid)
       pure (n > 0)
+
+validateNamedPackage :: Text -> SkillPackage -> Either Text ()
+validateNamedPackage name package = do
+  validatePackage package
+  when (package /= emptyPackage) (validatePackageName name)

@@ -403,7 +403,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                   requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
               for_ tcs $ \tc ->
                 logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]
-              batch <- executeModelBatch codeEnabled session hooks registered requests
+              batch <- executeModelBatch codeEnabled (toolSkillLoads ctx.acTools) session hooks registered requests
               for_ (zip tcs batch.tbInvocations) $ \(tc, invocation) ->
                 case outcomeResult invocation.tiOutcome of
                   Right value -> logInfo "agent: tool result" $ object ["id" .= tc.callId, "name" .= tc.callName, "outcome" .= outcomeName invocation.tiOutcome, "result" .= previewJson 400 value, "full_len" .= LBS.length (encode value)]

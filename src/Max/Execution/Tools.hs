@@ -146,7 +146,9 @@ executeToolBatch session hooks catalog requests =
                                   pure row
                               }
                       (_, invocation) <- withExecutionRecord admitting step start $ \row -> mask $ \restore -> do
-                        result <- restore (invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments)
+                        result <- case view request of
+                          Nothing -> pure (rejected "unknown_tool" ("tool is outside the execution catalog: " <> request.trName))
+                          Just _ -> restore (invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments)
                         -- A yield hands off after this admitted batch. Finish
                         -- remains immediate. The finally action also preserves
                         -- a yield when a later sibling is interrupted.

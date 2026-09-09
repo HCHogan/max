@@ -13,7 +13,9 @@ module Max.Tools.Skills
   )
 where
 
+import Control.Monad (foldM)
 import Data.Aeson
+import Data.Aeson.Key qualified as Key
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
@@ -23,18 +25,19 @@ import Data.Text qualified as T
 import Effectful
 import Max.Effects.ToolControl (ToolControl, activateSkills)
 import Max.Effects.Tools (Tool (..))
-import Max.Skills (Skill (..), SkillRegistry, lookupSkill, skillsForGroup)
-import Max.Tool.Bundles (SkillLoad (..), skillDependencies, skillLoadVersion)
+import Max.Skill.Package (PinnedPackage (..), emptyPackage, packageDependencies, packageInstructions)
+import Max.Skills (Skill (..), SkillRegistry, skillsForGroup)
+import Max.Tool.Bundles (SkillLoad (..), skillDependencies, skillReceiptVersion)
 import Max.ToolContext (ToolContext, toolGroupId, toolSkillLoads, toolSkills)
 import Max.Tools.Schema (stringParam, toolObject)
 
-skillToolsFor :: (IOE :> es, ToolControl :> es) => SkillRegistry -> ToolContext -> (Text -> IO (Either Text (Maybe Value))) -> [Tool es]
-skillToolsFor reg dc prepare
-  | toolSkills dc = [useSkillTool reg dc prepare]
+skillToolsFor :: (IOE :> es, ToolControl :> es) => SkillRegistry -> ToolContext -> (Text -> IO (Either Text (Maybe Value))) -> ([SkillLoad] -> Either Text [SkillLoad]) -> [Tool es]
+skillToolsFor reg dc prepare bind
+  | toolSkills dc = [useSkillTool reg dc prepare bind]
   | otherwise = []
 
-useSkillTool :: (IOE :> es, ToolControl :> es) => SkillRegistry -> ToolContext -> (Text -> IO (Either Text (Maybe Value))) -> Tool es
-useSkillTool reg dc prepare =
+useSkillTool :: (IOE :> es, ToolControl :> es) => SkillRegistry -> ToolContext -> (Text -> IO (Either Text (Maybe Value))) -> ([SkillLoad] -> Either Text [SkillLoad]) -> Tool es
+useSkillTool reg dc prepare bind =
   Tool
     { toolName = "use_skill",
       toolDescription =
@@ -47,55 +50,55 @@ useSkillTool reg dc prepare =
       toolRun = \args -> case parseEither (withObject "args" (\o -> o .: "name")) args of
         Left e -> pure $ Left ("bad args: " <> T.pack e)
         Right (name :: Text) -> do
-          found <- liftIO (lookupSkill reg (toolGroupId dc) (T.strip name))
-          case found of
-            Just s -> do
-              prepared <- liftIO (resolve [] s)
-              case prepared of
-                Left failure -> pure (Left failure)
-                Right loads
-                  | sum (map (T.length . (.slInstructions)) loads) + sum (map (T.length . (.slInstructions)) (Map.elems (toolSkillLoads dc))) > 120000
-                      || LBS.length (encode loads) > 512000 ->
-                      pure (Left "技能包超过完整加载上限；请缩小技能说明或在设计中拆分固定工具包，不能静默截断")
-                Right loads -> do
-                  activateSkills loads
-                  pure . Right $
-                    object
-                      [ "skill" .= s.skillName,
-                        "loaded" .= map (.slName) loads,
-                        "already_loaded" .= Map.member s.skillName (toolSkillLoads dc),
-                        "instructions" .= T.intercalate "\n\n" (map (.slInstructions) loads),
-                        "availability"
-                          .= [ object ["skill" .= load.slName, "details" .= available]
-                             | load <- loads,
-                               Just (Object metadata) <- [load.slMetadata],
-                               Just available <- [KeyMap.lookup "availability" metadata]
-                             ]
-                      ]
-            Nothing -> do
-              skills <- liftIO (skillsForGroup reg (toolGroupId dc))
-              pure . Left $
-                "没有叫 '"
-                  <> name
-                  <> "' 的技能。可用的技能："
-                  <> T.intercalate "、" [s.skillName | s <- skills]
+          snapshot <- liftIO (skillsForGroup reg (toolGroupId dc))
+          let available = Map.fromList [(s.skillName, s) | s <- snapshot]
+              selected = T.strip name
+          prepared <- liftIO (resolve available [] [] selected)
+          case prepared >>= bind of
+            Left failure -> pure (Left failure)
+            Right loads
+              | length loads + Map.size (toolSkillLoads dc) > 32
+                  || sum (map (T.length . (.slInstructions)) (loads <> Map.elems (toolSkillLoads dc))) > 120000
+                  || LBS.length (encode (loads <> Map.elems (toolSkillLoads dc))) > 512000 ->
+                  pure (Left "技能包超过完整加载上限，不能静默截断")
+            Right loads -> do
+              activateSkills loads
+              let current = maybe [] pure (Map.lookup selected (toolSkillLoads dc))
+              pure . Right $
+                object
+                  [ "skill" .= selected,
+                    "loaded" .= map (.slName) loads,
+                    "already_loaded" .= not (null current),
+                    "versions" .= object [Key.fromText l.slName .= l.slVersion | l <- loads <> current],
+                    "instructions" .= T.intercalate "\n\n" (map (.slInstructions) (loads <> current)),
+                    "availability" .= [object ["skill" .= l.slName, "details" .= value] | l <- loads <> current, Just (Object metadata) <- [l.slMetadata], Just value <- [KeyMap.lookup "availability" metadata]]
+                  ]
     }
   where
-    resolve seen s
-      | Map.member s.skillName (toolSkillLoads dc) = pure (Right [])
-      | s.skillName `elem` seen = pure (Left "技能依赖存在循环")
-      | otherwise = do
-          dependencies <- traverse (lookupSkill reg (toolGroupId dc)) (skillDependencies s.skillName)
-          case sequence dependencies of
-            Nothing -> pure (Left "技能的固定依赖不可用")
-            Just available -> do
-              nested <- traverse (resolve (s.skillName : seen)) available
-              metadata <- prepare s.skillName
-              pure $ do
-                earlier <- concat <$> sequence nested
-                extra <- metadata
-                let instructions = frame s
-                Right (earlier <> [SkillLoad s.skillName (skillLoadVersion instructions) instructions extra])
+    resolve available seen acc name
+      | Map.member name (toolSkillLoads dc) || any ((== name) . (.slName)) acc = pure (Right acc)
+      | name `elem` seen = pure (Left "技能依赖存在循环")
+      | length seen >= 16 || length acc >= 32 = pure (Left "技能依赖超过深度或数量上限")
+      | otherwise = case Map.lookup name available of
+          Nothing -> pure (Left ("技能或固定依赖不可用：" <> name))
+          Just s -> do
+            nested <-
+              foldM
+                ( \result dependency -> case result of
+                    Left err -> pure (Left err)
+                    Right earlier -> resolve available (name : seen) earlier dependency
+                )
+                (Right acc)
+                (skillDependencies name <> packageDependencies s.skillPackage)
+            case nested of
+              Left err -> pure (Left err)
+              Right earlier -> do
+                metadata <- prepare name
+                pure $ do
+                  extra <- metadata
+                  let instructions = frame s <> packageInstructions name s.skillPackage
+                      load = SkillLoad name "" instructions extra (if s.skillPackage == emptyPackage then Nothing else Just (PinnedPackage s.skillRevision s.skillPackage Map.empty))
+                  Right (earlier <> [load {slVersion = skillReceiptVersion load}])
 
 -- | The framing line matters: the body is configuration, and without
 -- it a body written in the imperative reads like a message someone

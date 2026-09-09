@@ -54,6 +54,7 @@ import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import Max.PublicationSpec qualified as PublicationSpec
 import Max.RecallSpec qualified as RecallSpec
 import Max.ResourceCapabilitiesSpec qualified as ResourceCapabilitiesSpec
+import Max.SkillWorkflowSpec qualified as SkillWorkflowSpec
 import Max.TaskExperienceSpec qualified as TaskExperienceSpec
 import System.Environment (lookupEnv)
 import System.Exit (die)
@@ -73,6 +74,7 @@ main = do
         [] -> putStrLn "migrations: nothing to apply (test DB already up to date)"
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
+        SkillWorkflowSpec.spec pool
         ExecutionSpec.spec pool
         AdminTimelineSpec.spec pool
         MaintenanceLeaseSpec.spec pool

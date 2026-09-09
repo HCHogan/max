@@ -33,7 +33,7 @@ import Effectful
 import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Concurrent.Async (race)
 import Effectful.Dispatch.Dynamic (interpret, send)
-import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
+import Max.Tool.Bundles (SkillLoad (..), skillReceiptVersion)
 import Max.Tool.Catalog (ToolCatalog, buildToolCatalog, lookupCatalogTool, validateArguments)
 import Max.Tool.Control (LoopControl (..), mapControlText)
 import Max.Tool.Types
@@ -174,9 +174,9 @@ sanitizeInvocation invocation = ToolInvocation (sanitizeToolOutcome invocation.t
   where
     sanitizeControl (LoadSkills loads) =
       LoadSkills
-        [ load {slInstructions = instructions, slVersion = skillLoadVersion instructions, slMetadata = sanitizeToolValue <$> load.slMetadata}
+        [ updated {slVersion = skillReceiptVersion updated}
         | load <- loads,
-          let instructions = sanitizeToolText load.slInstructions
+          let updated = load {slInstructions = sanitizeToolText load.slInstructions, slMetadata = sanitizeToolValue <$> load.slMetadata}
         ]
     sanitizeControl control = mapControlText sanitizeToolText control
 

@@ -873,6 +873,7 @@ function admin() {
           group_id: s.group_id == null ? '' : String(s.group_id),
           enabled: s.enabled,
           body: s.body,
+          expected_revision: s.revision,
         };
       }
     },
@@ -884,6 +885,7 @@ function admin() {
         description: d.description.trim(),
         body: d.body,
         enabled: !!d.enabled,
+        ...(d.expected_revision == null ? {} : {expected_revision: d.expected_revision}),
       };
     },
 

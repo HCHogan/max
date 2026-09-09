@@ -4,6 +4,7 @@ import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Monad (forM_)
 import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
@@ -185,7 +186,7 @@ spec = describe "JavaScript SDK in embedded Wasm" $ do
       $ \(enabled, calls) -> do
         result <- runEff . runConcurrent . runTools registry $ do
           session <- newExecutionSession Nothing
-          executeModelBatch enabled session noJournal (views registry) calls
+          executeModelBatch enabled Map.empty session noJournal (views registry) calls
         map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` replicate (length calls) "rejected"
     readIORef count `shouldReturn` 0
   where

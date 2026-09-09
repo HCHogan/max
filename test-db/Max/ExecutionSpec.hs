@@ -6,6 +6,7 @@ import Control.Exception (SomeException, fromException, try)
 import Control.Monad (unless, void)
 import Data.Aeson (Value, object, (.=))
 import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..))
@@ -20,6 +21,7 @@ import Max.Agent.Execution (ExecutionAdmission (..))
 import Max.Agent.Runtime (durableExecutionAdmission)
 import Max.CodeMode.Execution
 import Max.CodeMode.JavaScript (runJavaScript)
+import Max.CodeMode.Model (executeModelBatch)
 import Max.CodeMode.Wasm
 import Max.DB.AgentTurn
 import Max.DB.Connection (DbPool)
@@ -29,6 +31,8 @@ import Max.Effects.Blob (Blob, runBlob)
 import Max.Effects.ToolControl (activateSkills, runToolControl)
 import Max.Effects.Tools
 import Max.Execution.Tools
+import Max.Skill.Package
+import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Task.State (FailureKind (Transient))
 import Max.Tasks (TaskCancelled (..))
 import Max.Tool.Bundles (SkillLoad (..), skillLoadVersion)
@@ -137,7 +141,7 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
 
   it "persists trusted skill controls from either path even when the guest later traps" $ do
     (_, turn) <- fixture
-    let load = SkillLoad "web" (skillLoadVersion "trusted skill") "trusted skill" Nothing
+    let load = SkillLoad "web" (skillLoadVersion "trusted skill") "trusted skill" Nothing Nothing
         runner = echoTool {toolName = "use_skill", toolRun = \value -> activateSkills [load] >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [runner])
@@ -149,6 +153,39 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     result.cmControl `shouldBe` LoadSkills [load]
     map (.ccOutcome) result.cmCalls `shouldBe` ["succeeded", "rejected"]
     withDb pool (readSkillLoads turn) `shouldReturn` [load, load]
+
+  it "recovers an exact saved workflow and journals its version and output contract failure" $ do
+    (_, turn) <- fixture
+    let contract = object ["type" .= ("object" :: Text), "additionalProperties" .= True]
+        workflow = Workflow "saved" "tools.echo(args); return 'wrong shape';" contract contract ["echo"]
+        package = SkillPackage [] (Map.singleton "run" workflow)
+        raw = SkillLoad "saved" "" "saved instructions" Nothing (Just (PinnedPackage 1 package Map.empty))
+        writeDefinition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
+    effectRegistry <- either (fail . show) pure (buildToolRegistry [writeDefinition] [echoTool])
+    [pinned] <- either (fail . show) pure (bindWorkflowContracts (views effectRegistry) [raw])
+    let loader = echoTool {toolName = "use_skill", toolRun = \value -> activateSkills [pinned] >> pure (Right value)}
+        definition = echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
+    registry <- either (fail . show) pure (buildToolRegistry [definition] [loader])
+    _ <- withHost pool . runToolsWithControl runToolControl registry $ do
+      session <- newExecutionSession Nothing
+      executeToolBatch session (hostHooks turn) (views registry) [ToolRequest "load" "use_skill" args]
+    void . withDb pool $ execute "UPDATE task_attempts SET lease_until=now()-interval '1 second' WHERE turn_id=?" (Only turn.atrTurnId)
+    resumed <- claimOne pool
+    restored <- withDb pool (readSkillLoads resumed)
+    restored `shouldBe` [pinned]
+    result <- withHost pool . runTools effectRegistry $ do
+      session <- newExecutionSession Nothing
+      executeModelBatch
+        True
+        (Map.fromList [(l.slName, l) | l <- restored])
+        session
+        (hostHooks resumed)
+        (views effectRegistry)
+        [ToolRequest "saved-code" "run_code" (object ["workflow" .= ("saved/run" :: Text), "args" .= args])]
+    map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` ["outcome-unknown"]
+    states resumed `shouldReturn` [("host:wasm/v1", "outcome-unknown"), ("echo", "committed")]
+    evidence <- withDb pool $ query "SELECT normalized_input->'program'->'workflow'->>'version', normalized_input->'program'->>'source' FROM execution_journal WHERE turn_id=? AND tool_ref='host:wasm/v1'" (Only resumed.atrTurnId)
+    evidence `shouldBe` [(pinned.slVersion, workflow.wfSource)]
 
   it "charges one durable leaf when different sessions race for the last call" $ do
     (identifier, turn) <- fixture

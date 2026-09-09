@@ -1,0 +1,55 @@
+{
+  "dependencies": [
+    "maxops"
+  ],
+  "workflows": {
+    "check": {
+      "description": "汇总指定主机的 agent/exporter 状态和可读服务故障；保留不可达、未知和查询失败。",
+      "input": {
+        "type": "object",
+        "properties": {
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "minItems": 1,
+            "maxItems": 16
+          }
+        },
+        "required": [
+          "hosts"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "maxItems": 16
+          },
+          "overview_outcome": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "hosts",
+          "overview_outcome"
+        ],
+        "additionalProperties": false
+      },
+      "tools": [
+        "maxops_fleet_overview",
+        "maxops_units_failed"
+      ],
+      "source": "const hosts = [...new Set(args.hosts)];\nconst results = max.batch([{tool: \"maxops_fleet_overview\", args: {}}, ...hosts.map(host => ({tool: \"maxops_units_failed\", args: {host}}))]);\nconst overview = results[0];\nconst ok = result => result.outcome === \"succeeded\" || result.outcome === \"committed\";\nif (ok(overview) && !Array.isArray(overview.value?.hosts)) throw new Error(\"fleet.overview returned no hosts array\");\nconst summary = {overview_outcome: overview.outcome, hosts: hosts.map((host, index) => {\n  const observed = ok(overview) ? overview.value.hosts.find(row => row.host === host) : null;\n  const failure = results[index + 1];\n  if (ok(failure) && !Array.isArray(failure.value?.hosts)) throw new Error(\"units.failed returned no hosts array\");\n  const units = ok(failure) ? failure.value.hosts.find(row => row.host === host) : null;\n  return {host, assessment: observed?.assessment ?? \"unknown\", agent: observed?.agent ?? null,\n    exporter: observed?.exporter ?? null, units_outcome: failure.outcome,\n    unit_scope: units?.unit_scope ?? null, units_state: units?.state ?? \"unknown\",\n    failed_count: Array.isArray(units?.units) ? units.units.length : null,\n    failed_units: Array.isArray(units?.units) ? units.units.slice(0, 50).map(unit => ({unit: unit.name ?? unit.unit ?? null, active_state: unit.active_state, sub_state: unit.sub_state})) : null,\n    omitted_units: Array.isArray(units?.units) ? Math.max(0, units.units.length - 50) : 0,\n    error: !ok(failure) ? failure.error : !ok(overview) ? overview.error : null};\n})};\nwhile (JSON.stringify(summary).length > 20000) {\n  const row = [...summary.hosts].reverse().find(row => row.failed_units?.length);\n  if (!row) throw new Error(\"fleet summary exceeds output budget\");\n  row.failed_units.pop(); row.omitted_units += 1;\n}\nreturn summary;"
+    }
+  }
+}

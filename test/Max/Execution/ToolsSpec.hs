@@ -102,7 +102,7 @@ spec = describe "shared host tool execution" $ do
     map (outcomeName . (.tiOutcome)) later.tbInvocations `shouldBe` ["rejected"]
 
   it "keeps loaded skills out of the running guest catalog, including after a trap" $ do
-    let load = SkillLoad "test" (skillLoadVersion "trusted instructions") "trusted instructions" Nothing
+    let load = SkillLoad "test" (skillLoadVersion "trusted instructions") "trusted instructions" Nothing Nothing
         runner = echoTool {toolRun = \value -> activateSkills [load] >> pure (Right value)}
         definition = echoDefinition {tdParallelism = SequentialOnly, tdEffects = Set.singleton EffectReflect, tdRetryClass = RetryUnsafe}
     binary <- guestCalls [request "echo" args, request "hidden" args] "unreachable"

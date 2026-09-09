@@ -28,7 +28,7 @@ spec = describe "Max.Skills builtins" $ do
           mkToolContext
             (TurnIdentity (GroupId 7777) (CanonicalMessageId 1) (UserId 2) (UserId 3) (PrincipalId 2) Nothing Nothing)
             (TurnCapabilities False False True noAdvertisedCaps False Map.empty Nothing False)
-        load current = case skillToolsFor registry current (const (pure (Right Nothing))) of
+        load current = case skillToolsFor registry current (const (pure (Right Nothing))) Right of
           [runner] -> runEff (runToolControl (runner.toolRun (object ["name" .= ("office" :: T.Text)])))
           _ -> fail "missing skill loader"
     (_, first) <- load executionContext

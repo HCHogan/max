@@ -115,3 +115,7 @@ The concurrent kill fix uses explicit cancelled settlement: terminal turn, reque
 cancellation and frontend lease release commit together. Duplicate cancellation
 signals cannot interrupt that cleanup; a kill during publication failure cleanup
 also reaches the same terminal path. Cancelled durable tasks never auto-retry.
+
+Versioned, executable skill content and validated package dependencies are
+defined in [ADR-014](014-versioned-skill-workflows.md). They preserve fixed,
+complete loading and cannot change host-owned tool authority or effects.

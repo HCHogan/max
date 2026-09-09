@@ -1,0 +1,47 @@
+{
+  "dependencies": [
+    "web"
+  ],
+  "workflows": {
+    "search": {
+      "description": "批量检索并按查询整理标题、链接和摘要，保留每个查询的失败状态。",
+      "input": {
+        "type": "object",
+        "properties": {
+          "queries": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "minItems": 1,
+            "maxItems": 8
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10
+          }
+        },
+        "required": [
+          "queries",
+          "limit"
+        ],
+        "additionalProperties": false
+      },
+      "output": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "maxItems": 8
+      },
+      "tools": [
+        "web_search"
+      ],
+      "source": "const outcomes = max.batch(args.queries.map(query => ({tool: \"web_search\", args: {query, max_results: args.limit}})));\nconst rows = outcomes.map((outcome, index) => {\n  if (outcome.outcome !== \"succeeded\" && outcome.outcome !== \"committed\") return {query: args.queries[index], outcome: outcome.outcome, error: {...outcome.error, message: String(outcome.error?.message ?? \"\").slice(0, 512)}};\n  if (!Array.isArray(outcome.value?.results)) throw new Error(\"web_search returned no results array\");\n  const results = outcome.value.results;\n  return {query: args.queries[index], outcome: outcome.outcome,\n    answer: typeof outcome.value.answer === \"string\" ? outcome.value.answer.slice(0, 512) : null,\n    results: results.slice(0, args.limit).map(row => ({title: String(row.title ?? \"\").slice(0, 160), url: String(row.url ?? \"\").slice(0, 1024), snippet: String(row.snippet ?? \"\").slice(0, 400)})),\n    omitted_results: Math.max(0, results.length - args.limit)};\n});\n// 20k UTF-16 units fit below the host 64 KiB UTF-8 result limit.\nwhile (JSON.stringify(rows).length > 20000) {\n  const row = [...rows].reverse().find(row => row.results?.length);\n  if (!row) throw new Error(\"search summary exceeds output budget\");\n  row.results.pop(); row.omitted_results += 1;\n}\nreturn rows;"
+    }
+  }
+}

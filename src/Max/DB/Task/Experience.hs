@@ -162,7 +162,9 @@ publishExperience scope candidate replay = withTransaction $ do
                     "INSERT INTO skills(name,group_id,description,body,enabled) VALUES(?,?,?,?,true) ON CONFLICT DO NOTHING RETURNING id"
                     ("learned-task-" <> T.pack (show candidate), conversationStorageId scope, capsule.description, capsuleBody capsule)
                 case inserted :: [Only Int64] of
-                  [Only skill] -> (== 1) <$> execute "UPDATE task_experience_candidates SET published_skill_id=? WHERE candidate_id=?" (skill, candidate)
+                  [Only skill] -> do
+                    void $ execute "INSERT INTO skill_versions(skill_id,revision,snapshot) SELECT id,revision,to_jsonb(skills) FROM skills WHERE id=?" (Only skill)
+                    (== 1) <$> execute "UPDATE task_experience_candidates SET published_skill_id=? WHERE candidate_id=?" (skill, candidate)
                   _ -> pure False
           _ -> pure False
       _ -> pure False
@@ -175,10 +177,11 @@ invalidateExperience scope candidate reason = withTransaction $ do
     execute
       "UPDATE task_experience_candidates SET invalidated_at=now(),invalidation_reason=? WHERE candidate_id=? AND legacy_group=? AND invalidated_at IS NULL"
       (reason, candidate, conversationStorageId scope)
-  void $
-    execute
-      "UPDATE skills SET enabled=false,updated_at=now() WHERE id IN (SELECT published_skill_id FROM task_experience_candidates WHERE candidate_id=? AND legacy_group=? AND invalidated_at IS NOT NULL)"
+  disabled <-
+    query
+      "UPDATE skills SET enabled=false,revision=revision+1,updated_at=now() WHERE enabled AND id IN (SELECT published_skill_id FROM task_experience_candidates WHERE candidate_id=? AND legacy_group=? AND invalidated_at IS NOT NULL) RETURNING id"
       (candidate, conversationStorageId scope)
+  mapM_ (\(Only skill :: Only Int64) -> void $ execute "INSERT INTO skill_versions(skill_id,revision,snapshot) SELECT id,revision,to_jsonb(skills) FROM skills WHERE id=?" (Only skill)) disabled
   pure (changed == 1)
 
 experienceWorker :: (LLM :> es, Concurrent :> es, WithConnection :> es, Log :> es, IOE :> es) => Text -> Text -> SkillRegistry -> Int -> Eff es ()

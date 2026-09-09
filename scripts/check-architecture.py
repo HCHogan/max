@@ -25,6 +25,9 @@ PURE = {
     "Max.ModelCatalog.Internal",
     "Max.Tool.Types",
     "Max.Tool.Bundles",
+    "Max.Skill.Contract",
+    "Max.Skill.Package",
+    "Max.Skill.Workflow",
     "Max.Tool.Control",
     "Max.Tool.Catalog",
     "Max.Task.Types",
@@ -179,6 +182,7 @@ import Max.Effects.Blob
 import Max.Effects.BlobHost
 import Max.Effects.ToolControl
 import Max.Tool.Control
+import Max.Skill.Package (SkillPackage)
 import Max.Effects.ToolDirectory
 import Max.Effects.ToolOutput
 import Max.Effects.Tools
@@ -289,6 +293,7 @@ NEGATIVE = {
     "content cannot resolve host paths": ("BlobHost", "bad :: Blob :> es => BlobRef -> Eff es FilePath\nbad = resolveBlobHostPath"),
     "producer cannot drain": ("ToolOutputRead", "bad :: ToolOutput :> es => Eff es [InlineMedia]\nbad = drainInlineMedia"),
     "consumer cannot produce": ("ToolOutput", "bad :: ToolOutputRead :> es => InlineMedia -> Eff es Bool\nbad = queueInlineMedia"),
+    "skill package cannot execute tools": ("Tools", 'bad :: SkillPackage -> Eff es ToolOutcome\nbad _ = invokeTool "read" Null'),
     "directory cannot execute": ("Tools", 'bad :: ToolDirectory :> es => Eff es ToolOutcome\nbad = invokeTool "read" Null'),
     "directory cannot run arbitrary IO": ("IOE", "bad :: ToolDirectory :> es => Eff es ()\nbad = liftIO (pure ())"),
 }

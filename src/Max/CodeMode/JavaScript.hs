@@ -5,10 +5,11 @@ module Max.CodeMode.JavaScript
   ( javaScriptLimits,
     runJavaScript,
     javaScriptProgram,
+    workflowProgram,
   )
 where
 
-import Data.Aeson (encode, object, (.=))
+import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString (ByteString)
 import Data.ByteString.Lazy qualified as LBS
 import Data.FileEmbed (embedFile)
@@ -22,6 +23,7 @@ import Max.CodeMode.Execution
 import Max.CodeMode.Wasm (WasmLimits (..), defaultWasmLimits)
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools (ExecutionHooks, ExecutionSession)
+import Max.Skill.Package (Workflow (..))
 import Max.Tool.Types
 import System.Environment (lookupEnv)
 
@@ -49,7 +51,19 @@ javaScriptLimits =
     }
 
 javaScriptProgram :: [CatalogTool] -> Text -> WasmProgram
-javaScriptProgram catalog source =
+javaScriptProgram catalog source = programWithInput catalog source Nothing Nothing Nothing
+
+workflowProgram :: [CatalogTool] -> Text -> Text -> Workflow -> Value -> WasmProgram
+workflowProgram catalog reference version workflow args =
+  programWithInput
+    catalog
+    workflow.wfSource
+    (Just args)
+    (Just workflow.wfOutput)
+    (Just (object ["reference" .= reference, "version" .= version, "args" .= args]))
+
+programWithInput :: [CatalogTool] -> Text -> Maybe Value -> Maybe Value -> Maybe Value -> WasmProgram
+programWithInput catalog source args contract workflow =
   WasmProgram
     javaScriptRuntime
     (Just input)
@@ -57,12 +71,18 @@ javaScriptProgram catalog source =
         [ "language" .= ("javascript" :: Text),
           "runtime" .= ("quickjs-ng-0.16.2" :: Text),
           "source" .= source,
+          "workflow" .= workflow,
           "catalog" .= [object ["tool" .= entry.ctDefinition.tdRef.unToolRef, "schema_hash" .= entry.ctSchemaHash.unSchemaHash] | entry <- catalog]
         ]
     )
+    contract
+    workflow
   where
     names = [entry.ctDefinition.tdRef.unToolRef | entry <- catalog, entry.ctDefinition.tdRef /= ToolRef "run_code"]
-    input = javaScriptSdk <> "(__maxCall," <> LBS.toStrict (encode names) <> ");\n(async () => {\n\"use strict\";\n" <> TE.encodeUtf8 source <> "\n})()"
+    argument = maybe "" (LBS.toStrict . encode . TE.decodeUtf8 . LBS.toStrict . encode) args
+    suffix = maybe "()" (const ("(JSON.parse(" <> argument <> "))")) args
+    parameter = maybe "" (const "args") args
+    input = javaScriptSdk <> "(__maxCall," <> LBS.toStrict (encode names) <> ");\n(async (" <> parameter <> ") => {\n\"use strict\";\n" <> TE.encodeUtf8 source <> "\n})" <> suffix
 
 runJavaScript :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> Text -> Eff es CodeModeResult
 runJavaScript session hooks catalog source = runWasmProgram session hooks catalog javaScriptLimits (javaScriptProgram catalog source)
