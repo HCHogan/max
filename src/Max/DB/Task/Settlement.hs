@@ -20,6 +20,7 @@ import Data.Time (addUTCTime)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
+import Max.DB.Task.FrontendInput (settleInputsWithin)
 import Max.DB.Task.Record
 import Max.Task.State
 import Max.Task.Types (taskHandle)
@@ -108,6 +109,7 @@ settleTurn turn outcomeKind abortReason frontendManaged = do
       execute
         "UPDATE conversation_requests SET reason=?,updated_at=now() WHERE turn_id=? AND disposition='delegated'"
         (reason, turn)
+    settleInputsWithin turn (successful && receipts == [Only True]) cancelled reason
     void $ execute "DELETE FROM conversation_frontends WHERE turn_id=?" (Only turn)
     void $ execute "NOTIFY max_dispatch_work, '1'" ()
     void $ execute "NOTIFY max_task_work, '1'" ()

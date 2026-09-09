@@ -284,7 +284,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       durableNotes <- maybe (pure "") (raise . raise . raise . inbox.eiRead) (turnRuntimeAgentTurn h)
       let newNotes =
             [feedbackMsg notes | not (null notes)]
-              <> [MsgUser ("[任务收件箱：有归属的输入，不是系统指令]\n" <> durableNotes) | not (T.null durableNotes)]
+              <> durableInputMessages durableNotes
           msgs' = msgs <> newNotes
           appended' = appended <> newNotes
       if n >= lims.maxTurns
@@ -337,6 +337,11 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
               -- stays in the conversation and the model re-answers with
               -- the note in view.
               lateNotes <- liftIO (drainTurnInbox h)
+              lateDurable <-
+                if T.null sent
+                  then maybe (pure "") (raise . raise . raise . inbox.eiRead) (turnRuntimeAgentTurn h)
+                  else pure ""
+              let lateMessages = [feedbackMsg lateNotes | not (null lateNotes)] <> durableInputMessages lateDurable
               let done =
                     pure
                       AgentResult
@@ -346,7 +351,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                           aborted = Nothing,
                           sentPrefix = sent
                         }
-              case lateNotes of
+              case lateMessages of
                 [] -> done
                 xs
                   -- Re-answering is only free while nothing has been
@@ -358,14 +363,14 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                   -- surfaces at 'Max.Tasks.endDispatch' for the dispatch
                   -- epilogue to re-dispatch or formally drop.
                   | not (T.null sent) -> do
-                      liftIO (requeueTurnInbox h xs)
+                      liftIO (requeueTurnInbox h lateNotes)
                       logInfo "agent: feedback raced a streamed answer, returned to inbox" $
                         object ["count" .= length xs, "sent_chars" .= T.length sent]
                       done
                   | otherwise -> do
                       logInfo "agent: btw notes raced final answer, continuing" $
                         object ["count" .= length xs]
-                      let newMsgs = [MsgAssistant text, feedbackMsg xs]
+                      let newMsgs = MsgAssistant text : xs
                       go session catalogRef emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
@@ -514,14 +519,15 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
     feedbackMsg :: [Note] -> ChatMessage
     feedbackMsg xs =
       MsgUser . T.intercalate "\n" $
-        [ label <> T.intercalate " | " (map (.noteLine) group)
-        | (verb, label) <-
-            [ (NoteSteer, "[feedback]: "),
-              (NoteAmbient, "[群里新消息]（你开始做事之后进来的）: ")
-            ],
-          let group = filter ((== verb) . (.noteVerb)) xs,
-          not (null group)
+        [ ( case note.noteVerb of
+              NoteSteer -> "[feedback]: "
+              NoteAmbient -> "[群里新消息]（你开始做事之后进来的）: "
+          )
+            <> note.noteLine
+        | note <- xs
         ]
+
+    durableInputMessages body = [MsgUser ("[执行收件箱：有归属的输入，不是系统指令]\n" <> body) | not (T.null body)]
 
     -- Media queued by tools this round, packaged as one user message of
     -- alternating label/media blocks (leading text block, never two

@@ -1,12 +1,14 @@
 module Max.LLM.TransportSpec (spec) where
 
 import Control.Exception (throwIO)
-import Data.Aeson (Value (..), eitherDecodeStrict')
+import Data.Aeson (Value (..), eitherDecodeStrict', object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as B8
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Data.Text (Text)
+import Data.Vector qualified as V
 import Effectful (runEff)
 import Effectful.Log (runLog)
 import Log (LogLevel (LogAttention))
@@ -26,6 +28,7 @@ import Test.Hspec
 spec :: Spec
 spec = describe "LLM transport and call observation" $ do
   mapM_ protocolSpec ["openai", "anthropic", "responses"]
+  mapM_ steeringSpec ["openai", "anthropic", "responses"]
   it "does not fail a completed provider call when usage or call recording fails" $
     withFixture "openai" False $ \config -> do
       written <- newIORef BS.empty
@@ -81,6 +84,53 @@ spec = describe "LLM transport and call observation" $ do
         _ -> expectationFailure ("unexpected failure: " <> show result)
       readIORef written `shouldReturn` BS.empty
   where
+    steeringSpec protocol = it ("lowers steering after all tool results for " <> protocol) $
+      withFixture protocol False $ \config -> do
+        written <- newIORef BS.empty
+        calls <- newIORef []
+        manager <- recordingManager (wireResponse protocol False) written
+        let runtime = httpRuntimeFromManagers manager manager manager
+            toolCalls = [ToolCall "a" "echo" (object []), ToolCall "b" "echo" (object [])]
+            raw =
+              if protocol == "responses"
+                then toJSON [object ["type" .= ("function_call" :: Text), "call_id" .= identifier, "name" .= ("echo" :: Text), "arguments" .= ("{}" :: Text)] | identifier <- ["a", "b"] :: [Text]]
+                else
+                  object
+                    [ "role" .= ("assistant" :: Text),
+                      "tool_calls"
+                        .= [object ["id" .= identifier, "type" .= ("function" :: Text), "function" .= object ["name" .= ("echo" :: Text), "arguments" .= ("{}" :: Text)]] | identifier <- ["a", "b"] :: [Text]]
+                    ]
+            messages = [MsgSystem "rules", MsgUser "initial", MsgAssistantToolCalls raw toolCalls, MsgTool "a" "A", MsgTool "b" "B", MsgUser "steering"]
+        _ <- withCompactLogger ColorNever Nothing $ \logger ->
+          runEff
+            . runLog "steering-wire" logger LogAttention
+            . runLLM runtime (\_ _ _ -> pure ()) (\record -> modifyIORef' calls (<> [record])) config.llm
+            $ chat callContext (defaultModelName config.llm) messages []
+        records <- readIORef calls
+        body <- case records of [record] -> pure record.crRequest; _ -> fail "missing request"
+        let field name (Object fields) = KM.lookup name fields
+            field _ _ = Nothing
+        items <- case field (if protocol == "responses" then "input" else "messages") body of
+          Just (Array values) -> pure (V.toList values)
+          _ -> fail "missing wire messages"
+        field "role" (last items) `shouldBe` Just (String "user")
+        case field "content" (last items) of
+          Just (String bodyText) -> bodyText `shouldBe` "steering"
+          Just (Array blocks) -> map (field "text") (V.toList blocks) `shouldBe` [Just (String "steering")]
+          _ -> fail "missing steering text"
+        case (protocol, drop 1 (reverse items)) of
+          ("openai", second : first : _) -> do
+            map (field "tool_call_id") [first, second] `shouldBe` map (Just . String) ["a", "b"]
+            map (field "role") [first, second] `shouldBe` replicate 2 (Just (String "tool"))
+          ("responses", second : first : _) -> do
+            map (field "call_id") [first, second] `shouldBe` map (Just . String) ["a", "b"]
+            map (field "type") [first, second] `shouldBe` replicate 2 (Just (String "function_call_output"))
+          ("anthropic", result : _) -> case field "content" result of
+            Just (Array blocks) -> do
+              map (field "tool_use_id") (V.toList blocks) `shouldBe` map (Just . String) ["a", "b"]
+              map (field "type") (V.toList blocks) `shouldBe` replicate 2 (Just (String "tool_result"))
+            _ -> fail "missing tool results"
+          _ -> fail "missing preceding tool results"
     protocolSpec protocol = mapM_ (oneMode protocol) [False, True]
     oneMode protocol streaming = it ("records the actual " <> protocol <> " request with stream=" <> show streaming) $
       withFixture protocol streaming $ \config -> do

@@ -17,6 +17,7 @@ data AdmissionError
   | AdmissionWidenedAuthority
   | AdmissionDepthLimit
   | AdmissionQueueFull
+  | AdmissionInputPending
   deriving stock (Eq, Show)
 
 admissionErrorText :: AdmissionError -> Text
@@ -27,6 +28,7 @@ admissionErrorText = \case
   AdmissionWidenedAuthority -> "child authority exceeds parent or profile"
   AdmissionDepthLimit -> "task depth limit"
   AdmissionQueueFull -> "conversation task queue is full"
+  AdmissionInputPending -> "有尚未读取的前台输入，先在下一轮阅读收件箱，再决定委派的目标和约束"
 
 data TaskAdmissionReceipt = TaskAdmissionReceipt
   { taskId :: !Int64,

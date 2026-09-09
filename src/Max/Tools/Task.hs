@@ -8,7 +8,7 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Effectful
 import Max.Effects.TaskControl (TaskControl, controlTask, startTask)
-import Max.Effects.TaskExecution (TaskExecution, reportProgress, reportRequest, reportTask)
+import Max.Effects.TaskExecution (TaskExecution, reportProgress, reportRequestWithInputs, reportTask)
 import Max.Effects.TaskQuery (TaskQuery, listTasks, readTask)
 import Max.Effects.ToolControl (ToolControl, finishExecution, yieldFrontend)
 import Max.Effects.Tools (Tool (..))
@@ -128,11 +128,27 @@ taskToolsFor context =
       Tool
         "request_finish"
         "明确结束前台请求：answered 已回答，waiting 正在向用户询问缺失信息，declined 明确拒绝。系统会把 reply 发给用户；最终内容只写在 reply，调用本工具的这一轮正文留空，不加旁白，也不要先在正文或其他发送工具里重复发送。"
-        (toolObject [("disposition", enumParam ["answered", "waiting", "declined"] "请求的真实处置"), ("reply", stringParam "给用户的完整答复、澄清问题或拒绝理由，最多 40000 字符。系统会发送此内容，不要另写一份正文。")] ["disposition", "reply"])
-        ( parseArgs (withObject "request_finish" $ \fields -> (,) <$> fields .: "disposition" <*> fields .: "reply") $ \(disposition, reply) -> case State.parseDisposition disposition of
+        ( toolObject
+            [ ("disposition", enumParam ["answered", "waiting", "declined"] "最初请求的真实处置"),
+              ("reply", stringParam "给用户的完整答复、澄清问题或拒绝理由，最多 40000 字符。系统会发送此内容，不要另写一份正文。"),
+              ( "inputs",
+                object
+                  [ "type" .= ("array" :: Text),
+                    "maxItems" .= (256 :: Int),
+                    "description" .= ("可选：本次明确处理的前台收件箱输入。每项使用收件箱提供的 message_id，逐项声明处置；未列出的输入会交给下一轮，读过不等于完成。" :: Text),
+                    "items"
+                      .= toolObject
+                        [("message_id", integerParam "收件箱里的 canonical message_id"), ("disposition", enumParam ["answered", "waiting", "declined"] "这条输入的真实处置")]
+                        ["message_id", "disposition"]
+                  ]
+              )
+            ]
+            ["disposition", "reply"]
+        )
+        ( parseArgs (withObject "request_finish" $ \fields -> (,,) <$> fields .: "disposition" <*> fields .: "reply" <*> fields .:? "inputs" .!= []) $ \(disposition, reply, inputs) -> case State.parseDisposition disposition of
             Nothing -> pure (Left "无效请求处置")
             Just typed ->
-              reportRequest typed reply >>= \case
+              reportRequestWithInputs typed reply inputs >>= \case
                 Left failure -> pure (Left (renderExecutionFailure failure))
                 Right () -> finishExecution (Just (T.strip reply)) >> pure (Right (object ["returned" .= True, "reply" .= T.strip reply]))
         )

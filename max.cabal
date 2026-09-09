@@ -183,6 +183,7 @@ library
         Max.DB.Task.Admission
         Max.DB.Task.Reporting
         Max.DB.Task.Frontend
+        Max.DB.Task.FrontendInput
         Max.DB.Task.Progress
         Max.DB.Task.Settlement
         Max.DB.Task.Control
@@ -309,6 +310,7 @@ library
         Max.Task.Types
         Max.Task.Admission
         Max.Task.Execution
+        Max.Task.FrontendInput
         Max.Task.ToolRuntime
         Max.Effects.TaskQuery
         Max.Effects.TaskControl
@@ -697,6 +699,7 @@ test-suite max-test-db
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
         Max.DB.TaskSpec
+        Max.DB.FrontendInputSpec
         Max.DB.ProgressSpec
         Max.DB.BrowserSpec
         Max.DB.QQBackfillSpec

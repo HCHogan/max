@@ -18,10 +18,11 @@ import Effectful (Eff, IOE, liftIO, runEff, (:>))
 import Effectful.Concurrent.Async (runConcurrent)
 import Effectful.Log (runLog)
 import Log (LogLevel (LogAttention))
+import Max.Agent.Execution (ExecutionAdmission (..), ExecutionInbox (..), ExecutionJournal (..))
 import Max.Agent.Failure (AgentFailure (..))
 import Max.Agent.Runtime (runAgent)
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
-import Max.Effects.Agent (AgentContext (..), AgentLimits (..), AgentResult (..), agentTurn)
+import Max.Effects.Agent (AgentContext (..), AgentLimits (..), AgentResult (..), agentTurn, runAgentWith)
 import Max.Effects.LLM
   ( ChatMessage (..),
     ChatResponse (..),
@@ -55,6 +56,7 @@ import Max.Tasks
     TaskCancelled,
     TaskRegistry,
     TurnCompletion (..),
+    beginDurableTurnRuntime,
     beginTurnRuntime,
     cancelTask,
     finishTurnRuntime,
@@ -67,6 +69,7 @@ import Max.Tool.Bundles (toolVisible)
 import Max.Tool.Types (ToolCallMode (..), ToolSpec (..))
 import Max.ToolContext (TurnCapabilities (..), TurnIdentity (..), mkToolContext, toolSkillLoads)
 import Max.Tools.Skills (skillToolsFor)
+import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..), TurnOrdinal (..))
 import OneBot.Types (GroupId (..), UserId (..))
 import Test.Hspec
 
@@ -166,6 +169,7 @@ spec = describe "Agent full loop" $ do
     registry <- newSkillRegistry
     events <- newIORef []
     calls <- newIORef (0 :: Int)
+    leaves <- newIORef (0 :: Int)
     tasks <- newTaskRegistry
     turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) Nothing
     let executionContext =
@@ -180,7 +184,19 @@ spec = describe "Agent full loop" $ do
             ( [echoDefinition, echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
                 <> [echoDefinition {tdRef = ToolRef "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
             )
-            ( [echoTool]
+            ( [ Tool
+                  "echo"
+                  "echo with steering"
+                  (object ["type" .= ("object" :: Text)])
+                  ( \args -> do
+                      liftIO $ readIORef calls `shouldReturn` 2
+                      leaf <- liftIO $ atomicModifyIORef' leaves (\n -> (n + 1, n))
+                      when (leaf == 0) $ liftIO $ do
+                        _ <- pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "下一轮改成方案 B" Nothing NoteSteer)
+                        pure ()
+                      toolRun echoTool args
+                  )
+              ]
                 <> skillToolsFor registry current (const (pure (Right Nothing)))
                 <> [echoTool {toolName = "web_search"} | toolVisible (toolSkillLoads current) "web_search"]
             )
@@ -197,8 +213,12 @@ spec = describe "Agent full loop" $ do
                   1 -> do
                     liftIO $ names `shouldContain` ["run_code"]
                     liftIO $ names `shouldNotContain` ["web_search"]
-                    respond "run_code" (object ["code" .= ("const value = tools.echo({value:7}); tools.use_skill({name:'web'}); return {answer:value.echo.value, hidden:!max.names.includes('web_search')};" :: Text)])
+                    respond "run_code" (object ["code" .= ("const value = tools.echo({value:7}); tools.echo({value:8}); tools.use_skill({name:'web'}); return {answer:value.echo.value, hidden:!max.names.includes('web_search')};" :: Text)])
                   _ -> do
+                    liftIO $ readIORef leaves `shouldReturn` 2
+                    liftIO $ case reverse messages of
+                      MsgUser note : MsgUserBlocks _ : MsgTool "1" _ : _ -> note `shouldBe` "[feedback]: 下一轮改成方案 B"
+                      other -> expectationFailure ("input did not follow the complete code result: " <> show other)
                     liftIO $ names `shouldContain` ["web_search", "run_code"]
                     liftIO $ any (\case MsgTool "1" body -> "\"answer\":7" `T.isInfixOf` body && "\"hidden\":true" `T.isInfixOf` body; _ -> False) messages `shouldBe` True
                     liftIO $ any (\case MsgUserBlocks blocks -> any (\case ImageDataUrl _ -> True; _ -> False) blocks; _ -> False) messages `shouldBe` True
@@ -608,7 +628,7 @@ spec = describe "Agent full loop" $ do
           $ agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
 
-    -- One message, two labelled lines, steer first: they arrived together and
+    -- One message, two labelled lines in arrival order: they arrived together and
     -- splitting them into two turns would double the round the notes were
     -- meant to ride along with.
     map show result.appended
@@ -617,6 +637,89 @@ spec = describe "Agent full loop" $ do
         [ MsgUser "[feedback]: 改成方案 B\n[群里新消息]（你开始做事之后进来的）: 顺便说一句我明天休假",
           MsgAssistant "done"
         ]
+
+  it "preserves interleaved ambient and steering note order" $ do
+    events <- newIORef []
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) Nothing
+    for_ [(NoteAmbient, "first"), (NoteSteer, "second"), (NoteAmbient, "third")] $ \(verb, body) ->
+      pushToLatest tasks (GroupId 7777) Nothing Nothing (Note body Nothing verb)
+    let provider =
+          LLMInterpreter
+            ( \_ _ messages _ _ -> do
+                liftIO $ case reverse messages of
+                  MsgUser body : _ ->
+                    T.lines body
+                      `shouldBe` ["[群里新消息]（你开始做事之后进来的）: first", "[feedback]: second", "[群里新消息]（你开始做事之后进来的）: third"]
+                  _ -> expectationFailure "missing input"
+                pure (Right (ContentResp "done"))
+            )
+    _ <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgent (AgentLimits 2) (const (buildToolRegistry [] [])) $
+        agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    pure ()
+
+  it "appends steering after every result in a native tool batch" $ do
+    events <- newIORef []
+    calls <- newIORef (0 :: Int)
+    tasks <- newTaskRegistry
+    turn <- beginTurnRuntime tasks (GroupId 7777) (UserId 2001) Nothing
+    let runner =
+          Tool
+            "echo"
+            "echo with steering"
+            (object ["type" .= ("object" :: Text)])
+            ( \args -> do
+                _ <- liftIO $ pushToLatest tasks (GroupId 7777) Nothing Nothing (Note "next" Nothing NoteSteer)
+                pure (Right args)
+            )
+        provider =
+          LLMInterpreter
+            ( \_ _ messages _ _ -> do
+                roundNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
+                if roundNo == 0
+                  then pure (Right (ToolCallsResp (object []) "" [ToolCall "a" "echo" (object []), ToolCall "b" "echo" (object [])]))
+                  else do
+                    liftIO $ case reverse messages of
+                      MsgUser _ : MsgTool "b" _ : MsgTool "a" _ : MsgAssistantToolCalls _ _ : _ -> pure ()
+                      other -> expectationFailure ("unpaired tool results: " <> show other)
+                    pure (Right (ContentResp "done"))
+            )
+    _ <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgent (AgentLimits 3) (const (buildToolRegistry [echoDefinition] [runner])) $
+        agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    readIORef calls `shouldReturn` 2
+
+  it "reconsiders an unpublished final draft when durable input arrives during generation" $ do
+    events <- newIORef []
+    calls <- newIORef (0 :: Int)
+    inbox <- newIORef ""
+    tasks <- newTaskRegistry
+    turn <- beginDurableTurnRuntime tasks (AgentTurnRef (AgentTurnId 1) (TurnOrdinal 1)) (GroupId 7777) (UserId 2001) Nothing
+    let provider =
+          LLMInterpreter
+            ( \_ _ messages _ _ -> do
+                roundNo <- liftIO $ atomicModifyIORef' calls (\n -> (n + 1, n))
+                if roundNo == 0
+                  then do
+                    liftIO (modifyIORef' inbox (const "late durable correction"))
+                    pure (Right (ContentResp "draft"))
+                  else do
+                    liftIO $ case reverse messages of
+                      MsgUser note : MsgAssistant "draft" : _ -> note `shouldSatisfy` T.isInfixOf "late durable correction"
+                      other -> expectationFailure ("missing late correction: " <> show other)
+                    pure (Right (ContentResp "corrected"))
+            )
+        admission = ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing)
+        journal = ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure [])
+        inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inbox ("",))
+    result <- withCompactLogger ColorNever Nothing $ \logger ->
+      runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs (AgentLimits 3) (const (buildToolRegistry [] [])) $
+        agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
+    _ <- finishTurnRuntime tasks turn
+    result.reply `shouldBe` Just "corrected"
 
   it "propagates !kill as asynchronous cancellation and still permits root cleanup" $ do
     entered <- newEmptyMVar

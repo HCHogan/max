@@ -16,6 +16,7 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Authorization
+import Max.DB.Task.FrontendInput (closeInputWithin, unseenInputWithin)
 import Max.DB.Task.Record
 import Max.Task.Admission (AdmissionError (..))
 import Max.Task.Policy (taskDeadlineSeconds)
@@ -25,8 +26,10 @@ import Max.Turn.Types (AgentTurnId)
 admitTaskWithin :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Maybe Int64 -> Int64 -> Text -> Text -> TaskProfile -> Value -> Map Text Text -> Eff es (Either AdmissionError TaskRecord)
 admitTaskWithin turn message actor key objective profile inputs grants = do
   authorized <- authorizeWithin turn (ExecutionWork CheckOnly)
+  pending <- unseenInputWithin turn
   sources <- query "SELECT conversation_id,initiator_principal_id FROM agent_turns WHERE turn_id=?" (Only turn)
   case sources :: [(Int64, Maybe Int64)] of
+    [(_, Just _)] | authorized && pending -> pure (Left AdmissionInputPending)
     [(conversation, Just initiator)] | authorized -> do
       repeated <-
         query
@@ -106,6 +109,7 @@ admitTaskWithin turn message actor key objective profile inputs grants = do
                                         )
                                     case inserted of
                                       [Only identifier] -> do
+                                        when (isNothing parent) (closeInputWithin turn)
                                         void $ execute "INSERT INTO task_revisions(task_id,revision,objective,author_principal_id) VALUES(?,1,?,?)" (identifier, T.strip objective, actor)
                                         when (isJust message && isNothing parent) $
                                           void $

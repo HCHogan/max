@@ -11,6 +11,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Max.Agent.Execution
 import Max.DB.AgentTurn (enrichSandboxJournalStart, finishJournalExecution, markJournalOutcomeUnknown, readSkillLoads, recordAgentTurnLlmRound, recordModelNote, startJournalExecution)
 import Max.DB.Task qualified as Task
+import Max.DB.Task.FrontendInput qualified as FrontendInput
 import Max.DB.Transaction (withTransaction)
 import Max.Effects.Agent (Agent, AgentLimits, runAgentWith)
 import Max.Effects.Blob (Blob)
@@ -45,7 +46,7 @@ runDurableAgent =
   runAgentWith
     durableExecutionAdmission
     (ExecutionJournal recordModelNote finishJournalExecution markJournalOutcomeUnknown readSkillLoads)
-    (ExecutionInbox (Task.taskInbox . (.atrTurnId)))
+    (ExecutionInbox (\turn -> (<>) <$> Task.taskInbox turn.atrTurnId <*> FrontendInput.readInputs turn.atrTurnId))
 
 -- | Commit admission and its durable pre-effect fact together.
 durableExecutionAdmission :: (WithConnection :> es, IOE :> es) => ExecutionAdmission es

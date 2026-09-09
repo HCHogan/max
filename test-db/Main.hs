@@ -28,6 +28,7 @@ import Max.DB.ConnectionSpec qualified as ConnectionSpec
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
+import Max.DB.FrontendInputSpec qualified as FrontendInputSpec
 import Max.DB.HistorySpec qualified as HistorySpec
 import Max.DB.MediaSpec qualified as MediaSpec
 import Max.DB.Migrations (runMigrations)
@@ -75,6 +76,7 @@ main = do
         TransactionSpec.spec pool
         AgentTurnSpec.spec pool
         TaskSpec.spec pool
+        FrontendInputSpec.spec pool
         ProgressSpec.spec pool
         BrowserSpec.spec pool
         ConnectionSpec.spec pool

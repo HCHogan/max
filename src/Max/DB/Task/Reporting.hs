@@ -1,10 +1,12 @@
 -- | Current-attempt reporting. Validation, progress coalescing and notification
 -- spacing are host policies; every read and write shares one transaction.
-module Max.DB.Task.Reporting (submitReport, submitProgress, submitFailure, submitRequest) where
+module Max.DB.Task.Reporting (submitReport, submitProgress, submitFailure, submitRequest, submitRequestWithInputs) where
 
-import Control.Monad (void)
+import Control.Monad (forM_, void)
 import Data.Aeson (Value, object, (.=))
 import Data.Int (Int64)
+import Data.List (sortOn)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
@@ -12,8 +14,10 @@ import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Authorization
+import Max.DB.Task.FrontendInput (closeInputWithin, unseenInputWithin)
 import Max.DB.Task.Record
 import Max.DB.Transaction (withTransaction)
+import Max.Task.Execution (ExecutionFailure (..))
 import Max.Task.State
 import Max.Task.Types (taskHandle)
 import Max.Turn.Types (AgentTurnId)
@@ -76,11 +80,12 @@ routeProgress task version progress = do
   -- Claimed snapshots are immutable. A newer version revokes an in-flight
   -- review; its lease watcher cancels the model and the output guard rejects
   -- any response that raced the update.
-  void $ execute
-    "UPDATE task_notifications SET superseded_at=clock_timestamp() WHERE task_id=? AND kind='progress'\
-    \ AND turn_id IS NOT NULL AND delivered_at IS NULL AND superseded_at IS NULL\
-    \ AND review_decision->>'action' IS DISTINCT FROM 'skip'"
-    (Only task.taskId)
+  void $
+    execute
+      "UPDATE task_notifications SET superseded_at=clock_timestamp() WHERE task_id=? AND kind='progress'\
+      \ AND turn_id IS NOT NULL AND delivered_at IS NULL AND superseded_at IS NULL\
+      \ AND review_decision->>'action' IS DISTINCT FROM 'skip'"
+      (Only task.taskId)
   pending <-
     query
       "SELECT notification_id FROM task_notifications WHERE task_id=? AND kind='progress' AND turn_id IS NULL\
@@ -105,8 +110,17 @@ routeProgress task version progress = do
           (task.taskId, task.revision, task.attempt, jsonText progress, wake, version)
 
 submitRequest :: (WithConnection :> es, IOE :> es) => AgentTurnId -> RequestDisposition -> Text -> Eff es Bool
-submitRequest turn disposition reply
-  | disposition `notElem` [RequestAnswered, RequestWaiting, RequestDeclined] || T.null trimmed || T.length trimmed > 40000 = pure False
+submitRequest turn disposition reply = (== Right ()) <$> submitRequestWithInputs turn disposition reply []
+
+submitRequestWithInputs :: (WithConnection :> es, IOE :> es) => AgentTurnId -> RequestDisposition -> Text -> [RequestInputOutcome] -> Eff es (Either ExecutionFailure ())
+submitRequestWithInputs turn disposition reply inputs
+  | disposition `notElem` permitted
+      || T.null trimmed
+      || T.length trimmed > 40000
+      || length inputs > 256
+      || Set.size (Set.fromList (map (.messageId) inputs)) /= length inputs
+      || any (\input -> input.disposition `notElem` permitted) inputs =
+      pure (Left ExecutionReportRejected)
   | otherwise = withTransaction $ do
       _ <- lockTurnConversation turn
       authorized <- authorizeWithin turn ExecutionCheckpoint
@@ -116,16 +130,42 @@ submitRequest turn disposition reply
           \ EXISTS(SELECT 1 FROM task_notifications WHERE turn_id=?)"
           (turn, turn)
       if not authorized || frontend /= [(True, False)]
-        then pure False
+        then pure (Left ExecutionReportRejected)
         else do
-          void $
-            execute
-              "INSERT INTO request_outcomes(turn_id,disposition,reply) VALUES(?,?,?) ON CONFLICT(turn_id) DO NOTHING"
-              (turn, dispositionText disposition, trimmed)
+          pending <- unseenInputWithin turn
+          observed <-
+            query
+              "SELECT message_id,disposition FROM frontend_inputs WHERE turn_id=? AND released_at IS NULL AND seen_at IS NOT NULL ORDER BY message_id"
+              (Only turn)
           recorded <- query "SELECT disposition,reply FROM request_outcomes WHERE turn_id=?" (Only turn)
-          pure (recorded == [(dispositionText disposition, trimmed)])
+          let named = sortOn fst [(input.messageId, dispositionText input.disposition) | input <- inputs]
+              previous = [(message, decision) | (message, Just decision) <- observed]
+              known = Set.fromList [message | (message, _) <- observed :: [(Int64, Maybe Text)]]
+              valid = all (\input -> Set.member input.messageId known) inputs
+          if pending
+            then pure (Left ExecutionInputPending)
+            else
+              if not valid
+                then pure (Left ExecutionReportRejected)
+                else
+                  if not (null recorded)
+                    then
+                      pure (if recorded == [(dispositionText disposition, trimmed)] && previous == named then Right () else Left ExecutionReportRejected)
+                    else do
+                      void $
+                        execute
+                          "INSERT INTO request_outcomes(turn_id,disposition,reply) VALUES(?,?,?)"
+                          (turn, dispositionText disposition, trimmed)
+                      forM_ named $ \(message, decision) ->
+                        void $
+                          execute
+                            "UPDATE frontend_inputs SET disposition=? WHERE turn_id=? AND message_id=? AND released_at IS NULL"
+                            (decision, turn, message)
+                      closeInputWithin turn
+                      pure (Right ())
   where
     trimmed = T.strip reply
+    permitted = [RequestAnswered, RequestWaiting, RequestDeclined]
 
 withAuthorized :: (WithConnection :> es, IOE :> es) => AgentTurnId -> (TaskRecord -> Eff es Bool) -> Eff es Bool
 withAuthorized turn action = withTransaction $ do

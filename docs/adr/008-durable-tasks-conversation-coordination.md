@@ -337,6 +337,11 @@ archived Plan work or resets a live Task's identity, revision, spend or lease.
   successful recorded publication; unclassified prose remains unresolved,
   and no-output termination is failed. Task delegation remains atomic and
   progress never counts as completion.
+- **Frontend steering:** [ADR 013](013-frontend-steering.md) appends same-actor
+  inputs at the next model boundary and tracks each message's obligation.
+  `request_finish.inputs` explicitly settles additional inputs; unlisted ones
+  return to dispatch. `run_code` finishes its whole submission before steering
+  reaches the model.
 - **Progress:** explicit `task_progress` and agent progress events persist the
   latest revision/attempt-tagged value. Identical updates deduplicate; pending
   root updates coalesce and subsequent notices are spaced by 30 seconds.

@@ -1949,6 +1949,7 @@ claimDispatchWhere workerId mCanonical limit leaseDuration = do
       \   AND md.next_attempt_at <= now() \
       \   AND max_lease_free(md.lease_owner, md.lease_expires_at) \
       \   AND (?::bigint IS NULL OR md.canonical_message_id = ?) \
+      \   AND NOT EXISTS(SELECT 1 FROM frontend_inputs input WHERE input.message_id=md.canonical_message_id AND input.released_at IS NULL) \
       \ ORDER BY md.next_attempt_at, md.canonical_message_id \
       \ FOR UPDATE OF md SKIP LOCKED LIMIT ? \
       \), claimed AS ( \

@@ -12,6 +12,7 @@ module Max.Task.State
     parseTaskReport,
     reportTaskStatus,
     RequestDisposition (..),
+    RequestInputOutcome (..),
     dispositionText,
     parseDisposition,
     SettlementFacts (..),
@@ -171,6 +172,22 @@ reportTaskStatus = \case
 
 data RequestDisposition = RequestPending | RequestDelegated | RequestAnswered | RequestWaiting | RequestDeclined | RequestFailed | RequestCancelled
   deriving stock (Eq, Show)
+
+data RequestInputOutcome = RequestInputOutcome
+  { messageId :: !Int64,
+    disposition :: !RequestDisposition
+  }
+  deriving stock (Eq, Show)
+
+instance FromJSON RequestInputOutcome where
+  parseJSON = withObject "input disposition" $ \fields -> do
+    message <- fields .: "message_id"
+    decision <- fields .: "disposition"
+    case parseDisposition decision of
+      Just disposition
+        | message > 0 && disposition `elem` [RequestAnswered, RequestWaiting, RequestDeclined] ->
+            pure (RequestInputOutcome message disposition)
+      _ -> fail "input needs a canonical message_id and answered/waiting/declined disposition"
 
 dispositionText :: RequestDisposition -> Text
 dispositionText = \case
