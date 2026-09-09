@@ -30,6 +30,7 @@ module Max.IMessage
     iMessageCapabilitiesFor,
     iMessageWorker,
     iMessageDeliveryTransport,
+    iMessageDeliveryPreflight,
   )
 where
 
@@ -480,7 +481,9 @@ iMessageDeliveryTransport runtime cfg =
   DeliveryTransport
     { platform = PlatformIMessage,
       deliver = \journal _claim -> \case
-        DeliverMessage lowered -> sendChunks journal lowered
+        DeliverMessage lowered -> iMessageDeliveryPreflight
+          (fmap (either (Left . bridgeFailureText) (const (Right ()))) (fetchBridgeHealth runtime cfg))
+          (sendChunks journal lowered)
         DeliverEdit {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised edit without an emitter")
         DeliverReaction {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised reaction without an emitter")
         DeliverRedaction {} -> pure (AttemptPermanentlyFailed "iMessage endpoint advertised redaction without an emitter")
@@ -902,6 +905,14 @@ watchOnce runtime cfg chatId since = do
     -- One chunk is the whole signal: the bridge writes a byte when the chat
     -- changed, and the caller re-runs catch-up either way.
     awaitNotification reader = void (HTTP.brRead reader)
+
+-- | A failed read-only probe proves no send was attempted by this delivery.
+-- Keep post-send failures conservative: the probe cannot guarantee liveness
+-- for the following RPC, and never authorizes replay of an uncertain part.
+iMessageDeliveryPreflight :: IO (Either Text ()) -> IO DeliveryAttempt -> IO DeliveryAttempt
+iMessageDeliveryPreflight probe send = probe >>= \case
+  Left failure -> pure (AttemptRetryable ("iMessage bridge preflight: " <> failure))
+  Right () -> send
 
 bridgeRpc :: HttpRuntime -> IMessageConfig -> Text -> Value -> IO (Either BridgeFailure Value)
 bridgeRpc runtime cfg method params =

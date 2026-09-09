@@ -25,6 +25,8 @@ import Max.DB.AgentTurnSpec qualified as AgentTurnSpec
 import Max.DB.BrowserSpec qualified as BrowserSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.ConnectionSpec qualified as ConnectionSpec
+import Max.DB.DebtSpec qualified as DebtSpec
+import Max.DB.ProjectionSpec qualified as ProjectionSpec
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
@@ -80,6 +82,8 @@ main = do
         ProgressSpec.spec pool
         BrowserSpec.spec pool
         ConnectionSpec.spec pool
+        DebtSpec.spec pool
+        ProjectionSpec.spec pool
         ConversationCursorSpec.spec pool
         ContextMaterializationSpec.spec pool
         ContextAdminSpec.spec pool

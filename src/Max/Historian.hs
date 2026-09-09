@@ -95,10 +95,10 @@ import Max.Util (catchSync, trySync, tshow)
 import OneBot.Types (GroupId (..))
 
 historianPromptVersion :: Text
-historianPromptVersion = "historian/v3"
+historianPromptVersion = "historian/v4"
 
 historianSchemaVersion :: Int
-historianSchemaVersion = 1
+historianSchemaVersion = 2
 
 -- | A lease must cover the initial generation, the one allowed structured
 -- response repair, and publication.  Provider/transport failures do not run a
@@ -575,10 +575,10 @@ historianRepairPrompt =
     [ "The previous answer was not valid EpisodeCapture JSON.",
       "Return the complete corrected JSON object only; do not explain the repair.",
       "summary_p1/summary_p2/summary_p3 must each be objects with text and evidence_message_ids.",
-      "Every message id, user_id, memory id, and version must be a JSON number, never a quoted string.",
+      "Every message id, user_id, memory id, and expected_version must be a JSON number, never a quoted string.",
       "For add use only action,scope,user_id,content,category,evidence_message_ids.",
-      "For update use only action,id,version,content,evidence_message_ids; category/scope/user_id are forbidden.",
-      "For archive use only action,id,version,evidence_message_ids.",
+      "For update use only action,id,expected_version,content,evidence_message_ids; category/scope/user_id are forbidden.",
+      "For archive use only action,id,expected_version,evidence_message_ids.",
       "Use exactly the top-level and nested fields required by the original system instruction."
     ]
 
@@ -712,7 +712,7 @@ historianSystem =
       "Never store one-off meal/social plans, same-day coordination, transient troubleshooting outcomes, or casual acknowledgements as durable memory.",
       "An explicit group decision or a named speaker's explicit commitment tied to an absolute-dated plan is high-value durable memory; the date may be stated on that line or inherited only when the surrounding plan makes it unambiguous.",
       "When a speaker corrects an earlier statement, store only the final state and cite the correcting message (the earlier message may be cited too).",
-      "When new evidence corrects or replaces an existing listed memory about the same subject and topic, update that id/version in place; never archive it and add a duplicate identity.",
+      "When new evidence corrects or replaces an existing listed memory about the same subject and topic, update that id with its listed current expected_version in place; never archive it and add a duplicate identity.",
       "Archive an existing memory only when it is clearly obsolete and there is no replacement fact to store.",
       "Allowed add categories: person_fact, preference, group_convention, ongoing_project, commitment, decision, running_joke.",
       "Never infer relationship_context. Never create reminders, tasks, or transient state as memory.",
@@ -720,17 +720,17 @@ historianSystem =
       "When several speakers make distinct durable commitments, emit one user-scope commitment proposal for each speaker; do not collapse them into group memory or omit one because another was captured.",
       "Use group scope for group-wide decisions, conventions, and shared running jokes, not as a container for an individual's memory.",
       "For user scope, user_id must be the subject and at least one cited message must be spoken by that user.",
-      "For group scope, omit user_id. Only update/archive ids and versions listed in Existing scoped memories.",
+      "For group scope, omit user_id. Only update/archive ids listed in Existing scoped memories. Copy the listed current version exactly into expected_version; NEVER increment it. The database generates the new version.",
       "Each proposal must cite exact source message ids. Content is self-contained, <=300 chars, with absolute dates.",
       "Resolve yesterday/tomorrow/weekday and other relative dates from the local_now date and weekday supplied in the input; never guess the calendar.",
       "Maximum 12 proposals.",
       "Before returning, silently scan every speaker's lines once more: each explicit group decision and each named speaker's explicit commitment tied to an absolute-dated plan must have its own correctly scoped proposal unless an existing memory already says it. One speaker's proposal never substitutes for another's; never guess an ambiguous inherited date.",
       "",
-      "Proposal forms:",
+      "Proposal forms (for the update/archive examples, Existing scoped memories contains id=5 version=1):",
       "  {\"action\":\"add\",\"scope\":\"group\",\"content\":\"...\",\"category\":\"decision\",\"evidence_message_ids\":[1]}",
       "  {\"action\":\"add\",\"scope\":\"user\",\"user_id\":123,\"content\":\"...\",\"category\":\"preference\",\"evidence_message_ids\":[1]}",
-      "  {\"action\":\"update\",\"id\":5,\"version\":2,\"content\":\"...\",\"evidence_message_ids\":[1]}",
-      "  {\"action\":\"archive\",\"id\":5,\"version\":2,\"evidence_message_ids\":[1]}"
+      "  {\"action\":\"update\",\"id\":5,\"expected_version\":1,\"content\":\"...\",\"evidence_message_ids\":[1]}",
+      "  {\"action\":\"archive\",\"id\":5,\"expected_version\":1,\"evidence_message_ids\":[1]}"
     ]
 
 captureJsonText :: EpisodeCapture -> Text

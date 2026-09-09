@@ -34,6 +34,7 @@ module Max.EpisodeStore
     enqueueRebuildRun,
     claimCaptureRun,
     loadCaptureSource,
+    reviewRejectedMemoryProposal,
     recordCaptureGenerated,
     recordCaptureRejected,
     failCaptureRun,
@@ -102,6 +103,7 @@ import Max.MemoryStore
     MemoryVersion (..),
     admitMemory,
     archiveVisibleMemory,
+    fetchVisibleMemory,
     memoryNamespace,
     parseCategory,
     parseScope,
@@ -259,17 +261,17 @@ instance FromJSON EpisodeMemoryProposal where
           <*> o .:? "category"
           <*> o .: "evidence_message_ids"
       "update" -> do
-        rejectUnknownKeys "memory_proposal.update" ["action", "id", "version", "content", "evidence_message_ids"] o
+        rejectUnknownKeys "memory_proposal.update" ["action", "id", "expected_version", "content", "evidence_message_ids"] o
         ProposalUpdate
           <$> o .: "id"
-          <*> o .: "version"
+          <*> o .: "expected_version"
           <*> o .: "content"
           <*> o .: "evidence_message_ids"
       "archive" -> do
-        rejectUnknownKeys "memory_proposal.archive" ["action", "id", "version", "evidence_message_ids"] o
+        rejectUnknownKeys "memory_proposal.archive" ["action", "id", "expected_version", "evidence_message_ids"] o
         ProposalArchive
           <$> o .: "id"
-          <*> o .: "version"
+          <*> o .: "expected_version"
           <*> o .: "evidence_message_ids"
       other -> fail ("unknown memory proposal action: " <> T.unpack other)
 
@@ -288,7 +290,7 @@ instance ToJSON EpisodeMemoryProposal where
       object
         [ "action" .= ("update" :: Text),
           "id" .= memoryId,
-          "version" .= version,
+          "expected_version" .= version,
           "content" .= content,
           "evidence_message_ids" .= evidence
         ]
@@ -296,7 +298,7 @@ instance ToJSON EpisodeMemoryProposal where
       object
         [ "action" .= ("archive" :: Text),
           "id" .= memoryId,
-          "version" .= version,
+          "expected_version" .= version,
           "evidence_message_ids" .= evidence
         ]
 
@@ -507,14 +509,14 @@ validateProposal source index proposal = case proposal of
           contentErrors
             <> evidenceErrors source (base <> ".evidence_message_ids") evidence
             <> [err "id" "memory id must be positive" | memoryId.unMemoryId <= 0]
-            <> [err "version" "memory version must be positive" | version.unMemoryVersion <= 0]
+            <> [err "expected_version" "observed memory version must be positive" | version.unMemoryVersion <= 0]
      in finish (ValidatedUpdate memoryId version <$> validContent <*> pure evidence, errors)
   ProposalArchive memoryId version evidence ->
     finish
       ( Just (ValidatedArchive memoryId version evidence),
         evidenceErrors source (base <> ".evidence_message_ids") evidence
           <> [err "id" "memory id must be positive" | memoryId.unMemoryId <= 0]
-          <> [err "version" "memory version must be positive" | version.unMemoryVersion <= 0]
+          <> [err "expected_version" "observed memory version must be positive" | version.unMemoryVersion <= 0]
       )
   where
     base = "memory_proposals[" <> tshow index <> "]"
@@ -1025,6 +1027,10 @@ verifyRunSource scope run = do
   current <- loadCursor scope historianCursor
   when (runRequiresLiveCursor run && current /= run.crExpectedCursor) $
     publicationFailure "historian cursor no longer matches the run's expected cursor"
+  verifyCaptureSource scope run
+
+verifyCaptureSource :: (WithConnection :> es, IOE :> es) => ConversationScope -> CaptureRun -> Eff es ()
+verifyCaptureSource scope run = do
   source <- captureSourceRange scope run.crExpectedCursor run.crRange.srEnd
   case source of
     Just range
@@ -1167,6 +1173,7 @@ applyMemoryProposal scope _run compartment indexed = case indexed.ivpValidated o
       Left ExactMemoryAlreadyExists -> rejected "exact duplicate already exists" evidence
       Left MemoryAtCapacity -> rejected "memory namespace is at capacity" evidence
       Left MemoryConversationMissing -> publicationFailure "memory conversation no longer exists"
+      Left MemorySubjectNotVisible -> rejected "memory subject is not a known principal in this conversation" evidence
   ValidatedUpdate memoryId version content evidence ->
     updateVisibleMemory
       historianActor
@@ -1174,27 +1181,76 @@ applyMemoryProposal scope _run compartment indexed = case indexed.ivpValidated o
       memoryId
       (ExpectedVersion version)
       (MemoryUpdate content (EpisodeEvidence scope compartment.unCompartmentId))
-      >>= mutationOutcome evidence
+      >>= mutationOutcome memoryId version evidence
   ValidatedArchive memoryId version evidence ->
     archiveVisibleMemory
       historianActor
       (currentConversationRecall scope)
       memoryId
       (ExpectedVersion version)
-      >>= mutationOutcome evidence
+      >>= mutationOutcome memoryId version evidence
   where
     applied memory evidence =
       pure (baseOutcome evidence "applied" Nothing (Just memory))
     rejected reason evidence =
       pure (baseOutcome evidence "rejected_store" (Just reason) Nothing)
-    mutationOutcome evidence = \case
+    mutationOutcome memoryId version evidence = \case
       MemoryMutationApplied memory -> applied memory evidence
-      MemoryMutationRejected -> rejected "scope, lifecycle, or expected version rejected the mutation" evidence
+      MemoryMutationRejected -> do
+        visible <- fetchVisibleMemory (currentConversationRecall scope) memoryId
+        let reason = case visible of
+              Nothing -> "memory is not visible in this conversation"
+              Just memory
+                | memory.memLifecycle == "permanent" -> "permanent memory requires explicit user authorization"
+                | version < memory.memVersion -> "stale expected_version; re-read current memory and evidence before proposing again"
+                | version > memory.memVersion -> "future expected_version; copy the observed version without incrementing"
+                | otherwise -> "memory lifecycle or expected version rejected the mutation"
+        rejected reason evidence
     baseOutcome evidence status reason memory =
       ProposalOutcome indexed.ivpIndex indexed.ivpOriginal evidence status reason memory
 
 historianActor :: MemoryActor
 historianActor = MemoryActor ActorHistorian Nothing (Just "episode capture proposal")
+
+-- | Explicit review after re-reading evidence and current scoped memories.
+-- Reuses proposal validation and automatic-actor protections; this entry point
+-- cannot increment a supplied version, bypass permanent memory, move a cursor,
+-- or republish a summary. Nothing means an audited dismissal.
+reviewRejectedMemoryProposal ::
+  (WithConnection :> es, IOE :> es) =>
+  ConversationScope -> CaptureRunId -> Int -> Text -> Text -> Maybe EpisodeMemoryProposal -> Eff es Text
+reviewRejectedMemoryProposal scope captureId index actor reason proposed = withTransaction $ do
+  unless (not (T.null (T.strip actor)) && not (T.null (T.strip reason))) $
+    publicationFailure "memory review requires an actor and evidence-based reason"
+  locked <- lockConversation (conversationStorageId scope)
+  unless locked (publicationFailure "memory review conversation no longer exists")
+  available <- query
+    "SELECT count(*) FROM episode_memory_review_queue WHERE capture_run_id=? AND proposal_index=? AND conversation_id=?"
+    (captureId,index,conversationStorageId scope)
+  unless (available == [Only (1 :: Int)]) $ publicationFailure "proposal is outside scope or already reviewed"
+  runs <- query (fromTextQuery ("SELECT " <> captureRunColumns <> " FROM episode_capture_runs WHERE id=? AND conversation_id=? AND status='published' FOR UPDATE"))
+    (captureId,conversationStorageId scope)
+  run <- case runs of
+    [value] -> pure value
+    _ -> publicationFailure "memory review requires a published capture"
+  compartments <- query "SELECT published_compartment_id FROM episode_capture_runs WHERE id=?" (Only captureId)
+  compartment <- case compartments of
+    [Only (Just value)] -> pure value
+    _ -> publicationFailure "published capture has no compartment"
+  source <- loadCaptureSource run
+  when (isJust proposed) $ verifyCaptureSource scope run
+  let eligible = Map.fromList [(entry.history.canonicalId,entry.history.authorPrincipalId) | entry <- source,entry.transcriptEligible]
+  (status,detail,memory) <- case proposed of
+    Nothing -> pure ("dismissed",Nothing,Nothing)
+    Just proposal -> case validateProposal eligible index proposal of
+      Left invalid -> pure ("rejected_validation",Just (T.intercalate "; " (map (.validationMessage) invalid.rejectedErrors)),Nothing)
+      Right valid -> do
+        result <- applyMemoryProposal scope run compartment valid
+        pure (result.outcomeStatus,result.outcomeReason,result.outcomeMemory)
+  _ <- execute
+    "INSERT INTO episode_memory_reviews(capture_run_id,proposal_index,proposal,outcome,outcome_reason,memory_id,memory_version,actor,reason) VALUES (?,?,?::jsonb,?,?,?,?,?,?)"
+    (captureId,index,encodeText <$> proposed,status,detail,(.memId) <$> memory,(.memVersion) <$> memory,actor,reason)
+  pure status
 
 insertProposalOutcome ::
   (WithConnection :> es, IOE :> es) =>

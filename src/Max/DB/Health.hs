@@ -1,12 +1,26 @@
 module Max.DB.Health (operationalChecks) where
 
 import Database.PostgreSQL.Simple (Query)
+import Data.String (fromString)
 
 -- The boolean says whether a non-zero count is a failed health gate.  Pending
 -- and retryable work is expected while traffic is flowing; expired ownership,
 -- ambiguous effects, parked work, and deterministic poison are not.
 operationalChecks :: [(String, Bool, Query)]
-operationalChecks =
+operationalChecks = concatMap withReview terminalAndQueueChecks <>
+  [("debt_review_events", False, "SELECT count(*) FROM operational_debt_reviews"),
+   ("debt_accepted_current", False, "SELECT count(*) FROM operational_debt_status WHERE disposition='accepted'")]
+  where
+    withReview original@(label, _, sql)
+      | label `elem` reviewable =
+          [ (label, False, sql),
+            (label <> "_unreviewed", True, fromString ("SELECT count(*) FROM operational_debt_status WHERE kind='" <> label <> "' AND disposition<>'accepted'"))
+          ]
+      | otherwise = [original]
+    reviewable = ["delivery_permanent_failure", "delivery_outcome_unknown", "dispatch_outcome_unknown", "media_parked", "monitor_fire_parked", "task_notification_exhausted", "request_failed", "sandbox_outcome_unknown"]
+
+terminalAndQueueChecks :: [(String, Bool, Query)]
+terminalAndQueueChecks =
   [ ( "delivery_retryable",
       False,
       "SELECT count(*) FROM message_deliveries WHERE status = 'failed'"

@@ -2,15 +2,26 @@ module Max.IMessageSpec (spec) where
 
 import Data.Aeson (Value, object, (.=))
 import Data.ByteString qualified as BS
+import Data.IORef
 import Max.IMessage
 import Max.IR
 import Max.IR.Lower (OutboundCaps (..), Tier (..))
 import Max.IR.Prompt (promptText)
 import Max.Platform.Types (EventKind (..), NativeEventId (..), NativeUserId (..))
+import Max.Platform.Delivery.Parts (DeliveryAttempt (..))
 import Test.Hspec
 
 spec :: Spec
 spec = describe "iMessage adapter" $ do
+  it "does not begin a send on a failed health probe and preserves ambiguity after a successful probe" $ do
+    sends <- newIORef (0 :: Int)
+    let send = modifyIORef' sends (+1) >> pure (AttemptOutcomeUnknown "response lost after send")
+    iMessageDeliveryPreflight (pure (Left "connection refused")) send
+      `shouldReturn` AttemptRetryable "iMessage bridge preflight: connection refused"
+    readIORef sends `shouldReturn` 0
+    iMessageDeliveryPreflight (pure (Right ())) send
+      `shouldReturn` AttemptOutcomeUnknown "response lost after send"
+    readIORef sends `shouldReturn` 1
   it "uses IMCore only for replies and keeps bridge-validated send GUIDs" $ do
     let replyTarget = Just (NativeEventId "parent-guid")
     iMessageSendTransport Nothing `shouldBe` "applescript"

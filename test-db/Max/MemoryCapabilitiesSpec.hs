@@ -86,6 +86,42 @@ spec pool = before_ (truncateAll pool) $ describe "scoped memory capabilities" $
     run (Control.forgetMemory item.memId (ExpectedVersion updated.memVersion)) `shouldReturn` Left MemoryCallerFenced
     rows <- withDb pool (query "SELECT lifecycle,version FROM memories WHERE id=?" (Only item.memId))
     rows `shouldBe` [("permanent" :: Text, updated.memVersion)]
+
+  it "admits only canonical principals visible in the current conversation" $ do
+    (turn, message, actor) <- seed pool 900 2783846439
+    (_, _, colleague) <- seed pool 900 3526452465
+    (_, _, stranger) <- seed pool 901 777777777
+    withDb pool (claimFrontend turn) `shouldReturn` True
+    let scope = Control.MemoryControlScope (GroupId 900) (Just turn.atrTurnId) actor message
+        save subject = withDbLog pool (Control.runMemoryControl scope (Control.saveMemory subject "explicit personal fact"))
+        rejected = Left (MemoryAdmissionRejected MemorySubjectNotVisible)
+    save (PersonMemory (Just 2783846439)) `shouldReturn` rejected
+    save (PersonMemory (Just 999999999)) `shouldReturn` rejected
+    save (PersonMemory (Just stranger.unPrincipalId)) `shouldReturn` rejected
+    save (PersonMemory Nothing) `shouldSatisfyIO` isRight
+    save (PersonMemory (Just colleague.unPrincipalId)) `shouldSatisfyIO` isRight
+    audit <- withDb pool (query "SELECT count(*) FROM memory_mutations" ())
+    audit `shouldBe` [Only (2 :: Int64)]
+
+  it "repairs only an orphan subject proven by unique account mapping and original message evidence" $ do
+    (_, message, actor) <- seed pool 900 2783846439
+    (_, _, other) <- seed pool 900 777777777
+    let conversation = conversationScopeFor (GroupId 900)
+        draft = MemoryDraft "explicit permanent fact" MemoryPermanent Nothing (MessageEvidence conversation (Just actor.unPrincipalId) message.unCanonicalMessageId)
+    orphan <- withDb pool $ Store.createMemory (MemoryActor ActorAdmin Nothing (Just "legacy fixture")) (userMemoryNamespace conversation 2783846439) draft
+    let repair person = withDb pool $ Store.repairMemorySubjectAdmin conversation orphan.memId (ExpectedVersion orphan.memVersion) person "verified native identity and source message"
+    repair other.unPrincipalId `shouldReturn` MemoryMutationRejected
+    result <- repair actor.unPrincipalId
+    case result of
+      MemoryMutationApplied memory -> do
+        memory.memScopeId `shouldBe` actor.unPrincipalId
+        memory.memVersion `shouldBe` MemoryVersion 2
+        memory.memLifecycle `shouldBe` "permanent"
+        memory.memContent `shouldBe` "explicit permanent fact"
+      _ -> expectationFailure "proven orphan was not repaired"
+    repair actor.unPrincipalId `shouldReturn` MemoryMutationRejected
+    audit <- withDb pool $ query "SELECT operation,reason LIKE '%2783846439 -> %' FROM memory_mutations WHERE from_version=1" ()
+    audit `shouldBe` [("backfill" :: Text, True)]
   where
     isInvalid (MemoryContentInvalid _) = True
     isInvalid _ = False

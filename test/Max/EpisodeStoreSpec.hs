@@ -6,6 +6,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
 import Max.EpisodeStore
+import Max.Memory.Types (MemoryId (..), MemoryVersion (..))
 import Test.Hspec
 
 spec :: Spec
@@ -15,6 +16,14 @@ spec = describe "EpisodeCapture validation" $ do
 
   it "rejects unknown schema fields instead of silently accepting drift" $ do
     parseEpisodeCapture (T.replace "\"importance\":0.7" "\"importance\":0.7,\"surprise\":true" fencedCapture)
+      `shouldSatisfy` either (const True) (const False)
+
+  it "parses the observed version without incrementing it and rejects the ambiguous legacy field" $ do
+    let proposal = "{\"action\":\"update\",\"id\":5,\"expected_version\":1,\"content\":\"corrected fact\",\"evidence_message_ids\":[11]}"
+        response = T.replace "\"memory_proposals\":[]" ("\"memory_proposals\":[" <> proposal <> "]") fencedCapture
+    parseEpisodeCapture response
+      `shouldBe` Right (validCapture {captureMemoryProposals = [ProposalUpdate (MemoryId 5) (MemoryVersion 1) "corrected fact" [11]]})
+    parseEpisodeCapture (T.replace "expected_version" "version" response)
       `shouldSatisfy` either (const True) (const False)
 
   it "rejects summaries that cite filtered or out-of-range messages" $ do

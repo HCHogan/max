@@ -20,6 +20,7 @@ import Max.DB.ConversationCursor (advanceCursor, historianCursor, loadCursor)
 import Max.DB.History (HistoryItem (..), LedgerItem (..), MessageCursor (..))
 import Max.EpisodeStore
 import Max.MemoryStore (MemoryId, MemoryVersion)
+import Max.MemoryStore qualified as Memory
 import OneBot.Types (GroupId (..))
 import Test.Hspec
 
@@ -239,6 +240,41 @@ spec pool = before_ (truncateAll pool) $ describe "Max.EpisodeStore" $ do
       `shouldBe` [(0, "applied", False), (1, "rejected_validation", True)]
     warnings <- withDb pool $ query "SELECT jsonb_array_length(validation_errors) FROM episode_capture_runs" ()
     (warnings :: [Only Int]) `shouldBe` [Only 1]
+
+  it "applies observed-version corrections once while fencing stale, future and permanent proposals" $ do
+    (m1, m2, m3) <- seedConversation pool
+    let actor = Memory.MemoryActor Memory.ActorAgentTool Nothing Nothing
+        create lifecycle content = withDb pool $ Memory.createMemory actor (Memory.groupMemoryNamespace scopeA)
+          (Memory.MemoryDraft content lifecycle Nothing (Memory.MessageEvidence scopeA Nothing m1))
+    active <- create Memory.MemoryActive "old fact"
+    permanent <- create Memory.MemoryPermanent "explicit fact"
+    lease <- prepareLease pool
+    source <- withDb pool $ loadCaptureSource lease.leaseRun
+    let capture = validCapture [m1,m2,m3]
+          [ ProposalUpdate active.memId (Memory.MemoryVersion 2) "future version must fail" [m1],
+            ProposalUpdate active.memId active.memVersion "corrected fact" [m1],
+            ProposalUpdate active.memId active.memVersion "stale write must fail" [m1],
+            ProposalUpdate permanent.memId permanent.memVersion "automatic overwrite must fail" [m1]
+          ]
+    validated <- requireValid lease.leaseRun source capture
+    withDb pool (recordCaptureGenerated lease (captureJson capture) capture []) `shouldReturn` True
+    _ <- withDb pool $ publishCaptureRun scopeA lease validated
+    outcomes <- withDb pool $ query "SELECT outcome FROM episode_memory_proposals ORDER BY proposal_index" ()
+    (outcomes :: [Only Text]) `shouldBe` map Only ["rejected_store","applied","rejected_store","rejected_store"]
+    rows <- withDb pool $ query "SELECT content,version FROM memories WHERE id=?" (Only active.memId)
+    (rows :: [(Text,MemoryVersion)]) `shouldBe` [("corrected fact", Memory.MemoryVersion 2)]
+    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` lease.leaseRun.crRange.srEnd
+    let review scope version = withDb pool $ reviewRejectedMemoryProposal scope lease.leaseRun.crId 0 "operator" "re-read the correction and current memory"
+          (Just (ProposalUpdate active.memId version "reviewed correction" [m1]))
+    review scopeB (Memory.MemoryVersion 2) `shouldThrow` anyException
+    review scopeA (Memory.MemoryVersion 1) `shouldReturn` "rejected_store"
+    review scopeA (Memory.MemoryVersion 2) `shouldReturn` "applied"
+    review scopeA (Memory.MemoryVersion 3) `shouldThrow` anyException
+    reviewed <- withDb pool $ query "SELECT outcome FROM episode_memory_reviews ORDER BY review_id" ()
+    (reviewed :: [Only Text]) `shouldBe` map Only ["rejected_store","applied"]
+    original <- withDb pool $ query "SELECT outcome FROM episode_memory_proposals WHERE proposal_index=0" ()
+    (original :: [Only Text]) `shouldBe` [Only "rejected_store"]
+    withDb pool (loadCursor scopeA historianCursor) `shouldReturn` lease.leaseRun.crRange.srEnd
 
   -- Migration 062 changed conversation_source_hash and the ledger columns it
   -- reads, so every hash stamped before the ADR 003 cutover describes an input

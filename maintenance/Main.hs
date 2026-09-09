@@ -3,19 +3,18 @@
 -- | Offline release gate for ADR 003's atomic schema/content cutover.
 --
 -- This executable is deliberately not linked into the serving entry point.
--- Run it only after every writer is stopped, with MAX_DB_URL pointing at the
--- database being upgraded.  The serving binary has no dual reader/writer and
--- therefore must not overlap this program.
+-- Only gate/migrate/reproject require stopped writers. Verify, health and debt
+-- export are read-only and support live traffic; review appends audit records.
 module Main (main) where
 
 import Control.Exception (bracket)
 import Control.Monad (forM, unless, when)
-import Data.Aeson (Result (..), Value, fromJSON)
+import Data.Aeson (Value, eitherDecodeFileStrict, encodeFile)
 import Data.Int (Int64)
-import Data.Map.Strict (Map)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (UTCTime)
 import Database.PostgreSQL.Simple
   ( Connection,
     Only (..),
@@ -25,38 +24,29 @@ import Database.PostgreSQL.Simple
     query_,
     withTransaction,
   )
-import Database.PostgreSQL.Simple.FromRow qualified as FromRow
 import Max.DB.Connection (DbConfig (..), DbPool, closeDbPool, newDbPool, withConn)
 import Max.DB.Migrations (runMigrations)
 import Effectful (runEff)
 import Effectful.PostgreSQL.Connection (runWithConnection)
-import Max.IR
-  ( Body (..),
-    Phase (Canonical),
-    mentionIdentities,
-  )
-import Max.IR.Prompt (promptCanonicalText)
 import Max.DB.Health (operationalChecks)
-import Max.Platform.Store (expiredSendingDeliverySql, mentionPrincipalsFor)
-import Max.Platform.Types (PrincipalId, PrincipalIdentityId)
+import Max.DB.Debt qualified as Debt
+import Max.EpisodeStore (CaptureRunId (..), reviewRejectedMemoryProposal)
+import Max.ConversationScope (conversationScopeFor)
+import OneBot.Types (GroupId (..))
+import Max.MemoryStore qualified as Memory
+import Max.Platform.Store (expiredSendingDeliverySql)
+import Max.DB.Projection (ProjectionRow (..), projectionRows, expectedProjection)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (die)
+import Text.Read (readMaybe)
 
 data Command = Migrate | Reproject | Verify | Health | Gate
+  | DebtExport Debt.DebtKind Debt.DebtScope UTCTime FilePath
+  | DebtReview FilePath
+  | MemoryReview Int64 Int64 Int Text Text FilePath
+  | MemoryReviewQueue
+  | MemoryRepairSubject Int64 Int64 Int64 Int64 Text
   deriving stock (Eq, Show)
-
-data ProjectionRow = ProjectionRow
-  { canonicalMessageId :: !Int64,
-    canonicalContent :: !Value,
-    renderedText :: !Text
-  }
-
-instance FromRow.FromRow ProjectionRow where
-  fromRow =
-    ProjectionRow
-      <$> FromRow.field
-      <*> FromRow.field
-      <*> FromRow.field
 
 main :: IO ()
 main = do
@@ -74,6 +64,29 @@ run command migrationsDir pool = case command of
   Reproject -> withConn pool reproject
   Verify -> withConn pool (verify False)
   Health -> withConn pool operationalHealth
+  DebtExport kind scope cutoff path -> withConn pool $ \connection -> do
+    plan <- Debt.exportDebt connection kind scope cutoff
+    encodeFile path plan
+    putStrLn ("debt: exported " <> show (length plan.items) <> " exact observations to " <> path)
+  DebtReview path -> do
+    plan <- eitherDecodeFileStrict path >>= either die pure
+    changed <- withConn pool (`Debt.reviewDebt` plan)
+    putStrLn ("debt: appended " <> show changed <> " review events; source effects were not replayed")
+  MemoryReviewQueue -> withConn pool $ \connection -> do
+    rows <- query_ connection "SELECT jsonb_build_object('capture_run_id',capture_run_id,'proposal_index',proposal_index,'conversation_id',conversation_id,'outcome_reason',outcome_reason,'review_state',review_state) FROM episode_memory_review_queue ORDER BY capture_run_id,proposal_index" :: IO [Only Value]
+    mapM_ (print . fromOnly) rows
+  MemoryReview group capture index actor reason path -> do
+    proposal <- eitherDecodeFileStrict path >>= either die pure
+    result <- withConn pool $ \connection -> runEff . runWithConnection connection $
+      reviewRejectedMemoryProposal (conversationScopeFor (GroupId group)) (CaptureRunId capture) index actor reason proposal
+    putStrLn ("memory review: " <> T.unpack result)
+  MemoryRepairSubject group memory version principal reason -> do
+    result <- withConn pool $ \connection -> runEff . runWithConnection connection $
+      Memory.repairMemorySubjectAdmin (conversationScopeFor (GroupId group)) (Memory.MemoryId memory)
+        (Memory.ExpectedVersion (Memory.MemoryVersion version)) principal reason
+    case result of
+      Memory.MemoryMutationApplied item -> putStrLn ("memory subject repaired: id=" <> show item.memId <> " version=" <> show item.memVersion)
+      Memory.MemoryMutationRejected -> die "subject repair rejected: identity/evidence/scope/version/duplicate guard did not match"
   Gate -> do
     withConn pool preflightDrained
     migrate pool migrationsDir
@@ -135,9 +148,7 @@ reproject :: Connection -> IO ()
 reproject connection = withTransaction connection $ do
   rows <- projectionRows connection
   changed <- fmap sum . forM rows $ \row -> do
-    body <- decodeBody row
-    principals <- mentionPrincipals connection body
-    let expected = promptCanonicalText principals body
+    expected <- expectedProjection connection row >>= either die pure
     if expected == row.renderedText
       then pure (0 :: Int)
       else do
@@ -185,24 +196,6 @@ verify requireDrained connection = do
         else "ADR 003 verification PASSED (schema, IR, projections, and ledger)"
     )
 
-projectionRows :: Connection -> IO [ProjectionRow]
-projectionRows connection =
-  query_
-    connection
-    "SELECT canonical_message_id, canonical_content, rendered_text \
-    \FROM messages ORDER BY canonical_message_id"
-
-decodeBody :: ProjectionRow -> IO (Body 'Canonical)
-decodeBody row = case fromJSON row.canonicalContent of
-  Success body -> pure body
-  Error err ->
-    die
-      ( "canonical message "
-          <> show row.canonicalMessageId
-          <> " is not decodable v2 IR: "
-          <> err
-      )
-
 -- | Fast, read-only operational gate.  Retryable queues are reported because
 -- they are useful during an incident, but only states that have lost automatic
 -- progress or require explicit reconciliation fail the command.  A second run
@@ -229,39 +222,12 @@ operationalHealth connection = do
 verifyProjections :: Connection -> IO [String]
 verifyProjections connection = do
   rows <- projectionRows connection
-  fmap concat . forM rows $ \row -> case fromJSON row.canonicalContent of
-    Error err ->
-      pure
-        [ "canonical message "
-            <> show row.canonicalMessageId
-            <> " is not decodable v2 IR: "
-            <> err
-        ]
-    Success body -> do
-      principals <- mentionPrincipals connection body
-      let expected = promptCanonicalText principals body
-      pure
-        [ "canonical message "
-            <> show row.canonicalMessageId
-            <> " has a stale rendered_text projection"
-          | expected /= row.renderedText
-        ]
-
--- | The gate must resolve mentions exactly the way the writer did, so it
--- calls the writer's own resolution instead of keeping a second copy of the
--- query.  The two did drift once: only this one learned to prefer the
--- mentioned identity itself.
---
--- Since ADR 004 that resolution is identity → principal, which is one
--- always-defined join and no longer depends on the endpoint at all: the
--- prompt names people, not accounts.
-mentionPrincipals ::
-  Connection ->
-  Body 'Canonical ->
-  IO (Map PrincipalIdentityId PrincipalId)
-mentionPrincipals connection body =
-  runEff . runWithConnection connection $
-    mentionPrincipalsFor (mentionIdentities body)
+  fmap concat . forM rows $ \row -> expectedProjection connection row >>= \case
+    Left err -> pure [err]
+    Right expected -> pure
+      [ "canonical message " <> show row.canonicalMessageId <> " has a stale rendered_text projection"
+      | expected /= row.renderedText
+      ]
 
 scalarCount :: Connection -> Query -> IO Int64
 scalarCount connection sql = do
@@ -450,10 +416,27 @@ parseCommand = \case
   ["verify"] -> pure Verify
   ["health"] -> pure Health
   ["gate"] -> pure Gate
+  ["debt", "export", kind, scope, cutoff, path] ->
+    case (Debt.parseDebtKind (T.pack kind), Debt.parseDebtScope (T.pack scope), readMaybe cutoff) of
+      (Just parsedKind, Just parsedScope, Just parsedCutoff) -> pure (DebtExport parsedKind parsedScope parsedCutoff path)
+      _ -> die "invalid debt kind/scope/cutoff; timestamp example: 2026-09-09 05:00:00 UTC"
+  ["debt", "review", path] -> pure (DebtReview path)
+  ["memory", "reviews"] -> pure MemoryReviewQueue
+  ["memory", "repair-subject", group, memory, version, principal, reason] -> case (readMaybe group,readMaybe memory,readMaybe version,readMaybe principal) of
+    (Just g,Just m,Just v,Just p) -> pure (MemoryRepairSubject g m v p (T.pack reason))
+    _ -> die "subject repair requires numeric legacy conversation, memory, expected version and canonical principal ids"
+  ["memory", "review", group, capture, index, actor, reason, path] -> case (readMaybe group,readMaybe capture,readMaybe index) of
+    (Just g,Just c,Just i) -> pure (MemoryReview g c i (T.pack actor) (T.pack reason) path)
+    _ -> die "memory review requires numeric legacy conversation id, capture id and proposal index"
   _ ->
     die
       "usage: cabal run max-adr003-maintenance -- \
       \(migrate|reproject|verify|health|gate)\n\
+      \  debt export KIND (all|global|conversation:ID) 'YYYY-MM-DD HH:MM:SS UTC' FILE\n\
+      \  debt review FILE\n\
+      \  memory reviews\n\
+      \  memory repair-subject LEGACY_GROUP MEMORY EXPECTED_VERSION PRINCIPAL REASON\n\
+      \  memory review LEGACY_GROUP CAPTURE INDEX ACTOR REASON PROPOSAL_JSON_FILE\n\
       \  environment: MAX_DB_URL (required), MAX_MIGRATIONS_DIR (default: migrations)"
 
 requireEnv :: String -> IO String

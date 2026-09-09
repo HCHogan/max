@@ -44,7 +44,7 @@ import Max.EpisodeStore
 import Max.Historian (generateHistorianCapture, historianPromptVersion, renderHistorianMessages, renderHistorianSourceLine)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Log (withCompactLogger)
-import Max.MemoryStore (MemoryId (..))
+import Max.MemoryStore (MemoryId (..), MemoryVersion (..))
 import Max.ModelCatalog
   ( ModelCapabilities (..),
     contextInputBudget,
@@ -173,6 +173,7 @@ data ExpectedProposal = ExpectedProposal
     epUserId :: !(Maybe Int64),
     epCategories :: ![Text],
     epMemoryId :: !(Maybe Int64),
+    epExpectedVersion :: !(Maybe Int64),
     epContentTermGroups :: ![[Text]],
     epEvidenceIds :: ![Int64]
   }
@@ -189,6 +190,7 @@ instance FromJSON ExpectedProposal where
       <*> o .:? "user_id"
       <*> pure (maybe categories (: categories) category)
       <*> o .:? "id"
+      <*> o .:? "expected_version"
       <*> pure (map (: []) contentTerms <> contentTermGroups)
       <*> (fromMaybe [] <$> o .:? "evidence_message_ids")
 
@@ -426,10 +428,17 @@ proposalMatches expected actual =
     && maybe True (== userId) expected.epUserId
     && (null expected.epCategories || category `elem` expected.epCategories)
     && maybe True (== memoryId) expected.epMemoryId
+    && maybe True (\version -> observedVersion actual == Just version) expected.epExpectedVersion
     && all (any ((`T.isInfixOf` T.toCaseFold content) . T.toCaseFold)) expected.epContentTermGroups
     && all (`elem` evidence) expected.epEvidenceIds
   where
     (action, scope, userId, category, memoryId, content, evidence) = proposalParts actual
+
+observedVersion :: EpisodeMemoryProposal -> Maybe Int64
+observedVersion = \case
+  ProposalAdd {} -> Nothing
+  ProposalUpdate _ version _ _ -> Just version.unMemoryVersion
+  ProposalArchive _ version _ -> Just version.unMemoryVersion
 
 proposalParts :: EpisodeMemoryProposal -> (Text, Text, Int64, Text, Int64, Text, [Int64])
 proposalParts = \case

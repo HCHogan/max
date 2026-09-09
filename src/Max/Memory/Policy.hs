@@ -20,7 +20,7 @@ data MemorySubject = ConversationMemory | PersonMemory !(Maybe Int64) deriving s
 
 data DuplicatePolicy = AllowDuplicates | RejectExactDuplicates deriving stock (Eq, Show)
 
-data MemoryAdmissionFailure = MemoryAtCapacity | ExactMemoryAlreadyExists | MemoryConversationMissing deriving stock (Eq, Show)
+data MemoryAdmissionFailure = MemoryAtCapacity | ExactMemoryAlreadyExists | MemoryConversationMissing | MemorySubjectNotVisible deriving stock (Eq, Show)
 
 data MemoryWriteFailure
   = MemoryCallerFenced
@@ -59,3 +59,4 @@ memoryWriteFailureText = \case
   MemoryAdmissionRejected MemoryAtCapacity -> "该 scope 的记忆已满（" <> tshow maxMemoriesPerScope <> " 条）。先用 memory_forget 删掉过时的，或用 memory_update 合并相近条目，再保存。"
   MemoryAdmissionRejected ExactMemoryAlreadyExists -> "已经存在相同记忆"
   MemoryAdmissionRejected MemoryConversationMissing -> "记忆所属会话已不可用"
+  MemoryAdmissionRejected MemorySubjectNotVisible -> "记忆归属必须是本会话中已知的人物 principal ID（[@#principal]），不能使用平台用户号或其他会话的人物 ID"

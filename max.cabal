@@ -161,6 +161,8 @@ library
         Max.DB.FetchQueue
         Max.DB.Files
         Max.DB.Health
+        Max.DB.Debt
+        Max.DB.Projection
         Max.DB.History
         Max.History.Types
         Max.Media.Types
@@ -507,6 +509,7 @@ executable max-adr003-maintenance
         , max
         , postgresql-simple    >= 0.7  && < 0.8
         , text                 >= 2.1  && < 2.2
+        , time                 >= 1.12 && < 1.13
     ghc-options:      -threaded -rtsopts
 
 -- Offline replay of intent-classifier fixtures against a live LLM
@@ -693,6 +696,8 @@ test-suite max-test-db
         Max.EpisodeStoreSpec
         Max.HistorianSpec
         Max.DB.HistorySpec
+        Max.DB.DebtSpec
+        Max.DB.ProjectionSpec
         Max.DB.MediaSpec
         Max.MemoryStoreSpec
         Max.MemoryCapabilitiesSpec
