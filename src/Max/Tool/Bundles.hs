@@ -8,6 +8,7 @@ module Max.Tool.Bundles
     mergeSkillLoads,
     skillLoadVersion,
     skillReceiptVersion,
+    checkSkillLoadBudget,
   )
 where
 
@@ -48,6 +49,7 @@ skillDependencies _ = []
 
 toolBundle :: Text -> Maybe Text
 toolBundle name
+  | name `elem` ["skill_save", "skill_validate", "skill_inspect", "skill_publish"] = Just "skill-authoring"
   | name == "inspect_source" = Just "self-knowledge"
   | name `elem` ["web_search", "view_zhihu", "view_bilibili"] || "browser_" `T.isPrefixOf` name = Just "web"
   | "sandbox_" `T.isPrefixOf` name || name `elem` ["nix_search", "list_recent_files", "import_file_to_sandbox", "send_image_from_sandbox", "send_file_from_sandbox"] = Just "sandbox"
@@ -64,3 +66,11 @@ mergeSkillLoads old additions = old `Map.union` Map.fromList [(load.slName, load
 -- Include executable content and pinned contracts, while retaining legacy receipts.
 skillReceiptVersion :: SkillLoad -> Text
 skillReceiptVersion load = skillLoadVersion $ load.slInstructions <> maybe "" (TE.decodeUtf8 . LBS.toStrict . encode) load.slPackage
+
+-- The same complete-load limit gates activation and authoring publication.
+checkSkillLoadBudget :: Map Text SkillLoad -> [SkillLoad] -> Either Text [SkillLoad]
+checkSkillLoadBudget previous loads
+  | length allLoads > 32 || sum (map (T.length . (.slInstructions)) allLoads) > 120000 || LBS.length (encode allLoads) > 512000 = Left "技能包超过完整加载上限，不能静默截断"
+  | otherwise = Right loads
+  where
+    allLoads = loads <> Map.elems previous

@@ -61,6 +61,7 @@ module Max.Skills
     updateSkill,
     updateSkillAtRevision,
     deleteSkill,
+    publishSkillTransaction,
     validateSkill,
   )
 where
@@ -70,7 +71,6 @@ import Control.Concurrent.STM
 import Control.Monad (when)
 import Data.Aeson (Result (..), Value, eitherDecodeStrict', fromJSON, toJSON)
 import Data.ByteString (ByteString)
-import Data.Char (isSpace)
 import Data.FileEmbed (embedDir)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
@@ -82,13 +82,13 @@ import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..), SqlError (..), (:.) (..))
 import Effectful
-import Effectful.Exception (bracket_, mask_, try)
+import Effectful.Exception (bracket_, mask_, throwIO, try)
 import Effectful.PostgreSQL (WithConnection, execute, query, query_)
 import Max.Command.Help (helpText)
 import Max.Command.Version (buildIdentityLines, readOsPretty)
 import Max.DB.Transaction (withCommittedTransaction)
+import Max.Skill.Metadata (validateSkillText)
 import Max.Skill.Package (SkillPackage, emptyPackage, validatePackage, validatePackageName)
-import Max.Util (tshow)
 import OneBot.Types (GroupId (..))
 import System.FilePath (dropExtension, takeExtension)
 
@@ -271,26 +271,8 @@ data NewSkill = NewSkill
 -- dispatch's system prompt, so it gets the tightest one; the body is
 -- paid only on use but still bounded — a "skill" past this size is a
 -- document, and documents belong in sandbox files.
-maxNameLen, maxDescriptionLen, maxBodyLen :: Int
-maxNameLen = 64
-maxDescriptionLen = 120
-maxBodyLen = 49152
-
--- | Shared shape check for create and patch.  'Left' is a
--- user-showable reason.
 validateSkill :: Text -> Text -> Text -> Either Text ()
-validateSkill name desc body
-  | "learned-task-" `T.isPrefixOf` name = Left "learned-task- 为任务经验保留，需通过 experience 回放审核发布"
-  | any (T.any (== '\0')) [name, desc, body] = Left "skill content cannot contain NUL"
-  | T.null name = Left "name 不能为空"
-  | T.length name > maxNameLen = Left ("name 太长（上限 " <> tshow maxNameLen <> " 字符）")
-  | T.any isSpace name = Left "name 不能含空白字符（用 - 连接）"
-  | T.null (T.strip desc) = Left "description 不能为空"
-  | T.length desc > maxDescriptionLen = Left ("description 太长（上限 " <> tshow maxDescriptionLen <> " 字符，它是常驻提示词）")
-  | T.any (== '\n') desc = Left "description 必须是单行"
-  | T.null (T.strip body) = Left "body 不能为空"
-  | T.length body > maxBodyLen = Left ("body 太长（上限 " <> tshow maxBodyLen <> " 字符；更长的材料放 sandbox 文件）")
-  | otherwise = Right ()
+validateSkill = validateSkillText
 
 -- | Insert a new skill.  'Left' carries a user-showable reason
 -- (validation, duplicate name).
@@ -359,6 +341,27 @@ publish t = \case
   Right (Right skill) -> do
     liftIO . atomically $ modifyTVar' t (Map.insert skill.skillId skill)
     pure (Right skill)
+
+-- | Trusted publication adapter: serialize the standalone SQL commit and cache
+-- update together. The supplied operation must return the exact committed row.
+-- Public tool effects never receive this callback or the registry capability.
+publishSkillTransaction :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff es (Either Text Int64) -> Eff es (Either Text Skill)
+publishSkillTransaction reg@(SkillRegistry cache _) action = withMutation reg $ do
+  result <- try @SqlError . withCommittedTransaction $ do
+    changed <- action
+    case changed of
+      Left err -> pure (Left err)
+      Right sid -> do
+        rows <- query "SELECT id,name,group_id,description,body,enabled,created_by,updated_at,revision,package FROM skills WHERE id=?" (Only sid)
+        case rows of
+          [row] -> Right <$> skillFromRow row
+          _ -> liftIO (ioError (userError "published skill row is missing"))
+  case result of
+    -- A lost COMMIT acknowledgement must stay an exception so the tool kernel
+    -- records outcome-unknown. Only a definite uniqueness rollback is a normal
+    -- before-effect rejection.
+    Left failure | sqlState failure /= "23505" -> throwIO failure
+    _ -> publish cache result
 
 -- Serialize DB commits and cache publication; cancellation cannot land in the
 -- commit-to-cache gap. SQL still uses CAS across independent registry instances.

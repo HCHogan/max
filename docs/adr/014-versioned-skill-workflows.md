@@ -1,6 +1,6 @@
 # ADR-014: Versioned skill workflows
 
-Status: implemented locally (2026-09-09); release and deployment are separate.
+Status: first and second batches implemented locally (2026-09-10); release and deployment are separate.
 
 ## Decision
 
@@ -46,8 +46,8 @@ apply to that content. Package shape, dependency resolution and execution policy
 live in Haskell; SQL stores content, scope, revisions and provenance only.
 
 Existing admin APIs can seed and update packages. Package updates require an
-expected revision; no model authoring/publishing tools are introduced in this
-batch. Two embedded read-only workflows exercise fleet status aggregation and
+expected revision. Model authoring/publishing uses the separate scoped draft
+path described below. Two embedded read-only workflows exercise fleet status aggregation and
 batch search. They ship with the binary and require no production DB seed.
 
 ## Contracts and limits
@@ -60,7 +60,7 @@ or dynamic dependency discovery is added. Compatibility is conservative: a
 changed required tool fingerprint requires loading a new execution snapshot.
 This checks compatibility against the load-time catalog; it does not statically
 prove source compatibility with every future tool API. Validation records tied
-to authored package versions belong to the subsequent authoring batch.
+to authored package versions are provided by the authoring path described below.
 
 ## Acceptance
 
@@ -72,5 +72,13 @@ both real embedded sample workflows. Run build, unit/real PostgreSQL suites,
 architecture positive/negative boundaries, HLint and prompt-flow generation/check.
 Use a separate test database and worktree while other changes are in progress.
 
-Model authoring/validation/publication, execution evidence browsing, rollback UI,
-cross-task continuation and runtime compilation caching are subsequent batches.
+Execution evidence browsing, rollback UI, cross-task continuation and runtime
+compilation caching remain subsequent batches.
+
+## Model authoring follow-up (2026-09-10)
+
+The second batch is implemented locally: `skill-authoring` loads a fixed set of
+four tools for immutable drafts, fixture-only validation, inspection and scoped
+publication. See [the authoring contract](../skill-authoring.md) for exact writer,
+transaction, validation and authority boundaries. Execution evidence browsing,
+rollback UI, runtime caching and cross-task continuation remain future work.

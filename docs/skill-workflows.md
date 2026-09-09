@@ -67,8 +67,9 @@ skill and its stored revisions; already loaded execution receipts retain their
 content. There is no revision-history or rollback endpoint in this batch.
 
 Embedded packages pair `skills/<name>.md` instructions with a sibling `.json`
-package. They are compiled into Max. Creation/publishing by the model and a
-package editor are later batches; admin JSON is the initial authoring surface.
+package. They are compiled into Max. Model creation/publishing is available
+through the scoped authoring bundle below; a graphical package editor remains
+future work.
 
 ## Contracts and bounds
 
@@ -98,3 +99,10 @@ journal retains exact source and tool evidence. No whole-program retry, guest
 checkpoint, nested workflow execution or background resumption is added.
 `Finish`/`Yield` stops the entire program; a maxops handoff does not suspend an
 `await` until deployment finishes. Steering arrives after the complete run.
+
+## Model authoring
+
+Load `skill-authoring` to create group-local draft packages, validate against
+fixture tools and publish a checked revision. See [the authoring contract](skill-authoring.md).
+Admin package editing remains a separate privileged path; model publication cannot
+overwrite an admin-authored or subsequently admin-edited head.

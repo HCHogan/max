@@ -3,14 +3,17 @@
 -- | Fixed JavaScript guest and SDK. No model protocol or domain tool runners.
 module Max.CodeMode.JavaScript
   ( javaScriptLimits,
+    javaScriptRuntimeVersion,
     runJavaScript,
     javaScriptProgram,
     workflowProgram,
   )
 where
 
+import Crypto.Hash.SHA256 qualified as SHA256
 import Data.Aeson (Value, encode, object, (.=))
 import Data.ByteString (ByteString)
+import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
 import Data.FileEmbed (embedFile)
 import Data.Maybe (fromMaybe)
@@ -40,6 +43,10 @@ javaScriptRuntime =
 
 javaScriptSdk :: ByteString
 javaScriptSdk = $(embedFile "codemode/sdk.js")
+
+-- Validation evidence changes automatically when the embedded guest or SDK changes.
+javaScriptRuntimeVersion :: Text
+javaScriptRuntimeVersion = TE.decodeUtf8 (Base16.encode (SHA256.hash (javaScriptRuntime <> javaScriptSdk)))
 
 javaScriptLimits :: WasmLimits
 javaScriptLimits =

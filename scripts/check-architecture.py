@@ -25,6 +25,8 @@ PURE = {
     "Max.ModelCatalog.Internal",
     "Max.Tool.Types",
     "Max.Tool.Bundles",
+    "Max.Skill.Authoring",
+    "Max.Skill.Metadata",
     "Max.Skill.Contract",
     "Max.Skill.Package",
     "Max.Skill.Workflow",
@@ -88,6 +90,13 @@ def check_imports():
         if dependency.startswith("Max.") or dependency.startswith("System.Process"):
             errors.append(f"Wasm mechanics acquired domain or subprocess capability: {dependency}")
 
+    validation = (ROOT / "src/Max/Skill/Validation.hs").read_text()
+    for dependency in IMPORT.findall(validation):
+        if dependency.startswith(("Max.DB.", "Max.Tools.", "System.", "Network.")) or dependency in {"Effectful.PostgreSQL", "Max.Env", "Max.Skills", "Max.Skill.Store"} or dependency.endswith(".ToolRuntime"):
+            errors.append(f"Fixture validation acquired live application capability: {dependency}")
+    if "validateFixtures :: [CatalogTool] -> DraftVersion -> IO ValidationReport" not in validation or "runEff . runConcurrent . runTools registry" not in validation:
+        errors.append("Fixture validation must close over a fresh fixture-only interpreter")
+
     # Read-model codecs may decode SQL fields, but cannot execute queries or IO.
     read_models = {
         "Max.Memory.Types": {"Max.ConversationScope", "Max.Memory.Policy"},
@@ -139,7 +148,7 @@ def check_imports():
         dependencies = set(IMPORT.findall(source))
         if relative != "src/Max/MemoryStore.hs" and re.search(r"\bcreateMemory\b", source):
             errors.append(f"{relative}: memory creation bypasses shared admission")
-        domain_tools = {"src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Reminder.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs"}
+        domain_tools = {"src/Max/Tools/SkillAuthoring.hs", "src/Max/Tools/Task.hs", "src/Max/Tools/Monitor.hs", "src/Max/Tools/Reminder.hs", "src/Max/Tools/Memory.hs", "src/Max/Tools.hs", "src/Max/Tools/Pins.hs", "src/Max/Tools/Group.hs", "src/Max/Tools/Images.hs", "src/Max/Tools/Video.hs", "src/Max/Tools/Stickers.hs"}
         resource_tools = {"src/Max/Tools/Files.hs", "src/Max/Tools/Browser.hs"}
         if relative in domain_tools | resource_tools:
             if any(dependency.startswith("Max.DB.") for dependency in dependencies) or dependencies & {"Effectful.PostgreSQL", "Max.Platform.Store", "Max.Session", "Max.Reply.Resolve", "Max.Reply.Caption", "Max.Task.ToolRuntime", "Max.Monitor.ToolRuntime", "Max.Memory.ToolRuntime", "Max.MemoryStore", "Max.EpisodeStore", "Max.Recall", "Max.Prompt", "Max.Conversation.ToolRuntime", "Max.Monitor", "Max.Tools"}:
@@ -183,6 +192,11 @@ import Max.Effects.BlobHost
 import Max.Effects.ToolControl
 import Max.Tool.Control
 import Max.Skill.Package (SkillPackage)
+import Max.Skill.Authoring (DraftContent)
+import Max.Effects.SkillDraft (SkillDraft, saveSkillDraft)
+import Max.Effects.SkillQuery (SkillQuery, inspectSkill)
+import Max.Effects.SkillValidation (SkillValidation, validateSkillDraft)
+import Max.Effects.SkillPublication (SkillPublication, publishSkillDraft)
 import Max.Effects.ToolDirectory
 import Max.Effects.ToolOutput
 import Max.Effects.Tools
@@ -214,6 +228,14 @@ import OneBot.Types (GroupId (..), UserId (..))
 """
 
 POSITIVE = """
+draftSkill :: SkillDraft :> es => DraftContent -> Eff es ()
+draftSkill content = () <$ saveSkillDraft content 0
+inspectDraft :: SkillQuery :> es => Eff es ()
+inspectDraft = () <$ inspectSkill "demo" Nothing
+validateDraft :: SkillValidation :> es => Eff es ()
+validateDraft = () <$ validateSkillDraft "demo" 1
+publishDraft :: SkillPublication :> es => Eff es ()
+publishDraft = () <$ publishSkillDraft "demo" 1 1 0
 conversation :: ConversationQuery :> es => Eff es ()
 conversation = () <$ readMessage 1
 memories :: MemoryQuery :> es => Eff es ()
@@ -293,6 +315,10 @@ NEGATIVE = {
     "content cannot resolve host paths": ("BlobHost", "bad :: Blob :> es => BlobRef -> Eff es FilePath\nbad = resolveBlobHostPath"),
     "producer cannot drain": ("ToolOutputRead", "bad :: ToolOutput :> es => Eff es [InlineMedia]\nbad = drainInlineMedia"),
     "consumer cannot produce": ("ToolOutput", "bad :: ToolOutputRead :> es => InlineMedia -> Eff es Bool\nbad = queueInlineMedia"),
+    "skill query cannot publish": ("SkillPublication", 'bad :: SkillQuery :> es => Eff es ()\nbad = () <$ publishSkillDraft "demo" 1 1 0'),
+    "skill draft cannot publish": ("SkillPublication", 'bad :: SkillDraft :> es => Eff es ()\nbad = () <$ publishSkillDraft "demo" 1 1 0'),
+    "skill validation cannot execute live tools": ("Tools", 'bad :: SkillValidation :> es => Eff es ToolOutcome\nbad = invokeTool "write" Null'),
+    "skill publication cannot save a draft": ("SkillDraft", 'bad :: SkillPublication :> es => DraftContent -> Eff es ()\nbad d = () <$ saveSkillDraft d 0'),
     "skill package cannot execute tools": ("Tools", 'bad :: SkillPackage -> Eff es ToolOutcome\nbad _ = invokeTool "read" Null'),
     "directory cannot execute": ("Tools", 'bad :: ToolDirectory :> es => Eff es ToolOutcome\nbad = invokeTool "read" Null'),
     "directory cannot run arbitrary IO": ("IOE", "bad :: ToolDirectory :> es => Eff es ()\nbad = liftIO (pure ())"),

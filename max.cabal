@@ -345,6 +345,17 @@ library
         Max.SelfSource
         Max.Shutdown
         Max.Skills
+        Max.Skill.Authoring
+        Max.Skill.Metadata
+        Max.Skill.Load
+        Max.Skill.Store
+        Max.Skill.Validation
+        Max.Skill.ToolRuntime
+        Max.Effects.SkillDraft
+        Max.Effects.SkillQuery
+        Max.Effects.SkillValidation
+        Max.Effects.SkillPublication
+        Max.Tools.SkillAuthoring
         Max.Skill.Contract
         Max.Skill.Package
         Max.Skill.Workflow
@@ -613,6 +624,7 @@ test-suite max-test
         Max.SessionSpec
         Max.ShutdownSpec
         Max.SkillsSpec
+        Max.Skill.AuthoringSpec
         Max.Skill.WorkflowSpec
         Max.Agent.FailureSpec
         Max.Task.PolicySpec
@@ -692,6 +704,7 @@ test-suite max-test-db
         Helpers
         ExecutionFixture
         Max.ExecutionSpec
+        Max.SkillAuthoringSpec
         Max.SkillWorkflowSpec
         Max.AdminTimelineSpec
         Max.DB.ConnectionSpec
