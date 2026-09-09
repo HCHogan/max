@@ -368,7 +368,7 @@ expandTurnTrace scope cleared ordinal after limit = do
             "started_at" .= started,
             "finished_at" .= finished,
             "usage" .= object ["llm_turns" .= llmTurns, "prompt_tokens" .= promptTokens, "completion_tokens" .= completionTokens],
-            "journal" .= map journalValue page,
+            "journal" .= map (journalValue ordinal) page,
             "outputs" .= [object ["chunk" .= chunk, "message_id" .= messageId, "preview" .= preview] | (chunk, messageId, preview) <- outputs],
             "has_more" .= hasMore,
             "next_after_cursor" .= nextCursor
@@ -446,10 +446,11 @@ instance FromRow JournalTraceRow where
 journalOrdinal :: JournalTraceRow -> Maybe Int64
 journalOrdinal = Just . (.jtrOrdinal)
 
-journalValue :: JournalTraceRow -> Value
-journalValue row =
+journalValue :: TurnOrdinal -> JournalTraceRow -> Value
+journalValue turnOrdinal row =
   object
-    [ "execution" .= ("r" <> T.pack (show row.jtrOrdinal)),
+    [ "handle" .= (turnHandleText turnOrdinal <> ":r" <> T.pack (show row.jtrOrdinal)),
+      "execution" .= ("r" <> T.pack (show row.jtrOrdinal)),
       "kind" .= row.jtrKind,
       "state" .= row.jtrState,
       "tool" .= row.jtrToolRef,

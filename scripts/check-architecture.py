@@ -29,6 +29,7 @@ PURE = {
     "Max.Tool.Catalog",
     "Max.Task.Types",
     "Max.Task.State",
+    "Max.Task.Experience",
     "Max.Task.Execution",
     "Max.Task.FrontendInput",
     "Max.Task.Progress",

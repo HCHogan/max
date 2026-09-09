@@ -33,12 +33,12 @@ scopeB = conversationScopeFor (GroupId groupB)
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
-  it "searches all five scoped corpora with quotas and message-level deduplication" $ do
+  it "searches all five scoped corpora without collapsing distinct memory assertions" $ do
     seedRecallFixture pool
     hits <- withDb pool $ searchRecall (currentConversationRecall scopeA) "tea" Nothing 10
 
     sort (map (.rhSource) hits)
-      `shouldBe` ["caption", "episode", "memory", "message", "pin"]
+      `shouldBe` ["caption", "episode", "memory", "memory", "message", "pin"]
     length (nub (map (.rhDedupKey) hits)) `shouldBe` length hits
     [message | hit <- hits, hit.rhSource == "message", Just message <- [hit.rhMessageId]]
       `shouldBe` [1001]
@@ -88,7 +88,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
     foreignMemoryHits <- withDb pool $ searchRecallIn policyB (Set.singleton RecallMemories) "tea" Nothing 30
     foreignMemoryHits `shouldBe` []
 
-  it "explains candidates, scores, quotas, and final selection without tracing foreign rows" $ do
+  it "explains candidates, scores, relevance, and final selection without tracing foreign rows" $ do
     seedRecallFixture pool
     trace <-
       withDb pool $
@@ -101,7 +101,7 @@ spec pool = before_ (truncateAll pool) $ describe "Max.Recall" $ do
     trace.rtConversationId `shouldBe` groupA
     trace.rtLexicalCandidates `shouldSatisfy` (> 0)
     trace.rtSemanticCandidates `shouldBe` 0
-    trace.rtSourceQuotas `shouldSatisfy` (not . null)
+    trace.rtSourceQuotas `shouldBe` []
     trace.rtCandidates `shouldSatisfy` any ((== "selected") . (.rtcDecision))
     length trace.rtSelected `shouldBe` 5
 

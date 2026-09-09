@@ -35,6 +35,7 @@ import Max.DB.Calls (insertCall, pruneCalls, redactDataUrls)
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.Migrations (runMigrations)
 import Max.DB.Monitor (reclaimExpiredMonitorFireClaims)
+import Max.DB.Task.Experience (experienceWorker)
 import Max.DB.TurnContinuity (pruneTurnArchiveReferences)
 import Max.DB.Usage (insertUsage)
 import Max.Effects.Agent (Agent, defaultLimits)
@@ -66,7 +67,7 @@ import Max.MaxOps.Client (maxOpsClient)
 import Max.MaxOps.Notifications (notificationServer)
 import Max.MediaCaption (mediaCaptionWorker)
 import Max.MemoryExtract (dreamWorker)
-import Max.ModelCatalog (ModelCatalog, defaultModelName, modelProfileNames)
+import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, contextInputBudget, defaultContextLimits, defaultModelName, lookupModelCapabilities, modelProfileNames)
 import Max.Monitor (monitorWorker)
 import Max.Platform.Delivery (deliveryWorker, oneBotDeliveryTransport)
 import Max.Platform.Runtime (qqBackend, runRuntimePlatforms)
@@ -389,7 +390,10 @@ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath ap
                          (historianWorker profile candidate.historianTimeoutSeconds candidate.llm candidate.timezone workerEnv.beTasks (defaultModelName candidate.llm) scheduler)
                      | (profile, scheduler) <- maybeToList ((,) <$> candidate.memoryExtractProfile <*> workerEnv.beEpisodeScheduler)
                      ]
-                  <> [ worker "memory-dream" RestartableWorker (dreamWorker (ownerFor snapshot "memory-dream") profile candidate.timezone)
+                  <> [ worker "task-experience" RestartableWorker (experienceWorker (ownerFor snapshot "task-experience") profile workerEnv.beSkills (maintenanceInputBudget candidate.llm profile))
+                     | profile <- maybeToList candidate.memoryExtractProfile
+                     ]
+                  <> [ worker "memory-dream" RestartableWorker (dreamWorker (ownerFor snapshot "memory-dream") profile candidate.timezone (maintenanceInputBudget candidate.llm profile))
                      | profile <- maybeToList candidate.memoryExtractProfile
                      ]
                   <> [ worker
@@ -599,3 +603,7 @@ callPruner days = localDomain "calls" . forever $ do
     Right n ->
       logInfo "calls: pruned" $ object ["rows" .= n, "older_than_days" .= days]
   threadDelay (3600 * 1_000_000)
+
+-- Pin maintenance budgets to the same catalog generation as their LLM calls.
+maintenanceInputBudget :: ModelCatalog -> T.Text -> Int
+maintenanceInputBudget catalog profile = contextInputBudget (maybe defaultContextLimits (.contextLimits) (lookupModelCapabilities profile catalog)) False

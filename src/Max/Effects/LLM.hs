@@ -57,6 +57,7 @@ module Max.Effects.LLM
     runLLMWith,
     chat,
     chatStreaming,
+    chatMeasured,
 
     -- * Exposed for tests
     parseResponseOpenAI,
@@ -111,6 +112,9 @@ data LLM :: Effect where
     [ToolSpec] ->
     (Text -> m ()) ->
     LLM m (Either LLMFailure ChatResponse)
+  -- | The same call plus provider usage, scoped to this invocation (never a
+  -- shared last-usage slot that concurrent turns could overwrite).
+  ChatMeasured :: ChatCtx -> Text -> [ChatMessage] -> [ToolSpec] -> Maybe (Text -> m ()) -> LLM m (Either LLMFailure (ChatResponse, Maybe TokenUsage))
 
 type instance DispatchOf LLM = Dynamic
 
@@ -135,6 +139,9 @@ runLLMWith ::
   Eff (LLM : es) a ->
   Eff es a
 runLLMWith backend = interpret $ \localEnv -> \case
+  ChatMeasured ctx profile msgs tools sink ->
+    localSeqUnlift localEnv $ \unlift ->
+      fmap (,Nothing) <$> backend.liChat ctx profile msgs tools (fmap (unlift .) sink)
   Chat ctx profile msgs tools ->
     backend.liChat ctx profile msgs tools Nothing
   ChatStreaming ctx profile msgs tools sink ->
@@ -183,6 +190,9 @@ withLLMConfigGeneration ::
   Eff es a ->
   Eff es a
 withLLMConfigGeneration generation = interpose $ \localEnv -> \case
+  ChatMeasured ctx profile messages tools sink ->
+    localSeqUnlift localEnv $ \unlift ->
+      send (ChatMeasured (stamp ctx) profile messages tools (fmap (unlift .) sink))
   Chat ctx profile messages tools ->
     send (Chat (stamp ctx) profile messages tools)
   ChatStreaming ctx profile messages tools sink ->
@@ -209,9 +219,13 @@ runLLMResolving runtime usageWriter callWriter resolve action = do
   admission <- liftIO (newAdmission 50 10)
   interpret
     ( \localEnv -> \case
+        ChatMeasured ctx name msgs tools sink ->
+          localSeqUnlift localEnv $ \unlift -> do
+            reg <- liftIO (resolve ctx)
+            either (pure . Left) (\catalog -> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools (fmap (unlift .) sink)) reg
         Chat ctx name msgs tools -> do
           reg <- liftIO (resolve ctx)
-          either (pure . Left) (\catalog -> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools Nothing) reg
+          either (pure . Left) (\catalog -> fmap fst <$> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools Nothing) reg
         ChatStreaming ctx name msgs tools sink ->
           -- The sink sends messages, so it is 'Eff', not IO; unlifting it
           -- here is what lets the transport call back into the caller's
@@ -219,7 +233,7 @@ runLLMResolving runtime usageWriter callWriter resolve action = do
           -- single-threaded and calls the sink one frame at a time.
           localSeqUnlift localEnv $ \unlift -> do
             reg <- liftIO (resolve ctx)
-            either (pure . Left) (\catalog -> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools (Just (unlift . sink))) reg
+            either (pure . Left) (\catalog -> fmap fst <$> runOneChat admission runtime usageWriter callWriter catalog ctx name msgs tools (Just (unlift . sink))) reg
     )
     action
 
@@ -239,7 +253,7 @@ runOneChat ::
   [ChatMessage] ->
   [ToolSpec] ->
   Maybe (Text -> Eff es ()) ->
-  Eff es (Either LLMFailure ChatResponse)
+  Eff es (Either LLMFailure (ChatResponse, Maybe TokenUsage))
 runOneChat admission runtime usageWriter callWriter reg ctx name msgs tools mSink = case configureCallProfile reg ctx name of
   Nothing -> do
     logAttention "llm: unknown profile" $ object ["profile" .= name]
@@ -254,7 +268,7 @@ runOneChat admission runtime usageWriter callWriter reg ctx name msgs tools mSin
       _ -> callChat runtime bufferedRetryDelays cfg msgs tools
     finished <- liftIO getMonotonicTimeNSec
     recordChatResult usageWriter callWriter ctx name cfg streaming msgs tools (fromIntegral ((finished - started) `div` 1_000_000)) result
-    pure (fst <$> result)
+    pure result
 
 chat ::
   (LLM :> es) =>
@@ -278,3 +292,7 @@ chatStreaming ::
   Eff es (Either LLMFailure ChatResponse)
 chatStreaming ctx name msgs tools sink =
   send (ChatStreaming ctx name msgs tools sink)
+
+-- | Invocation-local usage for working-context accounting.
+chatMeasured :: (LLM :> es) => ChatCtx -> Text -> [ChatMessage] -> [ToolSpec] -> Maybe (Text -> Eff es ()) -> Eff es (Either LLMFailure (ChatResponse, Maybe TokenUsage))
+chatMeasured ctx name messages specs sink = send (ChatMeasured ctx name messages specs sink)

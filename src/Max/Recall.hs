@@ -17,10 +17,13 @@ module Max.Recall
     searchRecallIn,
     searchRecallTrace,
     selectRecallHits,
+    selectRecallHitsFor,
+    recallTerms,
     selectDirectAutoHints,
   )
 where
 
+import Data.Char (isAlphaNum, isAscii)
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
@@ -32,6 +35,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (FromRow, Query)
 import Database.PostgreSQL.Simple.FromRow (field, fromRow)
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful
 import Effectful.PostgreSQL (WithConnection, query)
 import Max.ConversationScope (RecallPolicy, conversationStorageId, recallConversationScope)
@@ -148,7 +152,7 @@ searchRecallIn policy corpora rawQuery embedding requestedLimit
   | T.null queryText = pure []
   | otherwise = do
       (now, _lexicalCount, _semanticCount, allowed) <- loadRecallCandidates policy corpora queryText embedding requestedLimit
-      pure (selectRecallHits now (max 1 (min 30 requestedLimit)) allowed)
+      pure (selectRecallHitsFor queryText now (max 1 (min 30 requestedLimit)) allowed)
   where
     queryText = T.strip rawQuery
 
@@ -164,7 +168,7 @@ searchRecallTrace policy corpora rawQuery embedding requestedLimit
   | Set.null corpora || T.null queryText = pure (emptyRecallTrace conversationId queryText corpora resultLimit)
   | otherwise = do
       (now, lexicalCount, semanticCount, allowed) <- loadRecallCandidates policy corpora queryText embedding resultLimit
-      let selected = selectRecallHits now resultLimit allowed
+      let selected = selectRecallHitsFor queryText now resultLimit allowed
           selectedKeys = Set.fromList (map (.rhDedupKey) selected)
           merged = Map.elems (Map.fromListWith mergeCandidate [(candidate.rcDedupKey, candidate) | candidate <- allowed])
           ranked = sortCandidates now merged
@@ -177,7 +181,7 @@ searchRecallTrace policy corpora rawQuery embedding requestedLimit
                     else
                       if candidate.rcDedupKey `Set.member` selectedKeys
                         then "selected"
-                        else "source_quota_or_result_limit"
+                        else "query_relevance_diversity_or_limit"
                 )
             | candidate <- ranked
             ]
@@ -191,7 +195,7 @@ searchRecallTrace policy corpora rawQuery embedding requestedLimit
             rtSemanticCandidates = semanticCount,
             rtCorpusFilteredCandidates = lexicalCount + semanticCount - length allowed,
             rtMergedCandidates = length merged,
-            rtSourceQuotas = [(source, sourceQuota resultLimit source) | source <- map corpusText [minBound .. maxBound]],
+            rtSourceQuotas = [],
             rtCandidates = traced,
             rtSelected = selected
           }
@@ -212,7 +216,8 @@ loadRecallCandidates policy corpora queryText embedding requestedLimit = do
   let conversationId = conversationStorageId (recallConversationScope policy)
       resultLimit = max 1 (min 30 requestedLimit)
       candidateLimit = max 8 (min 200 (resultLimit * 4))
-  lexical <- query lexicalCandidatesSql (conversationId, queryText, candidateLimit)
+  -- Score the full phrase and bounded query fragments in one scoped SQL pass.
+  lexical <- query lexicalCandidatesSql (conversationId, queryText, PGArray (recallTerms queryText), candidateLimit)
   semantic <- case embedding of
     Nothing -> pure []
     Just record ->
@@ -235,7 +240,7 @@ emptyRecallTrace conversationId queryText corpora resultLimit =
       rtSemanticCandidates = 0,
       rtCorpusFilteredCandidates = 0,
       rtMergedCandidates = 0,
-      rtSourceQuotas = [(source, sourceQuota resultLimit source) | source <- map corpusText [minBound .. maxBound]],
+      rtSourceQuotas = [],
       rtCandidates = [],
       rtSelected = []
     }
@@ -263,6 +268,61 @@ selectRecallHits now requestedLimit candidates =
     selectedKeys = Set.fromList (map (.rcDedupKey) quotaSelected)
     overflow = [candidate | candidate <- ranked, candidate.rcDedupKey `Set.notMember` selectedKeys]
     final = take resultLimit (sortCandidates now (quotaSelected <> take (resultLimit - length quotaSelected) overflow))
+
+-- | Query-aware ranking for explicit searches; automatic prompt injection
+-- stays off. Exact identifiers require lexical evidence, independent of cosine
+-- scale. Relevance precedes source diversity, so quotas cannot force in noise.
+selectRecallHitsFor :: Text -> UTCTime -> Int -> [RecallCandidate] -> [RecallHit]
+selectRecallHitsFor rawQuery now requestedLimit candidates = map (toHit now) (choose [] eligible)
+  where
+    terms = recallTerms rawQuery
+    identifiers = filter (\term -> T.any (`elem` ("._/:=-" :: String)) term || term == "github") terms
+    merged = Map.elems (Map.fromListWith mergeCandidate [(c.rcDedupKey, c) | c <- candidates])
+    coverage c =
+      let text = T.toCaseFold c.rcSnippet
+       in if null terms then 0 else fromIntegral (length (filter (`T.isInfixOf` text) terms)) / fromIntegral (length terms)
+    bestSignal = maximum (0 : map candidateSignal merged)
+    seeksUrl =
+      any (`T.isInfixOf` T.toCaseFold rawQuery) ["链接", "url", "address"]
+        && any (`T.isInfixOf` T.toCaseFold rawQuery) ["github", "仓库", "repo"]
+    hasUrl c = any (`T.isInfixOf` T.toCaseFold c.rcSnippet) ["https://", "http://", "github.com/", "git@"]
+    relevant c =
+      (not seeksUrl || hasUrl c)
+        && all (`T.isInfixOf` T.toCaseFold c.rcSnippet) identifiers
+        && candidateSignal c >= minimumSignal
+        && (coverage c > 0 || candidateSignal c >= bestSignal * 0.8)
+    eligible = filter relevant merged
+    rank selected c =
+      scoreCandidate now c
+        + 0.6 * coverage c
+        - 0.25 * maximum (0 : [overlap c old | old <- selected, c.rcPrincipalId == old.rcPrincipalId])
+    choose selected remaining
+      | length selected >= max 1 (min 30 requestedLimit) = selected
+      | otherwise = case sortOn (\c -> (Down (rank selected c), Down c.rcOccurredAt, c.rcDedupKey)) remaining of
+          [] -> selected
+          next : rest ->
+            choose
+              (selected <> [next])
+              [c | c <- rest, not (c.rcPrincipalId == next.rcPrincipalId && normalized c == normalized next)]
+    normalized = T.unwords . T.words . T.toCaseFold . (.rcSnippet)
+    overlap a b =
+      let left = shingles (normalized a)
+          right = shingles (normalized b)
+          union = Set.size (left <> right)
+       in if union == 0 then 0 else fromIntegral (Set.size (Set.intersection left right)) / fromIntegral union
+    shingles text = Set.fromList [T.take 3 suffix | suffix <- T.tails text, T.length suffix >= 3]
+
+-- Preserve URL/config tokens and names. Chinese runs additionally contribute
+-- bigrams, avoiding an English-only tokenizer. Bounded terms keep DB work finite.
+recallTerms :: Text -> [Text]
+recallTerms input = take 24 . Set.toAscList . Set.fromList $ concatMap (filter useful . splitRun) runs
+  where
+    useful term = term `notElem` ["the", "what", "where", "is", "of", "to", "and", "for", "in", "什么", "一下", "之前", "现在"]
+    runs = concatMap (T.groupBy (\a b -> isAscii a == isAscii b)) (filter (not . T.null) (T.split (\c -> not (isAlphaNum c || c `elem` ("._/:=-" :: String))) (T.toCaseFold input)))
+    splitRun run
+      | T.all isAscii run = [T.dropAround (`elem` (".:/-" :: String)) run | T.length run >= 2]
+      | T.length run <= 3 = [run]
+      | otherwise = [T.take 2 suffix | suffix <- T.tails run, T.length suffix >= 2]
 
 -- | Candidate policy for offline direct-turn auto-hint evaluation.  It is
 -- intentionally absent from ContextCollector/ContextPolicy.  Only explicit
@@ -387,7 +447,7 @@ toHit now candidate =
 lexicalCandidatesSql :: Query
 lexicalCandidatesSql =
   "WITH input AS ( \
-  \  SELECT ?::bigint AS conversation_id, ?::text AS query_text, ?::int AS candidate_limit \
+  \  SELECT ?::bigint AS conversation_id, ?::text AS query_text, ?::text[] AS query_terms, ?::int AS candidate_limit \
   \), pins AS ( \
   \  SELECT DISTINCT pin.value::bigint AS canonical_message_id \
   \  FROM sessions AS session \
@@ -395,14 +455,13 @@ lexicalCandidatesSql =
   \  CROSS JOIN LATERAL jsonb_array_elements_text(session.pinned) AS pin(value) \
   \), memory_candidates AS ( \
   \  SELECT 'memory'::text AS source, \
-  \         CASE WHEN evidence.source_episode_id IS NOT NULL THEN 'episode:' || evidence.source_episode_id::text \
-  \              WHEN evidence.source_canonical_message_id IS NOT NULL THEN 'message:' || evidence.source_canonical_message_id::text \
-  \              ELSE 'memory:' || memory.id::text END AS dedup_key, \
+  \         'memory:' || memory.id::text AS dedup_key, \
   \         left(memory.content, 800) AS snippet, memory.updated_at AS occurred_at, \
   \         CASE WHEN memory.scope = 'user' THEN memory.scope_id ELSE NULL END::bigint AS principal_id, \
-  \         NULL::bigint AS message_id, NULL::uuid AS episode_handle, memory.id AS memory_id, \
+  \         (SELECT canonical_message_id FROM messages WHERE canonical_message_id=evidence.source_canonical_message_id AND group_id=input.conversation_id) AS message_id, \
+  \         (SELECT expand_handle FROM conversation_compartments WHERE id=evidence.source_episode_id AND conversation_id=input.conversation_id) AS episode_handle, memory.id AS memory_id, \
   \         0::double precision AS importance, \
-  \         GREATEST(similarity(memory.content, input.query_text), \
+  \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(memory.content))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(memory.content, input.query_text), \
   \           CASE WHEN position(lower(input.query_text) in lower(memory.content)) > 0 THEN 1 ELSE 0 END \
   \         )::double precision AS lexical_score, \
   \         NULL::double precision AS semantic_score, false AS is_pinned, \
@@ -417,7 +476,7 @@ lexicalCandidatesSql =
   \      OR (memory.scope = 'user' AND memory.source_group_id = input.conversation_id)) \
   \    AND memory.lifecycle IN ('active', 'permanent') \
   \    AND (position(lower(input.query_text) in lower(memory.content)) > 0 \
-  \      OR similarity(memory.content, input.query_text) >= 0.08) \
+  \      OR similarity(memory.content, input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(memory.content))>0)) \
   \  ORDER BY lexical_score DESC, memory.updated_at DESC, memory.id \
   \  LIMIT (SELECT candidate_limit FROM input) \
   \), episode_candidates AS ( \
@@ -425,14 +484,14 @@ lexicalCandidatesSql =
   \         left(episode.summary_p2, 800) AS snippet, COALESCE(episode.activated_at, episode.created_at) AS occurred_at, \
   \         NULL::bigint AS principal_id, NULL::bigint AS message_id, episode.expand_handle AS episode_handle, \
   \         NULL::bigint AS memory_id, episode.importance, \
-  \         GREATEST(similarity(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3), input.query_text), \
+  \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3)))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3), input.query_text), \
   \           CASE WHEN position(lower(input.query_text) in lower(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3))) > 0 THEN 1 ELSE 0 END \
   \         )::double precision AS lexical_score, \
   \         NULL::double precision AS semantic_score, false AS is_pinned, false AS is_permanent \
   \  FROM conversation_compartments AS episode CROSS JOIN input \
   \  WHERE episode.conversation_id = input.conversation_id AND episode.state = 'active' \
   \    AND (position(lower(input.query_text) in lower(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3))) > 0 \
-  \      OR similarity(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3), input.query_text) >= 0.08) \
+  \      OR similarity(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3), input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(concat_ws(' ', episode.summary_p1, episode.summary_p2, episode.summary_p3)))>0)) \
   \  ORDER BY lexical_score DESC, occurred_at DESC, episode.id \
   \  LIMIT (SELECT candidate_limit FROM input) \
   \), message_candidates AS ( \
@@ -440,7 +499,7 @@ lexicalCandidatesSql =
   \         'message:' || message.canonical_message_id::text AS dedup_key, left(message.rendered_text, 800) AS snippet, \
   \         message.received_at AS occurred_at, message.author_principal_id AS principal_id, message.canonical_message_id, \
   \         NULL::uuid AS episode_handle, NULL::bigint AS memory_id, 0::double precision AS importance, \
-  \         GREATEST(similarity(message.rendered_text, input.query_text), \
+  \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(message.rendered_text))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(message.rendered_text, input.query_text), \
   \           CASE WHEN position(lower(input.query_text) in lower(message.rendered_text)) > 0 THEN 1 ELSE 0 END \
   \         )::double precision AS lexical_score, \
   \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
@@ -451,7 +510,7 @@ lexicalCandidatesSql =
     <> notForwardChild "message"
     <> " \
        \    AND (position(lower(input.query_text) in lower(message.rendered_text)) > 0 \
-       \      OR similarity(message.rendered_text, input.query_text) >= 0.08) \
+       \      OR similarity(message.rendered_text, input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(message.rendered_text))>0)) \
        \  ORDER BY lexical_score DESC, message.received_at DESC, message.canonical_message_id \
        \  LIMIT (SELECT candidate_limit FROM input) \
        \), media AS ( \
@@ -471,7 +530,7 @@ lexicalCandidatesSql =
        \         left(media.description, 800) AS snippet, message.received_at AS occurred_at, \
        \         message.author_principal_id AS principal_id, message.canonical_message_id, NULL::uuid AS episode_handle, \
        \         NULL::bigint AS memory_id, 0::double precision AS importance, \
-       \         GREATEST(similarity(media.description, input.query_text), \
+       \         GREATEST((SELECT count(*) FILTER (WHERE position(term in lower(media.description))>0)::double precision / GREATEST(cardinality(input.query_terms),1) FROM unnest(input.query_terms) term), similarity(media.description, input.query_text), \
        \           CASE WHEN position(lower(input.query_text) in lower(media.description)) > 0 THEN 1 ELSE 0 END \
        \         )::double precision AS lexical_score, \
        \         NULL::double precision AS semantic_score, (pins.canonical_message_id IS NOT NULL) AS is_pinned, false AS is_permanent \
@@ -479,7 +538,7 @@ lexicalCandidatesSql =
        \  LEFT JOIN pins USING (canonical_message_id) \
        \  WHERE message.group_id = input.conversation_id \
        \    AND (position(lower(input.query_text) in lower(media.description)) > 0 \
-       \      OR similarity(media.description, input.query_text) >= 0.08) \
+       \      OR similarity(media.description, input.query_text) >= 0.08 OR EXISTS(SELECT 1 FROM unnest(input.query_terms) term WHERE position(term in lower(media.description))>0)) \
        \  ORDER BY lexical_score DESC, message.received_at DESC, message.canonical_message_id \
        \  LIMIT (SELECT candidate_limit FROM input) \
        \) \
@@ -513,12 +572,11 @@ semanticCandidatesSql =
   \    AND memory.embedding_model = input.model_id AND memory.embedding_dimensions = input.dimensions \
   \), memory_candidates AS ( \
   \  SELECT 'memory'::text AS source, \
-  \         CASE WHEN memory.recall_episode_id IS NOT NULL THEN 'episode:' || memory.recall_episode_id::text \
-  \              WHEN memory.recall_message_id IS NOT NULL THEN 'message:' || memory.recall_message_id::text \
-  \              ELSE 'memory:' || memory.id::text END AS dedup_key, \
+  \         'memory:' || memory.id::text AS dedup_key, \
   \         left(memory.content, 800) AS snippet, memory.updated_at AS occurred_at, \
   \         CASE WHEN memory.scope = 'user' THEN memory.scope_id ELSE NULL END::bigint AS principal_id, \
-  \         NULL::bigint AS message_id, NULL::uuid AS episode_handle, memory.id AS memory_id, \
+  \         (SELECT canonical_message_id FROM messages WHERE canonical_message_id=memory.recall_message_id AND group_id=(SELECT conversation_id FROM input)) AS message_id, \
+  \         (SELECT expand_handle FROM conversation_compartments WHERE id=memory.recall_episode_id AND conversation_id=(SELECT conversation_id FROM input)) AS episode_handle, memory.id AS memory_id, \
   \         0::double precision AS importance, NULL::double precision AS lexical_score, \
   \         (1 - (memory.embedding <=> memory.query_vector))::double precision AS semantic_score, \
   \         false AS is_pinned, (memory.lifecycle = 'permanent') AS is_permanent \

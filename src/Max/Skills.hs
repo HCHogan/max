@@ -52,6 +52,7 @@ module Max.Skills
     SkillRegistry,
     newSkillRegistry,
     loadSkills,
+    refreshExperienceSkills,
     skillsForGroup,
     lookupSkill,
     listAllSkills,
@@ -187,6 +188,17 @@ loadSkills (SkillRegistry t) = do
           skillUpdatedAt = up
         }
 
+-- Only this reserved namespace is refreshed by experience maintenance. Ordinary
+-- admin skill mutations remain write-through and cannot race a full reload.
+refreshExperienceSkills :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff es ()
+refreshExperienceSkills (SkillRegistry registry) = do
+  rows <-
+    query_
+      "SELECT id,name,group_id,description,body,enabled,created_by,updated_at FROM skills WHERE name LIKE 'learned-task-%'"
+  let learned = [Skill sid name group description body enabled creator updated | (sid, name, group, description, body, enabled, creator, updated) <- rows]
+  liftIO . atomically $ modifyTVar' registry $ \current ->
+    Map.fromList [(skill.skillId, skill) | skill <- learned] <> Map.filter (not . T.isPrefixOf "learned-task-" . (.skillName)) current
+
 -- | What one group's dispatches see: enabled skills, global + this
 -- group's own, sorted by name (determinism keeps the rendered index
 -- byte-stable).  Name collisions resolve most-specific-first:
@@ -247,6 +259,7 @@ maxBodyLen = 49152
 -- user-showable reason.
 validateSkill :: Text -> Text -> Text -> Either Text ()
 validateSkill name desc body
+  | "learned-task-" `T.isPrefixOf` name = Left "learned-task- 为任务经验保留，需通过 experience 回放审核发布"
   | T.null name = Left "name 不能为空"
   | T.length name > maxNameLen = Left ("name 太长（上限 " <> tshow maxNameLen <> " 字符）")
   | T.any isSpace name = Left "name 不能含空白字符（用 - 连接）"
@@ -311,6 +324,7 @@ updateSkill (SkillRegistry t) sid f
       m <- liftIO (readTVarIO t)
       case Map.lookup sid m of
         Nothing -> pure (Left "not found")
+        Just old | "learned-task-" `T.isPrefixOf` old.skillName -> pure (Left "任务经验需重新回放审核，禁用请使用 experience invalidate")
         Just old -> do
           let new0 = f old
               new = new0 {skillId = old.skillId, skillCreatedBy = old.skillCreatedBy}

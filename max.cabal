@@ -145,6 +145,7 @@ library
         Max.ContextMaterialization
         Max.Context
         Max.Context.Policy
+        Max.Context.Working
         Max.Context.Types
         Max.ContextTraceStore
         Max.ConversationScope
@@ -272,6 +273,7 @@ library
         Max.Matrix
         Max.MessageKind
         Max.MemoryExtract
+        Max.Memory.Maintenance
         Max.MemoryStore
         Max.Memory.Types
         Max.Memory.Policy
@@ -323,6 +325,8 @@ library
         Max.DB.Task.Overview
         Max.DB.Task.Query
         Max.Task.State
+        Max.Task.Experience
+        Max.DB.Task.Experience
         Max.Task.View
         Max.Render
         Max.Reload
@@ -631,6 +635,8 @@ test-suite max-test
         Max.ModelCatalogSpec
         Max.PromptSpec
         Max.RecallSpec
+        Max.Context.WorkingSpec
+        Max.Task.ExperienceSpec
         Max.ReminderArgsSpec
         Max.Sandbox.RuntimeSpec
         Max.Runtime.ProtocolSpec
@@ -701,6 +707,8 @@ test-suite max-test-db
         Max.DB.MediaSpec
         Max.MemoryStoreSpec
         Max.MemoryCapabilitiesSpec
+        Max.MemoryMaintenanceSpec
+        Max.TaskExperienceSpec
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
         Max.DB.TaskSpec

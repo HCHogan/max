@@ -32,6 +32,7 @@ import Max.DB.Transaction (withTransaction)
 
 data MaintenanceDomain
   = MemoryDreamMaintenance
+  | TaskExperienceMaintenance
   | EmbeddingMaintenance
   | ContextRebuildMaintenance
   deriving stock (Show, Eq, Ord)
@@ -52,6 +53,7 @@ data MaintenanceRun a
 maintenanceDomainText :: MaintenanceDomain -> Text
 maintenanceDomainText = \case
   MemoryDreamMaintenance -> "memory_dream"
+  TaskExperienceMaintenance -> "task_experience"
   EmbeddingMaintenance -> "embedding"
   ContextRebuildMaintenance -> "context_rebuild"
 

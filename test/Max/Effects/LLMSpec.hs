@@ -18,6 +18,7 @@ import Max.Effects.LLM
     TokenUsage (..),
     ToolCall (..),
     chat,
+    chatMeasured,
     parseResponseAnthropic,
     parseResponseOpenAI,
     parseResponseResponses,
@@ -675,7 +676,7 @@ generationSpec = describe "worker configuration generation" $ do
         dispatch = background {ccConfigGeneration = Just (ConfigGeneration 7)}
     runEff . runLLMWith backend . withLLMConfigGeneration (ConfigGeneration 2) $ do
       _ <- chat background "profile" [] []
-      _ <- chat dispatch "profile" [] []
+      _ <- chatMeasured dispatch "profile" [] [] Nothing
       pure ()
     readIORef observed
       `shouldReturn` [Just (ConfigGeneration 2), Just (ConfigGeneration 7)]

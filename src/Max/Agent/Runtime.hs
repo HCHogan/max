@@ -9,7 +9,7 @@ import Effectful.Exception (throwIO)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Max.Agent.Execution
-import Max.DB.AgentTurn (enrichSandboxJournalStart, finishJournalExecution, markJournalOutcomeUnknown, readSkillLoads, recordAgentTurnLlmRound, recordModelNote, startJournalExecution)
+import Max.DB.AgentTurn (enrichSandboxJournalStart, finishJournalExecution, markJournalOutcomeUnknown, readSkillLoads, readWorkingContext, recordAgentTurnLlmRound, recordModelNote, startJournalExecution, writeWorkingContext)
 import Max.DB.Task qualified as Task
 import Max.DB.Task.FrontendInput qualified as FrontendInput
 import Max.DB.Transaction (withTransaction)
@@ -33,7 +33,7 @@ runAgent ::
 runAgent =
   runAgentWith
     (ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing))
-    (ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure []))
+    (ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure []) (\_ -> pure "") (\_ _ _ _ -> pure ()))
     (ExecutionInbox (\_ -> pure ""))
 
 runDurableAgent ::
@@ -45,8 +45,13 @@ runDurableAgent ::
 runDurableAgent =
   runAgentWith
     durableExecutionAdmission
-    (ExecutionJournal recordModelNote finishJournalExecution markJournalOutcomeUnknown readSkillLoads)
+    (ExecutionJournal recordModelNote finishJournalExecution markJournalOutcomeUnknown readSkillLoads readWorkingContext saveWorking)
     (ExecutionInbox (\turn -> (<>) <$> Task.taskInbox turn.atrTurnId <*> FrontendInput.readInputs turn.atrTurnId))
+  where
+    saveWorking turn summary tokens limit = withTransaction $ do
+      allowed <- Task.authorizeTaskStep turn.atrTurnId ExecutionCheckpoint
+      unless allowed (throwIO TaskCancelled)
+      writeWorkingContext turn summary tokens limit
 
 -- | Commit admission and its durable pre-effect fact together.
 durableExecutionAdmission :: (WithConnection :> es, IOE :> es) => ExecutionAdmission es

@@ -25,9 +25,8 @@ import Max.DB.AgentTurnSpec qualified as AgentTurnSpec
 import Max.DB.BrowserSpec qualified as BrowserSpec
 import Max.DB.Connection (DbConfig (..), closeDbPool, newDbPool)
 import Max.DB.ConnectionSpec qualified as ConnectionSpec
-import Max.DB.DebtSpec qualified as DebtSpec
-import Max.DB.ProjectionSpec qualified as ProjectionSpec
 import Max.DB.ConversationCursorSpec qualified as ConversationCursorSpec
+import Max.DB.DebtSpec qualified as DebtSpec
 import Max.DB.FetchQueueSpec qualified as FetchQueueSpec
 import Max.DB.FilesSpec qualified as FilesSpec
 import Max.DB.FrontendInputSpec qualified as FrontendInputSpec
@@ -36,6 +35,7 @@ import Max.DB.MediaSpec qualified as MediaSpec
 import Max.DB.Migrations (runMigrations)
 import Max.DB.MonitorSpec qualified as MonitorSpec
 import Max.DB.ProgressSpec qualified as ProgressSpec
+import Max.DB.ProjectionSpec qualified as ProjectionSpec
 import Max.DB.QQBackfillSpec qualified as QQBackfillSpec
 import Max.DB.SessionSpec qualified as SessionSpec
 import Max.DB.TaskSpec qualified as TaskSpec
@@ -46,6 +46,7 @@ import Max.HistorianSpec qualified as HistorianSpec
 import Max.MaintenanceLeaseSpec qualified as MaintenanceLeaseSpec
 import Max.MaxOpsNotificationSpec qualified as MaxOpsNotificationSpec
 import Max.MemoryCapabilitiesSpec qualified as MemoryCapabilitiesSpec
+import Max.MemoryMaintenanceSpec qualified as MemoryMaintenanceSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
 import Max.PlatformCapabilitiesSpec qualified as PlatformCapabilitiesSpec
 import Max.PlatformStoreSpec qualified as PlatformStoreSpec
@@ -53,6 +54,7 @@ import Max.PromptIntegrationSpec qualified as PromptIntegrationSpec
 import Max.PublicationSpec qualified as PublicationSpec
 import Max.RecallSpec qualified as RecallSpec
 import Max.ResourceCapabilitiesSpec qualified as ResourceCapabilitiesSpec
+import Max.TaskExperienceSpec qualified as TaskExperienceSpec
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import Test.Hspec (hspec)
@@ -95,6 +97,8 @@ main = do
         FilesSpec.spec pool
         MemoryCapabilitiesSpec.spec pool
         MemoryStoreSpec.spec pool
+        MemoryMaintenanceSpec.spec pool
+        TaskExperienceSpec.spec pool
         MediaSpec.spec pool
         FetchQueueSpec.spec pool
         MonitorSpec.spec pool

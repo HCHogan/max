@@ -9,6 +9,7 @@ import Max.LLM.Failure (LLMFailure, renderLLMFailure, retryableLLMFailure)
 data AgentFailure
   = AgentModelFailure !LLMFailure
   | AgentStreamInterrupted !ResponseFailure
+  | AgentContextBudget !Text
   | AgentRoundLimit
   deriving stock (Eq, Show)
 
@@ -16,6 +17,7 @@ renderAgentFailure :: AgentFailure -> Text
 renderAgentFailure = \case
   AgentModelFailure failure -> renderLLMFailure failure
   AgentStreamInterrupted failure -> "LLM stream interrupted: " <> renderResponseFailure failure
+  AgentContextBudget detail -> "context budget: " <> detail
   AgentRoundLimit -> "max-turns"
 
 retryableAgentFailure :: AgentFailure -> Bool
@@ -24,6 +26,7 @@ retryableAgentFailure = \case
   -- Some text or tool-call bytes already arrived. Retrying a durable task
   -- after a partial response must not replay its externally visible prefix.
   AgentStreamInterrupted _ -> False
+  AgentContextBudget _ -> False
   AgentRoundLimit -> False
 
 instance ToJSON AgentFailure where
@@ -33,4 +36,5 @@ instance ToJSON AgentFailure where
       kind = case failure of
         AgentModelFailure _ -> "model"
         AgentStreamInterrupted _ -> "stream_interrupted"
+        AgentContextBudget _ -> "context_budget"
         AgentRoundLimit -> "round_limit"

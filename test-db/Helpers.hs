@@ -96,6 +96,7 @@ truncateAll pool = withConn pool $ \c -> do
     execute_
       c
       "TRUNCATE \
+      \  skills, \
       \  operational_debt_reviews, \
       \  maintenance_leases, \
       \  qq_backfill_runs, \

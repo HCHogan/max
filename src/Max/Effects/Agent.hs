@@ -66,11 +66,11 @@ where
 import Control.Concurrent (myThreadId, throwTo)
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVarIO, writeTVar)
 import Control.Monad (unless, when)
-import Data.Aeson (Value (..), encode)
+import Data.Aeson (Value (..), decodeStrict', encode)
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (for_)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -83,7 +83,8 @@ import Max.Agent.Execution
 import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.Model (codeModeSpecs, executeModelBatch)
-import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), chat, chatStreaming)
+import Max.Context.Working
+import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), ToolSpec, chatMeasured)
 import Max.Effects.ToolControl (ToolControl, runToolControl)
 import Max.Effects.ToolDirectory (ToolDirectory, listCatalogTools, listToolSpecs, runToolDirectoryDynamic)
 import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, ToolOutputRead, defaultInlineMediaLimit, drainInlineMedia, newToolOutputQueue, runToolOutput, runToolOutputRead)
@@ -97,8 +98,9 @@ import Max.Effects.Tools
     runToolsWithInvocationDynamic,
   )
 import Max.Execution.Tools
+import Max.ModelCatalog (ModelCapabilities (..), defaultContextLimits, lookupModelCapabilities)
 import Max.Reply (readyPrefix)
-import Max.RuntimeConfig (RuntimeSnapshot (..))
+import Max.RuntimeConfig (RuntimeSnapshot (..), RuntimeValues (..))
 import Max.Tasks
   ( Note (..),
     NoteVerb (..),
@@ -114,7 +116,7 @@ import Max.Tasks
 import Max.Tool.Bundles (SkillLoad (..))
 import Max.Tool.Control (LoopControl (..), controlReply, controlSkillLoads, mergeControls)
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolRuntimeSnapshot, toolSkillLoads, toolTurnOutputContext, withToolInvocationIdentity, withToolSkillLoads)
-import Max.Turn.Types (AgentTurnRef (..), turnOutputAgentTurn)
+import Max.Turn.Types (AgentTurnRef (..), turnHandleText, turnOutputAgentTurn)
 import OneBot.Types (GroupId (..))
 
 -- | Agent-only data around the neutral context handed to tools.
@@ -227,6 +229,8 @@ runAgentWith ::
 runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv -> \case
   AgentTurn turn ctx profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
+    previousWorking <- maybe (pure "") journal.ejReadWorking (turnRuntimeAgentTurn turn)
+    workingRef <- liftIO (newTVarIO (Nothing, previousWorking))
     restored <- maybe (pure []) journal.ejReadSkillLoads (turnRuntimeAgentTurn turn)
     let context = ctx {acTools = withToolSkillLoads restored ctx.acTools}
         restoredInstructions = T.intercalate "\n\n" (map (.slInstructions) (Map.elems (toolSkillLoads context.acTools)))
@@ -251,9 +255,10 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
               (current, _) <- liftIO (readTVarIO catalogRef)
               either throwIO pure (toolFactory (withToolInvocationIdentity identity current))
           )
-          (loop session catalogRef emit context turn profile (msgs <> recoveryMessages))
+          (loop workingRef session catalogRef emit context turn profile (msgs <> recoveryMessages))
   where
     loop ::
+      TVar (Maybe UsageAnchor, Text) ->
       ExecutionSession ->
       TVar (ToolContext, ToolRegistry (ToolOutput : ToolControl : es)) ->
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
@@ -262,9 +267,10 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    loop session catalogRef emit ctx h profile = go session catalogRef emit ctx h 0 [] profile
+    loop workingRef session catalogRef emit ctx h profile = go workingRef session catalogRef emit ctx h 0 [] profile
 
     go ::
+      TVar (Maybe UsageAnchor, Text) ->
       ExecutionSession ->
       TVar (ToolContext, ToolRegistry (ToolOutput : ToolControl : es)) ->
       AgentEventSink (Eff (Tools : ToolDirectory : ToolOutputRead : es)) ->
@@ -275,7 +281,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    go session catalogRef emit ctx h n appended profile msgs = do
+    go workingRef session catalogRef emit ctx h n appended profile msgs = do
       catalog <- either throwIO pure (toolFactory ctx.acTools)
       liftIO (atomically (writeTVar catalogRef (ctx.acTools, catalog)))
       -- Drain any feedback notes that arrived since the previous turn.
@@ -288,7 +294,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
           msgs' = msgs <> newNotes
           appended' = appended <> newNotes
       if n >= lims.maxTurns
-        then finalAnswer ctx h n appended' profile msgs'
+        then finalAnswer workingRef ctx h n appended' profile msgs'
         else do
           liftIO (setTurnPhase h "llm")
           nativeSpecs <- listToolSpecs
@@ -298,16 +304,11 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
           -- (every recursion below builds on msgs''): stubs are
           -- permanent, so between trim events the list is byte-stable
           -- and the provider's prefix cache survives.
-          let msgs'' = capToolResults toolResultBudget msgs'
           -- Reset per call: one chat call is one utterance (a progress
           -- narration, or the final answer), and each gets its own
           -- prefix bookkeeping.
-          for_ (turnRuntimeAgentTurn h) $ \durable ->
-            do
-              active <- raise (raise (raise (admission.eaReserveRound durable)))
-              unless active (throwIO TaskCancelled)
           sentRef <- liftIO (newTVarIO "")
-          eres <- chatStreaming (turnCtx ctx "turn") profile msgs'' specs (releaseParagraphs emit sentRef)
+          (msgs'', eres) <- budgetedCall workingRef ctx h profile "turn" msgs' specs (Just (releaseParagraphs emit sentRef))
           checkDurable h
           sent <- liftIO (readTVarIO sentRef)
           case eres of
@@ -317,7 +318,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                   { reply = Nothing,
                     appended = appended',
                     turnsUsed = n + 1,
-                    aborted = Just (AgentModelFailure err),
+                    aborted = Just err,
                     sentPrefix = sent
                   }
             Right (InterruptedResp text reason) ->
@@ -371,7 +372,7 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                       logInfo "agent: btw notes raced final answer, continuing" $
                         object ["count" .= length xs]
                       let newMsgs = MsgAssistant text : xs
-                      go session catalogRef emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                      go workingRef session catalogRef emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -431,15 +432,73 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                       }
                 Nothing ->
                   if overBudget
-                    then finalAnswer ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                    then finalAnswer workingRef ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
                     else
-                      go session catalogRef emit nextContext h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                      go workingRef session catalogRef emit nextContext h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+
+    budgetedCall ::
+      TVar (Maybe UsageAnchor, Text) ->
+      AgentContext ->
+      TurnRuntime ->
+      Text ->
+      Text ->
+      [ChatMessage] ->
+      [ToolSpec] ->
+      Maybe (Text -> Eff (Tools : ToolDirectory : ToolOutputRead : es) ()) ->
+      Eff (Tools : ToolDirectory : ToolOutputRead : es) ([ChatMessage], Either AgentFailure ChatResponse)
+    budgetedCall workingRef ctx turn profile source messages specs sink = do
+      (anchor, previous) <- liftIO (readTVarIO workingRef)
+      let snapshot = toolRuntimeSnapshot ctx.acTools
+          capabilities = snapshot >>= \snap -> lookupModelCapabilities profile snap.rsValues.rvModelCatalog
+          limits = maybe defaultContextLimits (.contextLimits) capabilities
+          identity = workingIdentity profile (T.pack (show ((.rsGeneration) <$> snapshot))) limits specs
+          handle = maybe "unavailable" (turnHandleText . (.atrTurnOrdinal)) (turnRuntimeAgentTurn turn)
+          -- Native use_skill results are protected by the working planner.
+          -- Only restore instructions absent there (nested codemode/restart),
+          -- avoiding a second full copy of every directly loaded skill.
+          visibleInstructions = nativeSkillInstructions messages
+          missingInstructions = [load.slInstructions | load <- Map.elems (toolSkillLoads ctx.acTools), not (any (load.slInstructions `T.isInfixOf`) visibleInstructions)]
+          instructions = T.intercalate "\n\n" missingInstructions
+          skillPrefix = "[当前已加载宿主技能]\n"
+          withoutSkills = filter (\case MsgUser text -> not (skillPrefix `T.isPrefixOf` text); _ -> True) messages
+          hasWorking = any (\case MsgUser text -> "[可恢复工作记录：" `T.isPrefixOf` text; _ -> False) messages
+          skillFrames = [MsgUser (skillPrefix <> instructions) | not (T.null instructions)]
+          currentFrames = [m | m@(MsgUser text) <- messages, skillPrefix `T.isPrefixOf` text]
+          stableSkills =
+            if map messageFingerprint currentFrames == map messageFingerprint skillFrames
+              then messages
+              else takeWhile systemMessage withoutSkills <> skillFrames <> dropWhile systemMessage withoutSkills
+          systemMessage MsgSystem {} = True
+          systemMessage _ = False
+          prepared =
+            stableSkills
+              <> [MsgUser ("[可恢复工作记录：重启恢复，仅作证据；任务/journal 状态仍为准]\n" <> previous) | not hasWorking && not (T.null previous)]
+      case fitWorkingContext limits anchor identity handle previous prepared specs of
+        Left detail -> pure (prepared, Left (AgentContextBudget detail))
+        Right plan
+          | plan.wpCompacted && handle == "unavailable" ->
+              pure (prepared, Left (AgentContextBudget "cannot prune a turn without a durable recovery handle"))
+        Right plan -> do
+          for_ (turnRuntimeAgentTurn turn) $ \durable -> do
+            active <- raise (raise (raise (admission.eaReserveRound durable)))
+            unless active (throwIO TaskCancelled)
+            when plan.wpCompacted $ raise (raise (raise (journal.ejWriteWorking durable plan.wpSummary plan.wpEstimatedTokens plan.wpLimit)))
+          when plan.wpCompacted $
+            logInfo "agent: working context compacted" $
+              object ["estimated_tokens" .= plan.wpEstimatedTokens, "input_limit" .= plan.wpLimit, "turn" .= handle]
+          result <- chatMeasured (turnCtx ctx source) profile plan.wpMessages specs sink
+          let nextAnchor = case result of
+                Right (_, usage) -> observeUsage identity plan.wpMessages usage
+                Left _ -> Nothing
+          liftIO (atomically (writeTVar workingRef (nextAnchor, plan.wpSummary)))
+          pure (plan.wpMessages, either (Left . AgentModelFailure) (Right . fst) result)
 
     -- Hit the turn cap: make one final tool-free chat call so the user
     -- gets a real answer built from whatever the loop already gathered,
     -- rather than a bare "max turns" error.  Empty tool specs force a
     -- content response; a synthetic note tells the model to wrap up.
     finalAnswer ::
+      TVar (Maybe UsageAnchor, Text) ->
       AgentContext ->
       TurnRuntime ->
       Int ->
@@ -447,23 +506,19 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       Text ->
       [ChatMessage] ->
       Eff (Tools : ToolDirectory : ToolOutputRead : es) AgentResult
-    finalAnswer ctx h n appended profile msgs = do
+    finalAnswer workingRef ctx h n appended profile msgs = do
       logInfo "agent: max turns reached, forcing final answer" $
         object ["turns" .= n]
       liftIO (checkTurnCancellation h)
-      for_ (turnRuntimeAgentTurn h) $ \durable -> do
-        active <- raise (raise (raise (admission.eaReserveRound durable)))
-        unless active (throwIO TaskCancelled)
       let capNote =
             MsgUser
               "[system] 工具调用轮次已用满，别再调用任何工具了。\
               \直接根据目前已经掌握的信息，给用户一个最终回复。"
-      eres <-
-        chat (turnCtx ctx "wrapup") profile (capToolResults toolResultBudget (msgs <> [capNote])) []
+      (_, eres) <- budgetedCall workingRef ctx h profile "wrapup" (msgs <> [capNote]) [] Nothing
       let (mText, ab) = case eres of
             Right (ContentResp t) | not (T.null (T.strip t)) -> (Just t, Just AgentRoundLimit)
             Right _ -> (Nothing, Just AgentRoundLimit)
-            Left err -> (Nothing, Just (AgentModelFailure err))
+            Left err -> (Nothing, Just err)
       pure
         AgentResult
           { reply = mText,
@@ -541,6 +596,19 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       active <- raise (raise (raise (admission.eaCheck durable)))
       unless active (throwIO TaskCancelled)
 
+-- Match results to their actual protocol round, since providers may reuse ids.
+nativeSkillInstructions :: [ChatMessage] -> [Text]
+nativeSkillInstructions = go []
+  where
+    go _ [] = []
+    go _ (MsgAssistantToolCalls _ calls : rest) = go [call.callId | call <- calls, call.callName == "use_skill"] rest
+    go pending (MsgTool cid body : rest)
+      | cid `elem` pending,
+        Just (Object value) <- decodeStrict' (TE.encodeUtf8 body),
+        Just (String instructions) <- KeyMap.lookup "instructions" value =
+          instructions : go pending rest
+    go pending (_ : rest) = go pending rest
+
 -- | The model protocol adapter owns messages and debug events, not execution.
 nativeResult :: ToolCall -> ToolInvocation -> (ChatMessage, ToolDebugEvent, LoopControl)
 nativeResult tc invocation =
@@ -588,53 +656,6 @@ previewJson :: Int -> Value -> Text
 previewJson limit value =
   let text = T.unwords (T.words (TE.decodeUtf8 (LBS.toStrict (encode value))))
    in if T.length text <= limit then text else T.take limit text <> "…"
-
--- | High watermark: total tool-result characters tolerated before a
--- trim event.  Individual tools already cap their own output
--- (~16 KiB), but a long multi-round sandbox loop can still stack
--- dozens of those; this bounds the whole conversation.
-toolResultBudget :: Int
-toolResultBudget = 60000
-
--- | Cap the combined size of tool-result content sent to the model.
--- Two-watermark hysteresis: nothing is touched until the total
--- passes @budget@; then older results are stubbed until the intact
--- survivors fit in half of it.  The caller carries the trimmed list
--- forward, so between (rare) trim events the message list — and with
--- it the provider's prefix cache — stays byte-stable.  The previous
--- per-request sliding boundary re-stubbed one more old result nearly
--- every turn once over budget, invalidating the cache from that
--- point on every call.  Every 'MsgTool' is preserved (dropping one
--- would orphan its assistant @tool_call@ and make the request
--- invalid), and an already-stubbed result is never rewritten.
-capToolResults :: Int -> [ChatMessage] -> [ChatMessage]
-capToolResults budget msgs
-  | total <= budget = msgs
-  | otherwise = reverse (go (budget `div` 2) (reverse msgs))
-  where
-    total = sum [T.length c | MsgTool _ c <- msgs]
-    protected =
-      Set.fromList
-        ( [tc.callId | MsgAssistantToolCalls _ calls <- msgs, tc <- calls, tc.callName == "use_skill"]
-            <> case [calls | MsgAssistantToolCalls _ calls <- reverse msgs] of
-              calls : _ -> map (.callId) calls
-              [] -> []
-        )
-    go _ [] = []
-    go rem_ (m : rest) = case m of
-      MsgTool cid content
-        | cid `Set.member` protected -> m : go rem_ rest
-        | isStub content -> m : go rem_ rest
-        | rem_ <= 0 -> MsgTool cid (stub content) : go 0 rest
-        | otherwise ->
-            let len = T.length content
-             in if len <= rem_
-                  then m : go (rem_ - len) rest
-                  else MsgTool cid (stub content) : go 0 rest
-      _ -> m : go rem_ rest
-    isStub = (elision `T.isSuffixOf`)
-    stub content = T.take 300 content <> elision
-    elision = "\n…[older tool results truncated]"
 
 agentTurn ::
   (Agent :> es) =>

@@ -121,22 +121,23 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
                   then do
                     modifyIORef' keys (<> [key])
                     pure (Right (object ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("queued" :: Text)]))
-                  else if op.name == "jobs.logs"
-                    then pure (Right (object ["stdout_text" .= ("bounded diagnostic output" :: Text), "complete" .= True]))
-                    else do
-                      modifyIORef' waits (+ 1)
-                      pure
-                        ( Right
-                            ( object
-                                [ "job"
-                                    .= object
-                                      [ "handle"
-                                          .= object
-                                            ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("succeeded" :: Text), "revision" .= (3 :: Int)]
-                                      ]
-                                ]
-                            )
-                        )
+                  else
+                    if op.name == "jobs.logs"
+                      then pure (Right (object ["stdout_text" .= ("bounded diagnostic output" :: Text), "complete" .= True]))
+                      else do
+                        modifyIORef' waits (+ 1)
+                        pure
+                          ( Right
+                              ( object
+                                  [ "job"
+                                      .= object
+                                        [ "handle"
+                                            .= object
+                                              ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("succeeded" :: Text), "revision" .= (3 :: Int)]
+                                        ]
+                                  ]
+                              )
+                          )
             )
             (\_ _ -> pure (Right rawCatalog))
     for_ [1, 2 :: Int] $ \_ -> do
@@ -166,14 +167,17 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
               )
           )
       )
+    withDb pool (writeWorkingContext first "pending checks; recover t#2" 1200 2000)
     withDb pool (recordTaskFailure first.atrTurnId "HTTP 503" Transient) `shouldReturn` True
     withDb pool (finishAgentTurn first TurnFailed 1 Nothing Nothing)
     void $ withDb pool $ execute "UPDATE durable_tasks SET next_attempt_at=now()-interval '1 second' WHERE task_id=?" (Only identifier)
     second <- claimOne pool
     withDb pool (readSkillLoads second) `shouldReturn` [receipt]
+    withDb pool (readWorkingContext second) `shouldReturn` "pending checks; recover t#2"
     void $ withDb pool (taskControl (GroupId 900) actor False identifier "replace" (Just 1) Nothing "new objective")
     third <- claimOne pool
     withDb pool (readSkillLoads third) `shouldReturn` []
+    withDb pool (readWorkingContext third) `shouldReturn` ""
 
   it "settles kill before recovery cleanup and immediately admits the next frontend" $ do
     (front, CanonicalMessageId message, _) <- seed pool 650536599 1

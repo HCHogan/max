@@ -24,26 +24,39 @@ import Database.PostgreSQL.Simple
     query_,
     withTransaction,
   )
-import Max.DB.Connection (DbConfig (..), DbPool, closeDbPool, newDbPool, withConn)
-import Max.DB.Migrations (runMigrations)
 import Effectful (runEff)
 import Effectful.PostgreSQL.Connection (runWithConnection)
-import Max.DB.Health (operationalChecks)
-import Max.DB.Debt qualified as Debt
-import Max.EpisodeStore (CaptureRunId (..), reviewRejectedMemoryProposal)
 import Max.ConversationScope (conversationScopeFor)
-import OneBot.Types (GroupId (..))
+import Max.DB.Connection (DbConfig (..), DbPool, closeDbPool, newDbPool, withConn)
+import Max.DB.Debt qualified as Debt
+import Max.DB.Health (operationalChecks)
+import Max.DB.Migrations (runMigrations)
+import Max.DB.Projection (ProjectionRow (..), expectedProjection, projectionRows)
+import Max.DB.Task.Experience qualified as Experience
+import Max.EpisodeStore (CaptureRunId (..), reviewRejectedMemoryProposal)
 import Max.MemoryStore qualified as Memory
 import Max.Platform.Store (expiredSendingDeliverySql)
-import Max.DB.Projection (ProjectionRow (..), projectionRows, expectedProjection)
+import OneBot.Types (GroupId (..))
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (die)
 import Text.Read (readMaybe)
 
-data Command = Migrate | Reproject | Verify | Health | Gate
+data Command
+  = Migrate
+  | Reproject
+  | Verify
+  | Health
+  | Gate
   | DebtExport Debt.DebtKind Debt.DebtScope UTCTime FilePath
   | DebtReview FilePath
   | MemoryReview Int64 Int64 Int Text Text FilePath
+  | ExperienceList Int64
+  | ExperienceShow Int64 Int64
+  | ExperienceCreate Int64 Int64 FilePath
+  | ExperienceExport Int64 Int64 Int64 FilePath
+  | ExperienceReview Int64 Int64 Int64 Text FilePath
+  | ExperiencePublish Int64 Int64 Int64
+  | ExperienceInvalidate Int64 Int64 Text
   | MemoryReviewQueue
   | MemoryRepairSubject Int64 Int64 Int64 Int64 Text
   deriving stock (Eq, Show)
@@ -77,16 +90,62 @@ run command migrationsDir pool = case command of
     mapM_ (print . fromOnly) rows
   MemoryReview group capture index actor reason path -> do
     proposal <- eitherDecodeFileStrict path >>= either die pure
-    result <- withConn pool $ \connection -> runEff . runWithConnection connection $
-      reviewRejectedMemoryProposal (conversationScopeFor (GroupId group)) (CaptureRunId capture) index actor reason proposal
+    result <- withConn pool $ \connection ->
+      runEff . runWithConnection connection $
+        reviewRejectedMemoryProposal (conversationScopeFor (GroupId group)) (CaptureRunId capture) index actor reason proposal
     putStrLn ("memory review: " <> T.unpack result)
   MemoryRepairSubject group memory version principal reason -> do
-    result <- withConn pool $ \connection -> runEff . runWithConnection connection $
-      Memory.repairMemorySubjectAdmin (conversationScopeFor (GroupId group)) (Memory.MemoryId memory)
-        (Memory.ExpectedVersion (Memory.MemoryVersion version)) principal reason
+    result <- withConn pool $ \connection ->
+      runEff . runWithConnection connection $
+        Memory.repairMemorySubjectAdmin
+          (conversationScopeFor (GroupId group))
+          (Memory.MemoryId memory)
+          (Memory.ExpectedVersion (Memory.MemoryVersion version))
+          principal
+          reason
     case result of
       Memory.MemoryMutationApplied item -> putStrLn ("memory subject repaired: id=" <> show item.memId <> " version=" <> show item.memVersion)
       Memory.MemoryMutationRejected -> die "subject repair rejected: identity/evidence/scope/version/duplicate guard did not match"
+  ExperienceList group -> withConn pool $ \connection -> do
+    rows <-
+      query
+        connection
+        "SELECT jsonb_build_object('candidate_id',candidate_id,'task_id',task_id,'revision',task_revision,'description',capsule->>'description','created_at',created_at,'published_skill_id',published_skill_id,'invalidated_at',invalidated_at) FROM task_experience_candidates WHERE legacy_group=? ORDER BY candidate_id DESC LIMIT 100"
+        (Only group) ::
+        IO [Only Value]
+    mapM_ (print . fromOnly) rows
+  ExperienceShow group candidate -> withConn pool $ \connection -> do
+    rows <- query connection "SELECT to_jsonb(candidate) FROM task_experience_candidates candidate WHERE candidate_id=? AND legacy_group=?" (candidate, group) :: IO [Only Value]
+    mapM_ (print . fromOnly) rows
+  ExperienceCreate group task path -> do
+    capsule <- eitherDecodeFileStrict path >>= either die pure
+    outcome <- withConn pool $ \connection ->
+      runEff . runWithConnection connection $
+        Experience.createExperienceCandidate (conversationScopeFor (GroupId group)) task capsule
+    either (die . T.unpack) print outcome
+  ExperienceExport group candidate later path -> do
+    packet <- withConn pool $ \connection ->
+      runEff . runWithConnection connection $
+        Experience.exportExperienceReplay (conversationScopeFor (GroupId group)) candidate later
+    maybe (die "no current scoped candidate and later completed task") (encodeFile path) packet
+  ExperienceReview group candidate later reviewer path -> do
+    report <- eitherDecodeFileStrict path >>= either die pure
+    outcome <- withConn pool $ \connection ->
+      runEff . runWithConnection connection $
+        Experience.reviewExperienceReplay (conversationScopeFor (GroupId group)) candidate later reviewer report
+    maybe (die "replay fingerprint/scope guard rejected") print outcome
+  ExperiencePublish group candidate replay -> do
+    applied <- withConn pool $ \connection ->
+      runEff . runWithConnection connection $
+        Experience.publishExperience (conversationScopeFor (GroupId group)) candidate replay
+    unless applied (die "publication requires the latest passing, current paired replay")
+    putStrLn "experience published in its original conversation; runtime registry refreshes within five minutes"
+  ExperienceInvalidate group candidate reason -> do
+    applied <- withConn pool $ \connection ->
+      runEff . runWithConnection connection $
+        Experience.invalidateExperience (conversationScopeFor (GroupId group)) candidate reason
+    unless applied (die "candidate absent, invalidated or out of scope")
+    putStrLn "experience invalidated; runtime registry refreshes within five minutes"
   Gate -> do
     withConn pool preflightDrained
     migrate pool migrationsDir
@@ -222,12 +281,14 @@ operationalHealth connection = do
 verifyProjections :: Connection -> IO [String]
 verifyProjections connection = do
   rows <- projectionRows connection
-  fmap concat . forM rows $ \row -> expectedProjection connection row >>= \case
-    Left err -> pure [err]
-    Right expected -> pure
-      [ "canonical message " <> show row.canonicalMessageId <> " has a stale rendered_text projection"
-      | expected /= row.renderedText
-      ]
+  fmap concat . forM rows $ \row ->
+    expectedProjection connection row >>= \case
+      Left err -> pure [err]
+      Right expected ->
+        pure
+          [ "canonical message " <> show row.canonicalMessageId <> " has a stale rendered_text projection"
+          | expected /= row.renderedText
+          ]
 
 scalarCount :: Connection -> Query -> IO Int64
 scalarCount connection sql = do
@@ -238,10 +299,10 @@ scalarCount connection sql = do
 
 schemaChecks :: [(String, Query)]
 schemaChecks =
-    -- The 55-64 ADR 003 chain was squashed into one production baseline, and
-    -- 'reconcileSquash' rewrites schema_migrations to record only that file.
-    -- Requiring the individual pre-squash names now fails on every database,
-    -- including the one this gate exists to protect.
+  -- The 55-64 ADR 003 chain was squashed into one production baseline, and
+  -- 'reconcileSquash' rewrites schema_migrations to record only that file.
+  -- Requiring the individual pre-squash names now fails on every database,
+  -- including the one this gate exists to protect.
   [ ( "post-cutover schema baseline missing",
       "SELECT count(*) FROM (VALUES ('000_baseline.sql')) required(filename) \
       \LEFT JOIN schema_migrations migration USING (filename) \
@@ -370,7 +431,6 @@ drainChecks =
     )
   ]
 
-
 preflightChecks :: [(Text, String, Query)]
 preflightChecks =
   [ ( "message_deliveries",
@@ -421,12 +481,19 @@ parseCommand = \case
       (Just parsedKind, Just parsedScope, Just parsedCutoff) -> pure (DebtExport parsedKind parsedScope parsedCutoff path)
       _ -> die "invalid debt kind/scope/cutoff; timestamp example: 2026-09-09 05:00:00 UTC"
   ["debt", "review", path] -> pure (DebtReview path)
+  ["experience", "list", group] | Just g <- readMaybe group -> pure (ExperienceList g)
+  ["experience", "show", group, candidate] | Just g <- readMaybe group, Just c <- readMaybe candidate -> pure (ExperienceShow g c)
+  ["experience", "create", group, task, path] | Just g <- readMaybe group, Just t <- readMaybe task -> pure (ExperienceCreate g t path)
+  ["experience", "export", group, candidate, later, path] | Just g <- readMaybe group, Just c <- readMaybe candidate, Just t <- readMaybe later -> pure (ExperienceExport g c t path)
+  ["experience", "review", group, candidate, later, reviewer, path] | Just g <- readMaybe group, Just c <- readMaybe candidate, Just t <- readMaybe later -> pure (ExperienceReview g c t (T.pack reviewer) path)
+  ["experience", "publish", group, candidate, replay] | Just g <- readMaybe group, Just c <- readMaybe candidate, Just r <- readMaybe replay -> pure (ExperiencePublish g c r)
+  ["experience", "invalidate", group, candidate, reason] | Just g <- readMaybe group, Just c <- readMaybe candidate -> pure (ExperienceInvalidate g c (T.pack reason))
   ["memory", "reviews"] -> pure MemoryReviewQueue
-  ["memory", "repair-subject", group, memory, version, principal, reason] -> case (readMaybe group,readMaybe memory,readMaybe version,readMaybe principal) of
-    (Just g,Just m,Just v,Just p) -> pure (MemoryRepairSubject g m v p (T.pack reason))
+  ["memory", "repair-subject", group, memory, version, principal, reason] -> case (readMaybe group, readMaybe memory, readMaybe version, readMaybe principal) of
+    (Just g, Just m, Just v, Just p) -> pure (MemoryRepairSubject g m v p (T.pack reason))
     _ -> die "subject repair requires numeric legacy conversation, memory, expected version and canonical principal ids"
-  ["memory", "review", group, capture, index, actor, reason, path] -> case (readMaybe group,readMaybe capture,readMaybe index) of
-    (Just g,Just c,Just i) -> pure (MemoryReview g c i (T.pack actor) (T.pack reason) path)
+  ["memory", "review", group, capture, index, actor, reason, path] -> case (readMaybe group, readMaybe capture, readMaybe index) of
+    (Just g, Just c, Just i) -> pure (MemoryReview g c i (T.pack actor) (T.pack reason) path)
     _ -> die "memory review requires numeric legacy conversation id, capture id and proposal index"
   _ ->
     die
@@ -434,12 +501,19 @@ parseCommand = \case
       \(migrate|reproject|verify|health|gate)\n\
       \  debt export KIND (all|global|conversation:ID) 'YYYY-MM-DD HH:MM:SS UTC' FILE\n\
       \  debt review FILE\n\
+      \  experience list GROUP / experience show GROUP CANDIDATE\n\
+      \  experience create GROUP TASK CAPSULE_FILE\n\
+      \  experience export GROUP CANDIDATE LATER_TASK FILE\n\
+      \  experience review GROUP CANDIDATE LATER_TASK REVIEWER REPORT_FILE\n\
+      \  experience publish GROUP CANDIDATE REPLAY_ID\n\
+      \  experience invalidate GROUP CANDIDATE REASON\n\
       \  memory reviews\n\
       \  memory repair-subject LEGACY_GROUP MEMORY EXPECTED_VERSION PRINCIPAL REASON\n\
       \  memory review LEGACY_GROUP CAPTURE INDEX ACTOR REASON PROPOSAL_JSON_FILE\n\
       \  environment: MAX_DB_URL (required), MAX_MIGRATIONS_DIR (default: migrations)"
 
 requireEnv :: String -> IO String
-requireEnv name = lookupEnv name >>= \case
-  Just value | not (null value) -> pure value
-  _ -> die (name <> " must be set explicitly")
+requireEnv name =
+  lookupEnv name >>= \case
+    Just value | not (null value) -> pure value
+    _ -> die (name <> " must be set explicitly")

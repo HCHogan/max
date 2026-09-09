@@ -20,7 +20,9 @@ data ExecutionJournal es = ExecutionJournal
   { ejRecordNote :: AgentTurnRef -> Text -> Eff es (),
     ejFinish :: JournalExecution -> JournalFinish -> Eff es (),
     ejUnknown :: JournalExecution -> Text -> Eff es (),
-    ejReadSkillLoads :: AgentTurnRef -> Eff es [SkillLoad]
+    ejReadSkillLoads :: AgentTurnRef -> Eff es [SkillLoad],
+    ejReadWorking :: AgentTurnRef -> Eff es Text,
+    ejWriteWorking :: AgentTurnRef -> Text -> Int -> Int -> Eff es ()
   }
 
 newtype ExecutionInbox es = ExecutionInbox {eiRead :: AgentTurnRef -> Eff es Text}

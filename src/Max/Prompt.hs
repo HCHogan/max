@@ -143,10 +143,10 @@ import OneBot.Types (GroupId (..), isPrivateChat)
 -- profile advertises 256K+ input; older context remains available through
 -- tiered compartments and unified recall.
 rawTailLowCeiling :: Int
-rawTailLowCeiling = 16384
+rawTailLowCeiling = 8192
 
 rawTailHighCeiling :: Int
-rawTailHighCeiling = 32768
+rawTailHighCeiling = 16384
 
 historyTokenWatermarks :: ContextLimits -> Bool -> HistoryTokenWatermarks
 historyTokenWatermarks limits multimodal' =
@@ -1117,7 +1117,15 @@ planContext limits snapshot =
       budget = contextBudget limits (not (null initial.images))
       initialMessages = renderContext initial
       initialTokens = estimateMessagesTokens initialMessages
-      (selectedContext, drops) = selectContextTo contextCostModel budget.cbPromptTokenLimit initialTokens snapshot.csCandidates
+      -- Block-local deltas can miss wrapper overhead. Re-render and keep
+      -- degrading until the wire-shaped estimate fits or nothing optional remains.
+      refine candidates tokens accumulated =
+        let (selection, removed) = selectContextTo contextCostModel budget.cbPromptTokenLimit tokens candidates
+            actual = estimateMessagesTokens (renderContext selection.selectedInputs)
+         in if actual <= budget.cbPromptTokenLimit || null removed
+              then (selection, accumulated <> removed)
+              else refine (ContextCandidates selection.selectedInputs) actual (accumulated <> removed)
+      (selectedContext, drops) = refine snapshot.csCandidates initialTokens []
       selected = selectedContext.selectedInputs
       messages = renderContext selected
       estimated = estimateMessagesTokens messages
@@ -1352,7 +1360,7 @@ contextCompartmentFromActive active =
     }
 
 contextPolicyVersion :: Text
-contextPolicyVersion = "context-policy/v3"
+contextPolicyVersion = "context-policy/v4"
 
 -- | The returned 'Bool' is the coverage-loss signal: 'True' means the bounded
 -- tail fetch stopped before reaching the materialization end cursor, so raw
@@ -1391,7 +1399,7 @@ materializeTieredHistory scope triggerId cleared now' watermarks active = do
         pure (folded, foldedTail, foldedTruncated)
   where
     publishOrReload expected reason target = do
-      let draft = materializationDraft now' watermarks.htwHigh reason target
+      let draft = materializationDraft now' (min 8192 watermarks.htwHigh) reason target
       publishContextMaterialization scope expected draft >>= \case
         Just materialization -> pure materialization
         Nothing ->

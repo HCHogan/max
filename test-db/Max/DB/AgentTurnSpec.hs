@@ -135,6 +135,31 @@ spec pool = before_ (truncateAll pool) $ describe "Max.DB.AgentTurn" $ do
           (Only noteAndFirst.jeJournalId)
       (storageRows :: [(Bool, Bool)]) `shouldBe` [(True, True)]
 
+  it "persists bounded working checkpoints without changing task authority" $ do
+    fixture <- createFixture pool 42 1001
+    other <- createFixture pool 43 1002
+    withDb pool (readWorkingContext fixture.fxTurn) `shouldReturn` ""
+    withDb pool (writeWorkingContext fixture.fxTurn "goal / correction / pending; t#1" 900 1000)
+    withDb pool (readWorkingContext fixture.fxTurn) `shouldReturn` "goal / correction / pending; t#1"
+    withDb pool (readWorkingContext other.fxTurn) `shouldReturn` ""
+    withDb pool (writeWorkingContext fixture.fxTurn "latest" 800 1000)
+    withDb pool (readWorkingContext fixture.fxTurn) `shouldReturn` "latest"
+
+  it "expands spilled results by local call id with bounded pages and scope/clear guards" $ do
+    fixture <- createFixture pool 42 1001
+    withTemporaryBlobRoot $ \root -> do
+      execution <- withDb pool (startJournalExecution fixture.fxTurn (journalStart "original" "read"))
+      withDbBlob pool root (finishJournalExecution execution (JournalSucceeded (String (T.replicate 20000 "汉"))))
+      let readPage scope cleared = expandJournalResult scope cleared "t#1" (Just "original") Nothing 500
+      Just (Object page) <- withDbBlob pool root (readPage (conversationScopeFor fixture.fxGroup) Nothing)
+      KeyMap.lookup "has_more" page `shouldBe` Just (Bool True)
+      KeyMap.lookup "text" page `shouldSatisfy` (\case Just (String t) -> T.length t == 500; _ -> False)
+      withDbBlob pool root (readPage (conversationScopeFor (GroupId 43)) Nothing) `shouldReturn` Nothing
+      cleared <- getCurrentTime
+      withDbBlob pool root (readPage (conversationScopeFor fixture.fxGroup) (Just cleared)) `shouldReturn` Nothing
+      _ <- withDb pool (startJournalExecution fixture.fxTurn (journalStart "original" "read"))
+      withDbBlob pool root (readPage (conversationScopeFor fixture.fxGroup) Nothing) `shouldReturn` Nothing
+
   it "reclaims an interrupted effect exactly once without treating it as retryable" $ do
     fixture <- createFixture pool 42 1001
     execution <-

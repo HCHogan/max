@@ -132,9 +132,8 @@ applyBaseCompartmentTiers now' compartments' =
     ageDays compartment =
       max 0 (realToFrac (diffUTCTime now' compartment.contextEndedAt) / 86400 :: Double)
     baseTier distance compartment
-      | compartment.contextImportance >= 0.9 = TierP1
-      | ageDays compartment <= 7 && compartment.contextConfidence >= 0.5 = TierP1
-      | distance <= 3 && ageDays compartment <= 30 && compartment.contextConfidence >= 0.5 = TierP1
+      | distance <= 1 && ageDays compartment <= 7 && compartment.contextConfidence >= 0.5 = TierP1
+      | compartment.contextImportance >= 0.9 = TierP2
       | compartment.contextImportance >= 0.7 = TierP2
       | ageDays compartment <= 30 = TierP2
       | distance <= 15 && ageDays compartment <= 90 = TierP2

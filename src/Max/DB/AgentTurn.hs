@@ -22,6 +22,8 @@ module Max.DB.AgentTurn
     reclaimInterruptedTurns,
     recoveryViewForTurn,
     readSkillLoads,
+    readWorkingContext,
+    writeWorkingContext,
     nextAgentTurnOutputChunk,
     enrichSandboxJournalStart,
     startJournalExecution,
@@ -30,11 +32,12 @@ module Max.DB.AgentTurn
     markJournalOutcomeUnknown,
     lookupJournalResultEnvelope,
     resolveJournalResultValue,
+    expandJournalResult,
   )
 where
 
 import Control.Monad (forM_, when)
-import Data.Aeson (Value (..), eitherDecodeStrict', encode)
+import Data.Aeson (Value (..), eitherDecodeStrict', encode, object, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
@@ -780,3 +783,69 @@ resolveJournalResultValue scope cleared raw = case parseTurnHandle raw of
 exactlyOne :: Text -> [Only a] -> a
 exactlyOne _ [Only value] = value
 exactlyOne label rows = error (T.unpack label <> ": expected one row, got " <> show (length rows))
+
+-- The assembly's admission fence and this insert share one transaction.
+writeWorkingContext :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Text -> Int -> Int -> Eff es ()
+writeWorkingContext turn summary tokens limit = do
+  _ <-
+    execute
+      "INSERT INTO turn_working_context(turn_id,summary,input_tokens,input_limit) VALUES (?,?,?,?)"
+      (turn.atrTurnId, T.take 8000 summary, max 0 tokens, max 0 limit)
+  pure ()
+
+readWorkingContext :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Eff es Text
+readWorkingContext turn = do
+  rows <-
+    query
+      "SELECT w.summary FROM turn_working_context w WHERE w.turn_id=? OR w.turn_id IN \
+      \(SELECT previous.turn_id FROM task_attempts previous JOIN task_attempts current \
+      \ ON previous.task_id=current.task_id AND previous.revision=current.revision \
+      \ WHERE current.turn_id=? AND previous.attempt<=current.attempt) ORDER BY w.checkpoint_id DESC LIMIT 1"
+      (turn.atrTurnId, turn.atrTurnId)
+  pure $ case rows of [Only summary] -> summary; _ -> ""
+
+-- | Recover one journal result without publishing blob paths or replaying an
+-- effect. Provider call ids are local to a turn; ambiguous ids fail closed.
+-- Character pagination also bounds large inline and spilled JSON results.
+expandJournalResult ::
+  (WithConnection :> es, Blob :> es, IOE :> es) =>
+  ConversationScope -> Maybe UTCTime -> Text -> Maybe Text -> Maybe Int64 -> Int -> Eff es (Maybe Value)
+expandJournalResult scope cleared handle callId after limit = case target of
+  Nothing -> pure Nothing
+  Just (ordinal, execution) -> do
+    rows <-
+      query
+        "SELECT j.execution_ordinal,j.state,j.tool_ref,j.normalized_input,j.failure_detail,j.result_inline,j.result_blob_sha256 \
+        \ FROM conversations c JOIN agent_turns t USING(conversation_id) JOIN execution_journal j ON j.turn_id=t.turn_id \
+        \ WHERE c.legacy_group_id=? AND t.turn_ordinal=? AND j.event_kind='tool_call' \
+        \ AND (?::timestamptz IS NULL OR t.started_at>?) \
+        \ AND (?::bigint IS NULL OR j.execution_ordinal=?) AND (?::text IS NULL OR j.call_id=?) LIMIT 2"
+        (conversationStorageId scope, ordinal, cleared, cleared, execution, execution, callId, callId)
+    case rows :: [(ExecutionOrdinal, Text, Maybe Text, Maybe Value, Maybe Text, Maybe Value, Maybe Text)] of
+      [(number, state, name, input, failure, inline, blob)] -> do
+        value <- case (inline, blob >>= blobRefFromSha256) of
+          (Just v, _) -> pure (Just v)
+          (_, Just ref) -> either (const Nothing) Just . eitherDecodeStrict' <$> readBlob ref
+          _ -> pure Nothing
+        let payload =
+              TE.decodeUtf8 . LBS.toStrict . encode $
+                object
+                  ["state" .= state, "tool" .= name, "input" .= input, "failure" .= failure, "result" .= value]
+            cursor = fromIntegral (max 0 (min (fromIntegral (T.length payload)) (fromMaybe 0 after)))
+            bounded = max 256 (min 12000 limit)
+            part = T.take bounded (T.drop cursor payload)
+            next = cursor + T.length part
+        pure . Just $
+          object
+            [ "handle" .= resultHandleText ordinal number,
+              "format" .= ("json_text" :: Text),
+              "text" .= part,
+              "has_more" .= (next < T.length payload),
+              "next_after_cursor" .= (if next < T.length payload then Just next else Nothing)
+            ]
+      _ -> pure Nothing
+  where
+    target = case (parseTurnHandle handle, callId) of
+      (Just (ParsedTurnResult ordinal execution), Nothing) -> Just (ordinal, Just execution)
+      (Just (ParsedTurn ordinal), Just cid) | not (T.null cid) -> Just (ordinal, Nothing)
+      _ -> Nothing

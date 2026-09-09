@@ -211,6 +211,7 @@ spec = describe "Agent full loop" $ do
                     liftIO $ names `shouldNotContain` ["run_code"]
                     respond "use_skill" (object ["name" .= ("codemode" :: Text)])
                   1 -> do
+                    liftIO $ [text | MsgUser text <- messages, "[当前已加载宿主技能]" `T.isPrefixOf` text] `shouldBe` []
                     liftIO $ names `shouldContain` ["run_code"]
                     liftIO $ names `shouldNotContain` ["web_search"]
                     respond "run_code" (object ["code" .= ("const value = tools.echo({value:7}); tools.echo({value:8}); tools.use_skill({name:'web'}); return {answer:value.echo.value, hidden:!max.names.includes('web_search')};" :: Text)])
@@ -220,6 +221,9 @@ spec = describe "Agent full loop" $ do
                       MsgUser note : MsgUserBlocks _ : MsgTool "1" _ : _ -> note `shouldBe` "[feedback]: 下一轮改成方案 B"
                       other -> expectationFailure ("input did not follow the complete code result: " <> show other)
                     liftIO $ names `shouldContain` ["web_search", "run_code"]
+                    liftIO $
+                      [text | MsgUser text <- messages, "[当前已加载宿主技能]" `T.isPrefixOf` text]
+                        `shouldSatisfy` (\frames -> any (T.isInfixOf "[skill: web]") frames && not (any (T.isInfixOf "[skill: codemode]") frames))
                     liftIO $ any (\case MsgTool "1" body -> "\"answer\":7" `T.isInfixOf` body && "\"hidden\":true" `T.isInfixOf` body; _ -> False) messages `shouldBe` True
                     liftIO $ any (\case MsgUserBlocks blocks -> any (\case ImageDataUrl _ -> True; _ -> False) blocks; _ -> False) messages `shouldBe` True
                     pure (Right (ContentResp "done"))
@@ -713,7 +717,7 @@ spec = describe "Agent full loop" $ do
                     pure (Right (ContentResp "corrected"))
             )
         admission = ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing)
-        journal = ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure [])
+        journal = ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure []) (\_ -> pure "") (\_ _ _ _ -> pure ())
         inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inbox ("",))
     result <- withCompactLogger ColorNever Nothing $ \logger ->
       runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs (AgentLimits 3) (const (buildToolRegistry [] [])) $

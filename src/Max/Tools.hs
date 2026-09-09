@@ -20,7 +20,7 @@ import Data.Aeson
 import Data.Aeson.Types (Parser, parseEither)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isJust)
+import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (TimeZone)
@@ -31,7 +31,7 @@ import Max.Effects.ConversationQuery (ConversationQuery, expandEpisode, readForw
 import Max.Effects.Embedding (Embedding, embedBatch, renderEmbeddingFault)
 import Max.Effects.PlatformInteraction (PlatformInteraction, pokeUser)
 import Max.Effects.Tools (Tool (..))
-import Max.Effects.TurnQuery (TurnQuery, expandTurnTrace)
+import Max.Effects.TurnQuery (TurnQuery, expandTurnResult, expandTurnTrace)
 import Max.Embedding (EmbeddingRecord)
 import Max.Episode.Types (EpisodeExpansion (..), SourceRange (..), episodeHandleText, parseEpisodeHandle)
 import Max.History.Types (HistoryItem (..), LedgerItem (..), MessageCursor (..), bestName)
@@ -185,36 +185,40 @@ contextExpandTool tz =
           [ "展开上下文中的 [episode#<handle>]，读取该摘要对应的原始聊天记录。",
             "也可展开 [recent turns] 中的 t#<n>，读取该工作回合的规范化执行记录。",
             "handle 只用于定位；每次调用都会按当前会话重新检查权限。",
-            "长 episode 或 turn trace 会分页，按返回的 next_after_cursor 继续读取。"
+            "也可用 t#<n>:r<m>，或 t#<n> 加 call_id 读取完整工具结果（JSON 文本分页）。",
+            "按 next_after_cursor 续读；恢复结果不会重新执行工具。"
           ],
       toolSchema =
         toolObject
           [ ( "handle",
-              stringParam "[episode#<uuid>] 或 t#<n> 标记中的 handle"
+              stringParam "episode UUID、t#<n> 或 t#<n>:r<m>"
             ),
-            ("after_cursor", integerParam "继续读取时使用上页返回的 next_after_cursor"),
-            ("limit", boundedIntegerParam 1 100 40)
+            ("call_id", stringParam "配合 t#<n> 精确定位工具调用；重名拒绝，改用结果句柄"),
+            ("after_cursor", integerParam "上页 next_after_cursor；结果分页时是字符偏移"),
+            ("limit", boundedIntegerParam 1 12000 40)
           ]
           ["handle"],
       toolRun = \args -> case parseEither (withObject "args" parseExpandArgs) args of
         Left err -> pure $ Left ("bad args: " <> T.pack err)
-        Right (rawHandle, after, limit) -> case (parseEpisodeHandle rawHandle, parseTurnHandle rawHandle) of
-          (Just handle, _) -> do
+        Right (rawHandle, callId, after, limit) -> case (parseEpisodeHandle rawHandle, parseTurnHandle rawHandle) of
+          (Just handle, _) | isNothing callId -> do
             expanded <- expandEpisode handle (MessageCursor <$> after) limit
             pure $ case expanded of
               Nothing -> Left "episode not found or not visible in this conversation"
               Just (episode, media) -> Right (episodeExpansionSummary tz media episode)
-          (Nothing, Just (ParsedTurn ordinal)) -> do
+          (Nothing, Just (ParsedTurn ordinal)) | isNothing callId -> do
             expanded <- expandTurnTrace ordinal after limit
             pure $ maybe (Left "turn not found or not visible in this conversation") Right expanded
-          (Nothing, Just ParsedTurnResult {}) ->
-            pure (Left "bad args: pass the t#<n> turn handle, not a t#<n>:r<m> result handle")
+          (Nothing, Just _) -> do
+            expanded <- expandTurnResult rawHandle callId after (if limit == 40 then 6000 else limit)
+            pure $ maybe (Left "result not found, ambiguous, or not visible in this conversation") Right expanded
           _ -> pure (Left "bad args: handle must be an episode UUID or t#<n>")
     }
   where
     parseExpandArgs o =
-      (,,)
+      (,,,)
         <$> o .: "handle"
+        <*> o .:? "call_id"
         <*> o .:? "after_cursor"
         <*> (fromMaybe 40 <$> o .:? "limit")
 
