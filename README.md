@@ -67,12 +67,39 @@ canonical message ledger ────┬──▶ mirror deliveries: native wher
 ## Quick start
 
 ```sh
-direnv allow                         # or: nix develop --impure
 cp .env.example .env
 cp max.yaml.example max.yaml
-devenv up                            # PostgreSQL on 127.0.0.1:5433
+devenv shell                         # native devenv CLI >= 2.3
+devenv up -d                         # PostgreSQL on 127.0.0.1:5433
 cabal run max
 ```
+
+Interactive development uses native [devenv shell reload](https://devenv.sh/blog/2026/05/07/devenv-21-nix-with-zsh-fish-and-nushell-via-libghostty/):
+configuration changes rebuild in the background and apply at the next prompt.
+The running command keeps its environment. Source-code compilation and running
+Max processes are managed separately. The shell follows your login shell;
+`devenv --shell zsh shell` selects zsh explicitly.
+
+`.env` is loaded through `dotenv.enable`, including on native shell reload.
+Explicit `env` settings in `devenv.nix` take precedence over `.env` values.
+The pinned dotenv integration materializes these values in the local Nix store.
+
+The shared nix-config dev profile enables native zsh activation on `cd`:
+run `devenv allow` once in this repository. Entering the project opens a devenv
+subshell; moving between its subdirectories keeps it; leaving the project
+returns to the outer shell in the destination directory. On other setups,
+add `eval "$(devenv hook zsh)"` to your zsh configuration. `.envrc` is
+intentionally inert, allowing a global direnv hook to coexist with native
+activation. When moving from the old direnv environment, run `direnv allow`
+and return to a fresh outer shell before starting `devenv shell`: the old
+environment's `devenv-flake-compat` executable does not support `shell`.
+
+`nix develop --impure` remains available for CI and flake consumers, with
+dotenv disabled because devenv 2.3 requires the native CLI to load it.
+Pass environment variables explicitly when using this entry point.
+`devenv.yaml`/`devenv.lock` pin the same nixpkgs and devenv inputs as
+`flake.lock`; after updating either entry point, synchronize the other and run
+`python3 scripts/check-devenv-pins.py`. CI checks the resolved input graphs.
 
 The NixOS module provisions native NapCat, browser services and command
 sandboxes under `max-stack.target`. Enable `services.max.napcat.enable` for QQ,

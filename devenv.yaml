@@ -1,0 +1,8 @@
+# Keep these inputs aligned with flake.lock; checked in CI.
+inputs:
+  nixpkgs:
+    url: github:NixOS/nixpkgs/34268251cf5547d39063f2c5ea9a196246f7f3a6
+  devenv:
+    url: github:cachix/devenv/v2.3
+require_version: ">=2.3"
+reload: true

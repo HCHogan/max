@@ -5,7 +5,7 @@
     # Pinned to the rev in flake.lock: haskellPackages there is
     # GHC 9.10.3 and the whole closure is in the hydra cache.
     nixpkgs.url = "github:NixOS/nixpkgs/34268251cf5547d39063f2c5ea9a196246f7f3a6";
-    devenv.url = "github:cachix/devenv";
+    devenv.url = "github:cachix/devenv/v2.3";
     systems.url = "github:nix-systems/default";
   };
 
@@ -150,7 +150,11 @@
         {
           default = devenv.lib.mkShell {
             inherit inputs pkgs;
-            modules = [ ./devenv.nix ];
+            modules = [
+              ./devenv.nix
+              # devenv 2.3 dotenv requires the native CLI; CI supplies its env explicitly.
+              { dotenv.enable = nixpkgs.lib.mkForce false; }
+            ];
           };
         }
       );

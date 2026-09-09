@@ -96,6 +96,9 @@ jobs:
       - name: cabal update
         run: nix develop --impure -c cabal update
 
+      - name: Check native devenv and flake pins
+        run: python3 scripts/check-devenv-pins.py
+
       - name: Build
         run: nix develop --impure -c cabal build all
 
