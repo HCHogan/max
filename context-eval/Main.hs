@@ -41,7 +41,7 @@ import Max.EpisodeStore
     captureValidationWarnings,
     validateEpisodeCapture,
   )
-import Max.Historian (generateHistorianCapture, historianPromptVersion, renderHistorianMessages, renderHistorianSourceLine)
+import Max.Historian (generateHistorianCapture, historianPromptVersion, historianSchemaVersion, renderHistorianMessages, renderHistorianSourceLine)
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Log (withCompactLogger)
 import Max.MemoryStore (MemoryId (..), MemoryVersion (..))
@@ -515,7 +515,7 @@ fixtureRun fixture source profile =
       crLeaseExpiresAt = Nothing,
       crHistorianProfile = profile,
       crPromptVersion = historianPromptVersion,
-      crSchemaVersion = 1,
+      crSchemaVersion = historianSchemaVersion,
       crReplacesCompartment = Nothing
     }
 

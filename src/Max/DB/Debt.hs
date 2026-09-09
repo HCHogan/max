@@ -147,8 +147,11 @@ reviewDebt connection plan = withTransaction connection $ do
           GlobalDebt -> isNothing item.conversationId
           ConversationDebt value -> item.conversationId == Just value
     unless (scoped && item.observedAt <= plan.before) $ fail "item falls outside the declared scope or cutoff"
-    [Only calculated] <- query connection "SELECT md5(?::jsonb::text)" (Only item.snapshot)
-    unless (calculated == item.fingerprint) $ fail "snapshot fingerprint was modified"
+    -- The fingerprint is an opaque database revision, not a checksum to
+    -- recompute after JSON serialization. jsonb text preserves numeric scale
+    -- (e.g. epoch .100000), while JSON encoders may emit the equal value .1.
+    -- Validate the entire observation against current state or an immutable
+    -- prior audit below, including both fingerprint and semantic JSON value.
     current <- query connection
       "SELECT entity_id,conversation_id,observed_at,fingerprint,snapshot FROM operational_debt WHERE kind=? AND entity_id=?"
       (kindText plan.kind, item.entityId)

@@ -1,6 +1,7 @@
 module Max.DB.DebtSpec (spec) where
 
 import Control.Monad (void)
+import Data.Aeson (encode, eitherDecode, object, (.=))
 import Data.Int (Int64)
 import Data.Time (getCurrentTime, addUTCTime)
 import Database.PostgreSQL.Simple
@@ -40,10 +41,22 @@ spec pool = before_ (truncateAll pool) $ describe "operational debt review" $ do
     let reviewed = plan {actor="operator",disposition=Just Accepted,reason="reviewed",evidence="external evidence"}
     withConn pool (`reviewDebt` (reviewed {scope=GlobalDebt})) `shouldThrow` anyIOException
     withConn pool (`reviewDebt` (reviewed {items=map (\item -> item {fingerprint="modified"}) plan.items})) `shouldThrow` anyIOException
+    withConn pool (`reviewDebt` (reviewed {items=map (\item -> item {snapshot=object ["status" .= ("tampered" :: String)]}) plan.items})) `shouldThrow` anyIOException
     withConn pool (\c -> void $ execute c "UPDATE conversation_requests SET reason='changed' WHERE message_id=?" (Only second.unCanonicalMessageId))
     withConn pool (`reviewDebt` reviewed) `shouldThrow` anyIOException
     withConn pool (\c -> query_ c "SELECT count(*) FROM operational_debt_reviews")
       `shouldReturn` [Only (0 :: Int64)]
+
+  it "accepts exported JSON when numeric timestamp scale changes during serialization" $ do
+    (_, message, _) <- seed pool 900 1
+    failRequest message
+    withConn pool (\c -> void $ execute_ c "UPDATE conversation_requests SET updated_at='2026-09-01 00:00:00.100000+00'")
+    plan <- observation
+    let reviewed = plan {actor="operator",disposition=Just Accepted,reason="reviewed exact history",evidence="exported JSON round trip"}
+    roundTripped <- either fail pure (eitherDecode (encode reviewed))
+    roundTripped `shouldBe` reviewed
+    withConn pool (`reviewDebt` roundTripped) `shouldReturn` 1
+    unreviewed `shouldReturn` 0
 
   it "requires actual resolution, supports revocation and keeps the audit immutable" $ do
     (_, message, _) <- seed pool 900 1
