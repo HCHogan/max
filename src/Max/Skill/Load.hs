@@ -35,7 +35,7 @@ resolveSkillLoads snapshot loaded prepare = resolve snapshot [] []
                 pure $ do
                   extra <- metadata
                   let instructions = frame s <> packageInstructions name s.skillPackage
-                      load = SkillLoad name "" instructions extra (if s.skillPackage == emptyPackage then Nothing else Just (PinnedPackage s.skillRevision s.skillPackage Map.empty))
+                      load = SkillLoad name "" instructions extra (if s.skillPackage == emptyPackage && s.skillEvidence == TrustedSkill then Nothing else Just (PinnedPackage s.skillRevision s.skillPackage Map.empty Nothing s.skillEvidence))
                   Right (earlier <> [load {slVersion = skillReceiptVersion load}])
 
 -- | The framing line matters: the body is configuration, and without

@@ -22,6 +22,7 @@ import Max.Agent.Execution (ExecutionAdmission (..), ExecutionInbox (..), Execut
 import Max.Agent.Failure (AgentFailure (..))
 import Max.Agent.Runtime (runAgent)
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
+import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
 import Max.Effects.Agent (AgentContext (..), AgentLimits (..), AgentResult (..), agentTurn, runAgentWith)
 import Max.Effects.LLM
   ( ChatMessage (..),
@@ -265,7 +266,7 @@ spec = describe "Agent full loop" $ do
             ( [echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}]
                 <> [searchDefinition | toolVisible (toolSkillLoads current) "web_search"]
             )
-            ( skillToolsFor registry current (const (pure (Right Nothing))) (bindWorkflowContracts (catalogTools available))
+            ( skillToolsFor registry current (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion Map.empty (catalogTools available))
                 <> [searchTool | toolVisible (toolSkillLoads current) "web_search"]
             )
         provider =

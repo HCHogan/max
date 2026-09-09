@@ -12,7 +12,7 @@ import Data.Text.Encoding qualified as TE
 import Effectful
 import Effectful.Concurrent (Concurrent)
 import Max.CodeMode.Execution (CodeModeResult (..), codeModeInvocation, runWasmProgram)
-import Max.CodeMode.JavaScript (javaScriptLimits, runJavaScript, workflowProgram)
+import Max.CodeMode.JavaScript (javaScriptLimits, javaScriptRuntimeVersion, runJavaScript, workflowProgram)
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
 import Max.Skill.Workflow (ResolvedWorkflow (..), resolveWorkflow)
@@ -51,7 +51,7 @@ executeModelBatch enabled loaded session hooks catalog requests
             Just (String reference) <- KeyMap.lookup "workflow" fields,
             Just args <- KeyMap.lookup "args" fields,
             LBS.length (encode args) <= 65536 ->
-              case resolveWorkflow loaded catalog reference args of
+              case resolveWorkflow javaScriptRuntimeVersion loaded catalog reference args of
                 Left detail -> pure (ToolBatch [reject "invalid_workflow_submission" detail] False)
                 Right resolved -> do
                   result <-

@@ -33,6 +33,38 @@ import Test.Hspec hiding (context)
 
 spec :: Spec
 spec = describe "saved skill workflows" $ do
+  it "retains publication contracts across new loads and recovered receipts" $ do
+    registry <- checked [echoDefinition] [echoTool]
+    original <- pin (views registry) baseWorkflow
+    Just root <- pure (Map.lookup "demo" original)
+    let dependency = SkillLoad "dependency" "dependency-v1" "dependency instructions" Nothing Nothing
+        dep = dependency {slVersion = skillReceiptVersion dependency}
+        proof = publicationContract javaScriptRuntimeVersion root [root, dep]
+        authored = root {slPackage = fmap (\p -> p {ppRevision = 7, ppEvidence = ValidatedSkill proof}) root.slPackage}
+        receipt = authored {slVersion = skillReceiptVersion authored}
+        loaded = Map.fromList [("demo", receipt), ("dependency", dep)]
+        load runtime catalog changed = bindWorkflowContracts runtime (Map.singleton "dependency" dep) catalog [changed]
+    -- Draft revision 1 published as revision 7 still binds the same content.
+    load javaScriptRuntimeVersion (views registry) receipt `shouldBe` Right [receipt]
+    resolveWorkflow javaScriptRuntimeVersion loaded (views registry) "demo/run" arguments `shouldSatisfy` either (const False) (const True)
+    load "new-runtime" (views registry) receipt `shouldSatisfy` isLeft
+    load javaScriptRuntimeVersion [entry {ctSchemaHash = SchemaHash "changed"} | entry <- views registry] receipt `shouldSatisfy` isLeft
+    load javaScriptRuntimeVersion (views registry) receipt {slInstructions = "changed"} `shouldSatisfy` isLeft
+    resolveWorkflow "new-runtime" loaded (views registry) "demo/run" arguments `shouldSatisfy` isLeft
+    resolveWorkflow javaScriptRuntimeVersion (Map.delete "dependency" loaded) (views registry) "demo/run" arguments `shouldSatisfy` isLeft
+    let changedDep = dep {slInstructions = "changed dependency"}
+    resolveWorkflow javaScriptRuntimeVersion (Map.insert "dependency" changedDep {slVersion = skillReceiptVersion changedDep} loaded) (views registry) "demo/run" arguments `shouldSatisfy` isLeft
+
+  it "rejects old receipts without runtime identity and old authored heads" $ do
+    registry <- checked [echoDefinition] [echoTool]
+    original <- pin (views registry) baseWorkflow
+    Just root <- pure (Map.lookup "demo" original)
+    let legacy = root {slPackage = fmap (\p -> p {ppRuntime = Nothing}) root.slPackage}
+        receipt = legacy {slVersion = skillReceiptVersion legacy}
+        unpublished = root {slPackage = fmap (\p -> p {ppEvidence = UnvalidatedSkill}) root.slPackage}
+    resolveWorkflow javaScriptRuntimeVersion (Map.singleton "demo" receipt) (views registry) "demo/run" arguments `shouldSatisfy` isLeft
+    bindWorkflowContracts javaScriptRuntimeVersion Map.empty (views registry) [unpublished] `shouldSatisfy` isLeft
+
   it "validates nested contracts and rejects unsupported schema semantics" $ do
     let schema = object ["type" .= ("array" :: Text), "items" .= inputContract, "maxItems" .= (2 :: Int)]
     validateContract schema `shouldBe` Right ()
@@ -44,12 +76,12 @@ spec = describe "saved skill workflows" $ do
   it "pins source and the host contract, rejecting changed or unavailable tools" $ do
     registry <- checked [echoDefinition] [echoTool]
     loads <- pin (views registry) baseWorkflow
-    let resolve catalog = resolveWorkflow loads catalog "demo/run" arguments
+    let resolve catalog = resolveWorkflow javaScriptRuntimeVersion loads catalog "demo/run" arguments
     resolve (views registry) `shouldSatisfy` either (const False) (const True)
     resolve [] `shouldSatisfy` isLeft
     resolve [entry {ctDefinition = entry.ctDefinition {tdRetryClass = RetryUnsafe}} | entry <- views registry] `shouldSatisfy` isLeft
     resolve [entry {ctSchemaHash = SchemaHash "changed"} | entry <- views registry] `shouldSatisfy` isLeft
-    resolveWorkflow Map.empty (views registry) "demo/run" arguments `shouldSatisfy` isLeft
+    resolveWorkflow javaScriptRuntimeVersion Map.empty (views registry) "demo/run" arguments `shouldSatisfy` isLeft
     changed <- pin (views registry) baseWorkflow {wfSource = "return {value:99};"}
     fmap (.slVersion) (Map.lookup "demo" changed) `shouldNotBe` fmap (.slVersion) (Map.lookup "demo" loads)
 
@@ -109,7 +141,7 @@ spec = describe "saved skill workflows" $ do
   it "loads complete workflow dependencies and contracts without exposing source" $ do
     reg <- newSkillRegistry
     registry <- checked [echoDefinition {tdRef = ToolRef "web_search"}] [echoTool {toolName = "web_search"}]
-    let load catalog = case skillToolsFor reg context (const (pure (Right Nothing))) (bindWorkflowContracts catalog) of
+    let load catalog = case skillToolsFor reg context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion Map.empty catalog) of
           [runner] -> runEff (runToolControl (runner.toolRun (object ["name" .= ("batch-search" :: Text)])))
           _ -> fail "missing loader"
     (value, control) <- load (views registry)
@@ -167,8 +199,8 @@ baseWorkflow = Workflow "echo" "return tools.echo(args);" inputContract inputCon
 pin :: [CatalogTool] -> Workflow -> IO (Map.Map Text SkillLoad)
 pin catalog workflow = do
   let package = SkillPackage [] (Map.singleton "run" workflow)
-      load = SkillLoad "demo" "" "instructions" Nothing (Just (PinnedPackage 1 package Map.empty))
-  loads <- either (fail . T.unpack) pure (bindWorkflowContracts catalog [load])
+      load = SkillLoad "demo" "" "instructions" Nothing (Just (PinnedPackage 1 package Map.empty Nothing TrustedSkill))
+  loads <- either (fail . T.unpack) pure (bindWorkflowContracts javaScriptRuntimeVersion Map.empty catalog [load])
   pure (Map.fromList [(l.slName, l) | l <- loads])
 
 submission :: Value -> ToolRequest

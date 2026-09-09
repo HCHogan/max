@@ -14,6 +14,7 @@ module Max.Toolset
   ( allToolsFor,
     toolCountFor,
     toolDefinitionsFor,
+    skillToolDefinitions,
     toolAllowedByEffectCeiling,
     defaultToolDeadline,
   )
@@ -30,6 +31,7 @@ import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Max.Browser.ToolRuntime (browserToolsFor)
+import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
 import Max.Conversation.ToolRuntime (builtinsWithDatabase, groupToolsWithDatabase)
 import Max.Effects.Blob (Blob)
 import Max.Effects.BlobHost (BlobHost)
@@ -195,7 +197,7 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
       Right (catalogTools (registryCatalog registry))
     bindPackages loads = do
       registry <- either (Left . T.pack . show) Right (allToolsFor runtime env (withToolSkillLoads loads dc) :: Either ToolCatalogError (ToolRegistry es))
-      bindWorkflowContracts (catalogTools (registryCatalog registry)) loads
+      bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads dc) (catalogTools (registryCatalog registry)) loads
     runners0 =
       builtinsWithDatabase dispatchEnv.beTimeZone dc
         <> reminderToolsWithDatabase dispatchEnv.beTimeZone dc
@@ -288,6 +290,11 @@ data ToolInventoryItem = ToolInventoryItem
   { tiGate :: !ToolGate,
     tiDefinition :: !ToolDefinition
   }
+
+-- | Metadata only, shared by isolated skill acceptance and the serving catalog.
+-- Runners and the current caller's authorization remain separate.
+skillToolDefinitions :: [ToolDefinition]
+skillToolDefinitions = [item.tiDefinition | item <- toolInventory, item.tiDefinition.tdRef.unToolRef `elem` ["use_skill", "skill_save", "skill_inspect", "skill_validate", "skill_publish"]]
 
 toolInventory :: [ToolInventoryItem]
 toolInventory =

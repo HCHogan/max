@@ -1,14 +1,16 @@
 -- | Pure workflow binding and admission against the host's catalog snapshot.
-module Max.Skill.Workflow (ResolvedWorkflow (..), bindWorkflowContracts, resolveWorkflow) where
+module Max.Skill.Workflow (ResolvedWorkflow (..), bindWorkflowContracts, resolveWorkflow, publicationContract) where
 
 import Control.Monad (unless)
-import Data.Aeson (Value)
+import Data.Aeson (Value, encode)
+import Data.ByteString.Lazy qualified as LBS
 import Data.Foldable (traverse_)
 import Data.List (nub)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Max.Skill.Contract (validateValue)
 import Max.Skill.Package
 import Max.Tool.Bundles
@@ -26,8 +28,12 @@ data ResolvedWorkflow = ResolvedWorkflow
 fingerprint :: CatalogTool -> Text
 fingerprint entry = skillLoadVersion (T.pack (show entry.ctDefinition) <> ":" <> entry.ctSchemaHash.unSchemaHash)
 
-bindWorkflowContracts :: [CatalogTool] -> [SkillLoad] -> Either Text [SkillLoad]
-bindWorkflowContracts catalog = traverse bind
+bindWorkflowContracts :: Text -> Map Text SkillLoad -> [CatalogTool] -> [SkillLoad] -> Either Text [SkillLoad]
+bindWorkflowContracts runtime loaded catalog additions = do
+  bound <- traverse bind additions
+  let complete = loaded <> Map.fromList [(l.slName, l) | l <- bound]
+  traverse_ (verifyClosure runtime complete catalog) bound
+  pure bound
   where
     available = Map.fromList [(t.ctDefinition.tdRef.unToolRef, t) | t <- catalog]
     bind load = case load.slPackage of
@@ -37,16 +43,50 @@ bindWorkflowContracts catalog = traverse bind
         validatePackage p.ppContent
         let names = nub (concatMap (.wfTools) (Map.elems p.ppContent.spWorkflows))
         contracts <- traverse (\name -> maybe (Left ("workflow requires unavailable tool: " <> name)) (Right . (name,) . fingerprint) (Map.lookup name available)) names
-        let pinned = load {slPackage = Just p {ppContracts = Map.fromList contracts}}
+        let pinned = load {slPackage = Just p {ppContracts = Map.fromList contracts, ppRuntime = Just runtime}}
         Right pinned {slVersion = skillReceiptVersion pinned}
 
-resolveWorkflow :: Map Text SkillLoad -> [CatalogTool] -> Text -> Value -> Either Text ResolvedWorkflow
-resolveWorkflow loaded catalog reference args = do
+-- Content identity deliberately excludes the draft/publication revision number.
+contentVersion :: SkillLoad -> Text
+contentVersion load = skillLoadVersion (load.slInstructions <> TE.decodeUtf8 (LBS.toStrict (encode (maybe emptyPackage (.ppContent) load.slPackage))))
+
+publicationContract :: Text -> SkillLoad -> [SkillLoad] -> PublicationContract
+publicationContract runtime root loads = PublicationContract runtime (contentVersion root) (Map.fromList [(l.slName, l.slVersion) | l <- loads, l.slName /= root.slName]) (maybe Map.empty (.ppContracts) root.slPackage)
+
+verifyLoad :: Text -> Map Text SkillLoad -> [CatalogTool] -> SkillLoad -> Either Text ()
+verifyLoad runtime loaded catalog load = do
+  unless (load.slVersion == skillReceiptVersion load) (Left "invalid pinned workflow receipt")
+  case load.slPackage of
+    Nothing -> Right ()
+    Just package -> do
+      unless (package.ppRuntime == Just runtime) (stale "JavaScript runtime changed or absent")
+      let available = Map.fromList [(t.ctDefinition.tdRef.unToolRef, fingerprint t) | t <- catalog]
+      traverse_ (\(name, contract) -> unless (Map.lookup name available == Just contract) (stale ("tool contract changed or unavailable: " <> name))) (Map.toList package.ppContracts)
+      case package.ppEvidence of
+        TrustedSkill -> Right ()
+        UnvalidatedSkill -> stale "publication has no validation certificate"
+        ValidatedSkill proof -> do
+          unless (proof.pcRuntime == runtime && proof.pcContent == contentVersion load && proof.pcTools == package.ppContracts) (stale "published content, runtime or tools changed")
+          traverse_ (\(name, version) -> unless (fmap (.slVersion) (Map.lookup name loaded) == Just version) (stale ("dependency changed or missing: " <> name))) (Map.toList proof.pcDependencies)
+  where
+    stale detail = Left ("skill " <> load.slName <> ": " <> detail <> "; validate and publish again in a new turn")
+
+-- Certificates contain the complete transitive closure, so no recursive graph
+-- walk (or access to the mutable registry) is needed on recovery.
+verifyClosure :: Text -> Map Text SkillLoad -> [CatalogTool] -> SkillLoad -> Either Text ()
+verifyClosure runtime loaded catalog load = do
+  verifyLoad runtime loaded catalog load
+  case load.slPackage of
+    Just p | ValidatedSkill proof <- p.ppEvidence -> traverse_ (\name -> traverse_ (verifyLoad runtime loaded catalog) (Map.lookup name loaded)) (Map.keys proof.pcDependencies)
+    _ -> Right ()
+
+resolveWorkflow :: Text -> Map Text SkillLoad -> [CatalogTool] -> Text -> Value -> Either Text ResolvedWorkflow
+resolveWorkflow runtime loaded catalog reference args = do
   (name, entry) <- case T.splitOn "/" reference of
     [name, entry] | not (T.null name || T.null entry) -> Right (name, entry)
     _ -> Left "workflow reference must be skill/entry"
   load <- maybe (Left "workflow skill is not loaded") Right (Map.lookup name loaded)
-  unless (load.slVersion == skillReceiptVersion load) (Left "invalid pinned workflow receipt")
+  verifyClosure runtime loaded catalog load
   package <- maybe (Left "loaded skill has no workflow package") Right load.slPackage
   workflow <- maybe (Left "workflow entry does not exist in loaded version") Right (Map.lookup entry package.ppContent.spWorkflows)
   validateValue workflow.wfInput args

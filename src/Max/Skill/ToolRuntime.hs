@@ -18,9 +18,10 @@ import Max.Effects.SkillValidation
 import Max.Effects.Tools (Tool, hoistTool)
 import Max.Skill.Authoring
 import Max.Skill.Load (resolveSkillLoads)
+import Max.Skill.Package (SkillEvidence (..))
 import Max.Skill.Store
 import Max.Skill.Validation (validateFixtures)
-import Max.Skill.Workflow (bindWorkflowContracts)
+import Max.Skill.Workflow (bindWorkflowContracts, publicationContract)
 import Max.Skills
 import Max.Tool.Bundles (SkillLoad (..), checkSkillLoadBudget)
 import Max.Tool.Types
@@ -59,7 +60,7 @@ skillAuthoringToolsWithDatabase registry context catalog = map (hoistTool lower)
           now <- liftIO getCurrentTime
           let content = draft.dvContent
               GroupId gid = toolGroupId context
-              candidate = Skill 0 content.dcName (Just gid) content.dcDescription content.dcBody True Nothing now draft.dvRevision content.dcPackage
+              candidate = Skill 0 content.dcName (Just gid) content.dcDescription content.dcBody True Nothing now draft.dvRevision content.dcPackage TrustedSkill
               visible = Map.insert content.dcName candidate (Map.fromList [(s.skillName, s) | s <- snapshot])
               metadata name
                 | name == content.dcName = pure (Right Nothing)
@@ -68,14 +69,16 @@ skillAuthoringToolsWithDatabase registry context catalog = map (hoistTool lower)
               denied t = let name = t.ctDefinition.tdRef.unToolRef in t.ctDefinition.tdCallMode /= WorkCall || EffectReflect `Set.member` t.ctDefinition.tdEffects || "skill_" `T.isPrefixOf` name || "task_" `T.isPrefixOf` name
           resolved <- liftIO (resolveSkillLoads visible Map.empty metadata content.dcName)
           pure $ do
-            loads <- resolved >>= bindWorkflowContracts current >>= checkSkillLoadBudget Map.empty
+            loads <- resolved >>= bindWorkflowContracts javaScriptRuntimeVersion Map.empty current >>= checkSkillLoadBudget Map.empty
             let leaves = [t | t <- current, t.ctDefinition.tdRef.unToolRef `elem` authoredTools content.dcPackage]
             if any denied leaves
               then Left "authored workflows cannot call authoring or loop/task control tools"
               else do
                 if any (\l -> l.slName /= content.dcName && fmap (.slVersion) (Map.lookup l.slName (toolSkillLoads context)) /= Just l.slVersion) loads
                   then Left "a dependency differs from this turn's pinned version; use a new turn"
-                  else Right (validationContext javaScriptRuntimeVersion loads, leaves)
+                  else case filter ((== content.dcName) . (.slName)) loads of
+                    [root] -> Right (validationContext draft.dvRevision (publicationContract javaScriptRuntimeVersion root loads), leaves)
+                    _ -> Left "validation root missing"
     validate name revision = do
       active <- authoringCallerActive scope
       found <- if active then readDraft scope name revision else pure (Left "skill authoring caller is fenced")

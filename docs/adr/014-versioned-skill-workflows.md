@@ -1,6 +1,9 @@
 # ADR-014: Versioned skill workflows
 
-Status: first and second batches implemented locally (2026-09-10); release and deployment are separate.
+Status: workflow packages, authoring, and publication contract continuity implemented (2026-09-10); release and deployment are separate.
+
+Publication/load/recovery contract continuity and the live frontend acceptance
+harness are specified in [skill-contract-acceptance](../skill-contract-acceptance.md).
 
 ## Decision
 

@@ -20,7 +20,7 @@ import Helpers (truncateAll, withDb)
 import Max.Agent.Execution (ExecutionAdmission (..))
 import Max.Agent.Runtime (durableExecutionAdmission)
 import Max.CodeMode.Execution
-import Max.CodeMode.JavaScript (runJavaScript)
+import Max.CodeMode.JavaScript (javaScriptRuntimeVersion, runJavaScript)
 import Max.CodeMode.Model (executeModelBatch)
 import Max.CodeMode.Wasm
 import Max.DB.AgentTurn
@@ -159,10 +159,10 @@ spec pool = before_ (truncateAll pool) $ describe "native and Wasm execution wit
     let contract = object ["type" .= ("object" :: Text), "additionalProperties" .= True]
         workflow = Workflow "saved" "tools.echo(args); return 'wrong shape';" contract contract ["echo"]
         package = SkillPackage [] (Map.singleton "run" workflow)
-        raw = SkillLoad "saved" "" "saved instructions" Nothing (Just (PinnedPackage 1 package Map.empty))
+        raw = SkillLoad "saved" "" "saved instructions" Nothing (Just (PinnedPackage 1 package Map.empty Nothing TrustedSkill))
         writeDefinition = echoDefinition {tdEffects = Set.singleton (EffectWrite "test"), tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     effectRegistry <- either (fail . show) pure (buildToolRegistry [writeDefinition] [echoTool])
-    [pinned] <- either (fail . show) pure (bindWorkflowContracts (views effectRegistry) [raw])
+    [pinned] <- either (fail . show) pure (bindWorkflowContracts javaScriptRuntimeVersion Map.empty (views effectRegistry) [raw])
     let loader = echoTool {toolName = "use_skill", toolRun = \value -> activateSkills [pinned] >> pure (Right value)}
         definition = echoDefinition {tdRef = ToolRef "use_skill", tdEffects = Set.singleton EffectReflect, tdParallelism = SequentialOnly, tdRetryClass = RetryUnsafe}
     registry <- either (fail . show) pure (buildToolRegistry [definition] [loader])

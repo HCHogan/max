@@ -14,6 +14,7 @@ import Effectful.Concurrent (runConcurrent)
 import Effectful.PostgreSQL (execute, query)
 import ExecutionFixture (echoDefinition, echoTool, noJournal)
 import Helpers (truncateAll, withDb)
+import Max.CodeMode.JavaScript (javaScriptRuntimeVersion)
 import Max.CodeMode.Model (executeModelBatch)
 import Max.DB.Connection (DbPool)
 import Max.DB.Task (claimFrontend)
@@ -26,6 +27,7 @@ import Max.Platform.Types (noAdvertisedCaps)
 import Max.Skill.Authoring
 import Max.Skill.Package
 import Max.Skill.ToolRuntime (skillAuthoringToolsWithDatabase)
+import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Skills
 import Max.Tool.Bundles (toolVisible)
 import Max.Tool.Catalog (catalogTools)
@@ -38,6 +40,31 @@ import Test.Hspec hiding (context)
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "model skill authoring lifecycle" $ do
+  it "persists validation evidence independently of draft revision and rejects drift after restart" $ do
+    (registry, context) <- setup pool
+    Right _ <- call pool registry context "skill_save" (saveArgs draft 0)
+    Right _ <- call pool registry context "skill_save" (saveArgs draft 1)
+    Right checked <- call pool registry context "skill_validate" (reference 2)
+    let proof = field "validation_id" checked
+    Right _ <- call pool registry context "skill_publish" (object ["name" .= draft.dcName, "revision" .= (2 :: Int), "validation_id" .= proof, "expected_revision" .= (0 :: Int)])
+    restarted <- newSkillRegistry
+    _ <- withDb pool (loadSkills restarted)
+    Just published <- lookupSkill restarted (GroupId 900) draft.dcName
+    published.skillRevision `shouldBe` 1
+    published.skillEvidence `shouldSatisfy` \case ValidatedSkill _ -> True; _ -> False
+    _ <- load restarted context draft.dcName
+    [loader] <- pure (skillToolsFor restarted context (const (pure (Right Nothing))) (bindWorkflowContracts "changed-runtime" (toolSkillLoads context) []))
+    (rejected, control) <- runEff (runToolControl (loader.toolRun (object ["name" .= draft.dcName])))
+    rejected `shouldSatisfy` isLeft
+    controlSkillLoads control `shouldBe` []
+    -- Admin changes preserve the certificate, including across cache reload.
+    Right _ <- withDb pool (updateSkill restarted published.skillId (\s -> s {skillBody = "changed instructions"}))
+    _ <- withDb pool (loadSkills restarted)
+    [changed] <- pure (skillToolsFor restarted context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads context) []))
+    (stale, activation) <- runEff (runToolControl (changed.toolRun (object ["name" .= draft.dcName])))
+    stale `shouldSatisfy` isLeft
+    controlSkillLoads activation `shouldBe` []
+
   it "loads the complete authoring bundle and saves, validates, publishes and runs a workflow" $ do
     (registry, context) <- setup pool
     mapM_ (\name -> toolVisible Map.empty name `shouldBe` False) ["skill_save", "skill_inspect", "skill_validate", "skill_publish"]
@@ -162,7 +189,7 @@ setupAt pool group = do
   pure (registry, loaded)
 
 load :: SkillRegistry -> ToolContext -> Text -> IO ToolContext
-load registry context name = case skillToolsFor registry context (const (pure (Right Nothing))) Right of
+load registry context name = case skillToolsFor registry context (const (pure (Right Nothing))) (bindWorkflowContracts javaScriptRuntimeVersion (toolSkillLoads context) []) of
   [runner] -> do
     (result, control) <- runEff (runToolControl (runner.toolRun (object ["name" .= name])))
     result `shouldSatisfy` isRight

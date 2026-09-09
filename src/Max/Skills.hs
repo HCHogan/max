@@ -88,7 +88,7 @@ import Max.Command.Help (helpText)
 import Max.Command.Version (buildIdentityLines, readOsPretty)
 import Max.DB.Transaction (withCommittedTransaction)
 import Max.Skill.Metadata (validateSkillText)
-import Max.Skill.Package (SkillPackage, emptyPackage, validatePackage, validatePackageName)
+import Max.Skill.Package (SkillEvidence (..), SkillPackage, emptyPackage, validatePackage, validatePackageName)
 import OneBot.Types (GroupId (..))
 import System.FilePath (dropExtension, takeExtension)
 
@@ -109,7 +109,8 @@ data Skill = Skill
     skillCreatedBy :: !(Maybe Int64),
     skillUpdatedAt :: !UTCTime,
     skillRevision :: !Integer,
-    skillPackage :: !SkillPackage
+    skillPackage :: !SkillPackage,
+    skillEvidence :: !SkillEvidence
   }
   deriving stock (Show, Eq)
 
@@ -153,7 +154,8 @@ parseBuiltin bootTime osName sid (path, bytes)
               skillCreatedBy = Nothing,
               skillUpdatedAt = bootTime,
               skillRevision = 1,
-              skillPackage = package
+              skillPackage = package,
+              skillEvidence = TrustedSkill
             }
   where
     name = T.pack (dropExtension path)
@@ -180,7 +182,7 @@ loadSkills :: (WithConnection :> es, IOE :> es) => SkillRegistry -> Eff es Int
 loadSkills reg@(SkillRegistry t _) = withMutation reg $ do
   rows <-
     query_
-      "SELECT id, name, group_id, description, body, enabled, created_by, updated_at, revision, package \
+      "SELECT id, name, group_id, description, body, enabled, created_by, updated_at, revision, package, evidence \
       \  FROM skills ORDER BY id"
   skills <- traverse skillFromRow rows
   liftIO . atomically $ do
@@ -189,8 +191,8 @@ loadSkills reg@(SkillRegistry t _) = withMutation reg $ do
     writeTVar t (Map.fromList [(s.skillId, s) | s <- skills] <> builtins)
   Map.size <$> liftIO (readTVarIO t)
 
-skillFromRow :: (IOE :> es) => ((Int64, Text, Maybe Int64, Text, Text, Bool) :. (Maybe Int64, UTCTime, Integer, Value)) -> Eff es Skill
-skillFromRow ((i, n, g, d, b, e) :. (cb, up, revision, raw :: Value)) = do
+skillFromRow :: (IOE :> es) => ((Int64, Text, Maybe Int64, Text, Text, Bool) :. (Maybe Int64, UTCTime, Integer, Value, Value)) -> Eff es Skill
+skillFromRow ((i, n, g, d, b, e) :. (cb, up, revision, raw :: Value, evidence)) = do
   package <- case fromJSON raw of
     Error err -> liftIO (ioError (userError ("invalid persisted skill package: " <> err)))
     Success value -> pure value
@@ -205,7 +207,8 @@ skillFromRow ((i, n, g, d, b, e) :. (cb, up, revision, raw :: Value)) = do
         skillCreatedBy = cb,
         skillUpdatedAt = up,
         skillRevision = revision,
-        skillPackage = package
+        skillPackage = package,
+        skillEvidence = case fromJSON evidence of Success value -> value; Error _ -> UnvalidatedSkill
       }
 
 -- Only this reserved namespace is refreshed by experience maintenance. Ordinary
@@ -214,7 +217,7 @@ refreshExperienceSkills :: (WithConnection :> es, IOE :> es) => SkillRegistry ->
 refreshExperienceSkills reg@(SkillRegistry registry _) = withMutation reg $ do
   rows <-
     query_
-      "SELECT id,name,group_id,description,body,enabled,created_by,updated_at,revision,package FROM skills WHERE name LIKE 'learned-task-%'"
+      "SELECT id,name,group_id,description,body,enabled,created_by,updated_at,revision,package,evidence FROM skills WHERE name LIKE 'learned-task-%'"
   learned <- traverse skillFromRow rows
   liftIO . atomically $ modifyTVar' registry $ \current ->
     Map.fromList [(skill.skillId, skill) | skill <- learned] <> Map.filter (not . T.isPrefixOf "learned-task-" . (.skillName)) current
@@ -293,7 +296,7 @@ createSkill reg@(SkillRegistry t _) ns = withMutation reg $
         case rows of
           [(sid, up)] -> do
             recordVersion sid
-            pure (Right (Skill sid ns.nsName ns.nsGroup ns.nsDescription ns.nsBody ns.nsEnabled ns.nsCreatedBy up 1 ns.nsPackage))
+            pure (Right (Skill sid ns.nsName ns.nsGroup ns.nsDescription ns.nsBody ns.nsEnabled ns.nsCreatedBy up 1 ns.nsPackage TrustedSkill))
           _ -> pure (Left "insert failed: unexpected result shape")
       publish t result
 
@@ -313,7 +316,7 @@ updateSkillAtRevision reg@(SkillRegistry t _) sid expected edit
           | maybe False (/= old.skillRevision) expected -> pure (Left "skill revision conflict")
           | otherwise -> do
               let changed = edit old
-                  new = changed {skillId = old.skillId, skillCreatedBy = old.skillCreatedBy, skillRevision = old.skillRevision + 1}
+                  new = changed {skillId = old.skillId, skillCreatedBy = old.skillCreatedBy, skillRevision = old.skillRevision + 1, skillEvidence = old.skillEvidence}
               case validateSkill new.skillName new.skillDescription new.skillBody >> validateNamedPackage new.skillName new.skillPackage of
                 Left err -> pure (Left err)
                 Right () -> do
@@ -352,7 +355,7 @@ publishSkillTransaction reg@(SkillRegistry cache _) action = withMutation reg $ 
     case changed of
       Left err -> pure (Left err)
       Right sid -> do
-        rows <- query "SELECT id,name,group_id,description,body,enabled,created_by,updated_at,revision,package FROM skills WHERE id=?" (Only sid)
+        rows <- query "SELECT id,name,group_id,description,body,enabled,created_by,updated_at,revision,package,evidence FROM skills WHERE id=?" (Only sid)
         case rows of
           [row] -> Right <$> skillFromRow row
           _ -> liftIO (ioError (userError "published skill row is missing"))

@@ -12,6 +12,7 @@ where
 
 import Control.Monad (void)
 import Data.Aeson
+import Data.Aeson.Types (parseMaybe)
 import Data.Int (Int64)
 import Data.Text (Text)
 import Database.PostgreSQL.Simple (Only (..))
@@ -21,6 +22,7 @@ import Max.DB.Task.Authorization (authorizeCallerWithin)
 import Max.DB.Transaction (withReadSnapshot, withTransaction)
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
 import Max.Skill.Authoring
+import Max.Skill.Package (SkillEvidence (..))
 import Max.Turn.Types (AgentTurnId)
 import OneBot.Types (GroupId (..))
 
@@ -129,11 +131,11 @@ promoteDraftWithin scope draft validation expected context = do
       lockDraft scope content.dcName
       proofs <- query "SELECT context,report FROM skill_validations WHERE group_id=? AND name=? AND draft_revision=? AND validation_id=?" (groupNumber scope, content.dcName, draft.dvRevision, validation)
       case proofs of
-        [(frozen, raw)] | frozen == context, Success report <- fromJSON raw, validationPassed report -> promote
+        [(frozen, raw)] | frozen == context, Success report <- fromJSON raw, validationPassed report, Just evidence@(ValidatedSkill _) <- parseMaybe (withObject "validation context" (.: "evidence")) context -> promote evidence
         _ -> pure (Left "validation missing, failed, or stale; validate this exact draft again")
   where
     content = draft.dvContent
-    promote = do
+    promote evidence = do
       existing <- query "SELECT id,revision FROM skills WHERE group_id=? AND name=? FOR UPDATE" (groupNumber scope, content.dcName)
       case existing of
         [] | expected == 0 -> do
@@ -141,7 +143,7 @@ promoteDraftWithin scope draft validation expected context = do
           if prior == [Only True]
             then pure (Left "published skill was deleted; choose a new name")
             else do
-              rows <- query "INSERT INTO skills(name,group_id,description,body,enabled,created_by,package) VALUES(?,?,?,?,true,?,?) RETURNING id" (content.dcName, groupNumber scope, content.dcDescription, content.dcBody, scope.asPrincipal.unPrincipalId, toJSON content.dcPackage)
+              rows <- query "INSERT INTO skills(name,group_id,description,body,enabled,created_by,package,evidence) VALUES(?,?,?,?,true,?,?,?) RETURNING id" (content.dcName, groupNumber scope, content.dcDescription, content.dcBody, scope.asPrincipal.unPrincipalId, toJSON content.dcPackage, toJSON evidence)
               case rows of
                 [Only sid] -> receipt sid 1
                 _ -> pure (Left "skill insert failed")
@@ -150,7 +152,7 @@ promoteDraftWithin scope draft validation expected context = do
           if owned /= [Only True]
             then pure (Left "published head belongs to another writer; use a new name")
             else do
-              void $ execute "UPDATE skills SET description=?,body=?,package=?,revision=revision+1,enabled=true,updated_at=now() WHERE id=?" (content.dcDescription, content.dcBody, toJSON content.dcPackage, sid)
+              void $ execute "UPDATE skills SET description=?,body=?,package=?,evidence=?,revision=revision+1,enabled=true,updated_at=now() WHERE id=?" (content.dcDescription, content.dcBody, toJSON content.dcPackage, toJSON evidence, sid)
               receipt sid (revision + 1)
         _ -> pure (Left "published revision conflict")
     receipt sid revision = do

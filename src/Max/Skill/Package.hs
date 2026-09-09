@@ -3,6 +3,8 @@ module Max.Skill.Package
   ( SkillPackage (..),
     Workflow (..),
     PinnedPackage (..),
+    SkillEvidence (..),
+    PublicationContract (..),
     emptyPackage,
     validatePackage,
     validatePackageName,
@@ -45,9 +47,38 @@ data SkillPackage = SkillPackage
 data PinnedPackage = PinnedPackage
   { ppRevision :: !Integer,
     ppContent :: !SkillPackage,
-    ppContracts :: !(Map Text Text)
+    ppContracts :: !(Map Text Text),
+    ppRuntime :: !(Maybe Text),
+    ppEvidence :: !SkillEvidence
   }
   deriving stock (Show, Eq)
+
+data SkillEvidence = TrustedSkill | UnvalidatedSkill | ValidatedSkill !PublicationContract
+  deriving stock (Show, Eq)
+
+data PublicationContract = PublicationContract
+  { pcRuntime :: !Text,
+    pcContent :: !Text,
+    pcDependencies :: !(Map Text Text),
+    pcTools :: !(Map Text Text)
+  }
+  deriving stock (Show, Eq)
+
+instance ToJSON PublicationContract where
+  toJSON p = object ["runtime" .= p.pcRuntime, "content" .= p.pcContent, "dependencies" .= p.pcDependencies, "tools" .= p.pcTools]
+
+instance FromJSON PublicationContract where
+  parseJSON = withObject "publication contract" $ \o -> PublicationContract <$> o .: "runtime" <*> o .: "content" <*> o .: "dependencies" <*> o .: "tools"
+
+instance ToJSON SkillEvidence where
+  toJSON TrustedSkill = String "trusted"
+  toJSON UnvalidatedSkill = String "requires-validation"
+  toJSON (ValidatedSkill p) = object ["certificate" .= p]
+
+instance FromJSON SkillEvidence where
+  parseJSON (String "trusted") = pure TrustedSkill
+  parseJSON (String "requires-validation") = pure UnvalidatedSkill
+  parseJSON value = withObject "skill evidence" (\o -> ValidatedSkill <$> o .: "certificate") value
 
 emptyPackage :: SkillPackage
 emptyPackage = SkillPackage [] Map.empty
@@ -70,10 +101,10 @@ instance FromJSON SkillPackage where
     either (fail . T.unpack) (const (pure p)) (validatePackage p)
 
 instance ToJSON PinnedPackage where
-  toJSON p = object ["revision" .= p.ppRevision, "content" .= p.ppContent, "contracts" .= p.ppContracts]
+  toJSON p = object ["revision" .= p.ppRevision, "content" .= p.ppContent, "contracts" .= p.ppContracts, "runtime" .= p.ppRuntime, "evidence" .= p.ppEvidence]
 
 instance FromJSON PinnedPackage where
-  parseJSON = withObject "pinned package" $ \o -> PinnedPackage <$> o .: "revision" <*> o .: "content" <*> o .: "contracts"
+  parseJSON = withObject "pinned package" $ \o -> PinnedPackage <$> o .: "revision" <*> o .: "content" <*> o .: "contracts" <*> o .:? "runtime" <*> o .:? "evidence" .!= UnvalidatedSkill
 
 validatePackage :: SkillPackage -> Either Text ()
 validatePackage p = do

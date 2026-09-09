@@ -27,7 +27,6 @@ import Data.Text qualified as T
 import Max.Skill.Contract (validateValue)
 import Max.Skill.Metadata (validateSkillText)
 import Max.Skill.Package
-import Max.Tool.Bundles (SkillLoad (..))
 
 data FixtureCall = FixtureCall {fcTool :: !Text, fcArgs :: !Value, fcResult :: !(Either Text Value)} deriving stock (Show, Eq)
 
@@ -77,7 +76,7 @@ instance FromJSON ValidationReport where
   parseJSON = withObject "validation report" $ \o -> ValidationReport <$> o .: "failures"
 
 validatorVersion :: Text
-validatorVersion = "skill-fixtures/v1"
+validatorVersion = "skill-fixtures/v2"
 
 validationPassed :: ValidationReport -> Bool
 validationPassed = null . vrFailures
@@ -107,8 +106,8 @@ validateDraft d = do
 authoredTools :: SkillPackage -> [Text]
 authoredTools = nub . concatMap (.wfTools) . Map.elems . (.spWorkflows)
 
-validationContext :: Text -> [SkillLoad] -> Value
-validationContext runtime loads = object ["validator" .= validatorVersion, "runtime" .= runtime, "dependencies" .= [object ["name" .= l.slName, "version" .= l.slVersion] | l <- loads]]
+validationContext :: Integer -> PublicationContract -> Value
+validationContext revision contract = object ["validator" .= validatorVersion, "draft_revision" .= revision, "evidence" .= ValidatedSkill contract]
 
 -- Bounded structural diff; full source remains an explicit exact-version read.
 draftDiff :: DraftContent -> DraftContent -> Value
