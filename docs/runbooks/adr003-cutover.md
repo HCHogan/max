@@ -256,7 +256,7 @@ against the live database again. Run it from the exact deployed closure after
 every deploy while traffic is flowing:
 
 ```sh
-sudo -u max-bot env MAX_DB_URL='postgresql:///max-bot?host=/run/postgresql' \
+sudo -u max env MAX_DB_URL='postgresql:///max?host=/run/postgresql' \
   max-adr003-maintenance verify
 ```
 
@@ -277,6 +277,17 @@ connection timeout roughly every 90 seconds. No projection, delivery, or media
 row was changed during this check. A controlled reprojection, terminal-state
 reconciliation, and another live `verify` are still required before calling the
 routine production gate green.
+
+**2026-09-09 production acceptance.** The exact deployed `ba7387d` binary now
+preserves both public system-event projections and historical debug-body
+projections; no production reprojection was needed. Migration 102 adds scoped,
+append-only reviews of exact terminal observations. Reviewed history remains
+visible, while new debt and expired active leases continue to fail the gate.
+Use the [debt review runbook](operational-debt.md) for supported operator
+commands and the [release evidence](../research/2026-09-09-memory-health-release.md)
+for snapshot rehearsal, deployed closure, actual data repairs, historical
+decisions, and repeated live verification. These database checks do not prove
+that an unreachable platform bridge has recovered.
 
 ## Atomic rollback
 

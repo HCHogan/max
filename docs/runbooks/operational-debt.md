@@ -121,3 +121,8 @@ starting send parts. A failed probe remains retryable and creates no send-part
 effect. A successful probe cannot guarantee the following send: lost responses
 after send remain outcome-unknown. Probe failure also does not turn historical
 unknown deliveries into known failures.
+
+The [2026-09-09 release evidence](../research/2026-09-09-memory-health-release.md)
+records a production-snapshot rehearsal and the exact h610 revision, review
+decisions, data repairs and repeated live checks. Keep comparable evidence for
+each release; a historical accepted batch is not permission to accept new debt.
