@@ -1,6 +1,5 @@
 module Max.DB.Task
   ( TaskExecution (..),
-    admitTask,
     admitTaskReceipt,
     taskControl,
     listDurableTasks,
@@ -13,25 +12,19 @@ module Max.DB.Task
     renewTask,
     authorizeTaskStep,
     taskInbox,
-    taskReport,
     taskReportTyped,
     recordTaskProgress,
-    finishRequest,
     finishRequestTyped,
     recordTaskFailure,
     notificationKind,
     monitorTaskProfile,
-    configureMonitor,
     claimFrontend,
     admitTaskNotification,
     loadTaskNotification,
     taskTurnRef,
     taskForReply,
     admitMonitorTask,
-    monitorControl,
-    monitorHistory,
     taskResource,
-    steerChild,
     steerChildTyped,
     durableWorkOverview,
   )
@@ -57,7 +50,6 @@ import Max.DB.Task.Admission qualified as Admission
 import Max.DB.Task.Authorization qualified as Authorization
 import Max.DB.Task.Control qualified as Control
 import Max.DB.Task.Frontend (claimFrontend, frontendWorkWaitingWithin)
-import Max.DB.Task.MonitorControl qualified as MonitorControl
 import Max.DB.Task.Overview qualified as Overview
 import Max.DB.Task.Query qualified as Query
 import Max.DB.Task.Record qualified as Record
@@ -65,13 +57,11 @@ import Max.DB.Task.Reporting qualified as Reporting
 import Max.DB.Task.Scheduling qualified as Scheduling
 import Max.DB.Transaction (withTransaction)
 import Max.Execution.Types (ExecutionStep)
-import Max.Monitor.Control (PendingPolicy, monitorControlErrorText, parsePendingPolicy)
-import Max.Monitor.Policy (OverlapPolicy, parseOverlapPolicy)
 import Max.Monitor.Types (MonitorFireId (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
-import Max.Task.Admission (AdmissionError, TaskAdmissionReceipt (..), admissionErrorText)
+import Max.Task.Admission (AdmissionError, TaskAdmissionReceipt (..))
 import Max.Task.State qualified as State
-import Max.Task.Types (TaskProfile (..), parseProfile, profileName)
+import Max.Task.Types (TaskProfile (..), parseProfile)
 import Max.Task.View
 import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
@@ -91,32 +81,6 @@ data TaskExecution = TaskExecution
     teHistory :: !TaskHistory
   }
   deriving stock (Show, Eq)
-
-admitTask :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> CanonicalMessageId -> PrincipalId -> Text -> Text -> TaskProfile -> Value -> Map Text Text -> Eff es Value
-admitTask turn (CanonicalMessageId message) (PrincipalId principal) key objective profile inputs grants = withTransaction $ do
-  admitted <- Admission.admitTaskWithin turn.atrTurnId (if message > 0 then Just message else Nothing) principal key objective profile inputs grants
-  pure $ case admitted of
-    Left failure -> object ["error" .= admissionErrorText failure]
-    Right task ->
-      object
-        [ "task_id" .= task.taskId,
-          "revision" .= task.revision,
-          "objective" .= task.objective,
-          "status" .= task.status,
-          "profile" .= profileName task.profile,
-          "inputs" .= task.inputs,
-          "grants" .= task.grants,
-          "owner_principal_id" .= task.owner,
-          "source_message_id" .= task.sourceMessage,
-          "parent_task_id" .= task.parent,
-          "root_task_id" .= task.root,
-          "deadline" .= task.deadline,
-          "calls_reserved" .= task.calls,
-          "rounds_reserved" .= task.rounds,
-          "max_calls" .= task.maxCalls,
-          "max_rounds" .= task.maxRounds,
-          "attempt" .= task.attempt
-        ]
 
 -- | The tool runner receives a typed receipt from the committed record.
 admitTaskReceipt :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> CanonicalMessageId -> PrincipalId -> Text -> Text -> TaskProfile -> Value -> Map Text Text -> Eff es (Either AdmissionError TaskAdmissionReceipt)
@@ -261,11 +225,6 @@ taskInbox turn = withTransaction $ do
           (event.eventId, turn)
   pure (renderTaskInbox events)
 
-taskReport :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Value -> Eff es Bool
-taskReport turn report = case State.parseTaskReport report of
-  Left _ -> pure False
-  Right typed -> taskReportTyped turn typed
-
 taskReportTyped :: (WithConnection :> es, IOE :> es) => AgentTurnId -> State.TaskReport -> Eff es Bool
 taskReportTyped = Reporting.submitReport
 
@@ -296,19 +255,25 @@ admitTaskNotification = withTransaction $ do
           \ AND NOT EXISTS (SELECT 1 FROM conversation_frontends frontend WHERE frontend.conversation_id=work.conversation_id AND frontend.lease_until>clock_timestamp())\
           \ FOR UPDATE OF notice"
           (Only notification)
-      if null (available :: [Only Int64]) then pure [] else do
-        published <- query
-          "SELECT EXISTS(SELECT 1 FROM task_notifications n JOIN messages m ON m.agent_turn_id=n.turn_id WHERE n.notification_id=?)"
-          (Only notification)
-        waiting <- if kind == "progress" then frontendWorkWaitingWithin conversation Nothing else pure False
-        if kind == "progress" && published == [Only True] then do
-          void $ execute "UPDATE task_notifications SET delivered_at=clock_timestamp() WHERE notification_id=?" (Only notification)
-          pure []
-        else if waiting then do
-          now <- Record.databaseNow
-          void $ execute "UPDATE task_notifications SET next_attempt_at=? WHERE notification_id=?" (addUTCTime 30 now, notification)
-          pure []
-        else admitNotification notification conversation principal source
+      if null (available :: [Only Int64])
+        then pure []
+        else do
+          published <-
+            query
+              "SELECT EXISTS(SELECT 1 FROM task_notifications n JOIN messages m ON m.agent_turn_id=n.turn_id WHERE n.notification_id=?)"
+              (Only notification)
+          waiting <- if kind == "progress" then frontendWorkWaitingWithin conversation Nothing else pure False
+          if kind == "progress" && published == [Only True]
+            then do
+              void $ execute "UPDATE task_notifications SET delivered_at=clock_timestamp() WHERE notification_id=?" (Only notification)
+              pure []
+            else
+              if waiting
+                then do
+                  now <- Record.databaseNow
+                  void $ execute "UPDATE task_notifications SET next_attempt_at=? WHERE notification_id=?" (addUTCTime 30 now, notification)
+                  pure []
+                else admitNotification notification conversation principal source
     _ -> pure []
   where
     admitNotification notification conversation principal source = do
@@ -372,31 +337,8 @@ monitorAdmissionErrorText = \case
   MonitorAdmission.MonitorHourlyBudget -> "monitor hourly admission budget"
   MonitorAdmission.InvalidDefinitionSnapshot -> "invalid monitor definition snapshot"
 
-monitorControl :: (WithConnection :> es, IOE :> es) => GroupId -> PrincipalId -> Bool -> Int64 -> Text -> Maybe Int -> Text -> Text -> Int -> Text -> Bool -> Eff es Value
-monitorControl (GroupId group) (PrincipalId actor) administrator ordinal operation revision objective overlap capacity pending cancelTasks =
-  case operation of
-    "cancel" -> runMonitorControl group actor administrator ordinal MonitorControl.CancelMonitor cancelTasks
-    "configure" -> case (revision, parseMonitorPolicies overlap pending) of
-      (Just expected, Just (coalesce, cancelPending)) -> runMonitorControl group actor administrator ordinal (MonitorControl.ConfigureMonitor expected objective coalesce capacity cancelPending Nothing) cancelTasks
-      _ -> pure (object ["error" .= ("invalid monitor definition" :: Text)])
-    _ -> pure (object ["error" .= ("invalid operation" :: Text)])
-
-parseMonitorPolicies :: Text -> Text -> Maybe (OverlapPolicy, PendingPolicy)
-parseMonitorPolicies overlap pending = (,) <$> parseOverlapPolicy overlap <*> parsePendingPolicy pending
-
-runMonitorControl :: (WithConnection :> es, IOE :> es) => Int64 -> Int64 -> Bool -> Int64 -> MonitorControl.MonitorCommand -> Bool -> Eff es Value
-runMonitorControl group actor administrator ordinal command cancelTasks = withTransaction $ do
-  result <- MonitorControl.controlMonitor group actor administrator ordinal command cancelTasks
-  pure $ either (\failure -> object ["error" .= monitorControlErrorText failure]) toJSON result
-
-monitorHistory :: (WithConnection :> es, IOE :> es) => GroupId -> Int64 -> Eff es Value
-monitorHistory group ordinal = maybe (object ["error" .= ("not found in this conversation" :: Text)]) toJSON <$> Overview.readMonitorHistory group ordinal
-
 taskResource :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Text -> Eff es Bool
 taskResource turn resource = withTransaction $ Authorization.reserveResourceWithin turn resource
-
-steerChild :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Int64 -> Text -> Eff es Value
-steerChild turn identifier note = renderControl <$> steerChildTyped turn identifier note
 
 steerChildTyped :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Int64 -> Text -> Eff es (Either State.TaskControlError State.TaskControlReceipt)
 steerChildTyped turn identifier note = withTransaction $ do
@@ -418,11 +360,6 @@ recordTaskProgress turn progress = case parseEither (withObject "task progress" 
   Left _ -> pure False
   Right summary -> Reporting.submitProgress turn summary
 
-finishRequest :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Text -> Text -> Eff es Bool
-finishRequest turn disposition reply = case State.parseDisposition disposition of
-  Nothing -> pure False
-  Just typed -> finishRequestTyped turn typed reply
-
 finishRequestTyped :: (WithConnection :> es, IOE :> es) => AgentTurnId -> State.RequestDisposition -> Text -> Eff es Bool
 finishRequestTyped = Reporting.submitRequest
 
@@ -438,16 +375,6 @@ monitorTaskProfile :: (WithConnection :> es, IOE :> es) => MonitorFireId -> Eff 
 monitorTaskProfile fire = do
   rows <- query "SELECT COALESCE(definition_snapshot->>'profile',task_profile) FROM monitor_fires JOIN monitors USING(monitor_id) WHERE fire_id=?" (Only fire)
   pure $ case rows of [Only profile] -> fromMaybe Research (parseProfile profile); _ -> Research
-
-configureMonitor :: (WithConnection :> es, IOE :> es) => GroupId -> PrincipalId -> Bool -> Int64 -> Int -> Text -> Text -> Int -> Text -> Text -> Bool -> Eff es Value
-configureMonitor (GroupId group) (PrincipalId actor) administrator ordinal revision objective overlap capacity pending profile changeOnly =
-  case (parseMonitorPolicies overlap pending, parseProfile profile) of
-    (Just (coalesce, cancelPending), Just capability) -> do
-      result <- runMonitorControl group actor administrator ordinal (MonitorControl.ConfigureMonitor revision objective coalesce capacity cancelPending (Just (capability, changeOnly))) False
-      pure $ case result of
-        Object fields -> Object (KeyMap.insert "profile" (String profile) (KeyMap.insert "change_only" (Bool changeOnly) fields))
-        value -> value
-    _ -> pure (object ["error" .= ("invalid monitor definition" :: Text)])
 
 nextTaskWakeMicros :: (WithConnection :> es, IOE :> es) => Eff es Int
 nextTaskWakeMicros = do

@@ -1,6 +1,6 @@
 -- | Agent assembly. The durable interpreter pins admission and its journal
 -- obligation to one transaction; the model/tool loop has no database access.
-module Max.Agent.Runtime (runAgent, runDurableAgent, durableExecutionAdmission) where
+module Max.Agent.Runtime (runDurableAgent, durableExecutionAdmission) where
 
 import Control.Monad (unless)
 import Effectful
@@ -23,18 +23,6 @@ import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Tasks (TaskCancelled (..))
 import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnRef (..))
-
-runAgent ::
-  (LLM :> es, Concurrent :> es, Log :> es, IOE :> es) =>
-  AgentLimits ->
-  (ToolContext -> Either ToolCatalogError (ToolRegistry (ToolOutput : ToolControl : es))) ->
-  Eff (Agent : es) a ->
-  Eff es a
-runAgent =
-  runAgentWith
-    (ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing))
-    (ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure []) (\_ -> pure "") (\_ _ _ _ -> pure ()))
-    (ExecutionInbox (\_ -> pure ""))
 
 runDurableAgent ::
   (LLM :> es, Concurrent :> es, Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>

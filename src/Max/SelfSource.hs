@@ -22,6 +22,7 @@ module Max.SelfSource
 where
 
 import Crypto.Hash.SHA256 qualified as SHA256
+import Data.Bifunctor (first)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.FileEmbed (embedDir, embedFile)
@@ -30,11 +31,10 @@ import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
-import Data.Bifunctor (first)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
-import System.FilePath (isPathSeparator, takeExtension, takeFileName, (</>))
 import Max.Util (tshow)
+import System.FilePath (isPathSeparator, takeExtension, takeFileName, (</>))
 
 data SourceMatch = SourceMatch
   { smPath :: !Text,
@@ -58,7 +58,7 @@ data SourceSlice = SourceSlice
 -- file-embed tracks existing files rather than directory membership, so adding
 -- an eligible file under one of these roots must accompany a byte change here;
 -- the source-bundle tests then prove that the new file shipped.
--- Includes the ADR008 health queries and migration 091 lease upgrade fixture.
+-- Includes the shared caption module and current prompt/scheduler fixtures.
 embeddedFiles :: [(FilePath, BS.ByteString)]
 embeddedFiles =
   prefixDirectory "src" $(embedDir "src")
@@ -66,6 +66,7 @@ embeddedFiles =
     <> prefixDirectory "runtime-cli" $(embedDir "runtime-cli")
     <> prefixDirectory "test" $(embedDir "test")
     <> prefixDirectory "test-db" $(embedDir "test-db")
+    <> prefixDirectory "test-support" $(embedDir "test-support")
     <> prefixDirectory "migrations" $(embedDir "migrations")
     <> prefixDirectory "docs" $(embedDir "docs")
     <> prefixDirectory "skills" $(embedDir "skills")
@@ -181,7 +182,8 @@ searchSource rawQuery rawPrefix requestedLimit = do
   where
     fileMatches foldedQuery (path, body) =
       let contentMatches =
-            take 3
+            take
+              3
               [ ( (lineRank foldedQuery foldedLine, path, lineNumber),
                   SourceMatch path lineNumber (T.take 700 line)
                 )

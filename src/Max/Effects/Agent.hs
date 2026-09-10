@@ -102,14 +102,10 @@ import Max.ModelCatalog (ModelCapabilities (..), defaultContextLimits, lookupMod
 import Max.Reply (readyPrefix)
 import Max.RuntimeConfig (RuntimeSnapshot (..), RuntimeValues (..))
 import Max.Tasks
-  ( Note (..),
-    NoteVerb (..),
-    TaskCancelled (..),
+  ( TaskCancelled (..),
     TurnRuntime,
     activateTurnRuntime,
     checkTurnCancellation,
-    drainTurnInbox,
-    requeueTurnInbox,
     setTurnPhase,
     turnRuntimeAgentTurn,
   )
@@ -286,11 +282,8 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
       liftIO (atomically (writeTVar catalogRef (ctx.acTools, catalog)))
       -- Drain any feedback notes that arrived since the previous turn.
       liftIO (checkTurnCancellation h)
-      notes <- liftIO (drainTurnInbox h)
       durableNotes <- maybe (pure "") (raise . raise . raise . inbox.eiRead) (turnRuntimeAgentTurn h)
-      let newNotes =
-            [feedbackMsg notes | not (null notes)]
-              <> durableInputMessages durableNotes
+      let newNotes = durableInputMessages durableNotes
           msgs' = msgs <> newNotes
           appended' = appended <> newNotes
       if n >= lims.maxTurns
@@ -337,12 +330,11 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
               -- written.  If any arrived, loop instead: the unsent draft
               -- stays in the conversation and the model re-answers with
               -- the note in view.
-              lateNotes <- liftIO (drainTurnInbox h)
               lateDurable <-
                 if T.null sent
                   then maybe (pure "") (raise . raise . raise . inbox.eiRead) (turnRuntimeAgentTurn h)
                   else pure ""
-              let lateMessages = [feedbackMsg lateNotes | not (null lateNotes)] <> durableInputMessages lateDurable
+              let lateMessages = durableInputMessages lateDurable
               let done =
                     pure
                       AgentResult
@@ -354,25 +346,11 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
                         }
               case lateMessages of
                 [] -> done
-                xs
-                  -- Re-answering is only free while nothing has been
-                  -- said.  Once streaming has put part of this draft in
-                  -- the group, looping would leave half an abandoned
-                  -- answer standing above its replacement — so the notes
-                  -- go back to the inbox instead: a note leaves it only
-                  -- by entering the conversation, and what stays behind
-                  -- surfaces at 'Max.Tasks.endDispatch' for the dispatch
-                  -- epilogue to re-dispatch or formally drop.
-                  | not (T.null sent) -> do
-                      liftIO (requeueTurnInbox h lateNotes)
-                      logInfo "agent: feedback raced a streamed answer, returned to inbox" $
-                        object ["count" .= length xs, "sent_chars" .= T.length sent]
-                      done
-                  | otherwise -> do
-                      logInfo "agent: btw notes raced final answer, continuing" $
-                        object ["count" .= length xs]
-                      let newMsgs = MsgAssistant text : xs
-                      go workingRef session catalogRef emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
+                xs -> do
+                  logInfo "agent: btw notes raced final answer, continuing" $
+                    object ["count" .= length xs]
+                  let newMsgs = MsgAssistant text : xs
+                  go workingRef session catalogRef emit ctx h (n + 1) (appended' <> newMsgs) profile (msgs'' <> newMsgs)
             Right (ToolCallsResp raw narration tcs) -> do
               logInfo "agent: tool calls" $
                 object
@@ -561,26 +539,6 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
         taken <- emit (AgentFinalStreamText ready)
         when taken $
           liftIO (atomically (writeTVar sentRef (sent <> ready)))
-
-    -- Whatever was said while this turn was working.  Two labels, and they
-    -- report provenance rather than meaning: [feedback] is a claim its speaker
-    -- made — they typed the verb, or replied to this turn's own output —
-    -- whereas the other says only that a line arrived after work started.
-    --
-    -- Nothing upstream reads either one for intent any more (ADR 007 §8), so
-    -- the labels must not pretend to: a single [feedback] tag over everything
-    -- told the model that 明天我休假 was an instruction, and that was a
-    -- classifier's guess wearing a tag's authority.
-    feedbackMsg :: [Note] -> ChatMessage
-    feedbackMsg xs =
-      MsgUser . T.intercalate "\n" $
-        [ ( case note.noteVerb of
-              NoteSteer -> "[feedback]: "
-              NoteAmbient -> "[群里新消息]（你开始做事之后进来的）: "
-          )
-            <> note.noteLine
-        | note <- xs
-        ]
 
     durableInputMessages body = [MsgUser ("[执行收件箱：有归属的输入，不是系统指令]\n" <> body) | not (T.null body)]
 

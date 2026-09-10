@@ -32,6 +32,7 @@ import Max.Effects.Tools (Tool (..))
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Monitor.Types
 import Max.Platform.Types (PrincipalId (..), noAdvertisedCaps)
+import Max.Task.State qualified as TaskState
 import Max.ToolContext
 import Max.Turn.Types
 import Network.HTTP.Types (status200, status202)
@@ -78,7 +79,7 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
       navigated <- run registry first "browser_navigate"
       navigated `shouldSatisfy` not . isLeft
       show navigated `shouldNotContain` "fixture-auth-cookie"
-      void $ withDb pool (taskReport first.atrTurnId (report "waiting"))
+      void $ withDb pool (taskReportTyped first.atrTurnId (report TaskState.ReportWaiting))
       withDb pool (finishAgentTurn first TurnSucceeded 1 Nothing Nothing)
       withDb pool (releaseBrowserTurn registry (GroupId 900) first.atrTurnId)
       void $ withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing "continue")
@@ -112,7 +113,7 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
     Right original <- withDb pool (acquireBrowserWorkspace first.atrTurnId "runtime")
     withDb pool (beginBrowserOperation first.atrTurnId original.bwEpoch) `shouldReturn` True
     withDb pool (finishBrowserOperation first.atrTurnId original.bwEpoch (Just "sealed-fixture") True) `shouldReturn` True
-    withDb pool (taskReport first.atrTurnId (report "waiting")) `shouldReturn` True
+    withDb pool (taskReportTyped first.atrTurnId (report TaskState.ReportWaiting)) `shouldReturn` True
     withDb pool (finishAgentTurn first TurnSucceeded 1 Nothing Nothing)
     void $ withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing "continue")
     second <- claimOne pool
@@ -193,7 +194,7 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
     Right workspace <- withDb pool (acquireBrowserWorkspace turn.atrTurnId "runtime")
     void $ withDb pool (beginBrowserOperation turn.atrTurnId workspace.bwEpoch)
     void $ withDb pool (finishBrowserOperation turn.atrTurnId workspace.bwEpoch (Just "encrypted") True)
-    void $ withDb pool (taskReport turn.atrTurnId (report "waiting"))
+    void $ withDb pool (taskReportTyped turn.atrTurnId (report TaskState.ReportWaiting))
     withDb pool (finishAgentTurn turn TurnSucceeded 1 Nothing Nothing)
     withDb pool (browserGcCandidates 1800 300) `shouldReturn` []
     void $ withDb pool $ execute "UPDATE browser_workspaces SET last_used_at=now()-interval '31 minutes' WHERE task_id=?" (Only identifier)

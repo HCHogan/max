@@ -2,7 +2,7 @@
 
 -- | Submit progress and terminal reports for the bound execution. It cannot
 -- select another attempt or mutate unrelated tasks.
-module Max.Effects.TaskExecution (TaskExecution, reportTask, reportProgress, reportRequest, reportRequestWithInputs, runTaskExecution) where
+module Max.Effects.TaskExecution (TaskExecution, reportTask, reportProgress, reportRequestWithInputs, runTaskExecution) where
 
 import Data.Text (Text)
 import Effectful
@@ -25,9 +25,6 @@ reportTask = send . ReportTask
 
 reportProgress :: (TaskExecution :> es) => Text -> Eff es (Either ExecutionFailure ())
 reportProgress = send . ReportProgress
-
-reportRequest :: (TaskExecution :> es) => RequestDisposition -> Text -> Eff es (Either ExecutionFailure ())
-reportRequest disposition reply = reportRequestWithInputs disposition reply []
 
 reportRequestWithInputs :: (TaskExecution :> es) => RequestDisposition -> Text -> [RequestInputOutcome] -> Eff es (Either ExecutionFailure ())
 reportRequestWithInputs disposition reply inputs = send (ReportRequest disposition reply inputs)

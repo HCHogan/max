@@ -12,8 +12,8 @@ import Database.PostgreSQL.Simple.FromRow (field)
 import Effectful.PostgreSQL (execute, query)
 import Helpers (requireJust, truncateAll, withDb, withDbLog)
 import Max.DB.AgentTurn
-import Max.DB.Connection (DbPool)
 import Max.DB.Codec (jsonField, queryRows)
+import Max.DB.Connection (DbPool)
 import Max.DB.Health (operationalChecks)
 import Max.DB.Task
 import Max.DB.Task.Progress
@@ -27,6 +27,7 @@ import Max.Platform.Types (PrincipalId (..))
 import Max.ReplySend
 import Max.Task.Progress
 import Max.Task.Query qualified as TaskView
+import Max.Task.State qualified as TaskState
 import Max.Turn.Types
 import OneBot.Types (GroupId (..))
 import Test.Hspec
@@ -110,9 +111,10 @@ spec pool = before_ (truncateAll pool) $ describe "versioned progress review" $ 
   it "serializes a request takeover racing a decision without granting the old writer" $ do
     (_, _, front) <- ready pool
     (userTurn, _, _) <- seed pool 900 2
-    (_, acquired) <- concurrently
-      (withDb pool (recordProgressDecision front.atrTurnId 1 useful))
-      (withDb pool (claimFrontend userTurn))
+    (_, acquired) <-
+      concurrently
+        (withDb pool (recordProgressDecision front.atrTurnId 1 useful))
+        (withDb pool (claimFrontend userTurn))
     acquired `shouldBe` True
     withDb pool (enqueueOutbound (draft front)) `shouldThrow` anyException
 
@@ -131,7 +133,7 @@ spec pool = before_ (truncateAll pool) $ describe "versioned progress review" $ 
     (_, execution, front) <- ready pool
     withDb pool (recordProgressDecision front.atrTurnId 1 useful) `shouldReturn` True
     void $ withDb pool (enqueueOutbound (draft front))
-    withDb pool (enqueueOutbound ((draft front) {turnOutputLink=Just (TurnOutputLink front.atrTurnId 1)})) `shouldThrow` anyException
+    withDb pool (enqueueOutbound ((draft front) {turnOutputLink = Just (TurnOutputLink front.atrTurnId 1)})) `shouldThrow` anyException
     withDb pool (loadProgressReview front.atrTurnId) `shouldReturn` Nothing
     withDb pool (finishAgentTurn front TurnCrashed 0 (Just "died after publication") Nothing)
     due pool
@@ -159,19 +161,21 @@ spec pool = before_ (truncateAll pool) $ describe "versioned progress review" $ 
     rows `shouldBe` [(1 :: Int, True)]
     withDb pool admitTaskNotification `shouldReturn` []
 
-  mapM_ (\operation -> it ("fences a publish decision after task " <> T.unpack operation) $ do
-    (task, _, front) <- ready pool
-    withDb pool (recordProgressDecision front.atrTurnId 1 useful) `shouldReturn` True
-    [Only actor] <- withDb pool $ query "SELECT owner_principal_id FROM durable_tasks WHERE task_id=?" (Only task)
-    void $ withDb pool (taskControl (GroupId 900) (PrincipalId actor) False task operation (Just 1) Nothing "changed objective")
-    withDb pool (progressReviewCurrent front.atrTurnId) `shouldReturn` False
-    withDb pool (enqueueOutbound (draft front)) `shouldThrow` anyException)
+  mapM_
+    ( \operation -> it ("fences a publish decision after task " <> T.unpack operation) $ do
+        (task, _, front) <- ready pool
+        withDb pool (recordProgressDecision front.atrTurnId 1 useful) `shouldReturn` True
+        [Only actor] <- withDb pool $ query "SELECT owner_principal_id FROM durable_tasks WHERE task_id=?" (Only task)
+        void $ withDb pool (taskControl (GroupId 900) (PrincipalId actor) False task operation (Just 1) Nothing "changed objective")
+        withDb pool (progressReviewCurrent front.atrTurnId) `shouldReturn` False
+        withDb pool (enqueueOutbound (draft front)) `shouldThrow` anyException
+    )
     ["cancel", "replace"]
 
   it "supersedes a decided progress notification when the task finishes, preserving the result path" $ do
     (_, execution, front) <- ready pool
     withDb pool (recordProgressDecision front.atrTurnId 1 useful) `shouldReturn` True
-    withDb pool (taskReport execution.atrTurnId (report "succeeded")) `shouldReturn` True
+    withDb pool (taskReportTyped execution.atrTurnId (report TaskState.ReportSucceeded)) `shouldReturn` True
     withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
     withDb pool (enqueueOutbound (draft front)) `shouldThrow` anyException
     withDb pool (finishAgentTurn front TurnAborted 0 Nothing Nothing)
@@ -184,9 +188,9 @@ spec pool = before_ (truncateAll pool) $ describe "versioned progress review" $ 
     [Only source] <- withDb pool $ query "SELECT canonical_message_id FROM messages ORDER BY canonical_message_id LIMIT 1" ()
     output <- newTurnOutputContext front
     let text = "[reply#" <> T.pack (show (source :: Int64)) <> "] [mention#" <> T.pack (show (principal :: Int64)) <> ": Alice] 新证据\n\n正在验证"
-        target = ReplyTarget (GroupId 900) [("Alice",PrincipalId principal)] Nothing False True True False False (Just output)
+        target = ReplyTarget (GroupId 900) [("Alice", PrincipalId principal)] Nothing False True True False False (Just output)
     withDb pool (recordProgressDecision front.atrTurnId 1 (PublishProgress text "useful")) `shouldReturn` True
-    published <- withDbLog pool $ runOutbound $ sendAndPersistReply target (freshBudget {sbChunksLeft=1}) text
+    published <- withDbLog pool $ runOutbound $ sendAndPersistReply target (freshBudget {sbChunksLeft = 1}) text
     length published.committed `shouldBe` 1
     published.failure `shouldBe` Nothing
     rows <- withDb pool $ queryRows ((,) <$> jsonField <*> field) "SELECT canonical_content::text,reply_to_canonical_message_id FROM messages WHERE agent_turn_id=?" (Only front.atrTurnId)

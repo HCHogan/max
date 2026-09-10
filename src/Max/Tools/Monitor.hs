@@ -22,15 +22,13 @@ import Max.Effects.Tools (Tool (..))
 import Max.IR (MediaKind (..))
 import Max.Monitor.Control
 import Max.Monitor.Policy (parseOverlapPolicy)
-import Max.Monitor.Schedule (nextCronFire)
+import Max.Monitor.Schedule (TimePolicy (..), resolveTimeSpec)
 import Max.Monitor.Types
 import Max.Monitor.View (ArmedMonitor (..))
 import Max.Platform.Types (PrincipalId (..))
 import Max.Task.Types (parseProfile)
 import Max.Time (fmtDateHM)
-import Max.Time.Parse (parseTimeArg)
 import Max.Tools.Schema (boolParam, boundedIntegerParam, enumParam, integerParam, noArguments, stringParam, toolObject)
-import System.Cron.Parser (parseCronSchedule)
 
 monitorToolsFor ::
   (MonitorQuery :> es, MonitorControl :> es, Reader UTCTime :> es) =>
@@ -131,21 +129,19 @@ armMonitorTool tz =
         <*> (fromMaybe 100 <$> o .:? "max_fires")
 
 resolveTime :: TimeZone -> ArmArgs -> UTCTime -> Either Text (Maybe Text, UTCTime)
-resolveTime tz args now = case (args.aaInMinutes, args.aaAt, args.aaCron) of
-  (Just minutes, Nothing, Nothing)
-    | minutes <= 0 -> Left "in_minutes 必须是正整数"
-    | minutes > 2635200 -> Left "in_minutes 太大了（上限约五年）"
-    | otherwise -> Right (Nothing, addUTCTime (fromIntegral (minutes * 60)) now)
-  (Nothing, Just absolute, Nothing) -> do
-    fireAt <- parseTimeArg tz absolute
-    if fireAt <= now then Left "指定的时间已经过去了" else Right (Nothing, fireAt)
-  (Nothing, Nothing, Just expression) -> case parseCronSchedule (T.strip expression) of
-    Left err -> Left ("cron 表达式无效：" <> T.pack err)
-    Right schedule -> case nextCronFire tz schedule now of
-      Nothing -> Left "这个 cron 表达式算不出下一次触发时间"
-      Just fireAt -> Right (Just (T.strip expression), fireAt)
-  (Nothing, Nothing, Nothing) -> Left "time trigger 必须指定 in_minutes / at / cron 之一"
-  _ -> Left "in_minutes / at / cron 只能给一个"
+resolveTime tz args now =
+  resolveTimeSpec
+    ( TimePolicy
+        2635200
+        "in_minutes 太大了（上限约五年）"
+        "time trigger 必须指定 in_minutes / at / cron 之一"
+        "in_minutes / at / cron 只能给一个"
+    )
+    tz
+    now
+    args.aaInMinutes
+    args.aaAt
+    args.aaCron
 
 ledgerSpec :: ArmArgs -> Either Text LedgerMatchSpec
 ledgerSpec args = do

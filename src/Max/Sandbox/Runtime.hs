@@ -25,7 +25,6 @@ module Max.Sandbox.Runtime
 
     -- * Copy
     runCopyToContainer,
-    runCopyFromContainer,
     readSandboxArtifact,
     readBoundedArtifact,
 
@@ -153,8 +152,12 @@ runRun ::
   Text ->
   IO (Either Text Text)
 runRun name profile volume network = do
-  result <- try @IOException $ readProcessWithExitCode "max-runtime"
-    ["create", T.unpack name, T.unpack profile, T.unpack volume, T.unpack network] ""
+  result <-
+    try @IOException $
+      readProcessWithExitCode
+        "max-runtime"
+        ["create", T.unpack name, T.unpack profile, T.unpack volume, T.unpack network]
+        ""
   pure $ case result of
     Left err -> Left ("sandbox startup failed: " <> T.pack (show err))
     Right (ExitSuccess, out, _) -> Right (T.strip (T.pack out))
@@ -371,8 +374,12 @@ runExec container networkMode cmd timeoutSecs = do
 runPreparePackages :: Text -> [Text] -> Int -> IO (Either Text [Text])
 runPreparePackages _ [] _ = pure (Right [])
 runPreparePackages container packages timeoutSecs = do
-  result <- try @IOException $ readProcessWithExitCode "max-runtime"
-    (["build", T.unpack container, show timeoutSecs] <> map T.unpack packages) ""
+  result <-
+    try @IOException $
+      readProcessWithExitCode
+        "max-runtime"
+        (["build", T.unpack container, show timeoutSecs] <> map T.unpack packages)
+        ""
   pure $ case result of
     Left err -> Left ("package preparation failed: " <> T.pack (show err))
     Right (ExitSuccess, out, _) ->
@@ -380,9 +387,12 @@ runPreparePackages container packages timeoutSecs = do
        in if not (null paths) && all validPreparedStorePath paths
             then Right paths
             else Left "package preparation returned an invalid or empty store-path list"
-    Right (ExitFailure code, out, err) -> Left $
-      "package preparation exited " <> T.pack (show code) <> ": "
-        <> T.takeEnd 4000 (stripAnsi (T.pack (out <> "\n" <> err)))
+    Right (ExitFailure code, out, err) ->
+      Left $
+        "package preparation exited "
+          <> T.pack (show code)
+          <> ": "
+          <> T.takeEnd 4000 (stripAnsi (T.pack (out <> "\n" <> err)))
 
 -- | Search the same host-owned nixpkgs pin used by package preparation.
 runSearch :: Text -> Text -> IO (Either Text Text)
@@ -714,7 +724,7 @@ runCopyToContainer container hostPath containerPath = do
     try @IOException $
       readProcessWithExitCode
         "max-runtime"
-        [ "copy-to", T.unpack container, hostPath, T.unpack containerPath ]
+        ["copy-to", T.unpack container, hostPath, T.unpack containerPath]
         ""
   pure $ case res of
     Left e -> Left ("sandbox copy failed: " <> T.pack (show e))
@@ -775,31 +785,6 @@ readBoundedArtifact limit handle = do
     if BS.length bytes > max 0 limit
       then Left "sandbox artifact exceeds byte limit"
       else Right bytes
-
--- | @sandbox copy CONTAINER:CONTAINER_PATH HOST_PATH@.  Used by
--- @send_image_from_sandbox@ / @send_file_from_sandbox@ to materialise
--- a sandbox artifact onto the host so we can read or stage it.
-runCopyFromContainer ::
-  Text -> -- container name
-  Text -> -- container path
-  FilePath -> -- host path (destination file or dir)
-  IO (Either Text ())
-runCopyFromContainer container containerPath hostPath = do
-  res <-
-    try @IOException $
-      readProcessWithExitCode
-        "max-runtime"
-        [ "copy-from", T.unpack container, T.unpack containerPath, hostPath ]
-        ""
-  pure $ case res of
-    Left e -> Left ("sandbox copy failed: " <> T.pack (show e))
-    Right (ExitSuccess, _, _) -> Right ()
-    Right (ExitFailure c, _, err) ->
-      Left $
-        "sandbox copy exited "
-          <> T.pack (show c)
-          <> ": "
-          <> T.strip (T.pack err)
 
 --------------------------------------------------------------------------------
 -- Helpers.

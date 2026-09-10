@@ -3,23 +3,21 @@ module Max.DB.MonitorSpec (spec) where
 import Control.Concurrent (newEmptyMVar, takeMVar, tryPutMVar)
 import Control.Concurrent.Async (async, concurrently, wait)
 import Control.Monad (forM, forM_, (>=>))
+import Data.Either (isRight, rights)
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (catMaybes, isJust)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, diffUTCTime, getCurrentTime)
 import Database.PostgreSQL.Simple (Only (..))
-import Effectful (liftIO)
-import Effectful.PostgreSQL (execute, query)
+import Effectful (Eff, IOE, liftIO, (:>))
+import Effectful.PostgreSQL (WithConnection, execute, query)
 import Helpers (insertRawMessage, insertRawMessageWithClass, testTime, truncateAll, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
-  ( AgentTurnRecovery (..),
-    AgentTurnTerminal (TurnSucceeded),
-    ReclaimedTurns (..),
+  ( AgentTurnTerminal (TurnSucceeded),
     finishAgentTurn,
-    reclaimInterruptedTurns,
     startAgentTurn,
   )
 import Max.DB.Connection (DbPool)
@@ -28,26 +26,28 @@ import Max.DB.Monitor
     ElaboratedMonitorFire (..),
     MonitorArmError (..),
     TimeMonitor (..),
-    admitElaboratedMonitorTurn,
     admitDueTimeMonitors,
     armCannedTimeMonitor,
     armElaboratedTimeMonitor,
     armLedgerMatchMonitor,
-    cancelMonitor,
     claimCannedMonitorFires,
     claimElaboratedMonitorFires,
     completeCannedMonitorFire,
     listArmedMonitors,
     listCannedTimeMonitors,
-    loadAdmittedMonitorFire,
     lookupMonitorFireOutput,
     nextMonitorDeadline,
     reclaimExpiredMonitorFireClaims,
     recordMonitorFireFailure,
   )
+import Max.DB.Monitor.Admission
 import Max.DB.Notify (WorkChannel (MonitorWork), claimOrWaitUntil)
-import Max.IR (Body (..), Node (NText, NMention))
+import Max.DB.Task qualified as Task
+import Max.DB.Task.MonitorControl qualified as Control
+import Max.DB.Transaction (withTransaction)
+import Max.IR (Body (..), Node (NMention, NText))
 import Max.Monitor (deliveryBody)
+import Max.Monitor.Control qualified as ControlTypes
 import Max.Monitor.Types
   ( LedgerMatchSpec (..),
     MonitorFireId,
@@ -62,7 +62,7 @@ import Max.Platform.Store
     recordInternalMessage,
   )
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..))
-import Max.Turn.Types (AgentTurnId (..), AgentTurnRef (..))
+import Max.Turn.Types (AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
 import System.Timeout qualified
 import Test.Hspec
@@ -115,10 +115,10 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     otherAsker <- seedConversation pool 5002 43 8
     other <- withDb pool (arm otherAsker 43 "other" (addUTCTime 180 now))
     other.mrMonitorOrdinal `shouldBe` MonitorOrdinal 1
-    withDb pool (cancelMonitor (conversationScopeFor (GroupId 43)) (MonitorOrdinal 2))
-      `shouldReturn` False
-    withDb pool (cancelMonitor (conversationScopeFor (GroupId 42)) (MonitorOrdinal 2))
-      `shouldReturn` True
+    withDb pool (withTransaction (Control.controlMonitor 43 otherAsker False 2 Control.CancelMonitor False))
+      `shouldReturn` Left ControlTypes.MonitorNotFound
+    withDb pool (withTransaction (Control.controlMonitor 42 asker False 2 Control.CancelMonitor False))
+      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True)
 
     -- Admission and cancellation serialize on the monitor row. Whichever
     -- wins, cancellation cannot leave a live fire behind.
@@ -127,8 +127,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     (_, cancelled) <-
       concurrently
         (withDb pool (admitDueTimeMonitors now))
-        (withDb pool (cancelMonitor (conversationScopeFor (GroupId 44)) raced.mrMonitorOrdinal))
-    cancelled `shouldBe` True
+        (withDb pool (withTransaction (Control.controlMonitor 44 racedAsker False raced.mrMonitorOrdinal.unMonitorOrdinal Control.CancelMonitor False)))
+    cancelled `shouldBe` Right (ControlTypes.MonitorControlReceipt 1 False True)
     active <-
       withDb pool $
         query
@@ -236,8 +236,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     parked.tmDeliveryAttempts `shouldBe` 5
     parked.tmParkedAt `shouldSatisfy` isJust
     parked.tmLastError `shouldBe` Just "failure 5"
-    withDb pool (cancelMonitor (conversationScopeFor (GroupId 42)) monitor.mrMonitorOrdinal)
-      `shouldReturn` True
+    withDb pool (withTransaction (Control.controlMonitor 42 asker False monitor.mrMonitorOrdinal.unMonitorOrdinal Control.CancelMonitor False))
+      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True)
 
   it "reconciles a published but unacknowledged occurrence when cancel wins" $ do
     truncateAll pool
@@ -259,8 +259,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
               turnOutputLink = Nothing,
               monitorFireId = Just claimed.cmfFireId
             }
-    withDb pool (cancelMonitor (conversationScopeFor (GroupId 42)) monitor.mrMonitorOrdinal)
-      `shouldReturn` True
+    withDb pool (withTransaction (Control.controlMonitor 42 asker False monitor.mrMonitorOrdinal.unMonitorOrdinal Control.CancelMonitor False))
+      `shouldReturn` Right (ControlTypes.MonitorControlReceipt 1 False True)
     withDb
       pool
       ( completeCannedMonitorFire
@@ -322,8 +322,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     armingTurn <- withDb pool (startAgentTurn (GroupId 61) (CanonicalMessageId 1) (PrincipalId principal))
     now <- getCurrentTime
     monitor <-
-      requireRight "arm ledger monitor" =<<
-        withDb
+      requireRight "arm ledger monitor"
+        =<< withDb
           pool
           ( armLedgerMatchMonitor
               (GroupId 61)
@@ -389,8 +389,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     armingTurn <- withDb pool (startAgentTurn (GroupId 62) (CanonicalMessageId 1) (PrincipalId principal))
     now <- getCurrentTime
     monitor <-
-      requireRight "arm concurrent ledger monitor" =<<
-        withDb
+      requireRight "arm concurrent ledger monitor"
+        =<< withDb
           pool
           ( armLedgerMatchMonitor
               (GroupId 62)
@@ -415,38 +415,31 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
         claimElaboratedMonitorFires "admitter-a" now 60 10
     withDb pool (claimElaboratedMonitorFires "admitter-b" now 60 10)
       `shouldReturn` []
-    admitted <- requireJustIO "admitted monitor turn" =<< withDb pool (admitElaboratedMonitorTurn "admitter-a" claimed.emfFireId Nothing)
-    withDb pool (admitElaboratedMonitorTurn "admitter-a" claimed.emfFireId Nothing)
-      `shouldReturn` Nothing
-    withDb pool (loadAdmittedMonitorFire claimed.emfFireId)
-      `shouldReturn` Just claimed {emfClaimOwner = Nothing, emfAdmittedTurn = Just admitted}
-
-    edges <-
+    admitted@(MonitorTaskAdmitted identifier) <- requireRight "admitted monitor task" =<< withDb pool (admitFire "admitter-a" claimed Nothing)
+    withDb pool (admitFire "admitter-a" claimed Nothing) `shouldReturn` Right admitted
+    -- Admission persists work and its provenance before allocating a worker.
+    provenance <-
       withDb pool $
         query
-          "SELECT from_turn_id, to_turn_id, edge_kind FROM turn_edges WHERE from_turn_id=?"
-          (Only admitted.atrTurnId)
-    (edges :: [(Int64, Int64, Text)])
-      `shouldBe` [(unTurn admitted, unTurn armingTurn, "fork-from")]
-
-    firstBoot <- withDb pool (reclaimInterruptedTurns "monitor-boot-a")
-    firstBoot.rrRecoveries
-      `shouldBe`
-        [ AgentTurnRecovery
-            admitted
-            (GroupId 62)
-            claimed.emfTriggerCanonicalMessage
-            (Just claimed.emfFireId)
-        ]
-    withDb pool (reclaimInterruptedTurns "monitor-boot-a")
-      `shouldReturn` ReclaimedTurns 0 0 0 []
-    secondBoot <- withDb pool (reclaimInterruptedTurns "monitor-boot-b")
-    map (.atrRecoveryTurn) secondBoot.rrRecoveries `shouldBe` [admitted]
-    turnCount pool 62 `shouldReturn` 2
+          "SELECT source_turn_id,monitor_fire_id FROM durable_tasks WHERE task_id=?"
+          (Only identifier)
+    provenance `shouldBe` [(armingTurn.atrTurnId, claimed.emfFireId)]
+    turnCount pool 62 `shouldReturn` 1
+    [first] <- withDb pool (Task.claimTask "monitor-worker-a")
+    Just execution <- withDb pool (Task.loadTaskExecution first)
+    execution.teTaskId `shouldBe` identifier
+    withDb pool (Task.claimTask "monitor-worker-b") `shouldReturn` []
+    _ <- withDb pool $ execute "UPDATE task_attempts SET lease_until=now()-interval '1 second' WHERE turn_id=?" (Only first)
+    [resumed] <- withDb pool (Task.claimTask "monitor-worker-b")
+    resumed `shouldNotBe` first
+    Just recovered <- withDb pool (Task.loadTaskExecution resumed)
+    recovered.teTaskId `shouldBe` identifier
+    withDb pool (admitFire "admitter-a" claimed Nothing) `shouldReturn` Right admitted
 
     otherPrincipal <- seedConversation pool 6104 63 703
     otherTurn <- withDb pool (startAgentTurn (GroupId 63) (CanonicalMessageId 4) (PrincipalId otherPrincipal))
-    withDb pool
+    withDb
+      pool
       (execute "UPDATE monitor_fires SET admitted_turn_id=? WHERE fire_id=?" (otherTurn.atrTurnId, claimed.emfFireId))
       `shouldThrow` anyException
 
@@ -497,8 +490,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     budgetPrincipal <- seedConversation pool 6301 65 705
     budgetArming <- withDb pool (startAgentTurn (GroupId 65) (CanonicalMessageId 2) (PrincipalId budgetPrincipal))
     budgetMonitor <-
-      requireRight "arm budget ledger" =<<
-        withDb
+      requireRight "arm budget ledger"
+        =<< withDb
           pool
           ( armLedgerMatchMonitor
               (GroupId 65)
@@ -517,7 +510,7 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
       insertRawMessage pool messageId 65 705 99 now Nothing "budget-hit"
     fireCount pool budgetMonitor `shouldReturn` 21
     claimed <- withDb pool (claimElaboratedMonitorFires "budget-worker" now 60 50)
-    admitted <- catMaybes <$> mapM (\fire -> withDb pool (admitElaboratedMonitorTurn "budget-worker" fire.emfFireId Nothing)) claimed
+    admitted <- rights <$> mapM (\fire -> withDb pool (admitFire "budget-worker" fire Nothing)) claimed
     length admitted `shouldBe` 20
     budgetStates pool budgetMonitor `shouldReturn` [(20, 1)]
 
@@ -525,8 +518,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     withDb pool (admitDueTimeMonitors now) `shouldReturn` 1
     [clockFire] <- withDb pool (claimElaboratedMonitorFires "clock-worker" now 60 10)
     clockFire.emfMonitor `shouldBe` oneShot
-    clockTurn <- withDb pool (admitElaboratedMonitorTurn "clock-worker" clockFire.emfFireId Nothing)
-    clockTurn `shouldSatisfy` isJust
+    clockTurn <- withDb pool (admitFire "clock-worker" clockFire Nothing)
+    clockTurn `shouldSatisfy` isRight
     monitorState pool oneShot `shouldReturn` [("fired", 1)]
 
     _ <-
@@ -536,8 +529,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
           \ WHERE monitor_id=? AND admission_state='dispatched'"
           (Only budgetMonitor.mrMonitorId)
     [released] <- withDb pool (claimElaboratedMonitorFires "budget-worker-2" now 60 10)
-    finalTurn <- withDb pool (admitElaboratedMonitorTurn "budget-worker-2" released.emfFireId Nothing)
-    finalTurn `shouldSatisfy` isJust
+    finalTurn <- withDb pool (admitFire "budget-worker-2" released Nothing)
+    finalTurn `shouldSatisfy` isRight
     budgetStates pool budgetMonitor `shouldReturn` [(21, 0)]
 
   it "expires world watchers at TTL/max-fire boundaries and quietly closes a missing arming principal" $ do
@@ -546,8 +539,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     armingTurn <- withDb pool (startAgentTurn (GroupId 66) (CanonicalMessageId 1) (PrincipalId principal))
     now <- getCurrentTime
     maxOne <-
-      requireRight "arm max-one monitor" =<<
-        withDb
+      requireRight "arm max-one monitor"
+        =<< withDb
           pool
           ( armLedgerMatchMonitor
               (GroupId 66)
@@ -566,8 +559,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
       `shouldReturn` 1
 
     ttlMonitor <-
-      requireRight "arm expired TTL monitor" =<<
-        withDb
+      requireRight "arm expired TTL monitor"
+        =<< withDb
           pool
           ( armLedgerMatchMonitor
               (GroupId 66)
@@ -584,8 +577,8 @@ spec pool = describe "Max.DB.Monitor TimeCron + canned" $ do
     monitorReason pool ttlMonitor `shouldReturn` [("expired", Just "ttl_expired", 0)]
 
     ownerless <-
-      requireRight "arm ownerless monitor" =<<
-        withDb
+      requireRight "arm ownerless monitor"
+        =<< withDb
           pool
           ( armElaboratedTimeMonitor
               (GroupId 66)
@@ -715,5 +708,14 @@ armTimeFor pool principal armingTurn now =
         (Map.singleton "context_search" "grant-a")
     )
 
-unTurn :: AgentTurnRef -> Int64
-unTurn (AgentTurnRef (AgentTurnId turnId) _) = turnId
+-- The current admission boundary validates the claimed fire's seed and frozen
+-- authority, and allocates a durable task rather than a frontend turn.
+admitFire :: (WithConnection :> es, IOE :> es) => Text -> ElaboratedMonitorFire -> Maybe UTCTime -> Eff es (Either MonitorAdmissionError MonitorAdmission)
+admitFire owner fire next =
+  withTransaction $
+    admitMonitorTaskWithin
+      owner
+      fire.emfFireId
+      next
+      Map.empty
+      (maybe 0 (.unCanonicalMessageId) fire.emfSeedCanonicalMessage)

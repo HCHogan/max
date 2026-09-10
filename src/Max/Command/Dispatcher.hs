@@ -24,11 +24,11 @@ import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, query)
 import Effectful.Reader.Dynamic (Reader, ask)
 import Max.Browser.Registry (destroyBrowsersForGroup)
-import Max.DB.Browser (revokeConversationBrowsers)
 import Max.Command.Help (helpText)
 import Max.Command.Types
 import Max.Command.Version (readHostUptime, readOsPretty, versionCard)
 import Max.ConversationScope (conversationScopeFor)
+import Max.DB.Browser (revokeConversationBrowsers)
 import Max.DB.History (HistoryItem (..), bestName, fetchMessageInScope, fetchMessagesByIdsInScope)
 import Max.DB.Stickers qualified as Stickers
 import Max.Env (BotEnv (..))
@@ -49,9 +49,9 @@ import Max.MemoryStore
     userMemoryNamespace,
   )
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, lookupModelCapabilities, modelProfileNames)
-import Max.Sandbox.Runtime (ExecResult (..))
-import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
 import Max.Platform.Types (PrincipalId (..))
+import Max.Sandbox.Registry (SandboxEntry (..), SandboxId (..), destroySandboxesForGroup, ensureSandbox, execInSandbox)
+import Max.Sandbox.Runtime (ExecResult (..))
 import Max.Session (Session (..), SessionHandle, updateSession)
 import Max.Session qualified as Session
 import Max.Skills (skillsForGroup)
@@ -566,8 +566,11 @@ formatExecResult er =
         ]
           <> [ "[输出已截断"
                  <> maybe "" ("，输出文件在 " <>) er.erSpillPath
-                 <> if er.erSpillTruncated then "，文件也达到安全上限" else ""
-                 <> "]"
+                 <> if er.erSpillTruncated
+                   then "，文件也达到安全上限"
+                   else
+                     ""
+                       <> "]"
              | er.erTruncated
              ]
       body = filter (not . T.null) [out] <> stderrPart <> statusPart
@@ -620,7 +623,6 @@ formatOne now callerGid ti =
     ]
       <> [triggerTag | Just _ <- [ti.tiTrigger]]
       <> [groupTag | Just _ <- [callerGid]]
-      <> [pendingTag | ti.tiPending > 0]
       <> [idleTag | idleSeconds >= idleWorthSaying]
   where
     GroupId raw = ti.tiGroup
@@ -630,7 +632,6 @@ formatOne now callerGid ti =
     -- rather than at whatever is newest.
     triggerTag = "on=#" <> maybe "" (T.pack . show) ti.tiTrigger
     groupTag = "group=" <> tshow raw
-    pendingTag = "fb=" <> tshow ti.tiPending
     -- Silence rather than age: a turn ten minutes into honest work reads the
     -- same as a wedged one under 'ageText', and only this tells them apart.
     idleTag = "idle=" <> ageText now ti.tiProgressAt

@@ -135,7 +135,7 @@ taskToolsFor context =
                 object
                   [ "type" .= ("array" :: Text),
                     "maxItems" .= (256 :: Int),
-                    "description" .= ("可选：本次明确处理的前台收件箱输入。每项使用收件箱提供的 message_id，逐项声明处置；未列出的输入会交给下一轮，读过不等于完成。" :: Text),
+                    "description" .= ("可选：只列执行期间新收到、已读入前台收件箱的追加消息，使用收件箱提供的 message_id。原始请求由顶层 disposition 处理，无追加输入时省略 inputs 或传 []；若重复列出原始请求，其 disposition 必须与顶层一致。未列出的追加消息会交给下一轮，读过不等于完成。" :: Text),
                     "items"
                       .= toolObject
                         [("message_id", integerParam "收件箱里的 canonical message_id"), ("disposition", enumParam ["answered", "waiting", "declined"] "这条输入的真实处置")]

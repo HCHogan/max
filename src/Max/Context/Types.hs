@@ -28,14 +28,14 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Time (TimeZone, UTCTime)
 import Max.Context (ContextBudget, ContextTrace)
-import Max.DB.Files (FileRecord)
-import Max.DB.History (HistoryItem)
 import Max.Dispatch (DispatchMessage)
-import Max.EpisodeStore (EpisodeHandle)
+import Max.Episode.Types (EpisodeHandle)
+import Max.File.Types (FileRecord)
+import Max.History.Types (HistoryItem)
 import Max.LLM.Types (ChatMessage)
-import Max.MemoryStore (MemoryItem)
+import Max.Memory.Types (MemoryItem)
 import Max.Platform.Types (AdvertisedCaps)
-import Max.Session (Session)
+import Max.Session.Types (Session)
 
 -- | What one continuation contributes to a prompt.  The digest view is the
 -- always-available floor; segments and their covered ids are present only

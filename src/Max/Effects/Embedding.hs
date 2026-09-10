@@ -9,7 +9,6 @@ module Max.Effects.Embedding
     EmbeddingSpace (..),
     EmbeddingFaultKind (..),
     EmbeddingFault (..),
-    runEmbedding,
     runRuntimeEmbedding,
     runEmbeddingWith,
     embedBatch,
@@ -52,13 +51,6 @@ data Embedding :: Effect where
   GetEmbeddingSpace :: Embedding m (Maybe EmbeddingSpace)
 
 type instance DispatchOf Embedding = Dynamic
-
-runEmbedding ::
-  (IOE :> es) =>
-  Maybe EmbedClient ->
-  Eff (Embedding : es) a ->
-  Eff es a
-runEmbedding mClient = runRuntimeEmbedding (pure mClient)
 
 -- | Assembly supplies a client resolver evaluated once per operation, so a
 -- dispatch can retain its leased generation while the effect knows only the

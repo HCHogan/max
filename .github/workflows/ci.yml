@@ -227,8 +227,8 @@ jobs:
 
       - uses: cachix/install-nix-action@v31
 
-      - name: Build the flake package
-        run: nix build .#max --print-out-paths
+      - name: Build and verify runtime and developer packages
+        run: nix build .#max .#max-tools .#checks.x86_64-linux.package-contents --print-out-paths
 
   sandbox-network-test:
     runs-on: ubuntu-latest

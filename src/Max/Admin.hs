@@ -1026,8 +1026,7 @@ taskJson ti =
       "trigger_message_id" .= ti.tiTrigger,
       "kind" .= ti.tiKind,
       "started_at" .= ti.tiStartedAt,
-      "progress_at" .= ti.tiProgressAt,
-      "pending_notes" .= ti.tiPending
+      "progress_at" .= ti.tiProgressAt
     ]
 
 -- | Body of @POST /api/skills@.

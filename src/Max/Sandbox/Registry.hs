@@ -20,9 +20,7 @@
 module Max.Sandbox.Registry
   ( -- * Registry
     SandboxRegistry,
-    newSandboxRegistry,
     newDurableSandboxRegistry,
-    reapStaleSandboxes,
     reconcileSandboxes,
     gcExpiredSandboxes,
 
@@ -42,7 +40,6 @@ module Max.Sandbox.Registry
     writeSandboxFile,
     destroySandbox,
     destroySandboxesForGroup,
-    destroyAllSandboxes,
 
     -- * Naming
     namePrefix,
@@ -66,9 +63,9 @@ import Database.PostgreSQL.Simple (Only (..), execute, query, withTransaction)
 import Max.Concurrent.Lock (withLock)
 import Max.DB.Connection (DbPool, withConn)
 import Max.Sandbox.Runtime
-  ( RuntimeContainerStatus (..),
+  ( ExecResult (..),
+    RuntimeContainerStatus (..),
     RuntimePresence (..),
-    ExecResult (..),
     inspectContainerPolicy,
     inspectContainerStatus,
     inspectVolumePresence,
@@ -92,7 +89,7 @@ import OneBot.Types (GroupId (..))
 namePrefix :: Text
 namePrefix = "max-sb-"
 
--- | Short, human-typeable id like @s7@.  Counter is process-wide.
+-- | Short, human-typeable id like @s7@.  Allocated by the durable database sequence.
 newtype SandboxId = SandboxId {unSandboxId :: Text}
   deriving stock (Show, Eq, Ord)
 
@@ -109,30 +106,15 @@ data SandboxEntry = SandboxEntry
   }
 
 data SandboxRegistry = SandboxRegistry
-  { srNextId :: !(TVar Int),
-    srEntries :: !(TVar (Map SandboxId SandboxEntry)),
-    srDbPool :: !(Maybe DbPool)
+  { srEntries :: !(TVar (Map SandboxId SandboxEntry)),
+    srDbPool :: !DbPool
   }
-
-newSandboxRegistry :: IO SandboxRegistry
-newSandboxRegistry =
-  SandboxRegistry <$> newTVarIO 0 <*> newTVarIO Map.empty <*> pure Nothing
 
 newDurableSandboxRegistry :: DbPool -> IO SandboxRegistry
 newDurableSandboxRegistry pool = do
-  registry <- SandboxRegistry <$> newTVarIO 0 <*> newTVarIO Map.empty <*> pure (Just pool)
+  registry <- SandboxRegistry <$> newTVarIO Map.empty <*> pure pool
   reconcileSandboxes registry
   pure registry
-
--- | Best-effort cleanup of containers/volumes from a previous run
--- that crashed before its bracket released.  Run once at startup,
--- before any sandboxes are created.
-reapStaleSandboxes :: IO ()
-reapStaleSandboxes = do
-  cs <- listContainersByPrefix namePrefix
-  for_ cs runRm
-  vs <- listVolumesByPrefix namePrefix
-  for_ vs runVolumeRm
 
 data PersistedSandbox = PersistedSandbox
   { psId :: !Int64,
@@ -152,53 +134,51 @@ data PersistedSandbox = PersistedSandbox
 -- in Max's namespace with no database owner are pre-E0/orphan resources and
 -- are reclaimed.
 reconcileSandboxes :: SandboxRegistry -> IO ()
-reconcileSandboxes reg = case reg.srDbPool of
-  Nothing -> pure ()
-  Just pool -> do
-    now <- getCurrentTime
-    rows <- loadPersisted pool
-    containers <- Set.fromList <$> listContainersByPrefix namePrefix
-    volumes <- Set.fromList <$> listVolumesByPrefix namePrefix
-    let knownContainers = Set.fromList (map (.psContainer) rows)
-        knownVolumes = Set.fromList (map (.psVolume) rows)
-    for_ rows $ \row ->
-      if row.psExpiresAt <= now
-        then void (destroyPersisted reg row)
-        else do
-          -- Namespace listings are only an orphan-cleanup optimization.  A
-          -- persisted row is destroyed only after a per-resource inspection
-          -- positively reports absence; daemon/CLI failure is not absence.
-          volumeState <- inspectVolumePresence row.psVolume
-          case volumeState of
-            RuntimeAbsent -> do
-              runRm row.psContainer
-              atomically $ modifyTVar' reg.srEntries (Map.delete (SandboxId row.psHandle))
-              markSandboxDestroyed pool row.psId "durable volume missing during boot reconciliation"
-            RuntimeUnavailable detail ->
-              markSandboxUnknown pool row.psId detail
-            RuntimePresent -> do
-              containerState <- inspectContainerStatus row.psContainer
-              case containerState of
-                RuntimeContainerRunning -> do
-                  currentPolicy <- inspectContainerPolicy row.psContainer
-                  if currentPolicy && persistedPolicyCurrent row
-                    then adoptPersisted reg pool row
-                    else rebuildPersisted reg pool row
-                RuntimeContainerStopped -> rebuildPersisted reg pool row
-                RuntimeContainerMissing -> rebuildPersisted reg pool row
-                RuntimeContainerUnavailable detail ->
-                  markSandboxUnknown pool row.psId detail
-    for_ (Set.toList (containers `Set.difference` knownContainers)) runRm
-    for_ (Set.toList (volumes `Set.difference` knownVolumes)) runVolumeRm
+reconcileSandboxes reg = do
+  let pool = reg.srDbPool
+  now <- getCurrentTime
+  rows <- loadPersisted pool
+  containers <- Set.fromList <$> listContainersByPrefix namePrefix
+  volumes <- Set.fromList <$> listVolumesByPrefix namePrefix
+  let knownContainers = Set.fromList (map (.psContainer) rows)
+      knownVolumes = Set.fromList (map (.psVolume) rows)
+  for_ rows $ \row ->
+    if row.psExpiresAt <= now
+      then void (destroyPersisted reg row)
+      else do
+        -- Namespace listings are only an orphan-cleanup optimization.  A
+        -- persisted row is destroyed only after a per-resource inspection
+        -- positively reports absence; daemon/CLI failure is not absence.
+        volumeState <- inspectVolumePresence row.psVolume
+        case volumeState of
+          RuntimeAbsent -> do
+            runRm row.psContainer
+            atomically $ modifyTVar' reg.srEntries (Map.delete (SandboxId row.psHandle))
+            markSandboxDestroyed pool row.psId "durable volume missing during boot reconciliation"
+          RuntimeUnavailable detail ->
+            markSandboxUnknown pool row.psId detail
+          RuntimePresent -> do
+            containerState <- inspectContainerStatus row.psContainer
+            case containerState of
+              RuntimeContainerRunning -> do
+                currentPolicy <- inspectContainerPolicy row.psContainer
+                if currentPolicy && persistedPolicyCurrent row
+                  then adoptPersisted reg pool row
+                  else rebuildPersisted reg pool row
+              RuntimeContainerStopped -> rebuildPersisted reg pool row
+              RuntimeContainerMissing -> rebuildPersisted reg pool row
+              RuntimeContainerUnavailable detail ->
+                markSandboxUnknown pool row.psId detail
+  for_ (Set.toList (containers `Set.difference` knownContainers)) runRm
+  for_ (Set.toList (volumes `Set.difference` knownVolumes)) runVolumeRm
 
 gcExpiredSandboxes :: SandboxRegistry -> IO Int
-gcExpiredSandboxes reg = case reg.srDbPool of
-  Nothing -> pure 0
-  Just pool -> do
-    now <- getCurrentTime
-    rows <- filter ((<= now) . (.psExpiresAt)) <$> loadPersisted pool
-    outcomes <- traverse (destroyPersisted reg) rows
-    pure (length (filter id outcomes))
+gcExpiredSandboxes reg = do
+  let pool = reg.srDbPool
+  now <- getCurrentTime
+  rows <- filter ((<= now) . (.psExpiresAt)) <$> loadPersisted pool
+  outcomes <- traverse (destroyPersisted reg) rows
+  pure (length (filter id outcomes))
 
 adoptPersisted :: SandboxRegistry -> DbPool -> PersistedSandbox -> IO ()
 adoptPersisted reg pool row = do
@@ -269,10 +249,10 @@ createSandbox reg gid opts = do
   launched <- runRun container securedOpts.scoImage volume securedOpts.scoNetwork
   case launched of
     Left err -> do
-      for_ reg.srDbPool $ \pool -> markSandboxUnknown pool dbId err
+      markSandboxUnknown reg.srDbPool dbId err
       pure (Left err)
     Right _ -> do
-      for_ reg.srDbPool $ \pool -> markSandboxActive pool dbId
+      markSandboxActive reg.srDbPool dbId
       atomically $ modifyTVar' reg.srEntries (Map.insert sid entry)
       pure (Right entry)
 
@@ -425,13 +405,6 @@ destroySandboxesForGroup reg gid = do
   results <- traverse (releaseSandbox reg) entries
   pure (length [() | Right () <- results])
 
--- | Tear down every sandbox explicitly.  Production shutdown intentionally
--- does not call this: durable volumes survive process lifetime.
-destroyAllSandboxes :: SandboxRegistry -> IO ()
-destroyAllSandboxes reg = do
-  entries <- Map.elems <$> readTVarIO reg.srEntries
-  for_ entries (void . releaseSandbox reg)
-
 -- The exec lock keeps destruction from racing an in-container operation.
 -- Once destruction begins, the cache entry is removed even if the runtime becomes
 -- unavailable; the durable row remains outcome-unknown for reconciliation.
@@ -439,15 +412,15 @@ releaseSandbox :: SandboxRegistry -> SandboxEntry -> IO (Either Text ())
 releaseSandbox reg entry =
   withLock entry.seExecLock $
     do
-      for_ reg.srDbPool $ \pool -> markSandboxDestroying pool entry.seId
+      markSandboxDestroying reg.srDbPool entry.seId
       cleaned <- cleanupSandbox entry
       atomically $ modifyTVar' reg.srEntries (Map.delete entry.seId)
       case cleaned of
         Right () -> do
-          for_ reg.srDbPool $ \pool -> markSandboxDestroyedByHandle pool entry.seId "explicit destroy"
+          markSandboxDestroyedByHandle reg.srDbPool entry.seId "explicit destroy"
           pure (Right ())
         Left detail -> do
-          for_ reg.srDbPool $ \pool -> markSandboxUnknownByHandle pool entry.seId detail
+          markSandboxUnknownByHandle reg.srDbPool entry.seId detail
           pure (Left "sandbox volume cleanup failed; state retained for reconciliation")
 
 cleanupSandbox :: SandboxEntry -> IO (Either Text ())
@@ -468,39 +441,31 @@ allocateSandbox ::
   SandboxCreateOpts ->
   UTCTime ->
   IO (Int64, SandboxId, Text, Text)
-allocateSandbox reg (GroupId rawGroup) opts now = case reg.srDbPool of
-  Nothing -> atomically $ do
-    n <- readTVar reg.srNextId
-    writeTVar reg.srNextId (n + 1)
-    let ordinal = n + 1
-        sid = SandboxId ("s" <> T.pack (show ordinal))
-        nameBody = T.pack (show rawGroup) <> "-" <> sid.unSandboxId
-    pure (0, sid, namePrefix <> nameBody, namePrefix <> nameBody <> "-data")
-  Just pool -> withConn pool $ \conn -> withTransaction conn $ do
-    conversationRows <-
-      query conn "SELECT conversation_id FROM conversations WHERE legacy_group_id = ? FOR UPDATE" (Only rawGroup)
-    conversation <- case conversationRows :: [Only Int64] of
-      [Only value] -> pure value
-      _ -> fail "allocateSandbox: conversation not found"
-    idRows <- query conn "SELECT nextval('sandboxes_sandbox_id_seq')" ()
-    dbId <- case idRows :: [Only Int64] of
-      [Only value] -> pure value
-      _ -> fail "allocateSandbox: sequence did not return one row"
-    let sid = SandboxId ("s" <> T.pack (show dbId))
-        nameBody = T.pack (show rawGroup) <> "-" <> sid.unSandboxId
-        container = namePrefix <> nameBody
-        volume = namePrefix <> nameBody <> "-data"
-        expiry = addUTCTime sandboxTtl now
-    inserted <-
-      execute
-        conn
-        "INSERT INTO sandboxes \
-        \ (sandbox_id, conversation_id, sandbox_handle, container_name, volume_name, image, network_mode, \
-        \  status, created_at, last_used_at, expires_at) \
-        \ VALUES (?, ?, ?, ?, ?, ?, ?, 'creating', ?, ?, ?)"
-        (dbId, conversation, sid.unSandboxId, container, volume, opts.scoImage, opts.scoNetwork, now, now, expiry)
-    when (inserted /= 1) (fail "allocateSandbox: insert did not affect one row")
-    pure (dbId, sid, container, volume)
+allocateSandbox reg (GroupId rawGroup) opts now = withConn reg.srDbPool $ \conn -> withTransaction conn $ do
+  conversationRows <-
+    query conn "SELECT conversation_id FROM conversations WHERE legacy_group_id = ? FOR UPDATE" (Only rawGroup)
+  conversation <- case conversationRows :: [Only Int64] of
+    [Only value] -> pure value
+    _ -> fail "allocateSandbox: conversation not found"
+  idRows <- query conn "SELECT nextval('sandboxes_sandbox_id_seq')" ()
+  dbId <- case idRows :: [Only Int64] of
+    [Only value] -> pure value
+    _ -> fail "allocateSandbox: sequence did not return one row"
+  let sid = SandboxId ("s" <> T.pack (show dbId))
+      nameBody = T.pack (show rawGroup) <> "-" <> sid.unSandboxId
+      container = namePrefix <> nameBody
+      volume = namePrefix <> nameBody <> "-data"
+      expiry = addUTCTime sandboxTtl now
+  inserted <-
+    execute
+      conn
+      "INSERT INTO sandboxes \
+      \ (sandbox_id, conversation_id, sandbox_handle, container_name, volume_name, image, network_mode, \
+      \  status, created_at, last_used_at, expires_at) \
+      \ VALUES (?, ?, ?, ?, ?, ?, ?, 'creating', ?, ?, ?)"
+      (dbId, conversation, sid.unSandboxId, container, volume, opts.scoImage, opts.scoNetwork, now, now, expiry)
+  when (inserted /= 1) (fail "allocateSandbox: insert did not affect one row")
+  pure (dbId, sid, container, volume)
 
 sandboxTtl :: NominalDiffTime
 sandboxTtl = 14 * 24 * 60 * 60
@@ -558,7 +523,7 @@ updateSandboxRuntime pool row = withConn pool $ \conn -> do
   pure ()
 
 touchSandbox :: SandboxRegistry -> SandboxEntry -> IO ()
-touchSandbox reg entry = for_ reg.srDbPool $ \pool -> withConn pool $ \conn -> do
+touchSandbox reg entry = withConn reg.srDbPool $ \conn -> do
   _ <-
     execute
       conn
@@ -633,6 +598,4 @@ destroyPersisted reg row = do
             withLock
               entry.seExecLock
               action
-  case reg.srDbPool of
-    Nothing -> pure False
-    Just pool -> withEntryLock (cleanup pool)
+  withEntryLock (cleanup reg.srDbPool)

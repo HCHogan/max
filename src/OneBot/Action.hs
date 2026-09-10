@@ -4,7 +4,6 @@ module OneBot.Action
     Response (..),
     encodeAction,
     extractOutMid,
-    parseResponse,
     sendChatMsg,
   )
 where
@@ -196,9 +195,6 @@ instance FromJSON Response where
       <*> o .: "retcode"
       <*> o .:? "data" .!= Null
       <*> o .:? "echo" .!= ""
-
-parseResponse :: Value -> Parser Response
-parseResponse = parseJSON
 
 -- | The @message_id@ QQ assigned to a message we just sent, out of the
 -- send response's payload.  It is how an outbound message gets a row —

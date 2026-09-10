@@ -334,8 +334,9 @@ archived Plan work or resets a live Task's identity, revision, spend or lease.
   the LLM effect are outside this gate.
 - **Request disposition:** `request_finish` terminates the agent round with
   answered/waiting/declined and the reply. The obligation settles only after
-  successful recorded publication; unclassified prose remains unresolved,
-  and no-output termination is failed. Task delegation remains atomic and
+  successful recorded chat publication; termination without an explicit
+  outcome or chat output is failed, while waiting requires an explicit
+  disposition. Debug output is not a reply receipt. Task delegation remains atomic and
   progress never counts as completion.
 - **Frontend steering:** [ADR 013](013-frontend-steering.md) appends same-actor
   inputs at the next model boundary and tracks each message's obligation.

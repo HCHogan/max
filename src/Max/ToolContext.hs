@@ -12,9 +12,7 @@ module Max.ToolContext
     toolConversationScope,
     toolGroupId,
     toolCanonicalId,
-    toolUserId,
     toolAuthorPrincipalId,
-    toolSelfId,
     toolMultimodal,
     toolStickers,
     toolSkills,
@@ -120,12 +118,6 @@ toolCanonicalId = (.toolIdentity.tiCanonicalId)
 
 toolAuthorPrincipalId :: ToolContext -> PrincipalId
 toolAuthorPrincipalId = (.toolIdentity.tiAuthorPrincipalId)
-
-toolUserId :: ToolContext -> UserId
-toolUserId = (.toolIdentity.tiUserId)
-
-toolSelfId :: ToolContext -> UserId
-toolSelfId = (.toolIdentity.tiSelfId)
 
 toolMultimodal :: ToolContext -> Bool
 toolMultimodal = (.toolCapabilities.tcMultimodal)

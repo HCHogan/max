@@ -1,4 +1,4 @@
--- | Compatibility reminder tools backed by ADR 006 monitors. The public tool
+-- | Canned reminders backed by durable monitors. The public tool
 -- names stay stable, while persistence and scheduling use @TimeCron + canned@
 -- and conversation-scoped @m#@ handles.
 module Max.Tools.Reminder
@@ -17,7 +17,7 @@ import Data.Aeson.Types (parseEither)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (TimeZone, UTCTime, addUTCTime)
+import Data.Time (TimeZone, UTCTime)
 import Effectful
 import Effectful.Reader.Static (Reader, ask)
 import Max.Effects.MonitorControl (MonitorControl, armMonitor)
@@ -25,13 +25,11 @@ import Max.Effects.MonitorControl qualified as Control
 import Max.Effects.MonitorQuery (MonitorQuery, listReminders)
 import Max.Effects.Tools (Tool (..))
 import Max.Monitor.Control (MonitorCommand (CancelMonitor), armErrorText, monitorControlErrorText)
-import Max.Monitor.Schedule (nextCronFire)
+import Max.Monitor.Schedule (TimePolicy (..), resolveTimeSpec)
 import Max.Monitor.Types (MonitorRef (..), monitorHandleText, parseMonitorHandle)
 import Max.Monitor.View (TimeMonitor (..))
 import Max.Time (fmtDateHM)
-import Max.Time.Parse (parseTimeArg)
 import Max.Tools.Schema (integerParam, noArguments, stringParam, toolObject)
-import System.Cron.Parser (parseCronSchedule)
 
 reminderToolsFor ::
   (MonitorQuery :> es, MonitorControl :> es, Reader UTCTime :> es) =>
@@ -135,28 +133,18 @@ dropZero = \case
 
 resolveWhen :: TimeZone -> SetArgs -> UTCTime -> Either Text (Maybe Text, UTCTime)
 resolveWhen tz setArgs now =
-  case (setArgs.saInMinutes, setArgs.saAt, setArgs.saCron) of
-    (Just minutes, Nothing, Nothing) -> oneShotIn minutes
-    (Nothing, Just absolute, Nothing) -> oneShotAt absolute
-    (Nothing, Nothing, Just cron) -> recurring cron
-    (Nothing, Nothing, Nothing) -> Left "必须指定 in_minutes / at / cron 之一（只填要用的那个）"
-    -- Say what to do, not just what is wrong: the previous wording named the
-    -- rule and left the model to guess the remedy, and it guessed "keep the
-    -- placeholders, change their values".
-    _ -> Left "in_minutes / at / cron 只能给一个：不用的参数请整个省略，不要填 '.'、空字符串或 0"
-  where
-    oneShotIn minutes
-      | minutes <= 0 = Left "in_minutes 必须是正整数"
-      | minutes > 527040 = Left "in_minutes 太大了（上限约一年）"
-      | otherwise = Right (Nothing, addUTCTime (fromIntegral (minutes * 60)) now)
-    oneShotAt absolute = do
-      time <- parseTimeArg tz absolute
-      if time <= now then Left "指定的时间已经过去了" else Right (Nothing, time)
-    recurring expression = case parseCronSchedule (T.strip expression) of
-      Left err -> Left ("cron 表达式无效：" <> T.pack err)
-      Right schedule -> case nextCronFire tz schedule now of
-        Nothing -> Left "这个 cron 表达式算不出下一次触发时间"
-        Just time -> Right (Just (T.strip expression), time)
+  resolveTimeSpec
+    ( TimePolicy
+        527040
+        "in_minutes 太大了（上限约一年）"
+        "必须指定 in_minutes / at / cron 之一（只填要用的那个）"
+        "in_minutes / at / cron 只能给一个：不用的参数请整个省略，不要填 '.'、空字符串或 0"
+    )
+    tz
+    now
+    setArgs.saInMinutes
+    setArgs.saAt
+    setArgs.saCron
 
 listRemindersTool :: (MonitorQuery :> es) => TimeZone -> Tool es
 listRemindersTool tz =

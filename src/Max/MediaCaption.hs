@@ -27,29 +27,19 @@ import Control.Exception (IOException, try)
 import Control.Monad (forever)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.ByteString.Base64 qualified as B64
 import Data.Foldable (traverse_)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query_)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
 import Max.Effects.BlobHost (BlobHost, resolveBlobHostPath)
-import Max.Effects.LLM
-  ( ChatCtx (..),
-    ChatMessage (..),
-    ChatResponse (..),
-    ContentBlock (..),
-    LLM,
-    chat,
-  )
-import Max.Http.Failure (renderResponseFailure)
+import Max.Effects.LLM (LLM)
 import Max.ImagePrep (prepareImageForLLM)
-import Max.LLM.Failure (renderLLMFailure)
+import Max.Media.Caption (captionImage)
 import Max.Util (catchSync, trySync, withTempDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -159,23 +149,7 @@ mediaCaptionWorker profile = localDomain "media-caption" $ do
             Right (mime', bytes)
               | BS.length bytes > maxCaptionBytes ->
                   failed ("too large: " <> T.pack (show (BS.length bytes)))
-              | otherwise -> do
-                  let dataUrl = "data:" <> mime' <> ";base64," <> TE.decodeUtf8 (B64.encode bytes)
-                  eres <-
-                    chat
-                      (ChatCtx "caption" Nothing Nothing Nothing Nothing Nothing Nothing)
-                      profile
-                      [ MsgSystem sys,
-                        MsgUserBlocks [TextBlock lead, ImageDataUrl dataUrl]
-                      ]
-                      []
-                  case eres of
-                    Left err -> failed ("chat: " <> renderLLMFailure err)
-                    Right (InterruptedResp _ err) -> failed ("chat interrupted: " <> renderResponseFailure err)
-                    Right (ToolCallsResp {}) -> failed "chat: unexpected tool calls"
-                    Right (ContentResp raw)
-                      | T.null (T.strip raw) -> failed "chat: empty caption"
-                      | otherwise -> store (T.strip raw)
+              | otherwise -> captionImage profile sys lead mime' bytes >>= either failed store
       where
         lead
           | isVideo = "这段视频的第一帧："

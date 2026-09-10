@@ -12,7 +12,6 @@ module Max.Platform.Store
   ( EndpointRegistration (..),
     RegisteredEndpoint (..),
     createConversation,
-    findConversationByLegacyId,
     platformForLegacyConversation,
     platformForLegacyMessage,
     compatibilityMessageIdForCanonical,
@@ -21,7 +20,6 @@ module Max.Platform.Store
     ConversationRoster (..),
     conversationRoster,
     conversationAdvertisedCaps,
-    compatibilityPlatformId,
     registerEndpoint,
     ensureLegacyEndpoint,
     ensureConfiguredEndpoint,
@@ -581,14 +579,6 @@ createConversation kind title = do
     [Only cid] -> pure (ConversationId cid)
     _ -> error "createConversation: INSERT did not return one row"
 
-findConversationByLegacyId ::
-  (WithConnection :> es, IOE :> es) =>
-  Int64 ->
-  Eff es (Maybe ConversationId)
-findConversationByLegacyId legacyId = do
-  rows <- query "SELECT conversation_id FROM conversations WHERE legacy_group_id = ?" (Only legacyId)
-  pure (ConversationId . fromOnly <$> listToMaybe rows)
-
 -- | Resolve the endpoint used by legacy OneBot-shaped operations.  QQ is the
 -- preferred operational endpoint of a mirror conversation; a standalone
 -- foreign conversation resolves to its sole endpoint.
@@ -648,16 +638,6 @@ nativeEventIdForCanonical (CanonicalMessageId canonical) = do
       "SELECT source_native_event_id FROM messages WHERE canonical_message_id = ?"
       (Only canonical)
   pure (NativeEventId (exactlyOne "nativeEventIdForCanonical" rows))
-
--- | Compatibility projection for the still-OneBot-shaped Handler boundary.
--- It is never routing or authorization authority.
-compatibilityPlatformId ::
-  (WithConnection :> es, IOE :> es) =>
-  Platform ->
-  Text ->
-  Text ->
-  Eff es Int64
-compatibilityPlatformId platform kind = compatibilityId (renderPlatform platform) kind
 
 registerEndpoint ::
   (WithConnection :> es, IOE :> es) =>

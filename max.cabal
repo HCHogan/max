@@ -82,6 +82,17 @@ extra-source-files:
     static/vendor/*.css
     static/vendor/*.woff2
 
+-- Local builds include both groups; Nix selects one installable artifact.
+flag runtime-tools
+    description: Build the bot, runtime broker client, control and maintenance tools
+    default: True
+    manual: True
+
+flag developer-tools
+    description: Build prompt documentation and model evaluation tools
+    default: True
+    manual: True
+
 common warnings
     ghc-options:
         -Wall
@@ -167,6 +178,7 @@ library
         Max.DB.Projection
         Max.DB.History
         Max.History.Types
+        Max.Media.Caption
         Max.Media.Types
         Max.Episode.Types
         Max.Recall.Types
@@ -273,7 +285,6 @@ library
         Max.MaintenanceLease
         Max.Matrix
         Max.MessageKind
-        Max.MemoryExtract
         Max.Memory.Maintenance
         Max.MemoryStore
         Max.Memory.Types
@@ -460,6 +471,8 @@ library
 
 executable max
     import:           warnings, lang
+    if !flag(runtime-tools)
+        buildable: False
     hs-source-dirs:   app
     main-is:          Main.hs
     build-depends:
@@ -477,6 +490,8 @@ executable max
 
 executable max-runtime
     import:           warnings, lang
+    if !flag(runtime-tools)
+        buildable: False
     hs-source-dirs:   runtime-cli
     main-is:          Main.hs
     build-depends:
@@ -487,6 +502,8 @@ executable max-runtime
 
 executable maxctl
     import:           warnings, lang
+    if !flag(runtime-tools)
+        buildable: False
     hs-source-dirs:   maxctl
     main-is:          Main.hs
     build-depends:
@@ -498,6 +515,8 @@ executable maxctl
 -- seams between the Prompt, Agent and LLM effects; no DB or network needed.
 executable max-prompt-flow
     import:           warnings, lang
+    if !flag(developer-tools)
+        buildable: False
     hs-source-dirs:   prompt-flow
     main-is:          Main.hs
     other-modules:    PromptFlow
@@ -517,6 +536,8 @@ executable max-prompt-flow
 -- start against a half-migrated or projection-inconsistent database.
 executable max-adr003-maintenance
     import:           warnings, lang
+    if !flag(runtime-tools)
+        buildable: False
     hs-source-dirs:   maintenance
     main-is:          Main.hs
     build-depends:
@@ -536,6 +557,8 @@ executable max-adr003-maintenance
 -- workflow.
 executable max-intent-eval
     import:           warnings, lang
+    if !flag(developer-tools)
+        buildable: False
     hs-source-dirs:   eval
     main-is:          Main.hs
     build-depends:
@@ -553,6 +576,8 @@ executable max-intent-eval
 -- disabled direct-turn auto-recall policy.
 executable max-context-eval
     import:           warnings, lang
+    if !flag(developer-tools)
+        buildable: False
     hs-source-dirs:   context-eval
     main-is:          Main.hs
     build-depends:
@@ -569,6 +594,8 @@ executable max-context-eval
 
 executable max-skill-eval
     import:           warnings, lang
+    if !flag(developer-tools)
+        buildable: False
     hs-source-dirs:   skill-eval
     main-is:          Main.hs
     build-depends:
@@ -666,7 +693,7 @@ test-suite max-test
         Max.Platform.DeliverySpec
         Max.PromptFlowSpec
         PromptFlow
-        Max.MemoryExtractSpec
+        Max.EpisodeSchedulerSpec
         Max.MatrixSpec
         Max.ModelCatalogSpec
         Max.PromptSpec
@@ -721,6 +748,7 @@ test-suite max-test-db
     main-is:            Main.hs
     other-modules:
         Helpers
+        PromptFixture
         ExecutionFixture
         Max.ExecutionSpec
         Max.SkillAuthoringSpec

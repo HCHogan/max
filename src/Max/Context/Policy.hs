@@ -7,6 +7,7 @@ module Max.Context.Policy
     PolicyDrop (..),
     selectContextTo,
     applyBaseCompartmentTiers,
+    degradeCompartment,
     selectedCompartmentSummary,
     compartmentTierText,
   )
@@ -19,8 +20,8 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
 import Max.Context (estimateTextTokens)
 import Max.Context.Types
-import Max.DB.History (HistoryItem (..))
-import Max.MemoryStore (MemoryId, MemoryItem (..))
+import Max.History.Types (HistoryItem (..))
+import Max.Memory.Types (MemoryId, MemoryItem (..))
 
 data ContextCostModel = ContextCostModel
   { ccmMemoryBlockTokens :: PromptInputs -> Int,
@@ -56,28 +57,21 @@ selectContextTo costs tokenLimit initialTokens candidates =
     continue estimated drop' dropped inputs =
       go (max 0 (estimated - drop'.pdTokens)) (drop' : dropped) inputs
 
-degradeOneCompartment :: ContextCostModel -> PromptInputs -> Maybe (Text, Int, PromptInputs)
-degradeOneCompartment costs inputs = case filter ((/= TierP4) . (.contextTier)) inputs.compartments of
+-- | One deterministic fidelity downgrade, shared by materialization and the
+-- final prompt budget. The caller owns its token-cost model.
+degradeCompartment :: [ContextCompartment] -> Maybe (Text, [ContextCompartment])
+degradeCompartment compartments' = case filter ((/= TierP4) . (.contextTier)) compartments' of
   [] -> Nothing
   candidates ->
     let selected = minimumBy (compare `on` degradationKey) candidates
         nextTier = succ selected.contextTier
         degraded = selected {contextTier = nextTier}
-        compartments' =
-          map
-            (\compartment -> if compartment.contextCompartmentId == selected.contextCompartmentId then degraded else compartment)
-            inputs.compartments
-        after = inputs {compartments = compartments'}
         source =
           "history.compartment."
             <> T.toLower (compartmentTierText selected.contextTier)
             <> "->"
             <> T.toLower (compartmentTierText nextTier)
-     in Just
-          ( source,
-            blockRemovalCost (costs.ccmCompartmentBlockTokens inputs) (costs.ccmCompartmentBlockTokens after),
-            after
-          )
+     in Just (source, [if c.contextCompartmentId == selected.contextCompartmentId then degraded else c | c <- compartments'])
   where
     degradationKey compartment =
       ( compartment.contextImportance,
@@ -85,6 +79,12 @@ degradeOneCompartment costs inputs = case filter ((/= TierP4) . (.contextTier)) 
         compartment.contextMaterializationVersion,
         compartment.contextCompartmentId
       )
+
+degradeOneCompartment :: ContextCostModel -> PromptInputs -> Maybe (Text, Int, PromptInputs)
+degradeOneCompartment costs inputs = do
+  (source, compartments') <- degradeCompartment inputs.compartments
+  let after = inputs {compartments = compartments'}
+  pure (source, blockRemovalCost (costs.ccmCompartmentBlockTokens inputs) (costs.ccmCompartmentBlockTokens after), after)
 
 memoryDrop :: ContextCostModel -> Text -> PromptInputs -> PromptInputs -> MemoryItem -> PolicyDrop
 memoryDrop costs source before after memory =

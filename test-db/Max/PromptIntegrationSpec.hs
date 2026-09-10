@@ -10,16 +10,15 @@ module Max.PromptIntegrationSpec (spec) where
 
 import Data.Int (Int64)
 import Data.Map.Strict qualified as Map
-import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime, utc)
+import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful.PostgreSQL (execute, query)
 import Helpers (insertMessageWithCanonicalId, insertRawKind, insertRawMessage, requireJust, truncateAll, updateDbSession, withDb, withDbLog)
+import Max.ContextMaterialization (ContextMaterialization (..))
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.Connection (DbPool)
-import Max.ContextMaterialization (ContextMaterialization (..))
 import Max.DB.History (LedgerItem (..), MessageCursor (..))
 import Max.DB.Session (fetchOrInit)
 import Max.Dispatch (DispatchMessage (..))
@@ -28,9 +27,10 @@ import Max.EpisodeStore
 import Max.IR (Body (..), MentionTarget (MentionIdentity), Node (..))
 import Max.ModelCatalog (ContextLimits (..), defaultContextLimits)
 import Max.Platform.Types (CanonicalMessageId (..), Platform (PlatformQQ), PrincipalId (..), PrincipalIdentityId (..))
-import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), TriggerOrigin (..), buildContext, buildContextWithLimits, buildContextWithReadMode, collectContextPreview, materializeTieredHistory, planContext, renderContextPlan)
+import Max.Prompt (ContextReadMode (..), HistoryTokenWatermarks (..), PromptRequest (..), buildContext, collectContextPreview, materializeTieredHistory, planContext, renderContextPlan)
 import Max.Session (Session (..))
 import OneBot.Types (GroupId (..), UserId (..))
+import PromptFixture (promptRequest)
 import Test.Hspec
 
 groupRaw :: (Integral a) => a
@@ -80,7 +80,7 @@ spec pool = before_ (truncateAll pool) $
       insertMessageWithCanonicalId pool 1002 groupRaw memberRaw botRaw (timeAt 10) (Just "Alice") "另一条"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <-
-        withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+        withDbLog pool $ fst <$> buildContext (promptRequest s trigger)
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("随便聊" `T.isInfixOf`)
       ub `shouldSatisfy` ("另一条" `T.isInfixOf`)
@@ -91,7 +91,7 @@ spec pool = before_ (truncateAll pool) $
       s <-
         updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
           current {clearedAt = Just (timeAt 10)}
-      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ fst <$> buildContext (promptRequest s trigger)
       let ub = userBodyOf msgs
       ub `shouldNotSatisfy` ("旧" `T.isInfixOf`)
       ub `shouldSatisfy` ("新" `T.isInfixOf`)
@@ -101,7 +101,7 @@ spec pool = before_ (truncateAll pool) $
       insertMessageWithCanonicalId pool 1002 groupRaw botRaw botRaw (timeAt 10) Nothing "你好 Alice"
       _ <- withDb pool $ execute "UPDATE messages SET is_synthetic = true WHERE message_id = ?" (Only (1002 :: Int64))
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ fst <$> buildContext (promptRequest s trigger)
       -- The whole conversation is [system, user]: the bot's own past
       -- replies are lines in the transcript, not assistant turns.
       length msgs `shouldBe` 2
@@ -120,7 +120,7 @@ spec pool = before_ (truncateAll pool) $
         )
         [1 .. 5 :: Int64]
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ fst <$> buildContext (promptRequest s trigger)
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("昨天那事呢" `T.isInfixOf`)
       ub `shouldSatisfy` ("已经办好了" `T.isInfixOf`)
@@ -168,54 +168,20 @@ spec pool = before_ (truncateAll pool) $
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <-
         withDbLog pool $
-          buildContextWithLimits
-            defaultContextLimits
-            "default-persona"
-            False
-            False
-            OriginDirect
-            utc
-            []
-            []
-            Set.empty
-            s
-            trigger
+          fst <$> buildContext ((promptRequest s trigger) {prLimits = defaultContextLimits})
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("settled compact summary" `T.isInfixOf`)
       ub `shouldSatisfy` ("ambient raw tail" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("settled raw one" `T.isInfixOf`))
       rawEmergency <-
         withDbLog pool $
-          buildContextWithReadMode
-            defaultContextLimits
-            RawLedgerEmergency
-            "default-persona"
-            False
-            False
-            OriginDirect
-            utc
-            []
-            []
-            Set.empty
-            s
-            trigger
+          fst <$> buildContext ((promptRequest s trigger) {prReadMode = RawLedgerEmergency})
       userBodyOf rawEmergency `shouldSatisfy` ("settled raw one" `T.isInfixOf`)
       userBodyOf rawEmergency `shouldSatisfy` (not . ("settled full summary" `T.isInfixOf`))
       _ <- withDb pool $ execute "UPDATE context_materializations SET source_fingerprint = repeat('0', 64)" ()
       fallback <-
         withDbLog pool $
-          buildContextWithLimits
-            defaultContextLimits
-            "default-persona"
-            False
-            False
-            OriginDirect
-            utc
-            []
-            []
-            Set.empty
-            s
-            trigger
+          fst <$> buildContext ((promptRequest s trigger) {prLimits = defaultContextLimits})
       -- The last-known-good fallback re-runs deterministic base decay rather
       -- than trusting the corrupt materialization's stored tier.  This old
       -- fixture is therefore P2 at the test clock, not forced back to P1.
@@ -230,18 +196,7 @@ spec pool = before_ (truncateAll pool) $
       let tightLimits = ContextLimits 8000 512 0 0
           build =
             withDbLog pool $
-              buildContextWithLimits
-                tightLimits
-                "default-persona"
-                False
-                False
-                OriginDirect
-                utc
-                []
-                []
-                Set.empty
-                s
-                trigger
+              fst <$> buildContext ((promptRequest s trigger) {prLimits = tightLimits})
       _ <- build
       initial <- withDb pool $ query "SELECT revision, reason, jsonb_array_length(items) FROM context_materializations" ()
       (initial :: [(Int64, Text, Int)]) `shouldBe` [(1, "initial_materialization", 1)]
@@ -273,7 +228,7 @@ spec pool = before_ (truncateAll pool) $
       -- The bot's narration is conversation, so it stays.
       insertMessageWithCanonicalId pool 1006 groupRaw botRaw botRaw (timeAt 14) (Just "max") "我查一下日志"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ fst <$> buildContext (promptRequest s trigger)
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("普通聊天" `T.isInfixOf`)
       ub `shouldSatisfy` ("我查一下日志" `T.isInfixOf`)
@@ -287,7 +242,7 @@ spec pool = before_ (truncateAll pool) $
         (\i -> insertRawMessage pool (3000 + i) groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") ("短消息" <> T.pack (show i)))
         [1 .. 200 :: Int64]
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      msgs <- withDbLog pool $ buildContextWithLimits (ContextLimits 100000 1024 0 0) "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ fst <$> buildContext ((promptRequest s trigger) {prLimits = ContextLimits 100000 1024 0 0})
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("短消息1" `T.isInfixOf`)
       ub `shouldSatisfy` ("短消息200" `T.isInfixOf`)
@@ -311,18 +266,7 @@ spec pool = before_ (truncateAll pool) $
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       msgs <-
         withDbLog pool $
-          buildContextWithLimits
-            (ContextLimits 8000 1024 0 0)
-            "default-persona"
-            False
-            False
-            OriginDirect
-            utc
-            []
-            []
-            Set.empty
-            s
-            trigger
+          fst <$> buildContext ((promptRequest s trigger) {prLimits = ContextLimits 8000 1024 0 0})
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("newest-sentinel" `T.isInfixOf`)
       ub `shouldSatisfy` (not . ("oldest-sentinel" `T.isInfixOf`))
@@ -330,7 +274,7 @@ spec pool = before_ (truncateAll pool) $
     it "shows each raw-ledger message exactly once" $ do
       insertMessageWithCanonicalId pool 1001 groupRaw memberRaw botRaw (timeAt 9) (Just "Alice") "@1000 只此一次"
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
-      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ fst <$> buildContext (promptRequest s trigger)
       T.count "只此一次" (userBodyOf msgs) `shouldBe` 1
 
     it "renders pinned messages in the [pinned] section" $ do
@@ -338,7 +282,7 @@ spec pool = before_ (truncateAll pool) $
       s <-
         updateDbSession pool (GroupId groupRaw) "deepseek-flash" $ \current ->
           current {pinned = [1001]}
-      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+      msgs <- withDbLog pool $ fst <$> buildContext (promptRequest s trigger)
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[pinned" `T.isInfixOf`)
       ub `shouldSatisfy` ("重要信息" `T.isInfixOf`)
@@ -349,7 +293,7 @@ spec pool = before_ (truncateAll pool) $
       s <- withDb pool $ fetchOrInit (GroupId groupRaw) "deepseek-flash"
       snapshot <-
         withDbLog pool $
-          collectContextPreview "default-persona" False False OriginDirect utc [] [] Set.empty s trigger
+          collectContextPreview (promptRequest s trigger)
       let rendered = renderContextPlan (planContext defaultContextLimits snapshot)
       userBodyOf rendered `shouldSatisfy` ("preview summary" `T.isInfixOf`)
       [Only materializations] <- withDb pool $ query "SELECT count(*) FROM context_materializations" ()
@@ -365,7 +309,7 @@ spec pool = before_ (truncateAll pool) $
               { body = Body [NMention (MentionIdentity (PrincipalIdentityId 1)) "Max", NText " 看这条"],
                 replyTo = Just (CanonicalMessageId quoted)
               }
-      msgs <- withDbLog pool $ buildContext "default-persona" False False OriginDirect utc [] [] Set.empty s replyTrigger
+      msgs <- withDbLog pool $ fst <$> buildContext (promptRequest s replyTrigger)
       let ub = userBodyOf msgs
       ub `shouldSatisfy` ("[quoted context]" `T.isInfixOf`)
       ub `shouldSatisfy` ("被引用的话" `T.isInfixOf`)

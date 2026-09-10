@@ -13,13 +13,11 @@ module Max.DB.Monitor
     armLedgerMatchMonitor,
     listCannedTimeMonitors,
     listArmedMonitors,
-    cancelMonitor,
     nextMonitorDeadline,
     admitDueTimeMonitors,
     evaluateLedgerMatches,
     claimCannedMonitorFires,
     claimElaboratedMonitorFires,
-    admitElaboratedMonitorTurn,
     expireElaboratedMonitorFire,
     loadAdmittedMonitorFire,
     lookupMonitorFireOutput,
@@ -29,13 +27,13 @@ module Max.DB.Monitor
   )
 where
 
-import Control.Monad (forM, forM_, unless, when)
+import Control.Monad (forM, unless, when)
 import Data.Aeson (Value, eitherDecodeStrict', object, (.=))
 import Data.Either (fromRight)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (fromMaybe, isNothing, listToMaybe)
+import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -55,7 +53,7 @@ import Max.Monitor.Control (MonitorArmError (..))
 import Max.Monitor.Types
 import Max.Monitor.View (ArmedMonitor (..), TimeMonitor (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), PrincipalIdentityId)
-import Max.Turn.Types (AgentTurnId, AgentTurnRef (..), TurnOrdinal (..))
+import Max.Turn.Types (AgentTurnRef (..))
 import OneBot.Types (GroupId (..))
 
 newtype Jsonb = Jsonb Value
@@ -427,50 +425,6 @@ listArmedMonitors scope =
     \ORDER BY m.monitor_ordinal"
     (Only (conversationStorageId scope))
 
--- | Scope resolution uses m# only inside the current conversation.  Rows are
--- retained as cancelled audit state rather than deleted.
-cancelMonitor ::
-  (WithConnection :> es, IOE :> es) =>
-  ConversationScope ->
-  MonitorOrdinal ->
-  Eff es Bool
-cancelMonitor scope ordinal = withTransaction $ do
-  rows <-
-    query
-      "SELECT m.monitor_id FROM monitors m JOIN conversations c USING (conversation_id) \
-      \ WHERE m.conversation_id=c.conversation_id AND c.legacy_group_id=? \
-      \   AND m.monitor_ordinal=? AND m.status='armed' \
-      \ FOR UPDATE OF m"
-      (conversationStorageId scope, ordinal)
-  case rows :: [Only MonitorId] of
-    [] -> pure False
-    [Only monitorId] -> do
-      -- If canonical publication won the monitor lock just before cancel,
-      -- retain that occurrence as dispatched evidence while stopping every
-      -- future occurrence. Publication that loses this lock observes the
-      -- cancelled monitor and is rejected by enqueueOutbound instead.
-      published <-
-        execute
-          "UPDATE monitor_fires f SET admission_state='dispatched', dispatched_at=now(), \
-          \ outbound_canonical_message_id=msg.canonical_message_id, \
-          \ claim_owner=NULL, claim_expires_at=NULL, next_attempt_at=NULL, \
-          \ last_error=NULL, parked_at=NULL \
-          \ FROM messages msg WHERE f.monitor_id=? AND f.admission_state='pending' \
-          \   AND f.cancelled_at IS NULL AND msg.monitor_fire_id=f.fire_id"
-          (Only monitorId)
-      _ <-
-        execute
-          "UPDATE monitor_fires SET cancelled_at=now(), claim_owner=NULL, claim_expires_at=NULL \
-          \ WHERE monitor_id=? AND admission_state='pending' AND cancelled_at IS NULL"
-          (Only monitorId)
-      _ <-
-        execute
-          "UPDATE monitors SET status='cancelled', next_fire_at=NULL, cancelled_at=now(), \
-          \ fire_count=fire_count+?, updated_at=now() WHERE monitor_id=?"
-          (published, monitorId)
-      pure True
-    _ -> error "cancelMonitor: duplicate scoped ordinal"
-
 -- | Earliest evaluator, retry, or expired-lease wakeup.  This is a deadline,
 -- not polling: the in-memory scheduler sleeps until it or a write-through bell.
 nextMonitorDeadline ::
@@ -782,94 +736,6 @@ elaboratedFireSelect =
   \    AND source.ingest_seq<=m.armed_ingest_seq \
   \  ORDER BY source.ingest_seq DESC LIMIT 1 \
   \) seed ON true"
-
--- | Fire-time admission boundary for an elaborated continuation.  The fresh
--- horizon-1 turn, fire link, fork-from provenance and TimeCron advancement
--- commit together.  After this transaction, restart recovery owns the turn;
--- the scheduler must never create a replacement.
-admitElaboratedMonitorTurn ::
-  (WithConnection :> es, IOE :> es) =>
-  Text ->
-  MonitorFireId ->
-  Maybe UTCTime ->
-  Eff es (Maybe AgentTurnRef)
-admitElaboratedMonitorTurn owner fireId nextFire = withTransaction $ do
-  rows <-
-    query
-      "SELECT m.monitor_id, m.conversation_id, m.armed_by_principal_id, m.arming_turn_id, \
-      \       m.trigger_kind, m.schedule_cron, f.trigger_canonical_message_id, f.counted_at_admission \
-      \FROM monitor_fires f JOIN monitors m USING (monitor_id) \
-      \JOIN conversations c ON c.conversation_id=m.conversation_id \
-      \WHERE f.fire_id=? AND f.admission_state='pending' AND f.cancelled_at IS NULL \
-      \  AND f.claim_owner=? \
-      \  AND (m.status='armed' OR (m.status='expired' AND m.status_reason='max_fire_count')) \
-      \FOR UPDATE OF c, m, f"
-      (fireId, owner)
-  case rows :: [(MonitorId, Int64, Maybe Int64, Maybe AgentTurnId, Text, Maybe Text, Maybe Int64, Bool)] of
-    [] -> pure Nothing
-    [(monitorId, conversation, maybePrincipal, armingTurn, triggerKind, scheduleCron, triggerCanonical, counted)] ->
-      case maybePrincipal of
-        Nothing -> pure Nothing
-        Just principal -> do
-          recentRows <-
-            query
-              "SELECT count(*) FROM monitor_fires recent \
-              \ JOIN monitors rm USING (monitor_id) \
-              \ WHERE rm.conversation_id=? AND rm.continuation_kind='elaborated' \
-              \   AND NOT (rm.trigger_kind='time_cron' AND rm.schedule_cron IS NULL) \
-              \   AND recent.admission_state='dispatched' AND recent.disposition NOT IN ('coalesced','overflow') \
-              \   AND recent.dispatched_at>now() - interval '1 hour'"
-              (Only conversation)
-          let recentCount = exactlyOne "admitElaboratedMonitorTurn budget" (recentRows :: [Only Int64])
-              bypassBudget = triggerKind == "time_cron" && isNothing scheduleCron
-          if not bypassBudget && recentCount >= 20
-            then do
-              _ <-
-                execute
-                  "UPDATE monitor_fires SET claim_owner=NULL, claim_expires_at=NULL \
-                  \ WHERE fire_id=? AND admission_state='pending' AND claim_owner=?"
-                  (fireId, owner)
-              pure Nothing
-            else do
-              ordinalRows <-
-                query
-                  "SELECT COALESCE(max(turn_ordinal),0)+1 FROM agent_turns WHERE conversation_id=?"
-                  (Only conversation)
-              let ordinal = exactlyOne "admitElaboratedMonitorTurn ordinal" (ordinalRows :: [Only TurnOrdinal])
-              turnRows <-
-                query
-                  "INSERT INTO agent_turns \
-                  \ (conversation_id, turn_ordinal, trigger_canonical_message_id, initiator_principal_id, status) \
-                  \ VALUES (?, ?, ?, ?, 'starting') RETURNING turn_id"
-                  (conversation, ordinal, triggerCanonical, principal)
-              let turnId = exactlyOne "admitElaboratedMonitorTurn turn" (turnRows :: [Only AgentTurnId])
-                  turn = AgentTurnRef turnId ordinal
-              changed <-
-                execute
-                  "UPDATE monitor_fires SET admission_state='dispatched', admitted_turn_id=?, dispatched_at=now(), \
-                  \ claim_owner=NULL, claim_expires_at=NULL, next_attempt_at=NULL, last_error=NULL, parked_at=NULL \
-                  \ WHERE fire_id=? AND admission_state='pending' AND claim_owner=?"
-                  (turnId, fireId, owner)
-              if changed /= 1
-                then error "admitElaboratedMonitorTurn: lost claimed fire"
-                else do
-                  forM_ armingTurn $ \sourceTurn ->
-                    execute
-                      "INSERT INTO turn_edges (conversation_id, from_turn_id, to_turn_id, edge_kind, created_by) \
-                      \VALUES (?, ?, ?, 'fork-from', ?) ON CONFLICT DO NOTHING"
-                      (conversation, turnId, sourceTurn, principal)
-                  when (triggerKind == "time_cron") $ do
-                    _ <-
-                      execute
-                        "UPDATE monitors SET \
-                        \ status=CASE WHEN ?::timestamptz IS NULL THEN 'fired' ELSE 'armed' END, \
-                        \ status_reason=NULL, next_fire_at=?, \
-                        \ fire_count=fire_count + CASE WHEN ?::boolean THEN 0 ELSE 1 END, updated_at=now() \
-                        \ WHERE monitor_id=?"
-                        (nextFire, nextFire, counted, monitorId)
-                    pure ()
-                  pure (Just turn)
-    _ -> error "admitElaboratedMonitorTurn: duplicate fire"
 
 expireElaboratedMonitorFire ::
   (WithConnection :> es, IOE :> es) =>

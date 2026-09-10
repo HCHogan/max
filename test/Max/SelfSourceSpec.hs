@@ -10,6 +10,10 @@ spec = describe "deployed self-source snapshot" $ do
     (paths, truncated) <- requireRight (sourcePaths "" 1000)
     truncated `shouldBe` False
     paths `shouldContain` ["src/Max/Historian.hs"]
+    paths `shouldContain` ["src/Max/Media/Caption.hs"]
+    paths `shouldContain` ["test/Max/EpisodeSchedulerSpec.hs"]
+    paths `shouldContain` ["test-support/PromptFixture.hs"]
+    paths `shouldSatisfy` notElem "src/Max/MemoryExtract.hs"
     paths `shouldContain` ["test/Max/HistorianSpec.hs"]
     paths `shouldContain` ["migrations/000_baseline.sql"]
     paths `shouldContain` ["src/Max/DB/Health.hs"]

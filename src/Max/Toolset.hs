@@ -340,7 +340,9 @@ toolInventory =
     always (writeTool "task_cancel" ["task.db"] [CurrentConversation]),
     gated BackgroundOnly ((writeToolV 2 "task_finish" ["task.db"] [CurrentConversation]) {tdCallMode = FinishCall}),
     gated BackgroundOnly ((writeTool "task_progress" ["task.db"] [CurrentConversation]) {tdCallMode = CheckpointCall}),
-    gated FrontendOnly ((writeTool "request_finish" ["task.db"] [CurrentConversation]) {tdCallMode = FinishCall}),
+    -- Returned request validation/ownership errors precede every write in
+    -- submitRequestWithInputs. Exceptions and timeouts remain outcome-unknown.
+    gated FrontendOnly ((failsBeforeEffects (writeToolV 2 "request_finish" ["task.db"] [CurrentConversation])) {tdCallMode = FinishCall}),
     -- Queues turn-scoped inline video as well as reading the network.  Keep it
     -- sequential inside one agent round so concurrent calls cannot race the
     -- shared attachment order/budget; independent turns have independent

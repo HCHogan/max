@@ -12,10 +12,11 @@ import Helpers (truncateAll, withDb, withDbLog)
 import Max.ConversationScope (conversationScopeFor)
 import Max.DB.AgentTurn
 import Max.DB.Connection (DbPool)
-import Max.DB.Task (taskReport)
+import Max.DB.Task (taskReportTyped)
 import Max.DB.Task.Experience
 import Max.DB.TaskSpec (admit, claimOne, seed)
 import Max.Task.Experience
+import Max.Task.State (ReportStatus (ReportSucceeded), TaskReport (..))
 import Max.Turn.Types
 import OneBot.Types (GroupId (..))
 import Test.Hspec
@@ -74,7 +75,7 @@ complete pool group key = do
   receipt <- withDb pool (startJournalExecution execution (JournalStart "proof" "get_state" 1 "schema" (object []) (toJSON (["read"] :: [Text])) "safe"))
   withDbLog pool (finishJournalExecution receipt (JournalSucceeded (object ["verified" .= True])))
   let handle = resultHandleText execution.atrTurnOrdinal receipt.jeExecutionOrdinal
-  withDb pool (taskReport execution.atrTurnId (object ["status" .= ("succeeded" :: Text), "summary" .= ("verified" :: Text), "evidence" .= [handle], "unresolved" .= ([] :: [Text])])) `shouldReturn` True
+  withDb pool (taskReportTyped execution.atrTurnId (TaskReport ReportSucceeded "verified" [handle] [] Nothing Nothing)) `shouldReturn` True
   withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
   pure (task, handle)
 

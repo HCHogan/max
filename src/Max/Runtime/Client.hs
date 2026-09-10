@@ -63,8 +63,6 @@ runRuntimeClient arguments = do
     case arguments of
       ["copy-to", name, source, destination] -> withBinaryFile source ReadMode $ \file ->
         request (RunCommand (T.pack name) ["sh", "-c", "cat > " <> shellQuote (T.pack destination)]) (file, output, errors)
-      ["copy-from", name, source, destination] -> withBinaryFile destination WriteMode $ \file ->
-        request (RunCommand (T.pack name) ["cat", "--", T.pack source]) (input, file, errors)
       _ -> case parseRuntimeArgs (map T.pack arguments) of
         Left errorMessage -> TIO.hPutStrLn errors errorMessage >> pure 64
         Right value -> request value (input, output, errors)

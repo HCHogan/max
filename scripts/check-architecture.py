@@ -106,6 +106,8 @@ def check_imports():
         "Max.Conversation.Roster": {"GHC.Generics", "Max.Platform.Types"},
         "Max.Episode.Types": {"Max.History.Types"},
         "Max.Recall.Types": {"Max.Episode.Types", "Max.Memory.Types"},
+        "Max.Context.Types": {"Max.Context", "Max.Dispatch", "Max.File.Types", "Max.History.Types", "Max.Episode.Types", "Max.LLM.Types", "Max.Memory.Types", "Max.Platform.Types", "Max.Session.Types"},
+        "Max.Context.Policy": {"Max.Context", "Max.Context.Types", "Max.History.Types", "Max.Memory.Types"},
         "Max.Context.Media": {"Max.History.Types", "Max.Media.Types", "Max.Time"},
     }
     codecs = {"Database.PostgreSQL.Simple.FromField", "Database.PostgreSQL.Simple.ToField", "Database.PostgreSQL.Simple.FromRow"}

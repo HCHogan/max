@@ -66,7 +66,7 @@ import Max.Matrix (matrixDeliveryTransport, matrixWorker)
 import Max.MaxOps.Client (maxOpsClient)
 import Max.MaxOps.Notifications (notificationServer)
 import Max.MediaCaption (mediaCaptionWorker)
-import Max.MemoryExtract (dreamWorker)
+import Max.Memory.Maintenance (memoryMaintenanceWorker)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, contextInputBudget, defaultContextLimits, defaultModelName, lookupModelCapabilities, modelProfileNames)
 import Max.Monitor (monitorWorker)
 import Max.Platform.Delivery (deliveryWorker, oneBotDeliveryTransport)
@@ -393,7 +393,7 @@ runApp httpRuntime cfg activeConfig runtimeStore prepareResources controlPath ap
                   <> [ worker "task-experience" RestartableWorker (experienceWorker (ownerFor snapshot "task-experience") profile workerEnv.beSkills (maintenanceInputBudget candidate.llm profile))
                      | profile <- maybeToList candidate.memoryExtractProfile
                      ]
-                  <> [ worker "memory-dream" RestartableWorker (dreamWorker (ownerFor snapshot "memory-dream") profile candidate.timezone (maintenanceInputBudget candidate.llm profile))
+                  <> [ worker "memory-dream" RestartableWorker (memoryMaintenanceWorker (ownerFor snapshot "memory-dream") profile candidate.timezone (maintenanceInputBudget candidate.llm profile))
                      | profile <- maybeToList candidate.memoryExtractProfile
                      ]
                   <> [ worker

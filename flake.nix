@@ -46,7 +46,7 @@
         };
 
       maxPackage =
-        pkgs:
+        pkgs: developerTools:
         let
           hlib = pkgs.haskell.lib.compose;
           # Default haskellPackages set (GHC 9.10.3 on the pinned
@@ -72,6 +72,7 @@
                   MAX_CODEMODE_JS_WASM = "${import ./nix/codemode-js.nix { inherit pkgs; }}/quickjs.wasm";
                   postInstall = (old.postInstall or "") + ''
                     install -Dm644 codemode/QUICKJS-LICENSE $out/share/licenses/max/QuickJS-ng.txt
+                  '' + pkgs.lib.optionalString (!developerTools) ''
                     $out/bin/max --help > /dev/null
                   '';
                 })
@@ -79,7 +80,9 @@
             };
           };
         in
-        pkgs.haskell.lib.compose.justStaticExecutables hp.max;
+        hlib.justStaticExecutables (
+          hlib.disableCabalFlag (if developerTools then "runtime-tools" else "developer-tools") hp.max
+        );
     in
     {
       packages = forEachSystem (
@@ -88,9 +91,10 @@
           pkgs = nixpkgs.legacyPackages.${system};
         in
         {
-          max = maxPackage pkgs;
+          max = maxPackage pkgs false;
+          max-tools = maxPackage pkgs true;
           codemode-js = import ./nix/codemode-js.nix { inherit pkgs; };
-          default = maxPackage pkgs;
+          default = maxPackage pkgs false;
         }
         // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           camoufox-browser = (import ./nix/camoufox-browser.nix { inherit pkgs; }).bundle;
@@ -125,7 +129,18 @@
         let
           pkgs = nixpkgs.legacyPackages.${system};
         in
-        pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+        {
+          package-contents = pkgs.runCommand "max-package-contents" { } ''
+            ls -1 ${self.packages.${system}.max}/bin | sort > runtime.actual
+            printf '%s\n' max max-adr003-maintenance max-runtime maxctl | sort > runtime.expected
+            diff -u runtime.expected runtime.actual
+            ls -1 ${self.packages.${system}.max-tools}/bin | sort > tools.actual
+            printf '%s\n' max-context-eval max-intent-eval max-prompt-flow max-skill-eval | sort > tools.expected
+            diff -u tools.expected tools.actual
+            touch $out
+          '';
+        }
+        // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           state-migration = import ./nix/tests/state-migration.nix {
             inherit nixpkgs system;
             maxModule = self.nixosModules.max;

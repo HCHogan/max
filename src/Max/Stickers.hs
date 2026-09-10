@@ -23,27 +23,17 @@ import Control.Exception (IOException, try)
 import Control.Monad (forever)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as BS
-import Data.ByteString.Base64 qualified as B64
 import Data.Foldable (traverse_)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as T
-import Data.Text.Encoding qualified as TE
 import Database.PostgreSQL.Simple (Only (..))
 import Effectful
 import Effectful.Log
 import Effectful.PostgreSQL (WithConnection, execute, query_)
 import Max.Effects.Blob (Blob, blobRefFromSha256, readBlob)
-import Max.Effects.LLM
-  ( ChatCtx (..),
-    ChatMessage (..),
-    ChatResponse (..),
-    ContentBlock (..),
-    LLM,
-    chat,
-  )
-import Max.Http.Failure (renderResponseFailure)
-import Max.LLM.Failure (renderLLMFailure)
+import Max.Effects.LLM (LLM)
+import Max.Media.Caption (captionImage)
 import Max.Util (catchSync, trySync, withTempDirectory)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -119,24 +109,10 @@ captionOne profile (sha, mime, mSummary) =
                 if mime == "image/gif"
                   then liftIO (firstFrame bytes)
                   else pure (mime, bytes)
-              let dataUrl =
-                    "data:" <> mime' <> ";base64," <> TE.decodeUtf8 (B64.encode bytes')
-                  hint = case mSummary of
-                    Just s | not (T.null s) -> "（发送方标注：" <> s <> "）"
+              let hint = case mSummary of
+                    Just summary | not (T.null summary) -> "（发送方标注：" <> summary <> "）"
                     _ -> ""
-              eres <-
-                chat
-                  (ChatCtx "caption" Nothing Nothing Nothing Nothing Nothing Nothing)
-                  profile
-                  [ MsgSystem captionSystem,
-                    MsgUserBlocks [TextBlock ("这个表情包" <> hint <> "："), ImageDataUrl dataUrl]
-                  ]
-                  []
-              case eres of
-                Left err -> failed ("chat: " <> renderLLMFailure err)
-                Right (InterruptedResp _ err) -> failed ("chat interrupted: " <> renderResponseFailure err)
-                Right (ToolCallsResp {}) -> failed "chat: unexpected tool calls"
-                Right (ContentResp raw) -> apply (T.strip raw)
+              captionImage profile captionSystem ("这个表情包" <> hint <> "：") mime' bytes' >>= either failed apply
   where
     failed reason = do
       logAttention "caption: failed" $ object ["sha" .= sha, "reason" .= reason]
@@ -146,7 +122,6 @@ captionOne profile (sha, mime, mSummary) =
           (Only sha)
       pure ()
     apply t
-      | T.null t = failed "chat: empty caption"
       | "SKIP" `T.isPrefixOf` T.toUpper t = do
           _ <-
             execute

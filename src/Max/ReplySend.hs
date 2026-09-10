@@ -11,7 +11,7 @@
 -- give one of those its own copy of \"turn model text into messages\"
 -- produced the same bug twice in one day (@a0faa5b@, @d7f8177@):
 -- narration had a private copy, so it missed 'parseReplyTokens' and
--- then 'trimEdgeSegs', and a literal @[reply#111091811]@ went out as
+-- then trimmed segment edges, and a literal @[reply#111091811]@ went out as
 -- visible text.  One implementation, two callers.
 --
 -- == Splitting a reply across calls

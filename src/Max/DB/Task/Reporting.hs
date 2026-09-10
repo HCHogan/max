@@ -114,43 +114,58 @@ submitRequest turn disposition reply = (== Right ()) <$> submitRequestWithInputs
 
 submitRequestWithInputs :: (WithConnection :> es, IOE :> es) => AgentTurnId -> RequestDisposition -> Text -> [RequestInputOutcome] -> Eff es (Either ExecutionFailure ())
 submitRequestWithInputs turn disposition reply inputs
-  | disposition `notElem` permitted
-      || T.null trimmed
-      || T.length trimmed > 40000
-      || length inputs > 256
-      || Set.size (Set.fromList (map (.messageId) inputs)) /= length inputs
-      || any (\input -> input.disposition `notElem` permitted) inputs =
-      pure (Left ExecutionReportRejected)
+  | disposition `notElem` permitted = invalid "disposition 必须为 answered、waiting 或 declined。"
+  | T.null trimmed || T.length trimmed > 40000 = invalid "reply 必须包含 1 至 40000 个字符。"
+  | length inputs > 256 = invalid "inputs 最多包含 256 条消息。"
+  | Set.size (Set.fromList (map (.messageId) inputs)) /= length inputs = invalid "inputs 的 message_id 不能重复。"
+  | any (\input -> input.disposition `notElem` permitted) inputs = invalid "inputs 的 disposition 必须为 answered、waiting 或 declined。"
   | otherwise = withTransaction $ do
       _ <- lockTurnConversation turn
       authorized <- authorizeWithin turn ExecutionCheckpoint
       frontend <-
         query
-          "SELECT EXISTS(SELECT 1 FROM conversation_frontends WHERE turn_id=? AND lease_until>clock_timestamp()),\
-          \ EXISTS(SELECT 1 FROM task_notifications WHERE turn_id=?)"
-          (turn, turn)
-      if not authorized || frontend /= [(True, False)]
-        then pure (Left ExecutionReportRejected)
-        else do
+          "SELECT trigger_canonical_message_id,\
+          \ EXISTS(SELECT 1 FROM conversation_frontends front WHERE front.turn_id=owner.turn_id AND lease_until>clock_timestamp()),\
+          \ EXISTS(SELECT 1 FROM task_notifications notice WHERE notice.turn_id=owner.turn_id)\
+          \ FROM agent_turns owner WHERE owner.turn_id=?"
+          (Only turn)
+      case frontend :: [(Maybe Int64, Bool, Bool)] of
+        _ | not authorized -> pure (Left ExecutionOwnershipLost)
+        [(_, _, True)] -> pure (Left ExecutionNotFrontend)
+        [(trigger, True, False)] -> submitInputs trigger
+        _ -> pure (Left ExecutionOwnershipLost)
+  where
+    trimmed = T.strip reply
+    permitted = [RequestAnswered, RequestWaiting, RequestDeclined]
+    invalid = pure . Left . ExecutionInvalidRequest
+
+    -- The original request is settled by the top-level disposition. Models
+    -- sometimes repeat it in inputs: accept only an identical declaration,
+    -- without inventing an inbox observation or relaxing any input fence.
+    submitInputs trigger
+      | any (\input -> Just input.messageId == trigger && input.disposition /= disposition) inputs =
+          pure (Left ExecutionTriggerConflict)
+      | otherwise = do
           pending <- unseenInputWithin turn
           observed <-
             query
               "SELECT message_id,disposition FROM frontend_inputs WHERE turn_id=? AND released_at IS NULL AND seen_at IS NOT NULL ORDER BY message_id"
               (Only turn)
           recorded <- query "SELECT disposition,reply FROM request_outcomes WHERE turn_id=?" (Only turn)
-          let named = sortOn fst [(input.messageId, dispositionText input.disposition) | input <- inputs]
+          let additional = filter (\input -> Just input.messageId /= trigger) inputs
+              named = sortOn fst [(input.messageId, dispositionText input.disposition) | input <- additional]
               previous = [(message, decision) | (message, Just decision) <- observed]
               known = Set.fromList [message | (message, _) <- observed :: [(Int64, Maybe Text)]]
-              valid = all (\input -> Set.member input.messageId known) inputs
+              unowned = [input.messageId | input <- additional, Set.notMember input.messageId known]
           if pending
             then pure (Left ExecutionInputPending)
             else
-              if not valid
-                then pure (Left ExecutionReportRejected)
+              if not (null unowned)
+                then pure (Left (ExecutionInputUnowned unowned))
                 else
                   if not (null recorded)
                     then
-                      pure (if recorded == [(dispositionText disposition, trimmed)] && previous == named then Right () else Left ExecutionReportRejected)
+                      pure (if recorded == [(dispositionText disposition, trimmed)] && previous == named then Right () else Left ExecutionRequestConflict)
                     else do
                       void $
                         execute
@@ -163,9 +178,6 @@ submitRequestWithInputs turn disposition reply inputs
                             (decision, turn, message)
                       closeInputWithin turn
                       pure (Right ())
-  where
-    trimmed = T.strip reply
-    permitted = [RequestAnswered, RequestWaiting, RequestDeclined]
 
 withAuthorized :: (WithConnection :> es, IOE :> es) => AgentTurnId -> (TaskRecord -> Eff es Bool) -> Eff es Bool
 withAuthorized turn action = withTransaction $ do

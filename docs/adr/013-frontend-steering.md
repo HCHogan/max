@@ -32,6 +32,21 @@ the frontend has seen. Unlisted inputs remain pending and are dispatched
 again after the frontend exits. Publication failure also retains those inputs.
 Output receipts remain necessary for successful settlement.
 
+The original trigger is not an inbox entry. For model compatibility, a
+redundant original-trigger entry is normalized away only when its disposition
+matches the top-level disposition. Conflicting or duplicate declarations and
+unowned message IDs are rejected; normalization neither marks an input seen
+nor expands the caller's scope. Equivalent retries with or without that
+redundant entry share one immutable outcome.
+
+Request validation, unseen-input and ownership rejections are returned before
+any report write. The tool advertises this audited boundary so these returned
+errors are classified as failed-before-effect, with distinct corrective
+messages. Exceptions and timeouts remain outcome-unknown. A frontend that
+exits without an explicit request outcome is failed, even if ordinary prose
+was published; `waiting` is reserved for an explicit disposition. Debug
+messages do not count as reply receipts. Historical rows are not rewritten.
+
 `task_start` continues to delegate the original request. A separate question
 that needs its own background task is left pending for the next frontend;
 steering does not silently change a task's source message or owner.

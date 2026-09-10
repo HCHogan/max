@@ -892,7 +892,7 @@
           <div class="tabs-content">
             <div class="table-wrap">
               <table>
-                <thead><tr><th>任务</th><th>群</th><th>发起</th><th>类型</th><th>触发</th><th>开始</th><th>待处理</th><th></th></tr></thead>
+                <thead><tr><th>任务</th><th>群</th><th>发起</th><th>类型</th><th>触发</th><th>开始</th><th></th></tr></thead>
                 <tbody>
                   <template x-for="t in tasks" :key="t.id">
                     <tr>
@@ -902,7 +902,6 @@
                       <td data-label="类型" x-text="t.kind"></td>
                       <td data-label="触发"><span class="id" x-text="t.trigger_message_id == null ? '-' : t.trigger_message_id"></span></td>
                       <td class="stamp" data-label="开始" x-text="fmtDate(t.started_at)"></td>
-                      <td class="num" data-label="待处理" x-text="t.pending_notes || ''"></td>
                       <td class="act"><button class="danger sm" @click="kill(t)">kill</button></td>
                     </tr>
                   </template>

@@ -1,10 +1,7 @@
 module Max.Prompt
   ( -- * Pipeline
+    PromptRequest (..),
     buildContext,
-    buildContextWithLimits,
-    buildContextWithReadMode,
-    buildContextWithReadModeForOutput,
-    buildContextWithReadModeForOutputContinuation,
     ContextReadMode (..),
     TriggerOrigin (..),
 
@@ -19,7 +16,6 @@ module Max.Prompt
     csInputs,
     ContextPlan (..),
     cpInputs,
-    collectContext,
     collectContextPreview,
     planContext,
     materializeTieredHistory,
@@ -48,7 +44,7 @@ import Data.ByteString.Base64 qualified as B64
 import Data.Either (partitionEithers)
 import Data.Function (on)
 import Data.Int (Int64)
-import Data.List (find, groupBy, minimumBy, sortOn)
+import Data.List (find, groupBy, sortOn)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Set (Set)
@@ -76,6 +72,7 @@ import Max.Context.Policy
     PolicyDrop (..),
     applyBaseCompartmentTiers,
     compartmentTierText,
+    degradeCompartment,
     selectContextTo,
     selectedCompartmentSummary,
   )
@@ -94,7 +91,6 @@ import Max.Context.Types
     TriggerOrigin (..),
     cpInputs,
     csInputs,
-    noContinuation,
   )
 import Max.ContextMaterialization
   ( ContextMaterialization (..),
@@ -129,8 +125,8 @@ import Max.ImagePrep (prepareImageForLLM)
 import Max.Images (downloadableImageCount, downloadableVideoCount)
 import Max.LLM.Types (ChatMessage (..), ContentBlock (..))
 import Max.MemoryStore (MemoryId (..), MemoryItem (..), MemoryVersion (..), groupMemoryNamespace, listRecentMemories, userMemoryNamespace)
-import Max.ModelCatalog (ContextLimits, defaultContextLimits)
-import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), PrincipalId (..), qqAdvertisedCaps)
+import Max.ModelCatalog (ContextLimits)
+import Max.Platform.Types (AdvertisedCaps (..), CanonicalMessageId (..), PrincipalId (..))
 import Max.Prompt.System (systemPrompt)
 import Max.Session (Session (..))
 import Max.Time (fmtDate, fmtDurationSec, fmtEnvStamp, fmtHM)
@@ -174,136 +170,34 @@ historyTokenWatermarks limits multimodal' =
 -- @user@ message becomes 'MsgUserBlocks' instead of 'MsgUser'.
 -- Falls back gracefully when the image worker hasn't caught up yet —
 -- those images stay as @[image]@ markers.
+data PromptRequest = PromptRequest
+  { prContinuation :: !ContinuationInput,
+    prLimits :: !ContextLimits,
+    prReadMode :: !ContextReadMode,
+    prOutputCaps :: !AdvertisedCaps,
+    prPersona :: !Text,
+    prMultimodal :: !Bool,
+    prHistoryTurns :: !Bool,
+    prOrigin :: !TriggerOrigin,
+    prTimeZone :: !TimeZone,
+    prGroupBrief :: ![Text],
+    prSkills :: ![(Text, Text)],
+    prInFlight :: !(Set Int64),
+    prSession :: !Session,
+    prTrigger :: !DispatchMessage
+  }
+
+-- | Build the prompt and its exact output roster under one explicit request.
+-- Continuations and endpoint capabilities participate in budget planning.
 buildContext ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  Text -> -- default persona (used when session has no override)
-  Bool -> -- multimodal: load + attach inline images
-  Bool -> -- history as user/assistant turns (see 'PromptInputs.historyTurns')
-  TriggerOrigin -> -- what woke the bot (see 'PromptInputs.origin')
-  TimeZone -> -- display timezone for rendered timestamps
-  [Text] -> -- pre-rendered 群信息 lines (see 'PromptInputs.groupBrief')
-  [(Text, Text)] -> -- skill index for this group (see 'PromptInputs.skills')
-  Set Int64 -> -- triggers another turn is already answering (see 'PromptInputs.inFlight')
-  Session ->
-  DispatchMessage ->
-  Eff es [ChatMessage]
-buildContext = buildContextWithLimits defaultContextLimits
-
--- | Production entry point with limits taken from the selected model profile.
-buildContextWithLimits ::
-  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  ContextLimits ->
-  Text ->
-  Bool ->
-  Bool ->
-  TriggerOrigin ->
-  TimeZone ->
-  [Text] ->
-  [(Text, Text)] ->
-  Set Int64 ->
-  Session ->
-  DispatchMessage ->
-  Eff es [ChatMessage]
-buildContextWithLimits limits = buildContextWithReadMode limits TieredContext
-
-buildContextWithReadMode ::
-  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  ContextLimits ->
-  ContextReadMode ->
-  Text ->
-  Bool ->
-  Bool ->
-  TriggerOrigin ->
-  TimeZone ->
-  [Text] ->
-  [(Text, Text)] ->
-  Set Int64 ->
-  Session ->
-  DispatchMessage ->
-  Eff es [ChatMessage]
-buildContextWithReadMode limits readMode defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
-  fst
-    <$> buildContextWithReadModeForOutput
-      limits
-      readMode
-      qqAdvertisedCaps
-      defaultPersona
-      multimodal'
-      historyTurns'
-      origin'
-      tz'
-      brief
-      skills'
-      inFlight'
-      s
-      gm
-
--- | Production variant whose action grammar is constrained by the enabled
--- conversation endpoints.  The compatibility wrapper above keeps pure/legacy
--- fixtures stable, but live dispatches must call this function with the
--- endpoint-owned intersection from 'Max.Platform.Store'.
-buildContextWithReadModeForOutput ::
-  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  ContextLimits ->
-  ContextReadMode ->
-  AdvertisedCaps ->
-  Text ->
-  Bool ->
-  Bool ->
-  TriggerOrigin ->
-  TimeZone ->
-  [Text] ->
-  [(Text, Text)] ->
-  Set Int64 ->
-  Session ->
-  DispatchMessage ->
-  -- | The rendered prompt, plus the roster it shows.  They travel together
-  -- because the send path has to accept exactly the handles the model was
-  -- given: any other source of names is a second identity vocabulary, which
-  -- is the thing ADR 004 removes.
-  Eff es ([ChatMessage], [(Int64, Text)])
-buildContextWithReadModeForOutput = buildContextWithReadModeForOutputContinuation noContinuation
-
--- | ADR 005 variant: an exact finished-turn reply supplies its digest — and,
--- at the replay tier, its verbatim segments — before collection, so
--- ContextPolicy accounts for the whole continuation's token cost rather than
--- discovering it after planning.
-buildContextWithReadModeForOutputContinuation ::
-  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  ContinuationInput ->
-  ContextLimits ->
-  ContextReadMode ->
-  AdvertisedCaps ->
-  Text ->
-  Bool ->
-  Bool ->
-  TriggerOrigin ->
-  TimeZone ->
-  [Text] ->
-  [(Text, Text)] ->
-  Set Int64 ->
-  Session ->
-  DispatchMessage ->
-  Eff es ([ChatMessage], [(Int64, Text)])
-buildContextWithReadModeForOutputContinuation continuationView' limits readMode outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
-  let historyWatermarks = historyTokenWatermarks limits multimodal'
-  snapshot <-
-    collectContextWithWatermarks
-      PublishMaterialization
-      readMode
-      (Just historyWatermarks)
-      continuationView'
-      outputCaps
-      defaultPersona
-      multimodal'
-      historyTurns'
-      origin'
-      tz'
-      brief
-      skills'
-      inFlight'
-      s
-      gm
+  PromptRequest -> Eff es ([ChatMessage], [(Int64, Text)])
+buildContext request = do
+  let limits = request.prLimits
+      readMode = request.prReadMode
+      gm = request.prTrigger
+      historyWatermarks = historyTokenWatermarks limits request.prMultimodal
+  snapshot <- collectContextWithWatermarks PublishMaterialization (Just historyWatermarks) request
   let plan = planContext limits snapshot
       CanonicalMessageId triggerMessageId = gm.canonicalId
       scope = conversationScopeFor gm.groupId
@@ -339,40 +233,12 @@ contextReadModeText = \case
   TieredContext -> "tiered"
   RawLedgerEmergency -> "raw_emergency"
 
--- | Effectful I/O only: fetch and enrich a complete snapshot.  Selection and
--- token pressure happen later in the pure policy step.
-collectContext ::
-  (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  Text ->
-  Bool ->
-  Bool ->
-  TriggerOrigin ->
-  TimeZone ->
-  [Text] ->
-  [(Text, Text)] ->
-  Set Int64 ->
-  Session ->
-  DispatchMessage ->
-  Eff es ContextSnapshot
-collectContext = collectContextWithWatermarks PublishMaterialization TieredContext Nothing noContinuation qqAdvertisedCaps
-
--- | Read-only collection for admin previews and replay evaluation. It never
--- publishes a materialization revision or a diagnostic row; callers may pass
--- the returned snapshot to 'planContext' and render it independently.
+-- | Read-only collection. It never publishes a materialization revision or
+-- diagnostic row; callers can plan and render the snapshot independently.
 collectContextPreview ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  Text ->
-  Bool ->
-  Bool ->
-  TriggerOrigin ->
-  TimeZone ->
-  [Text] ->
-  [(Text, Text)] ->
-  Set Int64 ->
-  Session ->
-  DispatchMessage ->
-  Eff es ContextSnapshot
-collectContextPreview = collectContextWithWatermarks ReadOnlyPreview TieredContext Nothing noContinuation qqAdvertisedCaps
+  PromptRequest -> Eff es ContextSnapshot
+collectContextPreview = collectContextWithWatermarks ReadOnlyPreview Nothing
 
 data ContextMutationMode
   = PublishMaterialization
@@ -381,23 +247,21 @@ data ContextMutationMode
 
 collectContextWithWatermarks ::
   (Blob :> es, WithConnection :> es, Log :> es, IOE :> es) =>
-  ContextMutationMode ->
-  ContextReadMode ->
-  Maybe HistoryTokenWatermarks ->
-  ContinuationInput ->
-  AdvertisedCaps ->
-  Text ->
-  Bool ->
-  Bool ->
-  TriggerOrigin ->
-  TimeZone ->
-  [Text] ->
-  [(Text, Text)] ->
-  Set Int64 ->
-  Session ->
-  DispatchMessage ->
-  Eff es ContextSnapshot
-collectContextWithWatermarks mutationMode readMode materializationWatermarks continuation' outputCaps defaultPersona multimodal' historyTurns' origin' tz' brief skills' inFlight' s gm = do
+  ContextMutationMode -> Maybe HistoryTokenWatermarks -> PromptRequest -> Eff es ContextSnapshot
+collectContextWithWatermarks mutationMode materializationWatermarks request = do
+  let readMode = request.prReadMode
+      continuation' = request.prContinuation
+      outputCaps = request.prOutputCaps
+      defaultPersona = request.prPersona
+      multimodal' = request.prMultimodal
+      historyTurns' = request.prHistoryTurns
+      origin' = request.prOrigin
+      tz' = request.prTimeZone
+      brief = request.prGroupBrief
+      skills' = request.prSkills
+      inFlight' = request.prInFlight
+      s = request.prSession
+      gm = request.prTrigger
   let GroupId gid = gm.groupId
       CanonicalMessageId mid = gm.canonicalId
       PrincipalId senderPrincipal = gm.authorPrincipalId
@@ -410,7 +274,7 @@ collectContextWithWatermarks mutationMode readMode materializationWatermarks con
   -- emergency fallback reads the immutable ledger from the beginning and lets
   -- ContextPolicy retain as much as the selected model's token budget allows.
   -- No mention/participation lane and no fixed message count survive here.
-  let fallbackWatermarks = historyTokenWatermarks defaultContextLimits multimodal'
+  let fallbackWatermarks = historyTokenWatermarks request.prLimits multimodal'
       rawCollectionLimit = maybe fallbackWatermarks.htwHigh (.htwHigh) materializationWatermarks
       collectRawFallback reason = do
         (raw, _) <- fetchBoundedPromptTail scope (MessageCursor 0) mid s.clearedAt rawCollectionLimit
@@ -1466,23 +1330,9 @@ fitCompartmentTiers tokenLimit = go
   where
     go compartments'
       | sum (map compartmentSelectedTokens compartments') <= tokenLimit = compartments'
-      | otherwise = case filter ((/= TierP4) . (.contextTier)) compartments' of
-          [] -> compartments'
-          candidates ->
-            let selected = minimumBy (compare `on` degradationKey) candidates
-                degraded = selected {contextTier = succ selected.contextTier}
-             in go
-                  [ if compartment.contextCompartmentId == selected.contextCompartmentId
-                      then degraded
-                      else compartment
-                  | compartment <- compartments'
-                  ]
-    degradationKey compartment =
-      ( compartment.contextImportance,
-        compartment.contextEndedAt,
-        compartment.contextMaterializationVersion,
-        compartment.contextCompartmentId
-      )
+      | otherwise = case degradeCompartment compartments' of
+          Nothing -> compartments'
+          Just (_, degraded) -> go degraded
 
 materializedCompartments :: [ActiveCompartment] -> ContextMaterialization -> [ContextCompartment]
 materializedCompartments active materialization = mapMaybe materialize materialization.cmItems

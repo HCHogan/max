@@ -12,7 +12,6 @@
 -- we want to report back to the user.
 module Max.Command.Parser
   ( parseCommand,
-    parseCommandText,
     effortLevels,
   )
 where
@@ -87,14 +86,6 @@ splitLeadingPkgs = go []
                     else go (pkg : acc) rest
             _ -> (reverse acc, s')
     isSpace c = c == ' ' || c == '\t' || c == '\n' || c == '\r'
-
--- | Same but never returns @Right Nothing@ — for callers that already
--- know the input is meant to be a command.
-parseCommandText :: Text -> Either Text Command
-parseCommandText input = case parseCommand input of
-  Right (Just c) -> Right c
-  Right Nothing -> Left "not a command"
-  Left e -> Left e
 
 -- | Cheap pre-check: leading @!@ followed by ASCII letter.  We treat
 -- everything else as not-a-command so people can still yell "！！！"

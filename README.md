@@ -61,8 +61,8 @@ canonical message ledger ────┬──▶ mirror deliveries: native wher
   searching and reading the exact deployed code, ADRs, and schema.
 - Plus the table stakes: concurrent turns with streaming, cancellation,
   and mid-turn feedback; multimodal input; persistent per-group sandboxes
-  and browser automation; skills, typed monitors, durable orchestration
-  plans, proactive participation, and an authenticated local admin panel.
+  and browser automation; skills, typed monitors, durable background
+  tasks, proactive participation, and an authenticated local admin panel.
 
 ## Quick start
 
@@ -101,6 +101,13 @@ managed separately from either shell activation mechanism.
 `devenv.yaml`/`devenv.lock` pin the same nixpkgs and devenv inputs as
 `flake.lock`; after updating either entry point, synchronize the other and run
 `python3 scripts/check-devenv-pins.py`. CI checks the resolved input graphs.
+
+`nix build .#max` produces the runtime package: `max`, `max-runtime`,
+`maxctl`, and `max-adr003-maintenance`. The command
+`nix build .#max-tools --out-link result-tools` produces `max-prompt-flow` and the intent, context, and skill
+evaluation executables in `result-tools/bin`. Each package builds only its own
+executable group. Local Cabal builds include both groups by default, including
+`cabal run max-prompt-flow` before every commit.
 
 The NixOS module provisions native NapCat, browser services and command
 sandboxes under `max-stack.target`. Enable `services.max.napcat.enable` for QQ,
