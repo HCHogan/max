@@ -157,7 +157,8 @@
 
   dotenv.enable = true;
 
-  enterShell = ''
+  # Flake environments are captured before direnv loads local .env overrides.
+  enterShell = lib.optionalString (!config.devenv.flakesIntegration) ''
     # Native zsh reload evaluates stdout as environment assignments.
     # Keep informational output on stderr.
     {

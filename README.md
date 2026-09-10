@@ -69,34 +69,35 @@ canonical message ledger ────┬──▶ mirror deliveries: native wher
 ```sh
 cp .env.example .env
 cp max.yaml.example max.yaml
-devenv shell                         # native devenv CLI >= 2.3
-devenv up -d                         # PostgreSQL on 127.0.0.1:5433
+direnv allow                         # nix-direnv loads the flake devShell
+devenv up --detached                 # PostgreSQL on 127.0.0.1:5433
 cabal run max
 ```
 
-Interactive development uses native [devenv shell reload](https://devenv.sh/blog/2026/05/07/devenv-21-nix-with-zsh-fish-and-nushell-via-libghostty/):
-configuration changes rebuild in the background and apply at the next prompt.
-The running command keeps its environment. Source-code compilation and running
-Max processes are managed separately. The shell follows your login shell;
-`devenv --shell zsh shell` selects zsh explicitly.
+Interactive development defaults to direnv with `use flake . --impure`, using
+the same devShell as `nix develop --impure`. Entering the project loads the
+environment into your current shell; leaving restores the outer environment.
+nix-direnv caches the shell, and changes to `flake.nix`, `flake.lock`,
+`devenv.nix`, or `.env` are picked up at the next prompt.
 
-`.env` is loaded through `dotenv.enable`, including on native shell reload.
-Explicit `env` settings in `devenv.nix` take precedence over `.env` values.
-The pinned dotenv integration materializes these values in the local Nix store.
+direnv loads `.env` with `dotenv_if_exists` after the Nix environment, so local
+values override defaults from `devenv.nix`. This does not source `.env` as a
+shell script. Plain `nix develop --impure` and CI require explicit environment
+variables: devenv 2.3's built-in dotenv is unavailable through flakes.
 
-The shared nix-config dev profile enables native zsh activation on `cd`:
-run `devenv allow` once in this repository. Entering the project opens a devenv
-subshell; moving between its subdirectories keeps it; leaving the project
-returns to the outer shell in the destination directory. On other setups,
-add `eval "$(devenv hook zsh)"` to your zsh configuration. `.envrc` is
-intentionally inert, allowing a global direnv hook to coexist with native
-activation. When moving from the old direnv environment, run `direnv allow`
-and return to a fresh outer shell before starting `devenv shell`: the old
-environment's `devenv-flake-compat` executable does not support `shell`.
+The shared nix-config dev profile enables direnv and disables native devenv
+auto-activation. When switching from the native hook, run `devenv revoke` with
+the installed CLI in this repository, run `direnv allow`, and open a fresh
+terminal so an existing native subshell or hook does not remain active.
 
-`nix develop --impure` remains available for CI and flake consumers, with
-dotenv disabled because devenv 2.3 requires the native CLI to load it.
-Pass environment variables explicitly when using this entry point.
+The native CLI >= 2.3 remains an optional entry point through
+`devenv.yaml`/`devenv.lock`, with `dotenv.enable` and background shell reload.
+Inside the flake environment, `devenv` is a compatibility wrapper for `up`,
+`tasks`, and `test`; use the installed native CLI's full path to invoke `shell`.
+Native dotenv gives explicit `env` settings precedence and materializes values
+in the local Nix store. Source-code compilation and running Max processes are
+managed separately from either shell activation mechanism.
+
 `devenv.yaml`/`devenv.lock` pin the same nixpkgs and devenv inputs as
 `flake.lock`; after updating either entry point, synchronize the other and run
 `python3 scripts/check-devenv-pins.py`. CI checks the resolved input graphs.
