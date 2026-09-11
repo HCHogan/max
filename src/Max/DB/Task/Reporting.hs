@@ -3,7 +3,8 @@
 module Max.DB.Task.Reporting (submitReport, submitProgress, submitFailure, submitRequest, submitRequestWithInputs) where
 
 import Control.Monad (forM_, void)
-import Data.Aeson (Value, object, (.=))
+import Data.Aeson (Value (..), object, (.=))
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Set qualified as Set
@@ -23,13 +24,22 @@ import Max.Task.Types (taskHandle)
 import Max.Turn.Types (AgentTurnId)
 
 submitReport :: (WithConnection :> es, IOE :> es) => AgentTurnId -> TaskReport -> Eff es Bool
-submitReport turn report = withAuthorized turn $ \_ -> do
+submitReport turn report = withAuthorized turn $ \task -> do
+  structured <- case task.monitorFire of
+    Nothing -> pure False
+    Just fire -> do
+      rows <- query "SELECT COALESCE((definition_snapshot->>'change_only')::boolean,false) FROM monitor_fires WHERE fire_id=?" (Only fire)
+      pure (rows == [Only True])
+  let validObservation = case report.observation of
+        Just (Object fields) -> not (KeyMap.null fields)
+        _ -> False
+      observationRequired = structured && report.status `elem` [ReportSucceeded, ReportPartial]
   children <-
     query
       "SELECT EXISTS(SELECT 1 FROM durable_tasks child JOIN task_attempts parent ON child.parent_task_id=parent.task_id\
       \ AND child.parent_revision=parent.revision WHERE parent.turn_id=? AND child.status IN ('queued','running','waiting','retrying'))"
       (Only turn)
-  if report.status == ReportSucceeded && children == [Only True]
+  if (observationRequired && not validObservation) || (report.status == ReportSucceeded && children == [Only True])
     then pure False
     else do
       moved <-

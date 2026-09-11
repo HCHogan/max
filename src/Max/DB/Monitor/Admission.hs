@@ -7,7 +7,7 @@ import Data.Aeson (Value, object, (.=))
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
-import Data.Maybe (isNothing)
+import Data.Maybe (isNothing, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
@@ -105,12 +105,22 @@ admitMonitorTaskWithin owner occurrence next grants seed = do
                         pure (Left MonitorHourlyBudget)
                       else do
                         observations <- query "SELECT fire_id,trigger_evidence FROM monitor_fires WHERE coalesced_into=? ORDER BY fire_id DESC LIMIT 80" (Only occurrence)
-                        let evidence = [object ["fire" .= (identifier :: Int64), "evidence" .= T.take 5000 detail] | (identifier, detail) <- observations]
+                        previous <-
+                          query
+                            "SELECT work.result->'observation' FROM monitor_fires prior JOIN durable_tasks work ON work.task_id=prior.task_id\
+                            \ WHERE prior.monitor_id=? AND prior.definition_revision=? AND prior.fire_id<>?\
+                            \ AND work.status IN ('succeeded','partial') AND jsonb_typeof(work.result->'observation')='object'\
+                            \ ORDER BY prior.scheduled_at DESC,prior.fire_id DESC LIMIT 1"
+                            (fire.monitor, fire.revision, occurrence)
+                        let baseline = listToMaybe [value | Only value <- previous :: [Only Value]]
+                            evidence = [object ["fire" .= (identifier :: Int64), "evidence" .= T.take 5000 detail] | (identifier, detail) <- observations]
                             inputs =
                               object
                                 [ "trigger" .= fire.evidence,
                                   "scheduled_at" .= fire.scheduled,
                                   "definition_revision" .= fire.revision,
+                                  "change_only" .= snapshot.changeOnly,
+                                  "previous_observation" .= baseline,
                                   "coalesced_evidence" .= (if null evidence then Nothing else Just evidence)
                                 ]
                         tasks <-

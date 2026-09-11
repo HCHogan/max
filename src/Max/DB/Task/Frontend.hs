@@ -1,4 +1,4 @@
--- | Conversation ownership and admission priority. Progress reviews yield an
+-- | Conversation ownership and admission priority. Notification reviews yield an
 -- unpublished activation to real foreground work under the same commit lock.
 module Max.DB.Task.Frontend (FrontendAdmission (..), admitFrontend, claimFrontend, frontendWorkWaitingWithin) where
 
@@ -51,16 +51,16 @@ admitFrontend turn input = withTransaction $ do
       else pure []
   case active :: [(Int64, Maybe Int64)] of
     [(conversation, trigger)] -> do
-      review <- query "SELECT EXISTS(SELECT 1 FROM task_notifications WHERE turn_id=? AND kind='progress')" (Only turn.atrTurnId)
-      let progress = review == [Only True]
-      waiting <- if progress then frontendWorkWaitingWithin conversation (Just turn.atrTurnId) else pure False
+      review <- query "SELECT EXISTS(SELECT 1 FROM task_notifications WHERE turn_id=?)" (Only turn.atrTurnId)
+      let reviewPending = review == [Only True]
+      waiting <- if reviewPending then frontendWorkWaitingWithin conversation (Just turn.atrTurnId) else pure False
       -- Removing the lease fences every late publication before the new owner
       -- starts. The review's shared lease watcher cancels its model request.
-      unless progress $
+      unless reviewPending $
         void $
           execute
             "DELETE FROM conversation_frontends f USING task_notifications n\
-            \ WHERE f.conversation_id=? AND f.turn_id<>? AND n.turn_id=f.turn_id AND n.kind='progress'\
+            \ WHERE f.conversation_id=? AND f.turn_id<>? AND n.turn_id=f.turn_id\
             \ AND NOT EXISTS(SELECT 1 FROM messages m WHERE m.agent_turn_id=f.turn_id)"
             (conversation, turn.atrTurnId)
       occupied <-

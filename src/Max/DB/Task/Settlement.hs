@@ -5,13 +5,14 @@ module Max.DB.Task.Settlement
   ( SettlementOutcome (..),
     settleTurn,
     completeTask,
+    settleNotification,
     cancelDescendants,
     revokeTaskBrowser,
   )
 where
 
 import Control.Monad (forM_, unless, void, when)
-import Data.Aeson (Value, toJSON)
+import Data.Aeson (Value)
 import Data.Int (Int64)
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
@@ -87,7 +88,7 @@ settleTurn turn outcomeKind abortReason frontendManaged = do
             execute
               "INSERT INTO task_events(task_id,revision,kind,body) VALUES(?,?,'retry_scheduled',?)"
               (task.taskId, task.revision, T.take 60000 (jsonText decision.report))
-  settleNotification turn successful abortReason
+  settleNotification turn abortReason
   when frontendManaged $ do
     receipts <- query "SELECT EXISTS(SELECT 1 FROM messages WHERE agent_turn_id=? AND kind='chat')" (Only turn)
     outcomes <- query "SELECT disposition,reply FROM request_outcomes WHERE turn_id=?" (Only turn)
@@ -117,14 +118,14 @@ settleTurn turn outcomeKind abortReason frontendManaged = do
     void $ execute "NOTIFY max_dispatch_work, '1'" ()
     void $ execute "NOTIFY max_task_work, '1'" ()
 
-settleNotification :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Bool -> Maybe Text -> Eff es ()
-settleNotification turn successful abortReason = do
+settleNotification :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Maybe Text -> Eff es ()
+settleNotification turn abortReason = do
   receipts <- query "SELECT EXISTS(SELECT 1 FROM messages WHERE agent_turn_id=?)" (Only turn)
   when (receipts == [Only True]) $
     void $
       execute
-        "UPDATE task_notifications SET delivered_at=now() WHERE turn_id=? AND (superseded_at IS NULL OR kind='progress') AND delivered_at IS NULL AND (? OR kind='progress')"
-        (turn, successful)
+        "UPDATE task_notifications SET delivered_at=now() WHERE turn_id=? AND (superseded_at IS NULL OR review_decision->>'action'='publish') AND delivered_at IS NULL"
+        (Only turn)
   pending <-
     query
       "SELECT notification_id,attempts FROM task_notifications WHERE turn_id=? AND delivered_at IS NULL AND superseded_at IS NULL\
@@ -279,9 +280,9 @@ suppressMonitorNotice task = case task.monitorFire of
             case previous of
               [Only identifier] -> do
                 old <- loadTask identifier
-                pure $ maybe False (\prior -> task.status == prior.status && observationOf task.result == observationOf prior.result) old
+                pure $ maybe False (\prior -> task.status == prior.status && maybe False (\observation -> Just observation == observationOf prior.result) (observationOf task.result)) old
               _ -> pure False
       _ -> pure False
   where
     observationOf :: Maybe TaskReport -> Maybe Value
-    observationOf = fmap (\report -> fromMaybe (toJSON report) report.observation)
+    observationOf report = report >>= (.observation)

@@ -14,7 +14,11 @@ migration 091; production behavioral acceptance is separate from automated gates
   tools or live output stream. Its versioned publish/skip decision is visible in
   `task_status.progress.review_decision`; skip produces no conversation message.
   User requests can preempt an unpublished review; failed reviews retry without
-  dumping the background report. Final results keep their existing fallback.
+  dumping the background report. Migration 110 applies this review to final
+  results too and removes the literal-report fallback. A result can skip only
+  when no explicit source request is still pending, delegated or waiting.
+  Committed publication receipts survive a crashed terminal checkpoint without
+  producing another message.
 - `request_finish` records answered/waiting/declined and the frontend reply;
   only recorded output settles an explicit request.
 - `!task list`, `!task status task#N`, `!task steer task#N <note>`.
@@ -27,6 +31,10 @@ migration 091; production behavioral acceptance is separate from automated gates
   runtime entry is not an assignment. `!feedback task#N <note>` also addresses
   the durable inbox; unaddressed `!feedback` asks for a target. `!btw <question>`
   keeps a separate queued request even when the frontend is busy.
+- Change-only monitors must finish with a nonempty `observation` object. Each
+  occurrence receives `previous_observation` from the same definition revision;
+  preserve its keys/types and exclude timestamps, job IDs and generated prose.
+  Only equal status and equal observations suppress a repeated result.
 - `monitor_history` includes revisions, task links, coalescing, overflow and
   failures. `configure_monitor` requires CAS and explicit retain/cancel policy
   for pending old-revision occurrences, plus explicit profile/change_only fields. `cancel_monitor` stops future/pending

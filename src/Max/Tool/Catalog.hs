@@ -193,6 +193,16 @@ validatePresent args view (name, Object propertySchema) = case KeyMap.lookup nam
         Just (Number maximumValue)
           | n > maximumValue -> Left (rejectedFault view (Key.toText name <> " is above maximum"))
         _ -> Right ()
+    validateBounds (String text) = do
+      let size = fromIntegral (T.length text)
+      case KeyMap.lookup "minLength" propertySchema of
+        Just (Number minimumValue)
+          | size < minimumValue -> Left (rejectedFault view (Key.toText name <> " is shorter than minLength"))
+        _ -> Right ()
+      case KeyMap.lookup "maxLength" propertySchema of
+        Just (Number maximumValue)
+          | size > maximumValue -> Left (rejectedFault view (Key.toText name <> " is longer than maxLength"))
+        _ -> Right ()
     validateBounds _ = Right ()
 validatePresent _ view (name, _) =
   Left (rejectedFault view ("invalid registered schema for " <> Key.toText name))

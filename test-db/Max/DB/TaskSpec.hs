@@ -2,7 +2,7 @@ module Max.DB.TaskSpec (spec, seed, admit, claimOne, report, insertOccurrence, d
 
 import Control.Concurrent.Async (concurrently, mapConcurrently)
 import Control.Exception (bracket_)
-import Control.Monad (void)
+import Control.Monad (void, when)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Either (isLeft, isRight)
@@ -31,8 +31,8 @@ import Max.DB.Monitor
 import Max.DB.Monitor.Occurrence (OccurrenceDraft (..), recordOccurrence)
 import Max.DB.Task
 import Max.DB.Task.MonitorControl qualified as MonitorDB
+import Max.DB.Task.Notice (loadNoticeReview, recordNoticeDecision)
 import Max.DB.Task.Overview qualified as WorkQuery
-import Max.DB.Task.Progress (recordProgressDecision)
 import Max.DB.Task.Query qualified as TaskQuery
 import Max.DB.Task.Record (databaseNow)
 import Max.DB.Transaction (withTransaction)
@@ -57,9 +57,9 @@ import Max.ReplySend (ReplyPublicationException (..))
 import Max.Task.Admission (AdmissionError (..))
 import Max.Task.Admission qualified as Admission
 import Max.Task.Execution (ExecutionFailure (..))
+import Max.Task.Notice (NoticeDecision (PublishNotice), NoticeReview (..))
 import Max.Task.Overview qualified as WorkView
 import Max.Task.Policy (frontendDeadlineSeconds)
-import Max.Task.Progress (ProgressDecision (PublishProgress))
 import Max.Task.Query qualified as QueryView
 import Max.Task.State (FailureKind (..), TaskControlError (TaskCallerFenced, TaskNotFound), TaskOperation (Cancel, Steer))
 import Max.Task.State qualified as TaskState
@@ -76,82 +76,88 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
-  it "executes an admitted fleet job without model polling and retains its submission identity" $ do
-    (front, message, actor) <- seed pool 611798505 1
-    withDb pool (claimFrontend front) `shouldReturn` True
-    output <- newTurnOutputContext front
-    let config = MaxOpsConfig True "http://hub.test" "/test/runtime-token" [611798505]
-        operation name kind readonly idempotency =
-          object
-            [ "name" .= (name :: Text),
-              "kind" .= (kind :: Text),
-              "read_only" .= readonly,
-              "idempotency" .= (idempotency :: Text),
-              "minimum_protocol_version" .= (2 :: Int),
-              "params_schema" .= object ["type" .= ("object" :: Text)]
-            ]
-        rawCatalog =
-          object
-            [ "version" .= (2 :: Int),
-              "operations"
-                .= [operation "exec.run" "job_submission" False "required", operation "jobs.wait" "job_control" True "none", operation "jobs.logs" "job_control" True "none"]
-            ]
-        grants = Map.singleton "maxops_execute" "test-grant"
-        contextFor turnOutput background =
-          mkToolContext
-            (TurnIdentity (GroupId 611798505) message (UserId 1) (UserId 99) actor Nothing (Just turnOutput))
-            (TurnCapabilities False False True noAdvertisedCaps False grants Nothing background)
-    catalog <- either (fail . T.unpack) pure (parseCatalog rawCatalog)
-    entry <- case catalog.operations of first : _ -> pure first; _ -> fail "empty fixture"
-    (admitted, _) <-
-      withDb pool $
-        runToolControl
-          ( admitMaxOpsTask
-              (withToolInvocationIdentity (Just "max:j41") (contextFor output False))
-              config
-              entry
-              (object [])
-          )
-    admitted `shouldSatisfy` either (const False) (const True)
-    taskTurn <- claimOne pool
-    Just task <- withDb pool (loadTaskExecution taskTurn.atrTurnId)
-    taskOutput <- newTurnOutputContext taskTurn
-    keys <- newIORef []
-    waits <- newIORef (0 :: Int)
-    let client =
-          MaxOpsClient
-            ( \_ op _ key ->
-                if op.name == "exec.run"
-                  then do
-                    modifyIORef' keys (<> [key])
-                    pure (Right (object ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("queued" :: Text)]))
-                  else
-                    if op.name == "jobs.logs"
-                      then pure (Right (object ["stdout_text" .= ("bounded diagnostic output" :: Text), "complete" .= True]))
-                      else do
-                        modifyIORef' waits (+ 1)
-                        pure
-                          ( Right
-                              ( object
-                                  [ "job"
-                                      .= object
-                                        [ "handle"
-                                            .= object
-                                              ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("succeeded" :: Text), "revision" .= (3 :: Int)]
-                                        ]
-                                  ]
-                              )
-                          )
+  for_ [("exec.run", Nothing, True, TaskState.ReportPartial), ("diagnostics.collect", Just "complete", True, TaskState.ReportSucceeded), ("diagnostics.collect", Just "partial", True, TaskState.ReportPartial), ("diagnostics.collect", Just "failed", True, TaskState.ReportFailed), ("diagnostics.collect", Nothing, True, TaskState.ReportPartial), ("diagnostics.collect", Just "complete", False, TaskState.ReportPartial)] $ \(remoteOperation, assessment, outputAvailable, expected) ->
+    it ("observes " <> T.unpack remoteOperation <> " " <> show (assessment, outputAvailable) <> " without model polling or losing its submission identity") $ do
+      (front, message, actor) <- seed pool 611798505 1
+      withDb pool (claimFrontend front) `shouldReturn` True
+      output <- newTurnOutputContext front
+      let config = MaxOpsConfig True "http://hub.test" "/test/runtime-token" [611798505]
+          operation name kind readonly idempotency =
+            object
+              [ "name" .= (name :: Text),
+                "kind" .= (kind :: Text),
+                "read_only" .= readonly,
+                "idempotency" .= (idempotency :: Text),
+                "minimum_protocol_version" .= (2 :: Int),
+                "params_schema" .= object ["type" .= ("object" :: Text)]
+              ]
+          rawCatalog =
+            object
+              [ "version" .= (2 :: Int),
+                "operations"
+                  .= [operation remoteOperation "job_submission" False "required", operation "jobs.wait" "job_control" True "none", operation "jobs.logs" "job_control" True "none", operation "jobs.result" "job_control" True "none"]
+              ]
+          grants = Map.singleton "maxops_execute" "test-grant"
+          contextFor turnOutput background =
+            mkToolContext
+              (TurnIdentity (GroupId 611798505) message (UserId 1) (UserId 99) actor Nothing (Just turnOutput))
+              (TurnCapabilities False False True noAdvertisedCaps False grants Nothing background)
+      catalog <- either (fail . T.unpack) pure (parseCatalog rawCatalog)
+      entry <- case catalog.operations of first : _ -> pure first; _ -> fail "empty fixture"
+      (admitted, _) <-
+        withDb pool $
+          runToolControl
+            ( admitMaxOpsTask
+                (withToolInvocationIdentity (Just "max:j41") (contextFor output False))
+                config
+                entry
+                (object [])
             )
-            (\_ _ -> pure (Right rawCatalog))
-    for_ [1, 2 :: Int] $ \_ -> do
-      result <- withDbLog pool $ runMaxOpsTask client config (pure config) (contextFor taskOutput True) task
-      result.status `shouldBe` TaskState.ReportSucceeded
-      result.summary `shouldSatisfy` T.isInfixOf "bounded diagnostic output"
-    readIORef keys `shouldReturn` [Just "max:j41", Just "max:j41"]
-    readIORef waits `shouldReturn` 2
-    rows <- withDb pool $ query "SELECT state FROM execution_journal WHERE turn_id=?" (Only taskTurn.atrTurnId)
-    (rows :: [Only Text]) `shouldBe` [Only "committed", Only "committed"]
+      admitted `shouldSatisfy` either (const False) (const True)
+      admitted `shouldSatisfy` (\case Right (Object fields) -> KeyMap.lookup "kind" fields == Just (String "max_task") && not (KeyMap.member "job_id" fields); _ -> False)
+      taskTurn <- claimOne pool
+      Just task <- withDb pool (loadTaskExecution taskTurn.atrTurnId)
+      taskOutput <- newTurnOutputContext taskTurn
+      keys <- newIORef []
+      waits <- newIORef (0 :: Int)
+      let client =
+            MaxOpsClient
+              ( \_ op params key ->
+                  if op.name == remoteOperation
+                    then do
+                      modifyIORef' keys (<> [key])
+                      pure (Right (object ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("queued" :: Text)]))
+                    else
+                      if op.name == (if remoteOperation == "diagnostics.collect" then "jobs.result" else "jobs.logs")
+                        then do
+                          when (remoteOperation == "diagnostics.collect") $ params `shouldBe` object ["job_id" .= ("stable-remote-job" :: Text), "limit" .= (8192 :: Int), "pointer" .= ("/diagnostic" :: Text)]
+                          pure (if outputAvailable then Right (object ["stdout_text" .= ("bounded diagnostic output" :: Text), "complete" .= True]) else Left "maxops result unavailable")
+                        else do
+                          modifyIORef' waits (+ 1)
+                          pure
+                            ( Right
+                                ( object
+                                    [ "job"
+                                        .= object
+                                          [ "evidence_status" .= (assessment :: Maybe Text),
+                                            "handle"
+                                              .= object
+                                                ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("succeeded" :: Text), "revision" .= (3 :: Int)]
+                                          ]
+                                    ]
+                                )
+                            )
+              )
+              (\_ _ -> pure (Right rawCatalog))
+      for_ [1, 2 :: Int] $ \_ -> do
+        result <- withDbLog pool $ runMaxOpsTask client config (pure config) (contextFor taskOutput True) task
+        result.status `shouldBe` expected
+        null result.unresolved `shouldBe` (expected == TaskState.ReportSucceeded)
+        result.summary `shouldSatisfy` T.isInfixOf (if outputAvailable then "bounded diagnostic output" else "unavailable")
+      readIORef keys `shouldReturn` [Just "max:j41", Just "max:j41"]
+      readIORef waits `shouldReturn` 2
+      rows <- withDb pool $ query "SELECT state FROM execution_journal WHERE turn_id=?" (Only taskTurn.atrTurnId)
+      (rows :: [Only Text]) `shouldBe` [Only "committed", Only "committed"]
 
   it "recovers skill receipts across attempts but not across task revisions" $ do
     source@(_, _, actor) <- seed pool 900 1
@@ -712,12 +718,14 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     withDb pool (claimFrontend frontend) `shouldReturn` True
     beforePublication <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
     beforePublication `shouldBe` [Only ("delegated" :: Text)]
+    Just review <- withDb pool (loadNoticeReview notification)
+    withDb pool (recordNoticeDecision notification review.version (PublishNotice "task report" "completed findings")) `shouldReturn` True
     void $ withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
     afterPublication <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
     afterPublication `shouldBe` [Only ("answered" :: Text)]
 
-  it "retains task reply provenance after a notification retry" $ do
+  it "retains task reply provenance without retrying a published notification after a failed checkpoint" $ do
     source <- seed pool 900 1
     identifier <- admit pool source "reply-provenance"
     execution <- claimOne pool
@@ -726,11 +734,13 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     [notification] <- withDb pool admitTaskNotification
     Just frontend <- withDb pool (taskTurnRef notification)
     withDb pool (claimFrontend frontend) `shouldReturn` True
+    Just review <- withDb pool (loadNoticeReview notification)
+    withDb pool (recordNoticeDecision notification review.version (PublishNotice "task report" "completed findings")) `shouldReturn` True
     publication <- withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnFailed 0 Nothing Nothing)
     withDb pool admitTaskNotification `shouldReturn` []
     void $ withDb pool $ execute "UPDATE task_notifications SET next_attempt_at=now() - interval '1 second'" ()
-    [_] <- withDb pool admitTaskNotification
+    withDb pool admitTaskNotification `shouldReturn` []
     withDb pool (taskForReply (GroupId 900) publication.canonicalMessageId) `shouldReturn` Just identifier
 
   it "fences monitor mutations when the bound frontend lease expires" $ do
@@ -856,7 +866,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     _ <- withDb pool (admitMonitorTask "monitor-test" second.emfFireId Nothing Map.empty seedMessage)
     insertOccurrence pool monitor "coalesced"
     withDb pool (claimTask "task-test") `shouldReturn` []
-    withDb pool (taskReportTyped active.atrTurnId success) `shouldReturn` True
+    withDb pool (taskReportTyped active.atrTurnId monitorSuccess) `shouldReturn` True
     withDb pool (finishAgentTurn active TurnSucceeded 1 Nothing Nothing)
     _ <- claimOne pool
     rows <- withDb pool $ query "SELECT disposition FROM monitor_fires ORDER BY fire_id" ()
@@ -878,11 +888,11 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     (turn, seedMessage, actor) <- seed pool 900 1
     now <- getCurrentTime
     Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 20 Map.empty)
-    let changed = success {TaskState.summary = "different findings"}
-    finishOccurrence pool monitor seedMessage "first" success
-    finishOccurrence pool monitor seedMessage "unchanged" success
+    let changed = monitorSuccess {TaskState.summary = "different findings", TaskState.observation = Just (object ["active" .= False])}
+    finishOccurrence pool monitor seedMessage "first" monitorSuccess
+    finishOccurrence pool monitor seedMessage "unchanged" monitorSuccess
     finishOccurrence pool monitor seedMessage "changed" changed
-    finishOccurrence pool monitor seedMessage "returned" success
+    finishOccurrence pool monitor seedMessage "returned" monitorSuccess
     rows <- withDb pool $ query "SELECT count(*) FROM task_notifications" ()
     rows `shouldBe` [Only (3 :: Int64)]
 
@@ -1073,11 +1083,27 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     rows <- withDb pool $ query "SELECT definition_revision,definition_snapshot->>'profile' FROM monitor_fires" ()
     rows `shouldBe` [(2 :: Int, "browser" :: Text)]
 
+  it "requires a nonempty monitor observation and carries the previous baseline into the next task" $ do
+    (turn, seedMessage, actor) <- seed pool 900 1
+    now <- getCurrentTime
+    Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
+    insertOccurrence pool monitor "first"
+    [fire] <- withDb pool (claimElaboratedMonitorFires "monitor-test" now 60 10)
+    void $ withDb pool (admitMonitorTask "monitor-test" fire.emfFireId Nothing Map.empty seedMessage)
+    execution <- claimOne pool
+    for_ [Nothing, Just (String "healthy"), Just (object [])] $ \invalid ->
+      withDb pool (taskReportTyped execution.atrTurnId (success {TaskState.observation = invalid})) `shouldReturn` False
+    withDb pool (taskReportTyped execution.atrTurnId monitorSuccess) `shouldReturn` True
+    withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
+    finishOccurrence pool monitor seedMessage "same" monitorSuccess
+    rows <- withDb pool $ query "SELECT inputs->'previous_observation' FROM durable_tasks ORDER BY task_id DESC LIMIT 1" ()
+    rows `shouldBe` [Only (object ["active" .= True])]
+
   it "compares stable monitor observations rather than generated wording" $ do
     (turn, seedMessage, actor) <- seed pool 900 1
     now <- getCurrentTime
     Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
-    let observation summary value = success {TaskState.summary = summary, TaskState.observation = Just (toJSON (value :: Int))}
+    let observation summary value = success {TaskState.summary = summary, TaskState.observation = Just (object ["active" .= (value :: Int)])}
     finishOccurrence pool monitor seedMessage "first" (observation "first wording" 1)
     finishOccurrence pool monitor seedMessage "same" (observation "different wording" 1)
     finishOccurrence pool monitor seedMessage "changed" (observation "same wording" 2)
@@ -1092,7 +1118,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     [notification] <- withDb pool admitTaskNotification
     Just frontend <- withDb pool (taskTurnRef notification)
     withDb pool (claimFrontend frontend) `shouldReturn` True
-    withDb pool (recordProgressDecision notification 1 (PublishProgress "task report" "useful progress")) `shouldReturn` True
+    withDb pool (recordNoticeDecision notification 1 (PublishNotice "task report" "useful progress")) `shouldReturn` True
     void $ withDb pool (enqueueOutbound (draft frontend))
     withDb pool (finishAgentTurn frontend TurnSucceeded 1 Nothing Nothing)
     rows <- withDb pool $ query "SELECT disposition FROM conversation_requests WHERE message_id=?" (Only message.unCanonicalMessageId)
@@ -1126,19 +1152,19 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     (turn, seedMessage, actor) <- seed pool 900 1
     now <- getCurrentTime
     Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 Map.empty)
-    finishOccurrence pool monitor seedMessage "first" success
+    finishOccurrence pool monitor seedMessage "first" monitorSuccess
     insertOccurrence pool monitor "old-pending"
     changed <- withDb pool (withTransaction (MonitorDB.controlMonitor 900 actor.unPrincipalId False monitor.mrMonitorOrdinal.unMonitorOrdinal (MonitorControl.ConfigureMonitor 1 "watch" Coalesce 40 MonitorControl.RetainPending (Just (Research, False))) False))
     changed `shouldSatisfy` isRight
     [fire] <- withDb pool (claimElaboratedMonitorFires "monitor-test" now 60 10)
     void $ withDb pool (admitMonitorTask "monitor-test" fire.emfFireId Nothing Map.empty seedMessage)
     execution <- claimOne pool
-    withDb pool (taskReportTyped execution.atrTurnId success) `shouldReturn` True
+    withDb pool (taskReportTyped execution.atrTurnId monitorSuccess) `shouldReturn` True
     withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
     rows <- withDb pool $ query "SELECT count(*) FROM task_notifications WHERE kind='result'" ()
     rows `shouldBe` [Only (1 :: Int64)]
-    finishOccurrence pool monitor seedMessage "new-first" success
-    finishOccurrence pool monitor seedMessage "new-same" success
+    finishOccurrence pool monitor seedMessage "new-first" monitorSuccess
+    finishOccurrence pool monitor seedMessage "new-same" monitorSuccess
     later <- withDb pool $ query "SELECT count(*) FROM task_notifications WHERE kind='result'" ()
     later `shouldBe` [Only (3 :: Int64)]
 
@@ -1182,6 +1208,9 @@ status pool identifier = do
 
 success :: TaskState.TaskReport
 success = report TaskState.ReportSucceeded
+
+monitorSuccess :: TaskState.TaskReport
+monitorSuccess = success {TaskState.observation = Just (object ["active" .= True])}
 
 report :: TaskState.ReportStatus -> TaskState.TaskReport
 report state = TaskState.TaskReport state "bounded findings" [] [] Nothing Nothing

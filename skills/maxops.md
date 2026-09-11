@@ -8,13 +8,21 @@
 
 # 操作与结果
 
-先观察当前状态，再选择明确操作。job handle 只表示已受理；完成要看最终状态和证据。
+先观察当前状态，再选择明确操作。重复诊断优先 resources_list(kind=diagnostic_probes,host=...) 发现
+配置好的探针，再用 diagnostics_collect(probes=[...]) 一次采集；不要每轮重新拼同一套 shell。
+每个探针有独立状态与退出结果，job.evidence_status 为 complete/partial/failed；missing_evidence
+列出未完成项。大证据通过 jobs_result(pointer=/diagnostic) 按 next_offset 分页，不能把缺失当健康。
+诊断命令使用 diagnostic 普通用户；先读取 execution_profiles 的 path、interpreter、user、privileged、
+working_roots，不继承登录 shell。缺命令先报告环境缺项，不要为补 PATH 换 root profile。
+确需脚本时，先 command -v 检查必要工具并核对 CLI 参数，保留每项退出码；不能用管道或 || true
+掩盖必要步骤失败。exec_run 回传只证明进程退出，所属 operations 任务还须根据证据判断目标是否完成。
+job handle 只表示已受理；完成要看最终状态和证据。
 查询具体服务先用 units_status/units_logs；units_list 可按 state/prefix 分页。
 unit_scope=all_loaded 只覆盖已加载单元，allowlist 只覆盖授权名单；空列表不代表整机健康。
 诊断近期事件优先用 maxops_events_recent，指定 host、unit、since_seconds；events_list
 用于从旧游标重放历史。默认概要省略大 payload，确需原始记录再用 events_get(event_id,pointer=/payload) 有界读取。
 每个作业提交工具由宿主创建持久化后台任务、生成幂等键并自动提交和等待；返回 task#
-只是受理，不要重复提交或轮询。结果回到前台后再结合会话转述。需要模型分多步判断
+只是 Max 受理，数值 task_id 绝不是 maxops 的 UUID job_id，不要重复提交或轮询。结果回到前台后再结合会话转述。需要模型分多步判断
 的长运维工作可用 task_start 的 operations profile；纯作业观察不消耗模型轮次。
 提交会在同批调用完成后交接前台。需要根据命令结果继续排查或修复时，先启动完整
 operations 任务，在任务中提交作业并接收子任务结果；最终结果汇报回合只转述，

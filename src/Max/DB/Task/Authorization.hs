@@ -43,7 +43,8 @@ authorizeWithin turn step = do
           "SELECT EXISTS(SELECT 1 FROM task_notifications notice JOIN durable_tasks work USING(task_id) LEFT JOIN task_progress progress USING(task_id)\
           \ WHERE notice.turn_id=? AND (notice.revision<>work.revision OR notice.attempt<>work.attempt\
           \ OR notice.body->>'status' IS DISTINCT FROM work.status OR work.status='cancelled' OR notice.superseded_at IS NOT NULL\
-          \ OR (notice.kind='progress' AND (notice.progress_version IS DISTINCT FROM progress.version OR notice.review_decision->>'action'='skip'))))"
+          \ OR notice.review_decision->>'action'='skip'\
+          \ OR (notice.kind='progress' AND notice.progress_version IS DISTINCT FROM progress.version)))"
           (Only turn)
       if (managed && frontend /= [Only True]) || stale == [Only True]
         then pure False

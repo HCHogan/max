@@ -65,7 +65,19 @@ admitMaxOpsTask context config operation params = case (toolInvocationIdentity c
       Right receipt -> do
         unless (toolCapabilities context).tcBackground $
           yieldFrontend ("运维操作已交给 " <> taskHandle receipt.taskId <> "，完成后会转述结果。")
-        pure (Right (toJSON receipt))
+        pure
+          ( Right
+              ( object
+                  [ "kind" .= ("max_task" :: Text),
+                    "task" .= taskHandle receipt.taskId,
+                    "task_id" .= receipt.taskId,
+                    "status" .= receipt.status,
+                    "remote_operation" .= operation.name,
+                    "observation" .= ("host_managed" :: Text),
+                    "next_action" .= ("宿主会自动提交并等待；这是 Max task，不是 maxops job_id。结果将自动回传，不要轮询或重复提交。" :: Text)
+                  ]
+              )
+          )
   _ -> pure (Left "maxops submissions require a durable host invocation")
 
 -- The model-facing task_start accepts context as a string and resources as a
@@ -109,7 +121,7 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
                 Right value -> do
                   mapM_ (\row -> finishJournalExecution row (JournalCommitted value)) journal
                   case value of
-                    Object fields | Just (String identifier) <- KeyMap.lookup "job_id" fields -> observe (find ((== "jobs.logs") . (.name)) catalog.operations) waitOperation identifier Nothing
+                    Object fields | Just (String identifier) <- KeyMap.lookup "job_id" fields -> observe saved.name (find ((== (if saved.name == "diagnostics.collect" then "jobs.result" else "jobs.logs")) . (.name)) catalog.operations) waitOperation identifier Nothing
                     _ -> pure (failed "maxops 没有返回持久化 job handle；不能重复提交")
             _ -> pure (failed "maxops 操作契约已变化或缺少 jobs.wait；未提交操作")
   where
@@ -142,7 +154,7 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
           submit operation params key (attempt + 1)
         _ -> pure result
 
-    observe logsOperation operation identifier revision = do
+    observe remoteOperation logsOperation operation identifier revision = do
       check
       response <-
         liftIO $
@@ -152,7 +164,7 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
             (object ["job_id" .= identifier, "after_revision" .= revision, "timeout_seconds" .= (10 :: Int)])
             Nothing
       case response of
-        Left detail | transient detail -> liftIO (threadDelay 2_000_000) >> observe logsOperation operation identifier revision
+        Left detail | transient detail -> liftIO (threadDelay 2_000_000) >> observe remoteOperation logsOperation operation identifier revision
         Left detail -> pure ((failed detail) {evidence = ["maxops job " <> identifier]})
         Right value -> case parseEither
           ( withObject "wait" $ \fields -> do
@@ -174,19 +186,42 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
                   Nothing -> pure Nothing
                   Just logs -> do
                     check
-                    result <- liftIO (client.invokeOperation config logs (object ["job_id" .= identifier, "limit" .= (8192 :: Int)]) Nothing)
+                    let arguments =
+                          object
+                            ( ["job_id" .= identifier, "limit" .= (8192 :: Int)]
+                                <> ["pointer" .= ("/diagnostic" :: Text) | remoteOperation == "diagnostics.collect"]
+                            )
+                    result <- liftIO (client.invokeOperation config logs arguments Nothing)
                     pure (Just (either (\detail -> object ["unavailable" .= detail]) id result))
-                let report = object (["job" .= job] <> ["output" .= logs | Just logs <- [output]])
+                let assessment = case job of
+                      Object fields -> KeyMap.lookup "evidence_status" fields
+                      _ -> Nothing
+                    outputUnavailable = case output of
+                      Nothing -> True
+                      Just (Object fields) -> KeyMap.member "unavailable" fields
+                      _ -> False
+                    processOnly = remoteOperation == "exec.run" && state == "succeeded"
+                    status
+                      | state == "outcome_unknown" = ReportWaiting
+                      | state /= "succeeded" || assessment == Just (String "failed") = ReportFailed
+                      | processOnly || (remoteOperation == "diagnostics.collect" && (assessment /= Just (String "complete") || outputUnavailable)) = ReportPartial
+                      | otherwise = ReportSucceeded
+                    unresolved
+                      | processOnly = ["远端进程退出成功；诊断目标与输出尚待所属 operations 任务核实，不能据退出码认定取证完成。"]
+                      | status == ReportPartial || assessment == Just (String "failed") = ["诊断证据不完整；检查 missing_evidence 与各项输出，不能把缺失当作正常。"]
+                      | state == "outcome_unknown" = ["远端效果未知，需要核实；不能以新键重复提交"]
+                      | otherwise = []
+                    report = object (["job" .= job, "result_scope" .= (if processOnly then "process_exit" else "operation" :: Text)] <> ["output" .= logs | Just logs <- [output]])
                 pure
                   ( TaskReport
-                      (if state == "succeeded" then ReportSucceeded else if state == "outcome_unknown" then ReportWaiting else ReportFailed)
+                      status
                       ("maxops 作业结果（远端证据，输出有界；仅汇报，由所属 operations 任务继续后续工作）：\n" <> render report)
                       ["maxops job " <> identifier]
-                      ["远端效果未知，需要核实；不能以新键重复提交" | state == "outcome_unknown"]
+                      unresolved
                       Nothing
                       (Just report)
                   )
-              else observe logsOperation operation identifier (Just next)
+              else observe remoteOperation logsOperation operation identifier (Just next)
 
     transient detail = any (`T.isPrefixOf` detail) ["maxops transport", "maxops request timed out", "maxops connection timed out", "maxops HTTP 5", "maxops HTTP 429"]
     failed detail = TaskReport ReportFailed detail [] ["操作未被确认完成"] Nothing Nothing

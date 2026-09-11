@@ -55,6 +55,7 @@ import Max.DB.Task.Query qualified as Query
 import Max.DB.Task.Record qualified as Record
 import Max.DB.Task.Reporting qualified as Reporting
 import Max.DB.Task.Scheduling qualified as Scheduling
+import Max.DB.Task.Settlement (settleNotification)
 import Max.DB.Transaction (withTransaction)
 import Max.Execution.Types (ExecutionStep)
 import Max.Monitor.Types (MonitorFireId (..))
@@ -240,7 +241,7 @@ admitTaskNotification = withTransaction $ do
       \ ORDER BY (notice.kind='progress'),notice.notification_id LIMIT 1"
       ()
   case rows :: [(Int64, Int64, Int64, Maybe Int64, Text)] of
-    [(notification, conversation, principal, source, kind)] -> do
+    [(notification, conversation, principal, source, _kind)] -> do
       locked <- query "SELECT conversation_id FROM conversations WHERE conversation_id=? FOR UPDATE" (Only conversation)
       case locked :: [Only Int64] of
         [] -> error "admitTaskNotification: conversation missing"
@@ -260,14 +261,12 @@ admitTaskNotification = withTransaction $ do
         else do
           published <-
             query
-              "SELECT EXISTS(SELECT 1 FROM task_notifications n JOIN messages m ON m.agent_turn_id=n.turn_id WHERE n.notification_id=?)"
+              "SELECT n.turn_id FROM task_notifications n WHERE n.notification_id=? AND EXISTS(SELECT 1 FROM messages m WHERE m.agent_turn_id=n.turn_id)"
               (Only notification)
-          waiting <- if kind == "progress" then frontendWorkWaitingWithin conversation Nothing else pure False
-          if kind == "progress" && published == [Only True]
-            then do
-              void $ execute "UPDATE task_notifications SET delivered_at=clock_timestamp() WHERE notification_id=?" (Only notification)
-              pure []
-            else
+          waiting <- frontendWorkWaitingWithin conversation Nothing
+          case published of
+            [Only priorTurn] -> settleNotification priorTurn Nothing >> pure []
+            _ ->
               if waiting
                 then do
                   now <- Record.databaseNow

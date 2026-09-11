@@ -25,6 +25,19 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "shared host tool execution" $ do
+  it "enforces remote identifier string bounds before native or Wasm execution" $ do
+    let runner = echoTool {toolSchema = object ["type" .= ("object" :: Text), "required" .= (["value"] :: [Text]), "properties" .= object ["value" .= object ["type" .= ("string" :: Text), "minLength" .= (36 :: Int), "maxLength" .= (36 :: Int)]]]}
+        values = map (\value -> object ["value" .= (value :: Text)]) ["133", "01a08fdf-744d-7401-a700-616632d53bee", "01a08fdf-744d-7401-a700-616632d53bee-extra"]
+    registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [runner])
+    binary <- guestCalls (map (request "echo") values) ""
+    (native, guest) <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      native <- executeToolBatch session noJournal (views registry) [ToolRequest "native" "echo" value | value <- values]
+      guest <- runWasmTools session noJournal (views registry) defaultWasmLimits binary
+      pure (native, guest)
+    map (outcomeName . (.tiOutcome)) native.tbInvocations `shouldBe` ["rejected", "succeeded", "rejected"]
+    map (.ccOutcome) guest.cmCalls `shouldBe` ["rejected", "succeeded", "rejected"]
+
   it "lets native and Wasm contend for one final leaf reservation" $ do
     binary <- guestCalls [request "echo" args] ""
     registry <- either (fail . show) pure (buildToolRegistry [echoDefinition] [echoTool])

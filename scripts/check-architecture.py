@@ -37,7 +37,7 @@ PURE = {
     "Max.Task.Experience",
     "Max.Task.Execution",
     "Max.Task.FrontendInput",
-    "Max.Task.Progress",
+    "Max.Task.Notice",
     "Max.MaxOps.Protocol",
     "Max.Task.Query",
     "Max.Task.Overview",
