@@ -21,4 +21,4 @@ spec = describe "monitor occurrence policy" $ do
     restoreSnapshot fallback (object ["profile" .= ("not-a-profile" :: Text)]) `shouldBe` Nothing
 
 fallback :: DefinitionSnapshot
-fallback = DefinitionSnapshot "new definition" (Map.singleton "browser_click" "new-grant") "owner" Research True Coalesce 40 Nothing Nothing
+fallback = DefinitionSnapshot "new definition" (Map.singleton "browser" "new-grant") "owner" Research True Coalesce 40 Nothing Nothing

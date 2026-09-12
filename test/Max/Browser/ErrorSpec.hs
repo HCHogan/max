@@ -6,7 +6,7 @@ import Max.Browser.Error
     BrowserErrorKind (..),
     browserErrorFromMcp,
   )
-import Max.MCP.Client (McpError (..), McpErrorKind (McpToolError))
+import Max.MCP.Client (McpError (..), McpErrorKind (..))
 import Test.Hspec
 
 spec :: Spec
@@ -20,6 +20,10 @@ spec = describe "browserErrorFromMcp" $ do
     let err = McpError McpToolError "any diagnostic text" (metadata "session_blocked")
     (.browserErrorKind) (browserErrorFromMcp err)
       `shouldBe` BrowserSessionBlocked
+
+  it "classifies bodyless transport and HTTP session loss independently of metadata" $ do
+    [browserErrorKind (browserErrorFromMcp (McpError kind "connection closed" Nothing)) | kind <- [McpTransportError, McpSessionError]]
+      `shouldBe` [BrowserTransportLost, BrowserTransportLost]
 
   it "does not infer recovery from unrecognised metadata or prose" $ do
     let err = McpError McpToolError "Session expired" (metadata "future_kind")

@@ -10,11 +10,17 @@ import Control.Concurrent.MVar
   )
 import Control.Exception (finally)
 import Control.Monad (forM, forM_, replicateM, when)
-import Data.Aeson (object)
+import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Char8 qualified as BS8
+import Data.ByteString.Lazy qualified as LBS
 import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef)
+import Data.Text qualified as T
+import Effectful (runEff)
 import Max.Browser.Registry (BrowserRegistry, browserScopeForTask, browserScopeForTurn, callBrowserTool, getCamoSession, newBrowserRegistry, newBrowserRegistryWithHost, releaseBrowserScope, retryBrowserReleases, setCamoSession, tryWithBrowserWorkspace, withBrowserSession, withBrowserWorkspace)
+import Max.Effects.ToolOutput (newToolOutputQueue, runToolOutput)
+import Max.Effects.Tools (Tool (..))
 import Max.HttpRuntime (httpRuntimeFromManagers, newHttpRuntime)
+import Max.Tools.Browser (browserToolsAt)
 import Max.Turn.Types (AgentTurnId (..))
 import Network.HTTP.Client (ManagerSettings (..), defaultManagerSettings, makeConnection, newManager)
 import OneBot.Types (GroupId (..))
@@ -23,6 +29,57 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "withBrowserSession" $ do
+  it "recreates transport once, clears the page and never replays a lost click" $ do
+    let group = GroupId 1
+        scope = browserScopeForTurn group (AgentTurnId 1)
+        rpc value = LBS.toStrict (encode (object ["jsonrpc" .= ("2.0" :: String), "result" .= value]))
+        ok = rpc (object ["ok" .= True])
+        started sid = rpc (object ["structuredContent" .= object ["sessionId" .= (sid :: String)]])
+        page = rpc (object ["structuredContent" .= object ["url" .= ("https://example.test/" :: String), "text" .= ("fixture" :: String)]])
+    replies <- newIORef [ok, ok, started "old-page", page, BS8.empty, ok, ok, ok, started "new-page", page]
+    opens <- newIORef (0 :: Int)
+    writes <- newIORef []
+    manager <-
+      newManager
+        defaultManagerSettings
+          { managerIdleConnectionCount = 0,
+            managerRetryableException = const False,
+            managerRawConnection = pure $ \_ _ _ -> do
+              n <- atomicModifyIORef' opens (\value -> (value + 1, value + 1))
+              body <- atomicModifyIORef' replies $ \case [] -> ([], BS8.empty); reply : rest -> (rest, reply)
+              let sessionHeader = if n < 7 then "dead-transport" else "new-transport"
+              chunks <- newIORef [if BS8.null body then BS8.empty else "HTTP/1.1 200 OK\r\nMcp-Session-Id: " <> sessionHeader <> "\r\nContent-Length: " <> BS8.pack (show (BS8.length body)) <> "\r\n\r\n" <> body]
+              makeConnection
+                (atomicModifyIORef' chunks $ \case [] -> ([], BS8.empty); chunk : rest -> (rest, chunk))
+                (\bytes -> modifyIORef' writes (<> [(n, bytes)]))
+                (pure ())
+          }
+    registry <- newBrowserRegistryWithHost (httpRuntimeFromManagers manager manager manager) group "http://example.test/mcp" "localhost:8931"
+    browser <- case browserToolsAt scope registry Nothing of
+      first : _ -> pure first
+      [] -> fail "missing browser runner"
+    let invoke action fields = runEff $ do
+          queue <- newToolOutputQueue 0
+          runToolOutput queue (browser.toolRun (object (("action" .= (action :: String)) : fields)))
+        succeeded = either (const False) (const True)
+    invoke "open" ["url" .= ("https://example.test/" :: String)] >>= (`shouldSatisfy` succeeded)
+    getCamoSession registry scope `shouldReturn` Just "old-page"
+    invoke "click" ["selector" .= ("#effect" :: String)] >>= (`shouldSatisfy` either (T.isInfixOf "not replayed") (const False))
+    getCamoSession registry scope `shouldReturn` Nothing
+    readIORef opens `shouldReturn` 8
+    invoke "click" ["selector" .= ("#effect" :: String)] >>= (`shouldSatisfy` either (T.isInfixOf "action=open") (const False))
+    readIORef opens `shouldReturn` 8
+    invoke "open" ["url" .= ("https://example.test/" :: String)] >>= (`shouldSatisfy` succeeded)
+    getCamoSession registry scope `shouldReturn` Just "new-page"
+    readIORef opens `shouldReturn` 10
+    requests <- readIORef writes
+    let requestAt n = BS8.concat [bytes | (index, bytes) <- requests, index == n]
+    requestAt 5 `shouldSatisfy` BS8.isInfixOf "browse_session_action"
+    requestAt 7 `shouldSatisfy` (not . BS8.isInfixOf "Mcp-Session-Id")
+    requestAt 10 `shouldSatisfy` BS8.isInfixOf "new-page"
+    BS8.concat [bytes | (index, bytes) <- requests, index > 5]
+      `shouldSatisfy` (not . BS8.isInfixOf "browse_session_action")
+
   it "keeps failed foreground cleanup fenced and retries closure without replaying tools" $ do
     let success = "{\"jsonrpc\":\"2.0\",\"result\":{\"ok\":true}}"
         failure = "{\"jsonrpc\":\"2.0\",\"result\":{\"isError\":true,\"content\":[]}}"

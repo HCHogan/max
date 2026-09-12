@@ -138,6 +138,7 @@ library
         Max.Bilibili
         Max.Browser.Service
         Max.Browser.Error
+        Max.Browser.View
         Max.Browser.State
         Max.Browser.Registry
         Max.Concurrent.Lock
@@ -627,6 +628,7 @@ test-suite max-test
         Max.CliProxySpec
         Max.BilibiliSpec
         Max.Browser.ErrorSpec
+        Max.Browser.ViewSpec
         Max.Browser.StateSpec
         Max.Browser.RegistrySpec
         Max.Browser.VaultSpec

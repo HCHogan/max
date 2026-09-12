@@ -601,11 +601,12 @@ assembleToolRound raw tcs toolMsgs imgs =
       | otherwise = ImageDataUrl u
 
 -- | Turn a tool runner's result into the text-only message paired with
--- its call id on the wire.  Successful JSON uses the same compact Aeson
--- encoding as the live loop; failures keep the long-standing @error:@
+-- its call id on the wire. Text results remain text; structured JSON uses
+-- compact Aeson encoding. Failures keep the long-standing @error:@
 -- prefix the model knows how to recover from.
 toolResultMessage :: ToolCall -> Either Text Value -> ChatMessage
 toolResultMessage tc = \case
+  Right (String text) -> MsgTool tc.callId text
   Right v -> MsgTool tc.callId (TE.decodeUtf8 (LBS.toStrict (encode v)))
   Left err -> MsgTool tc.callId ("error: " <> err)
 

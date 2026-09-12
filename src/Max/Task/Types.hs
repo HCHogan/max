@@ -57,17 +57,7 @@ taskGrants profile = Map.filterWithKey (\name _ -> name `elem` allowed)
           Research -> []
           Operations -> ["maxops_execute"]
           Browser ->
-            [ "browser_navigate",
-              "browser_snapshot",
-              "browser_click",
-              "browser_type",
-              "browser_scroll",
-              "browser_press_key",
-              "browser_screenshot",
-              "browser_back",
-              "browser_wait_for",
-              "view_zhihu"
-            ]
+            ["browser", "view_zhihu"]
           Sandbox ->
             [ "sandbox_list",
               "sandbox_create",

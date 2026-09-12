@@ -36,7 +36,7 @@ spec = describe "Max.Skills builtins" $ do
         loaded = withToolSkillLoads receipts executionContext
     map (.slName) receipts `shouldBe` ["sandbox", "office"]
     toolVisible (toolSkillLoads loaded) "sandbox_exec" `shouldBe` True
-    toolVisible (toolSkillLoads loaded) "browser_navigate" `shouldBe` False
+    toolVisible (toolSkillLoads loaded) "browser" `shouldBe` False
     toolVisible (toolSkillLoads executionContext) "sandbox_exec" `shouldBe` False
     (_, again) <- load loaded
     controlSkillLoads again `shouldBe` []

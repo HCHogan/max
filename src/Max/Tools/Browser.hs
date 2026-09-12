@@ -1,27 +1,5 @@
--- |
--- Browser tools exposed to the agent. A group reuses one native browser
--- service, while every task workspace or foreground turn has an isolated MCP client and
--- browse session (see "Max.Browser.Registry").
---
--- == The snapshot → selector → act loop
---
--- Interaction is driven by @browser_snapshot@ (camoufox's
--- @browse_session_snapshot@): visible page text plus a list of
--- interactive elements, each carrying a generated CSS @selector@
--- (id-based where possible) with its role and accessible name.  The
--- model reads the snapshot, then targets elements by that selector in
--- @browser_click@ / @browser_type@.  No screenshots, no vision
--- required — but the whole toolset is only offered to
--- multimodal-capable profiles (gated in @app/Main.hs@).
---
--- == Sessions
---
--- All page state lives in a camoufox /browse session/.  The registry
--- records the workspace's live @sessionId@; every tool here injects it, so
--- the model never sees session plumbing.  @browser_navigate@ starts a
--- session on demand and transparently restarts one when camoufox
--- expired it (idle TTL, capped upstream at 15 min); the other tools
--- report the expiry and point the model back at @browser_navigate@.
+-- | One action-based browser tool and the dedicated Zhihu reader. Session IDs
+-- and launch options are host-owned; uncertain operations are never replayed.
 module Max.Tools.Browser
   ( browserToolsAt,
   )
@@ -34,6 +12,7 @@ import Data.Aeson
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.Bifunctor (first)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
@@ -46,27 +25,22 @@ import Max.Browser.Error
 import Max.Browser.Registry
   ( BrowserRegistry,
     BrowserScope,
+    browserScopeIsTask,
     callBrowserTool,
     getCamoSession,
     setCamoSession,
     takeBrowserRestore,
     withBrowserSession,
   )
+import Max.Browser.View
+import Max.Effects.ToolOutput (InlineMedia (..), ToolOutput, canQueueInlineMediaOnce, queueInlineMediaOnce)
 import Max.Effects.Tools (Tool (..))
 import Max.MCP.Client (mcpTextContent)
-import Max.Tools.Schema (boolParam, enumParam, numberParam, stringParam, toolObject)
+import Max.Tools.Schema (boundedIntegerParam, enumParam, numberParam, stringParam, toolObject)
 
-browserToolsAt :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Maybe Text -> [Tool es]
+browserToolsAt :: (IOE :> es, ToolOutput :> es) => BrowserScope -> BrowserRegistry -> Maybe Text -> [Tool es]
 browserToolsAt scope reg proxy =
-  [ navigateTool scope reg proxy,
-    viewZhihuTool scope reg proxy,
-    snapshotTool scope reg,
-    clickTool scope reg,
-    typeTool scope reg,
-    pressKeyTool scope reg,
-    waitForTool scope reg,
-    scrollTool scope reg
-  ]
+  [browserTool scope reg proxy, viewZhihuTool scope reg proxy]
 
 --------------------------------------------------------------------------------
 -- Session plumbing.
@@ -117,37 +91,31 @@ withSession ::
 withSession reg scope mcpTool fields =
   withBrowserSession reg scope $
     getCamoSession reg scope >>= \case
-      Nothing -> pure (Left "no page is open — call browser_navigate first")
+      Nothing -> pure (Left "no page is open — call browser action=open first")
       Just sid ->
         callBrowserTool reg scope mcpTool (withSid sid fields) >>= \case
           Left err -> case browserErrorKind err of
             BrowserSessionBlocked -> do
               dropSession reg scope sid True
               pure . Left $
-                "the browser blocked a request and the session was reset — call browser_navigate to reopen ("
+                "the browser blocked a request and the session was reset — call browser action=open to reopen ("
                   <> renderBrowserError err
                   <> ")"
+            BrowserTransportLost -> pure (Left (renderBrowserError err))
             BrowserSessionGone -> do
               dropSession reg scope sid False
-              pure (Left "the browser session expired — call browser_navigate to reopen the page")
+              pure (Left "the browser session expired — call browser action=open to reopen the page")
             BrowserCallFailed -> pure (Left (renderBrowserError err))
           Right value -> pure (Right value)
 
 withSid :: Text -> [(Key, Value)] -> Value
 withSid sid fields = object (("sessionId" .= sid) : fields)
 
--- | An MCP tool result flattened for the model.
-asResult :: Either Text Value -> Either Text Value
-asResult = fmap (\v -> object ["result" .= mcpTextContent v])
-
 --------------------------------------------------------------------------------
 -- Argument helpers (model args arrive as a JSON object).
 
 argText :: Value -> Key -> Maybe Text
 argText v k = parseMaybe (withObject "args" (.: k)) v
-
-argBool :: Value -> Key -> Maybe Bool
-argBool v k = parseMaybe (withObject "args" (.: k)) v
 
 -- | Copy the given keys from the model's args into MCP argument
 -- fields, skipping absent ones.
@@ -158,28 +126,137 @@ passThrough _ _ = []
 --------------------------------------------------------------------------------
 -- Tools.
 
-navigateTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Maybe Text -> Tool es
-navigateTool scope reg proxy =
+browserTool :: (IOE :> es, ToolOutput :> es) => BrowserScope -> BrowserRegistry -> Maybe Text -> Tool es
+browserTool scope reg proxy =
   Tool
-    { toolName = "browser_navigate",
+    { toolName = "browser",
       toolDescription =
-        "Open a URL in this task workspace's (or foreground turn's) isolated stealth browser (camoufox). Starts it on \
-        \first use and reopens it transparently if the session expired. Returns the \
-        \page's visible text and HTTP status; navigation.complete=false means readiness timed out after \
-        \the document arrived, not a broken browser. Inspect the partial page with browser_snapshot; do not \
-        \blindly repeat navigation. Call browser_snapshot for interactive elements.",
-      toolSchema = toolObject [("url", stringParam "Absolute URL to open, e.g. https://example.com")] ["url"],
-      toolRun = \args -> liftIO $ do
-        case argText args "url" of
-          Nothing -> pure (Left "missing required argument: url")
-          Just url -> asResult <$> navigateUrl reg scope proxy url
+        "Use this isolated stealth browser through action=open, snapshot, then selector-based actions. "
+          <> "Every result is bounded text with page identity, position and notes. "
+          <> "Use the latest selectors; navigation makes old selectors stale. "
+          <> "A transport loss clears the page: open again, never repeat an uncertain interaction. "
+          <> "evaluate is available only in a browser task. See use_skill web.",
+      toolSchema =
+        toolObject
+          [ ("action", enumParam ["open", "snapshot", "click", "fill", "type", "press", "hover", "select", "scroll", "wait_for", "evaluate", "read", "find", "links", "forms", "screenshot", "dialog", "collect"] "Browser operation."),
+            ("url", stringParam "Absolute HTTP(S) URL for open."),
+            ("selector", stringParam "CSS selector from the latest snapshot; required for click/fill/type/hover/select."),
+            ("frame", stringParam "Optional iframe CSS selector; element selectors resolve inside this frame."),
+            ("text", stringParam "Text for fill (replace) or type (append keystrokes)."),
+            ("value", object ["anyOf" .= [object ["type" .= ("string" :: Text)], object ["type" .= ("array" :: Text), "items" .= object ["type" .= ("string" :: Text)]]], "description" .= ("Option value(s) for select." :: Text)]),
+            ("key", stringParam "Key for press, e.g. Enter or Escape."),
+            ("delay", boundedIntegerParam 0 1000 0),
+            ("deltaY", numberParam "Scroll distance, default 600 px; negative scrolls up."),
+            ("deltaX", numberParam "Horizontal scroll distance."),
+            ("state", enumParam ["attached", "detached", "visible", "hidden"] "Element state for wait_for."),
+            ("loadState", enumParam ["domcontentloaded", "load", "networkidle"] "Readiness state for wait_for."),
+            ("timeout", boundedIntegerParam 100 60000 10000),
+            ("mode", enumParam ["text", "outline"] "read mode, default article text."),
+            ("query", stringParam "Text to locate with find."),
+            ("response", enumParam ["accept", "dismiss"] "One-shot answer for the next dialog, default dismiss."),
+            ("promptText", stringParam "Text for accepting the next prompt dialog."),
+            ("maxScrolls", boundedIntegerParam 1 20 5),
+            ("waitMs", boundedIntegerParam 0 2000 250),
+            ("expression", stringParam "JavaScript expression for evaluate; task sessions only."),
+            ("maxChars", object ["type" .= ("integer" :: Text), "minimum" .= (512 :: Int), "maximum" .= (30000 :: Int), "description" .= ("Total result character budget including metadata. Default 6000 for open/snapshot, 1500 after actions." :: Text)]),
+            ("maxElements", object ["type" .= ("integer" :: Text), "minimum" .= (1 :: Int), "maximum" .= (200 :: Int), "description" .= ("Default 40 for snapshot, 20 after an action." :: Text)])
+          ]
+          ["action"],
+      toolRun = \args -> do
+        canAttach <- canQueueInlineMediaOnce "browser.screenshot"
+        let action = fromMaybe "" (argText args "action")
+            budget = browserBudget action args
+            limits = ["maxChars" .= budget.maxChars, "maxElements" .= budget.maxElements]
+            required = case action of
+              "open" -> ["url"]
+              "click" -> ["selector"]
+              "hover" -> ["selector"]
+              "fill" -> ["selector", "text"]
+              "type" -> ["selector", "text"]
+              "select" -> ["selector", "value"]
+              "press" -> ["key"]
+              "evaluate" -> ["expression"]
+              "find" -> ["query"]
+              _ -> []
+            missing = [key | key <- required, null (passThrough args [key])]
+        result <-
+          liftIO $
+            if not (null missing)
+              then pure (Left "missing required arguments for browser action")
+              else case action of
+                "open" -> navigateUrlWith reg scope proxy (fromMaybe "" (argText args "url")) (limits <> passThrough args ["timeout", "selector"])
+                "snapshot" -> withSession reg scope "browse_session_snapshot" (limits <> passThrough args ["selector", "frame"])
+                "screenshot"
+                  | not canAttach ->
+                      fmap (setScreenshotNote "screenshot not attached: this turn's screenshot or attachment quota is exhausted") <$> withSession reg scope "browse_session_snapshot" limits
+                _
+                  | action `elem` ["read", "find", "links", "forms", "screenshot", "dialog", "collect"] ->
+                      withSession reg scope "browse_session_inspect" (("action" .= action) : limits <> passThrough args ["selector", "frame", "mode", "query", "response", "promptText", "maxScrolls", "waitMs", "timeout"])
+                "evaluate" | not (browserScopeIsTask scope) -> pure (Left "evaluate requires a browser task; use task_start profile=browser")
+                "wait_for" | null (passThrough args ["selector", "loadState"]) -> pure (Left "wait_for requires selector or loadState")
+                _
+                  | action `elem` ["click", "fill", "type", "press", "hover", "select", "scroll", "wait_for", "evaluate"] ->
+                      let actionType = if action == "wait_for" then "waitFor" else action
+                          fields =
+                            ["type" .= actionType]
+                              <> passThrough args ["selector", "frame", "key", "delay", "deltaY", "deltaX", "state", "loadState", "timeout", "expression"]
+                              <> (if action == "fill" then ["value" .= argText args "text"] else passThrough args ["text", "value"])
+                              <> ["maxChars" .= budget.maxChars | action == "evaluate"]
+                       in withSession reg scope "browse_session_action" (("action" .= object fields) : limits)
+                _ -> pure (Left "unknown browser action")
+        withImage <- case result of
+          Left err -> pure (Left err)
+          Right value -> Right <$> attachBrowserScreenshot reg scope budget action canAttach value
+        pure (first (browserFailureView budget action) (browserView budget action <$> withImage))
     }
+
+-- The media queue is scoped to the actual Agent turn, so task generations and
+-- rebuilt adapters cannot reset the one-screenshot budget.
+attachBrowserScreenshot :: (IOE :> es, ToolOutput :> es) => BrowserRegistry -> BrowserScope -> BrowserBudget -> Text -> Bool -> Value -> Eff es Value
+attachBrowserScreenshot reg scope budget action available value
+  | not (browserNeedsScreenshot action value) = pure value
+  | not available = pure (setScreenshotNote "screenshot not attached: this turn's screenshot or attachment quota is exhausted" value)
+  | otherwise = do
+      captured <-
+        if action == "screenshot"
+          then pure (Right value)
+          else liftIO $ withSession reg scope "browse_session_inspect" ["action" .= ("screenshot" :: Text), "maxChars" .= budget.maxChars, "maxElements" .= budget.maxElements]
+      case captured of
+        Left err -> pure (setScreenshotNote ("screenshot unavailable: " <> T.take 200 err) value)
+        Right imageResult -> case imageOf imageResult of
+          Nothing -> pure (setScreenshotNote "screenshot unavailable: no image returned" value)
+          Just dataUrl -> do
+            queued <- queueInlineMediaOnce "browser.screenshot" (InlineMedia "browser viewport screenshot" dataUrl)
+            pure (setScreenshotNote (if queued then "viewport screenshot attached" else "screenshot not attached: turn attachment quota exhausted") (mergeBrowserNotes imageResult value))
+  where
+    imageOf raw = do
+      items <- parseMaybe (withObject "MCP result" (.: "content")) raw
+      case ["data:" <> mime <> ";base64," <> bytes | item <- items, Just (kind, mime, bytes) <- [parseMaybe imageBlock item], kind == ("image" :: Text), mime `elem` ["image/jpeg", "image/png"], T.length bytes <= 2800000] of
+        firstImage : _ -> Just firstImage
+        [] -> Nothing
+    imageBlock = withObject "image block" $ \o -> (,,) <$> o .: "type" <*> o .: "mimeType" <*> o .: "data"
+
+mergeBrowserNotes :: Value -> Value -> Value
+mergeBrowserNotes extra original = case browserPayload original of
+  Object fields ->
+    let notes payload = fromMaybe [] (parseMaybe (withObject "browser notes" (.: "notes")) (browserPayload payload)) :: [Value]
+        combined = notes original <> [note | note <- notes extra, note `notElem` notes original]
+     in object ["structuredContent" .= Object (KM.insert "notes" (toJSON combined) fields)]
+  _ -> original
+
+setScreenshotNote :: Text -> Value -> Value
+setScreenshotNote note value = case browserPayload value of
+  Object fields -> object ["structuredContent" .= Object (KM.insert "screenshotNote" (String note) fields)]
+  _ -> value
 
 -- | Navigate the turn's browser to a URL, starting (or transparently
 -- replacing) the camoufox session as needed — the machinery behind
--- @browser_navigate@, shared with @view_zhihu@.
+-- @browser action=open@, shared with @view_zhihu@.
 navigateUrl :: BrowserRegistry -> BrowserScope -> Maybe Text -> Text -> IO (Either Text Value)
-navigateUrl reg scope proxy url =
+navigateUrl reg scope proxy url = navigateUrlWith reg scope proxy url ["maxChars" .= zhihuMaxChars, "maxElements" .= (40 :: Int)]
+
+navigateUrlWith :: BrowserRegistry -> BrowserScope -> Maybe Text -> Text -> [(Key, Value)] -> IO (Either Text Value)
+navigateUrlWith reg scope proxy url fields =
   withBrowserSession reg scope $
     getCamoSession reg scope >>= \case
       Nothing -> freshNavigate
@@ -188,6 +265,7 @@ navigateUrl reg scope proxy url =
           Left err -> case browserErrorKind err of
             BrowserSessionBlocked -> dropSession reg scope sid True >> freshNavigate
             BrowserSessionGone -> dropSession reg scope sid False >> freshNavigate
+            BrowserTransportLost -> pure (Left (renderBrowserError err))
             BrowserCallFailed -> pure (Left (renderBrowserError err))
           Right value -> pure (Right value)
   where
@@ -196,7 +274,7 @@ navigateUrl reg scope proxy url =
         >>= either
           (pure . Left)
           (\sid -> first renderBrowserError <$> callBrowserTool reg scope "browse_session_navigate" (navArgs sid))
-    navArgs sid = withSid sid ["url" .= url]
+    navArgs sid = withSid sid (("url" .= url) : fields)
 
 --------------------------------------------------------------------------------
 -- view_zhihu
@@ -226,7 +304,7 @@ viewZhihuTool scope reg proxy =
           Nothing -> pure (Left "missing required argument: url")
           Just url
             | not ("zhihu.com" `T.isInfixOf` url) ->
-                pure (Left "不是知乎链接；其他网页用 browser_navigate 打开")
+                pure (Left "不是知乎链接；其他网页用 browser action=open 打开")
             | otherwise -> go zhihuRetries url
     }
   where
@@ -240,16 +318,8 @@ viewZhihuTool scope reg proxy =
                 go (retries - 1) url
             | looksLikeChallenge status txt ->
                 pure (Left ("知乎的验证页没绕过去（HTTP " <> T.pack (show status) <> "），稍后再试"))
-            | otherwise ->
-                pure . Right $
-                  object
-                    [ "url" .= url,
-                      "text" .= T.take zhihuMaxChars txt,
-                      "note" .= ("页面保持打开，想看更多可用 browser_scroll / browser_snapshot" :: Text)
-                    ]
-          -- Payload shape we don't recognise: hand the raw result
-          -- over rather than guessing.
-          Nothing -> pure (asResult (Right v))
+            | otherwise -> pure (Right (browserView (BrowserBudget zhihuMaxChars 40) "read" v))
+          Nothing -> pure (Right (browserView (BrowserBudget zhihuMaxChars 40) "read" v))
 
     looksLikeChallenge status txt =
       status /= (200 :: Int)
@@ -271,142 +341,3 @@ navPayload v =
     structured = withObject "result" $ \o -> o .: "structuredContent" >>= fromPayload
     fromPayload :: Value -> Parser (Int, Text)
     fromPayload = withObject "payload" $ \o -> (,) <$> o .: "status" <*> o .: "text"
-
-snapshotTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
-snapshotTool scope reg =
-  Tool
-    { toolName = "browser_snapshot",
-      toolDescription =
-        "Capture the current page: visible text plus interactive elements, each with a \
-        \CSS 'selector' (and role/name) you pass to browser_click / browser_type. Call \
-        \this after navigating or after any action that changes the page; selectors \
-        \from an old snapshot may be stale.",
-      toolSchema =
-        toolObject
-          [ ("selector", stringParam "Optional CSS selector to limit the snapshot to one element."),
-            ("maxElements", numberParam "Maximum interactive elements to return (default 100).")
-          ]
-          [],
-      toolRun = \args ->
-        liftIO $
-          asResult
-            <$> withSession reg scope "browse_session_snapshot" (passThrough args ["selector", "maxElements"])
-    }
-
--- | Wrap one camoufox sequence action as a @browse_session_action@ call.
-runAction :: BrowserRegistry -> BrowserScope -> [(Key, Value)] -> IO (Either Text Value)
-runAction reg scope actionFields =
-  withSession reg scope "browse_session_action" ["action" .= object actionFields]
-
-clickTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
-clickTool scope reg =
-  Tool
-    { toolName = "browser_click",
-      toolDescription =
-        "Click an element identified by a CSS selector from the latest browser_snapshot. \
-        \Returns a fresh snapshot after the click.",
-      toolSchema =
-        toolObject [("selector", stringParam "CSS selector of the element, from the latest snapshot.")] ["selector"],
-      toolRun = \args -> liftIO $ case argText args "selector" of
-        Nothing -> pure (Left "missing required argument: selector")
-        Just sel ->
-          asResult
-            <$> runAction reg scope ["type" .= ("click" :: Text), "selector" .= sel, "clickMode" .= ("auto" :: Text)]
-    }
-
-typeTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
-typeTool scope reg =
-  Tool
-    { toolName = "browser_type",
-      toolDescription =
-        "Fill text into an editable element identified by a CSS selector from the latest \
-        \snapshot (replaces its current value). Set submit=true to press Enter afterwards.",
-      toolSchema =
-        toolObject
-          [ ("selector", stringParam "CSS selector of the field, from the latest snapshot."),
-            ("text", stringParam "Text to fill in."),
-            ("submit", boolParam "Press Enter after filling (default false).")
-          ]
-          ["selector", "text"],
-      toolRun = \args -> liftIO $ case (argText args "selector", argText args "text") of
-        (Just sel, Just txt) -> do
-          filled <- runAction reg scope ["type" .= ("fill" :: Text), "selector" .= sel, "value" .= txt]
-          asResult <$> case (filled, argBool args "submit") of
-            (Right _, Just True) ->
-              runAction reg scope ["type" .= ("press" :: Text), "selector" .= sel, "key" .= ("Enter" :: Text)]
-            _ -> pure filled
-        _ -> pure (Left "missing required arguments: selector, text")
-    }
-
-pressKeyTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
-pressKeyTool scope reg =
-  Tool
-    { toolName = "browser_press_key",
-      toolDescription =
-        "Press a single key, e.g. Enter, ArrowDown, Escape — on a specific element \
-        \(selector) or the currently focused one.",
-      toolSchema =
-        toolObject
-          [ ("key", stringParam "Key name, e.g. Enter or ArrowDown."),
-            ("selector", stringParam "Optional CSS selector to focus before pressing.")
-          ]
-          ["key"],
-      toolRun = \args -> liftIO $ case argText args "key" of
-        Nothing -> pure (Left "missing required argument: key")
-        Just key ->
-          asResult
-            <$> runAction
-              reg
-              scope
-              ( ["type" .= ("press" :: Text), "key" .= key]
-                  <> maybe [] (\s -> ["selector" .= s]) (argText args "selector")
-              )
-    }
-
-waitForTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
-waitForTool scope reg =
-  Tool
-    { toolName = "browser_wait_for",
-      toolDescription =
-        "Wait for an element (CSS selector) to reach a state, or for the page to reach a \
-        \load state. Give at least one of selector / loadState. Useful after an action \
-        \that triggers async loading.",
-      toolSchema =
-        toolObject
-          [ ("selector", stringParam "CSS selector to wait on."),
-            ("state", enumParam ["attached", "detached", "visible", "hidden"] "Element state to wait for (default visible)."),
-            ("loadState", enumParam ["domcontentloaded", "load", "networkidle"] "Page load state to wait for."),
-            ("timeout", numberParam "Timeout in milliseconds (100-60000).")
-          ]
-          [],
-      toolRun = \args ->
-        liftIO $
-          asResult
-            <$> runAction
-              reg
-              scope
-              (("type" .= ("waitFor" :: Text)) : passThrough args ["selector", "state", "loadState", "timeout"])
-    }
-
-scrollTool :: (IOE :> es) => BrowserScope -> BrowserRegistry -> Tool es
-scrollTool scope reg =
-  Tool
-    { toolName = "browser_scroll",
-      toolDescription =
-        "Scroll the page (or an element) vertically/horizontally. Positive deltaY \
-        \scrolls down (default 600 px). Returns a fresh snapshot afterwards.",
-      toolSchema =
-        toolObject
-          [ ("deltaY", numberParam "Vertical scroll amount in px (negative scrolls up; default 600)."),
-            ("deltaX", numberParam "Horizontal scroll amount in px."),
-            ("selector", stringParam "Optional CSS selector of a scrollable element.")
-          ]
-          [],
-      toolRun = \args ->
-        liftIO $
-          asResult
-            <$> runAction
-              reg
-              scope
-              (("type" .= ("scroll" :: Text)) : passThrough args ["deltaY", "deltaX", "selector"])
-    }

@@ -70,7 +70,7 @@ taskToolsFor context =
                     let grants = taskGrants profile (toolCatalogGrants context)
                     if Nothing `elem` resolved
                       then pure (Left "某个输入句柄无效、超出会话或已清除边界")
-                      else case lookup profile [(Browser, "browser_navigate"), (Sandbox, "sandbox_exec"), (Operations, "maxops_execute")] of
+                      else case lookup profile [(Browser, "browser"), (Sandbox, "sandbox_exec"), (Operations, "maxops_execute")] of
                         Just required | not (Map.member required grants) -> pure (Left ("当前权限没有 " <> required <> "，不能启动 " <> profileName profile <> " 任务"))
                         _ -> do
                           admitted <- startTask key objective profile (object ["context" .= explicitContext, "resources" .= Map.fromList (zip resources resolved)])

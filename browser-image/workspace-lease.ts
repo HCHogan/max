@@ -58,3 +58,9 @@ export async function withWorkspaceLease<Result>(name: string, input: unknown, o
     pendingRequests.delete(pending);
   }
 }
+
+// Page JavaScript is available only inside a host-bound task workspace.
+export function assertTaskWorkspaceLease(): void {
+  if (epoch === 0 || !requests.getStore()) throw new Error("evaluate requires a task workspace");
+  assertWorkspaceLease();
+}

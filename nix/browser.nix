@@ -102,6 +102,7 @@ pkgs.buildNpmPackage {
     ../browser-image/camoufox-structured-errors.patch
     ../browser-image/camoufox-workspaces.patch
     ../browser-image/camoufox-navigation.patch
+    ../browser-image/camoufox-browser-surface.patch
   ];
   postPatch = ''
     cp ${./browser-deps/package.json} package.json
@@ -109,6 +110,11 @@ pkgs.buildNpmPackage {
     cp ${../browser-image/workspace-lease.ts} src/workspace-lease.ts
     cp ${../browser-image/workspace-tools.ts} src/workspace-tools.ts
     cp ${../browser-image/navigation.ts} src/navigation.ts
+    cp ${../browser-image/request-guard.ts} src/request-guard.ts
+    cp ${../browser-image/session-view.ts} src/session-view.ts
+    cp ${../browser-image/session-inspect.ts} src/session-inspect.ts
+    cp ${../browser-image/collect.ts} src/collect.ts
+    cp ${../browser-image/dialogs.ts} src/dialogs.ts
   '';
   preBuild = ''
     patch --batch --forward -p1 < ${../browser-image/camoufox-virtual-display.patch}
@@ -124,6 +130,7 @@ pkgs.buildNpmPackage {
   postBuild = ''
     node ${../browser-image/workspace-lease.test.mjs} dist/workspace-lease.js
     node ${../browser-image/navigation.test.mjs} dist/navigation.js
+    node ${../browser-image/request-guard.test.mjs} dist/request-guard.js
     node ${../browser-image/workspace-close.test.mjs} dist/
   '';
   installPhase = ''

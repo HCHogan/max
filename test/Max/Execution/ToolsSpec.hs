@@ -14,7 +14,7 @@ import ExecutionFixture
 import Max.CodeMode.Execution
 import Max.CodeMode.Wasm
 import Max.Effects.ToolControl (activateSkills, finishExecution, runToolControl, yieldFrontend)
-import Max.Effects.ToolOutput (InlineMedia (..), drainInlineMedia, newToolOutputQueue, queueInlineMedia, runToolOutput, runToolOutputRead)
+import Max.Effects.ToolOutput (InlineMedia (..), canQueueInlineMediaOnce, drainInlineMedia, newToolOutputQueue, queueInlineMedia, queueInlineMediaOnce, runToolOutput, runToolOutputRead)
 import Max.Effects.Tools
 import Max.Execution.Tools
 import Max.Execution.Types (JournalStart (..))
@@ -164,6 +164,19 @@ spec = describe "shared host tool execution" $ do
         guest <- drainInlineMedia
         pure (native, guest)
     attachments `shouldBe` ([media], [])
+
+  it "keeps the browser screenshot category spent after drains and adapter reconstruction" $ do
+    let media = InlineMedia "browser screenshot" "data:image/jpeg;base64,AA=="
+    result <- runEff $ do
+      queue <- newToolOutputQueue 8
+      first <- runToolOutput queue (queueInlineMediaOnce "browser.screenshot" media)
+      drained <- runToolOutputRead queue drainInlineMedia
+      available <- runToolOutput queue (canQueueInlineMediaOnce "browser.screenshot")
+      second <- runToolOutput queue (queueInlineMediaOnce "browser.screenshot" media)
+      ordinary <- runToolOutput queue (queueInlineMedia media)
+      remaining <- runToolOutputRead queue drainInlineMedia
+      pure (first, drained, available, second, ordinary, remaining)
+    result `shouldBe` (True, [media], False, False, True, [media])
 
   it "does not run a sequential submission alongside a parallel batch" $ do
     started <- newEmptyMVar

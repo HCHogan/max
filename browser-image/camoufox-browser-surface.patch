@@ -1,0 +1,558 @@
+diff --git a/src/browser-runtime.ts b/src/browser-runtime.ts
+index 6e3eca2..cbdb8b8 100644
+--- a/src/browser-runtime.ts
++++ b/src/browser-runtime.ts
+@@ -1,3 +1,5 @@
++import { installRequestGuard } from "./request-guard.js";
++export { installRequestGuard } from "./request-guard.js";
+ import { Camoufox, type LaunchOptions } from "camoufox-js";
+ import { launchPath } from "camoufox-js/dist/pkgman.js";
+ import type { Browser, BrowserContext, Page, Response, Route } from "playwright-core";
+@@ -107,98 +109,6 @@ export async function launchCamoufoxBrowser(options: CamoufoxOptions): Promise<B
+   }
+ }
+ 
+-export async function installRequestGuard(context: BrowserContext): Promise<RequestGuard> {
+-  let inspectedRequests = 0;
+-  let blockedRequestError: Error | undefined;
+-
+-  function blockRequest(rawUrl: string, reason: string): void {
+-    if (!blockedRequestError) {
+-      blockedRequestError = new Error(`Blocked unsafe browser request to ${redactUrl(rawUrl)}. ${reason}`);
+-    }
+-  }
+-
+-  function hasRequestBudget(rawUrl: string): boolean {
+-    if (inspectedRequests >= MAX_GUARDED_REQUESTS) {
+-      blockRequest(rawUrl, "Too many browser requests.");
+-      return false;
+-    }
+-
+-    inspectedRequests += 1;
+-    return true;
+-  }
+-
+-  context.on("request", (request) => {
+-    const requestUrl = request.url();
+-    try {
+-      parseAndValidateBrowserRequestUrl(requestUrl);
+-    } catch (requestError) {
+-      blockRequest(requestUrl, describeError(requestError));
+-    }
+-  });
+-
+-  await context.route("**/*", async (route: Route) => {
+-    const requestUrl = route.request().url();
+-
+-    if (!hasRequestBudget(requestUrl)) {
+-      await route.abort("blockedbyclient").catch(() => undefined);
+-      return;
+-    }
+-
+-    try {
+-      await validateBrowserRequestUrl(requestUrl);
+-    } catch (requestError) {
+-      blockRequest(requestUrl, describeError(requestError));
+-      await route.abort("blockedbyclient").catch(() => undefined);
+-      return;
+-    }
+-
+-    await route.continue().catch((continueError) => {
+-      console.error(chalk.yellow(`[Camoufox] Request continue failed: ${describeError(continueError)}`));
+-    });
+-  });
+-
+-  await context.routeWebSocket(/.*/, async (webSocket) => {
+-    const requestUrl = webSocket.url();
+-
+-    if (!hasRequestBudget(requestUrl)) {
+-      await webSocket.close({ code: 1008, reason: "Blocked by server policy" }).catch(() => undefined);
+-      return;
+-    }
+-
+-    try {
+-      await validateBrowserRequestUrl(requestUrl);
+-    } catch (requestError) {
+-      blockRequest(requestUrl, describeError(requestError));
+-      await webSocket.close({ code: 1008, reason: "Blocked by server policy" }).catch(() => undefined);
+-      return;
+-    }
+-
+-    webSocket.connectToServer();
+-  });
+-
+-  return {
+-    assertAllowed(): void {
+-      if (blockedRequestError) {
+-        throw blockedRequestError;
+-      }
+-    },
+-    watchPage(page: Page): void {
+-      page.on("websocket", (webSocket) => {
+-        const requestUrl = webSocket.url();
+-        if (!hasRequestBudget(requestUrl)) {
+-          return;
+-        }
+-
+-        try {
+-          parseAndValidateBrowserRequestUrl(requestUrl);
+-        } catch (requestError) {
+-          blockRequest(requestUrl, describeError(requestError));
+-        }
+-      });
+-    },
+-  };
+-}
+-
+ export async function runBrowserOperation<T>(
+   label: string,
+   input: CommonBrowserInput,
+diff --git a/src/extractors/content.ts b/src/extractors/content.ts
+index dae6b12..4763d67 100644
+--- a/src/extractors/content.ts
++++ b/src/extractors/content.ts
+@@ -1,10 +1,10 @@
+-import type { Page, Response } from "playwright-core";
++import type { Page, Frame, Response } from "playwright-core";
+ import { MAX_EXTRACT_NODES } from "../config.js";
+ import type { BrowsePayload, ExtractedContent, OutputMode } from "../types.js";
+ import { redactUrl } from "../utils.js";
+ 
+ export async function extractPageContent(
+-  page: Page,
++  page: Page | Frame,
+   outputMode: OutputMode,
+   maxChars: number,
+   selector?: string,
+@@ -274,7 +274,7 @@ export async function extractPageContent(
+ }
+ 
+ export async function buildBrowsePayload(
+-  page: Page,
++  page: Page | Frame,
+   response: Response | null,
+   outputMode: OutputMode,
+   maxChars: number,
+diff --git a/src/extractors/find.ts b/src/extractors/find.ts
+index 639474d..22c207f 100644
+--- a/src/extractors/find.ts
++++ b/src/extractors/find.ts
+@@ -1,9 +1,9 @@
+-import type { Page, Response } from "playwright-core";
++import type { Page, Frame, Response } from "playwright-core";
+ import type { FindPayload } from "../types.js";
+ import { redactUrl } from "../utils.js";
+ 
+ export async function buildFindPayload(
+-  page: Page,
++  page: Page | Frame,
+   response: Response | null,
+   query: string,
+   maxMatches: number,
+diff --git a/src/extractors/forms.ts b/src/extractors/forms.ts
+index 5b12b2d..c75b5ab 100644
+--- a/src/extractors/forms.ts
++++ b/src/extractors/forms.ts
+@@ -1,9 +1,9 @@
+-import type { Page, Response } from "playwright-core";
++import type { Page, Frame, Response } from "playwright-core";
+ import type { FormEntry, FormsPayload } from "../types.js";
+ import { redactUrl } from "../utils.js";
+ 
+ export async function extractForms(
+-  page: Page,
++  page: Page | Frame,
+   maxForms: number,
+   maxFields: number,
+   selector?: string,
+@@ -144,7 +144,7 @@ export async function extractForms(
+             selector: selectorFor(field),
+             required: field.hasAttribute("required"),
+             placeholder: field.getAttribute("placeholder") ?? undefined,
+-            value: field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement ? field.value.slice(0, 300) : undefined,
++            value: field instanceof HTMLInputElement && ["password", "hidden"].includes(field.type) ? undefined : field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement ? field.value.slice(0, 300) : undefined,
+             options,
+           });
+         }
+@@ -167,7 +167,7 @@ export async function extractForms(
+ }
+ 
+ export async function buildFormsPayload(
+-  page: Page,
++  page: Page | Frame,
+   response: Response | null,
+   maxForms: number,
+   maxFields: number,
+diff --git a/src/extractors/links.ts b/src/extractors/links.ts
+index aaf1763..b36e315 100644
+--- a/src/extractors/links.ts
++++ b/src/extractors/links.ts
+@@ -1,9 +1,9 @@
+-import type { Page, Response } from "playwright-core";
++import type { Page, Frame, Response } from "playwright-core";
+ import type { LinkEntry, LinksPayload } from "../types.js";
+ import { redactUrl } from "../utils.js";
+ 
+ export async function extractLinks(
+-  page: Page,
++  page: Page | Frame,
+   maxLinks: number,
+   selector?: string,
+ ): Promise<{ links: LinkEntry[]; truncated: boolean; found: boolean }> {
+@@ -107,7 +107,7 @@ export async function extractLinks(
+ }
+ 
+ export async function buildLinksPayload(
+-  page: Page,
++  page: Page | Frame,
+   response: Response | null,
+   maxLinks: number,
+   selector?: string,
+diff --git a/src/extractors/outline.ts b/src/extractors/outline.ts
+index d126cde..f6b1b39 100644
+--- a/src/extractors/outline.ts
++++ b/src/extractors/outline.ts
+@@ -1,9 +1,9 @@
+-import type { Page, Response } from "playwright-core";
++import type { Page, Frame, Response } from "playwright-core";
+ import type { OutlinePayload } from "../types.js";
+ import { redactUrl } from "../utils.js";
+ 
+ export async function buildOutlinePayload(
+-  page: Page,
++  page: Page | Frame,
+   response: Response | null,
+   maxItems: number,
+   selector?: string,
+diff --git a/src/extractors/snapshot.ts b/src/extractors/snapshot.ts
+index eb9f42e..667afe3 100644
+--- a/src/extractors/snapshot.ts
++++ b/src/extractors/snapshot.ts
+@@ -1,15 +1,16 @@
+-import type { Page, Response } from "playwright-core";
++import type { Page, Frame, Response } from "playwright-core";
+ import type { SnapshotElement, SnapshotPayload } from "../types.js";
+ import { describeError, redactUrl, truncateString } from "../utils.js";
+ import { extractPageContent } from "./content.js";
+ 
+ export async function extractSnapshotElements(
+-  page: Page,
++  page: Page | Frame,
+   maxElements: number,
+   selector?: string,
++  nearby = false,
+ ): Promise<{ elements: SnapshotElement[]; truncated: boolean; found: boolean }> {
+   return page.evaluate(
+-    ({ maxItems, cssSelector }: { maxItems: number; cssSelector?: string }) => {
++    ({ maxItems, cssSelector, nearby }: { maxItems: number; cssSelector?: string; nearby: boolean }) => {
+       const root = cssSelector
+         ? document.querySelector(cssSelector)
+         : document.body ?? document.documentElement;
+@@ -152,6 +153,8 @@ export async function extractSnapshotElements(
+           continue;
+         }
+ 
++        const bounds = element.getBoundingClientRect();
++        if (nearby && (bounds.bottom < 0 || bounds.top > innerHeight || bounds.right < 0 || bounds.left > innerWidth)) continue;
+         if (elements.length >= maxItems) {
+           truncated = true;
+           break;
+@@ -179,19 +182,20 @@ export async function extractSnapshotElements(
+         found: true,
+       };
+     },
+-    { maxItems: maxElements, cssSelector: selector },
++    { maxItems: maxElements, cssSelector: selector, nearby },
+   );
+ }
+ 
+ export async function buildSnapshotPayload(
+-  page: Page,
++  page: Page | Frame,
+   response: Response | null,
+   maxChars: number,
+   maxElements: number,
+   selector?: string,
++  nearby = false,
+ ): Promise<SnapshotPayload> {
+   const text = await extractPageContent(page, "text", maxChars, selector);
+-  const elementSnapshot = await extractSnapshotElements(page, maxElements, selector);
++  const elementSnapshot = await extractSnapshotElements(page, maxElements, selector, nearby);
+   const payload: SnapshotPayload = {
+     url: redactUrl(page.url()),
+     title: await page.title(),
+diff --git a/src/index.ts b/src/index.ts
+index 8c5cce4..d992c18 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,4 +1,5 @@
+ #!/usr/bin/env node
++import { handleSessionInspect, sessionInspectShape } from "./session-inspect.js";
+ import { withWorkspaceLease } from "./workspace-lease.js";
+ import { handleWorkspaceTool, startWorkspace } from "./workspace-tools.js";
+ import "./sqlite-compat.js";
+@@ -88,6 +89,8 @@ registerJsonTool("browse_session_snapshot", "Read the current state of an existi
+ registerJsonTool("browse_session_resume", "Resume a paused session after human action and return current state.", sessionResumeToolShape, nonReadOnlyOpenWorld, async (input) => handleSessionResume(input as SessionResumeToolInput));
+ registerJsonTool("browse_session_close", "Close an existing browser session.", sessionCloseToolShape, nonReadOnlyOpenWorld, async (input) => handleSessionClose(input as SessionCloseToolInput));
+ 
++registerJsonTool("browse_session_inspect", "Read, collect or screenshot an existing session, or set the next dialog answer.", sessionInspectShape, nonReadOnlyOpenWorld, handleSessionInspect);
++
+ for (const name of ["max_workspace_bind", "max_workspace_renew", "max_workspace_unbind", "max_workspace_revoke", "max_workspace_checkpoint", "max_workspace_keepalive"]) {
+   registerJsonTool(name, "Max internal workspace control.", { epoch: z.number().optional(), until: z.string().optional(), sessionId: z.string().optional() }, nonReadOnlyOpenWorld, async (input) => handleWorkspaceTool(name, input));
+ }
+diff --git a/src/policy.ts b/src/policy.ts
+index e918b7e..b14c355 100644
+--- a/src/policy.ts
++++ b/src/policy.ts
+@@ -314,6 +314,8 @@ export function parseAndValidateTargetUrl(rawUrl: string): ParsedTargetUrl {
+   };
+ }
+ 
++export class DnsResolutionError extends Error {}
++
+ export async function validateTargetUrl(rawUrl: string): Promise<URL> {
+   const { parsed, hostname, needsDnsCheck } = parseAndValidateTargetUrl(rawUrl);
+ 
+@@ -325,11 +327,11 @@ export async function validateTargetUrl(rawUrl: string): Promise<URL> {
+   try {
+     records = await lookup(hostname, { all: true, verbatim: true });
+   } catch {
+-    throw new Error("Could not resolve URL host.");
++    throw new DnsResolutionError("Could not resolve URL host.");
+   }
+ 
+   if (records.length === 0) {
+-    throw new Error("URL host did not resolve to an address.");
++    throw new DnsResolutionError("URL host did not resolve to an address.");
+   }
+ 
+   if (records.some((record) => isBlockedIp(record.address))) {
+diff --git a/src/runtime-types.ts b/src/runtime-types.ts
+index d71baf3..cd07a07 100644
+--- a/src/runtime-types.ts
++++ b/src/runtime-types.ts
+@@ -12,6 +12,8 @@ export type SlotRelease = () => void;
+ export type ProxyConfig = string | { server: string; username?: string; password?: string };
+ 
+ export interface RequestGuard {
++  beginOperation(): void;
++  drainNotes(): string[];
+   assertAllowed(): void;
+   watchPage(page: Page): void;
+ }
+diff --git a/src/schema/tools.ts b/src/schema/tools.ts
+index 2f1009a..02a84a0 100644
+--- a/src/schema/tools.ts
++++ b/src/schema/tools.ts
+@@ -124,6 +124,7 @@ export const sequenceActionSchema = z.discriminatedUnion("type", [
+   }),
+   z.object({
+     type: z.literal("evaluate"),
++    frame: frameSchema,
+     expression: z.string().max(4000),
+     timeout: actionTimeoutSchema,
+     maxChars: z.number().int().min(100).max(MAX_MAX_CHARS).optional().default(DEFAULT_MAX_CHARS),
+@@ -201,7 +202,7 @@ export const sessionNavigateToolShape = {
+   ...sessionIdShape,
+   url: z.string().describe("The URL to navigate to. Must be a fully qualified http or https URL."),
+   waitStrategy: z.enum(["domcontentloaded", "load", "networkidle"]).optional().describe("Optional wait strategy override for this navigation."),
+-  timeout: z.number().min(5000).max(300000).optional().describe("Optional timeout override for this navigation."),
++  timeout: z.number().min(100).max(60000).optional().describe("Optional timeout override for this navigation."),
+   outputMode: z.enum(["text", "html", "metadata"]).optional().default("text").describe("Response content mode."),
+   maxChars: z.number().int().min(100).max(MAX_MAX_CHARS).optional().default(DEFAULT_MAX_CHARS).describe("Maximum text or HTML characters to return."),
+   selector: z.string().max(2000).optional().describe("Optional CSS selector to limit extraction."),
+@@ -218,6 +219,7 @@ export const sessionActionToolShape = {
+ };
+ 
+ export const sessionSnapshotToolShape = {
++  frame: frameSchema,
+   ...sessionIdShape,
+   maxChars: z.number().int().min(100).max(MAX_MAX_CHARS).optional().default(DEFAULT_MAX_CHARS).describe("Maximum visible text and ARIA snapshot characters to return."),
+   maxElements: z.number().int().min(1).max(MAX_MAX_ELEMENTS).optional().default(DEFAULT_MAX_ELEMENTS).describe("Maximum interactive elements to return."),
+diff --git a/src/sequence.ts b/src/sequence.ts
+index 3a6e9e4..b6b9942 100644
+--- a/src/sequence.ts
++++ b/src/sequence.ts
+@@ -1,3 +1,4 @@
++import { assertTaskWorkspaceLease } from "./workspace-lease.js";
+ import type { Locator, Page } from "playwright-core";
+ import chalk from "chalk";
+ import { ALLOW_EVALUATE, DEFAULT_ACTION_TIMEOUT_MS, SEQUENCE_TIMEOUT_MS } from "./config.js";
+@@ -23,6 +24,15 @@ export function resolveLocator(page: Page, selector: string, frame?: string): Lo
+   return page.locator(selector).first();
+ }
+ 
++export async function resolveReadFrame(page: Page, selector?: string) {
++  if (!selector) return page.mainFrame();
++  const handle = await page.locator(selector).first().elementHandle({ timeout: DEFAULT_ACTION_TIMEOUT_MS });
++  const frame = await handle?.contentFrame();
++  await handle?.dispose();
++  if (!frame) throw new Error("iframe not found");
++  return frame;
++}
++
+ export async function pointerClick(locator: Locator, timeout: number): Promise<void> {
+   await locator.click({ timeout });
+ }
+@@ -109,8 +119,8 @@ export async function runSequenceAction(
+       return { index, type: action.type, selector: action.selector, status: "ok", durationMs: Date.now() - started };
+ 
+     case "press":
+-      if (action.selector) {
+-        await resolveLocator(page, action.selector, action.frame).press(action.key, { timeout });
++      if (action.selector || action.frame) {
++        await resolveLocator(page, action.selector ?? ":focus", action.frame).press(action.key, { timeout });
+       } else {
+         await withTimeout(page.keyboard.press(action.key), timeout, "Press action");
+       }
+@@ -124,12 +134,14 @@ export async function runSequenceAction(
+           await page.waitForSelector(action.selector, { state: action.state, timeout });
+         }
+       } else {
+-        await page.waitForLoadState(action.loadState ?? "load", { timeout });
++        await (await resolveReadFrame(page, action.frame)).waitForLoadState(action.loadState ?? "load", { timeout });
+       }
+       return { index, type: action.type, selector: action.selector, status: "ok", durationMs: Date.now() - started };
+ 
+     case "scroll":
+-      if (action.selector) {
++      if (action.frame && !action.selector) {
++        await (await resolveReadFrame(page, action.frame)).evaluate(({ x, y }) => scrollBy(x, y), { x: action.deltaX, y: action.deltaY });
++      } else if (action.selector) {
+         const locator = resolveLocator(page, action.selector, action.frame);
+         await locator.waitFor({ state: "attached", timeout });
+         await withTimeout(
+@@ -164,12 +176,13 @@ export async function runSequenceAction(
+       return { index, type: action.type, selector: action.selector, status: "ok", durationMs: Date.now() - started };
+ 
+     case "evaluate": {
++      assertTaskWorkspaceLease();
+       if (!ALLOW_EVALUATE) {
+         throw new Error("Evaluate action is disabled by server policy. Set CAMOUFOX_MCP_ALLOW_EVALUATE=1 to enable it.");
+       }
+ 
+       const result = await withTimeout(
+-        page.evaluate((expression) => globalThis.eval(expression), action.expression),
++        (await resolveReadFrame(page, action.frame)).evaluate((expression) => globalThis.eval(expression), action.expression),
+         timeout,
+         "Evaluate action",
+       );
+diff --git a/src/sessions.ts b/src/sessions.ts
+index 0f96274..b8ee0b8 100644
+--- a/src/sessions.ts
++++ b/src/sessions.ts
+@@ -1,3 +1,5 @@
++import { installDialogs } from "./dialogs.js";
++import { sessionView } from "./session-view.js";
+ import { assertWorkspaceLease } from "./workspace-lease.js";
+ import { navigatePage } from "./navigation.js";
+ import { randomUUID } from "node:crypto";
+@@ -12,7 +14,7 @@ import { createDiagnosticsCollector } from "./diagnostics.js";
+ import { buildBrowsePayload, buildSnapshotPayload } from "./extractors.js";
+ import { maybeDetectCaptcha } from "./captcha.js";
+ import { buildSuccessContent, buildToolError, type ToolErrorKind } from "./responses.js";
+-import { isLocalOperationTimeout, runSequenceAction } from "./sequence.js";
++import { isLocalOperationTimeout, resolveReadFrame, runSequenceAction } from "./sequence.js";
+ import { applyStealthProfile, defaultHeadlessMode, describeError, getProxySecrets, getProxyServer, redactUrl, sanitizeErrorMessage, selectOperatingSystem } from "./utils.js";
+ 
+ let reservedSessions = 0;
+@@ -124,6 +126,7 @@ export async function runSessionExclusive<T>(
+     }
+ 
+     try {
++      session.requestGuard.beginOperation();
+       return await operation();
+     } catch (error) {
+       if (isLocalOperationTimeout(error)) {
+@@ -188,6 +191,7 @@ export async function handleSessionStart(input: SessionStartToolInput, storageSt
+     const context = await browser.newContext({ ...browserContextOptions(effectiveInput), storageState });
+     const requestGuard = await installRequestGuard(context);
+     const page = await context.newPage();
++    installDialogs(page);
+     requestGuard.watchPage(page);
+     assertWorkspaceLease();
+ 
+@@ -254,17 +258,11 @@ export function sessionSanitizedError(error: unknown, session?: SessionRecord, e
+   return sanitizeErrorMessage(describeError(error), rawUrls, secrets);
+ }
+ 
+-function sessionToolErrorKind(session?: SessionRecord): ToolErrorKind {
++export function sessionToolErrorKind(session?: SessionRecord): ToolErrorKind {
+   if (!session || session.closing || session.closed) {
+     return "session_gone";
+   }
+ 
+-  try {
+-    session.requestGuard.assertAllowed();
+-  } catch {
+-    return "session_blocked";
+-  }
+-
+   return "tool_failed";
+ }
+ 
+@@ -272,18 +270,19 @@ export async function buildSessionSnapshotResult(
+   session: SessionRecord,
+   input: SessionSnapshotToolInput,
+ ) {
++  const readFrame = await resolveReadFrame(session.page, input.frame);
+   const snapshot = await runGuardedPageRead(
+     session.page,
+     session.requestGuard,
+     () => buildSnapshotPayload(
+-      session.page,
++      readFrame,
+       session.lastNavigationResponse,
+       input.maxChars ?? DEFAULT_MAX_CHARS,
+       input.maxElements ?? DEFAULT_MAX_ELEMENTS,
+       input.selector,
+     ),
+   );
+-  const basePayload = { sessionId: session.id, expiresAt: sessionExpiresAt(session), ...snapshot };
++  const basePayload = await sessionView(session, { sessionId: session.id, expiresAt: sessionExpiresAt(session), ...snapshot });
+   if (input.captchaPolicy) {
+     const { mergedPayload, captchaScreenshot } = await maybeDetectCaptcha(
+       session.page,
+@@ -303,6 +302,7 @@ export async function handleSessionNavigate(input: SessionNavigateToolInput) {
+     const currentSession = await getSession(input.sessionId);
+     session = currentSession;
+     return await runSessionExclusive(currentSession, async () => {
++      const previousUrl = currentSession.page.url();
+       const { response, navigation } = await navigateSession(currentSession, input.url, input.waitStrategy, input.timeout);
+       const mode = input.outputMode ?? "text";
+       const charLimit = input.maxChars ?? DEFAULT_MAX_CHARS;
+@@ -311,7 +311,7 @@ export async function handleSessionNavigate(input: SessionNavigateToolInput) {
+         currentSession.requestGuard,
+         () => buildBrowsePayload(currentSession.page, response, mode, charLimit, input.selector),
+       );
+-      const basePayload = { sessionId: currentSession.id, expiresAt: sessionExpiresAt(currentSession), ...payload, navigation };
++      const basePayload = await sessionView(currentSession, { sessionId: currentSession.id, expiresAt: sessionExpiresAt(currentSession), ...payload, navigation }, previousUrl);
+       if (input.captchaPolicy) {
+         const { mergedPayload, captchaScreenshot } = await maybeDetectCaptcha(currentSession.page, response, basePayload, input.captchaPolicy, redactUrl(input.url));
+         return buildSuccessContent(mergedPayload, captchaScreenshot);
+@@ -332,20 +332,23 @@ export async function handleSessionAction(input: SessionActionToolInput) {
+     const currentSession = await getSession(input.sessionId);
+     session = currentSession;
+     return await runSessionExclusive(currentSession, async () => {
++      const previousUrl = currentSession.page.url();
+       const actionResult = await runSequenceAction(currentSession.page, input.action, 0, currentSession.rawUrls, currentSession.secrets);
+       await settleAndAssertSafe(currentSession.page, currentSession.requestGuard);
++      const readFrame = await resolveReadFrame(currentSession.page, input.action.frame);
+       const snapshot = await runGuardedPageRead(
+         currentSession.page,
+         currentSession.requestGuard,
+         () => buildSnapshotPayload(
+-          currentSession.page,
++          readFrame,
+           currentSession.lastNavigationResponse,
+           input.maxChars ?? DEFAULT_MAX_CHARS,
+           input.maxElements ?? DEFAULT_MAX_ELEMENTS,
+           input.selector,
++          true,
+         ),
+       );
+-      const basePayload = { sessionId: currentSession.id, expiresAt: sessionExpiresAt(currentSession), action: actionResult, snapshot };
++      const basePayload = await sessionView(currentSession, { sessionId: currentSession.id, expiresAt: sessionExpiresAt(currentSession), action: actionResult, snapshot }, previousUrl);
+       if (input.captchaPolicy) {
+         const { mergedPayload, captchaScreenshot } = await maybeDetectCaptcha(currentSession.page, currentSession.lastNavigationResponse, basePayload, input.captchaPolicy, redactUrl(currentSession.page.url()));
+         return buildSuccessContent(mergedPayload, captchaScreenshot);

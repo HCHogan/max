@@ -2,11 +2,10 @@ module Max.Browser.Runtime (managedBrowserTools, browserMaintenance, releaseBrow
 
 import Control.Monad (forM_, void, when)
 import Data.Aeson
-import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Types (parseMaybe)
 import Data.Either (fromRight)
 import Data.Int (Int64)
-import Data.Maybe (isNothing)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Database.PostgreSQL.Simple (Only (..))
@@ -15,8 +14,9 @@ import Effectful.Exception (onException)
 import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.Browser.Error (renderBrowserError)
 import Max.Browser.Registry
-import Max.Browser.State (WorkspaceError (..), WorkspaceState (..), renderWorkspaceError)
+import Max.Browser.State (WorkspaceState (..), renderWorkspaceError)
 import Max.Browser.Vault (openBrowserState, sealBrowserState)
+import Max.Browser.View (BrowserBudget (..), boundedBrowserText, browserBudget)
 import Max.DB.Browser
 import Max.DB.Task (authorizeTaskStep)
 import Max.Effects.Tools (Tool (..))
@@ -54,15 +54,17 @@ managedBrowserTools context registry build = map wrap (build fallback)
                   if allowed then original.toolRun arguments else pure (Left "browser execution was fenced")
                 Just identifier -> withSeqEffToIO $ \unlift ->
                   liftIO $ withBrowserWorkspace registry identifier $ unlift $ do
-                    acquired <- acquireReady turn identifier
+                    acquired <- acquireBrowserWorkspace turn (browserRuntimeId registry)
                     case acquired of
                       Left detail -> pure (Left (renderWorkspaceError detail))
                       Right workspace -> do
                         let scope = browserScopeForTask group identifier workspace.bwGeneration
                         session <- liftIO (getCamoSession registry scope)
                         let cold = workspace.bwState == Cold || isNothing session
-                        if cold && original.toolName `notElem` ["browser_navigate", "view_zhihu"]
-                          then pure (Left "browser workspace is cold; call browser_navigate and obtain a fresh snapshot. DOM, JS state and previous selectors were not restored; never replay uncertain actions")
+                        let action = parseMaybe (withObject "browser arguments" (.: "action")) arguments
+                            canOpen = original.toolName == "view_zhihu" || (original.toolName == "browser" && action == Just ("open" :: Text))
+                        if cold && not canOpen
+                          then pure (Left "browser workspace is cold; call browser action=open and obtain a fresh snapshot. DOM, JS state and previous selectors were not restored; never replay uncertain actions")
                           else case restoreWorkspace workspace of
                             Left detail -> pure (Left detail)
                             Right restored -> do
@@ -82,42 +84,40 @@ managedBrowserTools context registry build = map wrap (build fallback)
                                       ( do
                                           result <- run
                                           saved <- saveCheckpoint registry scope identifier
-                                          let readOnlyFailure = original.toolName `elem` ["browser_navigate", "browser_snapshot", "browser_scroll", "browser_wait_for", "view_zhihu"]
-                                              healthy = (readOnlyFailure || either (const False) (const True) result) && either (const False) (const True) saved
+                                          live <- liftIO (getCamoSession registry scope)
+                                          let readOnlyFailure = original.toolName == "view_zhihu" || action `elem` map Just ["open", "snapshot", "scroll", "wait_for", "read", "find", "links", "forms", "screenshot", "collect"]
+                                              -- A lost session can reopen, but its failed operation is
+                                              -- still reported as uncertain and is never replayed.
+                                              healthy = isNothing live || ((readOnlyFailure || either (const False) (const True) result) && either (const False) (const True) saved)
+                                              returned = case (saved, live, result) of
+                                                (Left _, Nothing, Right value) -> Right (addNote arguments "checkpoint transport lost; open again, without repeating the completed action" value)
+                                                _ -> result
                                           accepted <- finishBrowserOperation turn workspace.bwEpoch (fromRight Nothing saved) healthy
                                           if not accepted
                                             then pure (Left "browser execution was fenced after operation; its external outcome may already have occurred")
                                             else
                                               if not healthy
                                                 then pure (Left "browser operation or checkpoint failed; outcome may be unknown. Do not repeat it; inspect the external site and use !browser reset task#N before continuing")
-                                                else pure (fmap (addRecovery cold) result)
+                                                else pure (fmap (addRecovery arguments cold) returned)
                                         )
                                         `onException` interrupted
         }
-    addRecovery False value = value
-    addRecovery True (Object fields) = Object (KeyMap.insert "browser_recovery" (String "cold workspace; only saved authentication storage restored, never DOM or JS. Use the new snapshot, not old selectors") fields)
-    addRecovery True value = value
+    addRecovery _ False value = value
+    addRecovery arguments True value = addNote arguments "cold restore; use fresh selectors" value
+    addNote arguments note (String value) =
+      let action = fromMaybe "open" (parseMaybe (withObject "browser arguments" (.: "action")) arguments)
+          budget = browserBudget action arguments
+       in String (boundedBrowserText budget.maxChars (T.replace "Content:\n" ("Note: " <> note <> "\nContent:\n") value))
+    addNote _ _ value = value
     restoreWorkspace workspace = case workspace.bwCheckpoint of
       Just saved -> Just <$> openBrowserState (browserVault registry) (workspaceIdentity workspace.bwTask) saved
       Nothing -> case (workspace.bwProfile, workspace.bwProfileCheckpoint) of
         (Just profile, Just saved) -> Just <$> openBrowserState (browserVault registry) (profileIdentity profile) saved
         _ -> Right Nothing
-    acquireReady turn identifier = do
-      acquired <- acquireBrowserWorkspace turn (browserRuntimeId registry)
-      case acquired of
-        Right workspace | workspace.bwState == Hot -> do
-          let scope = browserScopeForTask group identifier workspace.bwGeneration
-          session <- liftIO (getCamoSession registry scope)
-          if isNothing session
-            then do
-              stopped <- liftIO (stopBrowserScope registry scope)
-              if not stopped
-                then pure (Left WorkspaceClosureUnconfirmed)
-                else do
-                  retireBrowserWorkspace identifier workspace.bwGeneration
-                  acquireBrowserWorkspace turn (browserRuntimeId registry)
-            else pure acquired
-        _ -> pure acquired
+
+-- A cleared page reopens on the registry's already-reinitialized transport.
+-- Runtime/revision changes still advance the generation in DB acquisition;
+-- retiring here would create a second transport after a single drop.
 
 saveCheckpoint :: (IOE :> es) => BrowserRegistry -> BrowserScope -> Int64 -> Eff es (Either Text (Maybe Text))
 saveCheckpoint registry scope identifier = liftIO $ do

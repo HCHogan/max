@@ -12,6 +12,7 @@
 -- other's page.  Browser service creation is serialized per group, never globally.
 module Max.Browser.Registry
   ( BrowserScope,
+    browserScopeIsTask,
     browserScopeForTurn,
     browserScopeForDispatch,
     browserScopeForTask,
@@ -59,22 +60,22 @@ import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Time (UTCTime, getCurrentTime)
+import Max.Browser.Error
+  ( BrowserError (..),
+    browserCallFailed,
+    browserErrorFromMcp,
+  )
 import Max.Browser.Service
   ( browserHostPort,
     defaultBrowserImage,
     runRunBrowser,
-  )
-import Max.Browser.Error
-  ( BrowserError,
-    browserCallFailed,
-    browserErrorFromMcp,
   )
 import Max.Browser.Vault (BrowserVault, newBrowserVault)
 import Max.Concurrent.Lock (LockMap, newLockMap, tryWithKeyLock, withKeyLock)
 import Max.HttpRuntime (HttpRuntime)
 import Max.MCP.Client
   ( McpClient,
-    McpErrorKind (McpSessionError),
+    McpErrorKind (McpSessionError, McpTransportError),
     mcpCallTool,
     mcpErrorKind,
     mcpInitialize,
@@ -106,6 +107,10 @@ data BrowserScope
   | BrowserDispatchScope !GroupId !CanonicalMessageId
   | BrowserTaskScope !GroupId !Int64 !Int64
   deriving stock (Show, Eq, Ord)
+
+browserScopeIsTask :: BrowserScope -> Bool
+browserScopeIsTask (BrowserTaskScope {}) = True
+browserScopeIsTask _ = False
 
 browserScopeForTurn :: GroupId -> AgentTurnId -> BrowserScope
 browserScopeForTurn = BrowserTurnScope
@@ -397,11 +402,14 @@ callBrowserTool reg scope toolName args = do
             _ -> args
       r <- mcpCallTool instance'.biClient toolName arguments
       case r of
-        Left err | err.mcpErrorKind == McpSessionError -> do
+        Left err | err.mcpErrorKind `elem` [McpSessionError, McpTransportError] -> do
           setCamoSession reg scope Nothing
-          reinit <- mcpInitialize instance'.biClient
+          initialized <- mcpInitialize instance'.biClient
+          reinit <- case (initialized, lease) of
+            (Right (), Just value) -> void <$> mcpCallTool instance'.biClient "max_workspace_bind" value
+            _ -> pure initialized
           case reinit of
-            Right () -> pure (Left (browserCallFailed "browser transport restarted; previous operation was not replayed"))
+            Right () -> pure (Left ((browserErrorFromMcp err) {browserErrorMessage = "browser transport restarted; previous operation was not replayed; use browser action=open to reopen the page"}))
             Left _ -> do
               entries <- readTVarIO reg.brEntries
               case Map.lookup (browserScopeGroup scope) entries of
@@ -411,10 +419,7 @@ callBrowserTool reg scope toolName args = do
                 _ -> do
                   void (timeout 5_000_000 (mcpTerminate instance'.biClient))
                   atomically $ modifyTVar' reg.brInstances (deleteOwnedInstance scope instance'.biHostCreatedAt)
-              pure . Left . browserCallFailed $
-                "browser instance lost; reinitialized without replay (was: "
-                  <> renderMcpError err
-                  <> ")"
+              pure (Left ((browserErrorFromMcp err) {browserErrorMessage = "browser instance lost; previous operation was not replayed; use browser action=open to reopen the page (" <> renderMcpError err <> ")"}))
         _ -> pure (first browserErrorFromMcp r)
 
 --------------------------------------------------------------------------------

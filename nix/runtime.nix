@@ -226,6 +226,10 @@ in
         HOME = "/var/lib/max/browser/%i";
         XDG_CACHE_HOME = "/var/lib/max/browser-cache/%i";
         MAX_BROWSER_ENDPOINT_FILE = "/run/max-browser-%i/endpoint.json";
+        # Launch options are host-owned; no model-facing session-start tool.
+        CAMOUFOX_MCP_ALLOW_UNSAFE_OPTIONS = "1";
+        # The fork additionally requires an active task workspace lease.
+        CAMOUFOX_MCP_ALLOW_EVALUATE = "1";
         CAMOUFOX_MCP_MAX_SESSIONS = "4";
         CAMOUFOX_MCP_SESSION_TTL_MS = "900000";
       };

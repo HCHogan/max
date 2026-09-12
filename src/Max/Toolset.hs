@@ -373,14 +373,8 @@ toolInventory =
     gated MaxOpsOnly (readTool "maxops_operations" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
     gated MaxOpsOnly (readTool "maxops_query" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
     gated MaxOpsOnly (writeTool "maxops_execute" ["fleet.management", "task.db"] [CurrentConversation, ProcessResource "maxops"]),
-    gated MultimodalOnly (browserTool "browser_navigate"),
+    gated MultimodalOnly (browserTool "browser"),
     gated MultimodalOnly (browserTool "view_zhihu"),
-    gated MultimodalOnly (browserTool "browser_snapshot"),
-    gated MultimodalOnly (browserTool "browser_click"),
-    gated MultimodalOnly (browserTool "browser_type"),
-    gated MultimodalOnly (browserTool "browser_press_key"),
-    gated MultimodalOnly (browserTool "browser_wait_for"),
-    gated MultimodalOnly (browserTool "browser_scroll"),
     gated MultimodalOnly (statefulReadTool "view_video" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation])
   ]
 

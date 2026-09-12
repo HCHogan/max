@@ -14,12 +14,16 @@ module Max.Effects.ToolOutput
     runToolOutput,
     runToolOutputRead,
     queueInlineMedia,
+    queueInlineMediaOnce,
+    canQueueInlineMediaOnce,
     drainInlineMedia,
     defaultInlineMediaLimit,
   )
 where
 
 import Control.Concurrent.STM (TVar, atomically, newTVarIO, readTVar, writeTVar)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Effectful
 import Effectful.Dispatch.Dynamic (interpret, send)
@@ -31,7 +35,8 @@ data InlineMedia = InlineMedia
   deriving stock (Show, Eq)
 
 data ToolOutput :: Effect where
-  QueueInlineMedia :: InlineMedia -> ToolOutput m Bool
+  QueueInlineMedia :: Maybe Text -> InlineMedia -> ToolOutput m Bool
+  CanQueueInlineMediaOnce :: Text -> ToolOutput m Bool
 
 data ToolOutputRead :: Effect where
   DrainInlineMedia :: ToolOutputRead m [InlineMedia]
@@ -46,10 +51,10 @@ defaultInlineMediaLimit = 8
 -- | The queue belongs to one turn. Only the assembly layer shares this handle
 -- between the producer and consumer interpreters; tool closures receive the
 -- producer effect alone. The total counter survives drains.
-data ToolOutputQueue = ToolOutputQueue !Int !(TVar (Int, [InlineMedia]))
+data ToolOutputQueue = ToolOutputQueue !Int !(TVar (Int, Set Text, [InlineMedia]))
 
 newToolOutputQueue :: (IOE :> es) => Int -> Eff es ToolOutputQueue
-newToolOutputQueue limit = ToolOutputQueue (max 0 limit) <$> liftIO (newTVarIO (0, []))
+newToolOutputQueue limit = ToolOutputQueue (max 0 limit) <$> liftIO (newTVarIO (0, Set.empty, []))
 
 runToolOutput ::
   (IOE :> es) =>
@@ -57,11 +62,14 @@ runToolOutput ::
   Eff (ToolOutput : es) a ->
   Eff es a
 runToolOutput (ToolOutputQueue limit state) = interpret $ \_ -> \case
-  QueueInlineMedia media -> liftIO . atomically $ do
-    (used, queued) <- readTVar state
-    if used >= limit
+  CanQueueInlineMediaOnce key -> liftIO . atomically $ do
+    (used, keys, _) <- readTVar state
+    pure (used < limit && Set.notMember key keys)
+  QueueInlineMedia key media -> liftIO . atomically $ do
+    (used, keys, queued) <- readTVar state
+    if used >= limit || maybe False (`Set.member` keys) key
       then pure False
-      else True <$ writeTVar state (used + 1, queued <> [media])
+      else True <$ writeTVar state (used + 1, maybe keys (`Set.insert` keys) key, queued <> [media])
 
 runToolOutputRead ::
   (IOE :> es) =>
@@ -70,12 +78,20 @@ runToolOutputRead ::
   Eff es a
 runToolOutputRead (ToolOutputQueue _ state) = interpret $ \_ -> \case
   DrainInlineMedia -> liftIO . atomically $ do
-    (used, queued) <- readTVar state
-    writeTVar state (used, [])
+    (used, keys, queued) <- readTVar state
+    writeTVar state (used, keys, [])
     pure queued
 
 queueInlineMedia :: (ToolOutput :> es) => InlineMedia -> Eff es Bool
-queueInlineMedia = send . QueueInlineMedia
+queueInlineMedia = send . QueueInlineMedia Nothing
+
+-- | A producer category can attach at most once in an agent turn, including
+-- across queue drains and adapter reconstruction. It still uses the global quota.
+queueInlineMediaOnce :: (ToolOutput :> es) => Text -> InlineMedia -> Eff es Bool
+queueInlineMediaOnce key = send . QueueInlineMedia (Just key)
+
+canQueueInlineMediaOnce :: (ToolOutput :> es) => Text -> Eff es Bool
+canQueueInlineMediaOnce = send . CanQueueInlineMediaOnce
 
 drainInlineMedia :: (ToolOutputRead :> es) => Eff es [InlineMedia]
 drainInlineMedia = send DrainInlineMedia

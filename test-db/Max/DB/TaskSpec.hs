@@ -447,7 +447,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
 
   it "takes admission authority from the bound scope rather than input JSON" $ do
     (turn, message, actor) <- seed pool 900 1
-    let grants = Map.fromList [("web_search", "search-grant"), ("browser_navigate", "browser-grant")]
+    let grants = Map.fromList [("web_search", "search-grant"), ("browser", "browser-grant")]
         scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor grants False
     admitted <-
       withDb pool . ControlCapability.runTaskControl scope $
@@ -483,7 +483,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
 
   it "enforces the profile grant ceiling at task admission even without a parent" $ do
     (turn, message, actor) <- seed pool 900 1
-    rejected <- withDb pool (admitTaskReceipt turn message actor "wider-profile" "research" Research (object []) (Map.singleton "browser_navigate" "browser-grant"))
+    rejected <- withDb pool (admitTaskReceipt turn message actor "wider-profile" "research" Research (object []) (Map.singleton "browser" "browser-grant"))
     rejected `shouldBe` Left AdmissionWidenedAuthority
     tasks <- withDb pool $ query "SELECT count(*) FROM durable_tasks" ()
     tasks `shouldBe` [Only (0 :: Int64)]
@@ -491,7 +491,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
   it "enforces frozen profile policy during monitor task admission" $ do
     (turn, message, actor) <- seed pool 900 1
     now <- getCurrentTime
-    let grants = Map.singleton "browser_navigate" "browser-grant"
+    let grants = Map.singleton "browser" "browser-grant"
     Right monitor <- withDb pool (armLedgerMatchMonitor (GroupId 900) actor turn "watch" (LedgerMatchSpec Nothing (Just "match") Nothing False) 0 (addUTCTime 86400 now) 100 grants)
     insertOccurrence pool monitor "profile-ceiling"
     [fire] <- withDb pool (claimElaboratedMonitorFires "monitor-test" now 60 10)
@@ -515,7 +515,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
             _ -> error "task_start missing"
     denied <- invokeWith Map.empty ("browser" :: Text)
     denied `shouldSatisfy` either (const True) (const False)
-    browser <- invokeWith (Map.singleton "browser_navigate" "current-browser-grant") "browser"
+    browser <- invokeWith (Map.singleton "browser" "current-browser-grant") "browser"
     browser `shouldSatisfy` either (const False) (not . hasError)
     sandbox <- invokeWith (Map.singleton "sandbox_exec" "current-sandbox-grant") "sandbox"
     sandbox `shouldSatisfy` either (const False) (not . hasError)

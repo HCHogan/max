@@ -48,7 +48,7 @@ export async function handleWorkspaceTool(name: string, input: Record<string, un
 
 export async function startWorkspace(input: SessionStartToolInput & { storage?: BrowserContextOptions["storageState"] }) {
   try {
-    const result = await handleSessionStart(input, input.storage);
+    const result = await handleSessionStart({ ...input, exclude_addons: ["UBO"], enable_cache: true, viewport: { width: 1280, height: 800 } }, input.storage);
     return "isError" in result ? buildToolError("workspace start or restore failed") : result;
   } catch {
     return buildToolError("workspace restore failed");

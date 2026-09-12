@@ -28,6 +28,7 @@ import Max.DB.Connection (DbPool)
 import Max.DB.Monitor (armLedgerMatchMonitor)
 import Max.DB.Task
 import Max.DB.TaskSpec (admit, claimOne, insertOccurrence, report, seed)
+import Max.Effects.ToolOutput (newToolOutputQueue, runToolOutput)
 import Max.Effects.Tools (Tool (..))
 import Max.HttpRuntime (newHttpRuntime)
 import Max.Monitor.Types
@@ -35,7 +36,7 @@ import Max.Platform.Types (PrincipalId (..), noAdvertisedCaps)
 import Max.Task.State qualified as TaskState
 import Max.ToolContext
 import Max.Turn.Types
-import Network.HTTP.Types (status200, status202)
+import Network.HTTP.Types (status200, status202, status404)
 import Network.Wai (Application, requestMethod, responseLBS, strictRequestBody)
 import Network.Wai.Handler.Warp (testWithApplication)
 import OneBot.Types (GroupId (..), UserId (..))
@@ -68,15 +69,17 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
       http <- newHttpRuntime
       let endpoint = "http://127.0.0.1:" <> show port <> "/mcp"
           makeRegistry = newBrowserRegistryWithHost http (GroupId 900) endpoint "localhost"
-          run registry turn name = do
+          run registry turn action = do
             output <- newTurnOutputContext turn
             let browserContext = mkToolContext (TurnIdentity (GroupId 900) message (UserId 1) (UserId 99) actor Nothing (Just output)) (TurnCapabilities True False False noAdvertisedCaps False Map.empty Nothing True)
-                arguments = object ["url" .= ("https://example.com" :: Text), "selector" .= ("#button" :: Text)]
-            withDb pool $ case [tool | tool <- browserToolsFor browserContext registry Nothing, tool.toolName == name] of
-              [tool] -> tool.toolRun arguments
+                arguments = object ["action" .= (action :: Text), "url" .= ("https://example.com" :: Text), "selector" .= ("#button" :: Text)]
+            withDb pool $ case [tool | tool <- browserToolsFor browserContext registry Nothing, tool.toolName == "browser"] of
+              [tool] -> do
+                queue <- newToolOutputQueue 0
+                runToolOutput queue (tool.toolRun arguments)
               _ -> error "missing browser tool"
       registry <- makeRegistry
-      navigated <- run registry first "browser_navigate"
+      navigated <- run registry first "open"
       navigated `shouldSatisfy` not . isLeft
       show navigated `shouldNotContain` "fixture-auth-cookie"
       void $ withDb pool (taskReportTyped first.atrTurnId (report TaskState.ReportWaiting))
@@ -84,22 +87,43 @@ spec pool = before_ (truncateAll pool) $ describe "task browser workspaces" $ do
       withDb pool (releaseBrowserTurn registry (GroupId 900) first.atrTurnId)
       void $ withDb pool (taskControl (GroupId 900) actor False identifier "steer" Nothing Nothing "continue")
       second <- claimOne pool
-      run registry second "browser_snapshot" >>= (`shouldSatisfy` not . isLeft)
+      run registry second "snapshot" >>= (`shouldSatisfy` not . isLeft)
       observed <- readIORef calls
       length (filter ((== "browse_session_start") . fst) observed) `shouldBe` 1
-      run registry first "browser_click" >>= (`shouldSatisfy` isLeft)
+      run registry first "click" >>= (`shouldSatisfy` isLeft)
       readIORef calls `shouldReturn` observed
       restarted <- configureBrowserRegistry (browserVault registry) 1800 300 <$> makeRegistry
-      run restarted second "browser_click" >>= (`shouldSatisfy` isLeft)
-      run restarted second "browser_navigate" >>= (`shouldSatisfy` not . isLeft)
+      run restarted second "click" >>= (`shouldSatisfy` isLeft)
+      run restarted second "open" >>= (`shouldSatisfy` not . isLeft)
       restored <- readIORef calls
       let starts = [arguments | (name, arguments) <- reverse restored, name == "browse_session_start"]
       length starts `shouldBe` 2
       show (last starts) `shouldContain` "fixture-auth-cookie"
+      beforeDrop <- readIORef serial
+      writeIORef failure "transport:browse_session_action"
+      lost <- run restarted second "click"
+      show lost `shouldContain` "not replayed"
+      readIORef serial `shouldReturn` (beforeDrop + 1)
+      afterDrop <- readIORef calls
+      run restarted second "snapshot" >>= (`shouldSatisfy` isLeft)
+      readIORef calls `shouldReturn` afterDrop
+      run restarted second "open" >>= (`shouldSatisfy` not . isLeft)
+      -- Reuse the registry's fresh handshake; cold recovery must not create
+      -- a second MCP process or replay the uncertain interaction.
+      readIORef serial `shouldReturn` (beforeDrop + 1)
+      reopened <- readIORef calls
+      length (filter ((== "browse_session_action") . fst) reopened) `shouldBe` 1
+      beforeCheckpointLoss <- readIORef serial
+      writeIORef failure "transport:max_workspace_checkpoint"
+      checkpointLost <- run restarted second "snapshot"
+      checkpointLost `shouldSatisfy` not . isLeft
+      show checkpointLost `shouldContain` "checkpoint transport lost"
+      run restarted second "open" >>= (`shouldSatisfy` not . isLeft)
+      readIORef serial `shouldReturn` (beforeCheckpointLoss + 1)
       writeIORef failure "browse_session_action"
-      run restarted second "browser_click" >>= (`shouldSatisfy` isLeft)
+      run restarted second "click" >>= (`shouldSatisfy` isLeft)
       afterFailure <- readIORef calls
-      run restarted second "browser_click" >>= (`shouldSatisfy` isLeft)
+      run restarted second "click" >>= (`shouldSatisfy` isLeft)
       readIORef calls `shouldReturn` afterFailure
       writeIORef failure "max_workspace_revoke"
       withDb pool (browserCommand restarted (GroupId 900) actor ["reset", "task#1"]) >>= (`shouldSatisfy` isLeft)
@@ -273,15 +297,20 @@ browserFixture calls failure serial request respond = do
         Just (name, arguments) -> do
           modifyIORef' calls ((name, arguments) :)
           failing <- readIORef failure
-          if name == failing
-            then rpc [] (object ["isError" .= True, "content" .= [object ["type" .= ("text" :: Text), "text" .= ("fixture failure" :: Text)]]])
-            else do
-              identifier <- readIORef serial
-              let payload = case name of
-                    "browse_session_start" -> object ["sessionId" .= ("session-" <> T.pack (show identifier))]
-                    "max_workspace_checkpoint" -> object ["storage" .= object ["cookies" .= [object ["name" .= ("fixture" :: Text), "value" .= ("fixture-auth-cookie" :: Text), "domain" .= ("example.com" :: Text)]], "origins" .= ([] :: [Value])]]
-                    _ -> object ["ok" .= True]
-              rpc [] (success payload)
+          if failing == "transport:" <> name
+            then do
+              writeIORef failure ""
+              respond (responseLBS status404 [] "session lost")
+            else
+              if name == failing
+                then rpc [] (object ["isError" .= True, "content" .= [object ["type" .= ("text" :: Text), "text" .= ("fixture failure" :: Text)]]])
+                else do
+                  identifier <- readIORef serial
+                  let payload = case name of
+                        "browse_session_start" -> object ["sessionId" .= ("session-" <> T.pack (show identifier))]
+                        "max_workspace_checkpoint" -> object ["storage" .= object ["cookies" .= [object ["name" .= ("fixture" :: Text), "value" .= ("fixture-auth-cookie" :: Text), "domain" .= ("example.com" :: Text)]], "origins" .= ([] :: [Value])]]
+                        _ -> object ["ok" .= True]
+                  rpc [] (success payload)
         _ -> rpc [] (object [])
     _ | requestMethod request == "DELETE" -> respond (responseLBS status200 [] "")
     _ -> respond (responseLBS status202 [] "")

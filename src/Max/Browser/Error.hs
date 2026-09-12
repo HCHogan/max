@@ -14,10 +14,11 @@ where
 import Data.Aeson (Value, withObject, (.:))
 import Data.Aeson.Types (parseMaybe)
 import Data.Text (Text)
-import Max.MCP.Client (McpError (..), renderMcpError)
+import Max.MCP.Client (McpError (..), McpErrorKind (..), renderMcpError)
 
 data BrowserErrorKind
-  = BrowserSessionGone
+  = BrowserTransportLost
+  | BrowserSessionGone
   | BrowserSessionBlocked
   | BrowserCallFailed
   deriving stock (Show, Eq)
@@ -37,7 +38,10 @@ browserCallFailed = BrowserError BrowserCallFailed
 browserErrorFromMcp :: McpError -> BrowserError
 browserErrorFromMcp err =
   BrowserError
-    { browserErrorKind = metadataKind err.mcpErrorMetadata,
+    { browserErrorKind = case err.mcpErrorKind of
+        McpTransportError -> BrowserTransportLost
+        McpSessionError -> BrowserTransportLost
+        _ -> metadataKind err.mcpErrorMetadata,
       browserErrorMessage = renderMcpError err
     }
 
