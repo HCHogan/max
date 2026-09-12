@@ -35,6 +35,7 @@ PURE = {
     "Max.Task.Types",
     "Max.Task.State",
     "Max.Task.Experience",
+    "Max.Task.Delegation",
     "Max.Task.Execution",
     "Max.Task.FrontendInput",
     "Max.Task.Notice",

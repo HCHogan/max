@@ -1,0 +1,23 @@
+{
+  "revision": 1,
+  "published": false,
+  "cited_handles": [
+    "t#2037:r1"
+  ],
+  "source_fingerprint": "ef291aff255cf04e140ca319f80577df294a21dafaff1413a67ad297901d37c7",
+  "capsule_fingerprint": "e8a383d80708a2e024d35ee8985f04ed50fad42105c2a5a0d239b3d29e1c1c33",
+  "task_ref": "eeca91fd439b6d5e827e8fda7fee35046f2def93508637483f6be8a2df7a4392",
+  "scope": "isolated production snapshot",
+  "before_count": 0,
+  "after_count": 1,
+  "source_tool": "maxops_exec_run",
+  "source_journal_state": "committed",
+  "production_mutated": false,
+  "remote_completion": {
+    "report_sha256": "f198a3826b07b6cae7507eb2d70a3421c67eea8268583a0b5794f02aa3e01068",
+    "state": "succeeded",
+    "exit_code": 0,
+    "success": true,
+    "output_complete": true
+  }
+}

@@ -47,6 +47,7 @@ data TaskRecord = TaskRecord
     grants :: !(Map Text Text),
     status :: !TaskStatus,
     result :: !(Maybe TaskReport),
+    -- Reserved usage, including work still in flight; see loadTask's projection.
     calls :: !Int,
     rounds :: !Int,
     maxCalls :: !Int,

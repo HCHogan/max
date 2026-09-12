@@ -18,6 +18,7 @@ import Max.CodeMode.Wasm
 import Max.Effects.ToolControl (finishExecution, runToolControl)
 import Max.Effects.Tools
 import Max.Execution.Tools
+import Max.Execution.Workflow
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Control (LoopControl (..))
 import System.Timeout (timeout)
@@ -25,6 +26,50 @@ import Test.Hspec
 
 spec :: Spec
 spec = describe "JavaScript SDK in embedded Wasm" $ do
+  it "awaits independent agent reports through the shared batch budget in input order" $ do
+    first <- newEmptyMVar
+    second <- newEmptyMVar
+    let start = echoDefinition {tdRef = ToolRef "task_start"}
+        tool = echoTool {toolName = "task_start"}
+        host =
+          WorkflowHost
+            (pure True)
+            ( \args _ -> do
+                liftIO $
+                  if args == object ["objective" .= ("one" :: Text), "profile" .= ("research" :: Text)]
+                    then putMVar first () >> takeMVar second
+                    else putMVar second () >> takeMVar first
+                pure (ToolInvocation (ToolCommitted args) ContinueLoop)
+            )
+            (\_ -> pure (ToolInvocation (ToolSucceeded Null) ContinueLoop))
+            True
+    registry <- checked [start] [tool]
+    result <- timeout 30000000 . runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession (Just 2)
+      runJavaScript session noJournal {ehWorkflow = Just host} (views registry) "return max.batch(['one','two'].map(objective => ({agent:{objective,profile:'research'}}))).map(max.value).map(x=>x.objective);"
+    fmap (.cmExit) result `shouldBe` Just WasmCompleted
+    fmap (.cmOutput) result `shouldBe` Just (Just (toValue [String "one", String "two"]))
+  it "stops guest execution at the steering boundary even if JavaScript would ignore the result" $ do
+    count <- newIORef (0 :: Int)
+    let host =
+          WorkflowHost
+            (pure True)
+            (\_ _ -> liftIO (modifyIORef' count (+ 1)) >> pure (ToolInvocation (ToolCommitted (object ["interrupted" .= True, "reason" .= ("workflow_steering_pending" :: Text)])) ContinueLoop))
+            (\_ -> pure (ToolInvocation (ToolSucceeded Null) ContinueLoop))
+            True
+    registry <- checked [echoDefinition {tdRef = ToolRef "task_start"}] [echoTool {toolName = "task_start"}]
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession (Just 3)
+      runJavaScript session noJournal {ehWorkflow = Just host} (views registry) "agent({objective:'one',profile:'research'}); agent({objective:'two',profile:'research'}); return 'unreachable';"
+    result.cmExit `shouldBe` WasmHostStopped
+    readIORef count `shouldReturn` 1
+  it "rejects recursive workflow execution for an awaited child before any guest work" $ do
+    let host = WorkflowHost (pure False) (\_ _ -> error "unreachable agent") (\_ -> error "unreachable phase") True
+    registry <- checked [echoDefinition] [echoTool]
+    result <- runEff . runConcurrent . runTools registry $ do
+      session <- newExecutionSession Nothing
+      executeModelBatch True Map.empty session noJournal {ehWorkflow = Just host} (views registry) [ToolRequest "child" "run_code" (object ["code" .= ("return tools.echo({value:1});" :: Text)])]
+    map (outcomeName . (.tiOutcome)) result.tbInvocations `shouldBe` ["rejected"]
   it "cannot register run_code as a leaf runner that would recursively acquire the gate" $ do
     case buildToolRegistry [echoDefinition {tdRef = ToolRef "run_code"}] [echoTool {toolName = "run_code"}] of
       Left (InvalidToolMetadata (ToolRef "run_code") _) -> pure ()

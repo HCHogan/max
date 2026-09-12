@@ -27,6 +27,7 @@ import Max.CodeMode.Wasm (WasmLimits (..), defaultWasmLimits)
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools (ExecutionHooks, ExecutionSession)
 import Max.Skill.Package (Workflow (..))
+import Max.Task.Policy (taskDeadlineSeconds)
 import Max.Tool.Types
 import System.Environment (lookupEnv)
 
@@ -52,7 +53,7 @@ javaScriptLimits :: WasmLimits
 javaScriptLimits =
   defaultWasmLimits
     { wlFuel = 1000000000,
-      wlTimeoutMicros = 1800 * 1000000,
+      wlTimeoutMicros = taskDeadlineSeconds * 1000000,
       wlModuleBytes = 4 * 1024 * 1024,
       wlHostCalls = 1024
     }

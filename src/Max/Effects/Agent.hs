@@ -83,6 +83,7 @@ import Max.Agent.Execution
 import Max.Agent.Failure (AgentFailure (..))
 import Max.AgentEvent (AgentEvent (..), AgentEventSink, ToolDebugEvent (..))
 import Max.CodeMode.Model (codeModeSpecs, executeModelBatch)
+import Max.Execution.Workflow (WorkflowHost)
 import Max.Context.Working
 import Max.Effects.LLM (ChatCtx (..), ChatMessage (..), ChatResponse (..), ContentBlock (..), LLM, ToolCall (..), ToolSpec, chatMeasured)
 import Max.Effects.ToolControl (ToolControl, runToolControl)
@@ -218,11 +219,12 @@ runAgentWith ::
   ExecutionAdmission es ->
   ExecutionJournal es ->
   ExecutionInbox es ->
+  Maybe (ToolContext -> AgentTurnRef -> WorkflowHost es) ->
   AgentLimits ->
   (ToolContext -> Either ToolCatalogError (ToolRegistry (ToolOutput : ToolControl : es))) ->
   Eff (Agent : es) a ->
   Eff es a
-runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv -> \case
+runAgentWith admission journal inbox workflowHost lims toolFactory = interpret $ \localEnv -> \case
   AgentTurn turn ctx profile msgs sink -> localSeqUnlift localEnv $ \unlift -> do
     selfTid <- liftIO myThreadId
     previousWorking <- maybe (pure "") journal.ejReadWorking (turnRuntimeAgentTurn turn)
@@ -377,7 +379,8 @@ runAgentWith admission journal inbox lims toolFactory = interpret $ \localEnv ->
               -- results keep call order so each tool_call id is
               -- answered in sequence.
               registered <- listCatalogTools
-              let hooks = hoistExecutionHooks (raise . raise . raise) (executionHooks admission journal (toolGroupId ctx.acTools) h)
+              let baseHooks = executionHooks admission journal (toolGroupId ctx.acTools) h
+                  hooks = hoistExecutionHooks (raise . raise . raise) baseHooks {ehWorkflow = (\build durable -> build ctx.acTools durable) <$> workflowHost <*> turnRuntimeAgentTurn h}
                   requests = [ToolRequest tc.callId tc.callName tc.callArguments | tc <- tcs]
               for_ tcs $ \tc ->
                 logInfo "agent: tool call" $ object ["id" .= tc.callId, "name" .= tc.callName, "args" .= previewJson 200 tc.callArguments]

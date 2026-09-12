@@ -57,7 +57,7 @@ settleTurn turn outcomeKind abortReason frontendManaged = do
             (Only task.taskId)
         let decision =
               if cancelled
-                then TaskSettlement Cancelled (TaskReport ReportCancelled (fromMaybe "execution cancelled" abortReason) [] ["Execution stopped; some external effects remain unconfirmed and require observation before retry" | unknown == [Only True]] Nothing Nothing) Nothing
+                then TaskSettlement Cancelled (TaskReport ReportCancelled (fromMaybe "execution cancelled" abortReason) [] ["Execution stopped; some external effects remain unconfirmed and require observation before retry" | unknown == [Only True]] Nothing Nothing Nothing) Nothing
                 else
                   decideSettlement
                     SettlementFacts
@@ -188,7 +188,7 @@ cancelDescendants parent reason = do
       \ UNION ALL SELECT child.task_id FROM durable_tasks child JOIN descendants ON child.parent_task_id=descendants.task_id)\
       \ UPDATE durable_tasks SET status='cancelled',result=?::jsonb,updated_at=now()\
       \ WHERE task_id IN (SELECT task_id FROM descendants) AND status IN ('queued','running','waiting','retrying') RETURNING task_id"
-      (parent, jsonText (TaskReport ReportCancelled reason [] [] Nothing Nothing))
+      (parent, jsonText (TaskReport ReportCancelled reason [] [] Nothing Nothing Nothing))
   forM_ (rows :: [Only Int64]) $ \(Only identifier) -> do
     revokeTaskBrowser identifier
     void $ execute "UPDATE task_attempts SET lease_until=clock_timestamp() WHERE task_id=?" (Only identifier)
@@ -232,7 +232,7 @@ routeCompletion task = case task.parent of
           (task.sourceMessage, task.sourceMessage)
     quiet <- if task.status == Waiting && children == [Only True] then pure True else suppressMonitorNotice task
     unless quiet $ do
-      let body = fromMaybe (TaskReport (terminalReport task.status) (taskStatusText task.status) [] [] Nothing Nothing) task.result
+      let body = fromMaybe (TaskReport (terminalReport task.status) (taskStatusText task.status) [] [] Nothing Nothing Nothing) task.result
       void $
         execute
           "INSERT INTO task_notifications(task_id,revision,attempt,body)\

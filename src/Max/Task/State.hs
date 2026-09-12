@@ -32,6 +32,7 @@ module Max.Task.State
 where
 
 import Data.Aeson
+import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types (Parser, parseEither)
 import Data.ByteString.Lazy qualified as LBS
 import Data.Int (Int64)
@@ -120,7 +121,8 @@ data TaskReport = TaskReport
     evidence :: ![Text],
     unresolved :: ![Text],
     failureKind :: !(Maybe FailureKind),
-    observation :: !(Maybe Value)
+    observation :: !(Maybe Value),
+    payload :: !(Maybe Value)
   }
   deriving stock (Eq, Show)
 
@@ -134,6 +136,7 @@ instance ToJSON TaskReport where
       ]
         <> ["failure_kind" .= kind | Just kind <- [report.failureKind]]
         <> ["observation" .= value | Just value <- [report.observation]]
+        <> ["payload" .= value | Just value <- [report.payload]]
 
 instance FromJSON TaskReport where
   -- Stored host outcomes may include cancellation, exhaustion, or extra
@@ -146,6 +149,7 @@ instance FromJSON TaskReport where
       <*> fields .:? "unresolved" .!= []
       <*> fields .:? "failure_kind"
       <*> fields .:? "observation"
+      <*> pure (KM.lookup "payload" fields)
 
 parseTaskReport :: Value -> Either Text TaskReport
 parseTaskReport value = do
@@ -249,6 +253,7 @@ decideSettlement facts
           (fromMaybe "execution ended without task_finish" facts.abortReason)
           []
           []
+          Nothing
           Nothing
           Nothing
     canRetry =

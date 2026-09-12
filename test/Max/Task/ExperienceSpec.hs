@@ -1,12 +1,30 @@
 module Max.Task.ExperienceSpec (spec) where
 
 import Data.Either (isLeft)
+import Data.Aeson (encode, object, (.=))
+import Data.ByteString.Lazy qualified as LBS
 import Data.Text qualified as T
+import Data.Text.Encoding qualified as TE
 import Max.Task.Experience
 import Test.Hspec
 
 spec :: Spec
 spec = describe "task experience replay gate" $ do
+  it "decodes list-valued capsule prose and preserves string-valued capsules" $ do
+    let answer prose = TE.decodeUtf8 . LBS.toStrict . encode $ object
+          ["description" .= capsule.description, "applicability" .= prose,
+           "procedure" .= prose, "invalidations" .= prose, "evidence" .= capsule.evidence]
+    parseExperienceResponse (answer (["first", "second"] :: [T.Text]))
+      `shouldBe` Right (Just capsule {applicability = "- first\n- second", procedure = "- first\n- second", invalidations = "- first\n- second"})
+    parseExperienceResponse (answer ("plain" :: T.Text))
+      `shouldBe` Right (Just capsule {applicability = "plain", procedure = "plain", invalidations = "plain"})
+    parseExperienceResponse (answer (object ["step" .= ("first" :: T.Text)])) `shouldSatisfy` isLeft
+    parseExperienceResponse (answer ([1, 2] :: [Int])) `shouldSatisfy` isLeft
+  it "accepts explicit abstention and leaves missing evidence to the semantic gate" $ do
+    parseExperienceResponse "null" `shouldBe` Right Nothing
+    let raw = TE.decodeUtf8 . LBS.toStrict . encode $ capsule {evidence = []}
+    Right (Just decoded) <- pure (parseExperienceResponse raw)
+    validateCapsule decoded `shouldSatisfy` isLeft
   it "requires a scoped evidence capsule with applicability and invalidation conditions" $ do
     validateCapsule capsule `shouldBe` Right ()
     validateCapsule capsule {evidence = []} `shouldSatisfy` isLeft

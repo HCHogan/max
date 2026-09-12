@@ -243,6 +243,7 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
                       unresolved
                       Nothing
                       (Just report)
+                      Nothing
                   )
               else observe remoteOperation logsOperation operation key (Just next) nextBudget Nothing
 
@@ -255,7 +256,8 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
         ["远端效果未确认；停止观察不等于取消。用原 idempotency_key 核实，不要以新键重复提交。"]
         Nothing
         (Just (object ["state" .= ("outcome_unknown" :: Text), "idempotency_key" .= key, "reason" .= detail]))
+        Nothing
 
     transient detail = any (`T.isPrefixOf` detail) ["maxops transport", "maxops request timed out", "maxops connection timed out", "maxops HTTP 5", "maxops HTTP 429"]
-    failed detail = TaskReport ReportFailed detail [] ["操作未被确认完成"] Nothing Nothing
+    failed detail = TaskReport ReportFailed detail [] ["操作未被确认完成"] Nothing Nothing Nothing
     render = TE.decodeUtf8 . LBS.toStrict . encode

@@ -11,6 +11,7 @@ module Max.Execution.Tools
     hoistExecutionHooks,
     freshExecutionLabel,
     executeToolBatch,
+    executeHostBatch,
     withExecutionRecord,
     outcomeName,
     outcomeEnvelope,
@@ -24,6 +25,8 @@ import Data.Aeson (Value (..), object, toJSON, (.=))
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Foldable (for_)
 import Data.List (find)
+import Data.Map.Strict (Map)
+import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust)
 import Data.Set qualified as Set
 import Data.Text (Text)
@@ -34,6 +37,7 @@ import Effectful.Exception (SomeException, bracket_, catch, finally, mask, throw
 import Max.Agent.Execution
 import Max.Effects.Tools (Tools, invokeToolWithIdentity)
 import Max.Execution.Types
+import Max.Execution.Workflow
 import Max.Tasks (TaskCancelled (..), TurnRuntime, checkTurnCancellation, turnRuntimeAgentTurn)
 import Max.Tool.Control (LoopControl (..), controlReply, controlSkillLoads)
 import Max.Tool.Types
@@ -51,7 +55,8 @@ data ExecutionHooks es = ExecutionHooks
   { ehCheck :: Eff es (),
     ehStart :: ExecutionStep -> JournalStart -> Eff es (Maybe JournalExecution),
     ehFinish :: JournalExecution -> JournalFinish -> Eff es (),
-    ehUnknown :: JournalExecution -> Text -> Eff es ()
+    ehUnknown :: JournalExecution -> Text -> Eff es (),
+    ehWorkflow :: Maybe (WorkflowHost es)
   }
 
 executionHooks :: (IOE :> es) => ExecutionAdmission es -> ExecutionJournal es -> GroupId -> TurnRuntime -> ExecutionHooks es
@@ -64,7 +69,8 @@ executionHooks admission journal group turn =
           unless active (throwIO TaskCancelled),
       ehStart = \step start -> maybe (pure Nothing) (\durable -> admission.eaStartTool group durable step start) (turnRuntimeAgentTurn turn),
       ehFinish = journal.ejFinish,
-      ehUnknown = journal.ejUnknown
+      ehUnknown = journal.ejUnknown,
+      ehWorkflow = Nothing
     }
 
 hoistExecutionHooks :: (forall x. Eff es x -> Eff target x) -> ExecutionHooks es -> ExecutionHooks target
@@ -73,7 +79,8 @@ hoistExecutionHooks lower hooks =
     { ehCheck = lower hooks.ehCheck,
       ehStart = \step -> lower . hooks.ehStart step,
       ehFinish = \row -> lower . hooks.ehFinish row,
-      ehUnknown = \row -> lower . hooks.ehUnknown row
+      ehUnknown = \row -> lower . hooks.ehUnknown row,
+      ehWorkflow = hoistWorkflowHost lower <$> hooks.ehWorkflow
     }
 
 data ExecutionSession = ExecutionSession
@@ -104,7 +111,23 @@ data ToolBatch = ToolBatch
 -- | A batch owns the scheduling gate, including settlement. Its unused local
 -- reservations are released even when admission or a sibling is interrupted.
 executeToolBatch :: (Tools :> es, Concurrent :> es, IOE :> es) => ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
-executeToolBatch session hooks catalog requests =
+executeToolBatch session hooks catalog = executeBatch False invoke session hooks catalog
+  where
+    invoke row request = invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments
+
+-- Queue-and-join callbacks are host-owned and admit ordinary tasks under the
+-- database lock. Their waits may overlap; actual child work is still scheduled
+-- by the task scheduler. They share all local reservations and journal handling
+-- below with normal leaves, which retain their catalog parallelism policy.
+executeHostBatch :: (Tools :> es, Concurrent :> es, IOE :> es) => Bool -> Map Text (Maybe JournalExecution -> Value -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
+executeHostBatch independent handlers = executeBatch independent invoke
+  where
+    invoke row request = case Map.lookup request.trName handlers of
+      Just handler -> handler row request.trArguments
+      Nothing -> invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments
+
+executeBatch :: (Concurrent :> es, IOE :> es) => Bool -> (Maybe JournalExecution -> ToolRequest -> Eff es ToolInvocation) -> ExecutionSession -> ExecutionHooks es -> [CatalogTool] -> [ToolRequest] -> Eff es ToolBatch
+executeBatch independent invoke session hooks catalog requests =
   bracket_ (liftIO (takeMVar session.batchLock)) (liftIO (putMVar session.batchLock ())) $ mask $ \restoreBatch -> do
     hooks.ehCheck
     let view request = find ((== ToolRef request.trName) . (.ctDefinition.tdRef)) catalog
@@ -148,7 +171,7 @@ executeToolBatch session hooks catalog requests =
                       (_, invocation) <- withExecutionRecord admitting step start $ \row -> mask $ \restore -> do
                         result <- case view request of
                           Nothing -> pure (rejected "unknown_tool" ("tool is outside the execution catalog: " <> request.trName))
-                          Just _ -> restore (invokeToolWithIdentity ((\entry -> "max:j" <> T.pack (show entry.jeJournalId)) <$> row) request.trName request.trArguments)
+                          Just _ -> restore (invoke row request)
                         -- A yield hands off after this admitted batch. Finish
                         -- remains immediate. The finally action also preserves
                         -- a yield when a later sibling is interrupted.
@@ -159,7 +182,7 @@ executeToolBatch session hooks catalog requests =
                               _ -> writeTVar session.terminal True
                         pure ((), result)
                       pure invocation
-        invocations <- restoreBatch (if all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release
+        invocations <- restoreBatch (if independent || all canParallel requests then mapConcurrently execute requests else traverse execute requests) `finally` release
         pure (ToolBatch invocations False)
 
 -- | Mask the admission-to-handler gap. The body is cancellable, and every

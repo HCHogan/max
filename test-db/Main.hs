@@ -57,6 +57,7 @@ import Max.ResourceCapabilitiesSpec qualified as ResourceCapabilitiesSpec
 import Max.SkillAuthoringSpec qualified as SkillAuthoringSpec
 import Max.SkillWorkflowSpec qualified as SkillWorkflowSpec
 import Max.TaskExperienceSpec qualified as TaskExperienceSpec
+import Max.WorkflowAgentSpec qualified as WorkflowAgentSpec
 import System.Environment (lookupEnv)
 import System.Exit (die)
 import Test.Hspec (hspec)
@@ -75,6 +76,7 @@ main = do
         [] -> putStrLn "migrations: nothing to apply (test DB already up to date)"
         xs -> putStrLn $ "migrations: applied " <> show (length xs) <> " — " <> show xs
       hspec $ do
+        WorkflowAgentSpec.spec pool
         SkillAuthoringSpec.spec pool
         SkillWorkflowSpec.spec pool
         ExecutionSpec.spec pool

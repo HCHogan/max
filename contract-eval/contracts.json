@@ -1,0 +1,20 @@
+{
+  "historian": [
+    "src/Max/Historian.hs",
+    "src/Max/EpisodeStore.hs"
+  ],
+  "task-experience": [
+    "src/Max/Task/Experience.hs",
+    "src/Max/DB/Task/Experience.hs"
+  ],
+  "memory-maintenance": [
+    "src/Max/Memory/Maintenance.hs"
+  ],
+  "intent": [
+    "src/Max/Intent.hs"
+  ],
+  "task-notice": [
+    "src/Max/Task/Notice.hs",
+    "src/Max/Task/NoticeReview.hs"
+  ]
+}

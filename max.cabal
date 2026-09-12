@@ -45,6 +45,14 @@ extra-source-files:
     bridge/wechat/go.mod
     bridge/wechat/README.md
     cabal.project
+    contract-eval/README.md
+    contract-eval/contracts.json
+    scripts/export-contract-inputs.sql
+    scripts/check-structured-contracts.py
+    docs/research/structured-contracts/*.json
+    docs/research/*.md
+    docs/research/*.json
+    workflow-eval/README.md
     context-eval/README.md
     context-eval/fixtures/*.jsonl
     devenv.nix
@@ -270,6 +278,7 @@ library
         Max.LLM.Failure
         Max.Execution.Types
         Max.Execution.Tools
+        Max.Execution.Workflow
         Max.CodeMode.Wasm
         Max.CodeMode.JavaScript
         Max.CodeMode.Model
@@ -340,7 +349,10 @@ library
         Max.DB.Task.Query
         Max.Task.State
         Max.Task.Experience
+        Max.Task.Delegation
+        Max.Task.WorkflowRuntime
         Max.DB.Task.Experience
+        Max.DB.Task.Workflow
         Max.Task.View
         Max.Render
         Max.Reload
@@ -615,6 +627,50 @@ executable max-skill-eval
         , time                 >= 1.12 && < 1.16
     ghc-options:      -threaded -rtsopts -with-rtsopts=-N
 
+executable max-contract-eval
+    import:           warnings, lang
+    if !flag(developer-tools)
+        buildable: False
+    hs-source-dirs:   contract-eval
+    main-is:          Main.hs
+    build-depends:
+        , aeson                >= 2.2  && < 2.4
+        , base                 >= 4.20 && < 5
+        , bytestring           >= 0.12 && < 0.13
+        , containers           >= 0.7  && < 0.9
+        , effectful            >= 2.5  && < 2.7
+        , log-effectful        >= 1.0  && < 1.1
+        , max
+        , cryptohash-sha256     >= 0.11 && < 0.12
+        , base16-bytestring     >= 1.0 && < 1.1
+        , file-embed            >= 0.0 && < 0.1
+        , opt-env-conf         >= 0.15 && < 0.17
+        , text                 >= 2.1  && < 2.2
+        , time                 >= 1.12 && < 1.16
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+
+executable max-workflow-eval
+    import:           warnings, lang
+    if !flag(developer-tools)
+        buildable: False
+    hs-source-dirs:   workflow-eval
+    main-is:          Main.hs
+    build-depends:
+        , aeson                >= 2.2  && < 2.4
+        , base                 >= 4.20 && < 5
+        , bytestring           >= 0.12 && < 0.13
+        , containers           >= 0.7  && < 0.9
+        , effectful            >= 2.5  && < 2.7
+        , effectful-postgresql >= 0.1  && < 0.2
+        , log-effectful        >= 1.0  && < 1.1
+        , max
+        , async                >= 2.2 && < 2.3
+        , opt-env-conf         >= 0.15 && < 0.17
+        , postgresql-simple    >= 0.7  && < 0.8
+        , text                 >= 2.1  && < 2.2
+        , time                 >= 1.12 && < 1.16
+    ghc-options:      -threaded -rtsopts -with-rtsopts=-N
+
 test-suite max-test
     import:             warnings, lang
     type:               exitcode-stdio-1.0
@@ -702,6 +758,7 @@ test-suite max-test
         Max.PromptSpec
         Max.RecallSpec
         Max.Context.WorkingSpec
+        Max.Task.DelegationSpec
         Max.Task.ExperienceSpec
         Max.ReminderArgsSpec
         Max.Sandbox.RuntimeSpec
@@ -778,6 +835,7 @@ test-suite max-test-db
         Max.MemoryCapabilitiesSpec
         Max.MemoryMaintenanceSpec
         Max.TaskExperienceSpec
+        Max.WorkflowAgentSpec
         Max.MaintenanceLeaseSpec
         Max.DB.MonitorSpec
         Max.DB.TaskSpec

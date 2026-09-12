@@ -105,6 +105,9 @@ jobs:
       - name: Check architecture boundaries
         run: nix develop --impure -c python3 scripts/check-architecture.py
 
+      - name: Check structured-output real-model evidence
+        run: python3 scripts/check-structured-contracts.py
+
       - name: Check source distribution metadata
         run: nix develop --impure -c cabal check
 
@@ -117,7 +120,7 @@ jobs:
       - name: Lint
         run: >-
           nix develop --impure -c hlint
-          src app maintenance test test-db prompt-flow eval context-eval
+          src app maintenance test test-db prompt-flow eval context-eval contract-eval workflow-eval
 
   unit-test:
     runs-on: ubuntu-latest
