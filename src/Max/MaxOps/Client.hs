@@ -2,8 +2,8 @@ module Max.MaxOps.Client
   ( maxOpsOperations,
     MaxOpsClient (..),
     maxOpsClient,
-    maxOpsQuery,
-    maxOpsExecute,
+    legacyMaxOpsQuery,
+    legacyMaxOpsExecute,
     maxOpsInvoke,
     maxOpsRequest,
   )
@@ -51,19 +51,21 @@ loadCatalog runtime config = do
   result <- maxOpsRequest runtime config "GET" "/v1/operations?view=tools" Nothing Nothing
   pure (result >>= parseCatalog)
 
-maxOpsQuery :: HttpRuntime -> MaxOpsConfig -> Text -> Value -> IO (Either Text Value)
-maxOpsQuery runtime config operation params = do
-  result <- maxOpsCall runtime config True operation params Nothing
+-- | Legacy discovery-per-call adapter, retained only for protocol 1 compatibility
+-- tests. Production runners use maxOpsInvoke with a pinned tools catalog.
+legacyMaxOpsQuery :: HttpRuntime -> MaxOpsConfig -> Text -> Value -> IO (Either Text Value)
+legacyMaxOpsQuery runtime config operation params = do
+  result <- legacyMaxOpsCall runtime config True operation params Nothing
   pure (result >>= withLogText)
 
 -- | Submissions return durable handles immediately. Polling, cancellation and
 -- reconciliation use the same registry; no HTTP failure automatically replays
 -- a write, including controls whose only protection is remote revision CAS.
-maxOpsExecute :: HttpRuntime -> MaxOpsConfig -> Text -> Value -> Maybe Text -> IO (Either Text Value)
-maxOpsExecute runtime config = maxOpsCall runtime config False
+legacyMaxOpsExecute :: HttpRuntime -> MaxOpsConfig -> Text -> Value -> Maybe Text -> IO (Either Text Value)
+legacyMaxOpsExecute runtime config = legacyMaxOpsCall runtime config False
 
-maxOpsCall :: HttpRuntime -> MaxOpsConfig -> Bool -> Text -> Value -> Maybe Text -> IO (Either Text Value)
-maxOpsCall runtime config readOnly operation params key
+legacyMaxOpsCall :: HttpRuntime -> MaxOpsConfig -> Bool -> Text -> Value -> Maybe Text -> IO (Either Text Value)
+legacyMaxOpsCall runtime config readOnly operation params key
   | not (isObject params) = pure (Left "maxops params must be an object")
   | LBS.length (encode request) > 2 * 1024 * 1024 = pure (Left "maxops request exceeds 2 MiB")
   | maybe False (not . validateIdempotencyKey) key = pure (Left "maxops idempotency_key must contain 1..128 printable ASCII characters without spaces")
@@ -123,7 +125,7 @@ safeFailure = \case
           Right (Object fields)
             | Just (String machineCode) <- KeyMap.lookup "code" fields,
               Just (String retry) <- KeyMap.lookup "retry" fields,
-              machineCode `elem` ["unsupported_operation", "idempotency_conflict", "revision_conflict", "stale_baseline", "cursor_invalid", "workflow_conflict", "unauthenticated", "forbidden", "not_found", "state_conflict", "cursor_expired", "busy", "invalid_request", "unavailable", "capability_not_permitted", "host_not_permitted", "unit_not_readable", "unit_not_manageable", "logs_not_permitted", "repository_not_permitted", "deployment_not_permitted", "execution_profile_host_required", "invalid_unit_name"],
+              machineCode `elem` ["unsupported_operation", "idempotency_conflict", "revision_conflict", "stale_baseline", "cursor_invalid", "workflow_conflict", "unauthenticated", "forbidden", "not_found", "state_conflict", "cursor_expired", "busy", "invalid_request", "unavailable", "capability_not_permitted", "host_not_permitted", "unit_not_readable", "unit_not_manageable", "logs_not_permitted", "repository_not_permitted", "deployment_not_permitted", "execution_profile_host_required", "invalid_unit_name", "unit_kind_not_manageable"],
               retry `elem` ["refresh_catalog", "never", "refresh", "replan", "restart_listing", "observe", "backoff", "observe_before_retry"] ->
                 prefix <> " code=" <> machineCode <> " retry=" <> retry <> failureHint machineCode
           _ -> prefix
@@ -134,6 +136,8 @@ safeFailure = \case
 
 failureHint :: Text -> Text
 failureHint = \case
+  "invalid_request" -> "：检查操作参数；jobs.status/wait/logs/result 的 job_id 必须是远端 UUID，不能传 Max task 编号。也可只传提交回执的 idempotency_key；尚未提交时等待所属提交任务回报，不要新建键重试。"
+  "unit_kind_not_manageable" -> "：此操作只管理 .service 单元；先从 resources_list(kind=units,host=...) 选择允许管理的服务。"
   "unit_not_readable" -> "：目标 unit 不在服务观察范围；用 resources_list(kind=units,host=...) 查看范围。切换前台/后台不会改变 Hub 的服务授权。"
   "unit_not_manageable" -> "：目标服务未授予启停权限；可读权限与管理权限独立。"
   "capability_not_permitted" -> "：Hub 凭据缺少该操作 capability；加载技能不会扩大权限。"

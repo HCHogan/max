@@ -76,7 +76,7 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
-  for_ [("exec.run", Nothing, True, TaskState.ReportPartial), ("diagnostics.collect", Just "complete", True, TaskState.ReportSucceeded), ("diagnostics.collect", Just "partial", True, TaskState.ReportPartial), ("diagnostics.collect", Just "failed", True, TaskState.ReportFailed), ("diagnostics.collect", Nothing, True, TaskState.ReportPartial), ("diagnostics.collect", Just "complete", False, TaskState.ReportPartial)] $ \(remoteOperation, assessment, outputAvailable, expected) ->
+  for_ [("exec.run", Nothing, True, TaskState.ReportPartial), ("diagnostics.collect", Just "complete", True, TaskState.ReportSucceeded), ("diagnostics.collect", Just "partial", True, TaskState.ReportPartial), ("diagnostics.collect", Just "failed", True, TaskState.ReportFailed), ("diagnostics.collect", Nothing, True, TaskState.ReportPartial), ("diagnostics.collect", Just "complete", False, TaskState.ReportPartial), ("units.restart", Nothing, True, TaskState.ReportWaiting), ("units.stop", Nothing, True, TaskState.ReportWaiting)] $ \(remoteOperation, assessment, outputAvailable, expected) ->
     it ("observes " <> T.unpack remoteOperation <> " " <> show (assessment, outputAvailable) <> " without model polling or losing its submission identity") $ do
       (front, message, actor) <- seed pool 611798505 1
       withDb pool (claimFrontend front) `shouldReturn` True
@@ -114,7 +114,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
                 (object [])
             )
       admitted `shouldSatisfy` either (const False) (const True)
-      admitted `shouldSatisfy` (\case Right (Object fields) -> KeyMap.lookup "kind" fields == Just (String "max_task") && not (KeyMap.member "job_id" fields); _ -> False)
+      admitted `shouldSatisfy` (\case Right (Object fields) -> KeyMap.lookup "kind" fields == Just (String "maxops_submission") && KeyMap.lookup "idempotency_key" fields == Just (String "max:j41") && not (any (`KeyMap.member` fields) ["job_id", "task", "task_id"]); _ -> False)
       taskTurn <- claimOne pool
       Just task <- withDb pool (loadTaskExecution taskTurn.atrTurnId)
       taskOutput <- newTurnOutputContext taskTurn
@@ -130,34 +130,58 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
                     else
                       if op.name == (if remoteOperation == "diagnostics.collect" then "jobs.result" else "jobs.logs")
                         then do
-                          when (remoteOperation == "diagnostics.collect") $ params `shouldBe` object ["job_id" .= ("stable-remote-job" :: Text), "limit" .= (8192 :: Int), "pointer" .= ("/diagnostic" :: Text)]
+                          when (remoteOperation == "diagnostics.collect") $ params `shouldBe` object ["idempotency_key" .= ("max:j41" :: Text), "limit" .= (8192 :: Int), "pointer" .= ("/diagnostic" :: Text)]
                           pure (if outputAvailable then Right (object ["stdout_text" .= ("bounded diagnostic output" :: Text), "complete" .= True]) else Left "maxops result unavailable")
                         else do
+                          key `shouldBe` Nothing
+                          params `shouldSatisfy` (\case Object fields -> KeyMap.lookup "idempotency_key" fields == Just (String "max:j41") && not (KeyMap.member "job_id" fields); _ -> False)
                           modifyIORef' waits (+ 1)
-                          pure
-                            ( Right
-                                ( object
-                                    [ "job"
-                                        .= object
-                                          [ "evidence_status" .= (assessment :: Maybe Text),
-                                            "handle"
-                                              .= object
-                                                ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("succeeded" :: Text), "revision" .= (3 :: Int)]
-                                          ]
-                                    ]
-                                )
-                            )
+                          submitted <- readIORef keys
+                          now <- getCurrentTime
+                          if null submitted
+                            then pure (Left "maxops HTTP 404 code=not_found retry=never")
+                            else do
+                              attempts <- readIORef waits
+                              let nonterminal = expected == TaskState.ReportWaiting
+                                  recovering = case params of Object fields -> KeyMap.lookup "timeout_seconds" fields == Just (Number 0); _ -> False
+                              if remoteOperation == "units.stop" && attempts > 2 && not recovering
+                                then pure (Left "maxops transport unavailable")
+                                else
+                                  pure
+                                    ( Right
+                                        ( object
+                                            [ "job"
+                                                .= object
+                                                  [ "deadline" .= addUTCTime (if nonterminal then -29.98 else 60) now,
+                                                    "evidence_status" .= (assessment :: Maybe Text),
+                                                    "handle"
+                                                      .= object
+                                                        ["job_id" .= ("stable-remote-job" :: Text), "state" .= (if nonterminal then "running" else "succeeded" :: Text), "revision" .= (3 :: Int)]
+                                                  ]
+                                            ]
+                                        )
+                                    )
               )
               (\_ _ -> pure (Right rawCatalog))
       for_ [1, 2 :: Int] $ \_ -> do
         result <- withDbLog pool $ runMaxOpsTask client config (pure config) (contextFor taskOutput True) task
         result.status `shouldBe` expected
         null result.unresolved `shouldBe` (expected == TaskState.ReportSucceeded)
-        result.summary `shouldSatisfy` T.isInfixOf (if outputAvailable then "bounded diagnostic output" else "unavailable")
-      readIORef keys `shouldReturn` [Just "max:j41", Just "max:j41"]
-      readIORef waits `shouldReturn` 2
+        result.summary `shouldSatisfy` T.isInfixOf (if expected == TaskState.ReportWaiting then "outcome_unknown" else if outputAvailable then "bounded diagnostic output" else "unavailable")
+      readIORef keys `shouldReturn` [Just "max:j41"]
+      count <- readIORef waits
+      count `shouldSatisfy` (>= 3)
       rows <- withDb pool $ query "SELECT state FROM execution_journal WHERE turn_id=?" (Only taskTurn.atrTurnId)
       (rows :: [Only Text]) `shouldBe` [Only "committed", Only "committed"]
+      -- A stale retryable flag must not turn an observer's terminal report into
+      -- the old repeated-success / forty-attempt loop.
+      result <- withDbLog pool $ runMaxOpsTask client config (pure config) (contextFor taskOutput True) task
+      void $ withDb pool $ execute "UPDATE task_attempts SET retryable=? WHERE turn_id=?" (expected /= TaskState.ReportFailed, taskTurn.atrTurnId)
+      withDb pool (taskReportTyped taskTurn.atrTurnId result) `shouldReturn` True
+      withDb pool (finishAgentTurn taskTurn TurnSucceeded 0 Nothing Nothing)
+      settled <- withDb pool $ query "SELECT status,attempt,next_attempt_at IS NULL FROM durable_tasks WHERE task_id=?" (Only task.teTaskId)
+      (settled :: [(Text, Int, Bool)]) `shouldBe` [(TaskState.reportStatusText expected, 1, True)]
+      readIORef keys `shouldReturn` [Just "max:j41"]
 
   it "recovers skill receipts across attempts but not across task revisions" $ do
     source@(_, _, actor) <- seed pool 900 1

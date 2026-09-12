@@ -6,6 +6,7 @@ module Max.MaxOps.Protocol
     Operation (..),
     parseCatalog,
     catalogValue,
+    catalogForSkill,
     operationToolName,
     operationSchema,
     operationSummary,
@@ -85,6 +86,17 @@ catalogValue access catalog =
   object
     ["version" .= catalog.version, "operations" .= [entry.wireValue | entry <- catalog.operations, access == ManagementCatalog || entry.readOnly]]
 
+-- | Visibility only: schemas and dispatch still come from the Hub. Reapply
+-- this partition to recovered receipts, including old full maxops catalogs.
+catalogForSkill :: Text -> Catalog -> Catalog
+catalogForSkill skill catalog = catalog {operations = filter included catalog.operations}
+  where
+    observation entry = entry.readOnly && not (any (`T.isPrefixOf` entry.name) ["workspace.", "changes.", "deploy."])
+    included entry = case skill of
+      "maxops" -> observation entry
+      "maxops-changes" -> not (observation entry)
+      _ -> False
+
 validateIdempotencyKey :: Text -> Bool
 validateIdempotencyKey key = not (T.null key) && T.length key <= 128 && T.all (\c -> c >= '!' && c <= '~') key
 
@@ -98,7 +110,7 @@ withLogText (Object fields)
     Just (String stderr) <- KeyMap.lookup "stderr_base64" fields = do
       out <- decodeLog stdout
       err <- decodeLog stderr
-      pure (Object (KeyMap.insert "encoding" (String "text") . KeyMap.insert "stdout_text" (String out) . KeyMap.insert "stderr_text" (String err) . KeyMap.insert "text_decoding" (String "utf8_with_replacement") . KeyMap.delete "stdout_base64" . KeyMap.delete "stderr_base64" $ fields))
+      pure (Object (KeyMap.insert "encoding" (String "utf8_with_replacement") . KeyMap.insert "stdout_text" (String out) . KeyMap.insert "stderr_text" (String err) . KeyMap.delete "stdout_base64" . KeyMap.delete "stderr_base64" $ fields))
   where
     decodeLog = either (const (Left "maxops returned invalid base64 logs")) (Right . TE.decodeUtf8With lenientDecode) . Base64.decode . TE.encodeUtf8
 withLogText value = Right value

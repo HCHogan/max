@@ -1,5 +1,6 @@
 module Max.MaxOpsSpec (spec) where
 
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.STM (atomically)
 import Control.Monad (forM_, (>=>))
 import Data.Aeson (Value (..), eitherDecodeFileStrict', encode, object, (.=))
@@ -13,16 +14,18 @@ import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as T
+import Data.Time (UTCTime (..), addUTCTime, fromGregorian, getCurrentTime)
 import Effectful (IOE, liftIO, runEff)
 import Max.Config (loadConfigCandidate, runtimeValuesFromConfig)
 import Max.Effects.Tools (Tool (..))
 import Max.HttpRuntime (HttpRuntime, httpRuntimeFromManagers)
-import Max.MaxOps.Client (maxOpsExecute, maxOpsInvoke, maxOpsOperations, maxOpsQuery)
-import Max.MaxOps.Protocol (Catalog (..), CatalogAccess (..), Operation (..), catalogValue, operationSchema, operationSummary, operationToolName, parseCatalog, withLogText)
+import Max.MaxOps.Client (legacyMaxOpsExecute, legacyMaxOpsQuery, maxOpsInvoke, maxOpsOperations)
+import Max.MaxOps.Observer
+import Max.MaxOps.Protocol (Catalog (..), CatalogAccess (..), Operation (..), catalogForSkill, catalogValue, operationSchema, operationSummary, operationToolName, parseCatalog, withLogText)
 import Max.MaxOps.Types
 import Max.RuntimeConfig
 import Max.Task.Types (TaskProfile (..), taskGrants)
-import Max.Tool.Catalog (buildToolCatalog)
+import Max.Tool.Catalog (buildToolCatalog, catalogTools, validateArguments)
 import Max.Tool.Types
 import Max.Tools.MaxOps (maxOpsBundle)
 import Network.HTTP.Client (ManagerSettings (..), defaultManagerSettings, makeConnection, newManager)
@@ -92,7 +95,7 @@ spec = describe "maxops" $ do
       map (.toolName) (fixtureTools runtime configured (pure configured) (GroupId 611798505) ReadOnlyCatalog)
         `shouldBe` ["maxops_fixture_status"]
 
-    it "delegates submissions to the host without exposing a key or making HTTP calls" $ do
+    it "delegates submissions without model-chosen identity or inline HTTP" $ do
       (runtime, requests) <- fixture []
       submitted <- newIORef []
       let entry = catalogEntry "fixture.submit"
@@ -103,20 +106,48 @@ spec = describe "maxops" $ do
               (pure configured)
               (GroupId 611798505)
               [entry]
-              (\op params -> liftIO (modifyIORef' submitted (<> [(op.name, params)])) >> pure (Right (object ["task_id" .= (42 :: Int)])))
+              (\op params -> liftIO (modifyIORef' submitted (<> [(op.name, params)])) >> pure (Right (object ["idempotency_key" .= text "host-key"])))
       runner <- case runners of
         [tool] -> pure tool
         _ -> fail "expected complete single-operation fixture"
-      runEff (runner.toolRun (object [])) `shouldReturn` Right (object ["task_id" .= (42 :: Int)])
+      runEff (runner.toolRun (object [])) `shouldReturn` Right (object ["idempotency_key" .= text "host-key"])
       runner.toolSchema `shouldBe` operationSchema entry
+      runner.toolDescription `shouldBe` operationSummary entry
       readIORef submitted `shouldReturn` [("fixture.submit", object [])]
       readIORef requests `shouldReturn` []
+
+  describe "bounded host observation" $ do
+    let now = UTCTime (fromGregorian 2026 9 12) 0
+        budget = observerBudgetAt now 0 now (addUTCTime 3600 now)
+        seconds n = n * 1_000_000_000
+    it "bounds discovery and preserves elapsed admission time across recovery" $ do
+      remainingMicrosAt (seconds 120) budget `shouldBe` 0
+      remainingMicrosAt 0 (observerBudgetAt (addUTCTime 100 now) 0 now (addUTCTime 3600 now)) `shouldBe` 20_000_000
+    it "uses the remote deadline plus grace without extending it on later responses" $ do
+      let known = withRemoteDeadline (addUTCTime 300 now) budget
+      remainingMicrosAt (seconds 329) known `shouldBe` 1_000_000
+      remainingMicrosAt (seconds 330) known `shouldBe` 0
+      remainingMicrosAt (seconds 330) (withRemoteDeadline (addUTCTime 600 now) known) `shouldBe` 0
+      remainingMicrosAt (seconds 130) (withRemoteDeadline (addUTCTime 100 now) known) `shouldBe` 0
+    it "reserves time for durable settlement before the Max task deadline" $ do
+      let bounded = withRemoteDeadline (addUTCTime 600 now) (observerBudgetAt now 0 now (addUTCTime 200 now))
+      remainingMicrosAt (seconds 195) bounded `shouldBe` 0
+
+    it "interrupts an in-flight read at the cutoff and does not start expired work" $ do
+      started <- getCurrentTime
+      active <- newObserverBudget started (addUTCTime 60 started)
+      completed <- newIORef False
+      withinBudget (withRemoteDeadline (addUTCTime (-29.95) started) active) (threadDelay 200_000 >> writeIORef completed True) `shouldReturn` Nothing
+      readIORef completed `shouldReturn` False
+      expired <- newObserverBudget (addUTCTime (-121) started) (addUTCTime 60 started)
+      withinBudget expired (writeIORef completed True) `shouldReturn` Nothing
+      readIORef completed `shouldReturn` False
 
   describe "authenticated read-only transport" $ do
     it "discovers the hub schema and executes without sending group or principal identity" $
       withToken $ \config -> do
         (runtime, requests) <- fixture [jsonResponse catalog, jsonResponse (object ["state" .= text "unknown"])]
-        maxOpsQuery runtime config "fixture.read" (object []) `shouldReturn` Right (object ["state" .= text "unknown"])
+        legacyMaxOpsQuery runtime config "fixture.read" (object []) `shouldReturn` Right (object ["state" .= text "unknown"])
         bytes <- BS.concat <$> readIORef requests
         bytes `shouldSatisfy` BS8.isInfixOf "GET /v1/operations"
         bytes `shouldSatisfy` BS8.isInfixOf "POST /v1/execute"
@@ -129,26 +160,26 @@ spec = describe "maxops" $ do
         let operations = object ["version" .= (1 :: Int), "operations" .= [operation "fixture.read" True, operation "fixture.write" False]]
         (runtime, requests) <- fixture [jsonResponse operations, jsonResponse operations]
         maxOpsOperations runtime config ManagementCatalog `shouldReturn` Right catalog
-        maxOpsQuery runtime config "fixture.write" (object []) >>= (`shouldSatisfy` isLeft)
+        legacyMaxOpsQuery runtime config "fixture.write" (object []) >>= (`shouldSatisfy` isLeft)
         readIORef requests >>= (`shouldSatisfy` (not . BS8.isInfixOf "POST")) . BS.concat
 
     it "fails closed on unknown protocol versions or missing read-only declarations" $
       withToken $ \config ->
         forM_ [object ["version" .= (3 :: Int), "operations" .= [operation "fixture.read" True]], object ["version" .= (1 :: Int), "operations" .= [object ["name" .= text "fixture.read"]]]] $ \invalid -> do
           (runtime, requests) <- fixture [jsonResponse invalid]
-          maxOpsQuery runtime config "fixture.read" (object []) >>= (`shouldSatisfy` isLeft)
+          legacyMaxOpsQuery runtime config "fixture.read" (object []) >>= (`shouldSatisfy` isLeft)
           readIORef requests >>= (`shouldSatisfy` (not . BS8.isInfixOf "POST")) . BS.concat
 
     it "rejects oversize requests and non-object params before reading credentials" $ do
       (runtime, requests) <- fixture []
-      maxOpsQuery runtime configured "fixture.read" (object ["large" .= replicate (2 * 1024 * 1024) 'x']) >>= (`shouldSatisfy` isLeft)
-      maxOpsQuery runtime configured "fixture.read" ("bad" :: Value) >>= (`shouldSatisfy` isLeft)
+      legacyMaxOpsQuery runtime configured "fixture.read" (object ["large" .= replicate (2 * 1024 * 1024) 'x']) >>= (`shouldSatisfy` isLeft)
+      legacyMaxOpsQuery runtime configured "fixture.read" ("bad" :: Value) >>= (`shouldSatisfy` isLeft)
       readIORef requests `shouldReturn` []
 
   describe "protocol 2 management transport" $ do
     it "makes binary log chunks readable without losing byte offsets or truncation state" $ do
       let logs = object ["encoding" .= text "base64", "stdout_base64" .= text "aGkK", "stderr_base64" .= text "/w==", "next_stdout_offset" .= (3 :: Int), "truncated" .= True]
-          expected = object ["encoding" .= text "text", "next_stdout_offset" .= (3 :: Int), "truncated" .= True, "stdout_text" .= text "hi\n", "stderr_text" .= text "\xfffd", "text_decoding" .= text "utf8_with_replacement"]
+          expected = object ["encoding" .= text "utf8_with_replacement", "next_stdout_offset" .= (3 :: Int), "truncated" .= True, "stdout_text" .= text "hi\n", "stderr_text" .= text "\xfffd"]
       withLogText logs `shouldBe` Right expected
       withLogText (object ["encoding" .= text "base64", "stdout_base64" .= text "bad", "stderr_base64" .= text ""]) `shouldSatisfy` isLeft
 
@@ -156,21 +187,21 @@ spec = describe "maxops" $ do
       withToken $ \config -> do
         (runtime, _) <- fixture [jsonResponse catalogV2, jsonResponse catalogV2, jsonResponse (object ["handle" .= text "existing-job"])]
         maxOpsOperations runtime config ManagementCatalog `shouldReturn` Right catalogV2
-        maxOpsQuery runtime config "fixture.status" (object []) `shouldReturn` Right (object ["handle" .= text "existing-job"])
+        legacyMaxOpsQuery runtime config "fixture.status" (object []) `shouldReturn` Right (object ["handle" .= text "existing-job"])
 
     it "keeps reads and mutations on separate execution paths" $
       withToken $ \config -> do
         (runtime, requests) <- fixture (replicate 3 (jsonResponse catalogV2))
-        maxOpsQuery runtime config "fixture.submit" (object []) >>= (`shouldSatisfy` isLeft)
-        maxOpsExecute runtime config "fixture.status" (object []) Nothing >>= (`shouldSatisfy` isLeft)
-        maxOpsExecute runtime config "fixture.missing" (object []) Nothing >>= (`shouldSatisfy` isLeft)
+        legacyMaxOpsQuery runtime config "fixture.submit" (object []) >>= (`shouldSatisfy` isLeft)
+        legacyMaxOpsExecute runtime config "fixture.status" (object []) Nothing >>= (`shouldSatisfy` isLeft)
+        legacyMaxOpsExecute runtime config "fixture.missing" (object []) Nothing >>= (`shouldSatisfy` isLeft)
         readIORef requests >>= (`shouldSatisfy` (not . BS8.isInfixOf "POST")) . BS.concat
 
     it "forwards stable submission keys as headers and returns the exact durable handle" $
       withToken $ \config -> do
         let handle = object ["job_id" .= text "job-123", "state" .= text "queued", "revision" .= (1 :: Int)]
         (runtime, requests) <- fixture [jsonResponse catalogV2, jsonResponse handle, jsonResponse catalogV2, jsonResponse handle]
-        forM_ [1, 2 :: Int] $ \_ -> maxOpsExecute runtime config "fixture.submit" (object []) (Just "incident-123") `shouldReturn` Right handle
+        forM_ [1, 2 :: Int] $ \_ -> legacyMaxOpsExecute runtime config "fixture.submit" (object []) (Just "incident-123") `shouldReturn` Right handle
         sent <- readIORef requests
         length [() | request <- sent, "Idempotency-Key: incident-123" `BS8.isInfixOf` request] `shouldBe` 2
         BS.concat sent `shouldSatisfy` (not . BS8.isInfixOf "\"idempotency_key\"")
@@ -178,23 +209,23 @@ spec = describe "maxops" $ do
     it "rejects missing, unexpected or unsafe keys before submitting anything" $
       withToken $ \config -> do
         (runtime, requests) <- fixture [jsonResponse catalogV2, jsonResponse catalogV2]
-        maxOpsExecute runtime config "fixture.submit" (object []) Nothing >>= (`shouldSatisfy` isLeft)
-        maxOpsExecute runtime config "fixture.control" (object []) (Just "not-supported") >>= (`shouldSatisfy` isLeft)
+        legacyMaxOpsExecute runtime config "fixture.submit" (object []) Nothing >>= (`shouldSatisfy` isLeft)
+        legacyMaxOpsExecute runtime config "fixture.control" (object []) (Just "not-supported") >>= (`shouldSatisfy` isLeft)
         forM_ ["", "has space", "x\r\nInjected: value", "中文", "nul\0", "long" <> text (mconcat (replicate 128 "x"))] $ \key ->
-          maxOpsExecute runtime config "fixture.submit" (object []) (Just key) >>= (`shouldSatisfy` isLeft)
+          legacyMaxOpsExecute runtime config "fixture.submit" (object []) (Just key) >>= (`shouldSatisfy` isLeft)
         readIORef requests >>= (`shouldSatisfy` (not . BS8.isInfixOf "POST")) . BS.concat
 
     it "accepts revisioned controls and workspace-sized payloads without inventing an idempotency contract" $
       withToken $ \config -> do
         let params = object ["expected_revision" .= (4 :: Int), "contents" .= replicate 8192 'x']
         (runtime, requests) <- fixture [jsonResponse catalogV2, jsonResponse (object ["revision" .= (5 :: Int)])]
-        maxOpsExecute runtime config "fixture.control" params Nothing `shouldReturn` Right (object ["revision" .= (5 :: Int)])
+        legacyMaxOpsExecute runtime config "fixture.control" params Nothing `shouldReturn` Right (object ["revision" .= (5 :: Int)])
         readIORef requests >>= (`shouldSatisfy` (not . BS8.isInfixOf "Idempotency-Key")) . BS.concat
 
     it "never automatically replays a write when its HTTP acknowledgement is lost" $
       withToken $ \config -> do
         (runtime, requests) <- fixture [jsonResponse catalogV2, BS.empty]
-        maxOpsExecute runtime config "fixture.submit" (object []) (Just "stable-key") `shouldReturn` Left "maxops transport unavailable"
+        legacyMaxOpsExecute runtime config "fixture.submit" (object []) (Just "stable-key") `shouldReturn` Left "maxops transport unavailable"
         sent <- readIORef requests
         length [() | request <- sent, "POST /v1/execute" `BS8.isInfixOf` request] `shouldBe` 1
 
@@ -223,7 +254,7 @@ spec = describe "maxops" $ do
         maxOpsOperations runtime config ManagementCatalog `shouldReturn` Left "maxops HTTP 401"
 
     it "preserves typed permission and parameter hints without reflecting upstream text" $
-      withToken $ \config -> forM_ [("unit_not_readable", "服务观察范围"), ("execution_profile_host_required", "必须指定 host")] $ \(code, hint) -> do
+      withToken $ \config -> forM_ [("unit_not_readable", "服务观察范围"), ("execution_profile_host_required", "必须指定 host"), ("invalid_request", "UUID"), ("unit_kind_not_manageable", ".service")] $ \(code, hint) -> do
         let body = LBS.toStrict (encode (object ["code" .= (code :: Text), "retry" .= ("never" :: Text), "error" .= ("secret upstream contents" :: Text)]))
             wire = "HTTP/1.1 403 Forbidden\r\nContent-Length: " <> BS8.pack (show (BS.length body)) <> "\r\n\r\n" <> body
         (runtime, _) <- fixture [wire]
@@ -273,7 +304,23 @@ spec = describe "maxops" $ do
             | entry <- loaded.operations
             ]
           specs = [ToolSpec (operationToolName entry) (operationSummary entry) (operationSchema entry) | entry <- loaded.operations]
-      buildToolCatalog defs specs `shouldSatisfy` either (const False) (const True)
+      Right tools <- pure (buildToolCatalog defs specs)
+      restart <- case filter ((== ToolRef "maxops_units_restart") . (.tdRef) . (.ctDefinition)) (catalogTools tools) of
+        [tool] -> pure tool
+        _ -> fail "restart schema missing"
+      validateArguments restart (object ["host" .= text "fixture", "unit" .= text "fixture.service"]) `shouldBe` Right ()
+      forM_ ["multi-user.target", "fixture.service/../../x", "ungranted.service"] $ \unit ->
+        validateArguments restart (object ["host" .= text "fixture", "unit" .= (unit :: Text)]) `shouldSatisfy` isLeft
+      let observation = catalogForSkill "maxops" loaded
+          changes = catalogForSkill "maxops-changes" loaded
+          baseNames = map (.name) observation.operations
+      forM_ ["jobs.status", "jobs.wait", "jobs.logs", "jobs.result"] $ \name -> baseNames `shouldContain` [name]
+      all (.readOnly) observation.operations `shouldBe` True
+      forM_ ["deploy.", "workspace.", "changes."] $ \prefix ->
+        any (prefix `T.isPrefixOf`) baseNames `shouldBe` False
+      length observation.operations + length changes.operations `shouldBe` length loaded.operations
+      (catalogForSkill "maxops" changes).operations `shouldBe` []
+      length observation.operations `shouldSatisfy` (< 30)
 
     it "refuses partial catalogs and removes response schemas from load receipts" $ do
       parseCatalog (object ["version" .= (2 :: Int), "operations" .= ([] :: [Value]), "next_cursor" .= text "next"])
@@ -291,6 +338,13 @@ spec = describe "maxops" $ do
       sent <- BS.concat <$> readIORef requests
       sent `shouldSatisfy` BS8.isInfixOf "POST /v1/execute?view=summary&encoding=text"
       sent `shouldSatisfy` (not . BS8.isInfixOf "GET ")
+
+    it "passes the original submission key in read parameters without a write header" $ withToken $ \config -> do
+      (runtime, requests) <- fixture [jsonResponse (object [])]
+      maxOpsInvoke runtime config (catalogEntry "fixture.status") (object ["idempotency_key" .= text "host-key"]) Nothing `shouldReturn` Right (object [])
+      sent <- BS.concat <$> readIORef requests
+      sent `shouldSatisfy` BS8.isInfixOf "\"idempotency_key\":\"host-key\""
+      sent `shouldSatisfy` (not . BS8.isInfixOf "Idempotency-Key:")
 
     it "rejects invalid identities and malformed parameters before transport" $ do
       (runtime, requests) <- fixture []

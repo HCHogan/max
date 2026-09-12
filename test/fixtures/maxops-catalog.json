@@ -1,4 +1,5 @@
 {
+  "next_cursor": null,
   "operations": [
     {
       "capability": "fleet:read",
@@ -7,9 +8,7 @@
       "minimum_protocol_version": 1,
       "name": "fleet.overview",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "title": "Empty",
         "type": "object"
       },
       "read_only": true,
@@ -22,18 +21,17 @@
       "minimum_protocol_version": 1,
       "name": "units.failed",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "host": {
             "default": null,
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "title": "FailedParams",
         "type": "object"
       },
       "read_only": true,
@@ -46,17 +44,16 @@
       "minimum_protocol_version": 1,
       "name": "host.facts",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           }
         },
         "required": [
           "host"
         ],
-        "title": "HostParams",
         "type": "object"
       },
       "read_only": true,
@@ -69,17 +66,30 @@
       "minimum_protocol_version": 1,
       "name": "host.metrics",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "$defs": {
+          "MetricAggregation": {
+            "enum": [
+              "none",
+              "stats"
+            ],
+            "type": "string"
+          }
+        },
         "additionalProperties": false,
         "properties": {
+          "aggregation": {
+            "$ref": "#/$defs/MetricAggregation",
+            "default": "none",
+            "description": "none retains individual series; stats reduces each metric to min/max/mean and series counts over fresh unambiguous samples. Summary view always uses stats."
+          },
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts).",
             "type": "string"
           }
         },
         "required": [
           "host"
         ],
-        "title": "HostParams",
         "type": "object"
       },
       "read_only": true,
@@ -92,18 +102,17 @@
       "minimum_protocol_version": 1,
       "name": "deploy.status",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "host": {
             "default": null,
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": [
               "string",
               "null"
             ]
           }
         },
-        "title": "FailedParams",
         "type": "object"
       },
       "read_only": true,
@@ -116,21 +125,23 @@
       "minimum_protocol_version": 1,
       "name": "units.list",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "cursor": {
             "default": null,
+            "description": "Continuation cursor returned by this operation; omit for the first page and preserve filters when continuing.",
             "type": [
               "string",
               "null"
             ]
           },
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           },
           "limit": {
             "default": 50,
+            "description": "Maximum entries per page; use the returned cursor to continue.",
             "format": "uint16",
             "maximum": 200,
             "minimum": 1,
@@ -156,7 +167,6 @@
         "required": [
           "host"
         ],
-        "title": "UnitsListParams",
         "type": "object"
       },
       "read_only": true,
@@ -169,13 +179,14 @@
       "minimum_protocol_version": 1,
       "name": "units.status",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           },
           "unit": {
+            "description": "Exact readable unit from resources.list(kind=units); observation accepts canonical systemd unit kinds, including services, timers and targets.",
             "type": "string"
           }
         },
@@ -183,7 +194,6 @@
           "host",
           "unit"
         ],
-        "title": "UnitParams",
         "type": "object"
       },
       "read_only": true,
@@ -196,14 +206,15 @@
       "minimum_protocol_version": 1,
       "name": "units.logs",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           },
           "lines": {
             "default": 50,
+            "description": "Maximum recent journal entries to collect (1..200, default 50).",
             "format": "uint16",
             "maximum": 200,
             "minimum": 1,
@@ -211,12 +222,14 @@
           },
           "since_seconds": {
             "default": 3600,
+            "description": "Journal lookback in seconds (1..86400, default 3600).",
             "format": "uint32",
             "maximum": 86400,
             "minimum": 1,
             "type": "integer"
           },
           "unit": {
+            "description": "Exact readable unit from resources.list(kind=units); observation accepts canonical systemd unit kinds, including services, timers and targets.",
             "type": "string"
           }
         },
@@ -224,7 +237,6 @@
           "host",
           "unit"
         ],
-        "title": "LogParams",
         "type": "object"
       },
       "read_only": true,
@@ -237,9 +249,36 @@
       "minimum_protocol_version": 1,
       "name": "alerts.active",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "title": "Empty",
+        "properties": {
+          "cursor": {
+            "default": null,
+            "description": "Revision-bound next_cursor from the same host filter and view; restart listing if the alert set changes.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "default": null,
+            "description": "Exact host from resources.list(kind=hosts); omit for all permitted hosts.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "default": null,
+            "description": "Maximum alerts per page before grouping, 1..200. Summary defaults to 20 alerts; full without bounds preserves the legacy response.",
+            "format": "uint16",
+            "maximum": 200,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
         "type": "object"
       },
       "read_only": true,
@@ -252,14 +291,15 @@
       "minimum_protocol_version": 1,
       "name": "events.get",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "event_id": {
+            "description": "Event UUID from events.recent or events.list; links this operation to that evidence and episode.",
             "type": "string"
           },
           "limit": {
             "default": 8192,
+            "description": "Maximum UTF-8 JSON fragment bytes (1..32768, default 8192); continue at next_offset.",
             "format": "uint32",
             "maximum": 32768,
             "minimum": 1,
@@ -267,6 +307,7 @@
           },
           "offset": {
             "default": 0,
+            "description": "UTF-8 byte offset from next_offset; start at zero and continue at a character boundary.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -280,7 +321,6 @@
         "required": [
           "event_id"
         ],
-        "title": "EventGetParams",
         "type": "object"
       },
       "read_only": true,
@@ -293,11 +333,11 @@
       "minimum_protocol_version": 1,
       "name": "events.recent",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "before_sequence": {
             "default": null,
+            "description": "Exclusive upper sequence from next_before_sequence; omit for newest events.",
             "format": "uint64",
             "minimum": 0,
             "type": [
@@ -307,6 +347,7 @@
           },
           "host": {
             "default": null,
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": [
               "string",
               "null"
@@ -314,6 +355,7 @@
           },
           "limit": {
             "default": 20,
+            "description": "Maximum entries per page; use the returned cursor to continue.",
             "format": "uint16",
             "maximum": 50,
             "minimum": 1,
@@ -321,6 +363,7 @@
           },
           "since_seconds": {
             "default": 3600,
+            "description": "Recent-event lookback in seconds, default one hour; does not change oldest-first events.list replay.",
             "format": "uint32",
             "maximum": 604800,
             "minimum": 1,
@@ -335,7 +378,6 @@
             ]
           }
         },
-        "title": "RecentEventsParams",
         "type": "object"
       },
       "read_only": true,
@@ -360,11 +402,11 @@
             "type": "string"
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "cursor": {
             "default": null,
+            "description": "Replay events after this durable sequence; omit to start at the earliest retained event.",
             "format": "uint64",
             "minimum": 0,
             "type": [
@@ -374,6 +416,7 @@
           },
           "host": {
             "default": null,
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": [
               "string",
               "null"
@@ -381,6 +424,7 @@
           },
           "kinds": {
             "default": [],
+            "description": "Event-kind filter; an empty array includes all kinds.",
             "items": {
               "$ref": "#/$defs/EventKind"
             },
@@ -388,13 +432,13 @@
           },
           "limit": {
             "default": 100,
+            "description": "Maximum entries per page; use the returned cursor to continue.",
             "format": "uint16",
             "maximum": 200,
             "minimum": 1,
             "type": "integer"
           }
         },
-        "title": "EventsListParams",
         "type": "object"
       },
       "read_only": true,
@@ -407,9 +451,7 @@
       "minimum_protocol_version": 1,
       "name": "self.status",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
-        "title": "Empty",
         "type": "object"
       },
       "read_only": true,
@@ -429,6 +471,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "argv": {
+                    "description": "Literal executable followed by arguments; no shell parsing or expansion.",
                     "items": {
                       "type": "string"
                     },
@@ -444,6 +487,7 @@
                 "additionalProperties": false,
                 "properties": {
                   "script": {
+                    "description": "Script run by the configured profile interpreter in a non-login shell with its declared PATH.",
                     "type": "string"
                   }
                 },
@@ -455,14 +499,15 @@
             ]
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "command": {
-            "$ref": "#/$defs/CommandSpec"
+            "$ref": "#/$defs/CommandSpec",
+            "description": "Exactly one of argv (literal executable and arguments, no shell expansion) or script (uses the profile interpreter in a non-login shell). The profile supplies declared PATH; preserve failure exit status rather than masking it with || true."
           },
           "credential_refs": {
             "default": [],
+            "description": "Configured credential names allowed by the profile; only operator-supplied references, never secret values or source paths. The executor uses systemd LoadCredential.",
             "items": {
               "type": "string"
             },
@@ -470,6 +515,7 @@
           },
           "cwd": {
             "default": null,
+            "description": "Optional absolute working directory under the profile working_roots from resources.list(kind=execution_profiles, host=...).",
             "type": [
               "string",
               "null"
@@ -480,16 +526,20 @@
               "type": "string"
             },
             "default": {},
+            "description": "Explicit non-secret environment overrides; omit to use the configured profile environment and PATH. Never put credentials here.",
             "type": "object"
           },
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           },
           "profile": {
+            "description": "Target profile name from resources.list(kind=execution_profiles, host=...). Inspect its user, privilege, interpreter, working_roots, PATH and limits before choosing.",
             "type": "string"
           },
           "timeout_seconds": {
             "default": null,
+            "description": "Requested runtime in seconds (1..86400); must not exceed max_timeout_seconds from resources.list(kind=execution_profiles, host=...). Omission uses the profile runtime limit and a 300-second Hub deadline; set explicitly to align them.",
             "format": "uint32",
             "minimum": 0,
             "type": [
@@ -503,7 +553,6 @@
           "profile",
           "command"
         ],
-        "title": "ExecRunParams",
         "type": "object"
       },
       "read_only": false,
@@ -516,20 +565,28 @@
       "minimum_protocol_version": 2,
       "name": "units.start",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_invocation_id": {
             "default": null,
+            "description": "Read units.status first and supply unit.details.invocation_id (32 hex digits); a concurrent restart then fails with stale_baseline. Omission disables this guard.",
             "type": [
               "string",
               "null"
             ]
           },
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           },
           "unit": {
+            "description": "Service-only mutation: exact .service name in manageable_units, discovered via resources.list(kind=units) with manageable=true.",
+            "enum": [
+              "fixture.service"
+            ],
+            "maxLength": 255,
+            "minLength": 9,
+            "pattern": "^[A-Za-z0-9_.:@-]+\\.service$",
             "type": "string"
           }
         },
@@ -537,7 +594,6 @@
           "host",
           "unit"
         ],
-        "title": "UnitActionParams",
         "type": "object"
       },
       "read_only": false,
@@ -550,20 +606,28 @@
       "minimum_protocol_version": 2,
       "name": "units.stop",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_invocation_id": {
             "default": null,
+            "description": "Read units.status first and supply unit.details.invocation_id (32 hex digits); a concurrent restart then fails with stale_baseline. Omission disables this guard.",
             "type": [
               "string",
               "null"
             ]
           },
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           },
           "unit": {
+            "description": "Service-only mutation: exact .service name in manageable_units, discovered via resources.list(kind=units) with manageable=true.",
+            "enum": [
+              "fixture.service"
+            ],
+            "maxLength": 255,
+            "minLength": 9,
+            "pattern": "^[A-Za-z0-9_.:@-]+\\.service$",
             "type": "string"
           }
         },
@@ -571,7 +635,6 @@
           "host",
           "unit"
         ],
-        "title": "UnitActionParams",
         "type": "object"
       },
       "read_only": false,
@@ -584,20 +647,28 @@
       "minimum_protocol_version": 2,
       "name": "units.restart",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_invocation_id": {
             "default": null,
+            "description": "Read units.status first and supply unit.details.invocation_id (32 hex digits); a concurrent restart then fails with stale_baseline. Omission disables this guard.",
             "type": [
               "string",
               "null"
             ]
           },
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           },
           "unit": {
+            "description": "Service-only mutation: exact .service name in manageable_units, discovered via resources.list(kind=units) with manageable=true.",
+            "enum": [
+              "fixture.service"
+            ],
+            "maxLength": 255,
+            "minLength": 9,
+            "pattern": "^[A-Za-z0-9_.:@-]+\\.service$",
             "type": "string"
           }
         },
@@ -605,7 +676,6 @@
           "host",
           "unit"
         ],
-        "title": "UnitActionParams",
         "type": "object"
       },
       "read_only": false,
@@ -618,20 +688,28 @@
       "minimum_protocol_version": 2,
       "name": "units.reload",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_invocation_id": {
             "default": null,
+            "description": "Read units.status first and supply unit.details.invocation_id (32 hex digits); a concurrent restart then fails with stale_baseline. Omission disables this guard.",
             "type": [
               "string",
               "null"
             ]
           },
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           },
           "unit": {
+            "description": "Service-only mutation: exact .service name in manageable_units, discovered via resources.list(kind=units) with manageable=true.",
+            "enum": [
+              "fixture.service"
+            ],
+            "maxLength": 255,
+            "minLength": 9,
+            "pattern": "^[A-Za-z0-9_.:@-]+\\.service$",
             "type": "string"
           }
         },
@@ -639,7 +717,6 @@
           "host",
           "unit"
         ],
-        "title": "UnitActionParams",
         "type": "object"
       },
       "read_only": false,
@@ -668,11 +745,14 @@
             "type": "string"
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "cursor": {
             "default": null,
+            "description": "Continuation cursor returned by this operation; omit for the first page and preserve filters when continuing.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "type": [
               "string",
               "null"
@@ -680,6 +760,7 @@
           },
           "host": {
             "default": null,
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": [
               "string",
               "null"
@@ -687,6 +768,7 @@
           },
           "limit": {
             "default": 50,
+            "description": "Maximum entries per page; use the returned cursor to continue.",
             "format": "uint16",
             "maximum": 200,
             "minimum": 1,
@@ -694,13 +776,13 @@
           },
           "states": {
             "default": [],
+            "description": "Optional job-state filter; an empty array includes all states.",
             "items": {
               "$ref": "#/$defs/JobState"
             },
             "type": "array"
           }
         },
-        "title": "JobsListParams",
         "type": "object"
       },
       "read_only": true,
@@ -713,17 +795,45 @@
       "minimum_protocol_version": 2,
       "name": "jobs.status",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "idempotency_key"
+              ]
+            },
+            "required": [
+              "job_id"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "job_id"
+              ]
+            },
+            "required": [
+              "idempotency_key"
+            ]
+          }
+        ],
         "properties": {
+          "idempotency_key": {
+            "description": "Original submission Idempotency-Key (1..128 printable ASCII characters without spaces), scoped to this authenticated principal. Supply instead of job_id; available once submission commits.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          },
           "job_id": {
+            "description": "Remote maxops job UUID; supply exactly one of job_id or idempotency_key. Never a consumer task number.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "type": "string"
           }
         },
-        "required": [
-          "job_id"
-        ],
-        "title": "JobIdParams",
         "type": "object"
       },
       "read_only": true,
@@ -736,14 +846,47 @@
       "minimum_protocol_version": 2,
       "name": "jobs.logs",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "idempotency_key"
+              ]
+            },
+            "required": [
+              "job_id"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "job_id"
+              ]
+            },
+            "required": [
+              "idempotency_key"
+            ]
+          }
+        ],
         "properties": {
+          "idempotency_key": {
+            "description": "Original submission Idempotency-Key scoped to this authenticated principal; supply instead of job_id, once submission commits.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          },
           "job_id": {
+            "description": "Remote maxops job UUID; supply exactly one of job_id or idempotency_key. Never a consumer task number.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "type": "string"
           },
           "limit": {
             "default": 65536,
+            "description": "Maximum bytes per stream (1..65536, default 65536); continue using returned offsets.",
             "format": "uint32",
             "maximum": 65536,
             "minimum": 1,
@@ -751,21 +894,19 @@
           },
           "stderr_offset": {
             "default": 0,
+            "description": "Byte offset from next_stderr_offset; zero starts at the beginning of stderr.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "stdout_offset": {
             "default": 0,
+            "description": "Byte offset from next_stdout_offset; zero starts at the beginning of stdout.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           }
         },
-        "required": [
-          "job_id"
-        ],
-        "title": "JobLogsParams",
         "type": "object"
       },
       "read_only": true,
@@ -778,18 +919,23 @@
       "minimum_protocol_version": 2,
       "name": "jobs.cancel",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_revision": {
+            "description": "Current job revision from jobs.status or jobs.wait; rejects cancellation based on stale state.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "job_id": {
+            "description": "Remote maxops job UUID from submission or jobs.list; never a consumer task number.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "type": "string"
           },
           "reason": {
+            "description": "Nonempty cancellation explanation, at most 1024 bytes; cancellation never reverses an accepted action.",
             "type": "string"
           }
         },
@@ -798,7 +944,6 @@
           "expected_revision",
           "reason"
         ],
-        "title": "JobCancelParams",
         "type": "object"
       },
       "read_only": false,
@@ -811,24 +956,24 @@
       "minimum_protocol_version": 2,
       "name": "workspace.create",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_remote_head": {
             "default": null,
+            "description": "Expected full remote commit hash observed for the configured ref; a later external push rejects this operation instead of being overwritten.",
             "type": [
               "string",
               "null"
             ]
           },
           "repository": {
+            "description": "Permitted repository name from resources.list(kind=repositories).",
             "type": "string"
           }
         },
         "required": [
           "repository"
         ],
-        "title": "WorkspaceCreateParams",
         "type": "object"
       },
       "read_only": false,
@@ -841,13 +986,14 @@
       "minimum_protocol_version": 2,
       "name": "workspace.status",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "repository": {
+            "description": "Permitted repository name from resources.list(kind=repositories).",
             "type": "string"
           },
           "workspace_id": {
+            "description": "Workspace UUID from workspace.create or workspace.status; use the same repository.",
             "type": "string"
           }
         },
@@ -855,7 +1001,6 @@
           "repository",
           "workspace_id"
         ],
-        "title": "WorkspaceStatusParams",
         "type": "object"
       },
       "read_only": true,
@@ -868,28 +1013,32 @@
       "minimum_protocol_version": 2,
       "name": "workspace.read",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_revision": {
+            "description": "Current workspace revision from workspace.status; compare-and-swap guard against intervening edits. Re-read after every change.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "max_bytes": {
             "default": 262144,
+            "description": "Maximum UTF-8 file bytes to read; oversized files are rejected rather than truncated.",
             "format": "uint32",
             "maximum": 262144,
             "minimum": 1,
             "type": "integer"
           },
           "path": {
+            "description": "Relative regular-file path within the workspace; no absolute paths, traversal, .git or symlinks.",
             "type": "string"
           },
           "repository": {
+            "description": "Permitted repository name from resources.list(kind=repositories).",
             "type": "string"
           },
           "workspace_id": {
+            "description": "Workspace UUID from workspace.create or workspace.status; use the same repository.",
             "type": "string"
           }
         },
@@ -899,7 +1048,6 @@
           "expected_revision",
           "path"
         ],
-        "title": "WorkspaceReadParams",
         "type": "object"
       },
       "read_only": true,
@@ -924,6 +1072,7 @@
                 ]
               },
               "path": {
+                "description": "Relative regular-file path within the workspace; no absolute paths, traversal, .git or symlinks.",
                 "type": "string"
               }
             },
@@ -933,24 +1082,27 @@
             "type": "object"
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "edits": {
+            "description": "Bounded replacements or deletions of regular UTF-8 files; creates one new immutable revision.",
             "items": {
               "$ref": "#/$defs/WorkspaceEdit"
             },
             "type": "array"
           },
           "expected_revision": {
+            "description": "Current workspace revision from workspace.status; compare-and-swap guard against intervening edits. Re-read after every change.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "repository": {
+            "description": "Permitted repository name from resources.list(kind=repositories).",
             "type": "string"
           },
           "workspace_id": {
+            "description": "Workspace UUID from workspace.create or workspace.status; use the same repository.",
             "type": "string"
           }
         },
@@ -960,7 +1112,6 @@
           "expected_revision",
           "edits"
         ],
-        "title": "WorkspaceApplyParams",
         "type": "object"
       },
       "read_only": false,
@@ -973,18 +1124,20 @@
       "minimum_protocol_version": 2,
       "name": "workspace.diff",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_revision": {
+            "description": "Current workspace revision from workspace.status; compare-and-swap guard against intervening edits. Re-read after every change.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "repository": {
+            "description": "Permitted repository name from resources.list(kind=repositories).",
             "type": "string"
           },
           "workspace_id": {
+            "description": "Workspace UUID from workspace.create or workspace.status; use the same repository.",
             "type": "string"
           }
         },
@@ -993,7 +1146,6 @@
           "workspace_id",
           "expected_revision"
         ],
-        "title": "WorkspaceRevisionParams",
         "type": "object"
       },
       "read_only": true,
@@ -1006,21 +1158,24 @@
       "minimum_protocol_version": 2,
       "name": "workspace.commit",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_revision": {
+            "description": "Current workspace revision from workspace.status; compare-and-swap guard against intervening edits. Re-read after every change.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "message": {
+            "description": "Commit message for the exact workspace revision; author identity comes from repository policy.",
             "type": "string"
           },
           "repository": {
+            "description": "Permitted repository name from resources.list(kind=repositories).",
             "type": "string"
           },
           "workspace_id": {
+            "description": "Workspace UUID from workspace.create or workspace.status; use the same repository.",
             "type": "string"
           }
         },
@@ -1030,7 +1185,6 @@
           "expected_revision",
           "message"
         ],
-        "title": "WorkspaceCommitParams",
         "type": "object"
       },
       "read_only": false,
@@ -1043,21 +1197,24 @@
       "minimum_protocol_version": 2,
       "name": "workspace.check",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "check": {
+            "description": "Operator-configured check name for the repository from resources.list(kind=repositories); discovery lists repository names, so obtain configured check names from its operator policy. No arbitrary command.",
             "type": "string"
           },
           "expected_revision": {
+            "description": "Current workspace revision from workspace.status; compare-and-swap guard against intervening edits. Re-read after every change.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "repository": {
+            "description": "Permitted repository name from resources.list(kind=repositories).",
             "type": "string"
           },
           "workspace_id": {
+            "description": "Workspace UUID from workspace.create or workspace.status; use the same repository.",
             "type": "string"
           }
         },
@@ -1067,7 +1224,6 @@
           "expected_revision",
           "check"
         ],
-        "title": "WorkspaceCheckParams",
         "type": "object"
       },
       "read_only": false,
@@ -1080,24 +1236,28 @@
       "minimum_protocol_version": 2,
       "name": "workspace.publish",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_remote_head": {
+            "description": "Expected full remote commit hash observed for the configured ref; a later external push rejects this operation instead of being overwritten.",
             "type": "string"
           },
           "expected_revision": {
+            "description": "Current workspace revision from workspace.status; compare-and-swap guard against intervening edits. Re-read after every change.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "reference": {
+            "description": "Configured publishable Git ref, such as refs/heads/main; obtain it from repository operator policy (resources.list(kind=repositories) discovers names only). No force push.",
             "type": "string"
           },
           "repository": {
+            "description": "Permitted repository name from resources.list(kind=repositories).",
             "type": "string"
           },
           "workspace_id": {
+            "description": "Workspace UUID from workspace.create or workspace.status; use the same repository.",
             "type": "string"
           }
         },
@@ -1108,7 +1268,6 @@
           "reference",
           "expected_remote_head"
         ],
-        "title": "WorkspacePublishParams",
         "type": "object"
       },
       "read_only": false,
@@ -1121,24 +1280,28 @@
       "minimum_protocol_version": 2,
       "name": "deploy.prepare",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_revision": {
+            "description": "Current workspace revision from workspace.status; compare-and-swap guard against intervening edits. Re-read after every change.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "profile": {
+            "description": "Granted deployment profile from resources.list(kind=deployments), matching repository and target_host.",
             "type": "string"
           },
           "repository": {
+            "description": "Permitted repository name from resources.list(kind=repositories).",
             "type": "string"
           },
           "target_host": {
+            "description": "Exact target_host paired with the profile in resources.list(kind=deployments).",
             "type": "string"
           },
           "workspace_id": {
+            "description": "Workspace UUID from workspace.create or workspace.status; use the same repository.",
             "type": "string"
           }
         },
@@ -1149,7 +1312,6 @@
           "target_host",
           "profile"
         ],
-        "title": "DeployPrepareParams",
         "type": "object"
       },
       "read_only": false,
@@ -1162,13 +1324,14 @@
       "minimum_protocol_version": 2,
       "name": "deploy.build",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "change_id": {
+            "description": "Change UUID returned by deploy.prepare or changes.history.",
             "type": "string"
           },
           "expected_revision": {
+            "description": "Current change revision from changes.status; re-read before each stage to reject concurrent changes.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1178,7 +1341,6 @@
           "change_id",
           "expected_revision"
         ],
-        "title": "DeployChangeParams",
         "type": "object"
       },
       "read_only": false,
@@ -1191,13 +1353,14 @@
       "minimum_protocol_version": 2,
       "name": "deploy.activate",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "change_id": {
+            "description": "Change UUID returned by deploy.prepare or changes.history.",
             "type": "string"
           },
           "expected_revision": {
+            "description": "Current change revision from changes.status; re-read before each stage to reject concurrent changes.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1207,7 +1370,6 @@
           "change_id",
           "expected_revision"
         ],
-        "title": "DeployChangeParams",
         "type": "object"
       },
       "read_only": false,
@@ -1220,13 +1382,14 @@
       "minimum_protocol_version": 2,
       "name": "deploy.verify",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "change_id": {
+            "description": "Change UUID returned by deploy.prepare or changes.history.",
             "type": "string"
           },
           "expected_revision": {
+            "description": "Current change revision from changes.status; re-read before each stage to reject concurrent changes.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1236,7 +1399,6 @@
           "change_id",
           "expected_revision"
         ],
-        "title": "DeployChangeParams",
         "type": "object"
       },
       "read_only": false,
@@ -1249,13 +1411,14 @@
       "minimum_protocol_version": 2,
       "name": "deploy.rollback",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "change_id": {
+            "description": "Change UUID returned by deploy.prepare or changes.history.",
             "type": "string"
           },
           "expected_revision": {
+            "description": "Current change revision from changes.status; re-read before each stage to reject concurrent changes.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1265,7 +1428,6 @@
           "change_id",
           "expected_revision"
         ],
-        "title": "DeployChangeParams",
         "type": "object"
       },
       "read_only": false,
@@ -1278,17 +1440,16 @@
       "minimum_protocol_version": 2,
       "name": "changes.status",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "change_id": {
+            "description": "Change UUID returned by deploy.prepare or changes.history.",
             "type": "string"
           }
         },
         "required": [
           "change_id"
         ],
-        "title": "ChangeStatusParams",
         "type": "object"
       },
       "read_only": true,
@@ -1301,11 +1462,11 @@
       "minimum_protocol_version": 2,
       "name": "changes.history",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "cursor": {
             "default": null,
+            "description": "Continuation cursor returned by this operation; omit for the first page and preserve filters when continuing.",
             "type": [
               "string",
               "null"
@@ -1313,6 +1474,7 @@
           },
           "host": {
             "default": null,
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": [
               "string",
               "null"
@@ -1320,13 +1482,13 @@
           },
           "limit": {
             "default": 50,
+            "description": "Maximum entries per page; use the returned cursor to continue.",
             "format": "uint16",
             "maximum": 200,
             "minimum": 1,
             "type": "integer"
           }
         },
-        "title": "ChangeHistoryParams",
         "type": "object"
       },
       "read_only": true,
@@ -1339,21 +1501,23 @@
       "minimum_protocol_version": 2,
       "name": "diagnostics.collect",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "event_id": {
             "default": null,
+            "description": "Event UUID from events.recent or events.list; links this operation to that evidence and episode.",
             "type": [
               "string",
               "null"
             ]
           },
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           },
           "lines": {
             "default": 50,
+            "description": "Maximum recent journal entries to collect (1..200, default 50).",
             "format": "uint16",
             "maximum": 200,
             "minimum": 1,
@@ -1361,6 +1525,7 @@
           },
           "probes": {
             "default": [],
+            "description": "Up to 16 fixed probe names from resources.list(kind=diagnostic_probes, host=...). Inspect argv/profile there; prefer configured probes for repeated diagnostics. Empty collects no probes.",
             "items": {
               "type": "string"
             },
@@ -1368,6 +1533,7 @@
           },
           "since_seconds": {
             "default": 3600,
+            "description": "Journal lookback in seconds (1..86400, default 3600).",
             "format": "uint32",
             "maximum": 86400,
             "minimum": 1,
@@ -1375,6 +1541,7 @@
           },
           "unit": {
             "default": null,
+            "description": "Optional readable .service from resources.list(kind=units), used for unit status and bounded journal evidence; non-service units are unsupported here.",
             "type": [
               "string",
               "null"
@@ -1384,7 +1551,6 @@
         "required": [
           "host"
         ],
-        "title": "DiagnosticCollectParams",
         "type": "object"
       },
       "read_only": false,
@@ -1397,13 +1563,14 @@
       "minimum_protocol_version": 2,
       "name": "remediations.begin",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "event_id": {
+            "description": "Event UUID from events.recent or events.list; links this operation to that evidence and episode.",
             "type": "string"
           },
           "host": {
+            "description": "Exact permitted host from resources.list(kind=hosts); never invent a host name.",
             "type": "string"
           }
         },
@@ -1411,7 +1578,6 @@
           "event_id",
           "host"
         ],
-        "title": "RemediationBeginParams",
         "type": "object"
       },
       "read_only": false,
@@ -1436,19 +1602,21 @@
             "type": "string"
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "expected_revision": {
+            "description": "Current remediation revision from the remediations.begin result or previous finish response; compare-and-swap guard.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "outcome": {
-            "$ref": "#/$defs/RemediationState"
+            "$ref": "#/$defs/RemediationState",
+            "description": "Terminal remediation outcome; active is rejected."
           },
           "related_change_id": {
             "default": null,
+            "description": "Optional change UUID providing deployment evidence for this outcome.",
             "type": [
               "string",
               "null"
@@ -1456,15 +1624,21 @@
           },
           "related_job_id": {
             "default": null,
+            "description": "Optional remote job UUID providing evidence for this outcome.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "type": [
               "string",
               "null"
             ]
           },
           "remediation_id": {
+            "description": "Remediation UUID returned in the result of remediations.begin.",
             "type": "string"
           },
           "summary": {
+            "description": "Evidence-based outcome explanation, 1..1024 bytes; distinguish missing evidence from verified recovery.",
             "type": "string"
           }
         },
@@ -1474,7 +1648,6 @@
           "outcome",
           "summary"
         ],
-        "title": "RemediationFinishParams",
         "type": "object"
       },
       "read_only": false,
@@ -1494,17 +1667,18 @@
               "units",
               "repositories",
               "deployments",
-              "execution_profiles"
+              "execution_profiles",
+              "diagnostic_probes"
             ],
             "type": "string"
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "if": {
           "properties": {
             "kind": {
-              "const": "execution_profiles"
+              "const": "execution_profiles",
+              "description": "Execution-profile discovery requires an explicit host."
             }
           },
           "required": [
@@ -1514,6 +1688,7 @@
         "properties": {
           "cursor": {
             "default": null,
+            "description": "Continuation cursor returned by this operation; omit for the first page and preserve filters when continuing.",
             "type": [
               "string",
               "null"
@@ -1521,7 +1696,7 @@
           },
           "host": {
             "default": null,
-            "description": "Required when kind is execution_profiles; optional for other kinds.",
+            "description": "Exact permitted host from resources.list(kind=hosts); required for kind=execution_profiles, optional to filter other kinds.",
             "type": [
               "string",
               "null"
@@ -1529,10 +1704,12 @@
           },
           "kind": {
             "$ref": "#/$defs/DiscoveryResourceKind",
-            "default": "hosts"
+            "default": "hosts",
+            "description": "Discovery namespace: hosts, units, repositories, deployments, execution_profiles or diagnostic_probes."
           },
           "limit": {
             "default": 50,
+            "description": "Maximum entries per page; use the returned cursor to continue.",
             "format": "uint16",
             "maximum": 200,
             "minimum": 1,
@@ -1542,6 +1719,7 @@
         "then": {
           "properties": {
             "host": {
+              "description": "Exact permitted host from resources.list(kind=hosts).",
               "minLength": 1,
               "type": "string"
             }
@@ -1550,7 +1728,6 @@
             "host"
           ]
         },
-        "title": "ResourcesParams",
         "type": "object"
       },
       "read_only": true,
@@ -1563,11 +1740,33 @@
       "minimum_protocol_version": 2,
       "name": "jobs.wait",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "idempotency_key"
+              ]
+            },
+            "required": [
+              "job_id"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "job_id"
+              ]
+            },
+            "required": [
+              "idempotency_key"
+            ]
+          }
+        ],
         "properties": {
           "after_revision": {
             "default": null,
+            "description": "Last observed job revision; return when it changes or the job is terminal. Omit to wait from the current revision.",
             "format": "uint64",
             "minimum": 0,
             "type": [
@@ -1575,21 +1774,29 @@
               "null"
             ]
           },
+          "idempotency_key": {
+            "description": "Original submission Idempotency-Key scoped to this principal; supply exactly one of job_id or idempotency_key, once submission commits.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          },
           "job_id": {
+            "description": "Remote maxops job UUID from submission or jobs.list; never a consumer task number.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "type": "string"
           },
           "timeout_seconds": {
             "default": 10,
+            "description": "Maximum observation wait (0..10 seconds, default 10); timeout does not cancel the remote job.",
             "format": "uint16",
             "maximum": 10,
             "minimum": 0,
             "type": "integer"
           }
         },
-        "required": [
-          "job_id"
-        ],
-        "title": "JobWaitParams",
         "type": "object"
       },
       "read_only": true,
@@ -1602,20 +1809,25 @@
       "minimum_protocol_version": 2,
       "name": "jobs.events",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "after_sequence": {
             "default": 0,
+            "description": "Last durable event sequence received; zero starts replay from the beginning.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "job_id": {
+            "description": "Remote maxops job UUID from submission or jobs.list; never a consumer task number.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "type": "string"
           },
           "limit": {
             "default": 50,
+            "description": "Maximum entries per page; use the returned cursor to continue.",
             "format": "uint16",
             "maximum": 200,
             "minimum": 1,
@@ -1625,7 +1837,6 @@
         "required": [
           "job_id"
         ],
-        "title": "JobEventsParams",
         "type": "object"
       },
       "read_only": true,
@@ -1638,14 +1849,47 @@
       "minimum_protocol_version": 2,
       "name": "jobs.result",
       "params_schema": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "not": {
+              "required": [
+                "idempotency_key"
+              ]
+            },
+            "required": [
+              "job_id"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "job_id"
+              ]
+            },
+            "required": [
+              "idempotency_key"
+            ]
+          }
+        ],
         "properties": {
+          "idempotency_key": {
+            "description": "Original submission Idempotency-Key scoped to this principal; supply exactly one of job_id or idempotency_key, once submission commits.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[!-~]+$",
+            "type": "string"
+          },
           "job_id": {
+            "description": "Remote maxops job UUID from submission or jobs.list; never a consumer task number.",
+            "maxLength": 36,
+            "minLength": 36,
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
             "type": "string"
           },
           "limit": {
             "default": 8192,
+            "description": "Maximum UTF-8 JSON fragment bytes (1..32768, default 8192); continue at next_offset.",
             "format": "uint32",
             "maximum": 32768,
             "minimum": 1,
@@ -1653,6 +1897,7 @@
           },
           "offset": {
             "default": 0,
+            "description": "UTF-8 byte offset from next_offset; start at zero and continue at a character boundary.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -1663,10 +1908,6 @@
             "type": "string"
           }
         },
-        "required": [
-          "job_id"
-        ],
-        "title": "JobResultParams",
         "type": "object"
       },
       "read_only": true,
@@ -1688,19 +1929,21 @@
             "type": "string"
           }
         },
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
         "additionalProperties": false,
         "properties": {
           "change_id": {
+            "description": "Change UUID returned by deploy.prepare or changes.history.",
             "type": "string"
           },
           "expected_revision": {
+            "description": "Current change revision from changes.status; rejects a stale workflow baseline.",
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
           },
           "until": {
-            "$ref": "#/$defs/DeployUntil"
+            "$ref": "#/$defs/DeployUntil",
+            "description": "Stop after built (artifact only) or verified (activation and target-owned acceptance)."
           }
         },
         "required": [
@@ -1708,12 +1951,14 @@
           "expected_revision",
           "until"
         ],
-        "title": "DeployRunParams",
         "type": "object"
       },
       "read_only": false,
       "summary": "Durably run a prepared change through build or verified activation; preserves revision and external-writer guards"
     }
   ],
-  "version": 2
+  "revision": "59391e327bb10012bcdbc9b8926ae88b4ff1c1b05f9dc8ebb14cf7a9e6eeb3b3",
+  "total": 45,
+  "version": 2,
+  "view": "tools"
 }

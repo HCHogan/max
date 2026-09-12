@@ -61,7 +61,7 @@ import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.File.ToolRuntime (fileToolsWithDatabase)
 import Max.HttpRuntime (HttpRuntime)
 import Max.MaxOps.Client (maxOpsOperations)
-import Max.MaxOps.Protocol (Catalog (..), CatalogAccess (..), Operation (..), operationToolName, parseCatalog)
+import Max.MaxOps.Protocol (Catalog (..), CatalogAccess (..), Operation (..), catalogForSkill, catalogValue, operationToolName, parseCatalog)
 import Max.MaxOps.TaskRuntime (admitMaxOpsTask)
 import Max.MaxOps.Types (maxOpsAllowed)
 import Max.Media.ToolRuntime (imageToolsWithDatabase, stickerToolsWithDatabase, videoToolsWithDatabase)
@@ -138,9 +138,13 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
     dispatchEnv = maybe env (`applyRuntimeSnapshot` env) (toolRuntimeSnapshot dc)
     authorized = toolDefinitionsFor dispatchEnv (toolGroupId dc) (toolCapabilities dc)
     definitions = filter (\definition' -> toolVisible (toolSkillLoads dc) definition'.tdRef.unToolRef && definition'.tdRef.unToolRef `notElem` ["maxops_operations", "maxops_query", "maxops_execute"]) authorized <> remoteDefinitions
-    loadedOperations = case Map.lookup "maxops" (toolSkillLoads dc) >>= (.slMetadata) >>= (\case Object fields -> KeyMap.lookup "catalog" fields; _ -> Nothing) of
-      Just value -> either (const []) (.operations) (parseCatalog value)
-      Nothing -> []
+    loadedOperations =
+      [ entry
+      | skill <- ["maxops", "maxops-changes"],
+        Just value <- [Map.lookup skill (toolSkillLoads dc) >>= (.slMetadata) >>= (\case Object fields -> KeyMap.lookup "catalog" fields; _ -> Nothing)],
+        Right catalog <- [parseCatalog value],
+        entry <- (catalogForSkill skill catalog).operations
+      ]
     remotePairs =
       [ (entry, marker)
       | entry <- loadedOperations,
@@ -158,7 +162,7 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
     allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- authorized]
     visibleRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
     allowedRunner tool = tool.toolName `Set.member` visibleRefs
-    prepareSkill "maxops" = do
+    prepareSkill skill | skill `elem` ["maxops", "maxops-changes"] = do
       current <- (.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore
       if current /= dispatchEnv.beMaxOps || not (maxOpsAllowed current (toolGroupId dc)) || not (any (`Set.member` allowedRefs) ["maxops_query", "maxops_execute"])
         then pure (Left "maxops access is unavailable or changed")
@@ -167,8 +171,9 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
           pure $ do
             value <- fetched
             catalog <- parseCatalog value
-            if any ((== "jobs.wait") . (.name)) catalog.operations || not (any (.requiresKey) catalog.operations)
-              then Right (Just (object ["catalog" .= value, "availability" .= object ["tools" .= map operationToolName catalog.operations, "unavailable" .= ([] :: [Text])]]))
+            let selected = catalogForSkill skill catalog
+            if any ((== "jobs.wait") . (.name)) catalog.operations || not (any (.requiresKey) selected.operations)
+              then Right (Just (object ["catalog" .= catalogValue ManagementCatalog selected, "availability" .= object ["tools" .= map operationToolName selected.operations, "unavailable" .= ([] :: [Text])]]))
               else Left "maxops 缺少 jobs.wait；请先更新 Hub，再加载完整工具包"
     prepareSkill "codemode" =
       pure (Right (Just (object ["availability" .= object ["tools" .= (["run_code"] :: [Text]), "unavailable" .= ([] :: [Text])]])))

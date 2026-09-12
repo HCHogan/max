@@ -10,9 +10,11 @@ import Data.Aeson.Types (parseEither)
 import Data.ByteString.Lazy qualified as LBS
 import Data.List (find)
 import Data.Map.Strict qualified as Map
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
+import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Exception (throwIO)
 import Effectful.PostgreSQL (WithConnection)
@@ -24,11 +26,12 @@ import Max.Effects.Blob (Blob)
 import Max.Effects.ToolControl (ToolControl, yieldFrontend)
 import Max.Execution.Types
 import Max.MaxOps.Client (MaxOpsClient (..))
+import Max.MaxOps.Observer
 import Max.MaxOps.Protocol
 import Max.MaxOps.Types
 import Max.Task.Admission (TaskAdmissionReceipt (..), admissionErrorText)
 import Max.Task.State
-import Max.Task.Types (TaskProfile (Operations), taskGrants, taskHandle)
+import Max.Task.Types (TaskProfile (Operations), taskGrants)
 import Max.Tasks (TaskCancelled (..))
 import Max.Tool.Bundles (skillLoadVersion)
 import Max.ToolContext
@@ -64,17 +67,16 @@ admitMaxOpsTask context config operation params = case (toolInvocationIdentity c
       Left failure -> pure (Left (admissionErrorText failure))
       Right receipt -> do
         unless (toolCapabilities context).tcBackground $
-          yieldFrontend ("运维操作已交给 " <> taskHandle receipt.taskId <> "，完成后会转述结果。")
+          yieldFrontend "运维操作已由宿主受理，完成后会转述结果。"
         pure
           ( Right
               ( object
-                  [ "kind" .= ("max_task" :: Text),
-                    "task" .= taskHandle receipt.taskId,
-                    "task_id" .= receipt.taskId,
+                  [ "kind" .= ("maxops_submission" :: Text),
+                    "idempotency_key" .= key,
                     "status" .= receipt.status,
                     "remote_operation" .= operation.name,
                     "observation" .= ("host_managed" :: Text),
-                    "next_action" .= ("宿主会自动提交并等待；这是 Max task，不是 maxops job_id。结果将自动回传，不要轮询或重复提交。" :: Text)
+                    "next_action" .= ("宿主会自动提交并等待，结果自动回传；需要读取时将 idempotency_key 传给 jobs.status/wait/logs/result，不要重复提交。" :: Text)
                   ]
               )
           )
@@ -96,9 +98,12 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
         || not (Map.member "maxops_execute" (toolCatalogGrants context)) ->
         pure (failed "运维配置或授权已变化，未提交远端操作")
     | otherwise -> do
-        discovered <- liftIO (client.discoverOperations config ManagementCatalog)
-        case discovered >>= parseCatalog of
-          Left err -> pure (failed err)
+        now <- liftIO getCurrentTime
+        budget <- liftIO (newObserverBudget now execution.teDeadline)
+        submissionBudget <- liftIO (newObserverBudget execution.teCreatedAt execution.teDeadline)
+        discovered <- liftIO (withinBudget budget (client.discoverOperations config ManagementCatalog))
+        case fromMaybe (Left "maxops observation deadline reached before catalog discovery") discovered >>= parseCatalog of
+          Left err -> pure (unknown key err)
           Right catalog -> case (find ((== saved.name) . (.name)) catalog.operations, find ((== "jobs.wait") . (.name)) catalog.operations) of
             (Just current, Just waitOperation) | current.wireValue == saved.wireValue && saved.requiresKey -> do
               let start =
@@ -111,18 +116,27 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
                       (toJSON [object ["kind" .= ("write" :: Text), "domain" .= ("fleet.management" :: Text)]])
                       "idempotent"
               journal <- durableExecutionAdmission.eaStartTool execution.teGroup execution.teTurn (ExecutionWork ReserveCall) start
-              submitted <- submit current params key 0
-              case submitted of
-                Left err -> do
-                  -- A rejected/ambiguous submission is evidence, not permission
-                  -- for the model to mint a new identity and submit it again.
-                  mapM_ (\row -> finishJournalExecution row (JournalOutcomeUnknown "maxops_submission" err)) journal
-                  pure (failed err)
-                Right value -> do
+              let observeJob = observe saved.name (find ((== (if saved.name == "diagnostics.collect" then "jobs.result" else "jobs.logs")) . (.name)) catalog.operations) waitOperation key Nothing budget
+              -- Recovered observers first read the original key. An old task
+              -- must never submit a new job merely because its receipt is gone.
+              existing <- liftIO (withinBudget budget (client.invokeOperation config waitOperation (object ["idempotency_key" .= key, "timeout_seconds" .= (0 :: Int)]) Nothing))
+              case existing of
+                Just (Right value) -> do
                   mapM_ (\row -> finishJournalExecution row (JournalCommitted value)) journal
-                  case value of
-                    Object fields | Just (String identifier) <- KeyMap.lookup "job_id" fields -> observe saved.name (find ((== (if saved.name == "diagnostics.collect" then "jobs.result" else "jobs.logs")) . (.name)) catalog.operations) waitOperation identifier Nothing
-                    _ -> pure (failed "maxops 没有返回持久化 job handle；不能重复提交")
+                  observeJob (Just value)
+                Just (Left err) | "maxops HTTP 404 code=not_found" `T.isPrefixOf` err -> do
+                  submitted <- submit submissionBudget current params key 0
+                  case submitted of
+                    Left detail -> do
+                      mapM_ (\row -> finishJournalExecution row (JournalOutcomeUnknown "maxops_submission" detail)) journal
+                      if transient detail then observeJob Nothing else pure (if detail == expired then unknown key detail else failed detail)
+                    Right value -> do
+                      mapM_ (\row -> finishJournalExecution row (JournalCommitted value)) journal
+                      observeJob Nothing
+                _ -> do
+                  let detail = case existing of Just (Left err) -> err; _ -> expired
+                  mapM_ (\row -> finishJournalExecution row (JournalOutcomeUnknown "maxops_receipt" detail)) journal
+                  if transient detail then observeJob Nothing else pure (unknown key detail)
             _ -> pure (failed "maxops 操作契约已变化或缺少 jobs.wait；未提交操作")
   where
     parseInput = withObject "host task" $ \fields -> do
@@ -145,41 +159,50 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
 
     -- Submission retries reuse the exact durable key and immutable arguments.
     -- Only transient transport errors retry; HTTP conflicts require decisions.
-    submit operation params key attempt = do
+    submit budget operation params key attempt = do
       check
-      result <- liftIO (client.invokeOperation config operation params (Just key))
+      response <- liftIO (withinBudget budget (client.invokeOperation config operation params (Just key)))
+      let result = fromMaybe (Left expired) response
       case result of
         Left detail | attempt < (5 :: Int) && transient detail -> do
-          liftIO (threadDelay (min 30 (2 ^ attempt) * 1_000_000))
-          submit operation params key (attempt + 1)
+          _ <- liftIO (withinBudget budget (threadDelay (min 30 (2 ^ attempt) * 1_000_000)))
+          submit budget operation params key (attempt + 1)
         _ -> pure result
 
-    observe remoteOperation logsOperation operation identifier revision = do
+    observe remoteOperation logsOperation operation key revision budget initial = do
       check
-      response <-
-        liftIO $
-          client.invokeOperation
-            config
-            operation
-            (object ["job_id" .= identifier, "after_revision" .= revision, "timeout_seconds" .= (10 :: Int)])
-            Nothing
+      response <- case initial of
+        Just value -> pure (Just (Right value))
+        Nothing ->
+          liftIO $
+            withinBudget budget $
+              client.invokeOperation
+                config
+                operation
+                (object ["idempotency_key" .= key, "after_revision" .= revision, "timeout_seconds" .= (10 :: Int)])
+                Nothing
       case response of
-        Left detail | transient detail -> liftIO (threadDelay 2_000_000) >> observe remoteOperation logsOperation operation identifier revision
-        Left detail -> pure ((failed detail) {evidence = ["maxops job " <> identifier]})
-        Right value -> case parseEither
+        Nothing -> pure (unknown key expired)
+        Just (Left detail) | transient detail -> do
+          _ <- liftIO (withinBudget budget (threadDelay 2_000_000))
+          observe remoteOperation logsOperation operation key revision budget Nothing
+        Just (Left detail) -> pure (unknown key detail)
+        Just (Right value) -> case parseEither
           ( withObject "wait" $ \fields -> do
               job <- fields .: "job"
               withObject
                 "job"
                 ( \fields' -> do
                     handle <- fields' .: "handle"
-                    withObject "handle" (\handleFields -> (,,) job <$> handleFields .: "state" <*> handleFields .: "revision") handle
+                    deadline <- fields' .:? "deadline"
+                    withObject "handle" (\handleFields -> (,,,,) job deadline <$> handleFields .: "job_id" <*> handleFields .: "state" <*> handleFields .: "revision") handle
                 )
                 job
           )
           value of
-          Left _ -> pure ((failed "maxops 返回了无效的等待结果") {evidence = ["maxops job " <> identifier]})
-          Right (job, state :: Text, next :: Int) ->
+          Left _ -> pure (unknown key "maxops 返回了无效的等待结果")
+          Right (job, deadline, identifier :: Text, state :: Text, next :: Int) -> do
+            let nextBudget = maybe budget (`withRemoteDeadline` budget) deadline
             if state `elem` ["succeeded", "failed", "cancelled", "timed_out", "outcome_unknown"]
               then do
                 output <- case logsOperation of
@@ -188,11 +211,11 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
                     check
                     let arguments =
                           object
-                            ( ["job_id" .= identifier, "limit" .= (8192 :: Int)]
+                            ( ["idempotency_key" .= key, "limit" .= (8192 :: Int)]
                                 <> ["pointer" .= ("/diagnostic" :: Text) | remoteOperation == "diagnostics.collect"]
                             )
-                    result <- liftIO (client.invokeOperation config logs arguments Nothing)
-                    pure (Just (either (\detail -> object ["unavailable" .= detail]) id result))
+                    result <- liftIO (withinBudget nextBudget (client.invokeOperation config logs arguments Nothing))
+                    pure (Just (either (\detail -> object ["unavailable" .= detail]) id (fromMaybe (Left expired) result)))
                 let assessment = case job of
                       Object fields -> KeyMap.lookup "evidence_status" fields
                       _ -> Nothing
@@ -211,7 +234,7 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
                       | status == ReportPartial || assessment == Just (String "failed") = ["诊断证据不完整；检查 missing_evidence 与各项输出，不能把缺失当作正常。"]
                       | state == "outcome_unknown" = ["远端效果未知，需要核实；不能以新键重复提交"]
                       | otherwise = []
-                    report = object (["job" .= job, "result_scope" .= (if processOnly then "process_exit" else "operation" :: Text)] <> ["output" .= logs | Just logs <- [output]])
+                    report = object (["idempotency_key" .= key, "job" .= job, "result_scope" .= (if processOnly then "process_exit" else "operation" :: Text)] <> ["output" .= logs | Just logs <- [output]])
                 pure
                   ( TaskReport
                       status
@@ -221,7 +244,17 @@ runMaxOpsTask client config currentConfig context execution = case parseEither p
                       Nothing
                       (Just report)
                   )
-              else observe remoteOperation logsOperation operation identifier (Just next)
+              else observe remoteOperation logsOperation operation key (Just next) nextBudget Nothing
+
+    expired = "maxops observation deadline reached"
+    unknown key detail =
+      TaskReport
+        ReportWaiting
+        ("maxops outcome_unknown：" <> detail)
+        []
+        ["远端效果未确认；停止观察不等于取消。用原 idempotency_key 核实，不要以新键重复提交。"]
+        Nothing
+        (Just (object ["state" .= ("outcome_unknown" :: Text), "idempotency_key" .= key, "reason" .= detail]))
 
     transient detail = any (`T.isPrefixOf` detail) ["maxops transport", "maxops request timed out", "maxops connection timed out", "maxops HTTP 5", "maxops HTTP 429"]
     failed detail = TaskReport ReportFailed detail [] ["操作未被确认完成"] Nothing Nothing

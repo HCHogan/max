@@ -79,6 +79,7 @@ data TaskExecution = TaskExecution
     teInputs :: !Value,
     teGrants :: !(Map Text Text),
     teDeadline :: !UTCTime,
+    teCreatedAt :: !UTCTime,
     teHistory :: !TaskHistory
   }
   deriving stock (Show, Eq)
@@ -144,6 +145,7 @@ instance FromRow ExecutionRow where
               <*> jsonField
               <*> jsonField
               <*> field
+              <*> field
               <*> pure (TaskHistory Nothing [])
           )
 
@@ -153,7 +155,7 @@ loadTaskExecution turn = withTransaction $ do
     query
       "SELECT work.task_id,work.revision,execution.turn_id,current_turn.turn_ordinal,conversation.legacy_group_id,\
       \ work.owner_principal_id,COALESCE(work.source_message_id,source.trigger_canonical_message_id,0),\
-      \ work.objective,work.profile,work.inputs::text,work.grants::text,work.deadline\
+      \ work.objective,work.profile,work.inputs::text,work.grants::text,work.deadline,work.created_at\
       \ FROM task_attempts execution JOIN durable_tasks work USING(task_id) JOIN conversations conversation USING(conversation_id)\
       \ JOIN agent_turns source ON source.turn_id=work.source_turn_id JOIN agent_turns current_turn ON current_turn.turn_id=execution.turn_id\
       \ WHERE execution.turn_id=? AND execution.revision=work.revision AND execution.attempt=work.attempt AND work.status='running'"
