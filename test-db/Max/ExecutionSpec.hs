@@ -1,4 +1,4 @@
-module Max.ExecutionSpec (spec) where
+module Max.ExecutionSpec (spec, withHost, hooks) where
 
 import Control.Concurrent (newEmptyMVar, putMVar, takeMVar)
 import Control.Concurrent.Async qualified as Async
@@ -54,7 +54,8 @@ hooks turn =
     { ehCheck = durableExecutionAdmission.eaCheck turn >>= \active -> unless active (throwIO TaskCancelled),
       ehStart = durableExecutionAdmission.eaStartTool (GroupId 900) turn,
       ehFinish = finishJournalExecution,
-      ehUnknown = markJournalOutcomeUnknown
+      ehUnknown = markJournalOutcomeUnknown,
+      ehWorkflow = Nothing
     }
 
 -- Lift the assembly callbacks into the local validated Tools interpreter.

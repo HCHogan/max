@@ -40,6 +40,7 @@ module Max.Intent
     noteBotActivity,
     intentWorker,
     classifyOnce,
+    classifierSystem,
 
     -- * Exposed for tests
     IntentVerdict (..),

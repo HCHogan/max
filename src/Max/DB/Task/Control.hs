@@ -65,7 +65,7 @@ controlTask group actor administrator identifier operation revision source note 
                   (identifier, task.revision + 1, trimmed, actor)
               revokeTaskBrowser identifier
               cancelDescendants identifier "parent task replaced"
-            Cancel -> completeTask task Cancelled (Just (TaskReport ReportCancelled trimmed [] [] Nothing Nothing))
+            Cancel -> completeTask task Cancelled (Just (TaskReport ReportCancelled trimmed [] [] Nothing Nothing Nothing))
             Steer -> completeTask task (if task.status `elem` [Running, Retrying] then task.status else Queued) task.result
           when (operation /= Steer) $ void $ execute "UPDATE task_attempts SET lease_until=clock_timestamp() WHERE task_id=?" (Only identifier)
           pure (Right (TaskControlReceipt identifier (task.revision + if operation == Replace then 1 else 0)))

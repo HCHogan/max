@@ -25,6 +25,7 @@ module Max.Historian
     renderHistorianSourceLine,
     renderHistorianMessages,
     generateHistorianCapture,
+    historianSystem,
   )
 where
 
@@ -95,7 +96,7 @@ import Max.Util (catchSync, trySync, tshow)
 import OneBot.Types (GroupId (..))
 
 historianPromptVersion :: Text
-historianPromptVersion = "historian/v4"
+historianPromptVersion = "historian/v5"
 
 historianSchemaVersion :: Int
 historianSchemaVersion = 2
@@ -719,7 +720,7 @@ historianSystem =
       "A named person's fact, preference, project, or commitment must use user scope with that user_id; never encode the subject id only inside group-memory content.",
       "When several speakers make distinct durable commitments, emit one user-scope commitment proposal for each speaker; do not collapse them into group memory or omit one because another was captured.",
       "Use group scope for group-wide decisions, conventions, and shared running jokes, not as a container for an individual's memory.",
-      "For user scope, user_id must be the subject and at least one cited message must be spoken by that user.",
+      "For user scope, user_id must be the internal principal_id printed on the subject's source lines, copied exactly. Never use a QQ/platform account number, display name, or a number mentioned in message text. At least one cited message must be spoken by that principal.",
       "For group scope, omit user_id. Only update/archive ids listed in Existing scoped memories. Copy the listed current version exactly into expected_version; NEVER increment it. The database generates the new version.",
       "Each proposal must cite exact source message ids. Content is self-contained, <=300 chars, with absolute dates.",
       "Resolve yesterday/tomorrow/weekday and other relative dates from the local_now date and weekday supplied in the input; never guess the calendar.",

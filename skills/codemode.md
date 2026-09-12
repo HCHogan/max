@@ -18,6 +18,17 @@
   按输入顺序返回 outcome 数组。宿主按工具元数据决定并发或顺序执行。
   需要并行时使用此接口；Promise.all 本身不会让同步工具调用并行。
 - `max.names`：本次运行可用工具名的完整只读数组。`tools` 与 `max` 不可替换。
+- `agent({objective, inputs, profile, output_contract?})`（也可写 `max.agent`）：
+  在根后台任务中启动普通子任务并等待报告。profile 为 research/browser/sandbox/
+  operations，只收窄父任务当前权限；inputs 是最多 64 KiB 请求内的显式 JSON 数据。
+  返回 `{task,status,findings,evidence,unresolved,payload,payload_valid,reused,original_execution}`。
+  output_contract 使用技能的闭合 JSON Schema 子集；子任务通过 task_finish.payload
+  返回结构化结果。形状正确不会把 partial/failed 变成 succeeded。
+- `max.batch([{agent:{objective,inputs,profile,output_contract?}}, ...])`：表达独立子任务。
+  宿主决定并发，按原顺序返回 outcome。与工具混合的 batch 顺序执行。
+  `Promise.all([agent(...),agent(...)])` 不会并发；请使用 max.batch。
+- `max.phase("阶段说明")`：记录当前任务进度，沿用 task_progress 的合并与通知规则。
+  保存工作流须在 tools 中声明 task_start（使用 agent）及 task_progress（使用 phase）。
 
 例如，按一个已可见工具的 schema 构造多份参数后：
 
@@ -31,7 +42,7 @@ JSON 和 Promise。没有 Node、浏览器 API、import/require、console、计�
 网络、文件系统、环境变量或宿主时间/随机源；需要这些能力时调用授权工具。
 
 每次程序是独立环境，不保存 JS 变量。单次源码和返回值各最多 64 KiB，Wasm
-内存 64 MiB，计算有 fuel 上限，总时间最多 30 分钟（含工具等待）；单个工具
+内存 64 MiB，计算有 fuel 上限，总时间最多六小时（含子任务/工具等待，且不能越过任务截止时间）；单个工具
 仍有自己的 deadline。SDK 会自动分帧读取同一次调用的结果（最多 4 MiB），
 不会为了读取大结果重复执行工具。请在 JS 内筛选、聚合后返回必要信息。
 单次程序最多 1024 次桥接交互（含分帧读取），叶子调用还受共享额度约束。
@@ -53,3 +64,10 @@ outcome-unknown 时先查明现状，不能直接重跑整段程序。宿主返�
 输入契约；宿主读取固定版本的源码，不必复制或重新生成代码。此格式与 `{code}`
 二选一。保存流程只能调用其声明且当前仍获授权的工具；契约变化会在执行前拒绝。
 结果包含 run_ref 和工作流版本。输出契约错误也不会撤销已完成的工具效果。
+
+子任务复用：同一父任务 revision 内，未改变的 agent 参数与已加载技能 receipt
+复用已结算子任务报告；修改一个调用只新建那个子任务。源码修改有新的 step_key，
+复用会记录原 journal 引用；它不重放普通 tools 调用的副作用。取消、替换父任务或
+改变已加载技能版本都会禁止旧报告复用。子任务不能再执行 run_code/agent。
+收到 steering 时宿主在 agent 边界停止程序，由父任务下一模型回合读取收件箱；
+已有子任务保留身份，不会因停止等待而自动重复执行。

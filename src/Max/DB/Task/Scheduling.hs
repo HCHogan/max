@@ -37,7 +37,7 @@ claimTask owner = withTransaction $ do
       now <- databaseNow
       if task.deadline <= now || task.attempt >= 40
         then do
-          completeTask task BudgetExhausted (Just (TaskReport ReportBudgetExhausted "deadline or retry budget exhausted" [] [] Nothing Nothing))
+          completeTask task BudgetExhausted (Just (TaskReport ReportBudgetExhausted "deadline or retry budget exhausted" [] [] Nothing Nothing Nothing))
           pure []
         else do
           when (task.status == Running) $ do
@@ -79,11 +79,11 @@ eligibleTask identifier =
     \ AND execution.attempt=work.attempt AND execution.lease_until>clock_timestamp())\
     \ OR work.status IN ('waiting','retrying') AND work.deadline<=clock_timestamp())\
     \ AND (SELECT count(*) FROM durable_tasks active JOIN task_attempts execution ON execution.task_id=active.task_id AND execution.attempt=active.attempt\
-    \ WHERE active.status='running' AND execution.lease_until>clock_timestamp())<?\
+    \ WHERE active.status='running' AND execution.lease_until>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM workflow_agent_waits waiting WHERE waiting.turn_id=execution.turn_id))<?\
     \ AND (SELECT count(*) FROM durable_tasks active JOIN task_attempts execution ON execution.task_id=active.task_id AND execution.attempt=active.attempt\
-    \ WHERE active.status='running' AND execution.lease_until>clock_timestamp() AND active.conversation_id=work.conversation_id)<?\
+    \ WHERE active.status='running' AND execution.lease_until>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM workflow_agent_waits waiting WHERE waiting.turn_id=execution.turn_id) AND active.conversation_id=work.conversation_id)<?\
     \ AND (SELECT count(*) FROM durable_tasks active JOIN task_attempts execution ON execution.task_id=active.task_id AND execution.attempt=active.attempt\
-    \ WHERE active.status='running' AND execution.lease_until>clock_timestamp() AND active.owner_principal_id=work.owner_principal_id)<?\
+    \ WHERE active.status='running' AND execution.lease_until>clock_timestamp() AND NOT EXISTS(SELECT 1 FROM workflow_agent_waits waiting WHERE waiting.turn_id=execution.turn_id) AND active.owner_principal_id=work.owner_principal_id)<?\
     \ AND (work.monitor_fire_id IS NULL OR NOT EXISTS (\
     \ SELECT 1 FROM durable_tasks active JOIN monitor_fires active_fire ON active_fire.fire_id=active.monitor_fire_id\
     \ JOIN monitor_fires candidate_fire ON candidate_fire.fire_id=work.monitor_fire_id\

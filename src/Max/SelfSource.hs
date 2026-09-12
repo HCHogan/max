@@ -58,7 +58,8 @@ data SourceSlice = SourceSlice
 -- file-embed tracks existing files rather than directory membership, so adding
 -- an eligible file under one of these roots must accompany a byte change here;
 -- the source-bundle tests then prove that the new file shipped.
--- Includes the shared caption module and current prompt/scheduler fixtures.
+-- Includes workflow joins, contract certificates, measured delegation evidence
+-- and the two corresponding evaluator programs.
 embeddedFiles :: [(FilePath, BS.ByteString)]
 embeddedFiles =
   prefixDirectory "src" $(embedDir "src")
@@ -75,6 +76,8 @@ embeddedFiles =
     <> prefixDirectory "static" $(embedDir "static")
     <> prefixDirectory "nix" $(embedDir "nix")
     <> prefixDirectory "context-eval" $(embedDir "context-eval")
+    <> prefixDirectory "contract-eval" $(embedDir "contract-eval")
+    <> prefixDirectory "workflow-eval" $(embedDir "workflow-eval")
     <> prefixDirectory "eval" $(embedDir "eval")
     <> prefixDirectory "prompt-flow" $(embedDir "prompt-flow")
     <> prefixDirectory "scripts" $(embedDir "scripts")

@@ -8,6 +8,7 @@ import Data.Text qualified as T
 data ExecutionFailure
   = ExecutionContextMissing
   | ExecutionReportRejected
+  | ExecutionInvalidPayload !Text
   | ExecutionInputPending
   | ExecutionOwnershipLost
   | ExecutionNotFrontend
@@ -20,6 +21,7 @@ data ExecutionFailure
 renderExecutionFailure :: ExecutionFailure -> Text
 renderExecutionFailure ExecutionContextMissing = "没有持久化执行上下文"
 renderExecutionFailure ExecutionReportRejected = "报告无效或当前执行已失去 revision/lease 所有权"
+renderExecutionFailure (ExecutionInvalidPayload detail) = "payload 不符合当前 output_contract：" <> detail <> "。返回契约要求的原生 JSON 值，不要把对象序列化成字符串。"
 renderExecutionFailure ExecutionInputPending = "有尚未读入上下文的前台输入，暂不能结束。下一轮先阅读收件箱，再重新决定答复；不要重复发送正文。"
 renderExecutionFailure ExecutionOwnershipLost = "当前前台执行已结束或失去 lease 所有权，不能提交 request_finish。"
 renderExecutionFailure ExecutionNotFrontend = "request_finish 只用于普通前台请求，不能用于后台任务或任务通知。"

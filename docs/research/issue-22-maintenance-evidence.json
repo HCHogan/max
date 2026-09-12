@@ -1,0 +1,61 @@
+{
+  "kind": "read_only_production_snapshot",
+  "events": 496,
+  "empty_outcomes": 496,
+  "pending": 0,
+  "keyword_matches": 25,
+  "external_bot_matches_excluded": 13,
+  "reviewed_examples": [
+    {
+      "event_ref": "7e66aa9810d7d8120906ac832c4292f6f471991025d48831b1540a686af36124",
+      "memory_ref": "f4dd301311d96b70a2ee62a6bccfe21bb0d94a89ca2805333cf352c1a2381c13",
+      "version_at_event": 2,
+      "source_ref": "9f87d4dcef6331a82465552a3496c4446dc8d32cd06de2af8fc41408497ade4a",
+      "source_sha256": "e38a89043f4b5062b841243df281eca7c4816520b7830731e63d15686f1c68cd",
+      "outcome": "[]",
+      "classification": "correction already applied in place",
+      "historian_applied": true
+    },
+    {
+      "event_ref": "124efbb5b266af8df5cdceb687a9a09cf946074d8201b1a20d27e1fd2484d0a1",
+      "memory_ref": "59b524f8de039389005bce58385cae1d9241abd663e87647727abc8802e85c3b",
+      "version_at_event": 6,
+      "source_ref": "1b9575b62ac8d995b89fa54caeda0538b7dd0979434188fd32acb3e75fb56cb4",
+      "source_sha256": "7037483056ec33b869c5691d4117b144aaac529f0ff7ca73a2fcfc1104400ed2",
+      "outcome": "[]",
+      "classification": "clarifications already applied in place; source contains no explicit expiry date",
+      "historian_applied": true
+    },
+    {
+      "event_ref": "8527a891e224136950ff32ca212b45bc93f69fbb801c3b1ebedac52775f99e61",
+      "memory_ref": "155d1cf609cedded2fbc27a4646de87ce7f7de2913b1e5a1bbf148a6df483e19",
+      "version_at_event": 2,
+      "source_ref": "72114b80a1b684f82884bfdc83767e029b52100356807418d0e7241daa63d4c7",
+      "source_sha256": "74603d5da48a13ffd441d11736a921c607f7017168976485a58254ffdd241947",
+      "outcome": "[]",
+      "classification": "design correction already applied in place",
+      "historian_applied": true
+    },
+    {
+      "event_ref": "9cfd3c755be26b4e1645918e2a64a26e3d851ede421e0b257f783b443bc443d1",
+      "memory_ref": "833cd8c0e698745b16dac196a511327c3b30258a0d9b96710745d28eca932533",
+      "version_at_event": 1,
+      "source_ref": "b31140e23cc8bc6115a67e0e3b89dee6fe8ae2e31723a95e44cbbbe6924c54db",
+      "source_sha256": "584cd0fcf368adccb85c02d970196a7706892b881a51c4098dc5cc8f11c8e285",
+      "outcome": "[]",
+      "classification": "short negation in new-memory evidence, no proven pair to supersede",
+      "historian_applied": true
+    },
+    {
+      "event_ref": "d2f483672c0239f6d7dd3c9ecee6deacbcd59185855625902a8b1c1a3bd67440",
+      "memory_ref": "227445a988500528d7826c6921d2e3b4a79ccf3a94cc3bcf7b667e3ae4990b36",
+      "version_at_event": 1,
+      "source_ref": "28df72a1f0af24fb093822fd86906c41571ce9da62c2ece483bfe1c6e8c71f12",
+      "source_sha256": "06ade7e604f4fb3cd1abedecf3f4c12734b629e000ba22ebbdf9d1ef1aaf4a8d",
+      "outcome": "[]",
+      "classification": "short negation in new-memory evidence, no proven pair to supersede",
+      "historian_applied": true
+    }
+  ],
+  "coverage": "keyword-selected sample, not an exhaustive semantic proof"
+}

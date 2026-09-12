@@ -1213,7 +1213,7 @@ monitorSuccess :: TaskState.TaskReport
 monitorSuccess = success {TaskState.observation = Just (object ["active" .= True])}
 
 report :: TaskState.ReportStatus -> TaskState.TaskReport
-report state = TaskState.TaskReport state "bounded findings" [] [] Nothing Nothing
+report state = TaskState.TaskReport state "bounded findings" [] [] Nothing Nothing Nothing
 
 finishOccurrence :: DbPool -> MonitorRef -> CanonicalMessageId -> Text -> TaskState.TaskReport -> IO ()
 finishOccurrence pool monitor seedMessage key outcome = do

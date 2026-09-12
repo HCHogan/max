@@ -1,6 +1,6 @@
 module Max.Task.StateSpec (spec) where
 
-import Data.Aeson (object, (.=))
+import Data.Aeson (Value (Null), object, (.=))
 import Data.Text (Text)
 import Data.Time (UTCTime (..), addUTCTime, fromGregorian)
 import Max.Task.State
@@ -30,13 +30,17 @@ spec = describe "typed task settlement" $ do
     next.status `shouldBe` BudgetExhausted
     next.report.status `shouldBe` ReportBudgetExhausted
   it "queues new durable input after a successful attempt instead of notifying a stale result" $ do
-    let next = decideSettlement facts {report = Just (TaskReport ReportSucceeded "done" [] [] Nothing Nothing), pendingInput = True}
+    let next = decideSettlement facts {report = Just (TaskReport ReportSucceeded "done" [] [] Nothing Nothing Nothing), pendingInput = True}
     next.status `shouldBe` Queued
     next.retryAt `shouldBe` Nothing
   it "rejects model-authored host control statuses" $ do
     parseTaskReport (object ["status" .= ("cancelled" :: Text), "summary" .= ("stop" :: Text)]) `shouldSatisfy` either (const True) (const False)
   it "rejects oversized and blank model reports at the boundary" $ do
     parseTaskReport (object ["status" .= ("succeeded" :: Text), "summary" .= ("  " :: Text)]) `shouldSatisfy` either (const True) (const False)
+
+  it "preserves an explicit null payload for a null output contract" $ do
+    Right decoded <- pure (parseTaskReport (object ["status" .= ("succeeded" :: Text), "summary" .= ("complete" :: Text), "evidence" .= ([] :: [Text]), "unresolved" .= ([] :: [Text]), "payload" .= Null]))
+    decoded.payload `shouldBe` Just Null
 
   it "allows attributed steering without transferring owner control" $ do
     let peer = TaskControlFacts Running 3 False True False
@@ -59,7 +63,7 @@ testNow :: UTCTime
 testNow = UTCTime (fromGregorian 2026 9 6) 0
 
 failed :: TaskReport
-failed = TaskReport ReportFailed "temporarily unavailable" ["journal#1"] [] (Just Transient) Nothing
+failed = TaskReport ReportFailed "temporarily unavailable" ["journal#1"] [] (Just Transient) Nothing Nothing
 
 facts :: SettlementFacts
 facts = SettlementFacts testNow (addUTCTime 600 testNow) 1 0 False False False False (Just failed) Nothing

@@ -21,6 +21,7 @@ import Max.Effects.ToolOutput (ToolOutput)
 import Max.Effects.Tools (ToolCatalogError, ToolRegistry)
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.Tasks (TaskCancelled (..))
+import Max.Task.WorkflowRuntime (taskWorkflowHost)
 import Max.ToolContext (ToolContext)
 import Max.Turn.Types (AgentTurnRef (..))
 
@@ -35,6 +36,7 @@ runDurableAgent =
     durableExecutionAdmission
     (ExecutionJournal recordModelNote finishJournalExecution markJournalOutcomeUnknown readSkillLoads readWorkingContext saveWorking)
     (ExecutionInbox (\turn -> (<>) <$> Task.taskInbox turn.atrTurnId <*> FrontendInput.readInputs turn.atrTurnId))
+    (Just taskWorkflowHost)
   where
     saveWorking turn summary tokens limit = withTransaction $ do
       allowed <- Task.authorizeTaskStep turn.atrTurnId ExecutionCheckpoint

@@ -46,15 +46,27 @@
   }
 
   const raw = (tool, args = {}) => exchange(request(tool, args));
+  const agentRequest = args => {
+    if (!allowed.has("task_start")) throw new TypeError("agent requires task_start in the workflow catalog");
+    if (!args || typeof args !== "object" || Array.isArray(args)) throw new TypeError("agent arguments must be an object");
+    return {agent: args};
+  };
+  const agent = args => value(exchange(agentRequest(args)));
+  const phase = summary => {
+    if (!allowed.has("task_progress")) throw new TypeError("phase requires task_progress in the workflow catalog");
+    if (typeof summary !== "string") throw new TypeError("phase requires a string");
+    return value(exchange({phase: summary}));
+  };
   const tools = Object.create(null);
   for (const name of names) tools[name] = (args = {}) => value(raw(name, args));
   const batch = calls => {
     if (!Array.isArray(calls) || calls.length < 1 || calls.length > 32)
       throw new RangeError("batch requires 1 to 32 calls");
-    return exchange({calls: calls.map(call => request(call.tool, call.args ?? {}))});
+    return exchange({calls: calls.map(call => call.agent ? agentRequest(call.agent) : request(call.tool, call.args ?? {}))});
   };
   Object.defineProperties(globalThis, {
     tools: {value: Object.freeze(tools)},
-    max: {value: Object.freeze({raw, batch, value, names: Object.freeze(names)})}
+    agent: {value: agent},
+    max: {value: Object.freeze({raw, batch, value, agent, phase, names: Object.freeze(names)})}
   });
 })

@@ -135,7 +135,7 @@
             printf '%s\n' max max-adr003-maintenance max-runtime maxctl | sort > runtime.expected
             diff -u runtime.expected runtime.actual
             ls -1 ${self.packages.${system}.max-tools}/bin | sort > tools.actual
-            printf '%s\n' max-context-eval max-intent-eval max-prompt-flow max-skill-eval | sort > tools.expected
+            printf '%s\n' max-context-eval max-contract-eval max-intent-eval max-prompt-flow max-skill-eval max-workflow-eval | sort > tools.expected
             diff -u tools.expected tools.actual
             touch $out
           '';

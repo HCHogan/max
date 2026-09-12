@@ -107,7 +107,8 @@ taskToolsFor context =
                 ("evidence", stringArrayParam "证据链接或本会话产物句柄；最多 80 条"),
                 ("unresolved", stringArrayParam "未解决的问题；最多 80 条"),
                 ("failure_kind", enumParam ["permanent", "transient"] "failed 时说明错误是否暂时性；未知外部效果不能自动重试。"),
-                ("observation", object ["description" .= ("change_only monitor 完成时必填非空对象；沿用 previous_observation 的键和类型，只放稳定业务状态。时间、报告措辞、job ID 放 evidence，不放此处。" :: Text)])
+                ("observation", object ["description" .= ("change_only monitor 完成时必填非空对象；沿用 previous_observation 的键和类型，只放稳定业务状态。时间、报告措辞、job ID 放 evidence，不放此处。" :: Text)]),
+                ("payload", object ["description" .= ("委派输入指定 output_contract 时，succeeded 必须在此返回遵循该契约的 JSON；形状正确不代表目标已经完成，仍需 summary、evidence、unresolved。" :: Text)])
               ]
               ["status", "summary", "evidence", "unresolved"],
           toolRun = \raw -> case State.parseTaskReport raw of

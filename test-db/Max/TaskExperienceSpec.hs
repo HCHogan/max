@@ -36,6 +36,12 @@ spec pool = before_ (truncateAll pool) $ describe "task experience lifecycle" $ 
     Right _ <- withDb pool (createExperienceCandidate scope ready (capsule handle))
     [Only count] <- withDb pool (query "SELECT count(*) FROM skills" ())
     (count :: Int64) `shouldBe` 0
+  it "does not treat a task's own completion or progress report as independent evidence" $ do
+    (task, _) <- complete pool 900 "self-report"
+    void $ withDb pool (execute "UPDATE execution_journal SET tool_ref='task_finish' WHERE tool_ref='get_state'" ())
+    withDb pool (taskExperienceSnapshot scope task) `shouldReturn` Nothing
+    void $ withDb pool (execute "UPDATE execution_journal SET tool_ref='task_progress' WHERE tool_ref='task_finish'" ())
+    withDb pool (taskExperienceSnapshot scope task) `shouldReturn` Nothing
   it "publishes only after a current paired replay, cannot override builtins, and supports invalidation" $ do
     (source, handle) <- complete pool 900 "source"
     Right candidateId <- withDb pool (createExperienceCandidate scope source (capsule handle))
@@ -75,7 +81,7 @@ complete pool group key = do
   receipt <- withDb pool (startJournalExecution execution (JournalStart "proof" "get_state" 1 "schema" (object []) (toJSON (["read"] :: [Text])) "safe"))
   withDbLog pool (finishJournalExecution receipt (JournalSucceeded (object ["verified" .= True])))
   let handle = resultHandleText execution.atrTurnOrdinal receipt.jeExecutionOrdinal
-  withDb pool (taskReportTyped execution.atrTurnId (TaskReport ReportSucceeded "verified" [handle] [] Nothing Nothing)) `shouldReturn` True
+  withDb pool (taskReportTyped execution.atrTurnId (TaskReport ReportSucceeded "verified" [handle] [] Nothing Nothing Nothing)) `shouldReturn` True
   withDb pool (finishAgentTurn execution TurnSucceeded 1 Nothing Nothing)
   pure (task, handle)
 

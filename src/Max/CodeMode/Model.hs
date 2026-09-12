@@ -15,6 +15,7 @@ import Max.CodeMode.Execution (CodeModeResult (..), codeModeInvocation, runWasmP
 import Max.CodeMode.JavaScript (javaScriptLimits, javaScriptRuntimeVersion, runJavaScript, workflowProgram)
 import Max.Effects.Tools (Tools)
 import Max.Execution.Tools
+import Max.Execution.Workflow (WorkflowHost (..))
 import Max.Skill.Workflow (ResolvedWorkflow (..), resolveWorkflow)
 import Max.Tool.Bundles (SkillLoad)
 import Max.Tool.Control (LoopControl (..))
@@ -35,34 +36,38 @@ executeModelBatch enabled loaded session hooks catalog requests
   | not (any ((== "run_code") . (.trName)) requests) = executeToolBatch session hooks catalog requests
   | otherwise = do
       hooks.ehCheck
-      case requests of
-        [request]
-          | enabled,
-            Object fields <- request.trArguments,
-            KeyMap.size fields == 1,
-            Just (String source) <- KeyMap.lookup "code" fields,
-            BS.length (TE.encodeUtf8 source) <= 65536 -> do
-              result <- runJavaScript session hooks catalog source
-              pure (ToolBatch [codeModeInvocation result] result.cmOverBudget)
-        [request]
-          | enabled,
-            Object fields <- request.trArguments,
-            KeyMap.size fields == 2,
-            Just (String reference) <- KeyMap.lookup "workflow" fields,
-            Just args <- KeyMap.lookup "args" fields,
-            LBS.length (encode args) <= 65536 ->
-              case resolveWorkflow javaScriptRuntimeVersion loaded catalog reference args of
-                Left detail -> pure (ToolBatch [reject "invalid_workflow_submission" detail] False)
-                Right resolved -> do
-                  result <-
-                    runWasmProgram
-                      session
-                      hooks
-                      resolved.rwCatalog
-                      javaScriptLimits
-                      (workflowProgram resolved.rwCatalog reference resolved.rwVersion resolved.rwWorkflow args)
+      allowed <- maybe (pure True) (.whAllowed) hooks.ehWorkflow
+      if not allowed
+        then pure (ToolBatch (map (const (reject "recursive_workflow_denied" "awaited children run the ordinary agent loop and cannot execute run_code")) requests) False)
+        else do
+          case requests of
+            [request]
+              | enabled,
+                Object fields <- request.trArguments,
+                KeyMap.size fields == 1,
+                Just (String source) <- KeyMap.lookup "code" fields,
+                BS.length (TE.encodeUtf8 source) <= 65536 -> do
+                  result <- runJavaScript session hooks catalog source
                   pure (ToolBatch [codeModeInvocation result] result.cmOverBudget)
-        _ -> pure (ToolBatch (map (const rejection) requests) False)
+            [request]
+              | enabled,
+                Object fields <- request.trArguments,
+                KeyMap.size fields == 2,
+                Just (String reference) <- KeyMap.lookup "workflow" fields,
+                Just args <- KeyMap.lookup "args" fields,
+                LBS.length (encode args) <= 65536 ->
+                  case resolveWorkflow javaScriptRuntimeVersion loaded catalog reference args of
+                    Left detail -> pure (ToolBatch [reject "invalid_workflow_submission" detail] False)
+                    Right resolved -> do
+                      result <-
+                        runWasmProgram
+                          session
+                          hooks
+                          resolved.rwCatalog
+                          javaScriptLimits
+                          (workflowProgram resolved.rwCatalog reference resolved.rwVersion resolved.rwWorkflow args)
+                      pure (ToolBatch [codeModeInvocation result] result.cmOverBudget)
+            _ -> pure (ToolBatch (map (const rejection) requests) False)
   where
     rejection = reject "invalid_code_submission" "先加载 codemode；run_code 必须单独提交 {code} 或 {workflow, args}（源码/输入最多 64 KiB）。本轮未执行调用。"
     reject code detail = ToolInvocation (ToolRejected (ToolFault code detail RetrySafe)) ContinueLoop

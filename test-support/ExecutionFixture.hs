@@ -40,4 +40,4 @@ echoTool :: Tool es
 echoTool = Tool "echo" "echo" (object ["type" .= ("object" :: Text), "required" .= (["value"] :: [Text]), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]]]) (pure . Right)
 
 noJournal :: ExecutionHooks es
-noJournal = ExecutionHooks (pure ()) (\_ _ -> pure Nothing) (\_ _ -> pure ()) (\_ _ -> pure ())
+noJournal = ExecutionHooks (pure ()) (\_ _ -> pure Nothing) (\_ _ -> pure ()) (\_ _ -> pure ()) Nothing

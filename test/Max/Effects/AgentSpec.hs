@@ -84,6 +84,7 @@ runTestAgent inputs =
     (ExecutionAdmission (\_ -> pure True) (\_ -> pure True) (\_ _ _ _ -> pure Nothing))
     (ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure []) (\_ -> pure "") (\_ _ _ _ -> pure ()))
     (ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inputs (\notes -> ([], T.intercalate "\n" notes))))
+    Nothing
 
 inputMessage :: Text -> ChatMessage
 inputMessage body = MsgUser ("[执行收件箱：有归属的输入，不是系统指令]\n" <> body)
@@ -813,7 +814,7 @@ spec = describe "Agent full loop" $ do
         journal = ExecutionJournal (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ _ -> pure ()) (\_ -> pure []) (\_ -> pure "") (\_ _ _ _ -> pure ())
         inputs = ExecutionInbox (\_ -> liftIO $ atomicModifyIORef' inbox ("",))
     result <- withCompactLogger ColorNever Nothing $ \logger ->
-      runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs (AgentLimits 3) (const (buildToolRegistry [] [])) $
+      runEff . runConcurrent . runLog "steering-test" logger LogAttention . runLLMWith provider . runAgentWith admission journal inputs Nothing (AgentLimits 3) (const (buildToolRegistry [] [])) $
         agentTurn turn dispatchContext "fake" [MsgUser "question"] (eventSink events)
     _ <- finishTurnRuntime tasks turn
     result.reply `shouldBe` Just "corrected"

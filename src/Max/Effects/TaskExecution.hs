@@ -31,7 +31,7 @@ reportRequestWithInputs disposition reply inputs = send (ReportRequest dispositi
 
 runTaskExecution :: forall es a. (WithConnection :> es, IOE :> es) => Maybe AgentTurnId -> Eff (TaskExecution : es) a -> Eff es a
 runTaskExecution owner = interpret $ \_ -> \case
-  ReportTask report -> submit (\turn -> DB.submitReport turn report)
+  ReportTask report -> maybe (pure (Left ExecutionContextMissing)) (\turn -> DB.submitReportChecked turn report) owner
   ReportProgress summary -> submit (\turn -> DB.submitProgress turn summary)
   ReportRequest disposition reply inputs -> case owner of
     Nothing -> pure (Left ExecutionContextMissing)

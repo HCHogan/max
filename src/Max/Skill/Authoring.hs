@@ -97,7 +97,7 @@ validateDraft d = do
       validateValue workflow.wfInput f.fxArgs
       validateValue workflow.wfOutput f.fxExpected
       unless (length f.fxCalls <= 32) (Left "at most 32 calls per fixture")
-      traverse_ (\c -> unless (c.fcTool `elem` workflow.wfTools) (Left "fixture tool is not declared")) f.fxCalls
+      traverse_ (\c -> unless ((case c.fcTool of "agent" -> "task_start"; "phase" -> "task_progress"; name -> name) `elem` workflow.wfTools) (Left "fixture tool is not declared")) f.fxCalls
     containsNul (String value) = T.any (== '\0') value
     containsNul (Array values) = any containsNul values
     containsNul (Object fields) = any containsNul (KM.elems fields) || any (T.any (== '\0') . Key.toText) (KM.keys fields)

@@ -338,7 +338,7 @@ toolInventory =
     always (writeTool "task_steer" ["task.db"] [CurrentConversation]),
     always (writeTool "task_replace" ["task.db"] [CurrentConversation]),
     always (writeTool "task_cancel" ["task.db"] [CurrentConversation]),
-    gated BackgroundOnly ((writeToolV 2 "task_finish" ["task.db"] [CurrentConversation]) {tdCallMode = FinishCall}),
+    gated BackgroundOnly ((writeToolV 3 "task_finish" ["task.db"] [CurrentConversation]) {tdCallMode = FinishCall}),
     gated BackgroundOnly ((writeTool "task_progress" ["task.db"] [CurrentConversation]) {tdCallMode = CheckpointCall}),
     -- Returned request validation/ownership errors precede every write in
     -- submitRequestWithInputs. Exceptions and timeouts remain outcome-unknown.

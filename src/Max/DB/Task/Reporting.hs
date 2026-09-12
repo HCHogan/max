@@ -1,6 +1,6 @@
 -- | Current-attempt reporting. Validation, progress coalescing and notification
 -- spacing are host policies; every read and write shares one transaction.
-module Max.DB.Task.Reporting (submitReport, submitProgress, submitFailure, submitRequest, submitRequestWithInputs) where
+module Max.DB.Task.Reporting (submitReport, submitReportChecked, submitProgress, submitFailure, submitRequest, submitRequestWithInputs) where
 
 import Control.Monad (forM_, void)
 import Data.Aeson (Value (..), object, (.=))
@@ -18,13 +18,17 @@ import Max.DB.Task.Authorization
 import Max.DB.Task.FrontendInput (closeInputWithin, unseenInputWithin)
 import Max.DB.Task.Record
 import Max.DB.Transaction (withTransaction)
+import Max.Task.Delegation (validateAgentPayload)
 import Max.Task.Execution (ExecutionFailure (..))
 import Max.Task.State
 import Max.Task.Types (taskHandle)
 import Max.Turn.Types (AgentTurnId)
 
 submitReport :: (WithConnection :> es, IOE :> es) => AgentTurnId -> TaskReport -> Eff es Bool
-submitReport turn report = withAuthorized turn $ \task -> do
+submitReport turn report = either (const False) (const True) <$> submitReportChecked turn report
+
+submitReportChecked :: (WithConnection :> es, IOE :> es) => AgentTurnId -> TaskReport -> Eff es (Either ExecutionFailure ())
+submitReportChecked turn report = withAuthorizedOr (Left ExecutionReportRejected) turn $ \task -> do
   structured <- case task.monitorFire of
     Nothing -> pure False
     Just fire -> do
@@ -34,23 +38,31 @@ submitReport turn report = withAuthorized turn $ \task -> do
         Just (Object fields) -> not (KeyMap.null fields)
         _ -> False
       observationRequired = structured && report.status `elem` [ReportSucceeded, ReportPartial]
+      contract = case task.inputs of
+        Object fields -> case KeyMap.lookup "output_contract" fields of
+          Just Null -> Nothing
+          value -> value
+        _ -> Nothing
   children <-
     query
       "SELECT EXISTS(SELECT 1 FROM durable_tasks child JOIN task_attempts parent ON child.parent_task_id=parent.task_id\
       \ AND child.parent_revision=parent.revision WHERE parent.turn_id=? AND child.status IN ('queued','running','waiting','retrying'))"
       (Only turn)
-  if (observationRequired && not validObservation) || (report.status == ReportSucceeded && children == [Only True])
-    then pure False
-    else do
-      moved <-
-        execute
-          "UPDATE task_attempts SET report=?::jsonb WHERE turn_id=? AND (report IS NULL OR report=?::jsonb)"
-          (jsonText report, turn, jsonText report)
-      pure (moved == 1)
+  case validateAgentPayload contract report of
+    Left detail -> pure (Left (ExecutionInvalidPayload detail))
+    Right () ->
+      if (observationRequired && not validObservation) || (report.status == ReportSucceeded && children == [Only True])
+        then pure (Left ExecutionReportRejected)
+        else do
+          moved <-
+            execute
+              "UPDATE task_attempts SET report=?::jsonb WHERE turn_id=? AND (report IS NULL OR report=?::jsonb)"
+              (jsonText report, turn, jsonText report)
+          pure (if moved == 1 then Right () else Left ExecutionReportRejected)
 
 submitFailure :: (WithConnection :> es, IOE :> es) => AgentTurnId -> Text -> FailureKind -> Eff es Bool
 submitFailure turn detail kind = withAuthorized turn $ \_ -> do
-  let report = TaskReport ReportFailed (T.take 40000 detail) [] [] (Just kind) Nothing
+  let report = TaskReport ReportFailed (T.take 40000 detail) [] [] (Just kind) Nothing Nothing
   moved <-
     execute
       "UPDATE task_attempts SET retryable=?,report=?::jsonb WHERE turn_id=? AND report IS NULL"
@@ -190,15 +202,18 @@ submitRequestWithInputs turn disposition reply inputs
                       pure (Right ())
 
 withAuthorized :: (WithConnection :> es, IOE :> es) => AgentTurnId -> (TaskRecord -> Eff es Bool) -> Eff es Bool
-withAuthorized turn action = withTransaction $ do
+withAuthorized = withAuthorizedOr False
+
+withAuthorizedOr :: (WithConnection :> es, IOE :> es) => a -> AgentTurnId -> (TaskRecord -> Eff es a) -> Eff es a
+withAuthorizedOr fallback turn action = withTransaction $ do
   _ <- lockTurnConversation turn
   allowed <- authorizeWithin turn ExecutionCheckpoint
   if not allowed
-    then pure False
+    then pure fallback
     else do
       attempt <- loadAttempt turn
       case attempt of
-        Nothing -> pure False
+        Nothing -> pure fallback
         Just execution -> do
           task <- loadTask execution.taskId
-          maybe (pure False) action task
+          maybe (pure fallback) action task

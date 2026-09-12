@@ -1,0 +1,175 @@
+{
+  "scope": "local_disposable_evaluation_databases",
+  "production_mutated": false,
+  "provenance": "Read after evaluator cleanup; original report bytes are preserved. Child states in paired reports were observed before cleanup.",
+  "cases": [
+    {
+      "report": "adr015-workflow-comparison.json",
+      "report_sha256": "fe4eca404138ff61284b865e48eb9ba9c4d905988e47d95a10ce9d5d63638d41",
+      "case": 1,
+      "mode": "serial",
+      "settled_parent": {
+        "task_id": 1,
+        "parent_task_id": null,
+        "status": "cancelled",
+        "calls_reserved": 14,
+        "rounds_reserved": 7
+      },
+      "settled_children": [
+        {
+          "task_id": 2,
+          "parent_task_id": 1,
+          "status": "succeeded",
+          "calls_reserved": 2,
+          "rounds_reserved": 3
+        },
+        {
+          "task_id": 3,
+          "parent_task_id": 1,
+          "status": "succeeded",
+          "calls_reserved": 5,
+          "rounds_reserved": 2
+        },
+        {
+          "task_id": 4,
+          "parent_task_id": 1,
+          "status": "cancelled",
+          "calls_reserved": 4,
+          "rounds_reserved": 2
+        }
+      ],
+      "usage_complete": false,
+      "unrecorded_reserved_rounds": 1
+    },
+    {
+      "report": "adr015-workflow-comparison.json",
+      "report_sha256": "fe4eca404138ff61284b865e48eb9ba9c4d905988e47d95a10ce9d5d63638d41",
+      "case": 2,
+      "mode": "parallel",
+      "settled_parent": {
+        "task_id": 5,
+        "parent_task_id": null,
+        "status": "succeeded",
+        "calls_reserved": 15,
+        "rounds_reserved": 8
+      },
+      "settled_children": [
+        {
+          "task_id": 6,
+          "parent_task_id": 5,
+          "status": "succeeded",
+          "calls_reserved": 2,
+          "rounds_reserved": 2
+        },
+        {
+          "task_id": 7,
+          "parent_task_id": 5,
+          "status": "succeeded",
+          "calls_reserved": 5,
+          "rounds_reserved": 3
+        },
+        {
+          "task_id": 8,
+          "parent_task_id": 5,
+          "status": "succeeded",
+          "calls_reserved": 5,
+          "rounds_reserved": 3
+        }
+      ],
+      "usage_complete": true,
+      "unrecorded_reserved_rounds": 0
+    },
+    {
+      "report": "adr015-workflow-comparison.json",
+      "report_sha256": "fe4eca404138ff61284b865e48eb9ba9c4d905988e47d95a10ce9d5d63638d41",
+      "case": 3,
+      "mode": "parallel",
+      "settled_parent": {
+        "task_id": 9,
+        "parent_task_id": null,
+        "status": "cancelled",
+        "calls_reserved": 14,
+        "rounds_reserved": 6
+      },
+      "settled_children": [
+        {
+          "task_id": 10,
+          "parent_task_id": 9,
+          "status": "failed",
+          "calls_reserved": 4,
+          "rounds_reserved": 2
+        },
+        {
+          "task_id": 11,
+          "parent_task_id": 9,
+          "status": "succeeded",
+          "calls_reserved": 5,
+          "rounds_reserved": 2
+        },
+        {
+          "task_id": 12,
+          "parent_task_id": 9,
+          "status": "succeeded",
+          "calls_reserved": 2,
+          "rounds_reserved": 2
+        }
+      ],
+      "usage_complete": true,
+      "unrecorded_reserved_rounds": 0
+    },
+    {
+      "report": "adr015-workflow-comparison.json",
+      "report_sha256": "fe4eca404138ff61284b865e48eb9ba9c4d905988e47d95a10ce9d5d63638d41",
+      "case": 4,
+      "mode": "serial",
+      "settled_parent": {
+        "task_id": 13,
+        "parent_task_id": null,
+        "status": "cancelled",
+        "calls_reserved": 14,
+        "rounds_reserved": 6
+      },
+      "settled_children": [
+        {
+          "task_id": 14,
+          "parent_task_id": 13,
+          "status": "succeeded",
+          "calls_reserved": 2,
+          "rounds_reserved": 2
+        },
+        {
+          "task_id": 15,
+          "parent_task_id": 13,
+          "status": "succeeded",
+          "calls_reserved": 5,
+          "rounds_reserved": 2
+        },
+        {
+          "task_id": 16,
+          "parent_task_id": 13,
+          "status": "failed",
+          "calls_reserved": 4,
+          "rounds_reserved": 2
+        }
+      ],
+      "usage_complete": true,
+      "unrecorded_reserved_rounds": 0
+    },
+    {
+      "report": "adr015-workflow-ordinary.json",
+      "report_sha256": "e2c3daf5a0490beb3ab73faabdafd384081203d52504cb590f2b882a50598b9d",
+      "case": 1,
+      "mode": "ordinary",
+      "settled_parent": {
+        "task_id": 1,
+        "parent_task_id": null,
+        "status": "cancelled",
+        "calls_reserved": 10,
+        "rounds_reserved": 2
+      },
+      "settled_children": [],
+      "usage_complete": true,
+      "unrecorded_reserved_rounds": 0
+    }
+  ]
+}

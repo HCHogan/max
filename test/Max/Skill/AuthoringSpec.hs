@@ -18,6 +18,14 @@ spec :: Spec
 spec = describe "isolated skill fixture validation" $ do
   it "runs real JS against fixture data using the shared host executor" $ do
     validateFixtures catalog draft `shouldReturn` ValidationReport []
+  it "validates phase and agent fixtures without any live child or database runner" $ do
+    let child = object ["objective" .= ("bounded research" :: Text), "profile" .= ("research" :: Text)]
+        result = object ["findings" .= ("verified" :: Text)]
+        workflow = Workflow "delegate" "max.phase('research'); return agent({objective:'bounded research',profile:'research'});" contract (object ["type" .= ("object" :: Text), "additionalProperties" .= True]) ["task_start", "task_progress"]
+        content = draft.dvContent {dcPackage = SkillPackage [] (Map.singleton "run" workflow), dcFixtures = [Fixture "run" args [FixtureCall "phase" (String "research") (Right Null), FixtureCall "agent" child (Right result)] result]}
+        available = [entry {ctDefinition = entry.ctDefinition {tdRef = ToolRef name}} | entry <- catalog, name <- ["task_start", "task_progress"]]
+    validateFixtures available (DraftVersion 1 content) `shouldReturn` ValidationReport []
+    validateDraft content {dcPackage = SkillPackage [] (Map.singleton "run" workflow {wfTools = []})} `shouldSatisfy` isLeft
   it "records unexpected calls even if the guest catches the error" $ do
     let bad = change "try { tools.echo({value:9}); } catch (_) {} return args;" draft
     report <- validateFixtures catalog bad
