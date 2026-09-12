@@ -17,7 +17,7 @@ import Effectful (IOE, liftIO, runEff)
 import Max.Effects.Tools (Tool (..))
 import Max.HttpRuntime (newHttpRuntime)
 import Max.MaxOps.Client (maxOpsInvoke, maxOpsOperations)
-import Max.MaxOps.Protocol (Catalog (..), CatalogAccess (..), Operation (..), operationToolName, parseCatalog)
+import Max.MaxOps.Protocol (Catalog (..), CatalogAccess (..), Operation (..), catalogForSkill, operationToolName, parseCatalog)
 import Max.MaxOps.Types
 import Max.Tools.MaxOps (maxOpsBundle)
 import OneBot.Types (GroupId (..))
@@ -37,12 +37,15 @@ main = do
   rawCatalog <- maxOpsOperations runtime config (if management then ManagementCatalog else ReadOnlyCatalog) >>= either (die . T.unpack) pure
   catalog <- either (die . T.unpack) pure (parseCatalog rawCatalog)
   keyRef <- newIORef Nothing
+  loadedChanges <- newIORef False
   let hostSubmit operation params = liftIO $ readIORef keyRef >>= maxOpsInvoke runtime config operation params
-      tools :: [Tool '[IOE]]
-      tools = maxOpsBundle runtime config (readIORef current) (GroupId 611798505) catalog.operations hostSubmit
-      call name params = case find ((== name) . (.toolName)) tools of
-        Nothing -> die "expected maxops tool is missing"
-        Just tool -> runEff (tool.toolRun params)
+      tools :: Bool -> [Tool '[IOE]]
+      tools changes = maxOpsBundle runtime config (readIORef current) (GroupId 611798505) ((catalogForSkill "maxops" catalog).operations <> [entry | changes, entry <- (catalogForSkill "maxops-changes" catalog).operations]) hostSubmit
+      call name params = do
+        loaded <- readIORef loadedChanges
+        case find ((== name) . (.toolName)) (tools loaded) of
+          Nothing -> die "expected maxops tool is missing"
+          Just tool -> runEff (tool.toolRun params)
       query operation params = case find (\entry -> entry.name == operation && entry.readOnly) catalog.operations of
         Nothing -> pure (Left "operation is not in the read-only bundle")
         Just entry -> call (operationToolName entry) params
@@ -63,14 +66,16 @@ main = do
           Left detail | "maxops HTTP 403" `T.isPrefixOf` detail -> putStrLn ("PASS " <> label)
           _ -> die (label <> ": expected scoped HTTP 403 denial")
   unless (hasField "operations" rawCatalog) (die "catalog has no operations")
-  putStrLn "PASS authenticated complete input-only operation bundle"
+  unless (all (\tool -> not (any (`T.isPrefixOf` tool.toolName) ["maxops_deploy_", "maxops_workspace_", "maxops_changes_"])) (tools False)) (die "base bundle leaked change tools")
+  putStrLn "PASS authenticated observation catalog excludes change tools"
   overview <- success "fleet overview with partial-state semantics" (query "fleet.overview" (object []))
   unless (hasField "hosts" overview) (die "overview has no hosts")
   facts <- success "host facts" (query "host.facts" (object ["host" .= host]))
   unless (field "host" facts == Just (String host)) (die "host identity mismatch")
   _ <- success "failed units" (query "units.failed" (object []))
   _ <- success "allowlisted unit list" (query "units.list" (object ["host" .= host]))
-  _ <- success "deployment status" (query "deploy.status" (object []))
+  writeIORef loadedChanges True
+  _ <- success "explicitly loaded deployment status" (query "deploy.status" (object []))
   _ <- success "host metrics with explicit unavailable-source semantics" (query "host.metrics" (object ["host" .= host]))
   _ <- success "allowlisted unit status" (query "units.status" (object ["host" .= host, "unit" .= unit]))
   denied "hub host scope" (query "host.facts" (object ["host" .= ("maxops-denied-fixture" :: Text)]))
@@ -89,16 +94,20 @@ main = do
     conflict <- execute "diagnostics.collect" (object ["host" .= host, "lines" .= (51 :: Int)]) key
     unless (either (T.isPrefixOf "maxops HTTP 409") (const False) conflict) (die "changed specification did not conflict with the original key")
     putStrLn "PASS changed specification cannot reuse a submitted key"
-    let waitForJob job remaining = do
-          waited <- query "jobs.wait" (object ["job_id" .= job, "timeout_seconds" .= (10 :: Int)]) >>= either (die . T.unpack) pure
+    let waitForJob lookupKey remaining = do
+          waited <- query "jobs.wait" (object ["idempotency_key" .= (lookupKey :: Text), "timeout_seconds" .= (10 :: Int)]) >>= either (die . T.unpack) pure
           status <- maybe (die "wait has no job") pure (field "job" waited)
           case field "handle" status >>= field "state" of
             Just (String "succeeded") -> pure status
-            Just (String state) | state `elem` ["queued", "dispatching", "running", "reconciling"], remaining > (0 :: Int) -> waitForJob job (remaining - 1)
+            Just (String state) | state `elem` ["queued", "dispatching", "running", "reconciling"], remaining > (0 :: Int) -> waitForJob lookupKey (remaining - 1)
             _ -> die "diagnostic did not reach a verified successful terminal state"
-    completed <- waitForJob identifier 100
+    completed <- waitForJob "max-adapter-diagnostic" 10
     unless (hasField "result" completed) (die "terminal job lost its evidence")
-    putStrLn "PASS queued job is observed with bounded jobs.wait"
+    putStrLn "PASS queued job is observed by the original submission key"
+    _ <- success "status by submission key" (query "jobs.status" (object ["idempotency_key" .= ("max-adapter-diagnostic" :: Text)]))
+    logs <- success "logs by submission key" (query "jobs.logs" (object ["idempotency_key" .= ("max-adapter-diagnostic" :: Text)]))
+    unless (field "encoding" logs == Just (String "utf8_with_replacement") && field "stdout_text" logs == Just (String "hi\n") && field "next_stdout_offset" logs == Just (Number 3) && not (hasField "text_decoding" logs)) (die "log text or byte offsets drifted")
+    _ <- success "structured result by submission key" (query "jobs.result" (object ["idempotency_key" .= ("max-adapter-diagnostic" :: Text), "pointer" .= ("/diagnostic" :: Text)]))
     _ <- success "job list" (query "jobs.list" (object []))
     events <- success "durable event replay" (query "events.list" (object ["host" .= host]))
     _ <- success "hub status" (query "self.status" (object []))
@@ -106,8 +115,8 @@ main = do
       Just (Array values) | first : _ <- toList values -> maybe (die "event has no ID") pure (field "event_id" first)
       _ -> die "diagnostic did not emit an event"
     claim <- success "durable remediation claim" (execute "remediations.begin" (object ["host" .= host, "event_id" .= event]) (Just "fixture-remediation"))
-    claimId <- maybe (die "remediation claim has no job ID") pure (field "job_id" claim)
-    claimed <- waitForJob claimId 100
+    unless (hasField "job_id" claim) (die "remediation claim has no job ID")
+    claimed <- waitForJob "fixture-remediation" 10
     remediation <- maybe (die "claim has no remediation record") pure (field "result" claimed >>= field "remediation")
     remediationId <- maybe (die "remediation has no ID") pure (field "remediation_id" remediation)
     revision <- maybe (die "remediation has no revision") pure (field "revision" remediation)

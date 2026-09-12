@@ -342,10 +342,22 @@ starts with base tools. Catalog and invocation admission share the snapshot, so
 same-batch calls cannot use a just-loaded capability early. Loaded manuals and
 the latest tool results survive normal result trimming.
 
-The maxops bundle comes from the credential-filtered Hub input-schema registry.
+The maxops bundles come from the credential-filtered Hub input-schema registry.
+`maxops` exposes observation and job reads; `maxops-changes` loads workspace,
+deployment and management operations on demand, with `maxops` as its instruction
+dependency. Recovered catalogs are partitioned again so an old full receipt does
+not widen the base bundle. Shared safety instructions live in the skills, not in
+every operation description.
 `MaxOps.Client` owns transport; `MaxOps.TaskRuntime` owns only Max's durable
-submission/observer task. It reuses a host-generated identity and uses `jobs.wait`
-without model polling. maxops owns remote jobs, deployment stages, CAS and recovery.
+submission/observer task. The model receives the host-generated `idempotency_key`,
+which all four job readers accept, without Max's numeric task ID. Recovery first
+looks up that key; only a missing receipt within two minutes of durable admission
+allows submission. The observer uses `jobs.wait` without model polling and stops
+at the remote deadline plus 30 seconds, anchored to a monotonic clock. Receipt
+recovery without a remote deadline is bounded to two minutes per attempt; neither
+HTTP calls nor transient-error sleeps may overrun it. Unconfirmed effects settle
+as `outcome_unknown` / waiting, without automatic task retry. maxops owns remote
+jobs, deployment stages, CAS and recovery.
 Observer cancellation does not imply remote cancellation. Reports follow the
 existing frontend interpretation path.
 

@@ -9,7 +9,7 @@ import Max.Effects.ToolControl (runToolControl)
 import Max.Effects.Tools (Tool (..))
 import Max.Platform.Types (CanonicalMessageId (..), PrincipalId (..), noAdvertisedCaps)
 import Max.Skills (Skill (..), lookupSkill, newSkillRegistry, skillsForGroup)
-import Max.Tool.Bundles (SkillLoad (..), toolVisible)
+import Max.Tool.Bundles (SkillLoad (..), skillDependencies, toolVisible)
 import Max.Tool.Control (controlSkillLoads)
 import Max.ToolContext
 import Max.Tools.Skills (skillToolsFor)
@@ -41,10 +41,14 @@ spec = describe "Max.Skills builtins" $ do
     (_, again) <- load loaded
     controlSkillLoads again `shouldBe` []
 
+  it "loads shared maxops instructions as a dependency of change tools" $ do
+    skillDependencies "maxops" `shouldBe` []
+    skillDependencies "maxops-changes" `shouldBe` ["maxops"]
+
   it "ships the manuals and the single self-knowledge entry point" $ do
     reg <- newSkillRegistry
     skills <- skillsForGroup reg (GroupId 7777)
-    mapM_ (\name -> map (.skillName) skills `shouldContain` [name]) ["office", "sandbox", "self-knowledge", "skill-authoring", "web"]
+    mapM_ (\name -> map (.skillName) skills `shouldContain` [name]) ["office", "sandbox", "self-knowledge", "skill-authoring", "web", "maxops", "maxops-changes"]
     -- Doc-mirror skills are retired: behaviour/architecture/design are
     -- read from the source snapshot via inspect_source, navigated by
     -- self-knowledge.

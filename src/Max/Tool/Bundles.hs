@@ -45,6 +45,7 @@ skillLoadVersion = TE.decodeUtf8 . B16.encode . SHA256.hash . TE.encodeUtf8
 
 skillDependencies :: Text -> [Text]
 skillDependencies "office" = ["sandbox"]
+skillDependencies "maxops-changes" = ["maxops"]
 skillDependencies _ = []
 
 toolBundle :: Text -> Maybe Text
