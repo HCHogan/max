@@ -2,9 +2,9 @@
   description = "max — a QQ group chat agent over OneBot 11 (NapCatQQ)";
 
   inputs = {
-    # Pinned to the rev in flake.lock: haskellPackages there is
-    # GHC 9.10.3 and the whole closure is in the hydra cache.
-    nixpkgs.url = "github:NixOS/nixpkgs/34268251cf5547d39063f2c5ea9a196246f7f3a6";
+    # Pinned to the same nixpkgs revision as nix-config. The default
+    # haskellPackages compiler is GHC 9.10.3.
+    nixpkgs.url = "github:NixOS/nixpkgs/21a67dc470149f337cecafbe965d8d252a390518";
     devenv.url = "github:cachix/devenv/v2.3";
     systems.url = "github:nix-systems/default";
   };

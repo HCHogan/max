@@ -6,7 +6,7 @@
 }: {
   languages.haskell = {
     enable = true;
-    # Default toolchain (GHC 9.10.3 on nixpkgs 25.11): the default set
+    # Default toolchain (GHC 9.10.3 on nixpkgs 26.05): the default set
     # is hydra-cached and its HLS actually builds — 9.12.4's does not.
     package = pkgs.haskell.compiler.ghc9103;
     stack.enable = false;
