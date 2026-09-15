@@ -1,5 +1,9 @@
 # Max 上下文与记忆：生产审计及 Hermes / OpenClaw 对照
 
+> Historical evidence below retains the tool names used at the time. The legacy
+> MaxOps API and observer tasks were retired on 2026-09-15; current operations
+> use [SSH through the sandbox](../runbooks/ssh-operations.md).
+
 调研日期：2026-09-09。结论：保留 Max 的消息账本、会话隔离、分层摘要和版本化存储；先修复记忆写入与主体身份的两个真实缺陷，再补工具轮预算、检索质量和经验积累。换向量库、扩大窗口或另接一个记忆服务，都不会自动解决这两个缺陷。
 
 ## 范围与证据
@@ -114,7 +118,7 @@ Hermes 把这件事区分得更明确：普适身份、偏好等留在很小的 
 
 Max dream 的门槛是 active 数量至少 15，且 namespace 最近 49 小时有更新。快照中 125 个 active namespace 有 119 个不足 15 条；按两个条件合并，当时 123 个不参加 dream。夜间整理在执行，但主要解决容量与重复压力，不会普遍检查小 namespace 的更正和时效。
 
-这不是把旧记忆判作过期的依据。稳定偏好可以长期有效；当前 393 条 active user memory 中 267 条超过 30 天未更新，单凭年龄不能删除。更有价值的是建立“收到更正、出现新证据、重复检索失败、明确有效期结束”的整理触发器。参见 [dreamWorker](../../src/Max/MemoryExtract.hs) 和 [候选 SQL](../../src/Max/MemoryStore.hs)。
+这不是把旧记忆判作过期的依据。稳定偏好可以长期有效；当前 393 条 active user memory 中 267 条超过 30 天未更新，单凭年龄不能删除。更有价值的是建立“收到更正、出现新证据、重复检索失败、明确有效期结束”的整理触发器。参见 [当前记忆维护实现（替代旧 dreamWorker）](../../src/Max/Memory/Maintenance.hs) 和 [候选 SQL](../../src/Max/MemoryStore.hs)。
 
 OpenClaw 的 dreaming 将召回频次、查询多样性、来源可信度和替代关系纳入整理，并保留人能审阅的变更记录；其当前实现先筛选来源，再让模型选择合并/替代，最终内容受来源证据和保留预算约束。这些机制可以用于 Max 的重评队列。不要只用“被自己多次召回”强化记忆，也不要把 bot 自己复述的旧结论重新当作用户证据。参见 [Dreaming](https://docs.openclaw.ai/concepts/dreaming) 和 [consolidation 实现](https://github.com/openclaw/openclaw/blob/9636ae49e0018fd24bc9aa1fa73af6bf28e05ec0/extensions/memory-core/src/dreaming-consolidation.ts)。
 

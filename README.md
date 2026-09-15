@@ -59,6 +59,10 @@ canonical message ledger ────┬──▶ mirror deliveries: native wher
 - **It reads its own source.** An allowlisted snapshot of this repository
   ships inside the binary; the bot answers questions about itself by
   searching and reading the exact deployed code, ADRs, and schema.
+- **SSH fleet operations.** Enabled groups load `operations` and run ordinary
+  `ssh hostname` from their native sandbox through a dedicated Tailscale client.
+  The fleet login is `max` with passwordless sudo; the bot runs as `max-service`.
+  [Configuration and lifecycle](docs/runbooks/ssh-operations.md).
 - Plus the table stakes: concurrent turns with streaming, cancellation,
   and mid-turn feedback; multimodal input; persistent per-group sandboxes
   and browser automation; skills, typed monitors, durable background
@@ -143,6 +147,8 @@ cabal build all
 |---|---|
 | [features.md](docs/features.md) | behaviour and configuration semantics |
 | [architecture.md](docs/architecture.md) | runtime, context/memory design, and durability |
+| [SSH operations](docs/runbooks/ssh-operations.md) | dedicated Tailscale, fleet login, recovery and acceptance |
+| [native runtime](docs/runbooks/native-runtime.md) | systemd services, sandbox state and service accounts |
 | [platforms.md](docs/platforms.md) | platform operations, mirroring, and cutover invariants |
 | [ADR 001](docs/adr/001-context-memory-foundations.md) | context/memory invariants and privacy boundaries |
 | [ADR 002](docs/adr/002-partial-plans-adaptive-elaboration.md) | historical partial-plan design; runtime contracts retained by ADR 008 |

@@ -1,5 +1,9 @@
 # ADR 003 atomic cutover runbook
 
+> Historical one-time migration, not a routine upgrade procedure. Its `max-bot`
+> database examples describe the original deployment. The current service runs
+> as `max-service` with database/role `max`; see [native runtime](native-runtime.md).
+
 This runbook moves production directly from the pre-ADR content pipeline to
 the final v2 IR pipeline. It deliberately has no rolling-upgrade, dual-reader,
 or dual-writer mode. Schedule a maintenance window and keep ingress closed

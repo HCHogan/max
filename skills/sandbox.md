@@ -11,10 +11,12 @@ sandbox_destroy、群里 !clear --all、连续 14 天没用触发 TTL 清理。b
 sandbox_create 没有参数。NixOS 系统和网络是宿主策略，不交给调用者选择：命令固定在
 宿主预构建的 NixOS 沙箱里以 uid 1000、无 Linux capability、no-new-privileges 运行，
 有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写。
-固定的 max-sandbox 网络允许访问公网 IPv4，可以 curl、git clone、调用公开 API、
+普通群的 max-sandbox 网络允许访问公网 IPv4，可以 curl、git clone、调用公开 API、
 下载项目依赖；普通群无法访问宿主机、内网、链路本地、Tailscale 地址和其他沙箱，IPv6 关闭。
 已开启运维功能的群使用共享 maxops 内网，加载 operations 技能后直接使用 ssh hostname。
 查看 sandbox_create/list 返回的 network_mode 确认当前网络；共享网络中的临时服务使用动态端口。
+加载技能只提供说明和工具，不改变群的网络策略。/work 中的代码和文件跨升级保留，
+读取旧 checkout 前先核对版本，不能拿它推断当前 Max 的能力。
 联网不等于获得对外写入权限：发布、上传、修改远端数据仍须符合任务授权。
 网络写入结果不明时先核实，不能因为命令超时就重复执行。
 
@@ -23,7 +25,7 @@ sandbox_create 没有参数。NixOS 系统和网络是宿主策略，不交给�
 NixOS 沙箱预装的是一套接近 Ubuntu 默认的基础环境，直接可用不必再传 packages：
 bash/coreutils/sed/awk/grep/find/diff/patch/file/tree/bc、tar/gzip/xz/bzip2/zstd/
 zip/unzip、curl/wget/openssl/rsync/socat/nc、ip/ss/ping/dig、ps/top/lsof/pstree、
-git/vim/nano、python3/perl、jq/rg/make。除此之外的工具都按需取。不要 apt/yum
+git/ssh/scp/vim/nano、python3/perl、jq/rg/make。除此之外的工具都按需取。不要 apt/yum
 （沙箱里没有这些包管理器的数据库）。要用没预装的工具，把 nixpkgs
 attribute 传给 sandbox_exec 的 packages 参数：宿主 broker 根据固定 nixpkgs 版本构建，
 为沙箱保存 GC roots，随后把返回的只读 store 路径放进
@@ -68,8 +70,9 @@ import_file_to_sandbox 才能把它拷进 /work（dest_path 可改名；ready=fa
 
 沙箱默认没有中文字体：matplotlib 画图、LibreOffice 转文档、ImageMagick 写字，
 中文都会变豆腐块。字体文件走 nix 拿：
-`nix build nixpkgs#noto-fonts-cjk-sans --print-out-paths`，输出路径的
-share/fonts/ 下就是字体文件。
+在 sandbox_exec 的 packages 中加入 `"noto-fonts-cjk-sans"`；命令内查看 PATH 中
+注入的 `/nix/store/…-noto-fonts-cjk-sans-…/bin`，去掉末尾 /bin 后从 share/fonts/
+读取字体。包由宿主 broker 构建，沙箱不直接调用共享 store 的 Nix daemon。
 走 fontconfig 的程序（LibreOffice、ImageMagick 等）：把字体拷进 ~/.fonts/，
 packages 里加 "fontconfig" 跑一次 `fc-cache -f`。
 matplotlib 另有一层：字体装了它也不会自动用——先试直接喂文件

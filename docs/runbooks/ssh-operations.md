@@ -34,6 +34,12 @@ tool arguments. Changes take effect on broker restart; stale containers are rebu
 around their existing `/work` when used or reconciled. Ordinary conversations
 retain public-only networking.
 
+Skill visibility is not network authorization. The broker selects `maxops` for
+all sandboxes owned by an enabled conversation, even before `operations` is
+loaded. Operations and sandbox task profiles inherit the same shell subset;
+neither is a read-only SSH boundary. Shared namespaces also share localhost and
+ports, so local services should bind dynamic ports. Work directories stay separate.
+
 ## Native lifecycle
 
 `max-ops-network.service` owns `/run/netns/maxops`, a veth uplink on
@@ -106,3 +112,53 @@ migration 112 drops its obsolete notification table. Historical task and journal
 records are retained. Before upgrading, finish or cancel any queued/running old
 API observer tasks with the previous release and inspect uncertain remote jobs.
 No old job is converted into a new SSH command.
+
+## Existing tasks, monitors and workspaces
+
+A binary upgrade changes embedded skills and source, but it does not rewrite
+monitor objectives, task inputs, previous tool results or `/work` repositories.
+DB-global or group skills can shadow builtins; successful skill loads are pinned
+within an execution and recovery can retain their instructions. Inspect the
+effective skill and task revision when behavior still follows an old workflow.
+
+Use `self-knowledge` and `inspect_source` for the running build's implementation.
+For an editable checkout, inspect its remote, HEAD and local changes, fetch the
+current remote revision, and use a separate worktree. Do not reset a retained
+workspace just to make its version match. Historical ADRs and receipts explain
+old behavior; they do not restore retired tools or credentials.
+
+If a recurring goal explicitly requests the old API, review its monitor revision
+and already admitted tasks separately. Correct future objectives through monitor
+controls and steer/replace/cancel existing work only within the user's intent.
+Neither redeploying nor editing the monitor changes a frozen in-flight objective.
+Inspect uncertain old remote work before retrying its intended operation via SSH.
+
+## Diagnosing access and deployment
+
+- Use an actual fleet target, such as `ssh h610`, then `id -un` and
+  `sudo -n id -u`. `ssh maxops` targets the dedicated client, whose inbound SSH
+  is disabled. Do not scan it for a retired Hub endpoint.
+- If login as `max` is denied, check the target account, its effective sudo rule,
+  Tailscale SSH settings and Headscale policy. Enabling the h610 client alone
+  does not install operator accounts on other machines.
+- For DNS/connectivity failures, inspect the dedicated service and namespace.
+  A host `/etc/hosts` loopback alias points inside the namespace when inherited;
+  h610 supplies the Headscale veth-gateway mapping through a service-specific
+  systemd bind mount. Preserve the host client's identity and resolver.
+- Before activation, record the running system, system profile and failed units.
+  Fetch source on the chosen builder, obey repository/user builder assignments,
+  and keep a durable remote job for long work. Avoid routing large closures
+  through a distant workstation when builders and targets can transfer directly.
+- After activation, compare both `/run/current-system` and the resolved
+  `/nix/var/nix/profiles/system` with the built closure. Inspect the switch result,
+  failed units and business behavior independently. A nonzero switch may leave
+  the new system active; investigate before another switch or rollback. Starting
+  targets during activation can retry an unrelated previously failed oneshot.
+
+The 2026-09-15 fleet deployment used Max `cfcbba9` and nix-config `3071dc2`.
+All ten registered NixOS targets passed sandbox SSH, full sudo, expected system
+and host Tailscale identity checks. h310's switch returned 4 after its preexisting
+Gaoji installer retried and timed out; its new running/profile paths and SSH
+acceptance passed. Functional acceptance does not erase that failure or Max's
+historical delivery debt. Fleet inventory, builder assignments and the complete
+deployment record live in nix-config's `docs/max-ssh-operations.md`.

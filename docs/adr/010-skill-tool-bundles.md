@@ -1,10 +1,11 @@
-# ADR-010: Fixed skill tool bundles and maxops integration
+# ADR-010: Fixed skill tool bundles
 
 > 2026-09-15: The legacy maxops integration described here has been removed.
 > Current operations use [SSH and the sandbox runtime](../runbooks/ssh-operations.md).
 
-Status: implemented locally (2026-09-07); deployment is separate.
-Written before implementation; validation evidence is recorded below.
+Status: fixed bundle mechanism implemented. Updated 2026-09-15 for the deployed
+SSH operations integration. The original API adapter is retired; its dated
+acceptance below is historical evidence, not the current tool contract.
 
 ## Problem and decision
 
@@ -21,11 +22,13 @@ or an implicit relevance heuristic. Do not expose partial bundles to fit a budge
 
 | Skill | Tool ownership / dependencies |
 | --- | --- |
-| web | web_search, browser tools, view_zhihu, view_bilibili |
+| web | web_search, browser, view_zhihu, view_bilibili |
 | sandbox | sandbox lifecycle/execution/files, nix_search, file import/export |
 | office | office instructions and the complete sandbox dependency |
 | self-knowledge | inspect_source |
-| maxops | all permitted registry-derived fleet tools and maxops instructions |
+| operations | SSH workflow and the complete sandbox dependency; requires an enabled group network |
+| skill-authoring | skill_save, skill_validate, skill_inspect, skill_publish |
+| codemode | workflow instructions; run_code remains governed by its existing task/host policy |
 
 Replies, conversation/context/media reads, memory, reminders/monitors and task
 control/settlement remain base capabilities. Shared tools and dependencies are
@@ -44,15 +47,16 @@ Loading a skill is sequential and takes effect at the next model round. A call
 batch cannot load a bundle and execute a previously hidden tool in the same batch.
 The tool directory and invocation admission use the same visibility snapshot.
 Only the registry owns execution metadata; skill loading cannot mint authority.
-The maxops management grant includes both fleet mutation and durable task writes
-before loading. Direct controls narrow that effect set; loading never adds a
-previously ungranted effect. Older management fingerprints fail closed on upgrade.
+For operations, the group network policy is enforced by the native broker.
+Loading `operations` checks that policy and loads sandbox instructions/tools;
+it cannot change the policy or supply a new credential.
 
 task_start and monitors derive their authority from the allowed ceiling, not the
 currently visible subset. A child profile only narrows that ceiling, and the
-child loads its own skills. A read-only child cannot acquire management tools by
-loading maxops. Group restrictions, policy changes and unavailable platform
-capabilities remain effective and are reported explicitly.
+child loads its own skills. Research has no shell grant. Operations and sandbox
+profiles share the shell subset, so an enabled group's sandbox can use full-sudo
+SSH; the profile name is not a separate read-only boundary. Group restrictions,
+policy changes and unavailable capabilities remain effective.
 
 ## Scope, recovery and context
 
@@ -68,28 +72,22 @@ Instructions needed by loaded bundles must survive normal tool-result trimming.
 Provider ordering stays deterministic; changing visibility is explicit and occurs
 only at a skill-load boundary.
 
-## maxops adapter
+## SSH operations
 
-The maxops public contract is documented in HCHogan/maxops at
-`docs/api-client-contract.md`. The credential and HTTP mechanics stay in the
-host adapter. Load the complete permitted input-schema catalog when maxops is
-activated, without making the model browse it. Keep response schemas and raw
-protocol metadata out of model results. Public catalog/resource discovery stays
-available to callers, but never controls bundle composition through relevance.
+`operations` depends on `sandbox`; commands use `ssh hostname` inside the
+broker-selected dedicated network. The fleet account is `max`, the local daemon
+account is `max-service`, and the shared client/node name is `maxops`. There is
+no registry-discovery, Hub API, management token or automatic job observer.
+Long remote work belongs in named systemd jobs; reconnect and inspect the actual
+result before retrying uncertain commands. See [the runbook](../runbooks/ssh-operations.md).
 
-Derive operation names, schemas and read/write metadata from the remote registry.
-Use stable host-generated submission keys tied to a logical invocation. Preserve
-revision checks, unknown outcomes and structured remote errors. Cache metadata
-without treating it as authorization; changed credentials/config invalidate it.
+## Historical API adapter acceptance (2026-09-07)
 
-All job submissions enter the existing durable Operations task runtime before
-HTTP submission, releasing the frontend. This fixed policy avoids predicting a
-job's latency. The host submits and observes programmatically, without LLM calls.
-Reconnect using the same remote reference; waiting is not remote cancellation. The model receives
-a compact terminal result or a decision-requiring conflict, rather than repeated
-poll responses. Deployment progression remains in maxops, not Max's database.
+The following describes the retired adapter's original validation, not current
+release requirements or callable tools. The fixed bundle/recovery mechanisms
+remain; API-specific code, fixtures and tests were removed on 2026-09-15.
 
-## Implementation and acceptance
+### Original implementation and acceptance
 
 1. Implement and test fixed bundle metadata, visibility snapshots, explicit
    dependency loading and instruction retention independently of maxops.

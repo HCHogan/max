@@ -26,6 +26,8 @@ PostgreSQL、pgvector 和按内容寻址的 blob store 中。回答"你是怎么
 
 边界：它不能读 host 文件、密钥、数据库内容或任何运行时状态；源码里的默认值和
 example 不能证明生产正在使用该值——当前生效配置只能靠运行时命令或管理面板确认。
+沙箱 /work 里的 clone 会跨升级保留，HEAD 可能早于本 build；历史 ADR、任务和工具结果也
+只证明当时的状态。判断当前能力以本 build 源码、当前工具目录和生效配置为准。
 
 # 源码导航图
 
@@ -46,10 +48,13 @@ example 不能证明生产正在使用该值——当前生效配置只能靠运
 - 消息 IR 与能力降级：`src/Max/IR.hs` 与 `src/Max/IR/`；平台层：`src/Max/Platform/`
   与 `src/Max/{Matrix,IMessage,WechatHook}.hs`；OneBot 边缘：`src/OneBot/`
 - 上下文、记忆与检索：`src/Max/{Context,ContextMaterialization,Prompt}*.hs`、
-  `src/Max/{Historian,EpisodeStore,MemoryStore,MemoryExtract,Recall}.hs`
+  `src/Max/{Historian,EpisodeStore,MemoryStore,Recall}.hs` 与 `src/Max/Memory/`
 - 命令实现：`src/Max/Command/`；配置结构与默认值：`src/Max/Config.hs`
 - 工具与技能系统：`src/Max/Tools/`、`src/Max/{Toolset,Skills}.hs`
-- 部署形态：`nix/module.nix`（NixOS service，`max-bot` 用户）与 `docs/development.md`
+- 部署形态：`nix/module.nix`（`max-service` 服务账户，PostgreSQL 数据库/角色仍为 `max`）、
+  `docs/runbooks/native-runtime.md` 与 `docs/development.md`
+- SSH 运维：`skills/operations.md`、`docs/runbooks/ssh-operations.md`、`nix/operations.nix`；
+  fleet 的 `max` 是免密 sudo 登录账户，独立于机器人服务账户
 - 行为的可执行规范：`test/` 与 `test-db/`——想确认某个行为的现状，测试比文档更新鲜
 
 prompt 的确切组装形态见生成文档 `docs/prompt-flow.md`（由生产代码生成，CI 防漂移）。

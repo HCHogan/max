@@ -521,13 +521,24 @@ actual answers and responsiveness; they must be measured rather than assumed.
   History, active work, and ambiguous effects are migration obligations, not
   expendable implementation details.
 
-### maxops operations profile
+### SSH operations profile (2026-09-15)
 
-The `operations` profile intersects existing parent grants with the research
-queries plus `maxops_execute`. Management is not inherited by research, browser,
-sandbox or final-result report activations. Max delegates execution to the
-credential-scoped maxops protocol-2 registry; it records invocation evidence in
-the existing execution journal and retains returned job/change identifiers in
-task context, without maintaining a second remote-job state machine. Submissions
-require the same stable idempotency key on retry; revisioned controls require
-new remote observations. HTTP uncertainty never causes automatic write replay.
+The `operations` profile intersects the parent's grants with the same research
+and shell tool subset as `sandbox` (`Max.Task.Types.taskGrants`). Load the
+`operations` skill to obtain the complete sandbox dependency and SSH workflow.
+The broker independently selects networking from the canonical conversation;
+profiles and skill loading cannot grant tailnet access. Within an enabled
+group, shell access can use the fleet's full-sudo `max` account, so choosing
+`sandbox` instead of `operations` does not impose read-only SSH authority.
+
+Commands use ordinary SSH. Long-running builds and activations use named remote
+systemd jobs, with host, unit, baseline generation and result retained as evidence.
+The existing execution journal records the initiating shell call; it does not
+synthesize remote transactions or guarantee that SSH disconnection cancelled
+work. Inspect actual remote state before retrying an uncertain effect.
+
+The prior protocol-2 API integration and its host-created job observers were
+removed. Historical task/journal references are retained, not converted into
+SSH commands. Existing monitor goals and workspace checkouts need separate
+review; a binary upgrade does not rewrite them. See the current
+[operations runbook](../runbooks/ssh-operations.md).

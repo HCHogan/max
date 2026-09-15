@@ -6,14 +6,23 @@
 本群的 sandbox 已接入 Max 专用 Tailscale 内网，直接使用 `ssh hostname`。
 SSH 默认登录 `max`，有完整免密 sudo；群内成员均可发起运维。
 传输文件与代码使用普通 scp、rsync、Git。若内网/DNS 不可用，报告实际错误。
+`maxops` 是专用客户端和网络的名字，不是运维服务器；目标填实际 fleet 主机名。
+当前运维入口是本技能和 shell/SSH。历史里的 maxops 技能、Hub API、远端 job 句柄均已退役，
+不能当成当前工具或待重放命令；旧任务继续按原目标，通过实际主机、服务和日志取证。
 
 # 工作方式
 
 先核对主机、服务状态、配置与相关日志，再执行修改。长流程使用 operations 后台任务。
 源码使用任务独立的 Git checkout/worktree，遵守仓库 AGENTS.md；Nix 配置优先使用原生模块与 systemd。
 先 fetch 检查远端更新与工作区差异，记录修改的 commit、构建产物与激活前 generation。
+保留的 /work 可能是旧版本。查看 Max 当前实现用 self-knowledge / inspect_source；
+要修改源码则核对 checkout 的 remote、HEAD 和未提交改动，再建立新 worktree，不覆盖旧工作。
+fleet 清单、构建机与部署约定读取 nix-config 的 README、AGENTS.md 和主机 registry；
+具体任务中用户指定的构建机优先。跨境传输慢时让构建机直接 fetch、下载与构建。
 小内存机器使用 fleet 规定的构建机，目标机接收闭包并激活。系统和 Home Manager 分别验证。
 长构建或部署在远端 systemd 作业中运行，保存主机、unit、日志和退出状态；SSH 断线先查询，不盲目重跑。
 停止本地等待不代表取消远端作业；取消后再次确认实际状态。
 部署后检查真实业务功能，不能仅凭 SSH 恢复、服务 active 或 shell 退出码认定完成。
+分别报告构建、系统/profile 路径、服务与业务验收；switch 非零时查失败 unit，
+区分系统未切换、已切换但服务失败与原有故障，不能直接宣称成功或盲目再次 switch。
 并发任务不要同时激活同一主机。回滚前核对当前 generation，避免覆盖其他任务或人工的新变更。

@@ -1,7 +1,7 @@
 # Native Max runtime
 
 Max's NixOS module provisions `max-stack.target`. `max.service` runs as
-`max`, and `max-runtime.socket` activates the separate root
+`max-service`, and `max-runtime.socket` activates the separate root
 `max-runtime.service` broker. Both broker and client are Haskell modules in
 this repository, built as `max-runtime`. The fixed, versioned Unix protocol
 accepts Max instance identifiers and operations; it cannot select host commands,
@@ -44,17 +44,20 @@ is loaded. Generic module users may still supply `settings` or `configFile`.
 Persistent Max state is under root-owned `/var/lib/max`:
 
 - `app`: main service home, images, files, outbox and browser checkpoint key;
-  owned by `max`, mode 0700.
+  owned by `max-service`, mode 0700.
 - `runtime`: root-owned sandbox work, disposable guest roots and broker metadata.
 - `napcat`: QQ account/configuration, owned by `max-napcat`.
 - `browser/<id>` and `browser-cache/<id>`: per-instance DynamicUser directories.
   `max-storage.service` binds `private` onto `/var/lib/private/max`, preserving
   systemd's private-state protection while keeping the physical data in this tree.
+- `tailscale`: root-only identity state for the optional dedicated operations client.
 - `backups`: root-only migration backups and retired manual configuration.
 
 Sockets and decrypted credentials remain ephemeral under `/run`. The shared
 host Nix store and shared PostgreSQL cluster retain their system locations;
-Max's peer-authenticated database and role are both named `max`.
+Max's database and role are both named `max`; a PostgreSQL peer map authenticates
+the Linux `max-service` account as that role. The fleet `max` login is a separate
+operator account. Never run service maintenance as the operator by assumption.
 
 ## Lifecycle and storage
 
@@ -98,7 +101,8 @@ one `python3.withPackages` environment. Native manifests observe `/work`; the
 legacy Docker layer-diff fields are empty because no Docker filesystem layer
 exists.
 
-The native bridge `max-sb-native` uses `10.231.0.0/16`. Isolated bridge ports and
+Ordinary conversations use the native bridge `max-sb-native` on `10.231.0.0/16`.
+Isolated bridge ports and
 nftables allow public IPv4 egress while blocking host, private, link-local,
 Tailscale and sibling addresses. Where unrelated Docker services remain, narrow
 DOCKER-USER forwarding rules coexist with this earlier filter. Max does not
@@ -107,7 +111,11 @@ The network unit prepares a shared `/run/netns` mount. Daemons that bind their
 own namespaces, such as DAE, should start after `max-sandbox-network.service` so
 later sandbox creation cannot hide an earlier namespace mount. The nspawn
 template preserves the broker's DNS configuration instead of copying a host
-loopback resolver into the private network.
+loopback resolver into the private network. Enabled operations conversations
+instead share the dedicated namespace described in [SSH operations](ssh-operations.md).
+They can reach the fleet and approved subnets; public-only isolation does not
+apply to that mode. Work directories remain separate, but localhost and ports
+are shared across operations sandboxes.
 
 ## Validation
 
@@ -123,6 +131,7 @@ scripts/test-browser-workspaces.sh "$(readlink -f result)"
 nix build .#checks.x86_64-linux.sandbox-network
 nix build .#checks.x86_64-linux.nixos-reload
 nix build .#checks.x86_64-linux.state-migration
+nix build .#checks.x86_64-linux.operations
 ```
 
 The native-runtime VM check exercises actual nspawn registration, caller uid,
@@ -140,6 +149,12 @@ DNS for domestic domains. After applying a DNS change, flush both resolved and
 NSS caches (`resolvectl flush-caches`, `nscd -i hosts`) before retesting.
 
 ## Historical Docker-to-native migration
+
+These two historical stages predate the `max-service` account. Their scripts
+produce the intermediate Linux account `max`; complete the subsequent
+[service-account cutover](ssh-operations.md#service-account-cutover) before
+starting the current release. Existing installations already on `max-service`
+must not repeat these stages.
 
 This is an offline maintenance operation. Build and validate the new system
 first. Retain its store path and the current `/run/current-system`, and verify a
@@ -159,8 +174,9 @@ volumes and verifies content/hardlinks before publishing each work directory.
 For a fresh Docker migration, stop the old workloads, provide the new
 `max-runtime` binary on PATH and prepare the `max-napcat` system user/group
 before running `--copy`. Then run the state-layout migration below **before**
-activating the current module. Do not activate the new `max` user while the
-old `max-bot` account/database still need renaming.
+activating the current module, followed by the service-account cutover. The
+intermediate `max` service account must become `max-service` before the fleet
+operator account can occupy `max`.
 
 For both migrations, gate `max.service`, `max-runtime.service`,
 `max-runtime.socket` and `max-napcat.service` with runtime drop-ins at
@@ -184,7 +200,8 @@ recreating either. Known absolute media paths are updated transactionally;
 relative paths and browser encryption keys remain intact. Indirect Nix GC roots
 are registered again at their new paths.
 
-Activate the validated system with the startup gates still present. Verify peer
+After the subsequent service-account cutover, activate the validated current
+system with the startup gates still present. Verify peer
 DB access, rendered JSON and ownership, then remove the gates and start
 `max-stack.target`. Check real QQ login, OneBot connectivity, existing sandbox
 work and browser navigation. Old Docker volume backups remain Docker-owned

@@ -1,5 +1,9 @@
 # ADR-015: Delegated agents inside workflows
 
+> Historical evidence below retains the tool names used at the time. The legacy
+> MaxOps API and observer tasks were retired on 2026-09-15; current operations
+> use [SSH through the sandbox](../runbooks/ssh-operations.md).
+
 Status: Mechanism implemented in the isolated `feat/issue-22-delegated-workflows`
 worktree, 2026-09-12. Behavioral gates passed; performance acceptance remains open.
 Not deployed. The historical inspection below explains the motivation;

@@ -1,5 +1,9 @@
 # Issue 22: structured output and memory maintenance
 
+> Historical evidence below retains the tool names used at the time. The legacy
+> MaxOps API and observer tasks were retired on 2026-09-15; current operations
+> use [SSH through the sandbox](../runbooks/ssh-operations.md).
+
 Validated in the isolated `feat/issue-22-delegated-workflows` worktree on
 2026-09-12. Production inspection and exports were read-only. Candidate creation
 was performed on a restored production snapshot; this is not deployment evidence.

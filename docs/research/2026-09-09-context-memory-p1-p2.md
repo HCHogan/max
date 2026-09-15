@@ -1,5 +1,9 @@
 # 上下文与记忆 P1 / P2：本地实现与验收
 
+> Historical evidence below retains the tool names used at the time. The legacy
+> MaxOps API and observer tasks were retired on 2026-09-15; current operations
+> use [SSH through the sandbox](../runbooks/ssh-operations.md).
+
 本轮继续 [原审计报告](2026-09-09-context-memory-hermes-openclaw.md) 的 P1/P2。**未部署，未修改 h610 生产数据，也未使用已关机的 b650。** P0 和 issue #15 的生产验收不自动覆盖这些新代码。上一轮有关 memory 579 的会话列错误已在 [原验收记录](2026-09-09-memory-health-release.md) 勘误。
 
 ## P1：逐轮工作上下文

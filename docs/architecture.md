@@ -281,7 +281,7 @@ Behaviour, architecture, design rationale and schema are read through
 would drift. A DB skill can shadow the built-in under the ordinary
 group > DB-global > builtin rule.
 
-Exact implementation questions bypass prose summaries. The globally visible
+Exact implementation questions bypass prose summaries. After loading `self-knowledge`, the
 `inspect_source` tool can list, case-insensitively search, and read numbered
 lines from an allowlisted public text bundle embedded by `Max.SelfSource` at
 compile time. It covers implementation, tests, migrations, ADRs, docs, skills,
@@ -332,7 +332,7 @@ the in-memory handles are read caches and wakeup bells, never the record.
 Effect stack at the top of `runApp`:
 `IOE → Concurrent → Log → Http → BlobHost → Blob → WithConnection → Outbound → LLM → Reader ModelCatalog → Reader BotEnv → PlatformAccount → PlatformInteraction → PlatformQuery → Embedding → Agent`.
 
-### Skill visibility and fleet jobs
+### Skill visibility and SSH operations
 
 ADR-010 separates the authorized tool ceiling from the current model catalog.
 `use_skill` emits typed `LoadSkills` control; the agent updates its local visibility
@@ -346,6 +346,16 @@ The `operations` skill loads sandbox tools after the broker confirms the group
 has the dedicated Tailscale network. Commands use ordinary SSH, and background
 operations inherit the parent shell grants. Remote systemd jobs retain long-running
 work across SSH disconnects; see [SSH operations](runbooks/ssh-operations.md).
+The `operations` and `sandbox` task profiles currently inherit the same shell
+tool subset. Neither a task profile nor skill loading changes network access:
+the broker selects it from the canonical conversation and configured group list.
+There is no separate read-only SSH grant within an enabled operations network.
+
+`max.service` and the broker client use `max-service`; the broker runs as root.
+The dedicated client and network belong to `max-stack.target` and `max.slice`.
+Fleet SSH targets authenticate `max`, a separate full-sudo operator account.
+Persisted skill receipts and `/work` checkouts can predate a release; deployment
+does not rewrite old task goals, monitors, DB skill overrides or workspace files.
 
 `!kill` has its own typed terminal settlement: request cancellation and frontend
 release commit together, and killed background attempts cannot auto-retry.

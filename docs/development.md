@@ -319,8 +319,12 @@ max --debug-optparse                              # the parser tree, when that i
 ```
 
 `--run-settings-check` parses and exits — no database, no server, so it is safe
-to point at a live deployment's config (as its user:
-`sudo -u max-bot env $(systemctl show max -p Environment --value) … --run-settings-check`).
+to point at a live deployment's config as `max-service`, using the exact binary,
+config path and environment from the effective unit. On h610 the rendered config
+is `/etc/max/config.json`; module-provided environment values still take precedence.
+Keep the output private because parsed settings can include credentials. See
+[the native runtime](runbooks/native-runtime.md#configuration-and-directory-ownership)
+for account and configuration ownership.
 A key you wrote that doesn't show up as *"set based on config value"* was
 either overridden by env or misspelled.
 
