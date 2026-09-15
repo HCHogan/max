@@ -1,6 +1,6 @@
 -- | Conversation ownership and admission priority. Notification reviews yield an
 -- unpublished activation to real foreground work under the same commit lock.
-module Max.DB.Task.Frontend (FrontendAdmission (..), admitFrontend, claimFrontend, frontendWorkWaitingWithin) where
+module Max.DB.Task.Frontend (FrontendAdmission (..), FrontendInputKind (..), admitFrontend, claimFrontend, frontendWorkWaitingWithin) where
 
 import Control.Monad (unless, void)
 import Data.Int (Int64)
@@ -12,6 +12,7 @@ import Max.DB.AgentTurn (AgentTurnTerminal (TurnAborted), finishAgentTurn)
 import Max.DB.Task.FrontendInput (queueInputWithin)
 import Max.DB.Task.Record (databaseNow, lockTurnConversation)
 import Max.DB.Transaction (withTransaction)
+import Max.Task.FrontendInput (FrontendInputKind (..))
 import Max.Task.Policy (frontendLeaseSeconds)
 import Max.Turn.Types (AgentTurnId, AgentTurnRef (..))
 
@@ -37,9 +38,9 @@ claimFrontend turn = (== FrontendClaimed) <$> admitFrontend turn Nothing
 data FrontendAdmission = FrontendClaimed | FrontendInputQueued | FrontendBusy
   deriving stock (Eq, Show)
 
--- | Nothing requests a separate frontend; Just records whether the speaker
--- explicitly labelled this input as feedback. Meaning stays with the model.
-admitFrontend :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Maybe Bool -> Eff es FrontendAdmission
+-- | Nothing requests a separate frontend; Just records host-derived addressing.
+-- Meaning stays with the model, including whether a mention changes the task.
+admitFrontend :: (WithConnection :> es, IOE :> es) => AgentTurnRef -> Maybe FrontendInputKind -> Eff es FrontendAdmission
 admitFrontend turn input = withTransaction $ do
   locked <- lockTurnConversation turn.atrTurnId
   active <-
@@ -68,7 +69,7 @@ admitFrontend turn input = withTransaction $ do
           "SELECT turn_id FROM conversation_frontends WHERE conversation_id=? AND turn_id<>? AND lease_until>clock_timestamp()"
           (conversation, turn.atrTurnId)
       queued <- case (input, occupied) of
-        (Just explicit, [Only target]) -> queueInputWithin turn.atrTurnId target explicit
+        (Just kind, [Only target]) -> queueInputWithin turn.atrTurnId target kind
         _ -> pure False
       if queued
         then do

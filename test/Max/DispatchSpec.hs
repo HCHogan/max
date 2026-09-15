@@ -19,18 +19,25 @@ spec = describe "canonical dispatch addressing" $ do
   it "sees an @ of the bot on QQ" $ do
     let message = qq [NMention (MentionIdentity (PrincipalIdentityId 1)) "Max", NText " 在吗"]
     dispatchMentionsSelf message `shouldBe` True
+    dispatchMentionsSelfDirectly message `shouldBe` True
 
   it "sees an @ of the bot's Matrix account, which is a different account" $ do
     let message = matrix [NMention (MentionIdentity (PrincipalIdentityId 11)) "Max", NText " help"]
     dispatchMentionsSelf message `shouldBe` True
+    dispatchMentionsSelfDirectly message `shouldBe` True
 
   it "ignores an @ of somebody else" $ do
     let message = matrix [NMention (MentionIdentity (PrincipalIdentityId 2)) "Alice", NText " help"]
     dispatchMentionsSelf message `shouldBe` False
+    dispatchMentionsSelfDirectly message `shouldBe` False
 
   it "treats a mention of everyone as addressing the bot" $ do
     let message = matrix [NMention MentionAll "@room", NText " 上线了"]
     dispatchMentionsSelf message `shouldBe` True
+    dispatchMentionsSelfDirectly message `shouldBe` False
+
+  it "does not mistake literal @Max text for a resolved mention" $ do
+    dispatchMentionsSelfDirectly (qq [NText "@Max help"]) `shouldBe` False
 
   describe "the text the command parser and the current line see" $ do
     it "renders a mention as the person's canonical handle" $ do

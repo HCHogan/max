@@ -11,10 +11,14 @@ Native tools and `run_code` use this same boundary. A code submission runs to
 completion; this change adds no guest checkpoints, interruption or replay.
 
 An eligible conversational message from the current frontend's initiator can
-enter its durable inbox. Explicit feedback and replies to that frontend's
-trigger/output carry steering provenance; other eligible messages carry only
-new-input provenance. The frontend decides their meaning. Another principal's
-request keeps its own admission and authority context. `!btw`, task commands,
+enter its durable inbox. Any participant in the same conversation can also
+enter that inbox by directly mentioning Max through a resolved bot identity;
+room-wide mentions and plain `@Max` text do not qualify for this exception.
+Direct mentions, explicit feedback and replies to that frontend's trigger/output
+carry steering provenance; other eligible messages carry only new-input
+provenance. The frontend decides their meaning and retains each input's actual
+author and request obligation; its original initiator is unchanged. Another
+principal's unmentioned request keeps its separate admission. `!btw`, task commands,
 background attempts and notification reviews retain their separate routing.
 An intent classification cannot merge obligations or grant authority.
 

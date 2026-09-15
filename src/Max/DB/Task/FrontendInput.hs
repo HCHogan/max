@@ -23,7 +23,7 @@ import Effectful.PostgreSQL (WithConnection, execute, query)
 import Max.DB.Task.Authorization (ExecutionStep (ExecutionCheckpoint), authorizeWithin)
 import Max.DB.Task.Record (lockTurnConversation)
 import Max.DB.Transaction (withTransaction)
-import Max.Task.FrontendInput (FrontendInputView (..), renderFrontendInputs)
+import Max.Task.FrontendInput (FrontendInputKind (..), FrontendInputView (..), renderFrontendInputs)
 import Max.Task.State (RequestDisposition (..), dispositionText)
 import Max.Turn.Types (AgentTurnId)
 
@@ -63,10 +63,10 @@ deferRequest turn retryAt = withTransaction $ do
         (retryAt, message, message, turn)
 
 -- | The source is a newly admitted conversational turn, not a task/monitor
--- or a recovery. Actor equality is a host rule: an incoming message must not
--- borrow another principal's tool capabilities by steering their frontend.
-queueInputWithin :: (WithConnection :> es, IOE :> es) => AgentTurnId -> AgentTurnId -> Bool -> Eff es Bool
-queueInputWithin source target explicit = do
+-- or a recovery. A direct mention admits other participants in this conversation;
+-- each canonical message retains its actual author and request obligation.
+queueInputWithin :: (WithConnection :> es, IOE :> es) => AgentTurnId -> AgentTurnId -> FrontendInputKind -> Eff es Bool
+queueInputWithin source target input = do
   rows <-
     query
       "SELECT message.canonical_message_id,\
@@ -76,18 +76,18 @@ queueInputWithin source target explicit = do
       \ JOIN conversation_frontends frontend ON frontend.turn_id=active.turn_id\
       \ JOIN messages message ON message.canonical_message_id=incoming.trigger_canonical_message_id\
       \ JOIN messages trigger ON trigger.canonical_message_id=active.trigger_canonical_message_id\
-      \ WHERE incoming.turn_id=? AND active.turn_id=? AND incoming.initiator_principal_id=active.initiator_principal_id\
-      \ AND message.author_principal_id=active.initiator_principal_id AND message.conversation_id=active.conversation_id\
+      \ WHERE incoming.turn_id=? AND active.turn_id=? AND (incoming.initiator_principal_id=active.initiator_principal_id OR ?)\
+      \ AND message.author_principal_id=incoming.initiator_principal_id AND message.conversation_id=active.conversation_id\
       \ AND message.ingest_seq>trigger.ingest_seq AND frontend.accepting_input\
       \ AND NOT EXISTS(SELECT 1 FROM conversation_requests request WHERE request.message_id=message.canonical_message_id AND request.disposition<>'pending')\
       \ AND frontend.lease_until>clock_timestamp() AND active.status IN ('starting','running','recovery-pending')\
       \ AND NOT EXISTS(SELECT 1 FROM task_notifications WHERE turn_id IN (?,?))\
       \ AND NOT EXISTS(SELECT 1 FROM task_attempts WHERE turn_id IN (?,?))\
       \ AND (SELECT count(*) FROM frontend_inputs WHERE turn_id=? AND released_at IS NULL)<256"
-      (source, target, source, target, source, target, target)
+      (source, target, input == MentionInput, source, target, source, target, target)
   case rows :: [(Int64, Bool)] of
     [(message, related)] -> do
-      let kind = if explicit || related then "steering" else "message" :: Text
+      let kind = if input /= MessageInput || related then "steering" else "message" :: Text
       void $
         execute
           "INSERT INTO frontend_inputs(turn_id,message_id,kind) VALUES(?,?,?) ON CONFLICT DO NOTHING"

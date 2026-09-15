@@ -341,8 +341,9 @@ archived Plan work or resets a live Task's identity, revision, spend or lease.
   outcome or chat output is failed, while waiting requires an explicit
   disposition. Debug output is not a reply receipt. Task delegation remains atomic and
   progress never counts as completion.
-- **Frontend steering:** [ADR 013](013-frontend-steering.md) appends same-actor
-  inputs at the next model boundary and tracks each message's obligation.
+- **Frontend steering:** [ADR 013](013-frontend-steering.md) appends initiator
+  inputs and other participants' direct mentions of Max at the next model
+  boundary, retaining each message's author and obligation.
   `request_finish.inputs` explicitly settles additional inputs; unlisted ones
   return to dispatch. `run_code` finishes its whole submission before steering
   reaches the model.

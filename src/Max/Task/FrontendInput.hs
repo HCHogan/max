@@ -1,6 +1,6 @@
 -- | The prompt view of ordered foreground inputs. Storage owns assignment
 -- and observation; this pure projection preserves per-message provenance.
-module Max.Task.FrontendInput (FrontendInputView (..), renderFrontendInputs) where
+module Max.Task.FrontendInput (FrontendInputKind (..), FrontendInputView (..), renderFrontendInputs) where
 
 import Data.Aeson (encode, object, (.=))
 import Data.ByteString.Lazy qualified as LBS
@@ -9,6 +9,10 @@ import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding qualified as TE
 import Data.Time (UTCTime)
+
+-- | Host-derived addressing, never a model-supplied grant.
+data FrontendInputKind = MessageInput | FeedbackInput | MentionInput
+  deriving stock (Eq, Show)
 
 data FrontendInputView = FrontendInputView
   { messageId :: !Int64,

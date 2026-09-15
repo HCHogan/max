@@ -10,6 +10,7 @@ module Max.Dispatch
     dispatchText,
     dispatchTextWithoutSelf,
     dispatchMentionsSelf,
+    dispatchMentionsSelfDirectly,
     stripDispatchVerb,
   )
 where
@@ -75,6 +76,10 @@ dispatchMentionsSelf message = any addressesSelf message.body.nodes
     mentionAll = \case
       NMention MentionAll _ -> True
       _ -> False
+
+-- | A resolved mention of Max specifically, excluding room-wide mentions.
+dispatchMentionsSelfDirectly :: DispatchMessage -> Bool
+dispatchMentionsSelfDirectly message = any (selfMention message) message.body.nodes
 
 selfMention :: DispatchMessage -> Node 'Canonical -> Bool
 selfMention message = \case
