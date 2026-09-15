@@ -44,8 +44,8 @@ skillLoadVersion :: Text -> Text
 skillLoadVersion = TE.decodeUtf8 . B16.encode . SHA256.hash . TE.encodeUtf8
 
 skillDependencies :: Text -> [Text]
+skillDependencies "operations" = ["sandbox"]
 skillDependencies "office" = ["sandbox"]
-skillDependencies "maxops-changes" = ["maxops"]
 skillDependencies _ = []
 
 toolBundle :: Text -> Maybe Text
@@ -54,7 +54,6 @@ toolBundle name
   | name == "inspect_source" = Just "self-knowledge"
   | name `elem` ["web_search", "browser", "view_zhihu", "view_bilibili"] = Just "web"
   | "sandbox_" `T.isPrefixOf` name || name `elem` ["nix_search", "list_recent_files", "import_file_to_sandbox", "send_image_from_sandbox", "send_file_from_sandbox"] = Just "sandbox"
-  | "maxops_" `T.isPrefixOf` name = Just "maxops"
   | otherwise = Nothing
 
 toolVisible :: Map Text SkillLoad -> Text -> Bool

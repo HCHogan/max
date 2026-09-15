@@ -32,12 +32,10 @@ parseProfile "operations" = Just Operations
 parseProfile _ = Nothing
 
 taskGrants :: TaskProfile -> Map Text Text -> Map Text Text
-taskGrants profile = Map.filterWithKey (\name _ -> name `elem` allowed)
+taskGrants profile parent = Map.filterWithKey (\name _ -> name `elem` allowed) parent
   where
     allowed =
       [ "web_search",
-        "maxops_operations",
-        "maxops_query",
         "get_message_by_id",
         "context_search",
         "context_expand",
@@ -55,7 +53,7 @@ taskGrants profile = Map.filterWithKey (\name _ -> name `elem` allowed)
       ]
         <> case profile of
           Research -> []
-          Operations -> ["maxops_execute"]
+          Operations -> Map.keys (taskGrants Sandbox parent)
           Browser ->
             ["browser", "view_zhihu"]
           Sandbox ->

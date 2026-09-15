@@ -72,7 +72,7 @@ beginAgentStep turn currentGrants receipts request journal = withTransaction $ d
       let same name contract = Map.lookup name task.grants == Just contract
           authority = Map.filterWithKey same currentGrants
           grants = taskGrants request.profile authority
-          required = case request.profile of Research -> Nothing; Browser -> Just "browser"; Sandbox -> Just "sandbox_exec"; Operations -> Just "maxops_execute"
+          required = case request.profile of Research -> Nothing; Browser -> Just "browser"; Sandbox -> Just "sandbox_exec"; Operations -> Just "sandbox_exec"
           key = agentCallKey (object ["receipts" .= receipts, "grants" .= grants]) request
       if maybe False (\name -> not (Map.member name grants)) required
         then pure (Left "requested profile exceeds the parent capability ceiling")

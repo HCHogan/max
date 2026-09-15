@@ -1,5 +1,8 @@
 # ADR 008: Durable Tasks and Conversation Coordination
 
+> 2026-09-15: The legacy maxops integration described here has been removed.
+> Current operations use [SSH and the sandbox runtime](../runbooks/ssh-operations.md).
+
 - Status: Accepted. Read-only production inspection on 2026-09-06 confirmed
   migrations 087–089 and deployed revision `4e9f934` on h610. The P0 follow-up
   below includes migration 091; release validation and real-provider behavioral

@@ -37,15 +37,6 @@ import Data.Text qualified as T
 import Data.Time (TimeZone)
 import Effectful
 import Max.Effects.Tools (Tool (..))
-import Max.Tools.Schema
-  ( integerParam,
-    noArguments,
-    stringArrayParam,
-    stringParam,
-    toolObject,
-    withKeys,
-  )
-import Max.Sandbox.Runtime (ExecResult (..), SandboxManifest (..), maxOutputBytes, runSearch)
 import Max.Sandbox.Registry
   ( SandboxCreateOpts (..),
     SandboxEntry (..),
@@ -60,7 +51,16 @@ import Max.Sandbox.Registry
     readSandboxFile,
     writeSandboxFile,
   )
+import Max.Sandbox.Runtime (ExecResult (..), SandboxManifest (..), maxOutputBytes, runSearch)
 import Max.Time (fmtDateHMS)
+import Max.Tools.Schema
+  ( integerParam,
+    noArguments,
+    stringArrayParam,
+    stringParam,
+    toolObject,
+    withKeys,
+  )
 import OneBot.Types (GroupId)
 
 sandboxToolsFor :: (IOE :> es) => TimeZone -> GroupId -> SandboxRegistry -> [Tool es]
@@ -125,7 +125,7 @@ execTool gid reg =
             "stream; when 'truncated' is true a bounded output spill is saved",
             "to 'full_output_file'.  'spill_truncated' says whether that file",
             "also reached its safety cap — inspect it instead of re-running.",
-            "Public internet access is available; host, private-network and peer-sandbox",
+            "Public internet access is available. Operations-enabled groups also have Tailscale access; otherwise host, private-network and peer-sandbox",
             "connections are blocked. External writes still need task authorization.",
             "Tools not preinstalled: list nixpkgs attributes in 'packages'",
             "(first use downloads — raise timeout_seconds to 120-300)."

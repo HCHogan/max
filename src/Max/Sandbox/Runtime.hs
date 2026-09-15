@@ -32,6 +32,7 @@ module Max.Sandbox.Runtime
     maxOutputBytes,
     maxSpillBytes,
     sandboxNetwork,
+    networkForGroup,
 
     -- * Helpers
     shellQuote,
@@ -211,8 +212,8 @@ inspectContainerStatus name = do
 -- | Whether a running/stopped container was created under the current
 -- isolation contract.  Inspection failure is deliberately false: adopting an
 -- unverifiable shell would weaken a write-capable boundary.
-inspectContainerPolicy :: Text -> IO Bool
-inspectContainerPolicy name = do
+inspectContainerPolicy :: Text -> Text -> IO Bool
+inspectContainerPolicy name expectedNetwork = do
   result <-
     try @IOException $
       readProcessWithExitCode
@@ -220,8 +221,17 @@ inspectContainerPolicy name = do
         ["policy", T.unpack name]
         ""
   pure $ case result of
-    Right (ExitSuccess, out, _) -> T.words (T.pack out) == [sandboxPolicyVersion, sandboxNetwork, "1"]
+    Right (ExitSuccess, out, _) -> T.words (T.pack out) == [sandboxPolicyVersion, expectedNetwork, "1"]
     _ -> False
+
+-- | Ask the root-owned policy; never accept a model-selected network.
+networkForGroup :: Integer -> IO (Either Text Text)
+networkForGroup group = do
+  result <- try @IOException $ readProcessWithExitCode "max-runtime" ["network", show group] ""
+  pure $ case result of
+    Right (ExitSuccess, out, _) | network <- T.strip (T.pack out), network `elem` [sandboxNetwork, "maxops"] -> Right network
+    Right (_, _, err) -> Left ("sandbox network policy unavailable: " <> T.take 1000 (T.pack err))
+    Left err -> Left (runtimeIOException err)
 
 -- | List durable work directories in the requested Max namespace.
 listVolumesByPrefix :: Text -> IO [Text]

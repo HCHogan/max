@@ -1,13 +1,10 @@
 module Max.ConfigReloadSpec (spec) where
 
-import Control.Exception (bracket)
 import Max.Config
 import Max.Http.Json (replyRetryDelaysSecs)
-import Max.MaxOps.Notifications (NotificationConfig (..))
-import Max.MaxOps.Types
 import Max.Task.Policy (frontendDeadlineSeconds, taskDeadlineSeconds)
 import OneBot.Server (ServerConfig (..))
-import System.Environment (lookupEnv, setEnv, unsetEnv, withArgs)
+import System.Environment (withArgs)
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempFile)
 import Test.Hspec
@@ -36,41 +33,6 @@ spec = describe "reload candidate configuration" $ do
         configChanges config explicit `shouldBe` []
         updated <- withArgs ["--config-file", path, "--llm-timeout-seconds", "1800", "--turn-silence-seconds", "14400"] loadConfig
         configChanges config updated `shouldBe` [ConfigChange "turn_silence_seconds" DispatchHot, ConfigChange "llm" DispatchHot]
-  it "loads native notification wiring independently and requires restart for routing changes" $
-    withEnvironment "MAX_MAXOPS_NOTIFY_PORT" "9722" $
-      withEnvironment "MAX_MAXOPS_NOTIFY_TOKEN_FILE" "/run/credentials/max.service/maxops-notifications" $
-        withEnvironment "MAX_MAXOPS_NOTIFY_GROUPS" "611798505" $
-          withEnvironment "MAX_MAXOPS_NOTIFY_HOSTS" "h610,tank" $
-            withArgs ["--llm-api-key", "fixture-key"] $ do
-              config <- loadConfig
-              config.maxopsNotifications `shouldBe` Just (NotificationConfig "127.0.0.1" 9722 "/run/credentials/max.service/maxops-notifications" [611798505] ["h610", "tank"])
-              configChanges config (config {maxopsNotifications = Nothing}) `shouldBe` [ConfigChange "maxops_notifications" RestartRequired]
-  it "accepts native maxops environment options and an explicit empty allowlist" $
-    withEnvironment "MAX_MAXOPS_ENABLED" "True" $
-      withEnvironment "MAX_MAXOPS_TOKEN_FILE" "/run/credentials/max.service/maxops-token" $
-        withEnvironment "MAX_MAXOPS_ALLOWED_GROUPS" "" $
-          withArgs ["--llm-api-key", "fixture-key"] $ do
-            config <- loadConfig
-            config.maxops.mocEnabled `shouldBe` True
-            config.maxops.mocAllowedGroups `shouldBe` []
-  it "loads maxops group permissions from YAML and classifies them as hot reloadable" $
-    withSystemTempFile "maxops.yaml" $ \path handle -> do
-      hPutStr handle "maxops:\n  enabled: true\n  base_url: http://127.0.0.1:9721\n  token_file: /run/credentials/max.service/maxops-token\n  allowed_groups: [611798505]\n"
-      hClose handle
-      withArgs ["--llm-api-key", "fixture-key", "--config-file", path] $ do
-        config <- loadConfig
-        config.maxops `shouldBe` MaxOpsConfig True "http://127.0.0.1:9721" "/run/credentials/max.service/maxops-token" [611798505]
-        let revoked = config {maxops = config.maxops {mocAllowedGroups = []}}
-        configChanges config revoked `shouldBe` [ConfigChange "maxops" DispatchHot]
-  it "rejects unsafe maxops endpoints, token paths, and non-group IDs" $ do
-    let configured = MaxOpsConfig True "http://127.0.0.1:9721" "/run/maxops-token" [611798505]
-    mapM_
-      (\url -> validateMaxOpsConfig (configured {mocBaseUrl = url}) `shouldContain` ["maxops.base_url"])
-      ["http://token@hub", "http://hub?token=secret", "http://hub#fragment", "file:///run/token", "not-a-url"]
-    mapM_
-      (\path -> validateMaxOpsConfig (configured {mocTokenFile = path}) `shouldContain` ["maxops.token_file"])
-      ["", "relative-token", "/nix/store/leaked-token"]
-    validateMaxOpsConfig (configured {mocAllowedGroups = [-1]}) `shouldContain` ["maxops.allowed_groups"]
   it "accepts browser options through the startup parser and its metadata checks" $
     withArgs ["--llm-api-key", "test-key", "--browser-state-key-file", "test-browser.key", "--browser-idle-seconds", "3600", "--browser-grace-seconds", "60"] $ do
       config <- loadConfig
@@ -118,6 +80,3 @@ spec = describe "reload candidate configuration" $ do
         `shouldContain` ["memory.extract_profile"]
   where
     isLeft = \case Left _ -> True; Right _ -> False
-
-withEnvironment :: String -> String -> IO a -> IO a
-withEnvironment name value action = bracket (lookupEnv name) (maybe (unsetEnv name) (setEnv name)) $ \_ -> setEnv name value >> action

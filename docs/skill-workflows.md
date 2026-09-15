@@ -21,10 +21,6 @@ The loaded version stays fixed across registry updates and task recovery.
 An independent request loads the current version. Current grants still apply:
 missing tools or changed host tool contracts reject a saved run before effects.
 
-The embedded `fleet-health/check` takes `{"hosts":["h610","b650"]}` and preserves
-agent/exporter observations, readable-service scope, unknown state and query
-failures. An empty or unavailable observation does not mean a healthy fleet.
-
 ## Package representation
 
 Existing admin `POST /api/skills` accepts an optional `package` property alongside
@@ -97,7 +93,7 @@ Results include `run_ref` (a journal reference for durable executions), workflow
 reference/version/arguments and bounded leaf receipts. The existing execution
 journal retains exact source and tool evidence. No whole-program retry, guest
 checkpoint, nested workflow execution or background resumption is added.
-`Finish`/`Yield` stops the entire program; a maxops handoff does not suspend an
+`Finish`/`Yield` stops the entire program; a tool handoff does not suspend an
 `await` until deployment finishes. Steering arrives after the complete run.
 
 ## Model authoring

@@ -20,8 +20,7 @@ module Max.Toolset
   )
 where
 
-import Data.Aeson (Value (..), object, (.=))
-import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Aeson (object, (.=))
 import Data.Map.Strict qualified as Map
 import Data.Maybe (isJust, isNothing)
 import Data.Set qualified as Set
@@ -60,30 +59,25 @@ import Max.Effects.Tools
 import Max.Env (BotEnv (..), applyRuntimeSnapshot)
 import Max.File.ToolRuntime (fileToolsWithDatabase)
 import Max.HttpRuntime (HttpRuntime)
-import Max.MaxOps.Client (maxOpsOperations)
-import Max.MaxOps.Protocol (Catalog (..), CatalogAccess (..), Operation (..), catalogForSkill, catalogValue, operationToolName, parseCatalog)
-import Max.MaxOps.TaskRuntime (admitMaxOpsTask)
-import Max.MaxOps.Types (maxOpsAllowed)
 import Max.Media.ToolRuntime (imageToolsWithDatabase, stickerToolsWithDatabase, videoToolsWithDatabase)
 import Max.Memory.ToolRuntime (memoryToolsWithDatabase)
 import Max.Monitor.ToolRuntime (monitorToolsWithDatabase, reminderToolsWithDatabase)
 import Max.Pin.ToolRuntime (pinToolsWithDatabase)
 import Max.Platform.Types (noAdvertisedCaps)
-import Max.RuntimeConfig (RuntimeSnapshot (..), RuntimeValues (..), currentRuntimeSnapshot)
+import Max.Sandbox.Runtime (networkForGroup)
 import Max.Skill.ToolRuntime (skillAuthoringToolsWithDatabase)
 import Max.Skill.Workflow (bindWorkflowContracts)
 import Max.Task.ToolRuntime (guardTaskResource, taskToolsWithDatabase)
-import Max.Tool.Bundles (SkillLoad (..), toolBundle, toolVisible)
+import Max.Tool.Bundles (toolBundle, toolVisible)
 import Max.Tool.Catalog (catalogTools)
 import Max.Tool.Types (ToolCallMode (..))
 import Max.ToolContext (ToolContext, TurnCapabilities (..), toolCapabilities, toolGroupId, toolMultimodal, toolRuntimeSnapshot, toolSkillLoads, toolStickers, withToolSkillLoads)
 import Max.Tools.Bilibili (bilibiliToolsFor)
-import Max.Tools.MaxOps (maxOpsBundle)
 import Max.Tools.Sandbox (sandboxToolsFor)
 import Max.Tools.Search (searchToolsFor)
 import Max.Tools.Skills (skillToolsFor)
 import Max.Turn.Continuity (toolCatalogFingerprint)
-import OneBot.Types (GroupId, isPrivateChat)
+import OneBot.Types (GroupId (..), isPrivateChat)
 
 -- | The tool list for one dispatch.
 --
@@ -137,44 +131,15 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
   where
     dispatchEnv = maybe env (`applyRuntimeSnapshot` env) (toolRuntimeSnapshot dc)
     authorized = toolDefinitionsFor dispatchEnv (toolGroupId dc) (toolCapabilities dc)
-    definitions = filter (\definition' -> toolVisible (toolSkillLoads dc) definition'.tdRef.unToolRef && definition'.tdRef.unToolRef `notElem` ["maxops_operations", "maxops_query", "maxops_execute"]) authorized <> remoteDefinitions
-    loadedOperations =
-      [ entry
-      | skill <- ["maxops", "maxops-changes"],
-        Just value <- [Map.lookup skill (toolSkillLoads dc) >>= (.slMetadata) >>= (\case Object fields -> KeyMap.lookup "catalog" fields; _ -> Nothing)],
-        Right catalog <- [parseCatalog value],
-        entry <- (catalogForSkill skill catalog).operations
-      ]
-    remotePairs =
-      [ (entry, marker)
-      | entry <- loadedOperations,
-        marker <- authorized,
-        marker.tdRef == ToolRef (if entry.readOnly then "maxops_query" else "maxops_execute")
-      ]
-    remoteDefinitions =
-      [ marker
-          { tdRef = ToolRef (operationToolName entry),
-            tdEffects = if entry.requiresKey then marker.tdEffects else Set.delete (EffectWrite "task.db") marker.tdEffects,
-            tdRetryClass = if entry.requiresKey then RetryIdempotent else marker.tdRetryClass
-          }
-      | (entry, marker) <- remotePairs
-      ]
+    definitions = filter (\definition' -> toolVisible (toolSkillLoads dc) definition'.tdRef.unToolRef) authorized
     allowedRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- authorized]
     visibleRefs = Set.fromList [definition'.tdRef.unToolRef | definition' <- definitions]
     allowedRunner tool = tool.toolName `Set.member` visibleRefs
-    prepareSkill skill | skill `elem` ["maxops", "maxops-changes"] = do
-      current <- (.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore
-      if current /= dispatchEnv.beMaxOps || not (maxOpsAllowed current (toolGroupId dc)) || not (any (`Set.member` allowedRefs) ["maxops_query", "maxops_execute"])
-        then pure (Left "maxops access is unavailable or changed")
-        else do
-          fetched <- maxOpsOperations runtime current (if "maxops_execute" `Set.member` allowedRefs then ManagementCatalog else ReadOnlyCatalog)
-          pure $ do
-            value <- fetched
-            catalog <- parseCatalog value
-            let selected = catalogForSkill skill catalog
-            if any ((== "jobs.wait") . (.name)) catalog.operations || not (any (.requiresKey) selected.operations)
-              then Right (Just (object ["catalog" .= catalogValue ManagementCatalog selected, "availability" .= object ["tools" .= map operationToolName selected.operations, "unavailable" .= ([] :: [Text])]]))
-              else Left "maxops 缺少 jobs.wait；请先更新 Hub，再加载完整工具包"
+    prepareSkill "operations" = do
+      selected <- networkForGroup (let GroupId raw = toolGroupId dc in fromIntegral raw)
+      pure $ case selected of
+        Right "maxops" | "sandbox_exec" `Set.member` allowedRefs -> Right Nothing
+        _ -> Left "当前群未开启 SSH 运维网络"
     prepareSkill "codemode" =
       pure (Right (Just (object ["availability" .= object ["tools" .= (["run_code"] :: [Text]), "unavailable" .= ([] :: [Text])]])))
     prepareSkill name =
@@ -219,13 +184,6 @@ resolvedToolsFor runtime env dc = (definitions, map (guardTaskResource dc) (filt
         <> fileToolsWithDatabase dispatchEnv.beTimeZone dc dispatchEnv.beSandboxes
         <> [t | toolStickers dc && dispatchEnv.beEmbeddingEnabled, t <- stickerToolsWithDatabase]
         <> maybe [] (searchToolsFor runtime) dispatchEnv.beSearch
-        <> maxOpsBundle
-          runtime
-          dispatchEnv.beMaxOps
-          ((.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore)
-          (toolGroupId dc)
-          (map fst remotePairs)
-          (admitMaxOpsTask dc dispatchEnv.beMaxOps)
         <> [t | toolMultimodal dc, t <- browserToolsFor dc dispatchEnv.beBrowsers dispatchEnv.beBrowserProxy]
         <> [t | toolMultimodal dc, t <- videoToolsWithDatabase dc]
 
@@ -261,7 +219,6 @@ toolDefinitionsFor env gid caps =
       StickersOnly -> caps.tcStickers && env.beEmbeddingEnabled
       SkillsOnly -> caps.tcSkills
       SearchOnly -> isJust env.beSearch
-      MaxOpsOnly -> maxOpsAllowed env.beMaxOps gid
       MonitorArmOnly -> caps.tcMonitorArming
       BackgroundOnly -> caps.tcBackground
       FrontendOnly -> not caps.tcBackground && isNothing caps.tcEffectCeiling
@@ -286,7 +243,6 @@ data ToolGate
   | StickersOnly
   | SkillsOnly
   | SearchOnly
-  | MaxOpsOnly
   | MonitorArmOnly
   | FrontendOnly
   | BackgroundOnly
@@ -375,9 +331,6 @@ toolInventory =
     always (sendReadTool "send_file_from_sandbox" ["sandbox.fs"]),
     gated StickersOnly (llmReadTool "find_stickers" ["sticker.db"] [CurrentConversation]),
     gated SearchOnly (readTool "web_search" ["network.search"] [CurrentConversation]),
-    gated MaxOpsOnly (readTool "maxops_operations" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
-    gated MaxOpsOnly (readTool "maxops_query" ["fleet.observations"] [CurrentConversation, ProcessResource "maxops"]),
-    gated MaxOpsOnly (writeTool "maxops_execute" ["fleet.management", "task.db"] [CurrentConversation, ProcessResource "maxops"]),
     gated MultimodalOnly (browserTool "browser"),
     gated MultimodalOnly (browserTool "view_zhihu"),
     gated MultimodalOnly (statefulReadTool "view_video" ["conversation.db", "blob.store", "tool.media"] [CurrentConversation])

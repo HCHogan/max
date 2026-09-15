@@ -48,6 +48,18 @@ spec = do
       parseRuntimeArgs ["systemctl", "start", "sshd"] `shouldSatisfy` isLeft
       parseRuntimeArgs ["exec", "--workdir", "/work", "max-sb-1-s1", "sh", "-c", "echo ok"]
         `shouldBe` Right (RunCommand "max-sb-1-s1" ["sh", "-c", "echo ok"])
+  describe "operations network selection" $ do
+    it "uses only positive allowlisted conversations" $ do
+      sandboxNetworkForGroup [12, -13] 12 `shouldBe` "maxops"
+      sandboxNetworkForGroup [12, -13] (-13) `shouldBe` "max-sandbox"
+      sandboxNetworkForGroup [12] 13 `shouldBe` "max-sandbox"
+      sandboxNetworkForGroup [] 12 `shouldBe` "max-sandbox"
+    it "extracts the owner without confusing the sandbox ordinal" $ do
+      (parseInstanceName "max-sb-12-s99" >>= maybe (Left "missing") Right . instanceGroup) `shouldBe` Right 12
+      (parseInstanceName "max-sb--12-s99" >>= maybe (Left "missing") Right . instanceGroup) `shouldBe` Right (-12)
+      parseRuntimeArgs ["network", "12"] `shouldBe` Right (SandboxNetwork 12)
+      parseRuntimeArgs ["network", "012"] `shouldSatisfy` isLeft
+
   describe "pinned package preparation" $ do
     it "quotes attribute segments and combines Python modules into one environment" $ do
       let expression = packageExpression "/nix/store/source" "x86_64-linux" ["qpdf", "python3Packages.openpyxl", "python3Packages.pandas"]

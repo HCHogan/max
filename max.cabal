@@ -25,7 +25,6 @@ extra-source-files:
     LICENSE
     README.md
     scripts/test-task-upgrade.sh
-    test/fixtures/*.json
     test-db/fixtures/task-upgrade-before.sql
     test-db/fixtures/task-settlement-upgrade.sql
     test-db/fixtures/task-authority-upgrade.sql
@@ -137,7 +136,6 @@ library
         OneBot.Server
         OneBot.Types
         Max.AgentEvent
-        Max.MaxOps.TaskRuntime
         Max.Tool.Bundles
         Max.Turn.Failure
         Max.AgentOutput
@@ -171,11 +169,6 @@ library
         Max.ContextTraceStore
         Max.ConversationScope
         Max.MCP.Client
-        Max.MaxOps.Client
-        Max.MaxOps.Protocol
-        Max.MaxOps.Observer
-        Max.MaxOps.Notifications
-        Max.MaxOps.Types
         Max.DB.Calls
         Max.DB.AgentTurn
         Max.DB.Connection
@@ -411,7 +404,6 @@ library
         Max.Tools.Sandbox
         Max.Tools.Schema
         Max.Tools.Search
-        Max.Tools.MaxOps
         Max.Tools.Search.Types
         Max.Tools.SelfSource
         Max.Tools.Skills
@@ -693,8 +685,6 @@ test-suite max-test
         Max.Command.ParserSpec
         Max.Command.PermissionSpec
         Max.ConfigReloadSpec
-        Max.MaxOpsSpec
-        Max.MaxOpsNotificationSpec
         Max.ConversationScopeSpec
         Max.DB.CallsSpec
         Max.DispatchFixture
@@ -847,7 +837,6 @@ test-suite max-test-db
         Max.PlatformCapabilitiesSpec
         Max.PlatformStoreSpec
         Max.PublicationSpec
-        Max.MaxOpsNotificationSpec
         Max.RecallSpec
     build-depends:
         , aeson                >= 2.2  && < 2.4
@@ -870,7 +859,6 @@ test-suite max-test-db
         , wai                  >= 3.2 && < 3.3
         , warp                 >= 3.3 && < 3.5
         , http-client          >= 0.7 && < 0.8
-        , temporary            >= 1.3 && < 1.4
     ghc-options:        -threaded -rtsopts -with-rtsopts=-N
 
 source-repository head

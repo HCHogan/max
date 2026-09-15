@@ -111,7 +111,6 @@ import Max.IR
 import Max.IR.Digest (digest)
 import Max.Images (enqueueImages)
 import Max.Intent (IntentState, clearPendingIntent, enqueueIntent, noteBotActivity)
-import Max.MaxOps.TaskRuntime (isMaxOpsTask, runMaxOpsTask)
 import Max.MessageKind (MessageKind (..), renderMessageKind)
 import Max.ModelCatalog (ModelCapabilities (..), ModelCatalog, defaultContextLimits, lookupModelCapabilities)
 import Max.Monitor (nextCronFire)
@@ -154,7 +153,6 @@ import Max.RuntimeConfig
   ( RuntimeSnapshot (..),
     RuntimeValues (..),
     acquireRuntimeConfigSTM,
-    currentRuntimeSnapshot,
     leasedRuntimeSnapshot,
     releaseRuntimeConfigSTM,
   )
@@ -1915,18 +1913,11 @@ dispatchLLMWith allowInput existingTurn recoveryView monitorView effectCeiling o
       setAgentTurnEnvironment durable currentPromptMajor (toolCatalogFingerprint definitions)
       raced <-
         race
-          ( if isMaxOpsTask execution.teInputs
-              then liftIO (setTurnPhase turn "maxops-job") >> Left <$> runMaxOpsTask env.beMaxOpsClient env.beMaxOps ((.rsValues.rvMaxOps) <$> currentRuntimeSnapshot env.beConfigStore) toolCtx execution
-              else Right <$> agentTurn turn (AgentContext toolCtx session.effortOverride Nothing) session.model messages (taskProgressEvent durable.atrTurnId)
-          )
+          (agentTurn turn (AgentContext toolCtx session.effortOverride Nothing) session.model messages (taskProgressEvent durable.atrTurnId))
           (taskHeartbeat durable)
       case raced of
         Right () -> finishAgentTurn durable TurnFailed 0 (Just "task lease, cancellation or deadline stopped execution") Nothing
-        Left (Left report) -> do
-          accepted <- DurableTask.taskReportTyped durable.atrTurnId report
-          unless accepted (liftIO (Exception.throwIO TaskCancelled))
-          finishAgentTurn durable TurnSucceeded 0 Nothing Nothing
-        Left (Right result) -> do
+        Left result -> do
           for_ result.aborted $ \detail -> void (DurableTask.recordTaskFailure durable.atrTurnId (renderAgentFailure detail) (if retryableAgentFailure detail then Transient else Permanent))
           archive <- captureTurnArchive durable session.model result
           finishAgentTurn durable (if isJust result.aborted then TurnFailed else TurnSucceeded) result.turnsUsed (renderAgentFailure <$> result.aborted) archive

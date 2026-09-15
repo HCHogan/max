@@ -67,6 +67,17 @@ spec pool = before_ (truncateAll pool) $ describe "ADR015 workflow children" $ d
     withDb pool (query "SELECT count(*) FROM durable_tasks WHERE parent_task_id IS NOT NULL" ()) `shouldReturn` [Only (0 :: Int64)]
     Right step <- withDb pool (beginAgentStep parent.atrTurnId browserGrants Null request {profile = Browser} entry.jeJournalId)
     withDb pool (query "SELECT grants FROM durable_tasks WHERE task_id=?" (Only step.childId)) `shouldReturn` [Only (toJSON browserGrants)]
+  it "admits the SSH shell grant only when its current contract matches the parent" $ do
+    (front, message, actor) <- seed pool 900 1
+    let shellGrants = Map.insert "sandbox_exec" "sandbox/v1" grants
+    Right _ <- withDb pool (admitTaskReceipt front message actor "operations-root" "SSH audit" Operations (object []) shellGrants)
+    parent <- claimOne pool
+    entry <- journal pool parent "operations-child"
+    forM_ [grants, Map.insert "sandbox_exec" "changed-contract" grants] $ \current ->
+      withDb pool (beginAgentStep parent.atrTurnId current Null request {profile = Operations} entry.jeJournalId) `shouldReturn` Left "requested profile exceeds the parent capability ceiling"
+    withDb pool (query "SELECT count(*) FROM durable_tasks WHERE parent_task_id IS NOT NULL" ()) `shouldReturn` [Only (0 :: Int64)]
+    Right step <- withDb pool (beginAgentStep parent.atrTurnId shellGrants Null request {profile = Operations} entry.jeJournalId)
+    withDb pool (query "SELECT grants FROM durable_tasks WHERE task_id=?" (Only step.childId)) `shouldReturn` [Only (toJSON shellGrants)]
   it "validates payload shape independently of claimed success, then reuses an unchanged settled child" $ do
     (_, parent) <- root pool
     entry <- journal pool parent "first"

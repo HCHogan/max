@@ -70,11 +70,14 @@
                 (hself.callCabal2nix "max" (cleanSrc pkgs) { wasmtime = pkgs.wasmtime; }).overrideAttrs (old: {
                   MAX_GIT_REV = self.shortRev or self.dirtyShortRev or "unknown";
                   MAX_CODEMODE_JS_WASM = "${import ./nix/codemode-js.nix { inherit pkgs; }}/quickjs.wasm";
-                  postInstall = (old.postInstall or "") + ''
-                    install -Dm644 codemode/QUICKJS-LICENSE $out/share/licenses/max/QuickJS-ng.txt
-                  '' + pkgs.lib.optionalString (!developerTools) ''
-                    $out/bin/max --help > /dev/null
-                  '';
+                  postInstall =
+                    (old.postInstall or "")
+                    + ''
+                      install -Dm644 codemode/QUICKJS-LICENSE $out/share/licenses/max/QuickJS-ng.txt
+                    ''
+                    + pkgs.lib.optionalString (!developerTools) ''
+                      $out/bin/max --help > /dev/null
+                    '';
                 })
               );
             };
@@ -148,6 +151,11 @@
           nixos-reload = import ./nix/tests/reload.nix {
             inherit nixpkgs system;
             maxModule = self.nixosModules.max;
+          };
+          operations = import ./nix/tests/operations.nix {
+            inherit nixpkgs system;
+            maxModule = self.nixosModules.max;
+            maxPackage = self.packages.${system}.max;
           };
           sandbox-network = import ./nix/tests/sandbox-network.nix {
             inherit nixpkgs system;

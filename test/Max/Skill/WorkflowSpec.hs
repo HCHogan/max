@@ -170,23 +170,6 @@ spec = describe "saved skill workflows" $ do
       Just (Array rows) -> map (field "outcome") (foldr (:) [] rows) `shouldBe` [Just (String "succeeded"), Just (String "failed-before-effect")]
       other -> expectationFailure (show other)
 
-  it "executes fleet health without interpreting unavailable observations as healthy" $ do
-    reg <- newSkillRegistry
-    Just skill <- lookupSkill reg (GroupId 7777) "fleet-health"
-    let overview = object ["hosts" .= [object ["host" .= ("h610" :: Text), "assessment" .= ("agent_unavailable" :: Text), "agent" .= object ["state" .= ("unavailable" :: Text), "failed_units" .= Null]]]]
-        units = object ["hosts" .= [object ["host" .= ("h610" :: Text), "state" .= ("unavailable" :: Text), "units" .= Null]]]
-        names = ["maxops_fleet_overview", "maxops_units_failed"]
-        runners = [echoTool {toolName = name, toolSchema = object ["type" .= ("object" :: Text)], toolRun = const (pure (Right value))} | (name, value) <- zip names [overview, units]]
-    registry <- checked [echoDefinition {tdRef = ToolRef name} | name <- names] runners
-    let workflow = skill.skillPackage.spWorkflows Map.! "check"
-    result <- runEff . runConcurrent . runTools registry $ do
-      session <- newExecutionSession Nothing
-      runWasmProgram session noJournal (views registry) javaScriptLimits (workflowProgram (views registry) "fleet-health/check" "test" workflow (object ["hosts" .= (["h610"] :: [Text])]))
-    outcomeName (codeModeInvocation result).tiOutcome `shouldBe` "succeeded"
-    case result.cmOutput >>= field "hosts" of
-      Just (Array rows) -> map (field "failed_count") (foldr (:) [] rows) `shouldBe` [Just Null]
-      other -> expectationFailure (show other)
-
 inputContract :: Value
 inputContract = object ["type" .= ("object" :: Text), "properties" .= object ["value" .= object ["type" .= ("integer" :: Text)]], "required" .= (["value"] :: [Text]), "additionalProperties" .= False]
 

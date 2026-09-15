@@ -1,5 +1,8 @@
 # ADR-010: Fixed skill tool bundles and maxops integration
 
+> 2026-09-15: The legacy maxops integration described here has been removed.
+> Current operations use [SSH and the sandbox runtime](../runbooks/ssh-operations.md).
+
 Status: implemented locally (2026-09-07); deployment is separate.
 Written before implementation; validation evidence is recorded below.
 

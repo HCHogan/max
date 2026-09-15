@@ -39,7 +39,6 @@ PURE = {
     "Max.Task.Execution",
     "Max.Task.FrontendInput",
     "Max.Task.Notice",
-    "Max.MaxOps.Protocol",
     "Max.Task.Query",
     "Max.Task.Overview",
     "Max.Task.Admission",
@@ -171,7 +170,6 @@ def check_imports():
         if "Max.Effects.ToolControl" in dependencies and relative not in {
             "src/Max/Tools/Task.hs", "src/Max/Task/ToolRuntime.hs", "src/Max/Toolset.hs", "src/Max/Agent/Runtime.hs", "src/Max/Effects/Agent.hs",
             "src/Max/Tools/Skills.hs",  # Publishes host-validated skill activation receipts.
-            "src/Max/MaxOps/TaskRuntime.hs",  # Yields after durable task admission.
         }:
             errors.append(f"{relative}: host loop control outside trusted task runners/assembly")
         if relative.startswith("src/Max/Tools") and "Max.Effects.PlatformAccount" in dependencies:

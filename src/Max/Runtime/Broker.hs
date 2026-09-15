@@ -16,6 +16,8 @@ import Data.Aeson
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LBS
+import Data.Either (fromRight)
+import Data.Int (Int64)
 import Data.List (sort)
 import Data.Map.Strict qualified as Map
 import Data.Maybe (fromMaybe, isJust)
@@ -58,6 +60,8 @@ data Configuration = Configuration
     subnet :: String,
     gateway :: String,
     dns :: [Text],
+    operationsGroups :: [Int64],
+    operationsDns :: [Text],
     generations :: Map.Map Text FilePath,
     commands :: Map.Map Text FilePath
   }
@@ -65,7 +69,7 @@ data Configuration = Configuration
   deriving anyclass (FromJSON)
 
 data Metadata = Metadata
-  {name :: Text, generation :: FilePath, policyVersion :: Text, address :: Maybe String, invocation :: Maybe Text}
+  {name :: Text, generation :: FilePath, policyVersion :: Text, address :: Maybe String, invocation :: Maybe Text, network :: Maybe Text}
   deriving stock (Generic)
   deriving anyclass (FromJSON, ToJSON)
 
@@ -116,6 +120,27 @@ instanceGeneration broker name = maybe (failure 125 "runtime backend is disabled
     kind = case name.instanceKind of
       SandboxRuntime -> "sandbox"
       BrowserRuntime -> "browser"
+
+instanceNetwork :: Broker -> InstanceName -> Text
+instanceNetwork broker name = maybe "max-sandbox" (sandboxNetworkForGroup broker.configuration.operationsGroups) (instanceGroup name)
+
+networkCurrent :: Broker -> InstanceName -> IO Bool
+networkCurrent broker name
+  | name.instanceKind /= SandboxRuntime = pure True
+  | instanceNetwork broker name /= "maxops" = pure True
+  | otherwise = do
+      let (namespace, _, _) = networkNames name
+      state <- unitState broker name
+      result <- try @IOException $ do
+        expected <- Posix.getFileStatus "/run/netns/maxops"
+        actual <- Posix.getFileStatus ("/run/netns/" <> namespace)
+        running <-
+          if field "ActiveState" state == "active"
+            then Just <$> Posix.getFileStatus ("/proc/" <> T.unpack (field "MainPID" state) <> "/ns/net")
+            else pure Nothing
+        let same status = Posix.deviceID expected == Posix.deviceID status && Posix.fileID expected == Posix.fileID status
+        pure (same actual && maybe True same running)
+      pure (fromRight False result)
 
 decodeOutput :: BS.ByteString -> Text
 decodeOutput = TE.decodeUtf8With lenientDecode
@@ -204,7 +229,7 @@ saveMetadata broker name record = do
 
 unitState :: Broker -> InstanceName -> IO (Map.Map Text Text)
 unitState broker name = do
-  output <- controlOK broker "systemctl" ["show", instanceUnit name, "--property=LoadState,ActiveState,InvocationID"] 45
+  output <- controlOK broker "systemctl" ["show", instanceUnit name, "--property=LoadState,ActiveState,InvocationID,MainPID"] 45
   let fields = Map.fromList [(key, T.drop 1 value) | line <- T.lines output, let (key, value) = T.breakOn "=" line, not (T.null value)]
   unless (Map.member "ActiveState" fields) (failure 125 "systemd returned no instance state")
   pure fields
@@ -241,7 +266,7 @@ reserveAddress broker name = withMVar broker.addresses $ \_ -> do
     value : _ -> pure value
     [] -> failure 125 "sandbox address pool exhausted"
   generation <- instanceGeneration broker name
-  let record = Metadata name.fullName generation sandboxPolicyVersion (Just address) Nothing
+  let record = Metadata name.fullName generation sandboxPolicyVersion (Just address) Nothing (Just "max-sandbox")
   saveMetadata broker name record
   pure record
 
@@ -285,12 +310,13 @@ startInstance broker name = withInstance broker name $ do
   generation <- instanceGeneration broker name
   current <- readMetadata broker name
   state <- unitState broker name
-  let reusable record = record.generation == generation && record.policyVersion == sandboxPolicyVersion && record.invocation == Just (field "InvocationID" state)
+  validNetwork <- networkCurrent broker name
+  let reusable record = record.generation == generation && record.policyVersion == sandboxPolicyVersion && record.invocation == Just (field "InvocationID" state) && record.network == Just (instanceNetwork broker name) && validNetwork
   unless (field "ActiveState" state == "active" && maybe False reusable current) $ do
     stopInstance broker name
     record <- case name.instanceKind of
       BrowserRuntime -> do
-        let record = Metadata name.fullName generation sandboxPolicyVersion Nothing Nothing
+        let record = Metadata name.fullName generation sandboxPolicyVersion Nothing Nothing (Just (instanceNetwork broker name))
         saveMetadata broker name record
         pure record
       SandboxRuntime -> do
@@ -308,11 +334,24 @@ startInstance broker name = withInstance broker name $ do
         forM_ ["etc/os-release", "etc/machine-id"] $ \file -> do
           BS.writeFile (root </> file) ""
           Posix.setFileMode (root </> file) 0o644
-        TIO.writeFile (root </> "etc/resolv.conf") (T.unlines (map ("nameserver " <>) broker.configuration.dns))
+        let nameservers = if instanceNetwork broker name == "maxops" then broker.configuration.operationsDns else broker.configuration.dns
+        TIO.writeFile (root </> "etc/resolv.conf") (T.unlines (map ("nameserver " <>) nameservers))
         Posix.setFileMode (root </> "etc/resolv.conf") 0o644
-        record <- reserveAddress broker name
-        forM_ record.address (prepareNetwork broker name)
-        pure record
+        if instanceNetwork broker name == "maxops"
+          then do
+            void (controlOK broker "systemctl" ["start", "max-ops-network.service", "max-ops-tailscaled.service"] 120)
+            let (namespace, _, _) = networkNames name
+                target = "/run/netns/" <> namespace
+            -- This is a private alias; deleting it never deletes the shared netns.
+            BS.writeFile target ""
+            void (controlOK broker "mount" ["--bind", "/run/netns/maxops", target] 45)
+            let record = Metadata name.fullName generation sandboxPolicyVersion Nothing Nothing (Just "maxops")
+            saveMetadata broker name record
+            pure record
+          else do
+            record <- reserveAddress broker name
+            forM_ record.address (prepareNetwork broker name)
+            pure record
     void (controlOK broker "systemctl" ["start", instanceUnit name] 120)
     started <- unitState broker name
     unless (field "ActiveState" started == "active") (failure 125 "instance did not become active")
@@ -359,7 +398,10 @@ execute broker socket streams command seconds guest = withCopies streams $ \(inp
 guestExec :: Broker -> InstanceName -> [Text] -> Socket.Socket -> (Handle, Handle, Handle) -> IO Int
 guestExec broker name arguments socket handles = do
   require (not (null arguments) && length arguments <= 256 && not (any (T.any (== '\0')) arguments)) "invalid sandbox command"
-  void (metadata broker name)
+  record <- metadata broker name
+  generation <- instanceGeneration broker name
+  validNetwork <- networkCurrent broker name
+  require (record.generation == generation && record.network == Just (instanceNetwork broker name) && validNetwork) "sandbox policy changed; recreate the sandbox around its existing work volume"
   identifier <- UUID.toString <$> UUID.nextRandom
   let unit = "max-exec-" <> identifier <> ".service"
       machine = instanceMachine name
@@ -433,10 +475,11 @@ handleRequest broker socket handles@(_, output, _) request = do
   case request of
     StartSandbox value profile volume network -> do
       name <- sandbox value
-      require (profile == "nixos-sandbox-v1" && network == "max-sandbox" && volume == value <> "-data") "unsupported sandbox policy or volume"
+      require (profile == "nixos-sandbox-v1" && network == instanceNetwork broker name && volume == value <> "-data") "unsupported sandbox policy or volume"
       startInstance broker name
       put value
       pure 0
+    SandboxNetwork group -> put (sandboxNetworkForGroup broker.configuration.operationsGroups group) >> pure 0
     StartBrowser value -> browser value >>= startInstance broker >> put value >> pure 0
     StopInstance value -> do
       name <- checkedName Nothing value
@@ -471,8 +514,9 @@ handleRequest broker socket handles@(_, output, _) request = do
       generation <- instanceGeneration broker name
       record <- metadata broker name
       state <- unitState broker name
-      let current = record.generation == generation && record.policyVersion == sandboxPolicyVersion && record.invocation == Just (field "InvocationID" state)
-      put ((if current then sandboxPolicyVersion else "old") <> " max-sandbox 1")
+      validNetwork <- networkCurrent broker name
+      let current = record.generation == generation && record.policyVersion == sandboxPolicyVersion && record.invocation == Just (field "InvocationID" state) && record.network == Just (instanceNetwork broker name) && validNetwork
+      put ((if current then sandboxPolicyVersion else "old") <> " " <> instanceNetwork broker name <> " 1")
       pure 0
     BrowserEndpoint value -> browser value >>= browserPort broker >>= put . T.pack . show >> pure 0
     RunCommand value arguments -> sandbox value >>= \name -> guestExec broker name arguments socket handles
@@ -565,7 +609,7 @@ runRuntimeBroker path = do
   unless (uid == 0) (failure 77 "runtime broker must run as root")
   configuration <- BS.readFile path >>= either (failure 125 . T.pack) pure . eitherDecodeStrict'
   require (configuration.subnet == "10.231.0.0/16" && configuration.gateway == "10.231.0.1") "unsupported sandbox address pool"
-  forM_ ["systemctl", "systemd-run", "ip", "bridge", "nix"] $ \command ->
+  forM_ ["systemctl", "systemd-run", "ip", "bridge", "nix", "mount"] $ \command ->
     require (maybe False (T.isPrefixOf "/nix/store/" . T.pack) (Map.lookup command configuration.commands)) "broker executables must be store paths"
   peer <- userID <$> getUserEntryForName configuration.user
   locks <- newMVar Map.empty

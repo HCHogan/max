@@ -197,3 +197,9 @@ A rollback requires stopping the new stack, restoring directory locations and
 UID/GID names, renaming the database/role back (or restoring its verified dump),
 and selecting the retained old system. Do not start the old generation against
 new paths or the new database name.
+
+## SSH fleet operations
+
+Enabled QQ groups can join a dedicated Tailscale network namespace and use
+ordinary `ssh hostname` from their sandbox. See [SSH operations](ssh-operations.md)
+for configuration, lifecycle, and the `max` to `max-service` account migration.

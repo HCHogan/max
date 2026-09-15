@@ -81,8 +81,6 @@ import Max.IMessage (IMessageConfig (..))
 import Max.Intent (IntentConfig (..))
 import Max.Log (ColorMode (..), parseColorMode, parseLogLevel, renderLogLevel)
 import Max.Matrix (MatrixConfig (..))
-import Max.MaxOps.Notifications (NotificationConfig (..), validateNotificationConfig)
-import Max.MaxOps.Types (MaxOpsConfig (..), defaultMaxOpsConfig, validateMaxOpsConfig)
 import Max.ModelCatalog (ContextLimits (..), ModelCatalog, defaultContextLimits, modelProfileNames)
 import Max.ModelCatalog qualified as ModelCatalog
 import Max.ModelCatalog.Internal (LLMProfile (..), Protocol (..), mkModelCatalogFromProfiles, parseProtocol)
@@ -141,8 +139,6 @@ data AppConfig = AppConfig
     -- | Web-search backend, if configured.  When 'Nothing' the
     -- @web_search@ tool is not registered (model doesn't see it).
     search :: !(Maybe SearchConfig),
-    maxops :: !MaxOpsConfig,
-    maxopsNotifications :: !(Maybe NotificationConfig),
     -- | Credential pool behind the LLM base URL, if it is a
     -- CLIProxyAPI we hold a management key for.  'Nothing' = the
     -- @\/api\/quota@ endpoint reports itself unconfigured.
@@ -328,8 +324,6 @@ validateConfig cfg =
       maybe [] validateIMessage cfg.imessage,
       maybe [] validateWechatHook cfg.wechathook,
       maybe [] validateIntent cfg.intent,
-      validateMaxOpsConfig cfg.maxops,
-      maybe [] validateNotificationConfig cfg.maxopsNotifications,
       validateProfile "memory.extract_profile" cfg.memoryExtractProfile,
       validateProfile "stickers.caption_profile" cfg.stickerCaptionProfile,
       validateProfile "intent.profile" ((.icProfile) <$> cfg.intent)
@@ -376,8 +370,6 @@ configChanges old new =
       changed "timezone_minutes" DispatchHot old.timezone new.timezone,
       changed "persona" DispatchHot old.persona new.persona,
       changed "search" DispatchHot old.search new.search,
-      changed "maxops" DispatchHot old.maxops new.maxops,
-      changed "maxops_notifications" RestartRequired old.maxopsNotifications new.maxopsNotifications,
       changed "cliproxy" DispatchHot old.cliproxy new.cliproxy,
       changed "browser.proxy" WorkerHandoff old.browserProxy new.browserProxy,
       changed "browser.state_key_file" RestartRequired old.browserStateKeyFile new.browserStateKeyFile,
@@ -419,7 +411,6 @@ runtimeValuesFromConfig cfg =
       rvTurnSilenceSeconds = cfg.turnSilenceSeconds,
       rvOwners = cfg.owners,
       rvSearch = cfg.search,
-      rvMaxOps = cfg.maxops,
       rvCliProxy = cfg.cliproxy,
       rvBrowserProxy = cfg.browserProxy,
       rvMemoryExtract = cfg.memoryExtractProfile,
@@ -523,8 +514,6 @@ appConfigParser usedRef =
           valueWithShown (const "(built-in Chinese default)") defaultPersona
         ]
     search <- subConfig "search" searchParser
-    maxops <- subConfig "maxops" maxOpsParser
-    maxopsNotifications <- subConfig "maxops_notifications" notificationParser
     cliproxy <- subConfig "cliproxy" cliproxyParser
     browserProxy <-
       subConfig "browser" $
@@ -800,31 +789,6 @@ dbParser = do
 
 --------------------------------------------------------------------------------
 -- Search.
-
-notificationParser :: Parser (Maybe NotificationConfig)
-notificationParser = do
-  port <- optional $ setting [help "Loopback Alertmanager notification receiver port", reader auto, option, long "maxops-notify-port", env "MAX_MAXOPS_NOTIFY_PORT", conf "port", metavar "PORT"]
-  ncHost <- setting [help "Notification receiver loopback address", reader str, option, long "maxops-notify-host", env "MAX_MAXOPS_NOTIFY_HOST", conf "host", metavar "HOST", value "127.0.0.1"]
-  ncTokenFile <- setting [help "Dedicated incoming notification credential file", reader str, option, long "maxops-notify-token-file", env "MAX_MAXOPS_NOTIFY_TOKEN_FILE", conf "token_file", metavar "FILE", value ""]
-  ncGroups <- setting [help "Notification target QQ groups, never taken from webhook data", reader (commaSeparatedList auto), option, long "maxops-notify-groups", env "MAX_MAXOPS_NOTIFY_GROUPS", conf "groups", metavar "GROUP[,GROUP..]", value []]
-  ncHosts <- setting [help "Inventory hosts permitted in incoming notifications", reader (commaSeparatedList str), option, long "maxops-notify-hosts", env "MAX_MAXOPS_NOTIFY_HOSTS", conf "hosts", metavar "HOST[,HOST..]", value []]
-  pure ((\ncPort -> NotificationConfig {..}) <$> port)
-
-maxOpsParser :: Parser MaxOpsConfig
-maxOpsParser = do
-  mocEnabled <-
-    yesNoSwitch
-      [help "Enable credential-scoped maxops tools in explicitly allowed groups", long "maxops-enabled", env "MAX_MAXOPS_ENABLED", conf "enabled", value False]
-  mocBaseUrl <-
-    setting
-      [help "maxops hub base URL (no credentials, query or fragment)", reader str, option, long "maxops-base-url", env "MAX_MAXOPS_BASE_URL", conf "base_url", metavar "URL", value defaultMaxOpsConfig.mocBaseUrl]
-  mocTokenFile <-
-    setting
-      [help "Runtime file containing the dedicated maxops client bearer token", reader str, option, long "maxops-token-file", env "MAX_MAXOPS_TOKEN_FILE", conf "token_file", metavar "FILE", value ""]
-  mocAllowedGroups <-
-    setting
-      [help "QQ groups allowed to use maxops; empty denies everyone", reader (commaSeparatedList auto), option, long "maxops-allowed-groups", env "MAX_MAXOPS_ALLOWED_GROUPS", conf "allowed_groups", metavar "GROUP[,GROUP..]", value []]
-  pure MaxOpsConfig {..}
 
 searchParser :: Parser (Maybe SearchConfig)
 searchParser = do

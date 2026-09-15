@@ -12,7 +12,9 @@ sandbox_create 没有参数。NixOS 系统和网络是宿主策略，不交给�
 宿主预构建的 NixOS 沙箱里以 uid 1000、无 Linux capability、no-new-privileges 运行，
 有 CPU/内存/PID 上限；根文件系统只读，只有 /work 和有大小上限的临时目录可写。
 固定的 max-sandbox 网络允许访问公网 IPv4，可以 curl、git clone、调用公开 API、
-下载项目依赖；宿主机、内网、链路本地、Tailscale 地址和其他沙箱均不可访问，IPv6 关闭。
+下载项目依赖；普通群无法访问宿主机、内网、链路本地、Tailscale 地址和其他沙箱，IPv6 关闭。
+已开启运维功能的群使用共享 maxops 内网，加载 operations 技能后直接使用 ssh hostname。
+查看 sandbox_create/list 返回的 network_mode 确认当前网络；共享网络中的临时服务使用动态端口。
 联网不等于获得对外写入权限：发布、上传、修改远端数据仍须符合任务授权。
 网络写入结果不明时先核实，不能因为命令超时就重复执行。
 

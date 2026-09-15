@@ -49,7 +49,10 @@ pkgs.testers.runNixOSTest {
       pkgs.dnsmasq
       config.services.max.browser.package
     ];
-    users.users.max-napcat = { isSystemUser = true; group = "max-napcat"; };
+    users.users.max-napcat = {
+      isSystemUser = true;
+      group = "max-napcat";
+    };
     users.groups.max-napcat = { };
     services.max = {
       enable = true;
@@ -73,7 +76,7 @@ pkgs.testers.runNixOSTest {
     machine.wait_for_unit("max.service")
     machine.wait_for_unit("max-sandbox-network.service")
     machine.succeed("touch /run/netns/max-foreign-fixture; mount --bind /proc/self/ns/net /run/netns/max-foreign-fixture")
-    cli = "runuser -u max -- max-runtime "
+    cli = "runuser -u max-service -- max-runtime "
     name = "max-sb--100-s1"
     unit = "max-sandbox@-100-s1.service"
     volume = name + "-data"
@@ -92,7 +95,7 @@ pkgs.testers.runNixOSTest {
     except Exception:
         print(machine.succeed("journalctl --machine=max-sandbox--100-s1 --no-pager -n 80"))
         raise
-    assert machine.succeed(cli + f"policy {name}").strip() == "6 max-sandbox 1"
+    assert machine.succeed(cli + f"policy {name}").strip() == "7 max-sandbox 1"
 
     with subtest("store, host paths and namespaces are protected"):
         machine.fail(execute + "touch /nix/store/max-test-write")
@@ -101,7 +104,7 @@ pkgs.testers.runNixOSTest {
         machine.succeed(execute + "test ! -S /nix/var/nix/daemon-socket/socket")
         machine.succeed(execute + "sh -c 'findmnt -no OPTIONS /nix/store | grep -w ro'")
         machine.succeed(execute + "sh -c 'echo durable > /work/keep; git --version; python3 --version; jq --version'")
-        machine.succeed("systemd-run --quiet --pipe --wait --collect --uid=max -p PrivateUsers=yes -p NoNewPrivileges=yes -p RestrictNamespaces=yes max-runtime status " + name)
+        machine.succeed("systemd-run --quiet --pipe --wait --collect --uid=max-service -p PrivateUsers=yes -p NoNewPrivileges=yes -p RestrictNamespaces=yes max-runtime status " + name)
         machine.succeed("chmod 666 /run/max-runtime/control.sock")
         status, _ = machine.execute("runuser -u nobody -- max-runtime list max-sb-")
         # Early credential rejection can close the socket while the client is
@@ -125,7 +128,7 @@ pkgs.testers.runNixOSTest {
         invocation = machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip()
         machine.succeed("/run/current-system/specialisation/browser-template/bin/switch-to-configuration test")
         assert machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip() == invocation
-        assert machine.succeed(cli + f"policy {name}").strip() == "6 max-sandbox 1"
+        assert machine.succeed(cli + f"policy {name}").strip() == "7 max-sandbox 1"
 
     with subtest("Max restart preserves the sibling sandbox; manual replacement fails adoption"):
         invocation = machine.succeed(f"systemctl show {unit} -p InvocationID --value").strip()
@@ -189,7 +192,7 @@ pkgs.testers.runNixOSTest {
         machine.fail("journalctl -u max-browser@-100 --no-pager | grep -E 'fixture_auth|fixture_identity|workspace-one'")
         machine.succeed("test $(stat -c %d:%i /var/lib/max/private) = $(stat -c %d:%i /var/lib/private/max)")
         machine.succeed("test -d /var/lib/max/private/browser/-100; test -d /var/lib/max/private/browser-cache/-100")
-        machine.fail("runuser -u max -- ls /var/lib/max/private/browser/-100")
+        machine.fail("runuser -u max-service -- ls /var/lib/max/private/browser/-100")
         machine.succeed(cli + "remove max-br--100")
         assert machine.succeed("systemctl show max-browser@-100 -p MainPID --value").strip() == "0"
 

@@ -47,7 +47,7 @@ module Max.Sandbox.Registry
 where
 
 import Control.Concurrent.STM
-import Control.Monad (void, when)
+import Control.Monad (unless, void, when)
 import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
 import Data.Foldable (for_)
 import Data.Int (Int64)
@@ -71,6 +71,7 @@ import Max.Sandbox.Runtime
     inspectVolumePresence,
     listContainersByPrefix,
     listVolumesByPrefix,
+    networkForGroup,
     runExec,
     runPreparePackages,
     runRead,
@@ -161,7 +162,7 @@ reconcileSandboxes reg = do
             containerState <- inspectContainerStatus row.psContainer
             case containerState of
               RuntimeContainerRunning -> do
-                currentPolicy <- inspectContainerPolicy row.psContainer
+                currentPolicy <- inspectContainerPolicy row.psContainer row.psNetwork
                 if currentPolicy && persistedPolicyCurrent row
                   then adoptPersisted reg pool row
                   else rebuildPersisted reg pool row
@@ -186,19 +187,22 @@ adoptPersisted reg pool row = do
   -- Hourly reconciliation must not replace the per-sandbox lock while an
   -- exec is holding it.  Keep the live cache entry when present; a fresh one
   -- is needed only on boot or after this process has evicted the sandbox.
-  atomically (modifyTVar' reg.srEntries (Map.insertWith (\_ old -> old) entry.seId entry))
+  atomically (modifyTVar' reg.srEntries (Map.insertWith (\new old -> old {seNetwork = new.seNetwork, seImage = new.seImage}) entry.seId entry))
   markSandboxActive pool row.psId
 
 rebuildPersisted :: SandboxRegistry -> DbPool -> PersistedSandbox -> IO ()
 rebuildPersisted reg pool row = do
-  let secured = securePersisted row
-  -- A stopped/dead container still owns its name.  The volume is the durable
-  -- state, so discard only the shell and recreate it around that volume.
-  runRm row.psContainer
-  updateSandboxRuntime pool secured
-  runRun secured.psContainer secured.psImage secured.psVolume secured.psNetwork >>= \case
-    Right _ -> adoptPersisted reg pool secured
+  selected <- networkForGroup (fromIntegral row.psGroup)
+  case selected of
     Left detail -> markSandboxUnknown pool row.psId detail
+    Right network -> do
+      let secured = (securePersisted row) {psNetwork = network}
+      -- A stopped container still owns its name; preserve its durable volume.
+      runRm row.psContainer
+      updateSandboxRuntime pool secured
+      runRun secured.psContainer secured.psImage secured.psVolume secured.psNetwork >>= \case
+        Right _ -> adoptPersisted reg pool secured
+        Left detail -> markSandboxUnknown pool row.psId detail
 
 --------------------------------------------------------------------------------
 -- Create options.
@@ -227,11 +231,18 @@ createSandbox ::
   SandboxCreateOpts ->
   IO (Either Text SandboxEntry)
 createSandbox reg gid opts = do
+  selected <- networkForGroup (let GroupId raw = gid in fromIntegral raw)
+  case selected of
+    Left detail -> pure (Left detail)
+    Right network -> createWithNetwork reg gid opts network
+
+createWithNetwork :: SandboxRegistry -> GroupId -> SandboxCreateOpts -> Text -> IO (Either Text SandboxEntry)
+createWithNetwork reg gid opts network = do
   now <- getCurrentTime
   -- Image and network are operator policy, never model-selected authority.
   -- Keep the argument for the internal API shape, but normalize it here so a
   -- future caller cannot accidentally re-open the old escape hatch.
-  let securedOpts = opts {scoImage = defaultCreateOpts.scoImage, scoNetwork = defaultCreateOpts.scoNetwork}
+  let securedOpts = opts {scoImage = defaultCreateOpts.scoImage, scoNetwork = network}
   allocated <- allocateSandbox reg gid securedOpts now
   let (dbId, sid, container, volume) = allocated
   lock <- newTMVarIO ()
@@ -319,11 +330,20 @@ execInSandbox reg gid sid packages cmd timeoutSecs = do
           withLock
             e.seExecLock
             ( do
+                selected <- networkForGroup (let GroupId raw = gid in fromIntegral raw)
+                network <- either (ioError . userError . T.unpack) pure selected
+                current <- inspectContainerPolicy e.seContainer network
+                unless current $ do
+                  launched <- runRun e.seContainer e.seImage e.seVolume network
+                  either (ioError . userError . T.unpack) (const (pure ())) launched
+                let updated = e {seNetwork = network}
+                atomically $ modifyTVar' reg.srEntries (Map.insert sid updated)
+                withConn reg.srDbPool $ \conn -> void $ execute conn "UPDATE sandboxes SET network_mode = ? WHERE sandbox_handle = ?" (network, sid.unSandboxId)
                 prepared <- runPreparePackages e.seContainer packages timeoutSecs
                 case prepared of
                   Left detail -> pure (Left detail)
                   Right storePaths -> do
-                    result <- runExec e.seContainer e.seNetwork (wrapPackages storePaths cmd) timeoutSecs
+                    result <- runExec e.seContainer network (wrapPackages storePaths cmd) timeoutSecs
                     -- @-1@ is reserved for failure to invoke the runtime client.  For a
                     -- write-capable tool this must travel as Left so the tool kernel
                     -- records outcome-unknown, never as a seemingly committed shell
@@ -504,7 +524,7 @@ entryFromPersisted row = do
 persistedPolicyCurrent :: PersistedSandbox -> Bool
 persistedPolicyCurrent row =
   row.psImage == defaultCreateOpts.scoImage
-    && row.psNetwork == defaultCreateOpts.scoNetwork
+    && row.psNetwork `elem` [sandboxNetwork, "maxops"]
 
 securePersisted :: PersistedSandbox -> PersistedSandbox
 securePersisted row =

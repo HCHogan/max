@@ -12,20 +12,28 @@ spec :: Spec
 spec = do
   describe "container network adoption" $ do
     it "adopts only the current policy on exactly the operator network" $
-      withRuntimeInspection "printf '6 max-sandbox 1\\n'" $
-        inspectContainerPolicy "fixture" `shouldReturn` True
+      withRuntimeInspection "printf '7 max-sandbox 1\\n'" $
+        inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` True
     it "rejects an otherwise current container connected to a second network" $
-      withRuntimeInspection "printf '6 max-sandbox 2\\n'" $
-        inspectContainerPolicy "fixture" `shouldReturn` False
+      withRuntimeInspection "printf '7 max-sandbox 2\\n'" $
+        inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` False
     it "rejects a replaced network even when its policy label is current" $
-      withRuntimeInspection "printf '6 bridge 1\\n'" $
-        inspectContainerPolicy "fixture" `shouldReturn` False
+      withRuntimeInspection "printf '7 bridge 1\\n'" $
+        inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` False
     it "rebuilds an old disconnected shell" $
       withRuntimeInspection "printf '4 none 0\\n'" $
-        inspectContainerPolicy "fixture" `shouldReturn` False
+        inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` False
     it "does not adopt when runtime inspection fails" $
       withRuntimeInspection "exit 1" $
-        inspectContainerPolicy "fixture" `shouldReturn` False
+        inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` False
+
+  describe "operations network adoption" $ do
+    it "requires the requested operations network" $
+      withRuntimeInspection "printf '7 maxops 1\\n'" $
+        inspectContainerPolicy "fixture" "maxops" `shouldReturn` True
+    it "does not adopt an operations container as a public sandbox" $
+      withRuntimeInspection "printf '7 maxops 1\\n'" $
+        inspectContainerPolicy "fixture" "max-sandbox" `shouldReturn` False
 
   describe "stripAnsi" $ do
     it "drops SGR colour codes" $

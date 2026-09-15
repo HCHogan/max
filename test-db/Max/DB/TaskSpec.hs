@@ -2,12 +2,11 @@ module Max.DB.TaskSpec (spec, seed, admit, claimOne, report, insertOccurrence, d
 
 import Control.Concurrent.Async (concurrently, mapConcurrently)
 import Control.Exception (bracket_)
-import Control.Monad (void, when)
+import Control.Monad (void)
 import Data.Aeson
 import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Either (isLeft, isRight)
 import Data.Foldable (for_)
-import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Int (Int64)
 import Data.List (sortOn)
 import Data.Map.Strict qualified as Map
@@ -44,10 +43,6 @@ import Max.Effects.ToolControl (runToolControl)
 import Max.Effects.Tools (Tool (..))
 import Max.Execution.Types (ExecutionStep (..), StepReservation (..))
 import Max.IR (Body (..), Node (NText))
-import Max.MaxOps.Client (MaxOpsClient (..))
-import Max.MaxOps.Protocol (Catalog (..), Operation (..), parseCatalog)
-import Max.MaxOps.TaskRuntime (admitMaxOpsTask, runMaxOpsTask)
-import Max.MaxOps.Types (MaxOpsConfig (..))
 import Max.Monitor.Control qualified as MonitorControl
 import Max.Monitor.Policy (OverlapPolicy (..))
 import Max.Monitor.Types
@@ -76,113 +71,6 @@ import Test.Hspec
 
 spec :: DbPool -> Spec
 spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
-  for_ [("exec.run", Nothing, True, TaskState.ReportPartial), ("diagnostics.collect", Just "complete", True, TaskState.ReportSucceeded), ("diagnostics.collect", Just "partial", True, TaskState.ReportPartial), ("diagnostics.collect", Just "failed", True, TaskState.ReportFailed), ("diagnostics.collect", Nothing, True, TaskState.ReportPartial), ("diagnostics.collect", Just "complete", False, TaskState.ReportPartial), ("units.restart", Nothing, True, TaskState.ReportWaiting), ("units.stop", Nothing, True, TaskState.ReportWaiting)] $ \(remoteOperation, assessment, outputAvailable, expected) ->
-    it ("observes " <> T.unpack remoteOperation <> " " <> show (assessment, outputAvailable) <> " without model polling or losing its submission identity") $ do
-      (front, message, actor) <- seed pool 611798505 1
-      withDb pool (claimFrontend front) `shouldReturn` True
-      output <- newTurnOutputContext front
-      let config = MaxOpsConfig True "http://hub.test" "/test/runtime-token" [611798505]
-          operation name kind readonly idempotency =
-            object
-              [ "name" .= (name :: Text),
-                "kind" .= (kind :: Text),
-                "read_only" .= readonly,
-                "idempotency" .= (idempotency :: Text),
-                "minimum_protocol_version" .= (2 :: Int),
-                "params_schema" .= object ["type" .= ("object" :: Text)]
-              ]
-          rawCatalog =
-            object
-              [ "version" .= (2 :: Int),
-                "operations"
-                  .= [operation remoteOperation "job_submission" False "required", operation "jobs.wait" "job_control" True "none", operation "jobs.logs" "job_control" True "none", operation "jobs.result" "job_control" True "none"]
-              ]
-          grants = Map.singleton "maxops_execute" "test-grant"
-          contextFor turnOutput background =
-            mkToolContext
-              (TurnIdentity (GroupId 611798505) message (UserId 1) (UserId 99) actor Nothing (Just turnOutput))
-              (TurnCapabilities False False True noAdvertisedCaps False grants Nothing background)
-      catalog <- either (fail . T.unpack) pure (parseCatalog rawCatalog)
-      entry <- case catalog.operations of first : _ -> pure first; _ -> fail "empty fixture"
-      (admitted, _) <-
-        withDb pool $
-          runToolControl
-            ( admitMaxOpsTask
-                (withToolInvocationIdentity (Just "max:j41") (contextFor output False))
-                config
-                entry
-                (object [])
-            )
-      admitted `shouldSatisfy` either (const False) (const True)
-      admitted `shouldSatisfy` (\case Right (Object fields) -> KeyMap.lookup "kind" fields == Just (String "maxops_submission") && KeyMap.lookup "idempotency_key" fields == Just (String "max:j41") && not (any (`KeyMap.member` fields) ["job_id", "task", "task_id"]); _ -> False)
-      taskTurn <- claimOne pool
-      Just task <- withDb pool (loadTaskExecution taskTurn.atrTurnId)
-      taskOutput <- newTurnOutputContext taskTurn
-      keys <- newIORef []
-      waits <- newIORef (0 :: Int)
-      let client =
-            MaxOpsClient
-              ( \_ op params key ->
-                  if op.name == remoteOperation
-                    then do
-                      modifyIORef' keys (<> [key])
-                      pure (Right (object ["job_id" .= ("stable-remote-job" :: Text), "state" .= ("queued" :: Text)]))
-                    else
-                      if op.name == (if remoteOperation == "diagnostics.collect" then "jobs.result" else "jobs.logs")
-                        then do
-                          when (remoteOperation == "diagnostics.collect") $ params `shouldBe` object ["idempotency_key" .= ("max:j41" :: Text), "limit" .= (8192 :: Int), "pointer" .= ("/diagnostic" :: Text)]
-                          pure (if outputAvailable then Right (object ["stdout_text" .= ("bounded diagnostic output" :: Text), "complete" .= True]) else Left "maxops result unavailable")
-                        else do
-                          key `shouldBe` Nothing
-                          params `shouldSatisfy` (\case Object fields -> KeyMap.lookup "idempotency_key" fields == Just (String "max:j41") && not (KeyMap.member "job_id" fields); _ -> False)
-                          modifyIORef' waits (+ 1)
-                          submitted <- readIORef keys
-                          now <- getCurrentTime
-                          if null submitted
-                            then pure (Left "maxops HTTP 404 code=not_found retry=never")
-                            else do
-                              attempts <- readIORef waits
-                              let nonterminal = expected == TaskState.ReportWaiting
-                                  recovering = case params of Object fields -> KeyMap.lookup "timeout_seconds" fields == Just (Number 0); _ -> False
-                              if remoteOperation == "units.stop" && attempts > 2 && not recovering
-                                then pure (Left "maxops transport unavailable")
-                                else
-                                  pure
-                                    ( Right
-                                        ( object
-                                            [ "job"
-                                                .= object
-                                                  [ "deadline" .= addUTCTime (if nonterminal then -29.98 else 60) now,
-                                                    "evidence_status" .= (assessment :: Maybe Text),
-                                                    "handle"
-                                                      .= object
-                                                        ["job_id" .= ("stable-remote-job" :: Text), "state" .= (if nonterminal then "running" else "succeeded" :: Text), "revision" .= (3 :: Int)]
-                                                  ]
-                                            ]
-                                        )
-                                    )
-              )
-              (\_ _ -> pure (Right rawCatalog))
-      for_ [1, 2 :: Int] $ \_ -> do
-        result <- withDbLog pool $ runMaxOpsTask client config (pure config) (contextFor taskOutput True) task
-        result.status `shouldBe` expected
-        null result.unresolved `shouldBe` (expected == TaskState.ReportSucceeded)
-        result.summary `shouldSatisfy` T.isInfixOf (if expected == TaskState.ReportWaiting then "outcome_unknown" else if outputAvailable then "bounded diagnostic output" else "unavailable")
-      readIORef keys `shouldReturn` [Just "max:j41"]
-      count <- readIORef waits
-      count `shouldSatisfy` (>= 3)
-      rows <- withDb pool $ query "SELECT state FROM execution_journal WHERE turn_id=?" (Only taskTurn.atrTurnId)
-      (rows :: [Only Text]) `shouldBe` [Only "committed", Only "committed"]
-      -- A stale retryable flag must not turn an observer's terminal report into
-      -- the old repeated-success / forty-attempt loop.
-      result <- withDbLog pool $ runMaxOpsTask client config (pure config) (contextFor taskOutput True) task
-      void $ withDb pool $ execute "UPDATE task_attempts SET retryable=? WHERE turn_id=?" (expected /= TaskState.ReportFailed, taskTurn.atrTurnId)
-      withDb pool (taskReportTyped taskTurn.atrTurnId result) `shouldReturn` True
-      withDb pool (finishAgentTurn taskTurn TurnSucceeded 0 Nothing Nothing)
-      settled <- withDb pool $ query "SELECT status,attempt,next_attempt_at IS NULL FROM durable_tasks WHERE task_id=?" (Only task.teTaskId)
-      (settled :: [(Text, Int, Bool)]) `shouldBe` [(TaskState.reportStatusText expected, 1, True)]
-      readIORef keys `shouldReturn` [Just "max:j41"]
-
   it "recovers skill receipts across attempts but not across task revisions" $ do
     source@(_, _, actor) <- seed pool 900 1
     identifier <- admit pool source "skill-retry"
@@ -484,16 +372,16 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     rejected <- withDb pool . ExecutionCapability.runTaskExecution Nothing $ ExecutionCapability.reportProgress "no owner"
     rejected `shouldBe` Left ExecutionContextMissing
 
-  it "persists an operations profile with only the caller's existing maxops management grant" $ do
+  it "persists an operations profile with the caller's existing SSH sandbox grants" $ do
     (turn, message, actor) <- seed pool 900 1
-    let grants = Map.fromList [("maxops_query", "query-grant"), ("maxops_execute", "management-grant"), ("sandbox_exec", "sandbox-grant")]
+    let grants = Map.fromList [("sandbox_exec", "sandbox-grant")]
         scope = ControlCapability.TaskControlScope (GroupId 900) (Just turn) message actor grants False
     admitted <-
       withDb pool . ControlCapability.runTaskControl scope $
         ControlCapability.startTask "fleet-operation" "diagnose and verify" Operations (object [])
     case admitted of
       Right (receipt :: Admission.TaskAdmissionReceipt) -> do
-        receipt.grants `shouldBe` Map.delete "sandbox_exec" grants
+        receipt.grants `shouldBe` grants
         rows <- withDb pool $ query "SELECT profile FROM durable_tasks WHERE task_id=?" (Only receipt.taskId)
         rows `shouldBe` [Only ("operations" :: Text)]
       Left failure -> expectationFailure (show failure)
@@ -502,7 +390,7 @@ spec pool = before_ (truncateAll pool) $ describe "ADR008 durable tasks" $ do
     source@(_, message, actor) <- seed pool 900 1
     _ <- admit pool source "research-parent"
     parent <- claimOne pool
-    rejected <- withDb pool (admitTaskReceipt parent message actor "forged-operation" "restart" Operations (object []) (Map.singleton "maxops_execute" "invented"))
+    rejected <- withDb pool (admitTaskReceipt parent message actor "forged-operation" "restart" Operations (object []) (Map.singleton "sandbox_exec" "invented"))
     rejected `shouldBe` Left AdmissionWidenedAuthority
 
   it "enforces the profile grant ceiling at task admission even without a parent" $ do

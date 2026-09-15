@@ -141,6 +141,7 @@ in
     ./storage.nix
     ./runtime.nix
     ./sandbox-network.nix
+    ./operations.nix
     ./napcat-module.nix
   ];
   options.services.max = {
@@ -188,7 +189,7 @@ in
         Use this JSON or YAML file instead of rendering one from `settings`.
         For configs full of per-profile API keys (which must stay out
         of the world-readable store) point this at a root-deployed or
-        sops-managed file readable by the max user.
+        sops-managed file readable by the max-service user.
 
         Setting this discards {option}`services.max.settings` — the
         module warns rather than merging, because merging a store-
@@ -208,50 +209,6 @@ in
       '';
     };
 
-    maxops = {
-      enable = lib.mkEnableOption "maxops fleet tools scoped by the hub principal's capabilities";
-      baseUrl = lib.mkOption {
-        type = lib.types.str;
-        default = "http://127.0.0.1:9721";
-        description = "Authenticated maxops hub URL, without embedded credentials.";
-      };
-      tokenFile = lib.mkOption {
-        type = lib.types.str;
-        default = "";
-        description = "Runtime token file for a dedicated maxops client, loaded through systemd credentials.";
-      };
-      allowedGroups = lib.mkOption {
-        type = lib.types.nullOr (lib.types.listOf lib.types.ints.positive);
-        default = null;
-        example = [ 611798505 ];
-        description = "QQ group allowlist. Null leaves max.yaml maxops.allowed_groups in control; an empty list denies everyone. Explicit lists override YAML.";
-      };
-    };
-
-    maxopsNotifications = {
-      enable = lib.mkEnableOption "authenticated loopback fleet notifications into the durable outbox";
-      port = lib.mkOption {
-        type = lib.types.port;
-        default = 9722;
-        description = "Loopback-only notification receiver port.";
-      };
-      tokenFile = lib.mkOption {
-        type = lib.types.str;
-        default = "";
-        description = "Dedicated incoming notification credential, supplied through LoadCredential.";
-      };
-      groups = lib.mkOption {
-        type = lib.types.listOf lib.types.ints.positive;
-        default = [ ];
-        description = "Fixed target QQ groups; webhook bodies cannot select destinations.";
-      };
-      hosts = lib.mkOption {
-        type = lib.types.listOf lib.types.str;
-        default = [ ];
-        description = "Inventory host names whose alerts may be delivered.";
-      };
-    };
-
     postgres.enable = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -265,25 +222,6 @@ in
   };
 
   config = lib.mkIf cfg.enable {
-    assertions = [
-      {
-        assertion =
-          !cfg.maxops.enable
-          || (lib.hasPrefix "/" cfg.maxops.tokenFile && !lib.hasPrefix "/nix/store/" cfg.maxops.tokenFile);
-        message = "services.max.maxops.tokenFile must be an absolute runtime path outside the Nix store.";
-      }
-      {
-        assertion =
-          !cfg.maxopsNotifications.enable
-          || (
-            lib.hasPrefix "/" cfg.maxopsNotifications.tokenFile
-            && !lib.hasPrefix "/nix/store/" cfg.maxopsNotifications.tokenFile
-            && cfg.maxopsNotifications.groups != [ ]
-            && cfg.maxopsNotifications.hosts != [ ]
-          );
-        message = "services.max.maxopsNotifications requires a runtime credential and explicit nonempty groups and hosts.";
-      }
-    ];
     # `configFile` wins outright, so anything in `settings` is silently
     # discarded — which reads as "I set that and it didn't work".  Say
     # so, and point at the channel that does work with a hand-managed
@@ -316,13 +254,36 @@ in
         127.0.0.1) instead.
       '';
 
-    users.users.max = {
+    environment.systemPackages = [
+      (pkgs.writeShellApplication {
+        name = "max-migrate-service-account";
+        runtimeInputs = [
+          pkgs.coreutils
+          pkgs.shadow
+          pkgs.getent
+          pkgs.procps
+          pkgs.util-linux
+          pkgs.jq
+          config.systemd.package
+        ];
+        text = builtins.readFile ../scripts/migrate-max-service-account.sh;
+      })
+    ];
+
+    system.preSwitchChecks.max-service-account = ''
+      if ${pkgs.getent}/bin/getent passwd max | ${pkgs.gawk}/bin/awk -F: '$6 == "/var/lib/max/app" { found=1 } END { exit !found }'; then
+        echo "Stop max-stack.target and run $1/sw/bin/max-migrate-service-account --migrate before activation." >&2
+        exit 1
+      fi
+    '';
+
+    users.users.max-service = {
       isSystemUser = true;
-      group = "max";
+      group = "max-service";
       home = stateDir;
       extraGroups = [ "max-outbox" ];
     };
-    users.groups.max = { };
+    users.groups.max-service = { };
     users.groups.max-outbox = { };
 
     # The process always re-reads this stable name. For rendered/Nix-owned
@@ -334,6 +295,8 @@ in
     services.postgresql = lib.mkIf cfg.postgres.enable {
       enable = true;
       extensions = ps: [ ps.pgvector ];
+      authentication = lib.mkBefore "local max max peer map=max-service\n";
+      identMap = "max-service max-service max\n";
       ensureDatabases = [ "max" ];
       ensureUsers = [
         {
@@ -356,7 +319,11 @@ in
     systemd.services.max = {
       description = "max — QQ group-chat agent";
       reloadTriggers = [ effectiveConfigFile ];
-      after = [ "network-online.target" "max-storage.service" ] ++ lib.optional cfg.postgres.enable "postgresql.service";
+      after = [
+        "network-online.target"
+        "max-storage.service"
+      ]
+      ++ lib.optional cfg.postgres.enable "postgresql.service";
       requires = [ "max-storage.service" ] ++ lib.optional cfg.postgres.enable "postgresql.service";
       wants = [ "network-online.target" ];
       wantedBy = [ "max-stack.target" ];
@@ -389,31 +356,14 @@ in
         HOME = stateDir;
         # Env (not settings) so they hold for hand-managed configFile
         # setups too — opt-env-conf gives env precedence over the file.
-        MAX_DB_URL = lib.mkDefault "postgresql:///max?host=/run/postgresql";
+        MAX_DB_URL = lib.mkDefault "postgresql://max@/max?host=/run/postgresql";
         MAX_IMAGES_DIR = lib.mkDefault "${stateDir}/images";
         # The .sql files ship with the flake source, not the binary.
         MAX_MIGRATIONS_DIR = lib.mkDefault "${../migrations}";
-      }
-      // lib.optionalAttrs cfg.maxops.enable (
-        {
-          MAX_MAXOPS_ENABLED = "True";
-          MAX_MAXOPS_BASE_URL = cfg.maxops.baseUrl;
-          MAX_MAXOPS_TOKEN_FILE = "/run/credentials/max.service/maxops-token";
-        }
-        // lib.optionalAttrs (cfg.maxops.allowedGroups != null) {
-          MAX_MAXOPS_ALLOWED_GROUPS = lib.concatMapStringsSep "," toString cfg.maxops.allowedGroups;
-        }
-      )
-      // lib.optionalAttrs cfg.maxopsNotifications.enable {
-        MAX_MAXOPS_NOTIFY_PORT = toString cfg.maxopsNotifications.port;
-        MAX_MAXOPS_NOTIFY_HOST = "127.0.0.1";
-        MAX_MAXOPS_NOTIFY_TOKEN_FILE = "/run/credentials/max.service/maxops-notifications";
-        MAX_MAXOPS_NOTIFY_GROUPS = lib.concatMapStringsSep "," toString cfg.maxopsNotifications.groups;
-        MAX_MAXOPS_NOTIFY_HOSTS = lib.concatStringsSep "," cfg.maxopsNotifications.hosts;
       };
       serviceConfig = {
-        User = "max";
-        Group = "max";
+        User = "max-service";
+        Group = "max-service";
         StateDirectory = "max/app";
         StateDirectoryMode = "0700";
         RuntimeDirectory = "max";
@@ -423,9 +373,6 @@ in
         ExecStart = "${cfg.package}/bin/max --config-file /etc/max/config.json";
         ExecReload = "${cfg.package}/bin/maxctl reload --socket /run/max/control.sock";
         EnvironmentFile = lib.optional (cfg.environmentFile != null) cfg.environmentFile;
-        LoadCredential =
-          lib.optional cfg.maxops.enable "maxops-token:${cfg.maxops.tokenFile}"
-          ++ lib.optional cfg.maxopsNotifications.enable "maxops-notifications:${cfg.maxopsNotifications.tokenFile}";
         Restart = "on-failure";
         RestartSec = 5;
         TimeoutStartSec = 30;
@@ -506,9 +453,9 @@ in
 
     systemd.tmpfiles.rules = [
       "d /var/lib/max 0755 root root -"
-      "d ${stateDir} 0700 max max -"
-      "d ${stateDir}/var 0750 max max -"
-      "d ${stateDir}/var/outbox 2770 max max-outbox -"
+      "d ${stateDir} 0700 max-service max-service -"
+      "d ${stateDir}/var 0750 max-service max-service -"
+      "d ${stateDir}/var/outbox 2770 max-service max-outbox -"
     ];
   };
 }

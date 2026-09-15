@@ -18,6 +18,8 @@ let
         // lib.optionalAttrs (kind == "sandbox") {
           nixpkgs = toString cfg.sandbox.nixpkgs;
           dns = cfg.sandbox.nameservers;
+          operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
+          operationsDns = [ "100.100.100.100" ];
           network =
             if cfg.sandboxNetwork.enable then config.networking.nftables.tables.max-sandbox.content else null;
         }
@@ -25,7 +27,7 @@ let
     );
   brokerConfig = pkgs.writeText "max-runtime.json" (
     builtins.toJSON {
-      user = "max";
+      user = "max-service";
       stateDirectory = runtime.stateDirectory;
       gcRootsDirectory = "${runtime.stateDirectory}/gcroots";
       legacyVolumeDirectory = "/var/lib/docker/volumes";
@@ -35,6 +37,8 @@ let
       subnet = "10.231.0.0/16";
       gateway = "10.231.0.1";
       dns = cfg.sandbox.nameservers;
+      operationsGroups = lib.optionals cfg.operations.enable cfg.operations.allowedGroups;
+      operationsDns = [ "100.100.100.100" ];
       # Each backend adopts only its own effective template. A browser package
       # change must not invalidate unrelated, running command sandboxes.
       generations =
@@ -46,6 +50,7 @@ let
         ip = "${pkgs.iproute2}/bin/ip";
         bridge = "${pkgs.iproute2}/bin/bridge";
         nix = "${pkgs.nix}/bin/nix";
+        mount = "${pkgs.util-linux}/bin/mount";
       };
     }
   );
@@ -138,8 +143,8 @@ in
       partOf = [ "max-stack.target" ];
       socketConfig = {
         ListenStream = "/run/max-runtime/control.sock";
-        SocketUser = "max";
-        SocketGroup = "max";
+        SocketUser = "max-service";
+        SocketGroup = "max-service";
         SocketMode = "0600";
         DirectoryMode = "0755";
         RemoveOnStop = true;
@@ -148,8 +153,15 @@ in
     systemd.services.max-runtime = {
       description = "Max restricted instance broker";
       partOf = [ "max-stack.target" ];
-      requires = [ "max-runtime.socket" "max-storage.service" ];
-      after = [ "max-runtime.socket" "max-storage.service" ] ++ lib.optional cfg.sandbox.enable "max-sandbox-network.service";
+      requires = [
+        "max-runtime.socket"
+        "max-storage.service"
+      ];
+      after = [
+        "max-runtime.socket"
+        "max-storage.service"
+      ]
+      ++ lib.optional cfg.sandbox.enable "max-sandbox-network.service";
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/max-runtime --serve ${brokerConfig}";
         User = "root";
@@ -175,7 +187,13 @@ in
       description = "Max NixOS sandbox %i";
       partOf = [ "max-stack.target" ];
       requires = [ "max-sandbox-network.service" ];
-      after = [ "max-sandbox-network.service" ];
+      after = [
+        "max-sandbox-network.service"
+      ]
+      ++ lib.optionals cfg.operations.enable [
+        "max-ops-network.service"
+        "max-ops-tailscaled.service"
+      ];
       restartIfChanged = false;
       serviceConfig = {
         Type = "notify";
@@ -236,7 +254,10 @@ in
       serviceConfig = {
         ExecStart = "${cfg.browser.package}/bin/max-browser";
         DynamicUser = true;
-        StateDirectory = [ "max/browser/%i" "max/browser-cache/%i" ];
+        StateDirectory = [
+          "max/browser/%i"
+          "max/browser-cache/%i"
+        ];
         StateDirectoryMode = "0700";
         RuntimeDirectory = "max-browser-%i";
         RuntimeDirectoryMode = "0700";

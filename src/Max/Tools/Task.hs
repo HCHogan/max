@@ -44,12 +44,12 @@ taskToolsFor context =
     startTool =
       Tool
         { toolName = "task_start",
-          toolDescription = "把长研究、浏览器、sandbox 或 maxops 运维工作交给后台。持久化后立即返回 task#，当前前台回合随即交还会话；不要等待或轮询。子任务不会直接向群里发言。profile 只收窄现有权限。每棵任务树共享 200 次工具预留、400 次模型请求和六小时截止时间，重试不重置。token/cost 仅观测，不是硬额度。",
+          toolDescription = "把长研究、浏览器、sandbox 或 SSH 运维工作交给后台。持久化后立即返回 task#，当前前台回合随即交还会话；不要等待或轮询。子任务不会直接向群里发言。profile 只收窄现有权限。每棵任务树共享 200 次工具预留、400 次模型请求和六小时截止时间，重试不重置。token/cost 仅观测，不是硬额度。",
           toolSchema =
             toolObject
               [ ("key", stringParam "本回合内稳定的幂等键；同一工作重试必须复用。"),
                 ("objective", stringParam "自包含目标、约束和期望证据，不依赖整段聊天记录。"),
-                ("profile", enumParam ["research", "browser", "sandbox", "operations"] "research 默认只读；browser/sandbox 增加对应权限；operations 允许继承已授权的 maxops 管理操作。"),
+                ("profile", enumParam ["research", "browser", "sandbox", "operations"] "research 默认只读；browser/sandbox 增加对应权限；operations 使用 shell/SSH 运维。"),
                 ("context", stringParam "显式传给子任务的上下文，最多 60000 字符。"),
                 ("resources", stringArrayParam "可选的本会话 t#N:rM 结果句柄，最多 40 个；在 admission 时解析并冻结。")
               ]
@@ -70,7 +70,7 @@ taskToolsFor context =
                     let grants = taskGrants profile (toolCatalogGrants context)
                     if Nothing `elem` resolved
                       then pure (Left "某个输入句柄无效、超出会话或已清除边界")
-                      else case lookup profile [(Browser, "browser"), (Sandbox, "sandbox_exec"), (Operations, "maxops_execute")] of
+                      else case lookup profile [(Browser, "browser"), (Sandbox, "sandbox_exec"), (Operations, "sandbox_exec")] of
                         Just required | not (Map.member required grants) -> pure (Left ("当前权限没有 " <> required <> "，不能启动 " <> profileName profile <> " 任务"))
                         _ -> do
                           admitted <- startTask key objective profile (object ["context" .= explicitContext, "resources" .= Map.fromList (zip resources resolved)])

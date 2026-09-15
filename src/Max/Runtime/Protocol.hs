@@ -12,6 +12,8 @@ module Max.Runtime.Protocol
     parseVolumeName,
     instanceUnit,
     instanceMachine,
+    instanceGroup,
+    sandboxNetworkForGroup,
     parseRuntimeArgs,
     validAttributes,
     packageExpression,
@@ -52,6 +54,7 @@ data RuntimeKind = SandboxRuntime | BrowserRuntime
 
 data RuntimeRequest
   = StartSandbox Text Text Text Text
+  | SandboxNetwork Int64
   | StartBrowser Text
   | StopInstance Text
   | ListInstances RuntimeKind
@@ -78,7 +81,7 @@ runtimeProtocolVersion = 1
 -- Bump when the broker's sandbox isolation contract changes. Persisted
 -- instances must match both this version and the host module generation.
 sandboxPolicyVersion :: Text
-sandboxPolicyVersion = "6"
+sandboxPolicyVersion = "7"
 
 -- | Every stream is an anonymous pipe created by the client. Reject sockets,
 -- devices and regular files before any privileged helper can inherit them.
@@ -125,6 +128,17 @@ parseInstanceName name
       Just number -> T.pack (show number) == value
       Nothing -> False
 
+-- Network authority comes from the host configuration and canonical owner.
+instanceGroup :: InstanceName -> Maybe Int64
+instanceGroup name
+  | name.instanceKind == SandboxRuntime = readMaybe (T.unpack (T.dropEnd 2 (fst (T.breakOnEnd "-s" name.instanceSuffix))))
+  | otherwise = Nothing
+
+sandboxNetworkForGroup :: [Int64] -> Int64 -> Text
+sandboxNetworkForGroup groups gid
+  | gid > 0 && gid `elem` groups = "maxops"
+  | otherwise = "max-sandbox"
+
 parseVolumeName :: Text -> Either Text InstanceName
 parseVolumeName volume = do
   name <- maybe (Left "invalid Max work volume") Right (T.stripSuffix "-data" volume)
@@ -144,6 +158,7 @@ kindName BrowserRuntime = "browser"
 parseRuntimeArgs :: [Text] -> Either Text RuntimeRequest
 parseRuntimeArgs = \case
   ["create", name, profile, volume, network] -> Right (StartSandbox name profile volume network)
+  ["network", group] | Just gid <- readMaybe (T.unpack group), T.pack (show (gid :: Int64)) == group -> Right (SandboxNetwork gid)
   ["browser-create", name] -> Right (StartBrowser name)
   ["remove", name] -> Right (StopInstance name)
   ["list", "max-sb-"] -> Right (ListInstances SandboxRuntime)

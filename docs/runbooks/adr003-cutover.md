@@ -256,7 +256,7 @@ against the live database again. Run it from the exact deployed closure after
 every deploy while traffic is flowing:
 
 ```sh
-sudo -u max env MAX_DB_URL='postgresql:///max?host=/run/postgresql' \
+sudo -u max-service env MAX_DB_URL='postgresql://max@/max?host=/run/postgresql' \
   max-adr003-maintenance verify
 ```
 

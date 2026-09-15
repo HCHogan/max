@@ -44,7 +44,6 @@ import Max.EpisodeStoreSpec qualified as EpisodeStoreSpec
 import Max.ExecutionSpec qualified as ExecutionSpec
 import Max.HistorianSpec qualified as HistorianSpec
 import Max.MaintenanceLeaseSpec qualified as MaintenanceLeaseSpec
-import Max.MaxOpsNotificationSpec qualified as MaxOpsNotificationSpec
 import Max.MemoryCapabilitiesSpec qualified as MemoryCapabilitiesSpec
 import Max.MemoryMaintenanceSpec qualified as MemoryMaintenanceSpec
 import Max.MemoryStoreSpec qualified as MemoryStoreSpec
@@ -114,7 +113,6 @@ main = do
         PlatformCapabilitiesSpec.spec pool
         PlatformStoreSpec.spec pool
         PublicationSpec.spec pool
-        MaxOpsNotificationSpec.spec pool
       -- Final wipe so a developer running tests against the dev DB
       -- doesn't leave random fixture rows behind.
       truncateAll pool
